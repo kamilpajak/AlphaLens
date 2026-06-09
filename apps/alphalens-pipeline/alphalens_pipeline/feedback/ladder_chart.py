@@ -1,0 +1,554 @@
+"""Ladder-chart payload projection for the ``/edge`` candlestick view (PR-1).
+
+Why this lives in the pipeline (NOT in the Django ingest)
+---------------------------------------------------------
+The ``/edge`` dashboard wants to *draw* the broker-free ladder replay on a
+candlestick chart: daily OHLC candles, the entry / take-profit / stop levels as
+price lines, and the modeled fill / exit markers (memo §7). Drawing that needs
+the cached Polygon minute bars + the exchange calendar (to fold minute bars into
+RTH daily sessions) + the pure ladder replay — all of which live in
+``alphalens_pipeline``.
+
+The slim Django production image deliberately does NOT install
+``alphalens_pipeline`` (the prod incident 2026-06-01: a top-level pipeline import
+broke the image build). So — exactly like
+:mod:`alphalens_pipeline.feedback.benchmark_excess` — the heavy compute is a
+PRE-COMPUTED PROJECTION: this module builds the whole chart payload and persists
+it as one ``chart_payload_json`` string column on the population-ladder parquet.
+Django ONLY READS the column (and serves it), never recomputes, never imports the
+pipeline.
+
+Scope (PR-1): DAILY bars only. The daily candles are derived FROM the cached
+minute bars (so a daily high/low is the union of its minute highs/lows — memo
+§4.5/§6), but only the daily aggregation is persisted (a 42-session intraday
+payload would be ~16k rows/record — Postgres/parquet bloat). Intraday lazy-fetch
+is a later PR.
+
+The marker-timestamp gotcha (memo §6, §9 appendix): Lightweight Charts requires a
+marker's ``time`` to match an EXISTING bar — a timestamp in a non-trading gap
+silently fails to render. So :func:`_markers_from_sequence` maps each crossing's
+``bar_ts_ms`` to its DAILY session date string and DROPS any crossing whose
+mapped date is not among the emitted daily bars.
+
+Pure core (``build_chart_payload`` + the daily aggregation + the marker mapping)
+imports nothing from the store / Polygon / Django; the impure
+:func:`enrich_store_with_chart_payloads` mirrors ``benchmark_excess`` (never-raises
+per row, idempotent over every store parquet, atomic write, injectable
+``bar_fetch``).
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import logging
+import math
+import os
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from alphalens_pipeline.feedback.ladder_replay import (
+    TIE_BREAK_SL_FIRST,
+    LadderOutcome,
+    parse_ladder,
+    replay_ladder,
+)
+from alphalens_pipeline.paper.calendar import (
+    DEFAULT_EXCHANGE,
+    session_on_or_after,
+    session_open_utc,
+)
+
+logger = logging.getLogger(__name__)
+
+# The one column this module writes. Listed once so the ingest side references the
+# same name.
+CHART_PAYLOAD_COLUMN = "chart_payload_json"
+
+# Marker kinds emitted in the payload (the chart's own vocabulary). These mirror
+# the replay ``LevelCrossing.kind`` values; TIME_STOP is emitted as a MARKER only,
+# never as a price line (a time-stop is an exit event, not a resting level).
+_MARKER_ENTRY = "ENTRY"
+_MARKER_TP = "TP"
+_MARKER_SL = "SL"
+_MARKER_TIME_STOP = "TIME_STOP"
+
+# A (ticker, arrival_session) -> list of cached OHLC minute bars. The production
+# default reads the per-(ticker, arrival) bar cache the population monitor writes;
+# test stubs inject synthetic bars.
+ChartBarFetch = Callable[[str, dt.date], Sequence[Mapping[str, Any]]]
+
+
+def _empty_price_lines() -> dict[str, Any]:
+    return {"entry": None, "tp": [], "stop": None}
+
+
+def _no_structure_payload() -> dict[str, Any]:
+    return {
+        "status": "NO_STRUCTURE",
+        "bars": [],
+        "price_lines": _empty_price_lines(),
+        "markers": [],
+        "ambiguous_bars": 0,
+        "intrabar_rule": TIE_BREAK_SL_FIRST,
+        "rth_only": True,
+    }
+
+
+def _no_data_payload() -> dict[str, Any]:
+    return {
+        "status": "NO_DATA",
+        "bars": [],
+        "price_lines": _empty_price_lines(),
+        "markers": [],
+        "ambiguous_bars": 0,
+        "intrabar_rule": TIE_BREAK_SL_FIRST,
+        "rth_only": True,
+    }
+
+
+def _session_date_for_ts(
+    ts_ms: int, session_windows: Sequence[tuple[dt.date, int, int]]
+) -> dt.date | None:
+    """The session date whose RTH window contains ``ts_ms`` (or ``None``).
+
+    ``session_windows`` is the pre-built ``(session, open_ms, close_ms)`` list for
+    the emitted daily bars; matching against it (rather than truncating the UTC
+    timestamp to a date) is what guarantees a marker maps to an EMITTED daily bar
+    and never to a non-trading gap.
+    """
+    for session, open_ms, close_ms in session_windows:
+        if open_ms <= ts_ms <= close_ms:
+            return session
+    return None
+
+
+def _rth_session_windows(
+    arrival_session: dt.date, horizon_session: dt.date, exchange: str
+) -> list[tuple[dt.date, int, int]]:
+    """``(session, open_ms, close_ms)`` per trading session in the window.
+
+    Walks the exchange calendar so weekends / holidays inside the span contribute
+    no window (and thus any minute bar landing on them is dropped from the daily
+    aggregation). Close is the RTH close (honours half-days). ``close_ms`` is
+    inclusive.
+    """
+    from alphalens_pipeline.paper.calendar import (
+        advance_trading_sessions,
+        trading_days_elapsed,
+    )
+
+    if horizon_session < arrival_session:
+        return []
+    n_sessions = trading_days_elapsed(arrival_session, horizon_session, exchange)
+    windows: list[tuple[dt.date, int, int]] = []
+    for i in range(n_sessions + 1):
+        session = advance_trading_sessions(arrival_session, i, exchange)
+        if session > horizon_session:
+            break
+        open_ms, close_ms = _rth_window_ms(session, exchange)
+        windows.append((session, open_ms, close_ms))
+    return windows
+
+
+def _rth_window_ms(session: dt.date, exchange: str) -> tuple[int, int]:
+    """``(open_ms, close_ms)`` epoch-ms RTH bounds for ``session`` (close inclusive).
+
+    Half-days resolve to their early close read off the calendar; a degenerate /
+    mis-reported close falls back to the full 390-minute session so a session is
+    never silently dropped.
+    """
+    from alphalens_pipeline.paper.calendar import _calendar, _to_session_timestamp, is_half_day
+
+    open_utc = session_open_utc(session, exchange)
+    open_ms = int(open_utc.timestamp() * 1000)
+    full_span_min = 390
+    if not is_half_day(session, exchange):
+        span_min = full_span_min
+    else:
+        ts = _to_session_timestamp(session)
+        close_utc = _calendar(exchange).session_close(ts).to_pydatetime().astimezone(dt.UTC)
+        span = int((close_utc - open_utc).total_seconds() // 60)
+        span_min = span if span > 0 else full_span_min
+    return open_ms, open_ms + span_min * 60_000
+
+
+def _daily_bars_from_minute(
+    bars: Sequence[Mapping[str, Any]],
+    session_windows: Sequence[tuple[dt.date, int, int]],
+) -> list[dict[str, Any]]:
+    """Fold minute bars into one daily OHLC candle per RTH session.
+
+    ``open`` = first (earliest ``t``) minute open, ``close`` = last minute close,
+    ``high`` = max minute high, ``low`` = min minute low, ``volume`` = sum. A bar
+    outside every session window (pre/post-market, weekend, holiday) is dropped so
+    the daily [low, high] is exactly the RTH minute union (memo §4.5). Sessions
+    with no minute bar emit no candle (a gap is honest, not a phantom flat bar).
+    """
+    # Group minute bars by their session date (ordered by ts for open/close).
+    by_session: dict[dt.date, list[Mapping[str, Any]]] = {}
+    for bar in sorted(bars, key=lambda b: int(b["t"])):
+        session = _session_date_for_ts(int(bar["t"]), session_windows)
+        if session is None:
+            continue
+        by_session.setdefault(session, []).append(bar)
+
+    daily: list[dict[str, Any]] = []
+    for session, _open_ms, _close_ms in session_windows:
+        minute_bars = by_session.get(session)
+        if not minute_bars:
+            continue
+        # Drop any minute bar with a missing or non-finite OHLC value: a single
+        # NaN/Inf tick would otherwise poison the daily open/high/low/close and
+        # the downstream JSON FloatField serialisation (a NaN is not valid JSON).
+        # A session left with no finite bar emits no candle — the same "a gap is
+        # honest, not a phantom flat bar" rule as a session with no bars at all.
+        finite_bars = [b for b in minute_bars if _has_finite_ohlc(b)]
+        if not finite_bars:
+            continue
+        daily.append(
+            {
+                "time": session.isoformat(),
+                "open": float(finite_bars[0]["o"]),
+                "high": max(float(b["h"]) for b in finite_bars),
+                "low": min(float(b["l"]) for b in finite_bars),
+                "close": float(finite_bars[-1]["c"]),
+                "volume": sum(_finite_or_zero(b.get("v")) for b in finite_bars),
+            }
+        )
+    return daily
+
+
+def _has_finite_ohlc(bar: Mapping[str, Any]) -> bool:
+    """True when the bar's open/high/low/close are all present and finite.
+
+    A missing key (``KeyError``) or a non-numeric / NaN / Inf value makes the bar
+    unusable for a daily candle, so it is dropped rather than crashing the fold.
+    """
+    try:
+        return all(math.isfinite(float(bar[k])) for k in ("o", "h", "l", "c"))
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def _finite_or_zero(value: Any) -> float:
+    """Coerce a volume value to a finite float; NaN / Inf / missing become 0.0."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return v if math.isfinite(v) else 0.0
+
+
+def _marker_kind_and_label(level_id: str, kind: str) -> tuple[str, str]:
+    """Map a replay crossing ``(level_id, kind)`` to the chart marker kind + label.
+
+    Labels are the compact level ids the UI draws (``E1``, ``TP1``, ``SL``); the
+    time-stop carries the ``TIME_STOP`` label so the tooltip reads honestly.
+    """
+    if kind == "ENTRY":
+        return _MARKER_ENTRY, level_id
+    if kind == "TP":
+        return _MARKER_TP, level_id
+    if kind == "SL":
+        return _MARKER_SL, level_id
+    return _MARKER_TIME_STOP, _MARKER_TIME_STOP
+
+
+def _markers_from_sequence(
+    outcome: LadderOutcome, session_windows: Sequence[tuple[dt.date, int, int]]
+) -> list[dict[str, Any]]:
+    """Map each replay crossing to a chart marker on its DAILY session bar.
+
+    Each ``LevelCrossing.bar_ts_ms`` is mapped to the session date whose RTH window
+    contains it. A crossing whose timestamp falls outside every emitted daily
+    session (a non-trading gap) is DROPPED — emitting it with a dangling ``time``
+    would silently fail to render in Lightweight Charts (memo §6). ``ambiguous`` is
+    carried straight from ``same_bar_ambiguous`` (the SL-first intrabar flag).
+    """
+    markers: list[dict[str, Any]] = []
+    for crossing in outcome.sequence:
+        session = _session_date_for_ts(crossing.bar_ts_ms, session_windows)
+        if session is None:
+            continue  # dangling time -> would not render; drop honestly
+        marker_kind, label = _marker_kind_and_label(crossing.level_id, crossing.kind)
+        markers.append(
+            {
+                "time": session.isoformat(),
+                "kind": marker_kind,
+                "level_id": crossing.level_id,
+                "price": crossing.price,
+                "label": label,
+                "ambiguous": bool(crossing.same_bar_ambiguous),
+            }
+        )
+    return markers
+
+
+def _price_lines(setup: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Entry / TP / stop levels for the chart price lines.
+
+    ``entry`` is the FIRST (E1) entry tier limit (the blended-entry / per-tier
+    geometry is a richer view deferred to PR-2); ``tp`` is the ordered list of TP
+    targets; ``stop`` is the disaster stop. TIME_STOP is intentionally NOT a price
+    line — it is an exit event, drawn only as a marker.
+    """
+    parsed = parse_ladder(setup)
+    entry = parsed.entries[0].price if parsed.entries else None
+    tp = [lvl.price for lvl in parsed.tps]
+    return {"entry": entry, "tp": tp, "stop": parsed.disaster_stop}
+
+
+def build_chart_payload(
+    setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    outcome: LadderOutcome,
+    *,
+    arrival_session: dt.date,
+    horizon_session: dt.date,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dict[str, Any]:
+    """Build the chart payload for one (brief_date, ticker).
+
+    ``setup`` is the parsed ``brief_trade_setup`` dict; ``bars`` are the cached
+    minute bars over the hold window; ``outcome`` is the replay outcome (the caller
+    passes the same one the store row was built from). Returns a JSON-serialisable
+    dict (see the module docstring / the payload shape below).
+
+    * ``NO_STRUCTURE`` when the setup has no parseable ladder (``parse_ladder``
+      ``ok=False``).
+    * ``NO_DATA`` when there are no minute bars in the RTH window (empty / all
+      pre-post-market / outside the session span).
+    * ``OK`` otherwise: daily candles + price lines + markers, all aligned so every
+      marker time is an emitted daily bar time.
+    """
+    parsed = parse_ladder(setup)
+    if not parsed.ok:
+        return _no_structure_payload()
+
+    session_windows = _rth_session_windows(arrival_session, horizon_session, exchange)
+    daily = _daily_bars_from_minute(bars, session_windows)
+    if not daily:
+        return _no_data_payload()
+
+    # Restrict the marker mapping to the windows that actually produced a daily bar
+    # so a crossing on a session with no emitted candle is dropped (not just one
+    # outside the calendar span).
+    emitted_dates = {b["time"] for b in daily}
+    emitted_windows = [w for w in session_windows if w[0].isoformat() in emitted_dates]
+    markers = _markers_from_sequence(outcome, emitted_windows)
+
+    return {
+        "status": "OK",
+        "bars": daily,
+        "price_lines": _price_lines(setup),
+        "markers": markers,
+        "ambiguous_bars": int(outcome.ambiguous_bars),
+        "intrabar_rule": TIE_BREAK_SL_FIRST,
+        "rth_only": True,
+    }
+
+
+def _default_bar_fetch(ticker: str, arrival_session: dt.date) -> Sequence[Mapping[str, Any]]:
+    """Production bar source: the population monitor's per-(ticker, arrival) cache.
+
+    Reads the SAME ``~/.alphalens/population_ladders/bars/TICKER_DATE.parquet`` the
+    monitor already populated for the replay — no new Polygon fetch, no new cache.
+    Returns ``[]`` when the cache is absent (the row gets a NO_DATA payload).
+    """
+    from alphalens_pipeline.feedback.population_ladder_monitor import _read_cached_bars
+
+    store_dir = Path.home() / ".alphalens" / "population_ladders"
+    return _read_cached_bars(store_dir, ticker, arrival_session)
+
+
+def enrich_store_with_chart_payloads(
+    store_dir: Path | str,
+    briefs_dir: Path | str,
+    *,
+    bar_fetch: ChartBarFetch | None = None,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> int:
+    """Add / refresh the ``chart_payload_json`` column on every store parquet.
+
+    For each ``YYYY-MM-DD.parquet`` row: resolve the brief's trade setup, fetch the
+    row's cached minute bars (keyed by ticker + arrival session), filter to RTH,
+    replay the ladder, build the chart payload, and persist it as a JSON string.
+    Rewrites the frame atomically. Returns the number of rows that got a non-empty
+    (non-NO_DATA / non-NO_STRUCTURE) payload.
+
+    Mirrors :func:`benchmark_excess.enrich_store_with_benchmark_excess`: never
+    raises per row (a bad row / missing brief leaves a NO_DATA payload and is
+    logged), idempotent + self-healing over every store parquet, atomic write.
+    """
+    store = Path(store_dir)
+    briefs = Path(briefs_dir)
+    if not store.exists():
+        return 0
+    fetch = bar_fetch or _default_bar_fetch
+
+    n_with_chart = 0
+    setups_by_date: dict[dt.date, dict[str, dict] | None] = {}
+
+    for path in sorted(store.glob("*.parquet")):
+        try:
+            df = pd.read_parquet(path)
+        except (OSError, ValueError) as exc:
+            logger.warning("chart-payload: bad store parquet %s — %s; skipping.", path, exc)
+            continue
+        if df.empty:
+            continue
+
+        payload_col: list[str] = []
+        for _, row in df.iterrows():
+            payload = _payload_for_row(
+                dict(row),
+                fetch=fetch,
+                exchange=exchange,
+                setups_by_date=setups_by_date,
+                briefs_dir=briefs,
+            )
+            if payload.get("status") == "OK":
+                n_with_chart += 1
+            payload_col.append(json.dumps(payload))
+
+        df[CHART_PAYLOAD_COLUMN] = payload_col
+        _write_atomic(path, df)
+
+    return n_with_chart
+
+
+def _payload_for_row(
+    row: Mapping[str, Any],
+    *,
+    fetch: ChartBarFetch,
+    exchange: str,
+    setups_by_date: dict[dt.date, dict[str, dict] | None],
+    briefs_dir: Path,
+) -> dict[str, Any]:
+    """Build one row's chart payload; never raises (NO_DATA on any failure)."""
+    try:
+        from alphalens_pipeline.feedback.population_ladder_monitor import _filter_bars_to_rth
+
+        brief_date = _as_date(row.get("brief_date"))
+        ticker = str(row.get("ticker") or "").upper()
+        if brief_date is None or not ticker:
+            return _no_data_payload()
+
+        setup = _setup_for(brief_date, ticker, setups_by_date, briefs_dir)
+        if setup is None:
+            return _no_structure_payload()
+
+        arrival_session = session_on_or_after(brief_date, exchange)
+        raw_bars: list[dict[str, Any]] = [dict(b) for b in fetch(ticker, arrival_session)]
+        if not raw_bars:
+            return _no_data_payload()
+
+        horizon_session = _horizon_session(arrival_session, raw_bars, exchange)
+        rth_bars = _filter_bars_to_rth(raw_bars, arrival_session, horizon_session, exchange)
+        outcome = replay_ladder(setup, rth_bars)
+        return build_chart_payload(
+            setup,
+            rth_bars,
+            outcome,
+            arrival_session=arrival_session,
+            horizon_session=horizon_session,
+            exchange=exchange,
+        )
+    except Exception:
+        logger.exception(
+            "chart-payload: failed for %s/%s; persisting NO_DATA",
+            row.get("brief_date"),
+            row.get("ticker"),
+        )
+        return _no_data_payload()
+
+
+def _horizon_session(
+    arrival_session: dt.date, bars: Sequence[Mapping[str, Any]], exchange: str
+) -> dt.date:
+    """The last session the cached bars reach (drives the RTH window span).
+
+    Derived from the newest cached bar's timestamp so the daily aggregation covers
+    exactly the bars on disk — no separate horizon arithmetic, no over-walking the
+    calendar past the data. Never earlier than the arrival session.
+    The newest bar's calendar date is rolled to the session on-or-after it. The
+    session-window walk + RTH filter then drop any session past the data, so an
+    over-shoot is harmless; the only guard needed is "never before arrival".
+    """
+    last_ts = max(int(b["t"]) for b in bars)
+    last_dt = dt.datetime.fromtimestamp(last_ts / 1000, dt.UTC).date()
+    horizon = session_on_or_after(last_dt, exchange)
+    return max(horizon, arrival_session)
+
+
+def _setup_for(
+    brief_date: dt.date,
+    ticker: str,
+    setups_by_date: dict[dt.date, dict[str, dict] | None],
+    briefs_dir: Path,
+) -> dict | None:
+    """Resolve the trade setup for (brief_date, ticker), caching per brief date."""
+    if brief_date not in setups_by_date:
+        setups_by_date[brief_date] = _load_setups_for_date(brief_date, briefs_dir)
+    setups = setups_by_date[brief_date]
+    if not setups:
+        return None
+    return setups.get(ticker)
+
+
+def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, dict] | None:
+    """``{TICKER: trade_setup}`` for one brief date, or ``None`` when unavailable."""
+    from alphalens_pipeline.paper.brief_loader import load_brief
+
+    try:
+        candidates = load_brief(brief_date, briefs_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.info(
+            "chart-payload: no brief for %s — %s; leaving the date NULL.",
+            brief_date.isoformat(),
+            exc,
+        )
+        return None
+    except Exception as exc:  # any other brief-load error must NOT abort the sweep
+        logger.warning(
+            "chart-payload: brief load failed for %s — %s; leaving the date NULL.",
+            brief_date.isoformat(),
+            exc,
+        )
+        return None
+    return {c.ticker.upper(): c.trade_setup for c in candidates if c.trade_setup is not None}
+
+
+def _as_date(value: Any) -> dt.date | None:
+    if value is None:
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    if hasattr(value, "to_pydatetime"):
+        try:
+            return value.to_pydatetime().date()
+        except (ValueError, TypeError):
+            return None
+    try:
+        return dt.date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _write_atomic(path: Path, df: pd.DataFrame) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    df.to_parquet(tmp)
+    os.replace(tmp, path)
+
+
+__all__ = [
+    "CHART_PAYLOAD_COLUMN",
+    "build_chart_payload",
+    "enrich_store_with_chart_payloads",
+]
