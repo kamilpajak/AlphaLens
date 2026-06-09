@@ -73,6 +73,15 @@ class LadderOutcome(models.Model):
 
     # Sequence + ratchet what-if.
     sequence_str = models.CharField(max_length=256, blank=True, default="")
+
+    # Pre-computed ladder-chart payload (PR-1): the JSON projection the pipeline
+    # enrich step writes onto the parquet (daily OHLC candles + entry/TP/stop
+    # price lines + modeled fill/exit markers). The slim Django image cannot
+    # import alphalens_pipeline, so the heavy compute (bars + markers) lives
+    # pipeline-side; the /v1/edge/chart endpoint only READS this string. "" =
+    # older row that predates the column (the chart endpoint treats it as a
+    # NO_DATA payload). See alphalens_pipeline.feedback.ladder_chart.
+    chart_payload_json = models.TextField(blank=True, default="")
     ambiguous_bars = models.IntegerField(null=True, blank=True)
     ratchet_realized_r = models.FloatField(null=True, blank=True)
 

@@ -90,6 +90,7 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     # fresh replay above), so they run even when the live replay failed.
     _enrich_population_benchmark_excess()
     _enrich_population_size_fields(briefs_dir)
+    _enrich_population_chart_payloads(briefs_dir)
 
 
 def _enrich_population_size_fields(briefs_dir: Path) -> None:
@@ -111,6 +112,28 @@ def _enrich_population_size_fields(briefs_dir: Path) -> None:
         typer.echo(f"size-enrichment: backfilled size fields on {n} terminal rows.")
     except Exception:
         logger.exception("size-field enrichment failed; continuing")
+
+
+def _enrich_population_chart_payloads(briefs_dir: Path) -> None:
+    """Add the ladder-chart payload column to the population-ladder store. Never raises.
+
+    Builds the pre-computed chart payload (daily OHLC candles + entry/TP/stop price
+    lines + modeled fill/exit markers) per row and writes it as the
+    ``chart_payload_json`` column, mirroring the benchmark-excess + size
+    enrichments. This MUST run HERE in the pipeline (Polygon-cached bars +
+    calendar); the slim Django ingest only READS the column and the
+    ``/v1/edge/chart`` endpoint only serves it. Swallow-all like the rest of the
+    nightly tail.
+    """
+    try:
+        from alphalens_pipeline.feedback.ladder_chart import (
+            enrich_store_with_chart_payloads,
+        )
+
+        n = enrich_store_with_chart_payloads(_ALPHALENS_HOME / "population_ladders", briefs_dir)
+        typer.echo(f"chart-payload: enriched {n} rows with a chart payload.")
+    except Exception:
+        logger.exception("chart-payload enrichment failed; continuing")
 
 
 def _enrich_population_benchmark_excess() -> None:

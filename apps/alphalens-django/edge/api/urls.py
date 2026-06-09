@@ -10,9 +10,15 @@ from __future__ import annotations
 
 from django.urls import path
 
+from edge.api.chart import EdgeChartView
 from edge.api.views import EdgeOutcomesView, EdgeSummaryView
 
 urlpatterns = [
     path("v1/edge/summary", EdgeSummaryView.as_view(), name="edge-summary"),
     path("v1/edge/outcomes", EdgeOutcomesView.as_view(), name="edge-outcomes"),
+    path(
+        "v1/edge/chart/<str:brief_date>/<str:ticker>",
+        EdgeChartView.as_view(),
+        name="edge-chart",
+    ),
 ]

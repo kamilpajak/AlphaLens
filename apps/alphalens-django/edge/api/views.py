@@ -22,6 +22,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from edge.api.chart import EdgeChartView
 from edge.api.serializers import EdgeOutcomeRowSerializer, EdgeSummarySerializer
 from edge.api.summary import build_edge_summary
 from edge.models import LadderOutcome
@@ -147,4 +148,4 @@ class EdgeOutcomesView(APIView):
         return Response({"data": EdgeOutcomeRowSerializer(rows, many=True).data})
 
 
-__all__ = ["EdgeOutcomesView", "EdgeSummaryView"]
+__all__ = ["EdgeChartView", "EdgeOutcomesView", "EdgeSummaryView"]

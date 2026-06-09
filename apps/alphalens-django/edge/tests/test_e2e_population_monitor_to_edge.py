@@ -43,6 +43,7 @@ from django.db import models as django_models
 from rest_framework.test import APIClient
 
 from alphalens_pipeline.feedback.benchmark_excess import enrich_store_with_benchmark_excess
+from alphalens_pipeline.feedback.ladder_chart import enrich_store_with_chart_payloads
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     enrich_store_with_size_fields,
     replay_population_ladders,
@@ -134,6 +135,15 @@ def _build_real_store(root: Path) -> Path:
     enrich_store_with_size_fields(store_dir, briefs_dir)
     # Benchmark excess (the ONLY other vendor touch — SPY bars injected).
     enrich_store_with_benchmark_excess(store_dir, bar_fetch=_spy_bars, now=_NOW)
+    # Chart payload (reads the monitor's per-(ticker, arrival) bar cache the real
+    # replay just wrote under store_dir/bars/, NOT the host ~/.alphalens default,
+    # so inject the cache reader bound to this test's store_dir).
+    from alphalens_pipeline.feedback.population_ladder_monitor import _read_cached_bars
+
+    def _cached_bars(ticker: str, arrival_session) -> list[dict]:
+        return _read_cached_bars(store_dir, ticker, arrival_session)
+
+    enrich_store_with_chart_payloads(store_dir, briefs_dir, bar_fetch=_cached_bars)
     return store_dir
 
 
@@ -189,6 +199,33 @@ class TestPopulationMonitorToEdgeE2E:
         columns = set(pd.read_parquet(parquet).columns)
         assert "market_excess_return" in columns
         assert "benchmark_window_return" in columns
+
+    def test_chart_payload_json_specifically_present(self, tmp_path: Path):
+        """Belt-and-braces on the PR-1 chart column.
+
+        ``chart_payload_json`` is written by a SEPARATE module (ladder_chart) from
+        the rest of the row, just like ``market_excess_return``. Pin it by name so
+        a drift on that one column is unmistakable, and assert the persisted string
+        round-trips to an OK payload (the matured TIME_STOP NVDA fixture has bars +
+        an entry marker)."""
+        store_dir = _build_real_store(tmp_path)
+        parquet = store_dir / f"{_BRIEF_DATE.isoformat()}.parquet"
+        df = pd.read_parquet(parquet)
+        assert "chart_payload_json" in df.columns
+        payload = json.loads(df.set_index("ticker").loc["NVDA", "chart_payload_json"])
+        assert payload["status"] == "OK"
+        assert payload["bars"], "expected daily candles in the chart payload"
+        assert any(m["kind"] == "ENTRY" for m in payload["markers"])
+
+    @pytest.mark.django_db
+    def test_chart_payload_round_trips_to_orm(self, tmp_path: Path):
+        """The REAL chart-payload column ingests onto the LadderOutcome row."""
+        store_dir = _build_real_store(tmp_path)
+        rebuild_from_parquet(store_dir)
+        row = LadderOutcome.objects.get(ticker="NVDA")
+        assert row.chart_payload_json
+        payload = json.loads(row.chart_payload_json)
+        assert payload["status"] == "OK"
 
     @pytest.mark.django_db
     def test_real_round_trip_materialises_outcome_rows(self, tmp_path: Path):

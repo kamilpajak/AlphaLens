@@ -103,6 +103,70 @@ class OpenPositionsSerializer(serializers.Serializer):
     note = serializers.CharField()
 
 
+class ChartBarSerializer(serializers.Serializer):
+    """One daily OHLC candle (folded from the cached minute bars, RTH-only).
+
+    ``time`` is an ISO date string (``YYYY-MM-DD``) so it maps 1:1 to a
+    Lightweight-Charts daily bar time.
+    """
+
+    time = serializers.CharField()
+    open = serializers.FloatField()
+    high = serializers.FloatField()
+    low = serializers.FloatField()
+    close = serializers.FloatField()
+    volume = serializers.FloatField()
+
+
+class ChartMarkerSerializer(serializers.Serializer):
+    """One modeled fill / exit marker, snapped to a daily bar ``time``.
+
+    ``kind`` is the chart vocabulary (``ENTRY`` / ``TP`` / ``SL`` / ``TIME_STOP``);
+    ``ambiguous`` carries the SL-first intrabar flag (a bar that touched both a TP
+    high and the SL low, resolved SL-first).
+    """
+
+    time = serializers.CharField()
+    kind = serializers.CharField()
+    level_id = serializers.CharField()
+    price = serializers.FloatField(allow_null=True)
+    label = serializers.CharField()
+    ambiguous = serializers.BooleanField()
+
+
+class ChartPriceLinesSerializer(serializers.Serializer):
+    """The resting ladder levels drawn as horizontal price lines.
+
+    ``tp`` is the ordered list of take-profit targets. TIME_STOP is NOT a price
+    line — it is an exit event drawn only as a marker.
+    """
+
+    entry = serializers.FloatField(allow_null=True)
+    tp = serializers.ListField(child=serializers.FloatField())
+    stop = serializers.FloatField(allow_null=True)
+
+
+class ChartResponseSerializer(serializers.Serializer):
+    """``/v1/edge/chart/<brief_date>/<ticker>`` — the pre-computed chart payload.
+
+    The SHAPE is stable across ``status``: a NO_DATA / NO_STRUCTURE payload carries
+    empty ``bars`` / ``markers`` and null/empty ``price_lines`` so the SPA branches
+    on ``status`` without a 2nd request. ``rth_only`` is always true in PR-1
+    (RTH-only daily candles; intraday is a later PR).
+    """
+
+    brief_date = serializers.DateField()
+    ticker = serializers.CharField()
+    ladder_classification = serializers.CharField(allow_blank=True)
+    status = serializers.ChoiceField(choices=["OK", "NO_DATA", "NO_STRUCTURE"])
+    bars = ChartBarSerializer(many=True)
+    price_lines = ChartPriceLinesSerializer()
+    markers = ChartMarkerSerializer(many=True)
+    ambiguous_bars = serializers.IntegerField()
+    intrabar_rule = serializers.CharField()
+    rth_only = serializers.BooleanField()
+
+
 class EdgeSummarySerializer(serializers.Serializer):
     """``/v1/edge/summary`` — the full N-gated, benchmark-relative aggregate."""
 
