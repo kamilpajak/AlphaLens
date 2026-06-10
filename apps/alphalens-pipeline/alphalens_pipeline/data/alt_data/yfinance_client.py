@@ -227,6 +227,42 @@ class YFinanceClient:
 
         return self._call_with_retry(_fetch, what=f"shares({upper})", default=None)
 
+    def dividends(self, ticker: str, *, asof: dt.date | None = None) -> pd.Series:
+        """Per-share cash-dividend history, indexed by ex-date; empty on failure.
+
+        Wraps ``yfinance.Ticker(T).dividends`` (a pandas Series of per-share
+        cash dividends indexed by ex-date). The index is normalised to tz-naive
+        with the same idempotent idiom as :meth:`shares`
+        (``pd.to_datetime(idx, utc=True).tz_localize(None)``), so a non-payer
+        and a future yfinance version that returns a naive index both behave.
+
+        When ``asof`` is given the series is sliced to ex-dates on or before it
+        (PIT). A non-payer, a permanent failure (delist / 404) or exhausted
+        retries all return an EMPTY ``float`` Series — this method NEVER raises,
+        so a single bad ticker can't crash the batch.
+        """
+        upper = ticker.upper()
+
+        def _fetch() -> pd.Series:
+            import yfinance as yf
+
+            series = yf.Ticker(upper).dividends
+            if series is None or len(series) == 0:
+                return pd.Series(dtype=float)
+            # tz_localize(None) on an already-naive index raises; build a
+            # UTC-aware index first so this is idempotent across yfinance
+            # versions (today the index is tz-aware; a future naive index
+            # would otherwise kill the whole dividends path).
+            series = series.copy()
+            series.index = pd.to_datetime(series.index, utc=True).tz_localize(None)
+            if asof is not None:
+                series = series[series.index <= pd.Timestamp(asof)]
+            return series
+
+        return self._call_with_retry(
+            _fetch, what=f"dividends({upper})", default=pd.Series(dtype=float)
+        )
+
     def cached_daily_ohlcv(self, ticker: str, *, asof: dt.date) -> pd.DataFrame:
         """OHLCV with disk + in-process cache and a stale-fallback safety net.
 
