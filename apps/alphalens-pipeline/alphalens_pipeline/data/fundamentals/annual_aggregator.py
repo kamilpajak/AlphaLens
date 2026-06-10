@@ -79,6 +79,13 @@ class AnnualStatement:
     the year is still emitted as long as at least one duration concept is
     present. ``capex`` carries the EDGAR positive-sign convention (cash
     outflow magnitude). Maintenance-vs-growth capex is NOT split here.
+
+    ``accounts_receivable``, ``inventory`` and ``accounts_payable`` are the
+    balance-sheet working-capital components, anchored on the fiscal-year end
+    like the other instant concepts. They feed the owner-earnings ΔWC term in
+    :mod:`alphalens_pipeline.data.fundamentals.owner_earnings`. A missing
+    inventory row (service / SaaS issuers carry none) stays ``None`` rather
+    than being coerced to zero.
     """
 
     fiscal_year_end: date
@@ -95,6 +102,9 @@ class AnnualStatement:
     short_term_debt: float | None
     cash_and_equivalents: float | None
     shares_outstanding: float | None
+    accounts_receivable: float | None
+    inventory: float | None
+    accounts_payable: float | None
 
 
 def _latest_fy_entry_per_end(entries: Sequence[_Entry]) -> dict[str, _Entry]:
@@ -355,6 +365,13 @@ def annual_statements(
                 ),
                 cash_and_equivalents=_instant_at_end(table, chains.CASH, asof, fiscal_year_end),
                 shares_outstanding=_shares_at_end(table, asof, fiscal_year_end),
+                accounts_receivable=_instant_at_end(
+                    table, chains.ACCOUNTS_RECEIVABLE, asof, fiscal_year_end
+                ),
+                inventory=_instant_at_end(table, chains.INVENTORY, asof, fiscal_year_end),
+                accounts_payable=_instant_at_end(
+                    table, chains.ACCOUNTS_PAYABLE, asof, fiscal_year_end
+                ),
             )
         )
     return out

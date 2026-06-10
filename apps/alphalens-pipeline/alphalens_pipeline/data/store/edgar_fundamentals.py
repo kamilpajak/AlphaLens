@@ -56,6 +56,10 @@ from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     companyfacts_json_to_parquet_table,
 )
 from alphalens_pipeline.data.fundamentals.edgar_companyfacts import _pit_filter
+from alphalens_pipeline.data.fundamentals.owner_earnings import (
+    OwnerEarnings,
+    compute_owner_earnings,
+)
 from alphalens_pipeline.data.fundamentals.ttm_aggregator import (
     _arrow_table_to_entries,
     compute_ttm,
@@ -353,6 +357,23 @@ class EdgarFundamentalsStore:
         if not (self._dir / f"{cik}.parquet").exists():
             self.preload([ticker])
         return annual_statements(self._reader, cik, asof, max_years=max_years)
+
+    def owner_earnings_as_of(
+        self, ticker: str, asof: date, *, max_years: int = 10
+    ) -> list[OwnerEarnings]:
+        """Per-fiscal-year owner earnings + working-capital deltas, PIT at ``asof``.
+
+        Delegates to
+        :func:`alphalens_pipeline.data.fundamentals.owner_earnings.compute_owner_earnings`
+        over the :meth:`annual_series_as_of` series — newest first, capped to
+        ``max_years``. The oldest year has no prior fiscal year, so its
+        ``working_capital_change`` (and hence ``owner_earnings``) is ``None``.
+        ``maintenance_capex`` is the ``min(capex, D&A)`` approximation; see the
+        owner-earnings module docstring. Additive and unwired — not consumed by
+        the thematic brief pipeline. Empty list when the ticker has no CIK or no
+        companyfacts on disk.
+        """
+        return compute_owner_earnings(self.annual_series_as_of(ticker, asof, max_years=max_years))
 
     # --- internals --------------------------------------------------------
 

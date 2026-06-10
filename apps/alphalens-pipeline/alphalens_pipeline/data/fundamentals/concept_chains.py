@@ -115,6 +115,32 @@ EQUITY: Final[tuple[str, ...]] = (
     "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
 )
 
+# --- Working-capital components (balance sheet, owner-earnings) -------------
+#
+# Working capital = accounts_receivable + inventory - accounts_payable. These
+# three instant concepts feed the owner-earnings ΔWC term in
+# ``alphalens_pipeline.data.fundamentals.owner_earnings``.
+
+# Trade receivables. Most issuers report ``AccountsReceivableNetCurrent``; the
+# broader ``ReceivablesNetCurrent`` (which can bundle non-trade receivables) is
+# the legacy fallback for filers who never adopted the narrower tag.
+ACCOUNTS_RECEIVABLE: Final[tuple[str, ...]] = (
+    "AccountsReceivableNetCurrent",
+    "ReceivablesNetCurrent",
+)
+
+# Net inventory. Service / SaaS issuers carry no inventory at all, so a missing
+# row is expected and resolves to None (NOT structurally zero — the
+# owner-earnings code treats it as missing on purpose).
+INVENTORY: Final[tuple[str, ...]] = ("InventoryNet",)
+
+# Trade payables. ``AccountsPayableCurrent`` is the narrow tag; some issuers
+# only break out the combined payables-and-accruals line, used as the fallback.
+ACCOUNTS_PAYABLE: Final[tuple[str, ...]] = (
+    "AccountsPayableCurrent",
+    "AccountsPayableAndAccruedLiabilitiesCurrent",
+)
+
 
 # --- Shares-outstanding (different taxonomy + unit) ------------------------
 
@@ -127,6 +153,8 @@ SHARES_OUTSTANDING_DEI: Final[tuple[str, ...]] = ("EntityCommonStockSharesOutsta
 
 
 __all__ = [
+    "ACCOUNTS_PAYABLE",
+    "ACCOUNTS_RECEIVABLE",
     "BALANCE_SHEET_MARKERS",
     "CAPEX",
     "CASH",
@@ -135,6 +163,7 @@ __all__ = [
     "EQUITY",
     "INCOME_TAX_EXPENSE",
     "INTEREST_EXPENSE",
+    "INVENTORY",
     "LONG_TERM_DEBT",
     "NET_INCOME",
     "OPERATING_CASH_FLOW",
