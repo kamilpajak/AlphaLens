@@ -378,3 +378,73 @@ class TestShares(unittest.TestCase):
         ):
             self.assertEqual(_client().shares("x", asof=dt.date(2026, 4, 14)), 500e6)
         self.assertTrue(any("forward-biased" in m for m in logs.output))
+
+
+class TestDividends(unittest.TestCase):
+    @staticmethod
+    def _dividend_series() -> pd.Series:
+        """A yfinance-style per-share cash-dividend series (tz-aware ex-dates)."""
+        return pd.Series(
+            [0.22, 0.23, 0.24],
+            index=pd.DatetimeIndex(
+                ["2025-08-08", "2025-11-07", "2026-02-06"], tz="America/New_York"
+            ),
+        )
+
+    def test_returns_full_series_when_no_asof(self):
+        tk = SimpleNamespace(dividends=self._dividend_series())
+        with patch("yfinance.Ticker", return_value=tk) as patched:
+            series = _client().dividends("aapl")
+        patched.assert_called_once_with("AAPL")
+        self.assertEqual(len(series), 3)
+        self.assertEqual(float(series.iloc[-1]), 0.24)
+
+    def test_index_is_tz_naive(self):
+        tk = SimpleNamespace(dividends=self._dividend_series())
+        with patch("yfinance.Ticker", return_value=tk):
+            series = _client().dividends("aapl")
+        self.assertIsInstance(series.index, pd.DatetimeIndex)
+        self.assertIsNone(series.index.tz)
+
+    def test_asof_slices_out_later_ex_dates(self):
+        # asof between the 2nd and 3rd ex-date drops the 2026-02-06 dividend.
+        tk = SimpleNamespace(dividends=self._dividend_series())
+        with patch("yfinance.Ticker", return_value=tk):
+            series = _client().dividends("aapl", asof=dt.date(2025, 12, 31))
+        self.assertEqual(len(series), 2)
+        self.assertEqual(float(series.iloc[-1]), 0.23)
+
+    def test_empty_series_when_no_dividends(self):
+        # A non-payer returns an empty yfinance series.
+        tk = SimpleNamespace(dividends=pd.Series(dtype=float))
+        with patch("yfinance.Ticker", return_value=tk):
+            series = _client().dividends("googl")
+        self.assertTrue(series.empty)
+
+    def test_permanent_failure_returns_empty_series_not_crash(self):
+        # A permanent failure (delisted / 404) returns the empty default,
+        # never raises.
+        class _Raises:
+            @property
+            def dividends(self):
+                raise RuntimeError("404 delisted")
+
+        with patch("yfinance.Ticker", return_value=_Raises()):
+            series = _client().dividends("DEAD")
+        self.assertTrue(series.empty)
+
+    def test_rate_limit_exhausted_returns_empty_series(self):
+        # Every attempt rate-limits → never crash the batch, return the empty
+        # default. ``dividends`` is an attribute access, so a property whose
+        # getter always raises models the persistent transient failure.
+        class _AlwaysRateLimited:
+            @property
+            def dividends(self):
+                raise YFRateLimitError()
+
+        slept: list[float] = []
+        with patch("yfinance.Ticker", return_value=_AlwaysRateLimited()):
+            series = _client(sleep=slept.append).dividends("QUBT")
+        self.assertTrue(series.empty)
+        # Retried up to the attempt cap before giving up.
+        self.assertEqual(len(slept), yc.YFinanceClient._MAX_REQUEST_ATTEMPTS - 1)

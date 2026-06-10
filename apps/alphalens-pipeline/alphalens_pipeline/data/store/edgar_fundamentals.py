@@ -51,6 +51,10 @@ from alphalens_pipeline.data.fundamentals.annual_aggregator import (
     AnnualStatement,
     annual_statements,
 )
+from alphalens_pipeline.data.fundamentals.capital_allocation import (
+    CapitalAllocation,
+    compute_buyback_proxy,
+)
 from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     CompanyfactsParquetReader,
     companyfacts_json_to_parquet_table,
@@ -374,6 +378,23 @@ class EdgarFundamentalsStore:
         companyfacts on disk.
         """
         return compute_owner_earnings(self.annual_series_as_of(ticker, asof, max_years=max_years))
+
+    def capital_allocation_as_of(
+        self, ticker: str, asof: date, *, max_years: int = 10
+    ) -> list[CapitalAllocation]:
+        """Per-fiscal-year buyback proxy (Δ shares outstanding YoY), PIT at ``asof``.
+
+        Delegates to
+        :func:`alphalens_pipeline.data.fundamentals.capital_allocation.compute_buyback_proxy`
+        over the :meth:`annual_series_as_of` series — newest first, capped to
+        ``max_years``. ``net_buyback`` reports only the SIGN of the share-count
+        change (a fall = net buyback, a rise = net issuance / dilution), not the
+        dollar amount; see the capital-allocation module docstring. The oldest
+        year has no prior fiscal year, so its change fields are ``None``.
+        Additive and unwired — not consumed by the thematic brief pipeline.
+        Empty list when the ticker has no CIK or no companyfacts on disk.
+        """
+        return compute_buyback_proxy(self.annual_series_as_of(ticker, asof, max_years=max_years))
 
     # --- internals --------------------------------------------------------
 
