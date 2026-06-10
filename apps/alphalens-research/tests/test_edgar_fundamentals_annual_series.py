@@ -34,6 +34,9 @@ _EXPECTED_FIELDS = {
     "short_term_debt",
     "cash_and_equivalents",
     "shares_outstanding",
+    "accounts_receivable",
+    "inventory",
+    "accounts_payable",
 }
 
 

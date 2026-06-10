@@ -305,6 +305,41 @@ class TestAnnualStatementsInstantAnchoring(_AnnualBase):
         series = annual_statements(reader, _CIK, date(2024, 1, 1))
         self.assertEqual(series[0].shares_outstanding, 5_000_000.0)
 
+    def test_working_capital_components_anchored_on_each_fy_end(self):
+        rows = [
+            _fy_duration("Revenues", 2021, 200.0),
+            _fy_duration("Revenues", 2022, 300.0),
+            _instant("AccountsReceivableNetCurrent", "2021-12-31", 100.0),
+            _instant("AccountsReceivableNetCurrent", "2022-12-31", 130.0),
+            _instant("InventoryNet", "2021-12-31", 50.0),
+            _instant("InventoryNet", "2022-12-31", 60.0),
+            _instant("AccountsPayableCurrent", "2021-12-31", 30.0),
+            _instant("AccountsPayableCurrent", "2022-12-31", 40.0),
+        ]
+        reader = self._reader(rows)
+        series = annual_statements(reader, _CIK, date(2024, 1, 1))
+        by_year = {s.fiscal_year_end: s for s in series}
+        self.assertEqual(by_year[date(2022, 12, 31)].accounts_receivable, 130.0)
+        self.assertEqual(by_year[date(2022, 12, 31)].inventory, 60.0)
+        self.assertEqual(by_year[date(2022, 12, 31)].accounts_payable, 40.0)
+        self.assertEqual(by_year[date(2021, 12, 31)].accounts_receivable, 100.0)
+        self.assertEqual(by_year[date(2021, 12, 31)].inventory, 50.0)
+        self.assertEqual(by_year[date(2021, 12, 31)].accounts_payable, 30.0)
+
+    def test_working_capital_component_fallback_chain(self):
+        # No AccountsReceivableNetCurrent; only the legacy ReceivablesNetCurrent
+        # tag, and the AP-and-accruals fallback.
+        rows = [
+            _fy_duration("Revenues", 2022, 300.0),
+            _instant("ReceivablesNetCurrent", "2022-12-31", 111.0),
+            _instant("AccountsPayableAndAccruedLiabilitiesCurrent", "2022-12-31", 22.0),
+        ]
+        reader = self._reader(rows)
+        series = annual_statements(reader, _CIK, date(2024, 1, 1))
+        self.assertEqual(series[0].accounts_receivable, 111.0)
+        self.assertEqual(series[0].accounts_payable, 22.0)
+        self.assertIsNone(series[0].inventory)
+
 
 class TestAnnualStatementsCaching(_AnnualBase):
     def test_reader_hit_once_for_many_concepts(self):
