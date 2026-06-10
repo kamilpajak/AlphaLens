@@ -42,7 +42,7 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 import pandas as pd
 
@@ -437,10 +437,7 @@ def build_comparison(
     ]
 
 
-_T = TypeVar("_T")
-
-
-def _safe(fn: Callable[[], _T], *, what: str) -> _T | None:
+def _safe[T](fn: Callable[[], T], *, what: str) -> T | None:
     """Call ``fn`` returning its result, or ``None`` (logged) on any exception.
 
     Keeps a single bad ticker / vendor hiccup from aborting the whole panel —
