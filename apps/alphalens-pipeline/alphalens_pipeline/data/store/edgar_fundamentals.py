@@ -47,6 +47,10 @@ import pyarrow.parquet as pq
 
 from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
 from alphalens_pipeline.data.fundamentals import concept_chains as chains
+from alphalens_pipeline.data.fundamentals.annual_aggregator import (
+    AnnualStatement,
+    annual_statements,
+)
 from alphalens_pipeline.data.fundamentals.companyfacts_parquet import (
     CompanyfactsParquetReader,
     companyfacts_json_to_parquet_table,
@@ -330,6 +334,25 @@ class EdgarFundamentalsStore:
             "total_equity": total_equity,
             "da_ttm": da_ttm,
         }
+
+    def annual_series_as_of(
+        self, ticker: str, asof: date, *, max_years: int = 10
+    ) -> list[AnnualStatement]:
+        """Multi-year annual (FY) statement series, PIT-correct at ``asof``.
+
+        Unlike :meth:`ev_fcff_features_as_of` (a single TTM-at-asof
+        snapshot), this returns the full per-fiscal-year history — newest
+        first, capped to ``max_years`` — for margin / capital-intensity
+        trend analysis and DCF history. Empty list when the ticker has no
+        CIK or no companyfacts on disk; triggers an on-demand fetch when the
+        parquet is missing, mirroring :meth:`ev_fcff_features_as_of`.
+        """
+        cik = self._cik_for(ticker)
+        if cik is None:
+            return []
+        if not (self._dir / f"{cik}.parquet").exists():
+            self.preload([ticker])
+        return annual_statements(self._reader, cik, asof, max_years=max_years)
 
     # --- internals --------------------------------------------------------
 
