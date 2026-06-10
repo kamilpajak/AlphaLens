@@ -240,6 +240,11 @@ class YFinanceClient:
         (PIT). A non-payer, a permanent failure (delist / 404) or exhausted
         retries all return an EMPTY ``float`` Series — this method NEVER raises,
         so a single bad ticker can't crash the batch.
+
+        Note for yield consumers: yfinance's ``.dividends`` values are
+        split-adjusted, so a dividend yield must pair them with split-adjusted
+        prices (the ``auto_adjust=False`` raw closes from :meth:`daily_ohlcv`
+        are NOT split-adjusted) to avoid a silent per-share-basis mismatch.
         """
         upper = ticker.upper()
 
