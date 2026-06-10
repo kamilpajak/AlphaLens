@@ -57,6 +57,16 @@ from alphalens_pipeline.data.fundamentals.ttm_aggregator import (
 # can differ by a handful of days within the same 10-K.
 _INSTANT_END_TOLERANCE_DAYS = 7
 
+# Tolerance (days) for collapsing fiscal-year ends that differ slightly
+# across duration concepts into ONE fiscal year. Normally every duration
+# fact in a 10-K shares an identical period_end (XBRL period context), but
+# a restatement or a cross-form recast can leave one concept on a
+# neighbouring date; without merging, the union of ends would emit two
+# partial AnnualStatement rows for a single fiscal year. Two genuine
+# fiscal years are ~365 days apart, so a half-month window cannot fuse
+# adjacent years (or a sub-annual transition period).
+_FY_MERGE_TOLERANCE_DAYS = 15
+
 
 @dataclass(frozen=True)
 class AnnualStatement:
@@ -240,9 +250,40 @@ def _shares_at_end(table: pa.Table, asof: date, target_end: date) -> float | Non
     return shares
 
 
-def _val(per_end: dict[str, _Entry], end: str) -> float | None:
-    entry = per_end.get(end)
-    return entry.val if entry is not None else None
+def _cluster_fy_ends(ends: set[str]) -> list[tuple[str, list[str]]]:
+    """Group fiscal-year ends within ``_FY_MERGE_TOLERANCE_DAYS`` into one year.
+
+    Returns ``[(canonical_end, member_ends), ...]`` newest canonical first.
+    The canonical end is the newest date in each cluster; members are every
+    raw end that falls within tolerance of it. Iterating newest->oldest, a
+    new cluster starts whenever the gap to the current cluster's canonical
+    exceeds the tolerance — so genuine adjacent fiscal years (~365 days
+    apart) never merge.
+    """
+    clusters: list[tuple[str, list[str]]] = []
+    for end in sorted(ends, reverse=True):
+        if clusters:
+            canonical = date.fromisoformat(clusters[-1][0])
+            if abs((canonical - date.fromisoformat(end)).days) <= _FY_MERGE_TOLERANCE_DAYS:
+                clusters[-1][1].append(end)
+                continue
+        clusters.append((end, [end]))
+    return clusters
+
+
+def _cluster_val(per_end: dict[str, _Entry], canonical: str, members: list[str]) -> float | None:
+    """Value for a clustered fiscal year: the member end present in
+    ``per_end`` closest to ``canonical`` (latest filed breaks ties)."""
+    canon = date.fromisoformat(canonical)
+    best: tuple[int, str, float] | None = None  # (distance, filed, val)
+    for member in members:
+        entry = per_end.get(member)
+        if entry is None:
+            continue
+        distance = abs((date.fromisoformat(member) - canon).days)
+        if best is None or distance < best[0] or (distance == best[0] and entry.filed > best[1]):
+            best = (distance, entry.filed, entry.val)
+    return best[2] if best is not None else None
 
 
 def annual_statements(
@@ -258,11 +299,13 @@ def annual_statements(
     ``fiscal_year_end`` descending (newest first). Empty list when the CIK
     has no parquet on disk.
 
-    The set of fiscal years is the union of FY ends across the *duration*
-    concepts (revenue, operating income, net income, OCF, capex, D&A); a
-    year with only instant (balance-sheet) rows and no duration row is not
-    emitted. The single ``reader.get_cik_table`` call is shared across every
-    concept lookup.
+    Fiscal years are the FY ends across the *duration* concepts (revenue,
+    operating income, net income, OCF, capex, D&A), clustered within
+    ``_FY_MERGE_TOLERANCE_DAYS`` so a concept whose ``period_end`` drifted a
+    few days (restatement / cross-form recast) does not split one fiscal
+    year into two partial rows. A year with only instant (balance-sheet)
+    rows and no duration row is not emitted. The single
+    ``reader.get_cik_table`` call is shared across every concept lookup.
     """
     table = reader.get_cik_table(cik)
     if table is None:
@@ -276,25 +319,35 @@ def annual_statements(
     da = _annual_da_entries(table, asof)
 
     duration_maps = (revenue, operating_income, net_income, ocf, capex, da)
-    fy_ends = sorted({end for per_end in duration_maps for end in per_end}, reverse=True)
-    fy_ends = fy_ends[:max_years]
+    all_ends = {end for per_end in duration_maps for end in per_end}
+    clusters = _cluster_fy_ends(all_ends)[:max_years]
 
     out: list[AnnualStatement] = []
-    for end in fy_ends:
-        present = [per_end[end] for per_end in duration_maps if end in per_end]
+    for canonical, members in clusters:
+        member_set = set(members)
+        present = [
+            entry
+            for per_end in duration_maps
+            for end, entry in per_end.items()
+            if end in member_set
+        ]
+        # filed_date is the latest publish date of the DURATION (P&L / cash
+        # flow) facts for this fiscal year, mirroring publish_date_str in the
+        # TTM dict. Instant balance-sheet rows may carry a different (often
+        # later) filed date; they are not folded in here on purpose.
         filed = max(e.filed for e in present)
-        fiscal_year_end = date.fromisoformat(end)
+        fiscal_year_end = date.fromisoformat(canonical)
         out.append(
             AnnualStatement(
                 fiscal_year_end=fiscal_year_end,
                 fy=fiscal_year_end.year,
                 filed_date=date.fromisoformat(filed),
-                revenue=_val(revenue, end),
-                operating_income=_val(operating_income, end),
-                net_income=_val(net_income, end),
-                ocf=_val(ocf, end),
-                capex=_val(capex, end),
-                da=_val(da, end),
+                revenue=_cluster_val(revenue, canonical, members),
+                operating_income=_cluster_val(operating_income, canonical, members),
+                net_income=_cluster_val(net_income, canonical, members),
+                ocf=_cluster_val(ocf, canonical, members),
+                capex=_cluster_val(capex, canonical, members),
+                da=_cluster_val(da, canonical, members),
                 total_equity=_instant_at_end(table, chains.EQUITY, asof, fiscal_year_end),
                 long_term_debt=_instant_at_end(table, chains.LONG_TERM_DEBT, asof, fiscal_year_end),
                 short_term_debt=_instant_at_end(

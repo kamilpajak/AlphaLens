@@ -131,6 +131,28 @@ class TestAnnualStatementsHappyPath(_AnnualBase):
         self.assertEqual(series[0].net_income, 15.0)
         self.assertEqual(series[2].revenue, 100.0)
 
+    def test_concept_period_end_drift_merges_into_one_year(self):
+        # Revenue ends 2022-12-28, NI ends 2022-12-31 (restatement / recast
+        # drift within tolerance) -> ONE fiscal year, not two partial rows.
+        rows = [
+            _row(
+                concept="Revenues",
+                period_start="2022-01-01",
+                period_end="2022-12-28",
+                val=300.0,
+                fp="FY",
+                form="10-K",
+                filed_date="2023-02-15",
+            ),
+            _fy_duration("NetIncomeLoss", 2022, 15.0),  # ends 2022-12-31
+        ]
+        reader = self._reader(rows)
+        series = annual_statements(reader, _CIK, date(2024, 1, 1))
+        self.assertEqual(len(series), 1)
+        self.assertEqual(series[0].fiscal_year_end, date(2022, 12, 31))  # newest member = canonical
+        self.assertEqual(series[0].revenue, 300.0)
+        self.assertEqual(series[0].net_income, 15.0)
+
     def test_fy_value_is_raw_not_ttm(self):
         # A single FY row's value must pass through verbatim.
         reader = self._reader([_fy_duration("Revenues", 2022, 987.0)])
