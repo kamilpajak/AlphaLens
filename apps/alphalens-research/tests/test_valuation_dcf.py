@@ -58,6 +58,11 @@ def _statement(
         short_term_debt=std,
         cash_and_equivalents=cash,
         shares_outstanding=shares,
+        # Working-capital fields added to AnnualStatement by #502 (PR #510);
+        # the DCF does not read them, but they are required dataclass fields.
+        accounts_receivable=None,
+        inventory=None,
+        accounts_payable=None,
     )
 
 
