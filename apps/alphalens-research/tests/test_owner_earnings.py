@@ -409,5 +409,53 @@ class TestOrderAndShape(unittest.TestCase):
         self.assertTrue(all(isinstance(r, OwnerEarnings) for r in result))
 
 
+class TestFiscalYearGapGuard(unittest.TestCase):
+    def test_gap_year_nulls_wc_change_and_owner_earnings(self):
+        # 2020 is missing -> 2021's prior in the series is 2019 (~731 days).
+        # The consecutive-year guard must reject that pairing: 2021 gets
+        # working_capital_change=None -> owner_earnings=None. 2022 (prior 2021,
+        # ~365 days) computes normally.
+        statements = [
+            _stmt(
+                2022,
+                net_income=200.0,
+                da=70.0,
+                capex=80.0,
+                accounts_receivable=130.0,
+                inventory=60.0,
+                accounts_payable=40.0,
+            ),  # WC = 150
+            _stmt(
+                2021,
+                net_income=180.0,
+                da=60.0,
+                capex=60.0,
+                accounts_receivable=100.0,
+                inventory=50.0,
+                accounts_payable=30.0,
+            ),  # WC = 120
+            _stmt(
+                2019,
+                net_income=150.0,
+                da=50.0,
+                capex=50.0,
+                accounts_receivable=90.0,
+                inventory=40.0,
+                accounts_payable=20.0,
+            ),  # WC = 110, but 2 years before 2021
+        ]
+        by_year = {r.fy: r for r in compute_owner_earnings(statements)}
+
+        # 2022 <- 2021 consecutive: ΔWC = 150 - 120 = 30, owner computes.
+        self.assertEqual(by_year[2022].working_capital_change, 30.0)
+        self.assertEqual(by_year[2022].owner_earnings, 200.0 + 70.0 - 70.0 - 30.0)
+
+        # 2021 <- 2019 has a gap year -> guard nulls ΔWC and owner_earnings,
+        # even though both years have a complete working-capital figure.
+        self.assertEqual(by_year[2021].working_capital, 120.0)
+        self.assertIsNone(by_year[2021].working_capital_change)
+        self.assertIsNone(by_year[2021].owner_earnings)
+
+
 if __name__ == "__main__":
     unittest.main()

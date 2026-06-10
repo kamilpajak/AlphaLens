@@ -41,6 +41,16 @@ from datetime import date
 
 from alphalens_pipeline.data.fundamentals.annual_aggregator import AnnualStatement
 
+# A ΔWC term is only valid between two CONSECUTIVE fiscal years. The #501
+# series only emits years that carry duration data, so a missing / non-filed
+# year (rare: delisting-relisting, a skipped filing) can leave a gap; without
+# this guard the next-older entry would be used as the "prior" year and ΔWC
+# would silently become a multi-year delta. A normal year-over-year gap is
+# ~365 days; the window tolerates 52/53-week calendars and a fiscal-year-end
+# shift of a few weeks while rejecting a whole skipped year (~730 days).
+_PRIOR_FY_MIN_GAP_DAYS = 300
+_PRIOR_FY_MAX_GAP_DAYS = 430
+
 
 @dataclass(frozen=True)
 class OwnerEarnings:
@@ -79,6 +89,16 @@ def _working_capital(stmt: AnnualStatement) -> float | None:
     return ar + inv - ap
 
 
+def _is_prior_consecutive(prior: AnnualStatement, current: AnnualStatement) -> bool:
+    """True when ``prior``'s fiscal-year end is ~1 year before ``current``'s.
+
+    Guards the ΔWC term against a gap year in the series (which would turn a
+    multi-year working-capital change into a mislabeled one-year delta).
+    """
+    gap_days = (current.fiscal_year_end - prior.fiscal_year_end).days
+    return _PRIOR_FY_MIN_GAP_DAYS <= gap_days <= _PRIOR_FY_MAX_GAP_DAYS
+
+
 def _maintenance_capex(stmt: AnnualStatement) -> float | None:
     """``min(capex, D&A)`` approximation, or None when either input is missing."""
     if stmt.capex is None or stmt.da is None:
@@ -104,8 +124,11 @@ def compute_owner_earnings(statements: list[AnnualStatement]) -> list[OwnerEarni
         # The prior fiscal year is the next (older) entry in the newest-first list.
         prior = statements[i + 1] if i + 1 < n else None
         prior_wc = _working_capital(prior) if prior is not None else None
+        # Only difference CONSECUTIVE years — a gap (missing fiscal year) would
+        # otherwise yield a multi-year ΔWC mislabeled as one year.
+        consecutive = prior is not None and _is_prior_consecutive(prior, stmt)
 
-        if wc is None or prior_wc is None:
+        if wc is None or prior_wc is None or not consecutive:
             wc_change: float | None = None
         else:
             wc_change = wc - prior_wc
