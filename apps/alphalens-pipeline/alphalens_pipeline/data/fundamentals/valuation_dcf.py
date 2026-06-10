@@ -21,16 +21,27 @@ Design contract:
   are a known limitation; the live caller supplies the current market cap from
   the yfinance snapshot via the store. The DCF module deliberately knows
   nothing about price retrieval.
-- **Value convention.** :func:`discount_owner_earnings` returns the
-  **enterprise value** (PV of the unlevered free-cash-flow proxy). Equity value
-  is then ``enterprise_value + net_cash`` where ``net_cash = cash − total_debt``
-  (so a net-debt company subtracts), and per-share value divides equity value by
-  shares outstanding. ``margin_of_safety`` compares equity-level market value to
-  equity-level intrinsic value.
-- **base_fcf proxy.** :func:`intrinsic_value_from_statements` derives
-  ``base_fcf`` from the latest fiscal year's ``ocf − capex`` (a free-cash-flow
-  proxy). Once PR-2 (#502) lands its ``owner_earnings`` series, that figure can
-  be substituted as ``base_fcf`` without changing this module's shape.
+- **Value convention.** :func:`discount_owner_earnings` returns the present
+  value of whatever cash-flow stream it is fed. The convention here labels that
+  PV as ``enterprise_value`` and reaches equity via
+  ``enterprise_value + net_cash`` (``net_cash = cash − total_debt``; a net-debt
+  company subtracts), per-share = equity value / shares. ``margin_of_safety``
+  compares equity-level market value to equity-level intrinsic value.
+- **Levered-proxy caveat (KNOWN approximation, not a rigorous valuation).**
+  :func:`intrinsic_value_from_statements` uses ``base_fcf = ocf − capex`` from
+  the latest fiscal year. Under US GAAP, OCF is reported **after cash interest
+  paid**, so ``ocf − capex`` is a **levered** free-cash-flow proxy (closest to
+  FCFE-before-net-borrowing), **not** unlevered FCFF. Discounting a levered
+  stream at a blended WACC and then adding net cash double-counts the capital
+  structure for leveraged firms; the error is second-order for low-leverage
+  issuers (small interest → ``ocf − capex`` ≈ FCFF, small net cash). This is an
+  acceptable, intentionally-documented approximation for a decision-support
+  tool — do NOT treat the output as a theoretically clean valuation. The proper
+  fix is deferred: either add back after-tax interest to form an unlevered FCFF
+  (needs an interest field not yet on ``AnnualStatement``; arrives with a #502
+  follow-up) and keep WACC + net cash, or discount an FCFE stream at the cost of
+  equity and drop the net-cash step. The ``discount_rate`` is a caller-supplied
+  parameter, so a caller passing a true FCFF stream + WACC gets the clean result.
 """
 
 from __future__ import annotations
@@ -128,8 +139,11 @@ def discount_owner_earnings(
     (discount_rate - terminal_growth)`` (Gordon growth), discounted back by
     ``(1 + discount_rate) ** years``.
 
-    Returns the **enterprise value** (the discounted value of the cash-flow
-    proxy itself); net cash is layered on by the caller.
+    Returns the present value of the projected stream. The caller labels it
+    ``enterprise_value`` and layers net cash on top; that EV interpretation is
+    only theoretically clean when ``base_fcf`` is an unlevered FCFF stream. With
+    the ``ocf − capex`` proxy used by :func:`intrinsic_value_from_statements`
+    the result is approximate (see the module docstring's levered-proxy caveat).
 
     Guard: a Gordon terminal value diverges unless the discount rate strictly
     exceeds the terminal growth rate. ``discount_rate <= terminal_growth``
@@ -142,7 +156,7 @@ def discount_owner_earnings(
         raise ValueError("discount_rate must be strictly greater than terminal_growth")
 
     pv_explicit = 0.0
-    cash_flow = base_fcf
+    cash_flow = base_fcf  # final iteration leaves CF_years for the terminal value
     for t in range(1, years + 1):
         cash_flow = base_fcf * (1 + growth_rate) ** t
         pv_explicit += cash_flow / (1 + discount_rate) ** t
@@ -197,8 +211,9 @@ def intrinsic_value_from_statements(
 
     Steps:
 
-    1. ``base_fcf = ocf - capex`` from the latest year (a free-cash-flow proxy;
-       PR-2's ``owner_earnings`` can be substituted later).
+    1. ``base_fcf = ocf - capex`` from the latest year — a **levered** FCF proxy
+       (OCF is post-interest), see the module docstring's levered-proxy caveat;
+       PR-2's ``owner_earnings`` can be substituted later.
     2. ``enterprise_value = discount_owner_earnings(base_fcf, ...)``.
     3. ``net_cash = cash_and_equivalents - (long_term_debt + short_term_debt)``
        from the latest year. Missing balance-sheet items are treated as zero
