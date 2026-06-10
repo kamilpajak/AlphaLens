@@ -246,6 +246,13 @@ def _intrinsic_value_per_share(
     divides by shares. ``None`` when owner earnings is missing / non-positive,
     there is no latest statement, or shares is missing / non-positive. Never
     raises (the Gordon guard cannot trip: hurdle 10% > terminal growth 0%).
+
+    Share-basis note: the divisor is the LATEST ANNUAL statement's
+    ``shares_outstanding``, but the downstream margin-of-safety compares the
+    resulting per-share value against the current snapshot ``price`` (features
+    dict). If the share count moved materially since the fiscal-year close
+    (large buyback / issuance), the two are on slightly different bases — an
+    accepted approximation for a screening lens, not a precise valuation.
     """
     if owner_earnings_latest is None or owner_earnings_latest <= 0:
         return None
