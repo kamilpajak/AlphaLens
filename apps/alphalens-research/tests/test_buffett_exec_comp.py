@@ -203,6 +203,76 @@ class TestExecCompAsOf(unittest.TestCase):
         self.assertGreater(n_first, 0)
         self.assertEqual(client2.frame_calls, [])  # served entirely from disk
 
+    def test_filing_date_fallback_when_no_acceptance_datetime(self):
+        subs = {
+            "fiscalYearEnd": "1231",
+            "filings": {
+                "recent": {
+                    "accessionNumber": ["0001321655-26-000019"],
+                    "acceptanceDateTime": [None],  # missing → fall back to filingDate
+                    "filingDate": ["2026-04-24"],
+                    "form": ["DEF 14A"],
+                },
+                "files": [],
+            },
+        }
+        client = _FakeClient(_full_year_frames(2025), subs=subs)
+        facts = self._run(client, dt.date(2026, 6, 1))
+        self.assertEqual(facts.coverage, ExecCompCoverage.PRESENT)
+
+    def test_accn_resolved_via_overflow_shard(self):
+        # The accn lives only in an overflow shard, not the recent block.
+        subs = {
+            "fiscalYearEnd": "1231",
+            "filings": {
+                "recent": {"accessionNumber": [], "acceptanceDateTime": [], "filingDate": []},
+                "files": [{"name": "CIK0001321655-submissions-001.json"}],
+            },
+        }
+
+        class _OverflowClient(_FakeClient):
+            def fetch_submissions_overflow(self, name):
+                return {
+                    "filings": {
+                        "recent": {
+                            "accessionNumber": ["0001321655-26-000019"],
+                            "acceptanceDateTime": ["2026-04-24T10:01:15.000Z"],
+                            "filingDate": ["2026-04-24"],
+                        }
+                    }
+                }
+
+        client = _OverflowClient(_full_year_frames(2025), subs=subs)
+        facts = self._run(client, dt.date(2026, 6, 1))
+        self.assertEqual(facts.coverage, ExecCompCoverage.PRESENT)
+
+    def test_failsoft_on_submissions_error(self):
+        class _BoomClient(_FakeClient):
+            def fetch_submissions(self, cik):
+                raise RuntimeError("sec down")
+
+        client = _BoomClient(_full_year_frames(2025))
+        facts = self._run(client, dt.date(2026, 6, 1))
+        self.assertEqual(facts.coverage, ExecCompCoverage.NOT_DISCLOSED)
+        self.assertIsNone(facts.peo_total_comp)
+
+    def test_non_numeric_val_becomes_none_not_crash(self):
+        frames = _full_year_frames(2025)
+        frames[("PeoActuallyPaidCompAmt", 2025)] = [
+            {"cik": int(_CIK), "val": "not-a-number", "accn": "0001321655-26-000019"}
+        ]
+        client = _FakeClient(frames)
+        facts = self._run(client, dt.date(2026, 6, 1))
+        self.assertEqual(facts.coverage, ExecCompCoverage.PRESENT)
+        self.assertIsNone(facts.peo_actually_paid)  # unparseable → None, never a crash
+
+    def test_corrupt_cache_file_refetches(self):
+        # A junk file at the cache path must not poison the read — refetch.
+        (self.cache / "ecd_PeoTotalCompAmt_USD_CY2025.json").write_text("{ broken json")
+        client = _FakeClient(_full_year_frames(2025))
+        facts = self._run(client, dt.date(2026, 6, 1))
+        self.assertEqual(facts.coverage, ExecCompCoverage.PRESENT)
+
 
 if __name__ == "__main__":
     unittest.main()

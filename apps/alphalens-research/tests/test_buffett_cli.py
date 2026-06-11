@@ -386,5 +386,51 @@ class TestScuttlebuttFlag(unittest.TestCase):
             self.assertEqual(called, [])
 
 
+class TestBuildExecCompFn(unittest.TestCase):
+    """#507 PR-7b: the CLI helper resolves ticker -> CIK and calls exec_comp_as_of,
+    returning a NOT_DISCLOSED facts object when the CIK can't be resolved."""
+
+    def test_resolves_cik_and_calls_exec_comp(self):
+        import datetime as _dt
+
+        from alphalens_cli.commands.buffett import _build_exec_comp_fn
+        from alphalens_pipeline.buffett.exec_comp import ExecCompCoverage, ExecCompFacts
+
+        sentinel = ExecCompFacts(
+            cik="1321655", coverage=ExecCompCoverage.PRESENT, peo_to_neo_ratio=4.0
+        )
+        with (
+            patch("alphalens_pipeline.data.alt_data.sec_edgar_client.get_default_sec_client"),
+            patch(
+                "alphalens_pipeline.thematic.verification.tenk_grep._resolve_cik",
+                return_value="0001321655",
+            ),
+            patch(
+                "alphalens_pipeline.buffett.exec_comp.exec_comp_as_of", return_value=sentinel
+            ) as ec,
+        ):
+            fn = _build_exec_comp_fn()
+            result = fn("ACME", _dt.date(2026, 6, 1))
+        self.assertIs(result, sentinel)
+        self.assertEqual(ec.call_args.args[0], "0001321655")
+
+    def test_unresolvable_cik_returns_not_disclosed(self):
+        import datetime as _dt
+
+        from alphalens_cli.commands.buffett import _build_exec_comp_fn
+        from alphalens_pipeline.buffett.exec_comp import ExecCompCoverage
+
+        with (
+            patch("alphalens_pipeline.data.alt_data.sec_edgar_client.get_default_sec_client"),
+            patch(
+                "alphalens_pipeline.thematic.verification.tenk_grep._resolve_cik", return_value=None
+            ),
+        ):
+            fn = _build_exec_comp_fn()
+            result = fn("XYZ", _dt.date(2026, 6, 1))
+        self.assertEqual(result.coverage, ExecCompCoverage.NOT_DISCLOSED)
+        self.assertIsNone(result.peo_to_neo_ratio)
+
+
 if __name__ == "__main__":
     unittest.main()
