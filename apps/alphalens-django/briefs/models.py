@@ -47,6 +47,13 @@ class Brief(models.Model):
     n_gates_unknown = models.IntegerField(default=0)
     verified = models.BooleanField(default=False)
 
+    # Structured per-gate verdict REASONS (PR-4): a JSON string
+    # {gate: {passed, threshold, actual, unit}} so a tuning analyst can see WHY a
+    # candidate cleared or missed a gate (e.g. insider net=$31k < $50k floor), not
+    # just the pass/fail names in gates_passed/failed/unknown. Empty for rows
+    # written before the field existed.
+    gate_verdict_json = models.TextField(blank=True, default="")
+
     source_event_url = models.URLField(max_length=2048, blank=True)
     source_event_title = models.CharField(max_length=512, blank=True)
     source_event_published_at = models.CharField(max_length=64, blank=True)

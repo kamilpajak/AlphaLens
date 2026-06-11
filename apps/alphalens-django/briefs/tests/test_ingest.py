@@ -36,6 +36,7 @@ def _sample_rows() -> list[dict]:
             "company_name": "NVIDIA",
             "gates_passed": ["pe", "fcff"],
             "n_gates_passed": 2,
+            "gate_verdict_json": '{"insider": {"passed": true, "threshold": 50000.0, "actual": 81000.0, "unit": "usd_net_90d"}}',
             "layer4_weighted_score": 12,
             "verified": True,
             "market_cap": 3_000_000_000_000.0,
@@ -79,6 +80,9 @@ class TestRebuildSmoke:
         assert nvda.date == dt.date(2026, 5, 22)
         assert nvda.gates_passed == ["pe", "fcff"]
         assert nvda.verified is True
+        # PR-4: structured gate reasons round-trip as a JSON string (TextField).
+        assert json.loads(nvda.gate_verdict_json)["insider"]["actual"] == 81000.0
+        # AVGO omits the column -> empty string default, not a crash.
         # next_earnings_date: ISO string in the parquet -> coerced DateField.
         assert nvda.next_earnings_date == dt.date(2026, 8, 5)
         # AVGO omits the column entirely -> null round-trip, not a crash.

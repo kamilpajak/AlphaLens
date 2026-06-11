@@ -41,6 +41,7 @@ def has_opportunistic_buy(
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     usd_threshold: float = DEFAULT_USD_THRESHOLD,
     form4_root: Path = DEFAULT_FORM4_ROOT,
+    reason: dict | None = None,
 ) -> bool | None:
     """Layer 3 verification gate: net opportunistic insider buy over threshold?
 
@@ -53,7 +54,15 @@ def has_opportunistic_buy(
     history. A March-every-year trader is ROUTINE regardless of WHICH ticker
     they touch; a ticker-restricted view would mislabel them as opportunistic
     on whichever ticker first breaks the pattern.
+
+    ``reason`` (PR-4, OPTIONAL out-param): when a dict is supplied it is filled
+    with the WHY of the verdict ``{threshold, actual, unit}`` so a tuning analyst
+    can see "net=$31k < $50k floor", not just pass/fail. Purely observational --
+    the bool/None return value is byte-identical whether or not it is passed.
+    ``actual`` stays ``None`` on the early no-data / no-trade exits.
     """
+    if reason is not None:
+        reason.update({"threshold": float(usd_threshold), "actual": None, "unit": "usd_net_90d"})
     years = form4_store.classification_years(asof)
     try:
         ticker_history = form4_store.load_form4_for_ticker(
@@ -88,6 +97,8 @@ def has_opportunistic_buy(
 
     classifier_cache = form4_store.MemoizedClassifier(full_history)
     net_usd = aggregate_opportunistic_signal(recent, asof=asof, classifier_cache=classifier_cache)
+    if reason is not None:
+        reason["actual"] = float(net_usd)
     return net_usd >= usd_threshold
 
 

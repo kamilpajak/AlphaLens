@@ -165,11 +165,29 @@ def _is_listlike(x) -> bool:
     return isinstance(x, Iterable)
 
 
+def _grep_result(haystack, kw_lower: list[str], reason: dict | None) -> bool:
+    """Pass iff any keyword substring-matches any row; record the match COUNT.
+
+    Equivalent to ``any(haystack.str.contains(kw).any() for kw in kw_lower)`` for
+    the boolean, but also counts the rows matching at least one keyword so the
+    optional ``reason`` out-param can report how many articles mentioned the theme.
+    """
+    match_mask = None
+    for kw in kw_lower:
+        col = haystack.str.contains(kw, regex=False)
+        match_mask = col if match_mask is None else (match_mask | col)
+    count = int(match_mask.sum()) if match_mask is not None else 0
+    if reason is not None:
+        reason["actual"] = count
+    return count > 0
+
+
 def has_theme_in_press_frame(
     *,
     ticker: str,
     keywords: Iterable[str],
     press_df: pd.DataFrame,
+    reason: dict | None = None,
 ) -> bool | None:
     """In-memory verification gate over a pre-fetched window DataFrame.
 
@@ -210,7 +228,7 @@ def has_theme_in_press_frame(
         .apply(lambda x: " ".join(str(k) for k in x) if _is_listlike(x) else "")
         .str.lower()
     )
-    return any(haystack.str.contains(kw, regex=False).any() for kw in kw_lower)
+    return _grep_result(haystack, kw_lower, reason)
 
 
 def has_theme_in_recent_press(
@@ -221,13 +239,21 @@ def has_theme_in_recent_press(
     client: PolygonClient | None = None,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
     cache_dir: Path = DEFAULT_CACHE_DIR,
+    reason: dict | None = None,
 ) -> bool | None:
     """Verification gate: does ticker's last-30d press mention any theme keyword?
 
     Tri-state: ``True`` (keyword hit), ``False`` (Polygon returned cleanly
     with no theme-tagged press), ``None`` (Polygon fetch failed — rate limit,
     network error — orchestrator records as ``gates_unknown``).
+
+    ``reason`` (PR-4, OPTIONAL out-param): when supplied, filled with
+    ``{threshold, actual, unit}`` -- threshold = the lookback-day window, actual =
+    the count of articles in that window mentioning any theme keyword. Purely
+    observational; the return value is unchanged whether or not it is passed.
     """
+    if reason is not None:
+        reason.update({"threshold": lookback_days, "actual": None, "unit": "matching_articles"})
     try:
         df = fetch_recent_news_cached(
             ticker=ticker,
@@ -241,9 +267,13 @@ def has_theme_in_recent_press(
         return None
 
     if df.empty:
+        if reason is not None:
+            reason["actual"] = 0
         return False
     kw_lower = [k.lower() for k in keywords if k]
     if not kw_lower:
+        if reason is not None:
+            reason["actual"] = 0
         return False
 
     # Concatenate title + description + keywords list per row, lowercase, substring grep.
@@ -259,7 +289,7 @@ def has_theme_in_recent_press(
         .apply(lambda x: " ".join(str(k) for k in x) if _is_listlike(x) else "")
         .str.lower()
     )
-    return any(haystack.str.contains(kw, regex=False).any() for kw in kw_lower)
+    return _grep_result(haystack, kw_lower, reason)
 
 
 __all__ = [

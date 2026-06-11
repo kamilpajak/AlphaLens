@@ -39,6 +39,9 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "gates_unknown_str",
     "n_gates_unknown",
     "verified",
+    # PR-4: structured per-gate verdict reasons {gate: {passed, threshold,
+    # actual, unit}} as a JSON string, alongside the pass/fail name-lists above.
+    "gate_verdict_json",
     "source_event_url",
     "source_event_title",
     "source_event_published_at",

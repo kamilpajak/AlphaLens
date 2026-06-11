@@ -456,13 +456,21 @@ def has_theme_keywords_in_10k(
     keywords: Iterable[str],
     cache_dir: Path = DEFAULT_CACHE_DIR,
     asof: dt.date | None = None,
+    reason: dict | None = None,
 ) -> bool | None:
     """Verification gate: any ``keyword`` substring-present in ``ticker``'s 10-K?
 
     Tri-state: ``True`` (keyword hit), ``False`` (10-K fetched but no hit),
     ``None`` (CIK unresolvable or fetch failed — orchestrator records as
     ``gates_unknown``, NOT a false negative).
+
+    ``reason`` (PR-4, OPTIONAL out-param): when supplied, filled with
+    ``{threshold, actual, unit}`` -- threshold 1 keyword hit, actual = the count
+    of distinct theme keywords matched in the filing. Purely observational; the
+    return value is unchanged whether or not it is passed.
     """
+    if reason is not None:
+        reason.update({"threshold": 1, "actual": None, "unit": "keyword_hits"})
     try:
         text = fetch_10k_text(ticker=ticker, cache_dir=cache_dir, asof=asof)
     except Exception as exc:
@@ -470,7 +478,10 @@ def has_theme_keywords_in_10k(
         return None
     if text is None:
         return None
-    return len(grep_keywords(text, keywords)) > 0
+    hits = grep_keywords(text, keywords)
+    if reason is not None:
+        reason["actual"] = len(hits)
+    return len(hits) > 0
 
 
 __all__ = [
