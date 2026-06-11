@@ -180,6 +180,17 @@ def lens_command(
             "off by default so the lens costs nothing."
         ),
     ),
+    scuttlebutt: bool = typer.Option(
+        False,
+        "--scuttlebutt",
+        help=(
+            "Opt-in add-on to --qualitative: fetch web-grounded scuttlebutt "
+            "(competitive position, customer/supplier concentration, management "
+            "reputation) via Perplexity per candidate and feed it to the classifier "
+            "as UNVERIFIED context (~$0.02-0.05 each). Needs PERPLEXITY_API_KEY; "
+            "requires --qualitative; qual-only (adds no numbers)."
+        ),
+    ),
 ) -> None:
     """Score a brief date's candidates on the Buffett quantitative delta.
 
@@ -224,7 +235,12 @@ def lens_command(
         typer.echo(f"No candidates in brief for {target.isoformat()}.")
         return
 
-    assessments = _run_qualitative(panels, asof=target) if qualitative else None
+    if scuttlebutt and not qualitative:
+        typer.echo("Note: --scuttlebutt requires --qualitative; ignoring --scuttlebutt.")
+
+    assessments = (
+        _run_qualitative(panels, asof=target, scuttlebutt=scuttlebutt) if qualitative else None
+    )
 
     typer.echo(f"Buffett lens (Mode A) — {target.isoformat()} — {len(panels)} candidates")
     typer.echo(_format_table(panels, assessments))
@@ -267,20 +283,42 @@ def _assessment_record(assessment) -> dict:  # QualitativeAssessment | None
 _QUALITATIVE_YEARS = 3
 
 
-def _run_qualitative(panels: list, *, asof: dt.date) -> list:
+def _build_scuttlebutt_client():
+    """Build a PerplexityClient from PERPLEXITY_API_KEY, or ``None`` (fail-soft).
+
+    Missing / empty key → ``None`` + one warning, so ``--scuttlebutt`` degrades to
+    "no scuttlebutt" rather than crashing the lens. Kept here (lazy) so the
+    non-scuttlebutt path never imports the client.
+    """
+    import os
+
+    from alphalens_pipeline.literature_scanner.perplexity_client import PerplexityClient
+
+    api_key = os.getenv("PERPLEXITY_API_KEY", "").strip()
+    if not api_key:
+        logger.warning("buffett --scuttlebutt: PERPLEXITY_API_KEY not set — skipping scuttlebutt")
+        return None
+    return PerplexityClient(api_key=api_key)
+
+
+def _run_qualitative(panels: list, *, asof: dt.date, scuttlebutt: bool = False) -> list:
     """Run the per-candidate qualitative LLM layer, one assessment per panel.
 
     For each panel: fetch up to ``_QUALITATIVE_YEARS`` of 10-Ks, split the latest
     into the four Buffett sections (Item 1/1A/7/8), collect the prior years'
     Item 1A risk factors as a moat-trend evidence trail, build the injected-facts
     dict from the already-computed panel, and call :func:`assess_qualitative`.
-    Every step is fail-soft — a fetch failure or a name with no 10-K yields
-    ``None`` for that row (rendered as dashes). The LLM import stays lazy here so
-    the non-qualitative path never pays for it.
+    When ``scuttlebutt`` is set, also fetch web-grounded context (#507) per
+    candidate and pass it in. Every step is fail-soft — a fetch failure or a name
+    with no 10-K yields ``None`` for that row (rendered as dashes). The LLM import
+    stays lazy here so the non-qualitative path never pays for it.
     """
     from alphalens_pipeline.buffett.qualitative import assess_qualitative
+    from alphalens_pipeline.buffett.scuttlebutt import fetch_scuttlebutt
     from alphalens_pipeline.buffett.tenk_sections import split_10k_sections
     from alphalens_pipeline.thematic.verification.tenk_grep import fetch_multi_year_10k_texts
+
+    scuttlebutt_client = _build_scuttlebutt_client() if scuttlebutt else None
 
     assessments: list = []
     for panel in panels:
@@ -300,6 +338,10 @@ def _run_qualitative(panels: list, *, asof: dt.date) -> list:
         prior_year_risk_factors = [
             (date, split_10k_sections(text).item_1a) for date, text in multi_year[1:]
         ]
+        scuttlebutt_text: str | None = None
+        if scuttlebutt_client is not None:
+            sb = fetch_scuttlebutt(panel.ticker, client=scuttlebutt_client)
+            scuttlebutt_text = sb.text if sb.ok else None
         facts = {
             "roic_latest": panel.roic_latest,
             "roic_3y_avg": panel.roic_3y_avg,
@@ -313,6 +355,7 @@ def _run_qualitative(panels: list, *, asof: dt.date) -> list:
                 sections=sections,
                 facts=facts,
                 prior_year_risk_factors=prior_year_risk_factors,
+                scuttlebutt=scuttlebutt_text,
             )
         )
     return assessments

@@ -123,7 +123,7 @@ recompute or restate them as your own estimate):
 
 10-K — ITEM 8 (FINANCIAL STATEMENTS AND SUPPLEMENTARY DATA):
 {item_8}
-{evolution_block}
+{evolution_block}{scuttlebutt_block}
 TASK — classify three qualities, returning ONLY the JSON object specified below:
 
 1. understandable (boolean): true if a generalist investor could clearly explain
@@ -248,12 +248,33 @@ def _format_evolution_block(prior_year_risk_factors: list[tuple[str, str | None]
     )
 
 
+def _format_scuttlebutt_block(scuttlebutt: str | None) -> str:
+    """Render the web-grounded scuttlebutt context as an optional prompt block (#507).
+
+    Empty / blank → "" so the prompt omits the block. The header frames it as
+    UNVERIFIED third-party narrative and tells the model not to treat any figure
+    inside it as authoritative — the doctrine mitigation so a stale Perplexity
+    number cannot masquerade as a real value even while informing a qualitative
+    classification.
+    """
+    if not isinstance(scuttlebutt, str) or not scuttlebutt.strip():
+        return ""
+    return (
+        "\nSCUTTLEBUTT — third-party web research (competitive position, customer/"
+        "supplier concentration, management reputation). Treat this as UNVERIFIED "
+        "narrative: reason over its qualitative claims, but do NOT treat any figure "
+        "in it as authoritative (authoritative numbers are in the FACTS block):\n"
+        f"{scuttlebutt.strip()}\n"
+    )
+
+
 def build_qualitative_prompt(
     *,
     ticker: str,
     sections,
     facts: dict,
     prior_year_risk_factors: list[tuple[str, str | None]] | None = None,
+    scuttlebutt: str | None = None,
 ) -> str:
     """Build the classification prompt: injected facts + 10-K section excerpts.
 
@@ -263,6 +284,8 @@ def build_qualitative_prompt(
     ``prior_year_risk_factors`` (#505) is an optional ``[(filing_date,
     item_1a_text), ...]`` of earlier-year risk sections — when supplied it adds a
     chronological RISK-FACTOR EVOLUTION block feeding the moat_trend call.
+    ``scuttlebutt`` (#507) is optional web-grounded narrative — when supplied it
+    adds an UNVERIFIED-context block; it is qual-only and never a source of numbers.
     """
     return _PROMPT_TEMPLATE.format(
         ticker=ticker,
@@ -272,6 +295,7 @@ def build_qualitative_prompt(
         item_7=sections.item_7 or _SECTION_PLACEHOLDER,
         item_8=sections.item_8 or _SECTION_PLACEHOLDER,
         evolution_block=_format_evolution_block(prior_year_risk_factors),
+        scuttlebutt_block=_format_scuttlebutt_block(scuttlebutt),
     )
 
 
@@ -367,6 +391,7 @@ def assess_qualitative(
     sections,
     facts: dict,
     prior_year_risk_factors: list[tuple[str, str | None]] | None = None,
+    scuttlebutt: str | None = None,
     llm_client: OpenRouterClient | None = None,
     model: str = DEFAULT_MODEL,
 ) -> QualitativeAssessment:
@@ -396,6 +421,7 @@ def assess_qualitative(
         sections=sections,
         facts=facts,
         prior_year_risk_factors=prior_year_risk_factors,
+        scuttlebutt=scuttlebutt,
     )
     try:
         # Client init inside the try so a missing OPENROUTER_API_KEY degrades
