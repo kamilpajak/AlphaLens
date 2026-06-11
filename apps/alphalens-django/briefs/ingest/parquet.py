@@ -83,6 +83,10 @@ class RebuildResult:
     skipped_dates: tuple[dt.date, ...]
     deleted_dates: tuple[dt.date, ...]
     total_briefs: int
+    # Dates whose parquet is gone but whose Brief rows were RETAINED by the
+    # retention guard (prune_missing=False, the default). Empty when prune_missing
+    # is True (those dates land in deleted_dates instead).
+    retained_dates: tuple[dt.date, ...] = ()
 
     @property
     def n_rebuilt(self) -> int:
@@ -95,6 +99,10 @@ class RebuildResult:
     @property
     def n_deleted(self) -> int:
         return len(self.deleted_dates)
+
+    @property
+    def n_retained(self) -> int:
+        return len(self.retained_dates)
 
 
 def _coerce_for_field(field: django_models.Field, raw):
@@ -225,8 +233,19 @@ def rebuild_from_parquet(
     briefs_dir: Path | str | None = None,
     *,
     force: bool = False,
+    prune_missing: bool = False,
 ) -> RebuildResult:
-    """Bring the DB in line with ``briefs_dir`` (one parquet file per date)."""
+    """Bring the DB in line with ``briefs_dir`` (one parquet file per date).
+
+    ``prune_missing`` (PR-5 retention guard, default False): when a date's parquet
+    is GONE from ``briefs_dir``, the default is to RETAIN its Brief rows rather
+    than cascade-delete them. Those rows are the join target for maturing EDGE
+    outcomes (the selection covariates a tuning analyst needs), so a transient or
+    accidental parquet removal must not silently destroy them. Pass
+    ``prune_missing=True`` to restore the old delete behaviour. In steady state the
+    parquet dir is append-only, so the missing set is normally empty and this flag
+    is a no-op.
+    """
     resolved = Path(briefs_dir) if briefs_dir is not None else DEFAULT_BRIEFS_DIR
 
     parquet_by_date = _scan_parquets(resolved)
@@ -248,17 +267,32 @@ def rebuild_from_parquet(
         total += n
         logger.info("ingest: rebuilt %s (%d rows)", date.isoformat(), n)
 
-    deleted = sorted(set(stored_mtimes) - set(parquet_by_date))
-    if deleted:
+    missing = sorted(set(stored_mtimes) - set(parquet_by_date))
+    deleted: list[dt.date] = []
+    retained: list[dt.date] = []
+    if missing and prune_missing:
         with transaction.atomic():
-            Brief.objects.filter(date__in=deleted).delete()
-            DayMeta.objects.filter(date__in=deleted).delete()
-        for d in deleted:
-            logger.info("ingest: dropped %s (parquet missing)", d.isoformat())
+            Brief.objects.filter(date__in=missing).delete()
+            DayMeta.objects.filter(date__in=missing).delete()
+        deleted = missing
+        for d in missing:
+            logger.info("ingest: dropped %s (parquet missing, prune_missing=True)", d.isoformat())
+    elif missing:
+        # Retention guard: keep the Brief rows so maturing EDGE outcomes keep
+        # their selection-covariate join target. Loud so an operator notices a
+        # parquet that genuinely should be pruned (pass prune_missing=True then).
+        retained = missing
+        logger.warning(
+            "ingest: %d date(s) have no parquet; RETAINING their Brief rows "
+            "(retention guard). Pass prune_missing=True to delete: %s",
+            len(missing),
+            [d.isoformat() for d in missing],
+        )
 
     return RebuildResult(
         rebuilt_dates=tuple(rebuilt),
         skipped_dates=tuple(skipped),
         deleted_dates=tuple(deleted),
         total_briefs=total,
+        retained_dates=tuple(retained),
     )

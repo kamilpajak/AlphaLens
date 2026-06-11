@@ -32,6 +32,15 @@ class Command(BaseCommand):
             action="store_true",
             help="Ignore mtime gate; rebuild every date present.",
         )
+        parser.add_argument(
+            "--prune-missing",
+            action="store_true",
+            help=(
+                "Delete Brief rows whose parquet is gone. Default is to RETAIN "
+                "them (retention guard) so maturing EDGE outcomes keep their "
+                "selection-covariate join target."
+            ),
+        )
 
     def handle(self, *args, **options) -> None:
         # Refuse to run if this image's migration graph disagrees with the DB
@@ -43,10 +52,15 @@ class Command(BaseCommand):
         except SchemaSkewError as exc:
             raise CommandError(str(exc)) from exc
 
-        result = rebuild_from_parquet(briefs_dir=options["briefs_dir"], force=options["force"])
+        result = rebuild_from_parquet(
+            briefs_dir=options["briefs_dir"],
+            force=options["force"],
+            prune_missing=options["prune_missing"],
+        )
         self.stdout.write(
             self.style.SUCCESS(
                 f"rebuilt={result.n_rebuilt} skipped={result.n_skipped} "
-                f"deleted={result.n_deleted} total_briefs={result.total_briefs}"
+                f"deleted={result.n_deleted} retained={result.n_retained} "
+                f"total_briefs={result.total_briefs}"
             )
         )
