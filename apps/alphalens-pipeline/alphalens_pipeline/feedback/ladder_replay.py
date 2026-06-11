@@ -330,17 +330,19 @@ def replay_ladder_grid(
 
     raw_tps = list(trade_setup.get("tp_tranches") or [])
     grid = dict(none_grid)
-    if raw_tps:
-        first = {**raw_tps[0], "tranche_pct": 100.0}
-        last = {**raw_tps[-1], "tranche_pct": 100.0}
+    # Ternary guards (rather than an `if raw_tps:` block) so the index access is
+    # provably safe to static analysis, not just at runtime.
+    first_tp = raw_tps[0] if raw_tps else None
+    last_tp = raw_tps[-1] if raw_tps else None
+    if first_tp is not None and last_tp is not None:
         grid["single_tp_first"] = _grid_realized_r(
-            _with_tp_tranches(trade_setup, [first]),
+            _with_tp_tranches(trade_setup, [{**first_tp, "tranche_pct": 100.0}]),
             bars,
             entry_expiry_ms=entry_expiry_ms,
             position_expiry_ms=position_expiry_ms,
         )
         grid["single_tp_last"] = _grid_realized_r(
-            _with_tp_tranches(trade_setup, [last]),
+            _with_tp_tranches(trade_setup, [{**last_tp, "tranche_pct": 100.0}]),
             bars,
             entry_expiry_ms=entry_expiry_ms,
             position_expiry_ms=position_expiry_ms,
