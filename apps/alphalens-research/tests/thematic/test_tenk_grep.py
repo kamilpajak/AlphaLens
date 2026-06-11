@@ -594,5 +594,287 @@ class TestFetch10kPITPath(unittest.TestCase):
             self.assertIn("CUDA", text)
 
 
+# A submissions index with several 10-Ks across years in the recent block, plus
+# overflow shard pointers in ``filings.files`` for older years (#505 multi-year).
+_MULTIYEAR_RECENT = {
+    "filings": {
+        "recent": {
+            "form": ["10-K", "10-Q", "10-K"],
+            "accessionNumber": ["acc-2026", "acc-q", "acc-2025"],
+            "filingDate": ["2026-02-20", "2026-05-01", "2025-02-18"],
+            "primaryDocument": ["y2026.htm", "q.htm", "y2025.htm"],
+        },
+        "files": [{"name": "CIK0000000001-submissions-001.json"}],
+    }
+}
+_OVERFLOW_SHARD = {
+    "filings": {
+        "recent": {
+            "form": ["10-K", "8-K"],
+            "accessionNumber": ["acc-2024", "acc-8k"],
+            "filingDate": ["2024-02-15", "2024-06-01"],
+            "primaryDocument": ["y2024.htm", "old8k.htm"],
+        }
+    }
+}
+
+
+class TestFind10Ks(unittest.TestCase):
+    """`find_10ks` generalizes `find_latest_10k` to the full sorted 10-K list."""
+
+    def test_returns_all_recent_10ks_newest_first(self):
+        recs = tenk_grep.find_10ks(_MULTIYEAR_RECENT)
+        self.assertEqual([r["filing_date"] for r in recs], ["2026-02-20", "2025-02-18"])
+        self.assertEqual(recs[0]["accession"], "acc-2026")
+        self.assertEqual(recs[0]["primary_doc"], "y2026.htm")
+
+    def test_respects_asof(self):
+        recs = tenk_grep.find_10ks(_MULTIYEAR_RECENT, asof=dt.date(2025, 6, 1))
+        self.assertEqual([r["filing_date"] for r in recs], ["2025-02-18"])
+
+    def test_respects_max_count(self):
+        recs = tenk_grep.find_10ks(_MULTIYEAR_RECENT, max_count=1)
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["filing_date"], "2026-02-20")
+
+    def test_empty_when_no_10k(self):
+        idx = {
+            "filings": {
+                "recent": {
+                    "form": ["10-Q"],
+                    "accessionNumber": ["a"],
+                    "filingDate": ["2025-01-01"],
+                    "primaryDocument": ["x.htm"],
+                }
+            }
+        }
+        self.assertEqual(tenk_grep.find_10ks(idx), [])
+
+
+class TestFetchMultiYear10KTexts(unittest.TestCase):
+    def test_reads_recent_only_when_enough_no_overflow(self):
+        # recent holds >= years 10-Ks -> overflow shards never read.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(tenk_grep, "_resolve_cik", return_value="0000000001"),
+                patch.object(tenk_grep, "_fetch_submissions_json", return_value=_MULTIYEAR_RECENT),
+                patch.object(tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML),
+                patch.object(
+                    tenk_grep,
+                    "_fetch_submissions_overflow",
+                    side_effect=AssertionError("overflow must not be read when recent suffices"),
+                ) as overflow,
+            ):
+                out = tenk_grep.fetch_multi_year_10k_texts(
+                    ticker="ACME", cache_dir=cache_dir, years=2
+                )
+            self.assertEqual([d for d, _ in out], ["2026-02-20", "2025-02-18"])
+            self.assertEqual(overflow.call_count, 0)
+
+    def test_paginates_and_fetches_overflow_html(self):
+        # recent holds 2 10-Ks, years=3 -> walk the overflow shard AND fetch the
+        # overflow-sourced filing's HTML directly (not via fetch_10k_text).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(tenk_grep, "_resolve_cik", return_value="0000000001"),
+                patch.object(tenk_grep, "_fetch_submissions_json", return_value=_MULTIYEAR_RECENT),
+                patch.object(
+                    tenk_grep, "_fetch_submissions_overflow", return_value=_OVERFLOW_SHARD
+                ) as overflow,
+                patch.object(
+                    tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML
+                ) as html,
+            ):
+                out = tenk_grep.fetch_multi_year_10k_texts(
+                    ticker="ACME", cache_dir=cache_dir, years=3
+                )
+            self.assertEqual([d for d, _ in out], ["2026-02-20", "2025-02-18", "2024-02-15"])
+            self.assertEqual(overflow.call_count, 1)
+            # Three distinct filings fetched as HTML (incl. the overflow one).
+            self.assertEqual(html.call_count, 3)
+            self.assertTrue((cache_dir / "ACME_2024-02-15.txt").exists())
+
+    def test_stops_gracefully_on_empty_filings_files(self):
+        recent_only = {
+            "filings": {
+                "recent": {
+                    "form": ["10-K"],
+                    "accessionNumber": ["acc-2026"],
+                    "filingDate": ["2026-02-20"],
+                    "primaryDocument": ["y2026.htm"],
+                },
+                "files": [],
+            }
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(tenk_grep, "_resolve_cik", return_value="0000000001"),
+                patch.object(tenk_grep, "_fetch_submissions_json", return_value=recent_only),
+                patch.object(tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML),
+                patch.object(
+                    tenk_grep,
+                    "_fetch_submissions_overflow",
+                    side_effect=AssertionError("no shard to read"),
+                ),
+            ):
+                out = tenk_grep.fetch_multi_year_10k_texts(
+                    ticker="ACME", cache_dir=cache_dir, years=3
+                )
+            self.assertEqual([d for d, _ in out], ["2026-02-20"])
+
+    def test_returns_empty_when_cik_unresolvable(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(tenk_grep, "_resolve_cik", return_value=None):
+                out = tenk_grep.fetch_multi_year_10k_texts(ticker="XYZ", cache_dir=Path(tmpdir))
+            self.assertEqual(out, [])
+
+    def test_each_text_cached_no_refetch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(tenk_grep, "_resolve_cik", return_value="0000000001"),
+                patch.object(tenk_grep, "_fetch_submissions_json", return_value=_MULTIYEAR_RECENT),
+                patch.object(tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML),
+            ):
+                tenk_grep.fetch_multi_year_10k_texts(ticker="ACME", cache_dir=cache_dir, years=2)
+            # Second call: HTML fetch must short-circuit on the disk cache.
+            with (
+                patch.object(tenk_grep, "_resolve_cik", return_value="0000000001"),
+                patch.object(tenk_grep, "_fetch_submissions_json", return_value=_MULTIYEAR_RECENT),
+                patch.object(
+                    tenk_grep, "_fetch_filing_html", side_effect=AssertionError("must reuse cache")
+                ),
+            ):
+                out = tenk_grep.fetch_multi_year_10k_texts(
+                    ticker="ACME", cache_dir=cache_dir, years=2
+                )
+            self.assertEqual(len(out), 2)
+
+
+class TestFetchPeer10KTexts(unittest.TestCase):
+    _SIC_MOD = "alphalens_pipeline.data.fundamentals.sic_index"
+
+    def test_resolves_peers_excludes_subject(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch(f"{self._SIC_MOD}.get_sic", return_value=7372),
+                patch(
+                    f"{self._SIC_MOD}.iter_peers_fallback",
+                    return_value=(["ACME", "PEER1", "PEER2"], "sic4"),
+                ),
+                patch.object(tenk_grep, "fetch_10k_text", return_value="peer 10-K body"),
+            ):
+                out = tenk_grep.fetch_peer_10k_texts(ticker="ACME", cache_dir=cache_dir)
+            tickers = [t for t, _ in out]
+            self.assertNotIn("ACME", tickers)
+            self.assertEqual(tickers, ["PEER1", "PEER2"])
+
+    def test_caps_at_max_peers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch(f"{self._SIC_MOD}.get_sic", return_value=7372),
+                patch(
+                    f"{self._SIC_MOD}.iter_peers_fallback",
+                    return_value=(["P1", "P2", "P3", "P4", "P5"], "sic4"),
+                ),
+                patch.object(tenk_grep, "fetch_10k_text", return_value="body") as fetch,
+            ):
+                out = tenk_grep.fetch_peer_10k_texts(
+                    ticker="ACME", cache_dir=cache_dir, max_peers=2
+                )
+            self.assertEqual(len(out), 2)
+            # Request count bounded: never attempt more peers than max_peers.
+            self.assertEqual(fetch.call_count, 2)
+
+    def test_failsoft_skips_unresolvable_peer(self):
+        def _fetch(*, ticker, cache_dir, asof=None):
+            if ticker == "BAD":
+                raise RuntimeError("network")
+            return "ok body"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch(f"{self._SIC_MOD}.get_sic", return_value=7372),
+                patch(
+                    f"{self._SIC_MOD}.iter_peers_fallback", return_value=(["BAD", "GOOD"], "sic4")
+                ),
+                patch.object(tenk_grep, "fetch_10k_text", side_effect=_fetch),
+            ):
+                out = tenk_grep.fetch_peer_10k_texts(
+                    ticker="ACME", cache_dir=cache_dir, max_peers=5
+                )
+            self.assertEqual([t for t, _ in out], ["GOOD"])
+
+    def test_empty_when_thin_cohort(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch(f"{self._SIC_MOD}.get_sic", return_value=None),
+                patch(f"{self._SIC_MOD}.iter_peers_fallback", return_value=([], "thin")) as peers,
+                patch.object(
+                    tenk_grep, "fetch_10k_text", side_effect=AssertionError("no peers to fetch")
+                ),
+            ):
+                out = tenk_grep.fetch_peer_10k_texts(ticker="ACME", cache_dir=cache_dir)
+            self.assertEqual(out, [])
+            peers.assert_called_once()
+
+
+class TestFindLatest10KByteForByteRegression(unittest.TestCase):
+    """Pins the daily-path contract: the #505 additions must NOT perturb
+    `find_latest_10k`. The live thematic pipeline reaches 10-K code only through
+    `fetch_10k_text -> find_latest_10k`; any drift here is a production change.
+    """
+
+    def test_exact_output_dict_unchanged(self):
+        rec = tenk_grep.find_latest_10k(FIXTURE_FILING_INDEX)
+        self.assertEqual(
+            rec,
+            {
+                "accession": "0001045810-25-000001",
+                "filing_date": "2025-02-21",
+                "primary_doc": "nvda-20250131.htm",
+            },
+        )
+
+    def test_asof_filter_unchanged(self):
+        rec = tenk_grep.find_latest_10k(FIXTURE_FILING_INDEX, asof=dt.date(2020, 1, 1))
+        self.assertIsNone(rec)
+
+
+class TestMultiYearPeerNotOnDailyPath(unittest.TestCase):
+    """Live-path safety: the new multi-year / peer fetchers must NOT be wired
+    into the daily thematic pipeline. They are reachable ONLY from the opt-in
+    Buffett `--qualitative` CLI. Source-scan the thematic package and assert the
+    new symbols appear nowhere except `tenk_grep` itself.
+    """
+
+    _NEW_SYMBOLS = ("fetch_multi_year_10k_texts", "fetch_peer_10k_texts", "find_10ks")
+
+    def test_new_symbols_absent_from_thematic_pipeline_sources(self):
+        import pathlib
+
+        import alphalens_pipeline.thematic as thematic_pkg
+
+        thematic_root = pathlib.Path(thematic_pkg.__file__).parent
+        offenders: list[str] = []
+        for py in thematic_root.rglob("*.py"):
+            if py.name == "tenk_grep.py":
+                continue
+            source = py.read_text()
+            for sym in self._NEW_SYMBOLS:
+                if sym in source:
+                    offenders.append(f"{py.relative_to(thematic_root)}::{sym}")
+        self.assertEqual(
+            offenders, [], f"new #505 fetchers leaked onto a pipeline source: {offenders}"
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
