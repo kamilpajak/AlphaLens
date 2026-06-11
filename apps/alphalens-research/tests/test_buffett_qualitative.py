@@ -117,6 +117,17 @@ class TestBuildPrompt(unittest.TestCase):
         self.assertIn("pricing power", prompt)
         self.assertIn("multi-year contracts", prompt)
 
+    def test_exec_comp_ratio_injected_as_multiple(self):
+        # #507 PR-7b: the DEF 14A CEO/NEO pay ratio is a multiple (×), rendered
+        # from the injected fact, never produced by the LLM.
+        facts = {**_FACTS, "peo_to_neo_ratio": 12.3}
+        prompt = build_qualitative_prompt(ticker="ACME", sections=_SECTIONS, facts=facts)
+        self.assertIn("12.3×", prompt)
+
+    def test_exec_comp_ratio_missing_renders_na(self):
+        prompt = build_qualitative_prompt(ticker="ACME", sections=_SECTIONS, facts=_FACTS)
+        self.assertIn("CEO pay vs average-NEO pay (DEF 14A): n/a", prompt)
+
 
 class TestAssessQualitative(unittest.TestCase):
     def setUp(self):

@@ -1,0 +1,275 @@
+"""DEF 14A executive-compensation reader — SEC pay-versus-performance (#507 PR-7b).
+
+The SEC pay-versus-performance rule (effective for fiscal years ending on/after
+2022-12-16) discloses CEO ("PEO") and average-other-NEO compensation as structured
+XBRL under the ``ecd`` taxonomy. Those tags are ABSENT from the per-company
+``companyfacts`` JSON but PRESENT in the cross-sectional **frames** API
+(``/api/xbrl/frames/ecd/<concept>/USD/CY<year>.json`` — one concept across all
+filers for a calendar year). This module reads them through the canonical
+:class:`SecEdgarClient`, computes the CEO-to-NEO pay ratio in Python (never the
+LLM), and reports a coverage enum so missing data is an honest ``None`` + reason,
+never a fabricated zero.
+
+POINT-IN-TIME — frame rows carry no ``filed`` timestamp, only an ``accn``
+(accession). True PIT (``accepted <= asof``) is therefore resolved by joining the
+``accn`` to its acceptance datetime in the issuer's submissions JSON (the exact-
+accn mechanism). A row whose proxy was accepted after ``asof`` is excluded.
+
+Non-calendar fiscal-year filers can't be mapped onto a ``CY`` frame soundly, so
+they are reported ``UNKNOWN_NON_CALENDAR_FY`` (never mislabeled "not disclosed").
+The reader is additive + opt-in (consumed only by the Buffett lens); it fails
+soft — a fetch error degrades to ``NOT_DISCLOSED`` with all-``None`` numerics.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import logging
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+
+from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
+
+logger = logging.getLogger(__name__)
+
+# ecd pay-versus-performance concepts (USD), confirmed live in the frames API.
+_PEO_TOTAL = "PeoTotalCompAmt"
+_PEO_CAP = "PeoActuallyPaidCompAmt"
+_NEO_TOTAL = "NonPeoNeoAvgTotalCompAmt"
+_NEO_CAP = "NonPeoNeoAvgCompActuallyPaidAmt"
+_CONCEPTS = (_PEO_TOTAL, _PEO_CAP, _NEO_TOTAL, _NEO_CAP)
+
+_TAXONOMY = "ecd"
+_UNIT = "USD"
+
+# First fiscal year with PvP data (FY2022, filed in 2023 proxies → CY2022 frame).
+_ECD_FIRST_DATA_YEAR = 2022
+# Scan the two most-recent calendar years before asof; the PIT filter drops any
+# whose proxy isn't yet accepted, so the freshest eligible year wins.
+_SCAN_WINDOW_YEARS = 2
+
+_DEFAULT_FRAME_CACHE_DIR = Path.home() / ".alphalens" / "sec_frames"
+
+
+class ExecCompCoverage(StrEnum):
+    """Why exec-comp is or isn't available — so a ``None`` is never read as a bug."""
+
+    PRESENT = "present"
+    PRE_2023_NOT_REQUIRED = "pre_2023_not_required"  # asof predates the PvP rule
+    NOT_DISCLOSED = "not_disclosed"  # calendar filer, required window, absent / fetch failed
+    UNKNOWN_NON_CALENDAR_FY = "unknown_non_calendar_fy"  # off-Dec FYE, CY-frame mapping unsound
+
+
+@dataclass(frozen=True)
+class ExecCompFacts:
+    """One filer's pay-versus-performance facts. Numerics ``None`` unless PRESENT."""
+
+    cik: str
+    coverage: ExecCompCoverage
+    fiscal_year: int | None = None
+    accn: str | None = None
+    accepted: dt.datetime | None = None
+    peo_total_comp: float | None = None
+    peo_actually_paid: float | None = None
+    neo_avg_total_comp: float | None = None
+    neo_avg_actually_paid: float | None = None
+    peo_to_neo_ratio: float | None = None
+
+
+def _missing(cik: str, coverage: ExecCompCoverage) -> ExecCompFacts:
+    return ExecCompFacts(cik=cik, coverage=coverage)
+
+
+def _scan_years(asof: dt.date) -> list[int]:
+    """Calendar years to scan, newest-first, bounded to >= the first PvP data year."""
+    window = [asof.year - offset for offset in range(1, _SCAN_WINDOW_YEARS + 1)]
+    return sorted((y for y in window if y >= _ECD_FIRST_DATA_YEAR), reverse=True)
+
+
+def _parse_accepted(value: str | None) -> dt.datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _build_accepted_resolver(subs: dict, client: SecEdgarClient):
+    """Return ``accn -> acceptance datetime`` resolver over recent + overflow shards.
+
+    Acceptance datetime is primary (``acceptanceDateTime``); the date-only
+    ``filingDate`` (treated as end-of-day) is the fallback. A ``filingDate`` in a
+    non-ISO format leaves the accn unresolved (``None``) and so excludes its row —
+    conservative fail-soft (no look-ahead), acceptable because SEC submissions use
+    ISO dates. Overflow shards are walked lazily only when an accn is not in the
+    recent block.
+    """
+    index: dict[str, dt.datetime] = {}
+
+    def _ingest(block: dict) -> None:
+        recent = block.get("filings", {}).get("recent", block.get("recent", block))
+        accns = recent.get("accessionNumber") or []
+        accepts = recent.get("acceptanceDateTime") or []
+        dates = recent.get("filingDate") or []
+        for i, accn in enumerate(accns):
+            accepted = _parse_accepted(accepts[i] if i < len(accepts) else None)
+            if accepted is None and i < len(dates):
+                day = _parse_accepted(dates[i])  # date-only ISO parses to midnight
+                if day is None:
+                    try:
+                        day = dt.datetime.combine(dt.date.fromisoformat(dates[i]), dt.time.max)
+                    except ValueError:
+                        day = None
+                accepted = day
+            if accepted is not None:
+                index.setdefault(accn, accepted)
+
+    _ingest(subs)
+    shards = subs.get("filings", {}).get("files") or []
+
+    def resolve(accn: str) -> dt.datetime | None:
+        if accn in index:
+            return index[accn]
+        for shard in shards:
+            name = shard.get("name") if isinstance(shard, dict) else None
+            if not name:
+                continue
+            try:
+                _ingest(client.fetch_submissions_overflow(name))
+            except Exception as exc:  # fail-soft: an unreadable shard is not fatal
+                logger.warning("exec_comp: overflow shard %s failed: %s", name, exc)
+                continue
+            if accn in index:
+                return index[accn]
+        return None
+
+    return resolve
+
+
+def _load_frame(client: SecEdgarClient, concept: str, year: int, cache_dir: Path) -> dict:
+    """Fetch one ecd frame, disk-cached under ``cache_dir`` (across-process layer)."""
+    path = cache_dir / f"{_TAXONOMY}_{concept}_{_UNIT}_CY{year}.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            pass  # corrupt cache file → refetch
+    data = client.fetch_xbrl_frame(_TAXONOMY, concept, _UNIT, f"CY{year}")
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data))
+    except OSError as exc:
+        logger.warning("exec_comp: could not write frame cache %s: %s", path, exc)
+    return data
+
+
+def _eligible_rows(frame: dict, cik_int: int, resolve, asof: dt.date) -> list[dict]:
+    """Rows for ``cik`` whose proxy was accepted on/before ``asof`` (PIT filter)."""
+    out: list[dict] = []
+    for row in frame.get("data", []):
+        try:
+            if int(row.get("cik", -1)) != cik_int:
+                continue
+        except (TypeError, ValueError):
+            continue
+        accepted = resolve(row.get("accn", ""))
+        if accepted is None or accepted.date() > asof:
+            continue  # exclude unverifiable or look-ahead rows
+        out.append(row)
+    return out
+
+
+def exec_comp_as_of(
+    cik: str,
+    asof: dt.date,
+    *,
+    client: SecEdgarClient,
+    frame_cache_dir: Path | None = None,
+) -> ExecCompFacts:
+    """Resolve one filer's PvP exec-comp as of ``asof`` (exact-accn PIT, fail-soft).
+
+    Returns an :class:`ExecCompFacts` whose ``coverage`` explains any missing data.
+    All numerics are ``None`` unless ``coverage == PRESENT``; the ratio is computed
+    in Python. Never raises — a fetch error degrades to ``NOT_DISCLOSED``.
+    """
+    cik = str(cik)
+    cache_dir = frame_cache_dir or _DEFAULT_FRAME_CACHE_DIR
+    try:
+        cik_int = int(cik)
+    except (TypeError, ValueError):
+        return _missing(cik, ExecCompCoverage.NOT_DISCLOSED)
+
+    years = _scan_years(asof)
+    if not years:
+        return _missing(cik, ExecCompCoverage.PRE_2023_NOT_REQUIRED)
+
+    try:
+        subs = client.fetch_submissions(cik)
+        fye = str(subs.get("fiscalYearEnd") or "1231")
+        if len(fye) >= 2 and fye[:2].isdigit() and int(fye[:2]) != 12:
+            return _missing(cik, ExecCompCoverage.UNKNOWN_NON_CALENDAR_FY)
+
+        resolve = _build_accepted_resolver(subs, client)
+        for year in years:
+            values: dict[str, float | None] = {}
+            present: dict[str, bool] = {}
+            ambiguous = False
+            accn: str | None = None
+            accepted: dt.datetime | None = None
+            for concept in _CONCEPTS:
+                frame = _load_frame(client, concept, year, cache_dir)
+                rows = _eligible_rows(frame, cik_int, resolve, asof)
+                present[concept] = len(rows) >= 1
+                if len(rows) == 1:
+                    values[concept] = _as_float(rows[0].get("val"))
+                else:
+                    if len(rows) > 1:  # mid-year CEO change etc. — don't pick one
+                        ambiguous = True
+                    values[concept] = None
+                if accn is None and rows:
+                    accn = rows[0].get("accn")
+                    accepted = resolve(accn or "")
+
+            # Year qualifies once it disclosed BOTH total concepts (an eligible row
+            # existed — single or ambiguous-multi).
+            if not (present.get(_PEO_TOTAL) and present.get(_NEO_TOTAL)):
+                continue
+
+            ratio = None if ambiguous else _ratio(values.get(_PEO_TOTAL), values.get(_NEO_TOTAL))
+            return ExecCompFacts(
+                cik=cik,
+                coverage=ExecCompCoverage.PRESENT,
+                fiscal_year=year,
+                accn=accn,
+                accepted=accepted,
+                peo_total_comp=values.get(_PEO_TOTAL),
+                peo_actually_paid=values.get(_PEO_CAP),
+                neo_avg_total_comp=values.get(_NEO_TOTAL),
+                neo_avg_actually_paid=values.get(_NEO_CAP),
+                peo_to_neo_ratio=ratio,
+            )
+        return _missing(cik, ExecCompCoverage.NOT_DISCLOSED)
+    except Exception as exc:  # fail-soft: never break the panel build
+        logger.warning("exec_comp: failed for cik %s: %s", cik, exc, exc_info=True)
+        return _missing(cik, ExecCompCoverage.NOT_DISCLOSED)
+
+
+def _as_float(value) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ratio(peo_total: float | None, neo_total: float | None) -> float | None:
+    if peo_total is None or neo_total is None or neo_total <= 0:
+        return None
+    return peo_total / neo_total
+
+
+__all__ = ["ExecCompCoverage", "ExecCompFacts", "exec_comp_as_of"]

@@ -90,8 +90,13 @@ class SecEdgarClient:
         # for R2000-scale universes (~2000 tickers, ~500 Form 4/yr average).
         self._submissions_cache: dict[str, dict[str, Any]] = {}
         self._form4_xml_cache: dict[tuple[str, str], bytes] = {}
+        self._xbrl_frame_cache: dict[str, dict[str, Any]] = {}
         self._submissions_cache_capacity = 5_000
         self._form4_xml_cache_capacity = 50_000
+        # XBRL frames are one concept aggregated across all filers for a period;
+        # a brief's whole candidate set shares the same few (concept, period)
+        # frames, so an in-process cache eliminates refetch across candidates.
+        self._xbrl_frame_cache_capacity = 5_000
 
     def fetch_submissions(self, cik: str) -> dict[str, Any]:
         """Fetch a filer's submissions index. cik must be 10-digit zero-padded."""
@@ -134,6 +139,27 @@ class SecEdgarClient:
         """Fetch SEC XBRL companyfacts (all reported concepts ever filed)."""
         url = f"{_DATA_BASE}/api/xbrl/companyfacts/CIK{cik}.json"
         return self._get_json(url)
+
+    def fetch_xbrl_frame(
+        self, taxonomy: str, concept: str, unit: str, period: str
+    ) -> dict[str, Any]:
+        """Fetch an XBRL *frame* — one concept aggregated across all filers for a period.
+
+        URL: ``/api/xbrl/frames/{taxonomy}/{concept}/{unit}/{period}.json`` (e.g.
+        ``ecd / PeoActuallyPaidCompAmt / USD / CY2024``) → ``{"data": [{accn, cik,
+        val, end, ...}]}``. Used by the Buffett DEF 14A pay-vs-performance reader,
+        whose whole candidate set shares the same few (concept, period) frames —
+        hence the per-process FIFO-bounded cache (same pattern as submissions).
+        """
+        cache_key = f"{taxonomy}/{concept}/{unit}/{period}"
+        cached = self._xbrl_frame_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        url = f"{_DATA_BASE}/api/xbrl/frames/{taxonomy}/{concept}/{unit}/{period}.json"
+        data = self._get_json(url)
+        _evict_to_capacity(self._xbrl_frame_cache, self._xbrl_frame_cache_capacity - 1)
+        self._xbrl_frame_cache[cache_key] = data
+        return data
 
     def fetch_form4_xml(
         self,

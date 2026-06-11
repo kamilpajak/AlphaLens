@@ -431,5 +431,54 @@ class TestBuildComparison(unittest.TestCase):
         self.assertEqual(len(panels), 3)
 
 
+class TestExecCompWiring(unittest.TestCase):
+    """#507 PR-7b: an injected exec_comp_fn populates the optional PvP panel
+    fields WITHOUT entering the 6-field data_coverage basket (the PvP rule is
+    post-2023, so its absence must not count as a data defect)."""
+
+    def test_exec_comp_fn_populates_without_diluting_coverage(self):
+        from alphalens_pipeline.buffett.comparison import _COVERAGE_FIELDS
+        from alphalens_pipeline.buffett.exec_comp import ExecCompCoverage, ExecCompFacts
+
+        facts = ExecCompFacts(cik="1", coverage=ExecCompCoverage.PRESENT, peo_to_neo_ratio=5.0)
+        panel = compute_panel(
+            "ZZZ",
+            "t",
+            ASOF,
+            store=_FakeStore(),
+            mcap_fn=_zero_mcap,
+            dividends_fn=_no_dividends,
+            exec_comp_fn=lambda _t, _a: facts,
+        )
+        self.assertEqual(panel.peo_to_neo_ratio, 5.0)
+        self.assertEqual(panel.exec_comp_coverage, "present")
+        # All 6 basket fields are None here → coverage 0 even though the ratio is set.
+        self.assertEqual(panel.data_coverage, 0.0)
+        self.assertEqual(len(_COVERAGE_FIELDS), 6)
+        self.assertNotIn("peo_to_neo_ratio", _COVERAGE_FIELDS)
+
+    def test_no_exec_comp_fn_leaves_fields_none(self):
+        panel = compute_panel(
+            "ZZZ", "t", ASOF, store=_FakeStore(), mcap_fn=_zero_mcap, dividends_fn=_no_dividends
+        )
+        self.assertIsNone(panel.peo_to_neo_ratio)
+        self.assertIsNone(panel.exec_comp_coverage)
+
+    def test_exec_comp_fn_failure_is_failsoft(self):
+        def _boom(_t, _a):
+            raise RuntimeError("sec down")
+
+        panel = compute_panel(
+            "ZZZ",
+            "t",
+            ASOF,
+            store=_FakeStore(),
+            mcap_fn=_zero_mcap,
+            dividends_fn=_no_dividends,
+            exec_comp_fn=_boom,
+        )
+        self.assertIsNone(panel.peo_to_neo_ratio)  # _safe swallows → None, no crash
+
+
 if __name__ == "__main__":
     unittest.main()

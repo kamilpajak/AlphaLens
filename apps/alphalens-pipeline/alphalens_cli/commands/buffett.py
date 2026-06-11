@@ -227,6 +227,7 @@ def lens_command(
             store=store,
             mcap_fn=fetch_mcap,
             dividends_fn=dividends_fn,
+            exec_comp_fn=_build_exec_comp_fn(),
         )
     except FileNotFoundError as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -275,6 +276,34 @@ def _assessment_record(assessment) -> dict:  # QualitativeAssessment | None
         "understandable": assessment.understandable if assessment is not None else None,
         "qualitative_rationale": assessment.rationale if assessment is not None else None,
     }
+
+
+def _build_exec_comp_fn():
+    """Build the (ticker, asof) -> ExecCompFacts callable for the panel (#507 PR-7b).
+
+    Resolves ticker -> CIK (reusing the 10-K resolver) then reads DEF 14A
+    pay-vs-performance from SEC XBRL frames via the canonical client. Returns a
+    NOT_DISCLOSED facts object when the CIK can't be resolved — never raises (the
+    panel's own ``_safe`` wrapper is the second net). Kept lazy so the cron path
+    never imports the SEC client.
+    """
+    from alphalens_pipeline.buffett.exec_comp import (
+        ExecCompCoverage,
+        ExecCompFacts,
+        exec_comp_as_of,
+    )
+    from alphalens_pipeline.data.alt_data.sec_edgar_client import get_default_sec_client
+    from alphalens_pipeline.thematic.verification.tenk_grep import _resolve_cik
+
+    client = get_default_sec_client()
+
+    def _fn(ticker: str, asof: dt.date) -> ExecCompFacts:
+        cik = _resolve_cik(ticker)
+        if cik is None:
+            return ExecCompFacts(cik="", coverage=ExecCompCoverage.NOT_DISCLOSED)
+        return exec_comp_as_of(cik, asof, client=client)
+
+    return _fn
 
 
 # Years of 10-K history fed to the qualitative layer (#505): the latest filing
@@ -348,6 +377,7 @@ def _run_qualitative(panels: list, *, asof: dt.date, scuttlebutt: bool = False) 
             "op_margin_latest": panel.op_margin_latest,
             "op_margin_3y_avg": panel.op_margin_3y_avg,
             "net_buyback": panel.net_buyback,
+            "peo_to_neo_ratio": panel.peo_to_neo_ratio,
         }
         assessments.append(
             assess_qualitative(

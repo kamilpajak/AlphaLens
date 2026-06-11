@@ -46,6 +46,7 @@ from typing import Protocol
 
 import pandas as pd
 
+from alphalens_pipeline.buffett.exec_comp import ExecCompFacts
 from alphalens_pipeline.data.fundamentals.annual_aggregator import AnnualStatement
 from alphalens_pipeline.data.fundamentals.capital_allocation import CapitalAllocation
 from alphalens_pipeline.data.fundamentals.owner_earnings import OwnerEarnings
@@ -126,6 +127,9 @@ class _FundamentalsStore(Protocol):
 # ``YFinanceClient.dividends``.
 McapFn = Callable[..., float | None]
 DividendsFn = Callable[..., pd.Series]
+# (ticker, asof) -> ExecCompFacts. Injected (DEF 14A pay-vs-performance, #507);
+# default None skips it so the base lens + tests need no SEC frames access.
+ExecCompFn = Callable[..., "ExecCompFacts"]
 
 
 @dataclass(frozen=True)
@@ -152,7 +156,12 @@ class BuffettPanel:
     buyback_pct: float | None
     net_buyback: bool | None
     dividend_yield_pct: float | None
-    data_coverage: float
+    # DEF 14A pay-vs-performance (#507 PR-7b). Optional, NOT part of the 6-field
+    # data_coverage basket (the PvP rule is post-2023, so its absence is not a
+    # data defect). ``exec_comp_coverage`` is the StrEnum value as plain telemetry.
+    peo_to_neo_ratio: float | None = None
+    exec_comp_coverage: str | None = None
+    data_coverage: float = 0.0
 
 
 def _latest_owner_earnings(series: Sequence[OwnerEarnings]) -> float | None:
@@ -301,6 +310,7 @@ def compute_panel(
     store: _FundamentalsStore,
     mcap_fn: McapFn,
     dividends_fn: DividendsFn,
+    exec_comp_fn: ExecCompFn | None = None,
 ) -> BuffettPanel:
     """Assemble the Buffett-delta :class:`BuffettPanel` for one candidate.
 
@@ -388,6 +398,16 @@ def compute_panel(
         _COVERAGE_FIELDS
     )
 
+    # DEF 14A pay-vs-performance (#507) — optional, injected, NOT in the coverage
+    # basket. Skipped entirely when no exec_comp_fn is wired (base lens / tests).
+    exec_comp = (
+        _safe(lambda: exec_comp_fn(ticker, asof), what=f"exec_comp({ticker})")
+        if exec_comp_fn is not None
+        else None
+    )
+    peo_to_neo_ratio = exec_comp.peo_to_neo_ratio if exec_comp is not None else None
+    exec_comp_coverage = str(exec_comp.coverage) if exec_comp is not None else None
+
     return BuffettPanel(
         ticker=ticker,
         theme=theme,
@@ -403,6 +423,8 @@ def compute_panel(
         buyback_pct=buyback_pct,
         net_buyback=net_buyback,
         dividend_yield_pct=dividend_yield_pct,
+        peo_to_neo_ratio=peo_to_neo_ratio,
+        exec_comp_coverage=exec_comp_coverage,
         data_coverage=data_coverage,
     )
 
@@ -414,6 +436,7 @@ def build_comparison(
     store: _FundamentalsStore,
     mcap_fn: McapFn,
     dividends_fn: DividendsFn,
+    exec_comp_fn: ExecCompFn | None = None,
 ) -> list[BuffettPanel]:
     """Load the brief for ``brief_date`` and compute one panel per candidate.
 
@@ -432,6 +455,7 @@ def build_comparison(
             store=store,
             mcap_fn=mcap_fn,
             dividends_fn=dividends_fn,
+            exec_comp_fn=exec_comp_fn,
         )
         for candidate in candidates
     ]

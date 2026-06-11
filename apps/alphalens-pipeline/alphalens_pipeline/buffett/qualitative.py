@@ -205,6 +205,16 @@ def _format_facts_block(facts: dict) -> str:
         except (TypeError, ValueError):
             return "n/a"
 
+    def _ratio(key: str) -> str:
+        # A multiple (e.g. CEO pay vs avg-NEO pay), rendered with × not %.
+        value = facts.get(key)
+        if value is None:
+            return "n/a"
+        try:
+            return f"{float(value):.1f}×"
+        except (TypeError, ValueError):
+            return "n/a"
+
     net_buyback = facts.get("net_buyback")
     if net_buyback is None:
         buyback_str = "n/a"
@@ -216,7 +226,8 @@ def _format_facts_block(facts: dict) -> str:
         f"- 3-year average ROIC: {_pct('roic_3y_avg')}\n"
         f"- Trailing operating margin: {_pct('op_margin_latest')}\n"
         f"- 3-year average operating margin: {_pct('op_margin_3y_avg')}\n"
-        f"- Net share buyback (shares shrinking): {buyback_str}"
+        f"- Net share buyback (shares shrinking): {buyback_str}\n"
+        f"- CEO pay vs average-NEO pay (DEF 14A): {_ratio('peo_to_neo_ratio')}"
     )
 
 
