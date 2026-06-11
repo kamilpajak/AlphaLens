@@ -154,7 +154,7 @@ class TestMtimeGate:
 
 @pytest.mark.django_db
 class TestOrphanDrop:
-    def test_deleted_parquet_removes_briefs_and_meta(self, tmp_path: Path):
+    def test_missing_parquet_prunes_only_with_opt_in(self, tmp_path: Path):
         path_a = _write_parquet(tmp_path, "2026-05-21", _sample_rows())
         _write_parquet(tmp_path, "2026-05-22", _sample_rows())
         rebuild_from_parquet(briefs_dir=tmp_path)
@@ -162,13 +162,31 @@ class TestOrphanDrop:
         assert DayMeta.objects.count() == 2
 
         path_a.unlink()
-        result = rebuild_from_parquet(briefs_dir=tmp_path)
+        result = rebuild_from_parquet(briefs_dir=tmp_path, prune_missing=True)
 
         assert result.n_deleted == 1
         assert result.deleted_dates == (dt.date(2026, 5, 21),)
+        assert result.n_retained == 0
         assert Brief.objects.filter(date=dt.date(2026, 5, 21)).count() == 0
         assert not DayMeta.objects.filter(date=dt.date(2026, 5, 21)).exists()
         assert Brief.objects.filter(date=dt.date(2026, 5, 22)).count() == 2
+
+    def test_missing_parquet_retained_by_default(self, tmp_path: Path):
+        # PR-5 retention guard: a vanished parquet must NOT cascade-delete its
+        # Brief rows by default (they are the EDGE-outcome join target).
+        path_a = _write_parquet(tmp_path, "2026-05-21", _sample_rows())
+        _write_parquet(tmp_path, "2026-05-22", _sample_rows())
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        path_a.unlink()
+        result = rebuild_from_parquet(briefs_dir=tmp_path)
+
+        assert result.n_deleted == 0
+        assert result.n_retained == 1
+        assert result.retained_dates == (dt.date(2026, 5, 21),)
+        # Rows + meta survive the missing parquet.
+        assert Brief.objects.filter(date=dt.date(2026, 5, 21)).count() == 2
+        assert DayMeta.objects.filter(date=dt.date(2026, 5, 21)).exists()
 
 
 @pytest.mark.django_db
