@@ -206,7 +206,16 @@ def has_theme_in_press_frame(
     Ticker comparison is case-insensitive on both sides: caller passes any
     case; cell entries are upper-cased before matching. Defensive against
     NaN / non-list cells (parquet round-trip artefacts).
+
+    ``reason`` (PR-4): stamped with the SAME ``{threshold, actual, unit}`` shape
+    as :func:`has_theme_in_recent_press` so a press verdict decided here carries a
+    uniform JSON. The window frame is the orchestrator's default-30d universe
+    fetch, so the threshold matches ``DEFAULT_LOOKBACK_DAYS``.
     """
+    if reason is not None:
+        reason.update(
+            {"threshold": DEFAULT_LOOKBACK_DAYS, "actual": None, "unit": "matching_articles"}
+        )
     if press_df.empty:
         return None
     kw_lower = [k.lower() for k in keywords if k]

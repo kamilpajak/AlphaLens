@@ -300,6 +300,18 @@ class TestHasThemeInPressFrame(unittest.TestCase):
             True,
         )
 
+    def test_reason_out_param_has_uniform_shape(self):
+        # PR-4: a frame-path verdict stamps the same {threshold, actual, unit}
+        # shape as the live path (zen MEDIUM).
+        df = self._two_ticker_frame()
+        reason: dict = {}
+        recent_press.has_theme_in_press_frame(
+            ticker="BEEM", keywords=["quantum"], press_df=df, reason=reason
+        )
+        self.assertEqual(reason["threshold"], recent_press.DEFAULT_LOOKBACK_DAYS)
+        self.assertEqual(reason["unit"], "matching_articles")
+        self.assertGreaterEqual(reason["actual"], 1)
+
     def test_returns_false_when_ticker_present_but_keyword_misses(self):
         # NVDA HAS rows in the frame but none mention "quantum" — this is a
         # real "no" (we checked, didn't find), distinct from "we couldn't
