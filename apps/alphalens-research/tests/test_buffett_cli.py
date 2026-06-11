@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 import alphalens_pipeline.buffett.comparison as comparison_mod
 import alphalens_pipeline.buffett.qualitative as qualitative_mod
 import alphalens_pipeline.thematic.verification.tenk_grep as tenk_grep_mod
-from alphalens_cli.commands.buffett import _fmt_num, _format_table
+from alphalens_cli.commands.buffett import _fmt_num, _format_rationale_block, _format_table
 from alphalens_cli.main import app
 from alphalens_pipeline.buffett.comparison import BuffettPanel
 from alphalens_pipeline.buffett.qualitative import QualitativeAssessment
@@ -57,6 +57,46 @@ class TestFormatTable(unittest.TestCase):
     def test_fmt_num_none_and_decimals(self):
         self.assertEqual(_fmt_num(None), "-")
         self.assertEqual(_fmt_num(3.14159, decimals=2), "3.14")
+
+
+class TestFormatRationaleBlock(unittest.TestCase):
+    def test_renders_present_rationales_skips_missing(self):
+        panels = [_panel("AAPL"), _panel("MSFT")]
+        assessments = [
+            QualitativeAssessment(
+                understandable=True,
+                moat_type="brand",
+                moat_trend="stable",
+                management_candor="candid",
+                rationale="Durable ecosystem and pricing power.",
+            ),
+            QualitativeAssessment(
+                understandable=None,
+                moat_type=None,
+                moat_trend=None,
+                management_candor=None,
+                rationale=None,  # no fetchable 10-K -> skipped
+            ),
+        ]
+        block = _format_rationale_block(panels, assessments)
+        assert block is not None
+        self.assertIn("Why (qualitative rationale)", block)
+        self.assertIn("AAPL", block)
+        self.assertIn("Durable ecosystem", block)
+        self.assertNotIn("MSFT", block)  # the None-rationale candidate is omitted
+
+    def test_returns_none_when_no_rationale(self):
+        panels = [_panel("AAPL")]
+        assessments = [
+            QualitativeAssessment(
+                understandable=None,
+                moat_type=None,
+                moat_trend=None,
+                management_candor=None,
+                rationale=None,
+            )
+        ]
+        self.assertIsNone(_format_rationale_block(panels, assessments))
 
 
 class TestLensCommand(unittest.TestCase):
@@ -147,6 +187,9 @@ class TestQualitativeFlag(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertIn("MOAT", result.output)
             self.assertIn("brand", result.output)
+            # The rationale (too long for a table cell) prints in a 'Why' block.
+            self.assertIn("Why (qualitative rationale)", result.output)
+            self.assertIn("strong brand", result.output)
             self.assertTrue(out.exists())
             import pandas as pd
 

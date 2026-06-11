@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import textwrap
 from pathlib import Path
 
 import typer
@@ -123,6 +124,36 @@ def _format_table(panels: list, assessments: list | None = None) -> str:
     return "\n".join(lines)
 
 
+_RATIONALE_WRAP_WIDTH = 96
+
+
+def _format_rationale_block(panels: list, assessments: list) -> str | None:
+    """A 'Why' block of the per-candidate qualitative rationale below the table.
+
+    The rationale (the LLM's "why" behind the moat / candor / understandability
+    classification) is too long for a table cell, so it is rendered here as a
+    wrapped paragraph per ticker. Candidates whose 10-K could not be assessed
+    (``None`` assessment or empty rationale) are skipped. Returns ``None`` when
+    no candidate has a rationale, so the caller can omit the block entirely.
+    """
+    entries: list[str] = []
+    for idx, panel in enumerate(panels):
+        assessment = assessments[idx] if idx < len(assessments) else None
+        rationale = getattr(assessment, "rationale", None)
+        if not isinstance(rationale, str) or not rationale.strip():
+            continue
+        wrapped = textwrap.fill(
+            rationale.strip(),
+            width=_RATIONALE_WRAP_WIDTH,
+            initial_indent="  ",
+            subsequent_indent="     ",
+        )
+        entries.append(f"  {panel.ticker}:\n{wrapped}")
+    if not entries:
+        return None
+    return "Why (qualitative rationale):\n" + "\n".join(entries)
+
+
 @buffett_app.command(name="lens")
 def lens_command(
     brief_date: str = typer.Argument(
@@ -197,6 +228,12 @@ def lens_command(
 
     typer.echo(f"Buffett lens (Mode A) — {target.isoformat()} — {len(panels)} candidates")
     typer.echo(_format_table(panels, assessments))
+
+    if assessments is not None:
+        rationale_block = _format_rationale_block(panels, assessments)
+        if rationale_block is not None:
+            typer.echo("")
+            typer.echo(rationale_block)
 
     if out is not None:
         from dataclasses import asdict
