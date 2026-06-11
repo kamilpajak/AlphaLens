@@ -357,6 +357,54 @@ def replay_ladder_grid(
     return grid
 
 
+def _with_entry_tiers(
+    trade_setup: Mapping[str, Any], entries: list[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Shallow-copy the setup with its entry ladder replaced (tps/stop untouched).
+
+    Mirror of :func:`_with_tp_tranches`: swaps the ``entry_tiers`` key with a NEW
+    list of freshly-built tier dicts; never mutates the original setup.
+    """
+    swapped = dict(trade_setup)
+    swapped["entry_tiers"] = entries
+    return swapped
+
+
+def realized_r_full_fill(
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    entry_expiry_ms: int | None = None,
+    position_expiry_ms: int | None = None,
+) -> float | None:
+    """Realized R if the position had been entered at the FULL-FILL blended price.
+
+    The entry-side counterfactual paired with the as-specified ``realized_r``: it
+    replays the SAME exit ladder over the SAME bars, but from a single entry tier
+    placed at the all-tier alloc-weighted blended entry (the price the ladder
+    would have averaged if every tier had filled). The gap
+    ``realized_r - realized_r_full_fill`` is the entry-tier-spacing drag --
+    whether laddering the entry helped or hurt vs a single fill at the full blend.
+
+    Like the exit grid, this is a pure transform over the already-fetched bars
+    (zero extra Polygon cost). It returns ``None`` for an unparseable setup or no
+    bars; ``None`` realized R when the single full-blend limit never fills (price
+    never dipped to the blended depth) -- which is itself the honest answer that a
+    full-ladder fill never triggered on this path.
+    """
+    ladder = parse_ladder(trade_setup)
+    if trade_setup is None or not bars or not ladder.ok:
+        return None
+    full_blend = _blended_entry(ladder.entries)
+    setup_full = _with_entry_tiers(trade_setup, [{"limit": full_blend, "alloc_pct": 100.0}])
+    return replay_ladder(
+        setup_full,
+        bars,
+        entry_expiry_ms=entry_expiry_ms,
+        position_expiry_ms=position_expiry_ms,
+    ).realized_r
+
+
 class _LadderWalk:
     """Single full-horizon pass state for the as-specified ladder replay.
 

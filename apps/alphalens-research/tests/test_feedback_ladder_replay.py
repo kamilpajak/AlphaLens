@@ -15,6 +15,7 @@ import unittest
 from alphalens_pipeline.feedback.ladder_replay import (
     GRID_CONFIGS,
     parse_ladder,
+    realized_r_full_fill,
     replay_ladder,
     replay_ladder_grid,
 )
@@ -135,6 +136,55 @@ class TestReplayLadderGrid(unittest.TestCase):
         # gives exactly +1R (TP1=110, entry=100, risk=10).
         grid = replay_ladder_grid(_setup(**self._SETUP), self._BARS)
         self.assertAlmostEqual(grid["single_tp_first"], 1.0, places=2)
+
+
+class TestRealizedRFullFill(unittest.TestCase):
+    """PR-3: the entry-side counterfactual. Replay the exit ladder from the
+    all-tier (full-fill) blended entry, holding the exit ladder + bars fixed, so
+    the gap vs the as-specified realized_r is the entry-tier-spacing drag."""
+
+    # E1=100, E2=96 equal alloc -> full blend = 98. SL=90, single TP at 108.
+    _SETUP = {
+        "entries": [(100.0, 50.0), (96.0, 50.0)],
+        "tps": [(108.0, 100.0)],
+        "stop": 90.0,
+    }
+    # Dips to 97 (fills the 98 full-blend limit AND E1@100, but NOT E2@96), then
+    # rallies through TP1 (108).
+    _BARS = [
+        _bar(1, low=97.0, high=101.0, close=99.0),
+        _bar(2, low=105.0, high=108.0, close=107.0),
+    ]
+
+    def test_full_fill_uses_all_tier_blend_and_beats_partial(self):
+        full = realized_r_full_fill(_setup(**self._SETUP), self._BARS)
+        actual = replay_ladder(_setup(**self._SETUP), self._BARS).realized_r
+        # Full-fill entry = 98 -> R = (108-98)/(98-90) = 1.25.
+        self.assertAlmostEqual(full, 1.25, places=2)
+        # As-specified only filled E1@100 -> R = (108-100)/(100-90) = 0.8. The
+        # full-fill counterfactual is the BETTER (deeper) entry, so the partial
+        # fill left capture on the table -> entry-fill drag is positive.
+        self.assertAlmostEqual(actual, 0.8, places=2)
+        self.assertGreater(full, actual)
+
+    def test_none_for_unparseable_or_no_bars(self):
+        self.assertIsNone(realized_r_full_fill(None, self._BARS))
+        self.assertIsNone(realized_r_full_fill(_setup(**self._SETUP), []))
+
+    def test_single_tier_setup_full_fill_equals_as_specified(self):
+        # With ONE entry tier, the full-fill blend IS that tier, so the
+        # counterfactual must equal the as-specified realized_r on a path that
+        # fills it.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(110.0, 100.0)], stop=90.0)
+        bars = [
+            _bar(1, low=99.0, high=101.0, close=100.0),
+            _bar(2, low=108.0, high=110.0, close=109.0),
+        ]
+        self.assertAlmostEqual(
+            realized_r_full_fill(setup, bars),
+            replay_ladder(setup, bars).realized_r,
+            places=4,
+        )
 
 
 class TestParseLadder(unittest.TestCase):

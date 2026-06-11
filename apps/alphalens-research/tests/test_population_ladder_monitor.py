@@ -225,6 +225,45 @@ class TestGridRealizedRStamp(_MonitorTestBase):
         xyz_grid = df.loc["XYZ", "grid_realized_r_json"]
         self.assertTrue(pd.isna(xyz_grid) or xyz_grid in (None, ""))
 
+    def test_resolved_plannable_row_carries_entry_counterfactual(self):
+        # The entry-side counterfactual (realized_r_full_fill) is stamped on a
+        # resolved plannable row and absent on the non-plannable one.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [
+                {"ticker": "NVDA", "setup": _OK_SETUP},
+                {"ticker": "XYZ", "setup": _NO_STRUCTURE_SETUP},
+            ],
+        )
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            # Fill E1 (low<=100) AND hit TP1 (high>=110) -> TP_FULL terminal, so
+            # realized_r is set (not an ongoing None).
+            return [{"t": base, "o": 100.0, "h": 110.0, "l": 99.0, "c": 109.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        df = self._read_store(brief_date).set_index("ticker")
+        self.assertIn("realized_r_full_fill", df.columns)
+        # _OK_SETUP has a single entry tier, so the full-fill blend IS that tier:
+        # the counterfactual must equal the as-specified realized_r.
+        self.assertFalse(pd.isna(df.loc["NVDA", "realized_r_full_fill"]))
+        self.assertAlmostEqual(
+            float(df.loc["NVDA", "realized_r_full_fill"]),
+            float(df.loc["NVDA", "realized_r"]),
+            places=4,
+        )
+        self.assertTrue(pd.isna(df.loc["XYZ", "realized_r_full_fill"]))
+
 
 class TestStampThemeUnit(unittest.TestCase):
     def test_fills_missing_theme(self):
