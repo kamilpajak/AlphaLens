@@ -163,9 +163,11 @@ class TestRealizedRFullFill(unittest.TestCase):
         self.assertAlmostEqual(full, 1.25, places=2)
         # As-specified only filled E1@100 -> R = (108-100)/(100-90) = 0.8. The
         # full-fill counterfactual is the BETTER (deeper) entry, so the partial
-        # fill left capture on the table -> entry-fill drag is positive.
+        # fill left R on the table: the gap realized_r - realized_r_full_fill is
+        # NEGATIVE here (laddering the entry hurt on this path).
         self.assertAlmostEqual(actual, 0.8, places=2)
         self.assertGreater(full, actual)
+        self.assertLess(actual - full, 0.0)
 
     def test_none_for_unparseable_or_no_bars(self):
         self.assertIsNone(realized_r_full_fill(None, self._BARS))

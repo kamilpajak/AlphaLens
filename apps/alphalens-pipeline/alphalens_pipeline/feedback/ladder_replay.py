@@ -39,6 +39,7 @@ write live in the caller (``population_ladder_monitor``).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -383,8 +384,11 @@ def realized_r_full_fill(
     replays the SAME exit ladder over the SAME bars, but from a single entry tier
     placed at the all-tier alloc-weighted blended entry (the price the ladder
     would have averaged if every tier had filled). The gap
-    ``realized_r - realized_r_full_fill`` is the entry-tier-spacing drag --
-    whether laddering the entry helped or hurt vs a single fill at the full blend.
+    ``realized_r - realized_r_full_fill`` shows the entry-tier-spacing effect by
+    SIGN: POSITIVE means laddering the entry HELPED (the actual composite entry
+    achieved a higher R than a single fill at the blend would have); NEGATIVE
+    means laddering HURT (a partial / shallow fill left R on the table that the
+    deeper full-blend entry would have captured).
 
     Like the exit grid, this is a pure transform over the already-fetched bars
     (zero extra Polygon cost). It returns ``None`` for an unparseable setup or no
@@ -395,7 +399,12 @@ def realized_r_full_fill(
     ladder = parse_ladder(trade_setup)
     if trade_setup is None or not bars or not ladder.ok:
         return None
-    full_blend = _blended_entry(ladder.entries)
+    # Filter non-finite limits to match the monitor's _full_ladder_blended_entry
+    # robustness (a corrupted NaN limit would otherwise poison the blend).
+    finite_entries = [lvl for lvl in ladder.entries if math.isfinite(lvl.price)]
+    if not finite_entries:
+        return None
+    full_blend = _blended_entry(finite_entries)
     setup_full = _with_entry_tiers(trade_setup, [{"limit": full_blend, "alloc_pct": 100.0}])
     return replay_ladder(
         setup_full,
