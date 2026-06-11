@@ -251,7 +251,10 @@ class TestQualitativeFlag(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
         priors = captured.get("prior_year_risk_factors")
         self.assertIsNotNone(priors)
-        # Two prior years (latest is the primary sections, not a prior).
+        # This asserts the SET of prior years handed to assess_qualitative (the
+        # latest filing is the primary sections, not a prior). The chronological
+        # oldest-first ordering inside the prompt is validated separately in
+        # test_buffett_qualitative.test_prior_year_risk_factors_rendered_oldest_first.
         dates = [d for d, _ in priors]
         self.assertEqual(sorted(dates), ["2024-03-22", "2025-03-21"])
         texts = " ".join(t or "" for _, t in priors)
