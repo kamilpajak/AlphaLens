@@ -148,20 +148,23 @@ class TestQualitativeFlag(unittest.TestCase):
     def setUp(self):
         self._runner = CliRunner()
         self._orig_build = comparison_mod.build_comparison
-        self._orig_fetch = tenk_grep_mod.fetch_10k_text
+        self._orig_fetch = tenk_grep_mod.fetch_multi_year_10k_texts
         self._orig_assess = qualitative_mod.assess_qualitative
 
     def tearDown(self):
         comparison_mod.build_comparison = self._orig_build  # type: ignore[assignment]
-        tenk_grep_mod.fetch_10k_text = self._orig_fetch  # type: ignore[assignment]
+        tenk_grep_mod.fetch_multi_year_10k_texts = self._orig_fetch  # type: ignore[assignment]
         qualitative_mod.assess_qualitative = self._orig_assess  # type: ignore[assignment]
 
     def test_qualitative_flag_adds_columns_and_writes_parquet(self):
         comparison_mod.build_comparison = lambda *_a, **_k: [_panel("AAPL")]  # type: ignore[assignment]
-        tenk_grep_mod.fetch_10k_text = lambda **_k: (  # type: ignore[assignment]
-            "Item 1. Business We make things. Item 1A. Risk Factors Risky. "
-            "Item 7. MD&A We discuss. Item 8. End"
-        )
+        tenk_grep_mod.fetch_multi_year_10k_texts = lambda **_k: [  # type: ignore[assignment]
+            (
+                "2026-03-27",
+                "Item 1. Business We make things. Item 1A. Risk Factors Risky. "
+                "Item 7. MD&A We discuss. Item 8. End",
+            )
+        ]
         qualitative_mod.assess_qualitative = lambda **_k: QualitativeAssessment(  # type: ignore[assignment]
             understandable=True,
             moat_type="brand",
@@ -200,7 +203,7 @@ class TestQualitativeFlag(unittest.TestCase):
     def test_no_qualitative_flag_does_not_call_llm(self):
         comparison_mod.build_comparison = lambda *_a, **_k: [_panel("AAPL")]  # type: ignore[assignment]
         calls: list[str] = []
-        tenk_grep_mod.fetch_10k_text = lambda **_k: calls.append("fetch") or ""  # type: ignore[assignment]
+        tenk_grep_mod.fetch_multi_year_10k_texts = lambda **_k: calls.append("fetch") or []  # type: ignore[assignment]
         qualitative_mod.assess_qualitative = lambda **_k: calls.append("assess")  # type: ignore[assignment]
         with TemporaryDirectory() as tmp:
             result = self._runner.invoke(
@@ -209,6 +212,55 @@ class TestQualitativeFlag(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, result.output)
             self.assertNotIn("MOAT", result.output)
             self.assertEqual(calls, [])
+
+    def test_qualitative_feeds_prior_year_risk_factors(self):
+        # #505 wiring: the multi-year fetch's prior years become the
+        # prior_year_risk_factors (Item 1A per year) passed to assess_qualitative.
+        comparison_mod.build_comparison = lambda *_a, **_k: [_panel("AAPL")]  # type: ignore[assignment]
+        tenk_grep_mod.fetch_multi_year_10k_texts = lambda **_k: [  # type: ignore[assignment]
+            (
+                "2026-03-27",
+                "Item 1. Business Now. Item 1A. Risk Factors Newest risk wording. Item 8. End",
+            ),
+            (
+                "2025-03-21",
+                "Item 1. Business Then. Item 1A. Risk Factors Middle risk wording. Item 8. End",
+            ),
+            (
+                "2024-03-22",
+                "Item 1. Business Past. Item 1A. Risk Factors Oldest risk wording. Item 8. End",
+            ),
+        ]
+        captured: dict = {}
+
+        def _capture_assess(**kwargs):
+            captured.update(kwargs)
+            return QualitativeAssessment(
+                understandable=True,
+                moat_type="brand",
+                moat_trend="narrowing",
+                management_candor="mixed",
+                rationale="risks intensified across years",
+            )
+
+        qualitative_mod.assess_qualitative = _capture_assess  # type: ignore[assignment]
+        with TemporaryDirectory() as tmp:
+            result = self._runner.invoke(
+                app, ["buffett", "lens", "2026-06-10", "--briefs-dir", tmp, "--qualitative"]
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+        priors = captured.get("prior_year_risk_factors")
+        self.assertIsNotNone(priors)
+        # This asserts the SET of prior years handed to assess_qualitative (the
+        # latest filing is the primary sections, not a prior). The chronological
+        # oldest-first ordering inside the prompt is validated separately in
+        # test_buffett_qualitative.test_prior_year_risk_factors_rendered_oldest_first.
+        dates = [d for d, _ in priors]
+        self.assertEqual(sorted(dates), ["2024-03-22", "2025-03-21"])
+        texts = " ".join(t or "" for _, t in priors)
+        self.assertIn("Oldest risk wording", texts)
+        self.assertIn("Middle risk wording", texts)
+        self.assertNotIn("Newest risk wording", texts)  # latest year is the primary sections
 
 
 if __name__ == "__main__":

@@ -261,30 +261,45 @@ def _assessment_record(assessment) -> dict:  # QualitativeAssessment | None
     }
 
 
+# Years of 10-K history fed to the qualitative layer (#505): the latest filing
+# supplies the primary Item 1/1A/7/8 sections, the earlier years contribute their
+# Item 1A risk factors so the model can judge how the moat is trending.
+_QUALITATIVE_YEARS = 3
+
+
 def _run_qualitative(panels: list, *, asof: dt.date) -> list:
     """Run the per-candidate qualitative LLM layer, one assessment per panel.
 
-    For each panel: fetch its latest 10-K, split into the three Buffett sections,
-    build the injected-facts dict from the already-computed panel, and call
-    :func:`assess_qualitative`. Every step is fail-soft — a fetch failure or a
-    name with no 10-K yields ``None`` for that row (rendered as dashes). The LLM
-    import stays lazy here so the non-qualitative path never pays for it.
+    For each panel: fetch up to ``_QUALITATIVE_YEARS`` of 10-Ks, split the latest
+    into the four Buffett sections (Item 1/1A/7/8), collect the prior years'
+    Item 1A risk factors as a moat-trend evidence trail, build the injected-facts
+    dict from the already-computed panel, and call :func:`assess_qualitative`.
+    Every step is fail-soft — a fetch failure or a name with no 10-K yields
+    ``None`` for that row (rendered as dashes). The LLM import stays lazy here so
+    the non-qualitative path never pays for it.
     """
     from alphalens_pipeline.buffett.qualitative import assess_qualitative
     from alphalens_pipeline.buffett.tenk_sections import split_10k_sections
-    from alphalens_pipeline.thematic.verification.tenk_grep import fetch_10k_text
+    from alphalens_pipeline.thematic.verification.tenk_grep import fetch_multi_year_10k_texts
 
     assessments: list = []
     for panel in panels:
         try:
-            text = fetch_10k_text(ticker=panel.ticker, asof=asof)
+            multi_year = fetch_multi_year_10k_texts(
+                ticker=panel.ticker, asof=asof, years=_QUALITATIVE_YEARS
+            )
         except Exception as exc:
             logger.warning("buffett qualitative: 10-K fetch failed for %s: %s", panel.ticker, exc)
-            text = None
-        if not text:
+            multi_year = []
+        if not multi_year:
             assessments.append(None)
             continue
-        sections = split_10k_sections(text)
+        # ``multi_year`` is newest-first: [0] is the latest filing (primary
+        # sections), the rest are prior years (risk-factor evolution).
+        sections = split_10k_sections(multi_year[0][1])
+        prior_year_risk_factors = [
+            (date, split_10k_sections(text).item_1a) for date, text in multi_year[1:]
+        ]
         facts = {
             "roic_latest": panel.roic_latest,
             "roic_3y_avg": panel.roic_3y_avg,
@@ -292,7 +307,14 @@ def _run_qualitative(panels: list, *, asof: dt.date) -> list:
             "op_margin_3y_avg": panel.op_margin_3y_avg,
             "net_buyback": panel.net_buyback,
         }
-        assessments.append(assess_qualitative(ticker=panel.ticker, sections=sections, facts=facts))
+        assessments.append(
+            assess_qualitative(
+                ticker=panel.ticker,
+                sections=sections,
+                facts=facts,
+                prior_year_risk_factors=prior_year_risk_factors,
+            )
+        )
     return assessments
 
 

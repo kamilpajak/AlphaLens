@@ -211,5 +211,93 @@ class TestAssessQualitative(unittest.TestCase):
             self.assertIs(result.understandable, expected, raw)
 
 
+_SECTIONS_WITH_ITEM_8 = TenKSections(
+    item_1="We design and sell enterprise widgets with recurring software revenue.",
+    item_1a="Competition from larger incumbents could erode our pricing power.",
+    item_7="Margins expanded as customers renewed multi-year contracts.",
+    item_8="CONSOLIDATED BALANCE SHEET Cash 100 Total assets 500. Goodwill not impaired.",
+)
+
+
+class TestMultiYearAndItem8Prompt(unittest.TestCase):
+    """#505 wiring: the qualitative prompt feeds Item 8 (financial statements)
+    plus prior-year Item 1A risk factors so the model can judge moat_trend from
+    how the risk narrative evolves, not just the latest snapshot.
+    """
+
+    def test_prompt_includes_item_8_when_present(self):
+        prompt = build_qualitative_prompt(
+            ticker="ACME", sections=_SECTIONS_WITH_ITEM_8, facts=_FACTS
+        )
+        self.assertIn("CONSOLIDATED BALANCE SHEET", prompt)
+        self.assertIn("Goodwill not impaired", prompt)
+
+    def test_item_8_placeholder_when_none(self):
+        # _SECTIONS has item_8 == None (default) — prompt must not crash and
+        # should mark the section as unavailable rather than leave a raw gap.
+        prompt = build_qualitative_prompt(ticker="ACME", sections=_SECTIONS, facts=_FACTS)
+        self.assertIn("not available", prompt.lower())
+
+    def test_prior_year_risk_factors_rendered_oldest_first(self):
+        prompt = build_qualitative_prompt(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            # Passed newest-first on purpose — the builder must order oldest-first.
+            prior_year_risk_factors=[
+                ("2025-03-21", "Newer risk: supply chain concentration intensified."),
+                ("2024-03-22", "Older risk: a single customer was 20 percent of revenue."),
+            ],
+        )
+        self.assertIn("2024-03-22", prompt)
+        self.assertIn("2025-03-21", prompt)
+        self.assertIn("single customer", prompt)
+        self.assertIn("supply chain concentration", prompt)
+        # Oldest year appears before the newer one (evolution reads chronologically).
+        self.assertLess(prompt.index("2024-03-22"), prompt.index("2025-03-21"))
+
+    def test_prior_year_risk_factors_capped(self):
+        huge = "x" * 20000
+        prompt = build_qualitative_prompt(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            prior_year_risk_factors=[("2024-03-22", huge)],
+        )
+        # The 20k-char prior-year body must be truncated well below its length.
+        self.assertLess(prompt.count("x"), 20000)
+
+    def test_no_evolution_block_when_no_prior_years(self):
+        prompt = build_qualitative_prompt(
+            ticker="ACME", sections=_SECTIONS_WITH_ITEM_8, facts=_FACTS, prior_year_risk_factors=[]
+        )
+        self.assertNotIn("(oldest first)", prompt)
+
+    def test_prior_year_none_or_empty_entries_skipped(self):
+        prompt = build_qualitative_prompt(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            prior_year_risk_factors=[("2024-03-22", None), ("2025-03-21", "   ")],
+        )
+        # Both entries are non-substantive → no evolution block emitted.
+        self.assertNotIn("(oldest first)", prompt)
+
+    def test_assess_passes_prior_years_through(self):
+        client = _make_stub_llm_client()
+        client.generate_content.return_value = SimpleNamespace(text=_GOOD_JSON)
+        result = assess_qualitative(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            prior_year_risk_factors=[("2024-03-22", "single customer concentration")],
+            llm_client=client,
+        )
+        self.assertEqual(result.moat_type, "switching_cost")
+        # The prompt the model saw carried the prior-year evidence.
+        sent_prompt = client.generate_content.call_args.kwargs["contents"]
+        self.assertIn("single customer concentration", sent_prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
