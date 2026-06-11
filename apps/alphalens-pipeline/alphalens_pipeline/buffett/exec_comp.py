@@ -101,8 +101,11 @@ def _build_accepted_resolver(subs: dict, client: SecEdgarClient):
     """Return ``accn -> acceptance datetime`` resolver over recent + overflow shards.
 
     Acceptance datetime is primary (``acceptanceDateTime``); the date-only
-    ``filingDate`` (treated as end-of-day) is the fallback. Overflow shards are
-    walked lazily only when an accn is not in the recent block.
+    ``filingDate`` (treated as end-of-day) is the fallback. A ``filingDate`` in a
+    non-ISO format leaves the accn unresolved (``None``) and so excludes its row —
+    conservative fail-soft (no look-ahead), acceptable because SEC submissions use
+    ISO dates. Overflow shards are walked lazily only when an accn is not in the
+    recent block.
     """
     index: dict[str, dt.datetime] = {}
 
