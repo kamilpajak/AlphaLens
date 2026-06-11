@@ -63,6 +63,7 @@ from alphalens_pipeline.feedback.bar_window import (
 from alphalens_pipeline.feedback.ladder_config import ladder_config_version
 from alphalens_pipeline.feedback.ladder_replay import (
     LadderOutcome,
+    realized_r_full_fill,
     replay_ladder,
     replay_ladder_grid,
 )
@@ -188,6 +189,11 @@ _CONFIG_COLUMNS = ("ladder_config_version",)
 # re-replaying the SAME bars under each EXIT policy. Carried/back-filled like the
 # other additive measurement columns.
 _GRID_COLUMNS = ("grid_realized_r_json",)
+
+# The entry-side counterfactual (PR-3): realized R if all tiers had filled at the
+# full-ladder blended entry. Paired with full_ladder_blended_entry; the gap vs
+# the headline realized_r is the entry-tier-spacing drag. Carried like the rest.
+_ENTRY_CF_COLUMNS = ("realized_r_full_fill",)
 
 
 @dataclass(frozen=True)
@@ -726,6 +732,7 @@ def _terminal_row(
     last_resolved_session: dt.date | None = None,
     reference_close: float | None = None,
     grid_realized_r: dict[str, float | None] | None = None,
+    realized_r_full: float | None = None,
 ) -> dict[str, Any]:
     """Build a monitor store row from a replay outcome (terminal or ongoing).
 
@@ -786,6 +793,8 @@ def _terminal_row(
         "ladder_config_version": ladder_config_version(order_ttl_days=entry_ttl),
         # Alternate-exit-ladder grid (None until a minute resolve computes it).
         "grid_realized_r_json": json.dumps(grid_realized_r) if grid_realized_r else None,
+        # Entry-side counterfactual: realized R at the full-fill blended entry.
+        "realized_r_full_fill": realized_r_full,
         # Grouped-daily screen columns: the session this resolve priced, the same
         # session as the last ACTUAL minute resolve (this is a resolve), + the
         # FROZEN arrival VWAP (the cheap path's forward_return anchor).
@@ -865,6 +874,7 @@ def _nonplannable_row(brief_date: dt.date, ticker: str, reason: str) -> dict[str
         # this row -- leave the stamp empty rather than invent a config.
         "ladder_config_version": None,
         "grid_realized_r_json": None,
+        "realized_r_full_fill": None,
         "last_priced_session": None,
         "last_resolved_session": None,
         "reference_close": None,
@@ -907,8 +917,9 @@ def _placeholder_row(
         # The geometry is already known for a plannable candidate; stamp the
         # config that the first successful replay will use.
         "ladder_config_version": ladder_config_version(order_ttl_days=entry_ttl),
-        # Grid needs minute bars, so it stays empty until the first real resolve.
+        # Grid + entry counterfactual need minute bars; empty until first resolve.
         "grid_realized_r_json": None,
+        "realized_r_full_fill": None,
         "last_priced_session": None,
         "last_resolved_session": None,
         "reference_close": None,
@@ -924,7 +935,13 @@ def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
     ``None`` keeps the schema stable (the next successful replay repopulates them).
     """
     carried = dict(prior)
-    for col in (*_SIZE_COLUMNS, *_SCREEN_COLUMNS, *_CONFIG_COLUMNS, *_GRID_COLUMNS):
+    for col in (
+        *_SIZE_COLUMNS,
+        *_SCREEN_COLUMNS,
+        *_CONFIG_COLUMNS,
+        *_GRID_COLUMNS,
+        *_ENTRY_CF_COLUMNS,
+    ):
         carried.setdefault(col, None)
     return carried
 
@@ -1579,7 +1596,13 @@ def _cheap_update_row(
     # setdefault only BACK-FILLS columns an old-format prior lacked; an existing
     # value (e.g. grid_realized_r_json from the last minute resolve) is kept frozen
     # -- the cheap daily path never recomputes the grid.
-    for col in (*_SIZE_COLUMNS, *_SCREEN_COLUMNS, *_CONFIG_COLUMNS, *_GRID_COLUMNS):
+    for col in (
+        *_SIZE_COLUMNS,
+        *_SCREEN_COLUMNS,
+        *_CONFIG_COLUMNS,
+        *_GRID_COLUMNS,
+        *_ENTRY_CF_COLUMNS,
+    ):
         row.setdefault(col, None)
     row["last_close"] = c_star
     row["last_priced_session"] = latest_session
@@ -1752,6 +1775,7 @@ def _resolve_queue(
             last_resolved_session=result.horizon_session,
             reference_close=result.reference_close,
             grid_realized_r=result.grid_realized_r,
+            realized_r_full=result.realized_r_full,
         )
         rows_by_ticker[ticker] = _stamp_theme(row, theme)
         counts["terminal" if row["terminal"] else "ongoing"] += 1
@@ -1766,6 +1790,7 @@ class _ResolveResult:
     reference_close: float | None
     horizon_session: dt.date
     grid_realized_r: dict[str, float | None] | None = None
+    realized_r_full: float | None = None
 
 
 def _replay_candidate(
@@ -1861,11 +1886,20 @@ def _replay_candidate(
         entry_expiry_ms=entry_expiry_ms,
         position_expiry_ms=position_expiry_ms,
     )
+    # Entry-side counterfactual (PR-3): realized R at the full-fill blended entry,
+    # same exit ladder + bars. Also zero extra Polygon cost.
+    realized_r_full = realized_r_full_fill(
+        setup,
+        bars,
+        entry_expiry_ms=entry_expiry_ms,
+        position_expiry_ms=position_expiry_ms,
+    )
     return _ResolveResult(
         outcome=outcome,
         reference_close=reference_close,
         horizon_session=horizon_session,
         grid_realized_r=grid_realized_r,
+        realized_r_full=realized_r_full,
     )
 
 

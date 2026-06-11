@@ -39,6 +39,7 @@ write live in the caller (``population_ladder_monitor``).
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -355,6 +356,62 @@ def replay_ladder_grid(
         position_expiry_ms=position_expiry_ms,
     )
     return grid
+
+
+def _with_entry_tiers(
+    trade_setup: Mapping[str, Any], entries: list[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Shallow-copy the setup with its entry ladder replaced (tps/stop untouched).
+
+    Mirror of :func:`_with_tp_tranches`: swaps the ``entry_tiers`` key with a NEW
+    list of freshly-built tier dicts; never mutates the original setup.
+    """
+    swapped = dict(trade_setup)
+    swapped["entry_tiers"] = entries
+    return swapped
+
+
+def realized_r_full_fill(
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    entry_expiry_ms: int | None = None,
+    position_expiry_ms: int | None = None,
+) -> float | None:
+    """Realized R if the position had been entered at the FULL-FILL blended price.
+
+    The entry-side counterfactual paired with the as-specified ``realized_r``: it
+    replays the SAME exit ladder over the SAME bars, but from a single entry tier
+    placed at the all-tier alloc-weighted blended entry (the price the ladder
+    would have averaged if every tier had filled). The gap
+    ``realized_r - realized_r_full_fill`` shows the entry-tier-spacing effect by
+    SIGN: POSITIVE means laddering the entry HELPED (the actual composite entry
+    achieved a higher R than a single fill at the blend would have); NEGATIVE
+    means laddering HURT (a partial / shallow fill left R on the table that the
+    deeper full-blend entry would have captured).
+
+    Like the exit grid, this is a pure transform over the already-fetched bars
+    (zero extra Polygon cost). It returns ``None`` for an unparseable setup or no
+    bars; ``None`` realized R when the single full-blend limit never fills (price
+    never dipped to the blended depth) -- which is itself the honest answer that a
+    full-ladder fill never triggered on this path.
+    """
+    ladder = parse_ladder(trade_setup)
+    if trade_setup is None or not bars or not ladder.ok:
+        return None
+    # Filter non-finite limits to match the monitor's _full_ladder_blended_entry
+    # robustness (a corrupted NaN limit would otherwise poison the blend).
+    finite_entries = [lvl for lvl in ladder.entries if math.isfinite(lvl.price)]
+    if not finite_entries:
+        return None
+    full_blend = _blended_entry(finite_entries)
+    setup_full = _with_entry_tiers(trade_setup, [{"limit": full_blend, "alloc_pct": 100.0}])
+    return replay_ladder(
+        setup_full,
+        bars,
+        entry_expiry_ms=entry_expiry_ms,
+        position_expiry_ms=position_expiry_ms,
+    ).realized_r
 
 
 class _LadderWalk:

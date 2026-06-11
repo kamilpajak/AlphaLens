@@ -106,6 +106,12 @@ class LadderOutcome(models.Model):
     # Empty until a minute resolve computes it (non-plannable / placeholder rows).
     grid_realized_r_json = models.TextField(blank=True, default="")
 
+    # Entry-side counterfactual (PR-3): realized R if all tiers had filled at the
+    # full-ladder blended entry, same exit ladder + bars. Paired with
+    # full_ladder_blended_entry; the gap realized_r - realized_r_full_fill is the
+    # entry-tier-spacing drag. NULL until a minute resolve computes it.
+    realized_r_full_fill = models.FloatField(null=True, blank=True)
+
     # Portfolio / size layer (additive, NOT the edge). Signal-time (intended).
     suggested_gross_weight_pct = models.FloatField(null=True, blank=True)
     full_ladder_blended_entry = models.FloatField(null=True, blank=True)
