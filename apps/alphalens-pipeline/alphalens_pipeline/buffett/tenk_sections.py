@@ -62,25 +62,32 @@ class TenKSections:
 
 
 def _extract_section(text: str, *, item_token: str, max_chars: int) -> str | None:
-    """Return the text after ``item_token``'s heading up to the next item heading.
+    """Return the longest body following an ``item_token`` heading.
 
     ``item_token`` is the bare number+suffix (e.g. ``"1"``, ``"1a"``, ``"7"``).
     The heading is matched case-insensitively with an optional trailing ``.``.
-    Returns ``None`` when the heading is not present. The returned slice is
-    stripped of surrounding whitespace and truncated to ``max_chars``.
+
+    Real 10-Ks list every item heading TWICE: once in the table of contents
+    (each entry tiny, bounded by the next TOC line) and once at the real section
+    body (long, bounded by the next real heading). Taking the FIRST match grabs
+    the TOC entry ("Business 3"). So we scan ALL occurrences and keep the one
+    whose body — text up to the next item heading of any number — is LONGEST;
+    the TOC fragments lose to the real section every time. ``None`` when the
+    heading never appears. The winning slice is stripped and truncated to
+    ``max_chars``.
     """
     heading = re.compile(rf"\bitem\s+{item_token}\b\.?", re.IGNORECASE)
-    match = heading.search(text)
-    if match is None:
+    best_body: str | None = None
+    for match in heading.finditer(text):
+        start = match.end()
+        next_match = _ANY_ITEM_HEADING.search(text, start)
+        end = next_match.start() if next_match is not None else len(text)
+        body = text[start:end].strip()
+        if best_body is None or len(body) > len(best_body):
+            best_body = body
+    if best_body is None:
         return None
-    start = match.end()
-    # Find the next item heading AFTER this one to bound the section. Skip any
-    # heading whose start is at/inside our own match (defensive — search starts
-    # past match.end() already, but keep the intent explicit).
-    next_match = _ANY_ITEM_HEADING.search(text, start)
-    end = next_match.start() if next_match is not None else len(text)
-    body = text[start:end].strip()
-    return body[:max_chars]
+    return best_body[:max_chars]
 
 
 def split_10k_sections(
