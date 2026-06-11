@@ -272,9 +272,27 @@ def _enum_or_none(value, allowed: frozenset[str]) -> str | None:
     return candidate if candidate in allowed else None
 
 
+_TRUE_STRINGS = frozenset({"true", "yes"})
+_FALSE_STRINGS = frozenset({"false", "no"})
+
+
 def _bool_or_none(value) -> bool | None:
-    """Return a strict bool, or ``None`` for any non-bool (e.g. "maybe", 1)."""
-    return value if isinstance(value, bool) else None
+    """Return a bool from a real bool or a common string boolean.
+
+    Accepts a genuine ``bool`` or a case-insensitive ``"true"/"false"/"yes"/"no"``
+    string (DeepSeek JSON mode occasionally stringifies booleans — coercing them
+    avoids a spurious ``None`` on an otherwise-valid label). Anything else
+    (``"maybe"``, ``1``, ``None``) → ``None``. Numbers are deliberately NOT
+    coerced — a numeric truthiness would blur the no-numbers boundary."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        candidate = value.strip().lower()
+        if candidate in _TRUE_STRINGS:
+            return True
+        if candidate in _FALSE_STRINGS:
+            return False
+    return None
 
 
 def _to_assessment(parsed: dict) -> QualitativeAssessment:

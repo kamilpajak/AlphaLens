@@ -197,6 +197,19 @@ class TestAssessQualitative(unittest.TestCase):
         self.assertIsNone(result.understandable)
         self.assertEqual(result.moat_type, "brand")
 
+    def test_string_boolean_understandable_is_coerced(self):
+        # DeepSeek JSON mode sometimes stringifies booleans; coerce the common
+        # forms rather than degrading an otherwise-valid label to None.
+        for raw, expected in (("true", True), ("False", False), ("YES", True), ("no", False)):
+            self._set_response(
+                f'{{"understandable": "{raw}", "moat_type": "brand", '
+                '"moat_trend": "stable", "management_candor": "mixed", "rationale": "ok"}'
+            )
+            result = assess_qualitative(
+                ticker="ACME", sections=_SECTIONS, facts=_FACTS, llm_client=self._client
+            )
+            self.assertIs(result.understandable, expected, raw)
+
 
 if __name__ == "__main__":
     unittest.main()
