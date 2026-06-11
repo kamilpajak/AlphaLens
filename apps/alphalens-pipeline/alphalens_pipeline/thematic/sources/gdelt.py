@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import html
 import json
 import logging
 import re
@@ -57,13 +58,29 @@ _SPACE_AFTER_OPENER = re.compile(r"([(\[{]) ")
 _SPACE_AROUND_HYPHEN = re.compile(r"(\w) - (\w)")
 
 
+def unescape_entities(title: str) -> str:
+    """Decode HTML character references (e.g. ``&#8216;`` → ``‘``, ``&amp;`` → ``&``).
+
+    News titles from the RSS / GDELT / Polygon aggregators occasionally arrive
+    with raw HTML entities that were never decoded upstream, so the dashboard
+    renders the literal ``&#8216;reset&#8217;`` instead of ``‘reset’``.
+    ``html.unescape`` is idempotent on already-decoded text, so applying it more
+    than once (e.g. here and again in :func:`clean_title`) is safe.
+    """
+    return html.unescape(title)
+
+
 def clean_title(title: str) -> str:
-    """Strip GDELT's space-padding around punctuation; collapse runs; trim.
+    """Decode HTML entities, strip GDELT's space-padding, collapse runs, trim.
 
     Public — also called by the legacy-title backfill (`alphalens thematic
-    clean-titles`, see `alphalens_pipeline.thematic.clean_titles`). Idempotent
-    on already-clean input.
+    clean-titles`, see `alphalens_pipeline.thematic.clean_titles`), so the
+    entity-decode step retro-cleans already-stored ``source_event_title`` rows.
+    Idempotent on already-clean input.
     """
+    # Decode first so any entity that resolves to whitespace (``&nbsp;`` →
+    # U+00A0) is then normalized by the whitespace collapse below.
+    title = unescape_entities(title)
     title = " ".join(title.split())  # collapse all whitespace runs + trim
     title = _SPACE_BEFORE_PUNCT.sub(r"\1", title)
     title = _SPACE_AFTER_OPENER.sub(r"\1", title)
