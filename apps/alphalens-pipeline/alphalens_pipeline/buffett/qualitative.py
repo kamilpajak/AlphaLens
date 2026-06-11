@@ -51,10 +51,16 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 
-# Cost: one DeepSeek Pro call per candidate. With three ~30k-char sections the
-# input runs ~25-40k tokens; at the post-promo ~$1.74/M input + $3.48/M output
-# rate that is roughly $0.05-0.10 per ticker. Opt-in only — the daily pipeline
-# never triggers it.
+# Cost: one DeepSeek Pro call per candidate. With three ~30k-char sections plus
+# Item 8 and a couple of capped prior-year risk-factor excerpts (#505) the input
+# runs ~30-45k tokens; at the post-promo ~$1.74/M input + $3.48/M output rate
+# that is roughly $0.06-0.12 per ticker. Opt-in only — the daily pipeline never
+# triggers it.
+
+# Per-prior-year Item 1A excerpt cap. Item 1A runs long; the model only needs the
+# leading risk narrative of each prior year to judge whether risks are growing,
+# so a tight cap keeps the multi-year evidence cheap.
+_PRIOR_YEAR_RISK_CAP = 6000
 
 # Allowed enum vocabularies. Any value outside these sets maps to None at parse
 # time so a hallucinated label never reaches the dataclass.
@@ -115,6 +121,9 @@ recompute or restate them as your own estimate):
 10-K — ITEM 7 (MANAGEMENT'S DISCUSSION & ANALYSIS):
 {item_7}
 
+10-K — ITEM 8 (FINANCIAL STATEMENTS AND SUPPLEMENTARY DATA):
+{item_8}
+{evolution_block}
 TASK — classify three qualities, returning ONLY the JSON object specified below:
 
 1. understandable (boolean): true if a generalist investor could clearly explain
@@ -126,9 +135,10 @@ TASK — classify three qualities, returning ONLY the JSON object specified belo
    evidence from the text. Use "none" if you see no durable advantage.
 
 3. moat_trend (one of: widening, stable, narrowing, unclear): considering Item 1A
-   risks and the Item 7 narrative together with the FACTS (e.g. a rising vs
-   falling ROIC / margin trend), is the advantage strengthening, holding,
-   eroding, or not determinable.
+   risks, the Item 7 narrative, the RISK-FACTOR EVOLUTION across prior years (if
+   provided — new or intensifying risks suggest a narrowing moat), and the FACTS
+   (e.g. a rising vs falling ROIC / margin trend), is the advantage strengthening,
+   holding, eroding, or not determinable.
 
 4. management_candor (one of: candid, mixed, promotional, unclear): does the MD&A
    read as candid about problems and trade-offs, mixed, marketing-heavy
@@ -210,12 +220,49 @@ def _format_facts_block(facts: dict) -> str:
     )
 
 
-def build_qualitative_prompt(*, ticker: str, sections, facts: dict) -> str:
+def _format_evolution_block(prior_year_risk_factors: list[tuple[str, str | None]] | None) -> str:
+    """Render prior-year Item 1A excerpts as a chronological evolution block (#505).
+
+    ``prior_year_risk_factors`` is ``[(filing_date, item_1a_text), ...]`` in any
+    order; entries with a ``None`` / blank body are dropped. The surviving years
+    are ordered OLDEST-first (so the model reads the risk narrative as it
+    evolves) and each body is capped to :data:`_PRIOR_YEAR_RISK_CAP`. Returns an
+    empty string when there is nothing substantive to show, so the prompt simply
+    omits the block rather than emitting an empty header.
+    """
+    if not prior_year_risk_factors:
+        return ""
+    usable = [
+        (date, text.strip()[:_PRIOR_YEAR_RISK_CAP])
+        for date, text in prior_year_risk_factors
+        if isinstance(text, str) and text.strip()
+    ]
+    if not usable:
+        return ""
+    usable.sort(key=lambda pair: pair[0])  # oldest first
+    entries = "\n\n".join(f"[{date}]\n{text}" for date, text in usable)
+    return (
+        "\nRISK-FACTOR EVOLUTION — Item 1A from prior years (oldest first), to judge "
+        "whether the durable advantage is strengthening or eroding over time:\n"
+        f"{entries}\n"
+    )
+
+
+def build_qualitative_prompt(
+    *,
+    ticker: str,
+    sections,
+    facts: dict,
+    prior_year_risk_factors: list[tuple[str, str | None]] | None = None,
+) -> str:
     """Build the classification prompt: injected facts + 10-K section excerpts.
 
-    ``sections`` is a :class:`~alphalens_pipeline.buffett.tenk_sections.TenKSections`.
-    A ``None`` section is rendered as a visible placeholder so the model knows it
-    is missing rather than seeing an empty gap.
+    ``sections`` is a :class:`~alphalens_pipeline.buffett.tenk_sections.TenKSections`
+    (Item 1 / 1A / 7 / 8). A ``None`` section is rendered as a visible placeholder
+    so the model knows it is missing rather than seeing an empty gap.
+    ``prior_year_risk_factors`` (#505) is an optional ``[(filing_date,
+    item_1a_text), ...]`` of earlier-year risk sections — when supplied it adds a
+    chronological RISK-FACTOR EVOLUTION block feeding the moat_trend call.
     """
     return _PROMPT_TEMPLATE.format(
         ticker=ticker,
@@ -223,6 +270,8 @@ def build_qualitative_prompt(*, ticker: str, sections, facts: dict) -> str:
         item_1=sections.item_1 or _SECTION_PLACEHOLDER,
         item_1a=sections.item_1a or _SECTION_PLACEHOLDER,
         item_7=sections.item_7 or _SECTION_PLACEHOLDER,
+        item_8=sections.item_8 or _SECTION_PLACEHOLDER,
+        evolution_block=_format_evolution_block(prior_year_risk_factors),
     )
 
 
@@ -317,6 +366,7 @@ def assess_qualitative(
     ticker: str,
     sections,
     facts: dict,
+    prior_year_risk_factors: list[tuple[str, str | None]] | None = None,
     llm_client: OpenRouterClient | None = None,
     model: str = DEFAULT_MODEL,
 ) -> QualitativeAssessment:
@@ -341,7 +391,12 @@ def assess_qualitative(
         logger.info("buffett qualitative: no 10-K sections for %s — skipping LLM", ticker)
         return _ALL_NONE
 
-    prompt = build_qualitative_prompt(ticker=ticker, sections=sections, facts=facts)
+    prompt = build_qualitative_prompt(
+        ticker=ticker,
+        sections=sections,
+        facts=facts,
+        prior_year_risk_factors=prior_year_risk_factors,
+    )
     try:
         # Client init inside the try so a missing OPENROUTER_API_KEY degrades
         # per-candidate rather than crashing the lens loop.
