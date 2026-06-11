@@ -101,5 +101,46 @@ class TestSplit10KSections(unittest.TestCase):
         self.assertIn("we manage", sections.item_7)
 
 
+class TestTableOfContentsIsSkipped(unittest.TestCase):
+    """Real 10-Ks open with a TABLE OF CONTENTS that lists every item heading
+    next to a page number, BEFORE the actual section bodies. Picking the FIRST
+    occurrence of "Item 1." grabs the TOC entry ("Business 3") instead of the
+    real Business section, starving the qualitative LLM. The splitter must pick
+    the body-bearing occurrence (observed live on Macy's 10-K, 2026-06-11).
+    """
+
+    _TOC_10K = (
+        "PART I "
+        # Table of contents: each heading is followed almost immediately by the
+        # NEXT heading + a page number (tiny inter-heading spans).
+        "Item 1. Business 3 "
+        "Item 1A. Risk Factors 7 "
+        "Item 1B. Unresolved Staff Comments 21 "
+        "Item 7. Management's Discussion and Analysis 22 "
+        "Item 8. Financial Statements 40 "
+        # The real sections, far down the document, with substantive bodies.
+        "Item 1. Business "
+        + ("We operate department stores selling apparel and home goods nationwide. " * 8)
+        + "Item 1A. Risk Factors "
+        + ("Consumer spending is cyclical and competition is intense. " * 8)
+        + "Item 1B. Unresolved Staff Comments None. "
+        + "Item 7. Management's Discussion and Analysis "
+        + ("Comparable sales declined while margins held on cost discipline. " * 8)
+        + "Item 8. Financial Statements See the accompanying notes."
+    )
+
+    def test_returns_real_body_not_toc_entry(self):
+        sections = split_10k_sections(self._TOC_10K)
+        assert sections.item_1 is not None
+        assert sections.item_1a is not None
+        assert sections.item_7 is not None
+        # The real bodies are long; the TOC fragments ("Business 3") are tiny.
+        self.assertGreater(len(sections.item_1), 100)
+        self.assertIn("department stores", sections.item_1)
+        self.assertNotEqual(sections.item_1.strip(), "Business 3")
+        self.assertIn("cyclical", sections.item_1a)
+        self.assertIn("Comparable sales", sections.item_7)
+
+
 if __name__ == "__main__":
     unittest.main()
