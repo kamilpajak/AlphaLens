@@ -492,6 +492,53 @@ class TestGdeltTitleCleaning(unittest.TestCase):
             "Stock rockets 33% on $100M backing",
         )
 
+
+class TestUnescapeEntities(unittest.TestCase):
+    """Aggregator titles sometimes arrive with raw HTML character references."""
+
+    def test_decodes_numeric_curly_quotes(self):
+        # The reported bug: "Xbox warns of a &#8216;reset&#8217;" rendered literally.
+        self.assertEqual(
+            gdelt.unescape_entities("Xbox warns of a &#8216;reset&#8217; as it prepares"),
+            "Xbox warns of a ‘reset’ as it prepares",
+        )
+
+    def test_decodes_named_ampersand(self):
+        self.assertEqual(
+            gdelt.unescape_entities("AT&amp;T raises guidance"), "AT&T raises guidance"
+        )
+
+    def test_decodes_hex_entity(self):
+        self.assertEqual(gdelt.unescape_entities("Tim&#x2019;s view"), "Tim’s view")
+
+    def test_idempotent_on_decoded_text(self):
+        decoded = "Xbox warns of a ‘reset’"
+        self.assertEqual(gdelt.unescape_entities(decoded), decoded)
+
+    def test_empty_stays_empty(self):
+        self.assertEqual(gdelt.unescape_entities(""), "")
+
+
+class TestCleanTitleDecodesEntities(unittest.TestCase):
+    """clean_title folds in entity decoding so the legacy backfill repairs stored rows."""
+
+    def test_decodes_numeric_curly_quotes(self):
+        self.assertEqual(
+            gdelt.clean_title("Xbox warns of a &#8216;reset&#8217; as it prepares for layoffs"),
+            "Xbox warns of a ‘reset’ as it prepares for layoffs",
+        )
+
+    def test_decodes_entity_and_strips_gdelt_padding_together(self):
+        # Entity decode + space-padding cleanup in one pass.
+        self.assertEqual(
+            gdelt.clean_title("Alphabet ( Google ) eyes &amp; buys AI . "),
+            "Alphabet (Google) eyes & buys AI.",
+        )
+
+    def test_nbsp_entity_collapses_to_single_space(self):
+        # &nbsp; decodes to U+00A0, which str.split() then normalizes away.
+        self.assertEqual(gdelt.clean_title("Foo&nbsp;bar"), "Foo bar")
+
     def test_collapses_hyphen_inside_compound_word(self):
         # GDELT tokenizes compound names like "D-Wave" into "D - Wave". Real
         # text never has a space-padded hyphen between alphanumeric tokens

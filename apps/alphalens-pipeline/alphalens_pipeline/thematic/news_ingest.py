@@ -99,6 +99,25 @@ def _safe_call(name: str, fn, **kwargs) -> pd.DataFrame:
         return empty_news_frame()
 
 
+def _decode_title_entities(df: pd.DataFrame) -> pd.DataFrame:
+    """Decode HTML character references in a source frame's ``title`` column.
+
+    Universal across all four sources (RSS / GDELT / Polygon / EDGAR): the
+    aggregators occasionally emit raw entities like ``&#8216;`` that render
+    literally on the dashboard. Applied at the pre-concat chokepoint so BOTH
+    the deduped current-view AND the immutable lake log carry decoded titles,
+    and so lexical clustering compares decoded text. Idempotent — GDELT titles
+    already passed through ``clean_title`` upstream, and ``html.unescape`` is a
+    no-op on decoded input. Returns the frame unchanged when it has no rows or
+    no ``title`` column.
+    """
+    if "title" not in df.columns or len(df) == 0:
+        return df
+    df = df.copy()
+    df["title"] = df["title"].fillna("").astype(str).map(gdelt.unescape_entities)
+    return df
+
+
 def _canonical_url(url: str) -> str:
     """Drop query string + fragment + trailing slash so cross-source dedup matches.
 
@@ -404,7 +423,9 @@ def ingest_daily(
         for name in _SOURCE_PRIORITY:
             source_row_counts[name] = len(source_frames[name])
 
-    frames = [df for df in (edgar_df, polygon_df, gdelt_df, rss_df) if len(df) > 0]
+    frames = [
+        _decode_title_entities(df) for df in (edgar_df, polygon_df, gdelt_df, rss_df) if len(df) > 0
+    ]
     if not frames:
         merged = empty_news_frame()
     else:

@@ -61,6 +61,42 @@ class TestNewsIngestOrchestration(unittest.TestCase):
             self.assertEqual(len(df), 3)
             self.assertEqual(set(df["source"]), {"polygon", "gdelt", "rss"})
 
+    def test_decodes_html_entities_in_titles_at_ingest(self):
+        """Raw HTML character references are decoded once, at the pre-concat chokepoint.
+
+        Covers every source uniformly — a Polygon title carrying ``&#8216;``/``&#8217;``
+        comes out with real curly quotes in the unified parquet.
+        """
+        polygon_df = _frame(
+            [
+                _row(
+                    "p1",
+                    "polygon",
+                    "2026-05-15T10:00:00Z",
+                    ["MSFT"],
+                    "Xbox warns of a &#8216;reset&#8217; as it prepares for layoffs",
+                )
+            ]
+        )
+        empty_df = news_ingest.empty_news_frame()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.object(news_ingest, "_fetch_polygon", return_value=polygon_df),
+                patch.object(news_ingest, "_fetch_gdelt", return_value=empty_df),
+                patch.object(news_ingest, "_fetch_rss", return_value=empty_df),
+            ):
+                df = news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                )
+
+            self.assertEqual(len(df), 1)
+            self.assertEqual(
+                df.iloc[0]["title"],
+                "Xbox warns of a ‘reset’ as it prepares for layoffs",
+            )
+
     def test_edgar_press_release_included_in_ingest(self):
         """EDGAR issuer press releases (8-K EX-99.1) now enter via PR-6 source."""
         self.assertTrue(hasattr(news_ingest, "_fetch_edgar_press_release"))
