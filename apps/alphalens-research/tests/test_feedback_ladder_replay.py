@@ -13,8 +13,10 @@ from __future__ import annotations
 import unittest
 
 from alphalens_pipeline.feedback.ladder_replay import (
+    GRID_CONFIGS,
     parse_ladder,
     replay_ladder,
+    replay_ladder_grid,
 )
 
 
@@ -77,6 +79,62 @@ class TestPostExitFillsDoNotCorruptHeadline(unittest.TestCase):
         # in-trade MAE must not include the post-exit dip to 90 (low while held
         # was 100 on bar 1 -> MAE 0, not negative from the post-exit 90).
         self.assertGreaterEqual(outcome.mae, 0.0)
+
+
+class TestReplayLadderGrid(unittest.TestCase):
+    """PR-2: re-replay the SAME bars under alternate EXIT ladders to separate
+    ladder-capture from selection. The candidate (bars), entry, and stop are held
+    fixed; only the TP policy varies."""
+
+    # E1=100 (full alloc), SL=90 (risk=10), TPs 110/120/130. Path: fill E1, hit
+    # TP1 (110) only, then reverse down to the stop (90).
+    _SETUP = {
+        "entries": [(100.0, 100.0)],
+        "tps": [(110.0, 33.3), (120.0, 33.3), (130.0, 33.3)],
+        "stop": 90.0,
+    }
+    _BARS = [
+        _bar(1, low=100.0, high=101.0, close=100.5),  # fills E1
+        _bar(2, low=105.0, high=112.0, close=108.0),  # TP1 (110) only
+        _bar(3, low=88.0, high=95.0, close=90.0),  # reverse to SL (90)
+    ]
+
+    def test_grid_has_all_config_keys(self):
+        grid = replay_ladder_grid(_setup(**self._SETUP), self._BARS)
+        self.assertEqual(set(grid), set(GRID_CONFIGS))
+
+    def test_exit_policy_separates_capture_on_one_path(self):
+        # Same price path, three exit ladders -> different realized R, proving the
+        # grid isolates trade-management from the (fixed) pick.
+        grid = replay_ladder_grid(_setup(**self._SETUP), self._BARS)
+        # Bank everything at TP1 -> captured the +1R move before the reversal.
+        self.assertGreater(grid["single_tp_first"], 0.0)
+        # Hold for the top target (130, never reached) -> rode down to the stop.
+        self.assertLess(grid["single_tp_last"], 0.0)
+        # No profit-taking -> rode to the stop too.
+        self.assertLess(grid["no_tp_ride"], 0.0)
+        # Early TP strictly beat letting it ride on THIS path.
+        self.assertGreater(grid["single_tp_first"], grid["no_tp_ride"])
+
+    def test_no_tps_yields_none_for_single_tp_configs(self):
+        setup = _setup(entries=[(100.0, 100.0)], tps=[], stop=90.0)
+        grid = replay_ladder_grid(setup, self._BARS)
+        self.assertIsNone(grid["single_tp_first"])
+        self.assertIsNone(grid["single_tp_last"])
+        # no_tp_ride is still defined (it never needed TPs).
+        self.assertIsNotNone(grid["no_tp_ride"])
+
+    def test_unparseable_setup_or_no_bars_returns_all_none(self):
+        all_none = dict.fromkeys(GRID_CONFIGS)
+        self.assertEqual(replay_ladder_grid(None, self._BARS), all_none)
+        self.assertEqual(replay_ladder_grid(_setup(**self._SETUP), []), all_none)
+
+    def test_grid_holds_entry_and_stop_fixed(self):
+        # The single_tp_first config must use the SAME entry + stop as as-specified
+        # (only the TP ladder changed): a path that fills E1 and banks TP1 at 100%
+        # gives exactly +1R (TP1=110, entry=100, risk=10).
+        grid = replay_ladder_grid(_setup(**self._SETUP), self._BARS)
+        self.assertAlmostEqual(grid["single_tp_first"], 1.0, places=2)
 
 
 class TestParseLadder(unittest.TestCase):

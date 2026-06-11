@@ -251,6 +251,112 @@ def replay_ladder(
     return _finalize(walk, blended=blended, reference_close=reference_close, ratchet_r=ratchet_r)
 
 
+# The fixed EXIT-policy grid (PR-2). Each config re-replays the SAME bars under a
+# different take-profit ladder while holding the candidate (price path), the entry
+# tiers, and the disaster stop FIXED -- so a difference in realized R is
+# attributable to trade-management, not to the pick. The entry-side counterfactual
+# (full-fill blended entry) is a SEPARATE measure (see realized_r_full_fill).
+GRID_CONFIGS: tuple[str, ...] = ("single_tp_first", "single_tp_last", "no_tp_ride")
+
+
+def _with_tp_tranches(
+    trade_setup: Mapping[str, Any], tps: list[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """Shallow-copy the setup with its TP ladder replaced (entries/stop untouched).
+
+    Swaps the ``tp_tranches`` key with a NEW list; never mutates the original
+    setup or its nested entry/tranche dicts. Callers pass freshly-built tranche
+    dicts, so the shallow copy depth is sufficient.
+    """
+    swapped = dict(trade_setup)
+    swapped["tp_tranches"] = tps
+    return swapped
+
+
+def _grid_realized_r(
+    trade_setup: Mapping[str, Any],
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    entry_expiry_ms: int | None,
+    position_expiry_ms: int | None,
+) -> float | None:
+    """Terminal realized R of one alternate-exit replay (``None`` if it never
+    exited / could not be built). ``reference_close`` is irrelevant here -- the
+    grid measures realized R (fill-anchored), not the substrate forward return."""
+    return replay_ladder(
+        trade_setup,
+        bars,
+        entry_expiry_ms=entry_expiry_ms,
+        position_expiry_ms=position_expiry_ms,
+    ).realized_r
+
+
+def replay_ladder_grid(
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    reference_close: float | None = None,
+    entry_expiry_ms: int | None = None,
+    position_expiry_ms: int | None = None,
+) -> dict[str, float | None]:
+    """Re-replay the SAME cached bars under a fixed grid of alternate EXIT ladders.
+
+    Returns ``{config_name: realized_r}`` for each entry in :data:`GRID_CONFIGS`.
+    This is the within-decision lever that separates ladder-capture quality from
+    selection quality: the bars, entry tiers, and stop are identical across the
+    grid, so the spread in realized R is the trade-management effect. It reuses
+    the pure :func:`replay_ladder` over the already-fetched bars (the same
+    zero-extra-cost pattern as the ratchet what-if pass), so there is no new walk
+    logic and no new Polygon call.
+
+    * ``single_tp_first`` -- collapse the TP ladder to a single 100% tranche at
+      the NEAREST target (bank everything at TP1).
+    * ``single_tp_last`` -- a single 100% tranche at the FARTHEST target (hold for
+      the top target only).
+    * ``no_tp_ride`` -- drop all take-profits; ride to the stop or the position
+      time-stop (no profit-taking).
+
+    A config that cannot be built (no TP tranches for the single-TP variants, an
+    unparseable setup, or no bars) maps to ``None``.
+
+    ``reference_close`` is intentionally unused -- the grid measures realized R
+    (fill-anchored), not the substrate forward return, which is the only thing the
+    arrival anchor feeds. It is kept only for call-signature symmetry with
+    :func:`replay_ladder`.
+    """
+    none_grid: dict[str, float | None] = dict.fromkeys(GRID_CONFIGS, None)
+    if trade_setup is None or not bars or not parse_ladder(trade_setup).ok:
+        return none_grid
+
+    raw_tps = list(trade_setup.get("tp_tranches") or [])
+    grid = dict(none_grid)
+    # next(iter(...), None) / next(reversed(...), None) instead of [0] / [-1]: no
+    # subscript means no IndexError to reason about (static analysis cannot narrow
+    # the `if raw_tps` truthiness guard on its own).
+    first_tp = next(iter(raw_tps), None)
+    last_tp = next(reversed(raw_tps), None)
+    if first_tp is not None and last_tp is not None:
+        grid["single_tp_first"] = _grid_realized_r(
+            _with_tp_tranches(trade_setup, [{**first_tp, "tranche_pct": 100.0}]),
+            bars,
+            entry_expiry_ms=entry_expiry_ms,
+            position_expiry_ms=position_expiry_ms,
+        )
+        grid["single_tp_last"] = _grid_realized_r(
+            _with_tp_tranches(trade_setup, [{**last_tp, "tranche_pct": 100.0}]),
+            bars,
+            entry_expiry_ms=entry_expiry_ms,
+            position_expiry_ms=position_expiry_ms,
+        )
+    grid["no_tp_ride"] = _grid_realized_r(
+        _with_tp_tranches(trade_setup, []),
+        bars,
+        entry_expiry_ms=entry_expiry_ms,
+        position_expiry_ms=position_expiry_ms,
+    )
+    return grid
+
+
 class _LadderWalk:
     """Single full-horizon pass state for the as-specified ladder replay.
 
