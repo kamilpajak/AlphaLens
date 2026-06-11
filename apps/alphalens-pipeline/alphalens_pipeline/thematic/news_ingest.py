@@ -492,6 +492,14 @@ def ingest_daily(
     # makes no session/cap decision; the session VIEW does, at read time). The
     # raw union is built INSIDE the try so any issue with it cannot break the
     # build. Same ``ingested_at`` (transaction-time) as the current-view run.
+    #
+    # "RAW" here means BEFORE the dedup / clustering / session / cap decisions the
+    # lake deliberately defers to the read-time VIEW — NOT byte-for-byte source
+    # text. ``frames`` already had HTML entities decoded (``_decode_title_entities``
+    # above), so the lake stores display-ready titles on purpose: the per-exchange
+    # session VIEW renders them to users, so preserving raw ``&#8216;`` here would
+    # just re-export the rendering bug. Entity-decode is content normalization, not
+    # a session/cap decision, so it is consistent with the Layer-1 principle.
     try:
         raw_union = pd.concat(frames, ignore_index=True) if frames else empty_news_frame()
         raw_union["ingested_at"] = ingested_at
