@@ -15,9 +15,12 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import alphalens_pipeline.buffett.comparison as comparison_mod
+import alphalens_pipeline.buffett.qualitative as qualitative_mod
+import alphalens_pipeline.thematic.verification.tenk_grep as tenk_grep_mod
 from alphalens_cli.commands.buffett import _fmt_num, _format_table
 from alphalens_cli.main import app
 from alphalens_pipeline.buffett.comparison import BuffettPanel
+from alphalens_pipeline.buffett.qualitative import QualitativeAssessment
 from typer.testing import CliRunner
 
 
@@ -92,6 +95,77 @@ class TestLensCommand(unittest.TestCase):
     def test_bad_date_is_rejected(self):
         result = self._runner.invoke(app, ["buffett", "lens", "not-a-date"])
         self.assertNotEqual(result.exit_code, 0)
+
+
+class TestQualitativeFlag(unittest.TestCase):
+    """The opt-in `--qualitative` flag adds MOAT/TREND/CANDOR/UNDERSTOOD columns.
+
+    All network / LLM seams are monkeypatched: `build_comparison` returns fixed
+    panels, `fetch_10k_text` returns synthetic text, and `assess_qualitative`
+    returns a fixed assessment — so the test is fully hermetic.
+    """
+
+    def setUp(self):
+        self._runner = CliRunner()
+        self._orig_build = comparison_mod.build_comparison
+        self._orig_fetch = tenk_grep_mod.fetch_10k_text
+        self._orig_assess = qualitative_mod.assess_qualitative
+
+    def tearDown(self):
+        comparison_mod.build_comparison = self._orig_build  # type: ignore[assignment]
+        tenk_grep_mod.fetch_10k_text = self._orig_fetch  # type: ignore[assignment]
+        qualitative_mod.assess_qualitative = self._orig_assess  # type: ignore[assignment]
+
+    def test_qualitative_flag_adds_columns_and_writes_parquet(self):
+        comparison_mod.build_comparison = lambda *_a, **_k: [_panel("AAPL")]  # type: ignore[assignment]
+        tenk_grep_mod.fetch_10k_text = lambda **_k: (  # type: ignore[assignment]
+            "Item 1. Business We make things. Item 1A. Risk Factors Risky. "
+            "Item 7. MD&A We discuss. Item 8. End"
+        )
+        qualitative_mod.assess_qualitative = lambda **_k: QualitativeAssessment(  # type: ignore[assignment]
+            understandable=True,
+            moat_type="brand",
+            moat_trend="widening",
+            management_candor="candid",
+            rationale="strong brand",
+        )
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "lens.parquet"
+            result = self._runner.invoke(
+                app,
+                [
+                    "buffett",
+                    "lens",
+                    "2026-06-10",
+                    "--briefs-dir",
+                    tmp,
+                    "--qualitative",
+                    "--out",
+                    str(out),
+                ],
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("MOAT", result.output)
+            self.assertIn("brand", result.output)
+            self.assertTrue(out.exists())
+            import pandas as pd
+
+            df = pd.read_parquet(out)
+            for col in ("moat_type", "moat_trend", "management_candor", "understandable"):
+                self.assertIn(col, df.columns)
+
+    def test_no_qualitative_flag_does_not_call_llm(self):
+        comparison_mod.build_comparison = lambda *_a, **_k: [_panel("AAPL")]  # type: ignore[assignment]
+        calls: list[str] = []
+        tenk_grep_mod.fetch_10k_text = lambda **_k: calls.append("fetch") or ""  # type: ignore[assignment]
+        qualitative_mod.assess_qualitative = lambda **_k: calls.append("assess")  # type: ignore[assignment]
+        with TemporaryDirectory() as tmp:
+            result = self._runner.invoke(
+                app, ["buffett", "lens", "2026-06-10", "--briefs-dir", tmp]
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertNotIn("MOAT", result.output)
+            self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":
