@@ -10,6 +10,16 @@ geometry changed, instead of blending two regimes into one mean.
 The token is the value record AND the version identity at once: identical configs
 serialise to byte-identical strings (sorted keys), so a plain SQL ``GROUP BY``
 partitions rows by geometry with no parsing.
+
+Design note -- per-row token, not a global code-version: the token folds in the
+``order_ttl_days`` ACTUALLY used for the row, which a candidate's
+``brief_trade_setup`` can override. So the token is a row-specific geometry hash,
+not a constant-only "code version" that changes only on a deploy. That is the
+intended trade-off: two rows replayed under different entry-TTLs ARE different
+configs and must not compare equal (this is exactly what surfaced the 10-vs-7
+divergence). An analyst wanting the "before/after a constant change" cut
+independent of per-row TTL can read the ``schema`` field or the dedicated
+``time_stop_days`` / ``arrival_vwap_window_min`` keys out of the token.
 """
 
 from __future__ import annotations
