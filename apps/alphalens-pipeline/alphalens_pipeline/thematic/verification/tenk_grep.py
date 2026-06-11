@@ -375,9 +375,12 @@ def fetch_multi_year_10k_texts(
                 continue
             try:
                 shard_payload = _fetch_submissions_overflow(name)
-            except Exception as exc:  # fail-soft: an unreadable shard is not fatal
+            except Exception as exc:  # fail-soft: one unreadable shard is not fatal
+                # ``continue`` not ``break``: a transient 403/500 on one shard
+                # must not stop the walk — a later shard may still hold the
+                # remaining years.
                 logger.warning("submissions overflow %s fetch failed: %s", name, exc)
-                break
+                continue
             collected.extend(find_10ks(shard_payload, asof=asof))
             if len(collected) >= years:
                 break

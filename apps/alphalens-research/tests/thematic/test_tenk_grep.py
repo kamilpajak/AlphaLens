@@ -696,6 +696,43 @@ class TestFetchMultiYear10KTexts(unittest.TestCase):
             self.assertEqual(html.call_count, 3)
             self.assertTrue((cache_dir / "ACME_2024-02-15.txt").exists())
 
+    def test_unreadable_first_shard_does_not_stop_later_shards(self):
+        # A transient failure on one overflow shard must not abort the walk:
+        # a later healthy shard can still supply the remaining years.
+        two_shard_recent = {
+            "filings": {
+                "recent": {
+                    "form": ["10-K"],
+                    "accessionNumber": ["acc-2026"],
+                    "filingDate": ["2026-02-20"],
+                    "primaryDocument": ["y2026.htm"],
+                },
+                "files": [
+                    {"name": "CIK0000000001-submissions-001.json"},
+                    {"name": "CIK0000000001-submissions-002.json"},
+                ],
+            }
+        }
+
+        def _overflow(name):
+            if name.endswith("001.json"):
+                raise RuntimeError("transient 500")
+            return _OVERFLOW_SHARD
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cache_dir = Path(tmpdir)
+            with (
+                patch.object(tenk_grep, "_resolve_cik", return_value="0000000001"),
+                patch.object(tenk_grep, "_fetch_submissions_json", return_value=two_shard_recent),
+                patch.object(tenk_grep, "_fetch_submissions_overflow", side_effect=_overflow),
+                patch.object(tenk_grep, "_fetch_filing_html", return_value=FIXTURE_10K_HTML),
+            ):
+                out = tenk_grep.fetch_multi_year_10k_texts(
+                    ticker="ACME", cache_dir=cache_dir, years=2
+                )
+            # The healthy second shard's 2024 10-K survives the first shard's failure.
+            self.assertEqual([d for d, _ in out], ["2026-02-20", "2024-02-15"])
+
     def test_stops_gracefully_on_empty_filings_files(self):
         recent_only = {
             "filings": {

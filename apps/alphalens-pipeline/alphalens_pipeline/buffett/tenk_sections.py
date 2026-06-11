@@ -50,7 +50,9 @@ _ANY_ITEM_HEADING = re.compile(r"\bitem\s+\d+[a-z]?\b\.?", re.IGNORECASE)
 # heading: many filers put a one-line "filed under Item 15" pointer there and
 # place the real statements in a back-of-document block. When the inline Item 8
 # body is shorter than this floor we treat it as such a stub and fall back to
-# scanning for a financial-statements anchor (below).
+# scanning for a financial-statements anchor (below). The bound is INCLUSIVE: a
+# body of exactly this length counts as inline (``len(primary) >= floor``), not
+# a stub — real inline Item 8 stubs are one-liners (~100 chars), far below it.
 _ITEM_8_STUB_FLOOR = 600
 
 # Unambiguous lead-in phrases for a financial-statements block. Used ONLY as the
