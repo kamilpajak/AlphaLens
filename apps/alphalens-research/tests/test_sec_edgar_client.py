@@ -138,6 +138,18 @@ class TestHappyPath(unittest.TestCase):
         # CIK without leading zeros, accession without dashes.
         self.assertIn("/Archives/edgar/data/320193/000032019322000001/form4.xml", url)
 
+    def test_fetch_xbrl_frame_builds_url_and_parses(self):
+        payload = {"data": [{"accn": "0001321655-26-000019", "cik": 1321655, "val": 1000.0}]}
+        session = _FakeSession([_FakeResponse(200, json_payload=payload)])
+        client = _make_client(session, _SleepRecorder())
+
+        result = client.fetch_xbrl_frame("ecd", "PeoActuallyPaidCompAmt", "USD", "CY2024")
+        self.assertEqual(result, payload)
+        url, _ = session.calls[0]
+        self.assertEqual(
+            url, "https://data.sec.gov/api/xbrl/frames/ecd/PeoActuallyPaidCompAmt/USD/CY2024.json"
+        )
+
 
 class TestCaching(unittest.TestCase):
     def test_fetch_submissions_caches_result(self):
@@ -156,6 +168,15 @@ class TestCaching(unittest.TestCase):
 
         client.fetch_submissions_overflow("CIK0000320193-submissions-001.json")
         client.fetch_submissions_overflow("CIK0000320193-submissions-001.json")
+        self.assertEqual(len(session.calls), 1)
+
+    def test_fetch_xbrl_frame_caches_per_key(self):
+        payload = {"data": []}
+        session = _FakeSession([_FakeResponse(200, json_payload=payload)])
+        client = _make_client(session, _SleepRecorder())
+
+        client.fetch_xbrl_frame("ecd", "PeoTotalCompAmt", "USD", "CY2024")
+        client.fetch_xbrl_frame("ecd", "PeoTotalCompAmt", "USD", "CY2024")  # cache hit
         self.assertEqual(len(session.calls), 1)
 
 
