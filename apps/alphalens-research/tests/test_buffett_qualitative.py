@@ -343,5 +343,44 @@ class TestScuttlebuttBlock(unittest.TestCase):
         self.assertNotIn("integer", str(_QUALITATIVE_RESPONSE_SCHEMA))
 
 
+class TestPromptSurvivesCurlyBraces(unittest.TestCase):
+    """The prompt is built with str.format(); literal {/} in any injected text
+    (10-K extract OR web scuttlebutt) must NOT crash the build. build_prompt runs
+    BEFORE the assess_qualitative try/except, so a KeyError there kills the whole
+    lens run, not just one candidate."""
+
+    def test_braces_in_sections_do_not_crash(self):
+        sections = TenKSections(
+            item_1="Guidance {raised} to a new {range} of products",
+            item_1a="Risk: {concentration} in one channel",
+            item_7="MD&A discusses {margins}",
+            item_8="CONSOLIDATED {BALANCE} SHEET",
+        )
+        prompt = build_qualitative_prompt(ticker="ACME", sections=sections, facts=_FACTS)
+        self.assertIn("raised", prompt)
+        self.assertIn("range", prompt)
+        self.assertIn("concentration", prompt)
+        self.assertIn("BALANCE", prompt)
+
+    def test_braces_in_scuttlebutt_do_not_crash(self):
+        prompt = build_qualitative_prompt(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            scuttlebutt="Competitor reportedly hit {record} growth and {strong} demand",
+        )
+        self.assertIn("record", prompt)
+        self.assertIn("strong", prompt)
+
+    def test_braces_in_prior_year_risk_factors_do_not_crash(self):
+        prompt = build_qualitative_prompt(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            prior_year_risk_factors=[("2024-03-22", "Risk grew {sharply} that year")],
+        )
+        self.assertIn("sharply", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
