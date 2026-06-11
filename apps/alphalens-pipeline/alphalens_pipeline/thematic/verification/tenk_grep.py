@@ -118,6 +118,15 @@ def _fetch_filing_html(cik: str, accession: str, primary_doc: str) -> str:
     return get_default_sec_client().get_text(url, encoding="utf-8")
 
 
+def _fetch_submissions_overflow(name: str) -> dict:
+    """Fetch a paginated submissions overflow shard (``filings.files`` pointer).
+
+    Module-level wrapper so the canonical client stays the only SEC transport
+    and tests can patch this like the other ``_fetch_*`` helpers.
+    """
+    return get_default_sec_client().fetch_submissions_overflow(name)
+
+
 def extract_text(html: str) -> str:
     """Strip HTML to plain text. Removes ``<script>``/``<style>`` content
     entirely (regex tag-strip would leave their inner JS/CSS in the haystack)
@@ -171,6 +180,43 @@ def find_latest_10k(submissions_payload: dict, asof: dt.date | None = None) -> d
         if best is None or dt_ > best["filing_date"]:
             best = {"accession": acc, "filing_date": dt_, "primary_doc": doc}
     return best
+
+
+def find_10ks(
+    submissions_payload: dict,
+    *,
+    asof: dt.date | None = None,
+    max_count: int | None = None,
+) -> list[dict]:
+    """Return ALL 10-K records in one ``filings.recent``-shaped block, ≤ asof.
+
+    Generalizes :func:`find_latest_10k` (which returns only the single freshest
+    record) to the full list, sorted newest-first. Pure — no I/O. Each record is
+    ``{accession, filing_date, primary_doc}``. The main submissions index AND
+    each ``filings.files`` overflow shard share the ``{recent: {...}}`` shape, so
+    the multi-year fetcher reuses this on both. ``max_count`` caps the list.
+
+    NOTE: this is intentionally a separate function, NOT a refactor of
+    ``find_latest_10k`` — the latter is on the live daily-brief path and is kept
+    byte-for-byte unchanged (#505 live-path safety).
+    """
+    asof_str = asof.isoformat() if asof is not None else None
+    recent = submissions_payload.get("filings", {}).get("recent", {})
+    forms = recent.get("form") or []
+    accessions = recent.get("accessionNumber") or []
+    dates = recent.get("filingDate") or []
+    docs = recent.get("primaryDocument") or []
+    out: list[dict] = []
+    for form, acc, dt_, doc in zip(forms, accessions, dates, docs, strict=False):
+        if form != "10-K":
+            continue
+        if asof_str is not None and dt_ > asof_str:
+            continue
+        out.append({"accession": acc, "filing_date": dt_, "primary_doc": doc})
+    out.sort(key=lambda r: r["filing_date"], reverse=True)
+    if max_count is not None:
+        out = out[:max_count]
+    return out
 
 
 _CACHE_TTL_DAYS = 380  # 10-Ks are annual; refresh once the latest cached file is more than ~one filing cycle stale, so a SEC index check supersedes a long-since-obsolete cache entry.
@@ -269,6 +315,141 @@ def fetch_10k_text(
     return text
 
 
+# Multi-year / peer reach (#505) — additive, reachable ONLY from the opt-in
+# Buffett `--qualitative` CLI, never from the daily thematic pipeline.
+_DEFAULT_MULTI_YEAR_COUNT = 3
+_DEFAULT_MAX_PEERS = 3
+
+
+def _fetch_and_cache_10k(ticker: str, cik: str, rec: dict, cache_dir: Path) -> str:
+    """Fetch + cache ONE 10-K's plain text for an explicit submissions record.
+
+    Mirrors :func:`fetch_10k_text`'s cache contract (``{TICKER}_{date}.txt``)
+    but for an arbitrary record rather than the latest-≤asof one — so an
+    overflow-sourced older filing (invisible to ``find_latest_10k``) is fetched
+    directly. Reuses the same cache namespace as ``fetch_10k_text`` so a year
+    already warmed by the daily path is not re-fetched.
+    """
+    cache_path = cache_dir / f"{ticker.upper()}_{rec['filing_date']}.txt"
+    if cache_path.exists():
+        return cache_path.read_text()
+    html = _fetch_filing_html(cik, rec["accession"], rec["primary_doc"])
+    text = extract_text(html)
+    cache_path.write_text(text)
+    return text
+
+
+def fetch_multi_year_10k_texts(
+    *,
+    ticker: str,
+    cache_dir: Path = DEFAULT_CACHE_DIR,
+    asof: dt.date | None = None,
+    years: int = _DEFAULT_MULTI_YEAR_COUNT,
+) -> list[tuple[str, str]]:
+    """Return up to ``years`` of 10-K texts (newest-first), ≤ asof.
+
+    ``[(filing_date, text), ...]``. Collects 10-K records from the recent
+    submissions block and, ONLY when that is short of ``years``, walks the
+    ``filings.files`` overflow shards. Each chosen filing's HTML is fetched
+    directly via :func:`_fetch_and_cache_10k` — NOT delegated to
+    ``fetch_10k_text``, which re-derives the filing via ``find_latest_10k``
+    (recent-only) and would never see an overflow-sourced older year.
+
+    For most issuers the recent block already holds ≥ ``years`` annual 10-Ks, so
+    no overflow shard is read. Returns ``[]`` when the CIK is unresolvable.
+    Reachable ONLY from the opt-in Buffett CLI — never the daily pipeline.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cik = _resolve_cik(ticker)
+    if cik is None:
+        logger.info("no CIK mapping for %s — multi-year 10-K unavailable", ticker)
+        return []
+
+    submissions = _fetch_submissions_json(cik)
+    collected = find_10ks(submissions, asof=asof)
+    if len(collected) < years:
+        shards = submissions.get("filings", {}).get("files") or []
+        for shard in shards:
+            name = shard.get("name") if isinstance(shard, dict) else None
+            if not name:
+                continue
+            try:
+                shard_payload = _fetch_submissions_overflow(name)
+            except Exception as exc:  # fail-soft: one unreadable shard is not fatal
+                # ``continue`` not ``break``: a transient 403/500 on one shard
+                # must not stop the walk — a later shard may still hold the
+                # remaining years.
+                logger.warning("submissions overflow %s fetch failed: %s", name, exc)
+                continue
+            collected.extend(find_10ks(shard_payload, asof=asof))
+            if len(collected) >= years:
+                break
+
+    # Newest-first, de-duplicated on accession, truncated to ``years``.
+    collected.sort(key=lambda r: r["filing_date"], reverse=True)
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for rec in collected:
+        if rec["accession"] in seen:
+            continue
+        seen.add(rec["accession"])
+        deduped.append(rec)
+    out: list[tuple[str, str]] = []
+    for rec in deduped[:years]:
+        out.append((rec["filing_date"], _fetch_and_cache_10k(ticker, cik, rec, cache_dir)))
+    return out
+
+
+def fetch_peer_10k_texts(
+    *,
+    ticker: str,
+    cache_dir: Path = DEFAULT_CACHE_DIR,
+    asof: dt.date | None = None,
+    max_peers: int = _DEFAULT_MAX_PEERS,
+    min_cohort: int | None = None,
+    peer_filter=None,
+) -> list[tuple[str, str]]:
+    """Return up to ``max_peers`` SIC/FF-peer latest-10K texts (fail-soft).
+
+    ``[(peer_ticker, text), ...]``. Resolves the peer cohort via
+    :func:`sic_index.iter_peers_fallback`, drops the subject ticker, and takes
+    the first ``max_peers`` — a HARD cap on SEC request volume. Each peer's
+    LATEST 10-K is fetched via :func:`fetch_10k_text` (correct here: we want each
+    peer's most recent filing, not a multi-year history). A peer that fails to
+    resolve / fetch is skipped, never raised.
+
+    ``peer_filter`` is an optional ``Callable[[list[str]], list[str]]`` passed
+    straight to ``iter_peers_fallback`` (e.g. a ``functools.partial`` binding the
+    mcap/price floor). Default ``None`` keeps the peer loop free of any
+    feature-fetcher dependency.
+
+    Caveat: peer MEMBERSHIP is current-snapshot (today's SIC cohort), NOT
+    point-in-time. The individual peer FILINGS are still ``asof``-filtered by
+    ``fetch_10k_text``. Peer-selection quality (ordering, comparability) is left
+    to the consumer; this is plumbing to make peer 10-K text retrievable.
+    Reachable ONLY from the opt-in Buffett CLI — never the daily pipeline.
+    """
+    from alphalens_pipeline.data.fundamentals import sic_index
+
+    if min_cohort is None:
+        min_cohort = sic_index.DEFAULT_MIN_COHORT
+    sic = sic_index.get_sic(ticker)
+    peers, _ = sic_index.iter_peers_fallback(sic, min_cohort=min_cohort, peer_filter=peer_filter)
+    subject = ticker.upper()
+    candidates = [p for p in peers if p.upper() != subject][:max_peers]
+    out: list[tuple[str, str]] = []
+    for peer in candidates:
+        try:
+            text = fetch_10k_text(ticker=peer, cache_dir=cache_dir, asof=asof)
+        except Exception as exc:  # fail-soft per peer
+            logger.warning("peer 10-K fetch failed for %s: %s", peer, exc)
+            continue
+        if text is None:
+            continue
+        out.append((peer, text))
+    return out
+
+
 def has_theme_keywords_in_10k(
     *,
     ticker: str,
@@ -296,6 +477,9 @@ __all__ = [
     "DEFAULT_CACHE_DIR",
     "extract_text",
     "fetch_10k_text",
+    "fetch_multi_year_10k_texts",
+    "fetch_peer_10k_texts",
+    "find_10ks",
     "find_latest_10k",
     "grep_keywords",
     "has_theme_keywords_in_10k",

@@ -46,6 +46,30 @@ _DEFAULT_MAX_CHARS_PER_SECTION = 30000
 # the three target headings and to find the NEXT heading that bounds a section.
 _ANY_ITEM_HEADING = re.compile(r"\bitem\s+\d+[a-z]?\b\.?", re.IGNORECASE)
 
+# Item 8 (Financial Statements) often does NOT carry its statements under the
+# heading: many filers put a one-line "filed under Item 15" pointer there and
+# place the real statements in a back-of-document block. When the inline Item 8
+# body is shorter than this floor we treat it as such a stub and fall back to
+# scanning for a financial-statements anchor (below). The bound is INCLUSIVE: a
+# body of exactly this length counts as inline (``len(primary) >= floor``), not
+# a stub — real inline Item 8 stubs are one-liners (~100 chars), far below it.
+_ITEM_8_STUB_FLOOR = 600
+
+# Unambiguous lead-in phrases for a financial-statements block. Used ONLY as the
+# Item 8 stub fallback. Deliberately multi-word — a bare "F-1" would match visa
+# / form references, so it is excluded.
+_ITEM_8_ANCHORS = (
+    "index to financial statements",
+    "consolidated balance sheet",
+    "consolidated statements of operations",
+    "consolidated statement of operations",
+)
+
+# Item 8 is mostly numeric tables + footnotes; the qualitative classifier only
+# needs the lead narrative + statement headers, so it carries a tighter cap than
+# the narrative sections (Item 1 / 1A / 7) to bound LLM token cost (#505).
+_DEFAULT_MAX_CHARS_ITEM_8 = 10000
+
 
 @dataclass(frozen=True)
 class TenKSections:
@@ -59,6 +83,10 @@ class TenKSections:
     item_1: str | None
     item_1a: str | None
     item_7: str | None
+    # Item 8 — Financial Statements and Supplementary Data (#505). Defaults to
+    # ``None`` so existing constructors (qualitative tests, the all-None early
+    # return) keep working unchanged when a shared type gains a field.
+    item_8: str | None = None
 
 
 def _extract_section(text: str, *, item_token: str, max_chars: int) -> str | None:
@@ -90,10 +118,45 @@ def _extract_section(text: str, *, item_token: str, max_chars: int) -> str | Non
     return best_body[:max_chars]
 
 
+def _extract_item_8(text: str, *, max_chars: int) -> str | None:
+    """Return Item 8 (Financial Statements) with a stub-aware anchor fallback.
+
+    First try the normal heading extraction (Item 8 → next item heading). When
+    the inline body is substantive (``>= _ITEM_8_STUB_FLOOR``) it is the real
+    statements block and is returned. When it is shorter — the common
+    "incorporated by reference / filed under Item 15" pointer — scan for the
+    FIRST financial-statements anchor (``_ITEM_8_ANCHORS``) and return from that
+    anchor up to the next item heading (or end). ``None`` only when there is
+    neither an Item 8 heading nor an anchor. The result is truncated to
+    ``max_chars``.
+    """
+    primary = _extract_section(text, item_token="8", max_chars=max_chars)
+    if primary is not None and len(primary) >= _ITEM_8_STUB_FLOOR:
+        return primary
+    # Stub or absent: look for a back-of-document statements block.
+    lowered = text.lower()
+    anchor_pos: int | None = None
+    for anchor in _ITEM_8_ANCHORS:
+        pos = lowered.find(anchor)
+        if pos != -1 and (anchor_pos is None or pos < anchor_pos):
+            anchor_pos = pos
+    if anchor_pos is None:
+        # No statements block found — return whatever the inline body was
+        # (a legitimately terse Item 8) or ``None``.
+        return primary
+    next_match = _ANY_ITEM_HEADING.search(text, anchor_pos + 1)
+    end = next_match.start() if next_match is not None else len(text)
+    body = text[anchor_pos:end].strip()
+    if not body:
+        return primary
+    return body[:max_chars]
+
+
 def split_10k_sections(
     text: str,
     *,
     max_chars_per_section: int = _DEFAULT_MAX_CHARS_PER_SECTION,
+    max_chars_item_8: int = _DEFAULT_MAX_CHARS_ITEM_8,
 ) -> TenKSections:
     """Split a 10-K plaintext into Item 1 / 1A / 7, each truncated + ``None``-safe.
 
@@ -102,11 +165,12 @@ def split_10k_sections(
     no item headings yields a :class:`TenKSections` of all ``None``.
     """
     if not text:
-        return TenKSections(item_1=None, item_1a=None, item_7=None)
+        return TenKSections(item_1=None, item_1a=None, item_7=None, item_8=None)
     return TenKSections(
         item_1=_extract_section(text, item_token="1", max_chars=max_chars_per_section),
         item_1a=_extract_section(text, item_token="1a", max_chars=max_chars_per_section),
         item_7=_extract_section(text, item_token="7", max_chars=max_chars_per_section),
+        item_8=_extract_item_8(text, max_chars=max_chars_item_8),
     )
 
 
