@@ -96,6 +96,15 @@ class TestBuildFromFrame(unittest.TestCase):
         self.assertIn("entry_tiers", d)
         self.assertIn("order_ttl_days", d)
 
+    def test_default_order_ttl_is_single_sourced_from_constants(self):
+        # The builder default and the replay fallback MUST agree on one value, or
+        # a brief stamps one TTL while the replay falls back to another (the live
+        # 10-vs-7 divergence). Pin the builder default to the canonical constant.
+        from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
+
+        setup = builder.build_trade_setup_from_frame(_synth_frame(_oscillating_uptrend()))
+        self.assertEqual(setup.to_dict()["order_ttl_days"], DEFAULT_ORDER_TTL_DAYS)
+
 
 class TestBuildViaLoader(unittest.TestCase):
     def test_loader_failure_degrades_to_no_structure(self):

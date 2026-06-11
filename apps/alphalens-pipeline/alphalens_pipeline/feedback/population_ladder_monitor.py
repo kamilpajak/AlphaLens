@@ -59,6 +59,7 @@ from alphalens_pipeline.feedback.bar_window import (
     IMPLAUSIBLE_RETURN_THRESHOLD,
     _window_vwap,
 )
+from alphalens_pipeline.feedback.ladder_config import ladder_config_version
 from alphalens_pipeline.feedback.ladder_replay import LadderOutcome, replay_ladder
 from alphalens_pipeline.paper.brief_loader import CandidateBrief, load_brief
 from alphalens_pipeline.paper.calendar import (
@@ -172,6 +173,11 @@ _SCREEN_COLUMNS = (
     "last_resolved_session",
     "reference_close",
 )
+
+# The load-bearing replay-config stamp (PR-1). Like the size/screen columns, a
+# carried OLD-format row predating it is back-filled to None so the schema stays
+# stable; the next successful replay repopulates it.
+_CONFIG_COLUMNS = ("ladder_config_version",)
 
 
 @dataclass(frozen=True)
@@ -765,6 +771,8 @@ def _terminal_row(
         "holding_days_elapsed": holding_days,
         "entry_ttl_days": entry_ttl,
         "position_ttl_days": position_ttl,
+        # The replay-config stamp uses the TTL ACTUALLY applied to this row.
+        "ladder_config_version": ladder_config_version(order_ttl_days=entry_ttl),
         # Grouped-daily screen columns: the session this resolve priced, the same
         # session as the last ACTUAL minute resolve (this is a resolve), + the
         # FROZEN arrival VWAP (the cheap path's forward_return anchor).
@@ -840,6 +848,9 @@ def _nonplannable_row(brief_date: dt.date, ticker: str, reason: str) -> dict[str
         "holding_days_elapsed": None,
         "entry_ttl_days": None,
         "position_ttl_days": None,
+        # Non-plannable candidates are never replayed, so no geometry produced
+        # this row -- leave the stamp empty rather than invent a config.
+        "ladder_config_version": None,
         "last_priced_session": None,
         "last_resolved_session": None,
         "reference_close": None,
@@ -879,6 +890,9 @@ def _placeholder_row(
         "holding_days_elapsed": None,
         "entry_ttl_days": entry_ttl,
         "position_ttl_days": position_ttl,
+        # The geometry is already known for a plannable candidate; stamp the
+        # config that the first successful replay will use.
+        "ladder_config_version": ladder_config_version(order_ttl_days=entry_ttl),
         "last_priced_session": None,
         "last_resolved_session": None,
         "reference_close": None,
@@ -894,7 +908,7 @@ def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
     ``None`` keeps the schema stable (the next successful replay repopulates them).
     """
     carried = dict(prior)
-    for col in (*_SIZE_COLUMNS, *_SCREEN_COLUMNS):
+    for col in (*_SIZE_COLUMNS, *_SCREEN_COLUMNS, *_CONFIG_COLUMNS):
         carried.setdefault(col, None)
     return carried
 
@@ -1546,7 +1560,7 @@ def _cheap_update_row(
         return _carry_only(prior)  # no usable new close — carry verbatim
 
     row = dict(prior)
-    for col in (*_SIZE_COLUMNS, *_SCREEN_COLUMNS):
+    for col in (*_SIZE_COLUMNS, *_SCREEN_COLUMNS, *_CONFIG_COLUMNS):
         row.setdefault(col, None)
     row["last_close"] = c_star
     row["last_priced_session"] = latest_session

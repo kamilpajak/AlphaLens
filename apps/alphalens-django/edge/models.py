@@ -92,6 +92,13 @@ class LadderOutcome(models.Model):
     entry_ttl_days = models.IntegerField(null=True, blank=True)
     position_ttl_days = models.IntegerField(null=True, blank=True)
 
+    # Canonical token of the load-bearing replay config (time-stop horizon,
+    # order-TTL actually used, arrival-VWAP window, ratchet + same-bar tiebreak
+    # rule) that produced this row. A future constant change yields a different
+    # token, so a tuning analyst can GROUP BY it to avoid blending two replay
+    # geometries into one mean. Empty for non-plannable rows (never replayed).
+    ladder_config_version = models.CharField(max_length=256, blank=True, default="")
+
     # Portfolio / size layer (additive, NOT the edge). Signal-time (intended).
     suggested_gross_weight_pct = models.FloatField(null=True, blank=True)
     full_ladder_blended_entry = models.FloatField(null=True, blank=True)

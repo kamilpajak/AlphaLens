@@ -47,6 +47,7 @@ def _terminal_row(ticker: str, *, excess: float | None) -> dict:
         "holding_days_elapsed": 11,
         "entry_ttl_days": 7,
         "position_ttl_days": 42,
+        "ladder_config_version": '{"order_ttl_days":7,"time_stop_days":42}',
         "suggested_gross_weight_pct": 0.04,
         "full_ladder_blended_entry": 100.0,
         "stop_distance_pct_full": 0.05,
@@ -75,6 +76,7 @@ def test_ingest_writes_rows_and_daymeta(tmp_path: Path):
     ampl = LadderOutcome.objects.get(ticker="AMPL")
     assert ampl.market_excess_return == pytest.approx(0.04)
     assert ampl.realized_r == pytest.approx(1.5)
+    assert ampl.ladder_config_version == '{"order_ttl_days":7,"time_stop_days":42}'
 
     meta = DayMetaLadderOutcome.objects.get(brief_date=dt.date(2026, 5, 27))
     assert meta.n_rows == 2

@@ -149,6 +149,47 @@ class TestPlannableSelection(_MonitorTestBase):
         self.assertIn("NVDA", fetched)
 
 
+class TestLadderConfigVersionStamp(_MonitorTestBase):
+    def test_plannable_row_carries_config_token_nonplannable_does_not(self):
+        # GIVEN a plannable + a non-plannable candidate. WHEN the monitor runs.
+        # THEN the plannable row carries a parseable config token reflecting the
+        # entry-TTL it used, and the non-plannable row carries no token.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [
+                {"ticker": "NVDA", "setup": _OK_SETUP},
+                {"ticker": "XYZ", "setup": _NO_STRUCTURE_SETUP},
+            ],
+        )
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        df = self._read_store(brief_date).set_index("ticker")
+        self.assertIn("ladder_config_version", df.columns)
+        token = df.loc["NVDA", "ladder_config_version"]
+        payload = json.loads(str(token))
+        # order_ttl in the token is the entry-TTL the row actually used (numpy
+        # int64 compares equal to the python int the token carries).
+        self.assertEqual(payload["order_ttl_days"], df.loc["NVDA", "entry_ttl_days"])
+        self.assertIn("time_stop_days", payload)
+        # Non-plannable was never replayed -> no geometry token (None serialises
+        # to NaN in the all-None column).
+        xyz_token = df.loc["XYZ", "ladder_config_version"]
+        self.assertTrue(pd.isna(xyz_token) or xyz_token in (None, ""))
+
+
 class TestStampThemeUnit(unittest.TestCase):
     def test_fills_missing_theme(self):
         self.assertEqual(_stamp_theme({}, "ai")["theme"], "ai")
