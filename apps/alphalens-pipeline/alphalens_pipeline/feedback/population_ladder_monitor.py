@@ -1576,6 +1576,9 @@ def _cheap_update_row(
         return _carry_only(prior)  # no usable new close — carry verbatim
 
     row = dict(prior)
+    # setdefault only BACK-FILLS columns an old-format prior lacked; an existing
+    # value (e.g. grid_realized_r_json from the last minute resolve) is kept frozen
+    # -- the cheap daily path never recomputes the grid.
     for col in (*_SIZE_COLUMNS, *_SCREEN_COLUMNS, *_CONFIG_COLUMNS, *_GRID_COLUMNS):
         row.setdefault(col, None)
     row["last_close"] = c_star

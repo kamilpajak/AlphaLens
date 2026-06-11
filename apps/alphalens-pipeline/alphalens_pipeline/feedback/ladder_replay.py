@@ -262,7 +262,12 @@ GRID_CONFIGS: tuple[str, ...] = ("single_tp_first", "single_tp_last", "no_tp_rid
 def _with_tp_tranches(
     trade_setup: Mapping[str, Any], tps: list[Mapping[str, Any]]
 ) -> dict[str, Any]:
-    """Shallow-copy the setup with its TP ladder replaced (entries/stop untouched)."""
+    """Shallow-copy the setup with its TP ladder replaced (entries/stop untouched).
+
+    Swaps the ``tp_tranches`` key with a NEW list; never mutates the original
+    setup or its nested entry/tranche dicts. Callers pass freshly-built tranche
+    dicts, so the shallow copy depth is sufficient.
+    """
     swapped = dict(trade_setup)
     swapped["tp_tranches"] = tps
     return swapped
@@ -313,6 +318,11 @@ def replay_ladder_grid(
 
     A config that cannot be built (no TP tranches for the single-TP variants, an
     unparseable setup, or no bars) maps to ``None``.
+
+    ``reference_close`` is intentionally unused -- the grid measures realized R
+    (fill-anchored), not the substrate forward return, which is the only thing the
+    arrival anchor feeds. It is kept only for call-signature symmetry with
+    :func:`replay_ladder`.
     """
     none_grid: dict[str, float | None] = dict.fromkeys(GRID_CONFIGS, None)
     if trade_setup is None or not bars or not parse_ladder(trade_setup).ok:
