@@ -330,10 +330,11 @@ def replay_ladder_grid(
 
     raw_tps = list(trade_setup.get("tp_tranches") or [])
     grid = dict(none_grid)
-    # Ternary guards (rather than an `if raw_tps:` block) so the index access is
-    # provably safe to static analysis, not just at runtime.
-    first_tp = raw_tps[0] if raw_tps else None
-    last_tp = raw_tps[-1] if raw_tps else None
+    # next(iter(...), None) / next(reversed(...), None) instead of [0] / [-1]: no
+    # subscript means no IndexError to reason about (static analysis cannot narrow
+    # the `if raw_tps` truthiness guard on its own).
+    first_tp = next(iter(raw_tps), None)
+    last_tp = next(reversed(raw_tps), None)
     if first_tp is not None and last_tp is not None:
         grid["single_tp_first"] = _grid_realized_r(
             _with_tp_tranches(trade_setup, [{**first_tp, "tranche_pct": 100.0}]),
