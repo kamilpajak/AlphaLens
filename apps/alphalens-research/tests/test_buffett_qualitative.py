@@ -299,5 +299,88 @@ class TestMultiYearAndItem8Prompt(unittest.TestCase):
         self.assertIn("single customer concentration", sent_prompt)
 
 
+class TestScuttlebuttBlock(unittest.TestCase):
+    """#507 PR-7a: optional web-grounded scuttlebutt context in the qual prompt.
+    Qual-only — the response schema is untouched; scuttlebutt is framed as
+    UNVERIFIED so a stale figure can't masquerade as authoritative.
+    """
+
+    def test_scuttlebutt_block_present_when_supplied(self):
+        prompt = build_qualitative_prompt(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            scuttlebutt="Rivals are undercutting Acme on price in its core segment.",
+        )
+        self.assertIn("SCUTTLEBUTT", prompt)
+        self.assertIn("undercutting Acme on price", prompt)
+        # Doctrine framing: the block must mark itself unverified / non-authoritative.
+        self.assertIn("UNVERIFIED", prompt)
+
+    def test_no_scuttlebutt_block_when_absent(self):
+        for value in (None, "", "   "):
+            prompt = build_qualitative_prompt(
+                ticker="ACME", sections=_SECTIONS_WITH_ITEM_8, facts=_FACTS, scuttlebutt=value
+            )
+            self.assertNotIn("SCUTTLEBUTT —", prompt)
+
+    def test_assess_passes_scuttlebutt_through(self):
+        client = _make_stub_llm_client()
+        client.generate_content.return_value = SimpleNamespace(text=_GOOD_JSON)
+        assess_qualitative(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            scuttlebutt="Supplier concentration is a known risk per trade press.",
+            llm_client=client,
+        )
+        sent_prompt = client.generate_content.call_args.kwargs["contents"]
+        self.assertIn("Supplier concentration is a known risk", sent_prompt)
+
+    def test_response_schema_still_numeric_free_with_scuttlebutt(self):
+        # Scuttlebutt adds no classified field — the schema is unchanged.
+        self.assertNotIn("number", str(_QUALITATIVE_RESPONSE_SCHEMA))
+        self.assertNotIn("integer", str(_QUALITATIVE_RESPONSE_SCHEMA))
+
+
+class TestPromptSurvivesCurlyBraces(unittest.TestCase):
+    """The prompt is built with str.format(); literal {/} in any injected text
+    (10-K extract OR web scuttlebutt) must NOT crash the build. build_prompt runs
+    BEFORE the assess_qualitative try/except, so a KeyError there kills the whole
+    lens run, not just one candidate."""
+
+    def test_braces_in_sections_do_not_crash(self):
+        sections = TenKSections(
+            item_1="Guidance {raised} to a new {range} of products",
+            item_1a="Risk: {concentration} in one channel",
+            item_7="MD&A discusses {margins}",
+            item_8="CONSOLIDATED {BALANCE} SHEET",
+        )
+        prompt = build_qualitative_prompt(ticker="ACME", sections=sections, facts=_FACTS)
+        self.assertIn("raised", prompt)
+        self.assertIn("range", prompt)
+        self.assertIn("concentration", prompt)
+        self.assertIn("BALANCE", prompt)
+
+    def test_braces_in_scuttlebutt_do_not_crash(self):
+        prompt = build_qualitative_prompt(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            scuttlebutt="Competitor reportedly hit {record} growth and {strong} demand",
+        )
+        self.assertIn("record", prompt)
+        self.assertIn("strong", prompt)
+
+    def test_braces_in_prior_year_risk_factors_do_not_crash(self):
+        prompt = build_qualitative_prompt(
+            ticker="ACME",
+            sections=_SECTIONS_WITH_ITEM_8,
+            facts=_FACTS,
+            prior_year_risk_factors=[("2024-03-22", "Risk grew {sharply} that year")],
+        )
+        self.assertIn("sharply", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

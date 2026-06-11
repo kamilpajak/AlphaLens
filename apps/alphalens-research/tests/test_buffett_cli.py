@@ -10,17 +10,21 @@ write, the no-candidates path, and the bad-date guard.
 
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import alphalens_pipeline.buffett.comparison as comparison_mod
 import alphalens_pipeline.buffett.qualitative as qualitative_mod
+import alphalens_pipeline.buffett.scuttlebutt as scuttlebutt_mod
 import alphalens_pipeline.thematic.verification.tenk_grep as tenk_grep_mod
 from alphalens_cli.commands.buffett import _fmt_num, _format_rationale_block, _format_table
 from alphalens_cli.main import app
 from alphalens_pipeline.buffett.comparison import BuffettPanel
 from alphalens_pipeline.buffett.qualitative import QualitativeAssessment
+from alphalens_pipeline.buffett.scuttlebutt import Scuttlebutt
 from typer.testing import CliRunner
 
 
@@ -261,6 +265,125 @@ class TestQualitativeFlag(unittest.TestCase):
         self.assertIn("Oldest risk wording", texts)
         self.assertIn("Middle risk wording", texts)
         self.assertNotIn("Newest risk wording", texts)  # latest year is the primary sections
+
+
+class TestScuttlebuttFlag(unittest.TestCase):
+    """#507 PR-7a: `--scuttlebutt` (sub-flag of `--qualitative`) fetches
+    web-grounded context per candidate and feeds it to assess_qualitative."""
+
+    def setUp(self):
+        self._runner = CliRunner()
+        self._orig_build = comparison_mod.build_comparison
+        self._orig_fetch = tenk_grep_mod.fetch_multi_year_10k_texts
+        self._orig_assess = qualitative_mod.assess_qualitative
+        self._orig_sb = scuttlebutt_mod.fetch_scuttlebutt
+        comparison_mod.build_comparison = lambda *_a, **_k: [_panel("AAPL")]  # type: ignore[assignment]
+        tenk_grep_mod.fetch_multi_year_10k_texts = lambda **_k: [  # type: ignore[assignment]
+            ("2026-03-27", "Item 1. Business X. Item 1A. Risk Factors Y. Item 8. End")
+        ]
+
+    def tearDown(self):
+        comparison_mod.build_comparison = self._orig_build  # type: ignore[assignment]
+        tenk_grep_mod.fetch_multi_year_10k_texts = self._orig_fetch  # type: ignore[assignment]
+        qualitative_mod.assess_qualitative = self._orig_assess  # type: ignore[assignment]
+        scuttlebutt_mod.fetch_scuttlebutt = self._orig_sb  # type: ignore[assignment]
+
+    def _capture(self) -> dict:
+        captured: dict = {}
+
+        def _assess(**kwargs):
+            captured.update(kwargs)
+            return QualitativeAssessment(
+                understandable=True,
+                moat_type="brand",
+                moat_trend="stable",
+                management_candor="candid",
+                rationale="ok",
+            )
+
+        qualitative_mod.assess_qualitative = _assess  # type: ignore[assignment]
+        return captured
+
+    def test_scuttlebutt_text_passed_to_assess(self):
+        captured = self._capture()
+        scuttlebutt_mod.fetch_scuttlebutt = lambda ticker, **_k: Scuttlebutt(  # type: ignore[assignment]
+            ticker=ticker, text="Rivals undercut on price.", ok=True
+        )
+        with (
+            TemporaryDirectory() as tmp,
+            patch.dict(os.environ, {"PERPLEXITY_API_KEY": "test-key"}),
+        ):
+            result = self._runner.invoke(
+                app,
+                [
+                    "buffett",
+                    "lens",
+                    "2026-06-10",
+                    "--briefs-dir",
+                    tmp,
+                    "--qualitative",
+                    "--scuttlebutt",
+                ],
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(captured.get("scuttlebutt"), "Rivals undercut on price.")
+
+    def test_scuttlebutt_failsoft_passes_none(self):
+        captured = self._capture()
+        scuttlebutt_mod.fetch_scuttlebutt = lambda ticker, **_k: Scuttlebutt(  # type: ignore[assignment]
+            ticker=ticker, text="", ok=False
+        )
+        with (
+            TemporaryDirectory() as tmp,
+            patch.dict(os.environ, {"PERPLEXITY_API_KEY": "test-key"}),
+        ):
+            result = self._runner.invoke(
+                app,
+                [
+                    "buffett",
+                    "lens",
+                    "2026-06-10",
+                    "--briefs-dir",
+                    tmp,
+                    "--qualitative",
+                    "--scuttlebutt",
+                ],
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+        # ok=False → scuttlebutt passed as None (section omitted).
+        self.assertIsNone(captured.get("scuttlebutt"))
+
+    def test_missing_key_skips_scuttlebutt_no_crash(self):
+        captured = self._capture()
+        scuttlebutt_mod.fetch_scuttlebutt = lambda *_a, **_k: (_ for _ in ()).throw(  # type: ignore[assignment]
+            AssertionError("must not fetch without a key")
+        )
+        with TemporaryDirectory() as tmp, patch.dict(os.environ, {"PERPLEXITY_API_KEY": ""}):
+            result = self._runner.invoke(
+                app,
+                [
+                    "buffett",
+                    "lens",
+                    "2026-06-10",
+                    "--briefs-dir",
+                    tmp,
+                    "--qualitative",
+                    "--scuttlebutt",
+                ],
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIsNone(captured.get("scuttlebutt"))
+
+    def test_scuttlebutt_without_qualitative_is_noop(self):
+        called: list[str] = []
+        scuttlebutt_mod.fetch_scuttlebutt = lambda *_a, **_k: called.append("fetch")  # type: ignore[assignment]
+        with TemporaryDirectory() as tmp:
+            result = self._runner.invoke(
+                app, ["buffett", "lens", "2026-06-10", "--briefs-dir", tmp, "--scuttlebutt"]
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("requires --qualitative", result.output)
+            self.assertEqual(called, [])
 
 
 if __name__ == "__main__":
