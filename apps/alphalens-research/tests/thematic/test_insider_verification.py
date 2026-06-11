@@ -68,6 +68,45 @@ class TestHasOpportunisticBuy(unittest.TestCase):
             )
         self.assertTrue(result)
 
+    def test_reason_out_param_records_threshold_and_actual(self):
+        # PR-4: the optional reason dict captures WHY (net_usd vs the floor)
+        # without changing the bool return.
+        history = pd.DataFrame(
+            [
+                _record("ins1", dt.date(2023, 3, 5), "P", 10, 1, "BEEM"),
+                _record("ins1", dt.date(2024, 6, 15), "P", 10, 1, "BEEM"),
+                _record("ins1", dt.date(2025, 9, 20), "P", 10, 1, "BEEM"),
+                _record("ins1", dt.date(2026, 5, 1), "P", 1000, 50, "BEEM"),  # $50k
+            ]
+        )
+        reason: dict = {}
+        with (
+            patch.object(form4_store, "load_form4_for_ticker", return_value=history),
+            patch.object(form4_store, "load_form4_for_insiders", return_value=history),
+        ):
+            result = insider_v.has_opportunistic_buy(
+                ticker="BEEM",
+                asof=dt.date(2026, 5, 15),
+                lookback_days=30,
+                usd_threshold=10_000,
+                reason=reason,
+            )
+        self.assertTrue(result)
+        self.assertEqual(reason["threshold"], 10_000.0)
+        self.assertEqual(reason["unit"], "usd_net_90d")
+        self.assertGreater(reason["actual"], 0.0)
+
+    def test_reason_actual_none_when_no_data(self):
+        # Early no-data exit leaves actual None (threshold still recorded).
+        reason: dict = {}
+        with patch.object(form4_store, "load_form4_for_ticker", return_value=pd.DataFrame()):
+            result = insider_v.has_opportunistic_buy(
+                ticker="NONE", asof=dt.date(2026, 5, 15), reason=reason
+            )
+        self.assertIsNone(result)
+        self.assertIsNone(reason["actual"])
+        self.assertEqual(reason["threshold"], float(insider_v.DEFAULT_USD_THRESHOLD))
+
     def test_returns_false_when_below_threshold(self):
         history = pd.DataFrame(
             [

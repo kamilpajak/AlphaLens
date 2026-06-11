@@ -291,6 +291,37 @@ class TestVerifyCandidate(unittest.TestCase):
         self.assertEqual(result["gates_unknown"], [])
         self.assertTrue(result["verified"])
 
+    def test_gate_verdict_json_carries_structured_reasons(self):
+        # PR-4: verify_candidate assembles a {gate: {passed, threshold, actual,
+        # unit}} JSON from each gate's reason out-param.
+        def _tenk(*, reason=None, **kw):
+            if reason is not None:
+                reason.update({"threshold": 1, "actual": 3, "unit": "keyword_hits"})
+            return True
+
+        def _insider(*, reason=None, **kw):
+            if reason is not None:
+                reason.update({"threshold": 50000.0, "actual": 31000.0, "unit": "usd_net_90d"})
+            return False
+
+        with (
+            patch.object(orchestrator, "_gate_tenk", side_effect=_tenk),
+            patch.object(orchestrator, "_gate_press", return_value=None),
+            patch.object(orchestrator, "_gate_insider", side_effect=_insider),
+        ):
+            result = orchestrator.verify_candidate(
+                ticker="QBTS", themes=["quantum_computing"], asof=dt.date(2026, 5, 15)
+            )
+        verdict = json.loads(result["gate_verdict_json"])
+        self.assertEqual(
+            verdict["insider"],
+            {"passed": False, "threshold": 50000.0, "actual": 31000.0, "unit": "usd_net_90d"},
+        )
+        self.assertTrue(verdict["tenk"]["passed"])
+        self.assertEqual(verdict["tenk"]["actual"], 3)
+        # A gate that returned None (unknown) still appears, with passed=None.
+        self.assertIsNone(verdict["press"]["passed"])
+
     def test_verify_returns_unverified_when_zero_gates_pass(self):
         with (
             patch.object(orchestrator, "_gate_tenk", return_value=False),
@@ -368,11 +399,13 @@ class TestVerifyCandidate(unittest.TestCase):
         # 10-K/press gates miss any document that spells the phrase normally.
         captured: dict[str, list[str]] = {}
 
-        def fake_tenk(*, ticker, theme_keywords, asof):
+        def fake_tenk(*, ticker, theme_keywords, asof, reason=None):
             captured["tenk"] = list(theme_keywords)
             return False
 
-        def fake_press(*, ticker, theme_keywords, asof, polygon_client=None, press_df=None):
+        def fake_press(
+            *, ticker, theme_keywords, asof, polygon_client=None, press_df=None, reason=None
+        ):
             captured["press"] = list(theme_keywords)
             return False
 
@@ -661,11 +694,13 @@ class TestMapThemes(unittest.TestCase):
         # gates instead of the fallback swap.
         captured: dict[str, list[str] | None] = {}
 
-        def _capture_tenk(*, ticker, theme_keywords, asof):
+        def _capture_tenk(*, ticker, theme_keywords, asof, reason=None):
             captured["tenk_keywords"] = list(theme_keywords)
             return False
 
-        def _capture_press(*, ticker, theme_keywords, asof, polygon_client=None, press_df=None):
+        def _capture_press(
+            *, ticker, theme_keywords, asof, polygon_client=None, press_df=None, reason=None
+        ):
             captured["press_keywords"] = list(theme_keywords)
             return False
 
@@ -714,7 +749,7 @@ class TestMapThemes(unittest.TestCase):
         # to substring-match against — narrow, but not empty.
         captured: dict[str, list[str] | None] = {}
 
-        def _capture_tenk(*, ticker, theme_keywords, asof):
+        def _capture_tenk(*, ticker, theme_keywords, asof, reason=None):
             captured["tenk_keywords"] = list(theme_keywords)
             return False
 

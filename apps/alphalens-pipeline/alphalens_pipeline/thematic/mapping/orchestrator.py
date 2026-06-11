@@ -24,6 +24,7 @@ row per (theme, ticker).
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 from collections.abc import Iterable, Sequence
@@ -63,8 +64,12 @@ _MAX_VERIFY_ATTEMPTS_PER_THEME = 5
 # each gate fail closed if its underlying data path errors.
 
 
-def _gate_tenk(*, ticker: str, theme_keywords: Iterable[str], asof: dt.date) -> bool | None:
-    return tenk_grep.has_theme_keywords_in_10k(ticker=ticker, keywords=theme_keywords, asof=asof)
+def _gate_tenk(
+    *, ticker: str, theme_keywords: Iterable[str], asof: dt.date, reason: dict | None = None
+) -> bool | None:
+    return tenk_grep.has_theme_keywords_in_10k(
+        ticker=ticker, keywords=theme_keywords, asof=asof, reason=reason
+    )
 
 
 def _gate_press(
@@ -74,6 +79,7 @@ def _gate_press(
     asof: dt.date,
     polygon_client: PolygonClient | None = None,
     press_df: pd.DataFrame | None = None,
+    reason: dict | None = None,
 ) -> bool | None:
     """Press verification gate with tri-state fall-through (issue #149).
 
@@ -87,36 +93,39 @@ def _gate_press(
     """
     if press_df is not None:
         result = recent_press.has_theme_in_press_frame(
-            ticker=ticker, keywords=theme_keywords, press_df=press_df
+            ticker=ticker, keywords=theme_keywords, press_df=press_df, reason=reason
         )
         if result is not None:
             return result
     return recent_press.has_theme_in_recent_press(
-        ticker=ticker, asof=asof, keywords=theme_keywords, client=polygon_client
+        ticker=ticker, asof=asof, keywords=theme_keywords, client=polygon_client, reason=reason
     )
 
 
-def _gate_insider(*, ticker: str, asof: dt.date) -> bool | None:
-    return insider.has_opportunistic_buy(ticker=ticker, asof=asof)
+def _gate_insider(*, ticker: str, asof: dt.date, reason: dict | None = None) -> bool | None:
+    return insider.has_opportunistic_buy(ticker=ticker, asof=asof, reason=reason)
 
 
-def _safe(name: str, fn, **kwargs) -> bool | None:
-    """Run a gate function returning tri-state ``bool | None``.
+def _safe(name: str, fn, **kwargs) -> tuple[bool | None, dict]:
+    """Run a gate function returning ``(tri-state, reason)``.
 
-    - ``True``  — gate ran and the candidate qualifies.
-    - ``False`` — gate ran and concluded "no" (real negative signal).
-    - ``None``  — gate could not determine (missing data, network error,
-      unresolved CIK, etc.). Distinct from False so the orchestrator can
-      record ``gates_unknown`` instead of silently failing closed.
+    Tri-state: ``True`` (qualifies), ``False`` (real negative), ``None`` (could
+    not determine — missing data / network error; recorded as ``gates_unknown``).
+
+    ``reason`` (PR-4) is the gate's structured WHY — ``{threshold, actual, unit}``
+    — captured via an out-param so an analyst can later see why a candidate
+    cleared or missed a gate. It is best-effort: a gate that raises or never
+    reaches its computation leaves ``actual`` ``None``.
     """
+    reason: dict = {}
     try:
-        result = fn(**kwargs)
+        result = fn(reason=reason, **kwargs)
     except Exception as exc:
         logger.warning("verification gate %s raised: %s", name, exc, exc_info=True)
-        return None
+        return None, reason
     if result is None:
-        return None
-    return bool(result)
+        return None, reason
+    return bool(result), reason
 
 
 def _theme_keywords(theme: str, *, pro_keywords: Iterable[str] | None = None) -> list[str]:
@@ -165,17 +174,22 @@ def verify_candidate(
     else:
         keywords = list(theme_keywords)
 
-    def _record(name: str, result: bool | None):
+    gates_passed: list[str] = []
+    gates_failed: list[str] = []
+    gates_unknown: list[str] = []
+    gate_reasons: dict[str, dict] = {}
+
+    def _record(name: str, outcome: tuple[bool | None, dict]):
+        result, reason = outcome
         if result is True:
             gates_passed.append(name)
         elif result is False:
             gates_failed.append(name)
         else:
             gates_unknown.append(name)
-
-    gates_passed: list[str] = []
-    gates_failed: list[str] = []
-    gates_unknown: list[str] = []
+        # Stamp the verdict onto the reason so the JSON is self-describing.
+        reason["passed"] = result
+        gate_reasons[name] = reason
 
     _record(
         "tenk",
@@ -207,6 +221,8 @@ def verify_candidate(
         "gates_failed": gates_failed,
         "gates_unknown": gates_unknown,
         "verified": len(gates_passed) > 0,
+        # Structured per-gate WHY (PR-4): {gate: {passed, threshold, actual, unit}}.
+        "gate_verdict_json": json.dumps(gate_reasons, sort_keys=True),
     }
 
 
@@ -275,6 +291,9 @@ def _build_row(
         "gates_unknown_str": ",".join(verdict["gates_unknown"]),
         "n_gates_unknown": len(verdict["gates_unknown"]),
         "verified": verdict["verified"],
+        # Structured per-gate WHY (PR-4): a JSON string {gate: {passed, threshold,
+        # actual, unit}}. "" when an older verdict dict predates the field.
+        "gate_verdict_json": verdict.get("gate_verdict_json", ""),
         "source_event_url": catalyst.url if catalyst else None,
         "source_event_title": catalyst.title if catalyst else None,
         "source_event_published_at": catalyst.published_at if catalyst else None,
@@ -299,6 +318,7 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     "gates_unknown_str",
     "n_gates_unknown",
     "verified",
+    "gate_verdict_json",
     "source_event_url",
     "source_event_title",
     "source_event_published_at",

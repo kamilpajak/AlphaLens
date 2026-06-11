@@ -1,6 +1,7 @@
 {
   "columns": [
     "company_name",
+    "gate_verdict_json",
     "gates_failed",
     "gates_failed_str",
     "gates_passed",

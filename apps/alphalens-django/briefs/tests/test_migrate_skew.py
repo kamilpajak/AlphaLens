@@ -40,8 +40,22 @@ pytestmark = pytest.mark.skipif(
     "SQLite RenameField rebuilds the table and cannot reproduce it",
 )
 
-_HEAD = ("briefs", "0007_rename_gemini_confidence_llm_confidence")
 _PRE_RENAME = ("briefs", "0006_alter_brief_brief_template_id")
+
+
+def _briefs_head() -> tuple[str, str]:
+    """The CURRENT leaf migration of the briefs app, resolved dynamically.
+
+    Pinning a literal head (the old ``0007`` constant) silently rots: a NEW
+    briefs migration leaves the fixture restoring to a stale schema, so the
+    control test then writes a column the rolled-back DB lacks. Resolving the
+    leaf keeps the restore correct as migrations accrue.
+    """
+    from django.db.migrations.loader import MigrationLoader
+
+    loader = MigrationLoader(connection)
+    leaves = [node for node in loader.graph.leaf_nodes() if node[0] == "briefs"]
+    return leaves[0]
 
 
 def _migrate_briefs_to(node: tuple[str, str]) -> None:
@@ -70,11 +84,12 @@ def _briefs_rolled_back_to_0006():
     connection. If that isolation ever changes, the restore must be hardened
     against a mid-migration crash.
     """
+    head = _briefs_head()
     _migrate_briefs_to(_PRE_RENAME)
     try:
         yield
     finally:
-        _migrate_briefs_to(_HEAD)
+        _migrate_briefs_to(head)
 
 
 @pytest.mark.django_db(transaction=True)
