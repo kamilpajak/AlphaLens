@@ -99,6 +99,13 @@ class LadderOutcome(models.Model):
     # geometries into one mean. Empty for non-plannable rows (never replayed).
     ladder_config_version = models.CharField(max_length=256, blank=True, default="")
 
+    # Alternate-exit-ladder grid (PR-2): JSON map {config -> realized_r} from
+    # re-replaying the SAME bars under each exit policy (single_tp_first /
+    # single_tp_last / no_tp_ride). Holds the candidate + entry + stop fixed, so
+    # the spread vs realized_r is the trade-management effect, not the pick.
+    # Empty until a minute resolve computes it (non-plannable / placeholder rows).
+    grid_realized_r_json = models.TextField(blank=True, default="")
+
     # Portfolio / size layer (additive, NOT the edge). Signal-time (intended).
     suggested_gross_weight_pct = models.FloatField(null=True, blank=True)
     full_ladder_blended_entry = models.FloatField(null=True, blank=True)

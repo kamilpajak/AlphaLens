@@ -7,6 +7,7 @@ builds the population-ladder fixture inline, no checked-in golden files.
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -48,6 +49,7 @@ def _terminal_row(ticker: str, *, excess: float | None) -> dict:
         "entry_ttl_days": 7,
         "position_ttl_days": 42,
         "ladder_config_version": '{"order_ttl_days":7,"time_stop_days":42}',
+        "grid_realized_r_json": '{"single_tp_first":1.0,"single_tp_last":-1.0,"no_tp_ride":-1.0}',
         "suggested_gross_weight_pct": 0.04,
         "full_ladder_blended_entry": 100.0,
         "stop_distance_pct_full": 0.05,
@@ -77,6 +79,7 @@ def test_ingest_writes_rows_and_daymeta(tmp_path: Path):
     assert ampl.market_excess_return == pytest.approx(0.04)
     assert ampl.realized_r == pytest.approx(1.5)
     assert ampl.ladder_config_version == '{"order_ttl_days":7,"time_stop_days":42}'
+    assert json.loads(ampl.grid_realized_r_json)["single_tp_first"] == 1.0
 
     meta = DayMetaLadderOutcome.objects.get(brief_date=dt.date(2026, 5, 27))
     assert meta.n_rows == 2

@@ -24,7 +24,7 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
-from alphalens_pipeline.feedback.ladder_replay import replay_ladder
+from alphalens_pipeline.feedback.ladder_replay import GRID_CONFIGS, replay_ladder
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     _SPLIT_SCREEN_THRESHOLD,
     _TOUCH_EPS,
@@ -188,6 +188,42 @@ class TestLadderConfigVersionStamp(_MonitorTestBase):
         # to NaN in the all-None column).
         xyz_token = df.loc["XYZ", "ladder_config_version"]
         self.assertTrue(pd.isna(xyz_token) or xyz_token in (None, ""))
+
+
+class TestGridRealizedRStamp(_MonitorTestBase):
+    def test_resolved_plannable_row_carries_grid_json(self):
+        # GIVEN a plannable candidate resolved by a minute replay. THEN the row
+        # carries a grid_realized_r_json map with every alternate-exit config; the
+        # non-plannable row carries none.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [
+                {"ticker": "NVDA", "setup": _OK_SETUP},
+                {"ticker": "XYZ", "setup": _NO_STRUCTURE_SETUP},
+            ],
+        )
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        df = self._read_store(brief_date).set_index("ticker")
+        self.assertIn("grid_realized_r_json", df.columns)
+        grid = json.loads(str(df.loc["NVDA", "grid_realized_r_json"]))
+        self.assertEqual(set(grid), set(GRID_CONFIGS))
+        # Non-plannable was never replayed -> no grid (None -> NaN in the column).
+        xyz_grid = df.loc["XYZ", "grid_realized_r_json"]
+        self.assertTrue(pd.isna(xyz_grid) or xyz_grid in (None, ""))
 
 
 class TestStampThemeUnit(unittest.TestCase):
