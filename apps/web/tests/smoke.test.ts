@@ -843,6 +843,45 @@ test.describe('smoke — mobile (390 + 360 viewports)', () => {
 			});
 		}
 	}
+
+	test('360px — every hovered tooltip stays inside the viewport (edge-clamp guard)', async ({
+		page
+	}) => {
+		// Regression guard for the clampToViewport action. The popover is centered
+		// on its trigger (`left-1/2 translateX(-50%)`); a trigger near the right
+		// edge would push the bubble off-screen, and an `overflow-hidden` ancestor
+		// CLIPS the overflow (text cut off) rather than growing scrollWidth — so
+		// the no-horizontal-scroll test above cannot catch it. Hover every tooltip
+		// trigger in the first card and assert its popover box is within [0, width].
+		const width = 360;
+		await page.setViewportSize({ width, height: 800 });
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		await expect(card).toBeVisible();
+
+		// Trigger wrappers carry role="group" with a direct-child [role="tooltip"]
+		// (gate pills, signal bars, chip tips). Direct-child `>` avoids matching a
+		// nested tip's popover.
+		const triggers = card.locator('[role="group"]:has(> [role="tooltip"])');
+		const count = await triggers.count();
+		expect(count, 'first card should expose at least one tooltip trigger').toBeGreaterThan(0);
+
+		for (let i = 0; i < count; i++) {
+			const trigger = triggers.nth(i);
+			await trigger.scrollIntoViewIfNeeded();
+			await trigger.hover();
+			const tip = trigger.locator('> [role="tooltip"]');
+			await expect(tip).toBeVisible();
+			const box = await tip.boundingBox();
+			expect(box, `tooltip ${i} should have a layout box`).not.toBeNull();
+			// 1px tolerance for sub-pixel rounding.
+			expect(box!.x, `tooltip ${i} left edge must stay on-screen`).toBeGreaterThanOrEqual(-1);
+			expect(
+				box!.x + box!.width,
+				`tooltip ${i} right edge must stay within the ${width}px viewport`
+			).toBeLessThanOrEqual(width + 1);
+		}
+	});
 });
 
 test.describe('experiments — evidence drawer files reachable', () => {
