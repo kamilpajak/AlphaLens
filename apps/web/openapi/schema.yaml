@@ -621,6 +621,26 @@ components:
           type: number
           format: double
           nullable: true
+        buffett_moat_type:
+          type: string
+          maxLength: 32
+        buffett_moat_trend:
+          type: string
+          maxLength: 32
+        buffett_management_candor:
+          type: string
+          maxLength: 32
+        buffett_understandable:
+          type: boolean
+          nullable: true
+        buffett_qualitative_rationale:
+          type: string
+        buffett_used_scuttlebutt:
+          type: boolean
+          nullable: true
+        buffett_qual_computed_at:
+          type: string
+          maxLength: 40
         also_in_themes: {}
         rank_in_day:
           type: integer

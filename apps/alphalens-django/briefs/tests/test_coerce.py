@@ -11,6 +11,7 @@ import pytest
 
 from briefs.ingest.coerce import (
     coerce_bool,
+    coerce_optional_bool,
     coerce_date,
     coerce_datetime,
     coerce_float,
@@ -78,6 +79,24 @@ class TestCoerceBool:
     def test_missing_defaults_false(self):
         assert coerce_bool(None) is False
         assert coerce_bool(math.nan) is False
+
+
+class TestCoerceOptionalBool:
+    """Nullable-boolean coercion — preserves the None / True / False tri-state
+    (used by `buffett_understandable`, where None = "not assessed" must NOT
+    collapse to False the way `coerce_bool` does)."""
+
+    def test_truthy(self):
+        assert coerce_optional_bool(True) is True
+        assert coerce_optional_bool(1) is True
+
+    def test_falsy(self):
+        assert coerce_optional_bool(False) is False
+        assert coerce_optional_bool(0) is False
+
+    def test_missing_stays_none(self):
+        assert coerce_optional_bool(None) is None
+        assert coerce_optional_bool(math.nan) is None
 
 
 class TestCoerceListStr:

@@ -117,6 +117,34 @@ class TestRebuildSmoke:
         with pytest.raises(ValueError, match="missing required columns"):
             rebuild_from_parquet(briefs_dir=tmp_path)
 
+    def test_buffett_qual_columns_preserve_understandable_tristate(self, tmp_path: Path):
+        # PR-3b: the nullable `buffett_understandable` must keep None / True /
+        # False distinct; the enum CharFields default to "" when absent.
+        rows = [
+            {
+                "ticker": "AAA",
+                "theme": "t",
+                "buffett_moat_type": "brand",
+                "buffett_understandable": True,
+                "buffett_qualitative_rationale": "durable franchise",
+            },
+            {"ticker": "BBB", "theme": "t", "buffett_understandable": False},
+            {"ticker": "CCC", "theme": "t"},  # no qualitative layer at all
+        ]
+        _write_parquet(tmp_path, "2026-05-22", rows)
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        aaa = Brief.objects.get(ticker="AAA")
+        assert aaa.buffett_moat_type == "brand"
+        assert aaa.buffett_understandable is True
+        assert aaa.buffett_qualitative_rationale == "durable franchise"
+
+        assert Brief.objects.get(ticker="BBB").buffett_understandable is False
+
+        ccc = Brief.objects.get(ticker="CCC")
+        assert ccc.buffett_understandable is None  # not assessed -> None, NOT False
+        assert ccc.buffett_moat_type == ""  # CharField default
+
 
 @pytest.mark.django_db
 class TestMtimeGate:

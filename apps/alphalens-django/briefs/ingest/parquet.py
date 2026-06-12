@@ -40,6 +40,7 @@ from briefs.ingest.coerce import (
     coerce_int,
     coerce_json_obj,
     coerce_list_str,
+    coerce_optional_bool,
     coerce_str,
 )
 from briefs.models import Brief, DayMeta
@@ -128,7 +129,9 @@ def _coerce_for_field(field: django_models.Field, raw):
     elif isinstance(field, django_models.DateField):
         value = coerce_date(raw)
     elif isinstance(field, django_models.BooleanField):
-        return coerce_bool(raw)
+        # Nullable bool (e.g. buffett_understandable) keeps the None/True/False
+        # tri-state; a NOT-NULL bool floors missing -> field default (False).
+        return coerce_optional_bool(raw) if field.null else coerce_bool(raw)
     elif isinstance(field, django_models.FloatField):
         value = coerce_float(raw)
     elif isinstance(field, django_models.IntegerField):
