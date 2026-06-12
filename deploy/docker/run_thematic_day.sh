@@ -45,6 +45,28 @@ alphalens thematic score
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic brief"
 alphalens thematic brief
 
+# Eager Buffett qualitative layer (card epic #500 / surfacing PRs #530-#535).
+# Classifies moat / trend / candor / understandability + a rationale per brief
+# survivor from its 10-K and stamps the seven qual columns INTO the brief parquet
+# the brief stage just wrote — so the rebuild-cache ExecStartPost below carries
+# them into Postgres and the card's `buffett.deep-read` drawer lights up.
+#
+# All five thematic stages above default to yesterday-UTC; qual-enrich takes the
+# date as a positional arg, so pass the same day explicitly. Results are cached
+# immutably per (date, ticker) under ~/.alphalens/buffett_qual/, so the 6×/day
+# reruns re-pay DeepSeek only for names not yet classified for the day (~$2-3/day
+# steady-state; a no-10-K name costs nothing — no LLM call).
+#
+# Best-effort under `set -e` (same posture as the VIX refresh below): the brief is
+# already written, so a DeepSeek / SEC hiccup must NOT fail the build — the drawer
+# simply stays absent for that name until the next run re-tries. `--scuttlebutt`
+# is intentionally left OFF: it adds Perplexity cost + an UNVERIFIED footnote;
+# enable it here per cost appetite.
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] buffett qual-enrich"
+QUAL_DATE="$(date -u -d 'yesterday' +%Y-%m-%d)"
+alphalens buffett qual-enrich "$QUAL_DATE" \
+    || echo "WARN: buffett qual-enrich failed for $QUAL_DATE; deep-read drawer absent until next run" >&2
+
 # VIX regime cache refresh (Track A v2 PR-2). Best-effort: a FRED blip must
 # NOT fail the whole thematic build (the brief is already written above). The
 # feedback POST path degrades to a "unknown" regime stamp if this cache goes
