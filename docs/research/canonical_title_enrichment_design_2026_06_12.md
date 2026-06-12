@@ -148,8 +148,13 @@ verified = _enrich_event_titles(verified)   # in-place column replace, best-effo
 Empty-url rows and empty df are no-ops. Wrapped so one row's failure never
 aborts the batch (per-call try/except already inside `canonical_title_for`).
 
-A module-level flag `ENABLE_CANONICAL_TITLE` (default True) lets the operator
-disable network enrichment without a code change (env `ALPHALENS_CANONICAL_TITLE=0`).
+A module-level flag `_CANONICAL_TITLE_ENABLED` gates the network enrichment.
+**Opt-in — default OFF** (`ALPHALENS_CANONICAL_TITLE=1` turns it on). This keeps
+every test and offline `generate_briefs` run hermetic (no live HTTP); the golden
+brief replay test calls `generate_briefs` with real fixture URLs, so a default-on
+flag would make it hit the network and miss its LLM cassette. Production enables
+it via `-e ALPHALENS_CANONICAL_TITLE=1` in the `alphalens-thematic-build` systemd
+unit (brief stage).
 
 ## 5. Safety / blast radius
 
@@ -158,8 +163,14 @@ disable network enrichment without a code change (env `ALPHALENS_CANONICAL_TITLE
   consumers of `source_event_title` are `_row_to_facts` (LLM catalyst citation)
   and the output parquet column. Changing it cannot move which tickers surface.
 - **Best-effort, fail-closed to current behavior.** Any fetch/parse/validation
-  failure keeps today's title. With `ENABLE_CANONICAL_TITLE=0` or no network,
-  the pipeline is byte-identical to pre-change.
+  failure keeps today's title. The feature is OFF unless
+  `ALPHALENS_CANONICAL_TITLE=1`, so by default (and in every test) the pipeline
+  is byte-identical to pre-change.
+- **SSRF guard.** Event URLs are externally-sourced; `_is_safe_url` rejects
+  non-http(s) schemes and literal private / loopback / link-local IPs before any
+  fetch. DNS-resolution / redirect-hop SSRF is documented residual (single-user).
+- **Atomic cache write** (temp + `os.replace`) so a crash can't leave a truncated
+  cached title that a later read trusts.
 - **No vendor-quota impact.** Fetches hit arbitrary publisher domains via a
   generic `requests` call — NOT routed through (and not counted against) the
   SEC/AV/OpenRouter/Polygon canonical clients. The `test_no_raw_*_http`

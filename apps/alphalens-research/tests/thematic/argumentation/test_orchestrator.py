@@ -132,6 +132,13 @@ _PUBLISHER_CLEAN = (
 
 
 class TestEnrichEventTitles(unittest.TestCase):
+    """Enrichment is opt-in (default OFF), so these force-enable the flag."""
+
+    def setUp(self):
+        p = patch.object(orchestrator, "_CANONICAL_TITLE_ENABLED", True)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_replaces_title_with_canonical_og_title(self):
         df = pd.DataFrame(
             [{"source_event_url": "https://pub.test/a", "source_event_title": _GDELT_MANGLED}]
@@ -196,6 +203,7 @@ class TestGenerateBriefs(unittest.TestCase):
             return _PUBLISHER_CLEAN if url else fallback
 
         with (
+            patch.object(orchestrator, "_CANONICAL_TITLE_ENABLED", True),
             patch.object(
                 orchestrator, "_brief_for_row", side_effect=lambda row, **kw: (None, None)
             ),

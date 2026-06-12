@@ -29,9 +29,11 @@ logger = logging.getLogger(__name__)
 DEFAULT_OUTPUT_DIR = Path.home() / ".alphalens" / "thematic_briefs"
 
 # Network enrichment of the displayed event title (GDELT mangles em-dashes /
-# apostrophes — replace with the publisher's canonical og:title). Operator can
-# disable without a code change: ALPHALENS_CANONICAL_TITLE=0.
-_CANONICAL_TITLE_ENABLED = os.environ.get("ALPHALENS_CANONICAL_TITLE", "1") != "0"
+# apostrophes — replace with the publisher's canonical og:title). OPT-IN: the
+# default is OFF so every test and offline run stays hermetic (no live HTTP from
+# generate_briefs). Production enables it with ALPHALENS_CANONICAL_TITLE=1 in the
+# thematic-build systemd unit.
+_CANONICAL_TITLE_ENABLED = os.environ.get("ALPHALENS_CANONICAL_TITLE", "0") == "1"
 
 
 def _enrich_event_titles(df: pd.DataFrame, *, fetcher=None) -> pd.DataFrame:
