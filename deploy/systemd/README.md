@@ -537,6 +537,20 @@ docker compose -f deploy/docker/docker-compose.yml run --rm pipeline \
 The unit passes the operator's UID/GID to compose via `%U`/`%G` so files
 written into `~/.alphalens/` and `web-data/` are jacoren-owned, not root.
 
+`run_thematic_day.sh` runs the five thematic stages (ingest → extract →
+map-themes → score → brief) and then, best-effort, **`alphalens buffett
+qual-enrich <yesterday>`** — the eager Buffett qualitative layer (moat / trend /
+candor / understandability + rationale per brief survivor, from its 10-K). It
+stamps seven `buffett_*` qual columns INTO the brief parquet *before* the
+`rebuild-cache` ExecStartPost ingests it, so the SPA card's `buffett.deep-read`
+drawer lights up. Needs `OPENROUTER_API_KEY` (DeepSeek) + `SEC_EDGAR_USER_AGENT`
+(both already passed into the container); results are cached per `(date, ticker)`
+under `~/.alphalens/buffett_qual/` so the 6×/day reruns re-pay DeepSeek only for
+not-yet-classified names (~$2-3/day steady-state). It is non-fatal under
+`set -e`: a DeepSeek / SEC hiccup leaves the drawer absent for that name until
+the next run, never failing the build. `--scuttlebutt` is OFF by default (extra
+Perplexity cost + an UNVERIFIED footnote).
+
 After a successful pipeline run, two `ExecStartPost=` slots fire in
 order:
 
