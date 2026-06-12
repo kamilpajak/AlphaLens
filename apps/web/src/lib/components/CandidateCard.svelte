@@ -42,7 +42,9 @@
 	// dimmed when fundamentals coverage is thin (< 0.5). The chip is hidden
 	// entirely when the score is null so a no-Buffett day reads identically.
 	const buffScore = $derived(
-		c.buffett_quality_score != null ? Math.round(c.buffett_quality_score) : null
+		Number.isFinite(c.buffett_quality_score)
+			? Math.round(c.buffett_quality_score as number)
+			: null
 	);
 	const buffTone = $derived(buffettTone(c.buffett_quality_score));
 	const buffLowCov = $derived(c.buffett_data_coverage != null && c.buffett_data_coverage < 0.5);
