@@ -62,6 +62,7 @@ ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     -e SEC_EDGAR_USER_AGENT \
     -e FRED_API_KEY \
     -e ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile \
+    -e ALPHALENS_CANONICAL_TITLE=1 \
     -v %h/.alphalens:/app/home/.alphalens \
     -v /var/lib/node_exporter/textfile:/var/lib/node_exporter/textfile \
     --entrypoint /bin/bash \
