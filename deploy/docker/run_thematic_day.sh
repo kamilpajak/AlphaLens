@@ -53,18 +53,24 @@ alphalens thematic brief
 #
 # All five thematic stages above default to yesterday-UTC; qual-enrich takes the
 # date as a positional arg, so pass the same day explicitly. Results are cached
-# immutably per (date, ticker) under ~/.alphalens/buffett_qual/, so the 6×/day
-# reruns re-pay DeepSeek only for names not yet classified for the day (~$2-3/day
-# steady-state; a no-10-K name costs nothing — no LLM call).
+# immutably per (date, ticker, scuttlebutt) under ~/.alphalens/buffett_qual/, so
+# the 6×/day reruns re-pay the LLM only for names not yet classified for the day
+# (~$3-4/day steady-state with scuttlebutt on; a no-10-K name costs nothing).
+#
+# `--scuttlebutt` is ON: it adds a web-grounded Perplexity context block
+# (competitive position, customer/supplier concentration, management reputation)
+# to the classifier as UNVERIFIED narrative, and surfaces the "scuttlebutt:
+# web-grounded, unverified" footnote in the drawer. Needs PERPLEXITY_API_KEY
+# (already passed into the container); if it is missing the scuttlebutt fetch
+# degrades to "no context" rather than failing — the qual layer still runs.
+# Cache is keyed by the flag, so the scuttlebutt and plain runs never collide.
 #
 # Best-effort under `set -e` (same posture as the VIX refresh below): the brief is
-# already written, so a DeepSeek / SEC hiccup must NOT fail the build — the drawer
-# simply stays absent for that name until the next run re-tries. `--scuttlebutt`
-# is intentionally left OFF: it adds Perplexity cost + an UNVERIFIED footnote;
-# enable it here per cost appetite.
+# already written, so a DeepSeek / Perplexity / SEC hiccup must NOT fail the build
+# — the drawer simply stays absent for that name until the next run re-tries.
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] buffett qual-enrich"
 QUAL_DATE="$(date -u -d 'yesterday' +%Y-%m-%d)"
-alphalens buffett qual-enrich "$QUAL_DATE" \
+alphalens buffett qual-enrich "$QUAL_DATE" --scuttlebutt \
     || echo "WARN: buffett qual-enrich failed for $QUAL_DATE; deep-read drawer absent until next run" >&2
 
 # VIX regime cache refresh (Track A v2 PR-2). Best-effort: a FRED blip must
