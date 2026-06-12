@@ -267,6 +267,73 @@ def lens_command(
         typer.echo(f"Wrote {len(df)} rows → {out}")
 
 
+@buffett_app.command(name="qual-enrich")
+def qual_enrich_command(
+    brief_date: str = typer.Argument(
+        ..., metavar="DATE", help="Brief date (YYYY-MM-DD) whose survivors to classify."
+    ),
+    briefs_dir: Path = typer.Option(
+        _DEFAULT_BRIEFS_DIR,
+        "--briefs-dir",
+        help="Directory of daily thematic brief parquets (stamped in place).",
+    ),
+    scuttlebutt: bool = typer.Option(
+        False,
+        "--scuttlebutt",
+        help="Also feed Perplexity web-grounded context to the classifier (needs PERPLEXITY_API_KEY).",
+    ),
+    cache_dir: Path | None = typer.Option(
+        None,
+        "--cache-dir",
+        help="Qual-result cache root (default ~/.alphalens/buffett_qual).",
+    ),
+) -> None:
+    """Eagerly compute + cache the qualitative Buffett layer and stamp it into the brief.
+
+    For every candidate in the brief: build the quant panel, fetch the 10-K, and
+    classify moat / trend / candor / understandability via DeepSeek Pro, then merge
+    the seven qualitative columns into the brief parquet. Each result is cached
+    **immutably per (date, ticker)** so this is idempotent — a warm cache entry
+    skips the LLM, and the 6x/day pipeline reruns never re-pay DeepSeek. Intended
+    to run right after the ``thematic brief`` stage, before the Django cache
+    rebuild. Fail-soft: a name with no 10-K shows dashes; nothing aborts the batch.
+    """
+    try:
+        target = dt.date.fromisoformat(brief_date)
+    except ValueError as exc:
+        raise typer.BadParameter(f"DATE must be YYYY-MM-DD: {exc}") from exc
+
+    # Lazy imports — keep the frequent-cron `alphalens` startup cheap.
+    from alphalens_pipeline.buffett.qual_enrichment import enrich_brief_parquet
+    from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
+    from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
+    from alphalens_pipeline.thematic.verification.mcap_filter import fetch_mcap
+
+    store = EdgarFundamentalsStore(with_prices=True)
+    dividends_fn = get_default_yfinance_client().dividends
+
+    try:
+        n_classified = enrich_brief_parquet(
+            target,
+            briefs_dir=briefs_dir,
+            store=store,
+            mcap_fn=fetch_mcap,
+            dividends_fn=dividends_fn,
+            exec_comp_fn=_build_exec_comp_fn(),
+            scuttlebutt=scuttlebutt,
+            cache_dir=cache_dir,
+        )
+    except FileNotFoundError as exc:
+        raise typer.BadParameter(
+            f"brief parquet not found for {target.isoformat()}: {exc}"
+        ) from exc
+
+    out_path = briefs_dir / f"{target.isoformat()}.parquet"
+    typer.echo(
+        f"Buffett qual-enrich {target.isoformat()}: classified {n_classified} names → {out_path}"
+    )
+
+
 def _assessment_record(assessment) -> dict:  # QualitativeAssessment | None
     """The qualitative fields as a flat dict for the parquet row (``None``-safe)."""
     return {
@@ -306,12 +373,6 @@ def _build_exec_comp_fn():
     return _fn
 
 
-# Years of 10-K history fed to the qualitative layer (#505): the latest filing
-# supplies the primary Item 1/1A/7/8 sections, the earlier years contribute their
-# Item 1A risk factors so the model can judge how the moat is trending.
-_QUALITATIVE_YEARS = 3
-
-
 def _build_scuttlebutt_client():
     """Build a PerplexityClient from PERPLEXITY_API_KEY, or ``None`` (fail-soft).
 
@@ -333,62 +394,18 @@ def _build_scuttlebutt_client():
 def _run_qualitative(panels: list, *, asof: dt.date, scuttlebutt: bool = False) -> list:
     """Run the per-candidate qualitative LLM layer, one assessment per panel.
 
-    For each panel: fetch up to ``_QUALITATIVE_YEARS`` of 10-Ks, split the latest
-    into the four Buffett sections (Item 1/1A/7/8), collect the prior years'
-    Item 1A risk factors as a moat-trend evidence trail, build the injected-facts
-    dict from the already-computed panel, and call :func:`assess_qualitative`.
-    When ``scuttlebutt`` is set, also fetch web-grounded context (#507) per
-    candidate and pass it in. Every step is fail-soft — a fetch failure or a name
-    with no 10-K yields ``None`` for that row (rendered as dashes). The LLM import
-    stays lazy here so the non-qualitative path never pays for it.
+    Thin wrapper over the shared per-panel op
+    :func:`~alphalens_pipeline.buffett.qual_enrichment.assess_panel_qualitative`
+    (the eager pipeline pass uses the same op). The scuttlebutt client is built
+    ONCE and reused across panels. Every step is fail-soft — a fetch failure or a
+    name with no 10-K yields ``None`` for that row (rendered as dashes). No result
+    cache here: the ad-hoc lens always recomputes (caching is the eager
+    ``qual-enrich`` pass's job).
     """
-    from alphalens_pipeline.buffett.qualitative import assess_qualitative
-    from alphalens_pipeline.buffett.scuttlebutt import fetch_scuttlebutt
-    from alphalens_pipeline.buffett.tenk_sections import split_10k_sections
-    from alphalens_pipeline.thematic.verification.tenk_grep import fetch_multi_year_10k_texts
+    from alphalens_pipeline.buffett.qual_enrichment import assess_panel_qualitative
 
-    scuttlebutt_client = _build_scuttlebutt_client() if scuttlebutt else None
-
-    assessments: list = []
-    for panel in panels:
-        try:
-            multi_year = fetch_multi_year_10k_texts(
-                ticker=panel.ticker, asof=asof, years=_QUALITATIVE_YEARS
-            )
-        except Exception as exc:
-            logger.warning("buffett qualitative: 10-K fetch failed for %s: %s", panel.ticker, exc)
-            multi_year = []
-        if not multi_year:
-            assessments.append(None)
-            continue
-        # ``multi_year`` is newest-first: [0] is the latest filing (primary
-        # sections), the rest are prior years (risk-factor evolution).
-        sections = split_10k_sections(multi_year[0][1])
-        prior_year_risk_factors = [
-            (date, split_10k_sections(text).item_1a) for date, text in multi_year[1:]
-        ]
-        scuttlebutt_text: str | None = None
-        if scuttlebutt_client is not None:
-            sb = fetch_scuttlebutt(panel.ticker, client=scuttlebutt_client)
-            scuttlebutt_text = sb.text if sb.ok else None
-        facts = {
-            "roic_latest": panel.roic_latest,
-            "roic_3y_avg": panel.roic_3y_avg,
-            "op_margin_latest": panel.op_margin_latest,
-            "op_margin_3y_avg": panel.op_margin_3y_avg,
-            "net_buyback": panel.net_buyback,
-            "peo_to_neo_ratio": panel.peo_to_neo_ratio,
-        }
-        assessments.append(
-            assess_qualitative(
-                ticker=panel.ticker,
-                sections=sections,
-                facts=facts,
-                prior_year_risk_factors=prior_year_risk_factors,
-                scuttlebutt=scuttlebutt_text,
-            )
-        )
-    return assessments
+    client = _build_scuttlebutt_client() if scuttlebutt else None
+    return [assess_panel_qualitative(panel, asof, scuttlebutt_client=client) for panel in panels]
 
 
 __all__ = ["buffett_app", "lens_command"]
