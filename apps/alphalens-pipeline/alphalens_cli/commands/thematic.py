@@ -423,6 +423,16 @@ def score(
     typer.echo(f"Scoring {len(candidates)} candidates from {src} (asof={target.isoformat()})...")
     enriched = screening_scorer.score_candidates(candidates, asof=target)
 
+    # Cheap Buffett-delta numerics + quality score, stamped from the fundamentals
+    # the scoring pass already fetched (companyfacts -> shared disk-cache hit). The
+    # six columns ride the merge chain into the brief parquet + card chip; this is
+    # display-only in v1 (it does NOT touch the brief sort). Lazy import keeps the
+    # frequent-cron `alphalens` startup cheap. Fail-soft: any wiring failure leaves
+    # the columns absent rather than aborting the score stage.
+    from alphalens_pipeline.buffett import quant_enrichment
+
+    enriched = quant_enrichment.enrich(enriched, asof=target)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{target.isoformat()}.parquet"
     enriched.to_parquet(out_path, index=False)
