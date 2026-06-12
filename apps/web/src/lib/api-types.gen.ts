@@ -303,6 +303,13 @@ export interface components {
             buffett_data_coverage?: number | null;
             /** Format: double */
             buffett_quality_score?: number | null;
+            buffett_moat_type?: string;
+            buffett_moat_trend?: string;
+            buffett_management_candor?: string;
+            buffett_understandable?: boolean | null;
+            buffett_qualitative_rationale?: string;
+            buffett_used_scuttlebutt?: boolean | null;
+            buffett_qual_computed_at?: string;
             also_in_themes?: unknown;
             /** Format: int64 */
             rank_in_day?: number | null;

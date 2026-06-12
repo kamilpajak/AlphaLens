@@ -60,6 +60,19 @@ def coerce_bool(value: Any) -> bool:
     return bool(value)
 
 
+def coerce_optional_bool(value: Any) -> bool | None:
+    """Nullable boolean: ``None`` for missing input (preserves the tri-state).
+
+    Unlike :func:`coerce_bool` (which floors missing -> ``False``), this keeps
+    ``None`` distinct from ``False`` — needed for a nullable ``BooleanField``
+    such as ``buffett_understandable``, where "not assessed" (``None``) must not
+    read as "not understandable" (``False``).
+    """
+    if is_missing(value):
+        return None
+    return bool(value)
+
+
 def coerce_list_str(value: Any) -> list[str]:
     """numpy arrays, pandas object cells, scalar strings, lists — all → list[str]."""
     if is_missing(value):

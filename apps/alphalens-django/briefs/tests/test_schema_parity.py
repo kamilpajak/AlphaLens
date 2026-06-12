@@ -117,6 +117,16 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "buffett_margin_of_safety_pct",
     "buffett_data_coverage",
     "buffett_quality_score",
+    # Post-legacy extension (2026-06-12, card PR-3b): Buffett qualitative layer —
+    # LLM classification (moat / trend / candor / understandable + rationale +
+    # provenance), eager-computed + cached, stamped into the brief parquet.
+    "buffett_moat_type",
+    "buffett_moat_trend",
+    "buffett_management_candor",
+    "buffett_understandable",
+    "buffett_qualitative_rationale",
+    "buffett_used_scuttlebutt",
+    "buffett_qual_computed_at",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.

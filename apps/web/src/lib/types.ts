@@ -76,6 +76,15 @@ export interface Candidate {
 	buffett_margin_of_safety_pct: number | null;
 	buffett_data_coverage: number | null;
 	buffett_quality_score: number | null;
+	// Buffett qualitative layer (card PR-3b) — LLM classification over the 10-K;
+	// enums/rationale are "" when no 10-K; understandable is tri-state (null = not assessed).
+	buffett_moat_type: string | null;
+	buffett_moat_trend: string | null;
+	buffett_management_candor: string | null;
+	buffett_understandable: boolean | null;
+	buffett_qualitative_rationale: string | null;
+	buffett_used_scuttlebutt: boolean | null;
+	buffett_qual_computed_at: string | null;
 	also_in_themes: string[];
 	rank_in_day: number | null;
 	cohort_size_in_day: number | null;

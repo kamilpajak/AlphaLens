@@ -100,6 +100,19 @@ class Brief(models.Model):
     buffett_data_coverage = models.FloatField(null=True, blank=True)
     buffett_quality_score = models.FloatField(null=True, blank=True)
 
+    # Buffett qualitative layer (card PR-3b). LLM classification over the 10-K +
+    # injected facts, precomputed eagerly by `alphalens buffett qual-enrich` and
+    # stamped into the brief parquet. The enums / rationale are blank ("") when a
+    # name had no fetchable 10-K; `understandable` is a NULLABLE bool so "not
+    # assessed" (None) stays distinct from "not understandable" (False).
+    buffett_moat_type = models.CharField(max_length=32, blank=True)
+    buffett_moat_trend = models.CharField(max_length=32, blank=True)
+    buffett_management_candor = models.CharField(max_length=32, blank=True)
+    buffett_understandable = models.BooleanField(null=True, blank=True)
+    buffett_qualitative_rationale = models.TextField(blank=True)
+    buffett_used_scuttlebutt = models.BooleanField(null=True, blank=True)
+    buffett_qual_computed_at = models.CharField(max_length=40, blank=True)
+
     technical_rsi = models.FloatField(null=True, blank=True)
     technical_ma50_distance_pct = models.FloatField(null=True, blank=True)
     technical_atr_pct = models.FloatField(null=True, blank=True)
