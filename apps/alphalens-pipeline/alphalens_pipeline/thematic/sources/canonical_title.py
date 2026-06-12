@@ -20,8 +20,12 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import html
+import ipaddress
 import logging
+import os
+import tempfile
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -59,6 +63,34 @@ _JUNK_SUBSTRINGS = (
 )
 
 
+def _is_safe_url(url: str) -> bool:
+    """Reject non-http(s) schemes and literal private / loopback / link-local IPs.
+
+    Event URLs are externally-sourced (news feeds), so they reach
+    ``requests.get`` from outside our control — guard against SSRF to
+    ``file://``, ``http://localhost``, the cloud-metadata endpoint
+    (169.254.169.254), and RFC-1918 ranges. A bare hostname (not a literal IP)
+    is allowed; full DNS-resolution / redirect-hop SSRF protection is out of
+    scope for this single-user tool (documented residual).
+    """
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in ("http", "https"):
+        return False
+    host = (parsed.hostname or "").lower()
+    if not host or host == "localhost":
+        return False
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return True  # hostname, not a literal IP
+    return not (
+        ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
+    )
+
+
 def _default_fetcher(url: str) -> str:
     """Fetch a publisher page as text. Generic web GET — deliberately NOT routed
     through a vendor client (these hit arbitrary publisher domains, not a quota'd
@@ -66,6 +98,19 @@ def _default_fetcher(url: str) -> str:
     resp = requests.get(url, headers={"User-Agent": _USER_AGENT}, timeout=_TIMEOUT_S)
     resp.raise_for_status()
     return resp.text
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write via temp-file + os.replace so a crash mid-write can't leave a
+    truncated cache entry that a later read would treat as a valid title."""
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp_name, path)
+    except Exception:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 def _clean(title: str) -> str:
@@ -145,6 +190,10 @@ def fetch_og_title(
     if path.exists() and _cache_is_fresh(path, ttl_days):
         return path.read_text(encoding="utf-8")
 
+    if not _is_safe_url(url):
+        logger.info("og:title fetch skipped — unsafe url %s", url)
+        return None
+
     try:
         html_text = fetcher(url)
     except Exception as exc:  # network / timeout / HTTP error — best-effort
@@ -155,7 +204,7 @@ def fetch_og_title(
     if not title or _is_junk(title) or not (_MIN_LEN <= len(title) <= _MAX_LEN):
         return None
 
-    path.write_text(title, encoding="utf-8")
+    _atomic_write_text(path, title)
     return title
 
 

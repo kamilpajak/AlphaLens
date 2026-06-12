@@ -75,6 +75,25 @@ class TestExtractTitle(unittest.TestCase):
         self.assertLessEqual(len(out), ct._TITLE_MAX_LEN)
 
 
+class TestSafeUrl(unittest.TestCase):
+    def test_accepts_public_https(self):
+        self.assertTrue(ct._is_safe_url("https://www.livescience.com/article"))
+
+    def test_rejects_non_http_scheme(self):
+        self.assertFalse(ct._is_safe_url("file:///etc/passwd"))
+        self.assertFalse(ct._is_safe_url("ftp://host/x"))
+
+    def test_rejects_localhost_and_private_and_metadata(self):
+        for url in (
+            "http://localhost/x",
+            "http://127.0.0.1/x",
+            "http://10.0.0.5/x",
+            "http://192.168.1.1/x",
+            "http://169.254.169.254/latest/meta-data/",
+        ):
+            self.assertFalse(ct._is_safe_url(url), url)
+
+
 class TestFetchOgTitleCache(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -106,6 +125,13 @@ class TestFetchOgTitleCache(unittest.TestCase):
         out = ct.fetch_og_title("https://x.test/a", cache_dir=self.cache_dir, fetcher=boom)
         self.assertIsNone(out)
         self.assertEqual(list(self.cache_dir.glob("*.txt")), [])  # no poisoning
+
+    def test_unsafe_url_returns_none_without_fetch_or_cache(self):
+        f = _fetcher_returning(_html(og=_PUBLISHER_TITLE))
+        out = ct.fetch_og_title("http://169.254.169.254/x", cache_dir=self.cache_dir, fetcher=f)
+        self.assertIsNone(out)
+        self.assertEqual(f.calls["n"], 0)  # never fetched
+        self.assertEqual(list(self.cache_dir.glob("*.txt")), [])
 
     def test_junk_title_returns_none_and_does_not_cache(self):
         f = _fetcher_returning(_html(og="Just a moment..."))

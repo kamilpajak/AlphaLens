@@ -44,7 +44,12 @@ def _enrich_event_titles(df: pd.DataFrame, *, fetcher=None) -> pd.DataFrame:
     is a no-op when disabled, when the frame is empty, or when it carries no
     ``source_event_url`` column. ``fetcher`` is injectable for tests.
     """
-    if not _CANONICAL_TITLE_ENABLED or df.empty or "source_event_url" not in df.columns:
+    if (
+        not _CANONICAL_TITLE_ENABLED
+        or df.empty
+        or "source_event_url" not in df.columns
+        or "source_event_title" not in df.columns
+    ):
         return df
     from alphalens_pipeline.thematic.sources import canonical_title
 

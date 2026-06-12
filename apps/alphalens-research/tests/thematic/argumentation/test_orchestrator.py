@@ -150,6 +150,13 @@ class TestEnrichEventTitles(unittest.TestCase):
         out = orchestrator._enrich_event_titles(df, fetcher=lambda url: _og_html("x"))
         self.assertEqual(out.at[0, "source_event_title"], _GDELT_MANGLED)
 
+    def test_noop_when_title_column_absent(self):
+        # source_event_url present but source_event_title column missing must not
+        # KeyError (malformed upstream frame).
+        df = pd.DataFrame([{"source_event_url": "https://pub.test/a"}])
+        out = orchestrator._enrich_event_titles(df, fetcher=lambda url: _og_html(_PUBLISHER_CLEAN))
+        self.assertEqual(list(out.columns), ["source_event_url"])
+
     def test_noop_when_disabled(self):
         df = pd.DataFrame(
             [{"source_event_url": "https://pub.test/a", "source_event_title": _GDELT_MANGLED}]
