@@ -1,3 +1,10 @@
+<script module lang="ts">
+	// Module-level counter for hydration-stable tooltip ids (same approach as
+	// ChipTip / JargonTip): adapter-static prerenders then the client re-
+	// instantiates in the same order, so the counter matches in both runs.
+	let __buffettPillarIdCounter = 0;
+</script>
+
 <script lang="ts">
 	// One Buffett qualitative pillar (MOAT / TREND / CANDOR / UNDERSTOOD) as a
 	// tone-coloured badge with a hover tooltip explaining the LLM's classification.
@@ -14,12 +21,15 @@
 		body: string;
 	}
 	let { label, value, tone, body }: Props = $props();
+
+	const tooltipId = `buffett-pillar-${__buffettPillarIdCounter++}`;
 </script>
 
 <span
 	class="group relative inline-block hover:z-50 focus-within:z-50"
 	tabindex="0"
 	role="group"
+	aria-describedby={tooltipId}
 	use:clampToViewport
 >
 	<span
@@ -38,6 +48,7 @@
 	</span>
 
 	<span
+		id={tooltipId}
 		class="pointer-events-none absolute bottom-full left-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
 		style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"
 		role="tooltip"
