@@ -76,7 +76,7 @@ columns). The Buffett surface is **additive and small**.
 
 | Level | Content | Where |
 |---|---|---|
-| **Always-visible (1 token)** | `buffett NN/100` score chip from the **cheap** numerics only; tone green ≥70 / amber 40-69 / muted <40; dim + dashed-underline when coverage <0.5; `{#if score != null}` guard so a no-Buffett day is pixel-identical to today | 5th right-side span in the meta bar, `CandidateCard.svelte:98-120`; `whitespace-nowrap` on `NN/100` (atomic-token rule, PR #261) |
+| **Always-visible (1 token)** | `buffett NN/100` score chip from the **cheap** numerics only; tone green ≥70 / amber 40-69 / muted <40; dim + dashed-underline when coverage <0.5. **Always rendered** — shows `buffett —` (muted) when the score is null, consistent with the other meta-bar metrics (layer-4 / mkt-cap also show `—`); the hover then explains "not enough fundamentals to score" (revised 2026-06-12 in PR-2 per user: prefer a consistently-present metric over hiding the chip) | 5th right-side span in the meta bar, `CandidateCard.svelte`; `whitespace-nowrap` on `NN/100` (atomic-token rule, PR #261) |
 | **Hover (ChipTip)** | the 4 cheap numerics spelled out: OE-yield % / ROIC 3y % / MoS % / coverage N/6 + one-line meaning | on the score chip |
 | **Expand (drawer, collapsed by default → zero resting vertical cost)** | 4 tri-state pillar badges MOAT / TREND / CANDOR / UNDERSTOOD (`BuffettPillar.svelte` cloned from `GatePill.svelte`) + full `qualitative_rationale` in a violet-left-border blockquote matching the thesis block + `scuttlebutt: web-grounded, unverified` amber footnote when used | `buffett.deep-read >` toggle at the bottom of the LEFT col-7, before the narrative band |
 
