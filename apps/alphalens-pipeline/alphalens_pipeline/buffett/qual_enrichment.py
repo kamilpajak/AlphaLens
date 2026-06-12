@@ -96,17 +96,23 @@ def _is_real(record: QualRecord) -> bool:
     )
 
 
-def _cache_path(ticker: str, asof: dt.date, cache_dir: Path) -> Path:
-    return cache_dir / asof.isoformat() / f"{ticker.upper()}.json"
+def _cache_path(ticker: str, asof: dt.date, cache_dir: Path, *, scuttlebutt: bool = False) -> Path:
+    # Scuttlebutt changes the prompt INPUT, so a scuttlebutt run is a distinct
+    # computation and gets its own cache entry — otherwise a prior no-scuttlebutt
+    # result would short-circuit a later ``--scuttlebutt`` request.
+    suffix = ".sb.json" if scuttlebutt else ".json"
+    return cache_dir / asof.isoformat() / f"{ticker.upper()}{suffix}"
 
 
-def load_cache(ticker: str, asof: dt.date, cache_dir: Path) -> QualRecord | None:
-    """Load a cached :class:`QualRecord` for ``(asof, ticker)``, or ``None``.
+def load_cache(
+    ticker: str, asof: dt.date, cache_dir: Path, *, scuttlebutt: bool = False
+) -> QualRecord | None:
+    """Load a cached :class:`QualRecord` for ``(asof, ticker, scuttlebutt)``, or ``None``.
 
     Never raises — a corrupt / unreadable cache file logs and is treated as a
     miss (the name recomputes) rather than crashing the enrichment.
     """
-    path = _cache_path(ticker, asof, cache_dir)
+    path = _cache_path(ticker, asof, cache_dir, scuttlebutt=scuttlebutt)
     if not path.exists():
         return None
     try:
@@ -117,9 +123,11 @@ def load_cache(ticker: str, asof: dt.date, cache_dir: Path) -> QualRecord | None
         return None
 
 
-def write_cache(ticker: str, asof: dt.date, cache_dir: Path, record: QualRecord) -> None:
-    """Persist ``record`` to the per-(date, ticker) cache (parents created)."""
-    path = _cache_path(ticker, asof, cache_dir)
+def write_cache(
+    ticker: str, asof: dt.date, cache_dir: Path, record: QualRecord, *, scuttlebutt: bool = False
+) -> None:
+    """Persist ``record`` to the per-(date, ticker, scuttlebutt) cache (parents created)."""
+    path = _cache_path(ticker, asof, cache_dir, scuttlebutt=scuttlebutt)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(record), sort_keys=True))
 
@@ -199,11 +207,18 @@ def _resolve_one(
 ) -> QualRecord | None:
     ticker = panel.ticker.upper()
     if cache_dir is not None:
-        cached = load_cache(ticker, asof, cache_dir)
+        cached = load_cache(ticker, asof, cache_dir, scuttlebutt=scuttlebutt)
         if cached is not None:
             return cached
 
-    assessment = assess_one(panel, asof, scuttlebutt)
+    try:
+        assessment = assess_one(panel, asof, scuttlebutt)
+    except Exception as exc:
+        # Per-ticker fail-soft: a vendor hiccup / unexpected raise inside the
+        # assess op must not abort the whole batch. Treat as "no result" (dashes,
+        # not cached -> retried next run).
+        logger.warning("buffett qual: assess failed for %s: %s", ticker, exc)
+        return None
     if assessment is None:
         return None  # no 10-K — not cached, retried next run (no LLM cost)
 
@@ -211,7 +226,7 @@ def _resolve_one(
         assessment, used_scuttlebutt=scuttlebutt, computed_at=computed_at
     )
     if cache_dir is not None and _is_real(record):
-        write_cache(ticker, asof, cache_dir, record)
+        write_cache(ticker, asof, cache_dir, record, scuttlebutt=scuttlebutt)
     return record
 
 
@@ -226,7 +241,9 @@ def stamp_columns(frame: pd.DataFrame, records: dict[str, QualRecord | None]) ->
     tickers = [str(t).upper() for t in out["ticker"]] if "ticker" in out.columns else []
 
     def _col(rec: QualRecord | None, attr: str):
-        return getattr(rec, attr) if rec is not None else None
+        # Defensive default: a record missing a field (older cache schema)
+        # stamps null rather than raising mid-batch.
+        return getattr(rec, attr, None) if rec is not None else None
 
     field_by_col = {
         "buffett_moat_type": "moat_type",

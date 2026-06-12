@@ -179,6 +179,39 @@ class TestEnrichQualitative(unittest.TestCase):
             self.assertIsNone(recs[0])
             self.assertFalse((cache / ASOF.isoformat() / "AAA.json").exists())
 
+    def test_scuttlebutt_and_plain_runs_have_separate_cache(self) -> None:
+        # A no-scuttlebutt cache entry must NOT short-circuit a --scuttlebutt run.
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            self._run([_panel("AAA")], {"AAA": _assessment("brand")}, cache, scuttlebutt=False)
+            # Scuttlebutt run is a distinct computation -> assess_one IS called.
+            _, calls = self._run(
+                [_panel("AAA")], {"AAA": _assessment("network")}, cache, scuttlebutt=True
+            )
+            self.assertEqual(calls, ["AAA"])
+            self.assertTrue((cache / ASOF.isoformat() / "AAA.json").exists())
+            self.assertTrue((cache / ASOF.isoformat() / "AAA.sb.json").exists())
+
+    def test_assess_one_raising_is_failsoft(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        def boom(panel, asof, scuttle):
+            raise RuntimeError("vendor hiccup")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            recs = qe.enrich_qualitative(
+                [_panel("AAA"), _panel("BBB")],
+                asof=ASOF,
+                cache_dir=Path(tmp),
+                assess_one=boom,
+                now_fn=lambda: NOW,
+            )
+            self.assertEqual(recs, [None, None])  # batch survives
+
     def test_unique_ticker_computed_once(self) -> None:
         import tempfile
         from pathlib import Path
