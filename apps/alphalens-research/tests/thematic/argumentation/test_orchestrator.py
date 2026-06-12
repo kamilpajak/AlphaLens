@@ -117,6 +117,50 @@ _FAKE_BRIEF_PRO = {
 }
 
 
+def _og_html(title):
+    return f'<html><head><meta property="og:title" content="{title}"></head><body>x</body></html>'
+
+
+_GDELT_MANGLED = (
+    "Scientists are fast-tracking 3 Ebola vaccines in hopes of "
+    "shortening the outbreak when could they be ready?"
+)
+_PUBLISHER_CLEAN = (
+    "3 new Ebola vaccines are being fast-tracked amid the current "
+    "outbreak — when could they be ready?"
+)
+
+
+class TestEnrichEventTitles(unittest.TestCase):
+    def test_replaces_title_with_canonical_og_title(self):
+        df = pd.DataFrame(
+            [{"source_event_url": "https://pub.test/a", "source_event_title": _GDELT_MANGLED}]
+        )
+        out = orchestrator._enrich_event_titles(df, fetcher=lambda url: _og_html(_PUBLISHER_CLEAN))
+        self.assertEqual(out.at[0, "source_event_title"], _PUBLISHER_CLEAN)
+        self.assertIn("—", out.at[0, "source_event_title"])
+
+    def test_keeps_original_when_no_url(self):
+        df = pd.DataFrame([{"source_event_url": "", "source_event_title": _GDELT_MANGLED}])
+        out = orchestrator._enrich_event_titles(df, fetcher=lambda url: _og_html("anything"))
+        self.assertEqual(out.at[0, "source_event_title"], _GDELT_MANGLED)
+
+    def test_noop_when_no_url_column(self):
+        df = pd.DataFrame([{"source_event_title": _GDELT_MANGLED}])
+        out = orchestrator._enrich_event_titles(df, fetcher=lambda url: _og_html("x"))
+        self.assertEqual(out.at[0, "source_event_title"], _GDELT_MANGLED)
+
+    def test_noop_when_disabled(self):
+        df = pd.DataFrame(
+            [{"source_event_url": "https://pub.test/a", "source_event_title": _GDELT_MANGLED}]
+        )
+        with patch.object(orchestrator, "_CANONICAL_TITLE_ENABLED", False):
+            out = orchestrator._enrich_event_titles(
+                df, fetcher=lambda url: _og_html(_PUBLISHER_CLEAN)
+            )
+        self.assertEqual(out.at[0, "source_event_title"], _GDELT_MANGLED)
+
+
 class TestGenerateBriefs(unittest.TestCase):
     def test_skips_unverified_candidates(self):
         with patch.object(
@@ -135,6 +179,30 @@ class TestGenerateBriefs(unittest.TestCase):
                 )
         # MADEUP (verified=False) skipped; QUBT + IONQ retained.
         self.assertEqual(set(out["ticker"]), {"QUBT", "IONQ"})
+
+    def test_canonical_title_enrichment_reaches_output(self):
+        df = _scored_df()
+        df["source_event_url"] = "https://pub.test/a"
+        df["source_event_title"] = _GDELT_MANGLED
+
+        def fake_canonical(url, *, fallback, **kw):
+            return _PUBLISHER_CLEAN if url else fallback
+
+        with (
+            patch.object(
+                orchestrator, "_brief_for_row", side_effect=lambda row, **kw: (None, None)
+            ),
+            patch(
+                "alphalens_pipeline.thematic.sources.canonical_title.canonical_title_for",
+                side_effect=fake_canonical,
+            ),
+        ):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = orchestrator.generate_briefs(
+                    df, asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+                )
+        # Every verified row's displayed title is now the clean publisher headline.
+        self.assertTrue((out["source_event_title"] == _PUBLISHER_CLEAN).all())
 
     def test_routes_pro_vs_flash_by_weighted_score(self):
         captured_models: dict[str, str] = {}

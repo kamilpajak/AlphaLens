@@ -28,6 +28,40 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_OUTPUT_DIR = Path.home() / ".alphalens" / "thematic_briefs"
 
+# Network enrichment of the displayed event title (GDELT mangles em-dashes /
+# apostrophes — replace with the publisher's canonical og:title). Operator can
+# disable without a code change: ALPHALENS_CANONICAL_TITLE=0.
+_CANONICAL_TITLE_ENABLED = os.environ.get("ALPHALENS_CANONICAL_TITLE", "1") != "0"
+
+
+def _enrich_event_titles(df: pd.DataFrame, *, fetcher=None) -> pd.DataFrame:
+    """Replace ``source_event_title`` with the publisher's canonical og:title.
+
+    Runs on the ~14 selected brief rows only (never the 200-item news cache).
+    Display + LLM-citation only — the title does not feed theme matching or
+    scoring, so this cannot change which tickers surface. Best-effort: every
+    fetch/parse/validation failure keeps the existing title, and the whole pass
+    is a no-op when disabled, when the frame is empty, or when it carries no
+    ``source_event_url`` column. ``fetcher`` is injectable for tests.
+    """
+    if not _CANONICAL_TITLE_ENABLED or df.empty or "source_event_url" not in df.columns:
+        return df
+    from alphalens_pipeline.thematic.sources import canonical_title
+
+    kw = {"fetcher": fetcher} if fetcher is not None else {}
+    df = df.copy()
+    for i in df.index:
+        url = df.at[i, "source_event_url"]
+        if not isinstance(url, str) or not url:
+            continue
+        current = df.at[i, "source_event_title"]
+        fallback = current if isinstance(current, str) else ""
+        df.at[i, "source_event_title"] = canonical_title.canonical_title_for(
+            url, fallback=fallback, **kw
+        )
+    return df
+
+
 # Same cache the Layer-4 scorer populated ({TICKER}_{asof}.parquet). The brief
 # step REUSES it (no re-fetch) — a cache miss degrades to NO_STRUCTURE.
 _OHLCV_CACHE_DIR = Path.home() / ".alphalens" / "thematic_ohlcv"
@@ -405,6 +439,10 @@ def generate_briefs(
     # themes with different catalysts could lose the strong-catalyst row to
     # the weak one on index-order fallback (zen pre-design HIGH finding).
     verified = _sort_and_dedup_for_brief(verified)
+    # Swap GDELT-mangled titles for the publisher's canonical og:title BEFORE the
+    # row loop, so both the LLM catalyst citation (_row_to_facts) and the output
+    # parquet column carry the clean title. Best-effort, ~14 fetches, cached.
+    verified = _enrich_event_titles(verified)
 
     client_pro, client_flash = _build_clients(api_key)
 
