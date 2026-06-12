@@ -432,5 +432,67 @@ class TestBuildExecCompFn(unittest.TestCase):
         self.assertIsNone(result.peo_to_neo_ratio)
 
 
+class TestQualEnrichCommand(unittest.TestCase):
+    """`alphalens buffett qual-enrich <date>` stamps the seven qual columns into
+    the brief parquet and caches each result. All network seams patched: fixed
+    panels, synthetic 10-K, fixed assessment."""
+
+    def setUp(self):
+        self._runner = CliRunner()
+        self._orig_build = comparison_mod.build_comparison
+        self._orig_fetch = tenk_grep_mod.fetch_multi_year_10k_texts
+        self._orig_assess = qualitative_mod.assess_qualitative
+        comparison_mod.build_comparison = lambda *_a, **_k: [_panel("AAPL")]  # type: ignore[assignment]
+        tenk_grep_mod.fetch_multi_year_10k_texts = lambda **_k: [  # type: ignore[assignment]
+            ("2026-03-27", "Item 1. Business X. Item 1A. Risk Factors Y. Item 7. Z. Item 8. End")
+        ]
+        qualitative_mod.assess_qualitative = lambda **_k: QualitativeAssessment(  # type: ignore[assignment]
+            understandable=True,
+            moat_type="brand",
+            moat_trend="stable",
+            management_candor="candid",
+            rationale="durable franchise",
+        )
+
+    def tearDown(self):
+        comparison_mod.build_comparison = self._orig_build  # type: ignore[assignment]
+        tenk_grep_mod.fetch_multi_year_10k_texts = self._orig_fetch  # type: ignore[assignment]
+        qualitative_mod.assess_qualitative = self._orig_assess  # type: ignore[assignment]
+
+    def test_stamps_columns_and_caches(self):
+        import pandas as pd
+
+        with TemporaryDirectory() as tmp:
+            briefs = Path(tmp) / "briefs"
+            briefs.mkdir()
+            cache = Path(tmp) / "cache"
+            pd.DataFrame({"ticker": ["AAPL"], "theme": ["x"]}).to_parquet(
+                briefs / "2026-06-10.parquet", index=False
+            )
+            result = self._runner.invoke(
+                app,
+                [
+                    "buffett",
+                    "qual-enrich",
+                    "2026-06-10",
+                    "--briefs-dir",
+                    str(briefs),
+                    "--cache-dir",
+                    str(cache),
+                ],
+            )
+            self.assertEqual(result.exit_code, 0, result.output)
+            self.assertIn("classified 1", result.output)
+            out = pd.read_parquet(briefs / "2026-06-10.parquet")
+            self.assertEqual(out.iloc[0]["buffett_moat_type"], "brand")
+            self.assertEqual(out.iloc[0]["buffett_understandable"], True)
+            # The result was cached immutably for (date, ticker).
+            self.assertTrue((cache / "2026-06-10" / "AAPL.json").exists())
+
+    def test_bad_date_guard(self):
+        result = self._runner.invoke(app, ["buffett", "qual-enrich", "nope"])
+        self.assertNotEqual(result.exit_code, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
