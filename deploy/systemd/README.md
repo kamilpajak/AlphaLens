@@ -544,12 +544,15 @@ candor / understandability + rationale per brief survivor, from its 10-K). It
 stamps seven `buffett_*` qual columns INTO the brief parquet *before* the
 `rebuild-cache` ExecStartPost ingests it, so the SPA card's `buffett.deep-read`
 drawer lights up. Needs `OPENROUTER_API_KEY` (DeepSeek) + `SEC_EDGAR_USER_AGENT`
-(both already passed into the container); results are cached per `(date, ticker)`
-under `~/.alphalens/buffett_qual/` so the 6×/day reruns re-pay DeepSeek only for
-not-yet-classified names (~$2-3/day steady-state). It is non-fatal under
-`set -e`: a DeepSeek / SEC hiccup leaves the drawer absent for that name until
-the next run, never failing the build. `--scuttlebutt` is OFF by default (extra
-Perplexity cost + an UNVERIFIED footnote).
++ `PERPLEXITY_API_KEY` (all already passed into the container); results are cached
+per `(date, ticker, scuttlebutt)` under `~/.alphalens/buffett_qual/` so the 6×/day
+reruns re-pay the LLM only for not-yet-classified names (~$3-4/day steady-state).
+It is non-fatal under `set -e`: a DeepSeek / Perplexity / SEC hiccup leaves the
+drawer absent for that name until the next run, never failing the build.
+`--scuttlebutt` is **ON**: it feeds a web-grounded Perplexity context block
+(UNVERIFIED) to the classifier and adds the "scuttlebutt: web-grounded,
+unverified" drawer footnote. A missing `PERPLEXITY_API_KEY` degrades scuttlebutt
+to "no context" rather than failing — the qual layer still runs.
 
 After a successful pipeline run, two `ExecStartPost=` slots fire in
 order:
