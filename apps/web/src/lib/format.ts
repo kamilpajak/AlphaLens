@@ -55,6 +55,18 @@ export function confidenceTone(conf: number | null | undefined): ConfidenceTone 
 	return 'muted';
 }
 
+export type BuffettTone = 'green' | 'amber' | 'muted';
+
+/** Tone for the Buffett quality chip (0-100). Three-state per the card design:
+ *  green >= 70, amber 40-69, muted < 40 (and muted when null). The score is a
+ *  hand-chosen screening heuristic, display-only — see the design memo. */
+export function buffettTone(score: number | null | undefined): BuffettTone {
+	if (score == null || !Number.isFinite(score)) return 'muted';
+	if (score >= 70) return 'green';
+	if (score >= 40) return 'amber';
+	return 'muted';
+}
+
 export function technicalsTrend(slope: number | null | undefined): 'up' | 'down' | 'flat' {
 	if (slope === null || slope === undefined || !Number.isFinite(slope)) return 'flat';
 	if (slope > 0.05) return 'up';
