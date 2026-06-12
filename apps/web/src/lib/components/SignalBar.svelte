@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { clampToViewport } from '$lib/actions/clampToViewport';
+
 	interface Props {
 		label: string;
 		value: number | null | undefined;
@@ -48,6 +50,7 @@
 	class:cursor-help={tooltip}
 	tabindex={tooltip ? 0 : undefined}
 	role={tooltip ? 'group' : undefined}
+	use:clampToViewport
 >
 	<div class="flex items-center justify-between mb-1.5 gap-2">
 		<span class="text-fg-muted truncate">{label}</span>
@@ -72,7 +75,8 @@
 
 	{#if tooltip}
 		<span
-			class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+			class="pointer-events-none absolute bottom-full left-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+			style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"
 			role="tooltip"
 		>
 			<span class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl">
@@ -81,7 +85,10 @@
 				</span>
 				<span class="block">{tooltip}</span>
 			</span>
-			<span class="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1 rotate-45"></span>
+			<span
+				class="absolute left-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1"
+				style="transform: translateX(calc(-50% + var(--tt-arrow, 0px))) rotate(45deg)"
+			></span>
 		</span>
 	{/if}
 </div>

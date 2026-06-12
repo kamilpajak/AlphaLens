@@ -1,4 +1,6 @@
 <script lang="ts">
+	import { clampToViewport } from '$lib/actions/clampToViewport';
+
 	interface Props {
 		name: string;
 		status: 'passed' | 'failed' | 'unknown';
@@ -52,6 +54,7 @@
 	class="group relative inline-block hover:z-50 focus-within:z-50"
 	tabindex={info ? 0 : undefined}
 	role={info ? 'group' : undefined}
+	use:clampToViewport
 >
 	<span
 		class="inline-flex items-center gap-1 px-2 py-0.5 border text-[10px] uppercase tracking-widest cursor-help"
@@ -68,7 +71,8 @@
 
 	{#if info}
 		<span
-			class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+			class="pointer-events-none absolute bottom-full left-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
+			style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"
 			role="tooltip"
 		>
 			<span class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl">
@@ -86,7 +90,8 @@
 				</span>
 			</span>
 			<span
-				class="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1 rotate-45"
+				class="absolute left-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1"
+				style="transform: translateX(calc(-50% + var(--tt-arrow, 0px))) rotate(45deg)"
 			></span>
 		</span>
 	{/if}

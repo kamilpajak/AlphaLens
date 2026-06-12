@@ -18,6 +18,7 @@
 	// aria-describedby link from the focusable trigger to the tooltip.
 
 	import type { Snippet } from 'svelte';
+	import { clampToViewport } from '$lib/actions/clampToViewport';
 
 	interface Props {
 		term: string;
@@ -46,12 +47,14 @@
 	data-testid="chip-tip"
 	data-term={term}
 	aria-describedby={tooltipId}
+	use:clampToViewport
 >
 	{@render chip()}
 
 	<span
 		id={tooltipId}
-		class="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover/chip:opacity-100 group-focus-within/chip:opacity-100"
+		class="pointer-events-none absolute bottom-full left-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover/chip:opacity-100 group-focus-within/chip:opacity-100"
+		style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"
 		role="tooltip"
 	>
 		<span class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl">
@@ -61,7 +64,8 @@
 			<span class="block">{body}</span>
 		</span>
 		<span
-			class="absolute left-1/2 -translate-x-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1 rotate-45"
+			class="absolute left-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1"
+			style="transform: translateX(calc(-50% + var(--tt-arrow, 0px))) rotate(45deg)"
 		></span>
 	</span>
 </span>
