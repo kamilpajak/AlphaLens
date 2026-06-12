@@ -108,6 +108,15 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     # catalysts; the SPA evidence panel renders the dict inline when present.
     "brief_template_id",
     "brief_template_facts",
+    # Post-legacy extension (2026-06-12, card PR-2): Buffett quantitative delta
+    # — cheap numerics + 0-100 quality composite, all nullable, precomputed in
+    # the pipeline score stage. Display-only; the qualitative verdict is a later PR.
+    "buffett_owner_earnings_yield_pct",
+    "buffett_roic_latest",
+    "buffett_roic_3y_avg",
+    "buffett_margin_of_safety_pct",
+    "buffett_data_coverage",
+    "buffett_quality_score",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.

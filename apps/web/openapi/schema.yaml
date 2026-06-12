@@ -597,6 +597,30 @@ components:
           maximum: 9223372036854775807
           minimum: -9223372036854775808
           format: int64
+        buffett_owner_earnings_yield_pct:
+          type: number
+          format: double
+          nullable: true
+        buffett_roic_latest:
+          type: number
+          format: double
+          nullable: true
+        buffett_roic_3y_avg:
+          type: number
+          format: double
+          nullable: true
+        buffett_margin_of_safety_pct:
+          type: number
+          format: double
+          nullable: true
+        buffett_data_coverage:
+          type: number
+          format: double
+          nullable: true
+        buffett_quality_score:
+          type: number
+          format: double
+          nullable: true
         also_in_themes: {}
         rank_in_day:
           type: integer

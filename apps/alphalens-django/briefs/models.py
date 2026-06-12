@@ -89,6 +89,17 @@ class Brief(models.Model):
     roe_pct = models.FloatField(null=True, blank=True)
     magic_formula_health_pass = models.BooleanField(default=False)
 
+    # Buffett quantitative delta (card PR-2). Cheap numerics precomputed in the
+    # pipeline score stage + a 0-100 quality composite; all nullable (a thin
+    # thematic name resolves few). The qualitative LLM verdict is NOT here (it
+    # arrives in a later PR). Auto-mapped by ingest + serializer (no allowlist).
+    buffett_owner_earnings_yield_pct = models.FloatField(null=True, blank=True)
+    buffett_roic_latest = models.FloatField(null=True, blank=True)
+    buffett_roic_3y_avg = models.FloatField(null=True, blank=True)
+    buffett_margin_of_safety_pct = models.FloatField(null=True, blank=True)
+    buffett_data_coverage = models.FloatField(null=True, blank=True)
+    buffett_quality_score = models.FloatField(null=True, blank=True)
+
     technical_rsi = models.FloatField(null=True, blank=True)
     technical_ma50_distance_pct = models.FloatField(null=True, blank=True)
     technical_atr_pct = models.FloatField(null=True, blank=True)

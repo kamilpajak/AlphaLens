@@ -291,6 +291,18 @@ export interface components {
             deep_drawdown_reversal?: boolean;
             /** Format: int64 */
             layer4_weighted_score?: number;
+            /** Format: double */
+            buffett_owner_earnings_yield_pct?: number | null;
+            /** Format: double */
+            buffett_roic_latest?: number | null;
+            /** Format: double */
+            buffett_roic_3y_avg?: number | null;
+            /** Format: double */
+            buffett_margin_of_safety_pct?: number | null;
+            /** Format: double */
+            buffett_data_coverage?: number | null;
+            /** Format: double */
+            buffett_quality_score?: number | null;
             also_in_themes?: unknown;
             /** Format: int64 */
             rank_in_day?: number | null;

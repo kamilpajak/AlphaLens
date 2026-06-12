@@ -68,6 +68,14 @@ export interface Candidate {
 	magic_formula_cohort_n: number | null;
 	deep_drawdown_reversal: boolean | null;
 	layer4_weighted_score: number | null;
+	// Buffett quantitative delta (card PR-2) — cheap numerics + 0-100 quality
+	// composite, precomputed in the pipeline; display-only. All nullable.
+	buffett_owner_earnings_yield_pct: number | null;
+	buffett_roic_latest: number | null;
+	buffett_roic_3y_avg: number | null;
+	buffett_margin_of_safety_pct: number | null;
+	buffett_data_coverage: number | null;
+	buffett_quality_score: number | null;
 	also_in_themes: string[];
 	rank_in_day: number | null;
 	cohort_size_in_day: number | null;

@@ -1,6 +1,15 @@
 <script lang="ts">
 	import type { Candidate } from '$lib/types';
-	import { fmtUsdCompact, fmtPct, fmtNum, fmtPctile, fmtDate, confidenceTone, confidenceLabel } from '$lib/format';
+	import {
+		fmtUsdCompact,
+		fmtPct,
+		fmtNum,
+		fmtPctile,
+		fmtDate,
+		confidenceTone,
+		confidenceLabel,
+		buffettTone
+	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
@@ -28,6 +37,25 @@
 	const confTone = $derived(confidenceTone(c.llm_confidence));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
+
+	// Buffett quality chip: a single 0-100 token in the meta bar, tone by score,
+	// dimmed when fundamentals coverage is thin (< 0.5). The chip is hidden
+	// entirely when the score is null so a no-Buffett day reads identically.
+	const buffScore = $derived(
+		c.buffett_quality_score != null ? Math.round(c.buffett_quality_score) : null
+	);
+	const buffTone = $derived(buffettTone(c.buffett_quality_score));
+	const buffLowCov = $derived(c.buffett_data_coverage != null && c.buffett_data_coverage < 0.5);
+	const buffCovN = $derived(
+		c.buffett_data_coverage != null ? Math.round(c.buffett_data_coverage * 6) : null
+	);
+	const buffHover = $derived(
+		`owner-earnings yield ${fmtPct(c.buffett_owner_earnings_yield_pct)} · ` +
+			`ROIC 3y ${fmtPct(c.buffett_roic_3y_avg)} · ` +
+			`margin of safety ${fmtPct(c.buffett_margin_of_safety_pct)} · ` +
+			`coverage ${buffCovN ?? '—'}/6` +
+			(buffLowCov ? ' — thin data, score down-weighted' : '')
+	);
 </script>
 
 <article
@@ -117,6 +145,27 @@
 				<span class="text-violet font-bold lowercase">{c.catalyst_event_type ?? '—'}</span>
 				<span class="text-fg-muted">/ {fmtNum(c.catalyst_strength, 2)}</span>
 			</span>
+			{#if buffScore !== null}
+				<ChipTip term="buffett quality" body={buffHover}>
+					{#snippet chip()}
+						<span
+							class="text-fg-muted whitespace-nowrap cursor-help"
+							class:opacity-60={buffLowCov}
+							class:underline={buffLowCov}
+							class:decoration-dashed={buffLowCov}
+							class:underline-offset-2={buffLowCov}
+						>
+							buffett
+							<span
+								class="font-bold normal-case"
+								class:text-green={buffTone === 'green'}
+								class:text-amber={buffTone === 'amber'}
+								class:text-fg-muted={buffTone === 'muted'}>{buffScore}/100</span
+							>
+						</span>
+					{/snippet}
+				</ChipTip>
+			{/if}
 		</div>
 	</div>
 
