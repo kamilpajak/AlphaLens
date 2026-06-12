@@ -72,6 +72,60 @@ def _format_template_facts_block(facts: dict) -> str:
     )
 
 
+# The cheap Buffett durability facts (already on the scored frame via
+# quant_enrichment.enrich) injected so the bear case can see business quality —
+# the axis the brief otherwise lacks (it only sees relative value + momentum +
+# insider flow). The qualitative moat/trend/candor verdict is deliberately NOT
+# here: it lives in the card drawer and is unvalidated until Buffett×EDGE.
+_BUFFETT_DURABILITY_KEYS = (
+    "buffett_roic_latest",
+    "buffett_roic_3y_avg",
+    "buffett_owner_earnings_yield_pct",
+    "buffett_margin_of_safety_pct",
+)
+
+
+def _has_durability(facts: dict) -> bool:
+    return any(facts.get(k) is not None for k in _BUFFETT_DURABILITY_KEYS)
+
+
+def _format_durability_line(facts: dict) -> str:
+    """One labelled durability line, or "" when no Buffett quant resolved.
+
+    Conditional so a name with no Buffett data yields a byte-identical prompt
+    (golden-cassette safe). Numbers are formatted here in Python (doctrine);
+    absent sub-fields inside a present block render as "n/a".
+    """
+    if not _has_durability(facts):
+        return ""
+    return (
+        "- durability (Buffett quant): "
+        f"ROIC {_format_num(facts.get('buffett_roic_latest'), '.1f')}%"
+        f" (3y avg {_format_num(facts.get('buffett_roic_3y_avg'), '.1f')}%),"
+        f" owner-earnings yield {_format_num(facts.get('buffett_owner_earnings_yield_pct'), '.1f')}%,"
+        f" DCF margin of safety {_format_num(facts.get('buffett_margin_of_safety_pct'), '.1f')}%\n"
+    )
+
+
+# Permissive (never mandatory) bear-case guidance for the durability facts.
+# Injected ONLY when the durability block is present, so the prompt — and thus
+# the cassette key — is unchanged for names with no Buffett data.
+_DURABILITY_CONSTRAINT = (
+    "- A durability (Buffett quant) line may appear in <facts>. When it does and "
+    "it is WEAK — trailing ROIC below its 3-year average (eroding capital "
+    "efficiency), a negative DCF margin of safety (price above a conservative "
+    "intrinsic value), or a low/negative owner-earnings yield — you MAY cite it as "
+    "a business-durability risk in bear_summary (and as a clean exit trigger in "
+    "catalyst_failure_exit). It is ONE admissible risk source, never mandatory: do "
+    "NOT invent a durability concern when the line is absent or healthy, and never "
+    "list missing data as a risk.\n"
+)
+
+
+def _format_durability_constraint(facts: dict) -> str:
+    return _DURABILITY_CONSTRAINT if _has_durability(facts) else ""
+
+
 def _format_facts_block(facts: dict) -> str:
     """Render the injected facts as a stable, key=value block.
 
@@ -117,6 +171,7 @@ def _format_facts_block(facts: dict) -> str:
         f" FCF margin {_format_num(facts.get('valuation_fcf_margin'), '.2f')},"
         f" composite sector pctile"
         f" {_format_pctile(facts.get('valuation_composite_sector_percentile'))}\n"
+        f"{_format_durability_line(facts)}"
         f"- fundamentals freshness: {age_str} since last filing\n"
         f"- technicals: {facts.get('technicals_summary_str', 'n/a')}\n"
         f"- 52w high distance: {_format_num(facts.get('technical_pct_off_52w_high'), '.1f')}%,"
@@ -170,7 +225,7 @@ CONSTRAINTS
 - If a catalyst (triggering event url/title) is provided, reference it
   in the supply_chain_reasoning as the trigger that surfaced this
   candidate. Cite the event factually; do NOT extrapolate market reaction.
-"""
+{durability_constraint}"""
 
 
 _FLASH_TEMPLATE = """\
@@ -192,7 +247,7 @@ Do NOT label large 52w drawdown as "cheap" or "on sale" — it is a
 momentum laggard signal per academic literature, not a bargain. Do NOT
 speculate on next_earnings_date outcomes. If catalyst event provided,
 reference it factually as the trigger.
-"""
+{durability_constraint}"""
 
 
 def build_pro_prompt(facts: dict) -> str:
@@ -200,6 +255,7 @@ def build_pro_prompt(facts: dict) -> str:
     return _PRO_TEMPLATE.format(
         facts_block=_format_facts_block(facts),
         template_facts_block=_format_template_facts_block(facts),
+        durability_constraint=_format_durability_constraint(facts),
     )
 
 
@@ -208,6 +264,7 @@ def build_flash_prompt(facts: dict) -> str:
     return _FLASH_TEMPLATE.format(
         facts_block=_format_facts_block(facts),
         template_facts_block=_format_template_facts_block(facts),
+        durability_constraint=_format_durability_constraint(facts),
     )
 
 

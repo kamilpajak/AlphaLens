@@ -26,6 +26,56 @@ def _sample_facts():
     }
 
 
+def _sample_facts_with_buffett():
+    facts = _sample_facts()
+    facts.update(
+        {
+            "buffett_roic_latest": 8.0,
+            "buffett_roic_3y_avg": 22.0,
+            "buffett_owner_earnings_yield_pct": 1.5,
+            "buffett_margin_of_safety_pct": -40.0,
+        }
+    )
+    return facts
+
+
+class TestBuffettDurabilityFacts(unittest.TestCase):
+    """The cheap Buffett durability facts (ROIC / owner-earnings yield / DCF
+    margin of safety) are injected so the bear case can cite business-durability
+    risk — but ONLY when present, and the qualitative moat/trend/candor verdict
+    is NEVER fed in (that stays in the drawer, unvalidated until Buffett×EDGE).
+    The block + its constraint are conditional so a name with no Buffett data
+    yields a byte-identical prompt (golden-cassette safe)."""
+
+    def test_durability_block_and_constraint_appear_when_present(self):
+        for build in (prompts.build_pro_prompt, prompts.build_flash_prompt):
+            p = build(_sample_facts_with_buffett())
+            self.assertIn("durability (Buffett quant)", p)
+            self.assertIn("ROIC 8.0%", p)
+            self.assertIn("3y avg 22.0%", p)
+            self.assertIn("DCF margin of safety -40.0%", p)
+            self.assertIn("durability", p.lower())
+
+    def test_absent_when_no_buffett_facts_keeps_prompt_clean(self):
+        # The existing no-Buffett sample must NOT gain the durability block or
+        # constraint — keeps the golden brief cassettes valid (the fixture scored
+        # frame has no buffett_* columns, so the prompt stays byte-identical).
+        for build in (prompts.build_pro_prompt, prompts.build_flash_prompt):
+            p = build(_sample_facts())
+            self.assertNotIn("durability (Buffett quant)", p)
+            self.assertNotIn("Buffett quant", p)
+
+    def test_qualitative_verdict_never_injected(self):
+        # Doctrine: the LLM moat/trend/candor verdict must NOT shape the brief
+        # narrative (it lives in the drawer; unvalidated until Buffett×EDGE).
+        facts = _sample_facts_with_buffett()
+        facts.update({"buffett_moat_type": "brand", "buffett_moat_trend": "narrowing"})
+        for build in (prompts.build_pro_prompt, prompts.build_flash_prompt):
+            p = build(facts)
+            self.assertNotIn("moat", p.lower())
+            self.assertNotIn("narrowing", p.lower())
+
+
 class TestProPrompt(unittest.TestCase):
     def test_contains_facts_delimiter(self):
         p = prompts.build_pro_prompt(_sample_facts())
