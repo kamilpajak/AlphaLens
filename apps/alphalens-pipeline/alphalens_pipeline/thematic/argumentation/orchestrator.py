@@ -117,6 +117,13 @@ _BRIEF_NUMERIC_FIELDS = (
     "technical_pct_off_52w_low",
     "technical_ma200_distance_pct",
     "technical_ma200_slope_pct_per_day",
+    # Cheap Buffett durability facts (card surfacing PRs). Already on the scored
+    # frame via quant_enrichment.enrich; fed into the brief prompt so the bear
+    # case can cite business-quality risk. The qualitative verdict is NOT here.
+    "buffett_roic_latest",
+    "buffett_roic_3y_avg",
+    "buffett_owner_earnings_yield_pct",
+    "buffett_margin_of_safety_pct",
 )
 
 

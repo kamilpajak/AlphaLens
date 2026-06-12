@@ -303,5 +303,46 @@ class TestRankInDayColumn(unittest.TestCase):
         self.assertEqual(out.iloc[0]["rank_in_day"], 1)
 
 
+class TestSortKeyBuffettLock(unittest.TestCase):
+    """ENFORCE the locked design decision: no Buffett term enters the brief sort
+    until the deferred Buffett×EDGE study validates it (N>=30 matured outcomes,
+    ~2026-09+). The qualitative LLM verdict NEVER enters the sort; the cheap
+    buffett_quality_score is display-only with hand-chosen, unvalidated weights.
+
+    Today the lock holds by OMISSION — this test converts it to an enforced
+    invariant so a future well-meaning PR cannot silently add a buffett_* tie-
+    break tuple without removing this guard (and writing the why-it-is-valid-now
+    rationale). See docs/research/buffett_card_surfacing_design_2026_06_12.md §5.
+    """
+
+    def test_no_buffett_key_in_sort_chain(self):
+        keys = [col for col, _asc, _default in orchestrator._BRIEF_SORT_KEYS]
+        offenders = [k for k in keys if k.startswith("buffett")]
+        self.assertEqual(
+            offenders,
+            [],
+            "A buffett_* key entered _BRIEF_SORT_KEYS — that is gated on the "
+            "deferred Buffett×EDGE validation; do not wire it before then.",
+        )
+
+    def test_sort_chain_is_exactly_the_documented_set(self):
+        # Pins the full chain so ANY addition (Buffett or otherwise) trips this
+        # test and forces a deliberate review, not a silent ordering change.
+        keys = tuple(col for col, _asc, _default in orchestrator._BRIEF_SORT_KEYS)
+        self.assertEqual(
+            keys,
+            (
+                "layer4_weighted_score",
+                "catalyst_strength",
+                "insider_score_usd",
+                "deep_drawdown_reversal",
+                "magic_formula_rank",
+                "n_gates_passed",
+                "llm_confidence",
+                "_template_facts_richness",
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
