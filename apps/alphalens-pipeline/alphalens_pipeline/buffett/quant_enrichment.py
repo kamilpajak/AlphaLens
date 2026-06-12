@@ -71,7 +71,10 @@ def _theme_by_ticker(frame: pd.DataFrame) -> dict[str, str]:
         return {}
     mapping: dict[str, str] = {}
     for ticker, theme in zip(frame["ticker"], frame["theme"], strict=False):
-        mapping.setdefault(str(ticker), "" if theme is None else str(theme))
+        # pd.isna guard so a pandas NaN theme becomes "" rather than the literal
+        # string "nan" leaking into the panel's theme metadata.
+        resolved = "" if theme is None or pd.isna(theme) else str(theme)
+        mapping.setdefault(str(ticker), resolved)
     return mapping
 
 
@@ -100,8 +103,14 @@ def enrich(frame: pd.DataFrame, *, asof: dt.date, panel_fn: PanelFn | None = Non
         panel = _safe_panel(fn, ticker, theme_by_ticker.get(ticker, ""), asof)
         per_ticker[ticker] = _columns_for(panel)
 
+    # Explicit float64 (None -> NaN) so an all-None column from the fail-soft
+    # degraded path keeps the SAME dtype as the empty-frame branch above. Without
+    # the dtype pin a list of all-None infers object dtype, breaking the
+    # "stable schema day to day" guarantee + any float-typed downstream reader.
     for col in BUFFETT_COLUMNS:
-        out[col] = [per_ticker[t][col] for t in tickers]
+        out[col] = pd.Series(
+            [per_ticker[t][col] for t in tickers], index=out.index, dtype="float64"
+        )
     return out
 
 

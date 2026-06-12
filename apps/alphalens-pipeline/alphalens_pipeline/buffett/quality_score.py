@@ -47,6 +47,13 @@ _CLIP_MARGIN_OF_SAFETY_PCT = 50.0
 
 # Coverage shrink: multiplier = ``_COVERAGE_BASE + (1 - _COVERAGE_BASE) * cov``.
 # At full coverage the composite is unchanged; at zero coverage it is halved.
+#
+# Deliberate: ``data_coverage`` is the panel's full 6-field basket fraction, but
+# the score reads only 3 of those fields. A name that resolved only ROIC through
+# a sparse EDGAR filing is therefore shrunk the same as one that missed OE-yield
+# for the same reason — thin data should not pass a quality screen that a fully-
+# covered name survives. Tuning the basket to the 3 scoring fields is deferred to
+# the Buffett×EDGE calibration (this score is display-only until then).
 _COVERAGE_BASE = 0.5
 
 

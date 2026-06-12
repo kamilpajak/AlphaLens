@@ -108,6 +108,23 @@ class TestEnrich(unittest.TestCase):
         row = out.iloc[0]
         for col in _BUFFETT_COLUMNS:
             self.assertTrue(pd.isna(row[col]), f"{col} should be NA for an absent panel")
+            # All-None columns must stay float64 (NaN), matching the empty-frame
+            # path — an object-dtype column would break schema stability + any
+            # float-typed downstream reader.
+            self.assertEqual(out[col].dtype, "float64", f"{col} dtype drifted to object")
+
+    def test_nan_theme_does_not_leak_as_string(self) -> None:
+        # A pandas NaN in the theme column must resolve to "" (not "nan") when
+        # the enrichment threads the theme into compute_panel.
+        seen_themes: list[str] = []
+
+        def capture(ticker: str, theme: str, asof: dt.date) -> BuffettPanel:
+            seen_themes.append(theme)
+            return _panel(ticker, owner_earnings_yield_pct=5.0, data_coverage=0.5)
+
+        frame = pd.DataFrame({"ticker": ["AAA"], "theme": [float("nan")]})
+        quant_enrichment.enrich(frame, asof=ASOF, panel_fn=capture)
+        self.assertEqual(seen_themes, [""])
 
     def test_panel_fn_raising_is_failsoft(self) -> None:
         frame = pd.DataFrame({"ticker": ["AAA", "BBB"], "theme": ["t1", "t2"]})
