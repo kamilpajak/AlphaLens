@@ -8,13 +8,19 @@
 		fmtDate,
 		confidenceTone,
 		confidenceLabel,
-		buffettTone
+		buffettTone,
+		moatTone,
+		moatTrendTone,
+		candorTone,
+		understoodTone,
+		understoodLabel
 	} from '$lib/format';
-	import { ExternalLink, Sparkle } from 'lucide-svelte';
+	import { ExternalLink, Sparkle, ChevronRight } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
+	import BuffettPillar from './BuffettPillar.svelte';
 	import TradeSetup from './TradeSetup.svelte';
 	import TemplateFacts from './TemplateFacts.svelte';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
@@ -63,6 +69,45 @@
 					? ' — thin data, score down-weighted'
 					: '')
 	);
+
+	// Buffett deep-read drawer (collapsed accordion): the qualitative layer —
+	// four pillar badges (moat / trend / candor / understood) + the LLM rationale.
+	// Only offered when the qual layer ran for this name (some field present);
+	// a name with no fetchable 10-K simply has no drawer.
+	let buffOpen = $state(false);
+	const hasBuffQual = $derived(
+		!!c.buffett_moat_type ||
+			!!c.buffett_qualitative_rationale ||
+			c.buffett_understandable != null ||
+			!!c.buffett_moat_trend ||
+			!!c.buffett_management_candor
+	);
+	const buffPillars = $derived([
+		{
+			label: 'moat',
+			value: c.buffett_moat_type || '—',
+			tone: moatTone(c.buffett_moat_type),
+			body: 'The dominant durable competitive advantage the LLM could evidence from the 10-K (brand / cost / switching-cost / network / regulatory / intangible / none).'
+		},
+		{
+			label: 'trend',
+			value: c.buffett_moat_trend || '—',
+			tone: moatTrendTone(c.buffett_moat_trend),
+			body: 'Whether that advantage looks to be widening, stable, narrowing, or unclear — judged from the risk-factor evolution + margin/ROIC trend.'
+		},
+		{
+			label: 'candor',
+			value: c.buffett_management_candor || '—',
+			tone: candorTone(c.buffett_management_candor),
+			body: "Reading of the MD&A's tone: candid about problems, mixed, promotional, or too little to tell."
+		},
+		{
+			label: 'understood',
+			value: understoodLabel(c.buffett_understandable),
+			tone: understoodTone(c.buffett_understandable),
+			body: 'Could a generalist clearly explain what the company sells and how it earns money from Item 1 — or is it "too hard"?'
+		}
+	]);
 </script>
 
 <article
@@ -341,6 +386,53 @@
 					</dl>
 				</div>
 			</div>
+
+			<!-- Buffett deep-read: collapsed qualitative drawer (card PR-4). The
+			     expensive moat / trend / candor classification + the LLM rationale,
+			     hidden by default so it costs zero resting vertical space. Only
+			     offered when the qualitative layer ran for this name. -->
+			{#if hasBuffQual}
+				<div class="px-4 sm:px-5 py-3 border-t border-grid">
+					<button
+						type="button"
+						class="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-cyan hover:text-amber transition-colors"
+						aria-expanded={buffOpen}
+						onclick={() => (buffOpen = !buffOpen)}
+					>
+						<ChevronRight class="size-3 transition-transform {buffOpen ? 'rotate-90' : ''}" />
+						buffett.deep-read
+					</button>
+					{#if buffOpen}
+						<div class="mt-3 space-y-3">
+							<div class="flex flex-wrap gap-2">
+								{#each buffPillars as pillar (pillar.label)}
+									<BuffettPillar
+										label={pillar.label}
+										value={pillar.value}
+										tone={pillar.tone}
+										body={pillar.body}
+									/>
+								{/each}
+							</div>
+							{#if c.buffett_qualitative_rationale}
+								<blockquote class="border-l-2 border-violet pl-4">
+									<p class="text-fg-dim text-xs leading-relaxed">
+										{c.buffett_qualitative_rationale}
+									</p>
+								</blockquote>
+							{/if}
+							<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-fg-muted">
+								{#if c.buffett_used_scuttlebutt}
+									<span class="text-amber whitespace-nowrap">scuttlebutt: web-grounded, unverified</span>
+								{/if}
+								{#if c.buffett_qual_computed_at}
+									<span class="whitespace-nowrap">classified {fmtDate(c.buffett_qual_computed_at)}</span>
+								{/if}
+							</div>
+						</div>
+					{/if}
+				</div>
+			{/if}
 		</div>
 
 		<!-- RIGHT column -->

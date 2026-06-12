@@ -67,6 +67,55 @@ export function buffettTone(score: number | null | undefined): BuffettTone {
 	return 'muted';
 }
 
+// --- Buffett deep-read drawer pillars (card PR-4) ---------------------------
+// Map each qualitative LLM enum / bool to a badge tone. Absent values (the ""
+// enums from the no-10-K path, or a null `understandable`) read as `muted` —
+// never a false verdict.
+export type PillarTone = 'good' | 'mixed' | 'bad' | 'muted';
+
+export function moatTone(moatType: string | null | undefined): PillarTone {
+	if (!moatType) return 'muted';
+	return moatType === 'none' ? 'bad' : 'good';
+}
+
+export function moatTrendTone(trend: string | null | undefined): PillarTone {
+	switch (trend) {
+		case 'widening':
+			return 'good';
+		case 'stable':
+			return 'mixed';
+		case 'narrowing':
+			return 'bad';
+		default:
+			return 'muted'; // unclear / "" / null
+	}
+}
+
+export function candorTone(candor: string | null | undefined): PillarTone {
+	switch (candor) {
+		case 'candid':
+			return 'good';
+		case 'mixed':
+			return 'mixed';
+		case 'promotional':
+			return 'bad';
+		default:
+			return 'muted'; // unclear / "" / null
+	}
+}
+
+export function understoodTone(understandable: boolean | null | undefined): PillarTone {
+	if (understandable === true) return 'good';
+	if (understandable === false) return 'bad';
+	return 'muted';
+}
+
+export function understoodLabel(understandable: boolean | null | undefined): string {
+	if (understandable === true) return 'yes';
+	if (understandable === false) return 'no';
+	return '—';
+}
+
 export function technicalsTrend(slope: number | null | undefined): 'up' | 'down' | 'flat' {
 	if (slope === null || slope === undefined || !Number.isFinite(slope)) return 'flat';
 	if (slope > 0.05) return 'up';
