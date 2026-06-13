@@ -37,6 +37,7 @@ from briefs.api.pagination import (
     envelope,
 )
 from briefs.api.serializers import (
+    CandidateDetailSerializer,
     CandidateSerializer,
     DayBriefSerializer,
     DayMetaSerializer,
@@ -227,13 +228,15 @@ class CandidateViewSet(viewsets.ViewSet):
     The router pattern in ``urls.py`` is custom for this reason.
     """
 
-    @extend_schema(responses=CandidateSerializer)
+    @extend_schema(responses=CandidateDetailSerializer)
     def retrieve_compound(self, request: Request, date: str, ticker: str) -> Response:
         parsed = _date_from_path(date, what="candidate")
         brief = Brief.objects.filter(date=parsed, ticker=ticker.upper()).first()
         if brief is None:
             raise NotFound(f"no candidate for date={parsed.isoformat()} ticker={ticker.upper()}")
-        return Response(CandidateSerializer(brief).data)
+        # Detail endpoint serves the heavy expert_assessments blob; the bulk list
+        # contexts use the light CandidateSerializer (no blob).
+        return Response(CandidateDetailSerializer(brief).data)
 
 
 @extend_schema_view(history=extend_schema(parameters=[TICKER_PATH]))

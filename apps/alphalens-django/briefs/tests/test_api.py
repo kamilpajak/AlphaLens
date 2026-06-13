@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 from rest_framework.test import APIClient
 
+from briefs.api.serializers import CandidateDetailSerializer, CandidateSerializer
 from briefs.ingest.parquet import rebuild_from_parquet
 
 
@@ -268,6 +269,64 @@ class TestOpenAPISchema:
             "/v1/stats",
         ]:
             assert path in text, f"missing path in OpenAPI: {path}"
+
+
+def _buffett_fixture(tmp_path: Path) -> None:
+    """One day, one candidate carrying a Buffett qualitative value so the assembled
+    expert_assessments blob is a real (non-null) dict."""
+    _write_parquet(
+        tmp_path,
+        "2026-05-22",
+        [
+            {
+                "ticker": "NVDA",
+                "theme": "ai-infra",
+                "layer4_weighted_score": 15,
+                "buffett_moat_type": "brand",
+                "buffett_understandable": True,
+                "buffett_qual_config_version": "buffett-pre-registry-v0",
+            }
+        ],
+    )
+    rebuild_from_parquet(briefs_dir=tmp_path)
+
+
+class TestWirePayloadSplit:
+    """PR-4: the heavy expert_assessments blob ships ONLY on the single-candidate
+    detail endpoint, never in the bulk candidate lists."""
+
+    def test_serializers_split_expert_assessments(self):
+        # Enforcement at the serializer level (not advisory): the bulk list
+        # serializer drops the blob; the detail serializer keeps it.
+        assert "expert_assessments" not in CandidateSerializer().fields
+        assert "expert_assessments" in CandidateDetailSerializer().fields
+        # The split is the ONLY difference — same field set otherwise.
+        assert set(CandidateDetailSerializer().fields) - set(CandidateSerializer().fields) == {
+            "expert_assessments"
+        }
+
+    @pytest.mark.django_db
+    def test_detail_endpoint_includes_blob(self, client, tmp_path):
+        _buffett_fixture(tmp_path)
+        body = client.get("/v1/candidates/2026-05-22/NVDA").json()
+        assert "expert_assessments" in body
+        assert body["expert_assessments"]["buffett"]["buffett_moat_type"] == "brand"
+
+    @pytest.mark.django_db
+    def test_bulk_lists_omit_blob(self, client, tmp_path):
+        _buffett_fixture(tmp_path)
+        # Day brief, per-day candidates, per-theme candidates, ticker history.
+        day = client.get("/v1/days/2026-05-22").json()
+        assert "expert_assessments" not in day["candidates"][0]
+        for url in (
+            "/v1/days/2026-05-22/candidates",
+            "/v1/themes/ai-infra/candidates",
+            "/v1/tickers/NVDA/history",
+        ):
+            cand = client.get(url).json()["data"][0]
+            assert "expert_assessments" not in cand, url
+        # But the flat buffett_* fields DO still ship in the bulk lists (PR-5 drops them).
+        assert day["candidates"][0]["buffett_moat_type"] == "brand"
 
 
 # silence linter when datetime isn't used in this file path-wise
