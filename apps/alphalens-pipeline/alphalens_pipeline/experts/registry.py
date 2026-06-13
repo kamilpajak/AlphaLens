@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from alphalens_pipeline.experts.base import Expert
 from alphalens_pipeline.experts.buffett.expert import BuffettExpert
+from alphalens_pipeline.experts.oneil.expert import ONeilExpert
 
 _REGISTRY: dict[str, Expert] = {}
 
@@ -40,5 +41,6 @@ def expert_ids() -> tuple[str, ...]:
 
 
 _register(BuffettExpert())
+_register(ONeilExpert())
 
 __all__ = ["all_experts", "expert_ids", "get_expert"]

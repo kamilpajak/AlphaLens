@@ -429,9 +429,19 @@ def score(
     # display-only in v1 (it does NOT touch the brief sort). Lazy import keeps the
     # frequent-cron `alphalens` startup cheap. Fail-soft: any wiring failure leaves
     # the columns absent rather than aborting the score stage.
-    from alphalens_pipeline.experts.buffett import quant_enrichment
+    from alphalens_pipeline.experts.buffett import quant_enrichment as buffett_quant_enrichment
 
-    enriched = quant_enrichment.enrich(enriched, asof=target)
+    enriched = buffett_quant_enrichment.enrich(enriched, asof=target)
+
+    # O'Neil momentum/technical numerics (PR-7). Runs AFTER score_candidates (so
+    # the technical_* columns it reuses for N + L are on the frame) and after the
+    # Buffett pass (so the shared companyfacts are already on disk -> O'Neil's
+    # preload is a pure cache hit). Stamps eight oneil_* columns; display-only,
+    # present-but-unread until PR-8 surfaces them. Same lazy-import + fail-soft
+    # contract as the Buffett step.
+    from alphalens_pipeline.experts.oneil import quant_enrichment as oneil_quant_enrichment
+
+    enriched = oneil_quant_enrichment.enrich(enriched, asof=target)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{target.isoformat()}.parquet"

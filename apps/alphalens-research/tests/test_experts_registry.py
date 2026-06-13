@@ -26,7 +26,7 @@ class TestExpertRegistry(unittest.TestCase):
 
     def test_get_expert_unknown_raises(self) -> None:
         with self.assertRaises(KeyError):
-            get_expert("oneil")
+            get_expert("nonexistent_expert")
 
 
 class TestNoStaleBuffettImportPaths(unittest.TestCase):

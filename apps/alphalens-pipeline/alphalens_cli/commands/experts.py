@@ -73,6 +73,7 @@ def enrich_command(
     # Lazy imports — keep the frequent-cron `alphalens` startup cheap.
     from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
     from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
+    from alphalens_pipeline.experts.base import QualEnrichExpert
     from alphalens_pipeline.experts.enrich import enrich_briefs
     from alphalens_pipeline.experts.registry import all_experts, get_expert
     from alphalens_pipeline.thematic.verification.mcap_filter import fetch_mcap
@@ -80,12 +81,24 @@ def enrich_command(
     from alphalens_cli.commands.buffett import _build_exec_comp_fn
 
     if all_experts_flag:
+        # --all enriches every QUAL-capable expert; a numeric-only expert (O'Neil)
+        # is simply skipped inside enrich_briefs — no error, its numerics are
+        # stamped at the score stage, not here.
         experts = all_experts()
     else:
         try:
-            experts = (get_expert(expert),)  # type: ignore[arg-type]  # guarded non-None above
+            chosen = get_expert(expert)  # type: ignore[arg-type]  # guarded non-None above
         except KeyError as exc:
             raise typer.BadParameter(f"unknown expert id: {expert!r}") from exc
+        # A single numeric-only expert has no qualitative layer to eager-enrich;
+        # reject explicitly rather than silently no-op (its numerics ride the score
+        # stage). --all stays tolerant; this guard is for the targeted single case.
+        if not isinstance(chosen, QualEnrichExpert):
+            raise typer.BadParameter(
+                f"expert {expert!r} is numeric-only — it has no qualitative layer to "
+                f"enrich (its numerics are stamped at the score stage)"
+            )
+        experts = (chosen,)
 
     store = EdgarFundamentalsStore(with_prices=True)
     dividends_fn = get_default_yfinance_client().dividends
