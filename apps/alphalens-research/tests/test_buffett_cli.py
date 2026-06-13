@@ -23,7 +23,6 @@ import alphalens_pipeline.thematic.verification.tenk_grep as tenk_grep_mod
 from alphalens_cli.commands.buffett import _fmt_num, _format_rationale_block, _format_table
 from alphalens_cli.main import app
 from alphalens_pipeline.experts.buffett.comparison import BuffettPanel
-from alphalens_pipeline.experts.buffett.qual_enrichment import BUFFETT_QUAL_CONFIG_VERSION as _CV
 from alphalens_pipeline.experts.buffett.qualitative import QualitativeAssessment
 from alphalens_pipeline.experts.buffett.scuttlebutt import Scuttlebutt
 from typer.testing import CliRunner
@@ -432,105 +431,6 @@ class TestBuildExecCompFn(unittest.TestCase):
             result = fn("XYZ", _dt.date(2026, 6, 1))
         self.assertEqual(result.coverage, ExecCompCoverage.NOT_DISCLOSED)
         self.assertIsNone(result.peo_to_neo_ratio)
-
-
-class TestQualEnrichCommand(unittest.TestCase):
-    """`alphalens buffett qual-enrich <date>` stamps the seven qual columns into
-    the brief parquet and caches each result. All network seams patched: fixed
-    panels, synthetic 10-K, fixed assessment."""
-
-    def setUp(self):
-        self._runner = CliRunner()
-        self._orig_build = comparison_mod.build_comparison
-        self._orig_fetch = tenk_grep_mod.fetch_multi_year_10k_texts
-        self._orig_assess = qualitative_mod.assess_qualitative
-        comparison_mod.build_comparison = lambda *_a, **_k: [_panel("AAPL")]  # type: ignore[assignment]
-        tenk_grep_mod.fetch_multi_year_10k_texts = lambda **_k: [  # type: ignore[assignment]
-            ("2026-03-27", "Item 1. Business X. Item 1A. Risk Factors Y. Item 7. Z. Item 8. End")
-        ]
-        qualitative_mod.assess_qualitative = lambda **_k: QualitativeAssessment(  # type: ignore[assignment]
-            understandable=True,
-            moat_type="brand",
-            moat_trend="stable",
-            management_candor="candid",
-            rationale="durable franchise",
-        )
-
-    def tearDown(self):
-        comparison_mod.build_comparison = self._orig_build  # type: ignore[assignment]
-        tenk_grep_mod.fetch_multi_year_10k_texts = self._orig_fetch  # type: ignore[assignment]
-        qualitative_mod.assess_qualitative = self._orig_assess  # type: ignore[assignment]
-
-    def test_stamps_columns_and_caches(self):
-        import pandas as pd
-
-        with TemporaryDirectory() as tmp:
-            briefs = Path(tmp) / "briefs"
-            briefs.mkdir()
-            cache = Path(tmp) / "cache"
-            pd.DataFrame({"ticker": ["AAPL"], "theme": ["x"]}).to_parquet(
-                briefs / "2026-06-10.parquet", index=False
-            )
-            result = self._runner.invoke(
-                app,
-                [
-                    "buffett",
-                    "qual-enrich",
-                    "2026-06-10",
-                    "--briefs-dir",
-                    str(briefs),
-                    "--cache-dir",
-                    str(cache),
-                ],
-            )
-            self.assertEqual(result.exit_code, 0, result.output)
-            self.assertIn("classified 1", result.output)
-            out = pd.read_parquet(briefs / "2026-06-10.parquet")
-            self.assertEqual(out.iloc[0]["buffett_moat_type"], "brand")
-            self.assertEqual(out.iloc[0]["buffett_understandable"], True)
-            self.assertEqual(out.iloc[0]["buffett_qual_config_version"], _CV)
-            # The result was cached immutably under the config_version tier.
-            self.assertTrue((cache / _CV / "2026-06-10" / "AAPL.json").exists())
-
-    def test_bad_date_guard(self):
-        result = self._runner.invoke(app, ["buffett", "qual-enrich", "nope"])
-        self.assertNotEqual(result.exit_code, 0)
-
-
-class TestMigrateQualCacheCommand(unittest.TestCase):
-    """`alphalens buffett migrate-qual-cache` moves legacy untagged cache files
-    into the config_version tier (the deploy gate the thematic script runs)."""
-
-    def setUp(self):
-        self._runner = CliRunner()
-
-    def test_migrate_moves_legacy_files_to_version_tier(self):
-        import json as _json
-
-        with TemporaryDirectory() as tmp:
-            cache = Path(tmp)
-            legacy = cache / "2026-06-10"
-            legacy.mkdir(parents=True)
-            (legacy / "AAPL.json").write_text(
-                _json.dumps(
-                    {
-                        "moat_type": "brand",
-                        "moat_trend": "stable",
-                        "management_candor": "candid",
-                        "understandable": True,
-                        "rationale": "x",
-                        "used_scuttlebutt": False,
-                        "computed_at": "2026-06-11T00:00:00+00:00",
-                    }
-                )
-            )
-            result = self._runner.invoke(
-                app, ["buffett", "migrate-qual-cache", "--cache-dir", str(cache)]
-            )
-            self.assertEqual(result.exit_code, 0, result.output)
-            self.assertIn("moved 1", result.output)
-            self.assertTrue((cache / _CV / "2026-06-10" / "AAPL.json").exists())
-            self.assertFalse((legacy / "AAPL.json").exists())
 
 
 if __name__ == "__main__":

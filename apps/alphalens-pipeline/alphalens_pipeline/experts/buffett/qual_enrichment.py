@@ -79,10 +79,6 @@ DEFAULT_QUAL_CACHE_DIR = Path.home() / ".alphalens" / "buffett_qual"
 # file produced by a *different* prompt / model would be silently mislabeled v0.
 BUFFETT_QUAL_CONFIG_VERSION = "buffett-pre-registry-v0"
 
-# Default directory holding the daily thematic brief parquets (the file the qual
-# columns are stamped into).
-_DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
-
 # (panel, asof, scuttlebutt) -> QualitativeAssessment | None. The expensive op
 # (10-K fetch + LLM). ``None`` means "no 10-K to reason over" (skip, no cost);
 # an all-``None`` assessment means the LLM ran but classified nothing.
@@ -463,58 +459,6 @@ def assess_panel_qualitative(
     )
 
 
-def enrich_brief_parquet(
-    brief_date: dt.date,
-    *,
-    briefs_dir: Path | None = None,
-    store,
-    mcap_fn,
-    dividends_fn,
-    exec_comp_fn=None,
-    scuttlebutt: bool = False,
-    cache_dir: Path | None = None,
-    assess_one: AssessOne | None = None,
-) -> int:
-    """Compute eager (cached) qual for the brief's survivors + stamp 8 columns in place.
-
-    Builds one :class:`BuffettPanel` per brief candidate (the quant facts the qual
-    prompt injects), computes the cached qualitative records, then re-writes the
-    brief parquet with the eight qual columns merged by ticker. Returns the count
-    of names that resolved a real (non-empty) qualitative classification.
-
-    The same file is both the panel source (via ``build_comparison`` -> the brief
-    loader) and the stamp target — so the columns ride the existing brief-parquet
-    -> Django ingest rails. ``store`` / ``mcap_fn`` / ``dividends_fn`` are injected
-    exactly as for the lens; ``assess_one`` is injectable for tests.
-    """
-    from alphalens_pipeline.experts.buffett.comparison import build_comparison
-
-    resolved_dir = briefs_dir if briefs_dir is not None else _DEFAULT_BRIEFS_DIR
-    panels = build_comparison(
-        brief_date,
-        briefs_dir=resolved_dir,
-        store=store,
-        mcap_fn=mcap_fn,
-        dividends_fn=dividends_fn,
-        exec_comp_fn=exec_comp_fn,
-    )
-    records = enrich_qualitative(
-        panels,
-        asof=brief_date,
-        scuttlebutt=scuttlebutt,
-        cache_dir=cache_dir if cache_dir is not None else DEFAULT_QUAL_CACHE_DIR,
-        assess_one=assess_one,
-    )
-    by_ticker: dict[str, QualRecord | None] = {
-        panel.ticker.upper(): rec for panel, rec in zip(panels, records, strict=True)
-    }
-    path = Path(resolved_dir) / f"{brief_date.isoformat()}.parquet"
-    df = pd.read_parquet(path)
-    df = stamp_columns(df, by_ticker)
-    df.to_parquet(path, index=False)
-    return sum(1 for rec in records if rec is not None and _is_real(rec))
-
-
 def _build_scuttlebutt_client():
     """Build a PerplexityClient from PERPLEXITY_API_KEY, or ``None`` (fail-soft)."""
     import os
@@ -534,7 +478,6 @@ __all__ = [
     "QUAL_COLUMNS",
     "QualRecord",
     "assess_panel_qualitative",
-    "enrich_brief_parquet",
     "enrich_qualitative",
     "load_cache",
     "migrate_legacy_qual_cache",

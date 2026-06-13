@@ -267,20 +267,32 @@ class _FakeStore:
         return []
 
 
-class TestEnrichBriefParquet(unittest.TestCase):
-    def test_stamps_qual_columns_into_brief_parquet_in_place(self) -> None:
+class TestBuffettEnrichBriefFrame(unittest.TestCase):
+    """``BuffettExpert.enrich_brief_frame`` (the QualEnrichExpert capability) stamps
+    the eight qual columns into an in-memory frame and reuses the PR-0 cache."""
+
+    def _frame_and_dir(self, tmp):
+        from pathlib import Path
+
+        briefs = Path(tmp) / "briefs"
+        briefs.mkdir()
+        pd.DataFrame({"ticker": ["AAA", "BBB"], "theme": ["t1", "t2"]}).to_parquet(
+            briefs / f"{ASOF.isoformat()}.parquet", index=False
+        )
+        return pd.read_parquet(briefs / f"{ASOF.isoformat()}.parquet"), briefs
+
+    def test_stamps_eight_qual_columns(self) -> None:
         import tempfile
         from pathlib import Path
 
+        from alphalens_pipeline.experts.buffett.expert import BuffettExpert
+
         with tempfile.TemporaryDirectory() as tmp:
-            briefs = Path(tmp) / "briefs"
-            briefs.mkdir()
             cache = Path(tmp) / "cache"
-            pd.DataFrame({"ticker": ["AAA", "BBB"], "theme": ["t1", "t2"]}).to_parquet(
-                briefs / f"{ASOF.isoformat()}.parquet", index=False
-            )
+            df, briefs = self._frame_and_dir(tmp)
             assess_map = {"AAA": _assessment("brand"), "BBB": None}
-            n_real = qe.enrich_brief_parquet(
+            out, n_real = BuffettExpert().enrich_brief_frame(
+                df,
                 ASOF,
                 briefs_dir=briefs,
                 store=_FakeStore(),
@@ -289,7 +301,6 @@ class TestEnrichBriefParquet(unittest.TestCase):
                 cache_dir=cache,
                 assess_one=lambda panel, asof, scuttle: assess_map[panel.ticker.upper()],
             )
-            out = pd.read_parquet(briefs / f"{ASOF.isoformat()}.parquet")
             for col in _QUAL_COLUMNS:
                 self.assertIn(col, out.columns)
             a = out[out["ticker"] == "AAA"].iloc[0]
@@ -300,6 +311,39 @@ class TestEnrichBriefParquet(unittest.TestCase):
             self.assertTrue(pd.isna(b["buffett_moat_type"]))
             self.assertTrue(pd.isna(b["buffett_qual_config_version"]))
             self.assertEqual(n_real, 1)  # only AAA resolved a real classification
+
+    def test_uses_pr0_cache_verbatim(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from alphalens_pipeline.experts.buffett.expert import BuffettExpert
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "cache"
+            df, briefs = self._frame_and_dir(tmp)
+            calls: list[str] = []
+
+            def assess_one(panel, asof, scuttle):
+                calls.append(panel.ticker.upper())
+                return _assessment("brand")
+
+            kwargs = {
+                "briefs_dir": briefs,
+                "store": _FakeStore(),
+                "mcap_fn": lambda ticker, asof=None: None,
+                "dividends_fn": lambda ticker, asof=None: pd.Series(dtype="float64"),
+                "cache_dir": cache,
+                "assess_one": assess_one,
+            }
+            exp = BuffettExpert()
+            exp.enrich_brief_frame(df, ASOF, **kwargs)
+            self.assertEqual(sorted(calls), ["AAA", "BBB"])
+            # Warm second pass: the (config_version, date, ticker, scuttlebutt) cache
+            # short-circuits — assess_one is not re-called.
+            calls.clear()
+            out2, _ = exp.enrich_brief_frame(df, ASOF, **kwargs)
+            self.assertEqual(calls, [])
+            self.assertEqual(out2[out2["ticker"] == "AAA"].iloc[0]["buffett_moat_type"], "brand")
 
 
 class TestConfigVersionCache(unittest.TestCase):

@@ -17,8 +17,11 @@ shared contract is "column name -> scalar".
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from pathlib import Path
 from typing import Protocol, runtime_checkable
+
+import pandas as pd
 
 # A panel is a flat mapping of column name -> scalar (or None). Deliberately a
 # wide scalar union so a momentum expert (floats) and a quality expert (floats +
@@ -68,4 +71,41 @@ class Expert(Protocol):
         ...
 
 
-__all__ = ["Assessment", "Expert", "Panel"]
+@runtime_checkable
+class QualEnrichExpert(Protocol):
+    """OPTIONAL capability: an expert with an eager, cached qualitative layer that
+    stamps its columns into a daily brief frame.
+
+    The enrichment driver (:mod:`alphalens_pipeline.experts.enrich`) ``isinstance``-
+    checks for this Protocol and skips any expert that does not implement it (a
+    numeric-only expert such as O'Neil simply omits ``enrich_brief_frame`` -> not a
+    ``QualEnrichExpert`` -> no panel build / no LLM cost). Kept separate from the
+    core :class:`Expert` so the base interface stays minimal.
+    """
+
+    id: str
+
+    def enrich_brief_frame(
+        self,
+        df: pd.DataFrame,
+        brief_date: dt.date,
+        *,
+        briefs_dir: Path | None = None,
+        store: object,
+        mcap_fn: Callable[..., object],
+        dividends_fn: Callable[..., object],
+        exec_comp_fn: Callable[..., object] | None = None,
+        scuttlebutt: bool = False,
+        cache_dir: Path | None = None,
+    ) -> tuple[pd.DataFrame, int]:
+        """Stamp THIS expert's columns into ``df`` (returned, possibly a copy) and
+        report the count of names that resolved a real classification."""
+        ...
+
+    def migrate_qual_cache(self, cache_dir: Path | None = None) -> int:
+        """Relocate this expert's legacy cache into the versioned layout; return the
+        count moved (see the per-expert cache retrofit)."""
+        ...
+
+
+__all__ = ["Assessment", "Expert", "Panel", "QualEnrichExpert"]

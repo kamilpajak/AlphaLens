@@ -17,13 +17,12 @@ output (no GDELT padding pathology).
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 
+from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.thematic.sources.gdelt import clean_title
 
 logger = logging.getLogger(__name__)
@@ -53,18 +52,12 @@ def _clean_series(s: pd.Series) -> tuple[pd.Series, int]:
 
 def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
     """Write parquet via temp-file + os.replace so a crash mid-write can't
-    leave a half-written file in place of the source-of-truth original."""
-    # delete=False + manual replace: NamedTemporaryFile would unlink on close.
-    # Keep the temp file alongside the target so os.replace is intra-filesystem.
-    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    os.close(fd)
-    tmp_path = Path(tmp_name)
-    try:
-        df.to_parquet(tmp_path)
-        os.replace(tmp_path, path)
-    except Exception:
-        tmp_path.unlink(missing_ok=True)
-        raise
+    leave a half-written file in place of the source-of-truth original.
+
+    Delegates to the shared :func:`write_parquet_atomic`; no ``index`` argument so
+    the default-index bytes this writer has always produced are preserved exactly.
+    """
+    write_parquet_atomic(df, path)
 
 
 def clean_titles_in_parquet_dir(briefs_dir: Path, *, dry_run: bool = False) -> CleanResult:
