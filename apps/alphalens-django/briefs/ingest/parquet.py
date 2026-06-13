@@ -77,6 +77,9 @@ _OBJECT_JSON_FIELDS: frozenset[str] = frozenset({"brief_trade_setup", "brief_tem
 # test_expert_columns_match_frozen_buffett_tuple — the only cross-boundary drift
 # guard, since Django cannot import the pipeline. Adding O'Neil (PR-6) means adding
 # its id + columns here AND extending that pin in lockstep with the registry.
+# REMOVE in PR-5: once the pipeline emits the blob directly (and drops the flat
+# buffett_* columns), this map + coerce_expert_blob + the special-case in
+# _row_to_brief become dead and the ingest reads the blob column via coerce_json_obj.
 _EXPERT_COLUMNS: dict[str, tuple[str, ...]] = {
     "buffett": (
         "buffett_owner_earnings_yield_pct",

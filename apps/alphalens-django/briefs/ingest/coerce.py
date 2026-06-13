@@ -197,6 +197,14 @@ def coerce_expert_blob(row: pd.Series, column_names: tuple[str, ...]) -> dict[st
     (enums / text / config_version) becomes ``str | None``. Returns the dict, or
     ``None`` when NO column from the set is present (so a row with no expert data
     yields a JSON null rather than ``{}``).
+
+    INTENTIONAL: a row where the columns ARE present but every value resolves to
+    null (a fully-unclassified name — in production the pipeline always stamps all
+    columns, ``None`` where unavailable) yields a dict of all-null values, NOT
+    ``None``. That is honest — the expert *was assembled* and found nothing,
+    distinct from the expert being absent — and consumers treat an all-null
+    assessment the same as a missing one. Only a parquet with NO expert column at
+    all (pre-expert-era) produces a ``None`` blob.
     """
     out: dict[str, Any] = {}
     for col in column_names:
