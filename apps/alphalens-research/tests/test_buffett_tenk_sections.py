@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import unittest
 
-from alphalens_pipeline.buffett.tenk_sections import (
+from alphalens_pipeline.experts.buffett.tenk_sections import (
     TenKSections,
     split_10k_sections,
 )

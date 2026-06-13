@@ -27,14 +27,14 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
-from alphalens_pipeline.buffett.qualitative import (
+from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
+from alphalens_pipeline.experts.buffett.qualitative import (
     _QUALITATIVE_RESPONSE_SCHEMA,
     QualitativeAssessment,
     assess_qualitative,
     build_qualitative_prompt,
 )
-from alphalens_pipeline.buffett.tenk_sections import TenKSections
-from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
+from alphalens_pipeline.experts.buffett.tenk_sections import TenKSections
 
 _SECTIONS = TenKSections(
     item_1="We design and sell enterprise widgets with recurring software revenue.",

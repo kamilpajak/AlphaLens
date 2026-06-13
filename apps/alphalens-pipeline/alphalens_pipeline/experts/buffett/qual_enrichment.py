@@ -36,8 +36,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from alphalens_pipeline.buffett.comparison import BuffettPanel
-from alphalens_pipeline.buffett.qualitative import QualitativeAssessment
+from alphalens_pipeline.experts.buffett.comparison import BuffettPanel
+from alphalens_pipeline.experts.buffett.qualitative import QualitativeAssessment
 
 logger = logging.getLogger(__name__)
 
@@ -421,9 +421,9 @@ def assess_panel_qualitative(
     block; ``None`` skips it. Imports are by module attribute so the CLI tests'
     monkeypatches on ``tenk_grep`` / ``qualitative`` still apply.
     """
-    from alphalens_pipeline.buffett import qualitative as qualitative_mod
-    from alphalens_pipeline.buffett import scuttlebutt as scuttlebutt_mod
-    from alphalens_pipeline.buffett.tenk_sections import split_10k_sections
+    from alphalens_pipeline.experts.buffett import qualitative as qualitative_mod
+    from alphalens_pipeline.experts.buffett import scuttlebutt as scuttlebutt_mod
+    from alphalens_pipeline.experts.buffett.tenk_sections import split_10k_sections
     from alphalens_pipeline.thematic.verification import tenk_grep
 
     try:
@@ -487,7 +487,7 @@ def enrich_brief_parquet(
     -> Django ingest rails. ``store`` / ``mcap_fn`` / ``dividends_fn`` are injected
     exactly as for the lens; ``assess_one`` is injectable for tests.
     """
-    from alphalens_pipeline.buffett.comparison import build_comparison
+    from alphalens_pipeline.experts.buffett.comparison import build_comparison
 
     resolved_dir = briefs_dir if briefs_dir is not None else _DEFAULT_BRIEFS_DIR
     panels = build_comparison(

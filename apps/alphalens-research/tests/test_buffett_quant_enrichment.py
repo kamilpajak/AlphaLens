@@ -25,9 +25,9 @@ import datetime as dt
 import unittest
 
 import pandas as pd
-from alphalens_pipeline.buffett import quant_enrichment
-from alphalens_pipeline.buffett.comparison import BuffettPanel
-from alphalens_pipeline.buffett.quality_score import compute_quality_score
+from alphalens_pipeline.experts.buffett import quant_enrichment
+from alphalens_pipeline.experts.buffett.comparison import BuffettPanel
+from alphalens_pipeline.experts.buffett.quality_score import compute_quality_score
 
 ASOF = dt.date(2026, 6, 11)
 

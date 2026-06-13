@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import unittest
 
-from alphalens_pipeline.buffett.comparison import BuffettPanel
-from alphalens_pipeline.buffett.quality_score import compute_quality_score
+from alphalens_pipeline.experts.buffett.comparison import BuffettPanel
+from alphalens_pipeline.experts.buffett.quality_score import compute_quality_score
 
 
 def _panel(

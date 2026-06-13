@@ -15,7 +15,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import MagicMock
 
-from alphalens_pipeline.buffett.scuttlebutt import (
+from alphalens_pipeline.experts.buffett.scuttlebutt import (
     Scuttlebutt,
     build_scuttlebutt_query,
     fetch_scuttlebutt,

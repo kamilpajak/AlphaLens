@@ -26,9 +26,9 @@ import datetime as dt
 import unittest
 
 import pandas as pd
-from alphalens_pipeline.buffett import qual_enrichment as qe
-from alphalens_pipeline.buffett.comparison import BuffettPanel
-from alphalens_pipeline.buffett.qualitative import QualitativeAssessment
+from alphalens_pipeline.experts.buffett import qual_enrichment as qe
+from alphalens_pipeline.experts.buffett.comparison import BuffettPanel
+from alphalens_pipeline.experts.buffett.qualitative import QualitativeAssessment
 
 ASOF = dt.date(2026, 6, 11)
 NOW = dt.datetime(2026, 6, 12, 9, 0, 0, tzinfo=dt.UTC)

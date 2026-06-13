@@ -2,7 +2,7 @@
 
 The daily brief card surfaces a single ``buffett NN/100`` chip. This module
 computes that number from the THREE cheap Buffett numerics the
-:class:`~alphalens_pipeline.buffett.comparison.BuffettPanel` already carries —
+:class:`~alphalens_pipeline.experts.buffett.comparison.BuffettPanel` already carries —
 owner-earnings yield, 3-year average ROIC, and margin of safety — and shrinks it
 by the panel's ``data_coverage`` so a thin-data name is neither buried to zero
 nor over-boosted past a fully-covered high-quality name.
@@ -27,7 +27,7 @@ Design contract (see ``docs/research/buffett_card_surfacing_design_2026_06_12.md
 
 from __future__ import annotations
 
-from alphalens_pipeline.buffett.comparison import BuffettPanel
+from alphalens_pipeline.experts.buffett.comparison import BuffettPanel
 
 # Component weights (sum to 1.0 so the pre-shrink composite lands in [0, 100]).
 # Owner-earnings yield leads (the cash a Buffett owner actually keeps), ROIC
