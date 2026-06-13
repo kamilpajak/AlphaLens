@@ -22,7 +22,7 @@ from briefs.models import Brief, DayMeta
 # (a day brief / theme / ticker-history can carry dozens of candidates × the blob,
 # all redundant with the flat buffett_* fields that still ship). The list
 # serializer drops it; the detail serializer keeps it. The split is enforced by a
-# serializer-field test (not advisory). PR-4 of epic #541.
+# serializer-field test (not advisory). Epic #541, PR-4 (#546).
 _LIST_EXCLUDE = ("pk", "expert_assessments")
 _DETAIL_EXCLUDE = ("pk",)
 
