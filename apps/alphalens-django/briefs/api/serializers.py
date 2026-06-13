@@ -26,6 +26,10 @@ from briefs.models import Brief, DayMeta
 # candidate (a few hundred bytes) for <100 candidates/day — negligible weight. The
 # detail serializer is kept (now identical) for forward N-expert payload-split
 # headroom. Epic #541, PR-5a (#547).
+# Identical today (both just drop the composite pk); kept as two names so a future
+# N-expert payload-split can trim the bulk list without re-touching the endpoints.
+# test_api.test_blob_on_both_serializers pins that the two field sets stay EQUAL, so
+# an accidental change to only one tuple reddens CI rather than silently diverging.
 _LIST_EXCLUDE = ("pk",)
 _DETAIL_EXCLUDE = ("pk",)
 
