@@ -44,24 +44,31 @@
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 
+	// The Buffett expert's assessment, read from the per-expert expert_assessments
+	// blob (PR-5a: the card is now blob-driven so a later PR can drop the flat
+	// buffett_* columns without touching the UI). The blob is SPARSE — a key may be
+	// absent (not just null) when that part of the layer did not run — so every read
+	// is optional-chained; the chip/drawer null-paths are unchanged ("—" when absent).
+	const buf = $derived(c.expert_assessments?.buffett ?? null);
+
 	// Buffett quality chip: a single 0-100 token in the meta bar, tone by score,
 	// dimmed when fundamentals coverage is thin (< 0.5). Always rendered (shows
 	// "—" when the score is null) so every card carries the metric consistently
 	// with the other meta-bar figures; the hover explains an absent score.
 	const buffScore = $derived(
-		Number.isFinite(c.buffett_quality_score)
-			? Math.round(c.buffett_quality_score as number)
+		Number.isFinite(buf?.buffett_quality_score)
+			? Math.round(buf?.buffett_quality_score as number)
 			: null
 	);
-	const buffTone = $derived(buffettTone(c.buffett_quality_score));
-	const buffLowCov = $derived(c.buffett_data_coverage != null && c.buffett_data_coverage < 0.5);
+	const buffTone = $derived(buffettTone(buf?.buffett_quality_score));
+	const buffLowCov = $derived(buf?.buffett_data_coverage != null && buf?.buffett_data_coverage < 0.5);
 	const buffCovN = $derived(
-		c.buffett_data_coverage != null ? Math.round(c.buffett_data_coverage * 6) : null
+		buf?.buffett_data_coverage != null ? Math.round(buf?.buffett_data_coverage * 6) : null
 	);
 	const buffHover = $derived(
-		`owner-earnings yield ${fmtPct(c.buffett_owner_earnings_yield_pct)} · ` +
-			`ROIC 3y ${fmtPct(c.buffett_roic_3y_avg)} · ` +
-			`margin of safety ${fmtPct(c.buffett_margin_of_safety_pct)} · ` +
+		`owner-earnings yield ${fmtPct(buf?.buffett_owner_earnings_yield_pct)} · ` +
+			`ROIC 3y ${fmtPct(buf?.buffett_roic_3y_avg)} · ` +
+			`margin of safety ${fmtPct(buf?.buffett_margin_of_safety_pct)} · ` +
 			`coverage ${buffCovN ?? '—'}/6` +
 			(buffScore === null
 				? ' — not enough fundamentals to score'
@@ -76,35 +83,35 @@
 	// a name with no fetchable 10-K simply has no drawer.
 	let buffOpen = $state(false);
 	const hasBuffQual = $derived(
-		!!c.buffett_moat_type ||
-			!!c.buffett_qualitative_rationale ||
-			c.buffett_understandable != null ||
-			!!c.buffett_moat_trend ||
-			!!c.buffett_management_candor
+		!!buf?.buffett_moat_type ||
+			!!buf?.buffett_qualitative_rationale ||
+			buf?.buffett_understandable != null ||
+			!!buf?.buffett_moat_trend ||
+			!!buf?.buffett_management_candor
 	);
 	const buffPillars = $derived([
 		{
 			label: 'moat',
-			value: c.buffett_moat_type || '—',
-			tone: moatTone(c.buffett_moat_type),
+			value: buf?.buffett_moat_type || '—',
+			tone: moatTone(buf?.buffett_moat_type),
 			body: 'The dominant durable competitive advantage the LLM could evidence from the 10-K (brand / cost / switching-cost / network / regulatory / intangible / none).'
 		},
 		{
 			label: 'trend',
-			value: c.buffett_moat_trend || '—',
-			tone: moatTrendTone(c.buffett_moat_trend),
+			value: buf?.buffett_moat_trend || '—',
+			tone: moatTrendTone(buf?.buffett_moat_trend),
 			body: 'Whether that advantage looks to be widening, stable, narrowing, or unclear — judged from the risk-factor evolution + margin/ROIC trend.'
 		},
 		{
 			label: 'candor',
-			value: c.buffett_management_candor || '—',
-			tone: candorTone(c.buffett_management_candor),
+			value: buf?.buffett_management_candor || '—',
+			tone: candorTone(buf?.buffett_management_candor),
 			body: "Reading of the MD&A's tone: candid about problems, mixed, promotional, or too little to tell."
 		},
 		{
 			label: 'understood',
-			value: understoodLabel(c.buffett_understandable),
-			tone: understoodTone(c.buffett_understandable),
+			value: understoodLabel(buf?.buffett_understandable),
+			tone: understoodTone(buf?.buffett_understandable),
 			body: 'Could a generalist clearly explain what the company sells and how it earns money from Item 1 — or is it "too hard"?'
 		}
 	]);
@@ -414,19 +421,19 @@
 									/>
 								{/each}
 							</div>
-							{#if c.buffett_qualitative_rationale}
+							{#if buf?.buffett_qualitative_rationale}
 								<blockquote class="border-l-2 border-violet pl-4">
 									<p class="text-fg-dim text-xs leading-relaxed">
-										{c.buffett_qualitative_rationale}
+										{buf?.buffett_qualitative_rationale}
 									</p>
 								</blockquote>
 							{/if}
 							<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-fg-muted">
-								{#if c.buffett_used_scuttlebutt}
+								{#if buf?.buffett_used_scuttlebutt}
 									<span class="text-amber whitespace-nowrap">scuttlebutt: web-grounded, unverified</span>
 								{/if}
-								{#if c.buffett_qual_computed_at}
-									<span class="whitespace-nowrap">classified {fmtDate(c.buffett_qual_computed_at)}</span>
+								{#if buf?.buffett_qual_computed_at}
+									<span class="whitespace-nowrap">classified {fmtDate(buf?.buffett_qual_computed_at)}</span>
 								{/if}
 							</div>
 						</div>

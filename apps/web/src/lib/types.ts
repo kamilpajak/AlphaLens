@@ -22,6 +22,9 @@ export interface Candidate {
 	n_gates_failed: number;
 	gates_unknown: string[];
 	n_gates_unknown: number;
+	// Structured per-gate verdict reasons {gate: {passed, threshold, actual, unit}}
+	// as a JSON string (PR #525). Drift-fix surfaced by the PR-5a schema regen.
+	gate_verdict_json: string | null;
 	verified: boolean;
 	source_event_url: string;
 	source_event_title: string;
@@ -85,6 +88,11 @@ export interface Candidate {
 	buffett_qualitative_rationale: string | null;
 	buffett_used_scuttlebutt: boolean | null;
 	buffett_qual_computed_at: string | null;
+	// Expert-panel blob (PR-5a) — the per-expert assessment the card now READS
+	// (instead of the flat buffett_* fields above, which PR-5b drops). Keyed by
+	// expert id; SPARSE — a key may be ABSENT (not just null) when that part of the
+	// layer did not run — so every key is optional.
+	expert_assessments?: ExpertAssessments | null;
 	also_in_themes: string[];
 	rank_in_day: number | null;
 	cohort_size_in_day: number | null;
@@ -106,6 +114,34 @@ export interface Candidate {
 	brief_template_id: string | null;
 	brief_template_facts: Record<string, unknown> | null;
 	brief_generated_at: string | null;
+}
+
+/**
+ * One expert's assessment inside the `expert_assessments` blob. SPARSE — every key
+ * is OPTIONAL because the pipeline omits a column it could not compute (not merely
+ * nulls it), so `buf?.buffett_quality_score` may be `undefined`. Keys carry the
+ * full `buffett_*` names for flat↔blob parity with the (still-present) flat fields.
+ */
+export interface BuffettAssessment {
+	buffett_owner_earnings_yield_pct?: number | null;
+	buffett_roic_latest?: number | null;
+	buffett_roic_3y_avg?: number | null;
+	buffett_margin_of_safety_pct?: number | null;
+	buffett_data_coverage?: number | null;
+	buffett_quality_score?: number | null;
+	buffett_moat_type?: string | null;
+	buffett_moat_trend?: string | null;
+	buffett_management_candor?: string | null;
+	buffett_understandable?: boolean | null;
+	buffett_qualitative_rationale?: string | null;
+	buffett_used_scuttlebutt?: boolean | null;
+	buffett_qual_computed_at?: string | null;
+	buffett_qual_config_version?: string;
+}
+
+/** The expert-panel blob, keyed by expert id (O'Neil etc. join later, additive). */
+export interface ExpertAssessments {
+	buffett?: BuffettAssessment;
 }
 
 /**

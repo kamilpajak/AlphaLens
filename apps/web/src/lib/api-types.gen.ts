@@ -77,6 +77,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/edge/chart/{brief_date}/{ticker}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description ``/v1/edge/chart/<brief_date>/<ticker>`` — the pre-computed chart payload. */
+        get: operations["v1_edge_chart_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/edge/outcomes": {
         parameters: {
             query?: never;
@@ -203,7 +220,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description One ranked candidate from a daily thematic brief. */
+        /**
+         * @description One ranked candidate for a BULK list (day brief / theme / ticker history).
+         *
+         *     Auto-exposes every Brief field except the composite pk — INCLUDING the
+         *     ``expert_assessments`` blob, which the SPA card reads (PR-5a). The *_str legacy
+         *     denormalisations live only in DRF method fields, not on the model, so they are
+         *     not auto-exposed here.
+         */
         Candidate: {
             /** Format: date */
             date: string;
@@ -225,6 +249,7 @@ export interface components {
             /** Format: int64 */
             n_gates_unknown?: number;
             verified?: boolean;
+            gate_verdict_json?: string;
             /** Format: uri */
             source_event_url?: string;
             source_event_title?: string;
@@ -264,6 +289,26 @@ export interface components {
             roe_pct?: number | null;
             magic_formula_health_pass?: boolean;
             /** Format: double */
+            buffett_owner_earnings_yield_pct?: number | null;
+            /** Format: double */
+            buffett_roic_latest?: number | null;
+            /** Format: double */
+            buffett_roic_3y_avg?: number | null;
+            /** Format: double */
+            buffett_margin_of_safety_pct?: number | null;
+            /** Format: double */
+            buffett_data_coverage?: number | null;
+            /** Format: double */
+            buffett_quality_score?: number | null;
+            buffett_moat_type?: string;
+            buffett_moat_trend?: string;
+            buffett_management_candor?: string;
+            buffett_understandable?: boolean | null;
+            buffett_qualitative_rationale?: string;
+            buffett_used_scuttlebutt?: boolean | null;
+            buffett_qual_computed_at?: string;
+            expert_assessments?: unknown;
+            /** Format: double */
             technical_rsi?: number | null;
             /** Format: double */
             technical_ma50_distance_pct?: number | null;
@@ -291,6 +336,90 @@ export interface components {
             deep_drawdown_reversal?: boolean;
             /** Format: int64 */
             layer4_weighted_score?: number;
+            also_in_themes?: unknown;
+            /** Format: int64 */
+            rank_in_day?: number | null;
+            /** Format: int64 */
+            cohort_size_in_day?: number | null;
+            /** Format: date */
+            next_earnings_date?: string | null;
+            brief_model_used?: string;
+            brief_tldr?: string;
+            brief_supply_chain_md?: string;
+            brief_bear_summary_md?: string;
+            brief_catalyst_failure_exit?: string;
+            brief_trade_setup?: unknown;
+            brief_template_id?: string;
+            brief_template_facts?: unknown;
+            /** Format: date-time */
+            brief_generated_at?: string | null;
+        };
+        /**
+         * @description One candidate for the single-candidate DETAIL endpoint
+         *     (``/v1/candidates/{date}/{ticker}``). Identical to :class:`CandidateSerializer`
+         *     today; kept distinct so a future N-expert payload-split can trim the bulk list
+         *     again without re-touching the endpoint wiring.
+         */
+        CandidateDetail: {
+            /** Format: date */
+            date: string;
+            ticker: string;
+            theme: string;
+            company_name: string;
+            rationale?: string;
+            /** Format: double */
+            llm_confidence?: number | null;
+            /** Format: double */
+            market_cap?: number | null;
+            gates_passed?: unknown;
+            /** Format: int64 */
+            n_gates_passed?: number;
+            gates_failed?: unknown;
+            /** Format: int64 */
+            n_gates_failed?: number;
+            gates_unknown?: unknown;
+            /** Format: int64 */
+            n_gates_unknown?: number;
+            verified?: boolean;
+            gate_verdict_json?: string;
+            /** Format: uri */
+            source_event_url?: string;
+            source_event_title?: string;
+            source_event_published_at?: string;
+            theme_search_keywords?: unknown;
+            /** Format: double */
+            industry_id?: number | null;
+            industry_name?: string;
+            sector_name?: string;
+            peer_cohort_level?: string;
+            /** Format: double */
+            insider_score_usd?: number | null;
+            /** Format: double */
+            insider_score_sector_percentile?: number | null;
+            /** Format: double */
+            fcff_yield_pct?: number | null;
+            /** Format: double */
+            fcff_yield_sector_percentile?: number | null;
+            /** Format: double */
+            valuation_pe?: number | null;
+            /** Format: double */
+            valuation_ps?: number | null;
+            /** Format: double */
+            valuation_ev_rev?: number | null;
+            /** Format: double */
+            valuation_ev_ebitda?: number | null;
+            /** Format: double */
+            valuation_fcf_margin?: number | null;
+            /** Format: double */
+            valuation_composite_sector_percentile?: number | null;
+            valuation_financials_publish_date?: string;
+            /** Format: int64 */
+            valuation_financials_age_days?: number | null;
+            /** Format: double */
+            roic_pct?: number | null;
+            /** Format: double */
+            roe_pct?: number | null;
+            magic_formula_health_pass?: boolean;
             /** Format: double */
             buffett_owner_earnings_yield_pct?: number | null;
             /** Format: double */
@@ -310,6 +439,35 @@ export interface components {
             buffett_qualitative_rationale?: string;
             buffett_used_scuttlebutt?: boolean | null;
             buffett_qual_computed_at?: string;
+            expert_assessments?: unknown;
+            /** Format: double */
+            technical_rsi?: number | null;
+            /** Format: double */
+            technical_ma50_distance_pct?: number | null;
+            /** Format: double */
+            technical_atr_pct?: number | null;
+            /** Format: double */
+            technical_volume_zscore?: number | null;
+            /** Format: double */
+            technical_pct_off_52w_high?: number | null;
+            /** Format: double */
+            technical_pct_off_52w_low?: number | null;
+            /** Format: double */
+            technical_ma200_distance_pct?: number | null;
+            /** Format: double */
+            technical_ma200_slope_pct_per_day?: number | null;
+            /** Format: double */
+            catalyst_strength?: number | null;
+            catalyst_event_type?: string;
+            /** Format: double */
+            catalyst_confidence?: number | null;
+            /** Format: double */
+            magic_formula_rank?: number | null;
+            /** Format: int64 */
+            magic_formula_cohort_n?: number | null;
+            deep_drawdown_reversal?: boolean;
+            /** Format: int64 */
+            layer4_weighted_score?: number;
             also_in_themes?: unknown;
             /** Format: int64 */
             rank_in_day?: number | null;
@@ -328,6 +486,88 @@ export interface components {
             /** Format: date-time */
             brief_generated_at?: string | null;
         };
+        /**
+         * @description One daily OHLC candle (folded from the cached minute bars, RTH-only).
+         *
+         *     ``time`` is an ISO date string (``YYYY-MM-DD``) so it maps 1:1 to a
+         *     Lightweight-Charts daily bar time.
+         */
+        ChartBar: {
+            time: string;
+            /** Format: double */
+            open: number;
+            /** Format: double */
+            high: number;
+            /** Format: double */
+            low: number;
+            /** Format: double */
+            close: number;
+            /** Format: double */
+            volume: number;
+        };
+        /**
+         * @description One modeled fill / exit marker, snapped to a daily bar ``time``.
+         *
+         *     ``kind`` is the chart vocabulary (``ENTRY`` / ``TP`` / ``SL`` / ``TIME_STOP``);
+         *     ``ambiguous`` carries the SL-first intrabar flag (a bar that touched both a TP
+         *     high and the SL low, resolved SL-first).
+         */
+        ChartMarker: {
+            time: string;
+            kind: string;
+            level_id: string;
+            /** Format: double */
+            price: number | null;
+            label: string;
+            ambiguous: boolean;
+        };
+        /**
+         * @description The resting ladder levels drawn as horizontal price lines.
+         *
+         *     ``tp`` is the ordered list of take-profit targets. TIME_STOP is NOT a price
+         *     line — it is an exit event drawn only as a marker.
+         */
+        ChartPriceLines: {
+            /** Format: double */
+            entry: number | null;
+            tp: number[];
+            /** Format: double */
+            stop: number | null;
+        };
+        /**
+         * @description ``/v1/edge/chart/<brief_date>/<ticker>`` — the pre-computed chart payload.
+         *
+         *     The SHAPE is stable across ``status``: a NO_DATA / NO_STRUCTURE payload carries
+         *     empty ``bars`` / ``markers`` and null/empty ``price_lines`` so the SPA branches
+         *     on ``status`` without a 2nd request. ``rth_only`` is always true in PR-1
+         *     (RTH-only daily candles; intraday is a later PR).
+         */
+        ChartResponse: {
+            /** Format: date */
+            brief_date: string;
+            ticker: string;
+            ladder_classification: string;
+            terminal: boolean;
+            holding_days_elapsed: number | null;
+            /** Format: double */
+            open_r: number | null;
+            /** Format: double */
+            realized_r: number | null;
+            status: components["schemas"]["ChartResponseStatusEnum"];
+            bars: components["schemas"]["ChartBar"][];
+            price_lines: components["schemas"]["ChartPriceLines"];
+            markers: components["schemas"]["ChartMarker"][];
+            ambiguous_bars: number;
+            intrabar_rule: string;
+            rth_only: boolean;
+        };
+        /**
+         * @description * `OK` - OK
+         *     * `NO_DATA` - NO_DATA
+         *     * `NO_STRUCTURE` - NO_STRUCTURE
+         * @enum {string}
+         */
+        ChartResponseStatusEnum: "OK" | "NO_DATA" | "NO_STRUCTURE";
         /** @description Full payload for one day: meta + every ranked candidate. */
         DayBrief: {
             /** Format: date */
@@ -393,7 +633,7 @@ export interface components {
          *     frontend can build a single static type and branch on ``status``.
          */
         EdgePanel: {
-            status: components["schemas"]["StatusEnum"];
+            status: components["schemas"]["Status3b9Enum"];
             n_matured: number;
             threshold: number;
             /** Format: double */
@@ -480,7 +720,7 @@ export interface components {
         };
         /** @description The PORTFOLIO (size-weighted) panel — gated, same N-gate as EDGE. */
         PortfolioPanel: {
-            status: components["schemas"]["StatusEnum"];
+            status: components["schemas"]["Status3b9Enum"];
             n_matured: number;
             threshold: number;
             /** Format: double */
@@ -512,7 +752,7 @@ export interface components {
          *     * `ok` - ok
          * @enum {string}
          */
-        StatusEnum: "insufficient" | "early" | "ok";
+        Status3b9Enum: "insufficient" | "early" | "ok";
         /** @description Row in ``/v1/themes``: distinct theme + appearance counts. */
         ThemeSummary: {
             theme: string;
@@ -562,7 +802,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Candidate"];
+                    "application/json": components["schemas"]["CandidateDetail"];
                 };
             };
         };
@@ -644,6 +884,30 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PaginatedCandidateList"];
+                };
+            };
+        };
+    };
+    v1_edge_chart_retrieve: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Brief date (ISO YYYY-MM-DD). */
+                brief_date: string;
+                /** @description Candidate ticker (case-insensitive). */
+                ticker: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChartResponse"];
                 };
             };
         };
