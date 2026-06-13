@@ -19,6 +19,7 @@ from __future__ import annotations
 import unittest
 
 import pandas as pd
+from alphalens_pipeline.experts.registry import expert_ids
 from alphalens_pipeline.thematic.argumentation import orchestrator
 
 
@@ -303,34 +304,119 @@ class TestRankInDayColumn(unittest.TestCase):
         self.assertEqual(out.iloc[0]["rank_in_day"], 1)
 
 
-class TestSortKeyBuffettLock(unittest.TestCase):
-    """ENFORCE the locked design decision: no Buffett term enters the brief sort
-    until the deferred Buffett×EDGE study validates it (N>=30 matured outcomes,
-    ~2026-09+). The qualitative LLM verdict NEVER enters the sort; the cheap
-    buffett_quality_score is display-only with hand-chosen, unvalidated weights.
+# The frozen allowlist of the ONLY columns permitted in the brief sort chain.
+# Every entry is a NON-expert signal (a screener/catalyst/verification primitive).
+# An expert assessment — any buffett_*, oneil_*, or the panel-level expert_*
+# disagreement scalars — must NEVER appear here. Experts stay display-only until
+# each one's Expert×EDGE correlation is validated (N>=30 matured outcomes,
+# ~2026-09+). A new NON-expert sort key requires adding it to BOTH this allowlist
+# and the ordered equality pin below — one without the other fails a test.
+_NON_EXPERT_SORT_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "layer4_weighted_score",
+        "catalyst_strength",
+        "insider_score_usd",
+        "deep_drawdown_reversal",
+        "magic_formula_rank",
+        "n_gates_passed",
+        "llm_confidence",
+        "_template_facts_richness",
+    }
+)
 
-    Today the lock holds by OMISSION — this test converts it to an enforced
-    invariant so a future well-meaning PR cannot silently add a buffett_* tie-
-    break tuple without removing this guard (and writing the why-it-is-valid-now
-    rationale). See docs/research/buffett_card_surfacing_design_2026_06_12.md §5.
+# Panel-level disagreement scalars (PR-8) — the single most tempting things to
+# rank on once the panel chip ships. Pinned out of the sort BY NAME so a future
+# PR wiring the chip cannot quietly add one as a tie-break tuple.
+_DISAGREEMENT_SCALARS: frozenset[str] = frozenset(
+    {"expert_spread", "expert_consensus_tone", "expert_split"}
+)
+
+
+def _sort_chain_keys() -> tuple[str, ...]:
+    return tuple(col for col, _asc, _default in orchestrator._BRIEF_SORT_KEYS)
+
+
+def _forbidden_expert_prefixes() -> tuple[str, ...]:
+    """Sort-key prefixes that mark an expert column. Derived from the live registry
+    (so a newly-registered expert is auto-covered) UNION the two known expert ids
+    not yet registered (``oneil`` lands in PR-7) UNION the generic panel-level
+    ``expert_`` namespace (the disagreement scalars)."""
+    # `buffett` is already registered (so it also comes from expert_ids()); it is
+    # listed explicitly to keep the set self-documenting. `oneil` is NOT yet
+    # registered (lands in PR-7) — naming it here closes the gap window so an
+    # `oneil_*` sort key is caught the moment it could be added, not only after
+    # the registry knows about it. The set union dedups the overlap.
+    ids = set(expert_ids()) | {"buffett", "oneil"}
+    return tuple(sorted({f"{eid}_" for eid in ids} | {"expert_"}))
+
+
+def _allowlist_offenders(keys: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(k for k in keys if k not in _NON_EXPERT_SORT_ALLOWLIST)
+
+
+def _prefix_offenders(keys: tuple[str, ...], prefixes: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(k for k in keys if any(k.startswith(p) for p in prefixes))
+
+
+class TestSortKeyExpertLock(unittest.TestCase):
+    """ENFORCE the locked design decision: NO expert term (Buffett, O'Neil, or any
+    future lens) enters the brief sort until that expert's Expert×EDGE study
+    validates it (N>=30 matured outcomes, ~2026-09+). The qualitative LLM verdict
+    NEVER enters the sort; the cheap per-expert composite score is display-only with
+    hand-chosen, unvalidated weights; the panel disagreement scalars are display-only.
+
+    Generalised from the single-Buffett guard (epic #541 PR-6): an allowlist makes
+    the lock N-safe — any expert prefix is excluded by construction rather than
+    enumerated one prefix at a time. See docs/research/expert_panel_design_2026_06_13.md
+    and docs/research/buffett_card_surfacing_design_2026_06_12.md §5.
     """
 
-    def test_no_buffett_key_in_sort_chain(self):
-        keys = [col for col, _asc, _default in orchestrator._BRIEF_SORT_KEYS]
-        offenders = [k for k in keys if k.startswith("buffett")]
+    def test_every_sort_key_is_in_non_expert_allowlist(self):
+        # The primary N-safe guard: ANY key not on the frozen non-expert allowlist
+        # trips this — including every expert prefix, with no per-prefix enumeration.
+        offenders = _allowlist_offenders(_sort_chain_keys())
         self.assertEqual(
             offenders,
-            [],
-            "A buffett_* key entered _BRIEF_SORT_KEYS — that is gated on the "
-            "deferred Buffett×EDGE validation; do not wire it before then.",
+            (),
+            f"Sort keys not on the non-expert allowlist entered _BRIEF_SORT_KEYS: "
+            f"{offenders}. If this is a NEW non-expert signal, add it to "
+            f"_NON_EXPERT_SORT_ALLOWLIST and the equality pin. If it is an expert "
+            f"column, it is gated on the deferred Expert×EDGE validation — do not wire it.",
         )
 
-    def test_sort_chain_is_exactly_the_documented_set(self):
-        # Pins the full chain so ANY addition (Buffett or otherwise) trips this
-        # test and forces a deliberate review, not a silent ordering change.
-        keys = tuple(col for col, _asc, _default in orchestrator._BRIEF_SORT_KEYS)
+    def test_no_expert_prefixed_key_in_sort_chain(self):
+        # Belt-and-suspenders to the allowlist: explicitly satisfies the acceptance
+        # that any expert_*/buffett_*/oneil_* key fires this guard.
+        prefixes = _forbidden_expert_prefixes()
+        offenders = _prefix_offenders(_sort_chain_keys(), prefixes)
         self.assertEqual(
-            keys,
+            offenders,
+            (),
+            f"Expert-prefixed keys entered _BRIEF_SORT_KEYS: {offenders} "
+            f"(forbidden prefixes: {prefixes}).",
+        )
+
+    def test_disagreement_scalars_never_in_sort(self):
+        present = _DISAGREEMENT_SCALARS & set(_sort_chain_keys())
+        self.assertEqual(
+            present,
+            set(),
+            f"Panel disagreement scalar(s) entered the sort: {present}. These are "
+            f"display-only until validated; ranking on them manufactures authority.",
+        )
+
+    def test_allowlist_matches_documented_chain(self):
+        # The allowlist and the ordered chain must describe the SAME set — no stale
+        # allowlist entry that is not an actual sort key, and no sort key missing
+        # from the allowlist. Keeps the two definitions in lockstep.
+        self.assertEqual(set(_sort_chain_keys()), set(_NON_EXPERT_SORT_ALLOWLIST))
+
+    def test_sort_chain_is_exactly_the_documented_set(self):
+        # The real N-safe backstop: pins the full ORDERED chain so ANY addition
+        # (expert or otherwise) trips this and forces a deliberate review, not a
+        # silent ordering change.
+        self.assertEqual(
+            _sort_chain_keys(),
             (
                 "layer4_weighted_score",
                 "catalyst_strength",
@@ -342,6 +428,26 @@ class TestSortKeyBuffettLock(unittest.TestCase):
                 "_template_facts_richness",
             ),
         )
+
+    def test_prefix_guard_covers_every_registered_expert(self):
+        # Meta-test (guard is not vacuous): every registered expert's prefix is
+        # actually caught, so a newly-registered expert cannot slip a sort key in
+        # under a prefix the guard forgot to derive.
+        prefixes = _forbidden_expert_prefixes()
+        for eid in expert_ids():
+            injected = (f"{eid}_quality_score",)
+            self.assertEqual(
+                _prefix_offenders(injected, prefixes),
+                injected,
+                f"Prefix guard does not cover registered expert {eid!r}.",
+            )
+
+    def test_allowlist_guard_catches_injected_expert_key(self):
+        # Meta-test (guard is not vacuous): the allowlist check actually flags an
+        # expert key appended to the real chain — proving a green run means the
+        # lock holds, not that the assertion is unreachable.
+        injected = (*_sort_chain_keys(), "oneil_rs_rating")
+        self.assertEqual(_allowlist_offenders(injected), ("oneil_rs_rating",))
 
 
 if __name__ == "__main__":
