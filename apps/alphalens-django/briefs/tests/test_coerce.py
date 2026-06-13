@@ -14,12 +14,21 @@ from briefs.ingest.coerce import (
     coerce_optional_bool,
     coerce_date,
     coerce_datetime,
+    coerce_expert_blob,
+    coerce_finite_float,
     coerce_float,
     coerce_int,
     coerce_json_obj,
     coerce_list_str,
     coerce_str,
     is_missing,
+)
+
+_BUFFETT_COLS = (
+    "buffett_owner_earnings_yield_pct",
+    "buffett_roic_latest",
+    "buffett_understandable",
+    "buffett_qual_config_version",
 )
 
 
@@ -184,3 +193,49 @@ class TestCoerceStr:
 
     def test_date_isoformatted(self):
         assert coerce_str(dt.date(2026, 5, 22)) == "2026-05-22"
+
+
+class TestCoerceFiniteFloat:
+    @pytest.mark.parametrize("bad", [float("nan"), np.nan, pd.NaT, float("inf"), float("-inf")])
+    def test_non_finite_becomes_none(self, bad):
+        # pd.isna catches NaN/NaT but NOT ±inf — coerce_finite_float must catch both
+        # so the JSONField never holds a bare NaN/Infinity token.
+        assert coerce_finite_float(bad) is None
+
+    def test_finite_passthrough(self):
+        assert coerce_finite_float(18.0) == 18.0
+        assert coerce_finite_float(np.float64(0.0)) == 0.0
+        assert coerce_finite_float(None) is None
+
+
+class TestCoerceExpertBlob:
+    def test_returns_none_when_no_columns_present(self):
+        row = pd.Series({"ticker": "AAA", "theme": "t"})
+        assert coerce_expert_blob(row, _BUFFETT_COLS) is None
+
+    def test_sparse_dict_scrubs_non_finite_and_keeps_tristate(self):
+        row = pd.Series(
+            {
+                "buffett_owner_earnings_yield_pct": float("inf"),
+                "buffett_roic_latest": float("nan"),
+                "buffett_understandable": None,
+                "buffett_qual_config_version": "buffett-pre-registry-v0",
+            }
+        )
+        blob = coerce_expert_blob(row, _BUFFETT_COLS)
+        assert blob is not None
+        assert blob == {
+            "buffett_owner_earnings_yield_pct": None,  # +inf scrubbed
+            "buffett_roic_latest": None,  # NaN scrubbed
+            "buffett_understandable": None,  # tri-state, NOT floored to False
+            "buffett_qual_config_version": "buffett-pre-registry-v0",
+        }
+        assert blob["buffett_understandable"] is None
+
+    def test_present_values_pass_through_absent_skipped(self):
+        row = pd.Series({"buffett_owner_earnings_yield_pct": 5.0, "buffett_understandable": True})
+        blob = coerce_expert_blob(row, _BUFFETT_COLS)
+        assert blob is not None
+        assert blob["buffett_owner_earnings_yield_pct"] == 5.0
+        assert blob["buffett_understandable"] is True
+        assert "buffett_roic_latest" not in blob  # absent column skipped, not None-filled

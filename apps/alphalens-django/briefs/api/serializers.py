@@ -22,9 +22,11 @@ class CandidateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Brief
-        # Explicit field list (66 cols) — derived from `Brief._meta.get_fields()`
-        # at class-definition time. Each name is the canonical SoT column; the
-        # *_str legacy denormalisations are deliberately excluded.
+        # Auto-expose every Brief field except the composite pk via `exclude`, so a
+        # new model field appears in the wire payload without editing a hand-kept
+        # list (no drifting count to maintain). The *_str legacy denormalisations
+        # live only in the DRF method fields below, not on the model, so they are
+        # not auto-exposed here.
         exclude = ("pk",)
 
 

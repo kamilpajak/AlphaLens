@@ -113,6 +113,17 @@ class Brief(models.Model):
     buffett_used_scuttlebutt = models.BooleanField(null=True, blank=True)
     buffett_qual_computed_at = models.CharField(max_length=40, blank=True)
 
+    # Expert-panel blob (epic #541 PR-3): ONE JSONField keyed by expert id
+    # ({"buffett": {...}, "oneil": {...}}) consolidating N experts × M columns into
+    # a single migration. PR-3 ASSEMBLES it at ingest from the still-emitted flat
+    # buffett_* parquet columns; PR-5 has the pipeline emit the blob directly and
+    # drops the flat columns. Holds the 14 buffett values keyed by their full
+    # buffett_* names (flat↔blob parity), INCLUDING buffett_qual_config_version
+    # (which has no flat field of its own) for the deferred Buffett×EDGE
+    # calibration corpus. Numeric leaves are NaN/NaT/±inf-scrubbed to JSON null at
+    # ingest (coerce_finite_float); tri-state bools stay None|True|False.
+    expert_assessments = models.JSONField(null=True, blank=True)
+
     technical_rsi = models.FloatField(null=True, blank=True)
     technical_ma50_distance_pct = models.FloatField(null=True, blank=True)
     technical_atr_pct = models.FloatField(null=True, blank=True)
