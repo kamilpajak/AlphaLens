@@ -397,7 +397,11 @@ class TestExpertAssessments:
         assert blob["buffett_moat_type"] == "brand"
         assert blob["buffett_understandable"] is True
         assert blob["buffett_qual_config_version"] == "buffett-pre-registry-v0"
-        assert not hasattr(Brief.objects.get(ticker="AAA"), "buffett_moat_type")
+        # The flat MODEL field is gone (PR-5b migration 0012): accessing it raises
+        # AttributeError — explicit access asserts the drop, where `not hasattr`
+        # would pass silently if `hasattr` itself swallowed an unrelated error.
+        with pytest.raises(AttributeError):
+            _ = Brief.objects.get(ticker="AAA").buffett_moat_type  # type: ignore[attr-defined]
 
     def test_non_finite_floats_become_json_null(self, tmp_path: Path):
         rows = [
