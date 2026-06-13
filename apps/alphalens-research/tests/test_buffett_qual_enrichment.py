@@ -32,16 +32,11 @@ from alphalens_pipeline.buffett.qualitative import QualitativeAssessment
 
 ASOF = dt.date(2026, 6, 11)
 NOW = dt.datetime(2026, 6, 12, 9, 0, 0, tzinfo=dt.UTC)
+_CV = qe.BUFFETT_QUAL_CONFIG_VERSION  # "buffett-pre-registry-v0"
 
-_QUAL_COLUMNS = (
-    "buffett_moat_type",
-    "buffett_moat_trend",
-    "buffett_management_candor",
-    "buffett_understandable",
-    "buffett_qualitative_rationale",
-    "buffett_used_scuttlebutt",
-    "buffett_qual_computed_at",
-)
+# Reference the module constant directly so the fixture cannot drift from the
+# real column set (the 8th `buffett_qual_config_version` column is now covered).
+_QUAL_COLUMNS = qe.QUAL_COLUMNS
 
 
 def _panel(ticker: str) -> BuffettPanel:
@@ -97,9 +92,10 @@ class TestQualCache(unittest.TestCase):
                 rationale="solid franchise",
                 used_scuttlebutt=True,
                 computed_at=NOW.isoformat(),
+                config_version=_CV,
             )
             qe.write_cache("AAA", ASOF, cache, rec)
-            path = cache / ASOF.isoformat() / "AAA.json"
+            path = cache / _CV / ASOF.isoformat() / "AAA.json"
             self.assertTrue(path.exists())
             loaded = qe.load_cache("aaa", ASOF, cache)  # case-insensitive
             self.assertEqual(loaded, rec)
@@ -164,7 +160,7 @@ class TestEnrichQualitative(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp)
             self._run([_panel("AAA")], {"AAA": _ALL_NONE}, cache)
-            self.assertFalse((cache / ASOF.isoformat() / "AAA.json").exists())
+            self.assertFalse((cache / _CV / ASOF.isoformat() / "AAA.json").exists())
             # next run retries (assess_one called again)
             _, calls2 = self._run([_panel("AAA")], {"AAA": _ALL_NONE}, cache)
             self.assertEqual(calls2, ["AAA"])
@@ -177,7 +173,7 @@ class TestEnrichQualitative(unittest.TestCase):
             cache = Path(tmp)
             recs, _ = self._run([_panel("AAA")], {"AAA": None}, cache)
             self.assertIsNone(recs[0])
-            self.assertFalse((cache / ASOF.isoformat() / "AAA.json").exists())
+            self.assertFalse((cache / _CV / ASOF.isoformat() / "AAA.json").exists())
 
     def test_scuttlebutt_and_plain_runs_have_separate_cache(self) -> None:
         # A no-scuttlebutt cache entry must NOT short-circuit a --scuttlebutt run.
@@ -192,8 +188,8 @@ class TestEnrichQualitative(unittest.TestCase):
                 [_panel("AAA")], {"AAA": _assessment("network")}, cache, scuttlebutt=True
             )
             self.assertEqual(calls, ["AAA"])
-            self.assertTrue((cache / ASOF.isoformat() / "AAA.json").exists())
-            self.assertTrue((cache / ASOF.isoformat() / "AAA.sb.json").exists())
+            self.assertTrue((cache / _CV / ASOF.isoformat() / "AAA.json").exists())
+            self.assertTrue((cache / _CV / ASOF.isoformat() / "AAA.sb.json").exists())
 
     def test_assess_one_raising_is_failsoft(self) -> None:
         import tempfile
@@ -237,6 +233,7 @@ class TestStampColumns(unittest.TestCase):
                 rationale="x",
                 used_scuttlebutt=False,
                 computed_at=NOW.isoformat(),
+                config_version=_CV,
             ),
             "BBB": None,
         }
@@ -247,8 +244,10 @@ class TestStampColumns(unittest.TestCase):
         a = out[out["ticker"] == "AAA"].iloc[0]
         self.assertEqual(a["buffett_moat_type"], "brand")
         self.assertEqual(a["buffett_understandable"], True)
+        self.assertEqual(a["buffett_qual_config_version"], _CV)
         b = out[out["ticker"] == "BBB"].iloc[0]
         self.assertTrue(pd.isna(b["buffett_moat_type"]))
+        self.assertTrue(pd.isna(b["buffett_qual_config_version"]))
 
 
 class _FakeStore:
@@ -296,9 +295,216 @@ class TestEnrichBriefParquet(unittest.TestCase):
             a = out[out["ticker"] == "AAA"].iloc[0]
             self.assertEqual(a["buffett_moat_type"], "brand")
             self.assertEqual(a["buffett_understandable"], True)
+            self.assertEqual(a["buffett_qual_config_version"], _CV)
             b = out[out["ticker"] == "BBB"].iloc[0]
             self.assertTrue(pd.isna(b["buffett_moat_type"]))
+            self.assertTrue(pd.isna(b["buffett_qual_config_version"]))
             self.assertEqual(n_real, 1)  # only AAA resolved a real classification
+
+
+class TestConfigVersionCache(unittest.TestCase):
+    """The config_version tier keeps distinct rubrics from colliding and tags
+    every verdict, while a legacy untagged body still loads as v0."""
+
+    def _real_body(self, **over) -> dict:
+        body = {
+            "moat_type": "brand",
+            "moat_trend": "stable",
+            "management_candor": "candid",
+            "understandable": True,
+            "rationale": "x",
+            "used_scuttlebutt": False,
+            "computed_at": NOW.isoformat(),
+        }
+        body.update(over)
+        return body
+
+    def test_cache_path_has_config_version_tier(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            rec = qe.QualRecord(**self._real_body(config_version=_CV))
+            qe.write_cache("AAA", ASOF, cache, rec)
+            self.assertTrue((cache / _CV / ASOF.isoformat() / "AAA.json").exists())
+            # NEVER the legacy un-tiered path.
+            self.assertFalse((cache / ASOF.isoformat() / "AAA.json").exists())
+
+    def test_distinct_config_versions_do_not_collide(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            v0 = qe.QualRecord(**self._real_body(config_version="buffett-pre-registry-v0"))
+            v1 = qe.QualRecord(
+                **self._real_body(moat_type="network", rationale="y", config_version="buffett-v1")
+            )
+            qe.write_cache("AAA", ASOF, cache, v0, config_version="buffett-pre-registry-v0")
+            qe.write_cache("AAA", ASOF, cache, v1, config_version="buffett-v1")
+            # Same (date, ticker), different rubric -> two files, neither overwritten.
+            self.assertEqual(
+                qe.load_cache("AAA", ASOF, cache, config_version="buffett-pre-registry-v0"), v0
+            )
+            self.assertEqual(qe.load_cache("AAA", ASOF, cache, config_version="buffett-v1"), v1)
+
+    def test_legacy_body_without_version_back_stamps_v0_on_load(self) -> None:
+        import json as _json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            # A pre-retrofit body (no config_version) sitting under the v0 tier.
+            p = cache / _CV / ASOF.isoformat() / "AAA.json"
+            p.parent.mkdir(parents=True)
+            p.write_text(_json.dumps(self._real_body(rationale="legacy")))
+            rec = qe.load_cache("AAA", ASOF, cache)
+            self.assertIsNotNone(rec)
+            self.assertEqual(rec.config_version, _CV)
+            self.assertEqual(rec.moat_type, "brand")
+
+    def test_load_at_wrong_tier_is_miss_not_misattributed(self) -> None:
+        import json as _json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            # A buffett-v1 body physically mis-placed under the v0 tier dir.
+            p = cache / _CV / ASOF.isoformat() / "AAA.json"
+            p.parent.mkdir(parents=True)
+            p.write_text(_json.dumps(self._real_body(config_version="buffett-v1")))
+            # Reading at the v0 tier must MISS (guard), never mis-attribute to v0.
+            self.assertIsNone(qe.load_cache("AAA", ASOF, cache, config_version=_CV))
+
+    def test_pre_migration_legacy_path_is_a_miss(self) -> None:
+        import json as _json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            # The TRUE legacy path (the real VPS pre-migration state).
+            legacy = cache / ASOF.isoformat()
+            legacy.mkdir(parents=True)
+            (legacy / "AAA.json").write_text(_json.dumps(self._real_body()))
+            # load_cache looks under the v0 tier, so this is a miss until migrated.
+            self.assertIsNone(qe.load_cache("AAA", ASOF, cache))
+
+    def test_enrich_qualitative_threads_version_end_to_end(self) -> None:
+        # Pins that the constant is RESOLVED + THREADED automatically (catches a
+        # dropped config_version in _resolve_one that explicit-arg unit tests miss).
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            recs = qe.enrich_qualitative(
+                [_panel("AAA")],
+                asof=ASOF,
+                cache_dir=cache,
+                assess_one=lambda panel, asof, scuttle: _assessment("brand"),
+                now_fn=lambda: NOW,
+            )
+            self.assertEqual(recs[0].config_version, _CV)
+            self.assertTrue((cache / _CV / ASOF.isoformat() / "AAA.json").exists())
+            self.assertFalse((cache / ASOF.isoformat() / "AAA.json").exists())
+            # A warm second pass short-circuits via the versioned tier.
+            calls: list[str] = []
+            qe.enrich_qualitative(
+                [_panel("AAA")],
+                asof=ASOF,
+                cache_dir=cache,
+                assess_one=lambda p, a, s: calls.append(p.ticker) or _assessment("network"),
+                now_fn=lambda: NOW,
+            )
+            self.assertEqual(calls, [])
+
+
+class TestMigrateLegacyCache(unittest.TestCase):
+    """The one-shot move relocates the untagged corpus into the v0 tier exactly
+    once (no overwrite, no double-count) and is idempotent."""
+
+    def _body(self, **over) -> dict:
+        body = {
+            "moat_type": "brand",
+            "moat_trend": "stable",
+            "management_candor": "candid",
+            "understandable": True,
+            "rationale": "z",
+            "used_scuttlebutt": False,
+            "computed_at": NOW.isoformat(),
+        }
+        body.update(over)
+        return body
+
+    def test_migrate_moves_to_version_tier_and_is_idempotent(self) -> None:
+        import json as _json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            legacy_dir = cache / ASOF.isoformat()
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "AAA.json").write_text(_json.dumps(self._body()))
+            (legacy_dir / "AAA.sb.json").write_text(_json.dumps(self._body(used_scuttlebutt=True)))
+            n = qe.migrate_legacy_qual_cache(cache)
+            self.assertEqual(n, 2)
+            v = cache / _CV / ASOF.isoformat()
+            self.assertEqual(qe.load_cache("AAA", ASOF, cache).config_version, _CV)
+            self.assertTrue((v / "AAA.sb.json").exists())
+            # MOVED, not copied — the legacy files are gone.
+            self.assertFalse((legacy_dir / "AAA.json").exists())
+            self.assertFalse((legacy_dir / "AAA.sb.json").exists())
+            # Idempotent: a second run finds no legacy date tiers.
+            self.assertEqual(qe.migrate_legacy_qual_cache(cache), 0)
+
+    def test_migrated_corpus_has_no_double_count(self) -> None:
+        import json as _json
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            legacy_dir = cache / ASOF.isoformat()
+            legacy_dir.mkdir(parents=True)
+            (legacy_dir / "AAA.json").write_text(_json.dumps(self._body()))
+            qe.migrate_legacy_qual_cache(cache)
+            # A naive corpus walk keyed by (config_version, date, ticker, scuttle):
+            keys: list[tuple[str, str, str, bool]] = []
+            for f in cache.rglob("*.json"):
+                rel = f.relative_to(cache)
+                cv, date, name = rel.parts[0], rel.parts[1], rel.parts[2]
+                sb = name.endswith(".sb.json")
+                ticker = name[:-8] if sb else name[:-5]
+                keys.append((cv, date, ticker, sb))
+            self.assertEqual(len(keys), 1)
+            self.assertEqual(len(set(keys)), 1)
+
+    def test_migrate_skips_version_tier_and_missing_dir(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            # Already-migrated layout only -> migrate finds no legacy date tier.
+            rec = qe.QualRecord(
+                moat_type="brand",
+                moat_trend="stable",
+                management_candor="candid",
+                understandable=True,
+                rationale="x",
+                used_scuttlebutt=False,
+                computed_at=NOW.isoformat(),
+                config_version=_CV,
+            )
+            qe.write_cache("AAA", ASOF, cache, rec)
+            self.assertEqual(qe.migrate_legacy_qual_cache(cache), 0)
+            # A non-existent cache dir is a no-op, not a crash.
+            self.assertEqual(qe.migrate_legacy_qual_cache(cache / "nope"), 0)
 
 
 if __name__ == "__main__":
