@@ -291,42 +291,38 @@ def _buffett_fixture(tmp_path: Path) -> None:
     rebuild_from_parquet(briefs_dir=tmp_path)
 
 
-class TestWirePayloadSplit:
-    """PR-4: the heavy expert_assessments blob ships ONLY on the single-candidate
-    detail endpoint, never in the bulk candidate lists."""
+class TestExpertAssessmentsInBulkLists:
+    """PR-5a reverses the PR-4 wire-split: the SPA card is blob-driven, so the
+    expert_assessments blob ships IN the bulk candidate lists (the always-visible
+    chip needs it) AND on the single-candidate detail endpoint."""
 
-    def test_serializers_split_expert_assessments(self):
-        # Enforcement at the serializer level (not advisory): the bulk list
-        # serializer drops the blob; the detail serializer keeps it.
-        assert "expert_assessments" not in CandidateSerializer().fields
+    def test_blob_on_both_serializers(self):
+        # Both serializers now carry the blob (the bulk list serves the card chip).
+        assert "expert_assessments" in CandidateSerializer().fields
         assert "expert_assessments" in CandidateDetailSerializer().fields
-        # The split is the ONLY difference — same field set otherwise.
-        assert set(CandidateDetailSerializer().fields) - set(CandidateSerializer().fields) == {
-            "expert_assessments"
-        }
+        # Identical field sets today (the detail serializer is kept for headroom).
+        assert set(CandidateSerializer().fields) == set(CandidateDetailSerializer().fields)
 
     @pytest.mark.django_db
     def test_detail_endpoint_includes_blob(self, client, tmp_path):
         _buffett_fixture(tmp_path)
         body = client.get("/v1/candidates/2026-05-22/NVDA").json()
-        assert "expert_assessments" in body
         assert body["expert_assessments"]["buffett"]["buffett_moat_type"] == "brand"
 
     @pytest.mark.django_db
-    def test_bulk_lists_omit_blob(self, client, tmp_path):
+    def test_bulk_lists_include_blob(self, client, tmp_path):
         _buffett_fixture(tmp_path)
-        # Day brief, per-day candidates, per-theme candidates, ticker history.
+        # Day brief, per-day candidates, per-theme candidates, ticker history — all
+        # carry the blob so the card chip renders from c.expert_assessments.buffett.
         day = client.get("/v1/days/2026-05-22").json()
-        assert "expert_assessments" not in day["candidates"][0]
+        assert day["candidates"][0]["expert_assessments"]["buffett"]["buffett_moat_type"] == "brand"
         for url in (
             "/v1/days/2026-05-22/candidates",
             "/v1/themes/ai-infra/candidates",
             "/v1/tickers/NVDA/history",
         ):
             cand = client.get(url).json()["data"][0]
-            assert "expert_assessments" not in cand, url
-        # But the flat buffett_* fields DO still ship in the bulk lists (PR-5 drops them).
-        assert day["candidates"][0]["buffett_moat_type"] == "brand"
+            assert cand["expert_assessments"]["buffett"]["buffett_moat_type"] == "brand", url
 
 
 # silence linter when datetime isn't used in this file path-wise

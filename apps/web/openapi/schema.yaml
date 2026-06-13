@@ -35,7 +35,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Candidate'
+                $ref: '#/components/schemas/CandidateDetail'
           description: ''
   /v1/days:
     get:
@@ -150,6 +150,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaginatedCandidateList'
+          description: ''
+  /v1/edge/chart/{brief_date}/{ticker}:
+    get:
+      operationId: v1_edge_chart_retrieve
+      description: '``/v1/edge/chart/<brief_date>/<ticker>`` — the pre-computed chart
+        payload.'
+      parameters:
+      - in: path
+        name: brief_date
+        schema:
+          type: string
+          format: date
+        description: Brief date (ISO YYYY-MM-DD).
+        required: true
+      - in: path
+        name: ticker
+        schema:
+          type: string
+        description: Candidate ticker (case-insensitive).
+        required: true
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChartResponse'
           description: ''
   /v1/edge/outcomes:
     get:
@@ -410,7 +442,13 @@ components:
   schemas:
     Candidate:
       type: object
-      description: One ranked candidate from a daily thematic brief.
+      description: |-
+        One ranked candidate for a BULK list (day brief / theme / ticker history).
+
+        Auto-exposes every Brief field except the composite pk — INCLUDING the
+        ``expert_assessments`` blob, which the SPA card reads (PR-5a). The *_str legacy
+        denormalisations live only in DRF method fields, not on the model, so they are
+        not auto-exposed here.
       properties:
         date:
           type: string
@@ -454,6 +492,8 @@ components:
           format: int64
         verified:
           type: boolean
+        gate_verdict_json:
+          type: string
         source_event_url:
           type: string
           format: uri
@@ -537,6 +577,52 @@ components:
           nullable: true
         magic_formula_health_pass:
           type: boolean
+        buffett_owner_earnings_yield_pct:
+          type: number
+          format: double
+          nullable: true
+        buffett_roic_latest:
+          type: number
+          format: double
+          nullable: true
+        buffett_roic_3y_avg:
+          type: number
+          format: double
+          nullable: true
+        buffett_margin_of_safety_pct:
+          type: number
+          format: double
+          nullable: true
+        buffett_data_coverage:
+          type: number
+          format: double
+          nullable: true
+        buffett_quality_score:
+          type: number
+          format: double
+          nullable: true
+        buffett_moat_type:
+          type: string
+          maxLength: 32
+        buffett_moat_trend:
+          type: string
+          maxLength: 32
+        buffett_management_candor:
+          type: string
+          maxLength: 32
+        buffett_understandable:
+          type: boolean
+          nullable: true
+        buffett_qualitative_rationale:
+          type: string
+        buffett_used_scuttlebutt:
+          type: boolean
+          nullable: true
+        buffett_qual_computed_at:
+          type: string
+          maxLength: 40
+        expert_assessments:
+          nullable: true
         technical_rsi:
           type: number
           format: double
@@ -597,50 +683,6 @@ components:
           maximum: 9223372036854775807
           minimum: -9223372036854775808
           format: int64
-        buffett_owner_earnings_yield_pct:
-          type: number
-          format: double
-          nullable: true
-        buffett_roic_latest:
-          type: number
-          format: double
-          nullable: true
-        buffett_roic_3y_avg:
-          type: number
-          format: double
-          nullable: true
-        buffett_margin_of_safety_pct:
-          type: number
-          format: double
-          nullable: true
-        buffett_data_coverage:
-          type: number
-          format: double
-          nullable: true
-        buffett_quality_score:
-          type: number
-          format: double
-          nullable: true
-        buffett_moat_type:
-          type: string
-          maxLength: 32
-        buffett_moat_trend:
-          type: string
-          maxLength: 32
-        buffett_management_candor:
-          type: string
-          maxLength: 32
-        buffett_understandable:
-          type: boolean
-          nullable: true
-        buffett_qualitative_rationale:
-          type: string
-        buffett_used_scuttlebutt:
-          type: boolean
-          nullable: true
-        buffett_qual_computed_at:
-          type: string
-          maxLength: 40
         also_in_themes: {}
         rank_in_day:
           type: integer
@@ -685,6 +727,451 @@ components:
       - date
       - theme
       - ticker
+    CandidateDetail:
+      type: object
+      description: |-
+        One candidate for the single-candidate DETAIL endpoint
+        (``/v1/candidates/{date}/{ticker}``). Identical to :class:`CandidateSerializer`
+        today; kept distinct so a future N-expert payload-split can trim the bulk list
+        again without re-touching the endpoint wiring.
+      properties:
+        date:
+          type: string
+          format: date
+        ticker:
+          type: string
+          maxLength: 12
+        theme:
+          type: string
+          maxLength: 128
+        company_name:
+          type: string
+          maxLength: 256
+        rationale:
+          type: string
+        llm_confidence:
+          type: number
+          format: double
+          nullable: true
+        market_cap:
+          type: number
+          format: double
+          nullable: true
+        gates_passed: {}
+        n_gates_passed:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        gates_failed: {}
+        n_gates_failed:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        gates_unknown: {}
+        n_gates_unknown:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        verified:
+          type: boolean
+        gate_verdict_json:
+          type: string
+        source_event_url:
+          type: string
+          format: uri
+          maxLength: 2048
+        source_event_title:
+          type: string
+          maxLength: 512
+        source_event_published_at:
+          type: string
+          maxLength: 64
+        theme_search_keywords: {}
+        industry_id:
+          type: number
+          format: double
+          nullable: true
+        industry_name:
+          type: string
+          maxLength: 256
+        sector_name:
+          type: string
+          maxLength: 128
+        peer_cohort_level:
+          type: string
+          maxLength: 8
+        insider_score_usd:
+          type: number
+          format: double
+          nullable: true
+        insider_score_sector_percentile:
+          type: number
+          format: double
+          nullable: true
+        fcff_yield_pct:
+          type: number
+          format: double
+          nullable: true
+        fcff_yield_sector_percentile:
+          type: number
+          format: double
+          nullable: true
+        valuation_pe:
+          type: number
+          format: double
+          nullable: true
+        valuation_ps:
+          type: number
+          format: double
+          nullable: true
+        valuation_ev_rev:
+          type: number
+          format: double
+          nullable: true
+        valuation_ev_ebitda:
+          type: number
+          format: double
+          nullable: true
+        valuation_fcf_margin:
+          type: number
+          format: double
+          nullable: true
+        valuation_composite_sector_percentile:
+          type: number
+          format: double
+          nullable: true
+        valuation_financials_publish_date:
+          type: string
+          maxLength: 32
+        valuation_financials_age_days:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        roic_pct:
+          type: number
+          format: double
+          nullable: true
+        roe_pct:
+          type: number
+          format: double
+          nullable: true
+        magic_formula_health_pass:
+          type: boolean
+        buffett_owner_earnings_yield_pct:
+          type: number
+          format: double
+          nullable: true
+        buffett_roic_latest:
+          type: number
+          format: double
+          nullable: true
+        buffett_roic_3y_avg:
+          type: number
+          format: double
+          nullable: true
+        buffett_margin_of_safety_pct:
+          type: number
+          format: double
+          nullable: true
+        buffett_data_coverage:
+          type: number
+          format: double
+          nullable: true
+        buffett_quality_score:
+          type: number
+          format: double
+          nullable: true
+        buffett_moat_type:
+          type: string
+          maxLength: 32
+        buffett_moat_trend:
+          type: string
+          maxLength: 32
+        buffett_management_candor:
+          type: string
+          maxLength: 32
+        buffett_understandable:
+          type: boolean
+          nullable: true
+        buffett_qualitative_rationale:
+          type: string
+        buffett_used_scuttlebutt:
+          type: boolean
+          nullable: true
+        buffett_qual_computed_at:
+          type: string
+          maxLength: 40
+        expert_assessments:
+          nullable: true
+        technical_rsi:
+          type: number
+          format: double
+          nullable: true
+        technical_ma50_distance_pct:
+          type: number
+          format: double
+          nullable: true
+        technical_atr_pct:
+          type: number
+          format: double
+          nullable: true
+        technical_volume_zscore:
+          type: number
+          format: double
+          nullable: true
+        technical_pct_off_52w_high:
+          type: number
+          format: double
+          nullable: true
+        technical_pct_off_52w_low:
+          type: number
+          format: double
+          nullable: true
+        technical_ma200_distance_pct:
+          type: number
+          format: double
+          nullable: true
+        technical_ma200_slope_pct_per_day:
+          type: number
+          format: double
+          nullable: true
+        catalyst_strength:
+          type: number
+          format: double
+          nullable: true
+        catalyst_event_type:
+          type: string
+          maxLength: 64
+        catalyst_confidence:
+          type: number
+          format: double
+          nullable: true
+        magic_formula_rank:
+          type: number
+          format: double
+          nullable: true
+        magic_formula_cohort_n:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        deep_drawdown_reversal:
+          type: boolean
+        layer4_weighted_score:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        also_in_themes: {}
+        rank_in_day:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        cohort_size_in_day:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        next_earnings_date:
+          type: string
+          format: date
+          nullable: true
+        brief_model_used:
+          type: string
+          maxLength: 64
+        brief_tldr:
+          type: string
+        brief_supply_chain_md:
+          type: string
+        brief_bear_summary_md:
+          type: string
+        brief_catalyst_failure_exit:
+          type: string
+        brief_trade_setup:
+          nullable: true
+        brief_template_id:
+          type: string
+          maxLength: 128
+        brief_template_facts:
+          nullable: true
+        brief_generated_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - company_name
+      - date
+      - theme
+      - ticker
+    ChartBar:
+      type: object
+      description: |-
+        One daily OHLC candle (folded from the cached minute bars, RTH-only).
+
+        ``time`` is an ISO date string (``YYYY-MM-DD``) so it maps 1:1 to a
+        Lightweight-Charts daily bar time.
+      properties:
+        time:
+          type: string
+        open:
+          type: number
+          format: double
+        high:
+          type: number
+          format: double
+        low:
+          type: number
+          format: double
+        close:
+          type: number
+          format: double
+        volume:
+          type: number
+          format: double
+      required:
+      - close
+      - high
+      - low
+      - open
+      - time
+      - volume
+    ChartMarker:
+      type: object
+      description: |-
+        One modeled fill / exit marker, snapped to a daily bar ``time``.
+
+        ``kind`` is the chart vocabulary (``ENTRY`` / ``TP`` / ``SL`` / ``TIME_STOP``);
+        ``ambiguous`` carries the SL-first intrabar flag (a bar that touched both a TP
+        high and the SL low, resolved SL-first).
+      properties:
+        time:
+          type: string
+        kind:
+          type: string
+        level_id:
+          type: string
+        price:
+          type: number
+          format: double
+          nullable: true
+        label:
+          type: string
+        ambiguous:
+          type: boolean
+      required:
+      - ambiguous
+      - kind
+      - label
+      - level_id
+      - price
+      - time
+    ChartPriceLines:
+      type: object
+      description: |-
+        The resting ladder levels drawn as horizontal price lines.
+
+        ``tp`` is the ordered list of take-profit targets. TIME_STOP is NOT a price
+        line — it is an exit event drawn only as a marker.
+      properties:
+        entry:
+          type: number
+          format: double
+          nullable: true
+        tp:
+          type: array
+          items:
+            type: number
+            format: double
+        stop:
+          type: number
+          format: double
+          nullable: true
+      required:
+      - entry
+      - stop
+      - tp
+    ChartResponse:
+      type: object
+      description: |-
+        ``/v1/edge/chart/<brief_date>/<ticker>`` — the pre-computed chart payload.
+
+        The SHAPE is stable across ``status``: a NO_DATA / NO_STRUCTURE payload carries
+        empty ``bars`` / ``markers`` and null/empty ``price_lines`` so the SPA branches
+        on ``status`` without a 2nd request. ``rth_only`` is always true in PR-1
+        (RTH-only daily candles; intraday is a later PR).
+      properties:
+        brief_date:
+          type: string
+          format: date
+        ticker:
+          type: string
+        ladder_classification:
+          type: string
+        terminal:
+          type: boolean
+        holding_days_elapsed:
+          type: integer
+          nullable: true
+        open_r:
+          type: number
+          format: double
+          nullable: true
+        realized_r:
+          type: number
+          format: double
+          nullable: true
+        status:
+          $ref: '#/components/schemas/ChartResponseStatusEnum'
+        bars:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChartBar'
+        price_lines:
+          $ref: '#/components/schemas/ChartPriceLines'
+        markers:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChartMarker'
+        ambiguous_bars:
+          type: integer
+        intrabar_rule:
+          type: string
+        rth_only:
+          type: boolean
+      required:
+      - ambiguous_bars
+      - bars
+      - brief_date
+      - holding_days_elapsed
+      - intrabar_rule
+      - ladder_classification
+      - markers
+      - open_r
+      - price_lines
+      - realized_r
+      - rth_only
+      - status
+      - terminal
+      - ticker
+    ChartResponseStatusEnum:
+      enum:
+      - OK
+      - NO_DATA
+      - NO_STRUCTURE
+      type: string
+      description: |-
+        * `OK` - OK
+        * `NO_DATA` - NO_DATA
+        * `NO_STRUCTURE` - NO_STRUCTURE
     DayBrief:
       type: object
       description: 'Full payload for one day: meta + every ranked candidate.'
@@ -837,7 +1324,7 @@ components:
         frontend can build a single static type and branch on ``status``.
       properties:
         status:
-          $ref: '#/components/schemas/StatusEnum'
+          $ref: '#/components/schemas/Status3b9Enum'
         n_matured:
           type: integer
         threshold:
@@ -1054,7 +1541,7 @@ components:
       description: The PORTFOLIO (size-weighted) panel — gated, same N-gate as EDGE.
       properties:
         status:
-          $ref: '#/components/schemas/StatusEnum'
+          $ref: '#/components/schemas/Status3b9Enum'
         n_matured:
           type: integer
         threshold:
@@ -1120,7 +1607,7 @@ components:
       - n_days
       - n_themes
       - top_themes
-    StatusEnum:
+    Status3b9Enum:
       enum:
       - insufficient
       - early

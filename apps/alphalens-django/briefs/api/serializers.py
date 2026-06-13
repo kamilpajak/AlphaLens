@@ -17,23 +17,26 @@ from rest_framework import serializers
 from briefs.models import Brief, DayMeta
 
 
-# The heavy expert-panel blob (expert_assessments — a per-expert dict of ~14
-# values each) is detail-endpoint-only: it would bloat the bulk candidate lists
-# (a day brief / theme / ticker-history can carry dozens of candidates × the blob,
-# all redundant with the flat buffett_* fields that still ship). The list
-# serializer drops it; the detail serializer keeps it. The split is enforced by a
-# serializer-field test (not advisory). Epic #541, PR-4 (#546).
-_LIST_EXCLUDE = ("pk", "expert_assessments")
+# PR-5a reverses the PR-4 (#546) wire-split: the SPA card is now BLOB-DRIVEN — it
+# reads the per-expert buffett values from expert_assessments instead of the flat
+# buffett_* fields — so the always-visible card chip needs the blob IN the bulk
+# list (a day brief / theme / ticker-history candidate). The PR-4 "redundant with
+# the flat fields" rationale ends once the flat cols are dropped (PR-5b), so the
+# blob must move back into the list. The blob is one small sparse dict per
+# candidate (a few hundred bytes) for <100 candidates/day — negligible weight. The
+# detail serializer is kept (now identical) for forward N-expert payload-split
+# headroom. Epic #541, PR-5a (#547).
+_LIST_EXCLUDE = ("pk",)
 _DETAIL_EXCLUDE = ("pk",)
 
 
 class CandidateSerializer(serializers.ModelSerializer):
     """One ranked candidate for a BULK list (day brief / theme / ticker history).
 
-    Auto-exposes every Brief field except the composite pk AND the heavy
-    ``expert_assessments`` blob (see :class:`CandidateDetailSerializer`). The *_str
-    legacy denormalisations live only in DRF method fields, not on the model, so
-    they are not auto-exposed here.
+    Auto-exposes every Brief field except the composite pk — INCLUDING the
+    ``expert_assessments`` blob, which the SPA card reads (PR-5a). The *_str legacy
+    denormalisations live only in DRF method fields, not on the model, so they are
+    not auto-exposed here.
     """
 
     class Meta:
@@ -43,9 +46,9 @@ class CandidateSerializer(serializers.ModelSerializer):
 
 class CandidateDetailSerializer(serializers.ModelSerializer):
     """One candidate for the single-candidate DETAIL endpoint
-    (``/v1/candidates/{date}/{ticker}``) — identical to
-    :class:`CandidateSerializer` plus the full ``expert_assessments`` blob, fetched
-    on demand (e.g. for a card's deep-read drawer) rather than in every bulk list."""
+    (``/v1/candidates/{date}/{ticker}``). Identical to :class:`CandidateSerializer`
+    today; kept distinct so a future N-expert payload-split can trim the bulk list
+    again without re-touching the endpoint wiring."""
 
     class Meta:
         model = Brief
