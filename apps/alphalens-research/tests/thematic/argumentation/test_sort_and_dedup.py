@@ -341,6 +341,11 @@ def _forbidden_expert_prefixes() -> tuple[str, ...]:
     (so a newly-registered expert is auto-covered) UNION the two known expert ids
     not yet registered (``oneil`` lands in PR-7) UNION the generic panel-level
     ``expert_`` namespace (the disagreement scalars)."""
+    # `buffett` is already registered (so it also comes from expert_ids()); it is
+    # listed explicitly to keep the set self-documenting. `oneil` is NOT yet
+    # registered (lands in PR-7) — naming it here closes the gap window so an
+    # `oneil_*` sort key is caught the moment it could be added, not only after
+    # the registry knows about it. The set union dedups the overlap.
     ids = set(expert_ids()) | {"buffett", "oneil"}
     return tuple(sorted({f"{eid}_" for eid in ids} | {"expert_"}))
 
