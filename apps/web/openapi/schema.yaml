@@ -577,50 +577,6 @@ components:
           nullable: true
         magic_formula_health_pass:
           type: boolean
-        buffett_owner_earnings_yield_pct:
-          type: number
-          format: double
-          nullable: true
-        buffett_roic_latest:
-          type: number
-          format: double
-          nullable: true
-        buffett_roic_3y_avg:
-          type: number
-          format: double
-          nullable: true
-        buffett_margin_of_safety_pct:
-          type: number
-          format: double
-          nullable: true
-        buffett_data_coverage:
-          type: number
-          format: double
-          nullable: true
-        buffett_quality_score:
-          type: number
-          format: double
-          nullable: true
-        buffett_moat_type:
-          type: string
-          maxLength: 32
-        buffett_moat_trend:
-          type: string
-          maxLength: 32
-        buffett_management_candor:
-          type: string
-          maxLength: 32
-        buffett_understandable:
-          type: boolean
-          nullable: true
-        buffett_qualitative_rationale:
-          type: string
-        buffett_used_scuttlebutt:
-          type: boolean
-          nullable: true
-        buffett_qual_computed_at:
-          type: string
-          maxLength: 40
         expert_assessments:
           nullable: true
         technical_rsi:
@@ -862,50 +818,6 @@ components:
           nullable: true
         magic_formula_health_pass:
           type: boolean
-        buffett_owner_earnings_yield_pct:
-          type: number
-          format: double
-          nullable: true
-        buffett_roic_latest:
-          type: number
-          format: double
-          nullable: true
-        buffett_roic_3y_avg:
-          type: number
-          format: double
-          nullable: true
-        buffett_margin_of_safety_pct:
-          type: number
-          format: double
-          nullable: true
-        buffett_data_coverage:
-          type: number
-          format: double
-          nullable: true
-        buffett_quality_score:
-          type: number
-          format: double
-          nullable: true
-        buffett_moat_type:
-          type: string
-          maxLength: 32
-        buffett_moat_trend:
-          type: string
-          maxLength: 32
-        buffett_management_candor:
-          type: string
-          maxLength: 32
-        buffett_understandable:
-          type: boolean
-          nullable: true
-        buffett_qualitative_rationale:
-          type: string
-        buffett_used_scuttlebutt:
-          type: boolean
-          nullable: true
-        buffett_qual_computed_at:
-          type: string
-          maxLength: 40
         expert_assessments:
           nullable: true
         technical_rsi:

@@ -71,27 +71,11 @@ export interface Candidate {
 	magic_formula_cohort_n: number | null;
 	deep_drawdown_reversal: boolean | null;
 	layer4_weighted_score: number | null;
-	// Buffett quantitative delta (card PR-2) — cheap numerics + 0-100 quality
-	// composite, precomputed in the pipeline; display-only. All nullable.
-	buffett_owner_earnings_yield_pct: number | null;
-	buffett_roic_latest: number | null;
-	buffett_roic_3y_avg: number | null;
-	buffett_margin_of_safety_pct: number | null;
-	buffett_data_coverage: number | null;
-	buffett_quality_score: number | null;
-	// Buffett qualitative layer (card PR-3b) — LLM classification over the 10-K;
-	// enums/rationale are "" when no 10-K; understandable is tri-state (null = not assessed).
-	buffett_moat_type: string | null;
-	buffett_moat_trend: string | null;
-	buffett_management_candor: string | null;
-	buffett_understandable: boolean | null;
-	buffett_qualitative_rationale: string | null;
-	buffett_used_scuttlebutt: boolean | null;
-	buffett_qual_computed_at: string | null;
-	// Expert-panel blob (PR-5a) — the per-expert assessment the card now READS
-	// (instead of the flat buffett_* fields above, which PR-5b drops). Keyed by
-	// expert id; SPARSE — a key may be ABSENT (not just null) when that part of the
-	// layer did not run — so every key is optional.
+	// Expert-panel blob (PR-5a/5b) — the per-expert assessment the card READS. PR-5b
+	// (#547) dropped the 13 flat buffett_* fields that used to sit here; the blob is
+	// now the SOLE Buffett surface on the wire. Keyed by expert id; SPARSE — a key may
+	// be ABSENT (not just null) when that part of the layer did not run — so every key
+	// is optional.
 	expert_assessments?: ExpertAssessments | null;
 	also_in_themes: string[];
 	rank_in_day: number | null;
@@ -120,7 +104,8 @@ export interface Candidate {
  * One expert's assessment inside the `expert_assessments` blob. SPARSE — every key
  * is OPTIONAL because the pipeline omits a column it could not compute (not merely
  * nulls it), so `buf?.buffett_quality_score` may be `undefined`. Keys carry the
- * full `buffett_*` names for flat↔blob parity with the (still-present) flat fields.
+ * full `buffett_*` names (the historical flat-column names; PR-5b dropped the flat
+ * fields themselves but the blob keeps the names for the Buffett×EDGE corpus).
  */
 export interface BuffettAssessment {
 	buffett_owner_earnings_yield_pct?: number | null;

@@ -89,39 +89,18 @@ class Brief(models.Model):
     roe_pct = models.FloatField(null=True, blank=True)
     magic_formula_health_pass = models.BooleanField(default=False)
 
-    # Buffett quantitative delta (card PR-2). Cheap numerics precomputed in the
-    # pipeline score stage + a 0-100 quality composite; all nullable (a thin
-    # thematic name resolves few). The qualitative LLM verdict is NOT here (it
-    # arrives in a later PR). Auto-mapped by ingest + serializer (no allowlist).
-    buffett_owner_earnings_yield_pct = models.FloatField(null=True, blank=True)
-    buffett_roic_latest = models.FloatField(null=True, blank=True)
-    buffett_roic_3y_avg = models.FloatField(null=True, blank=True)
-    buffett_margin_of_safety_pct = models.FloatField(null=True, blank=True)
-    buffett_data_coverage = models.FloatField(null=True, blank=True)
-    buffett_quality_score = models.FloatField(null=True, blank=True)
-
-    # Buffett qualitative layer (card PR-3b). LLM classification over the 10-K +
-    # injected facts, precomputed eagerly by `alphalens buffett qual-enrich` and
-    # stamped into the brief parquet. The enums / rationale are blank ("") when a
-    # name had no fetchable 10-K; `understandable` is a NULLABLE bool so "not
-    # assessed" (None) stays distinct from "not understandable" (False).
-    buffett_moat_type = models.CharField(max_length=32, blank=True)
-    buffett_moat_trend = models.CharField(max_length=32, blank=True)
-    buffett_management_candor = models.CharField(max_length=32, blank=True)
-    buffett_understandable = models.BooleanField(null=True, blank=True)
-    buffett_qualitative_rationale = models.TextField(blank=True)
-    buffett_used_scuttlebutt = models.BooleanField(null=True, blank=True)
-    buffett_qual_computed_at = models.CharField(max_length=40, blank=True)
-
-    # Expert-panel blob (epic #541 PR-3): ONE JSONField keyed by expert id
-    # ({"buffett": {...}, "oneil": {...}}) consolidating N experts × M columns into
-    # a single migration. PR-3 ASSEMBLES it at ingest from the still-emitted flat
-    # buffett_* parquet columns; PR-5 has the pipeline emit the blob directly and
-    # drops the flat columns. Holds the 14 buffett values keyed by their full
-    # buffett_* names (flat↔blob parity), INCLUDING buffett_qual_config_version
-    # (which has no flat field of its own) for the deferred Buffett×EDGE
-    # calibration corpus. Numeric leaves are NaN/NaT/±inf-scrubbed to JSON null at
-    # ingest (coerce_finite_float); tri-state bools stay None|True|False.
+    # Expert-panel blob (epic #541): ONE JSONField keyed by expert id
+    # ({"buffett": {...}, "oneil": {...}}) — the SOLE Buffett store on the model.
+    # PR-5b (#547) dropped the 13 flat buffett_* model fields (migration 0012); the
+    # blob is the only place Buffett data lives on the API/model now. It is still
+    # ASSEMBLED at ingest from the flat buffett_* PARQUET columns (which the pipeline
+    # keeps emitting — ingest reads the parquet row, not a model field), so a
+    # `rebuild_briefs_cache --force` repopulates every blob from the parquet source
+    # of truth. Holds the 14 buffett values keyed by their full buffett_* names,
+    # INCLUDING buffett_qual_config_version (no flat field of its own) for the
+    # deferred Buffett×EDGE calibration corpus. Numeric leaves are NaN/NaT/±inf-
+    # scrubbed to JSON null at ingest (coerce_finite_float); tri-state bools stay
+    # None|True|False.
     expert_assessments = models.JSONField(null=True, blank=True)
 
     technical_rsi = models.FloatField(null=True, blank=True)

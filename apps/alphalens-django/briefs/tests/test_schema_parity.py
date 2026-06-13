@@ -108,30 +108,12 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     # catalysts; the SPA evidence panel renders the dict inline when present.
     "brief_template_id",
     "brief_template_facts",
-    # Post-legacy extension (2026-06-12, card PR-2): Buffett quantitative delta
-    # — cheap numerics + 0-100 quality composite, all nullable, precomputed in
-    # the pipeline score stage. Display-only; the qualitative verdict is a later PR.
-    "buffett_owner_earnings_yield_pct",
-    "buffett_roic_latest",
-    "buffett_roic_3y_avg",
-    "buffett_margin_of_safety_pct",
-    "buffett_data_coverage",
-    "buffett_quality_score",
-    # Post-legacy extension (2026-06-12, card PR-3b): Buffett qualitative layer —
-    # LLM classification (moat / trend / candor / understandable + rationale +
-    # provenance), eager-computed + cached, stamped into the brief parquet.
-    "buffett_moat_type",
-    "buffett_moat_trend",
-    "buffett_management_candor",
-    "buffett_understandable",
-    "buffett_qualitative_rationale",
-    "buffett_used_scuttlebutt",
-    "buffett_qual_computed_at",
-    # Post-legacy extension (2026-06-13, epic #541 PR-3): single JSONField keyed by
-    # expert id, consolidating N experts × M columns into one migration. Assembled
-    # at ingest from the still-emitted flat buffett_* columns (PR-3); the flat
-    # columns stay until PR-5. buffett_qual_config_version rides INSIDE the blob
-    # (no flat field of its own), so it is NOT a separate contract entry.
+    # Post-legacy extension (2026-06-13, epic #541): the Buffett delta — once 13
+    # flat buffett_* columns (card PR-2/PR-3b) — is now a SINGLE JSONField keyed by
+    # expert id. PR-5b (#547) dropped the 13 flat MODEL fields (migration 0012); the
+    # blob is the sole Buffett surface on the API/model. The flat columns survive in
+    # the brief PARQUET (the pipeline still emits them) as the ingest assembly source
+    # — buffett_qual_config_version rides INSIDE the blob (it never had a flat field).
     "expert_assessments",
 )
 

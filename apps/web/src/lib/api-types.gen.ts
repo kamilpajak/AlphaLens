@@ -288,25 +288,6 @@ export interface components {
             /** Format: double */
             roe_pct?: number | null;
             magic_formula_health_pass?: boolean;
-            /** Format: double */
-            buffett_owner_earnings_yield_pct?: number | null;
-            /** Format: double */
-            buffett_roic_latest?: number | null;
-            /** Format: double */
-            buffett_roic_3y_avg?: number | null;
-            /** Format: double */
-            buffett_margin_of_safety_pct?: number | null;
-            /** Format: double */
-            buffett_data_coverage?: number | null;
-            /** Format: double */
-            buffett_quality_score?: number | null;
-            buffett_moat_type?: string;
-            buffett_moat_trend?: string;
-            buffett_management_candor?: string;
-            buffett_understandable?: boolean | null;
-            buffett_qualitative_rationale?: string;
-            buffett_used_scuttlebutt?: boolean | null;
-            buffett_qual_computed_at?: string;
             expert_assessments?: unknown;
             /** Format: double */
             technical_rsi?: number | null;
@@ -420,25 +401,6 @@ export interface components {
             /** Format: double */
             roe_pct?: number | null;
             magic_formula_health_pass?: boolean;
-            /** Format: double */
-            buffett_owner_earnings_yield_pct?: number | null;
-            /** Format: double */
-            buffett_roic_latest?: number | null;
-            /** Format: double */
-            buffett_roic_3y_avg?: number | null;
-            /** Format: double */
-            buffett_margin_of_safety_pct?: number | null;
-            /** Format: double */
-            buffett_data_coverage?: number | null;
-            /** Format: double */
-            buffett_quality_score?: number | null;
-            buffett_moat_type?: string;
-            buffett_moat_trend?: string;
-            buffett_management_candor?: string;
-            buffett_understandable?: boolean | null;
-            buffett_qualitative_rationale?: string;
-            buffett_used_scuttlebutt?: boolean | null;
-            buffett_qual_computed_at?: string;
             expert_assessments?: unknown;
             /** Format: double */
             technical_rsi?: number | null;

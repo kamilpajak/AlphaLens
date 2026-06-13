@@ -118,34 +118,6 @@ class TestRebuildSmoke:
         with pytest.raises(ValueError, match="missing required columns"):
             rebuild_from_parquet(briefs_dir=tmp_path)
 
-    def test_buffett_qual_columns_preserve_understandable_tristate(self, tmp_path: Path):
-        # PR-3b: the nullable `buffett_understandable` must keep None / True /
-        # False distinct; the enum CharFields default to "" when absent.
-        rows = [
-            {
-                "ticker": "AAA",
-                "theme": "t",
-                "buffett_moat_type": "brand",
-                "buffett_understandable": True,
-                "buffett_qualitative_rationale": "durable franchise",
-            },
-            {"ticker": "BBB", "theme": "t", "buffett_understandable": False},
-            {"ticker": "CCC", "theme": "t"},  # no qualitative layer at all
-        ]
-        _write_parquet(tmp_path, "2026-05-22", rows)
-        rebuild_from_parquet(briefs_dir=tmp_path)
-
-        aaa = Brief.objects.get(ticker="AAA")
-        assert aaa.buffett_moat_type == "brand"
-        assert aaa.buffett_understandable is True
-        assert aaa.buffett_qualitative_rationale == "durable franchise"
-
-        assert Brief.objects.get(ticker="BBB").buffett_understandable is False
-
-        ccc = Brief.objects.get(ticker="CCC")
-        assert ccc.buffett_understandable is None  # not assessed -> None, NOT False
-        assert ccc.buffett_moat_type == ""  # CharField default
-
 
 @pytest.mark.django_db
 class TestMtimeGate:
@@ -400,7 +372,7 @@ class TestExpertAssessments:
         assert ea is not None
         return ea["buffett"]
 
-    def test_blob_assembles_from_flat_columns_dual_write(self, tmp_path: Path):
+    def test_blob_assembles_from_flat_parquet_columns(self, tmp_path: Path):
         rows = [
             {
                 "ticker": "AAA",
@@ -418,15 +390,14 @@ class TestExpertAssessments:
         _write_parquet(tmp_path, "2026-05-22", rows)
         rebuild_from_parquet(briefs_dir=tmp_path)
 
+        # The blob is assembled from the flat PARQUET columns (PR-5b dropped the flat
+        # MODEL fields, so the Brief no longer has buffett_* attributes — only the blob).
         blob = self._buffett("AAA")
         assert blob["buffett_owner_earnings_yield_pct"] == 5.0
         assert blob["buffett_moat_type"] == "brand"
         assert blob["buffett_understandable"] is True
         assert blob["buffett_qual_config_version"] == "buffett-pre-registry-v0"
-        # Dual-write: the flat fields are ALSO still populated this PR (PR-5 drops them).
-        aaa = Brief.objects.get(ticker="AAA")
-        assert aaa.buffett_owner_earnings_yield_pct == 5.0
-        assert aaa.buffett_moat_type == "brand"
+        assert not hasattr(Brief.objects.get(ticker="AAA"), "buffett_moat_type")
 
     def test_non_finite_floats_become_json_null(self, tmp_path: Path):
         rows = [
