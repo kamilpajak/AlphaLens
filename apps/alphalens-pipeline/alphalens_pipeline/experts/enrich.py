@@ -77,7 +77,9 @@ def enrich_briefs(
             counts[expert.id] = n_real
             stamped = True
         except Exception as exc:  # one expert must not abort the batch
-            logger.warning("experts enrich: %s failed: %s", expert.id, exc)
+            # exc_info so a persistent failure carries the full traceback (the
+            # only other signal is the count-0 in the CLI echo).
+            logger.warning("experts enrich: %s failed: %s", expert.id, exc, exc_info=True)
             counts[expert.id] = 0
 
     if stamped:
