@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import os
 from pathlib import Path
 
@@ -16,7 +17,7 @@ import pandas as pd
 import pytest
 from django.core.management import call_command
 
-from briefs.ingest.parquet import rebuild_from_parquet
+from briefs.ingest.parquet import _EXPERT_COLUMNS, rebuild_from_parquet
 from briefs.models import Brief, DayMeta
 
 
@@ -368,3 +369,133 @@ class TestDefaultBriefsDirEnvOverride:
             # Mirrors the override test — reload after monkeypatch teardown
             # so any subsequent test sees the real-env DEFAULT_BRIEFS_DIR.
             importlib.reload(parquet_mod)
+
+
+_EXPECTED_BUFFETT_BLOB_COLUMNS = (
+    "buffett_owner_earnings_yield_pct",
+    "buffett_roic_latest",
+    "buffett_roic_3y_avg",
+    "buffett_margin_of_safety_pct",
+    "buffett_data_coverage",
+    "buffett_quality_score",
+    "buffett_moat_type",
+    "buffett_moat_trend",
+    "buffett_management_candor",
+    "buffett_understandable",
+    "buffett_qualitative_rationale",
+    "buffett_used_scuttlebutt",
+    "buffett_qual_computed_at",
+    "buffett_qual_config_version",
+)
+
+
+@pytest.mark.django_db
+class TestExpertAssessments:
+    """PR-3: the expert_assessments JSONField is ASSEMBLED at ingest from the flat
+    buffett_* columns, NaN/NaT/±inf-scrubbed, tri-state preserved."""
+
+    @staticmethod
+    def _buffett(ticker: str) -> dict:
+        ea = Brief.objects.get(ticker=ticker).expert_assessments
+        assert ea is not None
+        return ea["buffett"]
+
+    def test_blob_assembles_from_flat_columns_dual_write(self, tmp_path: Path):
+        rows = [
+            {
+                "ticker": "AAA",
+                "theme": "t",
+                "buffett_owner_earnings_yield_pct": 5.0,
+                "buffett_roic_latest": 18.0,
+                "buffett_moat_type": "brand",
+                "buffett_understandable": True,
+                "buffett_qualitative_rationale": "durable franchise",
+                "buffett_used_scuttlebutt": True,
+                "buffett_qual_computed_at": "2026-06-12T09:00:00+00:00",
+                "buffett_qual_config_version": "buffett-pre-registry-v0",
+            }
+        ]
+        _write_parquet(tmp_path, "2026-05-22", rows)
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        blob = self._buffett("AAA")
+        assert blob["buffett_owner_earnings_yield_pct"] == 5.0
+        assert blob["buffett_moat_type"] == "brand"
+        assert blob["buffett_understandable"] is True
+        assert blob["buffett_qual_config_version"] == "buffett-pre-registry-v0"
+        # Dual-write: the flat fields are ALSO still populated this PR (PR-5 drops them).
+        aaa = Brief.objects.get(ticker="AAA")
+        assert aaa.buffett_owner_earnings_yield_pct == 5.0
+        assert aaa.buffett_moat_type == "brand"
+
+    def test_non_finite_floats_become_json_null(self, tmp_path: Path):
+        rows = [
+            {
+                "ticker": "AAA",
+                "theme": "t",
+                "buffett_owner_earnings_yield_pct": float("nan"),
+                "buffett_roic_latest": 18.0,
+            },
+            {"ticker": "BBB", "theme": "t", "buffett_owner_earnings_yield_pct": float("inf")},
+            {"ticker": "CCC", "theme": "t", "buffett_roic_latest": float("-inf")},
+        ]
+        _write_parquet(tmp_path, "2026-05-22", rows)
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        for ticker in ("AAA", "BBB", "CCC"):
+            # Reload from the DB (true write -> JSONField -> reload cycle).
+            blob = self._buffett(ticker)
+            # POSITIVE finiteness assertion over every numeric leaf (backend-agnostic;
+            # also reddens on an Infinity leak, not just a substring scan).
+            for value in blob.values():
+                assert value is None or not isinstance(value, float) or math.isfinite(value)
+            # And no NaN/Infinity token in the serialized JSON.
+            serialized = json.dumps(Brief.objects.get(ticker=ticker).expert_assessments)
+            for token in ("NaN", "NaT", "Infinity", "-Infinity"):
+                assert token not in serialized
+        assert self._buffett("AAA")["buffett_roic_latest"] == 18.0
+
+    def test_tristate_understandable_preserved_in_blob(self, tmp_path: Path):
+        rows = [
+            {"ticker": "AAA", "theme": "t", "buffett_understandable": True},
+            {"ticker": "BBB", "theme": "t", "buffett_understandable": False},
+            # CCC has no understandable value; pandas unions the column across rows,
+            # so CCC's buffett_understandable is present-as-NaN -> blob holds explicit
+            # JSON null (tri-state), NOT False. (A blob that is wholly None only
+            # happens when the parquet has NO buffett column at all — see
+            # test_migration_0011_null_backfill.)
+            {"ticker": "CCC", "theme": "t"},
+        ]
+        _write_parquet(tmp_path, "2026-05-22", rows)
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        assert self._buffett("AAA")["buffett_understandable"] is True
+        assert self._buffett("BBB")["buffett_understandable"] is False
+        assert self._buffett("CCC")["buffett_understandable"] is None  # null, not False
+
+    def test_config_version_rides_only_in_blob_no_flat_field(self, tmp_path: Path):
+        rows = [
+            {
+                "ticker": "AAA",
+                "theme": "t",
+                "buffett_qual_config_version": "buffett-pre-registry-v0",
+            }
+        ]
+        _write_parquet(tmp_path, "2026-05-22", rows)
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        assert self._buffett("AAA")["buffett_qual_config_version"] == "buffett-pre-registry-v0"
+        assert not hasattr(Brief.objects.get(ticker="AAA"), "buffett_qual_config_version")
+
+    def test_expert_columns_match_frozen_buffett_tuple(self):
+        # The ONLY cross-boundary drift guard (Django cannot import the pipeline).
+        # When PR-6 adds O'Neil to the pipeline registry, add its tuple here AND to
+        # _EXPERT_COLUMNS in lockstep.
+        assert _EXPERT_COLUMNS["buffett"] == _EXPECTED_BUFFETT_BLOB_COLUMNS
+
+    def test_migration_0011_null_backfill(self, tmp_path: Path):
+        # A brief whose parquet carries no buffett columns has expert_assessments
+        # None (clean null over the new nullable JSONField).
+        _write_parquet(tmp_path, "2026-05-22", [{"ticker": "AAA", "theme": "t"}])
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        assert Brief.objects.get(ticker="AAA").expert_assessments is None

@@ -127,6 +127,12 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "buffett_qualitative_rationale",
     "buffett_used_scuttlebutt",
     "buffett_qual_computed_at",
+    # Post-legacy extension (2026-06-13, epic #541 PR-3): single JSONField keyed by
+    # expert id, consolidating N experts × M columns into one migration. Assembled
+    # at ingest from the still-emitted flat buffett_* columns (PR-3); the flat
+    # columns stay until PR-5. buffett_qual_config_version rides INSIDE the blob
+    # (no flat field of its own), so it is NOT a separate contract entry.
+    "expert_assessments",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.

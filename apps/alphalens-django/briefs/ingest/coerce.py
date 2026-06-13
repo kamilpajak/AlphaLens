@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 from typing import Any
 
 import pandas as pd
@@ -46,6 +47,22 @@ def coerce_float(value: Any) -> float | None:
     if is_missing(value):
         return None
     return float(value)
+
+
+def coerce_finite_float(value: Any) -> float | None:
+    """Float coercion that also rejects ±inf, not just NaN/NaT.
+
+    ``pd.isna`` does NOT catch ``np.inf``, so :func:`coerce_float` would let
+    ``float('inf')`` through and Django's JSONField would emit the bare
+    ``Infinity`` token (invalid JSON, the same leak class as ``NaN``). Used by the
+    ``expert_assessments`` blob assembler so the persisted JSON can never hold a
+    non-finite float. Kept separate from :func:`coerce_float` so the flat
+    ``FloatField`` path (which expects raw passthrough) is unchanged.
+    """
+    out = coerce_float(value)
+    if out is None or not math.isfinite(out):
+        return None
+    return out
 
 
 def coerce_int(value: Any) -> int | None:
@@ -151,3 +168,45 @@ def _ensure_tz(value: dt.datetime) -> dt.datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=dt.UTC)
     return value
+
+
+# Per-column role classification for the expert_assessments blob assembler. Bool
+# columns keep the None/True/False tri-state; float columns are non-finite-scrubbed
+# (NaN/NaT/±inf -> None); everything else (enums / free text / datetime string /
+# config_version) goes through coerce_str.
+_EXPERT_BOOL_COLUMNS = frozenset({"buffett_understandable", "buffett_used_scuttlebutt"})
+_EXPERT_FLOAT_COLUMNS = frozenset(
+    {
+        "buffett_owner_earnings_yield_pct",
+        "buffett_roic_latest",
+        "buffett_roic_3y_avg",
+        "buffett_margin_of_safety_pct",
+        "buffett_data_coverage",
+        "buffett_quality_score",
+    }
+)
+
+
+def coerce_expert_blob(row: pd.Series, column_names: tuple[str, ...]) -> dict[str, Any] | None:
+    """Assemble ONE expert's dict from a parquet row, non-finite-scrubbed + tri-state safe.
+
+    Columns absent from ``row`` are skipped entirely (a sparse blob); a present
+    column is coerced by role so the persisted JSON can never hold a ``NaN`` /
+    ``NaT`` / ``Infinity`` token. Bool columns keep ``None`` distinct from
+    ``False`` (tri-state); float columns are non-finite-scrubbed; everything else
+    (enums / text / config_version) becomes ``str | None``. Returns the dict, or
+    ``None`` when NO column from the set is present (so a row with no expert data
+    yields a JSON null rather than ``{}``).
+    """
+    out: dict[str, Any] = {}
+    for col in column_names:
+        if col not in row.index:
+            continue
+        raw = row[col]
+        if col in _EXPERT_BOOL_COLUMNS:
+            out[col] = coerce_optional_bool(raw)
+        elif col in _EXPERT_FLOAT_COLUMNS:
+            out[col] = coerce_finite_float(raw)
+        else:
+            out[col] = coerce_str(raw)
+    return out or None

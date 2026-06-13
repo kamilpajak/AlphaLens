@@ -36,6 +36,7 @@ from briefs.ingest.coerce import (
     coerce_bool,
     coerce_date,
     coerce_datetime,
+    coerce_expert_blob,
     coerce_float,
     coerce_int,
     coerce_json_obj,
@@ -64,6 +65,36 @@ REQUIRED_PARQUET_COLUMNS: frozenset[str] = frozenset({"ticker", "theme"})
 # JSONFields that hold a dict (parsed from a json.dumps string), NOT a list[str].
 # Anything not listed here is coerced as a list of strings.
 _OBJECT_JSON_FIELDS: frozenset[str] = frozenset({"brief_trade_setup", "brief_template_facts"})
+
+# Django-local mirror of the pipeline registry's per-expert column set (slim image
+# must NOT import alphalens_pipeline). Mirrors
+# alphalens_pipeline.experts.buffett.expert.BuffettExpert.column_names — 6 quant +
+# 5 qual-content + 3 qual-provenance, INCLUDING buffett_qual_config_version (which
+# has no flat Brief field but rides inside the blob for the deferred Buffett×EDGE
+# calibration corpus). The expert_assessments JSONField is ASSEMBLED from these
+# flat parquet columns at ingest (PR-3); PR-5 has the pipeline emit the blob
+# directly + drops the flat columns. Pinned by
+# test_expert_columns_match_frozen_buffett_tuple — the only cross-boundary drift
+# guard, since Django cannot import the pipeline. Adding O'Neil (PR-6) means adding
+# its id + columns here AND extending that pin in lockstep with the registry.
+_EXPERT_COLUMNS: dict[str, tuple[str, ...]] = {
+    "buffett": (
+        "buffett_owner_earnings_yield_pct",
+        "buffett_roic_latest",
+        "buffett_roic_3y_avg",
+        "buffett_margin_of_safety_pct",
+        "buffett_data_coverage",
+        "buffett_quality_score",
+        "buffett_moat_type",
+        "buffett_moat_trend",
+        "buffett_management_candor",
+        "buffett_understandable",
+        "buffett_qualitative_rationale",
+        "buffett_used_scuttlebutt",
+        "buffett_qual_computed_at",
+        "buffett_qual_config_version",
+    ),
+}
 
 # Parquet → model field renames. Pipeline persists ``brief_template_facts_json``
 # (matching the source ``catalyst_template_facts_json`` column shape) but the
@@ -159,6 +190,20 @@ def _payload_fields() -> list[django_models.Field]:
 def _row_to_brief(date: dt.date, row: pd.Series, fields: Iterable[django_models.Field]) -> Brief:
     kwargs: dict[str, object] = {"date": date}
     for field in fields:
+        if field.name == "expert_assessments":
+            # MUST be handled before the generic dispatch: a bare JSONField not in
+            # _OBJECT_JSON_FIELDS routes to coerce_list_str, which would iterate the
+            # assembled dict's KEYS into a list[str] and silently corrupt the blob.
+            # The blob is ASSEMBLED from the sibling flat buffett_* columns (PR-3),
+            # not read from a single json.dumps cell, so it does NOT belong in
+            # _OBJECT_JSON_FIELDS. PR-5 has the pipeline emit the blob directly.
+            blob: dict[str, object] = {}
+            for expert_id, cols in _EXPERT_COLUMNS.items():
+                assessment = coerce_expert_blob(row, cols)
+                if assessment is not None:
+                    blob[expert_id] = assessment
+            kwargs[field.name] = blob or None
+            continue
         # Honour the parquet → model rename table so the source column
         # name can differ from the Django field name (e.g. PR-3 ingests
         # parquet's brief_template_facts_json into model's brief_template_facts).
