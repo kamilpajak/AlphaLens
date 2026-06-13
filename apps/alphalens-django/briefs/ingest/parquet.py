@@ -97,6 +97,30 @@ _EXPERT_COLUMNS: dict[str, tuple[str, ...]] = {
         "buffett_qual_computed_at",
         "buffett_qual_config_version",
     ),
+    # O'Neil momentum lens (PR-7 stamped these; PR-8a assembles them into the blob).
+    # Mirrors alphalens_pipeline.experts.oneil.quant_enrichment.ONEIL_COLUMNS — 6
+    # float + 2 bool-as-float (the bool pair is in _EXPERT_BOOL_COLUMNS so the
+    # tri-state survives). Pinned by test_expert_columns_match_frozen_oneil_tuple.
+    "oneil": (
+        "oneil_pct_off_52w_high",
+        "oneil_ma200_slope_pct_per_day",
+        "oneil_ma200_distance_pct",
+        "oneil_earnings_growth_yoy_pct",
+        "oneil_earnings_growth_near_zero_base",
+        "oneil_new_high_split_suspected",
+        "oneil_data_coverage",
+        "oneil_score",
+    ),
+    # Panel-level disagreement scalars (PR-8a) — NOT a per-expert lens. Mirrors
+    # alphalens_pipeline.experts.disagreement.PANEL_COLUMNS. expert_spread is the
+    # raw, UNCALIBRATED gap between the two composites (recorded for the deferred
+    # Expert×EDGE study, display-only); panel_config_version pins the formula + band
+    # set. Rides under a "panel" blob key (sibling to per-expert keys), no model
+    # field / migration. Pinned by test_expert_columns_match_frozen_panel_tuple.
+    "panel": (
+        "expert_spread",
+        "panel_config_version",
+    ),
 }
 
 # Parquet → model field renames. Pipeline persists ``brief_template_facts_json``

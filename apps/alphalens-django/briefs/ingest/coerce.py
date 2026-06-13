@@ -174,7 +174,19 @@ def _ensure_tz(value: dt.datetime) -> dt.datetime:
 # columns keep the None/True/False tri-state; float columns are non-finite-scrubbed
 # (NaN/NaT/±inf -> None); everything else (enums / free text / datetime string /
 # config_version) goes through coerce_str.
-_EXPERT_BOOL_COLUMNS = frozenset({"buffett_understandable", "buffett_used_scuttlebutt"})
+_EXPERT_BOOL_COLUMNS = frozenset(
+    {
+        "buffett_understandable",
+        "buffett_used_scuttlebutt",
+        # O'Neil audit flags (PR-8a): tri-state bool-as-float (0.0/1.0/NaN). MUST
+        # stay here, not in _EXPERT_FLOAT_COLUMNS — coerce_optional_bool restores
+        # None/True/False so a FALSE flag (0.0 -> False) does not fire the SPA badge
+        # and an absent flag stays None. The else-branch coerce_str would persist
+        # the JS-truthy strings "0.0"/"1.0" and break the strict ``=== true`` render.
+        "oneil_new_high_split_suspected",
+        "oneil_earnings_growth_near_zero_base",
+    }
+)
 _EXPERT_FLOAT_COLUMNS = frozenset(
     {
         "buffett_owner_earnings_yield_pct",
@@ -183,6 +195,16 @@ _EXPERT_FLOAT_COLUMNS = frozenset(
         "buffett_margin_of_safety_pct",
         "buffett_data_coverage",
         "buffett_quality_score",
+        # O'Neil numeric readouts (PR-8a) — 6 floats (None -> JSON null).
+        "oneil_pct_off_52w_high",
+        "oneil_ma200_slope_pct_per_day",
+        "oneil_ma200_distance_pct",
+        "oneil_earnings_growth_yoy_pct",
+        "oneil_data_coverage",
+        "oneil_score",
+        # Panel disagreement scalar (PR-8a) — finite-scrubbed; panel_config_version
+        # (the sibling column) falls through to coerce_str.
+        "expert_spread",
     }
 )
 
