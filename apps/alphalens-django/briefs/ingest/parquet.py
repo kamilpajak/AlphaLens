@@ -72,14 +72,14 @@ _OBJECT_JSON_FIELDS: frozenset[str] = frozenset({"brief_trade_setup", "brief_tem
 # 5 qual-content + 3 qual-provenance, INCLUDING buffett_qual_config_version (which
 # has no flat Brief field but rides inside the blob for the deferred Buffett×EDGE
 # calibration corpus). The expert_assessments JSONField is ASSEMBLED from these
-# flat parquet columns at ingest (PR-3); PR-5 has the pipeline emit the blob
-# directly + drops the flat columns. Pinned by
+# flat PARQUET columns at ingest — and this STAYS the assembly path after PR-5b
+# (#547) dropped the 13 flat buffett_* MODEL fields: the parquet still carries the
+# flat columns (the pipeline keeps emitting them), and ingest reads the parquet ROW
+# here, not a model field, so `rebuild_briefs_cache --force` repopulates every blob
+# from the parquet source of truth. Pinned by
 # test_expert_columns_match_frozen_buffett_tuple — the only cross-boundary drift
 # guard, since Django cannot import the pipeline. Adding O'Neil (PR-6) means adding
 # its id + columns here AND extending that pin in lockstep with the registry.
-# REMOVE in PR-5: once the pipeline emits the blob directly (and drops the flat
-# buffett_* columns), this map + coerce_expert_blob + the special-case in
-# _row_to_brief become dead and the ingest reads the blob column via coerce_json_obj.
 _EXPERT_COLUMNS: dict[str, tuple[str, ...]] = {
     "buffett": (
         "buffett_owner_earnings_yield_pct",
@@ -197,9 +197,10 @@ def _row_to_brief(date: dt.date, row: pd.Series, fields: Iterable[django_models.
             # MUST be handled before the generic dispatch: a bare JSONField not in
             # _OBJECT_JSON_FIELDS routes to coerce_list_str, which would iterate the
             # assembled dict's KEYS into a list[str] and silently corrupt the blob.
-            # The blob is ASSEMBLED from the sibling flat buffett_* columns (PR-3),
-            # not read from a single json.dumps cell, so it does NOT belong in
-            # _OBJECT_JSON_FIELDS. PR-5 has the pipeline emit the blob directly.
+            # The blob is ASSEMBLED from the sibling flat buffett_* PARQUET columns
+            # (still emitted by the pipeline; PR-5b dropped only the flat MODEL
+            # fields), not read from a single json.dumps cell, so it does NOT belong
+            # in _OBJECT_JSON_FIELDS.
             blob: dict[str, object] = {}
             for expert_id, cols in _EXPERT_COLUMNS.items():
                 assessment = coerce_expert_blob(row, cols)

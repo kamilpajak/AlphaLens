@@ -702,7 +702,7 @@
         "schemas": {
             "Candidate": {
                 "type": "object",
-                "description": "One ranked candidate for a BULK list (day brief / theme / ticker history).\n\nAuto-exposes every Brief field except the composite pk AND the heavy\n``expert_assessments`` blob (see :class:`CandidateDetailSerializer`). The *_str\nlegacy denormalisations live only in DRF method fields, not on the model, so\nthey are not auto-exposed here.",
+                "description": "One ranked candidate for a BULK list (day brief / theme / ticker history).\n\nAuto-exposes every Brief field except the composite pk — INCLUDING the\n``expert_assessments`` blob, which the SPA card reads (PR-5a). The *_str legacy\ndenormalisations live only in DRF method fields, not on the model, so they are\nnot auto-exposed here.",
                 "properties": {
                     "date": {
                         "type": "string",
@@ -865,62 +865,8 @@
                     "magic_formula_health_pass": {
                         "type": "boolean"
                     },
-                    "buffett_owner_earnings_yield_pct": {
-                        "type": "number",
-                        "format": "double",
+                    "expert_assessments": {
                         "nullable": true
-                    },
-                    "buffett_roic_latest": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_roic_3y_avg": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_margin_of_safety_pct": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_data_coverage": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_quality_score": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_moat_type": {
-                        "type": "string",
-                        "maxLength": 32
-                    },
-                    "buffett_moat_trend": {
-                        "type": "string",
-                        "maxLength": 32
-                    },
-                    "buffett_management_candor": {
-                        "type": "string",
-                        "maxLength": 32
-                    },
-                    "buffett_understandable": {
-                        "type": "boolean",
-                        "nullable": true
-                    },
-                    "buffett_qualitative_rationale": {
-                        "type": "string"
-                    },
-                    "buffett_used_scuttlebutt": {
-                        "type": "boolean",
-                        "nullable": true
-                    },
-                    "buffett_qual_computed_at": {
-                        "type": "string",
-                        "maxLength": 40
                     },
                     "technical_rsi": {
                         "type": "number",
@@ -1058,7 +1004,7 @@
             },
             "CandidateDetail": {
                 "type": "object",
-                "description": "One candidate for the single-candidate DETAIL endpoint\n(``/v1/candidates/{date}/{ticker}``) — identical to\n:class:`CandidateSerializer` plus the full ``expert_assessments`` blob, fetched\non demand (e.g. for a card's deep-read drawer) rather than in every bulk list.",
+                "description": "One candidate for the single-candidate DETAIL endpoint\n(``/v1/candidates/{date}/{ticker}``). Identical to :class:`CandidateSerializer`\ntoday; kept distinct so a future N-expert payload-split can trim the bulk list\nagain without re-touching the endpoint wiring.",
                 "properties": {
                     "date": {
                         "type": "string",
@@ -1220,63 +1166,6 @@
                     },
                     "magic_formula_health_pass": {
                         "type": "boolean"
-                    },
-                    "buffett_owner_earnings_yield_pct": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_roic_latest": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_roic_3y_avg": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_margin_of_safety_pct": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_data_coverage": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_quality_score": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "buffett_moat_type": {
-                        "type": "string",
-                        "maxLength": 32
-                    },
-                    "buffett_moat_trend": {
-                        "type": "string",
-                        "maxLength": 32
-                    },
-                    "buffett_management_candor": {
-                        "type": "string",
-                        "maxLength": 32
-                    },
-                    "buffett_understandable": {
-                        "type": "boolean",
-                        "nullable": true
-                    },
-                    "buffett_qualitative_rationale": {
-                        "type": "string"
-                    },
-                    "buffett_used_scuttlebutt": {
-                        "type": "boolean",
-                        "nullable": true
-                    },
-                    "buffett_qual_computed_at": {
-                        "type": "string",
-                        "maxLength": 40
                     },
                     "expert_assessments": {
                         "nullable": true
