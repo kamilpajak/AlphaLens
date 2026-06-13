@@ -179,8 +179,8 @@
 			<span class="text-fg-muted whitespace-nowrap">
 				layer-4 score <span class="text-amber font-bold normal-case">{c.layer4_weighted_score ?? '—'}</span>
 			</span>
-			<span class="text-fg-muted whitespace-nowrap">
-				confidence
+			<span class="text-fg-muted whitespace-nowrap" title="LLM's confidence that this ticker fits the theme — distinct from the layer-4 signal score">
+				theme-fit
 				<span
 					class="font-bold normal-case"
 					class:text-green={confTone === 'green'}
