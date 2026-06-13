@@ -324,6 +324,32 @@ class TestExpertAssessmentsInBulkLists:
             cand = client.get(url).json()["data"][0]
             assert cand["expert_assessments"]["buffett"]["buffett_moat_type"] == "brand", url
 
+    @pytest.mark.django_db
+    def test_oneil_and_panel_surface_on_api(self, client, tmp_path):
+        # PR-8a: the oneil + panel blob keys ride the same serializer, so they reach
+        # the API the moment ingest assembles them — the SPA reads them in PR-8b.
+        _write_parquet(
+            tmp_path,
+            "2026-05-22",
+            [
+                {
+                    "ticker": "NVDA",
+                    "theme": "ai-infra",
+                    "layer4_weighted_score": 15,
+                    "oneil_score": 72.0,
+                    "oneil_new_high_split_suspected": 1.0,
+                    "expert_spread": 47.0,
+                    "panel_config_version": "panel-v1-absdiff-2x",
+                }
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        ea = client.get("/v1/days/2026-05-22").json()["candidates"][0]["expert_assessments"]
+        assert ea["oneil"]["oneil_score"] == 72.0
+        assert ea["oneil"]["oneil_new_high_split_suspected"] is True
+        assert ea["panel"]["expert_spread"] == 47.0
+        assert ea["panel"]["panel_config_version"] == "panel-v1-absdiff-2x"
+
 
 # silence linter when datetime isn't used in this file path-wise
 _ = dt

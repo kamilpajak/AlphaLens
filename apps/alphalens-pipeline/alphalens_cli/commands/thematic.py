@@ -443,6 +443,16 @@ def score(
 
     enriched = oneil_quant_enrichment.enrich(enriched, asof=target)
 
+    # Panel disagreement scalar (PR-8a): the raw gap between the two expert
+    # composites, recorded per row for the deferred Expert×EDGE study (log-now).
+    # Runs LAST — needs both buffett_quality_score + oneil_score on the frame.
+    # Display-only, NOT in the brief sort (the PR-6 allowlist enforces). Pure frame
+    # arithmetic (no store/network); a failure leaves the two panel columns absent
+    # rather than aborting the score stage.
+    from alphalens_pipeline.experts import disagreement
+
+    enriched = disagreement.enrich(enriched)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{target.isoformat()}.parquet"
     enriched.to_parquet(out_path, index=False)

@@ -108,12 +108,10 @@ class TestRebuildSmoke:
         avgo = Brief.objects.get(ticker="AVGO")
         assert avgo.brief_trade_setup is None
 
-    def test_oneil_columns_present_but_unread_do_not_break_ingest(self, tmp_path: Path):
-        # PR-7 stamps eight oneil_* columns into the brief parquet, but Django does
-        # NOT model or surface them yet (deferred to PR-8 — _EXPERT_COLUMNS stays
-        # buffett-only). Ingest must tolerate the extra columns: they are simply
-        # never read (ingest iterates Brief fields), so the rebuild succeeds and the
-        # columns are neither a model attribute nor an expert_assessments key.
+    def test_oneil_and_panel_assembled_into_blob(self, tmp_path: Path):
+        # PR-8a: O'Neil's 8 columns + the 2 panel scalars are now ASSEMBLED into the
+        # expert_assessments blob (PR-7 stamped them present-but-unread; this inverts
+        # that). They ride under the "oneil" + "panel" blob keys, NOT model fields.
         rows = _sample_rows()
         rows[0].update(
             {
@@ -122,9 +120,11 @@ class TestRebuildSmoke:
                 "oneil_ma200_distance_pct": 8.0,
                 "oneil_earnings_growth_yoy_pct": 20.0,
                 "oneil_earnings_growth_near_zero_base": 0.0,
-                "oneil_new_high_split_suspected": 0.0,
+                "oneil_new_high_split_suspected": 1.0,
                 "oneil_data_coverage": 1.0,
                 "oneil_score": 72.0,
+                "expert_spread": 47.0,
+                "panel_config_version": "panel-v1-absdiff-2x",
             }
         )
         _write_parquet(tmp_path, "2026-05-22", rows)
@@ -133,12 +133,37 @@ class TestRebuildSmoke:
 
         assert result.total_briefs == 2
         nvda = Brief.objects.get(ticker="NVDA")
-        # Present-but-unread: not a model attribute, and the expert blob (buffett-only
-        # for now) carries no "oneil" key.
+        # Still NOT model attributes — the blob is the sole surface.
         assert not hasattr(nvda, "oneil_score")
-        assert "oneil" not in _EXPERT_COLUMNS
-        if nvda.expert_assessments is not None:
-            assert "oneil" not in nvda.expert_assessments
+        assert not hasattr(nvda, "expert_spread")
+        ea = nvda.expert_assessments
+        assert ea is not None
+        oneil = ea["oneil"]
+        assert oneil["oneil_score"] == 72.0
+        assert oneil["oneil_pct_off_52w_high"] == -3.0
+        # bool-as-float restored to a real tri-state bool (NOT the string "1.0").
+        assert oneil["oneil_new_high_split_suspected"] is True
+        assert oneil["oneil_earnings_growth_near_zero_base"] is False
+        panel = ea["panel"]
+        assert panel["expert_spread"] == 47.0
+        assert panel["panel_config_version"] == "panel-v1-absdiff-2x"
+
+    def test_null_spread_row_still_carries_panel_config_version(self, tmp_path: Path):
+        # A row where the pipeline could not compute the spread (one expert absent)
+        # still stamps panel_config_version; the blob's panel key holds null spread +
+        # the config so the calibration corpus records which config would have applied.
+        rows = _sample_rows()
+        rows[0].update(
+            {"expert_spread": float("nan"), "panel_config_version": "panel-v1-absdiff-2x"}
+        )
+        _write_parquet(tmp_path, "2026-05-22", rows)
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        ea = Brief.objects.get(ticker="NVDA").expert_assessments
+        assert ea is not None
+        panel = ea["panel"]
+        assert panel["expert_spread"] is None  # NaN finite-scrubbed to JSON null
+        assert panel["panel_config_version"] == "panel-v1-absdiff-2x"
 
     def test_empty_directory_is_noop(self, tmp_path: Path):
         result = rebuild_from_parquet(briefs_dir=tmp_path)
@@ -392,6 +417,25 @@ _EXPECTED_BUFFETT_BLOB_COLUMNS = (
     "buffett_qual_config_version",
 )
 
+# Frozen mirrors of the pipeline tuples (Django cannot import the pipeline). Keep in
+# lockstep with alphalens_pipeline.experts.oneil.quant_enrichment.ONEIL_COLUMNS and
+# alphalens_pipeline.experts.disagreement.PANEL_COLUMNS — a divergence corrupts the
+# blob assembly silently, so the drift-guard tests below are the only safety net.
+_EXPECTED_ONEIL_BLOB_COLUMNS = (
+    "oneil_pct_off_52w_high",
+    "oneil_ma200_slope_pct_per_day",
+    "oneil_ma200_distance_pct",
+    "oneil_earnings_growth_yoy_pct",
+    "oneil_earnings_growth_near_zero_base",
+    "oneil_new_high_split_suspected",
+    "oneil_data_coverage",
+    "oneil_score",
+)
+_EXPECTED_PANEL_BLOB_COLUMNS = (
+    "expert_spread",
+    "panel_config_version",
+)
+
 
 @pytest.mark.django_db
 class TestExpertAssessments:
@@ -496,9 +540,28 @@ class TestExpertAssessments:
 
     def test_expert_columns_match_frozen_buffett_tuple(self):
         # The ONLY cross-boundary drift guard (Django cannot import the pipeline).
-        # When PR-6 adds O'Neil to the pipeline registry, add its tuple here AND to
-        # _EXPERT_COLUMNS in lockstep.
         assert _EXPERT_COLUMNS["buffett"] == _EXPECTED_BUFFETT_BLOB_COLUMNS
+
+    def test_expert_columns_match_frozen_oneil_tuple(self):
+        # Drift guard: _EXPERT_COLUMNS["oneil"] must mirror the pipeline's
+        # ONEIL_COLUMNS. If they diverge, the blob assembly silently drops/mistypes a
+        # column. Keep _EXPECTED_ONEIL_BLOB_COLUMNS in lockstep with the registry.
+        assert _EXPERT_COLUMNS["oneil"] == _EXPECTED_ONEIL_BLOB_COLUMNS
+
+    def test_expert_columns_match_frozen_panel_tuple(self):
+        # Drift guard: _EXPERT_COLUMNS["panel"] must mirror disagreement.PANEL_COLUMNS.
+        assert _EXPERT_COLUMNS["panel"] == _EXPECTED_PANEL_BLOB_COLUMNS
+
+    def test_oneil_panel_blob_keys_are_migration_free(self):
+        # The whole justification for the blob-key path (vs flat Brief fields) is
+        # that it needs NO migration — the JSONField already exists. Pin that adding
+        # the oneil/panel keys did not introduce an un-applied model change.
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        out = StringIO()
+        call_command("makemigrations", "briefs", check=True, dry_run=True, stdout=out, stderr=out)
 
     def test_migration_0011_null_backfill(self, tmp_path: Path):
         # A brief whose parquet carries no buffett columns has expert_assessments
