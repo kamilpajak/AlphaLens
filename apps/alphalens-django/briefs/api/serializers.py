@@ -17,17 +17,39 @@ from rest_framework import serializers
 from briefs.models import Brief, DayMeta
 
 
+# The heavy expert-panel blob (expert_assessments — a per-expert dict of ~14
+# values each) is detail-endpoint-only: it would bloat the bulk candidate lists
+# (a day brief / theme / ticker-history can carry dozens of candidates × the blob,
+# all redundant with the flat buffett_* fields that still ship). The list
+# serializer drops it; the detail serializer keeps it. The split is enforced by a
+# serializer-field test (not advisory). Epic #541, PR-4 (#546).
+_LIST_EXCLUDE = ("pk", "expert_assessments")
+_DETAIL_EXCLUDE = ("pk",)
+
+
 class CandidateSerializer(serializers.ModelSerializer):
-    """One ranked candidate from a daily thematic brief."""
+    """One ranked candidate for a BULK list (day brief / theme / ticker history).
+
+    Auto-exposes every Brief field except the composite pk AND the heavy
+    ``expert_assessments`` blob (see :class:`CandidateDetailSerializer`). The *_str
+    legacy denormalisations live only in DRF method fields, not on the model, so
+    they are not auto-exposed here.
+    """
 
     class Meta:
         model = Brief
-        # Auto-expose every Brief field except the composite pk via `exclude`, so a
-        # new model field appears in the wire payload without editing a hand-kept
-        # list (no drifting count to maintain). The *_str legacy denormalisations
-        # live only in the DRF method fields below, not on the model, so they are
-        # not auto-exposed here.
-        exclude = ("pk",)
+        exclude = _LIST_EXCLUDE
+
+
+class CandidateDetailSerializer(serializers.ModelSerializer):
+    """One candidate for the single-candidate DETAIL endpoint
+    (``/v1/candidates/{date}/{ticker}``) — identical to
+    :class:`CandidateSerializer` plus the full ``expert_assessments`` blob, fetched
+    on demand (e.g. for a card's deep-read drawer) rather than in every bulk list."""
+
+    class Meta:
+        model = Brief
+        exclude = _DETAIL_EXCLUDE
 
 
 class DayMetaSerializer(serializers.ModelSerializer):

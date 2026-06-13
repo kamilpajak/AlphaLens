@@ -45,7 +45,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "$ref": "#/components/schemas/Candidate"
+                                    "$ref": "#/components/schemas/CandidateDetail"
                                 }
                             }
                         },
@@ -232,6 +232,201 @@
                             "application/json": {
                                 "schema": {
                                     "$ref": "#/components/schemas/PaginatedCandidateList"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/edge/chart/{brief_date}/{ticker}": {
+            "get": {
+                "operationId": "v1_edge_chart_retrieve",
+                "description": "``/v1/edge/chart/<brief_date>/<ticker>`` — the pre-computed chart payload.",
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "brief_date",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "Brief date (ISO YYYY-MM-DD).",
+                        "required": true
+                    },
+                    {
+                        "in": "path",
+                        "name": "ticker",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Candidate ticker (case-insensitive).",
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ChartResponse"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/edge/outcomes": {
+            "get": {
+                "operationId": "v1_edge_outcomes_list",
+                "description": "``/v1/edge/outcomes`` — per-candidate rows (theme joined from the brief).",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "status",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Filter: 'terminal' or 'ongoing' (default: all plannable)."
+                    },
+                    {
+                        "in": "query",
+                        "name": "window",
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "description": "Calendar days back from the latest brief date (default: all)."
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/EdgeOutcomeRow"
+                                    }
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/edge/summary": {
+            "get": {
+                "operationId": "v1_edge_summary_retrieve",
+                "description": "``/v1/edge/summary`` — the N-gated, benchmark-relative aggregate.",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "window",
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "description": "Calendar days back from the latest brief date (default: all)."
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/EdgeSummary"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/v1/market/status": {
+            "get": {
+                "operationId": "market_status_retrieve",
+                "description": "Returns whether the requested venue (defaulting to XNYS) holds a session on the anchor date, whether that session is a half-day, whether the venue is in a regular session right now, and the UTC ISO 8601 timestamps of the next session open and next session close. The day-level fields (``is_trading_day``, ``is_half_day``, ``next_open_iso``) are anchored on UTC today unless ``?as_of=YYYY-MM-DD`` is supplied; the intraday fields (``is_open_now``, ``next_close_iso``) always reflect the current wall-clock instant.",
+                "summary": "Current market-status snapshot",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "as_of",
+                        "schema": {
+                            "type": "string",
+                            "format": "date"
+                        },
+                        "description": "ISO 8601 date (YYYY-MM-DD) to anchor the response on. Defaults to today (UTC). Date-only — time components are rejected with 400."
+                    }
+                ],
+                "tags": [
+                    "v1"
+                ],
+                "security": [
+                    {
+                        "CloudflareAccessJWT": []
+                    },
+                    {
+                        "cookieAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/MarketStatus"
+                                }
+                            }
+                        },
+                        "description": ""
+                    },
+                    "400": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {}
                                 }
                             }
                         },
@@ -507,7 +702,7 @@
         "schemas": {
             "Candidate": {
                 "type": "object",
-                "description": "One ranked candidate from a daily thematic brief.",
+                "description": "One ranked candidate for a BULK list (day brief / theme / ticker history).\n\nAuto-exposes every Brief field except the composite pk AND the heavy\n``expert_assessments`` blob (see :class:`CandidateDetailSerializer`). The *_str\nlegacy denormalisations live only in DRF method fields, not on the model, so\nthey are not auto-exposed here.",
                 "properties": {
                     "date": {
                         "type": "string",
@@ -561,6 +756,9 @@
                     },
                     "verified": {
                         "type": "boolean"
+                    },
+                    "gate_verdict_json": {
+                        "type": "string"
                     },
                     "source_event_url": {
                         "type": "string",
@@ -666,6 +864,63 @@
                     },
                     "magic_formula_health_pass": {
                         "type": "boolean"
+                    },
+                    "buffett_owner_earnings_yield_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_roic_latest": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_roic_3y_avg": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_margin_of_safety_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_data_coverage": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_quality_score": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_moat_type": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "buffett_moat_trend": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "buffett_management_candor": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "buffett_understandable": {
+                        "type": "boolean",
+                        "nullable": true
+                    },
+                    "buffett_qualitative_rationale": {
+                        "type": "string"
+                    },
+                    "buffett_used_scuttlebutt": {
+                        "type": "boolean",
+                        "nullable": true
+                    },
+                    "buffett_qual_computed_at": {
+                        "type": "string",
+                        "maxLength": 40
                     },
                     "technical_rsi": {
                         "type": "number",
@@ -778,31 +1033,14 @@
                     "brief_catalyst_failure_exit": {
                         "type": "string"
                     },
-                    "brief_entry_price_note": {
-                        "type": "string"
-                    },
-                    "brief_position_pct": {
-                        "type": "number",
-                        "format": "double",
+                    "brief_trade_setup": {
                         "nullable": true
                     },
-                    "brief_time_exit_weeks": {
-                        "type": "integer",
-                        "maximum": 9223372036854775807,
-                        "minimum": -9223372036854775808,
-                        "format": "int64",
-                        "nullable": true
+                    "brief_template_id": {
+                        "type": "string",
+                        "maxLength": 128
                     },
-                    "brief_time_exit_on_catalyst_failure_weeks": {
-                        "type": "integer",
-                        "maximum": 9223372036854775807,
-                        "minimum": -9223372036854775808,
-                        "format": "int64",
-                        "nullable": true
-                    },
-                    "brief_disaster_stop_pct": {
-                        "type": "number",
-                        "format": "double",
+                    "brief_template_facts": {
                         "nullable": true
                     },
                     "brief_generated_at": {
@@ -817,6 +1055,549 @@
                     "theme",
                     "ticker"
                 ]
+            },
+            "CandidateDetail": {
+                "type": "object",
+                "description": "One candidate for the single-candidate DETAIL endpoint\n(``/v1/candidates/{date}/{ticker}``) — identical to\n:class:`CandidateSerializer` plus the full ``expert_assessments`` blob, fetched\non demand (e.g. for a card's deep-read drawer) rather than in every bulk list.",
+                "properties": {
+                    "date": {
+                        "type": "string",
+                        "format": "date"
+                    },
+                    "ticker": {
+                        "type": "string",
+                        "maxLength": 12
+                    },
+                    "theme": {
+                        "type": "string",
+                        "maxLength": 128
+                    },
+                    "company_name": {
+                        "type": "string",
+                        "maxLength": 256
+                    },
+                    "rationale": {
+                        "type": "string"
+                    },
+                    "llm_confidence": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "market_cap": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "gates_passed": {},
+                    "n_gates_passed": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "gates_failed": {},
+                    "n_gates_failed": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "gates_unknown": {},
+                    "n_gates_unknown": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "verified": {
+                        "type": "boolean"
+                    },
+                    "gate_verdict_json": {
+                        "type": "string"
+                    },
+                    "source_event_url": {
+                        "type": "string",
+                        "format": "uri",
+                        "maxLength": 2048
+                    },
+                    "source_event_title": {
+                        "type": "string",
+                        "maxLength": 512
+                    },
+                    "source_event_published_at": {
+                        "type": "string",
+                        "maxLength": 64
+                    },
+                    "theme_search_keywords": {},
+                    "industry_id": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "industry_name": {
+                        "type": "string",
+                        "maxLength": 256
+                    },
+                    "sector_name": {
+                        "type": "string",
+                        "maxLength": 128
+                    },
+                    "peer_cohort_level": {
+                        "type": "string",
+                        "maxLength": 8
+                    },
+                    "insider_score_usd": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "insider_score_sector_percentile": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "fcff_yield_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "fcff_yield_sector_percentile": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_pe": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_ps": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_ev_rev": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_ev_ebitda": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_fcf_margin": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_composite_sector_percentile": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "valuation_financials_publish_date": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "valuation_financials_age_days": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "roic_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "roe_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "magic_formula_health_pass": {
+                        "type": "boolean"
+                    },
+                    "buffett_owner_earnings_yield_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_roic_latest": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_roic_3y_avg": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_margin_of_safety_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_data_coverage": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_quality_score": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "buffett_moat_type": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "buffett_moat_trend": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "buffett_management_candor": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "buffett_understandable": {
+                        "type": "boolean",
+                        "nullable": true
+                    },
+                    "buffett_qualitative_rationale": {
+                        "type": "string"
+                    },
+                    "buffett_used_scuttlebutt": {
+                        "type": "boolean",
+                        "nullable": true
+                    },
+                    "buffett_qual_computed_at": {
+                        "type": "string",
+                        "maxLength": 40
+                    },
+                    "expert_assessments": {
+                        "nullable": true
+                    },
+                    "technical_rsi": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_ma50_distance_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_atr_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_volume_zscore": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_pct_off_52w_high": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_pct_off_52w_low": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_ma200_distance_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "technical_ma200_slope_pct_per_day": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "catalyst_strength": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "catalyst_event_type": {
+                        "type": "string",
+                        "maxLength": 64
+                    },
+                    "catalyst_confidence": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "magic_formula_rank": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "magic_formula_cohort_n": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "deep_drawdown_reversal": {
+                        "type": "boolean"
+                    },
+                    "layer4_weighted_score": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64"
+                    },
+                    "also_in_themes": {},
+                    "rank_in_day": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "cohort_size_in_day": {
+                        "type": "integer",
+                        "maximum": 9223372036854775807,
+                        "minimum": -9223372036854775808,
+                        "format": "int64",
+                        "nullable": true
+                    },
+                    "next_earnings_date": {
+                        "type": "string",
+                        "format": "date",
+                        "nullable": true
+                    },
+                    "brief_model_used": {
+                        "type": "string",
+                        "maxLength": 64
+                    },
+                    "brief_tldr": {
+                        "type": "string"
+                    },
+                    "brief_supply_chain_md": {
+                        "type": "string"
+                    },
+                    "brief_bear_summary_md": {
+                        "type": "string"
+                    },
+                    "brief_catalyst_failure_exit": {
+                        "type": "string"
+                    },
+                    "brief_trade_setup": {
+                        "nullable": true
+                    },
+                    "brief_template_id": {
+                        "type": "string",
+                        "maxLength": 128
+                    },
+                    "brief_template_facts": {
+                        "nullable": true
+                    },
+                    "brief_generated_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "company_name",
+                    "date",
+                    "theme",
+                    "ticker"
+                ]
+            },
+            "ChartBar": {
+                "type": "object",
+                "description": "One daily OHLC candle (folded from the cached minute bars, RTH-only).\n\n``time`` is an ISO date string (``YYYY-MM-DD``) so it maps 1:1 to a\nLightweight-Charts daily bar time.",
+                "properties": {
+                    "time": {
+                        "type": "string"
+                    },
+                    "open": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "high": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "low": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "close": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "volume": {
+                        "type": "number",
+                        "format": "double"
+                    }
+                },
+                "required": [
+                    "close",
+                    "high",
+                    "low",
+                    "open",
+                    "time",
+                    "volume"
+                ]
+            },
+            "ChartMarker": {
+                "type": "object",
+                "description": "One modeled fill / exit marker, snapped to a daily bar ``time``.\n\n``kind`` is the chart vocabulary (``ENTRY`` / ``TP`` / ``SL`` / ``TIME_STOP``);\n``ambiguous`` carries the SL-first intrabar flag (a bar that touched both a TP\nhigh and the SL low, resolved SL-first).",
+                "properties": {
+                    "time": {
+                        "type": "string"
+                    },
+                    "kind": {
+                        "type": "string"
+                    },
+                    "level_id": {
+                        "type": "string"
+                    },
+                    "price": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "label": {
+                        "type": "string"
+                    },
+                    "ambiguous": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "ambiguous",
+                    "kind",
+                    "label",
+                    "level_id",
+                    "price",
+                    "time"
+                ]
+            },
+            "ChartPriceLines": {
+                "type": "object",
+                "description": "The resting ladder levels drawn as horizontal price lines.\n\n``tp`` is the ordered list of take-profit targets. TIME_STOP is NOT a price\nline — it is an exit event drawn only as a marker.",
+                "properties": {
+                    "entry": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "tp": {
+                        "type": "array",
+                        "items": {
+                            "type": "number",
+                            "format": "double"
+                        }
+                    },
+                    "stop": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "entry",
+                    "stop",
+                    "tp"
+                ]
+            },
+            "ChartResponse": {
+                "type": "object",
+                "description": "``/v1/edge/chart/<brief_date>/<ticker>`` — the pre-computed chart payload.\n\nThe SHAPE is stable across ``status``: a NO_DATA / NO_STRUCTURE payload carries\nempty ``bars`` / ``markers`` and null/empty ``price_lines`` so the SPA branches\non ``status`` without a 2nd request. ``rth_only`` is always true in PR-1\n(RTH-only daily candles; intraday is a later PR).",
+                "properties": {
+                    "brief_date": {
+                        "type": "string",
+                        "format": "date"
+                    },
+                    "ticker": {
+                        "type": "string"
+                    },
+                    "ladder_classification": {
+                        "type": "string"
+                    },
+                    "terminal": {
+                        "type": "boolean"
+                    },
+                    "holding_days_elapsed": {
+                        "type": "integer",
+                        "nullable": true
+                    },
+                    "open_r": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "realized_r": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "status": {
+                        "$ref": "#/components/schemas/ChartResponseStatusEnum"
+                    },
+                    "bars": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ChartBar"
+                        }
+                    },
+                    "price_lines": {
+                        "$ref": "#/components/schemas/ChartPriceLines"
+                    },
+                    "markers": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/ChartMarker"
+                        }
+                    },
+                    "ambiguous_bars": {
+                        "type": "integer"
+                    },
+                    "intrabar_rule": {
+                        "type": "string"
+                    },
+                    "rth_only": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "ambiguous_bars",
+                    "bars",
+                    "brief_date",
+                    "holding_days_elapsed",
+                    "intrabar_rule",
+                    "ladder_classification",
+                    "markers",
+                    "open_r",
+                    "price_lines",
+                    "realized_r",
+                    "rth_only",
+                    "status",
+                    "terminal",
+                    "ticker"
+                ]
+            },
+            "ChartResponseStatusEnum": {
+                "enum": [
+                    "OK",
+                    "NO_DATA",
+                    "NO_STRUCTURE"
+                ],
+                "type": "string",
+                "description": "* `OK` - OK\n* `NO_DATA` - NO_DATA\n* `NO_STRUCTURE` - NO_STRUCTURE"
             },
             "DayBrief": {
                 "type": "object",
@@ -890,6 +1671,299 @@
                     "n_candidates",
                     "n_themes",
                     "top_theme"
+                ]
+            },
+            "DeploymentPanel": {
+                "type": "object",
+                "description": "The DEPLOYMENT panel — N-INDEPENDENT, always populated.",
+                "properties": {
+                    "n_terminal": {
+                        "type": "integer"
+                    },
+                    "n_filled": {
+                        "type": "integer"
+                    },
+                    "n_no_fill": {
+                        "type": "integer"
+                    },
+                    "fill_rate": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "no_fill_rate": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "mean_tiers_filled_count": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "fill_rate",
+                    "mean_tiers_filled_count",
+                    "n_filled",
+                    "n_no_fill",
+                    "n_terminal",
+                    "no_fill_rate"
+                ]
+            },
+            "EdgeOutcomeRow": {
+                "type": "object",
+                "description": "The lean per-candidate shape for ``/v1/edge/outcomes`` (memo §5 table).",
+                "properties": {
+                    "ticker": {
+                        "type": "string"
+                    },
+                    "brief_date": {
+                        "type": "string",
+                        "format": "date"
+                    },
+                    "theme": {
+                        "type": "string",
+                        "nullable": true
+                    },
+                    "ladder_classification": {
+                        "type": "string"
+                    },
+                    "terminal": {
+                        "type": "boolean"
+                    },
+                    "realized_r": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "open_r": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "market_excess_return": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "forward_return": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "benchmark_window_return": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "holding_days_elapsed": {
+                        "type": "integer",
+                        "nullable": true
+                    },
+                    "realized_return_pct_of_book": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "benchmark_window_return",
+                    "brief_date",
+                    "forward_return",
+                    "holding_days_elapsed",
+                    "ladder_classification",
+                    "market_excess_return",
+                    "open_r",
+                    "realized_r",
+                    "realized_return_pct_of_book",
+                    "terminal",
+                    "ticker"
+                ]
+            },
+            "EdgePanel": {
+                "type": "object",
+                "description": "The EDGE panel — gated. ``status='insufficient'`` nulls the stat fields.\n\nThe key SHAPE is stable (every field always present); the N-gate hides the\nnumbers by setting them to ``null`` rather than dropping the keys, so the\nfrontend can build a single static type and branch on ``status``.",
+                "properties": {
+                    "status": {
+                        "$ref": "#/components/schemas/Status3b9Enum"
+                    },
+                    "n_matured": {
+                        "type": "integer"
+                    },
+                    "threshold": {
+                        "type": "integer"
+                    },
+                    "market_excess_mean": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "market_excess_median": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "market_excess_quantiles": {
+                        "$ref": "#/components/schemas/_Quantiles"
+                    },
+                    "gross_realized_r_mean": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "gross_realized_r_median": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "gross_realized_r_n": {
+                        "type": "integer"
+                    },
+                    "holding_days_n": {
+                        "type": "integer"
+                    },
+                    "holding_days_p50": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "holding_days_p95": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "gross_of_cost": {
+                        "type": "boolean"
+                    },
+                    "regime_stratified": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "gross_of_cost",
+                    "gross_realized_r_mean",
+                    "gross_realized_r_median",
+                    "gross_realized_r_n",
+                    "holding_days_n",
+                    "holding_days_p50",
+                    "holding_days_p95",
+                    "market_excess_mean",
+                    "market_excess_median",
+                    "market_excess_quantiles",
+                    "n_matured",
+                    "regime_stratified",
+                    "status",
+                    "threshold"
+                ]
+            },
+            "EdgeSummary": {
+                "type": "object",
+                "description": "``/v1/edge/summary`` — the full N-gated, benchmark-relative aggregate.",
+                "properties": {
+                    "n_brief": {
+                        "type": "integer"
+                    },
+                    "n_plannable": {
+                        "type": "integer"
+                    },
+                    "n_terminal": {
+                        "type": "integer"
+                    },
+                    "n_matured": {
+                        "type": "integer"
+                    },
+                    "n_gate_threshold": {
+                        "type": "integer"
+                    },
+                    "benchmark": {
+                        "type": "string"
+                    },
+                    "metric_note": {
+                        "type": "string"
+                    },
+                    "edge": {
+                        "$ref": "#/components/schemas/EdgePanel"
+                    },
+                    "portfolio": {
+                        "$ref": "#/components/schemas/PortfolioPanel"
+                    },
+                    "deployment": {
+                        "$ref": "#/components/schemas/DeploymentPanel"
+                    },
+                    "open_positions": {
+                        "$ref": "#/components/schemas/OpenPositions"
+                    }
+                },
+                "required": [
+                    "benchmark",
+                    "deployment",
+                    "edge",
+                    "metric_note",
+                    "n_brief",
+                    "n_gate_threshold",
+                    "n_matured",
+                    "n_plannable",
+                    "n_terminal",
+                    "open_positions",
+                    "portfolio"
+                ]
+            },
+            "MarketStatus": {
+                "type": "object",
+                "properties": {
+                    "is_trading_day": {
+                        "type": "boolean"
+                    },
+                    "is_half_day": {
+                        "type": "boolean"
+                    },
+                    "is_open_now": {
+                        "type": "boolean"
+                    },
+                    "next_open_iso": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "next_close_iso": {
+                        "type": "string",
+                        "format": "date-time"
+                    },
+                    "exchange": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "exchange",
+                    "is_half_day",
+                    "is_open_now",
+                    "is_trading_day",
+                    "next_close_iso",
+                    "next_open_iso"
+                ]
+            },
+            "OpenPositions": {
+                "type": "object",
+                "description": "Ongoing positions as a DESCRIPTIVE distribution (never a scalar mean).",
+                "properties": {
+                    "n_open": {
+                        "type": "integer"
+                    },
+                    "near_tp": {
+                        "type": "integer"
+                    },
+                    "near_sl": {
+                        "type": "integer"
+                    },
+                    "note": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "n_open",
+                    "near_sl",
+                    "near_tp",
+                    "note"
                 ]
             },
             "PaginatedCandidateList": {
@@ -1003,6 +2077,54 @@
                     }
                 }
             },
+            "PortfolioPanel": {
+                "type": "object",
+                "description": "The PORTFOLIO (size-weighted) panel — gated, same N-gate as EDGE.",
+                "properties": {
+                    "status": {
+                        "$ref": "#/components/schemas/Status3b9Enum"
+                    },
+                    "n_matured": {
+                        "type": "integer"
+                    },
+                    "threshold": {
+                        "type": "integer"
+                    },
+                    "total_realized_contribution_pct_of_book": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "size_weighted_realized_r": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "mean_realized_risk_pct": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "mean_tiers_filled_count": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "gross_of_cost": {
+                        "type": "boolean"
+                    }
+                },
+                "required": [
+                    "gross_of_cost",
+                    "mean_realized_risk_pct",
+                    "mean_tiers_filled_count",
+                    "n_matured",
+                    "size_weighted_realized_r",
+                    "status",
+                    "threshold",
+                    "total_realized_contribution_pct_of_book"
+                ]
+            },
             "Stats": {
                 "type": "object",
                 "description": "Top-line counters and most-frequent themes for ``/v1/stats``.",
@@ -1047,6 +2169,15 @@
                     "n_themes",
                     "top_themes"
                 ]
+            },
+            "Status3b9Enum": {
+                "enum": [
+                    "insufficient",
+                    "early",
+                    "ok"
+                ],
+                "type": "string",
+                "description": "* `insufficient` - insufficient\n* `early` - early\n* `ok` - ok"
             },
             "ThemeSummary": {
                 "type": "object",
@@ -1095,6 +2226,31 @@
                     "n_candidates",
                     "n_days",
                     "theme"
+                ]
+            },
+            "_Quantiles": {
+                "type": "object",
+                "properties": {
+                    "p10": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "p50": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "p90": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "p10",
+                    "p50",
+                    "p90"
                 ]
             }
         },
