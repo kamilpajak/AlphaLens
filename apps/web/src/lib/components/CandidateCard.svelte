@@ -9,18 +9,14 @@
 		confidenceTone,
 		confidenceLabel,
 		buffettTone,
-		moatTone,
-		moatTrendTone,
-		candorTone,
-		understoodTone,
-		understoodLabel
+		panelCoverageLabel
 	} from '$lib/format';
-	import { ExternalLink, Sparkle, ChevronRight } from 'lucide-svelte';
+	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
-	import BuffettPillar from './BuffettPillar.svelte';
+	import ExpertPanel from './ExpertPanel.svelte';
 	import TradeSetup from './TradeSetup.svelte';
 	import TemplateFacts from './TemplateFacts.svelte';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
@@ -77,44 +73,12 @@
 					: '')
 	);
 
-	// Buffett deep-read drawer (collapsed accordion): the qualitative layer —
-	// four pillar badges (moat / trend / candor / understood) + the LLM rationale.
-	// Only offered when the qual layer ran for this name (some field present);
-	// a name with no fetchable 10-K simply has no drawer.
-	let buffOpen = $state(false);
-	const hasBuffQual = $derived(
-		!!buf?.buffett_moat_type ||
-			!!buf?.buffett_qualitative_rationale ||
-			buf?.buffett_understandable != null ||
-			!!buf?.buffett_moat_trend ||
-			!!buf?.buffett_management_candor
-	);
-	const buffPillars = $derived([
-		{
-			label: 'moat',
-			value: buf?.buffett_moat_type || '—',
-			tone: moatTone(buf?.buffett_moat_type),
-			body: 'The dominant durable competitive advantage the LLM could evidence from the 10-K (brand / cost / switching-cost / network / regulatory / intangible / none).'
-		},
-		{
-			label: 'trend',
-			value: buf?.buffett_moat_trend || '—',
-			tone: moatTrendTone(buf?.buffett_moat_trend),
-			body: 'Whether that advantage looks to be widening, stable, narrowing, or unclear — judged from the risk-factor evolution + margin/ROIC trend.'
-		},
-		{
-			label: 'candor',
-			value: buf?.buffett_management_candor || '—',
-			tone: candorTone(buf?.buffett_management_candor),
-			body: "Reading of the MD&A's tone: candid about problems, mixed, promotional, or too little to tell."
-		},
-		{
-			label: 'understood',
-			value: understoodLabel(buf?.buffett_understandable),
-			tone: understoodTone(buf?.buffett_understandable),
-			body: 'Could a generalist clearly explain what the company sells and how it earns money from Item 1 — or is it "too hard"?'
-		}
-	]);
+	// Expert-panel coverage chip (PR-8b): a tone-NEUTRAL +1 token in the meta bar —
+	// "panel 2 lenses" / "1 lens" / "—" — that only states HOW MANY lenses scored
+	// this name. No band word, no colour on the card face (the disagreement band +
+	// its colour live in the opened drawer with an "unvalidated" label). The qualitative
+	// deep-read + the dot-lane + the O'Neil numerics all live in <ExpertPanel>.
+	const panelCov = $derived(panelCoverageLabel(buf?.buffett_quality_score, c.expert_assessments?.oneil?.oneil_score));
 </script>
 
 <article
@@ -221,6 +185,16 @@
 							class:text-fg-muted={buffTone === 'muted'}
 							>{buffScore !== null ? `${buffScore}/100` : '—'}</span
 						>
+					</span>
+				{/snippet}
+			</ChipTip>
+			<ChipTip
+				term="expert panel"
+				body="How many orthogonal expert lenses scored this name (Buffett value/quality + O'Neil momentum). Open the panel for each lens's read and the disagreement between them. Display-only, unvalidated — not a buy/avoid signal."
+			>
+				{#snippet chip()}
+					<span class="text-fg-muted whitespace-nowrap cursor-help">
+						panel <span class="font-bold normal-case">{panelCov}</span>
 					</span>
 				{/snippet}
 			</ChipTip>
@@ -394,52 +368,13 @@
 				</div>
 			</div>
 
-			<!-- Buffett deep-read: collapsed qualitative drawer (card PR-4). The
-			     expensive moat / trend / candor classification + the LLM rationale,
-			     hidden by default so it costs zero resting vertical space. Only
-			     offered when the qualitative layer ran for this name. -->
-			{#if hasBuffQual}
-				<div class="px-4 sm:px-5 py-3 border-t border-grid">
-					<button
-						type="button"
-						class="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-cyan hover:text-amber transition-colors"
-						aria-expanded={buffOpen}
-						onclick={() => (buffOpen = !buffOpen)}
-					>
-						<ChevronRight class="size-3 transition-transform {buffOpen ? 'rotate-90' : ''}" />
-						buffett.deep-read
-					</button>
-					{#if buffOpen}
-						<div class="mt-3 space-y-3">
-							<div class="flex flex-wrap gap-2">
-								{#each buffPillars as pillar (pillar.label)}
-									<BuffettPillar
-										label={pillar.label}
-										value={pillar.value}
-										tone={pillar.tone}
-										body={pillar.body}
-									/>
-								{/each}
-							</div>
-							{#if buf?.buffett_qualitative_rationale}
-								<blockquote class="border-l-2 border-violet pl-4">
-									<p class="text-fg-dim text-xs leading-relaxed">
-										{buf?.buffett_qualitative_rationale}
-									</p>
-								</blockquote>
-							{/if}
-							<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-fg-muted">
-								{#if buf?.buffett_used_scuttlebutt}
-									<span class="text-amber whitespace-nowrap">scuttlebutt: web-grounded, unverified</span>
-								{/if}
-								{#if buf?.buffett_qual_computed_at}
-									<span class="whitespace-nowrap">classified {fmtDate(buf?.buffett_qual_computed_at)}</span>
-								{/if}
-							</div>
-						</div>
-					{/if}
-				</div>
-			{/if}
+			<!-- Expert-panel deep-read (PR-8b): the generalized drawer — disagreement
+			     headline + dot-lane (only when >=2 lenses scored) + one section per
+			     expert (Buffett qual pillars + rationale; O'Neil numeric readouts +
+			     audit flags). Hidden by default; renders nothing when no lens has
+			     content for this name. The transition shim lives inside (reads the
+			     persisted panel.expert_spread, never recomputes). -->
+			<ExpertPanel assessments={c.expert_assessments} />
 		</div>
 
 		<!-- RIGHT column -->

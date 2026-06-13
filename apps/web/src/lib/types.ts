@@ -124,10 +124,52 @@ export interface BuffettAssessment {
 	buffett_qual_config_version?: string;
 }
 
-/** The expert-panel blob, keyed by expert id (O'Neil etc. join later, additive). */
+/**
+ * O'Neil's momentum/technical assessment (PR-7 numerics, surfaced PR-8). Numeric-
+ * only — no qualitative pillars / rationale. The two audit flags are real tri-state
+ * booleans (Django coerce_optional_bool restored them from the bool-as-float parquet
+ * cells); the SPA renders their badges only on a strict `=== true`. Every key is
+ * OPTIONAL (sparse blob). oneil_score is null whenever the mandatory N term is absent.
+ */
+export interface ONeilAssessment {
+	oneil_pct_off_52w_high?: number | null;
+	oneil_ma200_slope_pct_per_day?: number | null;
+	oneil_ma200_distance_pct?: number | null;
+	oneil_earnings_growth_yoy_pct?: number | null;
+	oneil_earnings_growth_near_zero_base?: boolean | null;
+	oneil_new_high_split_suspected?: boolean | null;
+	oneil_data_coverage?: number | null;
+	oneil_score?: number | null;
+}
+
+/**
+ * Panel-level disagreement scalars (PR-8a), sibling to the per-expert keys.
+ * `expert_spread` is the RAW, UNCALIBRATED gap between the two composites (null when
+ * fewer than two scored) — recorded for the deferred Expert×EDGE study, NOT a
+ * calibrated magnitude. `panel_config_version` pins the formula + the drawer band set.
+ */
+export interface PanelAssessment {
+	expert_spread?: number | null;
+	panel_config_version?: string | null;
+}
+
+/** The expert-panel blob, keyed by expert id + a panel-level `panel` namespace. */
 export interface ExpertAssessments {
 	buffett?: BuffettAssessment;
+	oneil?: ONeilAssessment;
+	panel?: PanelAssessment;
 }
+
+/**
+ * How each expert renders in the drawer. `qual` = pillar badges + LLM rationale
+ * (Buffett); `numeric` = a readout list + audit-flag badges, no rationale (O'Neil).
+ * SPA-side map (Django cannot import the pipeline registry); a 3rd expert is one entry.
+ */
+export type ExpertKind = 'qual' | 'numeric';
+export const EXPERT_KIND: Record<string, ExpertKind> = {
+	buffett: 'qual',
+	oneil: 'numeric'
+};
 
 /**
  * One limit-buy rung of the entry ladder. `atr_distance` is how far below the

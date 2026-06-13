@@ -510,6 +510,21 @@ test.describe('smoke — brief detail interactions', () => {
 		await expect(page.locator('article[id] [data-testid="trade-setup"]').first()).toBeVisible();
 	});
 
+	test('expert-panel coverage chip renders as a single non-wrapping +1 token', async ({ page }) => {
+		// PR-8b: every card gains exactly one tone-neutral "panel N lenses" / "—"
+		// coverage chip (the +1 token). With no expert_assessments in the fixture the
+		// chip reads "panel —" — it must still render (the metric is always shown) and
+		// carry whitespace-nowrap so "panel 2 lenses" can never break across two lines.
+		await page.goto(`/brief/${latestDay.date}`);
+		await expect(page.locator('article[id]').first()).toBeVisible();
+		const chip = page
+			.locator('article[id] span')
+			.filter({ hasText: /^\s*panel\s+(\d+ lens(es)?|—)\s*$/i })
+			.first();
+		await expect(chip).toBeVisible();
+		await expect(chip).toHaveClass(/whitespace-nowrap/);
+	});
+
 	test('trade-setup percentages render with bounded precision (no raw floats)', async ({ page }) => {
 		// Regression: prod data arrives as raw floats (e.g. suggested_size_pct =
 		// 4.065583485277316, alloc_pct = 27.98308726424079) from the equal-risk
