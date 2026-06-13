@@ -6,9 +6,10 @@ from the existing ``build_default_panel_fn`` + ``compute_panel``, the 0-100 scor
 from ``compute_quality_score``, and the qualitative classification from
 ``assess_panel_qualitative``.
 
-PR-1 scaffolding: this adapter + the registry are consumed by tests. The WIRED
-thematic score stage still calls ``quant_enrichment.enrich`` directly; routing the
-generalized enrichment through the registry (and adding O'Neil) is PR-2 / PR-7.
+The eager qualitative enrich (``enrich_brief_frame``, the ``QualEnrichExpert``
+capability) is driven by the registry via ``experts.enrich.enrich_briefs`` (PR-2).
+The numeric score-stage stamping still calls ``quant_enrichment.enrich`` directly;
+O'Neil (numeric-only, no qual layer) follows in PR-7.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Mapping
 from dataclasses import asdict
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from alphalens_pipeline.experts.base import Assessment, Panel
 from alphalens_pipeline.experts.buffett.comparison import BuffettPanel
@@ -27,15 +28,29 @@ from alphalens_pipeline.experts.buffett.quant_enrichment import (
     build_default_panel_fn,
 )
 
-# The five qualitative CONTENT columns the assessment yields. The three
-# provenance columns (used_scuttlebutt / qual_computed_at / qual_config_version)
-# are stamped by the qual-enrich pass and join the panel surface in PR-2.
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pandas as pd
+
+    from alphalens_pipeline.experts.buffett.qual_enrichment import AssessOne
+
+# The five qualitative CONTENT columns the assessment yields.
 _QUAL_CONTENT_COLUMNS: tuple[str, ...] = (
     "buffett_moat_type",
     "buffett_moat_trend",
     "buffett_management_candor",
     "buffett_understandable",
     "buffett_qualitative_rationale",
+)
+
+# The three provenance columns the qual-enrich pass stamps alongside the content
+# (folded into the expert's declared surface in PR-2; their VALUES still come from
+# QualRecord via the unchanged qual_enrichment.stamp_columns map).
+_QUAL_PROVENANCE_COLUMNS: tuple[str, ...] = (
+    "buffett_used_scuttlebutt",
+    "buffett_qual_computed_at",
+    "buffett_qual_config_version",
 )
 
 
@@ -55,7 +70,7 @@ class BuffettExpert:
 
     id = "buffett"
     name = "Warren Buffett (value / quality)"
-    column_names = BUFFETT_COLUMNS + _QUAL_CONTENT_COLUMNS
+    column_names = BUFFETT_COLUMNS + _QUAL_CONTENT_COLUMNS + _QUAL_PROVENANCE_COLUMNS
 
     def __init__(self, panel_fn: PanelFn | None = None) -> None:
         # Injectable for tests; the default wires the real store LAZILY on first
@@ -113,6 +128,70 @@ class BuffettExpert:
             "buffett_understandable": assessment.understandable,
             "buffett_qualitative_rationale": assessment.rationale,
         }
+
+    def enrich_brief_frame(
+        self,
+        df: pd.DataFrame,
+        brief_date: dt.date,
+        *,
+        briefs_dir: Path | None = None,
+        store,
+        mcap_fn,
+        dividends_fn,
+        exec_comp_fn=None,
+        scuttlebutt: bool = False,
+        cache_dir: Path | None = None,
+        assess_one: AssessOne | None = None,
+    ) -> tuple[pd.DataFrame, int]:
+        """Stamp the eight Buffett qualitative columns into ``df`` (the eager,
+        cached qual layer — the :class:`QualEnrichExpert` capability).
+
+        Delegates verbatim to the moved Buffett machinery: ``build_comparison``
+        builds the panels, ``enrich_qualitative`` computes the records against the
+        immutable per-(config_version, date, ticker, scuttlebutt) cache (PR-0),
+        and ``stamp_columns`` merges the eight columns by ticker. Returns the
+        (stamped) frame plus the count of names that resolved a real
+        classification. ``assess_one`` is injectable for tests. The single atomic
+        write is the driver's responsibility (read-once / write-once).
+        """
+        from alphalens_pipeline.experts.buffett.comparison import build_comparison
+        from alphalens_pipeline.experts.buffett.qual_enrichment import (
+            DEFAULT_QUAL_CACHE_DIR,
+            _is_real,
+            enrich_qualitative,
+            stamp_columns,
+        )
+
+        panels = build_comparison(
+            brief_date,
+            briefs_dir=briefs_dir,
+            store=store,
+            mcap_fn=mcap_fn,
+            dividends_fn=dividends_fn,
+            exec_comp_fn=exec_comp_fn,
+        )
+        records = enrich_qualitative(
+            panels,
+            asof=brief_date,
+            scuttlebutt=scuttlebutt,
+            cache_dir=cache_dir if cache_dir is not None else DEFAULT_QUAL_CACHE_DIR,
+            assess_one=assess_one,
+        )
+        by_ticker = {panel.ticker.upper(): rec for panel, rec in zip(panels, records, strict=True)}
+        out = stamp_columns(df, by_ticker)
+        n_real = sum(1 for rec in records if rec is not None and _is_real(rec))
+        return out, n_real
+
+    def migrate_qual_cache(self, cache_dir: Path | None = None) -> int:
+        """Move this expert's legacy untagged cache into the version-tiered layout."""
+        from alphalens_pipeline.experts.buffett.qual_enrichment import (
+            DEFAULT_QUAL_CACHE_DIR,
+            migrate_legacy_qual_cache,
+        )
+
+        return migrate_legacy_qual_cache(
+            cache_dir if cache_dir is not None else DEFAULT_QUAL_CACHE_DIR
+        )
 
 
 __all__ = ["BuffettExpert"]

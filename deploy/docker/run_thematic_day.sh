@@ -45,14 +45,17 @@ alphalens thematic score
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic brief"
 alphalens thematic brief
 
-# Eager Buffett qualitative layer (card epic #500 / surfacing PRs #530-#535).
-# Classifies moat / trend / candor / understandability + a rationale per brief
-# survivor from its 10-K and stamps the seven qual columns INTO the brief parquet
-# the brief stage just wrote — so the rebuild-cache ExecStartPost below carries
-# them into Postgres and the card's `buffett.deep-read` drawer lights up.
+# Eager expert-panel qualitative layer (card epic #500 / surfacing PRs #530-#535;
+# generalized to the experts registry in PR-2). For each registered qual-capable
+# expert (Buffett today) it classifies moat / trend / candor / understandability +
+# a rationale per brief survivor from its 10-K and stamps the eight qual columns
+# INTO the brief parquet the brief stage just wrote — so the rebuild-cache
+# ExecStartPost below carries them into Postgres and the card's `buffett.deep-read`
+# drawer lights up. `--all` runs every registered expert (identical to Buffett-only
+# today).
 #
-# All five thematic stages above default to yesterday-UTC; qual-enrich takes the
-# date as a positional arg, so pass the same day explicitly. Results are cached
+# All five thematic stages above default to yesterday-UTC; `experts enrich` takes
+# the date as a positional arg, so pass the same day explicitly. Results are cached
 # immutably per (date, ticker, scuttlebutt) under ~/.alphalens/buffett_qual/, so
 # the 6×/day reruns re-pay the LLM only for names not yet classified for the day
 # (~$3-4/day steady-state with scuttlebutt on; a no-10-K name costs nothing).
@@ -69,7 +72,7 @@ alphalens thematic brief
 # already written, so a DeepSeek / Perplexity / SEC hiccup must NOT fail the build
 # — the drawer simply stays absent for that name until the next run re-tries.
 #
-# MANDATORY ORDERING: migrate the qual cache into version tiers BEFORE qual-enrich.
+# MANDATORY ORDERING: migrate the qual cache into version tiers BEFORE enrich.
 # This deploy widened the cache key with a `config_version` tier so a future rubric
 # bump can never overwrite the corpus. The one-shot move relocates the existing
 # pre-registry corpus into the v0 tier so enrich SHORT-CIRCUITS on a load-hit there,
@@ -77,14 +80,14 @@ alphalens thematic brief
 # (LLM-nondeterministic) verdict. Idempotent — re-runs migrate nothing. Best-effort
 # under `set -e`: a migrate hiccup must not fail the build (it costs at most one run
 # of recompute-waste), so warn to stderr and continue.
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] buffett migrate-qual-cache"
-alphalens buffett migrate-qual-cache \
-    || echo "WARN: buffett migrate-qual-cache failed; legacy names may recompute into v0 tier" >&2
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] experts migrate-qual-cache"
+alphalens experts migrate-qual-cache \
+    || echo "WARN: experts migrate-qual-cache failed; legacy names may recompute into v0 tier" >&2
 
-echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] buffett qual-enrich"
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] experts enrich"
 QUAL_DATE="$(date -u -d 'yesterday' +%Y-%m-%d)"
-alphalens buffett qual-enrich "$QUAL_DATE" --scuttlebutt \
-    || echo "WARN: buffett qual-enrich failed for $QUAL_DATE; deep-read drawer absent until next run" >&2
+alphalens experts enrich "$QUAL_DATE" --all --scuttlebutt \
+    || echo "WARN: experts enrich failed for $QUAL_DATE; deep-read drawer absent until next run" >&2
 
 # VIX regime cache refresh (Track A v2 PR-2). Best-effort: a FRED blip must
 # NOT fail the whole thematic build (the brief is already written above). The

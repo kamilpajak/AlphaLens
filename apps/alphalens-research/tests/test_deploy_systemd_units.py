@@ -685,6 +685,26 @@ class TestThematicBuildCadence(unittest.TestCase):
             "short-circuits every run after the first.",
         )
 
+    def test_run_thematic_day_uses_experts_cli(self) -> None:
+        # PR-2 renamed `buffett qual-enrich` / `buffett migrate-qual-cache` to the
+        # registry-driven `experts` surface; the deploy script must invoke the new
+        # commands (migrate strictly before enrich) and carry NO stale old command.
+        script_text = RUN_THEMATIC_SCRIPT.read_text()
+        self.assertIn("alphalens experts migrate-qual-cache", script_text)
+        self.assertRegex(
+            script_text,
+            re.compile(r"^alphalens experts enrich .*--all --scuttlebutt", re.MULTILINE),
+        )
+        self.assertNotIn("buffett qual-enrich", script_text)
+        self.assertNotIn("buffett migrate-qual-cache", script_text)
+        # Ordering: the migrate COMMAND must run before the enrich COMMAND
+        # (short-circuit before recompute). Anchor on the `alphalens ...`
+        # invocations, not the comment prose that also names them.
+        self.assertLess(
+            script_text.index("alphalens experts migrate-qual-cache"),
+            script_text.index("alphalens experts enrich"),
+        )
+
     def test_thematic_build_staleness_alert_threshold_is_12h(self) -> None:
         # 12h = 3× the 4h interval. Loose enough that one transient
         # miss (Gemini RPM blip, Polygon outage) does not page; tight

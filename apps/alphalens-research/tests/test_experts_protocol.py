@@ -109,6 +109,24 @@ class TestBuffettExpertProtocol(unittest.TestCase):
         self.assertTrue(set(BUFFETT_COLUMNS).issubset(cols))
         self.assertTrue(_QUAL_KEYS.issubset(cols))
 
+    def test_is_qual_enrich_expert_with_provenance_columns(self) -> None:
+        from alphalens_pipeline.experts.base import QualEnrichExpert
+        from alphalens_pipeline.experts.buffett import qual_enrichment as qe
+
+        exp = BuffettExpert()
+        self.assertIsInstance(exp, QualEnrichExpert)
+        # 6 quant + 5 content + 3 provenance = 14, a superset of the 8 columns
+        # stamp_columns actually writes (incl. buffett_qual_config_version).
+        self.assertEqual(len(exp.column_names), 14)
+        self.assertEqual(len(qe.QUAL_COLUMNS), 8)
+        self.assertTrue(set(qe.QUAL_COLUMNS).issubset(set(exp.column_names)))
+        for col in (
+            "buffett_used_scuttlebutt",
+            "buffett_qual_computed_at",
+            "buffett_qual_config_version",
+        ):
+            self.assertIn(col, exp.column_names)
+
 
 if __name__ == "__main__":
     unittest.main()
