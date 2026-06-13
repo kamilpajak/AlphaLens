@@ -108,6 +108,38 @@ class TestRebuildSmoke:
         avgo = Brief.objects.get(ticker="AVGO")
         assert avgo.brief_trade_setup is None
 
+    def test_oneil_columns_present_but_unread_do_not_break_ingest(self, tmp_path: Path):
+        # PR-7 stamps eight oneil_* columns into the brief parquet, but Django does
+        # NOT model or surface them yet (deferred to PR-8 — _EXPERT_COLUMNS stays
+        # buffett-only). Ingest must tolerate the extra columns: they are simply
+        # never read (ingest iterates Brief fields), so the rebuild succeeds and the
+        # columns are neither a model attribute nor an expert_assessments key.
+        rows = _sample_rows()
+        rows[0].update(
+            {
+                "oneil_pct_off_52w_high": -3.0,
+                "oneil_ma200_slope_pct_per_day": 0.05,
+                "oneil_ma200_distance_pct": 8.0,
+                "oneil_earnings_growth_yoy_pct": 20.0,
+                "oneil_earnings_growth_near_zero_base": 0.0,
+                "oneil_new_high_split_suspected": 0.0,
+                "oneil_data_coverage": 1.0,
+                "oneil_score": 72.0,
+            }
+        )
+        _write_parquet(tmp_path, "2026-05-22", rows)
+
+        result = rebuild_from_parquet(briefs_dir=tmp_path)
+
+        assert result.total_briefs == 2
+        nvda = Brief.objects.get(ticker="NVDA")
+        # Present-but-unread: not a model attribute, and the expert blob (buffett-only
+        # for now) carries no "oneil" key.
+        assert not hasattr(nvda, "oneil_score")
+        assert "oneil" not in _EXPERT_COLUMNS
+        if nvda.expert_assessments is not None:
+            assert "oneil" not in nvda.expert_assessments
+
     def test_empty_directory_is_noop(self, tmp_path: Path):
         result = rebuild_from_parquet(briefs_dir=tmp_path)
         assert result.n_rebuilt == 0

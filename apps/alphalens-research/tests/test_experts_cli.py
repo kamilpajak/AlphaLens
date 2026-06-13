@@ -137,8 +137,16 @@ class TestExpertsEnrichCommand(unittest.TestCase):
         self.assertNotEqual(neither.exit_code, 0)
 
     def test_unknown_expert_rejected(self):
+        r = self._runner.invoke(app, ["experts", "enrich", "2026-06-10", "--expert", "graham"])
+        self.assertNotEqual(r.exit_code, 0)
+        self.assertIn("unknown expert", r.output)
+
+    def test_numeric_only_expert_rejected(self):
+        # O'Neil is numeric-only (stamped at the score stage) — `enrich` has no
+        # qualitative layer to run for it, so a single --expert oneil is rejected.
         r = self._runner.invoke(app, ["experts", "enrich", "2026-06-10", "--expert", "oneil"])
         self.assertNotEqual(r.exit_code, 0)
+        self.assertIn("numeric-only", r.output)
 
     def test_bad_date_rejected(self):
         r = self._runner.invoke(app, ["experts", "enrich", "nope", "--all"])
@@ -164,8 +172,15 @@ class TestExpertsMigrateCommand(unittest.TestCase):
             self.assertFalse((legacy / "AAPL.json").exists())
 
     def test_unknown_expert_rejected(self):
+        r = self._runner.invoke(app, ["experts", "migrate-qual-cache", "--expert", "graham"])
+        self.assertNotEqual(r.exit_code, 0)
+        self.assertIn("unknown expert", r.output)
+
+    def test_numeric_only_expert_has_no_cache_to_migrate(self):
+        # O'Neil is numeric-only — no qualitative cache to relocate.
         r = self._runner.invoke(app, ["experts", "migrate-qual-cache", "--expert", "oneil"])
         self.assertNotEqual(r.exit_code, 0)
+        self.assertIn("no qualitative cache", r.output)
 
 
 class TestOldBuffettSubcommandsRemoved(unittest.TestCase):
