@@ -16,16 +16,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-import alphalens_pipeline.buffett.comparison as comparison_mod
-import alphalens_pipeline.buffett.qualitative as qualitative_mod
-import alphalens_pipeline.buffett.scuttlebutt as scuttlebutt_mod
+import alphalens_pipeline.experts.buffett.comparison as comparison_mod
+import alphalens_pipeline.experts.buffett.qualitative as qualitative_mod
+import alphalens_pipeline.experts.buffett.scuttlebutt as scuttlebutt_mod
 import alphalens_pipeline.thematic.verification.tenk_grep as tenk_grep_mod
 from alphalens_cli.commands.buffett import _fmt_num, _format_rationale_block, _format_table
 from alphalens_cli.main import app
-from alphalens_pipeline.buffett.comparison import BuffettPanel
-from alphalens_pipeline.buffett.qual_enrichment import BUFFETT_QUAL_CONFIG_VERSION as _CV
-from alphalens_pipeline.buffett.qualitative import QualitativeAssessment
-from alphalens_pipeline.buffett.scuttlebutt import Scuttlebutt
+from alphalens_pipeline.experts.buffett.comparison import BuffettPanel
+from alphalens_pipeline.experts.buffett.qual_enrichment import BUFFETT_QUAL_CONFIG_VERSION as _CV
+from alphalens_pipeline.experts.buffett.qualitative import QualitativeAssessment
+from alphalens_pipeline.experts.buffett.scuttlebutt import Scuttlebutt
 from typer.testing import CliRunner
 
 
@@ -395,7 +395,7 @@ class TestBuildExecCompFn(unittest.TestCase):
         import datetime as _dt
 
         from alphalens_cli.commands.buffett import _build_exec_comp_fn
-        from alphalens_pipeline.buffett.exec_comp import ExecCompCoverage, ExecCompFacts
+        from alphalens_pipeline.experts.buffett.exec_comp import ExecCompCoverage, ExecCompFacts
 
         sentinel = ExecCompFacts(
             cik="1321655", coverage=ExecCompCoverage.PRESENT, peo_to_neo_ratio=4.0
@@ -407,7 +407,8 @@ class TestBuildExecCompFn(unittest.TestCase):
                 return_value="0001321655",
             ),
             patch(
-                "alphalens_pipeline.buffett.exec_comp.exec_comp_as_of", return_value=sentinel
+                "alphalens_pipeline.experts.buffett.exec_comp.exec_comp_as_of",
+                return_value=sentinel,
             ) as ec,
         ):
             fn = _build_exec_comp_fn()
@@ -419,7 +420,7 @@ class TestBuildExecCompFn(unittest.TestCase):
         import datetime as _dt
 
         from alphalens_cli.commands.buffett import _build_exec_comp_fn
-        from alphalens_pipeline.buffett.exec_comp import ExecCompCoverage
+        from alphalens_pipeline.experts.buffett.exec_comp import ExecCompCoverage
 
         with (
             patch("alphalens_pipeline.data.alt_data.sec_edgar_client.get_default_sec_client"),

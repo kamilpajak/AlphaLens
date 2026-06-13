@@ -46,7 +46,6 @@ from typing import Protocol
 
 import pandas as pd
 
-from alphalens_pipeline.buffett.exec_comp import ExecCompFacts
 from alphalens_pipeline.data.fundamentals.annual_aggregator import AnnualStatement
 from alphalens_pipeline.data.fundamentals.capital_allocation import CapitalAllocation
 from alphalens_pipeline.data.fundamentals.owner_earnings import OwnerEarnings
@@ -54,6 +53,7 @@ from alphalens_pipeline.data.fundamentals.valuation_dcf import (
     discount_owner_earnings,
     margin_of_safety,
 )
+from alphalens_pipeline.experts.buffett.exec_comp import ExecCompFacts
 from alphalens_pipeline.paper.brief_loader import load_brief
 from alphalens_pipeline.thematic.screening import magic_formula
 

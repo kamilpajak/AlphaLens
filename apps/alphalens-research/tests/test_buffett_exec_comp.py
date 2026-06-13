@@ -16,7 +16,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from alphalens_pipeline.buffett.exec_comp import (
+from alphalens_pipeline.experts.buffett.exec_comp import (
     ExecCompCoverage,
     ExecCompFacts,
     exec_comp_as_of,

@@ -13,7 +13,7 @@ candidate, three Buffett qualities that the quantitative lens cannot derive:
 
 DOCTRINE — "LLM training-cutoff blindness" (CLAUDE.md). The LLM NEVER produces a
 number. All numbers (ROIC, operating margin, the net-buyback flag) are computed
-upstream in Python (the Buffett :class:`~alphalens_pipeline.buffett.comparison.BuffettPanel`)
+upstream in Python (the Buffett :class:`~alphalens_pipeline.experts.buffett.comparison.BuffettPanel`)
 and INJECTED into the prompt as a labelled FACTS block. The model only reasons /
 classifies over the section text + those injected facts. Two structural guards
 enforce this:
@@ -30,7 +30,7 @@ often have no fetchable 10-K, and that patchy coverage is itself the honest
 signal (the Buffett "too hard" pile).
 
 Scope: this layer consumes a SINGLE latest 10-K's sections (the
-:func:`~alphalens_pipeline.buffett.tenk_sections.split_10k_sections` output).
+:func:`~alphalens_pipeline.experts.buffett.tenk_sections.split_10k_sections` output).
 Multi-year and competitor 10-K fetching for richer moat-trend evidence is
 deferred to #505. The layer is additive and unwired — it runs only behind the
 opt-in ``alphalens buffett lens --qualitative`` flag.
@@ -289,7 +289,7 @@ def build_qualitative_prompt(
 ) -> str:
     """Build the classification prompt: injected facts + 10-K section excerpts.
 
-    ``sections`` is a :class:`~alphalens_pipeline.buffett.tenk_sections.TenKSections`
+    ``sections`` is a :class:`~alphalens_pipeline.experts.buffett.tenk_sections.TenKSections`
     (Item 1 / 1A / 7 / 8). A ``None`` section is rendered as a visible placeholder
     so the model knows it is missing rather than seeing an empty gap.
     ``prior_year_risk_factors`` (#505) is an optional ``[(filing_date,
@@ -408,7 +408,7 @@ def assess_qualitative(
 ) -> QualitativeAssessment:
     """Classify F0 / F3 / F4 for one candidate from 10-K sections + injected facts.
 
-    ``sections`` is a :class:`~alphalens_pipeline.buffett.tenk_sections.TenKSections`;
+    ``sections`` is a :class:`~alphalens_pipeline.experts.buffett.tenk_sections.TenKSections`;
     ``facts`` is the pre-computed numeric dict (ROIC latest/3y, op-margin
     latest/3y, net_buyback). Pass ``llm_client=`` for tests / to hoist one client
     across many candidates; omit it to fall back to

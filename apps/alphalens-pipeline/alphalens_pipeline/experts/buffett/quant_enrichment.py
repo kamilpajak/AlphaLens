@@ -31,8 +31,8 @@ from collections.abc import Callable
 
 import pandas as pd
 
-from alphalens_pipeline.buffett.comparison import BuffettPanel, compute_panel
-from alphalens_pipeline.buffett.quality_score import compute_quality_score
+from alphalens_pipeline.experts.buffett.comparison import BuffettPanel, compute_panel
+from alphalens_pipeline.experts.buffett.quality_score import compute_quality_score
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ def enrich(frame: pd.DataFrame, *, asof: dt.date, panel_fn: PanelFn | None = Non
             out[col] = pd.Series([], dtype="float64")
         return out
 
-    fn = panel_fn if panel_fn is not None else _build_default_panel_fn(unique)
+    fn = panel_fn if panel_fn is not None else build_default_panel_fn(unique)
     theme_by_ticker = _theme_by_ticker(out)
 
     per_ticker: dict[str, dict[str, float | None]] = {}
@@ -123,7 +123,7 @@ def _safe_panel(fn: PanelFn, ticker: str, theme: str, asof: dt.date) -> BuffettP
         return None
 
 
-def _build_default_panel_fn(tickers: list[str]) -> PanelFn:
+def build_default_panel_fn(tickers: list[str]) -> PanelFn:
     """Wire the real store + market-cap + dividends callables for production.
 
     Preloads ONLY ``tickers`` (already-fetched companyfacts -> disk-cache hit).
@@ -159,4 +159,4 @@ def _build_default_panel_fn(tickers: list[str]) -> PanelFn:
     return fn
 
 
-__all__ = ["BUFFETT_COLUMNS", "enrich"]
+__all__ = ["BUFFETT_COLUMNS", "build_default_panel_fn", "enrich"]

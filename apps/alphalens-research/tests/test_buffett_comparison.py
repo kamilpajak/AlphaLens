@@ -24,20 +24,20 @@ import unittest
 from datetime import date
 
 import pandas as pd
-from alphalens_pipeline.buffett.comparison import (
-    DEFAULT_GROWTH,
-    DEFAULT_HURDLE_RATE,
-    DEFAULT_TERMINAL_GROWTH,
-    BuffettPanel,
-    build_comparison,
-    compute_panel,
-)
 from alphalens_pipeline.data.fundamentals.annual_aggregator import AnnualStatement
 from alphalens_pipeline.data.fundamentals.capital_allocation import CapitalAllocation
 from alphalens_pipeline.data.fundamentals.owner_earnings import OwnerEarnings
 from alphalens_pipeline.data.fundamentals.valuation_dcf import (
     discount_owner_earnings,
     margin_of_safety,
+)
+from alphalens_pipeline.experts.buffett.comparison import (
+    DEFAULT_GROWTH,
+    DEFAULT_HURDLE_RATE,
+    DEFAULT_TERMINAL_GROWTH,
+    BuffettPanel,
+    build_comparison,
+    compute_panel,
 )
 
 ASOF = date(2024, 6, 30)
@@ -409,7 +409,7 @@ class TestBuildComparison(unittest.TestCase):
     def test_preserves_brief_order_and_length(self):
         from unittest import mock
 
-        from alphalens_pipeline.buffett import comparison as comp_mod
+        from alphalens_pipeline.experts.buffett import comparison as comp_mod
 
         candidates = [
             mock.Mock(ticker="CCC", theme="theme-c"),
@@ -437,8 +437,8 @@ class TestExecCompWiring(unittest.TestCase):
     post-2023, so its absence must not count as a data defect)."""
 
     def test_exec_comp_fn_populates_without_diluting_coverage(self):
-        from alphalens_pipeline.buffett.comparison import _COVERAGE_FIELDS
-        from alphalens_pipeline.buffett.exec_comp import ExecCompCoverage, ExecCompFacts
+        from alphalens_pipeline.experts.buffett.comparison import _COVERAGE_FIELDS
+        from alphalens_pipeline.experts.buffett.exec_comp import ExecCompCoverage, ExecCompFacts
 
         facts = ExecCompFacts(cik="1", coverage=ExecCompCoverage.PRESENT, peo_to_neo_ratio=5.0)
         panel = compute_panel(

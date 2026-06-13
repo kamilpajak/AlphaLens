@@ -429,7 +429,7 @@ def score(
     # display-only in v1 (it does NOT touch the brief sort). Lazy import keeps the
     # frequent-cron `alphalens` startup cheap. Fail-soft: any wiring failure leaves
     # the columns absent rather than aborting the score stage.
-    from alphalens_pipeline.buffett import quant_enrichment
+    from alphalens_pipeline.experts.buffett import quant_enrichment
 
     enriched = quant_enrichment.enrich(enriched, asof=target)
 

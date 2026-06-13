@@ -212,9 +212,9 @@ def lens_command(
         raise typer.BadParameter(f"DATE must be YYYY-MM-DD: {exc}") from exc
 
     # Lazy imports — keep the CLI startup cheap for the frequent cron paths.
-    from alphalens_pipeline.buffett.comparison import build_comparison
     from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
     from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
+    from alphalens_pipeline.experts.buffett.comparison import build_comparison
     from alphalens_pipeline.thematic.verification.mcap_filter import fetch_mcap
 
     store = EdgarFundamentalsStore(with_prices=True)
@@ -304,9 +304,9 @@ def qual_enrich_command(
         raise typer.BadParameter(f"DATE must be YYYY-MM-DD: {exc}") from exc
 
     # Lazy imports — keep the frequent-cron `alphalens` startup cheap.
-    from alphalens_pipeline.buffett.qual_enrichment import enrich_brief_parquet
     from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
     from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
+    from alphalens_pipeline.experts.buffett.qual_enrichment import enrich_brief_parquet
     from alphalens_pipeline.thematic.verification.mcap_filter import fetch_mcap
 
     store = EdgarFundamentalsStore(with_prices=True)
@@ -353,7 +353,7 @@ def migrate_qual_cache_command(
     with a possibly-different verdict. Safe to re-run (a second pass migrates nothing).
     """
     # Lazy import — keep the frequent-cron `alphalens` startup cheap.
-    from alphalens_pipeline.buffett.qual_enrichment import (
+    from alphalens_pipeline.experts.buffett.qual_enrichment import (
         BUFFETT_QUAL_CONFIG_VERSION,
         DEFAULT_QUAL_CACHE_DIR,
         migrate_legacy_qual_cache,
@@ -387,12 +387,12 @@ def _build_exec_comp_fn():
     panel's own ``_safe`` wrapper is the second net). Kept lazy so the cron path
     never imports the SEC client.
     """
-    from alphalens_pipeline.buffett.exec_comp import (
+    from alphalens_pipeline.data.alt_data.sec_edgar_client import get_default_sec_client
+    from alphalens_pipeline.experts.buffett.exec_comp import (
         ExecCompCoverage,
         ExecCompFacts,
         exec_comp_as_of,
     )
-    from alphalens_pipeline.data.alt_data.sec_edgar_client import get_default_sec_client
     from alphalens_pipeline.thematic.verification.tenk_grep import _resolve_cik
 
     client = get_default_sec_client()
@@ -428,14 +428,14 @@ def _run_qualitative(panels: list, *, asof: dt.date, scuttlebutt: bool = False) 
     """Run the per-candidate qualitative LLM layer, one assessment per panel.
 
     Thin wrapper over the shared per-panel op
-    :func:`~alphalens_pipeline.buffett.qual_enrichment.assess_panel_qualitative`
+    :func:`~alphalens_pipeline.experts.buffett.qual_enrichment.assess_panel_qualitative`
     (the eager pipeline pass uses the same op). The scuttlebutt client is built
     ONCE and reused across panels. Every step is fail-soft — a fetch failure or a
     name with no 10-K yields ``None`` for that row (rendered as dashes). No result
     cache here: the ad-hoc lens always recomputes (caching is the eager
     ``qual-enrich`` pass's job).
     """
-    from alphalens_pipeline.buffett.qual_enrichment import assess_panel_qualitative
+    from alphalens_pipeline.experts.buffett.qual_enrichment import assess_panel_qualitative
 
     client = _build_scuttlebutt_client() if scuttlebutt else None
     return [assess_panel_qualitative(panel, asof, scuttlebutt_client=client) for panel in panels]
