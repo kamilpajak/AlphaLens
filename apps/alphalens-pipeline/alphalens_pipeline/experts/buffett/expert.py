@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Mapping
 from dataclasses import asdict
+from typing import Any, cast
 
 from alphalens_pipeline.experts.base import Assessment, Panel
 from alphalens_pipeline.experts.buffett.comparison import BuffettPanel
@@ -36,6 +37,17 @@ _QUAL_CONTENT_COLUMNS: tuple[str, ...] = (
     "buffett_understandable",
     "buffett_qualitative_rationale",
 )
+
+
+def _panel_from_dict(panel: Panel) -> BuffettPanel:
+    """Reconstruct a :class:`BuffettPanel` from a panel ``dict``.
+
+    ``Panel`` is a wide scalar union (``float | bool | str | None``) while the
+    dataclass fields are precisely typed; the round-trip is lossless because the
+    dict was produced by ``asdict`` of a ``BuffettPanel``, so the cast is safe and
+    silences the spread-type check.
+    """
+    return BuffettPanel(**cast("dict[str, Any]", panel))
 
 
 class BuffettExpert:
@@ -71,7 +83,7 @@ class BuffettExpert:
     def compute_score(self, panel: Panel | None) -> float | None:
         if panel is None:
             return None
-        return compute_quality_score(BuffettPanel(**panel))
+        return compute_quality_score(_panel_from_dict(panel))
 
     def assess_qualitative(
         self,
@@ -90,7 +102,7 @@ class BuffettExpert:
         if panel is None:
             return None
         assessment = assess_panel_qualitative(
-            BuffettPanel(**panel), asof, scuttlebutt_client=scuttlebutt_client
+            _panel_from_dict(panel), asof, scuttlebutt_client=scuttlebutt_client
         )
         if assessment is None:
             return None
