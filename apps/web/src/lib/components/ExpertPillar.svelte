@@ -2,15 +2,15 @@
 	// Module-level counter for hydration-stable tooltip ids (same approach as
 	// ChipTip / JargonTip): adapter-static prerenders then the client re-
 	// instantiates in the same order, so the counter matches in both runs.
-	let __buffettPillarIdCounter = 0;
+	let __expertPillarIdCounter = 0;
 </script>
 
 <script lang="ts">
-	// One Buffett qualitative pillar (MOAT / TREND / CANDOR / UNDERSTOOD) as a
-	// tone-coloured badge with a hover tooltip explaining the LLM's classification.
-	// Cloned from GatePill (same border-badge + amber popover styling, same
-	// viewport-clamp action); the caller supplies the label, the display value,
-	// the tone, and the hover body so the badge stays generic.
+	// One expert pillar / audit badge — a Buffett qualitative pillar (moat / trend /
+	// candor / understood) OR an O'Neil audit flag (split-suspected / near-zero base) —
+	// as a tone-coloured badge with a hover tooltip. Cloned from GatePill (same
+	// border-badge + amber popover styling, same viewport-clamp action); the caller
+	// supplies the label, the display value, the tone, and the hover body so it stays generic.
 	import type { PillarTone } from '$lib/format';
 	import { clampToViewport } from '$lib/actions/clampToViewport';
 
@@ -22,7 +22,7 @@
 	}
 	let { label, value, tone, body }: Props = $props();
 
-	const tooltipId = `buffett-pillar-${__buffettPillarIdCounter++}`;
+	const tooltipId = `expert-pillar-${__expertPillarIdCounter++}`;
 </script>
 
 <span

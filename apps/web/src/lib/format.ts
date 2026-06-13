@@ -122,3 +122,47 @@ export function technicalsTrend(slope: number | null | undefined): 'up' | 'down'
 	if (slope < -0.05) return 'down';
 	return 'flat';
 }
+
+// --- Expert panel: O'Neil tone + disagreement bands (PR-8b) -----------------
+// O'Neil's own 0-100 score colour (same three-state shape as buffettTone; its own
+// helper so the two experts' cutoffs are independently documented + catalogued in
+// panel_config_version). Display-only; never translated into a buy/avoid word.
+export function oneilTone(score: number | null | undefined): BuffettTone {
+	if (score == null || !Number.isFinite(score)) return 'muted';
+	if (score >= 70) return 'green';
+	if (score >= 40) return 'amber';
+	return 'muted';
+}
+
+// The disagreement bands over the RAW expert_spread (0-100). UNVALIDATED, hand-
+// chosen cutoffs — used ONLY inside the opened drawer with a visible "not a
+// buy/avoid signal" label, NEVER on the resting card face. The cutoffs are folded
+// into panel_config_version; the deferred Expert×EDGE study correlates the raw
+// scalar, never the bucket. consensusBand returns the descriptive word, consensusTone
+// the colour. `null`/non-finite -> 'muted' / '—' (no band).
+export type ConsensusTone = 'green' | 'amber' | 'red' | 'muted';
+
+export function consensusTone(spread: number | null | undefined): ConsensusTone {
+	if (spread == null || !Number.isFinite(spread)) return 'muted';
+	if (spread < 20) return 'green';
+	if (spread < 50) return 'amber';
+	return 'red';
+}
+
+export function consensusBand(spread: number | null | undefined): string {
+	if (spread == null || !Number.isFinite(spread)) return '—';
+	if (spread < 20) return 'consensus';
+	if (spread < 50) return 'mixed';
+	return 'split';
+}
+
+// The resting panel chip is COVERAGE-ONLY (tone-neutral, no band word). Counts how
+// many of the two expert composites resolved a finite score. +1 token for ANY N.
+export function panelCoverageLabel(
+	buffettScore: number | null | undefined,
+	oneilScore: number | null | undefined
+): string {
+	const n = (Number.isFinite(buffettScore) ? 1 : 0) + (Number.isFinite(oneilScore) ? 1 : 0);
+	if (n === 0) return '—';
+	return n === 1 ? '1 lens' : `${n} lenses`;
+}
