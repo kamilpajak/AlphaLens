@@ -334,6 +334,39 @@ def qual_enrich_command(
     )
 
 
+@buffett_app.command(name="migrate-qual-cache")
+def migrate_qual_cache_command(
+    cache_dir: Path | None = typer.Option(
+        None,
+        "--cache-dir",
+        help="Qual-result cache root (default ~/.alphalens/buffett_qual).",
+    ),
+) -> None:
+    """One-shot, idempotent move of the legacy untagged qual cache into version tiers.
+
+    Pre-retrofit the cache laid each result at ``<date>/<TICKER>{.sb}.json`` with no
+    ``config_version``; this relocates every such file under the
+    ``<config_version>/<date>/...`` tier (stamping the v0 sentinel) and removes the
+    legacy copy, so a future rubric bump can never overwrite the corpus. MUST run
+    before the first ``qual-enrich`` of a deploy carrying the cache-key change —
+    otherwise enrich misses at the new tier and recomputes every cached name into v0
+    with a possibly-different verdict. Safe to re-run (a second pass migrates nothing).
+    """
+    # Lazy import — keep the frequent-cron `alphalens` startup cheap.
+    from alphalens_pipeline.buffett.qual_enrichment import (
+        BUFFETT_QUAL_CONFIG_VERSION,
+        DEFAULT_QUAL_CACHE_DIR,
+        migrate_legacy_qual_cache,
+    )
+
+    root = cache_dir if cache_dir is not None else DEFAULT_QUAL_CACHE_DIR
+    n_migrated = migrate_legacy_qual_cache(root)
+    typer.echo(
+        f"Buffett migrate-qual-cache: moved {n_migrated} legacy file(s) "
+        f"→ {root}/{BUFFETT_QUAL_CONFIG_VERSION}/"
+    )
+
+
 def _assessment_record(assessment) -> dict:  # QualitativeAssessment | None
     """The qualitative fields as a flat dict for the parquet row (``None``-safe)."""
     return {

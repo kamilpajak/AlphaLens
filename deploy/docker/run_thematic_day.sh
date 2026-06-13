@@ -68,6 +68,19 @@ alphalens thematic brief
 # Best-effort under `set -e` (same posture as the VIX refresh below): the brief is
 # already written, so a DeepSeek / Perplexity / SEC hiccup must NOT fail the build
 # — the drawer simply stays absent for that name until the next run re-tries.
+#
+# MANDATORY ORDERING: migrate the qual cache into version tiers BEFORE qual-enrich.
+# This deploy widened the cache key with a `config_version` tier so a future rubric
+# bump can never overwrite the corpus. The one-shot move relocates the existing
+# pre-registry corpus into the v0 tier so enrich SHORT-CIRCUITS on a load-hit there,
+# instead of recomputing every cached name into v0 with a possibly-different
+# (LLM-nondeterministic) verdict. Idempotent — re-runs migrate nothing. Best-effort
+# under `set -e`: a migrate hiccup must not fail the build (it costs at most one run
+# of recompute-waste), so warn to stderr and continue.
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] buffett migrate-qual-cache"
+alphalens buffett migrate-qual-cache \
+    || echo "WARN: buffett migrate-qual-cache failed; legacy names may recompute into v0 tier" >&2
+
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] buffett qual-enrich"
 QUAL_DATE="$(date -u -d 'yesterday' +%Y-%m-%d)"
 alphalens buffett qual-enrich "$QUAL_DATE" --scuttlebutt \
