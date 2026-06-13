@@ -53,6 +53,10 @@ class BuffettExpert:
         self._panel_fn = panel_fn
 
     def _resolve_panel_fn(self) -> PanelFn:
+        # Empty preload: the registry is only used by tests in PR-1; the wired hot
+        # path (the thematic score stage) passes its own per-batch panel_fn with
+        # the candidate tickers preloaded, so this lazy instance never carries the
+        # preload optimisation (correctness is unaffected — fetches are lazy).
         if self._panel_fn is None:
             self._panel_fn = build_default_panel_fn([])
         return self._panel_fn
