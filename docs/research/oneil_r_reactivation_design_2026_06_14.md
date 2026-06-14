@@ -1,9 +1,12 @@
 # O'Neil "R" (relative strength) re-activation — design memo
 
-**Status:** DRAFT 2026-06-14 (proposal — not scheduled; needs user GO/NO-GO). Follows
+**Status:** LOCKED + SHIPPED 2026-06-14 — PR-A #566 (RS history store + backfill + `n_sessions_before`
++ nightly top-up unit) and PR-B #567 (the 4-term O'Neil score N+R+L+C/A, `panel-v1r-absdiff-2x`,
+Django + SPA wiring) both merged. Deploy is gated on the VPS one-time grouped-daily backfill
+(~21mo store) completing. Follows
 [`oneil_expert_design_2026_06_13.md`](oneil_expert_design_2026_06_13.md), which shipped
 O'Neil v1 as **N + L + C/A** and **deferred R** (relative strength) for three independent
-data-feasibility reasons. This memo is the plan to lift that deferral by building a
+data-feasibility reasons. This memo is the plan that lifted that deferral by building a
 persistent market-wide daily-close history, and notes that the new approach also dissolves
 2 of the 3 original blockers.
 
@@ -50,14 +53,20 @@ per date**. So ~252–504 calls = 1–2 years of full-market history.
   Files** (bulk S3 daily-bar dumps) for a single clean pull, then cancel. One-time ~$30.
 
 ### Why this dissolves 2 of the 3 original blockers (for free)
-1. **Survivorship bias → gone.** Backfill **per-date (grouped-daily)**, NOT per-current-ticker.
-   A past date's grouped snapshot contains the names that traded THAT day — including ones
-   later delisted — so **each date is a PIT-correct universe by construction**. (Pulling
-   today's tickers backward would be biased; grouped-daily-per-date is not.)
-2. **Broken split math → gone.** Pull `adjusted=true` (split + dividend adjusted) for the
-   backfill → clean returns, no raw-close jumps. The fixed-band / MAD-z-score split detector
-   becomes unnecessary. (The monitor keeps its own `adjusted=false` cache for intraday touch
-   detection — this is a SEPARATE store; see §4.)
+1. **Delisting survivorship → largely removed (not perfectly).** Backfill **per-date
+   (grouped-daily)**, NOT per-current-ticker. A past date's grouped snapshot contains the names
+   that traded THAT day — including ones later delisted — so **each date is delisting-clean by
+   construction** (pulling today's tickers backward would be biased; grouped-daily-per-date is
+   not). Two RESIDUAL approximations remain, NOT "gone": Polygon's `T` is the CURRENT symbol, so
+   a ticker that was remapped (FB→META) carries its history under the new symbol; and M&A-stitched
+   histories are not PIT-exact. The within-date percentile over ~8000 names tolerates both — call
+   it "delisting-clean", not "survivorship-free".
+2. **Broken split math → gone.** Pull `adjusted=true` for the backfill → split-clean returns, no
+   raw-close jumps. The fixed-band / MAD-z-score split detector becomes unnecessary. **CAVEAT:**
+   Polygon's `adjusted=true` on grouped-daily is **split-only, NOT dividend-adjusted** — so RS is a
+   SPLIT-clean trailing-PRICE-return percentile and dividend drift is a minor relative-rank
+   approximation, not a corrected factor. (The monitor keeps its own `adjusted=false` cache for
+   intraday touch detection — this is a SEPARATE store; see §4.)
 3. **Missing calendar helper → still to build** (trivial once the store is dated — §4).
 
 ## 3. RS-approx computation (once the store exists)
@@ -98,8 +107,11 @@ rs_percentile = percentile_rank(ret, over = universe)      # 0–100
    - O'Neil's score formula changes (R term added, re-weighted) → a new O'Neil score config
      token (or fold into the existing per-expert provenance).
    - Because `oneil_score` feeds `expert_spread`, the panel corpus changes meaning → **bump
-     `PANEL_CONFIG_VERSION`** (e.g. `panel-v2-...`). Rows under v1 (no R) and v2 (with R) are
-     NOT poolable in the deferred Expert×EDGE study — the analyst groups by config_version.
+     `PANEL_CONFIG_VERSION`**. SHIPPED as `panel-v1-absdiff-2x` → `panel-v1r-absdiff-2x` (NOT
+     `panel-v2-...`: v1r = the v1 absdiff/2x formula-family with the R-reweighted `oneil_score`
+     input; `panel-v2-pstdev-3x` stays reserved for the FUTURE 3rd-expert arity change). Rows
+     under v1 (no R) and v1r (with R) are NOT poolable in the deferred Expert×EDGE study — the
+     analyst groups by config_version.
 7. **Django + SPA:** no schema change — `oneil_rs_approx_pct` rides the existing
    `expert_assessments.oneil` blob (add to `_EXPERT_COLUMNS["oneil"]` + the float coerce set +
    the frozen drift-guard pin, in lockstep). The drawer's O'Neil section gains one readout +
