@@ -201,6 +201,62 @@ class YFinanceClient:
 
         return self._call_with_retry(_fetch, what=f"market_cap({upper})", default=None)
 
+    def last_price(self, ticker: str) -> float | None:
+        """Latest trade price via ``fast_info.last_price``; ``None`` on failure.
+
+        Throttled + retried like every Yahoo call. The EDGAR fundamentals store
+        uses this to build market cap = ``price × PIT-shares`` (it keeps EDGAR's
+        point-in-time shares, not yfinance's snapshot shares, so it needs the
+        price alone — not :meth:`market_cap`, which would pair it with today's
+        yfinance share count). A ``NaN`` snapshot (yfinance returns ``nan`` for a
+        halted / thin name) is treated as missing so it never poisons the
+        downstream multiple.
+        """
+        upper = ticker.upper()
+
+        def _fetch() -> float | None:
+            import yfinance as yf
+
+            p = yf.Ticker(upper).fast_info.last_price
+            if p is None or pd.isna(p):
+                return None
+            return float(p)
+
+        return self._call_with_retry(_fetch, what=f"last_price({upper})", default=None)
+
+    def batch_last_close(self, tickers: list[str]) -> dict[str, float]:
+        """Most-recent close per ticker from one ``yfinance.download`` batch.
+
+        A single HTTP round-trip for the whole list (vs N per-ticker
+        :meth:`last_price` calls) — the EDGAR fundamentals store's price
+        prefetch. Throttled + retried as ONE unit: a transient error retries the
+        whole batch, a permanent failure or exhausted retries returns ``{}`` (the
+        caller falls back to the per-ticker :meth:`last_price` path). Tickers
+        yfinance omits or returns ``NaN`` for are simply absent from the result;
+        keys are upper-cased.
+        """
+        if not tickers:
+            return {}
+        uppers = [t.upper() for t in tickers]
+
+        def _fetch() -> dict[str, float]:
+            import yfinance as yf
+
+            df = yf.download(uppers, period="5d", progress=False, auto_adjust=False)
+            if df is None or df.empty or "Close" not in df.columns:
+                return {}
+            closes = df["Close"].ffill().iloc[-1]
+            out: dict[str, float] = {}
+            if isinstance(closes, pd.Series):
+                for sym, val in closes.items():
+                    if pd.notna(val):
+                        out[str(sym).upper()] = float(val)
+            elif pd.notna(closes):  # single-ticker batch collapses to a scalar
+                out[uppers[0]] = float(closes)
+            return out
+
+        return self._call_with_retry(_fetch, what=f"batch_last_close({len(uppers)})", default={})
+
     _SHARES_STALE_WARN_DAYS = 90  # warn if the PIT shares match predates asof by this much
 
     def shares(self, ticker: str, *, asof: dt.date | None = None) -> float | None:

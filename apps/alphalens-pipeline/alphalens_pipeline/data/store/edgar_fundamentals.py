@@ -46,6 +46,7 @@ from typing import Any
 import pyarrow.parquet as pq
 
 from alphalens_pipeline.data.alt_data.sec_edgar_client import SecEdgarClient
+from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
 from alphalens_pipeline.data.fundamentals import concept_chains as chains
 from alphalens_pipeline.data.fundamentals.annual_aggregator import (
     AnnualStatement,
@@ -411,111 +412,57 @@ class EdgarFundamentalsStore:
         return max(_TAX_RATE_MIN, min(_TAX_RATE_MAX, rate))
 
     def _batch_fetch_prices(self, tickers: list[str]) -> None:
-        """Populate self._prices from a single yfinance batch download.
+        """Populate self._prices from one canonical-client batch download.
 
         Cuts N sequential HTTPS round-trips (one per ticker) down to one.
-        Misses (delisted, weird tickers, partial yfinance returns) fall
-        through to the per-ticker path in :meth:`_fetch_price`.
+        Misses (delisted, weird tickers, partial yfinance returns, a 429 that
+        survives the client's retries) are simply absent and fall through to the
+        per-ticker path in :meth:`_fetch_price`. The shared throttle + bounded
+        retry now live in :class:`YFinanceClient` (PR #573).
         """
-        try:
-            import pandas as pd
-            import yfinance as yf
-        except ImportError:
-            logger.warning("yfinance unavailable; prices empty")
-            return
-        try:
-            df = yf.download(tickers, period="5d", progress=False, auto_adjust=False)
-        except Exception as exc:
-            logger.warning("yfinance batch download failed: %s", exc)
-            return
-        if df is None or df.empty or "Close" not in df.columns:
-            return
-        closes = df["Close"].ffill().iloc[-1]
-        if isinstance(closes, pd.Series):
-            for t, val in closes.items():
-                if pd.notna(val):
-                    self._prices[str(t).upper()] = float(val)
-        # Single-ticker batch returns a scalar.
-        elif pd.notna(closes):
-            self._prices[tickers[0].upper()] = float(closes)
+        self._prices.update(get_default_yfinance_client().batch_last_close(tickers))
 
     def _fetch_price(self, ticker: str, asof: date) -> float | None:
-        """Latest close from yfinance.
+        """Latest close via the canonical :class:`YFinanceClient`; ``None`` on failure.
 
         Snapshot (most recent close on or before today), not PIT.
         Acceptable for live thematic briefs where asof ≈ today; the
         future paradigm-13 audit replay (which IS PIT-sensitive) is out
         of scope of this store and routes through a separate price loader.
+
+        A value already prefetched by :meth:`_batch_fetch_prices` short-circuits
+        the per-ticker call. Only a real value is memoised — a ``None`` (the
+        client exhausted its retries or the name is a genuine miss) is NOT cached
+        so a later candidate in the same batch re-attempts.
         """
-        cached = self._prices.get(ticker.upper())
+        key = ticker.upper()
+        cached = self._prices.get(key)
         if cached is not None:
             return cached
-        try:
-            import yfinance as yf
-        except ImportError:
-            logger.warning("yfinance unavailable; price=None for %s", ticker)
+        price = get_default_yfinance_client().last_price(ticker)
+        if price is None:
             return None
-        try:
-            info = yf.Ticker(ticker).fast_info
-            price = info.last_price
-        except Exception as exc:
-            logger.warning("yfinance fast_info failed for %s: %s", ticker, exc)
-            return None
-        if price is None or math.isnan(price):
-            return None
-        result = float(price)
-        self._prices[ticker.upper()] = result
-        return result
+        self._prices[key] = price
+        return price
 
     def _fetch_shares_yf(self, ticker: str, asof: date) -> float | None:
-        """Third-tier shares fallback — yfinance ``get_shares_full`` / ``fast_info.shares``.
+        """Third-tier shares fallback via the canonical :class:`YFinanceClient`.
 
-        Mirrors the PIT shares pattern in
-        :mod:`alphalens_pipeline.thematic.verification.mcap_filter` so live brief
-        cohorts (asof ≈ today) and historical replays use the same
-        external source. ``get_shares_full`` is the only yfinance API that
-        exposes a dated series; ``fast_info.shares`` is a snapshot used
-        when the series returns nothing. Results are cached per ticker for
-        the lifetime of the store so a single brief doesn't double-fetch.
+        Delegates to :meth:`YFinanceClient.shares` (the latest
+        ``get_shares_full`` value on or before ``asof``, falling back to the
+        ``fast_info.shares`` snapshot) so the live brief cohort and any replay
+        share one throttled + retried Yahoo seam. The store keeps only the
+        memoisation: a definitive value is cached for the store lifetime; a
+        ``None`` (rate-limit blip that survived the client's retries, or a
+        genuine miss) is NOT cached, so a later candidate re-attempts (zen
+        finding #3, PR #174).
         """
         key = ticker.upper()
         if key in self._shares_cache:
             return self._shares_cache[key]
-        try:
-            import pandas as pd
-            import yfinance as yf
-        except ImportError:
-            logger.warning("yfinance unavailable; shares fallback skipped for %s", ticker)
-            self._shares_cache[key] = None
-            return None
-        try:
-            tk = yf.Ticker(ticker)
-            asof_ts = pd.Timestamp(asof)
-            try:
-                series = tk.get_shares_full(
-                    start=(asof_ts - pd.Timedelta(days=400)).date().isoformat(),
-                    end=(asof_ts + pd.Timedelta(days=1)).date().isoformat(),
-                )
-            except Exception:
-                series = None
-            if series is not None and len(series) > 0:
-                series.index = pd.to_datetime(series.index).tz_localize(None)
-                pit = series[series.index <= asof_ts]
-                if not pit.empty:
-                    val = float(pit.iloc[-1])
-                    self._shares_cache[key] = val
-                    return val
-            fallback = getattr(tk.fast_info, "shares", None)
-            val = float(fallback) if fallback else None
-        except Exception as exc:
-            # Transient failures (rate limit, DNS, malformed response) do
-            # NOT pollute the cache — a retry within the same store
-            # lifetime should be able to succeed (zen finding #3 on PR
-            # #174). Only definitive ``None`` results from a clean call
-            # are cached.
-            logger.warning("yfinance shares fallback failed for %s: %s", ticker, exc)
-            return None
-        self._shares_cache[key] = val
+        val = get_default_yfinance_client().shares(ticker, asof=asof)
+        if val is not None:
+            self._shares_cache[key] = val
         return val
 
     def _latest_publish_date(self, cik: str, asof: date) -> str | None:
