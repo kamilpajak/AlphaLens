@@ -110,6 +110,7 @@ _EXPERT_COLUMNS: dict[str, tuple[str, ...]] = {
         "oneil_new_high_split_suspected",
         "oneil_data_coverage",
         "oneil_score",
+        "oneil_rs_approx_pct",
     ),
     # Panel-level disagreement scalars (PR-8a) — NOT a per-expert lens. Mirrors
     # alphalens_pipeline.experts.disagreement.PANEL_COLUMNS. expert_spread is the

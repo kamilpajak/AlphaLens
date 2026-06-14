@@ -49,8 +49,10 @@ class TestSchemaStability(unittest.TestCase):
             self.assertEqual(out[col].dtype, "float64")
             self.assertTrue(out[col].isna().all())
 
-    def test_columns_count_is_eight(self):
-        self.assertEqual(len(ONEIL_COLUMNS), 8)
+    def test_columns_count_is_nine(self):
+        # 8 v1 columns + oneil_rs_approx_pct (R-reactivation).
+        self.assertEqual(len(ONEIL_COLUMNS), 9)
+        self.assertEqual(ONEIL_COLUMNS[-1], "oneil_rs_approx_pct")
 
 
 class TestBoolAsFloat(unittest.TestCase):
@@ -199,6 +201,56 @@ class TestNoNewNetwork(unittest.TestCase):
         finally:
             ef.EdgarFundamentalsStore = orig_store  # type: ignore[misc]
             yc.get_default_yfinance_client = orig_get_yf
+
+    def test_rs_term_is_disk_only_never_fetches_polygon(self):
+        # The R term reads the grouped-daily history store off disk via
+        # rs_history.rs_percentile — NEVER an in-pass Polygon call at the score stage.
+        import alphalens_pipeline.experts.oneil.quant_enrichment as qe
+
+        class _Store:
+            def __init__(self, *a, **k):
+                pass
+
+            def preload(self, tickers):
+                pass
+
+            def annual_series_as_of(self, ticker, asof, *, max_years=10):
+                return []
+
+        class _Yf:
+            def cached_daily_ohlcv(self, ticker, *, asof):
+                return pd.DataFrame({"close": [1.0, 1.0]})
+
+        import alphalens_pipeline.data.alt_data.polygon_client as pc
+        import alphalens_pipeline.data.alt_data.yfinance_client as yc
+        import alphalens_pipeline.data.store.edgar_fundamentals as ef
+
+        def _boom_polygon():
+            raise AssertionError("the R term must read disk only — no Polygon at score stage")
+
+        def _fake_get_yf():
+            return _Yf()
+
+        orig = (
+            ef.EdgarFundamentalsStore,
+            yc.get_default_yfinance_client,
+            pc.get_default_polygon_client,
+        )
+        ef.EdgarFundamentalsStore = _Store  # type: ignore[misc,assignment]
+        yc.get_default_yfinance_client = _fake_get_yf
+        pc.get_default_polygon_client = _boom_polygon  # type: ignore[assignment]
+        try:
+            fn = qe.build_default_panel_fn(["AAA"])
+            # The fn() call computing the R term completing WITHOUT the spy raising is
+            # the disk-only proof (rs_percentile reads the parquet store, never Polygon).
+            panel = fn("AAA", "t", ASOF, dict.fromkeys(qe._TECHNICAL_SOURCE))
+            assert panel is not None
+        finally:
+            (
+                ef.EdgarFundamentalsStore,
+                yc.get_default_yfinance_client,
+                pc.get_default_polygon_client,
+            ) = orig
 
 
 if __name__ == "__main__":

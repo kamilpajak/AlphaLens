@@ -202,6 +202,7 @@ _EXPERT_FLOAT_COLUMNS = frozenset(
         "oneil_earnings_growth_yoy_pct",
         "oneil_data_coverage",
         "oneil_score",
+        "oneil_rs_approx_pct",
         # Panel disagreement scalar (PR-8a) — finite-scrubbed; panel_config_version
         # (the sibling column) falls through to coerce_str.
         "expert_spread",

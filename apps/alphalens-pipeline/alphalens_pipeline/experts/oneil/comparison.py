@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 # ONLY for the split screen — never to recompute a technical the frame already has.
 OhlcvFn = Callable[[str, dt.date], "pd.DataFrame"]
 
+# (ticker, asof) -> 0-100 relative-strength percentile, or None. Injected in tests;
+# the default reads the split-adjusted grouped-daily history store (DISK ONLY — never
+# an in-pass Polygon call). None on any store gap / candidate-absent (tri-state).
+RsFn = Callable[[str, dt.date], "float | None"]
+
 
 @runtime_checkable
 class _AnnualStatement(Protocol):
@@ -84,9 +89,13 @@ class ONeilPanel:
     # True when the raw-close window shows a suspected split (so the N term is
     # treated as absent for scoring); ``None`` when the window is unavailable.
     new_high_split_suspected: bool | None
-    # Fraction of the 2 OPTIONAL scoring terms (trend, earnings) that resolved.
+    # Fraction of the 3 OPTIONAL scoring terms (R, trend, earnings) that resolved.
     # The mandatory N term is a hard gate, not part of this fraction.
     data_coverage: float
+    # R — relative-strength percentile (0-100) from the grouped-daily history store;
+    # ``None`` on any store gap / candidate-absent. Optional scoring term. Defaulted
+    # so pre-R-reactivation constructions stay valid.
+    oneil_rs_approx_pct: float | None = None
 
 
 def _detect_split(closes: pd.Series) -> bool | None:
@@ -158,20 +167,25 @@ def compute_oneil_panel(
     ma200_distance_pct: float | None,
     store: EarningsStore | None = None,
     ohlcv_fn: OhlcvFn | None = None,
+    rs_fn: RsFn | None = None,
 ) -> ONeilPanel:
-    """Assemble the O'Neil panel for one candidate from frame technicals + store.
+    """Assemble the O'Neil panel for one candidate from frame technicals + stores.
 
     The three technical inputs are passed in (read off the score-stage frame by
-    the caller); the earnings term and split screen are computed here from the
-    injected store + ohlcv reader. ``data_coverage`` counts the two OPTIONAL terms
-    (trend, earnings) that resolved — the mandatory N term is a gate, not a fraction.
+    the caller); the earnings term + split screen come from the injected store +
+    ohlcv reader; R (relative strength) comes from the injected ``rs_fn`` (a DISK-ONLY
+    read of the grouped-daily history store — never an in-pass Polygon call).
+    ``data_coverage`` counts the three OPTIONAL terms (R, trend, earnings) that
+    resolved — the mandatory N term is a gate, not a fraction.
     """
     earnings_growth, near_zero_base = _earnings_growth_yoy(store, ticker, asof)
     split_suspected = _split_suspected(ticker, asof, ohlcv_fn)
+    rs_approx = _rs_approx(ticker, asof, rs_fn)
 
     trend_present = ma200_slope_pct_per_day is not None
     earnings_present = earnings_growth is not None
-    data_coverage = (int(trend_present) + int(earnings_present)) / 2.0
+    rs_present = rs_approx is not None
+    data_coverage = (int(trend_present) + int(earnings_present) + int(rs_present)) / 3.0
 
     return ONeilPanel(
         ticker=ticker,
@@ -183,7 +197,20 @@ def compute_oneil_panel(
         earnings_growth_near_zero_base=near_zero_base,
         new_high_split_suspected=split_suspected,
         data_coverage=data_coverage,
+        oneil_rs_approx_pct=rs_approx,
     )
 
 
-__all__ = ["ONeilPanel", "compute_oneil_panel"]
+def _rs_approx(ticker: str, asof: dt.date, rs_fn: RsFn | None) -> float | None:
+    """The relative-strength percentile from the injected reader; ``None`` when the
+    reader is missing or raises (mirror the split-screen fail-soft, tri-state None)."""
+    if rs_fn is None:
+        return None
+    try:
+        return rs_fn(ticker, asof)
+    except Exception as exc:
+        logger.warning("oneil rs: rs_fn(%s) failed: %s", ticker, exc)
+        return None
+
+
+__all__ = ["ONeilPanel", "RsFn", "compute_oneil_panel"]

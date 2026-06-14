@@ -105,14 +105,17 @@ class TestComputePanel(unittest.TestCase):
             ma200_distance_pct=8.0,
             store=_FakeStore([120.0, 100.0]),
             ohlcv_fn=_ohlcv([100.0, 101.0, 102.0]),
+            rs_fn=lambda t, a: 60.0,  # R present
         )
         self.assertEqual(panel.ticker, "AAA")
         self.assertEqual(panel.theme, "theme-x")
         self.assertAlmostEqual(panel.earnings_growth_yoy_pct, 20.0)
+        self.assertAlmostEqual(panel.oneil_rs_approx_pct, 60.0)
         self.assertIs(panel.new_high_split_suspected, False)
-        self.assertAlmostEqual(panel.data_coverage, 1.0)  # trend + earnings both present
+        self.assertAlmostEqual(panel.data_coverage, 1.0)  # R + trend + earnings all present
 
-    def test_coverage_half_when_earnings_absent(self):
+    def test_coverage_one_third_when_only_trend(self):
+        # 3 OPTIONAL terms now (R + trend + earnings); only trend resolves -> 1/3.
         panel = compute_oneil_panel(
             "AAA",
             "t",
@@ -122,9 +125,10 @@ class TestComputePanel(unittest.TestCase):
             ma200_distance_pct=8.0,
             store=_FakeStore([120.0]),  # <2 FY => earnings None
             ohlcv_fn=_ohlcv([100.0, 101.0]),
-        )
+        )  # no rs_fn => R None
         self.assertIsNone(panel.earnings_growth_yoy_pct)
-        self.assertAlmostEqual(panel.data_coverage, 0.5)  # trend only
+        self.assertIsNone(panel.oneil_rs_approx_pct)
+        self.assertAlmostEqual(panel.data_coverage, 1 / 3)  # trend only of 3 optional
 
     def test_coverage_zero_when_both_optional_absent(self):
         panel = compute_oneil_panel(
@@ -151,6 +155,43 @@ class TestComputePanel(unittest.TestCase):
             ohlcv_fn=None,  # no reader => split unknown
         )
         self.assertIsNone(panel.new_high_split_suspected)
+
+
+class TestRsTerm(unittest.TestCase):
+    """R (relative strength) — injected rs_fn (disk-only in prod); tri-state None;
+    optional (counts in coverage when present); fail-soft on a raising reader."""
+
+    def _panel(self, **over):
+        kw = {
+            "pct_off_52w_high": -3.0,
+            "ma200_slope_pct_per_day": None,
+            "ma200_distance_pct": None,
+            "store": _FakeStore(None),
+            "ohlcv_fn": _ohlcv([100.0, 101.0]),
+        }
+        kw.update(over)
+        return compute_oneil_panel("AAA", "t", ASOF, **kw)
+
+    def test_rs_fn_value_stamped_and_counted(self):
+        panel = self._panel(rs_fn=lambda t, a: 72.0)
+        self.assertAlmostEqual(panel.oneil_rs_approx_pct, 72.0)
+        self.assertAlmostEqual(panel.data_coverage, 1 / 3)  # only R of 3 optional
+
+    def test_rs_fn_none_returns_none_not_counted(self):
+        panel = self._panel(rs_fn=lambda t, a: None)
+        self.assertIsNone(panel.oneil_rs_approx_pct)
+        self.assertAlmostEqual(panel.data_coverage, 0.0)
+
+    def test_rs_fn_absent_is_none(self):
+        panel = self._panel()  # no rs_fn
+        self.assertIsNone(panel.oneil_rs_approx_pct)
+
+    def test_rs_fn_raising_is_swallowed(self):
+        def boom(t, a):
+            raise RuntimeError("store error")
+
+        panel = self._panel(rs_fn=boom)
+        self.assertIsNone(panel.oneil_rs_approx_pct)  # fail-soft, mirror split screen
 
 
 if __name__ == "__main__":
