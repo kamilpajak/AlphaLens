@@ -1,13 +1,8 @@
 from __future__ import annotations
 
-import logging
-
-import requests
-
+from ....data.alt_data.telegram_client import TelegramClient
 from ...classifier import ClassifiedEvent, Severity
 from .base import AlertHandler
-
-logger = logging.getLogger(__name__)
 
 SEVERITY_EMOJI = {
     Severity.HIGH: "🚨",
@@ -17,35 +12,22 @@ SEVERITY_EMOJI = {
 
 
 class TelegramHandler(AlertHandler):
-    def __init__(self, bot_token: str, chat_id: str):
-        if not bot_token:
-            raise ValueError("bot_token required")
+    """Format a classified EDGAR event and deliver it via the canonical
+    :class:`TelegramClient` (shared retry + token-sanitised logging)."""
+
+    def __init__(self, bot_token: str, chat_id: str, *, client: TelegramClient | None = None):
         if not chat_id:
             raise ValueError("chat_id required")
-        self.bot_token = bot_token
         self.chat_id = chat_id
-        self.api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+        # The client validates bot_token (raises ValueError on empty) and owns
+        # the HTTP + retry + credential sanitisation.
+        self._client = client or TelegramClient(bot_token)
 
     def handle(self, classified: ClassifiedEvent) -> None:
         self.send_message(self._format(classified))
 
     def send_message(self, text: str) -> None:
-        payload = {
-            "chat_id": self.chat_id,
-            "text": text,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": False,
-        }
-        try:
-            resp = requests.post(self.api_url, json=payload, timeout=10)
-            resp.raise_for_status()
-        except requests.RequestException as exc:
-            # Don't use logger.exception / exc_info=True: requests' string
-            # repr embeds the request URL which contains the bot token
-            # (api.telegram.org/bot{TOKEN}/sendMessage). Sanitise str(exc)
-            # and log without traceback so logs stay credential-safe.
-            safe_msg = str(exc).replace(self.bot_token, "***")
-            logger.error("Telegram send failed: %s", safe_msg)  # NOSONAR(S8572)
+        self._client.send_message(self.chat_id, text)
 
     @staticmethod
     def _format(classified: ClassifiedEvent) -> str:
