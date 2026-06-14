@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 def _classified(ticker="AAPL", severity=None, relevance=None, action=None, form=None, items=None):
@@ -37,48 +37,38 @@ class TestAlertHandlerABC(unittest.TestCase):
 
 
 class TestTelegramHandler(unittest.TestCase):
-    @patch("alphalens_pipeline.edgar_detector.dispatch.handlers.telegram.requests.post")
-    def test_send_uses_bot_api_endpoint(self, mock_post):
-        from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import TelegramHandler
+    """The handler now formats the message and delegates delivery to the
+    canonical :class:`TelegramClient` (URL building + retry + token sanitising
+    are the client's job, covered by ``test_telegram_client``)."""
 
-        mock_post.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
-        handler = TelegramHandler(bot_token="BOTTOKEN", chat_id="CHATID")
-        handler.handle(_classified())
-
-        self.assertTrue(mock_post.called)
-        url = mock_post.call_args.args[0]
-        self.assertIn("api.telegram.org/botBOTTOKEN/sendMessage", url)
-
-    @patch("alphalens_pipeline.edgar_detector.dispatch.handlers.telegram.requests.post")
-    def test_message_includes_severity_and_url(self, mock_post):
+    def test_formats_and_delegates_to_client(self):
         from alphalens_pipeline.edgar_detector.classifier import Severity
         from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import TelegramHandler
 
-        mock_post.return_value = MagicMock(status_code=200, raise_for_status=MagicMock())
-        handler = TelegramHandler(bot_token="T", chat_id="C")
+        client = MagicMock()
+        handler = TelegramHandler(bot_token="T", chat_id="CHATID", client=client)
         handler.handle(_classified(severity=Severity.HIGH))
 
-        payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args.kwargs.get("data")
-        self.assertIsNotNone(payload)
-        text = payload["text"]
+        client.send_message.assert_called_once()
+        chat_id, text = client.send_message.call_args.args
+        self.assertEqual(chat_id, "CHATID")
         self.assertIn("HIGH", text)
         self.assertIn("AAPL", text)
         self.assertIn("https://sec.gov/filing", text)
 
-    @patch("alphalens_pipeline.edgar_detector.dispatch.handlers.telegram.requests.post")
-    def test_handles_api_error_without_raising(self, mock_post):
-        import requests as req_module
+    def test_delivery_failure_does_not_raise(self):
         from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import TelegramHandler
 
-        mock_post.side_effect = req_module.ConnectionError("down")
-        handler = TelegramHandler(bot_token="T", chat_id="C")
+        client = MagicMock()
+        client.send_message.return_value = False  # client swallows failures
+        handler = TelegramHandler(bot_token="T", chat_id="C", client=client)
         handler.handle(_classified())  # should not raise
 
     def test_requires_bot_token_and_chat_id(self):
         from alphalens_pipeline.edgar_detector.dispatch.handlers.telegram import TelegramHandler
 
         with self.assertRaises(ValueError):
-            TelegramHandler(bot_token="", chat_id="C")
+            TelegramHandler(bot_token="", chat_id="C")  # empty token rejected by the client
         with self.assertRaises(ValueError):
             TelegramHandler(bot_token="T", chat_id="")
 
