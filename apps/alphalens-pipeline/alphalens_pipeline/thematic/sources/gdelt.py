@@ -20,8 +20,6 @@ import logging
 import re
 import time
 import urllib.error
-import urllib.parse
-import urllib.request
 from collections.abc import Iterable
 from functools import lru_cache
 from pathlib import Path
@@ -29,14 +27,18 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from alphalens_pipeline.data.alt_data.gdelt_client import (
+    DEFAULT_MAXRECORDS,
+    GdeltMaxRetriesError,
+    GdeltQueryError,
+    get_default_gdelt_client,
+)
 from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS, empty_news_frame
 
 logger = logging.getLogger(__name__)
 
-ENDPOINT = "https://api.gdeltproject.org/api/v2/doc/doc"
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "thematic_news" / "gdelt"
 THEMES_PATH = Path(__file__).parent.parent / "config" / "gdelt_themes.yaml"
-DEFAULT_MAXRECORDS = 100
 # 10s margin over GDELT's documented 5s/req soft limit. Pre-fix value was 8s,
 # but bursts from per-bucket retries on broken queries were tripping HTTP 429
 # on downstream buckets; with permanent-vs-transient distinction below the
@@ -97,92 +99,12 @@ def clean_title(title: str) -> str:
     return title
 
 
-class GdeltQueryError(Exception):
-    """Permanent error returned by GDELT — query is malformed, do not retry.
-
-    Triggered when the API responds 200 OK with a non-JSON body, e.g.
-    ``"The specified phrase is too short."`` for queries containing
-    single-word quoted phrases. Retrying just burns the rate-limit budget
-    of subsequent buckets without ever succeeding.
-    """
-
-
-class GdeltMaxRetriesError(Exception):
-    """Transient retries exhausted (empty body, HTTPError) — bucket dropped."""
-
-
-def _http_get_json(
-    url: str,
-    *,
-    timeout: float = 20.0,
-    max_attempts: int = 3,
-    backoff_sec: float = 10.0,
-) -> dict:
-    """Fetch JSON from GDELT, distinguishing permanent vs transient errors.
-
-    Transient (retried with exponential backoff): empty body (soft rate-limit
-    signal) and ``HTTPError`` (including real 429).
-
-    Permanent (raised immediately as ``GdeltQueryError``): non-empty body that
-    does not look like JSON. GDELT signals malformed queries with HTTP 200 and
-    a plain-text message body, so retrying is wasted wall time AND triggers
-    GDELT's 5s/req soft cap for the bucket that comes next.
-    """
-    last_err: Exception | None = None
-    for attempt in range(max_attempts):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "AlphaLens-thematic/0.1"})
-            # URL built from gdelt-base constant + querystring; file:// not reachable.
-            with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec B310
-                body = r.read()
-            if not body:
-                raise json.JSONDecodeError("empty body (likely rate-limited)", "", 0)
-            if body.lstrip()[:1] not in (b"{", b"["):
-                snippet = body[:200].decode("utf-8", errors="replace").strip()
-                raise GdeltQueryError(f"GDELT permanent error: {snippet}")
-            return json.loads(body)
-        except GdeltQueryError:
-            raise
-        except (json.JSONDecodeError, urllib.error.HTTPError) as e:
-            last_err = e
-            if attempt + 1 < max_attempts:
-                time.sleep(backoff_sec * (2**attempt))
-    raise GdeltMaxRetriesError(f"GDELT fetch failed after {max_attempts} attempts: {last_err}")
-
-
 @lru_cache(maxsize=1)
 def load_theme_buckets() -> dict[str, str]:
     """Return the ``{theme_name: gdelt_query_string}`` map from YAML config."""
     with THEMES_PATH.open() as f:
         data = yaml.safe_load(f)
     return dict(data.get("themes") or {})
-
-
-def build_query_url(
-    *,
-    query: str,
-    startdatetime: str | None = None,
-    enddatetime: str | None = None,
-    maxrecords: int = DEFAULT_MAXRECORDS,
-    sort: str = "datedesc",
-) -> str:
-    """Build a GDELT DOC API URL with optional explicit UTC bounds.
-
-    ``startdatetime`` / ``enddatetime`` are GDELT ``YYYYMMDDHHMMSS`` strings
-    (absolute, UTC). They are only emitted when BOTH are provided; the legacy
-    relative ``timespan`` parameter is gone (P1a strict single-day window).
-    """
-    params: dict[str, object] = {
-        "query": query,
-        "mode": "artlist",
-        "format": "json",
-        "maxrecords": maxrecords,
-        "sort": sort,
-    }
-    if startdatetime is not None and enddatetime is not None:
-        params["startdatetime"] = startdatetime
-        params["enddatetime"] = enddatetime
-    return f"{ENDPOINT}?{urllib.parse.urlencode(params)}"
 
 
 def _format_datetime_for_gdelt(dt_: dt.datetime) -> str:
@@ -270,13 +192,12 @@ def fetch_theme(
     falls outside ``[start, end)`` are filtered post-fetch — the file is then
     free of T-0 bleed and replay-correct regardless of fetch wall-time.
     """
-    url = build_query_url(
+    data = get_default_gdelt_client().fetch_doc(
         query=query,
         startdatetime=_format_datetime_for_gdelt(start),
         enddatetime=_format_datetime_for_gdelt(end),
         maxrecords=maxrecords,
     )
-    data = _http_get_json(url)
     df = transform(data.get("articles") or [], theme=theme)
     if not df.empty:
         start_ts = pd.Timestamp(start)
