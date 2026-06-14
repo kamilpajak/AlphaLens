@@ -82,6 +82,9 @@ def write_grouped_day_atomic(root: Path, date: dt.date, payload: dict[str, dict[
         for symbol, bar in payload.items()
     ]
     df = pd.DataFrame(rows, columns=["T", *_GROUPED_DAILY_FIELDS])
+    # The temp suffix is deliberately `.parquet.tmp` (not `.tmp.parquet`) so an in-flight
+    # write is invisible to `glob("*.parquet")` — `_newest_session_on_or_before` never
+    # picks up a partial snapshot.
     tmp = path.with_suffix(path.suffix + ".tmp")
     df.to_parquet(tmp, index=False)
     os.replace(tmp, path)
@@ -105,7 +108,7 @@ def _newest_session_on_or_before(root: Path, asof: dt.date) -> dt.date | None:
     before ``asof``, never a future bar. Lexicographic order over the ISO-date ``.parquet``
     stems is a valid chronological order (zero-padded ``YYYY-MM-DD``).
     """
-    if not root.exists():
+    if not root.is_dir():
         return None
     cutoff = asof.isoformat()
     best: str | None = None

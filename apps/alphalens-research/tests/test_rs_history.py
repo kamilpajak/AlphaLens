@@ -127,6 +127,14 @@ class TestRsPercentile(unittest.TestCase):
             self._seed(root)
             self.assertIsNone(rs_percentile(root, "AAA", dt.date(2024, 1, 1)))
 
+    def test_none_when_root_is_not_a_directory(self):
+        # A root that exists as a regular file (or is missing) -> None, never an OSError.
+        with TemporaryDirectory() as tmp:
+            as_file = Path(tmp) / "not_a_dir"
+            as_file.write_text("x")
+            self.assertIsNone(rs_percentile(as_file, "AAA", ASOF))
+            self.assertIsNone(rs_percentile(Path(tmp) / "missing", "AAA", ASOF))
+
     def test_pit_intersection_universe(self):
         # A name present at asof but NOT at lookback (recent IPO) is excluded from the
         # universe denominator (delisting-survivorship-clean by construction).
