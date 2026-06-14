@@ -1,8 +1,9 @@
 """The O'Neil panel assembly — earnings YoY, split screen, coverage, sparsity.
 
 Earnings is the one term computed from a store here (technicals are passed in by
-the caller); the split screen reads a raw-close window. Both degrade to ``None``
-honestly. ``data_coverage`` counts only the two OPTIONAL terms (trend, earnings).
+the caller); the split screen reads the authoritative split calendar (a real split in
+the trailing 52 weeks, NOT a price jump). Both degrade to ``None`` honestly.
+``data_coverage`` counts the three OPTIONAL terms (R, trend, earnings).
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import unittest
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import pandas as pd
 from alphalens_pipeline.experts.oneil import comparison
 from alphalens_pipeline.experts.oneil.comparison import compute_oneil_panel
 
@@ -36,9 +36,11 @@ class _FakeStore:
         return [_FakeStatement(ni) for ni in self._net_incomes]
 
 
-def _ohlcv(closes: list[float]) -> Callable[[str, dt.date], pd.DataFrame]:
-    def fn(ticker: str, asof: dt.date) -> pd.DataFrame:
-        return pd.DataFrame({"close": closes})
+def _splits(dates: list[dt.date]) -> Callable[[str], list[dt.date]]:
+    """A SplitsFn stub: returns a fixed all-time split-date list for any ticker."""
+
+    def fn(ticker: str) -> list[dt.date]:
+        return dates
 
     return fn
 
@@ -83,15 +85,48 @@ class TestEarningsGrowthYoy(unittest.TestCase):
 
 
 class TestSplitScreen(unittest.TestCase):
-    def test_clean_window_not_suspected(self):
-        self.assertIs(comparison._detect_split(pd.Series([100.0, 101.0, 99.0, 102.0])), False)
+    """The screen flags N as contaminated only when a REAL split (from the authoritative
+    calendar) falls in the trailing 52-week window — a large single-day earnings move is
+    NOT a split, so it no longer nulls the score."""
 
-    def test_split_jump_suspected(self):
-        # 100 -> 49 is a ~2:1 split (|ratio-1| = 0.51 > 0.35).
-        self.assertIs(comparison._detect_split(pd.Series([100.0, 49.0, 50.0])), True)
+    def test_split_in_window_is_suspected(self):
+        # A split 30 days before asof contaminates the raw 52w-high basis.
+        self.assertIs(
+            comparison._split_suspected("AAA", ASOF, _splits([ASOF - dt.timedelta(days=30)])),
+            True,
+        )
 
-    def test_short_window_is_none(self):
-        self.assertIsNone(comparison._detect_split(pd.Series([100.0])))
+    def test_clean_calendar_is_not_suspected(self):
+        # No split ever recorded -> a confident False (NOT None), so N is scored.
+        self.assertIs(comparison._split_suspected("AAA", ASOF, _splits([])), False)
+
+    def test_split_older_than_window_is_clean(self):
+        # A split ~2 years ago no longer touches the trailing 52-week high (this is the
+        # TTD case: its 2021 10:1 split is far outside, so a -38% earnings day stays scored).
+        self.assertIs(
+            comparison._split_suspected("AAA", ASOF, _splits([ASOF - dt.timedelta(days=730)])),
+            False,
+        )
+
+    def test_future_dated_split_excluded(self):
+        # No look-ahead: a split AFTER asof must not count.
+        self.assertIs(
+            comparison._split_suspected("AAA", ASOF, _splits([ASOF + dt.timedelta(days=5)])),
+            False,
+        )
+
+    def test_reader_absent_is_none(self):
+        self.assertIsNone(comparison._split_suspected("AAA", ASOF, None))
+
+    def test_reader_returns_none_is_none(self):
+        # Calendar fetch failed -> tri-state None (leaves N ungated, never a fake False).
+        self.assertIsNone(comparison._split_suspected("AAA", ASOF, lambda t: None))
+
+    def test_reader_raising_is_swallowed_to_none(self):
+        def boom(ticker):
+            raise RuntimeError("yfinance down")
+
+        self.assertIsNone(comparison._split_suspected("AAA", ASOF, boom))
 
 
 class TestComputePanel(unittest.TestCase):
@@ -104,7 +139,7 @@ class TestComputePanel(unittest.TestCase):
             ma200_slope_pct_per_day=0.05,
             ma200_distance_pct=8.0,
             store=_FakeStore([120.0, 100.0]),
-            ohlcv_fn=_ohlcv([100.0, 101.0, 102.0]),
+            splits_fn=_splits([]),  # clean calendar -> split_suspected False
             rs_fn=lambda t, a: 60.0,  # R present
         )
         self.assertEqual(panel.ticker, "AAA")
@@ -124,7 +159,7 @@ class TestComputePanel(unittest.TestCase):
             ma200_slope_pct_per_day=0.05,
             ma200_distance_pct=8.0,
             store=_FakeStore([120.0]),  # <2 FY => earnings None
-            ohlcv_fn=_ohlcv([100.0, 101.0]),
+            splits_fn=_splits([]),
         )  # no rs_fn => R None
         self.assertIsNone(panel.earnings_growth_yoy_pct)
         self.assertIsNone(panel.oneil_rs_approx_pct)
@@ -139,7 +174,7 @@ class TestComputePanel(unittest.TestCase):
             ma200_slope_pct_per_day=None,
             ma200_distance_pct=None,
             store=_FakeStore(None),
-            ohlcv_fn=_ohlcv([100.0, 101.0]),
+            splits_fn=_splits([]),
         )
         self.assertAlmostEqual(panel.data_coverage, 0.0)
 
@@ -152,7 +187,7 @@ class TestComputePanel(unittest.TestCase):
             ma200_slope_pct_per_day=0.05,
             ma200_distance_pct=8.0,
             store=_FakeStore([120.0, 100.0]),
-            ohlcv_fn=None,  # no reader => split unknown
+            splits_fn=None,  # no calendar reader => split unknown
         )
         self.assertIsNone(panel.new_high_split_suspected)
 
@@ -167,7 +202,7 @@ class TestRsTerm(unittest.TestCase):
             "ma200_slope_pct_per_day": None,
             "ma200_distance_pct": None,
             "store": _FakeStore(None),
-            "ohlcv_fn": _ohlcv([100.0, 101.0]),
+            "splits_fn": _splits([]),
         }
         kw.update(over)
         return compute_oneil_panel("AAA", "t", ASOF, **kw)
