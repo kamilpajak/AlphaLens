@@ -86,6 +86,15 @@ class TestRetry(unittest.TestCase):
         self.assertFalse(_client(sess).send_message("C", "x"))
         self.assertEqual(sess.post.call_count, 1)  # no retry on a permanent 400
 
+    def test_exotic_request_exception_returns_false_not_raise(self):
+        """An exotic requests failure (not Timeout/ConnectionError) must NOT
+        propagate — it would crash the live dispatch caller and could leak the
+        bot-token URL in its repr. Permanent: no retry, return False."""
+        sess = MagicMock()
+        sess.post.side_effect = requests.TooManyRedirects("too many redirects")
+        self.assertFalse(_client(sess).send_message("C", "x"))
+        self.assertEqual(sess.post.call_count, 1)
+
 
 class TestCredentialSafety(unittest.TestCase):
     def test_bot_token_never_appears_in_logs(self):

@@ -105,6 +105,16 @@ class TelegramClient:
                 if self._retry(attempt, "network error", exc):
                     continue
                 return False
+            except requests.RequestException as exc:
+                # Exotic requests failures (TooManyRedirects / InvalidURL /
+                # ChunkedEncodingError / ...) are permanent — they won't fix on
+                # retry. Catch them here so send_message NEVER raises (a failed
+                # alert must not crash the live edgar-detect / thematic /
+                # literature pipelines) AND the token can't leak: requests
+                # embeds the bot-token URL in its exception repr, so we sanitise
+                # before logging rather than letting it propagate uncaught.
+                logger.error("Telegram send failed (permanent): %s", self._sanitize(str(exc)))
+                return False
             if resp.status_code in _TRANSIENT_STATUS:
                 if self._retry(attempt, f"HTTP {resp.status_code}", None):
                     continue
