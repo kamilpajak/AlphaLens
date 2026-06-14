@@ -434,6 +434,13 @@ class EdgarFundamentalsStore:
         the per-ticker call. Only a real value is memoised — a ``None`` (the
         client exhausted its retries or the name is a genuine miss) is NOT cached
         so a later candidate in the same batch re-attempts.
+
+        Note (not time-aligned): a batch-prefetched price is the most recent
+        close in a 5-day window (usually the prior trading day) while this
+        per-ticker fallback is the live intraday ``last_price``, so within one
+        brief some market caps use yesterday's close and some today's live
+        price. Pre-existing in this store; a future PIT-aware price loader would
+        remove the mismatch.
         """
         key = ticker.upper()
         cached = self._prices.get(key)
@@ -456,6 +463,13 @@ class EdgarFundamentalsStore:
         ``None`` (rate-limit blip that survived the client's retries, or a
         genuine miss) is NOT cached, so a later candidate re-attempts (zen
         finding #3, PR #174).
+
+        Trade-off vs the pre-migration store: that code cached a clean-call
+        ``None`` (a genuinely share-less / delisted name), whereas the uniform
+        don't-cache-``None`` rule here re-fetches such a name once per candidate
+        in the run. Accepted: the client distinguishes transient from permanent
+        only by exhausting retries, share-less names are rare, and correctness
+        (always ``None``) is unchanged — only a small, bounded extra call cost.
         """
         key = ticker.upper()
         if key in self._shares_cache:

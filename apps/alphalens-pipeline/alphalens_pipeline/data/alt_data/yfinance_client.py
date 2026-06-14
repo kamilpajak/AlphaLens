@@ -234,6 +234,11 @@ class YFinanceClient:
         caller falls back to the per-ticker :meth:`last_price` path). Tickers
         yfinance omits or returns ``NaN`` for are simply absent from the result;
         keys are upper-cased.
+
+        The reported close is the last non-NaN value in the 5-day window (via
+        ``ffill``), so a ticker that stops trading midway through the window
+        still surfaces its last traded close — the most recent close *within
+        the window*, not necessarily the latest-trading-day close.
         """
         if not tickers:
             return {}
