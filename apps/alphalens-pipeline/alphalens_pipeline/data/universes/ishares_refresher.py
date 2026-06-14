@@ -24,14 +24,12 @@ from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 
-import requests
 import yaml
 
+from alphalens_pipeline.data.alt_data.ishares_client import get_default_ishares_client
 from alphalens_pipeline.data.alt_data.iwm_refresher import parse_ishares_csv
 
 logger = logging.getLogger(__name__)
-
-_DEFAULT_USER_AGENT = "AlphaLens (research / personal use)"
 
 # iShares AJAX URL pattern is identical across funds; only the product ID
 # and ticker filename change. URLs sourced 2026-05-03 from ishares.com.
@@ -52,13 +50,7 @@ ETF_URLS: dict[str, str] = {
 
 
 def _default_fetcher(url: str) -> str:
-    resp = requests.get(
-        url,
-        headers={"User-Agent": _DEFAULT_USER_AGENT},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.text
+    return get_default_ishares_client().fetch_holdings_csv(url)
 
 
 def refresh_ishares_snapshot(

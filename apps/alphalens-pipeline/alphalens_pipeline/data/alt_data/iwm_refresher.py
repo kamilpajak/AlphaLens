@@ -31,8 +31,9 @@ import shutil
 from collections.abc import Callable
 from pathlib import Path
 
-import requests
 import yaml
+
+from alphalens_pipeline.data.alt_data.ishares_client import get_default_ishares_client
 
 # Strict ticker pattern: 1-6 uppercase letters, optional class suffix (e.g. BRK.B, GOOG-L).
 # Rejects iShares CSV footer disclaimers that otherwise slip into the Ticker column.
@@ -44,7 +45,6 @@ IWM_AJAX_URL = (
     "https://www.ishares.com/us/products/239710/ishares-russell-2000-etf/"
     "1467271812596.ajax?fileType=csv&fileName=IWM_holdings&dataType=fund"
 )
-_DEFAULT_USER_AGENT = "AlphaLens (research / personal use)"
 
 
 class IsharesCsvFormatError(ValueError):
@@ -94,13 +94,7 @@ def parse_ishares_csv(csv_text: str) -> list[str]:
 
 
 def _default_fetcher() -> str:
-    resp = requests.get(
-        IWM_AJAX_URL,
-        headers={"User-Agent": _DEFAULT_USER_AGENT},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.text
+    return get_default_ishares_client().fetch_holdings_csv(IWM_AJAX_URL)
 
 
 def refresh_iwm_current(
