@@ -6,10 +6,11 @@ columns ``[open, high, low, close, volume]``). Wraps everything in
 OHLCV fetch to a caller-provided ``loader`` — same pattern as the FCFF
 ``feature_fetcher`` indirection.
 
-The orchestrator can either preload yfinance OHLCV via
-:func:`alphalens_pipeline.data.alt_data.yfinance_cache.load_cached_histories` and
-pass an in-memory lookup, or compose a live :func:`yf.Ticker.history`
-call.
+The orchestrator supplies the ``loader``. The live thematic scorer injects
+:meth:`alphalens_pipeline.data.alt_data.yfinance_client.YFinanceClient.cached_daily_ohlcv`
+(the canonical client — throttled + bounded retry, with a stale-cache
+fallback); research callers can pass any in-memory
+``(ticker, asof) -> DataFrame`` lookup instead.
 
 Each metric returns ``None`` when history is too short. The summary string
 is always returned (never None) so it can render in the parquet without
