@@ -298,6 +298,76 @@ class TestMarketCap(unittest.TestCase):
             self.assertEqual(_client().market_cap("x"), 1e9)
 
 
+class TestLastPrice(unittest.TestCase):
+    @staticmethod
+    def _ticker(price):
+        return SimpleNamespace(fast_info=SimpleNamespace(last_price=price))
+
+    def test_returns_last_price(self):
+        with patch("yfinance.Ticker", return_value=self._ticker(241.16)):
+            self.assertEqual(_client().last_price("fds"), 241.16)
+
+    def test_none_price_returns_none(self):
+        with patch("yfinance.Ticker", return_value=self._ticker(None)):
+            self.assertIsNone(_client().last_price("x"))
+
+    def test_nan_price_returns_none(self):
+        """fast_info.last_price can be NaN for a halted / thin name — treat as
+        missing rather than propagating a NaN into market-cap math."""
+        with patch("yfinance.Ticker", return_value=self._ticker(float("nan"))):
+            self.assertIsNone(_client().last_price("x"))
+
+    def test_retries_rate_limit_then_returns(self):
+        with patch(
+            "yfinance.Ticker",
+            side_effect=[YFRateLimitError(), self._ticker(50.0)],
+        ):
+            self.assertEqual(_client().last_price("x"), 50.0)
+
+
+class TestBatchLastClose(unittest.TestCase):
+    @staticmethod
+    def _multi_frame() -> pd.DataFrame:
+        """yfinance.download multi-ticker shape: a ``Close`` column-group with
+        one sub-column per ticker (BBB has a leading gap to exercise ffill)."""
+        idx = pd.DatetimeIndex(["2026-06-10", "2026-06-11"])
+        close = pd.DataFrame({"AAA": [9.0, 10.0], "BBB": [None, 20.0]}, index=idx)
+        return pd.concat({"Close": close}, axis=1)
+
+    def test_empty_ticker_list_returns_empty_dict_no_call(self):
+        with patch("yfinance.download") as dl:
+            self.assertEqual(_client().batch_last_close([]), {})
+            dl.assert_not_called()
+
+    def test_returns_ffilled_last_close_per_ticker_uppercased(self):
+        with patch("yfinance.download", return_value=self._multi_frame()):
+            out = _client().batch_last_close(["aaa", "bbb"])
+        self.assertEqual(out, {"AAA": 10.0, "BBB": 20.0})
+
+    def test_single_ticker_scalar_close(self):
+        idx = pd.DatetimeIndex(["2026-06-10", "2026-06-11"])
+        frame = pd.DataFrame({"Close": [9.0, 10.0]}, index=idx)
+        with patch("yfinance.download", return_value=frame):
+            out = _client().batch_last_close(["aaa"])
+        self.assertEqual(out, {"AAA": 10.0})
+
+    def test_empty_download_returns_empty_dict(self):
+        with patch("yfinance.download", return_value=pd.DataFrame()):
+            self.assertEqual(_client().batch_last_close(["x"]), {})
+
+    def test_transient_failure_retries_then_returns(self):
+        with patch(
+            "yfinance.download",
+            side_effect=[YFRateLimitError(), self._multi_frame()],
+        ):
+            out = _client().batch_last_close(["aaa", "bbb"])
+        self.assertEqual(out, {"AAA": 10.0, "BBB": 20.0})
+
+    def test_permanent_failure_returns_empty_dict_not_crash(self):
+        with patch("yfinance.download", side_effect=RuntimeError("delisted 404")):
+            self.assertEqual(_client().batch_last_close(["x"]), {})
+
+
 class TestShares(unittest.TestCase):
     def test_pit_uses_latest_shares_on_or_before_asof(self):
         series = pd.Series([200e6, 224.5e6], index=pd.to_datetime(["2026-01-15", "2026-03-30"]))

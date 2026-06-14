@@ -195,45 +195,28 @@ class TestSharesChainOrder(unittest.TestCase):
             self.assertEqual(features["shares_outstanding"], 130_000_000.0)
             mock_yf.assert_called_once_with("AI", date(2026, 5, 19))
 
-    def test_yfinance_transient_exception_not_cached(self):
-        """Zen finding #3 (PR #174): a yfinance rate-limit / network blip
-        must not permanently disable the fallback for the lifetime of the
-        store. The second call must re-attempt and pick up the value
-        (None is cached only for definitive "no data" results).
+    def test_yfinance_none_not_cached_value_is(self):
+        """Zen finding #3 (PR #174): a ``None`` from the canonical client (an
+        exhausted-transient rate-limit / network blip OR a permanent miss) must
+        NOT be cached, so a later candidate in the same batch re-attempts; only
+        a definitive value is memoised for the store lifetime. The retry itself
+        now lives inside :class:`YFinanceClient`; the store keeps only the
+        don't-cache-None invariant and the PIT ``asof`` passthrough.
         """
-        from alphalens_pipeline.data.store.edgar_fundamentals import EdgarFundamentalsStore
+        from alphalens_pipeline.data.store import edgar_fundamentals as ef
 
         with tempfile.TemporaryDirectory() as td:
-            tdp = Path(td)
-            store = EdgarFundamentalsStore(cache_dir=tdp, sec_client=_stub_sec_client({}))
-
-            # Mock yfinance.Ticker so the first invocation raises and the
-            # second returns a real fast_info.shares value.
-            ticker_mock_attempt = [0]
-
-            class _FakeFastInfo:
-                shares = 140_000_000.0
-
-            class _FakeTicker:
-                def __init__(self, t):
-                    ticker_mock_attempt[0] += 1
-                    if ticker_mock_attempt[0] == 1:
-                        raise RuntimeError("network blip")
-                    self.fast_info = _FakeFastInfo()
-
-                def get_shares_full(self, start, end):
-                    return None
-
-            fake_yf = MagicMock()
-            fake_yf.Ticker.side_effect = _FakeTicker
-
-            with patch.dict("sys.modules", {"yfinance": fake_yf}):
+            store = ef.EdgarFundamentalsStore(cache_dir=Path(td), sec_client=_stub_sec_client({}))
+            fake_client = MagicMock()
+            fake_client.shares.side_effect = [None, 140_000_000.0]
+            with patch.object(ef, "get_default_yfinance_client", return_value=fake_client):
                 first = store._fetch_shares_yf("AI", date(2026, 5, 19))
-                self.assertIsNone(first)  # transient failure
+                self.assertIsNone(first)  # client returned None
                 self.assertNotIn("AI", store._shares_cache)  # not cached
                 second = store._fetch_shares_yf("AI", date(2026, 5, 19))
             self.assertEqual(second, 140_000_000.0)
             self.assertEqual(store._shares_cache["AI"], 140_000_000.0)
+            fake_client.shares.assert_called_with("AI", asof=date(2026, 5, 19))
 
     def test_yfinance_fallback_skipped_when_xbrl_succeeds(self):
         """Don't waste yfinance roundtrips when EDGAR is fresh."""
@@ -262,6 +245,63 @@ class TestSharesChainOrder(unittest.TestCase):
                 features = store.ev_fcff_features_as_of("BAR", date(2026, 5, 19))
             self.assertEqual(features["shares_outstanding"], 200_000_000.0)
             mock_yf.assert_not_called()
+
+
+class TestPriceFetchDelegation(unittest.TestCase):
+    """Price prefetch + per-ticker fallback delegate to the canonical
+    :class:`YFinanceClient` (its shared throttle + bounded retry replace the
+    store's old raw ``yfinance`` calls — the fragility behind a single name
+    losing every price-dependent multiple after a Yahoo 429 burst)."""
+
+    def test_batch_fetch_prices_populates_from_client(self):
+        from alphalens_pipeline.data.store import edgar_fundamentals as ef
+
+        with tempfile.TemporaryDirectory() as td:
+            store = ef.EdgarFundamentalsStore(cache_dir=Path(td), sec_client=_stub_sec_client({}))
+            fake = MagicMock()
+            fake.batch_last_close.return_value = {"AAA": 10.0, "BBB": 20.0}
+            with patch.object(ef, "get_default_yfinance_client", return_value=fake):
+                store._batch_fetch_prices(["aaa", "bbb"])
+            self.assertEqual(store._prices, {"AAA": 10.0, "BBB": 20.0})
+            fake.batch_last_close.assert_called_once_with(["aaa", "bbb"])
+
+    def test_fetch_price_delegates_then_serves_from_cache(self):
+        from alphalens_pipeline.data.store import edgar_fundamentals as ef
+
+        with tempfile.TemporaryDirectory() as td:
+            store = ef.EdgarFundamentalsStore(cache_dir=Path(td), sec_client=_stub_sec_client({}))
+            fake = MagicMock()
+            fake.last_price.return_value = 241.16
+            with patch.object(ef, "get_default_yfinance_client", return_value=fake):
+                first = store._fetch_price("FDS", date(2026, 6, 12))
+                second = store._fetch_price("FDS", date(2026, 6, 12))
+            self.assertEqual(first, 241.16)
+            self.assertEqual(second, 241.16)
+            fake.last_price.assert_called_once_with("FDS")  # 2nd served from cache
+
+    def test_fetch_price_none_not_cached(self):
+        from alphalens_pipeline.data.store import edgar_fundamentals as ef
+
+        with tempfile.TemporaryDirectory() as td:
+            store = ef.EdgarFundamentalsStore(cache_dir=Path(td), sec_client=_stub_sec_client({}))
+            fake = MagicMock()
+            fake.last_price.return_value = None
+            with patch.object(ef, "get_default_yfinance_client", return_value=fake):
+                self.assertIsNone(store._fetch_price("X", date(2026, 6, 12)))
+                self.assertNotIn("X", store._prices)
+
+    def test_fetch_price_prefers_prefetched_batch_value(self):
+        """A value already in the batch cache short-circuits the per-ticker
+        client call entirely."""
+        from alphalens_pipeline.data.store import edgar_fundamentals as ef
+
+        with tempfile.TemporaryDirectory() as td:
+            store = ef.EdgarFundamentalsStore(cache_dir=Path(td), sec_client=_stub_sec_client({}))
+            store._prices["MTCH"] = 33.0
+            fake = MagicMock()
+            with patch.object(ef, "get_default_yfinance_client", return_value=fake):
+                self.assertEqual(store._fetch_price("mtch", date(2026, 6, 12)), 33.0)
+            fake.last_price.assert_not_called()
 
 
 if __name__ == "__main__":

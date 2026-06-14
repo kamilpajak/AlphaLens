@@ -17,11 +17,16 @@ Mirror of :mod:`tests.test_no_raw_polygon_http` (+ sec / av / openrouter); same
 positive-control discipline so the detection patterns can't silently rot to
 empty.
 
+``edgar_fundamentals.py`` was migrated in PR-3 (#573): its price prefetch +
+single-price + shares fallbacks now route through the client's
+``batch_last_close`` / ``last_price`` / ``shares`` methods, so a 429 burst can no
+longer null out every price-dependent multiple for one name (the FDS / MTCH
+symptom). The batch-vs-throttle tension was resolved by moving the batch
+``yfinance.download`` INTO the client (one throttled + retried unit).
+
 ALLOWLIST (documented TODOs, NOT permitted shadow clients — tighten as each is
 migrated):
 - ``yfinance_cache.py`` — a DI OHLCV cache shared with research scripts.
-- ``edgar_fundamentals.py`` — a yfinance *batch* download with a genuine
-  batch-vs-throttle design tension (PR-3).
 - ``screeners/prescreener/data_fetcher.py`` — the RESEARCH_ONLY Layer 2a
   prescreener; pulls the full ``.info`` dict, a surface the client does not yet
   expose. Manual ad-hoc, no live-pipeline burst contention.
@@ -51,14 +56,14 @@ SCAN_DIRS = (
 CANONICAL_CLIENT_REL = "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/yfinance_client.py"
 
 # Deferred-migration allowlist (documented TODOs, not shadow clients). The
-# pipeline sites have a real batch-vs-throttle tension (PR-3); the prescreener is
+# `yfinance_cache.py` DI cache is shared with research scripts; the prescreener is
 # a RESEARCH_ONLY layer pulling the full `.info` dict (a surface the client does
 # not expose yet); the four research SCRIPTS are ad-hoc, run manually on a
 # different IP than the VPS pipeline, so they don't contend for the live rate
-# budget — low priority.
+# budget — low priority. `edgar_fundamentals.py` was migrated in PR-3 (#573) and
+# is intentionally NO LONGER here.
 DEFERRED_RELS = (
     "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/yfinance_cache.py",
-    "apps/alphalens-pipeline/alphalens_pipeline/data/store/edgar_fundamentals.py",
     "apps/alphalens-research/alphalens_research/screeners/prescreener/data_fetcher.py",
     "apps/alphalens-research/scripts/probe_yfinance_analyst_survivorship.py",
     "apps/alphalens-research/scripts/precheck_pc_cyclicality_is.py",
