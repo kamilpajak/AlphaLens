@@ -204,8 +204,14 @@ def build_default_panel_fn(tickers: list[str]) -> PanelFn:
         store.preload(tickers)
         yf = get_default_yfinance_client()
 
-        def ohlcv_fn(ticker: str, asof: dt.date) -> pd.DataFrame:
-            return yf.cached_daily_ohlcv(ticker, asof=asof)
+        # Split screen — the authoritative yfinance split calendar (NOT a price-jump
+        # heuristic): a real split in the trailing 52 weeks contaminates the raw 52w-high.
+        # None when the calendar could not be fetched (tri-state, leaves N ungated).
+        def splits_fn(ticker: str) -> list[dt.date] | None:
+            series = yf.splits(ticker)
+            if series is None:
+                return None
+            return [ts.date() for ts in pd.to_datetime(series.index)]
 
         # R (relative strength) — DISK ONLY: reads the split-adjusted grouped-daily
         # history store the nightly top-up maintains. NO in-pass Polygon call; a
@@ -225,7 +231,7 @@ def build_default_panel_fn(tickers: list[str]) -> PanelFn:
             ma200_slope_pct_per_day=technicals.get("ma200_slope_pct_per_day"),
             ma200_distance_pct=technicals.get("ma200_distance_pct"),
             store=store,
-            ohlcv_fn=ohlcv_fn,
+            splits_fn=splits_fn,
             rs_fn=rs_fn,
         )
 

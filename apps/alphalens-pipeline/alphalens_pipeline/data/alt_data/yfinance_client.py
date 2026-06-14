@@ -137,6 +137,36 @@ class YFinanceClient:
             return pd.DataFrame()
         return _normalize_ohlcv(raw)
 
+    def splits(self, ticker: str) -> pd.Series | None:
+        """All recorded stock-split actions for ``ticker`` as a date -> ratio Series.
+
+        Wraps ``yfinance.Ticker(T).splits`` (ratio ``2.0`` = a 2:1 forward split,
+        ``0.1`` = a 1:10 reverse split), with a tz-naive ``DatetimeIndex``. This is the
+        authoritative corporate-action record — the O'Neil split screen uses it instead
+        of inferring a split from a price jump (a large single-day earnings move is NOT a
+        split). Returns an EMPTY Series when the ticker has genuinely never split, and
+        ``None`` only on a permanent failure / exhausted retries (so the caller can tell
+        "no splits" apart from "could not fetch" — never raises).
+        """
+        upper = ticker.upper()
+
+        def _fetch() -> pd.Series | None:
+            import yfinance as yf
+
+            return yf.Ticker(upper).splits
+
+        raw = self._call_with_retry(_fetch, what=f"splits({upper})", default=None)
+        if raw is None:
+            return None
+        if len(raw) == 0:
+            return pd.Series(dtype=float)
+        series = raw.copy()
+        # tz_localize(None) on an already-naive index raises; build a UTC-aware index
+        # first so this is idempotent across yfinance versions (same pattern as shares /
+        # dividends).
+        series.index = pd.to_datetime(series.index, utc=True).tz_localize(None)
+        return series
+
     def next_earnings(self, ticker: str) -> dict | pd.DataFrame | None:
         """The raw ``yfinance.Ticker(T).calendar`` payload (dict or DataFrame).
 

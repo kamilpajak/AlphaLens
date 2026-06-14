@@ -19,14 +19,14 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-import pandas as pd
-
 logger = logging.getLogger(__name__)
 
-# ``cached_daily_ohlcv``-shaped reader: (ticker, asof) -> raw-close OHLCV frame.
-# Injected in tests; the default is the yfinance client's disk-cache reader. Used
-# ONLY for the split screen — never to recompute a technical the frame already has.
-OhlcvFn = Callable[[str, dt.date], "pd.DataFrame"]
+# (ticker) -> the ticker's all-time stock-split ex-dates, or None when the split
+# calendar could not be fetched. Injected in tests; the default reads the yfinance
+# corporate-action record (YFinanceClient.splits). The screen flags N as contaminated
+# only when a REAL split falls inside the trailing 52-week window — a big single-day
+# earnings move is NOT a split, so it no longer nulls the score.
+SplitsFn = Callable[[str], "list[dt.date] | None"]
 
 # (ticker, asof) -> 0-100 relative-strength percentile, or None. Injected in tests;
 # the default reads the split-adjusted grouped-daily history store (DISK ONLY — never
@@ -55,12 +55,11 @@ class EarningsStore(Protocol):
     ) -> Sequence[_AnnualStatement]: ...
 
 
-# A consecutive day-over-day close ratio further than this from 1.0 marks a
-# suspected split in the raw-close window (auto_adjust=False), contaminating the
-# 52w-high peak. 0.35 is looser than the monitor's 0.18 consecutive band so a
-# legitimate large gap is not nulled, but tight enough to catch a >=2:1 split.
-# Unvalidated heuristic — see the design memo's open risks.
-_SPLIT_JUMP_THRESHOLD = 0.35
+# The trailing window over which a real split contaminates the raw 52-week high
+# (auto_adjust=False). ~52 weeks = 364 days; 366 is inclusive of leap years. A split
+# inside this window means the pre-split highs are on a different per-share basis, so
+# the "% off 52w high" (N) is unreliable and the score is gated to None.
+_SPLIT_LOOKBACK_DAYS = 366
 
 # When the prior fiscal year's net income is this small relative to the latest,
 # the YoY growth % explodes into an uninformative artifact: the earnings term is
@@ -98,30 +97,26 @@ class ONeilPanel:
     oneil_rs_approx_pct: float | None = None
 
 
-def _detect_split(closes: pd.Series) -> bool | None:
-    """``True`` if any consecutive close ratio is further than the threshold from
-    1.0, ``False`` if the window is clean, ``None`` when it is too short to judge."""
-    series = pd.to_numeric(closes, errors="coerce").dropna()
-    if len(series) < 2:
-        return None
-    ratios = series / series.shift(1)
-    jumps = (ratios - 1.0).abs()
-    return bool((jumps > _SPLIT_JUMP_THRESHOLD).any())
+def _split_suspected(ticker: str, asof: dt.date, splits_fn: SplitsFn | None) -> bool | None:
+    """``True`` when a REAL split falls in the trailing 52-week window before ``asof``
+    (so the raw 52w-high is on a stale per-share basis), ``False`` when the split
+    calendar is clean over that window, ``None`` when it could not be read (the reader
+    missing, returning ``None``, or raising).
 
-
-def _split_suspected(ticker: str, asof: dt.date, ohlcv_fn: OhlcvFn | None) -> bool | None:
-    """Run the split screen over the cached raw-close window; ``None`` when the
-    window is unavailable (the ohlcv reader missing, empty, or raising)."""
-    if ohlcv_fn is None:
+    Uses the authoritative split record, NOT a price-jump heuristic — a large single-day
+    earnings move is not a split and must not null the score (the old heuristic flagged
+    e.g. TTD's -38.6% earnings day as a "split")."""
+    if splits_fn is None:
         return None
     try:
-        frame = ohlcv_fn(ticker, asof)
+        split_dates = splits_fn(ticker)
     except Exception as exc:
-        logger.warning("oneil split screen: ohlcv(%s) failed: %s", ticker, exc)
+        logger.warning("oneil split screen: splits(%s) failed: %s", ticker, exc)
         return None
-    if frame is None or getattr(frame, "empty", True) or "close" not in frame.columns:
+    if split_dates is None:
         return None
-    return _detect_split(frame["close"])
+    earliest = asof - dt.timedelta(days=_SPLIT_LOOKBACK_DAYS)
+    return any(earliest < d <= asof for d in split_dates)
 
 
 def _earnings_growth_yoy(
@@ -166,20 +161,21 @@ def compute_oneil_panel(
     ma200_slope_pct_per_day: float | None,
     ma200_distance_pct: float | None,
     store: EarningsStore | None = None,
-    ohlcv_fn: OhlcvFn | None = None,
+    splits_fn: SplitsFn | None = None,
     rs_fn: RsFn | None = None,
 ) -> ONeilPanel:
     """Assemble the O'Neil panel for one candidate from frame technicals + stores.
 
     The three technical inputs are passed in (read off the score-stage frame by
-    the caller); the earnings term + split screen come from the injected store +
-    ohlcv reader; R (relative strength) comes from the injected ``rs_fn`` (a DISK-ONLY
-    read of the grouped-daily history store — never an in-pass Polygon call).
-    ``data_coverage`` counts the three OPTIONAL terms (R, trend, earnings) that
-    resolved — the mandatory N term is a gate, not a fraction.
+    the caller); the earnings term comes from the injected ``store``; the split screen
+    from the injected ``splits_fn`` (the authoritative split calendar); R (relative
+    strength) from the injected ``rs_fn`` (a DISK-ONLY read of the grouped-daily history
+    store — never an in-pass Polygon call). ``data_coverage`` counts the three OPTIONAL
+    terms (R, trend, earnings) that resolved — the mandatory N term is a gate, not a
+    fraction.
     """
     earnings_growth, near_zero_base = _earnings_growth_yoy(store, ticker, asof)
-    split_suspected = _split_suspected(ticker, asof, ohlcv_fn)
+    split_suspected = _split_suspected(ticker, asof, splits_fn)
     rs_approx = _rs_approx(ticker, asof, rs_fn)
 
     trend_present = ma200_slope_pct_per_day is not None

@@ -277,10 +277,6 @@ class TestSingleton(unittest.TestCase):
         self.assertIsNot(a, b)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestMarketCap(unittest.TestCase):
     @staticmethod
     def _ticker(mcap):
@@ -448,3 +444,42 @@ class TestDividends(unittest.TestCase):
         self.assertTrue(series.empty)
         # Retried up to the attempt cap before giving up.
         self.assertEqual(len(slept), yc.YFinanceClient._MAX_REQUEST_ATTEMPTS - 1)
+
+
+class TestSplits(unittest.TestCase):
+    def test_returns_tz_naive_split_series(self):
+        fake = MagicMock()
+        fake.splits = pd.Series(
+            [2.0, 10.0],
+            index=pd.DatetimeIndex(["2021-06-09", "2024-08-12"], tz="America/New_York"),
+        )
+        with patch("yfinance.Ticker", return_value=fake) as patched:
+            s = _client().splits("ttd")
+        patched.assert_called_once_with("TTD")
+        assert s is not None
+        self.assertIsNone(s.index.tz)  # normalized tz-naive
+        self.assertEqual([float(x) for x in s.to_list()], [2.0, 10.0])
+
+    def test_empty_calendar_is_empty_series_not_none(self):
+        # A ticker that never split -> empty Series (a confident "no split"), NOT None.
+        fake = MagicMock()
+        fake.splits = pd.Series(dtype=float)
+        with patch("yfinance.Ticker", return_value=fake):
+            s = _client().splits("AAA")
+        self.assertIsNotNone(s)
+        self.assertTrue(s.empty)
+
+    def test_returns_none_on_permanent_exception(self):
+        # ``splits`` is an attribute access — model raise-on-access with a property,
+        # so a permanent failure yields None (distinct from "no splits" = empty).
+        class _Raises:
+            @property
+            def splits(self):
+                raise RuntimeError("404 delisted")
+
+        with patch("yfinance.Ticker", return_value=_Raises()):
+            self.assertIsNone(_client().splits("DEAD"))
+
+
+if __name__ == "__main__":
+    unittest.main()

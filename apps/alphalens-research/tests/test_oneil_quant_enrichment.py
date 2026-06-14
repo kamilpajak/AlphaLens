@@ -178,8 +178,8 @@ class TestNoNewNetwork(unittest.TestCase):
                 return []
 
         class _Yf:
-            def cached_daily_ohlcv(self, ticker, *, asof):
-                return pd.DataFrame({"close": [1.0, 1.0]})
+            def splits(self, ticker):
+                return pd.Series(dtype=float)  # empty calendar -> no split -> clean
 
         import alphalens_pipeline.data.alt_data.yfinance_client as yc
         import alphalens_pipeline.data.store.edgar_fundamentals as ef
@@ -218,8 +218,8 @@ class TestNoNewNetwork(unittest.TestCase):
                 return []
 
         class _Yf:
-            def cached_daily_ohlcv(self, ticker, *, asof):
-                return pd.DataFrame({"close": [1.0, 1.0]})
+            def splits(self, ticker):
+                return pd.Series(dtype=float)  # empty calendar -> no split -> clean
 
         import alphalens_pipeline.data.alt_data.polygon_client as pc
         import alphalens_pipeline.data.alt_data.yfinance_client as yc
