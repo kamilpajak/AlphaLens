@@ -28,6 +28,7 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
+from alphalens_pipeline.data.alt_data import gdelt_client
 from alphalens_pipeline.thematic import news_ingest
 from alphalens_pipeline.thematic.sources import gdelt, polygon_news, rss
 from alphalens_pipeline.thematic.sources.schema import empty_news_frame
@@ -74,7 +75,7 @@ def _replay_ingest(unified_cache: Path) -> pd.DataFrame:
         tmp = Path(tmp_root)
         with (
             mock.patch.object(gdelt, "load_theme_buckets", lambda: dict(_GDELT_BUCKETS)),
-            mock.patch.object(gdelt, "_http_get_json", gdelt_player),
+            mock.patch.object(gdelt_client, "_http_get_json", gdelt_player),
             mock.patch.object(
                 news_ingest.gdelt,
                 "fetch_daily_news",

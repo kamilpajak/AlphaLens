@@ -4,7 +4,7 @@
 fits the canonical Polygon / SEC clients. The GDELT and RSS sources have no such
 client — they hit a module-level helper keyed purely on the URL:
 
-* GDELT  → ``gdelt._http_get_json(url, ...)`` returns a JSON dict.
+* GDELT  → ``gdelt_client._http_get_json(url, ...)`` returns a JSON dict.
 * RSS    → ``rss._parse_feed(url)`` returns a feedparser result (attribute-access
   ``.entries`` / ``.bozo`` / per-entry ``.link/.title/.summary/
   .published_parsed/.updated_parsed``).

@@ -40,6 +40,7 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
+from alphalens_pipeline.data.alt_data import gdelt_client
 from alphalens_pipeline.data.alt_data.polygon_client import PolygonClient
 from alphalens_pipeline.thematic import news_ingest
 from alphalens_pipeline.thematic.config.universe import load_input_universe
@@ -116,7 +117,7 @@ def _write_synthetic_gdelt() -> None:
     end = start + dt.timedelta(days=1)
     store: dict[str, dict] = {}
     for theme, query in _GDELT_BUCKETS.items():
-        url = gdelt.build_query_url(
+        url = gdelt_client.build_query_url(
             query=query,
             startdatetime=gdelt._format_datetime_for_gdelt(start),
             enddatetime=gdelt._format_datetime_for_gdelt(end),
@@ -168,7 +169,7 @@ def main() -> None:
         with (
             # GDELT: synthetic, subset to the 2 authored buckets (no live call).
             mock.patch.object(gdelt, "load_theme_buckets", lambda: dict(_GDELT_BUCKETS)),
-            mock.patch.object(gdelt, "_http_get_json", gdelt_player),
+            mock.patch.object(gdelt_client, "_http_get_json", gdelt_player),
             # Polygon + RSS: live, with per-source cache redirected to temp.
             mock.patch.object(
                 news_ingest.polygon_news,
