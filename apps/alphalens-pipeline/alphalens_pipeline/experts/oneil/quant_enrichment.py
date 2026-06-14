@@ -49,6 +49,7 @@ ONEIL_COLUMNS: tuple[str, ...] = (
     "oneil_new_high_split_suspected",
     "oneil_data_coverage",
     "oneil_score",
+    "oneil_rs_approx_pct",
 )
 
 # The screening-scorer technical columns O'Neil reuses, keyed by the panel field.
@@ -70,7 +71,7 @@ def _bool_to_float(value: bool | None) -> float | None:
 
 
 def _columns_for(panel: ONeilPanel | None) -> dict[str, float | None]:
-    """The eight column values for one ticker; all ``None`` when no panel."""
+    """The nine column values for one ticker; all ``None`` when no panel."""
     if panel is None:
         return dict.fromkeys(ONEIL_COLUMNS)
     return {
@@ -84,6 +85,7 @@ def _columns_for(panel: ONeilPanel | None) -> dict[str, float | None]:
         "oneil_new_high_split_suspected": _bool_to_float(panel.new_high_split_suspected),
         "oneil_data_coverage": panel.data_coverage,
         "oneil_score": compute_oneil_score(panel),
+        "oneil_rs_approx_pct": panel.oneil_rs_approx_pct,
     }
 
 
@@ -190,6 +192,7 @@ def build_default_panel_fn(tickers: list[str]) -> PanelFn:
     crashing the score stage.
     """
     try:
+        from alphalens_pipeline.data import rs_history
         from alphalens_pipeline.data.alt_data.yfinance_client import (
             get_default_yfinance_client,
         )
@@ -203,6 +206,12 @@ def build_default_panel_fn(tickers: list[str]) -> PanelFn:
 
         def ohlcv_fn(ticker: str, asof: dt.date) -> pd.DataFrame:
             return yf.cached_daily_ohlcv(ticker, asof=asof)
+
+        # R (relative strength) — DISK ONLY: reads the split-adjusted grouped-daily
+        # history store the nightly top-up maintains. NO in-pass Polygon call; a
+        # store gap / candidate-absent yields None (tri-state, R simply drops out).
+        def rs_fn(ticker: str, asof: dt.date) -> float | None:
+            return rs_history.rs_percentile(rs_history.DEFAULT_RS_HISTORY_ROOT, ticker, asof)
     except Exception as exc:
         logger.warning("oneil quant enrichment: store wiring failed: %s", exc)
         return lambda ticker, theme, asof, technicals: None
@@ -217,6 +226,7 @@ def build_default_panel_fn(tickers: list[str]) -> PanelFn:
             ma200_distance_pct=technicals.get("ma200_distance_pct"),
             store=store,
             ohlcv_fn=ohlcv_fn,
+            rs_fn=rs_fn,
         )
 
     return fn

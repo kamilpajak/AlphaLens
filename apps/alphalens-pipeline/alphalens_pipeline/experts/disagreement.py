@@ -16,10 +16,18 @@ scalars inherit that status). The display BANDS (CONSENSUS/MIXED/SPLIT) live onl
 in the SPA drawer (PR-8b), are unvalidated, and are folded into
 ``PANEL_CONFIG_VERSION`` — the analyst correlates the raw scalar, never the bucket.
 
-N>2 generalization (documented, NOT wired): dispersion would become the population
-standard deviation over present scores; for exactly 2 present scores ``pstdev`` =
-``abs(a−b)/2`` ≠ the range used here, so a 3rd expert is a NEW ``PANEL_CONFIG_VERSION``
-(``panel-v2-pstdev-3x``) and rows are only poolable within one config_version.
+TWO INDEPENDENT VERSION AXES (keep distinct):
+- ``v1r`` (the current token) = the v1 absdiff/2x FORMULA-FAMILY with an R-reweighted
+  ``oneil_score`` input (R-reactivation). The formula + expert SET (buffett+oneil) + arity
+  are unchanged; only the MEANING of the oneil_score that feeds the spread changed, so v1
+  (no R) and v1r (with R) rows are NOT poolable.
+- ``panel-v2-pstdev-3x`` (RESERVED, NOT wired) = the FUTURE arity change — a 3rd expert,
+  where dispersion becomes the population standard deviation over present scores (for
+  exactly 2 present scores ``pstdev`` = ``abs(a−b)/2`` ≠ the range used here).
+
+``panel_config_version`` is the SOLE poolability key for BOTH ``expert_spread`` AND the
+4-term ``oneil_score`` (O'Neil carries no own provenance token by design) — the deferred
+Expert×EDGE analyst always partitions both by it, never pools across versions.
 """
 
 from __future__ import annotations
@@ -31,10 +39,12 @@ import pandas as pd
 
 # Pins, as one opaque token, every hand-chosen choice that determines how the raw
 # spread was produced AND how the SPA buckets it for display: the formula family +
-# arity (range over exactly 2 experts), the participating expert set, and the
-# drawer band cutoffs. Bump on any change (3rd expert / retuned bands) so the
-# calibration corpus knows the rows are not comparable across versions.
-PANEL_CONFIG_VERSION = "panel-v1-absdiff-2x"
+# arity (range over exactly 2 experts), the participating expert set, the per-expert
+# score formulas feeding the spread, and the drawer band cutoffs. Bump on any change
+# so the calibration corpus knows the rows are not comparable across versions.
+# v1r = v1 absdiff/2x formula-family with the R-reweighted 4-term oneil_score input
+# (R-reactivation); NOT panel-v2-pstdev-3x (that token is reserved for the future arity change).
+PANEL_CONFIG_VERSION = "panel-v1r-absdiff-2x"
 
 # The two flat columns this step stamps onto every scored row.
 PANEL_COLUMNS: tuple[str, ...] = ("expert_spread", "panel_config_version")

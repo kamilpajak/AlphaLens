@@ -430,6 +430,7 @@ _EXPECTED_ONEIL_BLOB_COLUMNS = (
     "oneil_new_high_split_suspected",
     "oneil_data_coverage",
     "oneil_score",
+    "oneil_rs_approx_pct",
 )
 _EXPECTED_PANEL_BLOB_COLUMNS = (
     "expert_spread",

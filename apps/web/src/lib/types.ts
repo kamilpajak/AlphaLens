@@ -140,6 +140,9 @@ export interface ONeilAssessment {
 	oneil_new_high_split_suspected?: boolean | null;
 	oneil_data_coverage?: number | null;
 	oneil_score?: number | null;
+	/** R — relative-strength percentile (0-100) from the grouped-daily history store
+	 *  (R-reactivation). Null on any store gap / candidate-absent. */
+	oneil_rs_approx_pct?: number | null;
 }
 
 /**

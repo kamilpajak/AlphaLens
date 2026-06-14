@@ -66,11 +66,11 @@ class TestRegistry(unittest.TestCase):
         self.assertEqual({"buffett", "oneil"}, ids)
 
 
-class TestNoRsColumnsInV1(unittest.TestCase):
-    def test_no_rs_columns(self):
-        # R (relative strength) is deferred out of v1 — no rs columns emitted.
-        rs_like = [c for c in ONEIL_COLUMNS if "rs" in c or "relative_strength" in c]
-        self.assertEqual(rs_like, [])
+class TestRsColumnPresent(unittest.TestCase):
+    def test_rs_column_present(self):
+        # R (relative strength) re-activated: oneil_rs_approx_pct is the 9th column.
+        self.assertIn("oneil_rs_approx_pct", ONEIL_COLUMNS)
+        self.assertEqual(len(ONEIL_COLUMNS), 9)
 
 
 class TestDisplayOnly(unittest.TestCase):

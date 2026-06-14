@@ -94,10 +94,12 @@
 		oneilScore !== null ||
 			Number.isFinite(oneil?.oneil_pct_off_52w_high) ||
 			Number.isFinite(oneil?.oneil_ma200_slope_pct_per_day) ||
-			Number.isFinite(oneil?.oneil_earnings_growth_yoy_pct)
+			Number.isFinite(oneil?.oneil_earnings_growth_yoy_pct) ||
+			Number.isFinite(oneil?.oneil_rs_approx_pct)
 	);
 	const oneilReadouts = $derived([
 		{ label: 'off 52w high', value: fmtPct(oneil?.oneil_pct_off_52w_high) },
+		{ label: 'rel strength', value: fmtPct(oneil?.oneil_rs_approx_pct) },
 		{ label: 'MA200 slope/d', value: fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2) },
 		{ label: 'MA200 dist', value: fmtPct(oneil?.oneil_ma200_distance_pct) },
 		{ label: 'earnings YoY', value: fmtPct(oneil?.oneil_earnings_growth_yoy_pct) }

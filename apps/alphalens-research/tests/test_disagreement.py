@@ -92,7 +92,9 @@ class TestEnrich(unittest.TestCase):
 
     def test_config_version_format_pinned(self):
         # Pin the token (folded into the calibration corpus; a change must be deliberate).
-        self.assertEqual(PANEL_CONFIG_VERSION, "panel-v1-absdiff-2x")
+        # v1r = the v1 absdiff/2x formula-family with the R-reweighted 4-term oneil_score
+        # input (R-reactivation); NOT panel-v2-pstdev-3x (reserved for the future arity change).
+        self.assertEqual(PANEL_CONFIG_VERSION, "panel-v1r-absdiff-2x")
         self.assertEqual(disagreement.PANEL_COLUMNS, ("expert_spread", "panel_config_version"))
 
     def test_spread_finite_when_present(self):
