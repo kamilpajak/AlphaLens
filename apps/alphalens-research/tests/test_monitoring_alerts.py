@@ -52,6 +52,7 @@ ACTIVE_JOBS = (
     "thematic-build",
     "feedback-shadow-returns",
     "form4-incremental",
+    "grouped-daily-topup",
 )
 
 

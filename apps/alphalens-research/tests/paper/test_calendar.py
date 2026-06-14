@@ -30,6 +30,7 @@ from alphalens_pipeline.paper.calendar import (
     advance_trading_sessions,
     is_half_day,
     is_trading_day,
+    n_sessions_before,
     next_trading_open,
     previous_trading_day,
     session_on_or_after,
@@ -277,6 +278,45 @@ class TestAdvanceTradingSessionsXNYS(unittest.TestCase):
     def test_negative_n_rejected(self):
         with self.assertRaises(ValueError):
             advance_trading_sessions(dt.date(2026, 5, 29), -1)
+
+
+# ---------------------------------------------------------------- n_sessions_before
+
+
+class TestNSessionsBeforeXNYS(unittest.TestCase):
+    """The lookback analogue of advance_trading_sessions — locates the O'Neil RS
+    trailing-return reference date n sessions before the session on-or-before asof."""
+
+    def test_zero_on_session_is_identity(self):
+        self.assertEqual(n_sessions_before(dt.date(2026, 6, 12), 0), dt.date(2026, 6, 12))
+
+    def test_five_sessions_clean_week_friday_to_friday(self):
+        self.assertEqual(n_sessions_before(dt.date(2026, 6, 12), 5), dt.date(2026, 6, 5))
+
+    def test_five_sessions_spanning_memorial_day(self):
+        # Base Fri 2026-06-01; -1 Fri 5-29, -2 Thu, -3 Wed, -4 Tue 5-26 (Mon 5-25
+        # holiday skipped), -5 Fri 2026-05-22. Calendar-day math would land 5-27;
+        # the session lookback lands on 5-22.
+        self.assertEqual(n_sessions_before(dt.date(2026, 6, 1), 5), dt.date(2026, 5, 22))
+
+    def test_252_sessions_is_about_one_year(self):
+        # 12-month RS lookback: ~252 trading sessions ≈ one calendar year earlier.
+        self.assertEqual(n_sessions_before(dt.date(2026, 6, 12), 252), dt.date(2025, 6, 11))
+
+    def test_non_session_asof_rolls_back_to_prior_session(self):
+        # ANCHOR ASYMMETRY: a weekend/holiday asof rolls BACK (not forward) so the
+        # lookback anchors on the last close on-or-before it. Sun 2026-06-14 -> Fri 6-12.
+        self.assertEqual(n_sessions_before(dt.date(2026, 6, 14), 0), dt.date(2026, 6, 12))
+
+    def test_negative_n_rejected(self):
+        with self.assertRaises(ValueError):
+            n_sessions_before(dt.date(2026, 6, 12), -1)
+
+    def test_xwar_parity(self):
+        # Works for a different MIC (exchange-parametrized helper).
+        result = n_sessions_before(dt.date(2026, 6, 12), 5, exchange="XWAR")
+        self.assertIsInstance(result, dt.date)
+        self.assertLess(result, dt.date(2026, 6, 12))
 
 
 # ---------------------------------------------------------------- session_open_utc

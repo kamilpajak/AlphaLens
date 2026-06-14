@@ -1,0 +1,28 @@
+# Nightly top-up of the split-adjusted grouped-daily history (~/.alphalens/grouped_daily_history/)
+# that backs the O'Neil relative-strength term. Self-sizing: fetches every not-on-disk session
+# from the store's newest date forward to yesterday (capped --max-catchup-days), so a multi-day
+# outage auto-heals on the next run. Steady-state = ONE Polygon grouped-daily call/session
+# (adjusted=true), trivially within the free 5 req/min quota. The one-time backfill (--sessions 440)
+# is run by hand once; this unit only keeps it fresh. Runs at 01:30 UTC (after US close + EOD
+# finalization, BEFORE the 02:30 form4 job) so it never collides with the heavier backfills.
+[Unit]
+Description=AlphaLens grouped-daily history top-up (O'Neil RS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+EnvironmentFile=/etc/alphalens/env
+ExecStart=%h/AlphaLens/.venv/bin/python \
+    apps/alphalens-research/scripts/backfill_grouped_daily_history.py \
+    --topup
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics grouped-daily-topup
+StandardOutput=journal
+StandardError=journal
+MemoryMax=1G
+TasksMax=32
+TimeoutStartSec=20min
+
+[Install]
+WantedBy=default.target

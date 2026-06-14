@@ -233,6 +233,34 @@ groups:
           summary: "form4-incremental success metric missing"
           description: "No success metric for form4-incremental. The job has not run since metrics were enabled (e.g. a freshly installed unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
+      # grouped-daily-topup runs daily at 01:30 UTC (split-adjusted grouped-daily
+      # history top-up that backs the O'Neil RS term). 172800s = 48h = 2× the daily
+      # cadence, matching the other nightly backfills. The self-sizing top-up makes a
+      # one-night miss self-heal on the next run, and the job exits 0 even on a
+      # transient fetch night, so last_success refreshes nightly — staleness here
+      # cleanly catches "the RS history top-up stopped running".
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="grouped-daily-topup"} > 172800
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: grouped-daily-topup
+        annotations:
+          summary: "grouped-daily-topup stale > 48h (expected daily cadence)"
+          description: "Last successful run was {{ $value | humanizeDuration }} ago. The O'Neil RS history store is going stale; RS-approx nulls for asofs whose 252-session lookback falls in the gap."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="grouped-daily-topup"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: grouped-daily-topup
+        annotations:
+          summary: "grouped-daily-topup success metric missing"
+          description: "No success metric for grouped-daily-topup. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Clears after the first successful run."
+
       # ---------------------------------------------------------------
       # VIX regime-cache freshness (Track A v2 PR-2 follow-up).
       # ---------------------------------------------------------------
