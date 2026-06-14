@@ -15,6 +15,7 @@
 	import { EXPERT_KIND } from '$lib/types';
 	import {
 		fmtPct,
+		fmtPctile,
 		fmtNum,
 		fmtDate,
 		buffettTone,
@@ -99,7 +100,14 @@
 	);
 	const oneilReadouts = $derived([
 		{ label: 'off 52w high', value: fmtPct(oneil?.oneil_pct_off_52w_high) },
-		{ label: 'rel strength', value: fmtPct(oneil?.oneil_rs_approx_pct) },
+		// Relative-strength is a 0-100 percentile RANK (O'Neil RS), not a signed % change:
+		// render it as "N%ile" (matching the sector-percentile readouts), never fmtPct (+N%).
+		{
+			label: 'rel strength',
+			value: Number.isFinite(oneil?.oneil_rs_approx_pct)
+				? `${fmtPctile(oneil?.oneil_rs_approx_pct)}%ile`
+				: '—'
+		},
 		{ label: 'MA200 slope/d', value: fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2) },
 		{ label: 'MA200 dist', value: fmtPct(oneil?.oneil_ma200_distance_pct) },
 		{ label: 'earnings YoY', value: fmtPct(oneil?.oneil_earnings_growth_yoy_pct) }
