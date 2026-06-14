@@ -95,6 +95,32 @@ def _default_grouped_fetch(date: dt.date) -> dict[str, dict[str, Any]]:
     return get_default_polygon_client().get_grouped_daily(date, adjusted=True)
 
 
+def _newest_session_on_or_before(root: Path, asof: dt.date) -> dt.date | None:
+    """The newest stored session date on or before ``asof``, or ``None`` when the store
+    holds none.
+
+    Rolls a non-session / lagging ``asof`` (a weekend brief date — the thematic pipeline
+    runs 7 days/week — or an ``asof`` ahead of the nightly top-up) back to the latest real
+    session present on disk. PIT-correct: the 'as of' close is the most recent one on or
+    before ``asof``, never a future bar. Lexicographic order over the ISO-date ``.parquet``
+    stems is a valid chronological order (zero-padded ``YYYY-MM-DD``).
+    """
+    if not root.exists():
+        return None
+    cutoff = asof.isoformat()
+    best: str | None = None
+    for p in root.glob("*.parquet"):
+        stem = p.stem
+        if len(stem) == 10 and stem <= cutoff and (best is None or stem > best):
+            best = stem
+    if best is None:
+        return None
+    try:
+        return dt.date.fromisoformat(best)
+    except ValueError:
+        return None
+
+
 def _close(bar: dict[str, Any]) -> float | None:
     """The adjusted close, or ``None`` when missing / non-positive."""
     c = bar.get("c")
@@ -117,15 +143,22 @@ def rs_percentile(
 ) -> float | None:
     """The candidate's trailing-``n_sessions`` return percentile vs the market, or ``None``.
 
-    Reads ONLY the on-disk store (never fetches). ``None`` (tri-state, never a fake ``0.0``)
-    when either snapshot is off-disk (early store life / unhealed gap) OR the candidate is
-    absent from either endpoint (recent IPO / trading gap / delisted). The reference universe
-    is the PIT intersection of the two snapshots with a positive close in BOTH. ``rs_pct`` is
-    a WITHIN-DATE cross-sectional rank in [0, 100] (the deferred study must treat it as a
-    per-date rank, never a cross-date cardinal level — the intersection denominator shifts daily).
+    Reads ONLY the on-disk store (never fetches). The CURRENT endpoint is the newest stored
+    session on or before ``asof`` (so a weekend brief date — the pipeline runs 7 days/week — or
+    an ``asof`` ahead of the nightly top-up rolls back to the latest real session, never a future
+    bar); the lookback is anchored to THAT resolved session, not the raw ``asof``. ``None``
+    (tri-state, never a fake ``0.0``) when no session is on disk on or before ``asof`` (empty /
+    too-young store), the lookback snapshot is off-disk (unhealed gap), OR the candidate is absent
+    from either endpoint (recent IPO / trading gap / delisted). The reference universe is the PIT
+    intersection of the two snapshots with a positive close in BOTH. ``rs_pct`` is a WITHIN-DATE
+    cross-sectional rank in [0, 100] (the deferred study must treat it as a per-date rank, never a
+    cross-date cardinal level — the intersection denominator shifts daily).
     """
-    lookback = n_sessions_before(asof, n_sessions, exchange)
-    asof_map = read_grouped_day(root, asof)
+    current = _newest_session_on_or_before(root, asof)
+    if current is None:
+        return None
+    lookback = n_sessions_before(current, n_sessions, exchange)
+    asof_map = read_grouped_day(root, current)
     lookback_map = read_grouped_day(root, lookback)
     if asof_map is None or lookback_map is None:
         return None

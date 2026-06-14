@@ -97,6 +97,36 @@ class TestRsPercentile(unittest.TestCase):
             self.assertAlmostEqual(rs_percentile(root, "AAA", ASOF), 100.0)  # only AAA in universe
             self.assertIsNone(rs_percentile(root, "ZZZ", ASOF))
 
+    def test_rolls_non_session_asof_to_latest_session(self):
+        # The thematic pipeline asks for the BRIEF date, which is routinely a non-session
+        # day (the pipeline runs 7 days/week → weekend briefs). rs_percentile must roll the
+        # current endpoint back to the latest session ON OR BEFORE asof, not return None.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed(root)  # sessions at ASOF (Fri 2026-06-12) + LOOKBACK
+            saturday = dt.date(2026, 6, 13)
+            sunday = dt.date(2026, 6, 14)
+            self.assertEqual(saturday.weekday(), 5)  # sanity: ASOF+1 is a Saturday
+            for asof in (saturday, sunday):
+                # rolls to the Friday ASOF snapshot -> identical to querying ASOF directly
+                self.assertAlmostEqual(rs_percentile(root, "BBB", asof), 100.0)
+                self.assertAlmostEqual(rs_percentile(root, "AAA", asof), 100.0 * 2 / 3)
+
+    def test_rolls_future_asof_to_newest_on_disk(self):
+        # asof ahead of the store (top-up lag) rolls to the newest stored session; the
+        # lookback is anchored to THAT session, not the raw asof.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed(root)  # store newest is ASOF 2026-06-12
+            self.assertAlmostEqual(rs_percentile(root, "BBB", dt.date(2026, 7, 1)), 100.0)
+
+    def test_none_when_no_session_on_or_before_asof(self):
+        # asof BEFORE the earliest stored session -> no current endpoint -> tri-state None.
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._seed(root)
+            self.assertIsNone(rs_percentile(root, "AAA", dt.date(2024, 1, 1)))
+
     def test_pit_intersection_universe(self):
         # A name present at asof but NOT at lookback (recent IPO) is excluded from the
         # universe denominator (delisting-survivorship-clean by construction).
