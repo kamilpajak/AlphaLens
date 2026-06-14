@@ -1,0 +1,14 @@
+# Trigger the grouped-daily history top-up nightly at 01:30 UTC (after US close + EOD
+# finalization, before the 02:30 form4 incremental). Persistent=true so a missed fire
+# (host asleep) runs on next boot; the self-sizing top-up then catches up any gap.
+[Unit]
+Description=Trigger AlphaLens grouped-daily history top-up (O'Neil RS)
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-* 01:30:00 UTC
+Persistent=true
+Unit=alphalens-grouped-daily-topup.service
+
+[Install]
+WantedBy=timers.target

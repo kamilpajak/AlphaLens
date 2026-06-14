@@ -254,6 +254,35 @@ def advance_trading_sessions(
     return session.date()
 
 
+def n_sessions_before(
+    asof: DateLike,
+    n: int,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dt.date:
+    """The session ``n`` sessions before the session on-or-before ``asof``.
+
+    The lookback analogue of :func:`advance_trading_sessions`, used by the O'Neil
+    relative-strength term to locate the trailing-return reference date. ``n == 0``
+    returns the session on-or-before ``asof``; ``n == 5`` from a Friday lands on the
+    previous Friday in a clean week (later-spanning holidays are skipped because the
+    offset walks the session index, not calendar days).
+
+    ANCHOR ASYMMETRY (deliberate): a non-session ``asof`` rolls BACK to the prior
+    session (``direction="previous"``) — opposite of ``advance_trading_sessions``'s
+    roll-forward — so a lookback anchored on a weekend/holiday uses the last close
+    on-or-before it. Raises ``ValueError`` on negative ``n`` (a negative lookback is
+    a caller bug, not a silently-clamped no-op). Derived from the market calendar,
+    NOT from any on-disk store, so a missing price file yields a clean ``None`` at the
+    RS read site rather than a silently-shifted reference date.
+    """
+    if n < 0:
+        raise ValueError(f"n must be >= 0, got {n}")
+    cal = _calendar(exchange)
+    ts = _to_session_timestamp(asof)
+    session = ts if cal.is_session(ts) else cal.date_to_session(ts, direction="previous")
+    return cal.session_offset(session, -n).date()
+
+
 def session_open_utc(
     d: DateLike,
     exchange: str = DEFAULT_EXCHANGE,
