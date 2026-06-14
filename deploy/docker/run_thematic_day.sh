@@ -46,13 +46,14 @@ echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic brief"
 alphalens thematic brief
 
 # Eager expert-panel qualitative layer (card epic #500 / surfacing PRs #530-#535;
-# generalized to the experts registry in PR-2). For each registered qual-capable
-# expert (Buffett today) it classifies moat / trend / candor / understandability +
-# a rationale per brief survivor from its 10-K and stamps the eight qual columns
-# INTO the brief parquet the brief stage just wrote — so the rebuild-cache
-# ExecStartPost below carries them into Postgres and the card's `buffett.deep-read`
-# drawer lights up. `--all` runs every registered expert (identical to Buffett-only
-# today).
+# generalized to the experts registry in PR-2). `--all` runs every registered
+# QUAL-capable expert: today that is Buffett (value/quality) — it classifies moat /
+# trend / candor / understandability + a rationale per brief survivor from its 10-K
+# and stamps the qual columns INTO the brief parquet the brief stage just wrote, so
+# the rebuild-cache ExecStartPost below carries them into Postgres and the card's
+# `expert.panel` deep-read drawer lights up. O'Neil (momentum, PR-7) is numeric-only
+# (NOT a QualEnrichExpert) — it is skipped here at $0 because its numerics + the
+# panel disagreement scalar are stamped earlier, at the `score` stage, not here.
 #
 # All five thematic stages above default to yesterday-UTC; `experts enrich` takes
 # the date as a positional arg, so pass the same day explicitly. Results are cached
