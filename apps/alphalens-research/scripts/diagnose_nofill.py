@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import math
 from collections import Counter
 from pathlib import Path
 
@@ -180,7 +181,7 @@ def _as_float(v: object) -> float | None:
         f = float(v)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-    return f if f == f else None  # drop NaN  # noqa: PLR0124
+    return None if math.isnan(f) else f  # drop NaN
 
 
 def _sign(x: float) -> str:
