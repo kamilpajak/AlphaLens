@@ -657,17 +657,25 @@ class TestThematicBuildCadence(unittest.TestCase):
         # systemd.service §"Type=oneshot"). A run that wedges on a
         # Gemini quota loop or a Polygon retry storm would block
         # every subsequent timer fire forever — the systemd job
-        # manager queues new fires behind the running one. 45min =
-        # ~3× the typical 15-20min wall time; a healthy run never
+        # manager queues new fires behind the running one. 75min =
+        # ~4× the typical 15-20min wall time; a healthy run never
         # trips this, a wedged one gets SIGTERM (then SIGKILL after
-        # TimeoutStopSec) so the next slot can fire. Zen pre-merge
-        # review of PR-F flagged the hang-blocks-queue class as the
-        # real pipeline-overlap risk (the surface concern of "two
-        # runs in parallel" doesn't actually occur on Type=oneshot).
+        # TimeoutStopSec) so the next slot can fire. Bumped 45→75min
+        # after the pipeline grew (O'Neil R grouped-daily reads +
+        # eager Buffett qual enrich + scuttlebutt Perplexity): on
+        # 2026-06-15 a yfinance DNS-resolution storm pushed two
+        # slots past 45min mid-enrich, so they were SIGKILLed before
+        # the rebuild-cache publish and the freshly-built brief never
+        # reached Postgres (dashboard stuck a day behind). 75min is
+        # still < the 4h slot spacing, so a truly wedged run is killed
+        # before the next fire. Zen pre-merge review of PR-F flagged
+        # the hang-blocks-queue class as the real pipeline-overlap
+        # risk (the surface concern of "two runs in parallel" doesn't
+        # actually occur on Type=oneshot).
         self.assertRegex(
             SERVICE_PATH.read_text(),
-            re.compile(r"^TimeoutStartSec=45min\s*$", re.MULTILINE),
-            "Service must carry TimeoutStartSec=45min or a wedged run "
+            re.compile(r"^TimeoutStartSec=75min\s*$", re.MULTILINE),
+            "Service must carry TimeoutStartSec=75min or a wedged run "
             "blocks every subsequent timer fire indefinitely.",
         )
 
