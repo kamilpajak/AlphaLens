@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -202,8 +203,10 @@ def _eligible_rows(frame: dict, cik_int: int, resolve, asof: dt.date) -> list[di
 class _YearScan:
     """Per-year accumulation across the four ecd concepts (PIT-filtered rows)."""
 
-    values: dict[str, float | None]
-    present: dict[str, bool]
+    # Mapping (not dict): frozen guards attribute rebinding only — the annotation
+    # signals these are read-only after construction (consumers never mutate them).
+    values: Mapping[str, float | None]
+    present: Mapping[str, bool]
     ambiguous: bool  # >1 eligible row for some concept (e.g. mid-year CEO change)
     accn: str | None
     accepted: dt.datetime | None
