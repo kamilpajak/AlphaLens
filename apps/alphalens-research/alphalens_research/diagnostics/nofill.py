@@ -20,6 +20,10 @@ CAUSE_TOUCHED_AFTER_TTL = "TOUCHED_AFTER_TTL"
 CAUSE_GAP_UP_ARRIVAL = "GAP_UP_ARRIVAL"
 CAUSE_MOMENTUM_RAN = "MOMENTUM_RAN"
 
+# The monitor's ladder_classification value for an entry that never filled (distinct
+# from the diagnostic CAUSE_* labels above, which explain WHY a NO_FILL happened).
+LADDER_NO_FILL = "NO_FILL"
+
 
 @dataclass(frozen=True)
 class NoFillReconstruction:
@@ -141,6 +145,32 @@ def _classify(
     if arrival_drift is not None and arrival_drift > gap_up_margin:
         return CAUSE_GAP_UP_ARRIVAL
     return CAUSE_MOMENTUM_RAN
+
+
+def population_summary(
+    plannable: Sequence[bool], classifications: Sequence[str | None]
+) -> dict[str, int | float | None]:
+    """Population counts aligned with the ``/edge`` dashboard.
+
+    ``/edge`` shows PLANNABLE rows only (a verified candidate with a valid trade
+    setup); the raw store also carries non-plannable rows the monitor tracked but
+    never planned. A NO_FILL only arises on a plannable row (a no-fill needs a
+    parsed ladder), so the meaningful rate is ``NO_FILL / plannable``, not over all
+    raw rows. ``nofill_rate_pct`` is ``None`` when there are no plannable rows.
+    """
+    total_raw = len(plannable)
+    plannable_n = sum(1 for p in plannable if p)
+    nofill_n = sum(
+        1 for p, c in zip(plannable, classifications, strict=True) if p and c == LADDER_NO_FILL
+    )
+    rate = (nofill_n / plannable_n * 100.0) if plannable_n else None
+    return {
+        "total_raw": total_raw,
+        "plannable": plannable_n,
+        "non_plannable": total_raw - plannable_n,
+        "nofill": nofill_n,
+        "nofill_rate_pct": rate,
+    }
 
 
 def _bar_low_high_open(

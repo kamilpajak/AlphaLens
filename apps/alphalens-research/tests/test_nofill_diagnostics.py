@@ -152,5 +152,29 @@ class TestAnalyzeOutcomeRow(unittest.TestCase):
         self.assertEqual(r.cause, nofill.CAUSE_DATA_GAP)
 
 
+class TestPopulationSummary(unittest.TestCase):
+    def test_rate_is_over_plannable_only(self):
+        # 3 plannable (1 NO_FILL) + 2 non-plannable (the non-plannable NO_FILL is
+        # spurious and must NOT count toward the rate).
+        plannable = [True, True, True, False, False]
+        classifications = ["NO_FILL", "TP_FULL", "OPEN", "NO_FILL", None]
+        s = nofill.population_summary(plannable, classifications)
+        self.assertEqual(s["total_raw"], 5)
+        self.assertEqual(s["plannable"], 3)
+        self.assertEqual(s["non_plannable"], 2)
+        self.assertEqual(s["nofill"], 1)  # only the plannable NO_FILL
+        self.assertAlmostEqual(s["nofill_rate_pct"], 100.0 / 3)
+
+    def test_zero_plannable_gives_none_rate(self):
+        s = nofill.population_summary([False, False], [None, "X"])
+        self.assertEqual(s["plannable"], 0)
+        self.assertEqual(s["nofill"], 0)
+        self.assertIsNone(s["nofill_rate_pct"])
+
+    def test_mismatched_lengths_raise(self):
+        with self.assertRaises(ValueError):
+            nofill.population_summary([True, False], ["NO_FILL"])
+
+
 if __name__ == "__main__":
     unittest.main()
