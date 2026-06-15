@@ -94,17 +94,35 @@ def main() -> None:
     if outcomes.empty:
         print("no population-ladder outcomes found at", args.ladders_dir)
         return
-    if "ladder_classification" not in outcomes.columns:
-        print("error: population_ladders store missing ladder_classification column")
+    if "ladder_classification" not in outcomes.columns or "plannable" not in outcomes.columns:
+        print("error: population_ladders store missing ladder_classification/plannable column")
         return
     setups = _setup_index(args.briefs_dir)
 
-    # Population mix over ALL rows (NO_FILL classification needs no maturity).
-    mix = Counter(str(c or "") for c in outcomes.get("ladder_classification", []))
-    print("classification mix (all rows):", dict(mix))
+    # /edge counts PLANNABLE rows only (verified candidate + valid trade setup); the
+    # raw store also carries non-plannable rows. Report the NO_FILL rate over plannable,
+    # not over all raw rows, so it matches the dashboard.
+    summary = nofill.population_summary(
+        outcomes["plannable"].tolist(), outcomes["ladder_classification"].tolist()
+    )
+    print(
+        f"population: {summary['plannable']} plannable "
+        f"(+{summary['non_plannable']} non-plannable = {summary['total_raw']} raw; "
+        "/edge shows plannable only)"
+    )
+    mix = Counter(
+        str(c or "")
+        for p, c in zip(outcomes["plannable"], outcomes["ladder_classification"], strict=True)
+        if p
+    )
+    print("classification mix (plannable):", dict(mix))
+    rate = summary["nofill_rate_pct"]
+    rate_s = f"{rate:.1f}%" if rate is not None else "n/a"
+    print(f"NO_FILL rows: {summary['nofill']} / {summary['plannable']} plannable = {rate_s}")
 
-    nofill_rows = outcomes[outcomes["ladder_classification"] == "NO_FILL"].copy()
-    print(f"NO_FILL rows: {len(nofill_rows)} / {len(outcomes)} total")
+    nofill_rows = outcomes[
+        (outcomes["ladder_classification"] == "NO_FILL") & outcomes["plannable"]
+    ].copy()
 
     grouped_cache: dict[dt.date, dict | None] = {}
 
