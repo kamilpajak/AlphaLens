@@ -43,6 +43,21 @@ class TestReconstruct(unittest.TestCase):
         self.assertEqual(r.days_to_first_touch, 2)
         self.assertAlmostEqual(r.min_low_in_window, 98.5)
 
+    def test_touched_after_ttl_when_only_tail_dips_to_e1(self):
+        # Window never reaches E1=99 (min 100.0), but the post-window tail dips to
+        # 98.0 -> the dip-buy would have filled just after the 7-session TTL.
+        r = nofill.reconstruct(
+            tiers=[99.0, 97.0, 95.0],
+            stop=90.0,
+            reference_close=100.0,
+            window_lows_highs=[(100.0, 104.0), (100.5, 105.0), (101.0, 106.0)],
+            first_session_open=100.2,
+            tail_min_low=98.0,
+        )
+        self.assertEqual(r.cause, nofill.CAUSE_TOUCHED_AFTER_TTL)
+        self.assertFalse(r.touched_e1)
+        self.assertIsNone(r.days_to_first_touch)
+
 
 if __name__ == "__main__":
     unittest.main()
