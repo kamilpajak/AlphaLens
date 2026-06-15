@@ -153,13 +153,25 @@
 	     Pattern: small dim uppercase key + bold value, replacing the old uniform
 	     uppercase ticker-tape. -->
 	<div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 sm:px-5 py-2 border-b border-grid">
-		<span class="min-w-0 truncate text-[10px] uppercase tracking-widest text-fg-muted">
-			{#if c.sector_name && c.industry_name}
-				{c.sector_name}<span class="text-grid-strong mx-1">/</span>{c.industry_name}
-			{:else}
-				{c.sector_name ?? c.industry_name ?? '—'}
-			{/if}
-		</span>
+		<!-- Identity cluster: what the company is (sector / industry) and how big it is
+		     (market cap). Mcap lives here, not with the right-side scores — it is a
+		     descriptive company fact (kin to sector), and it is a SELECTION-gate input
+		     (the mcap filter), so it earns an at-a-glance spot but reads as identity,
+		     not a signal. The sector path truncates; mcap stays (shrink-0, nowrap). -->
+		<div class="flex min-w-0 items-baseline gap-x-3 text-[10px] uppercase tracking-widest">
+			<span class="min-w-0 truncate text-fg-muted">
+				{#if c.sector_name && c.industry_name}
+					{c.sector_name}<span class="text-grid-strong mx-1">/</span>{c.industry_name}
+				{:else}
+					{c.sector_name ?? c.industry_name ?? '—'}
+				{/if}
+			</span>
+			<span class="inline-flex shrink-0 items-baseline gap-1.5 whitespace-nowrap">
+				<span class="text-grid-strong">·</span>
+				<span class="text-[9px] text-fg-muted">mcap</span>
+				<span class="text-xs font-bold normal-case text-fg">{fmtUsdCompact(c.market_cap)}</span>
+			</span>
+		</div>
 		<div class="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
 			<!-- Layer-4 score — the headline ordering signal, given a filled badge. -->
 			<span
@@ -179,10 +191,6 @@
 					class:text-cyan={confTone === 'cyan'}
 					class:text-fg-muted={confTone === 'muted'}>{confidenceLabel(c.llm_confidence)}</span
 				>
-			</span>
-			<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap">
-				<span class="text-[9px] uppercase tracking-widest text-fg-muted">mcap</span>
-				<span class="text-xs font-bold text-fg">{fmtUsdCompact(c.market_cap)}</span>
 			</span>
 			<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap">
 				<span class="text-[9px] uppercase tracking-widest text-fg-muted">catalyst</span>
