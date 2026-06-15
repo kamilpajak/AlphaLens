@@ -58,6 +58,43 @@ class TestReconstruct(unittest.TestCase):
         self.assertFalse(r.touched_e1)
         self.assertIsNone(r.days_to_first_touch)
 
+    def test_gap_up_arrival_when_open_jumps_above_anchor(self):
+        # Window never reaches E1, no tail touch, but arrival opened +5% vs anchor.
+        r = nofill.reconstruct(
+            tiers=[99.0, 97.0, 95.0],
+            stop=90.0,
+            reference_close=100.0,
+            window_lows_highs=[(104.0, 108.0), (105.0, 109.0), (106.0, 110.0)],
+            first_session_open=105.0,  # drift = +5% > 3%
+            tail_min_low=104.0,
+        )
+        self.assertEqual(r.cause, nofill.CAUSE_GAP_UP_ARRIVAL)
+        self.assertAlmostEqual(r.arrival_drift, 0.05)
+
+    def test_data_gap_when_a_window_session_is_missing(self):
+        r = nofill.reconstruct(
+            tiers=[99.0, 97.0, 95.0],
+            stop=90.0,
+            reference_close=100.0,
+            window_lows_highs=[(101.0, 105.0), None, (102.0, 106.0)],  # one snapshot absent
+            first_session_open=100.5,
+            tail_min_low=None,
+        )
+        self.assertEqual(r.cause, nofill.CAUSE_DATA_GAP)
+        self.assertFalse(r.window_complete)
+
+    def test_data_gap_when_no_entry_tier(self):
+        r = nofill.reconstruct(
+            tiers=[],
+            stop=None,
+            reference_close=100.0,
+            window_lows_highs=[(101.0, 105.0)],
+            first_session_open=100.5,
+            tail_min_low=None,
+        )
+        self.assertEqual(r.cause, nofill.CAUSE_DATA_GAP)
+        self.assertIsNone(r.e1)
+
 
 if __name__ == "__main__":
     unittest.main()
