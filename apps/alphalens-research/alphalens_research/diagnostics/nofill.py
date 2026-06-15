@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 TOUCH_EPS = 0.0025  # mirrors alphalens_pipeline...population_ladder_monitor._TOUCH_EPS
 GAP_UP_MARGIN = 0.03  # opening gap vs arrival anchor that counts as GAP_UP_ARRIVAL
@@ -38,7 +39,7 @@ class NoFillReconstruction:
 
 
 def _tier(tiers: Sequence[float], i: int) -> float | None:
-    return float(tiers[i]) if tiers is not None and len(tiers) > i else None
+    return float(tiers[i]) if len(tiers) > i else None
 
 
 def reconstruct(
@@ -75,10 +76,16 @@ def reconstruct(
                 days_to_first_touch = i + 1
                 break
 
-    gap_to_e1 = (min_low - e1) / e1 if (min_low is not None and e1) else None
+    gap_to_e1 = (
+        (min_low - e1) / e1 if (min_low is not None and e1 is not None and e1 != 0.0) else None
+    )
     arrival_drift = (
         (first_session_open - reference_close) / reference_close
-        if (first_session_open is not None and reference_close)
+        if (
+            first_session_open is not None
+            and reference_close is not None
+            and reference_close != 0.0
+        )
         else None
     )
 
@@ -110,7 +117,14 @@ def reconstruct(
 
 
 def _classify(
-    *, e1, window_complete, min_low, tail_min_low, arrival_drift, touch_eps, gap_up_margin
+    *,
+    e1: float | None,
+    window_complete: bool,
+    min_low: float | None,
+    tail_min_low: float | None,
+    arrival_drift: float | None,
+    touch_eps: float,
+    gap_up_margin: float,
 ) -> str:
     if e1 is None or not window_complete or min_low is None:
         return CAUSE_DATA_GAP
@@ -124,7 +138,7 @@ def _classify(
 
 
 def _bar_low_high_open(
-    snapshot: Mapping[str, Mapping[str, object]] | None, ticker: str
+    snapshot: Mapping[str, Mapping[str, Any]] | None, ticker: str
 ) -> tuple[float, float, float] | None:
     """Pull (low, high, open) for ``ticker`` from one grouped-daily snapshot.
 
@@ -150,7 +164,7 @@ def analyze_outcome_row(
     reference_close: float | None,
     window_sessions: Sequence[object],
     tail_sessions: Sequence[object],
-    grouped_by_session: Mapping[object, Mapping[str, Mapping[str, object]] | None],
+    grouped_by_session: Mapping[object, Mapping[str, Mapping[str, Any]] | None],
     touch_eps: float = TOUCH_EPS,
     gap_up_margin: float = GAP_UP_MARGIN,
 ) -> NoFillReconstruction:
