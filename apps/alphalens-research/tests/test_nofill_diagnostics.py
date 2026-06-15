@@ -26,6 +26,23 @@ class TestReconstruct(unittest.TestCase):
         self.assertAlmostEqual(r.min_low_in_window, 100.5)
         self.assertAlmostEqual(r.gap_to_e1, (100.5 - 99.0) / 99.0)
 
+    def test_ambiguous_when_daily_low_reaches_e1(self):
+        # Session 2 low dips to 98.5 < E1=99 -> daily path says fillable, yet the
+        # row is NO_FILL -> AMBIGUOUS (daily-vs-minute discrepancy, escalate).
+        r = nofill.reconstruct(
+            tiers=[99.0, 97.0, 95.0],
+            stop=90.0,
+            reference_close=100.0,
+            window_lows_highs=[(100.0, 105.0), (98.5, 101.0), (99.5, 103.0)],
+            first_session_open=100.1,
+            tail_min_low=None,
+        )
+        self.assertEqual(r.cause, nofill.CAUSE_AMBIGUOUS)
+        self.assertTrue(r.touched_e1)
+        self.assertFalse(r.touched_e3)  # 98.5 not <= 95*(1.0025)
+        self.assertEqual(r.days_to_first_touch, 2)
+        self.assertAlmostEqual(r.min_low_in_window, 98.5)
+
 
 if __name__ == "__main__":
     unittest.main()
