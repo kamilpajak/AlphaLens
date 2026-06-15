@@ -228,7 +228,7 @@
 									<p class="text-fg-dim text-xs leading-relaxed">{buf.buffett_qualitative_rationale}</p>
 								</blockquote>
 							{/if}
-							<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-fg-muted">
+							<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] leading-snug text-fg-muted">
 								{#if buf?.buffett_used_scuttlebutt}
 									<span class="text-amber whitespace-nowrap">scuttlebutt: web-grounded, unverified</span>
 								{/if}
@@ -268,7 +268,11 @@
 									{/if}
 								</div>
 							{/if}
-							<p class="text-[9px] text-fg-muted">price panel + EDGAR fundamentals · numeric-only, no LLM</p>
+							<p class="text-[10px] leading-snug text-fg-muted">
+								<span class="uppercase tracking-wider">source</span>
+								<span class="text-fg-dim">price panel + EDGAR fundamentals</span>
+								<span class="text-grid-strong"> · </span>numeric-only, no LLM
+							</p>
 						{/if}
 					</div>
 				{/each}
