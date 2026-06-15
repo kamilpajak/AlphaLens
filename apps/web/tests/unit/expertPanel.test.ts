@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-	oneilTone,
-	consensusTone,
-	consensusBand,
-	panelMagnitudeFormula
-} from '../../src/lib/format';
+import { oneilTone, consensusTone, consensusBand } from '../../src/lib/format';
 
 // The expert-panel disagreement helpers (PR-8b). The resting chip is coverage-only
 // (tone-neutral); the band word + colour are drawer-only. The transition shim is the
@@ -48,28 +43,6 @@ describe('consensusBand', () => {
 		expect(consensusBand(70)).toBe('split');
 		expect(consensusBand(null)).toBe('—');
 		expect(consensusBand(NaN)).toBe('—');
-	});
-});
-
-describe('panelMagnitudeFormula (decode config slug → human magnitude, drawer footer)', () => {
-	it('decodes the abs-difference family to the plain gap (the trailing Nx is ARITY, not a multiplier)', () => {
-		// disagreement.py compute_spread() = max(present) − min(present) = abs(buffett − oneil).
-		// The `2x` in `absdiff-2x` is the 2-expert ARITY (the range over two lens scores),
-		// NOT a ×2 scale — so it must decode to the plain gap, never "× 2". Matches both the
-		// v1 and the O'Neil-R (v1r) slug; a term-set bump alone does not change the magnitude.
-		expect(panelMagnitudeFormula('panel-v1r-absdiff-2x')).toBe("|Buffett − O'Neil|");
-		expect(panelMagnitudeFormula('panel-v1-absdiff-2x')).toBe("|Buffett − O'Neil|");
-		expect(panelMagnitudeFormula('panel-v2-absdiff')).toBe("|Buffett − O'Neil|");
-	});
-	it('falls back to a generic, never-wrong phrase for unknown / absent / non-absdiff slugs', () => {
-		// The reserved `pstdev-3x` family is a DIFFERENT dispersion measure (population
-		// std-dev over 3 scores) — decoding it as |Buffett − O'Neil| would be wrong, so it
-		// degrades to the generic phrase, as does any future formula we have not taught.
-		expect(panelMagnitudeFormula('panel-v2-pstdev-3x')).toBe('gap between lens scores');
-		expect(panelMagnitudeFormula('panel-v9-zscore')).toBe('gap between lens scores');
-		expect(panelMagnitudeFormula('')).toBe('gap between lens scores');
-		expect(panelMagnitudeFormula(null)).toBe('gap between lens scores');
-		expect(panelMagnitudeFormula(undefined)).toBe('gap between lens scores');
 	});
 });
 
