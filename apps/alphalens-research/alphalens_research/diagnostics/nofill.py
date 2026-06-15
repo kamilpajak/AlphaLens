@@ -78,15 +78,16 @@ def reconstruct(
                 days_to_first_touch = i + 1
                 break
 
+    # Divisor guards use ``> 0.0`` (prices are strictly positive) rather than
+    # ``!= 0.0`` — float inequality-to-zero trips Sonar S1244 and a non-positive
+    # price is invalid for these ratios anyway.
     gap_to_e1 = (
-        (min_low - e1) / e1 if (min_low is not None and e1 is not None and e1 != 0.0) else None
+        (min_low - e1) / e1 if (min_low is not None and e1 is not None and e1 > 0.0) else None
     )
     arrival_drift = (
         (first_session_open - reference_close) / reference_close
         if (
-            first_session_open is not None
-            and reference_close is not None
-            and reference_close != 0.0
+            first_session_open is not None and reference_close is not None and reference_close > 0.0
         )
         else None
     )
