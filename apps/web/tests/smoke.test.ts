@@ -262,6 +262,12 @@ test.describe('smoke — SPA navigation', () => {
 		const seen = new Set<string>();
 		for (const path of ['/', '/briefs', '/about', '/experiments', `/brief/${latestDay.date}`]) {
 			await page.goto(path);
+			// Auto-wait for the layout nav to hydrate before the one-shot
+			// evaluateAll. This is a pure client-rendered SPA (ssr=false), so
+			// goto resolves on the empty shell; without this wait a slow CI
+			// runner reads zero links → the loop below runs no assertions and
+			// the test passes while checking nothing (silent coverage gap).
+			await expect(page.locator('a[href^="/"]').first()).toBeVisible();
 			const hrefs = await page.locator('a[href^="/"]').evaluateAll((nodes) =>
 				nodes
 					.map((n) => (n as HTMLAnchorElement).getAttribute('href') ?? '')
@@ -381,6 +387,12 @@ test.describe('smoke — brief detail interactions', () => {
 		// the empty-state placeholder appears — guarantees Svelte's $derived
 		// filtered-list reactivity ran before we move on.
 		const chips = page.getByRole('button', { name: /^#/ });
+		// Auto-wait for the first theme chip to hydrate before the snapshot
+		// count(). The brief route is client-rendered (ssr=false) with two
+		// async fetches; goto resolves before the chips mount, so on slow CI
+		// count() returns 0 → the click loop never runs and the test passes
+		// vacuously without exercising any chip. latestDay always has themes.
+		await expect(chips.first()).toBeVisible();
 		const count = await chips.count();
 		for (let i = 0; i < count; i++) {
 			await chips.nth(i).click();
@@ -909,6 +921,19 @@ test.describe('experiments — evidence drawer files reachable', () => {
 	// commit 01ae4fb flagged the gap.
 	test('every evidence button targets a reachable /docs/research file', async ({ page, request }) => {
 		await page.goto('/experiments');
+		// Auto-wait for the first evidence button to be ATTACHED before the
+		// one-shot evaluateAll. `/experiments` mounts these buttons after
+		// client-side hydration, so an immediate evaluateAll can run before any
+		// button exists on a slow CI runner → reads 0 → the count assertion
+		// below fails spuriously (recurring CI flake on PRs that touch no web
+		// file). `attached` (not `visible`) because each button lives inside a
+		// `<details>` that is collapsed by default — present in the DOM but not
+		// visible — and evaluateAll reads hidden nodes too. A visibility wait
+		// would never resolve without opening every drawer.
+		await page
+			.locator('button[aria-label^="open evidence: "]')
+			.first()
+			.waitFor({ state: 'attached' });
 		// Buttons are labelled ``open evidence: <path>`` — extract the path
 		// from the aria-label and verify the corresponding static asset
 		// returns 200 over real HTTP (not the api-mock — these files are
