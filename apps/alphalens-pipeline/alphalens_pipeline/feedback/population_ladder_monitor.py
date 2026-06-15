@@ -1357,6 +1357,99 @@ class _ScreenDecision:
     forced: bool = False  # R7 periodic / brand-new (reserved budget + cheap-flip precedence)
 
 
+def _touch_triggered(
+    classification: str,
+    *,
+    daily_low: float | None,
+    daily_high: float | None,
+    unfilled_entries: list[float],
+    disaster_stop: float | None,
+    lowest_unhit_tp: float | None,
+    entry_window_open: bool,
+) -> bool:
+    """Screen step 7 — did a daily H/L touch a level that needs a minute resolve?
+
+    NO_FILL watches unfilled entry limits (only while the entry window is open);
+    OPEN watches the disaster stop (always), unfilled entries (entry-window-gated)
+    and the lowest unhit TP. Any other classification never touch-triggers.
+    """
+    if classification == "NO_FILL":
+        return entry_window_open and any(_lower_touched(lim, daily_low) for lim in unfilled_entries)
+    if classification == "OPEN":
+        if disaster_stop is not None and _lower_touched(disaster_stop, daily_low):
+            return True
+        if entry_window_open and any(_lower_touched(lim, daily_low) for lim in unfilled_entries):
+            return True
+        if lowest_unhit_tp is not None and _upper_touched(lowest_unhit_tp, daily_high):
+            return True
+    return False
+
+
+def _screen_session(
+    session: dt.date,
+    *,
+    ticker: str,
+    classification: str,
+    prior: dict[str, Any],
+    grouped_by_session: dict[dt.date, dict[str, dict[str, Any]] | None],
+    unfilled_entries: list[float],
+    disaster_stop: float | None,
+    lowest_unhit_tp: float | None,
+    entry_window_open: bool,
+    position_expiry_session: dt.date,
+    exchange: str,
+) -> _ScreenDecision | None:
+    """Screen steps 4-8 for one new session; ``None`` means "no trigger, keep going".
+
+    Fail-closed (``touched=True``) on a missing bar / missing-or-zero prev_close /
+    split-class day, then the per-state level-touch screen, then position-expiry.
+    """
+    from alphalens_pipeline.paper.calendar import previous_trading_day
+
+    grouped = grouped_by_session.get(session)
+    # 4. missing-bar fail-closed: a NEW session absent from its complete map
+    # (halt / illiquid / upstream gap). Never cheap-advance on a missing close.
+    if grouped is None or ticker.upper() not in grouped:
+        return _ScreenDecision(needs_resolve=True, touched=True)
+    c_star = _grouped_close(grouped, ticker)
+    if c_star is None:
+        return _ScreenDecision(needs_resolve=True, touched=True)
+
+    # 5. missing prev_close fail-closed — the split screen needs it.
+    prev_session = previous_trading_day(session, exchange)
+    prev_grouped = grouped_by_session.get(prev_session)
+    prev_c = _grouped_close(prev_grouped, ticker) if prev_grouped is not None else None
+    # Reuse the prior row's last_close as the prev_c when the prev session is
+    # not in this run's fetch set (it was priced on an earlier night).
+    if prev_c is None:
+        prev_c = _safe_finite_float(prior.get("last_close"))
+    if prev_c is None or prev_c == 0:
+        return _ScreenDecision(needs_resolve=True, touched=True)
+
+    # 6. split-class day.
+    if abs(c_star / prev_c - 1) > _SPLIT_SCREEN_THRESHOLD:
+        return _ScreenDecision(needs_resolve=True, touched=True)
+
+    # 7. level touch (eps band) per prior state.
+    daily_low, daily_high = _grouped_low_high(grouped, ticker)
+    if _touch_triggered(
+        classification,
+        daily_low=daily_low,
+        daily_high=daily_high,
+        unfilled_entries=unfilled_entries,
+        disaster_stop=disaster_stop,
+        lowest_unhit_tp=lowest_unhit_tp,
+        entry_window_open=entry_window_open,
+    ):
+        return _ScreenDecision(needs_resolve=True, touched=True)
+
+    # 8. position-expiry (time-stop) session in the new range — one-time resolve.
+    if session >= position_expiry_session:
+        return _ScreenDecision(needs_resolve=True, touched=True)
+
+    return None
+
+
 def _screen_decision(
     prior: dict[str, Any] | None,
     ticker: str,
@@ -1383,7 +1476,7 @@ def _screen_decision(
     defeated. ``last_priced_session`` stays the least-recently-priced fair-ordering
     key only.
     """
-    from alphalens_pipeline.paper.calendar import previous_trading_day, trading_days_elapsed
+    from alphalens_pipeline.paper.calendar import trading_days_elapsed
 
     classification = _prior_classification(prior)
 
@@ -1414,48 +1507,21 @@ def _screen_decision(
     entry_window_open = entry_expiry_session > (last_priced_session or last_closed_session)
 
     for session in new_sessions:
-        grouped = grouped_by_session.get(session)
-        # 4. missing-bar fail-closed: a NEW session absent from its complete map
-        # (halt / illiquid / upstream gap). Never cheap-advance on a missing close.
-        if grouped is None or ticker.upper() not in grouped:
-            return _ScreenDecision(needs_resolve=True, touched=True)
-        c_star = _grouped_close(grouped, ticker)
-        if c_star is None:
-            return _ScreenDecision(needs_resolve=True, touched=True)
-
-        # 5. missing prev_close fail-closed — the split screen needs it.
-        prev_session = previous_trading_day(session, exchange)
-        prev_grouped = grouped_by_session.get(prev_session)
-        prev_c = _grouped_close(prev_grouped, ticker) if prev_grouped is not None else None
-        # Reuse the prior row's last_close as the prev_c when the prev session is
-        # not in this run's fetch set (it was priced on an earlier night).
-        if prev_c is None:
-            prev_c = _safe_finite_float(prior.get("last_close"))
-        if prev_c is None or prev_c == 0:
-            return _ScreenDecision(needs_resolve=True, touched=True)
-
-        # 6. split-class day.
-        if abs(c_star / prev_c - 1) > _SPLIT_SCREEN_THRESHOLD:
-            return _ScreenDecision(needs_resolve=True, touched=True)
-
-        daily_low, daily_high = _grouped_low_high(grouped, ticker)
-        # 7. level touch (eps band) per prior state.
-        if classification == "NO_FILL" and entry_window_open:
-            if any(_lower_touched(lim, daily_low) for lim in unfilled_entries):
-                return _ScreenDecision(needs_resolve=True, touched=True)
-        elif classification == "OPEN":
-            if disaster_stop is not None and _lower_touched(disaster_stop, daily_low):
-                return _ScreenDecision(needs_resolve=True, touched=True)
-            if entry_window_open and any(
-                _lower_touched(lim, daily_low) for lim in unfilled_entries
-            ):
-                return _ScreenDecision(needs_resolve=True, touched=True)
-            if lowest_unhit_tp is not None and _upper_touched(lowest_unhit_tp, daily_high):
-                return _ScreenDecision(needs_resolve=True, touched=True)
-
-        # 8. position-expiry (time-stop) session in the new range — one-time resolve.
-        if session >= position_expiry_session:
-            return _ScreenDecision(needs_resolve=True, touched=True)
+        decision = _screen_session(
+            session,
+            ticker=ticker,
+            classification=classification,
+            prior=prior,
+            grouped_by_session=grouped_by_session,
+            unfilled_entries=unfilled_entries,
+            disaster_stop=disaster_stop,
+            lowest_unhit_tp=lowest_unhit_tp,
+            entry_window_open=entry_window_open,
+            position_expiry_session=position_expiry_session,
+            exchange=exchange,
+        )
+        if decision is not None:
+            return decision
 
     return _ScreenDecision(needs_resolve=False)
 
