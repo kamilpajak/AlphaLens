@@ -26,7 +26,6 @@
 		candorTone,
 		understoodTone,
 		understoodLabel,
-		panelMagnitudeFormula,
 		type BuffettTone
 	} from '$lib/format';
 	import { ChevronRight } from 'lucide-svelte';
@@ -225,17 +224,6 @@
 								O'Neil {oneilScore}
 							</span>
 						</div>
-						<p class="text-[10px] leading-relaxed text-fg-muted">
-							The two lenses sit <span class="text-fg-dim">{Math.round(spread!)} apart</span> on a 0–100
-							scale. Magnitude =
-							<span class="text-fg-dim whitespace-nowrap"
-								>{panelMagnitudeFormula(panel?.panel_config_version)}</span
-							>
-							<span class="text-grid-strong"> · </span>
-							<span class="whitespace-nowrap" title="panel config version — audit trace"
-								>{panel?.panel_config_version ?? 'panel'}</span
-							>
-						</p>
 					</div>
 				{/if}
 
@@ -324,20 +312,6 @@
 						{/if}
 					</div>
 				{/each}
-
-				<!-- Persistent display-only caveat — the caveat people act on, always shown
-				     while the drawer is open, never a buy/avoid word. -->
-				<div class="-mx-4 sm:-mx-5 -mb-3 mt-1 border-t-2 border-amber bg-bg-1 px-4 sm:px-5 py-2.5">
-					<p class="text-xs leading-snug text-fg">
-						<span
-							class="text-[10px] font-bold uppercase tracking-widest text-amber whitespace-nowrap"
-							>display-only</span
-						>
-						<span class="text-grid-strong"> · </span>not a buy or avoid signal
-						<span class="text-grid-strong"> · </span>
-						<span class="text-fg-muted">unvalidated bands</span>
-					</p>
-				</div>
 			</div>
 		{/if}
 	</div>
