@@ -138,11 +138,20 @@ TasksMax=512
 # §"Type=oneshot"). Without an explicit timeout, a run that wedges on a
 # OpenRouter quota loop, a Polygon retry storm, or a stuck rebuild-cache step
 # would block every subsequent timer fire forever — systemd queues new
-# fires behind the running unit. 45min = ~3× the typical 15-20min wall
+# fires behind the running unit. 75min = ~4× the typical 15-20min wall
 # time; a healthy run never trips this, a wedged one gets SIGTERM (then
 # SIGKILL after TimeoutStopSec) so the next 4h slot can fire. Pinned by
 # PR-F zen pre-merge review (epic #295 / issue #300).
-TimeoutStartSec=45min
+#
+# Bumped 45→75min on 2026-06-15: the pipeline grew (O'Neil R grouped-daily
+# reads + eager Buffett qual enrich + scuttlebutt Perplexity), and a
+# yfinance DNS-resolution storm (hundreds of `curl (28) Resolving timed
+# out` errors) pushed two morning slots past 45min mid-`experts enrich`.
+# Both were SIGKILLed before the rebuild-cache publish, so the brief that
+# had already been written to parquet never reached Postgres and the
+# dashboard sat a day behind. 75min stays well under the 4h slot spacing,
+# so a truly wedged run is still killed before the next fire.
+TimeoutStartSec=75min
 
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,
 # OpenRouter quota, OOM) systemd surfaces non-zero exit in journalctl + status.
