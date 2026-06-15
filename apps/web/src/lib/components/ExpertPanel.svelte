@@ -27,6 +27,7 @@
 		candorTone,
 		understoodTone,
 		understoodLabel,
+		panelMagnitudeFormula,
 		type BuffettTone
 	} from '$lib/format';
 	import { ChevronRight } from 'lucide-svelte';
@@ -183,10 +184,30 @@
 								></span>
 							{/if}
 						</div>
-						<p class="text-[9px] text-fg-muted">
-							<span class="whitespace-nowrap">{panel?.panel_config_version ?? 'panel'}</span> ·
-							unvalidated, display-only — not a buy/avoid signal
-						</p>
+						<!-- Status bar: the disclaimer is the loudest line (the caveat people
+						     act on), the opaque config slug is decoded into a plain-language
+						     magnitude formula and demoted to a hover-titled audit tag.
+						     Display-only, unvalidated — never a buy/avoid word. -->
+						<div class="space-y-1.5 rounded-sm border-l-2 border-amber bg-bg-1 px-3 py-2">
+							<p class="text-xs leading-snug text-fg">
+								<span
+									class="text-[10px] font-bold uppercase tracking-widest text-amber whitespace-nowrap"
+									>display-only</span
+								>
+								<span class="text-grid-strong"> · </span>not a buy or avoid signal
+							</p>
+							<p class="text-[10px] leading-snug text-fg-muted">
+								<span class="uppercase tracking-wider">magnitude</span>
+								<span class="text-fg-dim whitespace-nowrap"
+									>{panelMagnitudeFormula(panel?.panel_config_version)}</span
+								>
+								<span class="text-grid-strong"> · </span>unvalidated
+								<span class="text-grid-strong"> · </span>
+								<span class="whitespace-nowrap" title="panel config version — audit trace"
+									>{panel?.panel_config_version ?? 'panel'}</span
+								>
+							</p>
+						</div>
 					</div>
 				{/if}
 

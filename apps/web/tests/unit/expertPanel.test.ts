@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { oneilTone, consensusTone, consensusBand, panelCoverageLabel } from '../../src/lib/format';
+import {
+	oneilTone,
+	consensusTone,
+	consensusBand,
+	panelCoverageLabel,
+	panelMagnitudeFormula
+} from '../../src/lib/format';
 
 // The expert-panel disagreement helpers (PR-8b). The resting chip is coverage-only
 // (tone-neutral); the band word + colour are drawer-only. The transition shim is the
@@ -57,6 +63,24 @@ describe('panelCoverageLabel (resting +1 token, tone-neutral)', () => {
 		expect(panelCoverageLabel(NaN, 78)).toBe('1 lens');
 		expect(panelCoverageLabel(undefined, undefined)).toBe('—');
 		expect(panelCoverageLabel(Infinity, NaN)).toBe('—');
+	});
+});
+
+describe('panelMagnitudeFormula (decode config slug → human magnitude, drawer footer)', () => {
+	it('decodes the known abs-difference formulae from the version slug', () => {
+		// `absdiff-2x` => |Buffett − O'Neil| scaled ×2; matches both the v1 and
+		// the O'Neil-R (v1r) slug so a term-set bump alone does not re-jargon it.
+		expect(panelMagnitudeFormula('panel-v1r-absdiff-2x')).toBe("|Buffett − O'Neil| × 2");
+		expect(panelMagnitudeFormula('panel-v1-absdiff-2x')).toBe("|Buffett − O'Neil| × 2");
+		// abs-difference without the ×2 scale tag => the unscaled gap.
+		expect(panelMagnitudeFormula('panel-v2-absdiff')).toBe("|Buffett − O'Neil|");
+	});
+	it('falls back to a generic, never-wrong phrase for unknown / absent slugs', () => {
+		// A future formula we have not taught the decoder must NOT be mis-described.
+		expect(panelMagnitudeFormula('panel-v9-zscore')).toBe('gap between lens scores');
+		expect(panelMagnitudeFormula('')).toBe('gap between lens scores');
+		expect(panelMagnitudeFormula(null)).toBe('gap between lens scores');
+		expect(panelMagnitudeFormula(undefined)).toBe('gap between lens scores');
 	});
 });
 

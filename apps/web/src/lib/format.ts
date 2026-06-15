@@ -166,3 +166,19 @@ export function panelCoverageLabel(
 	if (n === 0) return '—';
 	return n === 1 ? '1 lens' : `${n} lenses`;
 }
+
+// Decode the opaque `panel_config_version` slug (e.g. `panel-v1r-absdiff-2x`)
+// into a plain-language magnitude formula for the drawer footer. Display-only:
+// the raw slug is still rendered beside this as an audit tag, but the reader
+// gets the math, not the jargon. Known formulae are matched explicitly so a
+// future version bump can never silently MIS-describe the math — an unrecognised
+// slug degrades to a generic, always-true phrase rather than a wrong one. The
+// minus sign is the U+2212 math glyph (an atomic token — wrap in
+// `whitespace-nowrap` at the call site so it never breaks across two lines).
+export function panelMagnitudeFormula(version: string | null | undefined): string {
+	if (typeof version === 'string') {
+		if (version.includes('absdiff-2x')) return "|Buffett − O'Neil| × 2";
+		if (version.includes('absdiff')) return "|Buffett − O'Neil|";
+	}
+	return 'gap between lens scores';
+}
