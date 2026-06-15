@@ -159,6 +159,10 @@ def main() -> None:
     table.to_parquet(args.out, index=False)
     print("wrote", args.out, "rows:", len(table))
 
+    if table.empty:
+        print("no NO_FILL rows to classify")
+        return
+
     print("\ncause distribution (NO_FILL):", dict(Counter(table["cause"])))
 
     # The lynchpin: NO_FILL cause x sign(market_excess) over MATURED rows only.
