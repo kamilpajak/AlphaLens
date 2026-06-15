@@ -1,22 +1,21 @@
 <script lang="ts">
-	// The generalized expert-panel deep-read drawer (PR-8b). Replaces the single
-	// Buffett drawer: one accordion that stacks one section per expert, handling a
-	// QUAL expert (Buffett — pillar badges + LLM rationale) and a NUMERIC expert
-	// (O'Neil — readout list + audit-flag badges, no rationale) via the EXPERT_KIND
-	// map. The disagreement headline + dot-lane render ONLY when the persisted
-	// expert_spread is finite (>=2 lenses scored). Display-only: the band word + its
-	// colour live HERE with a visible "unvalidated · not a buy/avoid signal" label,
-	// never on the resting card face (that chip is tone-neutral coverage). The
-	// transition shim is a single predicate — Number.isFinite(panel.expert_spread):
-	// we NEVER recompute the spread client-side (the pipeline owns the formula), so a
-	// pre-PR-8a row (no panel key) degrades to "just the per-expert sections, no
-	// headline / dot-lane", never a wrong or flipping number.
+	// The generalized expert-panel deep-read drawer (PR-8b, rebuilt for readability).
+	// One accordion that stacks a per-expert "scorecard" — a QUAL expert (Buffett:
+	// pillar badges + LLM rationale) and a NUMERIC expert (O'Neil: readout grid +
+	// audit-flag badges, no rationale) via the EXPERT_KIND map. Above the cards, a
+	// disagreement SCALE (the two lens scores plotted on one 0-100 track with the gap
+	// shaded) renders ONLY when the persisted expert_spread is finite (>=2 lenses
+	// scored). Display-only throughout: the band word + its colour live HERE behind a
+	// persistent "display-only · not a buy or avoid signal" footer, never on the
+	// resting card face (that chip is tone-neutral coverage). The transition shim is a
+	// single predicate — Number.isFinite(panel.expert_spread): we NEVER recompute the
+	// spread client-side (the pipeline owns the formula), so a pre-PR-8a row (no panel
+	// key) degrades to "just the per-expert cards, no scale", never a wrong number.
 	import type { BuffettAssessment, ExpertAssessments, ONeilAssessment } from '$lib/types';
 	import { EXPERT_KIND } from '$lib/types';
 	import {
 		fmtPct,
 		fmtPctile,
-		fmtNum,
 		fmtDate,
 		buffettTone,
 		oneilTone,
@@ -54,6 +53,10 @@
 		Number.isFinite(panel?.expert_spread) ? (panel!.expert_spread as number) : null
 	);
 	const bothScored = $derived(buffScore !== null && oneilScore !== null);
+	// The disagreement scale needs both markers; it plots the two lens scores together.
+	const showScale = $derived(spread !== null && bothScored);
+	const gapLeft = $derived(bothScored ? Math.min(buffScore!, oneilScore!) : 0);
+	const gapWidth = $derived(bothScored ? Math.abs(buffScore! - oneilScore!) : 0);
 
 	// Buffett qualitative pillars (moat / trend / candor / understood).
 	const hasBuffQual = $derived(
@@ -126,109 +129,156 @@
 
 	let open = $state(false);
 
+	// Tone → marker fill / score text colour. The score number and its scale marker
+	// share one colour so a weak lens (muted) and a strong lens (green) read at a glance.
 	function toneDot(t: BuffettTone): string {
 		return t === 'green' ? 'bg-green' : t === 'amber' ? 'bg-amber' : 'bg-fg-muted';
+	}
+	function toneText(t: BuffettTone): string {
+		return t === 'green' ? 'text-green' : t === 'amber' ? 'text-amber' : 'text-fg-muted';
+	}
+	// Clamp a marker's label so the edge markers (score 0 / score 100) do not clip
+	// past the track ends: left-anchor near 0, right-anchor near 100, else centre.
+	function labelShift(p: number): string {
+		if (p <= 12) return 'translateX(0)';
+		if (p >= 88) return 'translateX(-100%)';
+		return 'translateX(-50%)';
 	}
 </script>
 
 {#if hasContent}
 	<div class="px-4 sm:px-5 py-3 border-t border-grid">
-		<button
-			type="button"
-			class="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-cyan hover:text-amber transition-colors"
-			aria-expanded={open}
-			onclick={() => (open = !open)}
-		>
-			<ChevronRight class="size-3 transition-transform {open ? 'rotate-90' : ''}" />
-			expert.panel
-		</button>
+		<!-- Trigger row + (when open & both scored) the one-glance disagreement verdict. -->
+		<div class="flex items-center justify-between gap-2">
+			<button
+				type="button"
+				class="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-cyan hover:text-amber transition-colors"
+				aria-expanded={open}
+				onclick={() => (open = !open)}
+			>
+				<ChevronRight class="size-3 transition-transform {open ? 'rotate-90' : ''}" />
+				expert panel
+			</button>
+			{#if open && showScale}
+				{@const bandTone = consensusTone(spread)}
+				<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">
+					lenses
+					<span
+						class="font-bold"
+						class:text-green={bandTone === 'green'}
+						class:text-amber={bandTone === 'amber'}
+						class:text-red={bandTone === 'red'}>{consensusBand(spread)}</span
+					>
+					<span class="text-grid-strong">·</span> gap {Math.round(spread!)}
+				</span>
+			{/if}
+		</div>
+
 		{#if open}
 			<div class="mt-3 space-y-4">
-				<!-- Disagreement headline + dot-lane: only when the persisted spread is
-				     finite (>=2 lenses scored). Band word + colour are display-only and
-				     explicitly labelled unvalidated. -->
-				{#if spread !== null && bothScored}
-					{@const band = consensusBand(spread)}
+				<!-- Disagreement scale: the two lens scores on one 0-100 track, the gap
+				     between them shaded. Replaces the old thin dot-lane + headline sentence.
+				     Renders only when the persisted spread is finite (>=2 lenses scored). -->
+				{#if showScale}
 					{@const bandTone = consensusTone(spread)}
-					<div class="space-y-2">
-						<p class="text-xs leading-relaxed text-fg-dim">
-							<span class="whitespace-nowrap">Buffett {buffScore} (value/quality)</span>
-							<span class="text-fg-muted"> vs </span>
-							<span class="whitespace-nowrap">O'Neil {oneilScore} (momentum)</span>
-							<span class="text-fg-muted"> — lenses </span>
+					{@const buffT = buffettTone(buf?.buffett_quality_score)}
+					{@const oneilT = oneilTone(oneil?.oneil_score)}
+					<div>
+						<div class="flex justify-between text-[9px] uppercase tracking-widest text-fg-muted">
+							<span>lens score</span>
+							<span>0–100</span>
+						</div>
+						<!-- track -->
+						<div class="relative mt-2 mb-7 h-1.5 rounded-full bg-grid" aria-hidden="true">
 							<span
-								class="font-bold uppercase tracking-widest text-[10px]"
-								class:text-green={bandTone === 'green'}
-								class:text-amber={bandTone === 'amber'}
-								class:text-red={bandTone === 'red'}>{band}</span
+								class="absolute top-0 h-1.5 rounded-full"
+								class:bg-green={bandTone === 'green'}
+								class:bg-amber={bandTone === 'amber'}
+								class:bg-red={bandTone === 'red'}
+								style="left: {gapLeft}%; width: {gapWidth}%; opacity: 0.22"
+							></span>
+							<!-- Buffett marker + label -->
+							<span
+								class="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg {toneDot(
+									buffT
+								)}"
+								style="left: {buffScore}%"
+							></span>
+							<span
+								class="absolute top-full mt-1 text-[9px] whitespace-nowrap {toneText(buffT)}"
+								style="left: {buffScore}%; transform: {labelShift(buffScore!)}"
 							>
-							<span class="text-fg-muted whitespace-nowrap"> (spread {Math.round(spread)})</span>
+								Buffett {buffScore}
+							</span>
+							<!-- O'Neil marker + label -->
+							<span
+								class="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg {toneDot(
+									oneilT
+								)}"
+								style="left: {oneilScore}%"
+							></span>
+							<span
+								class="absolute top-full mt-1 text-[9px] whitespace-nowrap {toneText(oneilT)}"
+								style="left: {oneilScore}%; transform: {labelShift(oneilScore!)}"
+							>
+								O'Neil {oneilScore}
+							</span>
+						</div>
+						<p class="text-[10px] leading-relaxed text-fg-muted">
+							The two lenses sit <span class="text-fg-dim">{Math.round(spread!)} apart</span> on a 0–100
+							scale. Magnitude =
+							<span class="text-fg-dim whitespace-nowrap"
+								>{panelMagnitudeFormula(panel?.panel_config_version)}</span
+							>
+							<span class="text-grid-strong"> · </span>
+							<span class="whitespace-nowrap" title="panel config version — audit trace"
+								>{panel?.panel_config_version ?? 'panel'}</span
+							>
 						</p>
-						<!-- Dot-lane: one dot per present score on a 0-100 track, coloured by
-						     that expert's OWN tone. Visual distance = the spread. -->
-						<div class="relative h-1 w-full bg-grid" aria-hidden="true">
-							{#if buffScore !== null}
-								<span
-									class="absolute top-1/2 size-2 -translate-y-1/2 -translate-x-1/2 rounded-full {toneDot(
-										buffettTone(buf?.buffett_quality_score)
-									)}"
-									style="left: {buffScore}%"
-								></span>
-							{/if}
-							{#if oneilScore !== null}
-								<span
-									class="absolute top-1/2 size-2 -translate-y-1/2 -translate-x-1/2 rounded-full {toneDot(
-										oneilTone(oneil?.oneil_score)
-									)}"
-									style="left: {oneilScore}%"
-								></span>
-							{/if}
-						</div>
-						<!-- Status bar: the disclaimer is the loudest line (the caveat people
-						     act on), the opaque config slug is decoded into a plain-language
-						     magnitude formula and demoted to a hover-titled audit tag.
-						     Display-only, unvalidated — never a buy/avoid word. -->
-						<div class="space-y-1.5 rounded-sm border-l-2 border-amber bg-bg-1 px-3 py-2">
-							<p class="text-xs leading-snug text-fg">
-								<span
-									class="text-[10px] font-bold uppercase tracking-widest text-amber whitespace-nowrap"
-									>display-only</span
-								>
-								<span class="text-grid-strong"> · </span>not a buy or avoid signal
-							</p>
-							<p class="text-[10px] leading-snug text-fg-muted">
-								<span class="uppercase tracking-wider">magnitude</span>
-								<span class="text-fg-dim whitespace-nowrap"
-									>{panelMagnitudeFormula(panel?.panel_config_version)}</span
-								>
-								<span class="text-grid-strong"> · </span>unvalidated
-								<span class="text-grid-strong"> · </span>
-								<span class="whitespace-nowrap" title="panel config version — audit trace"
-									>{panel?.panel_config_version ?? 'panel'}</span
-								>
-							</p>
-						</div>
 					</div>
 				{/if}
 
-				<!-- Per-expert sections, registry order. -->
+				<!-- Per-expert scorecards, registry order. -->
 				{#each sections as id (id)}
-					<div class="space-y-2 border-t border-grid pt-3 first:border-t-0 first:pt-0">
-						{#if EXPERT_KIND[id] === 'qual'}
-							<p class="text-[10px] uppercase tracking-widest text-fg-muted">
-								buffett <span class="font-bold normal-case">{buffScore ?? '—'}/100</span>
-							</p>
-							<div class="flex flex-wrap gap-2">
+					{@const isBuf = EXPERT_KIND[id] === 'qual'}
+					{@const score = isBuf ? buffScore : oneilScore}
+					{@const tone = isBuf
+						? buffettTone(buf?.buffett_quality_score)
+						: oneilTone(oneil?.oneil_score)}
+					<div class="border-t border-grid pt-4 first:border-t-0 first:pt-0">
+						<!-- Card header: identity swatch + name + lens kind | big tone-coloured score. -->
+						<div class="flex items-baseline justify-between gap-3">
+							<div class="flex items-center gap-2.5">
+								<span
+									class="h-7 w-[3px] rounded-sm {isBuf ? 'bg-cyan' : 'bg-magenta'}"
+									aria-hidden="true"
+								></span>
+								<span>
+									<span class="block font-display text-[15px] font-semibold leading-none">
+										{isBuf ? 'Buffett' : "O'Neil"}
+									</span>
+									<span class="mt-1 block text-[9px] uppercase tracking-widest text-fg-muted">
+										{isBuf ? 'value / quality' : 'momentum'}
+									</span>
+								</span>
+							</div>
+							<span class="font-display text-2xl font-semibold leading-none whitespace-nowrap {toneText(tone)}">
+								{score ?? '—'}<span class="text-xs font-normal text-fg-muted">/100</span>
+							</span>
+						</div>
+
+						{#if isBuf}
+							<div class="mt-3 flex flex-wrap gap-2">
 								{#each buffPillars as pillar (pillar.label)}
 									<ExpertPillar label={pillar.label} value={pillar.value} tone={pillar.tone} body={pillar.body} />
 								{/each}
 							</div>
 							{#if buf?.buffett_qualitative_rationale}
-								<blockquote class="border-l-2 border-violet pl-4">
+								<blockquote class="mt-3 border-l-2 border-cyan pl-4">
 									<p class="text-fg-dim text-xs leading-relaxed">{buf.buffett_qualitative_rationale}</p>
 								</blockquote>
 							{/if}
-							<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] leading-snug text-fg-muted">
+							<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] leading-snug text-fg-muted">
 								{#if buf?.buffett_used_scuttlebutt}
 									<span class="text-amber whitespace-nowrap">scuttlebutt: web-grounded, unverified</span>
 								{/if}
@@ -237,10 +287,7 @@
 								{/if}
 							</div>
 						{:else}
-							<p class="text-[10px] uppercase tracking-widest text-fg-muted">
-								oneil <span class="font-bold normal-case">{oneilScore ?? '—'}/100</span>
-							</p>
-							<dl class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+							<dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3">
 								{#each oneilReadouts as r (r.label)}
 									<div>
 										<dt class="text-[9px] uppercase tracking-widest text-fg-muted">{r.label}</dt>
@@ -249,7 +296,7 @@
 								{/each}
 							</dl>
 							{#if oneil?.oneil_new_high_split_suspected === true || oneil?.oneil_earnings_growth_near_zero_base === true}
-								<div class="flex flex-wrap gap-2">
+								<div class="mt-3 flex flex-wrap gap-2">
 									{#if oneil?.oneil_new_high_split_suspected === true}
 										<ExpertPillar
 											label="data"
@@ -268,7 +315,7 @@
 									{/if}
 								</div>
 							{/if}
-							<p class="text-[10px] leading-snug text-fg-muted">
+							<p class="mt-3 text-[10px] leading-snug text-fg-muted">
 								<span class="uppercase tracking-wider">source</span>
 								<span class="text-fg-dim">price panel + EDGAR fundamentals</span>
 								<span class="text-grid-strong"> · </span>numeric-only, no LLM
@@ -276,6 +323,20 @@
 						{/if}
 					</div>
 				{/each}
+
+				<!-- Persistent display-only caveat — the caveat people act on, always shown
+				     while the drawer is open, never a buy/avoid word. -->
+				<div class="-mx-4 sm:-mx-5 -mb-3 mt-1 border-t-2 border-amber bg-bg-1 px-4 sm:px-5 py-2.5">
+					<p class="text-xs leading-snug text-fg">
+						<span
+							class="text-[10px] font-bold uppercase tracking-widest text-amber whitespace-nowrap"
+							>display-only</span
+						>
+						<span class="text-grid-strong"> · </span>not a buy or avoid signal
+						<span class="text-grid-strong"> · </span>
+						<span class="text-fg-muted">unvalidated bands</span>
+					</p>
+				</div>
 			</div>
 		{/if}
 	</div>
