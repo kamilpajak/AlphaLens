@@ -9,7 +9,7 @@
 		confidenceTone,
 		confidenceLabel,
 		buffettTone,
-		panelCoverageLabel
+		oneilTone
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -73,12 +73,23 @@
 					: '')
 	);
 
-	// Expert-panel coverage chip (PR-8b): a tone-NEUTRAL +1 token in the meta bar —
-	// "panel 2 lenses" / "1 lens" / "—" — that only states HOW MANY lenses scored
-	// this name. No band word, no colour on the card face (the disagreement band +
-	// its colour live in the opened drawer with an "unvalidated" label). The qualitative
-	// deep-read + the dot-lane + the O'Neil numerics all live in <ExpertPanel>.
-	const panelCov = $derived(panelCoverageLabel(buf?.buffett_quality_score, c.expert_assessments?.oneil?.oneil_score));
+	// O'Neil momentum chip — the symmetric sibling of the Buffett chip (both expert
+	// lenses are named on the meta-bar face so it reads coherently, not "Buffett +
+	// an unnamed count"). Same shape: a 0-100 token, tone by score, always rendered
+	// ("—" when absent). The disagreement BAND + its colour still live ONLY in the
+	// opened <ExpertPanel> drawer (the manufactured-authority guard) — the face shows
+	// the two raw scores, never the verdict.
+	const oneil = $derived(c.expert_assessments?.oneil ?? null);
+	const oneilScore = $derived(
+		Number.isFinite(oneil?.oneil_score) ? Math.round(oneil?.oneil_score as number) : null
+	);
+	const oneilScoreTone = $derived(oneilTone(oneil?.oneil_score));
+	const oneilHover = $derived(
+		`off 52w high ${fmtPct(oneil?.oneil_pct_off_52w_high)} · ` +
+			`MA200 slope ${fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2)}/d · ` +
+			`earnings YoY ${fmtPct(oneil?.oneil_earnings_growth_yoy_pct)}` +
+			(oneilScore === null ? ' — momentum terms incomplete to score' : '')
+	);
 </script>
 
 <article
@@ -178,7 +189,9 @@
 				<span class="text-xs font-bold lowercase text-violet">{c.catalyst_event_type ?? '—'}</span>
 				<span class="text-[11px] text-fg-muted">{fmtNum(c.catalyst_strength, 2)}</span>
 			</span>
-			<!-- Display-only expert chips, set apart behind a divider (not ranking inputs). -->
+			<!-- Display-only expert lenses, named symmetrically + set apart behind a
+			     divider (not ranking inputs). Both raw 0-100 scores on the face; the
+			     disagreement verdict + the full read live in the <ExpertPanel> drawer. -->
 			<div class="flex items-center gap-x-4 border-l border-grid pl-4">
 				<ChipTip term="buffett quality" body={buffHover}>
 					{#snippet chip()}
@@ -195,19 +208,22 @@
 								class:text-green={buffTone === 'green'}
 								class:text-amber={buffTone === 'amber'}
 								class:text-fg-muted={buffTone === 'muted'}
-								>{buffScore !== null ? `${buffScore}/100` : '—'}</span
+								>{buffScore ?? '—'}</span
 							>
 						</span>
 					{/snippet}
 				</ChipTip>
-				<ChipTip
-					term="expert panel"
-					body="How many orthogonal expert lenses scored this name (Buffett value/quality + O'Neil momentum). Open the panel for each lens's read and the disagreement between them. Display-only, unvalidated — not a buy/avoid signal."
-				>
+				<ChipTip term="o'neil momentum" body={oneilHover}>
 					{#snippet chip()}
 						<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap cursor-help">
-							<span class="text-[9px] uppercase tracking-widest text-fg-muted">panel</span>
-							<span class="text-xs font-bold">{panelCov}</span>
+							<span class="text-[9px] uppercase tracking-widest text-fg-muted">o'neil</span>
+							<span
+								class="text-xs font-bold"
+								class:text-green={oneilScoreTone === 'green'}
+								class:text-amber={oneilScoreTone === 'amber'}
+								class:text-fg-muted={oneilScoreTone === 'muted'}
+								>{oneilScore ?? '—'}</span
+							>
 						</span>
 					{/snippet}
 				</ChipTip>

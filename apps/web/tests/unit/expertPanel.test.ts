@@ -3,7 +3,6 @@ import {
 	oneilTone,
 	consensusTone,
 	consensusBand,
-	panelCoverageLabel,
 	panelMagnitudeFormula
 } from '../../src/lib/format';
 
@@ -49,20 +48,6 @@ describe('consensusBand', () => {
 		expect(consensusBand(70)).toBe('split');
 		expect(consensusBand(null)).toBe('—');
 		expect(consensusBand(NaN)).toBe('—');
-	});
-});
-
-describe('panelCoverageLabel (resting +1 token, tone-neutral)', () => {
-	it('counts finite scores: 2 lenses / 1 lens / dash', () => {
-		expect(panelCoverageLabel(31, 78)).toBe('2 lenses');
-		expect(panelCoverageLabel(31, null)).toBe('1 lens');
-		expect(panelCoverageLabel(null, 78)).toBe('1 lens');
-		expect(panelCoverageLabel(null, null)).toBe('—');
-	});
-	it('non-finite scores do not count as present', () => {
-		expect(panelCoverageLabel(NaN, 78)).toBe('1 lens');
-		expect(panelCoverageLabel(undefined, undefined)).toBe('—');
-		expect(panelCoverageLabel(Infinity, NaN)).toBe('—');
 	});
 });
 

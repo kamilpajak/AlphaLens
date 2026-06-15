@@ -510,19 +510,19 @@ test.describe('smoke — brief detail interactions', () => {
 		await expect(page.locator('article[id] [data-testid="trade-setup"]').first()).toBeVisible();
 	});
 
-	test('expert-panel coverage chip renders as a single non-wrapping +1 token', async ({ page }) => {
-		// PR-8b: every card gains exactly one tone-neutral "panel N lenses" / "—"
-		// coverage chip (the +1 token). With no expert_assessments in the fixture the
-		// chip reads "panel —" — it must still render (the metric is always shown) and
-		// carry whitespace-nowrap so "panel 2 lenses" can never break across two lines.
+	test('expert chips render symmetrically (buffett + o\'neil) as non-wrapping tokens', async ({ page }) => {
+		// The meta bar names BOTH expert lenses symmetrically (buffett + o'neil), each
+		// a raw 0-100 score. With no expert_assessments in the fixture both read "—" —
+		// they must still render (always shown, like the other meta-bar figures) and
+		// carry whitespace-nowrap so "buffett 11" / "o'neil 62" can never break across
+		// two lines. The disagreement verdict stays in the drawer, never on the face.
 		await page.goto(`/brief/${latestDay.date}`);
 		await expect(page.locator('article[id]').first()).toBeVisible();
-		const chip = page
-			.locator('article[id] span')
-			.filter({ hasText: /^\s*panel\s+(\d+ lens(es)?|—)\s*$/i })
-			.first();
-		await expect(chip).toBeVisible();
-		await expect(chip).toHaveClass(/whitespace-nowrap/);
+		for (const lens of [/^\s*buffett\s+(\d+|—)\s*$/i, /^\s*o'neil\s+(\d+|—)\s*$/i]) {
+			const chip = page.locator('article[id] span').filter({ hasText: lens }).first();
+			await expect(chip).toBeVisible();
+			await expect(chip).toHaveClass(/whitespace-nowrap/);
+		}
 	});
 
 	test('trade-setup percentages render with bounded precision (no raw floats)', async ({ page }) => {
