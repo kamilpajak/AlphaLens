@@ -94,6 +94,9 @@ def main() -> None:
     if outcomes.empty:
         print("no population-ladder outcomes found at", args.ladders_dir)
         return
+    if "ladder_classification" not in outcomes.columns:
+        print("error: population_ladders store missing ladder_classification column")
+        return
     setups = _setup_index(args.briefs_dir)
 
     # Population mix over ALL rows (NO_FILL classification needs no maturity).
@@ -117,6 +120,10 @@ def main() -> None:
         tiers, stop = _tiers_and_stop(setups.get((brief_date, ticker)))
 
         arrival = session_on_or_after(brief_date, args.exchange)
+        # Entry is live on sessions [arrival .. arrival+ttl-1] (inclusive of arrival)
+        # and expires at the start of session arrival+ttl. The tail therefore starts
+        # at arrival+ttl (the expiry session) so a touch there is post-TTL, never
+        # double-counting the last in-window session.
         window_sessions = [
             advance_trading_sessions(arrival, i, args.exchange) for i in range(args.ttl)
         ]
@@ -181,7 +188,7 @@ def _as_float(v: object) -> float | None:
         f = float(v)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-    return None if math.isnan(f) else f  # drop NaN
+    return None if math.isnan(f) or math.isinf(f) else f  # drop NaN / inf
 
 
 def _sign(x: float) -> str:

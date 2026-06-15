@@ -28,6 +28,8 @@ class NoFillReconstruction:
     e3: float | None
     stop: float | None
     min_low_in_window: float | None
+    # touched_eN is meaningful only when the corresponding tier is not None; it is
+    # False both when the price never reached the tier AND when the tier is absent.
     touched_e1: bool
     touched_e2: bool
     touched_e3: bool
@@ -128,6 +130,9 @@ def _classify(
 ) -> str:
     if e1 is None or not window_complete or min_low is None:
         return CAUSE_DATA_GAP
+    # Daily low reached E1 yet the row is NO_FILL: the daily path says it should have
+    # filled but the minute-resolve monitor recorded no fill (daily-vs-minute
+    # disagreement). Flag for minute-bar escalation rather than trusting either side.
     if min_low <= e1 * (1.0 + touch_eps):
         return CAUSE_AMBIGUOUS
     if tail_min_low is not None and tail_min_low <= e1 * (1.0 + touch_eps):
