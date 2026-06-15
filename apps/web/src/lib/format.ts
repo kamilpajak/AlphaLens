@@ -168,17 +168,19 @@ export function panelCoverageLabel(
 }
 
 // Decode the opaque `panel_config_version` slug (e.g. `panel-v1r-absdiff-2x`)
-// into a plain-language magnitude formula for the drawer footer. Display-only:
-// the raw slug is still rendered beside this as an audit tag, but the reader
-// gets the math, not the jargon. Known formulae are matched explicitly so a
-// future version bump can never silently MIS-describe the math — an unrecognised
-// slug degrades to a generic, always-true phrase rather than a wrong one. The
-// minus sign is the U+2212 math glyph (an atomic token — wrap in
-// `whitespace-nowrap` at the call site so it never breaks across two lines).
+// into a plain-language magnitude formula for the drawer. Display-only: the raw
+// slug is still rendered beside this as an audit tag, but the reader gets the
+// math, not the jargon. The pipeline's `disagreement.py::compute_spread` is
+// `max(present) − min(present)` = `abs(buffett − oneil)`, so the `absdiff`
+// family decodes to the plain gap. CRITICAL: the trailing `Nx` token is the
+// formula's ARITY (`2x` = the 2-expert range; the reserved `pstdev-3x` = a
+// 3-expert population std-dev), NOT a multiplier — never render "× N". Any slug
+// outside the absdiff family degrades to a generic, always-true phrase rather
+// than a wrong one. The minus sign is the U+2212 math glyph (an atomic token —
+// wrap in `whitespace-nowrap` at the call site so it never breaks across lines).
 export function panelMagnitudeFormula(version: string | null | undefined): string {
-	if (typeof version === 'string') {
-		if (version.includes('absdiff-2x')) return "|Buffett − O'Neil| × 2";
-		if (version.includes('absdiff')) return "|Buffett − O'Neil|";
+	if (typeof version === 'string' && version.includes('absdiff')) {
+		return "|Buffett − O'Neil|";
 	}
 	return 'gap between lens scores';
 }

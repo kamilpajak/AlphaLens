@@ -54,6 +54,8 @@
 	);
 	const bothScored = $derived(buffScore !== null && oneilScore !== null);
 	// The disagreement scale needs both markers; it plots the two lens scores together.
+	// gapLeft/gapWidth are meaningful ONLY when bothScored (the dummy 0 fallback is
+	// never rendered — every read is inside the `{#if showScale}` guard below).
 	const showScale = $derived(spread !== null && bothScored);
 	const gapLeft = $derived(bothScored ? Math.min(buffScore!, oneilScore!) : 0);
 	const gapWidth = $derived(bothScored ? Math.abs(buffScore! - oneilScore!) : 0);
@@ -137,12 +139,11 @@
 	function toneText(t: BuffettTone): string {
 		return t === 'green' ? 'text-green' : t === 'amber' ? 'text-amber' : 'text-fg-muted';
 	}
-	// Clamp a marker's label so the edge markers (score 0 / score 100) do not clip
-	// past the track ends: left-anchor near 0, right-anchor near 100, else centre.
+	// Anchor a marker's label so the edge scores (0 / 100) do not clip past the track
+	// ends: a continuous -p% shift left-anchors at 0, centres at 50, right-anchors at
+	// 100 — no hard-threshold jump as the score moves between rows.
 	function labelShift(p: number): string {
-		if (p <= 12) return 'translateX(0)';
-		if (p >= 88) return 'translateX(-100%)';
-		return 'translateX(-50%)';
+		return `translateX(-${Math.max(0, Math.min(100, p))}%)`;
 	}
 </script>
 
