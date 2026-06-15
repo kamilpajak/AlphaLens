@@ -9,7 +9,7 @@
 		confidenceTone,
 		confidenceLabel,
 		buffettTone,
-		panelCoverageLabel
+		oneilTone
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -73,12 +73,23 @@
 					: '')
 	);
 
-	// Expert-panel coverage chip (PR-8b): a tone-NEUTRAL +1 token in the meta bar —
-	// "panel 2 lenses" / "1 lens" / "—" — that only states HOW MANY lenses scored
-	// this name. No band word, no colour on the card face (the disagreement band +
-	// its colour live in the opened drawer with an "unvalidated" label). The qualitative
-	// deep-read + the dot-lane + the O'Neil numerics all live in <ExpertPanel>.
-	const panelCov = $derived(panelCoverageLabel(buf?.buffett_quality_score, c.expert_assessments?.oneil?.oneil_score));
+	// O'Neil momentum chip — the symmetric sibling of the Buffett chip (both expert
+	// lenses are named on the meta-bar face so it reads coherently, not "Buffett +
+	// an unnamed count"). Same shape: a 0-100 token, tone by score, always rendered
+	// ("—" when absent). The disagreement BAND + its colour still live ONLY in the
+	// opened <ExpertPanel> drawer (the manufactured-authority guard) — the face shows
+	// the two raw scores, never the verdict.
+	const oneil = $derived(c.expert_assessments?.oneil ?? null);
+	const oneilScore = $derived(
+		Number.isFinite(oneil?.oneil_score) ? Math.round(oneil?.oneil_score as number) : null
+	);
+	const oneilScoreTone = $derived(oneilTone(oneil?.oneil_score));
+	const oneilHover = $derived(
+		`off 52w high ${fmtPct(oneil?.oneil_pct_off_52w_high)} · ` +
+			`MA200 slope ${fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2)}/d · ` +
+			`earnings YoY ${fmtPct(oneil?.oneil_earnings_growth_yoy_pct)}` +
+			(oneilScore === null ? ' — momentum terms incomplete to score' : '')
+	);
 </script>
 
 <article
@@ -135,69 +146,96 @@
 		</div>
 	</header>
 
-	<!-- Meta bar: sector / industry on the left, the 4 headline metrics on the right. -->
-	<div
-		class="flex flex-wrap items-center gap-x-5 gap-y-1 px-4 sm:px-5 py-2 border-b border-grid text-[10px] uppercase tracking-widest"
-	>
-		<span class="text-fg-muted min-w-0 truncate">
-			{#if c.sector_name && c.industry_name}
-				{c.sector_name}<span class="text-grid-strong mx-1">/</span>{c.industry_name}
-			{:else}
-				{c.sector_name ?? c.industry_name ?? '—'}
-			{/if}
-		</span>
-		<div class="flex flex-wrap items-center gap-x-5 gap-y-1 ml-auto">
-			<span class="text-fg-muted whitespace-nowrap">
-				layer-4 score <span class="text-amber font-bold normal-case">{c.layer4_weighted_score ?? '—'}</span>
+	<!-- Meta bar: sector / industry on the left; the headline metrics on the right,
+	     grouped so the eye lands on the layer-4 score first — a filled L4 badge
+	     (the ordering signal) leads, then confidence / mcap / catalyst, then the
+	     display-only expert chips (buffett + panel) set apart behind a divider.
+	     Pattern: small dim uppercase key + bold value, replacing the old uniform
+	     uppercase ticker-tape. -->
+	<div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 sm:px-5 py-2 border-b border-grid">
+		<!-- Identity cluster: what the company is (sector / industry) and how big it is
+		     (market cap). Mcap lives here, not with the right-side scores — it is a
+		     descriptive company fact (kin to sector), and it is a SELECTION-gate input
+		     (the mcap filter), so it earns an at-a-glance spot but reads as identity,
+		     not a signal. The sector path truncates; mcap stays (shrink-0, nowrap). -->
+		<div class="flex min-w-0 items-baseline gap-x-3 text-[10px] uppercase tracking-widest">
+			<span class="min-w-0 truncate text-fg-muted">
+				{#if c.sector_name && c.industry_name}
+					{c.sector_name}<span class="text-grid-strong mx-1">/</span>{c.industry_name}
+				{:else}
+					{c.sector_name ?? c.industry_name ?? '—'}
+				{/if}
 			</span>
-			<span class="text-fg-muted whitespace-nowrap">
-				confidence
+			<span class="inline-flex shrink-0 items-baseline gap-1.5 whitespace-nowrap">
+				<span class="text-grid-strong">·</span>
+				<span class="text-[9px] text-fg-muted">mcap</span>
+				<span class="text-xs font-bold normal-case text-fg">{fmtUsdCompact(c.market_cap)}</span>
+			</span>
+		</div>
+		<div class="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
+			<!-- Layer-4 score — the headline ordering signal, given a filled badge. -->
+			<span
+				class="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-sm border border-amber/35 bg-amber/10 px-2 py-0.5"
+			>
+				<span class="text-[8px] uppercase tracking-widest text-amber">layer-4</span>
+				<span class="font-display text-[15px] font-bold leading-none text-amber"
+					>{c.layer4_weighted_score ?? '—'}</span
+				>
+			</span>
+			<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+				<span class="text-[9px] uppercase tracking-widest text-fg-muted">conf</span>
 				<span
-					class="font-bold normal-case"
+					class="text-xs font-bold"
 					class:text-green={confTone === 'green'}
 					class:text-amber={confTone === 'amber'}
 					class:text-cyan={confTone === 'cyan'}
 					class:text-fg-muted={confTone === 'muted'}>{confidenceLabel(c.llm_confidence)}</span
 				>
 			</span>
-			<span class="text-fg-muted whitespace-nowrap">
-				mkt cap <span class="text-fg font-bold normal-case">{fmtUsdCompact(c.market_cap)}</span>
+			<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+				<span class="text-[9px] uppercase tracking-widest text-fg-muted">catalyst</span>
+				<span class="text-xs font-bold lowercase text-violet">{c.catalyst_event_type ?? '—'}</span>
+				<span class="text-[11px] text-fg-muted">{fmtNum(c.catalyst_strength, 2)}</span>
 			</span>
-			<span class="text-fg-muted whitespace-nowrap">
-				catalyst
-				<span class="text-violet font-bold lowercase">{c.catalyst_event_type ?? '—'}</span>
-				<span class="text-fg-muted">/ {fmtNum(c.catalyst_strength, 2)}</span>
-			</span>
-			<ChipTip term="buffett quality" body={buffHover}>
-				{#snippet chip()}
-					<span
-						class="text-fg-muted whitespace-nowrap cursor-help"
-						class:opacity-60={buffLowCov}
-						class:underline={buffLowCov}
-						class:decoration-dashed={buffLowCov}
-						class:underline-offset-2={buffLowCov}
-					>
-						buffett
+			<!-- Display-only expert lenses, named symmetrically + set apart behind a
+			     divider (not ranking inputs). Both raw 0-100 scores on the face; the
+			     disagreement verdict + the full read live in the <ExpertPanel> drawer. -->
+			<div class="flex items-center gap-x-4 border-l border-grid pl-4">
+				<ChipTip term="buffett quality" body={buffHover}>
+					{#snippet chip()}
 						<span
-							class="font-bold normal-case"
-							class:text-green={buffTone === 'green'}
-							class:text-amber={buffTone === 'amber'}
-							class:text-fg-muted={buffTone === 'muted'}
-							>{buffScore !== null ? `${buffScore}/100` : '—'}</span
+							class="inline-flex items-baseline gap-1.5 whitespace-nowrap cursor-help"
+							class:opacity-60={buffLowCov}
+							class:underline={buffLowCov}
+							class:decoration-dashed={buffLowCov}
+							class:underline-offset-2={buffLowCov}
 						>
-					</span>
-				{/snippet}
-			</ChipTip>
-			<ChipTip
-				term="expert panel"
-				body="How many orthogonal expert lenses scored this name (Buffett value/quality + O'Neil momentum). Open the panel for each lens's read and the disagreement between them. Display-only, unvalidated — not a buy/avoid signal."
-			>
-				{#snippet chip()}
-					<span class="text-fg-muted whitespace-nowrap cursor-help">
-						panel <span class="font-bold normal-case">{panelCov}</span>
-					</span>
-				{/snippet}
-			</ChipTip>
+							<span class="text-[9px] uppercase tracking-widest text-fg-muted">buffett</span>
+							<span
+								class="text-xs font-bold"
+								class:text-green={buffTone === 'green'}
+								class:text-amber={buffTone === 'amber'}
+								class:text-fg-muted={buffTone === 'muted'}
+								>{buffScore ?? '—'}</span
+							>
+						</span>
+					{/snippet}
+				</ChipTip>
+				<ChipTip term="o'neil momentum" body={oneilHover}>
+					{#snippet chip()}
+						<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap cursor-help">
+							<span class="text-[9px] uppercase tracking-widest text-fg-muted">o'neil</span>
+							<span
+								class="text-xs font-bold"
+								class:text-green={oneilScoreTone === 'green'}
+								class:text-amber={oneilScoreTone === 'amber'}
+								class:text-fg-muted={oneilScoreTone === 'muted'}
+								>{oneilScore ?? '—'}</span
+							>
+						</span>
+					{/snippet}
+				</ChipTip>
+			</div>
 		</div>
 	</div>
 
