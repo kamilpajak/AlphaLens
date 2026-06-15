@@ -5,9 +5,9 @@
 	// audit-flag badges, no rationale) via the EXPERT_KIND map. Above the cards, a
 	// disagreement SCALE (the two lens scores plotted on one 0-100 track with the gap
 	// shaded) renders ONLY when the persisted expert_spread is finite (>=2 lenses
-	// scored). Display-only throughout: the band word + its colour live HERE behind a
-	// persistent "display-only · not a buy or avoid signal" footer, never on the
-	// resting card face (that chip is tone-neutral coverage). The transition shim is a
+	// scored). Display-only throughout: the band word + its colour live HERE in the
+	// drawer header, never on the resting card face (that chip is tone-neutral
+	// coverage). The transition shim is a
 	// single predicate — Number.isFinite(panel.expert_spread): we NEVER recompute the
 	// spread client-side (the pipeline owns the formula), so a pre-PR-8a row (no panel
 	// key) degrades to "just the per-expert cards, no scale", never a wrong number.
