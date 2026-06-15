@@ -198,6 +198,81 @@ def _eligible_rows(frame: dict, cik_int: int, resolve, asof: dt.date) -> list[di
     return out
 
 
+@dataclass(frozen=True)
+class _YearScan:
+    """Per-year accumulation across the four ecd concepts (PIT-filtered rows)."""
+
+    values: dict[str, float | None]
+    present: dict[str, bool]
+    ambiguous: bool  # >1 eligible row for some concept (e.g. mid-year CEO change)
+    accn: str | None
+    accepted: dt.datetime | None
+
+
+def _is_non_calendar_fye(subs: dict) -> bool:
+    """True for an off-December fiscal-year-end (CY-frame mapping is unsound)."""
+    fye = str(subs.get("fiscalYearEnd") or "1231")
+    return len(fye) >= 2 and fye[:2].isdigit() and int(fye[:2]) != 12
+
+
+def _scan_year_concepts(
+    client: SecEdgarClient,
+    cik_int: int,
+    resolve,
+    asof: dt.date,
+    year: int,
+    cache_dir: Path,
+) -> _YearScan:
+    """Fold the four ecd concept frames for one ``year`` into a :class:`_YearScan`.
+
+    A single eligible row yields its value; >1 row marks the year ``ambiguous`` (we
+    refuse to pick a CEO); 0 rows leaves the value ``None``. ``accn``/``accepted``
+    come from the first concept (in ``_CONCEPTS`` order) that has any eligible row.
+    """
+    values: dict[str, float | None] = {}
+    present: dict[str, bool] = {}
+    ambiguous = False
+    accn: str | None = None
+    accepted: dt.datetime | None = None
+    for concept in _CONCEPTS:
+        frame = _load_frame(client, concept, year, cache_dir)
+        rows = _eligible_rows(frame, cik_int, resolve, asof)
+        present[concept] = len(rows) >= 1
+        if len(rows) == 1:
+            values[concept] = _as_float(rows[0].get("val"))
+        else:
+            if len(rows) > 1:  # mid-year CEO change etc. — don't pick one
+                ambiguous = True
+            values[concept] = None
+        if accn is None and rows:
+            accn = rows[0].get("accn")
+            accepted = resolve(accn or "")
+    return _YearScan(values, present, ambiguous, accn, accepted)
+
+
+def _facts_for_year(cik: str, year: int, scan: _YearScan) -> ExecCompFacts | None:
+    """Build PRESENT facts for ``year`` if it disclosed BOTH total concepts, else None."""
+    # Year qualifies once it disclosed BOTH total concepts (an eligible row
+    # existed — single or ambiguous-multi).
+    if not (scan.present.get(_PEO_TOTAL) and scan.present.get(_NEO_TOTAL)):
+        return None
+    ratio = (
+        None if scan.ambiguous else _ratio(scan.values.get(_PEO_TOTAL), scan.values.get(_NEO_TOTAL))
+    )
+    return ExecCompFacts(
+        cik=cik,
+        coverage=ExecCompCoverage.PRESENT,
+        fiscal_year=year,
+        accn=scan.accn,
+        accepted=scan.accepted,
+        peo_total_comp=scan.values.get(_PEO_TOTAL),
+        peo_actually_paid=scan.values.get(_PEO_CAP),
+        neo_avg_total_comp=scan.values.get(_NEO_TOTAL),
+        neo_avg_actually_paid=scan.values.get(_NEO_CAP),
+        peo_to_neo_ratio=ratio,
+    )
+
+
 def exec_comp_as_of(
     cik: str,
     asof: dt.date,
@@ -224,49 +299,15 @@ def exec_comp_as_of(
 
     try:
         subs = client.fetch_submissions(cik)
-        fye = str(subs.get("fiscalYearEnd") or "1231")
-        if len(fye) >= 2 and fye[:2].isdigit() and int(fye[:2]) != 12:
+        if _is_non_calendar_fye(subs):
             return _missing(cik, ExecCompCoverage.UNKNOWN_NON_CALENDAR_FY)
 
         resolve = _build_accepted_resolver(subs, client)
         for year in years:
-            values: dict[str, float | None] = {}
-            present: dict[str, bool] = {}
-            ambiguous = False
-            accn: str | None = None
-            accepted: dt.datetime | None = None
-            for concept in _CONCEPTS:
-                frame = _load_frame(client, concept, year, cache_dir)
-                rows = _eligible_rows(frame, cik_int, resolve, asof)
-                present[concept] = len(rows) >= 1
-                if len(rows) == 1:
-                    values[concept] = _as_float(rows[0].get("val"))
-                else:
-                    if len(rows) > 1:  # mid-year CEO change etc. — don't pick one
-                        ambiguous = True
-                    values[concept] = None
-                if accn is None and rows:
-                    accn = rows[0].get("accn")
-                    accepted = resolve(accn or "")
-
-            # Year qualifies once it disclosed BOTH total concepts (an eligible row
-            # existed — single or ambiguous-multi).
-            if not (present.get(_PEO_TOTAL) and present.get(_NEO_TOTAL)):
-                continue
-
-            ratio = None if ambiguous else _ratio(values.get(_PEO_TOTAL), values.get(_NEO_TOTAL))
-            return ExecCompFacts(
-                cik=cik,
-                coverage=ExecCompCoverage.PRESENT,
-                fiscal_year=year,
-                accn=accn,
-                accepted=accepted,
-                peo_total_comp=values.get(_PEO_TOTAL),
-                peo_actually_paid=values.get(_PEO_CAP),
-                neo_avg_total_comp=values.get(_NEO_TOTAL),
-                neo_avg_actually_paid=values.get(_NEO_CAP),
-                peo_to_neo_ratio=ratio,
-            )
+            scan = _scan_year_concepts(client, cik_int, resolve, asof, year, cache_dir)
+            facts = _facts_for_year(cik, year, scan)
+            if facts is not None:
+                return facts
         return _missing(cik, ExecCompCoverage.NOT_DISCLOSED)
     except Exception as exc:  # fail-soft: never break the panel build
         logger.warning("exec_comp: failed for cik %s: %s", cik, exc, exc_info=True)
