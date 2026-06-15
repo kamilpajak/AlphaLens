@@ -97,56 +97,72 @@ def _parse_accepted(value: str | None) -> dt.datetime | None:
         return None
 
 
-def _build_accepted_resolver(subs: dict, client: SecEdgarClient):
-    """Return ``accn -> acceptance datetime`` resolver over recent + overflow shards.
+def _row_accepted(accepts: list, dates: list, i: int) -> dt.datetime | None:
+    """Acceptance datetime for submission row ``i``.
 
-    Acceptance datetime is primary (``acceptanceDateTime``); the date-only
-    ``filingDate`` (treated as end-of-day) is the fallback. A ``filingDate`` in a
-    non-ISO format leaves the accn unresolved (``None``) and so excludes its row —
+    ``acceptanceDateTime`` is primary; the date-only ``filingDate`` (treated as
+    end-of-day) is the fallback. A non-ISO ``filingDate`` resolves to ``None`` —
     conservative fail-soft (no look-ahead), acceptable because SEC submissions use
-    ISO dates. Overflow shards are walked lazily only when an accn is not in the
-    recent block.
+    ISO dates.
     """
-    index: dict[str, dt.datetime] = {}
+    accepted = _parse_accepted(accepts[i] if i < len(accepts) else None)
+    if accepted is not None:
+        return accepted
+    if i >= len(dates):
+        return None
+    day = _parse_accepted(dates[i])  # date-only ISO parses to midnight
+    if day is not None:
+        return day
+    try:
+        return dt.datetime.combine(dt.date.fromisoformat(dates[i]), dt.time.max)
+    except ValueError:
+        return None
 
-    def _ingest(block: dict) -> None:
+
+class _AcceptedResolver:
+    """``accn -> acceptance datetime`` over the recent block + overflow shards.
+
+    Overflow shards are walked lazily only when an accn is not already indexed
+    from the recent block; an unreadable shard is logged and skipped (fail-soft).
+    """
+
+    def __init__(self, subs: dict, client: SecEdgarClient) -> None:
+        self._client = client
+        self._index: dict[str, dt.datetime] = {}
+        self._ingest(subs)
+        self._shards = subs.get("filings", {}).get("files") or []
+
+    def _ingest(self, block: dict) -> None:
         recent = block.get("filings", {}).get("recent", block.get("recent", block))
         accns = recent.get("accessionNumber") or []
         accepts = recent.get("acceptanceDateTime") or []
         dates = recent.get("filingDate") or []
         for i, accn in enumerate(accns):
-            accepted = _parse_accepted(accepts[i] if i < len(accepts) else None)
-            if accepted is None and i < len(dates):
-                day = _parse_accepted(dates[i])  # date-only ISO parses to midnight
-                if day is None:
-                    try:
-                        day = dt.datetime.combine(dt.date.fromisoformat(dates[i]), dt.time.max)
-                    except ValueError:
-                        day = None
-                accepted = day
+            accepted = _row_accepted(accepts, dates, i)
             if accepted is not None:
-                index.setdefault(accn, accepted)
+                self._index.setdefault(accn, accepted)
 
-    _ingest(subs)
-    shards = subs.get("filings", {}).get("files") or []
-
-    def resolve(accn: str) -> dt.datetime | None:
-        if accn in index:
-            return index[accn]
-        for shard in shards:
+    def resolve(self, accn: str) -> dt.datetime | None:
+        if accn in self._index:
+            return self._index[accn]
+        for shard in self._shards:
             name = shard.get("name") if isinstance(shard, dict) else None
             if not name:
                 continue
             try:
-                _ingest(client.fetch_submissions_overflow(name))
+                self._ingest(self._client.fetch_submissions_overflow(name))
             except Exception as exc:  # fail-soft: an unreadable shard is not fatal
                 logger.warning("exec_comp: overflow shard %s failed: %s", name, exc)
                 continue
-            if accn in index:
-                return index[accn]
+            if accn in self._index:
+                return self._index[accn]
         return None
 
-    return resolve
+
+def _build_accepted_resolver(subs: dict, client: SecEdgarClient):
+    """Return an ``accn -> acceptance datetime`` resolver callable (see
+    :class:`_AcceptedResolver`)."""
+    return _AcceptedResolver(subs, client).resolve
 
 
 def _load_frame(client: SecEdgarClient, concept: str, year: int, cache_dir: Path) -> dict:

@@ -19,6 +19,7 @@ from pathlib import Path
 from alphalens_pipeline.experts.buffett.exec_comp import (
     ExecCompCoverage,
     ExecCompFacts,
+    _row_accepted,
     exec_comp_as_of,
 )
 
@@ -272,6 +273,32 @@ class TestExecCompAsOf(unittest.TestCase):
         client = _FakeClient(_full_year_frames(2025))
         facts = self._run(client, dt.date(2026, 6, 1))
         self.assertEqual(facts.coverage, ExecCompCoverage.PRESENT)
+
+
+class TestRowAccepted(unittest.TestCase):
+    """Pins the per-row acceptance resolution leaf extracted from the resolver."""
+
+    def test_acceptance_datetime_is_primary(self):
+        got = _row_accepted(["2026-04-24T10:01:15.000Z"], ["2026-04-20"], 0)
+        self.assertEqual(got, dt.datetime.fromisoformat("2026-04-24T10:01:15.000Z"))
+
+    def test_falls_back_to_filing_date_when_acceptance_missing(self):
+        # filingDate is a date-only ISO string → parses to midnight.
+        got = _row_accepted([None], ["2026-04-24"], 0)
+        self.assertEqual(got, dt.datetime(2026, 4, 24, 0, 0, 0))
+
+    def test_non_iso_filing_date_resolves_to_end_of_day(self):
+        # Not parseable by datetime.fromisoformat but parseable by date.fromisoformat
+        # is impossible for the same string; a fully non-ISO string yields None.
+        self.assertIsNone(_row_accepted([None], ["April 24, 2026"], 0))
+
+    def test_index_out_of_range_dates_is_none(self):
+        self.assertIsNone(_row_accepted([None], [], 0))
+
+    def test_missing_acceptance_entry_uses_dates(self):
+        # accepts shorter than the row index → acceptance treated as absent.
+        got = _row_accepted([], ["2026-04-24"], 0)
+        self.assertEqual(got, dt.datetime(2026, 4, 24, 0, 0, 0))
 
 
 if __name__ == "__main__":
