@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import unittest
 
 from alphalens_research.diagnostics import nofill
@@ -94,6 +95,61 @@ class TestReconstruct(unittest.TestCase):
         )
         self.assertEqual(r.cause, nofill.CAUSE_DATA_GAP)
         self.assertIsNone(r.e1)
+
+
+class TestAnalyzeOutcomeRow(unittest.TestCase):
+    def _grouped(self, low, high, open_=None):
+        bar = {"o": open_ if open_ is not None else high, "h": high, "l": low, "c": high, "v": 1.0}
+        return {"AAA": bar}
+
+    def test_extracts_window_path_and_classifies_momentum(self):
+        w = [dt.date(2026, 5, 4), dt.date(2026, 5, 5), dt.date(2026, 5, 6)]
+        tail = [dt.date(2026, 5, 7)]
+        grouped = {
+            w[0]: self._grouped(100.5, 105.0, open_=100.4),
+            w[1]: self._grouped(101.0, 106.0),
+            w[2]: self._grouped(102.0, 107.0),
+            tail[0]: self._grouped(103.0, 108.0),
+        }
+        r = nofill.analyze_outcome_row(
+            ticker="aaa",
+            tiers=[99.0, 97.0, 95.0],
+            stop=90.0,
+            reference_close=100.0,
+            window_sessions=w,
+            tail_sessions=tail,
+            grouped_by_session=grouped,
+        )
+        self.assertEqual(r.cause, nofill.CAUSE_MOMENTUM_RAN)
+        self.assertAlmostEqual(r.min_low_in_window, 100.5)
+
+    def test_missing_snapshot_is_data_gap(self):
+        w = [dt.date(2026, 5, 4), dt.date(2026, 5, 5)]
+        grouped = {w[0]: self._grouped(101.0, 105.0), w[1]: None}  # second snapshot not on disk
+        r = nofill.analyze_outcome_row(
+            ticker="AAA",
+            tiers=[99.0],
+            stop=90.0,
+            reference_close=100.0,
+            window_sessions=w,
+            tail_sessions=[],
+            grouped_by_session=grouped,
+        )
+        self.assertEqual(r.cause, nofill.CAUSE_DATA_GAP)
+
+    def test_ticker_absent_from_present_snapshot_is_missing(self):
+        w = [dt.date(2026, 5, 4)]
+        grouped = {w[0]: {"BBB": {"o": 10, "h": 11, "l": 9, "c": 10, "v": 1}}}  # AAA not traded
+        r = nofill.analyze_outcome_row(
+            ticker="AAA",
+            tiers=[99.0],
+            stop=90.0,
+            reference_close=100.0,
+            window_sessions=w,
+            tail_sessions=[],
+            grouped_by_session=grouped,
+        )
+        self.assertEqual(r.cause, nofill.CAUSE_DATA_GAP)
 
 
 if __name__ == "__main__":
