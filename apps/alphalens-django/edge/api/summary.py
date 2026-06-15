@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 # Hard N-gate threshold (memo §3.2). Below this, edge + portfolio aggregates are
@@ -79,153 +80,182 @@ def _is_truthy(value: Any) -> bool:
     return bool(value) and value is not None
 
 
+@dataclass
+class _Accumulator:
+    """Single pass over the rows accumulates here (memo §3 layers).
+
+    Split out of ``build_edge_summary`` so the loop body's branching does not
+    pile its cognitive complexity onto the orchestrator.
+    """
+
+    n_brief: int = 0
+    n_plannable: int = 0
+    # Edge layer (terminal only, equal-weight, size-free).
+    excess: list[float] = field(default_factory=list)  # market_excess_return (HEADLINE)
+    realized_r: list[float] = field(default_factory=list)  # gross/risk-norm (de-emphasised)
+    holding_days: list[float] = field(default_factory=list)
+    # Portfolio / size layer (terminal only).
+    contributions: list[float] = field(default_factory=list)
+    realized_risk_pcts: list[float] = field(default_factory=list)
+    risk_weighted_r_num: float = 0.0
+    risk_weighted_r_den: float = 0.0
+    tiers_filled: list[float] = field(default_factory=list)
+    # Deployment (N-independent) — over the whole plannable population.
+    n_filled: int = 0
+    n_no_fill: int = 0
+    n_terminal: int = 0
+    # Open distribution (descriptive only — never a scalar mean).
+    n_open: int = 0
+    open_near_tp: int = 0
+    open_near_sl: int = 0
+
+
+def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
+    """Fold one terminal (matured) row into the edge / portfolio / deployment layers."""
+    acc.n_terminal += 1
+    classification = str(row.get("ladder_classification") or "")
+    if classification == "NO_FILL":
+        acc.n_no_fill += 1
+    if classification in _FILLED_TERMINAL:
+        acc.n_filled += 1
+
+    ex = _finite(row.get("market_excess_return"))
+    if ex is not None:
+        acc.excess.append(ex)
+    rv = _finite(row.get("realized_r"))
+    if rv is not None:
+        acc.realized_r.append(rv)
+    hd = _finite(row.get("holding_days_elapsed"))
+    if hd is not None:
+        acc.holding_days.append(hd)
+    contrib = _finite(row.get("realized_return_pct_of_book"))
+    if contrib is not None:
+        acc.contributions.append(contrib)
+    risk = _finite(row.get("realized_risk_pct"))
+    if risk is not None:
+        acc.realized_risk_pcts.append(risk)
+        if rv is not None:
+            acc.risk_weighted_r_num += rv * risk
+            acc.risk_weighted_r_den += risk
+    tfc = _finite(row.get("tiers_filled_count"))
+    if tfc is not None:
+        acc.tiers_filled.append(tfc)
+
+
+def _accumulate_open(acc: _Accumulator, row: dict[str, Any]) -> None:
+    """Fold one ongoing row into the descriptive open distribution (§3.3)."""
+    acc.n_open += 1
+    ov = _finite(row.get("open_r"))
+    if ov is not None and ov > 0:
+        acc.open_near_tp += 1
+    elif ov is not None and ov < 0:
+        acc.open_near_sl += 1
+
+
+def _accumulate(rows: Iterable[dict[str, Any]]) -> _Accumulator:
+    acc = _Accumulator()
+    for row in rows:
+        acc.n_brief += 1
+        if not _is_truthy(row.get("plannable")):
+            continue
+        acc.n_plannable += 1
+        if _is_truthy(row.get("terminal")):
+            _accumulate_terminal(acc, row)
+        else:
+            _accumulate_open(acc, row)
+    return acc
+
+
+def _gate_status(*, gated: bool, early: bool) -> str:
+    """Map the N-gate flags to the panel status string."""
+    if gated:
+        return "insufficient"
+    return "early" if early else "ok"
+
+
+def _build_edge(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, Any]:
+    """Edge panel — stable keys; when gated the statistic fields are nulled."""
+    quantiles_null = {"p10": None, "p50": None, "p90": None}
+    return {
+        "status": status,
+        "n_matured": len(acc.excess),
+        "threshold": N_GATE_THRESHOLD,
+        # HEADLINE — benchmark-excess (gross, pre-cost), return units.
+        "market_excess_mean": None if gated else _mean(acc.excess),
+        "market_excess_median": None if gated else _median(acc.excess),
+        "market_excess_quantiles": quantiles_null if gated else _quantiles(acc.excess),
+        # De-emphasised gross / risk-normalised R (NOT the headline).
+        "gross_realized_r_mean": None if gated else _mean(acc.realized_r),
+        "gross_realized_r_median": None if gated else _median(acc.realized_r),
+        "gross_realized_r_n": len(acc.realized_r),
+        "holding_days_n": len(acc.holding_days),
+        "holding_days_p50": None if gated else _percentile(acc.holding_days, 50.0),
+        "holding_days_p95": None if gated else _percentile(acc.holding_days, 95.0),
+        "gross_of_cost": True,
+        "regime_stratified": False,
+    }
+
+
+def _build_portfolio(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, Any]:
+    """Portfolio / size panel — stable keys; statistic fields nulled when gated."""
+    total_contribution = sum(acc.contributions) if acc.contributions else None
+    size_weighted_r = (
+        acc.risk_weighted_r_num / acc.risk_weighted_r_den if acc.risk_weighted_r_den > 0 else None
+    )
+    return {
+        "status": status,
+        "n_matured": len(acc.excess),
+        "threshold": N_GATE_THRESHOLD,
+        "total_realized_contribution_pct_of_book": None if gated else total_contribution,
+        "size_weighted_realized_r": None if gated else size_weighted_r,
+        "mean_realized_risk_pct": None if gated else _mean(acc.realized_risk_pcts),
+        "mean_tiers_filled_count": None if gated else _mean(acc.tiers_filled),
+        "gross_of_cost": True,
+    }
+
+
+def _build_deployment(acc: _Accumulator) -> dict[str, Any]:
+    """Deployment block — ALWAYS returned (N-independent)."""
+    n = acc.n_terminal
+    return {
+        "n_terminal": n,
+        "n_filled": acc.n_filled,
+        "n_no_fill": acc.n_no_fill,
+        "fill_rate": (acc.n_filled / n) if n > 0 else None,
+        "no_fill_rate": (acc.n_no_fill / n) if n > 0 else None,
+        "mean_tiers_filled_count": _mean(acc.tiers_filled),
+    }
+
+
+def _build_open(acc: _Accumulator) -> dict[str, Any]:
+    return {
+        "n_open": acc.n_open,
+        "near_tp": acc.open_near_tp,
+        "near_sl": acc.open_near_sl,
+        "note": "descriptive only — excluded from expectancy (memo §3.3)",
+    }
+
+
 def build_edge_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """Build the N-gated, benchmark-relative edge summary from store rows.
 
     ``rows`` are plain dicts with the LadderOutcome field names. Returns the
     response payload (see ``serializers.EdgeSummarySerializer``).
     """
-    n_brief = 0
-    n_plannable = 0
+    acc = _accumulate(rows)
 
-    # Edge layer (terminal only, equal-weight, size-free).
-    excess: list[float] = []  # market_excess_return (HEADLINE)
-    realized_r: list[float] = []  # gross / risk-normalised (de-emphasised)
-    holding_days: list[float] = []
-
-    # Portfolio / size layer (terminal only).
-    contributions: list[float] = []
-    realized_risk_pcts: list[float] = []
-    risk_weighted_r_num = 0.0
-    risk_weighted_r_den = 0.0
-    tiers_filled: list[float] = []
-
-    # Deployment (N-independent) — over the whole plannable population.
-    n_filled = 0
-    n_no_fill = 0
-    n_terminal = 0
-
-    # Open distribution (descriptive only — never a scalar mean).
-    n_open = 0
-    open_near_tp = 0
-    open_near_sl = 0
-
-    for row in rows:
-        n_brief += 1
-        if not _is_truthy(row.get("plannable")):
-            continue
-        n_plannable += 1
-
-        if _is_truthy(row.get("terminal")):
-            n_terminal += 1
-            classification = str(row.get("ladder_classification") or "")
-            if classification == "NO_FILL":
-                n_no_fill += 1
-            if classification in _FILLED_TERMINAL:
-                n_filled += 1
-
-            ex = _finite(row.get("market_excess_return"))
-            if ex is not None:
-                excess.append(ex)
-            rv = _finite(row.get("realized_r"))
-            if rv is not None:
-                realized_r.append(rv)
-            hd = _finite(row.get("holding_days_elapsed"))
-            if hd is not None:
-                holding_days.append(hd)
-            contrib = _finite(row.get("realized_return_pct_of_book"))
-            if contrib is not None:
-                contributions.append(contrib)
-            risk = _finite(row.get("realized_risk_pct"))
-            if risk is not None:
-                realized_risk_pcts.append(risk)
-                if rv is not None:
-                    risk_weighted_r_num += rv * risk
-                    risk_weighted_r_den += risk
-            tfc = _finite(row.get("tiers_filled_count"))
-            if tfc is not None:
-                tiers_filled.append(tfc)
-        else:
-            # Ongoing — descriptive distribution only (§3.3).
-            n_open += 1
-            ov = _finite(row.get("open_r"))
-            if ov is not None and ov > 0:
-                open_near_tp += 1
-            elif ov is not None and ov < 0:
-                open_near_sl += 1
-
-    # The N-gate is keyed on the matured (terminal) edge count. Use the count of
-    # excess values when available, else the realized_r count, so the gate
-    # reflects how many matured rows actually carry the headline metric.
-    n_matured_excess = len(excess)
-    n_matured_realized = len(realized_r)
-    n_terminal_total = n_terminal
-
-    gated = n_matured_excess < N_GATE_THRESHOLD
-    early = (not gated) and n_matured_excess < N_EARLY_THRESHOLD
-
-    # Stable shape: the panels ALWAYS carry the same keys. When gated, the
-    # statistic fields are ``None`` (the frontend branches on ``status``); the
-    # N-gate hides the numbers by nulling them, never by dropping the keys.
-    status = "insufficient" if gated else ("early" if early else "ok")
-    quantiles_null = {"p10": None, "p50": None, "p90": None}
-    edge: dict[str, Any] = {
-        "status": status,
-        "n_matured": n_matured_excess,
-        "threshold": N_GATE_THRESHOLD,
-        # HEADLINE — benchmark-excess (gross, pre-cost), return units.
-        "market_excess_mean": None if gated else _mean(excess),
-        "market_excess_median": None if gated else _median(excess),
-        "market_excess_quantiles": quantiles_null if gated else _quantiles(excess),
-        # De-emphasised gross / risk-normalised R (NOT the headline).
-        "gross_realized_r_mean": None if gated else _mean(realized_r),
-        "gross_realized_r_median": None if gated else _median(realized_r),
-        "gross_realized_r_n": n_matured_realized,
-        "holding_days_n": len(holding_days),
-        "holding_days_p50": None if gated else _percentile(holding_days, 50.0),
-        "holding_days_p95": None if gated else _percentile(holding_days, 95.0),
-        "gross_of_cost": True,
-        "regime_stratified": False,
-    }
-    portfolio: dict[str, Any] = {
-        "status": status,
-        "n_matured": n_matured_excess,
-        "threshold": N_GATE_THRESHOLD,
-        "total_realized_contribution_pct_of_book": (
-            None if gated else (sum(contributions) if contributions else None)
-        ),
-        "size_weighted_realized_r": (
-            None
-            if gated
-            else (risk_weighted_r_num / risk_weighted_r_den if risk_weighted_r_den > 0 else None)
-        ),
-        "mean_realized_risk_pct": None if gated else _mean(realized_risk_pcts),
-        "mean_tiers_filled_count": None if gated else _mean(tiers_filled),
-        "gross_of_cost": True,
-    }
-
-    # Deployment block — ALWAYS returned (N-independent).
-    deployment = {
-        "n_terminal": n_terminal_total,
-        "n_filled": n_filled,
-        "n_no_fill": n_no_fill,
-        "fill_rate": (n_filled / n_terminal_total) if n_terminal_total > 0 else None,
-        "no_fill_rate": (n_no_fill / n_terminal_total) if n_terminal_total > 0 else None,
-        "mean_tiers_filled_count": _mean(tiers_filled),
-    }
-
-    open_positions = {
-        "n_open": n_open,
-        "near_tp": open_near_tp,
-        "near_sl": open_near_sl,
-        "note": "descriptive only — excluded from expectancy (memo §3.3)",
-    }
+    # The N-gate is keyed on the matured (terminal) edge count — how many matured
+    # rows actually carry the headline market-excess metric.
+    n_matured = len(acc.excess)
+    gated = n_matured < N_GATE_THRESHOLD
+    early = (not gated) and n_matured < N_EARLY_THRESHOLD
+    status = _gate_status(gated=gated, early=early)
 
     return {
-        "n_brief": n_brief,
-        "n_plannable": n_plannable,
-        "n_terminal": n_terminal_total,
-        "n_matured": n_matured_excess,
+        "n_brief": acc.n_brief,
+        "n_plannable": acc.n_plannable,
+        "n_terminal": acc.n_terminal,
+        "n_matured": n_matured,
         "n_gate_threshold": N_GATE_THRESHOLD,
         "benchmark": "SPY",
         "metric_note": (
@@ -233,8 +263,8 @@ def build_edge_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
             "(same window, raw return units); gross / pre-cost; telemetry / "
             "exploratory only — not confirmatory."
         ),
-        "edge": edge,
-        "portfolio": portfolio,
-        "deployment": deployment,
-        "open_positions": open_positions,
+        "edge": _build_edge(acc, gated=gated, status=status),
+        "portfolio": _build_portfolio(acc, gated=gated, status=status),
+        "deployment": _build_deployment(acc),
+        "open_positions": _build_open(acc),
     }

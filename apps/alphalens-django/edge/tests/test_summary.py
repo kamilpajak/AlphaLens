@@ -116,3 +116,150 @@ class TestDeploymentIsNIndependent:
         assert out["deployment"]["n_filled"] == 1
         assert out["deployment"]["n_no_fill"] == 2
         assert abs(out["deployment"]["fill_rate"] - (1 / 3)) < 1e-9
+
+
+def _char_terminal(i: int, excess: float, rr: float, cls: str = "TP_FULL") -> dict:
+    """Richly-varied terminal row used by the full-payload characterization."""
+    return {
+        "plannable": True,
+        "terminal": True,
+        "ladder_classification": cls,
+        "realized_r": rr,
+        "market_excess_return": excess,
+        "forward_return": (excess or 0) + 0.01,
+        "holding_days_elapsed": 8 + (i % 5),
+        "realized_return_pct_of_book": 0.001 * (i + 1),
+        "realized_risk_pct": 0.01 + 0.001 * (i % 3),
+        "tiers_filled_count": float(1 + (i % 3)),
+        "open_r": None,
+    }
+
+
+def _char_ongoing(open_r: float | None) -> dict:
+    return {
+        "plannable": True,
+        "terminal": False,
+        "ladder_classification": "OPEN",
+        "open_r": open_r,
+        "market_excess_return": None,
+        "realized_r": None,
+    }
+
+
+def _char_no_fill() -> dict:
+    return {
+        "plannable": True,
+        "terminal": True,
+        "ladder_classification": "NO_FILL",
+        "realized_r": None,
+        "market_excess_return": None,
+        "open_r": None,
+    }
+
+
+class TestFullPayloadCharacterization:
+    """Golden snapshot of the WHOLE payload over a mixed population (terminal +
+    no-fill + open + non-plannable), pinning every field + numeric value so the
+    aggregation is provably behaviour-preserving across refactors."""
+
+    def _mixed_rows(self) -> list[dict]:
+        rows = [
+            _char_terminal(i, excess=round(-0.02 + 0.002 * i, 4), rr=round(0.1 * ((i % 7) - 3), 4))
+            for i in range(35)
+        ]
+        rows += [_char_no_fill(), _char_no_fill()]
+        rows += [_char_terminal(99, excess=0.05, rr=0.4, cls="TIME_STOP")]
+        rows += [_char_ongoing(0.3), _char_ongoing(-0.2), _char_ongoing(0.0), _char_ongoing(None)]
+        rows += [{"plannable": False, "terminal": True}]
+        return rows
+
+    def test_full_payload_matches_golden(self):
+        out = build_edge_summary(self._mixed_rows())
+        assert out == {
+            "n_brief": 43,
+            "n_plannable": 42,
+            "n_terminal": 38,
+            "n_matured": 36,
+            "n_gate_threshold": 30,
+            "benchmark": "SPY",
+            "metric_note": (
+                "market_excess_return = forward_return − benchmark_window_return "
+                "(same window, raw return units); gross / pre-cost; telemetry / "
+                "exploratory only — not confirmatory."
+            ),
+            "edge": {
+                "status": "early",
+                "n_matured": 36,
+                "threshold": 30,
+                "market_excess_mean": 0.015000000000000001,
+                "market_excess_median": 0.014,
+                "market_excess_quantiles": {"p10": -0.014, "p50": 0.014, "p90": 0.044},
+                "gross_realized_r_mean": 0.011111111111111112,
+                "gross_realized_r_median": 0.0,
+                "gross_realized_r_n": 36,
+                "holding_days_n": 36,
+                "holding_days_p50": 10.0,
+                "holding_days_p95": 12.0,
+                "gross_of_cost": True,
+                "regime_stratified": False,
+            },
+            "portfolio": {
+                "status": "early",
+                "n_matured": 36,
+                "threshold": 30,
+                "total_realized_contribution_pct_of_book": 0.73,
+                "size_weighted_realized_r": 0.009898477157360403,
+                "mean_realized_risk_pct": 0.010944444444444444,
+                "mean_tiers_filled_count": 1.9444444444444444,
+                "gross_of_cost": True,
+            },
+            "deployment": {
+                "n_terminal": 38,
+                "n_filled": 36,
+                "n_no_fill": 2,
+                "fill_rate": 0.9473684210526315,
+                "no_fill_rate": 0.05263157894736842,
+                "mean_tiers_filled_count": 1.9444444444444444,
+            },
+            "open_positions": {
+                "n_open": 4,
+                "near_tp": 1,
+                "near_sl": 1,
+                "note": "descriptive only — excluded from expectancy (memo §3.3)",
+            },
+        }
+
+    def test_gated_payload_nulls_stats_but_keeps_shape(self):
+        # 5 terminal rows (< gate) → edge/portfolio nulled, deployment + open intact.
+        rows = [_char_terminal(i, excess=0.01 * i, rr=0.5) for i in range(5)]
+        rows += [_char_ongoing(0.2), _char_no_fill()]
+        out = build_edge_summary(rows)
+        assert out["edge"] == {
+            "status": "insufficient",
+            "n_matured": 5,
+            "threshold": 30,
+            "market_excess_mean": None,
+            "market_excess_median": None,
+            "market_excess_quantiles": {"p10": None, "p50": None, "p90": None},
+            "gross_realized_r_mean": None,
+            "gross_realized_r_median": None,
+            "gross_realized_r_n": 5,
+            "holding_days_n": 5,
+            "holding_days_p50": None,
+            "holding_days_p95": None,
+            "gross_of_cost": True,
+            "regime_stratified": False,
+        }
+        assert out["portfolio"] == {
+            "status": "insufficient",
+            "n_matured": 5,
+            "threshold": 30,
+            "total_realized_contribution_pct_of_book": None,
+            "size_weighted_realized_r": None,
+            "mean_realized_risk_pct": None,
+            "mean_tiers_filled_count": None,
+            "gross_of_cost": True,
+        }
+        assert out["deployment"]["n_filled"] == 5
+        assert out["deployment"]["n_no_fill"] == 1
+        assert out["open_positions"]["n_open"] == 1
