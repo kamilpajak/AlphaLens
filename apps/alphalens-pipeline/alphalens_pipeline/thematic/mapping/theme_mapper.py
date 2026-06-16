@@ -143,7 +143,7 @@ def _call_llm(llm_client: OpenRouterClient, prompt: str, *, model: str):
 _MAPPER_FREEZE_SCHEMA = "mapper-freeze-v1"
 
 
-def mapper_config_version(*, market_cap_range: tuple[int, int]) -> str:
+def mapper_config_version(*, market_cap_range: tuple[int, int], model: str | None = None) -> str:
     """Canonical JSON token of the config that determines the proposed set.
 
     The thematic ``map-themes`` stage freezes its candidate parquet per
@@ -157,7 +157,7 @@ def mapper_config_version(*, market_cap_range: tuple[int, int]) -> str:
     """
     payload = {
         "schema": _MAPPER_FREEZE_SCHEMA,
-        "model": DEFAULT_MODEL,
+        "model": model or DEFAULT_MODEL,
         "temperature": _MAPPER_TEMPERATURE,
         "max_output_tokens": _MAPPER_MAX_OUTPUT_TOKENS,
         "prompt_sha": hashlib.sha256(_PROMPT_TEMPLATE.encode()).hexdigest()[:12],

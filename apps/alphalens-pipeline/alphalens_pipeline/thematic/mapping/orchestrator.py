@@ -373,13 +373,19 @@ def _propose_and_filter_candidates(
     min_cap: int,
     max_cap: int,
     asof: dt.date,
+    model: str | None = None,
 ) -> tuple[list[dict], dict[str, float], list[str]]:
     """Pro proposal → real-time mcap filter → keyword harvest.
 
     Returns (in-bracket candidate dicts, ticker→mcap map, search keywords).
     Empty candidates list signals "nothing further to do for this theme".
     """
-    proposal = theme_mapper.propose_candidates(theme=theme, api_key=api_key, llm_client=pro_client)
+    proposal = theme_mapper.propose_candidates(
+        theme=theme,
+        api_key=api_key,
+        llm_client=pro_client,
+        model=model or theme_mapper.DEFAULT_MODEL,
+    )
     candidates = proposal.get("candidates") or []
     if not candidates:
         return [], {}, []
@@ -471,6 +477,7 @@ def map_themes(
     keep_unverified: bool = False,
     market_cap_range: tuple[int, int] = DEFAULT_MCAP_RANGE,
     rebuild: bool = False,
+    model: str | None = None,
 ) -> pd.DataFrame:
     """For each theme, propose candidates, post-filter by real-time mcap, then verify.
 
@@ -507,7 +514,9 @@ def map_themes(
     # borderline candidate would otherwise appear in one run and vanish in the
     # next, silently mutating the recommended set the EDGE feedback record is
     # keyed on. Reuse the frozen parquet when its config token still matches.
-    config_version = theme_mapper.mapper_config_version(market_cap_range=market_cap_range)
+    config_version = theme_mapper.mapper_config_version(
+        market_cap_range=market_cap_range, model=model
+    )
     if not rebuild:
         frozen = _load_frozen_candidates(out_path, config_version)
         if frozen is not None:
@@ -547,6 +556,7 @@ def map_themes(
             min_cap=min_cap,
             max_cap=max_cap,
             asof=asof,
+            model=model,
         )
         if not candidates:
             continue

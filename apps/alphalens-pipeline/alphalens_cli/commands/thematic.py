@@ -372,6 +372,7 @@ def map_themes_cmd(
         output_dir=output_dir,
         keep_unverified=keep_unverified,
         rebuild=rebuild,
+        model=model,
     )
     # input = novel themes fed to the mapper; output = verified candidate
     # rows. 0 candidates from N novel themes = a DeepSeek Pro mapping /

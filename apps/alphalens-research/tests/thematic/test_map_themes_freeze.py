@@ -81,6 +81,21 @@ class TestMapperConfigVersion(unittest.TestCase):
     def test_carries_schema_tag(self):
         self.assertIn("mapper-freeze", theme_mapper.mapper_config_version(market_cap_range=MCAP))
 
+    def test_changes_with_model(self):
+        a = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+        b = theme_mapper.mapper_config_version(market_cap_range=MCAP, model="other/model")
+        self.assertNotEqual(a, b)
+
+    def test_default_model_token_matches_explicit_default(self):
+        # Threading model must not gratuitously invalidate existing frozen sets:
+        # the default-model token equals the no-model token byte-for-byte.
+        self.assertEqual(
+            theme_mapper.mapper_config_version(market_cap_range=MCAP),
+            theme_mapper.mapper_config_version(
+                market_cap_range=MCAP, model=theme_mapper.DEFAULT_MODEL
+            ),
+        )
+
 
 class TestMapThemesFreeze(unittest.TestCase):
     def test_reuses_frozen_set_without_proposing_or_building_llm(self):
@@ -119,6 +134,25 @@ class TestMapThemesFreeze(unittest.TestCase):
                     themes=["government_contract"], asof=ASOF, output_dir=out, rebuild=True
                 )
             prop.assert_called_once()
+
+    def test_model_override_threaded_into_proposal(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            with (
+                patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
+                patch.object(
+                    orchestrator, "_propose_and_filter_candidates", return_value=([], {}, [])
+                ) as prop,
+                patch.object(orchestrator, "_init_pro_client"),
+                patch.object(orchestrator, "_fetch_press_window", return_value=None),
+            ):
+                orchestrator.map_themes(
+                    themes=["government_contract"],
+                    asof=ASOF,
+                    output_dir=out,
+                    model="custom/model-x",
+                )
+            self.assertEqual(prop.call_args.kwargs["model"], "custom/model-x")
 
     def test_config_version_mismatch_recomputes(self):
         with tempfile.TemporaryDirectory() as td:
