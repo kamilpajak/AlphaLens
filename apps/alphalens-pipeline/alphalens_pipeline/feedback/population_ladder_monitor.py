@@ -1343,7 +1343,7 @@ def _parse_hit_tp_ids(sequence_str: Any) -> set[str]:
     out: set[str] = set()
     for token in sequence_str.split("->"):
         tok = token.strip()
-        if len(tok) >= 3 and tok[:2] == "TP" and tok[2:].isdigit():
+        if len(tok) >= 3 and tok.startswith("TP") and tok[2:].isdigit():
             out.add(tok)
     return out
 

@@ -65,7 +65,7 @@ function schedule() {
 }
 
 function ensureListeners() {
-	if (listenersAttached || typeof window === 'undefined') return;
+	if (listenersAttached || typeof globalThis.window === 'undefined') return;
 	listenersAttached = true;
 	// scroll uses capture so it catches scrolling on any ancestor (scroll does
 	// not bubble); passive since we never preventDefault.
@@ -87,7 +87,7 @@ export function clampToViewport(node: HTMLElement, options: ClampOptions = {}) {
 	const tooltipSelector = options.tooltipSelector ?? TOOLTIP_SELECTOR;
 
 	// Actions only run client-side, but guard defensively for any reuse.
-	if (typeof window === 'undefined') {
+	if (typeof globalThis.window === 'undefined') {
 		return { destroy() {} };
 	}
 
