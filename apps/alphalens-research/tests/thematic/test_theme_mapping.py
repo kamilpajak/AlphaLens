@@ -1093,7 +1093,7 @@ class TestDiversityGuardrail(unittest.TestCase):
         mcap = {c["ticker"]: 1_000_000_000 for c in (candidates_a + candidates_b)}
 
         # Mapper returns different candidates per theme call.
-        def _propose_side_effect(*, theme, api_key, llm_client):
+        def _propose_side_effect(*, theme, api_key, llm_client, model=None):
             if theme == "theme_a":
                 return _mapper_result(candidates=candidates_a)
             return _mapper_result(candidates=candidates_b)
@@ -1152,7 +1152,7 @@ class TestSkipsThemesWithoutCatalyst(unittest.TestCase):
     def test_theme_without_catalyst_does_not_call_pro_proposal(self):
         propose_calls: list[str] = []
 
-        def _track_propose(*, theme, api_key, llm_client):
+        def _track_propose(*, theme, api_key, llm_client, model=None):
             propose_calls.append(theme)
             return _mapper_result(
                 candidates=[{"ticker": "FOO", "rationale": "x", "confidence": 0.9}],

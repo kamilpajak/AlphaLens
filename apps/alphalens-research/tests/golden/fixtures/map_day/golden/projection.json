@@ -9,6 +9,7 @@
     "gates_unknown",
     "gates_unknown_str",
     "llm_confidence",
+    "mapper_config_version",
     "market_cap",
     "n_gates_failed",
     "n_gates_passed",
