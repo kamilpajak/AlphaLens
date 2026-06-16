@@ -19,7 +19,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from django.db.models import Count, Max, Min, QuerySet
+from django.db.models import Count, F, Max, Min, QuerySet
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import status, viewsets
@@ -78,6 +78,15 @@ TICKER_PATH = OpenApiParameter(
 # fall back to "string" type on custom ``lookup_field`` paths.
 _PATH_SEGMENT_NO_DOT = r"[^/.]+"
 
+# Canonical per-day candidate display order. ``rank_in_day`` is pre-computed by
+# the pipeline using its full sort chain (see thematic ``_BRIEF_SORT_KEYS``) and
+# frozen into the parquet, so it is the single source of truth for both the card
+# "RANK NN" badge and the list position. Ordering on anything else (e.g.
+# ``-layer4_weighted_score, ticker``) re-breaks score ties differently and makes
+# the badge disagree with the position. ``nulls_last`` keeps any legacy/unranked
+# rows at the bottom, where the score/ticker tail decides their order.
+_BRIEF_DISPLAY_ORDER = (F("rank_in_day").asc(nulls_last=True), "-layer4_weighted_score", "ticker")
+
 
 def _date_from_path(pk: str | None, *, what: str) -> dt.date:
     """Parse a path PK as an ISO date or raise 404.
@@ -134,7 +143,7 @@ class DayViewSet(viewsets.ViewSet):
         if meta is None:
             raise NotFound(f"no brief for date={asof.isoformat()}")
 
-        candidates = Brief.objects.filter(date=asof).order_by("-layer4_weighted_score", "ticker")
+        candidates = Brief.objects.filter(date=asof).order_by(*_BRIEF_DISPLAY_ORDER)
         payload = {
             "date": meta.date,
             "n_candidates": meta.n_candidates,
@@ -168,7 +177,7 @@ class DayViewSet(viewsets.ViewSet):
                 qs = qs.filter(layer4_weighted_score__gte=int(min_score))
             except ValueError as exc:
                 raise NotFound(f"invalid min_score: {min_score!r}") from exc
-        qs = qs.order_by("-layer4_weighted_score", "ticker")
+        qs = qs.order_by(*_BRIEF_DISPLAY_ORDER)
 
         paginator = EnvelopePagination()
         page = paginator.paginate_queryset(qs, request, view=self)

@@ -76,6 +76,43 @@ def _two_day_fixture(tmp_path: Path) -> None:
     rebuild_from_parquet(briefs_dir=tmp_path)
 
 
+def _rank_tie_fixture(tmp_path: Path) -> None:
+    """Two candidates with the SAME ``layer4_weighted_score`` but a ``rank_in_day``
+    order that disagrees with alphabetical ticker order.
+
+    Reproduces the badge-vs-position bug: the pipeline breaks the score tie with
+    its full sort chain and stamps ``rank_in_day`` (SAIC = 1); a secondary sort
+    on ``ticker`` breaks the same tie alphabetically (ANET first), so a card
+    labelled "RANK 01" renders at list position 2. The API must honour the
+    pre-computed ``rank_in_day`` so badge and position agree.
+    """
+    _write_parquet(
+        tmp_path,
+        "2026-05-30",
+        [
+            {
+                "ticker": "SAIC",
+                "theme": "defense",
+                "layer4_weighted_score": 10,
+                "rank_in_day": 1,
+                "cohort_size_in_day": 2,
+                "gates_passed": [],
+                "n_gates_passed": 0,
+            },
+            {
+                "ticker": "ANET",
+                "theme": "defense",
+                "layer4_weighted_score": 10,
+                "rank_in_day": 2,
+                "cohort_size_in_day": 2,
+                "gates_passed": [],
+                "n_gates_passed": 0,
+            },
+        ],
+    )
+    rebuild_from_parquet(briefs_dir=tmp_path)
+
+
 @pytest.fixture
 def client() -> APIClient:
     return APIClient()
@@ -107,6 +144,20 @@ class TestDaysEndpoint:
         assert tickers == ["NVDA", "QUBT"]
         # JSONField round-trip
         assert body["candidates"][0]["gates_passed"] == ["pe", "fcff"]
+
+    def test_retrieve_orders_by_rank_in_day_not_ticker(self, client, tmp_path):
+        _rank_tie_fixture(tmp_path)
+        body = client.get("/v1/days/2026-05-30").json()
+        # rank_in_day order (SAIC=1, ANET=2), NOT alphabetical (ANET < SAIC).
+        tickers = [c["ticker"] for c in body["candidates"]]
+        assert tickers == ["SAIC", "ANET"]
+        assert [c["rank_in_day"] for c in body["candidates"]] == [1, 2]
+
+    def test_day_candidates_order_by_rank_in_day(self, client, tmp_path):
+        _rank_tie_fixture(tmp_path)
+        body = client.get("/v1/days/2026-05-30/candidates").json()
+        tickers = [c["ticker"] for c in body["data"]]
+        assert tickers == ["SAIC", "ANET"]
 
     def test_retrieve_missing_date_404(self, client, tmp_path):
         resp = client.get("/v1/days/2099-01-01")
