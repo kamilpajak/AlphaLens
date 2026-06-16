@@ -302,6 +302,43 @@ def _margin_of_safety_pct(*, per_share: float | None, price: float | None) -> fl
         return None
 
 
+def _owner_earnings_yield_pct(
+    owner_earnings_latest: float | None, market_cap: float | None
+) -> float | None:
+    """Owner-earnings yield (%) — only for positive earnings over a positive mcap."""
+    if (
+        owner_earnings_latest is not None
+        and owner_earnings_latest > 0
+        and market_cap is not None
+        and market_cap > 0
+    ):
+        return 100.0 * owner_earnings_latest / market_cap
+    return None
+
+
+def _buyback_pct(latest_capital: CapitalAllocation | None) -> float | None:
+    """Net share-count change (%) for the latest capital-allocation year, if known."""
+    if latest_capital is not None and latest_capital.shares_change_pct is not None:
+        return latest_capital.shares_change_pct * 100.0
+    return None
+
+
+def _resolve_exec_comp(
+    exec_comp_fn: ExecCompFn | None, ticker: str, asof: dt.date
+) -> tuple[float | None, str | None]:
+    """DEF 14A pay-vs-performance ``(ratio, coverage)``; ``(None, None)`` when not wired.
+
+    Optional + injected + NOT in the coverage basket — skipped entirely when no
+    ``exec_comp_fn`` is provided (base lens / tests) or the lookup fails.
+    """
+    if exec_comp_fn is None:
+        return None, None
+    exec_comp = _safe(lambda: exec_comp_fn(ticker, asof), what=f"exec_comp({ticker})")
+    if exec_comp is None:
+        return None, None
+    return exec_comp.peo_to_neo_ratio, str(exec_comp.coverage)
+
+
 def compute_panel(
     ticker: str,
     theme: str,
@@ -350,14 +387,7 @@ def compute_panel(
     latest_statement = annual[0] if annual else None
 
     owner_earnings_latest = _latest_owner_earnings(owner_series)
-    owner_earnings_yield_pct = (
-        100.0 * owner_earnings_latest / market_cap
-        if owner_earnings_latest is not None
-        and owner_earnings_latest > 0
-        and market_cap is not None
-        and market_cap > 0
-        else None
-    )
+    owner_earnings_yield_pct = _owner_earnings_yield_pct(owner_earnings_latest, market_cap)
 
     roic_latest = magic_formula.compute_roic(features) if isinstance(features, dict) else None
     roic_by_year = [_roic_for_year(s) for s in annual]
@@ -375,11 +405,7 @@ def compute_panel(
 
     latest_capital = capital_series[0] if capital_series else None
     net_buyback = latest_capital.net_buyback if latest_capital is not None else None
-    buyback_pct = (
-        latest_capital.shares_change_pct * 100.0
-        if latest_capital is not None and latest_capital.shares_change_pct is not None
-        else None
-    )
+    buyback_pct = _buyback_pct(latest_capital)
 
     dividends = _safe(lambda: dividends_fn(ticker, asof=asof), what=f"dividends({ticker})")
     dividend_yield_pct = (
@@ -398,15 +424,7 @@ def compute_panel(
         _COVERAGE_FIELDS
     )
 
-    # DEF 14A pay-vs-performance (#507) — optional, injected, NOT in the coverage
-    # basket. Skipped entirely when no exec_comp_fn is wired (base lens / tests).
-    exec_comp = (
-        _safe(lambda: exec_comp_fn(ticker, asof), what=f"exec_comp({ticker})")
-        if exec_comp_fn is not None
-        else None
-    )
-    peo_to_neo_ratio = exec_comp.peo_to_neo_ratio if exec_comp is not None else None
-    exec_comp_coverage = str(exec_comp.coverage) if exec_comp is not None else None
+    peo_to_neo_ratio, exec_comp_coverage = _resolve_exec_comp(exec_comp_fn, ticker, asof)
 
     return BuffettPanel(
         ticker=ticker,
