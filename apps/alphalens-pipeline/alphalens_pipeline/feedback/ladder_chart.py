@@ -601,7 +601,7 @@ def _memoized_daily_fetch(daily_fetch: DailyBarFetch) -> DailyBarFetch:
     def cached(ticker: str, start: dt.datetime, end: dt.datetime) -> Sequence[Mapping[str, Any]]:
         key = (ticker, start, end)
         if key not in cache:
-            cache[key] = daily_fetch(ticker, start, end)  # raise propagates, not cached
+            cache[key] = daily_fetch(ticker, start, end)  # a raised error propagates, uncached
         return cache[key]
 
     return cached
