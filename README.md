@@ -44,7 +44,7 @@ Python 3.13 + [uv](https://github.com/astral-sh/uv) · Typer CLI · Django 6 + D
 git clone https://github.com/kamilpajak/AlphaLens.git
 cd AlphaLens
 uv sync                       # both Python apps + dev tools
-pnpm --filter web install     # web dependencies
+pnpm -C apps/web install      # web dependencies
 ```
 
 Set API keys in `.env` at the repo root (see [`.env.example`](.env.example) for the full catalogue):

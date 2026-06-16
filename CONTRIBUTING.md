@@ -13,7 +13,7 @@ The project is released under the [PolyForm Noncommercial License 1.0.0](LICENSE
 By submitting a contribution (a pull request, patch, or any other change), you agree
 that:
 
-1. Your contribution is provided under the project's license, the **PolyForm
+1. Your contribution is licensed under the project's license, the **PolyForm
    Noncommercial License 1.0.0** (inbound = outbound); and
 2. You grant the project's copyright holder, **Kamil Pająk**, a perpetual, worldwide,
    non-exclusive, royalty-free, irrevocable license to use, reproduce, modify,
