@@ -40,7 +40,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -293,6 +293,99 @@ def _is_missing_daily_index(exc: SecForbiddenError) -> bool:
     return _MISSING_KEY_403_MARKER in str(exc)
 
 
+@dataclass
+class _DayOutcome:
+    """Per-date deltas the window loop aggregates."""
+
+    rows_written: int = 0
+    accessions: set[str] = field(default_factory=set)
+    transient_errors: int = 0
+    other_errors: int = 0
+    latest_filing_date: date | None = None
+    wrote: bool = False
+
+
+def _fetch_index_rows_safe(sec: SecEdgarClient, d: date) -> tuple[list[Form4IndexRow] | None, int]:
+    """Fetch one date's daily-index rows, classifying failure.
+
+    Returns ``(rows, transient_delta)``. ``rows`` is ``None`` when the date should
+    be skipped: a missing daily index (market holiday / not-yet-published) is
+    BENIGN (``transient_delta == 0``) — counting it would keep ``transient_errors``
+    > 0 on every window spanning a non-trading day and false-fire the
+    sustained-error alert; a real throttle / network / read failure counts
+    (``transient_delta == 1``). Anything other than the SEC/OS error families
+    propagates (a bare except would mask programmer errors as retried-forever).
+    """
+    try:
+        return _fetch_index_rows_for_date(sec, date=d), 0
+    except SecForbiddenError as exc:
+        if _is_missing_daily_index(exc):
+            logger.info("form4-incremental: no daily index for %s (non-trading/unpublished)", d)
+            return None, 0
+        logger.warning("form4-incremental daily-index 403 for %s: %s", d, exc)
+        return None, 1
+    except (SecEdgarError, OSError) as exc:
+        logger.warning("form4-incremental daily-index fetch failed for %s: %s", d, exc)
+        return None, 1
+
+
+def _apply_universe_filter(
+    rows: list[Form4IndexRow], cik_universe: set[str], d: date
+) -> list[Form4IndexRow]:
+    """Drop non-universe issuers BEFORE any ``.txt`` fetch (they cost zero requests)."""
+    n_before = len(rows)
+    filtered = [r for r in rows if r.cik in cik_universe]
+    if n_before and not filtered:
+        # A populated index day with zero survivors is almost certainly a
+        # CIK-format drift in the universe file (8005 issuers rarely all skip a
+        # day) — surface it now, not after the 5-day dead-man.
+        logger.warning(
+            "form4-incremental: all %d index rows for %s filtered out by the "
+            "universe — possible CIK-format mismatch in the universe file",
+            n_before,
+            d,
+        )
+    return filtered
+
+
+def _process_date(
+    sec: SecEdgarClient,
+    d: date,
+    *,
+    parquet_root: Path,
+    cik_universe: set[str] | None,
+) -> _DayOutcome:
+    """Ingest one date: fetch index → universe-scope → fetch filings → flush.
+
+    Flushes this date's records immediately (memory-bounded per-date; the
+    duplicate part files an overlapping window produces collapse at the caller's
+    ``compact_root``). Degrades gracefully — index / per-filing failures are
+    counted into the returned :class:`_DayOutcome`, never raised.
+    """
+    rows, transient = _fetch_index_rows_safe(sec, d)
+    if rows is None:
+        return _DayOutcome(transient_errors=transient)
+
+    if cik_universe is not None:
+        rows = _apply_universe_filter(rows, cik_universe, d)
+
+    try:
+        records, accessions, day_other = _records_for_date(sec, rows=rows)
+    except SecForbiddenError as exc:
+        logger.warning("form4-incremental per-filing 403 for %s: %s", d, exc)
+        return _DayOutcome(transient_errors=1)
+
+    outcome = _DayOutcome(other_errors=day_other, accessions=set(accessions))
+    if records:
+        write_records_to_parquet(records, parquet_root=parquet_root)
+        outcome.rows_written = len(records)
+        outcome.wrote = True
+    if accessions:
+        # The date being processed IS d; a non-empty accession set proves success.
+        outcome.latest_filing_date = d
+    return outcome
+
+
 def fetch_form4_records_for_window(
     client: SecEdgarClient | None,
     *,
@@ -331,65 +424,14 @@ def fetch_form4_records_for_window(
     for d in _iter_window_dates(start_date, end_date):
         if d.weekday() >= _SATURDAY:
             continue  # weekend — no SEC filings, no daily index to fetch
-        try:
-            rows = _fetch_index_rows_for_date(sec, date=d)
-        except SecForbiddenError as exc:
-            if _is_missing_daily_index(exc):
-                # No daily index for this date (a market holiday, or today before
-                # SEC publishes it). The file does not exist — benign, NOT a
-                # transient SEC failure. Counting it would keep transient_errors
-                # > 0 on every window that spans a non-trading day and false-fire
-                # the sustained-error alert. A real throttle/UA-reject carries a
-                # different body and still counts below.
-                logger.info("form4-incremental: no daily index for %s (non-trading/unpublished)", d)
-                continue
-            transient_errors += 1
-            logger.warning("form4-incremental daily-index 403 for %s: %s", d, exc)
-            continue
-        except (SecEdgarError, OSError) as exc:
-            # Network / HTTP / index-read failure for this date — degrade and let
-            # the overlapping next run re-pull. A bare ``except`` here would mask
-            # programmer errors (AttributeError, KeyError, ...) as transient and
-            # retry them forever, so let anything else propagate and fail loud.
-            transient_errors += 1
-            logger.warning("form4-incremental daily-index fetch failed for %s: %s", d, exc)
-            continue
-
-        if cik_universe is not None:
-            # Universe-scope: drop non-universe issuers BEFORE any .txt fetch so
-            # they cost zero requests (the consumer only reads universe tickers).
-            n_before = len(rows)
-            rows = [r for r in rows if r.cik in cik_universe]
-            if n_before and not rows:
-                # A populated index day with zero survivors is almost certainly a
-                # CIK-format drift in the universe file (8005 issuers rarely all
-                # skip a day) — surface it now, not after the 5-day dead-man.
-                logger.warning(
-                    "form4-incremental: all %d index rows for %s filtered out by the "
-                    "universe — possible CIK-format mismatch in the universe file",
-                    n_before,
-                    d,
-                )
-
-        try:
-            records, accessions, day_other = _records_for_date(sec, rows=rows)
-        except SecForbiddenError as exc:
-            transient_errors += 1
-            logger.warning("form4-incremental per-filing 403 for %s: %s", d, exc)
-            continue
-
-        other_errors += day_other
-        all_accessions.update(accessions)
-        if records:
-            # Flush this date immediately rather than accumulating the whole
-            # window — bounds memory for a long catch-up. The duplicate part
-            # files an overlapping window produces collapse at compact_root.
-            write_records_to_parquet(records, parquet_root=parquet_root)
-            rows_written += len(records)
-            wrote_any = True
-        if accessions:
-            # The date being processed IS d; the guard already proves success.
-            latest_filing_date = d
+        outcome = _process_date(sec, d, parquet_root=parquet_root, cik_universe=cik_universe)
+        rows_written += outcome.rows_written
+        all_accessions.update(outcome.accessions)
+        transient_errors += outcome.transient_errors
+        other_errors += outcome.other_errors
+        wrote_any = wrote_any or outcome.wrote
+        if outcome.latest_filing_date is not None:
+            latest_filing_date = outcome.latest_filing_date
 
     if wrote_any:
         compact_root(parquet_root)
