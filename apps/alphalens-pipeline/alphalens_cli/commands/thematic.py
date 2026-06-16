@@ -328,6 +328,15 @@ def map_themes_cmd(
         "--keep-unverified",
         help="Include candidates that failed all 4 verification gates (audit/debug).",
     ),
+    rebuild: bool = typer.Option(
+        False,
+        "--rebuild",
+        help=(
+            "Force re-proposing candidates even when a frozen parquet for this date "
+            "already exists. By default map-themes is idempotent per (date, config): "
+            "a rerun reuses the frozen set instead of re-rolling the LLM proposal."
+        ),
+    ),
 ) -> None:
     """Roll up novel themes from Phase B → DeepSeek v4-pro maps to candidates → verify."""
     # Default to yesterday so a same-day cron after Phase B extract sees a
@@ -362,6 +371,7 @@ def map_themes_cmd(
         polygon_api_key=polygon_key,
         output_dir=output_dir,
         keep_unverified=keep_unverified,
+        rebuild=rebuild,
     )
     # input = novel themes fed to the mapper; output = verified candidate
     # rows. 0 candidates from N novel themes = a DeepSeek Pro mapping /

@@ -36,6 +36,7 @@ from alphalens_pipeline.data.alt_data.polygon_client import (
     PolygonClient,
     get_default_polygon_client,
 )
+from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.thematic.mapping import catalyst_resolver, theme_mapper
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.verification import (
@@ -323,7 +324,45 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     "source_event_title",
     "source_event_published_at",
     "theme_search_keywords",
+    # Idempotent-freeze fingerprint (mapper model/prompt/schema/sampling/mcap).
+    # A re-run for the same asof reuses this parquet when the token still
+    # matches the current config, instead of re-rolling the LLM proposal.
+    "mapper_config_version",
 )
+
+
+def _load_frozen_candidates(out_path: Path, config_version: str) -> pd.DataFrame | None:
+    """Return a reusable frozen candidates parquet for this date, else ``None``.
+
+    The freeze is honoured only when the existing parquet (1) is readable,
+    (2) carries a ``mapper_config_version`` matching the current config, and
+    (3) is non-degraded — at least one verified candidate. A legacy parquet
+    without the column, a config mismatch, or an empty/all-unverified set is
+    treated as a miss so the caller recomputes (anti-poisoned-freeze: a thin
+    set from a transient first-run failure must not seal the date). Mirrors the
+    buffett-qual successes-only / config-version cache discipline.
+    """
+    if not out_path.exists():
+        return None
+    try:
+        df = pd.read_parquet(out_path)
+    except Exception as exc:  # corrupt / partial file -> recompute
+        logger.warning("map_themes: unreadable frozen parquet %s: %s -> recomputing", out_path, exc)
+        return None
+    if "mapper_config_version" not in df.columns:
+        return None  # pre-freeze parquet
+    versions = set(df["mapper_config_version"].dropna().unique())
+    if versions != {config_version}:
+        logger.info(
+            "map_themes: frozen config_version mismatch (%s != %s) -> recomputing",
+            versions or "{}",
+            config_version,
+        )
+        return None
+    if df.empty or "verified" not in df.columns or not bool(df["verified"].astype(bool).any()):
+        logger.info("map_themes: frozen set degraded (empty / no verified) -> recomputing")
+        return None
+    return df
 
 
 def _propose_and_filter_candidates(
@@ -431,6 +470,7 @@ def map_themes(
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     keep_unverified: bool = False,
     market_cap_range: tuple[int, int] = DEFAULT_MCAP_RANGE,
+    rebuild: bool = False,
 ) -> pd.DataFrame:
     """For each theme, propose candidates, post-filter by real-time mcap, then verify.
 
@@ -461,6 +501,23 @@ def map_themes(
 
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{asof.isoformat()}.parquet"
+
+    # Idempotent freeze: the 6×/day reruns for the same closed-session date must
+    # not re-roll the (server-side non-deterministic) DeepSeek MoE proposal — a
+    # borderline candidate would otherwise appear in one run and vanish in the
+    # next, silently mutating the recommended set the EDGE feedback record is
+    # keyed on. Reuse the frozen parquet when its config token still matches.
+    config_version = theme_mapper.mapper_config_version(market_cap_range=market_cap_range)
+    if not rebuild:
+        frozen = _load_frozen_candidates(out_path, config_version)
+        if frozen is not None:
+            logger.info(
+                "map_themes %s: reusing %d frozen candidate(s) (idempotent freeze; "
+                "pass --rebuild to force recompute)",
+                asof.isoformat(),
+                len(frozen),
+            )
+            return frozen
 
     pro_client = _init_pro_client(api_key)
     press_df = _fetch_press_window(asof, polygon_client)
@@ -523,9 +580,14 @@ def map_themes(
         )
     else:
         df = pd.DataFrame(columns=list(_MAP_THEMES_COLUMNS))
+    # Stamp the freeze fingerprint so a later rerun can decide whether to reuse
+    # this set (config match) or recompute (deliberate config bump). Written
+    # atomically so a crash mid-write can never leave a partial parquet that a
+    # later run would treat as a valid freeze.
+    df["mapper_config_version"] = config_version
     df.attrs["dropped_total"] = dropped_total
     df.attrs["dropped_all_unknown"] = dropped_all_unknown
-    df.to_parquet(out_path, index=False)
+    write_parquet_atomic(df, out_path, index=False)
     if dropped_total > 0:
         logger.info(
             "map_themes %s: kept %d / dropped %d (all-unknown %d)",

@@ -15,6 +15,8 @@ these names unchanged.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 
 from alphalens_pipeline.data.alt_data.openrouter_client import (
@@ -26,6 +28,12 @@ from alphalens_pipeline.thematic.extraction.schema import parse_extraction
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
+
+# Sampling parameters for the single per-theme proposal call. Pinned as module
+# constants (not inline literals) so ``mapper_config_version`` can fingerprint
+# them — a deliberate change to either must invalidate any frozen candidate set.
+_MAPPER_TEMPERATURE = 0.0
+_MAPPER_MAX_OUTPUT_TOKENS = 8000
 
 # Cost: ~10-20 themes/month from rollup × ~$0.02/call (DeepSeek v4-pro
 # post-promo $1.74/M input + $3.48/M output) = ~$0.30/mo. ~6× cheaper than
@@ -123,10 +131,42 @@ def _call_llm(llm_client: OpenRouterClient, prompt: str, *, model: str):
         config=llm_client.build_config(
             response_mime_type="application/json",
             response_schema=_MAPPER_RESPONSE_SCHEMA,
-            temperature=0.0,
-            max_output_tokens=8000,
+            temperature=_MAPPER_TEMPERATURE,
+            max_output_tokens=_MAPPER_MAX_OUTPUT_TOKENS,
         ),
     )
+
+
+# Bump on any code-level change to candidate proposal/normalization that the
+# data-level fingerprint below cannot see (e.g. ``_normalize`` logic). Mirrors
+# the ``_STAMP_SCHEMA`` discipline of ``feedback/ladder_config.py``.
+_MAPPER_FREEZE_SCHEMA = "mapper-freeze-v1"
+
+
+def mapper_config_version(*, market_cap_range: tuple[int, int]) -> str:
+    """Canonical JSON token of the config that determines the proposed set.
+
+    The thematic ``map-themes`` stage freezes its candidate parquet per
+    ``(asof, config_version)``: a re-run for the same date reuses the frozen
+    set instead of re-rolling the (server-side non-deterministic) DeepSeek MoE
+    proposal. A deliberate change to the model, prompt, response schema,
+    sampling, or mcap bracket must invalidate that freeze — so this token
+    fingerprints all of them. Hash the data-level inputs; bump
+    :data:`_MAPPER_FREEZE_SCHEMA` for code-level (normalization) changes.
+    Mirrors :func:`ladder_config_version` / the buffett-qual config-version tier.
+    """
+    payload = {
+        "schema": _MAPPER_FREEZE_SCHEMA,
+        "model": DEFAULT_MODEL,
+        "temperature": _MAPPER_TEMPERATURE,
+        "max_output_tokens": _MAPPER_MAX_OUTPUT_TOKENS,
+        "prompt_sha": hashlib.sha256(_PROMPT_TEMPLATE.encode()).hexdigest()[:12],
+        "schema_sha": hashlib.sha256(
+            json.dumps(_MAPPER_RESPONSE_SCHEMA, sort_keys=True).encode()
+        ).hexdigest()[:12],
+        "mcap_range": [int(market_cap_range[0]), int(market_cap_range[1])],
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
 def build_prompt(theme: str) -> str:
