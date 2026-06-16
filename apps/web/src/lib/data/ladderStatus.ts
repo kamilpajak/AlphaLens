@@ -111,7 +111,7 @@ export const PENDING_STATUS: LadderStatusEntry = {
 
 /** True when the classification is a blank/null not-yet-priced placeholder. */
 export function isPendingStatus(code: string | null | undefined): boolean {
-	return !code || !code.trim();
+	return !code?.trim();
 }
 
 /** Badge label for a raw `ladder_classification`: the value itself, or
