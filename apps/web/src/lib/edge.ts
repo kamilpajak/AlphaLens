@@ -80,7 +80,7 @@ export const EXCESS_RETURN_BAR_DOMAIN = 0.25;
 
 export function excessBarGeometry(
 	value: number | null | undefined,
-	domain = 1.0
+	domain = 1
 ): ExcessBarGeometry {
 	if (value === null || value === undefined || !Number.isFinite(value) || domain <= 0) {
 		return { left: 50, width: 0, positive: false };
