@@ -19,16 +19,14 @@ from pathlib import Path
 
 import pandas as pd
 from alphalens_pipeline.data import rs_history
-from alphalens_pipeline.paper import brief_loader
 from alphalens_pipeline.paper.calendar import (
     DEFAULT_EXCHANGE,
     advance_trading_sessions,
     session_on_or_after,
 )
 from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
-from alphalens_research.diagnostics import nofill
+from alphalens_research.diagnostics import edge_stores, nofill
 
-_HOME = Path.home() / ".alphalens"
 _TAIL_SESSIONS = 10  # post-TTL window for TOUCHED_AFTER_TTL detection
 
 
@@ -51,53 +49,24 @@ def _tiers_and_stop(setup: dict | None) -> tuple[list[float], float | None]:
     return tiers, stop_f
 
 
-def _load_store(store_dir: Path) -> pd.DataFrame:
-    frames = []
-    for path in sorted(store_dir.glob("*.parquet")):
-        try:
-            d = dt.date.fromisoformat(path.stem)
-        except ValueError:
-            continue
-        df = pd.read_parquet(path)
-        df["brief_date"] = d
-        frames.append(df)
-    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-
-def _setup_index(briefs_dir: Path) -> dict[tuple[dt.date, str], dict]:
-    out: dict[tuple[dt.date, str], dict] = {}
-    briefs = _load_store(briefs_dir)
-    if briefs.empty:
-        return out
-    for _, row in briefs.iterrows():
-        ticker = str(row.get("ticker", "")).upper()
-        if not ticker:
-            continue
-        raw = row.get("brief_trade_setup")
-        setup = brief_loader._coerce_trade_setup(raw)
-        if setup is not None:
-            out[(row["brief_date"], ticker)] = setup
-    return out
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ladders-dir", type=Path, default=_HOME / "population_ladders")
-    ap.add_argument("--briefs-dir", type=Path, default=_HOME / "thematic_briefs")
+    ap.add_argument("--ladders-dir", type=Path, default=edge_stores.HOME / "population_ladders")
+    ap.add_argument("--briefs-dir", type=Path, default=edge_stores.HOME / "thematic_briefs")
     ap.add_argument("--grouped-root", type=Path, default=rs_history.DEFAULT_RS_HISTORY_ROOT)
     ap.add_argument("--exchange", default=DEFAULT_EXCHANGE)
     ap.add_argument("--ttl", type=int, default=DEFAULT_ORDER_TTL_DAYS)
-    ap.add_argument("--out", type=Path, default=_HOME / "diagnostics" / "nofill.parquet")
+    ap.add_argument("--out", type=Path, default=edge_stores.HOME / "diagnostics" / "nofill.parquet")
     args = ap.parse_args()
 
-    outcomes = _load_store(args.ladders_dir)
+    outcomes = edge_stores.load_store(args.ladders_dir)
     if outcomes.empty:
         print("no population-ladder outcomes found at", args.ladders_dir)
         return
     if "ladder_classification" not in outcomes.columns or "plannable" not in outcomes.columns:
         print("error: population_ladders store missing ladder_classification/plannable column")
         return
-    setups = _setup_index(args.briefs_dir)
+    setups = edge_stores.setup_index(args.briefs_dir)
 
     # /edge counts PLANNABLE rows only (verified candidate + valid trade setup); the
     # raw store also carries non-plannable rows. Report the NO_FILL rate over plannable,
@@ -124,12 +93,7 @@ def main() -> None:
         (outcomes["ladder_classification"] == "NO_FILL") & outcomes["plannable"]
     ].copy()
 
-    grouped_cache: dict[dt.date, dict | None] = {}
-
-    def grouped(session: dt.date) -> dict | None:
-        if session not in grouped_cache:
-            grouped_cache[session] = rs_history.read_grouped_day(args.grouped_root, session)
-        return grouped_cache[session]
+    grouped = edge_stores.GroupedDailyCache(args.grouped_root)
 
     records: list[dict] = []
     for _, row in nofill_rows.iterrows():
@@ -150,7 +114,7 @@ def main() -> None:
             for j in range(_TAIL_SESSIONS)
         ]
         grouped_by_session: dict[dt.date, dict | None] = {
-            s: grouped(s) for s in (*window_sessions, *tail_sessions)
+            s: grouped.get(s) for s in (*window_sessions, *tail_sessions)
         }
 
         r = nofill.analyze_outcome_row(
