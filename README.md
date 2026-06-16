@@ -5,246 +5,90 @@
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=kamilpajak_AlphaLens&metric=coverage)](https://sonarcloud.io/summary/new_code?id=kamilpajak_AlphaLens)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-blue.svg)](https://polyformproject.org/licenses/noncommercial/1.0.0/)
 
-Research lab infrastructure for retail active alpha experimentation — real-time SEC EDGAR event detection, quantitative screening, a vectorised backtest engine for paradigm validation, and a daily-brief web app served from Django + Postgres.
+AlphaLens is a personal research-lab and decision-support monorepo for retail active-equity research. It combines real-time SEC EDGAR event detection, a daily thematic event-driven brief (news → ranked candidate cards surfaced in a web dashboard), and a rigorous quant backtest/attribution engine for factor-paradigm validation. It is decision **support**, not automated trading — capital deployment is off-table and there is no standing strategy PASS.
 
-## What's here
+## What's inside
 
-The repo is a small monorepo with three Python workspace members + a frontend + shared infra:
+- **Live EDGAR detector** — Layer 1 SEC EDGAR poller that classifies new filings and queues candidates, firing every 15 minutes in production.
+- **Daily thematic brief pipeline + web dashboard** — ingest news → LLM theme extraction → beneficiary mapping → scorer screen → daily brief of ranked candidate cards. Each card carries an **expert panel** (Buffett value/quality + O'Neil momentum lenses, with a disagreement spread; display-only).
+- **EDGE market-behavior feedback** — the `/edge` dashboard plus a broker-free **ladder monitor** that replays trade-setup ladders over price paths to measure market behavior (the sole go-forward feedback metric; N≥30 gated).
+- **Backtest / attribution research lab** — a screener-agnostic replay engine and a 5-layer attribution stack producing risk-adjusted metrics and a GO/KILL verdict for factor-paradigm audits.
+- **Literature scanner** — periodic Perplexity literature review (monthly deep scan + weekly RSS), auto-committed to `main`.
 
-- **`apps/alphalens-pipeline/`** — live production tier: `alphalens_pipeline` (edgar_detector, thematic build, literature_scanner, data clients, scorer library) + the `alphalens` Typer CLI binary. Split rationale: [ADR 0011](docs/adr/0011-split-pipeline-and-research.md).
-- **`apps/alphalens-research/`** — research lab: `alphalens_research` (screeners, backtest engine, attribution, overlays, gates, preaudit, diagnostics, retrospective audit). Lab imports from pipeline (`data`, `core`, `scorers`); the reverse is forbidden at top level (enforced by `tests/test_module_dependencies.py`).
-- **`apps/alphalens-django/`** — read/write briefs API (Django 6 + DRF + Postgres + Cloudflare Access). Migration history in [ADR 0009](docs/adr/0009-django-replaces-fastapi.md).
-- **`apps/web/`** — SvelteKit + Tailwind dashboard that consumes the Django API.
-- **`deploy/`** — all deploy targets: `docker/` (pipeline + django-prod), `systemd/` (Linux VPS units — edgar-detect, literature scans, thematic build, paper, backfills), `runpod/` (GPU/CPU pod bootstrap).
-- **`docs/adr/`** — 11 ADRs covering the load-bearing decisions.
+## Architecture
 
-Architectural detail and quick contributor guide: [`CLAUDE.md`](CLAUDE.md). Per-layer postmortems: [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md).
-
-## Status (2026-05-22)
-
-Two parallel research tracks active:
-
-1. **Factor paradigm search** — paradigm #14 PEAD v2 audit running on VPS (gated on AV free-tier 21-day backfill). 14 paradigm-class failures + 2 inconclusive retrospectives in the postmortem ledger. Capital deployment off the table per pre-reg `capital_deploy_clause`.
-2. **Thematic event-driven assistant** — MVP Phase A-E shipped 2026-05-17. Buy-side decision support for a private WhatsApp investing group; tool is augmentation, not replacement.
-
-The first phase-robust positive observation landed 2026-05-09 — PASS_MARGINAL on Cohen-Malloy opportunistic Form-4 — replicated across two independent OOS windows. PASS_MARGINAL is not a full PASS; it unlocks eligibility for advanced overlay testing, not capital deployment.
-
-Live in production:
-- Layer 1 SEC EDGAR detector (VPS systemd `edgar-detect` every 15 min)
-- Literature review (Perplexity, monthly + weekly)
-- VPS daily thematic pipeline → Django brief API → SvelteKit dashboard
-
-Everything else is RESEARCH_ONLY (active research scorers) or live infrastructure (data clients, backtest engine, attribution).
-
-## Layer status
-
-Each layer / screener package declares `__status__ ∈ {ACTIVE, CLOSED, RESEARCH_ONLY, ARCHIVED}` in its `__init__.py`; enforced by `apps/alphalens-research/tests/test_layer_status.py`.
-
-### Live production (`apps/alphalens-pipeline/alphalens_pipeline/`)
-
-| Path | Status | Notes |
-|------|--------|-------|
-| `alphalens_pipeline/core/` | ACTIVE (namespace) | Plumbing — candidates, queue |
-| `alphalens_pipeline/edgar_detector/` | ACTIVE | Layer 1 — `detect` live on VPS (systemd) |
-| `alphalens_pipeline/literature_scanner/` | ACTIVE | Monthly + weekly Perplexity scan, live on VPS (systemd) |
-| `alphalens_pipeline/thematic/` | ACTIVE | Daily thematic pipeline (news → brief), live on VPS |
-| `alphalens_pipeline/data/` | ACTIVE (namespace) | PIT SoT + vendor clients + S&P 400/500/600 PIT yamls |
-| `alphalens_pipeline/scorers/` | ACTIVE | Reusable validated-scorer library |
-
-### Research lab (`apps/alphalens-research/alphalens_research/`)
-
-| Path | Status | Notes |
-|------|--------|-------|
-| `alphalens_research/backtest/` | ACTIVE | Layer 3 engine — screener-agnostic |
-| `alphalens_research/attribution/` | ACTIVE | Layer 5 — cost / factor / regime / verdict |
-| `alphalens_research/preaudit/` | ACTIVE | Per-strategy SmokeProfile + coverage gate |
-| `alphalens_research/diagnostics/` | ACTIVE | Survivorship + cyclicality screens |
-| `alphalens_research/retrospective_audit/` | RESEARCH_ONLY | Universe loaders + SMD backfill for offline retrospective audits |
-| `alphalens_research/gates/` | RESEARCH_ONLY | Layer 2 selection-gate wrapper |
-| `alphalens_research/overlays/` | RESEARCH_ONLY | Layer 4 sizing overlays |
-| `alphalens_research/screeners/*` | RESEARCH_ONLY | Active research scorers; per-strategy memos in `docs/research/` |
-
-Closed paradigms used to live under `alphalens_research/archive/`; reusable scorers were promoted to `alphalens_pipeline/scorers/` and the rest was removed per [ADR 0010](docs/adr/0010-archive-extracted-and-removed.md).
-
-External methodology dep: [`kamilpajak/phase-robust-backtesting`](https://github.com/kamilpajak/phase-robust-backtesting) (MIT) — see [ADR 0006](docs/adr/0006-phase-robust-backtesting-extraction.md).
-
-## Concepts
-
-### Basic terms
-
-- **Ticker** — exchange symbol identifying a stock; the unit of selection in every screener.
-- **Asof** — a point-in-time anchor at which features are computed using only data observable on that date.
-- **Rebalance** — recomputing scores at an asof and updating holdings. Default stride 5 trading days, 20-day holding (75% overlap, 4-tranche).
-- **Holdout** — the date range withheld from model fitting and used only for verdict.
-
-### Statistics & multiple-testing
-
-- **αt** — t-stat of the Carhart-4F regression intercept; primary success metric. Bonferroni-adjusted threshold typically `|αt| ≥ 2.86` at n=27 tests.
-- **Bonferroni correction** — multiple-testing adjustment that raises critical t when N hypotheses share a data window. Program-level Bonferroni budget tracked in `docs/research/preregistration/ledger.json`.
-- **Multi-phase audit** — same scorer at strided phase offsets (typically 5 phases, stride=21 days) on the same OOS window. PASS requires every phase to clear floor AND mean αt to clear Bonferroni.
-- **Phase-robust** — every phase αt ≥ 1.5 AND mean αt ≥ critical AND dispersion ≤ gate.
-- **HAC / Newey-West** — heteroskedasticity-and-autocorrelation-consistent SE. `hac_maxlags` is locked to match signal serial-correlation horizon.
-- **Romano-Wolf bootstrap** — block bootstrap producing simultaneous confidence bounds across phases.
-- **Dispersion gate** — caps allowed range of αt across phases. `mean ≥ 2.86` with `range > 50pp` flips PASS → INCONCLUSIVE.
-- **HARKing** — Hypothesising After Results Known. Mitigated by pre-registration with frozen params and SHA256 hash before any holdout look.
-- **Burnt holdout** — same OOS window observed across multiple experiments. Each new fit adds to program-level multiplicity even if model class differs.
-
-### Factor attribution
-
-- **Carhart-4F** — 4-factor regression: Mkt-RF, SMB, HML, UMD. Default in `apps/alphalens-research/alphalens_research/attribution/factor_analysis.py`.
-- **Fama-French factors** — **Mkt-RF**, **SMB** (size), **HML** (value); **UMD** (momentum) is the Carhart extension.
-- **Residualisation** — projecting the raw signal on a panel of equity controls (`reversal_1m`, `momentum_6m`, `rv_30d`) and using the OLS residual as the score.
-- **Sharpe-as-primary** — for overlay-bearing strategies (Layer 4) primary metric is Sharpe improvement, not αt — overlays modulate beta which biases αt downward.
-
-### Data discipline
-
-- **PIT (point-in-time)** — at every asof, features use only data observable on that date. Enforced by `apps/alphalens-research/tests/test_pit_universe_loader.py` + `alphalens_pipeline/data/store/`.
-- **Survivorship bias** — Russell PIT yamls (`alphalens_pipeline/data/universes/r{1000,2000,3000}_pit/YYYY-MM.yaml`) keyed to membership-as-of date.
-- **Fire-sale exclusion** — drop returns 180 days before delisting date (per `survivorship_pit.DelistingEvent`). Without this, distress signals get +100-300bps inflation.
-- **First-filed semantics** — for fundamentals, use the value as first reported, not later restated.
-
-### Architecture (5 layers per ADR 0007)
-
-1. **Watchdog** (`alphalens_pipeline/edgar_detector/`) — SEC EDGAR event detection + classifier + dispatch.
-2. **Screener** (`alphalens_research/screeners/*`) — cross-sectional rank @ asof → top-N tickers.
-3. **Backtest engine** (`alphalens_research/backtest/engine.py`) — strided rebalance → `BacktestReport`.
-4. **Risk overlay** (`alphalens_research/overlays/`) — time-series sizing on portfolio realised vol.
-5. **Attribution** (`alphalens_research/attribution/`) — cost-drag + Carhart-4F + Sharpe + Bonferroni → ledger verdict.
-
-Pre-registration ledger (`docs/research/preregistration/ledger.json`) records every hypothesis with frozen params and SHA256 hash before holdout look.
-
-### Domain — SEC filings
-
-- **Form 4 / 4-A** — SEC filing reporting an insider's transaction; "/A" is an amendment.
-- **Accession number** — unique SEC identifier per filing; primary key in the parquet store.
-- **Cohen-Malloy classifier** — splits insider trades into **routine** vs **opportunistic** per JFE 2012. Opportunistic-insider net buys generate +82bps/m abnormal returns in small/mid-caps.
-
-### Verdicts & operational gates
-
-- **Verdict tiers** — **PASS** (phase-robust, every phase clears floor + mean clears Bonferroni), **PASS_MARGINAL** (mean clears critical but dispersion or weakest phase below floor), **INCONCLUSIVE** (mean ∈ [floor, critical)), **FAIL** (mean < floor or every phase < 0).
-- **Phase A auto-pivot** — pre-flight checks on TRAIN before burning OOS compute. Failing breadth / density / direction abandons the experiment with a one-shot Bonferroni cost.
-- **7-gate kill verdict** — every CLOSED layer ships `__closed_evidence__` mapping 7 gates → evidence paths. Schema: `docs/research/kill_verdict_checklist.md`; enforced by `tests/test_layer_status.py`.
-
-## Quickstart
-
-### Prerequisites
-
-- Linux VPS for systemd scheduling (CLI itself runs anywhere, incl. macOS)
-- Python 3.13 via [`uv`](https://github.com/astral-sh/uv)
-- API keys: Google AI (Gemini), Alpha Vantage, Telegram bot; optional Polygon
-
-### Setup
-
-```bash
-git clone git@github.com:kamilpajak/AlphaLens.git
-cd AlphaLens
-uv venv --python 3.13
-uv sync
-```
-
-`.env` at repo root:
-
-```
-GOOGLE_API_KEY=...
-ALPHA_VANTAGE_API_KEY=...
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_CHAT_ID=...
-POLYGON_API_KEY=...
-```
-
-Layer 1 routing config at `~/.alphalens/edgar-detect/portfolio.yaml`:
-
-```yaml
-held:    [AAPL, MSFT]
-watchlist: [NVDA, GOOGL]
-```
-
-### Running things
-
-```bash
-# Live workflows
-.venv/bin/alphalens edgar detect                 # Layer 1: poll EDGAR, classify, dispatch
-.venv/bin/alphalens status                     # global queue + digest + dedup
-.venv/bin/alphalens literature monthly         # ad-hoc Perplexity deep scan (~1h)
-.venv/bin/alphalens literature weekly          # ad-hoc weekly RSS scan (~15min)
-
-# Pre-registration ledger
-.venv/bin/alphalens preregister add ...
-.venv/bin/alphalens preregister threshold
-.venv/bin/alphalens preregister complete <id> --verdict ...
-
-# Multi-phase audit (canonical research gate)
-.venv/bin/alphalens audit insider_form4_opportunistic \
-    --is-start 2018-01-01 --is-end 2023-12-31 --rebalance-stride 21
-
-# Tests (unittest, not pytest)
-.venv/bin/python -m unittest discover apps/alphalens-research/tests -t apps/alphalens-research -v
-
-# Inspect the queue directly
-sqlite3 ~/.alphalens/candidates.db \
-  "SELECT id, ticker, source, priority, status, decision FROM candidates ORDER BY id DESC LIMIT 20;"
-```
-
-### Scheduled jobs (systemd, VPS)
-
-Production scheduling runs as systemd-user units on the Linux VPS, not on the Mac.
-
-| Unit | When | Purpose |
-|---|---|---|
-| `alphalens-edgar-detect` | every 15 min | Layer 1 EDGAR poll → submit Candidates |
-| `alphalens-literature-scan-monthly` | 1st of month, 09:00 | Perplexity deep literature scan |
-| `alphalens-literature-scan-weekly` | Sunday, 18:00 | Perplexity RSS scan |
-
-Unit sources and the install / cutover recipe live in [`deploy/systemd/`](deploy/systemd/README.md).
-
-## Layout
+A uv workspace split into live infrastructure and a research lab:
 
 ```
 apps/
-├── alphalens-pipeline/          ← live production tier (Python)
-│   ├── alphalens_pipeline/      ← edgar_detector, thematic, literature_scanner, data, core, scorers
-│   ├── alphalens_cli/           ← Typer CLI entry points (alphalens binary)
-│   └── data/                    ← S&P 400/500/600 PIT yamls
-├── alphalens-research/          ← research lab (Python)
-│   ├── alphalens_research/      ← screeners, backtest, attribution, overlays, gates, preaudit, diagnostics, retrospective_audit
-│   ├── tests/                   ← unittest suite (~2000+ tests; architectural enforcers — pipeline + research together)
-│   └── scripts/                 ← experiment runners + backfill orchestrators
-├── alphalens-django/            ← briefs API (Django 6 + DRF + Postgres)
-│   ├── briefs/                  ← models + ingest + /v1/* viewsets
-│   ├── auth_cf/                 ← Cloudflare Access JWT
-│   └── config/                  ← settings split (base/dev/prod)
-└── web/                         ← SvelteKit + Tailwind dashboard
-
-deploy/
-├── docker/
-│   ├── Dockerfile.pipeline      ← pipeline image (thematic daily)
-│   └── django-prod/             ← Django + nginx + Postgres compose
-├── systemd/                     ← VPS user units (edgar-detect, literature scans, thematic build, paper, backfills)
-└── runpod/                      ← GPU/CPU pod bootstrap + experiment runner
-
-docs/
-├── adr/                         ← 11 Architecture Decision Records
-├── research/                    ← paradigm postmortems, design memos, ledger
-└── backtest/                    ← historical run outputs
+  alphalens-pipeline/   # live services + data clients + validated scorers; the `alphalens` CLI
+  alphalens-research/   # backtest engine, attribution, screeners, overlays (research lab)
+  alphalens-django/     # Django 6 + DRF API serving briefs, edge, market-status (/v1/*)
+  web/                  # SvelteKit SPA dashboard (briefs, /edge, /experiments)
+deploy/                 # Dockerfiles, compose stacks, systemd-user units, monitoring
+docs/                   # ADRs + research memos + backtest archive
 ```
 
-## Development
+The pipeline/research split is one-way: `alphalens_research.*` may import live infrastructure (`data`, `core`, `scorers`), but `alphalens_pipeline.*` must not import from the research lab at top level. This is machine-enforced — see [ADR 0011](docs/adr/0011-split-pipeline-and-research.md) for the workspace split and [ADR 0007](docs/adr/0007-layer-architecture.md) for the layer architecture.
 
-- **Package manager**: `uv` (not pip / poetry)
-- **Testing**: unittest (not pytest) — `python -m unittest discover apps/alphalens-research/tests -t apps/alphalens-research`
-- **Commits**: Conventional Commits (`feat(scope):`, `fix(scope):`, `refactor(scope):`, …)
-- **Code language**: English in source; enforced by `tests/test_no_polish_chars.py`
-- **New components** — pick the side per the [ADR 0011](docs/adr/0011-split-pipeline-and-research.md) DAG: infra / live services / data clients / scorer libraries → `apps/alphalens-pipeline/alphalens_pipeline/<name>/`; lab / backtest / attribution / overlays / preaudit / experiments → `apps/alphalens-research/alphalens_research/<name>/`; CLI commands → `apps/alphalens-pipeline/alphalens_cli/`; Django app → `apps/alphalens-django/`.
+## Tech stack
 
-Four enforcement tests guard architectural invariants (all in `apps/alphalens-research/tests/`):
+Python 3.13 + [uv](https://github.com/astral-sh/uv) · Typer CLI · Django 6 + DRF + Postgres · SvelteKit + Tailwind CSS · Cloudflare Pages + Access · Docker + systemd on a Linux VPS.
 
-- `test_layer_status.py` — every layer declares `__status__` + 7-gate `__closed_evidence__` for CLOSED/ARCHIVED.
-- `test_module_dependencies.py` — intra-research: `alphalens_research.backtest.*` ⇏ `alphalens_research.screeners.*` and `alphalens_research.backtest.*` ⇏ `alphalens_research.attribution.*`. Workspace DAG: `alphalens_pipeline.*` ⇏ `alphalens_research.*` at top level (lazy CLI imports are the documented exception).
-- `test_no_polish_chars.py` — English-only in source.
-- `test_preaudit_cli_default_in_sync.py` — pins the duplicated `DEFAULT_SMOKE_TIMEOUT_S` constant between the CLI-side typer.Option default and the research-side runner.
+## Quickstart
+
+```bash
+# Clone and install the workspace (single venv at ./.venv)
+git clone https://github.com/kamilpajak/AlphaLens.git
+cd AlphaLens
+uv sync                       # both Python apps + dev tools
+pnpm -C apps/web install      # web dependencies
+```
+
+Set API keys in `.env` at the repo root (see [`.env.example`](.env.example) for the full catalogue):
+
+```
+OPENROUTER_API_KEY=...        # DeepSeek v4 Pro/Flash — all LLM calls
+ALPHA_VANTAGE_API_KEY=...
+POLYGON_API_KEY=...
+PERPLEXITY_API_KEY=...
+FRED_API_KEY=...
+TELEGRAM_BOT_TOKEN=...        # + TELEGRAM_CHAT_ID for alerts
+SEC_EDGAR_USER_AGENT=...      # SEC contact string (built-in default locally)
+```
+
+Example commands (the CLI binary is `alphalens`, via `.venv/bin/alphalens` or `uv run alphalens`):
+
+```bash
+alphalens status                              # global queue + digest + dedup
+alphalens edgar detect                        # Layer 1: poll EDGAR, classify, queue
+alphalens thematic score                      # run a thematic pipeline stage
+alphalens literature scan --window weekly     # ad-hoc literature scan
+```
+
+Run the research-lab test suite (unittest, not pytest):
+
+```bash
+uv run python -m unittest discover \
+    -s apps/alphalens-research/tests \
+    -t apps/alphalens-research -v
+```
+
+Or use the orchestrator: `just test` (Python + Django + web), `just lint`, `just dev-django`, `just dev-web`.
+
+## Production
+
+The SvelteKit SPA is hosted on **Cloudflare Pages**; the Django API runs on a Linux VPS as a Docker Compose stack (image published to GHCR), reached through a **Cloudflare Tunnel** and gated by **Cloudflare Access** (Zero Trust, Google SSO). Scheduled jobs — EDGAR detection, the thematic build, feedback backfills, Form-4 ingest, literature scans — run as **systemd-user units** on the VPS. See [`deploy/systemd/README.md`](deploy/systemd/README.md) and [`deploy/docker/README.md`](deploy/docker/README.md) for the operator runbooks.
+
+## Docs
+
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute, DCO sign-off, contribution licensing
+- [`CLAUDE.md`](CLAUDE.md) — architecture and contributor guide (layer statuses, conventions, doctrine)
+- [`docs/adr/`](docs/adr/) — architectural decision records
+- [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md) — catalogue of closed factor paradigms with kill rationale
 
 ## License
 
-MIT.
+[PolyForm Noncommercial License 1.0.0](LICENSE) — the source is open to read, study, fork, and use for any **noncommercial** purpose. Commercial use (using the software for commercial advantage or monetary compensation) is not permitted. This is a source-available license, not an OSI "open source" license.
