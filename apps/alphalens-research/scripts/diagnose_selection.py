@@ -120,7 +120,7 @@ def main() -> None:
         e1 = _e1(setups.get((brief_date, ticker)))
         duration: int | None = None
         event = 0
-        if e1 is not None:
+        if e1 is not None and e1 > 0.0:
             incomplete = False
             for i in range(args.ttl):
                 s = advance_trading_sessions(arrival, i, args.exchange)
