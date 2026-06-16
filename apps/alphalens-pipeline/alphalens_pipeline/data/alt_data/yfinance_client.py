@@ -80,6 +80,41 @@ def _is_transient(exc: Exception) -> bool:
     return any(marker in msg for marker in _TRANSIENT_MARKERS)
 
 
+def _pit_shares_from_full(tk: Any, asof: dt.date, upper: str, stale_warn_days: int) -> float | None:
+    """Latest ``get_shares_full`` shares value on or before ``asof``; ``None`` if none.
+
+    Returns ``None`` (so the caller falls back to the snapshot) when the series is
+    empty or holds no point on or before ``asof``. Warns — but still returns the
+    value — when the nearest point predates ``asof`` by more than
+    ``stale_warn_days``, so a forward-biased PIT result is visible.
+    """
+    asof_ts = pd.Timestamp(asof)
+    series = tk.get_shares_full(
+        start=(asof_ts - pd.Timedelta(days=400)).date().isoformat(),
+        end=(asof_ts + pd.Timedelta(days=1)).date().isoformat(),
+    )
+    if series is None or len(series) == 0:
+        return None
+    # tz_localize(None) on an already-naive index raises; build a UTC-aware index
+    # first so this is idempotent across yfinance versions (today the index is
+    # UTC-aware; a future naive index would otherwise silently kill the PIT path).
+    series.index = pd.to_datetime(series.index, utc=True).tz_localize(None)
+    pit = series[series.index <= asof_ts]
+    if pit.empty:
+        return None
+    match_ts = pit.index[-1]
+    if (asof_ts - match_ts).days > stale_warn_days:
+        logger.warning(
+            "PIT shares for %s@%s are stale: nearest get_shares_full "
+            "point is %s (%d days before asof)",
+            upper,
+            asof.isoformat(),
+            match_ts.date().isoformat(),
+            (asof_ts - match_ts).days,
+        )
+    return float(pit.iloc[-1])
+
+
 class YFinanceClient:
     """Canonical client for Yahoo data via yfinance.
 
@@ -283,30 +318,9 @@ class YFinanceClient:
 
             tk = yf.Ticker(upper)
             if asof is not None:
-                asof_ts = pd.Timestamp(asof)
-                series = tk.get_shares_full(
-                    start=(asof_ts - pd.Timedelta(days=400)).date().isoformat(),
-                    end=(asof_ts + pd.Timedelta(days=1)).date().isoformat(),
-                )
-                if series is not None and len(series) > 0:
-                    # tz_localize(None) on an already-naive index raises; build a
-                    # UTC-aware index first so this is idempotent across yfinance
-                    # versions (today the index is UTC-aware; a future naive index
-                    # would otherwise silently kill the whole PIT shares path).
-                    series.index = pd.to_datetime(series.index, utc=True).tz_localize(None)
-                    pit = series[series.index <= asof_ts]
-                    if not pit.empty:
-                        match_ts = pit.index[-1]
-                        if (asof_ts - match_ts).days > self._SHARES_STALE_WARN_DAYS:
-                            logger.warning(
-                                "PIT shares for %s@%s are stale: nearest get_shares_full "
-                                "point is %s (%d days before asof)",
-                                upper,
-                                asof.isoformat(),
-                                match_ts.date().isoformat(),
-                                (asof_ts - match_ts).days,
-                            )
-                        return float(pit.iloc[-1])
+                pit_shares = _pit_shares_from_full(tk, asof, upper, self._SHARES_STALE_WARN_DAYS)
+                if pit_shares is not None:
+                    return pit_shares
                 logger.warning(
                     "PIT shares for %s@%s: no get_shares_full point on or before asof; "
                     "falling back to today's fast_info.shares snapshot (forward-biased)",
