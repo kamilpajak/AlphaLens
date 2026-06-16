@@ -1,0 +1,86 @@
+name: DCO
+
+# Enforce the Developer Certificate of Origin: every non-merge commit in a PR
+# must carry a `Signed-off-by` trailer matching its own author (name + email).
+# Contributors sign off with `git commit -s`. See CONTRIBUTING.md.
+#
+# Self-contained (no third-party action) so the check stays auditable and has no
+# supply-chain surface. To make it blocking, add "DCO" as a required status check
+# in the branch-protection rule for `main`.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dco:
+    name: DCO sign-off
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0  # full history so the base..head range is reachable
+
+      - name: Verify Signed-off-by on every commit
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # The base SHA lives on `main`; make sure it is present locally.
+          git fetch --no-tags --quiet origin "$BASE_SHA" 2>/dev/null || true
+
+          commits="$(git rev-list --no-merges "$BASE_SHA..$HEAD_SHA")"
+          if [ -z "$commits" ]; then
+            echo "No non-merge commits to check."
+            exit 0
+          fi
+
+          fail=0
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            author="$(git show -s --format='%an <%ae>' "$sha")"
+            subject="$(git show -s --format='%s' "$sha")"
+            signoffs="$(git show -s --format='%(trailers:key=Signed-off-by,valueonly=true)' "$sha")"
+            # -i case-insensitive, -x whole-line, -F literal (emails contain no regex)
+            if printf '%s\n' "$signoffs" | grep -qixF "$author"; then
+              echo "  ok   ${sha:0:12}  $subject"
+            else
+              echo "  MISS ${sha:0:12}  $subject"
+              echo "         author:   $author"
+              echo "         sign-off: ${signoffs:-<none>}"
+              fail=1
+            fi
+          done <<< "$commits"
+
+          if [ "$fail" -ne 0 ]; then
+            cat <<'EOF'
+
+          DCO check failed: one or more commits are missing a matching `Signed-off-by` line.
+
+          Every commit must be signed off by its author. Fix it with:
+            - single commit:   git commit --amend -s
+            - a series:        git rebase --signoff <base>   (then force-push the branch)
+
+          The sign-off line must match the commit author exactly, e.g.:
+            Signed-off-by: Jane Developer <jane@example.com>
+
+          See CONTRIBUTING.md for the full Developer Certificate of Origin terms.
+          EOF
+            exit 1
+          fi
+
+          echo ""
+          echo "All commits carry a matching Signed-off-by line."
