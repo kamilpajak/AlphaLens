@@ -157,7 +157,7 @@
 				onclick={() => (open = !open)}
 			>
 				<ChevronRight class="size-3 transition-transform {open ? 'rotate-90' : ''}" />
-				expert panel
+				expert.panel
 			</button>
 			{#if open && showScale}
 				{@const bandTone = consensusTone(spread)}
