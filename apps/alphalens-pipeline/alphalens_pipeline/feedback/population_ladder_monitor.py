@@ -1210,35 +1210,53 @@ def _union_new_sessions(
     before the earliest new session (the split screen / prev_close fail-closed
     needs it).
     """
-    from alphalens_pipeline.paper.calendar import previous_trading_day
-
     sessions: set[dt.date] = set()
     for c in candidates:
-        plannable, _ = _is_plannable(c)
-        if not plannable or c.trade_setup is None:
-            continue
-        prior = existing.get(c.ticker.upper())
-        if prior is not None and bool(prior.get("terminal")):
-            continue  # frozen — no new pricing
-        # Only CHEAP-ELIGIBLE priors consult the grouped-daily screen. Brand-new
-        # (no prior / no classification) and PARTIAL_TP_OPEN priors ALWAYS resolve
-        # via the minute path (predicate items 1+2), so they need no grouped fetch.
-        classification = _prior_classification(prior)
-        if classification not in ("OPEN", "NO_FILL"):
-            continue
-        cutoffs = _engine_cutoffs(brief_date, c.trade_setup, exchange)
-        arrival_session = cutoffs[0]
-        horizon = min(cutoffs[2], last_closed_session)
-        if horizon < arrival_session:
-            continue
-        last_priced = _coerce_session(prior.get("last_priced_session")) if prior else None
-        start = last_priced if last_priced is not None else arrival_session
-        for s in _sessions_between(start, horizon, exchange, inclusive_start=last_priced is None):
-            sessions.add(s)
-            # The split screen + prev_close fail-closed need the session immediately
-            # BEFORE the earliest new session too.
-            sessions.add(previous_trading_day(s, exchange))
+        sessions.update(
+            _candidate_new_sessions(c, brief_date, existing, last_closed_session, exchange)
+        )
     return sorted(sessions)
+
+
+def _candidate_new_sessions(
+    c: CandidateBrief,
+    brief_date: dt.date,
+    existing: dict[str, dict[str, Any]],
+    last_closed_session: dt.date,
+    exchange: str,
+) -> list[dt.date]:
+    """New (+ the session before each) grouped-daily dates for ONE candidate; ``[]``
+    when the candidate is not cheap-eligible.
+
+    Only CHEAP-ELIGIBLE priors consult the grouped-daily screen. Brand-new
+    (no prior / no classification) and PARTIAL_TP_OPEN priors ALWAYS resolve via
+    the minute path (predicate items 1+2), so they need no grouped fetch. The
+    split screen + prev_close fail-closed also need the session immediately BEFORE
+    each new session, so it is included.
+    """
+    from alphalens_pipeline.paper.calendar import previous_trading_day
+
+    plannable, _ = _is_plannable(c)
+    if not plannable or c.trade_setup is None:
+        return []
+    prior = existing.get(c.ticker.upper())
+    if prior is not None and bool(prior.get("terminal")):
+        return []  # frozen — no new pricing
+    classification = _prior_classification(prior)
+    if classification not in ("OPEN", "NO_FILL"):
+        return []
+    cutoffs = _engine_cutoffs(brief_date, c.trade_setup, exchange)
+    arrival_session = cutoffs[0]
+    horizon = min(cutoffs[2], last_closed_session)
+    if horizon < arrival_session:
+        return []
+    last_priced = _coerce_session(prior.get("last_priced_session")) if prior else None
+    start = last_priced if last_priced is not None else arrival_session
+    out: list[dt.date] = []
+    for s in _sessions_between(start, horizon, exchange, inclusive_start=last_priced is None):
+        out.append(s)
+        out.append(previous_trading_day(s, exchange))
+    return out
 
 
 def _coerce_session(value: Any) -> dt.date | None:
@@ -1773,6 +1791,26 @@ def _resolve_order_key(item: _ResolveItem) -> tuple:
     return (cls, lps)
 
 
+def _carried_row(item: _ResolveItem) -> dict[str, Any]:
+    """Row to persist when an item can't be resolved (budget / fetch / implausible).
+
+    Carries the prior forward so the denominator never shrinks; a brand-new ticker
+    with no prior gets a retryable placeholder instead.
+    """
+    if item.prior is not None:
+        return _carry_prior(item.prior)
+    return _placeholder_row(item.brief_date, item.candidate.ticker.upper(), item.cutoffs)
+
+
+def _deferred_age(item: _ResolveItem, last_closed_session: dt.date) -> int | None:
+    """Sessions-behind age for a deferred TOUCH item (dead-man input), else None."""
+    from alphalens_pipeline.paper.calendar import trading_days_elapsed
+
+    if item.touched and item.last_priced_session is not None:
+        return max(0, trading_days_elapsed(item.last_priced_session, last_closed_session))
+    return None
+
+
 def _resolve_queue(
     resolve_queue: list[_ResolveItem],
     rows_by_ticker: dict[str, dict[str, Any]],
@@ -1796,7 +1834,6 @@ def _resolve_queue(
     """
     ordered = sorted(resolve_queue, key=_resolve_order_key)
     deferred_ages: list[int] = []
-    from alphalens_pipeline.paper.calendar import trading_days_elapsed
 
     for item in ordered:
         ticker = item.candidate.ticker.upper()
@@ -1817,17 +1854,11 @@ def _resolve_queue(
         if result is None:
             # Budget exhausted / fetch fail / implausible — carry prior (or a
             # retryable placeholder for a brand-new ticker) and record the age.
-            if item.prior is not None:
-                rows_by_ticker[ticker] = _stamp_theme(_carry_prior(item.prior), theme)
-            else:
-                rows_by_ticker[ticker] = _stamp_theme(
-                    _placeholder_row(item.brief_date, ticker, item.cutoffs), theme
-                )
+            rows_by_ticker[ticker] = _stamp_theme(_carried_row(item), theme)
             counts["carried"] += 1
-            if item.touched and item.last_priced_session is not None:
-                deferred_ages.append(
-                    max(0, trading_days_elapsed(item.last_priced_session, last_closed_session))
-                )
+            age = _deferred_age(item, last_closed_session)
+            if age is not None:
+                deferred_ages.append(age)
             continue
 
         row = _terminal_row(
