@@ -99,35 +99,44 @@ class TelegramClient:
             "disable_web_page_preview": disable_web_page_preview,
         }
         for attempt in range(self._MAX_ATTEMPTS):
-            try:
-                resp = self._session.post(self._send_url, json=payload, timeout=self._timeout)
-            except (requests.Timeout, requests.ConnectionError) as exc:
-                if self._retry(attempt, "network error", exc):
-                    continue
-                return False
-            except requests.RequestException as exc:
-                # Exotic requests failures (TooManyRedirects / InvalidURL /
-                # ChunkedEncodingError / ...) are permanent — they won't fix on
-                # retry. Catch them here so send_message NEVER raises (a failed
-                # alert must not crash the live edgar-detect / thematic /
-                # literature pipelines) AND the token can't leak: requests
-                # embeds the bot-token URL in its exception repr, so we sanitise
-                # before logging rather than letting it propagate uncaught.
+            outcome, reason, exc = self._send_once(payload)
+            if outcome == "ok":
+                return True
+            if outcome == "permanent":
+                # The token can't leak: requests embeds the bot-token URL in its
+                # exception repr, so we sanitise before logging.
                 logger.error("Telegram send failed (permanent): %s", self._sanitize(str(exc)))
                 return False
-            if resp.status_code in _TRANSIENT_STATUS:
-                if self._retry(attempt, f"HTTP {resp.status_code}", None):
-                    continue
+            # transient — retry with backoff, or give up once attempts exhaust.
+            if not self._retry(attempt, reason, exc):
                 return False
-            try:
-                resp.raise_for_status()
-            except requests.HTTPError as exc:
-                logger.error("Telegram send failed (permanent): %s", self._sanitize(str(exc)))
-                return False
-            return True
         return False
 
     # ----- internals -----
+
+    def _send_once(self, payload: dict) -> tuple[str, str, Exception | None]:
+        """One POST attempt classified as ``("ok"|"permanent"|"transient", reason, exc)``.
+
+        NEVER raises (a failed alert must not crash the live edgar-detect /
+        thematic / literature pipelines). Network blips + HTTP 429/5xx are
+        ``transient`` (retryable); a 4xx and exotic requests failures
+        (TooManyRedirects / InvalidURL / ChunkedEncodingError / ...) are
+        ``permanent`` — they won't fix on retry. ``exc`` is carried so the caller
+        can sanitise-and-log it.
+        """
+        try:
+            resp = self._session.post(self._send_url, json=payload, timeout=self._timeout)
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            return "transient", "network error", exc
+        except requests.RequestException as exc:
+            return "permanent", "exotic requests failure", exc
+        if resp.status_code in _TRANSIENT_STATUS:
+            return "transient", f"HTTP {resp.status_code}", None
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as exc:
+            return "permanent", "HTTP error", exc
+        return "ok", "", None
 
     def _retry(self, attempt: int, reason: str, exc: Exception | None) -> bool:
         """Sleep + signal retry (return ``True``) unless attempts are exhausted,
