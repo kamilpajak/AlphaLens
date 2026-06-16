@@ -316,7 +316,7 @@ def _price_lines(setup: Mapping[str, Any] | None) -> dict[str, Any]:
     return {"entry": entry, "tp": tp, "stop": parsed.disaster_stop}
 
 
-def _lead_in_sessions(arrival_session: dt.date, hold_sessions: int) -> int:
+def _lead_in_sessions(hold_sessions: int) -> int:
     """Number of pre-arrival context sessions: ``min(CAP, max(FLOOR, 2 x hold))``."""
     return min(LEAD_IN_CAP, max(LEAD_IN_FLOOR, 2 * max(0, hold_sessions)))
 
@@ -386,7 +386,7 @@ def _context_bars(
     phantoms). A fetch that raises or returns empty degrades to no context
     (``([], [])``) so the caller falls back to the in-trade bars only.
     """
-    lead_in = _lead_in_sessions(arrival_session, hold_sessions)
+    lead_in = _lead_in_sessions(hold_sessions)
     oldest_lead_in = _retreat_sessions(arrival_session, lead_in, exchange)
     newest_trailing = advance_trading_sessions(horizon_session, TRAILING_SESSIONS, exchange)
 
