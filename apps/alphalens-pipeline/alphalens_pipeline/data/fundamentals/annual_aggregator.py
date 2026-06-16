@@ -186,6 +186,56 @@ def _annual_da_entries(table: pa.Table, asof: date) -> dict[str, _Entry]:
     return da
 
 
+def _supersedes(distance: int, filed: str, best: tuple[int, str, float] | None) -> bool:
+    """True when ``(distance, filed)`` beats the incumbent ``best`` row.
+
+    Prefer the row closest to ``target_end``; break distance ties by the later
+    filed date (a restatement supersedes the original).
+    """
+    if best is None:
+        return True
+    if distance != best[0]:
+        return distance < best[0]
+    return filed > best[1]
+
+
+def _best_instant_for_concept(
+    table: pa.Table,
+    concept: str,
+    asof: date,
+    target_end: date,
+    *,
+    taxonomy: str,
+    unit: str,
+) -> float | None:
+    """Closest-to-``target_end`` PIT-visible instant value for one concept, or None.
+
+    Considers only rows within ``_INSTANT_END_TOLERANCE_DAYS`` of ``target_end``;
+    an unparseable ``end`` date is skipped.
+    """
+    entries = _arrow_table_to_entries(
+        table,
+        concept,
+        taxonomy=taxonomy,
+        unit=unit,
+        form_whitelist=DEFAULT_FORM_WHITELIST,
+    )
+    if not entries:
+        return None
+    best: tuple[int, str, float] | None = None  # (distance, filed, val)
+    for entry in _pit_filter(entries, asof):
+        try:
+            end = date.fromisoformat(entry.end)
+        except ValueError:
+            continue
+        distance = abs((end - target_end).days)
+        if distance > _INSTANT_END_TOLERANCE_DAYS:
+            continue
+        if _supersedes(distance, entry.filed, best):
+            best = (distance, entry.filed, entry.val)
+    return best[2] if best is not None else None
+
+
 def _instant_at_end(
     table: pa.Table,
     chain: Sequence[str],
@@ -197,41 +247,15 @@ def _instant_at_end(
 ) -> float | None:
     """Balance-sheet value reported as of ``target_end`` (a FY close).
 
-    Scans ``chain`` in priority order; the first concept with an instant
-    row within ``_INSTANT_END_TOLERANCE_DAYS`` of ``target_end`` wins. Among
-    candidate rows the one closest to ``target_end`` is taken, with the
-    latest filed date breaking distance ties (restatement supersedes).
+    Scans ``chain`` in priority order; the first concept with an instant row
+    within ``_INSTANT_END_TOLERANCE_DAYS`` of ``target_end`` wins.
     """
     for concept in chain:
-        entries = _arrow_table_to_entries(
-            table,
-            concept,
-            taxonomy=taxonomy,
-            unit=unit,
-            form_whitelist=DEFAULT_FORM_WHITELIST,
+        val = _best_instant_for_concept(
+            table, concept, asof, target_end, taxonomy=taxonomy, unit=unit
         )
-        if not entries:
-            continue
-        visible = _pit_filter(entries, asof)
-        best: tuple[int, str, float] | None = None  # (distance, filed, val)
-        for entry in visible:
-            try:
-                end = date.fromisoformat(entry.end)
-            except ValueError:
-                continue
-            distance = abs((end - target_end).days)
-            if distance > _INSTANT_END_TOLERANCE_DAYS:
-                continue
-            # Prefer the row closest to target_end; break distance ties by
-            # the later filed date (restatement supersedes the original).
-            if (
-                best is None
-                or distance < best[0]
-                or (distance == best[0] and entry.filed > best[1])
-            ):
-                best = (distance, entry.filed, entry.val)
-        if best is not None:
-            return best[2]
+        if val is not None:
+            return val
     return None
 
 
