@@ -78,7 +78,9 @@ function clamp(v: number, lo: number, hi: number): number {
 	// When the bubble is wider than the available space (hi < lo) prefer the
 	// left margin rather than producing NaN.
 	if (hi < lo) return lo;
-	return v < lo ? lo : v > hi ? hi : v;
+	if (v < lo) return lo;
+	if (v > hi) return hi;
+	return v;
 }
 
 export function clampToViewport(node: HTMLElement, options: ClampOptions = {}) {
