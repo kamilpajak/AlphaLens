@@ -60,10 +60,12 @@ def bootstrap_ci(
     mean = sum(vals) / n
     if n == 1:
         return (vals[0], vals[0], vals[0])
+    # Seeded -> deterministic. Statistical resampling, not security-sensitive (Sonar S2245).
     rng = random.Random(seed)
     means: list[float] = []
     for _ in range(n_resamples):
-        means.append(sum(vals[rng.randrange(n)] for _ in range(n)) / n)
+        sample = [vals[rng.randrange(n)] for _ in range(n)]  # NOSONAR
+        means.append(sum(sample) / n)
     means.sort()
     lo_i = int((1.0 - ci) / 2.0 * n_resamples)
     hi_i = int((1.0 + ci) / 2.0 * n_resamples) - 1

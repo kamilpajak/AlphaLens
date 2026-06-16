@@ -47,10 +47,12 @@ def fill_rate_ci(
         return (None, None, None)
     rate = n_touched / n_total
     data = [1] * n_touched + [0] * (n_total - n_touched)
+    # Seeded -> deterministic. Statistical resampling, not security-sensitive (Sonar S2245).
     rng = random.Random(seed)
     rates: list[float] = []
     for _ in range(n_resamples):
-        rates.append(sum(data[rng.randrange(n_total)] for _ in range(n_total)) / n_total)
+        sample = [data[rng.randrange(n_total)] for _ in range(n_total)]  # NOSONAR
+        rates.append(sum(sample) / n_total)
     rates.sort()
     lo_i = int((1.0 - ci) / 2.0 * n_resamples)
     hi_i = int((1.0 + ci) / 2.0 * n_resamples) - 1
