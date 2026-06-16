@@ -339,6 +339,46 @@ def _fetch_and_cache_10k(ticker: str, cik: str, rec: dict, cache_dir: Path) -> s
     return text
 
 
+def _collect_10ks_with_overflow(submissions: dict, asof: dt.date | None, years: int) -> list[dict]:
+    """10-K records from the recent block, walking overflow shards only if short.
+
+    For most issuers the recent block already holds >= ``years`` annual 10-Ks, so
+    no overflow shard is read. ``continue`` (not ``break``) on a shard fetch error:
+    a transient 403/500 on one shard must not stop the walk — a later shard may
+    still hold the remaining years.
+    """
+    collected = find_10ks(submissions, asof=asof)
+    if len(collected) >= years:
+        return collected
+    shards = submissions.get("filings", {}).get("files") or []
+    for shard in shards:
+        name = shard.get("name") if isinstance(shard, dict) else None
+        if not name:
+            continue
+        try:
+            shard_payload = _fetch_submissions_overflow(name)
+        except Exception as exc:  # fail-soft: one unreadable shard is not fatal
+            logger.warning("submissions overflow %s fetch failed: %s", name, exc)
+            continue
+        collected.extend(find_10ks(shard_payload, asof=asof))
+        if len(collected) >= years:
+            break
+    return collected
+
+
+def _dedup_newest_first(records: list[dict], limit: int) -> list[dict]:
+    """Sort records newest-first, de-duplicate on accession, truncate to ``limit``."""
+    records.sort(key=lambda r: r["filing_date"], reverse=True)
+    seen: set[str] = set()
+    deduped: list[dict] = []
+    for rec in records:
+        if rec["accession"] in seen:
+            continue
+        seen.add(rec["accession"])
+        deduped.append(rec)
+    return deduped[:limit]
+
+
 def fetch_multi_year_10k_texts(
     *,
     ticker: str,
@@ -366,38 +406,11 @@ def fetch_multi_year_10k_texts(
         return []
 
     submissions = _fetch_submissions_json(cik)
-    collected = find_10ks(submissions, asof=asof)
-    if len(collected) < years:
-        shards = submissions.get("filings", {}).get("files") or []
-        for shard in shards:
-            name = shard.get("name") if isinstance(shard, dict) else None
-            if not name:
-                continue
-            try:
-                shard_payload = _fetch_submissions_overflow(name)
-            except Exception as exc:  # fail-soft: one unreadable shard is not fatal
-                # ``continue`` not ``break``: a transient 403/500 on one shard
-                # must not stop the walk — a later shard may still hold the
-                # remaining years.
-                logger.warning("submissions overflow %s fetch failed: %s", name, exc)
-                continue
-            collected.extend(find_10ks(shard_payload, asof=asof))
-            if len(collected) >= years:
-                break
-
-    # Newest-first, de-duplicated on accession, truncated to ``years``.
-    collected.sort(key=lambda r: r["filing_date"], reverse=True)
-    seen: set[str] = set()
-    deduped: list[dict] = []
-    for rec in collected:
-        if rec["accession"] in seen:
-            continue
-        seen.add(rec["accession"])
-        deduped.append(rec)
-    out: list[tuple[str, str]] = []
-    for rec in deduped[:years]:
-        out.append((rec["filing_date"], _fetch_and_cache_10k(ticker, cik, rec, cache_dir)))
-    return out
+    collected = _collect_10ks_with_overflow(submissions, asof, years)
+    deduped = _dedup_newest_first(collected, years)
+    return [
+        (rec["filing_date"], _fetch_and_cache_10k(ticker, cik, rec, cache_dir)) for rec in deduped
+    ]
 
 
 def fetch_peer_10k_texts(
