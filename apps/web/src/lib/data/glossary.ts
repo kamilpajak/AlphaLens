@@ -49,7 +49,9 @@ function briefMetric(
 	term: string,
 	full: string,
 	body: string,
-	extra: Partial<GlossaryEntry> = {}
+	// Only the genuinely-optional fields — NOT category/pages, which briefMetric
+	// owns and a caller must not silently override.
+	extra: Pick<GlossaryEntry, 'formula' | 'bands'> = {}
 ): GlossaryEntry {
 	return { term, full, body, category: 'first-per-section', pages: ['briefs'], ...extra };
 }
