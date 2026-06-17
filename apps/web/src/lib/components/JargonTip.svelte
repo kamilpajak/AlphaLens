@@ -29,6 +29,7 @@
 	import type { Snippet } from 'svelte';
 	import { clampToViewport } from '$lib/actions/clampToViewport';
 	import TooltipBubble from './TooltipBubble.svelte';
+	import Formula from './Formula.svelte';
 
 	interface Props {
 		term: string;
@@ -37,10 +38,13 @@
 		body?: string;
 		/** Rich body snippet (lists / formulas) — takes precedence over `body`. */
 		bodyRich?: Snippet;
+		/** Optional formulas.json key — typesets the formula under the text body
+		 *  (glossary-backed ratio terms like PE/ROE; ignored when `bodyRich` is set). */
+		formula?: string;
 		children?: Snippet;
 	}
 
-	let { term, full = '', body, bodyRich, children }: Props = $props();
+	let { term, full = '', body, bodyRich, formula, children }: Props = $props();
 
 	// Per-instance id linking the focusable trigger to the tooltip body via
 	// aria-describedby. Sourced from the module-level counter so SSR and
@@ -74,6 +78,11 @@
 
 	<TooltipBubble id={tooltipId}>
 		{#snippet header()}{term}{#if full} // {full}{/if}{/snippet}
-		{#if bodyRich}{@render bodyRich()}{:else}<span class="block">{body}</span>{/if}
+		{#if bodyRich}
+			{@render bodyRich()}
+		{:else}
+			<span class="block">{body}</span>
+			{#if formula}<span class="block mt-1.5 text-fg-muted">= <Formula name={formula} /></span>{/if}
+		{/if}
 	</TooltipBubble>
 </span>

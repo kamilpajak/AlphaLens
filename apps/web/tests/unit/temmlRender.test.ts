@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderTex } from '../../src/lib/temmlRender.js';
 import formulas from '../../src/lib/formulas.json';
+import { GLOSSARY } from '../../src/lib/data/glossary';
 
 // renderTex is the build-time LaTeX → MathML helper the virtual:formulas Vite
 // plugin runs in Node. The browser only ever sees its pre-rendered output, so
@@ -54,6 +55,21 @@ describe('formulas.json registry', () => {
 			// Temml colours a failed parse #b22222 — none of the shipped formulas
 			// may regress into that fallback.
 			expect(html).not.toContain('b22222');
+		});
+	}
+});
+
+describe('glossary formula references', () => {
+	const referenced = GLOSSARY.filter((e) => e.formula);
+
+	it('at least one glossary term carries a formula', () => {
+		expect(referenced.length).toBeGreaterThan(0);
+	});
+
+	for (const entry of referenced) {
+		it(`"${entry.term}" → formula key "${entry.formula}" exists in formulas.json`, () => {
+			// A dangling reference would render a blank `= ` in the tooltip; pin it.
+			expect(Object.keys(formulas)).toContain(entry.formula);
 		});
 	}
 });

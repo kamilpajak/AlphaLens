@@ -1,4 +1,12 @@
 {
   "margin_of_safety": "= 1 - P / V_{\\text{intrinsic}}",
-  "owner_earnings_yield": "= \\dfrac{\\text{owner earnings}}{EV}"
+  "owner_earnings_yield": "= \\dfrac{\\text{owner earnings}}{EV}",
+  "pe": "\\dfrac{\\text{price}}{\\text{EPS}}",
+  "ps": "\\dfrac{\\text{mkt cap}}{\\text{revenue}}",
+  "ev_rev": "\\dfrac{EV}{\\text{revenue}}",
+  "ev_ebitda": "\\dfrac{EV}{\\text{EBITDA}}",
+  "roe": "\\dfrac{\\text{net income}}{\\text{equity}}",
+  "fcf_margin": "\\dfrac{\\text{FCF}}{\\text{revenue}}",
+  "fcff_yield": "\\dfrac{\\text{FCFF}}{EV}",
+  "magic_formula": "\\text{rank}_{\\text{EY}} + \\text{rank}_{\\text{ROC}}"
 }

@@ -46,8 +46,11 @@ const glossaryEntries = new Map();
 	// pages: [...] array. Terms with pages NOT including 'experiments' are
 	// scoped to other routes (e.g. /brief/[date]) and the unreferenced-check
 	// below skips them — this audit script scans the /experiments page only.
+	// An optional `formula: '...'` line may sit between `full:` and `body:`
+	// (glossary ratio terms point at a src/lib/formulas.json key); it is
+	// non-capturing so the term/full/body/category capture indices are unchanged.
 	const entryRe =
-		/\{\s*\n\s*term:\s*'([^']+)',\s*\n\s*full:\s*'([^']*)',\s*\n\s*body:\s*'((?:[^'\\]|\\.)*)'[\s,\n]*category:\s*'(always|first-per-section)'([^}]*)/g;
+		/\{\s*\n\s*term:\s*'([^']+)',\s*\n\s*full:\s*'([^']*)',\s*\n\s*(?:formula:\s*'[^']*',\s*\n\s*)?body:\s*'((?:[^'\\]|\\.)*)'[\s,\n]*category:\s*'(always|first-per-section)'([^}]*)/g;
 	let m;
 	while ((m = entryRe.exec(glossarySrc)) !== null) {
 		const trailing = m[5] ?? '';

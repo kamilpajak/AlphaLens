@@ -25,7 +25,12 @@
 	// Same tipProps pattern as /experiments — looks up term in shared glossary.
 	function tipProps(term: string) {
 		const g = GLOSSARY_BY_TERM.get(term);
-		return { term: g?.term ?? term, full: g?.full ?? '', body: g?.body ?? '' };
+		return {
+			term: g?.term ?? term,
+			full: g?.full ?? '',
+			body: g?.body ?? '',
+			formula: g?.formula
+		};
 	}
 
 	interface Props {
