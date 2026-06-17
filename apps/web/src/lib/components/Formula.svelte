@@ -13,6 +13,14 @@
 	let { name }: { name: string } = $props();
 
 	const html = $derived(formulas[name]);
+
+	// A typo in `name` otherwise renders nothing silently; surface it in dev so
+	// a missing registry entry is obvious before it ships as a blank tooltip.
+	$effect(() => {
+		if (import.meta.env.DEV && !html) {
+			console.warn(`[Formula] no formula named "${name}" in src/lib/formulas.json`);
+		}
+	});
 </script>
 
 {#if html}<span class="whitespace-nowrap">{@html html}</span>{/if}

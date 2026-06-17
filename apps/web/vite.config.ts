@@ -2,6 +2,7 @@ import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, type Plugin } from 'vite';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { renderTex } from './src/lib/temmlRender.js';
 
 // Pre-render every tooltip formula (src/lib/formulas.json) to a MathML string
@@ -20,7 +21,11 @@ function virtualFormulas(): Plugin {
 		},
 		async load(id) {
 			if (id !== RESOLVED_ID) return;
-			const raw = await readFile(new URL('./src/lib/formulas.json', import.meta.url), 'utf-8');
+			const formulasPath = fileURLToPath(new URL('./src/lib/formulas.json', import.meta.url));
+			// Re-run this loader when formulas.json changes so `vite dev` HMR picks
+			// up edits without a restart (the build path is unaffected either way).
+			this.addWatchFile(formulasPath);
+			const raw = await readFile(formulasPath, 'utf-8');
 			const registry: Record<string, string> = JSON.parse(raw);
 			const rendered: Record<string, string> = {};
 			for (const [key, tex] of Object.entries(registry)) {
