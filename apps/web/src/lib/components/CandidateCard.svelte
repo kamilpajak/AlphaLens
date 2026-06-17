@@ -18,6 +18,7 @@
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
 	import Formula from './Formula.svelte';
+	import TooltipNote from './TooltipNote.svelte';
 	import ExpertPanel from './ExpertPanel.svelte';
 	import TradeSetup from './TradeSetup.svelte';
 	import TemplateFacts from './TemplateFacts.svelte';
@@ -224,7 +225,7 @@
 							<li>coverage <span class="whitespace-nowrap font-bold text-fg">{buffCovN ?? '—'}/6</span></li>
 						</ul>
 						<p class="mt-1.5 text-fg-muted">
-							margin of safety <Formula name="margin_of_safety" />
+							margin of safety = <Formula name="margin_of_safety" />
 						</p>
 						{#if buffScore === null}
 							<p class="mt-1 text-fg-muted">not enough fundamentals to score</p>
@@ -372,9 +373,7 @@
 									<li>EV/EBITDA</li>
 									<li>FCF margin</li>
 								</ul>
-								<span class="block mt-1 text-fg-muted"
-									>higher = cheaper than sector peers on several multiples at once</span
-								>
+								<TooltipNote>higher = cheaper than sector peers on several multiples at once</TooltipNote>
 							{/snippet}
 						</SignalBar>
 						<SignalBar
@@ -389,9 +388,10 @@
 									<li>thematic alignment with the source event</li>
 									<li>freshness</li>
 								</ul>
-								<span class="block mt-1 text-fg-muted"
-									>higher = stronger event-driven setup; below the
-									<span class="whitespace-nowrap">0.55</span> floor → candidate filtered out</span
+								<TooltipNote
+									>higher = stronger event-driven setup; <span class="font-bold">below</span> the
+									<span class="whitespace-nowrap font-bold">0.55 floor</span> → candidate
+									<span class="font-bold">filtered out</span></TooltipNote
 								>
 							{/snippet}
 						</SignalBar>

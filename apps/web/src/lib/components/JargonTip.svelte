@@ -85,10 +85,10 @@
 			{@render bodyRich()}
 		{:else}
 			<span class="block">{body}</span>
-			<!-- formulas.json values are complete expressions (they include the
-			     leading `=` inside the MathML) so the `=` reads as one formula to
-			     assistive tech, not a detached text operator. -->
-			{#if formula}<span class="block mt-1.5 text-fg-muted"><Formula name={formula} /></span>{/if}
+			<!-- Centred, slightly larger display formula under the definition — the
+			     term name above is the left-hand side, so formulas.json carries just
+			     the right-hand expression (no leading `=`). -->
+			{#if formula}<span class="block mt-2 text-center text-[13px] text-fg-dim"><Formula name={formula} /></span>{/if}
 			{#if bands && bands.length}
 				<ul class="list-disc pl-4 mt-1.5 space-y-0.5 marker:text-amber">
 					{#each bands as band}

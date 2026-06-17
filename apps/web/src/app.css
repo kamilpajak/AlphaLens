@@ -55,6 +55,15 @@
 	--font-display: 'Space Grotesk Variable', 'Space Grotesk', system-ui, sans-serif;
 }
 
+/* Typeset tooltip formulas (Temml MathML) in the terminal mono face instead
+   of Temml-Local.css's default math font, so a formula reads as part of the
+   same typography as the rest of the card. The math font stays in the fallback
+   chain for any glyph JetBrains Mono lacks (∑, integrals, …). Must come after
+   the `@import 'temml/dist/Temml-Local.css'` above to win the cascade. */
+math {
+	font-family: var(--font-mono), 'Cambria Math', math;
+}
+
 html,
 body {
 	background: var(--color-bg);
