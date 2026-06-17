@@ -162,6 +162,10 @@ def _format_facts_block(facts: dict) -> str:
         f"verified gates: {facts.get('gates_passed_str', '')}\n"
         f"{catalyst_block}"
         f"Phase D signals:\n"
+        # NOTE: the "(90d)" label is stale post-insider-v2 (window is now 180d),
+        # but the brief prompt text is hash-pinned by the golden-replay cassettes
+        # — relabelling here invalidates them. Deferred to the prompt-reframe pass
+        # that re-records the cassettes. The raw $ value shown is window-correct.
         f"- insider opportunistic buys (90d): {ins_str},"
         f" sector percentile {_format_pctile(facts.get('insider_score_sector_percentile'))}\n"
         f"- FCFF yield: {_format_num(facts.get('fcff_yield_pct'), '.1f')}%,"

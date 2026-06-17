@@ -76,7 +76,7 @@ class Brief(models.Model):
     # the deferred Insider×EDGE calibration partitions by it, never pooling old
     # (net / 90d / <=-percentile) rows with new (buy-only / 180d / within-buyers)
     # rows. Stamped on every scored row by the pipeline; blank for pre-v2 dates.
-    insider_signal_version = models.CharField(max_length=64, blank=True, default="")
+    insider_signal_version = models.CharField(max_length=128, blank=True, default="")
 
     fcff_yield_pct = models.FloatField(null=True, blank=True)
     fcff_yield_sector_percentile = models.FloatField(null=True, blank=True)

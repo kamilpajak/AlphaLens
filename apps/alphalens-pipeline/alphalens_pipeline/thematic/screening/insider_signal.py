@@ -28,6 +28,12 @@ import logging
 from datetime import date as _date
 from pathlib import Path
 
+# LOAD-BEARING private imports: the buy-only aggregator below reuses these so
+# its Cohen-Malloy classification + price resolution stay byte-identical to the
+# SHA-locked opportunistic_form4 scorer (which must NOT be edited — its bytes
+# define a pre-registered paradigm-#11 audit verdict). Do not rename/remove
+# `_is_eligible_record` / `_resolve_price` / `_ClassifierCache` without updating
+# this consumer in lockstep.
 from alphalens_pipeline.scorers.opportunistic_form4 import (
     _ClassifierCache,
     _is_eligible_record,
@@ -236,7 +242,10 @@ def score_insider(
         if ps is not None and ps > 0:
             buyer_peers.append(ps)
 
-    percentile = percentile_rank(candidate, buyer_peers)
+    # A LONE buyer (no peer buyers to rank against) gets an explicitly absent
+    # rank, not percentile_rank's empty-peers 50.0 midpoint — 50.0 would read
+    # as "median buyer" when there is in fact no cohort to compare against.
+    percentile = percentile_rank(candidate, buyer_peers) if buyer_peers else None
     return {
         "score_usd": candidate,
         "sector_percentile": percentile,

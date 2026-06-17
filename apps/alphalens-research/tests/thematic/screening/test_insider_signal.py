@@ -183,6 +183,17 @@ class TestScoreInsider(unittest.TestCase):
         self.assertEqual(out["score_usd"], 0.0)
         self.assertIsNone(out["sector_percentile"])
 
+    def test_lone_buyer_has_no_rank(self):
+        # Candidate is the ONLY net buyer in its cohort — there is nothing to
+        # rank it against, so the percentile is explicitly absent (NOT the
+        # empty-peers 50.0 midpoint, which would read as "median buyer").
+        with self._patch_buys({"A": 0.0, "B": None, "C": 120000.0}):
+            out = insider_signal.score_insider(
+                ticker="C", asof=dt.date(2026, 5, 15), peers=["A", "B", "C"]
+            )
+        self.assertEqual(out["score_usd"], 120000.0)
+        self.assertIsNone(out["sector_percentile"])
+
     def test_within_buyers_rank(self):
         # Candidate C=300 ranked ONLY among net buyers A=100, B=200, C=300 -> top.
         with self._patch_buys({"A": 100.0, "B": 200.0, "C": 300.0}):
