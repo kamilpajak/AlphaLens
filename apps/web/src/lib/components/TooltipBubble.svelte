@@ -53,7 +53,7 @@
 	role="tooltip"
 >
 	<span
-		class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl"
+		class="block border border-amber bg-bg-1 px-[var(--tt-pad-x)] py-[var(--tt-pad-y)] text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl"
 	>
 		<span class="block text-amber font-bold uppercase tracking-widest text-[10px] mb-1">
 			{@render header()}
