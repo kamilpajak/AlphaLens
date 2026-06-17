@@ -1,0 +1,14 @@
+{
+  "_doc": "Controlled vocabulary for src/lib/formulas.json typography, enforced by tests/unit/formula-typography.test.ts against ISO 80000-2 / NIST. Every token that appears inside \\text{}/\\mathrm{} in a formula MUST be registered here (catches typos + forces a deliberate decision for each new symbol). Classes: names = multi-letter quantity names/acronyms (upright); operators = function names written as text (upright); labels = descriptive subscript words (upright); variables = the ONLY single letters allowed bare/italic; constants = must be upright if used (e, i); units = currencies/units (upright).",
+  "names": [
+    "EV", "EPS", "EBITDA", "FCF", "FCFF", "ROE", "EY", "ROC",
+    "MA50", "MA200", "price", "revenue", "equity", "close",
+    "entry", "stop", "size", "alloc", "mkt cap", "net income",
+    "owner earnings", "intrinsic value", "tier price"
+  ],
+  "operators": ["mean", "rank"],
+  "labels": ["cand", "bench", "actual", "expected"],
+  "variables": ["R"],
+  "constants": ["e", "i"],
+  "units": ["USD", "EUR", "bps"]
+}
