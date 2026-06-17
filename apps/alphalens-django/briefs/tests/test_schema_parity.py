@@ -54,6 +54,11 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "peer_cohort_level",
     "insider_score_usd",
     "insider_score_sector_percentile",
+    # Backend-only poolability key (insider signal v2): stamped per row so the
+    # deferred Insider×EDGE calibration partitions by signal version. NOT
+    # API-serialised (no SPA use) — registered here only to satisfy the
+    # no-orphan-model-field guard; carries no OpenAPI/legacy.json change.
+    "insider_signal_version",
     "fcff_yield_pct",
     "fcff_yield_sector_percentile",
     "valuation_pe",
