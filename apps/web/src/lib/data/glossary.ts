@@ -376,6 +376,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'MA50',
 		full: '50-day moving average',
+		formula: 'ma50_dist',
 		body: 'Average closing price over the last 50 trading days. Distance from the MA50 is a short-term trend gauge: well above = trending strongly, well below = falling. Crosses with MA200 ("golden cross" / "death cross") are momentum signals.',
 		category: 'first-per-section',
 		pages: ['briefs']
@@ -383,6 +384,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'MA200',
 		full: '200-day moving average',
+		formula: 'ma200_dist',
 		body: 'Average closing price over the last 200 trading days — the canonical long-term trend filter. Price above + MA200 slope > 0 = secular uptrend; price below + slope < 0 = downtrend; positive slope under price = deep-drawdown-reversal candidate setup.',
 		category: 'first-per-section',
 		pages: ['briefs']
