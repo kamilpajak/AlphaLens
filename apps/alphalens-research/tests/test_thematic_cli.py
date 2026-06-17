@@ -143,6 +143,7 @@ class TestMapThemesCLI(unittest.TestCase):
                 "alphalens_cli.commands.thematic.orchestrator.map_themes",
                 side_effect=AssertionError("must not be called"),
             ),
+            patch("alphalens_cli.commands.thematic._emit_stage_volume") as emit,
         ):
             result = self.runner.invoke(
                 app,
@@ -150,6 +151,9 @@ class TestMapThemesCLI(unittest.TestCase):
             )
             # Assert inside the `with` so the TemporaryDirectory still exists.
             self.assertEqual(result.exit_code, 0, msg=result.output)
+            # Observability contract stays uniform: the quiet-day path emits the
+            # true 0/0 volume so the gauge does not carry stale values.
+            emit.assert_called_once_with("map-themes", output_rows=0, input_rows=0)
             self.assertIn("No novel themes", result.output)
             out_path = Path(tmpdir) / "2026-05-15.parquet"
             self.assertTrue(
