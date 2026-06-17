@@ -82,7 +82,10 @@
 			{@render bodyRich()}
 		{:else}
 			<span class="block">{body}</span>
-			{#if formula}<span class="block mt-1.5 text-fg-muted">= <Formula name={formula} /></span>{/if}
+			<!-- formulas.json values are complete expressions (they include the
+			     leading `=` inside the MathML) so the `=` reads as one formula to
+			     assistive tech, not a detached text operator. -->
+			{#if formula}<span class="block mt-1.5 text-fg-muted"><Formula name={formula} /></span>{/if}
 		{/if}
 	</TooltipBubble>
 </span>
