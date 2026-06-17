@@ -229,5 +229,41 @@ class TestMapThemesFreeze(unittest.TestCase):
             self.assertTrue((out / f"{ASOF.isoformat()}.parquet").exists())
 
 
+class TestWriteEmptyCandidates(unittest.TestCase):
+    """A zero-novel-themes day writes a typed-empty candidates parquet so the
+    downstream score/brief stages find the file (the run_thematic_day.sh
+    `set -e` chain would otherwise abort). The empty set MUST remain
+    recompute-eligible: a later 6×/day slot that DOES surface novel themes for
+    the same date must not reuse the empty freeze (anti-poisoned-freeze)."""
+
+    def test_writes_typed_empty_parquet_with_config_stamp(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            path = orchestrator.write_empty_candidates(
+                asof=ASOF, output_dir=out, market_cap_range=MCAP
+            )
+            self.assertEqual(path, out / f"{ASOF.isoformat()}.parquet")
+            self.assertTrue(path.exists())
+            df = pd.read_parquet(path)
+            self.assertEqual(len(df), 0)
+            for col in orchestrator._MAP_THEMES_COLUMNS:
+                self.assertIn(col, df.columns)
+            cfg = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+            self.assertTrue((df["mapper_config_version"] == cfg).all())
+
+    def test_empty_set_is_not_reused_so_later_slots_recompute(self):
+        # The empty parquet is config-stamped, but _load_frozen_candidates
+        # treats an empty/all-unverified set as degraded -> recompute, so a
+        # later run that surfaces news is NOT poisoned by the morning's empty
+        # freeze.
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            path = orchestrator.write_empty_candidates(
+                asof=ASOF, output_dir=out, market_cap_range=MCAP
+            )
+            cfg = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+            self.assertIsNone(orchestrator._load_frozen_candidates(path, cfg))
+
+
 if __name__ == "__main__":
     unittest.main()

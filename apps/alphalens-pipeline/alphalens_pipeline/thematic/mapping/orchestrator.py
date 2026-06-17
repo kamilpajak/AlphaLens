@@ -609,9 +609,46 @@ def map_themes(
     return df
 
 
+def write_empty_candidates(
+    *,
+    asof: dt.date,
+    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    market_cap_range: tuple[int, int] = DEFAULT_MCAP_RANGE,
+    model: str | None = None,
+) -> Path:
+    """Write a typed-empty candidates parquet for ``asof`` and return its path.
+
+    A zero-novel-themes day (a quiet/holiday window, or the first run for a
+    fresh date) produces no themes to map. The map-themes CLI must NOT call the
+    LLM in that case, but it still has to leave the candidates parquet on disk:
+    the next stage (``score``) hard-errors on a missing Phase C parquet, and
+    under ``run_thematic_day.sh``'s ``set -euo pipefail`` that aborts the whole
+    daily build before ``brief`` + ``rebuild_briefs_cache`` — so a genuinely
+    quiet day produced no brief at all.
+
+    The frame carries the full candidate schema + the freeze ``config_version``
+    stamp, identical to the all-candidates-dropped branch of :func:`map_themes`,
+    so ``score`` / ``brief`` / Django ingest read it like any other empty day.
+    It stays recompute-eligible: :func:`_load_frozen_candidates` treats an empty
+    set as degraded, so a later 6×/day slot that DOES surface novel themes for
+    the same date recomputes instead of reusing this empty freeze.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    out_path = output_dir / f"{asof.isoformat()}.parquet"
+    config_version = theme_mapper.mapper_config_version(
+        market_cap_range=market_cap_range, model=model
+    )
+    df = pd.DataFrame(columns=list(_MAP_THEMES_COLUMNS))
+    df["mapper_config_version"] = config_version
+    write_parquet_atomic(df, out_path, index=False)
+    logger.info("map_themes %s: 0 novel themes -> wrote empty candidate set", asof.isoformat())
+    return out_path
+
+
 __all__ = [
     "DEFAULT_OUTPUT_DIR",
     "GATE_NAMES",
     "map_themes",
     "verify_candidate",
+    "write_empty_candidates",
 ]

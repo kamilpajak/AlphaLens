@@ -355,9 +355,16 @@ def map_themes_cmd(
     novel = themes_mod.flag_novel(rollup, threshold=novelty_threshold)
     novel = novel.head(max_themes)
     if len(novel) == 0:
+        # Quiet day: nothing to map, but still write a typed-empty candidates
+        # parquet so `score` finds the file and the run_thematic_day.sh `set -e`
+        # chain does not abort before brief + rebuild-cache. The empty set is
+        # recompute-eligible, so a later same-date slot with news is not frozen.
+        out_path = orchestrator.write_empty_candidates(
+            asof=target, output_dir=output_dir, model=model
+        )
         typer.echo(
             f"No novel themes above {novelty_threshold:.1f} in {window_days}d window — "
-            f"nothing to map."
+            f"wrote empty candidate set → {out_path}"
         )
         return
 
