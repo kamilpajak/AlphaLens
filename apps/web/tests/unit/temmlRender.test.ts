@@ -73,3 +73,22 @@ describe('glossary formula references', () => {
 		});
 	}
 });
+
+describe('glossary threshold bands', () => {
+	const banded = GLOSSARY.filter((e) => e.bands);
+
+	it('at least one glossary term carries bands', () => {
+		expect(banded.length).toBeGreaterThan(0);
+	});
+
+	for (const entry of banded) {
+		it(`"${entry.term}" bands are non-empty range/label pairs`, () => {
+			// A blank range or label would render a confusing dangling bullet.
+			expect(entry.bands!.length).toBeGreaterThan(0);
+			for (const band of entry.bands!) {
+				expect(band.range.trim()).not.toBe('');
+				expect(band.label.trim()).not.toBe('');
+			}
+		});
+	}
+});
