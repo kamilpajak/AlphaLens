@@ -9,6 +9,14 @@
 @import '@fontsource-variable/jetbrains-mono';
 @import '@fontsource-variable/space-grotesk';
 
+/* Temml MathML styling for typeset tooltip formulas (MathTex.svelte). The
+   `-Local` variant is the lightest (8.5KB CSS + a 9.2KB woff2 used only for
+   script capitals); it leaves `<math>` on the system math font so formulas
+   read close to the surrounding mono terminal face rather than a serif math
+   face. Vite rewrites the relative font URL and self-hosts the woff2 into the
+   Cloudflare Pages build output. */
+@import 'temml/dist/Temml-Local.css';
+
 /* Tailwind v4 module-graph detection for SvelteKit components is fragile —
    explicit @source globs are the canonical fix per upstream guidance. */
 @source "./lib/**/*.svelte";

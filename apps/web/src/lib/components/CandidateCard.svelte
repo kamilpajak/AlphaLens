@@ -16,6 +16,7 @@
 	import GatePill from './GatePill.svelte';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
+	import Formula from './Formula.svelte';
 	import ExpertPanel from './ExpertPanel.svelte';
 	import TradeSetup from './TradeSetup.svelte';
 	import TemplateFacts from './TemplateFacts.svelte';
@@ -210,6 +211,9 @@
 							<li>margin of safety <span class="whitespace-nowrap font-bold text-fg">{fmtPct(buf?.buffett_margin_of_safety_pct)}</span></li>
 							<li>coverage <span class="whitespace-nowrap font-bold text-fg">{buffCovN ?? '—'}/6</span></li>
 						</ul>
+						<p class="mt-1.5 text-fg-muted">
+							margin of safety <Formula name="margin_of_safety" />
+						</p>
 						{#if buffScore === null}
 							<p class="mt-1 text-fg-muted">not enough fundamentals to score</p>
 						{:else if buffLowCov}
