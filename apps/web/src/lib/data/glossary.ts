@@ -33,13 +33,25 @@ export interface GlossaryEntry {
 	// the pre-rendered MathML formula under the text body (e.g. PE → price/EPS).
 	// A unit test pins that every referenced key exists in formulas.json.
 	formula?: string;
+	// Optional threshold/state bands, rendered by the JargonTip as a small list
+	// under the body (e.g. RSI-style ranges). Plain data (not a Svelte snippet),
+	// so it lives happily in this .ts source. `range` is the bold token/condition
+	// (kept on one line), `label` is its meaning.
+	bands?: { range: string; label: string }[];
 }
 
 // Brief-detail-page metrics share the same shape (first-per-section /
 // pages: ['briefs']). Constructor avoids the literal-object repetition that
-// SonarCloud CPD flags as new-line duplication when entries are added.
-function briefMetric(term: string, full: string, body: string): GlossaryEntry {
-	return { term, full, body, category: 'first-per-section', pages: ['briefs'] };
+// SonarCloud CPD flags as new-line duplication when entries are added. `extra`
+// carries the occasional optional field (formula / bands) without forcing the
+// caller back to a full object literal.
+function briefMetric(
+	term: string,
+	full: string,
+	body: string,
+	extra: Partial<GlossaryEntry> = {}
+): GlossaryEntry {
+	return { term, full, body, category: 'first-per-section', pages: ['briefs'], ...extra };
 }
 
 export const GLOSSARY: GlossaryEntry[] = [
@@ -385,9 +397,14 @@ export const GLOSSARY: GlossaryEntry[] = [
 		term: 'MA200',
 		full: '200-day moving average',
 		formula: 'ma200_dist',
-		body: 'Average closing price over the last 200 trading days — the canonical long-term trend filter. Price above + MA200 slope > 0 = secular uptrend; price below + slope < 0 = downtrend; positive slope under price = deep-drawdown-reversal candidate setup.',
+		body: 'Average closing price over the last 200 trading days — the canonical long-term trend filter.',
 		category: 'first-per-section',
-		pages: ['briefs']
+		pages: ['briefs'],
+		bands: [
+			{ range: 'uptrend', label: 'price above MA, slope > 0' },
+			{ range: 'downtrend', label: 'price below MA, slope < 0' },
+			{ range: 'reversal setup', label: 'price below MA, slope > 0' }
+		]
 	},
 	{
 		term: 'magic formula',
@@ -397,7 +414,18 @@ export const GLOSSARY: GlossaryEntry[] = [
 		category: 'first-per-section',
 		pages: ['briefs']
 	},
-	briefMetric('financials age', 'days since last filing', 'Calendar days between the candidate brief-date and the publish date of the latest 10-K / 10-Q used to derive fundamentals (PE, PS, ROE, FCFF yield, …). Higher = staler fundamentals = larger blind-spot risk if the business has changed since the filing. Typical fresh quarter is 30–90d; >180d means the next earnings could materially repaint the picture.'),
+	briefMetric(
+		'financials age',
+		'days since last filing',
+		'Calendar days between the candidate brief-date and the publish date of the latest 10-K / 10-Q used to derive fundamentals (PE, PS, ROE, FCFF yield, …). Higher = staler fundamentals = larger blind-spot risk if the business has changed since the filing.',
+		{
+			bands: [
+				{ range: '≤90d', label: 'fresh quarter' },
+				{ range: '90–180d', label: 'aging — fundamentals may have drifted' },
+				{ range: '>180d', label: 'stale; next earnings could repaint the picture' }
+			]
+		}
+	),
 	briefMetric('next earnings', 'next scheduled earnings date', 'Next confirmed quarterly earnings release for the company. Holding a position through earnings adds a binary event-risk that the trade setup (ATR-based stops / tiers) does not price — the post-print gap can blow through the disaster stop intraday. Blank = no confirmed date available; treat as "unknown, could be soon" if the last filing is >75d old.'),
 	briefMetric('MA200 slope', '200-day moving average slope', 'Day-over-day change in the MA200, expressed as % per day. Positive slope = the long-term trend is still rising (price drawdowns happen against an up-trending base — classic deep-drawdown-reversal setup). Negative slope = secular downtrend; "buy the dip" is fighting the trend. Magnitude is small by construction (typical band ±0.1–0.5%/d).')
 ];

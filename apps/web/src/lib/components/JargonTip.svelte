@@ -41,10 +41,13 @@
 		/** Optional formulas.json key — typesets the formula under the text body
 		 *  (glossary-backed ratio terms like PE/ROE; ignored when `bodyRich` is set). */
 		formula?: string;
+		/** Optional threshold/state bands rendered as a small list under the body
+		 *  (RSI-style ranges; ignored when `bodyRich` is set). */
+		bands?: { range: string; label: string }[];
 		children?: Snippet;
 	}
 
-	let { term, full = '', body, bodyRich, formula, children }: Props = $props();
+	let { term, full = '', body, bodyRich, formula, bands, children }: Props = $props();
 
 	// Per-instance id linking the focusable trigger to the tooltip body via
 	// aria-describedby. Sourced from the module-level counter so SSR and
@@ -86,6 +89,13 @@
 			     leading `=` inside the MathML) so the `=` reads as one formula to
 			     assistive tech, not a detached text operator. -->
 			{#if formula}<span class="block mt-1.5 text-fg-muted"><Formula name={formula} /></span>{/if}
+			{#if bands && bands.length}
+				<ul class="list-disc pl-4 mt-1.5 space-y-0.5 marker:text-amber">
+					{#each bands as band}
+						<li><span class="whitespace-nowrap font-bold text-fg">{band.range}</span> {band.label}</li>
+					{/each}
+				</ul>
+			{/if}
 		{/if}
 	</TooltipBubble>
 </span>

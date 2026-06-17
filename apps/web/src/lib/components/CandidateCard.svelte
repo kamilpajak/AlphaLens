@@ -30,7 +30,8 @@
 			term: g?.term ?? term,
 			full: g?.full ?? '',
 			body: g?.body ?? '',
-			formula: g?.formula
+			formula: g?.formula,
+			bands: g?.bands
 		};
 	}
 
