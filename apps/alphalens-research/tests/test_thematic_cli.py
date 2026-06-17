@@ -117,7 +117,16 @@ class TestMapThemesCLI(unittest.TestCase):
         self.assertIn("QUBT", result.output)
         self.assertIn("tenk,press", result.output)
 
-    def test_map_themes_no_novel_themes_short_circuits(self):
+    def test_map_themes_no_novel_themes_writes_empty_parquet(self):
+        # A genuinely quiet news day yields 0 novel themes — a documented,
+        # EXPECTED state. map-themes must still write a typed-empty candidates
+        # parquet (NOT call the LLM) so the next stage (score) finds the file
+        # and the run_thematic_day.sh `set -e` chain does NOT abort before
+        # brief + rebuild-cache. Regression for the zero-novel chain-halt.
+        from pathlib import Path
+
+        from alphalens_pipeline.thematic.mapping.orchestrator import _MAP_THEMES_COLUMNS
+
         with (
             tempfile.TemporaryDirectory() as tmpdir,
             patch.dict(os.environ, self._env(), clear=False),
@@ -130,16 +139,79 @@ class TestMapThemesCLI(unittest.TestCase):
                 return_value=pd.DataFrame(),
             ),
             patch(
+                # The LLM proposal path must NOT run on a zero-novel day.
                 "alphalens_cli.commands.thematic.orchestrator.map_themes",
                 side_effect=AssertionError("must not be called"),
             ),
+            patch("alphalens_cli.commands.thematic._emit_stage_volume") as emit,
         ):
             result = self.runner.invoke(
                 app,
                 ["thematic", "map-themes", "--date", "2026-05-15", "--output-dir", tmpdir],
             )
-        self.assertEqual(result.exit_code, 0, msg=result.output)
-        self.assertIn("No novel themes", result.output)
+            # Assert inside the `with` so the TemporaryDirectory still exists.
+            self.assertEqual(result.exit_code, 0, msg=result.output)
+            # Observability contract stays uniform: the quiet-day path emits the
+            # true 0/0 volume so the gauge does not carry stale values.
+            emit.assert_called_once_with("map-themes", output_rows=0, input_rows=0)
+            self.assertIn("No novel themes", result.output)
+            out_path = Path(tmpdir) / "2026-05-15.parquet"
+            self.assertTrue(
+                out_path.exists(), msg="zero-novel day must still write a candidates parquet"
+            )
+            written = pd.read_parquet(out_path)
+            self.assertEqual(len(written), 0)
+            # Carries the full candidate schema + the freeze stamp so score /
+            # brief / Django ingest read it like any other (empty) day.
+            for col in _MAP_THEMES_COLUMNS:
+                self.assertIn(col, written.columns)
+            self.assertIn("mapper_config_version", written.columns)
+
+    def test_zero_novel_then_score_does_not_halt_the_chain(self):
+        # End-to-end proof of the fix: map-themes (0 novel) -> score for the
+        # SAME date must both exit 0, so `set -euo pipefail` in
+        # run_thematic_day.sh does not abort the daily build. Before the fix,
+        # map-themes wrote nothing and score raised BadParameter (exit 1).
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as cdir, tempfile.TemporaryDirectory() as sdir:
+            with (
+                patch.dict(os.environ, self._env(), clear=False),
+                patch(
+                    "alphalens_cli.commands.thematic.themes_mod.roll_up",
+                    return_value=pd.DataFrame(),
+                ),
+                patch(
+                    "alphalens_cli.commands.thematic.themes_mod.flag_novel",
+                    return_value=pd.DataFrame(),
+                ),
+                patch(
+                    "alphalens_cli.commands.thematic.orchestrator.map_themes",
+                    side_effect=AssertionError("must not be called"),
+                ),
+            ):
+                r_map = self.runner.invoke(
+                    app,
+                    ["thematic", "map-themes", "--date", "2026-05-15", "--output-dir", cdir],
+                )
+            self.assertEqual(r_map.exit_code, 0, msg=r_map.output)
+
+            r_score = self.runner.invoke(
+                app,
+                [
+                    "thematic",
+                    "score",
+                    "--date",
+                    "2026-05-15",
+                    "--candidates-dir",
+                    cdir,
+                    "--output-dir",
+                    sdir,
+                ],
+            )
+            self.assertEqual(r_score.exit_code, 0, msg=r_score.output)
+            self.assertIn("Wrote 0 scored rows", r_score.output)
+            self.assertTrue((Path(sdir) / "2026-05-15.parquet").exists())
 
     def test_map_themes_missing_api_key_raises(self):
         with (
