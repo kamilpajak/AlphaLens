@@ -14,6 +14,10 @@
 		tooltip?: string;
 		/** Rich tooltip snippet (lists / formulas) — takes precedence over `tooltip`. */
 		tooltipRich?: Snippet;
+		/** Text shown (muted, empty bar) when `value` is null/non-finite. Defaults
+		 *  to an em-dash. Used to render an honest "no buys" / "net selling" state
+		 *  instead of a misleading percentile. */
+		placeholder?: string;
 	}
 	let {
 		label,
@@ -23,7 +27,8 @@
 		format = (v) => v.toFixed(1),
 		inverted = false,
 		tooltip,
-		tooltipRich
+		tooltipRich,
+		placeholder = '—'
 	}: Props = $props();
 
 	// A bubble shows when either body form is supplied; the trigger affordances
@@ -36,7 +41,7 @@
 			: Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100))
 	);
 	const display = $derived(
-		value === null || value === undefined || !Number.isFinite(value) ? '—' : format(value)
+		value === null || value === undefined || !Number.isFinite(value) ? placeholder : format(value)
 	);
 
 	type Tone = 'green' | 'amber' | 'red' | 'muted';
