@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 from alphalens_cli.main import app
 from typer.testing import CliRunner
@@ -151,6 +152,140 @@ class TestMapThemesCLI(unittest.TestCase):
             )
         # typer.BadParameter raises non-zero
         self.assertNotEqual(result.exit_code, 0)
+
+    def test_map_themes_renders_reused_frozen_candidates_with_ndarray_gates(self):
+        """The idempotent-freeze reuse path (PR #611) reloads candidates from
+        parquet, where list columns (``gates_passed`` / ``gates_unknown``)
+        deserialize as numpy ndarrays. The display loop must render them
+        without crashing.
+
+        Regression: the old ``row.get("gates_unknown", []) or []`` evaluated
+        ndarray truthiness, raising ``ValueError: truth value of an empty
+        array is ambiguous`` and halting the daily pipeline on EVERY reuse
+        run (VPS 2026-06-17, slots 20:30 / 04:30 UTC). The common case is an
+        EMPTY ``gates_unknown`` (most candidates carry no unknown gates),
+        which round-trips as an empty ndarray — and numpy raises only for
+        arrays whose length is not 1, so the empty case is the live crash.
+        """
+        with tempfile.TemporaryDirectory() as rtdir:
+            # Round-trip through parquet so the list columns carry the REAL
+            # production reuse dtype (object cells holding numpy ndarrays),
+            # not a fabricated one. gates_unknown is EMPTY — the exact shape
+            # that produced "truth value of an empty array is ambiguous".
+            seed = pd.DataFrame(
+                [
+                    {
+                        "theme": "quantum_computing",
+                        "ticker": "QUBT",
+                        "company_name": "Quantum Computing Inc",
+                        "rationale": "Pure-play quantum hardware",
+                        "llm_confidence": 0.85,
+                        "market_cap": 1_780_000_000.0,
+                        "gates_passed": ["tenk", "press"],
+                        "gates_passed_str": "tenk,press",
+                        "n_gates_passed": 2,
+                        "gates_failed": ["etf"],
+                        "gates_failed_str": "etf",
+                        "n_gates_failed": 1,
+                        "gates_unknown": [],
+                        "gates_unknown_str": "",
+                        "n_gates_unknown": 0,
+                        "verified": True,
+                    }
+                ]
+            )
+            rt_path = f"{rtdir}/seed.parquet"
+            seed.to_parquet(rt_path, index=False)
+            df = pd.read_parquet(rt_path)
+        # Sanity: the reuse dtype really is ndarray, not list (otherwise the
+        # test would not exercise the regression).
+        self.assertIsInstance(df.iloc[0]["gates_passed"], np.ndarray)
+        df.attrs["dropped_total"] = 0
+        df.attrs["dropped_all_unknown"] = 0
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, self._env(), clear=False),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.roll_up",
+                return_value=pd.DataFrame(
+                    [
+                        {
+                            "theme": "quantum_computing",
+                            "novelty_score": 5.0,
+                            "count_recent": 3,
+                            "count_baseline": 0,
+                            "count_window": 3,
+                            "first_seen": dt.date(2026, 5, 1),
+                            "latest_seen": dt.date(2026, 5, 15),
+                        }
+                    ]
+                ),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel",
+                return_value=pd.DataFrame(
+                    [
+                        {
+                            "theme": "quantum_computing",
+                            "novelty_score": 5.0,
+                            "count_recent": 3,
+                            "count_baseline": 0,
+                            "count_window": 3,
+                            "first_seen": dt.date(2026, 5, 1),
+                            "latest_seen": dt.date(2026, 5, 15),
+                        }
+                    ]
+                ),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.orchestrator.map_themes",
+                return_value=df,
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                ["thematic", "map-themes", "--date", "2026-05-15", "--output-dir", tmpdir],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("QUBT", result.output)
+        self.assertIn("tenk,press", result.output)
+
+
+class TestMapThemesGateCellFormatting(unittest.TestCase):
+    """``_fmt_gate_cell`` formats a ``gates_*`` list cell for the operator
+    table that iterates ``df.head(25).iterrows()``. It must accept a Python
+    list (fresh-compute path), a numpy ndarray (frozen-candidate parquet
+    round-trip — list columns deserialize as ndarray), or None, and must
+    NEVER evaluate array truthiness (``ndarray or []`` raises ValueError)."""
+
+    def setUp(self):
+        from alphalens_cli.commands.thematic import _fmt_gate_cell
+
+        self._fmt = _fmt_gate_cell
+
+    def test_joins_python_list(self):
+        self.assertEqual(self._fmt(["tenk", "press"], empty="(none)"), "tenk,press")
+
+    def test_empty_python_list_returns_empty_marker(self):
+        self.assertEqual(self._fmt([], empty="-"), "-")
+
+    def test_none_returns_empty_marker(self):
+        self.assertEqual(self._fmt(None, empty="-"), "-")
+
+    def test_joins_numpy_array(self):
+        # The motivating regression: a populated ndarray from a parquet
+        # round-trip must render, not raise.
+        self.assertEqual(
+            self._fmt(np.array(["tenk", "press"], dtype=object), empty="(none)"),
+            "tenk,press",
+        )
+
+    def test_empty_numpy_array_returns_empty_marker(self):
+        # An empty ndarray's truthiness is ALSO ambiguous — the helper must
+        # short-circuit on length, not on ``or``.
+        self.assertEqual(self._fmt(np.array([], dtype=object), empty="-"), "-")
 
 
 class TestExtractCLIModelEnvVar(unittest.TestCase):
