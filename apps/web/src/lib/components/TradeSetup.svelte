@@ -101,6 +101,7 @@
 					<JargonTip
 						term="risk at stop"
 						body="Percent of the book lost if the full ladder fills and the disaster stop is hit: suggested size × distance from the blended entry to the stop. The real downside the position puts at risk."
+						formula="risk_at_stop"
 						>risk at stop</JargonTip
 					>
 				</div>
@@ -125,6 +126,7 @@
 					<JargonTip
 						term="full-ladder entry"
 						body="Allocation-weighted average entry price if all entry tiers fill. The blended cost basis the risk-at-stop and to-stop figures are measured from."
+						formula="full_ladder_entry"
 						>full-ladder entry</JargonTip
 					>
 				</div>
@@ -137,6 +139,7 @@
 					<JargonTip
 						term="to stop"
 						body="Percent move down from the full-ladder blended entry to the disaster stop — the price drop that triggers the maximum loss."
+						formula="to_stop"
 						>to stop</JargonTip
 					>
 				</div>
