@@ -72,6 +72,11 @@ class Brief(models.Model):
 
     insider_score_usd = models.FloatField(null=True, blank=True)
     insider_score_sector_percentile = models.FloatField(null=True, blank=True)
+    # Poolability key for the insider signal (mirrors panel_config_version):
+    # the deferred Insider×EDGE calibration partitions by it, never pooling old
+    # (net / 90d / <=-percentile) rows with new (buy-only / 180d / within-buyers)
+    # rows. Stamped on every scored row by the pipeline; blank for pre-v2 dates.
+    insider_signal_version = models.CharField(max_length=64, blank=True, default="")
 
     fcff_yield_pct = models.FloatField(null=True, blank=True)
     fcff_yield_sector_percentile = models.FloatField(null=True, blank=True)

@@ -20,6 +20,7 @@
     "industry_name",
     "insider_score_sector_percentile",
     "insider_score_usd",
+    "insider_signal_version",
     "layer4_weighted_score",
     "magic_formula_cohort_n",
     "magic_formula_health_pass",

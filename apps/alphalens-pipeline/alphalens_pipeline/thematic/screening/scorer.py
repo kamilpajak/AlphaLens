@@ -137,7 +137,6 @@ def _safe_signal(name: str, fn, **kwargs):
 
 def compose_weighted_score(
     *,
-    insider_positive: bool,
     fcff_positive: bool,
     magic_formula_top_quartile: bool,
     deep_drawdown_reversal: bool,
@@ -147,7 +146,6 @@ def compose_weighted_score(
     """Combine boolean signals + catalyst strength into a 1-5 confidence score.
 
     Components:
-    - insider 2× (Cohen-Malloy paradigm #11 doctrine)
     - fcff 1×, technicals 1×
     - value/reversal slot 1×: fires on EITHER Magic Formula top-quartile
       (mature value pick) OR deep-drawdown-reversal (thematic momentum
@@ -155,12 +153,18 @@ def compose_weighted_score(
     - catalyst_floor 0-2: strong catalyst (≥0.70) lifts cohort by 2;
       moderate (≥0.25) by 1; weak by 0
 
+    Insider is INTENTIONALLY ABSENT (was a 2× term per Cohen-Malloy paradigm
+    #11 doctrine): the old absolute $50k gate never fired in practice, so the
+    term contributed 0; the v2 buy-only insider signal is held out of the
+    ordering score until a Phase-4 offline lift test validates its incremental
+    value (insider stays a display/rank dimension meanwhile). Re-introducing it
+    here, with a small evidence-based weight, is the explicit Phase-4 step.
+
     Result clipped to [1, 5].
     """
     val_or_reversal = int(magic_formula_top_quartile or deep_drawdown_reversal)
     raw = (
-        2 * int(insider_positive)
-        + int(fcff_positive)
+        int(fcff_positive)
         + val_or_reversal
         + int(technicals_positive)
         + catalyst_signals.catalyst_floor(catalyst_strength)
@@ -358,6 +362,10 @@ def _build_candidate_row(
         "peer_cohort_level": cohort.peer_cohort_level,
         "insider_score_usd": ins["score_usd"],
         "insider_score_sector_percentile": insider_pctl,
+        # Poolability key stamped on EVERY row (even when score_usd is null), so
+        # the deferred Insider×EDGE calibration partitions old vs new signal
+        # semantics and never pools across versions. Mirrors panel_config_version.
+        "insider_signal_version": insider_signal.INSIDER_SIGNAL_VERSION,
         "fcff_yield_pct": fcff["yield_pct"],
         "fcff_yield_sector_percentile": fcff_pctl,
         "valuation_pe": val["pe"],
@@ -414,7 +422,12 @@ def _build_candidate_row(
         # ``fcff_positive`` reads the cohort-adjusted percentile so a
         # thin-cohort candidate doesn't get a +1 lift from the
         # midpoint-50 fallback (which would otherwise pass the ≥50 test).
-        "_insider_positive": insider_is_positive(score_usd=ins["score_usd"]),
+        # Insider is HELD OUT of layer4_weighted_score (display/rank dimension
+        # only) pending a Phase-4 offline lift test — it contributed 0 in
+        # practice (no candidate cleared the old $50k gate) and the v2 buy-only
+        # signal must not silently start re-weighting the score before its
+        # incremental value is validated. `insider_is_positive` is retained for
+        # that future re-integration.
         "_fcff_positive": fcff_is_positive(sector_percentile=fcff_pctl),
         "_technicals_positive": technicals_are_positive(
             rsi=tech["rsi"], ma_distance_pct=tech["ma50_distance_pct"]
@@ -574,7 +587,6 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
 
     enrichment["layer4_weighted_score"] = [
         compose_weighted_score(
-            insider_positive=row["_insider_positive"],
             fcff_positive=row["_fcff_positive"],
             magic_formula_top_quartile=magic_formula.is_top_quartile(
                 rank=row["magic_formula_rank"], cohort_n=cohort_n
@@ -585,9 +597,7 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
         )
         for _, row in enrichment.iterrows()
     ]
-    enrichment = enrichment.drop(
-        columns=["_insider_positive", "_fcff_positive", "_technicals_positive"]
-    )
+    enrichment = enrichment.drop(columns=["_fcff_positive", "_technicals_positive"])
 
     # Merge on ticker to preserve original order + Phase C columns.
     merged = candidates.copy().reset_index(drop=True)
