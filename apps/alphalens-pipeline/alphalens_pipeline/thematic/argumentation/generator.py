@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import re
 from typing import Any
 
 import json_repair
@@ -42,6 +43,24 @@ _DEFAULT_MAX_OUTPUT_TOKENS = 2000
 _DEFAULT_TEMPERATURE = 0.2
 _RETRY_TEMPERATURE = 0.0  # greedy decode for stability on the retry
 
+# CJK Unicode blocks: a brief is English prose, so ANY Han / Kana / Hangul
+# character signals whole-language drift (DeepSeek v4 is Chinese-developed and
+# nondeterministically writes the whole brief in Chinese when the prompt does
+# not pin the output language — WK card 2026-06-12). Deliberately NOT a generic
+# "non-ASCII" test: English briefs legitimately carry Greek math notation
+# (α, ρ), the minus sign (−), and the multiplication sign (×), none of which
+# fall in these blocks, so they must never trip the guard.
+_CJK_RE = re.compile(
+    "["
+    "぀-ヿ"  # Hiragana + Katakana
+    "㐀-䶿"  # CJK Extension A
+    "一-鿿"  # CJK Unified Ideographs
+    "가-힣"  # Hangul syllables
+    "豈-﫿"  # CJK Compatibility Ideographs
+    "＀-￯"  # Halfwidth + Fullwidth forms
+    "]"
+)
+
 
 class BriefErrorKind(enum.Enum):
     """Classifies the outcome of a single brief-generation call.
@@ -56,6 +75,19 @@ class BriefErrorKind(enum.Enum):
     MALFORMED_JSON = "malformed_json"  # finish_reason == STOP, non-empty body, parse failed
     SAFETY = "safety"  # finish_reason == SAFETY
     TRANSPORT = "transport"  # SDK raised before producing a response
+    LANGUAGE_DRIFT = "language_drift"  # parsed cleanly but the prose is CJK, not English
+
+
+def _contains_cjk(parsed: dict) -> bool:
+    """True when any of the brief's required string fields carries CJK text.
+
+    A drifted brief is unreadable for the WhatsApp group, so even one drifted
+    field rejects the whole response (the retry regenerates all fields).
+    """
+    return any(
+        isinstance(parsed.get(key), str) and bool(_CJK_RE.search(parsed[key]))
+        for key in BRIEF_RESPONSE_SCHEMA["required"]
+    )
 
 
 def choose_model(*, weighted_score: int | float | None) -> str:
@@ -222,6 +254,16 @@ def generate_brief(
     # Defensive: ensure all 5 expected keys present; missing key → string "".
     for key in BRIEF_RESPONSE_SCHEMA["required"]:
         parsed.setdefault(key, "")
+
+    # Language guard: DeepSeek v4 (Chinese-developed) nondeterministically writes
+    # the whole brief in Chinese. Such a brief parses cleanly but is unreadable
+    # for the WhatsApp group (WK card 2026-06-12). Surface LANGUAGE_DRIFT so the
+    # retry wrapper drives a fresh greedy (temperature=0) call; the English
+    # directive in the prompt makes that retry deterministically English.
+    if _contains_cjk(parsed):
+        logger.warning("brief language drift (CJK output) for %s", facts.get("ticker"))
+        return None, BriefErrorKind.LANGUAGE_DRIFT
+
     parsed["model_used"] = model
     return parsed, BriefErrorKind.NONE
 
@@ -280,6 +322,11 @@ def generate_brief_with_retry(
       a fresh call at ``temperature=0``; the token cap is left unchanged —
       doubling it does nothing for an empty response (it was never a
       truncation), so we keep the base cap.
+    * ``BriefErrorKind.LANGUAGE_DRIFT`` — the brief parsed cleanly but the
+      prose came back in Chinese (DeepSeek v4 is Chinese-developed and drifts
+      when the language is not pinned). The recovery is a fresh greedy
+      (``temperature=0``) call at the base cap; combined with the prompt's
+      English directive the retry is deterministically English.
 
     Non-retryable kinds (``MALFORMED_JSON``, ``SAFETY``, ``TRANSPORT``)
     return None without retrying — extra tokens won't fix bad JSON, safety
@@ -307,11 +354,15 @@ def generate_brief_with_retry(
     )
     if kind == BriefErrorKind.NONE:
         return brief
-    if kind not in (BriefErrorKind.TRUNCATED, BriefErrorKind.EMPTY):
+    if kind not in (
+        BriefErrorKind.TRUNCATED,
+        BriefErrorKind.EMPTY,
+        BriefErrorKind.LANGUAGE_DRIFT,
+    ):
         return None
 
-    # Only TRUNCATED needs more room; EMPTY was not a token-exhaustion, so a
-    # fresh greedy call at the base cap is the right recovery.
+    # Only TRUNCATED needs more room; EMPTY / LANGUAGE_DRIFT were not token-
+    # exhaustion, so a fresh greedy call at the base cap is the right recovery.
     retry_tokens = (
         base_max_output_tokens * 2 if kind == BriefErrorKind.TRUNCATED else base_max_output_tokens
     )

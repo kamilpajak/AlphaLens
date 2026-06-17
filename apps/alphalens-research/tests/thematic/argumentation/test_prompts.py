@@ -118,5 +118,23 @@ class TestFlashPrompt(unittest.TestCase):
         self.assertIn("quantum_computing", p)
 
 
+class TestEnglishLanguageDirective(unittest.TestCase):
+    """Both prompts must pin the OUTPUT language to English.
+
+    DeepSeek v4 (a Chinese-developed model) nondeterministically drifts to
+    Chinese when no output language is fixed, producing a brief whose prose
+    the WhatsApp group cannot read (WK card, 2026-06-12). The instruction is
+    the source-side fix; the generator's CJK guard is the safety net.
+    """
+
+    def test_pro_prompt_pins_english_output(self):
+        p = prompts.build_pro_prompt(_sample_facts())
+        self.assertIn("English", p)
+
+    def test_flash_prompt_pins_english_output(self):
+        p = prompts.build_flash_prompt(_sample_facts())
+        self.assertIn("English", p)
+
+
 if __name__ == "__main__":
     unittest.main()

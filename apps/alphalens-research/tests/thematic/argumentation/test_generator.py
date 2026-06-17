@@ -483,5 +483,95 @@ class TestGenerateBriefWithRetryClient(unittest.TestCase):
         self.assertEqual(mock_ctor.call_count, 1)
 
 
+# A fully-Chinese brief — the exact failure mode observed on the WK card
+# (2026-06-12): valid JSON, all 4 string fields present, but DeepSeek wrote the
+# prose in Chinese instead of English.
+_CJK_BRIEF = {
+    "tldr": "Workiva的财务报告平台契合主题，但技术面动量滞后且内部人买入为零。",
+    "supply_chain_reasoning": "Workiva提供云端财务报告、SEC合规与审计管理软件，直接支持企业财报生成链。",
+    "bear_summary": "风险：1) 内部人90日内零买入；2) 技术面动量疲弱；3) 估值偏高。",
+    "catalyst_failure_exit": "若EX-99.1发布后股价未站上MA50或量能未放大，则视为催化剂失效。",
+}
+
+
+class TestLanguageDriftGuard(unittest.TestCase):
+    """A CJK brief is treated as a retryable failure (``LANGUAGE_DRIFT``).
+
+    Math notation (Greek α/ρ, ×, −) is NOT CJK and must NEVER trip the guard —
+    English briefs legitimately carry it, and a false positive would discard a
+    perfectly readable brief.
+    """
+
+    def test_cjk_brief_classified_as_language_drift(self):
+        fake_response = SimpleNamespace(text=json.dumps(_CJK_BRIEF, ensure_ascii=False))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.LANGUAGE_DRIFT)
+
+    def test_partial_cjk_in_any_field_classified_as_drift(self):
+        # Only one field drifts to Chinese — still unreadable for that field,
+        # so the whole brief is rejected and retried.
+        mixed = dict(_SAMPLE_BRIEF)
+        mixed["bear_summary"] = "估值偏高，内部人零买入。"
+        fake_response = SimpleNamespace(text=json.dumps(mixed, ensure_ascii=False))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.LANGUAGE_DRIFT)
+
+    def test_english_with_math_notation_is_not_drift(self):
+        english_math = dict(_SAMPLE_BRIEF)
+        english_math["bear_summary"] = "Carhart α=-2.01, ρ≈0.3; 20-40 bps drag; P/S × peers rich."
+        fake_response = SimpleNamespace(text=json.dumps(english_math, ensure_ascii=False))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="k")
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
+        self.assertIsNotNone(brief)
+
+
+class TestLanguageDriftRetry(unittest.TestCase):
+    def test_retry_recovers_language_drift(self):
+        # First call drifts to Chinese; the temperature-0 retry comes back in
+        # English. The wrapper must retry and return the English brief.
+        with patch.object(
+            generator,
+            "_call_llm",
+            side_effect=[
+                SimpleNamespace(text=json.dumps(_CJK_BRIEF, ensure_ascii=False)),
+                SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF)),
+            ],
+        ):
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+        self.assertIsNotNone(brief)
+        self.assertEqual(brief["tldr"], _SAMPLE_BRIEF["tldr"])
+
+    def test_language_drift_retry_uses_temperature_zero_and_base_tokens(self):
+        captured: list[dict] = []
+
+        def fake_call(client, prompt, *, model, max_output_tokens, temperature):
+            captured.append({"max_output_tokens": max_output_tokens, "temperature": temperature})
+            if len(captured) == 1:
+                return SimpleNamespace(text=json.dumps(_CJK_BRIEF, ensure_ascii=False))
+            return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
+
+        with patch.object(generator, "_call_llm", side_effect=fake_call):
+            generator.generate_brief_with_retry(
+                _facts(weighted_score=4), api_key="k", base_max_output_tokens=2000
+            )
+        # Drift is not token exhaustion → keep the base cap (only TRUNCATED doubles).
+        self.assertEqual(captured[1]["max_output_tokens"], 2000)
+        self.assertEqual(captured[1]["temperature"], 0.0)
+
+    def test_two_language_drifts_give_up(self):
+        with patch.object(
+            generator,
+            "_call_llm",
+            return_value=SimpleNamespace(text=json.dumps(_CJK_BRIEF, ensure_ascii=False)),
+        ):
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+
+
 if __name__ == "__main__":
     unittest.main()
