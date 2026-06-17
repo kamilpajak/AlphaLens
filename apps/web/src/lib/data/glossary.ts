@@ -144,6 +144,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'CAR',
 		full: 'cumulative abnormal return',
+		formula: 'car',
 		body: 'Sum of a stock\'s returns above what was expected over an event window (e.g. +1 to +20 days post-filing). Used to test whether an event (earnings, 8-K, M&A) predicts price movement.'
 ,
 		category: 'always'

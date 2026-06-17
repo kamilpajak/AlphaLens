@@ -161,6 +161,7 @@
 								<JargonTip
 									term="excess expectancy"
 									body="Average excess return across matured trades — the candidate's raw window return minus the benchmark's return over the same window. The headline edge estimate. Gross of cost."
+									formula="excess_expectancy"
 									>excess expectancy</JargonTip
 								>
 							</div>
@@ -290,6 +291,7 @@
 								<JargonTip
 									term="mean risk%"
 									body="Average risk-at-stop per trade as a percent of the book: position size × distance from blended entry to the disaster stop."
+									formula="mean_risk"
 									>mean risk%</JargonTip
 								>
 								<span class="text-fg-dim font-bold normal-case whitespace-nowrap">
