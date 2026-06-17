@@ -29,6 +29,10 @@ export interface GlossaryEntry {
 	// this list). Default ['experiments']; brief-detail-only acronyms set
 	// ['briefs']; shared concepts set both.
 	pages?: ('experiments' | 'briefs')[];
+	// Optional key into src/lib/formulas.json. When set, the JargonTip renders
+	// the pre-rendered MathML formula under the text body (e.g. PE → price/EPS).
+	// A unit test pins that every referenced key exists in formulas.json.
+	formula?: string;
 }
 
 // Brief-detail-page metrics share the same shape (first-per-section /
@@ -125,6 +129,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'FCFF',
 		full: 'free cash flow to the firm',
+		formula: 'fcff_yield',
 		body: 'Cash the company generates from operations, minus capital spending, before interest payments. "FCFF yield" is FCFF / enterprise value — a value-investing favourite.'
 ,
 		category: 'first-per-section'
@@ -315,6 +320,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'PE',
 		full: 'price-to-earnings ratio',
+		formula: 'pe',
 		body: 'Market price per share divided by trailing twelve-month earnings per share. Lower = "cheaper" relative to current profits; very low can also mean the market expects earnings to fall.',
 		category: 'first-per-section',
 		pages: ['briefs']
@@ -322,6 +328,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'PS',
 		full: 'price-to-sales ratio',
+		formula: 'ps',
 		body: 'Market cap divided by trailing twelve-month revenue. Useful for unprofitable / cyclical companies where PE is undefined or volatile. Lower = pay less per dollar of revenue.',
 		category: 'first-per-section',
 		pages: ['briefs']
@@ -329,6 +336,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'EV/REV',
 		full: 'enterprise value to revenue',
+		formula: 'ev_rev',
 		body: 'Enterprise value (market cap + debt − cash) divided by revenue. Like PS but adjusts for capital structure — a debt-heavy company looks "cheap" on PS but expensive on EV/REV.',
 		category: 'first-per-section',
 		pages: ['briefs']
@@ -336,6 +344,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'EV/EBITDA',
 		full: 'enterprise value to EBITDA',
+		formula: 'ev_ebitda',
 		body: 'Enterprise value divided by earnings before interest, taxes, depreciation, and amortization. A profitability-aware valuation multiple — comparable across companies regardless of leverage or D&A policy.',
 		category: 'first-per-section',
 		pages: ['briefs']
@@ -343,6 +352,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'ROE',
 		full: 'return on equity',
+		formula: 'roe',
 		body: 'Net income divided by shareholder equity, expressed as %. How efficiently the company turns its equity base into profit. >15% is generally considered strong for non-leveraged businesses.',
 		category: 'first-per-section',
 		pages: ['briefs']
@@ -350,6 +360,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'FCF margin',
 		full: 'free cash flow margin',
+		formula: 'fcf_margin',
 		body: 'Free cash flow (operating cash flow minus capex) divided by revenue. Measures how much of each dollar of sales the business converts to discretionary cash — a "real" profitability signal less manipulable than reported earnings.',
 		category: 'first-per-section',
 		pages: ['briefs']
@@ -378,6 +389,7 @@ export const GLOSSARY: GlossaryEntry[] = [
 	{
 		term: 'magic formula',
 		full: 'Greenblatt magic-formula rank',
+		formula: 'magic_formula',
 		body: 'Joel Greenblatt\'s ranking that combines earnings yield (cheap) with return on capital (high quality). Each candidate gets ranked within its sector cohort — lower magic-formula rank # = better combined score. Failed health gates (no PE / negative equity) leave the cell blank.',
 		category: 'first-per-section',
 		pages: ['briefs']

@@ -25,7 +25,12 @@
 	// Same tipProps pattern as /experiments — looks up term in shared glossary.
 	function tipProps(term: string) {
 		const g = GLOSSARY_BY_TERM.get(term);
-		return { term: g?.term ?? term, full: g?.full ?? '', body: g?.body ?? '' };
+		return {
+			term: g?.term ?? term,
+			full: g?.full ?? '',
+			body: g?.body ?? '',
+			formula: g?.formula
+		};
 	}
 
 	interface Props {
@@ -341,20 +346,56 @@
 							label="valuation composite"
 							value={c.valuation_composite_sector_percentile}
 							format={(v) => fmtPctile(v) + '%ile'}
-							tooltip="Composite sector-percentile rank across PE, PS, EV/Revenue, EV/EBITDA, FCF margin. Higher = cheaper than sector peers on multiple multiples simultaneously."
-						/>
+						>
+							{#snippet tooltipRich()}
+								<span class="block">composite sector-%ile rank across 5 multiples:</span>
+								<ul class="list-disc pl-4 mt-1 space-y-0.5 marker:text-amber">
+									<li>PE</li>
+									<li>PS</li>
+									<li>EV/Revenue</li>
+									<li>EV/EBITDA</li>
+									<li>FCF margin</li>
+								</ul>
+								<span class="block mt-1 text-fg-muted"
+									>higher = cheaper than sector peers on several multiples at once</span
+								>
+							{/snippet}
+						</SignalBar>
 						<SignalBar
 							label="catalyst strength"
 							value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
 							format={(v) => (v / 100).toFixed(2)}
-							tooltip="Layer 4 catalyst-floor score (0-1) combining news novelty, thematic alignment with the source event, and freshness. Higher = stronger event-driven setup. Below 0.55 floor → candidate filtered out."
-						/>
+						>
+							{#snippet tooltipRich()}
+								<span class="block">Layer-4 catalyst-floor score (0–1), combining:</span>
+								<ul class="list-disc pl-4 mt-1 space-y-0.5 marker:text-amber">
+									<li>news novelty</li>
+									<li>thematic alignment with the source event</li>
+									<li>freshness</li>
+								</ul>
+								<span class="block mt-1 text-fg-muted"
+									>higher = stronger event-driven setup; below the
+									<span class="whitespace-nowrap">0.55</span> floor → candidate filtered out</span
+								>
+							{/snippet}
+						</SignalBar>
 						<SignalBar
 							label="rsi 14d"
 							value={c.technical_rsi}
 							format={(v) => v.toFixed(0)}
-							tooltip="Relative Strength Index, 14-day. <30 oversold (potential reversal), >70 overbought (potential pullback), ~50 neutral. Combined with MA200 distance / 52w drawdown for the deep-drawdown-reversal pattern flag."
-						/>
+						>
+							{#snippet tooltipRich()}
+								<span class="block">Relative Strength Index, 14-day:</span>
+								<ul class="list-disc pl-4 mt-1 space-y-0.5 marker:text-amber">
+									<li><span class="whitespace-nowrap">&lt;30</span> oversold (potential reversal)</li>
+									<li><span class="whitespace-nowrap">~50</span> neutral</li>
+									<li><span class="whitespace-nowrap">&gt;70</span> overbought (potential pullback)</li>
+								</ul>
+								<span class="block mt-1 text-fg-muted"
+									>combined with MA200 distance + 52w drawdown for the deep-drawdown-reversal flag</span
+								>
+							{/snippet}
+						</SignalBar>
 						<SignalBar
 							label="off 52w high"
 							value={c.technical_pct_off_52w_high != null ? Math.abs(c.technical_pct_off_52w_high) : null}
@@ -378,8 +419,22 @@
 							min={0}
 							max={5}
 							format={(v) => (c.technical_volume_zscore! >= 0 ? '+' : '-') + v.toFixed(1) + 'σ'}
-							tooltip="20-day volume z-score. >+2σ = unusual buying interest (catalyst confirmation), <-2σ = drying volume (waning thesis). Sign matters; magnitude bar shows |z|."
-						/>
+						>
+							{#snippet tooltipRich()}
+								<span class="block">20-day volume z-score:</span>
+								<ul class="list-disc pl-4 mt-1 space-y-0.5 marker:text-amber">
+									<li>
+										<span class="whitespace-nowrap">&gt;+2σ</span> unusual buying interest (catalyst confirmation)
+									</li>
+									<li>
+										<span class="whitespace-nowrap">&lt;−2σ</span> drying volume (waning thesis)
+									</li>
+								</ul>
+								<span class="block mt-1 text-fg-muted"
+									>sign matters; the bar shows <span class="whitespace-nowrap">|z|</span></span
+								>
+							{/snippet}
+						</SignalBar>
 					</div>
 				</div>
 
