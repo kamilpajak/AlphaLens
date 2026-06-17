@@ -417,6 +417,89 @@ class TestLiteraturePublishWrapper(unittest.TestCase):
         # 2026-W22.md untracked, never committed).
         self.assertNotRegex(text, re.compile(r"git diff --quiet(?!\S)"))
 
+
+class TestRunThematicDayChainContract(unittest.TestCase):
+    """Pin the error-propagation contract of run_thematic_day.sh.
+
+    The daily build relies on a specific fail-fast / best-effort split that two
+    production incidents leaned on: the #614 map-themes crash and the zero-novel
+    chain-halt both depend on the 5 core thematic stages being fail-fast — a
+    crash MUST abort the run BEFORE the rebuild-cache ExecStartPost, never
+    publish a partial/stale brief — while the post-brief enrichment stages are
+    deliberately best-effort (a DeepSeek / Perplexity / FRED hiccup must not
+    fail a build whose brief is already written). Nothing pinned this, so a
+    stray ``|| true`` on a core stage — or dropping ``set -e`` — could silently
+    turn a hard failure into a half-built day. These static asserts lock it in.
+    """
+
+    CORE_STAGES = ("ingest --force", "extract", "map-themes", "score", "brief")
+    BEST_EFFORT = (
+        "experts migrate-qual-cache",
+        "experts enrich",
+        "cache refresh-vix",
+    )
+
+    def setUp(self):
+        self.text = RUN_THEMATIC_SCRIPT.read_text()
+        self.lines = self.text.splitlines()
+        self.logical = self._logical_lines(self.text)
+
+    @staticmethod
+    def _logical_lines(text: str) -> list[str]:
+        # Join shell backslash-continuations into one logical line, so a
+        # `cmd \\\n  || echo ...` stays a single inspectable statement.
+        out: list[str] = []
+        buf = ""
+        for raw in text.splitlines():
+            if raw.rstrip().endswith("\\"):
+                buf += raw.rstrip()[:-1].rstrip() + " "
+            else:
+                out.append((buf + raw).strip())
+                buf = ""
+        if buf:
+            out.append(buf.strip())
+        return out
+
+    def _stage_line(self, stage: str) -> str:
+        # CORE_STAGES are `alphalens thematic <stage>`; BEST_EFFORT carry their
+        # own subcommand group (`experts ...` / `cache ...`).
+        if stage in self.CORE_STAGES:
+            needle = f"alphalens thematic {stage}"
+        else:
+            needle = f"alphalens {stage}"
+        matches = [ln for ln in self.logical if ln.startswith(needle)]
+        self.assertEqual(
+            len(matches), 1, f"expected exactly one invocation line for {needle!r}, got {matches}"
+        )
+        return matches[0]
+
+    def test_set_euo_pipefail_present(self):
+        # The fail-fast root: without this a non-zero stage would be ignored.
+        self.assertRegex(self.text, r"(?m)^set -euo pipefail\b")
+
+    def test_core_stages_are_fail_fast(self):
+        # No core stage may swallow its exit code: a crash MUST abort the run
+        # before the rebuild-cache step (no partial-brief publish).
+        for stage in self.CORE_STAGES:
+            line = self._stage_line(stage)
+            self.assertNotIn("||", line, f"core stage must be fail-fast (no '||'): {line!r}")
+            self.assertNotRegex(
+                line, r";\s*(true|echo)\b", f"core stage must be fail-fast: {line!r}"
+            )
+
+    def test_post_brief_stages_are_best_effort(self):
+        # Enrichment after `brief` must not fail the build (brief already written).
+        for stage in self.BEST_EFFORT:
+            line = self._stage_line(stage)
+            self.assertIn("||", line, f"post-brief stage must be best-effort ('|| ...'): {line!r}")
+
+    def test_core_stage_ordering(self):
+        # score (which reads map-themes' parquet) must run before brief, so the
+        # zero-novel / #614 fail-fast actually gates the brief.
+        positions = {s: self.text.index(f"alphalens thematic {s}") for s in self.CORE_STAGES}
+        ordered = sorted(self.CORE_STAGES, key=lambda s: positions[s])
+        self.assertEqual(ordered, list(self.CORE_STAGES), f"stage order drifted: {ordered}")
+
     def test_wrapper_stages_before_gate_so_untracked_file_is_committed(self) -> None:
         # Regression for the silent new-period drop: the skip-gate MUST run
         # `git add` BEFORE testing the diff, or an untracked new-period file
