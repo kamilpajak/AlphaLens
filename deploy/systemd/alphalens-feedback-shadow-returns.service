@@ -72,10 +72,16 @@ StandardError=journal
 
 # The 14-day sweep x Polygon free-tier throttle (~5 req/min, 2 fetches per
 # matured ticker) can run long after a VPS-downtime backlog — Persistent=true
-# replay makes the first post-downtime run the largest. 45min gives headroom;
-# a timeout-kill is self-healing (idempotent re-stamp, next nightly fire
-# re-covers). Memory-light (minute-bar dicts), 1G is comfortable.
-TimeoutStartSec=45min
+# replay makes the first post-downtime run the largest. The recompute itself is
+# idempotent, BUT the ExecStartPost Postgres mirror runs only after a SUCCESSFUL
+# ExecStart — so a timeout-kill leaves fresh parquets on disk while the edge
+# dashboard freezes at the last completed run's brief_date (it is NOT
+# self-healing on its own). As the ongoing-position backlog grew (~100+ ongoing
+# across ~30 brief dates, each deferring on the Polygon fetch budget), the
+# steady-state run started crossing the old 45min ceiling and dying before the
+# mirror, stranding the dashboard 2+ days behind. 90min gives headroom to reach
+# ExecStartPost. Memory-light (minute-bar dicts), 1G is comfortable.
+TimeoutStartSec=90min
 MemoryMax=1G
 TasksMax=32
 
