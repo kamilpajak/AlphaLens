@@ -35,8 +35,8 @@ def _candidates_df(tickers: list[str]) -> pd.DataFrame:
 
 class TestWeightedScore(unittest.TestCase):
     def _kw(self, **overrides):
+        # Insider is intentionally absent — held out of layer4 pending Phase 4.
         base = {
-            "insider_positive": False,
             "fcff_positive": False,
             "magic_formula_top_quartile": False,
             "deep_drawdown_reversal": False,
@@ -47,11 +47,10 @@ class TestWeightedScore(unittest.TestCase):
         return base
 
     def test_all_positive_with_strong_catalyst_clips_to_5(self):
-        # 2*1 + 1 + 1 + 1 + 2 (catalyst floor strong) = 7, clipped to 5
+        # 1 (fcff) + 1 (MF) + 1 (tech) + 2 (catalyst floor strong) = 5
         self.assertEqual(
             scorer.compose_weighted_score(
                 **self._kw(
-                    insider_positive=True,
                     fcff_positive=True,
                     magic_formula_top_quartile=True,
                     technicals_positive=True,
@@ -64,11 +63,12 @@ class TestWeightedScore(unittest.TestCase):
     def test_all_negative_floors_to_1(self):
         self.assertEqual(scorer.compose_weighted_score(**self._kw()), 1)
 
-    def test_insider_only_counts_double(self):
-        self.assertEqual(
-            scorer.compose_weighted_score(**self._kw(insider_positive=True)),
-            2,
-        )
+    def test_insider_is_not_a_component(self):
+        # Insider held out of the ordering score (Phase 2): compose must reject
+        # an insider_positive kwarg, and a lone fcff signal scores 1 (no 2×).
+        with self.assertRaises(TypeError):
+            scorer.compose_weighted_score(**self._kw(), insider_positive=True)  # type: ignore[call-arg]
+        self.assertEqual(scorer.compose_weighted_score(**self._kw(fcff_positive=True)), 1)
 
     def test_reversal_substitutes_for_magic_formula_in_value_slot(self):
         # MF false, reversal true → val_or_reversal = 1; +tech = 2
@@ -293,6 +293,7 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
             "sector_name",
             "insider_score_usd",
             "insider_score_sector_percentile",
+            "insider_signal_version",
             "fcff_yield_pct",
             "fcff_yield_sector_percentile",
             "valuation_pe",
@@ -348,13 +349,14 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
         # Catalyst is mocked to None → cs=0, no catalyst floor. Reversal is
         # False (no source_event_url in fixture). So formula matches the pre-
         # catalyst behaviour.
-        # QUBT: insider neg, fcff sub-median, MF rank NaN (health gate FAIL),
-        # reversal False, technicals ok. -> clip(0+0+0+0+1+0, 1, 5) = 1.
+        # Insider is HELD OUT of layer4 (Phase 2) — it no longer contributes.
+        # QUBT: fcff sub-median, MF rank NaN (health gate FAIL), reversal False,
+        # technicals ok. -> clip(0+0+1+0, 1, 5) = 1.
         self.assertEqual(int(qubt["layer4_weighted_score"]), 1)
-        # IONQ: insider pos (2), fcff pos (1), MF top-quartile False (cohort
-        # n=1 → rank NaN → quartile False), reversal False, technicals not
-        # positive (RSI 80 too high). -> 2+1+0+0+0+0 = 3.
-        self.assertEqual(int(ionq["layer4_weighted_score"]), 3)
+        # IONQ: fcff pos (1), MF top-quartile False (cohort n=1 → rank NaN →
+        # quartile False), reversal False, technicals not positive (RSI 80 too
+        # high). Insider no longer adds its old +2. -> clip(1+0+0+0, 1, 5) = 1.
+        self.assertEqual(int(ionq["layer4_weighted_score"]), 1)
 
 
 class TestScoreCandidatesIsResilientToSignalExceptions(unittest.TestCase):

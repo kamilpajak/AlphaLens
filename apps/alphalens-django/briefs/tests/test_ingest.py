@@ -570,3 +570,33 @@ class TestExpertAssessments:
         _write_parquet(tmp_path, "2026-05-22", [{"ticker": "AAA", "theme": "t"}])
         rebuild_from_parquet(briefs_dir=tmp_path)
         assert Brief.objects.get(ticker="AAA").expert_assessments is None
+
+
+@pytest.mark.django_db
+class TestInsiderSignalVersionIngest:
+    """The insider-signal poolability key round-trips so the deferred
+    Insider×EDGE calibration can partition old vs new signal semantics."""
+
+    def test_signal_version_round_trips(self, tmp_path: Path):
+        _write_parquet(
+            tmp_path,
+            "2026-06-17",
+            [
+                {
+                    "ticker": "BAH",
+                    "theme": "defense",
+                    "insider_score_usd": 120000.0,
+                    "insider_score_sector_percentile": 80.0,
+                    "insider_signal_version": "insider-v2-buyonly-180d-withinbuyers",
+                }
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        bah = Brief.objects.get(ticker="BAH")
+        assert bah.insider_signal_version == "insider-v2-buyonly-180d-withinbuyers"
+
+    def test_missing_version_defaults_to_blank(self, tmp_path: Path):
+        # A pre-v2 parquet that omits the column ingests to "" (not a crash).
+        _write_parquet(tmp_path, "2026-06-17", [{"ticker": "AAA", "theme": "t"}])
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        assert Brief.objects.get(ticker="AAA").insider_signal_version == ""
