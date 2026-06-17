@@ -14,5 +14,7 @@
   "full_ladder_entry": "= \\dfrac{\\sum (\\text{tier price} \\times \\text{alloc})}{\\sum \\text{alloc}}",
   "excess_expectancy": "= \\text{mean}(R_{\\text{cand}} - R_{\\text{bench}})",
   "mean_risk": "= \\text{mean}(\\text{size} \\times \\tfrac{\\text{entry} - \\text{stop}}{\\text{entry}})",
-  "car": "= \\sum (R_{\\text{actual}} - R_{\\text{expected}})"
+  "car": "= \\sum (R_{\\text{actual}} - R_{\\text{expected}})",
+  "ma50_dist": "= \\dfrac{\\text{close} - \\text{MA50}}{\\text{MA50}}",
+  "ma200_dist": "= \\dfrac{\\text{close} - \\text{MA200}}{\\text{MA200}}"
 }
