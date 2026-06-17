@@ -921,12 +921,15 @@ class TestShadowReturnsUnit(unittest.TestCase):
 
     def test_service_sets_generous_timeout_for_rate_limited_sweep(self) -> None:
         # The 14-day sweep × Polygon ~5 req/min throttle can run long after a
-        # VPS-downtime backlog (Persistent replay = the largest run). 45min
-        # gives headroom; a timeout-kill is self-healing (next nightly fire
-        # re-covers via idempotency).
+        # VPS-downtime backlog (Persistent replay = the largest run). The
+        # ExecStartPost Postgres mirror runs only after a SUCCESSFUL ExecStart,
+        # so a timeout-kill is NOT self-healing — it strands the edge dashboard
+        # at the last completed run's brief_date. The ongoing-position backlog
+        # grew past the old 45min ceiling and started dying before the mirror,
+        # so the timeout was bumped to 90min to keep reaching ExecStartPost.
         self.assertRegex(
             SHADOW_SERVICE.read_text(),
-            re.compile(r"^TimeoutStartSec=45min\s*$", re.MULTILINE),
+            re.compile(r"^TimeoutStartSec=90min\s*$", re.MULTILINE),
         )
 
     def test_timer_fires_daily_at_0630_utc_persistent(self) -> None:
