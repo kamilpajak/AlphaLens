@@ -209,6 +209,8 @@ Return a JSON object with these fields (each a single string):
   e.g. "exit if a competitor announces a comparable product publicly")
 
 CONSTRAINTS
+- Write the ENTIRE brief in English. Every output field must be English
+  prose, even when names or text inside <facts> appear in another language.
 - Ground every claim in the facts provided. Do NOT invent numbers,
   prices, dates, products, or names not present in <facts>.
 - Be terse, factual, no marketing tone.
@@ -246,11 +248,12 @@ Return JSON with these string fields:
 - bear_summary (≤250 chars, MANDATORY, ≥2 risks)
 - catalyst_failure_exit (≤200 chars, thesis-specific)
 
-Do NOT invent numbers, names, or dates not in <facts>. No marketing tone.
-Do NOT label large 52w drawdown as "cheap" or "on sale" — it is a
-momentum laggard signal per academic literature, not a bargain. Do NOT
-speculate on next_earnings_date outcomes. If catalyst event provided,
-reference it factually as the trigger.
+Write the ENTIRE brief in English, even when text inside <facts> is in
+another language. Do NOT invent numbers, names, or dates not in <facts>.
+No marketing tone. Do NOT label large 52w drawdown as "cheap" or "on
+sale" — it is a momentum laggard signal per academic literature, not a
+bargain. Do NOT speculate on next_earnings_date outcomes. If catalyst
+event provided, reference it factually as the trigger.
 {durability_constraint}"""
 
 
