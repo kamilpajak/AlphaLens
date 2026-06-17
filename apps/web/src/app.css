@@ -55,13 +55,19 @@
 	--font-display: 'Space Grotesk Variable', 'Space Grotesk', system-ui, sans-serif;
 }
 
-/* Typeset tooltip formulas (Temml MathML) in the terminal mono face instead
-   of Temml-Local.css's default math font, so a formula reads as part of the
-   same typography as the rest of the card. The math font stays in the fallback
-   chain for any glyph JetBrains Mono lacks (∑, integrals, …). Must come after
-   the `@import 'temml/dist/Temml-Local.css'` above to win the cascade. */
+/* Typeset tooltip formulas (Temml MathML) in Latin Modern Math — the classic
+   Computer-Modern face pdfLaTeX produces, so a formula reads like one in a
+   scientific paper. Self-hosted from static/fonts (GUST license, ≡ LPPL) since
+   temml does not bundle it; Temml-Local.css above still supplies the structural
+   MathML CSS. This `math {…}` rule must come after that @import to win the
+   cascade over its default math font. */
+@font-face {
+	font-family: 'Latin Modern Math';
+	src: url('/fonts/latinmodernmath.woff2') format('woff2');
+	font-display: swap;
+}
 math {
-	font-family: var(--font-mono), 'Cambria Math', math;
+	font-family: 'Latin Modern Math', math;
 }
 
 /* Single source of truth for the TooltipBubble inner-box padding. TooltipNote

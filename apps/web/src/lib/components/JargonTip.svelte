@@ -88,7 +88,7 @@
 			<!-- Centred, slightly larger display formula under the definition — the
 			     term name above is the left-hand side, so formulas.json carries just
 			     the right-hand expression (no leading `=`). -->
-			{#if formula}<span class="block mt-2 text-center text-[13px] text-fg-dim"><Formula name={formula} /></span>{/if}
+			{#if formula}<span class="block mt-2 text-center text-[15px] text-fg-dim"><Formula name={formula} /></span>{/if}
 			{#if bands && bands.length}
 				<ul class="list-disc pl-4 mt-1.5 space-y-0.5 marker:text-amber">
 					{#each bands as band}
