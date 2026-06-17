@@ -11,7 +11,7 @@
   "magic_formula": "= \\text{rank}_{\\text{EY}} + \\text{rank}_{\\text{ROC}}",
   "to_stop": "= \\dfrac{\\text{entry} - \\text{stop}}{\\text{entry}}",
   "risk_at_stop": "= \\text{size} \\times \\dfrac{\\text{entry} - \\text{stop}}{\\text{entry}}",
-  "full_ladder_entry": "= \\sum (\\text{tier price} \\times \\text{alloc})",
+  "full_ladder_entry": "= \\dfrac{\\sum (\\text{tier price} \\times \\text{alloc})}{\\sum \\text{alloc}}",
   "excess_expectancy": "= \\text{mean}(R_{\\text{cand}} - R_{\\text{bench}})",
   "mean_risk": "= \\text{mean}(\\text{size} \\times \\tfrac{\\text{entry} - \\text{stop}}{\\text{entry}})",
   "car": "= \\sum (R_{\\text{actual}} - R_{\\text{expected}})"
