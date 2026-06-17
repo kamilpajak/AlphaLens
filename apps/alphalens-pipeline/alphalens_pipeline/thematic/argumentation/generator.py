@@ -51,14 +51,13 @@ _RETRY_TEMPERATURE = 0.0  # greedy decode for stability on the retry
 # (α, ρ), the minus sign (−), and the multiplication sign (×), none of which
 # fall in these blocks, so they must never trip the guard.
 _CJK_RE = re.compile(
-    "["
-    "぀-ヿ"  # Hiragana + Katakana
-    "㐀-䶿"  # CJK Extension A
-    "一-鿿"  # CJK Unified Ideographs
-    "가-힣"  # Hangul syllables
-    "豈-﫿"  # CJK Compatibility Ideographs
-    "＀-￯"  # Halfwidth + Fullwidth forms
-    "]"
+    "[\u3000-\u303f"  # CJK symbols & punctuation (ideographic comma/period/brackets)
+    "\u3040-\u30ff"  # Hiragana + Katakana
+    "\u3400-\u4dbf"  # CJK Extension A
+    "\u4e00-\u9fff"  # CJK Unified Ideographs
+    "\uac00-\ud7a3"  # Hangul syllables
+    "\uf900-\ufaff"  # CJK Compatibility Ideographs
+    "\uff00-\uffef]"  # Halfwidth + Fullwidth forms
 )
 
 
