@@ -1,0 +1,4 @@
+{
+  "margin_of_safety": "= 1 - P / V_{\\text{intrinsic}}",
+  "owner_earnings_yield": "= \\dfrac{\\text{owner earnings}}{EV}"
+}

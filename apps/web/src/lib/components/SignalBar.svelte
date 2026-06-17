@@ -1,5 +1,7 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import { clampToViewport } from '$lib/actions/clampToViewport';
+	import TooltipBubble from './TooltipBubble.svelte';
 
 	interface Props {
 		label: string;
@@ -8,8 +10,10 @@
 		max?: number;
 		format?: (v: number) => string;
 		inverted?: boolean;
-		/** Optional descriptive tooltip shown on hover. */
+		/** Optional plain-text tooltip shown on hover. Ignored when `tooltipRich` is set. */
 		tooltip?: string;
+		/** Rich tooltip snippet (lists / formulas) — takes precedence over `tooltip`. */
+		tooltipRich?: Snippet;
 	}
 	let {
 		label,
@@ -18,8 +22,13 @@
 		max = 100,
 		format = (v) => v.toFixed(1),
 		inverted = false,
-		tooltip
+		tooltip,
+		tooltipRich
 	}: Props = $props();
+
+	// A bubble shows when either body form is supplied; the trigger affordances
+	// (cursor-help, focusability) follow the same condition.
+	const hasTooltip = $derived(Boolean(tooltip || tooltipRich));
 
 	const pct = $derived(
 		value === null || value === undefined || !Number.isFinite(value)
@@ -47,9 +56,9 @@
 <div
 	data-testid="signal-bar"
 	class="group relative text-[10px] uppercase tracking-widest hover:z-50 focus-within:z-50"
-	class:cursor-help={tooltip}
-	tabindex={tooltip ? 0 : undefined}
-	role={tooltip ? 'group' : undefined}
+	class:cursor-help={hasTooltip}
+	tabindex={hasTooltip ? 0 : undefined}
+	role={hasTooltip ? 'group' : undefined}
 	use:clampToViewport
 >
 	<div class="flex items-center justify-between mb-1.5 gap-2">
@@ -73,22 +82,10 @@
 		></div>
 	</div>
 
-	{#if tooltip}
-		<span
-			class="pointer-events-none absolute bottom-full left-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
-			style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"
-			role="tooltip"
-		>
-			<span class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl">
-				<span class="block text-amber font-bold uppercase tracking-widest text-[10px] mb-1">
-					{label}
-				</span>
-				<span class="block">{tooltip}</span>
-			</span>
-			<span
-				class="absolute left-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1"
-				style="transform: translateX(calc(-50% + var(--tt-arrow, 0px))) rotate(45deg)"
-			></span>
-		</span>
+	{#if hasTooltip}
+		<TooltipBubble>
+			{#snippet header()}{label}{/snippet}
+			{#if tooltipRich}{@render tooltipRich()}{:else}<span class="block">{tooltip}</span>{/if}
+		</TooltipBubble>
 	{/if}
 </div>

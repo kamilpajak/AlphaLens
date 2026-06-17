@@ -16,6 +16,7 @@
 	import GatePill from './GatePill.svelte';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
+	import Formula from './Formula.svelte';
 	import ExpertPanel from './ExpertPanel.svelte';
 	import TradeSetup from './TradeSetup.svelte';
 	import TemplateFacts from './TemplateFacts.svelte';
@@ -61,17 +62,6 @@
 	const buffCovN = $derived(
 		buf?.buffett_data_coverage != null ? Math.round(buf?.buffett_data_coverage * 6) : null
 	);
-	const buffHover = $derived(
-		`owner-earnings yield ${fmtPct(buf?.buffett_owner_earnings_yield_pct)} · ` +
-			`ROIC 3y ${fmtPct(buf?.buffett_roic_3y_avg)} · ` +
-			`margin of safety ${fmtPct(buf?.buffett_margin_of_safety_pct)} · ` +
-			`coverage ${buffCovN ?? '—'}/6` +
-			(buffScore === null
-				? ' — not enough fundamentals to score'
-				: buffLowCov
-					? ' — thin data, score down-weighted'
-					: '')
-	);
 
 	// O'Neil momentum chip — the symmetric sibling of the Buffett chip (both expert
 	// lenses are named on the meta-bar face so it reads coherently, not "Buffett +
@@ -84,12 +74,6 @@
 		Number.isFinite(oneil?.oneil_score) ? Math.round(oneil?.oneil_score as number) : null
 	);
 	const oneilScoreTone = $derived(oneilTone(oneil?.oneil_score));
-	const oneilHover = $derived(
-		`off 52w high ${fmtPct(oneil?.oneil_pct_off_52w_high)} · ` +
-			`MA200 slope ${fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2)}/d · ` +
-			`earnings YoY ${fmtPct(oneil?.oneil_earnings_growth_yoy_pct)}` +
-			(oneilScore === null ? ' — momentum terms incomplete to score' : '')
-	);
 </script>
 
 <article
@@ -201,7 +185,7 @@
 			     divider (not ranking inputs). Both raw 0-100 scores on the face; the
 			     disagreement verdict + the full read live in the <ExpertPanel> drawer. -->
 			<div class="flex items-center gap-x-4 border-l border-grid pl-4">
-				<ChipTip term="buffett quality" body={buffHover}>
+				<ChipTip term="buffett quality">
 					{#snippet chip()}
 						<span
 							class="inline-flex items-baseline gap-1.5 whitespace-nowrap cursor-help"
@@ -220,8 +204,24 @@
 							>
 						</span>
 					{/snippet}
+					{#snippet bodyRich()}
+						<ul class="list-disc pl-4 space-y-0.5 marker:text-amber">
+							<li>owner-earnings yield <span class="whitespace-nowrap font-bold text-fg">{fmtPct(buf?.buffett_owner_earnings_yield_pct)}</span></li>
+							<li>ROIC 3y <span class="whitespace-nowrap font-bold text-fg">{fmtPct(buf?.buffett_roic_3y_avg)}</span></li>
+							<li>margin of safety <span class="whitespace-nowrap font-bold text-fg">{fmtPct(buf?.buffett_margin_of_safety_pct)}</span></li>
+							<li>coverage <span class="whitespace-nowrap font-bold text-fg">{buffCovN ?? '—'}/6</span></li>
+						</ul>
+						<p class="mt-1.5 text-fg-muted">
+							margin of safety <Formula name="margin_of_safety" />
+						</p>
+						{#if buffScore === null}
+							<p class="mt-1 text-fg-muted">not enough fundamentals to score</p>
+						{:else if buffLowCov}
+							<p class="mt-1 text-fg-muted">thin data, score down-weighted</p>
+						{/if}
+					{/snippet}
 				</ChipTip>
-				<ChipTip term="o'neil momentum" body={oneilHover}>
+				<ChipTip term="o'neil momentum">
 					{#snippet chip()}
 						<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap cursor-help">
 							<span class="text-[9px] uppercase tracking-widest text-fg-muted">o'neil</span>
@@ -233,6 +233,16 @@
 								>{oneilScore ?? '—'}</span
 							>
 						</span>
+					{/snippet}
+					{#snippet bodyRich()}
+						<ul class="list-disc pl-4 space-y-0.5 marker:text-amber">
+							<li>off 52w high <span class="whitespace-nowrap font-bold text-fg">{fmtPct(oneil?.oneil_pct_off_52w_high)}</span></li>
+							<li>MA200 slope <span class="whitespace-nowrap font-bold text-fg">{fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2)}/d</span></li>
+							<li>earnings YoY <span class="whitespace-nowrap font-bold text-fg">{fmtPct(oneil?.oneil_earnings_growth_yoy_pct)}</span></li>
+						</ul>
+						{#if oneilScore === null}
+							<p class="mt-1 text-fg-muted">momentum terms incomplete to score</p>
+						{/if}
 					{/snippet}
 				</ChipTip>
 			</div>

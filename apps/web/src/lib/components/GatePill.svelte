@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { clampToViewport } from '$lib/actions/clampToViewport';
+	import TooltipBubble from './TooltipBubble.svelte';
 
 	interface Props {
 		name: string;
@@ -70,29 +71,17 @@
 	</span>
 
 	{#if info}
-		<span
-			class="pointer-events-none absolute bottom-full left-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
-			style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"
-			role="tooltip"
-		>
-			<span class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl">
-				<span class="block text-amber font-bold uppercase tracking-widest text-[10px] mb-1">
-					{name} // {info.full}
-				</span>
-				<span class="block">{info.what}</span>
-				<span
-					class="block mt-1.5 font-bold"
-					class:text-green={status === 'passed'}
-					class:text-red={status === 'failed'}
-					class:text-fg-muted={status === 'unknown'}
-				>
-					<span class="font-mono">{sym}</span> {statusLine}
-				</span>
-			</span>
+		<TooltipBubble>
+			{#snippet header()}{name} // {info.full}{/snippet}
+			<span class="block">{info.what}</span>
 			<span
-				class="absolute left-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1"
-				style="transform: translateX(calc(-50% + var(--tt-arrow, 0px))) rotate(45deg)"
-			></span>
-		</span>
+				class="block mt-1.5 font-bold"
+				class:text-green={status === 'passed'}
+				class:text-red={status === 'failed'}
+				class:text-fg-muted={status === 'unknown'}
+			>
+				<span class="font-mono">{sym}</span> {statusLine}
+			</span>
+		</TooltipBubble>
 	{/if}
 </span>

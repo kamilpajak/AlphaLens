@@ -11,16 +11,21 @@
 	// as a tone-coloured badge with a hover tooltip. Cloned from GatePill (same
 	// border-badge + amber popover styling, same viewport-clamp action); the caller
 	// supplies the label, the display value, the tone, and the hover body so it stays generic.
+	import type { Snippet } from 'svelte';
 	import type { PillarTone } from '$lib/format';
 	import { clampToViewport } from '$lib/actions/clampToViewport';
+	import TooltipBubble from './TooltipBubble.svelte';
 
 	interface Props {
 		label: string;
 		value: string;
 		tone: PillarTone;
-		body: string;
+		/** Plain-text body. Ignored when `bodyRich` is supplied. */
+		body?: string;
+		/** Rich body snippet (lists / formulas) — takes precedence over `body`. */
+		bodyRich?: Snippet;
 	}
-	let { label, value, tone, body }: Props = $props();
+	let { label, value, tone, body, bodyRich }: Props = $props();
 
 	const tooltipId = `expert-pillar-${__expertPillarIdCounter++}`;
 </script>
@@ -47,21 +52,8 @@
 		<span class="font-bold normal-case">{value}</span>
 	</span>
 
-	<span
-		id={tooltipId}
-		class="pointer-events-none absolute bottom-full left-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100"
-		style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"
-		role="tooltip"
-	>
-		<span class="block border border-amber bg-bg-1 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl">
-			<span class="block text-amber font-bold uppercase tracking-widest text-[10px] mb-1">
-				{label}
-			</span>
-			<span class="block">{body}</span>
-		</span>
-		<span
-			class="absolute left-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-1 -mt-1"
-			style="transform: translateX(calc(-50% + var(--tt-arrow, 0px))) rotate(45deg)"
-		></span>
-	</span>
+	<TooltipBubble id={tooltipId}>
+		{#snippet header()}{label}{/snippet}
+		{#if bodyRich}{@render bodyRich()}{:else}<span class="block">{body}</span>{/if}
+	</TooltipBubble>
 </span>
