@@ -394,8 +394,8 @@ def map_themes_cmd(
         )
         typer.echo("-" * 110)
         for _, row in df.head(25).iterrows():
-            passed = ",".join(row["gates_passed"]) or "(none)"
-            unknown = ",".join(row.get("gates_unknown", []) or []) or "-"
+            passed = _fmt_gate_cell(row.get("gates_passed"), empty="(none)")
+            unknown = _fmt_gate_cell(row.get("gates_unknown"), empty="-")
             typer.echo(
                 f"{row['theme'][:27]:28s} {row['ticker']:8s} "
                 f"{passed:20s} {unknown:16s} {row['llm_confidence']:.2f}  "
@@ -484,6 +484,26 @@ def _fmt_num_or_dash(value, fmt: str) -> str:
     if value is None or pd.isna(value):
         return "-"
     return f"{value:{fmt}}"
+
+
+def _fmt_gate_cell(value: Any, *, empty: str) -> str:
+    """Render a ``gates_*`` list cell for the map-themes preview table.
+
+    Sibling of :func:`_fmt_str_or_dash`. The candidate columns
+    ``gates_passed`` / ``gates_unknown`` are Python lists on the
+    fresh-compute path, but the idempotent-freeze reuse path (PR #611)
+    reloads candidates from parquet, where list columns deserialize as
+    numpy ndarrays. ``ndarray or []`` raises ``ValueError: truth value of
+    an empty array is ambiguous`` for any array whose length is not 1 — so
+    the common empty ``gates_unknown`` crashed the map-themes stage on
+    EVERY reuse run (VPS 2026-06-17), halting the daily pipeline before
+    score / brief / rebuild-cache. Guard on ``len`` and ``is None``, never
+    on array truthiness.
+    """
+    if value is None:
+        return empty
+    items = [str(g) for g in value]
+    return ",".join(items) if items else empty
 
 
 def _fmt_str_or_dash(value, max_len: int) -> str:
