@@ -9,7 +9,8 @@
 		confidenceTone,
 		confidenceLabel,
 		buffettTone,
-		oneilTone
+		oneilTone,
+		insiderDisplay
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -43,6 +44,11 @@
 	}: Props = $props();
 
 	const confTone = $derived(confidenceTone(c.llm_confidence));
+	// Honest insider 90d display: only show the sector-percentile bar when there
+	// is actual net opportunistic buying; otherwise a muted "no buys" / "net
+	// selling" / "—" state (a 0/negative dollar signal ranks ~100th percentile
+	// only relative to net-selling peers — not a buy signal). See format.ts.
+	const insider = $derived(insiderDisplay(c.insider_score_usd, c.insider_score_sector_percentile));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 
@@ -330,12 +336,21 @@
 						{/if}
 					</div>
 					<div class="flex flex-col gap-y-4">
-						<SignalBar
-							label="insider 90d (sector %ile)"
-							value={c.insider_score_sector_percentile}
-							format={(v) => fmtPctile(v) + '%ile'}
-							tooltip="Cohen-Malloy opportunistic insider buys ($USD) in the last 90 days, ranked within the ticker's sector. Higher percentile = stronger insider conviction vs sector peers. Paradigm #11 scorer (αt 2.71 IS, SLIPPAGE-FAIL standalone)."
-						/>
+						{#if insider.mode === 'bar'}
+							<SignalBar
+								label="insider 90d (sector %ile)"
+								value={insider.percentile}
+								format={(v) => fmtPctile(v) + '%ile'}
+								tooltip="Net opportunistic insider buying ({fmtUsdCompact(insider.netUsd)}) in the last 90 days, ranked within the ticker's sector — shown only when there is net buying. Cohen-Malloy opportunistic classification; paradigm #11 scorer (αt 2.71 IS, SLIPPAGE-FAIL standalone)."
+							/>
+						{:else}
+							<SignalBar
+								label="insider 90d"
+								value={null}
+								placeholder={insider.label}
+								tooltip="No net opportunistic insider buying in the last 90 days. The sector percentile is suppressed on purpose: a 0/negative dollar signal ranks high only relative to net-selling peers, which is not a buy signal. Cohen-Malloy opportunistic classification; paradigm #11 scorer."
+							/>
+						{/if}
 						<SignalBar
 							label="fcff yield (sector %ile)"
 							value={c.fcff_yield_sector_percentile}

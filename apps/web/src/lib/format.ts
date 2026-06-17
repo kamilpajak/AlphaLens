@@ -34,6 +34,39 @@ export function fmtPctile(value: number | null | undefined): string {
 	return `${Math.round(value)}`;
 }
 
+/** Decide how to render the insider 90d signal honestly.
+ *
+ * `insider_score_sector_percentile` is a `<=`-rank: a ticker with ZERO net
+ * opportunistic buying lands at ~100th percentile whenever its sector peers
+ * are net sellers (`0 <= 0` counts). Rendering that as a green "100%ile" bar
+ * reads as "strong insider buying" when it really means "not selling, in a
+ * selling sector". Gate the bullish percentile bar on actual net buying
+ * (`insider_score_usd > 0`); for zero / net-selling / no-data, return a muted
+ * state so the card never shows a high percentile on a 0/negative dollar
+ * signal. (Phase 1 of the insider-signal redesign — display-only; the netting
+ * and ranking math are addressed separately in the pipeline.) */
+export type InsiderDisplay =
+	| { mode: 'bar'; percentile: number | null; netUsd: number }
+	| { mode: 'muted'; label: string };
+
+export function insiderDisplay(
+	scoreUsd: number | null | undefined,
+	percentile: number | null | undefined
+): InsiderDisplay {
+	if (scoreUsd === null || scoreUsd === undefined || !Number.isFinite(scoreUsd)) {
+		return { mode: 'muted', label: '—' };
+	}
+	if (scoreUsd > 0) {
+		const pct =
+			percentile === null || percentile === undefined || !Number.isFinite(percentile)
+				? null
+				: percentile;
+		return { mode: 'bar', percentile: pct, netUsd: scoreUsd };
+	}
+	if (scoreUsd < 0) return { mode: 'muted', label: 'net selling' };
+	return { mode: 'muted', label: 'no buys' };
+}
+
 export function fmtDate(value: string | null | undefined): string {
 	if (!value) return '—';
 	return value.slice(0, 10);
