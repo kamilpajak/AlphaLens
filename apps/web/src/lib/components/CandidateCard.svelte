@@ -473,7 +473,7 @@
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('magic formula')}>magic formula</JargonTip></dt><dd class="text-fg text-right">
 							{#if magic.mode === 'rank'}
 								<span class="text-amber font-bold">#{magic.rank}</span>
-								{#if magic.cohortN !== null}<span class="text-fg-muted">/{magic.cohortN}</span>{/if}
+								{#if magic.cohortN !== null}/{magic.cohortN}{/if}
 							{:else}
 								{magic.label}
 							{/if}
