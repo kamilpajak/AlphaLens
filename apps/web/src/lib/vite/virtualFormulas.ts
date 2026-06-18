@@ -25,6 +25,9 @@ export function virtualFormulas(): Plugin {
 		},
 		async load(id) {
 			if (id !== RESOLVED_ID) return;
+			// Sibling-relative to this file: formulas.json + temmlRender.js live in
+			// src/lib/ (one level up from src/lib/vite/). Keep this file co-located
+			// with them — moving it requires updating both relative paths.
 			const formulasPath = fileURLToPath(new URL('../formulas.json', import.meta.url));
 			// Re-run this loader when formulas.json changes so `vite dev` HMR picks
 			// up edits without a restart (the build path is unaffected either way).

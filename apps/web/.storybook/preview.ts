@@ -1,7 +1,12 @@
 import type { Preview } from '@storybook/sveltekit';
 // app.css = Tailwind utilities + @theme tokens + Temml-Local.css + the Latin
 // Modern Math @font-face. Importing it pulls the whole terminal look into the
-// preview iframe so stories render identically to the app.
+// preview iframe so stories render identically to the app. Story classes are
+// scanned via app.css's own src-relative @source globs (the .stories.svelte
+// files live under src/lib). If a Storybook-only decorator/chrome file under
+// .storybook/ ever needs Tailwind utilities, add a Storybook-scoped
+// `@source "../.storybook/**"` HERE (a preview-only stylesheet) rather than in
+// app.css — keeping it out of app.css keeps the production CSS app-scoped.
 import '../src/app.css';
 
 const preview: Preview = {
