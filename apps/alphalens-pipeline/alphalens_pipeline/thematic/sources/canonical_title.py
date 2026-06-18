@@ -291,6 +291,9 @@ def canonical_title_for(
     if _looks_truncated(og, fallback):
         # Publisher truncated its own og:title mid-token (Benzinga caps at
         # ~104 chars). The fallback is the complete source headline — keep it.
+        # Log so any false-positive (a complete headline wrongly rejected) is
+        # visible for tuning the heuristics.
+        logger.info("og:title rejected as truncated for %s: %r", url, og)
         return fallback
     shared = text_similarity.normalize_title(og) & norm_fallback
     if len(shared) >= _MIN_SHARED_TOKENS:
