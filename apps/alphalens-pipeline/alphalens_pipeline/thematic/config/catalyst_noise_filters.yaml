@@ -25,3 +25,52 @@ url_blocklist:
   - '(?i)/story/best-[^/]+(-(of|for|in))?-\d{4}'
   # Generic discount / save phrasing in slug.
   - '(?i)/story/[^/]*-(save-\$|save-\d+%|\d+%-off)'
+
+# Source-based gate for ENTITY-LESS catalyst events (catalyst_resolver
+# _filter_entityless_events). Entity-less events are eligible BY DEFAULT —
+# ~97% are reputable English journalism. They are dropped only when the
+# article's GDELT `domain` is listed here OR its `sourcecountry` is in
+# `state_media_countries`. Entity-RICH events are never affected. `domain`
+# and `sourcecountry` come from the news `extra` JSON, populated only for
+# GDELT (RSS/polygon/edgar carry neither, so their entity-less events pass).
+#
+# Domain match is host-exact or registrable-suffix (host == blocked OR
+# host.endswith("." + blocked)), case-insensitive — never substring (so
+# rt.com does not match report.com).
+state_media_domain_blocklist:
+  # US State Dept foreign-mission designated PRC state media:
+  - xinhuanet.com
+  - news.cn
+  - cgtn.com
+  - people.com.cn
+  - peopledaily.com.cn
+  - chinadaily.com.cn
+  - globaltimes.cn
+  # EU/US-sanctioned Russian state media:
+  - rt.com
+  - sputniknews.com
+  - sputnikglobe.com
+  - tass.com
+  # observed in AlphaLens production catalyst noise:
+  - voc.com.cn
+  - 163.com
+  - sina.com.cn
+  - ifeng.com
+  - tmtpost.com
+  - bjreview.com
+
+# GDELT `sourcecountry` string values (full English names, compared
+# case-insensitively). Taiwan / Hong Kong are deliberately NOT here.
+# "China" + "Russia" were verified against the live GDELT DOC 2.0 artlist
+# JSON (the actual production noise — voc.com.cn etc. tag as "China").
+# "Iran" / "North Korea" / "Belarus" are plausible-spelling backstops whose
+# exact GDELT string is NOT yet verified; the match is fail-OPEN (a spelling
+# mismatch silently keeps the event, never crashes or over-blocks), and the
+# domain blocklist already covers the major outlets, so an unverified country
+# string is at worst a no-op backstop. Verify + correct if one ever recurs.
+state_media_countries:
+  - China
+  - Russia
+  - Iran
+  - North Korea
+  - Belarus

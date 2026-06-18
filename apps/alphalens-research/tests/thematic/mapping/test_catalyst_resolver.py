@@ -1,10 +1,22 @@
 import datetime as dt
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 import pandas as pd
 from alphalens_pipeline.thematic.mapping import catalyst_resolver
+
+
+def _gdelt_extra(*, domain: str | None = None, sourcecountry: str | None = None) -> str:
+    """Build a GDELT-shaped ``extra`` JSON string for a seeded news row.
+
+    Mirrors ``sources/gdelt.py``: GDELT rows carry ``domain`` (bare host),
+    ``language``, and ``sourcecountry`` (full English name) inside the
+    ``extra`` JSON. RSS/polygon/edgar rows have an ``extra`` without these
+    keys (callers pass ``extra=None``/omit it entirely).
+    """
+    return json.dumps({"domain": domain, "sourcecountry": sourcecountry})
 
 
 def _seed_news(news_dir: Path, date: dt.date, rows: list[dict]) -> None:
@@ -983,19 +995,22 @@ class TestTier2StoryArc(unittest.TestCase):
 
 
 class TestCatalystEntityAnchor(unittest.TestCase):
-    """Eligibility gate: a catalyst event must name >=1 company entity.
+    """Source-based gate: entity-less events are ALLOWED by default.
 
-    Generic articles that name NO company (``primary_entities=[]``) get
-    attached as the catalyst to tickers that share only the THEME — a
-    Chinese state-media "build a tech power" piece with no entity was the
-    source_event for BAH/PSN/AVAV in production. The fix drops zero-entity
-    rows before the trigger is selected. The discriminator is entity
-    presence, NOT language — legit foreign-language news resolves entities
-    (NVDA, MSFT, TSM, SKHYNIX) and stays eligible.
+    Most entity-less catalysts are reputable English journalism
+    (MarketWatch/TechCrunch/FT/Reuters/CNBC) and must stay eligible. The
+    real noise is a tiny state-media set — a Chinese state-media "build a
+    tech power" piece (voc.com.cn, sourcecountry "China") was the
+    source_event for BAH/PSN/AVAV in production. So an entity-less event is
+    dropped ONLY when its GDELT ``domain`` is in the state-media blocklist
+    OR its ``sourcecountry`` is in the state-media country set. The
+    discriminator is the SOURCE, NOT the language: legit foreign-language
+    EU/Taiwan news with no entity stays eligible. Entity-rich events are
+    never touched by this gate.
     """
 
-    def test_theme_with_only_entityless_event_returns_none(self):
-        # The theme's ONLY event names no company → no catalyst surfaced.
+    def test_state_media_domain_entityless_returns_none(self):
+        # Entity-less event from a state-media domain → no catalyst surfaced.
         with tempfile.TemporaryDirectory() as tmp:
             news = Path(tmp) / "news"
             events = Path(tmp) / "events"
@@ -1004,10 +1019,11 @@ class TestCatalystEntityAnchor(unittest.TestCase):
                 dt.date(2026, 6, 12),
                 [
                     {
-                        "id": "n_generic",
+                        "id": "n_state",
                         "title": "Build a tech power, state media urges",
-                        "url": "https://state.example/tech-power",
+                        "url": "https://voc.com.cn/tech-power",
                         "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                        "extra": _gdelt_extra(domain="voc.com.cn", sourcecountry="China"),
                     }
                 ],
             )
@@ -1016,7 +1032,7 @@ class TestCatalystEntityAnchor(unittest.TestCase):
                 dt.date(2026, 6, 12),
                 [
                     {
-                        "news_id": "n_generic",
+                        "news_id": "n_state",
                         "themes": ["national_strategy"],
                         "primary_entities": [],  # names NO company
                         "confidence": 0.9,
@@ -1032,9 +1048,309 @@ class TestCatalystEntityAnchor(unittest.TestCase):
             )
         self.assertIsNone(cat)
 
-    def test_entityless_latest_ignored_entity_bearing_chosen(self):
-        # Latest event is entity-less; an older entity-bearing event exists.
-        # The entity-bearing event is chosen despite NOT being the latest.
+    def test_state_media_country_backstop_entityless_returns_none(self):
+        # Entity-less event whose domain is NOT blocklisted but whose
+        # sourcecountry is a state-media country → dropped by the country
+        # backstop.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_cn",
+                        "title": "Build a tech power, state media urges",
+                        "url": "https://some-unlisted-cn-host.example/tech",
+                        "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                        "extra": _gdelt_extra(
+                            domain="some-unlisted-cn-host.example", sourcecountry="China"
+                        ),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_cn",
+                        "themes": ["national_strategy"],
+                        "primary_entities": [],
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="national_strategy",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
+    def test_english_non_state_entityless_event_kept(self):
+        # The SNAP regression restored: a generic English TechCrunch article
+        # with no entity is KEPT under the default-allow flip.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_tc",
+                        "title": "Social platforms race to ship AI features",
+                        "url": "https://techcrunch.com/2026/06/12/ai-features",
+                        "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                        "extra": _gdelt_extra(
+                            domain="techcrunch.com", sourcecountry="United States"
+                        ),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_tc",
+                        "themes": ["social_ai"],
+                        "primary_entities": [],  # entity-less, but reputable source
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="social_ai",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat.url, "https://techcrunch.com/2026/06/12/ai-features")
+
+    def test_foreign_language_eu_entityless_event_kept(self):
+        # No language arm: legit foreign-language EU news with no entity is
+        # KEPT (German/French/Polish/Norwegian). sourcecountry is an EU
+        # country, NOT a state-media country.
+        for country, domain in [
+            ("Germany", "handelsblatt.com"),
+            ("France", "lemonde.fr"),
+            ("Poland", "rp.pl"),
+            ("Norway", "dn.no"),
+        ]:
+            with self.subTest(country=country):
+                with tempfile.TemporaryDirectory() as tmp:
+                    news = Path(tmp) / "news"
+                    events = Path(tmp) / "events"
+                    _seed_news(
+                        news,
+                        dt.date(2026, 6, 12),
+                        [
+                            {
+                                "id": "n_eu",
+                                "title": "Europaeische Tech-Strategie nimmt Form an",
+                                "url": f"https://{domain}/tech",
+                                "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                                "extra": _gdelt_extra(domain=domain, sourcecountry=country),
+                            }
+                        ],
+                    )
+                    _seed_events(
+                        events,
+                        dt.date(2026, 6, 12),
+                        [
+                            {
+                                "news_id": "n_eu",
+                                "themes": ["eu_tech"],
+                                "primary_entities": [],
+                                "confidence": 0.9,
+                            }
+                        ],
+                    )
+                    cat = catalyst_resolver.find_trigger_event(
+                        theme="eu_tech",
+                        asof=dt.date(2026, 6, 12),
+                        events_dir=events,
+                        news_dir=news,
+                        lookback_days=30,
+                    )
+                self.assertIsNotNone(cat)
+                self.assertEqual(cat.url, f"https://{domain}/tech")
+
+    def test_taiwan_entityless_event_kept(self):
+        # Taiwan is NOT a state-media country → entity-less Taiwan news kept.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_tw",
+                        "title": "Taiwan chip ecosystem expands capacity",
+                        "url": "https://taipeitimes.com/chip",
+                        "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                        "extra": _gdelt_extra(domain="taipeitimes.com", sourcecountry="Taiwan"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_tw",
+                        "themes": ["semiconductors"],
+                        "primary_entities": [],
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="semiconductors",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat.url, "https://taipeitimes.com/chip")
+
+    def test_entity_rich_state_media_domain_kept(self):
+        # Entity-rich article on a state-media domain bypasses the gate
+        # entirely — the gate only ever touches entity-less rows.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_state_nvda",
+                        "title": "NVIDIA expands China data-centre footprint",
+                        "url": "https://voc.com.cn/nvda",
+                        "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                        "extra": _gdelt_extra(domain="voc.com.cn", sourcecountry="China"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_state_nvda",
+                        "themes": ["national_strategy"],
+                        "primary_entities": ["NVDA"],  # entity-rich → bypasses gate
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="national_strategy",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat.url, "https://voc.com.cn/nvda")
+
+    def test_rss_entityless_event_kept(self):
+        # RSS/polygon/edgar rows have an ``extra`` without domain/sourcecountry
+        # (or no extra at all) → no state-media signal → entity-less KEPT.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_rss",
+                        "title": "Markets recap: tech leads broad rally",
+                        "url": "https://feeds.example/rss/markets",
+                        "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                        "extra": json.dumps({"feed": "markets"}),  # no domain/country
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_rss",
+                        "themes": ["markets"],
+                        "primary_entities": [],
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="markets",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat.url, "https://feeds.example/rss/markets")
+
+    def test_state_media_domain_suffix_match_does_not_overmatch(self):
+        # rt.com is blocklisted, but report.com / supportrt.com must NOT match
+        # (registrable-suffix match, never substring). The entity-less event
+        # on report.com is KEPT.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_report",
+                        "title": "Report.com analyses tech sector trends",
+                        "url": "https://report.com/tech",
+                        "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                        "extra": _gdelt_extra(domain="report.com", sourcecountry="United States"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_report",
+                        "themes": ["tech"],
+                        "primary_entities": [],
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="tech",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat.url, "https://report.com/tech")
+
+    def test_entityless_state_latest_ignored_entity_bearing_chosen(self):
+        # Latest event is an entity-less STATE-MEDIA row; an older
+        # entity-bearing event exists. The state-media row is dropped and the
+        # entity-bearing event is chosen despite NOT being the latest.
         with tempfile.TemporaryDirectory() as tmp:
             news = Path(tmp) / "news"
             events = Path(tmp) / "events"
@@ -1047,6 +1363,7 @@ class TestCatalystEntityAnchor(unittest.TestCase):
                         "title": "NVIDIA unveils next-gen accelerator",
                         "url": "https://reuters.example/nvda-launch",
                         "timestamp": pd.Timestamp("2026-06-10T09:00:00Z"),
+                        "extra": _gdelt_extra(domain="reuters.com", sourcecountry="United Kingdom"),
                     }
                 ],
             )
@@ -1055,10 +1372,11 @@ class TestCatalystEntityAnchor(unittest.TestCase):
                 dt.date(2026, 6, 12),
                 [
                     {
-                        "id": "n_generic",
+                        "id": "n_state",
                         "title": "Build a tech power, state media urges",
-                        "url": "https://state.example/tech-power",
+                        "url": "https://voc.com.cn/tech-power",
                         "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                        "extra": _gdelt_extra(domain="voc.com.cn", sourcecountry="China"),
                     }
                 ],
             )
@@ -1079,9 +1397,9 @@ class TestCatalystEntityAnchor(unittest.TestCase):
                 dt.date(2026, 6, 12),
                 [
                     {
-                        "news_id": "n_generic",
+                        "news_id": "n_state",
                         "themes": ["national_strategy"],
-                        "primary_entities": [],  # latest, but entity-less
+                        "primary_entities": [],  # latest, but entity-less state media
                         "confidence": 0.9,
                     }
                 ],
@@ -1094,7 +1412,7 @@ class TestCatalystEntityAnchor(unittest.TestCase):
                 lookback_days=30,
             )
         self.assertIsNotNone(cat)
-        # Entity-bearing event wins; the latest entity-less row is dropped.
+        # Entity-bearing event wins; the latest state-media row is dropped.
         self.assertEqual(cat.url, "https://reuters.example/nvda-launch")
         self.assertEqual(cat.published_at, "2026-06-10")
 
@@ -1140,9 +1458,11 @@ class TestCatalystEntityAnchor(unittest.TestCase):
         self.assertEqual(cat.echo_count, 1)
         self.assertFalse(cat.is_amplified)
 
-    def test_macro_geopolitical_entityless_event_excluded(self):
-        # No event_type exception — a macro/geopolitical event with no entity
-        # is gated exactly like any other entity-less event.
+    def test_macro_geopolitical_state_media_entityless_event_excluded(self):
+        # A macro/geopolitical entity-less event from a state-media source is
+        # gated like any other state-media entity-less event (no event_type
+        # exception). Without the state-media signal it would now be KEPT
+        # under default-allow — the source is what discriminates.
         with tempfile.TemporaryDirectory() as tmp:
             news = Path(tmp) / "news"
             events = Path(tmp) / "events"
@@ -1153,8 +1473,9 @@ class TestCatalystEntityAnchor(unittest.TestCase):
                     {
                         "id": "n_macro",
                         "title": "Trade tensions reshape supply chains",
-                        "url": "https://macro.example/trade-tensions",
+                        "url": "https://rt.com/trade-tensions",
                         "timestamp": pd.Timestamp("2026-06-12T07:00:00Z"),
+                        "extra": _gdelt_extra(domain="rt.com", sourcecountry="Russia"),
                     }
                 ],
             )
@@ -1282,10 +1603,13 @@ class TestCatalystEntityAnchor(unittest.TestCase):
         self.assertIsNotNone(cat)
         self.assertEqual(cat.url, "https://reuters.example/legit")
 
-    def test_all_nan_primary_entities_yields_none(self):
+    def test_all_nan_primary_entities_state_media_yields_none(self):
         # Column PRESENT but every row's value is NaN (column added by a newer
         # extractor yet unpopulated for an old date): _entity_set coerces NaN to
-        # an empty set, so all rows are gated and the theme yields no catalyst.
+        # an empty set, so every row is treated as entity-less. With a
+        # state-media source the rows are dropped and the theme yields no
+        # catalyst. (Without the state-media signal default-allow would keep
+        # them — entity-less is allowed by default.)
         with tempfile.TemporaryDirectory() as tmp:
             news = Path(tmp) / "news"
             events = Path(tmp) / "events"
@@ -1296,8 +1620,9 @@ class TestCatalystEntityAnchor(unittest.TestCase):
                     {
                         "id": "n_nan",
                         "title": "Some news with no extracted entities",
-                        "url": "https://state.example/nan",
+                        "url": "https://xinhuanet.com/nan",
                         "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                        "extra": _gdelt_extra(domain="xinhuanet.com", sourcecountry="China"),
                     }
                 ],
             )
@@ -1328,6 +1653,59 @@ class TestCatalystEntityAnchor(unittest.TestCase):
         # arc and let an otherwise entity-less row slip past the catalyst gate.
         row = pd.Series({"primary_entities": ["AAPL", float("nan"), "MSFT"]})
         self.assertEqual(catalyst_resolver._entity_set(row), {"AAPL", "MSFT"})
+
+    def test_entity_set_skips_none_and_pd_na_in_list(self):
+        # None / pd.NA mixed into the list must NOT enter the set as "NONE" /
+        # "<NA>" — that would make an otherwise entity-less row look entity-rich
+        # and slip past the state-media catalyst gate (zen review). A row whose
+        # entities are ALL null-like must coerce to an empty set.
+        row = pd.Series({"primary_entities": ["AAPL", None, pd.NA, "MSFT"]})
+        self.assertEqual(catalyst_resolver._entity_set(row), {"AAPL", "MSFT"})
+        all_null = pd.Series({"primary_entities": [None, pd.NA, float("nan")]})
+        self.assertEqual(catalyst_resolver._entity_set(all_null), set())
+
+
+class TestStateMediaHelpers(unittest.TestCase):
+    """Unit coverage for the source-gate primitives."""
+
+    def test_extra_field_reads_value(self):
+        extra = json.dumps({"domain": "voc.com.cn", "sourcecountry": "China"})
+        self.assertEqual(catalyst_resolver._extra_field(extra, "domain"), "voc.com.cn")
+        self.assertEqual(catalyst_resolver._extra_field(extra, "sourcecountry"), "China")
+
+    def test_extra_field_none_safe(self):
+        ef = catalyst_resolver._extra_field
+        self.assertIsNone(ef(None, "domain"))  # missing column
+        self.assertIsNone(ef(float("nan"), "domain"))  # NaN cell
+        self.assertIsNone(ef(123, "domain"))  # non-str
+        self.assertIsNone(ef("", "domain"))  # empty
+        self.assertIsNone(ef("{not json", "domain"))  # malformed JSON
+        self.assertIsNone(ef("[1, 2]", "domain"))  # JSON but not a dict
+        self.assertIsNone(ef(json.dumps({"x": 1}), "domain"))  # key absent
+        self.assertIsNone(ef(json.dumps({"domain": 5}), "domain"))  # non-str value
+        self.assertIsNone(ef(json.dumps({"domain": "  "}), "domain"))  # blank value
+
+    def test_domain_blocklisted_exact_and_suffix(self):
+        db = catalyst_resolver._domain_blocklisted
+        blocked = frozenset({"rt.com", "voc.com.cn"})
+        self.assertTrue(db("rt.com", blocked))  # exact
+        self.assertTrue(db("news.rt.com", blocked))  # sub-host
+        self.assertTrue(db("RT.COM", blocked))  # case-insensitive
+        self.assertFalse(db("report.com", blocked))  # NOT a substring match
+        self.assertFalse(db("supportrt.com", blocked))  # NOT a substring match
+        self.assertFalse(db(None, blocked))  # no domain
+        self.assertFalse(db("rt.com", frozenset()))  # empty blocklist
+
+    def test_is_state_media_row_splits_hits(self):
+        ismr = catalyst_resolver._is_state_media_row
+        domains = frozenset({"voc.com.cn"})
+        countries = frozenset({"china"})
+        dom = pd.Series({"extra": json.dumps({"domain": "voc.com.cn", "sourcecountry": "US"})})
+        self.assertEqual(ismr(dom, domains, countries), (True, False))
+        ctry = pd.Series({"extra": json.dumps({"domain": "unlisted.cn", "sourcecountry": "China"})})
+        self.assertEqual(ismr(ctry, domains, countries), (False, True))
+        rss = pd.Series({"extra": json.dumps({"publisher": "Reuters"})})
+        self.assertEqual(ismr(rss, domains, countries), (False, False))
 
 
 if __name__ == "__main__":

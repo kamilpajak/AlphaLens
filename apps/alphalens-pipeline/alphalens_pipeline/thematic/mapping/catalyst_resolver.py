@@ -52,16 +52,26 @@ _NOISE_FILTERS_PATH = Path(__file__).parent.parent / "config" / "catalyst_noise_
 ENTITY_JACCARD_THRESHOLD = text_similarity.ENTITY_JACCARD_THRESHOLD
 MIN_TRIGGER_ENTITIES = 2
 
-# Eligibility gate (DISTINCT from MIN_TRIGGER_ENTITIES). MIN_TRIGGER_ENTITIES
-# is the story-arc vs single-event-degraded threshold applied AFTER the
-# trigger is picked. MIN_CATALYST_ENTITIES is the ELIGIBILITY gate applied
-# BEFORE: a catalyst event must name >=1 company entity to be a catalyst at
-# all. Generic articles that name NO company (primary_entities=[]) — e.g. a
-# macro/geopolitical or state-media "build a tech power" piece — must not be
-# attached as the catalyst to tickers that share only the THEME. The
-# discriminator is entity PRESENCE, not language: legit foreign-language news
-# resolves entities (NVDA, MSFT, TSM, SKHYNIX) and stays eligible.
-MIN_CATALYST_ENTITIES = 1
+# Entity-anchor floor for the >=2-entity story-arc path (DISTINCT from the
+# source-based eligibility gate below). MIN_TRIGGER_ENTITIES is the story-arc
+# vs single-event-degraded threshold applied AFTER the trigger is picked. The
+# source-based eligibility gate (:func:`_filter_entityless_events`) is applied
+# BEFORE.
+#
+# Eligibility semantics (revises the #630 entity-presence gate):
+#   - Entity-RICH events (>=1 named company) are ALWAYS eligible — never
+#     touched by the source gate.
+#   - Entity-LESS events (primary_entities=[]) are ELIGIBLE BY DEFAULT. Data
+#     showed ~97% of entity-less catalysts are reputable English journalism
+#     (MarketWatch/TechCrunch/FT/Reuters/CNBC), which must stay eligible.
+#     They are dropped ONLY when the SOURCE is state media — the article's
+#     GDELT ``domain`` is in the state-media blocklist OR its ``sourcecountry``
+#     is a state-media country. The discriminator is the SOURCE, not the
+#     language: legit foreign-language EU/Taiwan entity-less news stays
+#     eligible. (#630 wrongly dropped ALL entity-less events, including the SNAP
+#     TechCrunch regression and legit EU news; a "drop non-English" arm was
+#     rejected — the noise is a tiny state-media set, e.g. voc.com.cn "build a
+#     tech power" -> BAH/PSN/AVAV.)
 
 # PR-2 precedence rule: when both a template event AND a Flash event exist
 # for the same (primary_entity_ticker, event_type) within this window, the
@@ -108,6 +118,94 @@ def _url_matches_blocklist(url: str, patterns: tuple[re.Pattern, ...]) -> bool:
     return any(p.search(url) for p in patterns)
 
 
+@lru_cache(maxsize=1)
+def _load_state_media_filters() -> tuple[frozenset[str], frozenset[str]]:
+    """Load the state-media domain blocklist + country set (cached for batch reuse).
+
+    Reads ``state_media_domain_blocklist`` (list of bare hosts) and
+    ``state_media_countries`` (list of GDELT ``sourcecountry`` English names)
+    from the catalyst-noise YAML. Domains are lower-cased; countries keep
+    their YAML casing but are compared case-insensitively by callers.
+
+    Degrades to two empty frozensets when the YAML / PyYAML is missing or
+    malformed (mirroring :func:`_load_url_blocklist_patterns`) — callers then
+    keep every entity-less event (default-allow) rather than crash.
+    """
+    try:
+        import yaml
+    except ImportError:
+        logger.warning("PyYAML not available; state-media catalyst filter disabled")
+        return frozenset(), frozenset()
+    if not _NOISE_FILTERS_PATH.exists():
+        return frozenset(), frozenset()
+    try:
+        cfg = yaml.safe_load(_NOISE_FILTERS_PATH.read_text()) or {}
+    except yaml.YAMLError as exc:
+        logger.warning("catalyst noise YAML parse failed: %s", exc)
+        return frozenset(), frozenset()
+    domains = frozenset(
+        str(d).strip().lower()
+        for d in (cfg.get("state_media_domain_blocklist") or [])
+        if str(d).strip()
+    )
+    countries = frozenset(
+        str(c).strip().lower() for c in (cfg.get("state_media_countries") or []) if str(c).strip()
+    )
+    return domains, countries
+
+
+def _extra_field(extra_raw: Any, key: str) -> str | None:
+    """Pull a single key out of a news row's ``extra`` JSON, None-safe.
+
+    The ``extra`` column is a JSON string (see ``sources/gdelt.py``); GDELT
+    rows carry ``domain`` / ``language`` / ``sourcecountry`` there, while
+    RSS/polygon/edgar rows have an ``extra`` without those keys. Returns the
+    stripped string value, or ``None`` on missing column (NaN) / malformed
+    JSON / absent key / non-string value.
+    """
+    if extra_raw is None:
+        return None
+    try:
+        if pd.isna(extra_raw):
+            return None
+    except (TypeError, ValueError):
+        # pd.isna raises on some pandas-typed sequences; treat as not-NaN.
+        pass
+    if not isinstance(extra_raw, str):
+        return None
+    stripped = extra_raw.strip()
+    if not stripped:
+        return None
+    try:
+        decoded = json.loads(stripped)
+    except ValueError:
+        return None
+    if not isinstance(decoded, dict):
+        return None
+    value = decoded.get(key)
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _domain_blocklisted(domain: str | None, blocked: frozenset[str]) -> bool:
+    """Whether ``domain`` matches a blocklisted host (exact or registrable suffix).
+
+    GDELT ``domain`` is a bare host like ``"voc.com.cn"``. A row matches when
+    its host EQUALS a blocked host or is a sub-host of it
+    (``host.endswith("." + blocked)``). This is deliberately NOT a substring
+    match: ``rt.com`` must block ``rt.com`` and ``news.rt.com`` but never
+    ``report.com`` or ``supportrt.com``. Compared case-insensitively.
+    """
+    if not domain or not blocked:
+        return False
+    host = domain.strip().lower()
+    if not host:
+        return False
+    return any(host == b or host.endswith("." + b) for b in blocked)
+
+
 @lru_cache(maxsize=8)
 def _load_window(parquet_dir: Path, asof: dt.date, lookback_days: int) -> pd.DataFrame:
     """Concat all parquets in ``[asof - lookback, asof]`` from ``parquet_dir``.
@@ -152,29 +250,72 @@ def _apply_noise_and_blocklist_filters(joined: pd.DataFrame) -> pd.DataFrame:
     return joined
 
 
-def _filter_entityless_events(joined: pd.DataFrame) -> pd.DataFrame:
-    """Drop rows whose ``primary_entities`` names fewer than ``MIN_CATALYST_ENTITIES``.
+def _is_state_media_row(
+    row: pd.Series, blocked_domains: frozenset[str], state_countries: frozenset[str]
+) -> tuple[bool, bool]:
+    """Whether a row's SOURCE is state media, split into (domain_hit, country_hit).
 
-    Entity-less events are a noise class: a generic article that names no
-    company (``primary_entities=[]``) would otherwise be attached as the
-    catalyst to every ticker that shares only the THEME. Reuses the existing
-    :func:`_entity_set` row coercion (upper-cased set of tickers).
+    Reads ``domain`` + ``sourcecountry`` from the row's ``extra`` JSON.
+    ``sourcecountry`` is compared case-insensitively against the YAML country
+    set (already lower-cased by :func:`_load_state_media_filters`). RSS /
+    polygon / edgar rows carry neither key, so both flags are False and the
+    row is NOT state media.
+    """
+    extra_raw = row.get("extra") if "extra" in row.index else None
+    domain = _extra_field(extra_raw, "domain")
+    country = _extra_field(extra_raw, "sourcecountry")
+    domain_hit = _domain_blocklisted(domain, blocked_domains)
+    # _extra_field already returns a stripped string or None.
+    country_hit = country is not None and country.lower() in state_countries
+    return domain_hit, country_hit
+
+
+def _filter_entityless_events(joined: pd.DataFrame) -> pd.DataFrame:
+    """Drop entity-less events ONLY when their SOURCE is state media.
+
+    Eligibility (revises #630's drop-all-entity-less gate):
+      - Entity-RICH events (``len(_entity_set(row)) >= 1``) are ALWAYS kept —
+        never touched here.
+      - Entity-LESS events are kept BY DEFAULT (the #630 default flips). They
+        are dropped only when the article's GDELT ``domain`` is in the
+        state-media blocklist OR its ``sourcecountry`` is a state-media
+        country. ``domain`` / ``sourcecountry`` live in the news ``extra``
+        JSON and are populated ONLY for GDELT — RSS/polygon/edgar entity-less
+        events always pass, which is correct.
 
     The gate fires only when the ``primary_entities`` column is PRESENT —
     a parquet that predates the column is left untouched (mirroring the
     ``event_type``-column guard in :func:`_apply_noise_and_blocklist_filters`),
-    so forward/backward schema drift degrades to "no entity filter" rather
-    than dropping every row.
+    so forward/backward schema drift degrades to "no entity filter".
     """
-    if "primary_entities" not in joined.columns:
+    if "primary_entities" not in joined.columns or joined.empty:
         return joined
-    before = len(joined)
-    keep = joined.apply(lambda row: len(_entity_set(row)) >= MIN_CATALYST_ENTITIES, axis=1)
-    filtered = joined[keep]
-    dropped = before - len(filtered)
-    if dropped:
-        logger.info("catalyst entity-anchor dropped %d entity-less event(s)", dropped)
-    return filtered
+    blocked_domains, state_countries = _load_state_media_filters()
+
+    def _verdict(row: pd.Series) -> str:
+        """One of ``keep`` / ``domain`` / ``country`` (a per-row scalar, so the
+        ``apply`` stays a plain Series — no closure-mutated counters)."""
+        if len(_entity_set(row)) >= 1:
+            return "keep"  # entity-rich rows always pass
+        domain_hit, country_hit = _is_state_media_row(row, blocked_domains, state_countries)
+        if domain_hit:
+            return "domain"
+        if country_hit:
+            return "country"
+        return "keep"  # entity-less but non-state-media -> kept (default-allow)
+
+    verdict = joined.apply(_verdict, axis=1)
+    domain_drops = int((verdict == "domain").sum())
+    country_drops = int((verdict == "country").sum())
+    if domain_drops or country_drops:
+        logger.info(
+            "catalyst source-gate dropped %d entity-less state-media event(s) "
+            "(%d domain, %d country)",
+            domain_drops + country_drops,
+            domain_drops,
+            country_drops,
+        )
+    return joined[verdict == "keep"]
 
 
 def _primary_ticker(value: Any) -> str | None:
@@ -334,15 +475,14 @@ def _entity_set(row: pd.Series) -> set[str]:
         stripped = val.strip().upper()
         return {stripped} if stripped else set()
     try:
-        # Skip NaN-in-list (e.g. ``["AAPL", nan]`` from a malformed parquet):
-        # ``str(nan)`` is ``"nan"`` which would otherwise enter the set as the
-        # spurious entity ``"NAN"`` — both poisoning the entity-overlap arc and
-        # letting an otherwise entity-less row slip past the catalyst gate.
-        return {
-            str(e).strip().upper()
-            for e in val
-            if not (isinstance(e, float) and pd.isna(e)) and str(e).strip()
-        }
+        # Skip any null-like element (``None`` / ``np.nan`` / ``pd.NA``) in the
+        # list (e.g. ``["AAPL", None]`` from a malformed parquet): ``str(None)``
+        # / ``str(nan)`` / ``str(pd.NA)`` would otherwise enter the set as the
+        # spurious entities ``"NONE"`` / ``"NAN"`` / ``"<NA>"`` — both poisoning
+        # the entity-overlap arc AND making an otherwise entity-less row look
+        # entity-rich, slipping it past the state-media catalyst gate. pd.notna
+        # handles all the null variants in one check.
+        return {str(e).strip().upper() for e in val if pd.notna(e) and str(e).strip()}
     except TypeError:
         return set()
 
@@ -484,10 +624,11 @@ def find_trigger_event(
     if joined.empty:
         return None
 
-    # Entity-anchor eligibility gate: drop events that name no company.
-    # Entity-less rows are a noise class, so this sits beside the noise
-    # filters above. A theme whose only events are entity-less yields NO
-    # catalyst — we deliberately do not surface candidates off generic noise.
+    # Source-based eligibility gate: entity-less events are kept by default;
+    # only entity-less STATE-MEDIA events (blocklisted domain or state-media
+    # sourcecountry) are dropped. Entity-rich events always pass. This sits
+    # beside the noise filters above. A theme whose only events are
+    # entity-less state-media pieces yields NO catalyst.
     joined = _filter_entityless_events(joined)
     if joined.empty:
         return None
