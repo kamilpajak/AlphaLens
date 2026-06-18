@@ -22,6 +22,10 @@
 @source "./lib/**/*.svelte";
 @source "./routes/**/*.svelte";
 @source "./**/*.{ts,js,html,svelte}";
+/* Storybook config/decorators live one level up (siblings of src/), so the
+   src-relative globs above don't scan them — needed for Tailwind classes
+   authored in .storybook/ (preview chrome, decorators) to survive purge. */
+@source "../.storybook/**/*.{ts,svelte}";
 
 @theme {
 	/* Bloomberg-terminal palette */
