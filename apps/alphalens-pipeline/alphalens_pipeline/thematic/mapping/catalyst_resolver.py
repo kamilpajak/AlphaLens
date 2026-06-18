@@ -265,7 +265,8 @@ def _is_state_media_row(
     domain = _extra_field(extra_raw, "domain")
     country = _extra_field(extra_raw, "sourcecountry")
     domain_hit = _domain_blocklisted(domain, blocked_domains)
-    country_hit = bool(country) and country.strip().lower() in state_countries
+    # _extra_field already returns a stripped string or None.
+    country_hit = country is not None and country.lower() in state_countries
     return domain_hit, country_hit
 
 
@@ -478,15 +479,14 @@ def _entity_set(row: pd.Series) -> set[str]:
         stripped = val.strip().upper()
         return {stripped} if stripped else set()
     try:
-        # Skip NaN-in-list (e.g. ``["AAPL", nan]`` from a malformed parquet):
-        # ``str(nan)`` is ``"nan"`` which would otherwise enter the set as the
-        # spurious entity ``"NAN"`` — both poisoning the entity-overlap arc and
-        # letting an otherwise entity-less row slip past the catalyst gate.
-        return {
-            str(e).strip().upper()
-            for e in val
-            if not (isinstance(e, float) and pd.isna(e)) and str(e).strip()
-        }
+        # Skip any null-like element (``None`` / ``np.nan`` / ``pd.NA``) in the
+        # list (e.g. ``["AAPL", None]`` from a malformed parquet): ``str(None)``
+        # / ``str(nan)`` / ``str(pd.NA)`` would otherwise enter the set as the
+        # spurious entities ``"NONE"`` / ``"NAN"`` / ``"<NA>"`` — both poisoning
+        # the entity-overlap arc AND making an otherwise entity-less row look
+        # entity-rich, slipping it past the state-media catalyst gate. pd.notna
+        # handles all the null variants in one check.
+        return {str(e).strip().upper() for e in val if pd.notna(e) and str(e).strip()}
     except TypeError:
         return set()
 

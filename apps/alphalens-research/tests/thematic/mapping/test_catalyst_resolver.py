@@ -1654,6 +1654,16 @@ class TestCatalystEntityAnchor(unittest.TestCase):
         row = pd.Series({"primary_entities": ["AAPL", float("nan"), "MSFT"]})
         self.assertEqual(catalyst_resolver._entity_set(row), {"AAPL", "MSFT"})
 
+    def test_entity_set_skips_none_and_pd_na_in_list(self):
+        # None / pd.NA mixed into the list must NOT enter the set as "NONE" /
+        # "<NA>" — that would make an otherwise entity-less row look entity-rich
+        # and slip past the state-media catalyst gate (zen review). A row whose
+        # entities are ALL null-like must coerce to an empty set.
+        row = pd.Series({"primary_entities": ["AAPL", None, pd.NA, "MSFT"]})
+        self.assertEqual(catalyst_resolver._entity_set(row), {"AAPL", "MSFT"})
+        all_null = pd.Series({"primary_entities": [None, pd.NA, float("nan")]})
+        self.assertEqual(catalyst_resolver._entity_set(all_null), set())
+
 
 if __name__ == "__main__":
     unittest.main()
