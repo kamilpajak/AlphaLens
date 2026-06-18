@@ -149,6 +149,16 @@ def _passing_verdict(*, ticker: str, **_kwargs) -> dict:
 
 
 class TestCatalystGateMapThemesIntegration(unittest.TestCase):
+    def setUp(self) -> None:
+        # The gate path reads two module-level @lru_cache helpers: _load_window
+        # (events/news parquets, keyed on dir+asof+lookback) and
+        # _load_state_media_filters (the YAML blocklist). Clear both so this
+        # test never observes an entry warmed by another test in the same
+        # discover process — the result must depend ONLY on the tmp parquets +
+        # the committed YAML, never on cache order.
+        catalyst_resolver._load_window.cache_clear()
+        catalyst_resolver._load_state_media_filters.cache_clear()
+
     def _run_map_themes(self, output_dir: Path, propose_mock: Mock) -> pd.DataFrame:
         """Run map_themes over the two seeded themes with the gate REAL, propose mocked.
 
