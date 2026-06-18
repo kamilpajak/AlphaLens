@@ -1282,6 +1282,53 @@ class TestCatalystEntityAnchor(unittest.TestCase):
         self.assertIsNotNone(cat)
         self.assertEqual(cat.url, "https://reuters.example/legit")
 
+    def test_all_nan_primary_entities_yields_none(self):
+        # Column PRESENT but every row's value is NaN (column added by a newer
+        # extractor yet unpopulated for an old date): _entity_set coerces NaN to
+        # an empty set, so all rows are gated and the theme yields no catalyst.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_nan",
+                        "title": "Some news with no extracted entities",
+                        "url": "https://state.example/nan",
+                        "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_nan",
+                        "themes": ["national_strategy"],
+                        "primary_entities": float("nan"),
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="national_strategy",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
+    def test_entity_set_skips_nan_in_list(self):
+        # A NaN mixed into the entity list (malformed parquet) must NOT enter the
+        # set as the spurious entity "NAN" — that would both poison the overlap
+        # arc and let an otherwise entity-less row slip past the catalyst gate.
+        row = pd.Series({"primary_entities": ["AAPL", float("nan"), "MSFT"]})
+        self.assertEqual(catalyst_resolver._entity_set(row), {"AAPL", "MSFT"})
+
 
 if __name__ == "__main__":
     unittest.main()

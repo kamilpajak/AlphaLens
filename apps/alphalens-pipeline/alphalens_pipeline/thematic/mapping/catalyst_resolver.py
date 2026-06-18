@@ -334,7 +334,15 @@ def _entity_set(row: pd.Series) -> set[str]:
         stripped = val.strip().upper()
         return {stripped} if stripped else set()
     try:
-        return {str(e).strip().upper() for e in val if str(e).strip()}
+        # Skip NaN-in-list (e.g. ``["AAPL", nan]`` from a malformed parquet):
+        # ``str(nan)`` is ``"nan"`` which would otherwise enter the set as the
+        # spurious entity ``"NAN"`` — both poisoning the entity-overlap arc and
+        # letting an otherwise entity-less row slip past the catalyst gate.
+        return {
+            str(e).strip().upper()
+            for e in val
+            if not (isinstance(e, float) and pd.isna(e)) and str(e).strip()
+        }
     except TypeError:
         return set()
 
@@ -513,6 +521,9 @@ def find_trigger_event(
 
     joined = joined.reset_index(drop=True)
     trigger = joined.sort_values(time_col, ascending=False).iloc[0]
+    # Empty set for a legacy parquet that predates the ``primary_entities``
+    # column (the entity gate above is a no-op there) -> the < threshold below
+    # deliberately routes such a trigger into single-event degraded mode.
     trigger_entities = _entity_set(trigger)
 
     if len(trigger_entities) < MIN_TRIGGER_ENTITIES:
