@@ -67,6 +67,29 @@ export function insiderDisplay(
 	return { mode: 'muted', label: 'no buys' };
 }
 
+/** Magic-formula cell display. A candidate that fails the health gate (no PE /
+ * negative equity) never gets a Greenblatt rank, so the cell has no value. Every
+ * sibling FUNDAMENTALS row renders a muted "—" for a missing value; this helper
+ * does the same for the unranked case instead of the old verbose "health-gate
+ * fail" phrase, which read inconsistently in a column of numbers/dashes (the
+ * reason lives in the cell's tooltip / glossary). A finite rank returns the
+ * rounded rank plus its sector-cohort size. */
+export type MagicFormulaDisplay =
+	| { mode: 'rank'; rank: number; cohortN: number | null }
+	| { mode: 'muted'; label: string };
+
+export function magicFormulaDisplay(
+	rank: number | null | undefined,
+	cohortN: number | null | undefined
+): MagicFormulaDisplay {
+	if (rank === null || rank === undefined || !Number.isFinite(rank)) {
+		return { mode: 'muted', label: '—' };
+	}
+	const n =
+		cohortN === null || cohortN === undefined || !Number.isFinite(cohortN) ? null : cohortN;
+	return { mode: 'rank', rank: Math.round(rank), cohortN: n };
+}
+
 export function fmtDate(value: string | null | undefined): string {
 	if (!value) return '—';
 	return value.slice(0, 10);

@@ -10,7 +10,8 @@
 		confidenceLabel,
 		buffettTone,
 		oneilTone,
-		insiderDisplay
+		insiderDisplay,
+		magicFormulaDisplay
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -50,6 +51,9 @@
 	// selling" / "—" state (a 0/negative dollar signal ranks ~100th percentile
 	// only relative to net-selling peers — not a buy signal). See format.ts.
 	const insider = $derived(insiderDisplay(c.insider_score_usd, c.insider_score_sector_percentile));
+	// Unranked (health-gate fail) renders a muted "—" like every sibling
+	// fundamentals row, not the verbose phrase. See format.ts.
+	const magic = $derived(magicFormulaDisplay(c.magic_formula_rank, c.magic_formula_cohort_n));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 
@@ -466,11 +470,11 @@
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ROE')}>roe</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.roe_pct)}</dd>
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('FCFF')}>fcff yield</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.fcff_yield_pct, 2)}</dd>
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('magic formula')}>magic formula</JargonTip></dt><dd class="text-right">
-							{#if c.magic_formula_rank != null}
-								<span class="text-amber font-bold">#{Math.round(c.magic_formula_rank)}</span>
-								<span class="text-fg-muted">/{c.magic_formula_cohort_n}</span>
+							{#if magic.mode === 'rank'}
+								<span class="text-amber font-bold">#{magic.rank}</span>
+								{#if magic.cohortN !== null}<span class="text-fg-muted">/{magic.cohortN}</span>{/if}
 							{:else}
-								<span class="text-fg-muted">health-gate fail</span>
+								<span class="text-fg-muted">{magic.label}</span>
 							{/if}
 						</dd>
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('financials age')}>financials age</JargonTip></dt><dd class="text-fg text-right">{c.valuation_financials_age_days != null ? Math.round(c.valuation_financials_age_days) + 'd' : '—'}</dd>
