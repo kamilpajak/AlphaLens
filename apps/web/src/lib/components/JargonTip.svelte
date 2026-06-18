@@ -30,6 +30,7 @@
 	import { clampToViewport } from '$lib/actions/clampToViewport';
 	import TooltipBubble from './TooltipBubble.svelte';
 	import Formula from './Formula.svelte';
+	import MetricGrid from './MetricGrid.svelte';
 
 	interface Props {
 		term: string;
@@ -85,16 +86,16 @@
 			{@render bodyRich()}
 		{:else}
 			<span class="block">{body}</span>
-			<!-- formulas.json values are complete expressions (they include the
-			     leading `=` inside the MathML) so the `=` reads as one formula to
-			     assistive tech, not a detached text operator. -->
-			{#if formula}<span class="block mt-1.5 text-fg-muted"><Formula name={formula} /></span>{/if}
+			<!-- Centred, slightly larger display formula under the definition — the
+			     term name above is the left-hand side, so formulas.json carries just
+			     the right-hand expression (no leading `=`). -->
+			{#if formula}<span
+					class="block mt-2 text-center text-[15px] text-fg-dim {bands?.length
+						? 'mb-2.5'
+						: 'mb-1'}"><Formula name={formula} /></span
+				>{/if}
 			{#if bands && bands.length}
-				<ul class="list-disc pl-4 mt-1.5 space-y-0.5 marker:text-amber">
-					{#each bands as band}
-						<li><span class="whitespace-nowrap font-bold text-fg">{band.range}</span> {band.label}</li>
-					{/each}
-				</ul>
+				<MetricGrid rows={bands.map((b) => ({ key: b.range, value: b.label }))} class="mt-1.5" />
 			{/if}
 		{/if}
 	</TooltipBubble>
