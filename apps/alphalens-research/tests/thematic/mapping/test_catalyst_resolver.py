@@ -982,5 +982,306 @@ class TestTier2StoryArc(unittest.TestCase):
         self.assertEqual(cat.trigger_url, "https://ft.example/spacex-trigger")
 
 
+class TestCatalystEntityAnchor(unittest.TestCase):
+    """Eligibility gate: a catalyst event must name >=1 company entity.
+
+    Generic articles that name NO company (``primary_entities=[]``) get
+    attached as the catalyst to tickers that share only the THEME — a
+    Chinese state-media "build a tech power" piece with no entity was the
+    source_event for BAH/PSN/AVAV in production. The fix drops zero-entity
+    rows before the trigger is selected. The discriminator is entity
+    presence, NOT language — legit foreign-language news resolves entities
+    (NVDA, MSFT, TSM, SKHYNIX) and stays eligible.
+    """
+
+    def test_theme_with_only_entityless_event_returns_none(self):
+        # The theme's ONLY event names no company → no catalyst surfaced.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_generic",
+                        "title": "Build a tech power, state media urges",
+                        "url": "https://state.example/tech-power",
+                        "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_generic",
+                        "themes": ["national_strategy"],
+                        "primary_entities": [],  # names NO company
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="national_strategy",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
+    def test_entityless_latest_ignored_entity_bearing_chosen(self):
+        # Latest event is entity-less; an older entity-bearing event exists.
+        # The entity-bearing event is chosen despite NOT being the latest.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 10),
+                [
+                    {
+                        "id": "n_nvda",
+                        "title": "NVIDIA unveils next-gen accelerator",
+                        "url": "https://reuters.example/nvda-launch",
+                        "timestamp": pd.Timestamp("2026-06-10T09:00:00Z"),
+                    }
+                ],
+            )
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_generic",
+                        "title": "Build a tech power, state media urges",
+                        "url": "https://state.example/tech-power",
+                        "timestamp": pd.Timestamp("2026-06-12T08:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 10),
+                [
+                    {
+                        "news_id": "n_nvda",
+                        "themes": ["national_strategy"],
+                        "primary_entities": ["NVDA"],
+                        "confidence": 0.92,
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_generic",
+                        "themes": ["national_strategy"],
+                        "primary_entities": [],  # latest, but entity-less
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="national_strategy",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        # Entity-bearing event wins; the latest entity-less row is dropped.
+        self.assertEqual(cat.url, "https://reuters.example/nvda-launch")
+        self.assertEqual(cat.published_at, "2026-06-10")
+
+    def test_single_entity_event_still_eligible(self):
+        # A real single-company catalyst (exactly 1 entity) stays eligible —
+        # the 1-entity degraded single-event path is preserved.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_ford",
+                        "title": "Ford guides Q3 above consensus",
+                        "url": "https://wsj.example/ford-guidance",
+                        "timestamp": pd.Timestamp("2026-06-12T13:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_ford",
+                        "themes": ["autos"],
+                        "primary_entities": ["F"],  # exactly 1 entity
+                        "confidence": 0.88,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="autos",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat.url, "https://wsj.example/ford-guidance")
+        self.assertEqual(cat.echo_count, 1)
+        self.assertFalse(cat.is_amplified)
+
+    def test_macro_geopolitical_entityless_event_excluded(self):
+        # No event_type exception — a macro/geopolitical event with no entity
+        # is gated exactly like any other entity-less event.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n_macro",
+                        "title": "Trade tensions reshape supply chains",
+                        "url": "https://macro.example/trade-tensions",
+                        "timestamp": pd.Timestamp("2026-06-12T07:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "news_id": "n_macro",
+                        "themes": ["geopolitics"],
+                        "event_type": "geopolitical",
+                        "primary_entities": [],
+                        "confidence": 0.9,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="geopolitics",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNone(cat)
+
+    def test_two_entity_story_arc_unchanged(self):
+        # Regression: the >=2-entity story-arc behaviour is unchanged. Both
+        # events carry {SPACEX, MUSK}; catalyst traces to the earliest root.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "id": "n_root",
+                        "title": "SpaceX files IPO with SEC",
+                        "url": "https://reuters.example/spacex-ipo",
+                        "timestamp": pd.Timestamp("2026-05-12T09:00:00Z"),
+                    }
+                ],
+            )
+            _seed_news(
+                news,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "id": "n_echo",
+                        "title": "SpaceX IPO valuation jumps as Musk speaks",
+                        "url": "https://ft.example/spacex-echo",
+                        "timestamp": pd.Timestamp("2026-05-14T14:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 12),
+                [
+                    {
+                        "news_id": "n_root",
+                        "themes": ["space_exploration"],
+                        "primary_entities": ["SPACEX", "MUSK"],
+                        "confidence": 0.92,
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 5, 14),
+                [
+                    {
+                        "news_id": "n_echo",
+                        "themes": ["space_exploration"],
+                        "primary_entities": ["SPACEX", "MUSK"],
+                        "confidence": 0.89,
+                    }
+                ],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="space_exploration",
+                asof=dt.date(2026, 5, 14),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat.url, "https://reuters.example/spacex-ipo")
+        self.assertEqual(cat.echo_count, 2)
+        self.assertTrue(cat.is_amplified)
+        self.assertEqual(cat.trigger_url, "https://ft.example/spacex-echo")
+
+    def test_missing_primary_entities_column_not_gated(self):
+        # Legacy/forward-compat: an events parquet without a primary_entities
+        # column at all is NOT gated (the gate fires only on a present column
+        # with too few entities), mirroring the event_type-column guard in
+        # _apply_noise_and_blocklist_filters. The legit event still surfaces.
+        with tempfile.TemporaryDirectory() as tmp:
+            news = Path(tmp) / "news"
+            events = Path(tmp) / "events"
+            _seed_news(
+                news,
+                dt.date(2026, 6, 12),
+                [
+                    {
+                        "id": "n1",
+                        "title": "Some legit news",
+                        "url": "https://reuters.example/legit",
+                        "timestamp": pd.Timestamp("2026-06-12T10:00:00Z"),
+                    }
+                ],
+            )
+            _seed_events(
+                events,
+                dt.date(2026, 6, 12),
+                [{"news_id": "n1", "themes": ["AI"], "confidence": 0.9}],
+            )
+            cat = catalyst_resolver.find_trigger_event(
+                theme="AI",
+                asof=dt.date(2026, 6, 12),
+                events_dir=events,
+                news_dir=news,
+                lookback_days=30,
+            )
+        self.assertIsNotNone(cat)
+        self.assertEqual(cat.url, "https://reuters.example/legit")
+
+
 if __name__ == "__main__":
     unittest.main()
