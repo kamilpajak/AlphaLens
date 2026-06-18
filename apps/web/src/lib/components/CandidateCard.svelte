@@ -19,6 +19,8 @@
 	import ChipTip from './ChipTip.svelte';
 	import Formula from './Formula.svelte';
 	import TooltipNote from './TooltipNote.svelte';
+	import MetricGrid from './MetricGrid.svelte';
+	import BulletList from './BulletList.svelte';
 	import ExpertPanel from './ExpertPanel.svelte';
 	import TradeSetup from './TradeSetup.svelte';
 	import TemplateFacts from './TemplateFacts.svelte';
@@ -75,6 +77,14 @@
 	const buffCovN = $derived(
 		buf?.buffett_data_coverage != null ? Math.round(buf?.buffett_data_coverage * 6) : null
 	);
+	// Rows for the buffett quality tooltip's key→value grid (label left, value
+	// right) — see MetricGrid.
+	const buffRows = $derived([
+		{ key: 'owner-earnings yield', value: fmtPct(buf?.buffett_owner_earnings_yield_pct) },
+		{ key: 'ROIC 3y', value: fmtPct(buf?.buffett_roic_3y_avg) },
+		{ key: 'margin of safety', value: fmtPct(buf?.buffett_margin_of_safety_pct) },
+		{ key: 'coverage', value: `${buffCovN ?? '—'}/6` }
+	]);
 
 	// O'Neil momentum chip — the symmetric sibling of the Buffett chip (both expert
 	// lenses are named on the meta-bar face so it reads coherently, not "Buffett +
@@ -87,6 +97,12 @@
 		Number.isFinite(oneil?.oneil_score) ? Math.round(oneil?.oneil_score as number) : null
 	);
 	const oneilScoreTone = $derived(oneilTone(oneil?.oneil_score));
+	// Rows for the o'neil momentum tooltip's key→value grid.
+	const oneilRows = $derived([
+		{ key: 'off 52w high', value: fmtPct(oneil?.oneil_pct_off_52w_high) },
+		{ key: 'MA200 slope', value: `${fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2)}/d` },
+		{ key: 'earnings YoY', value: fmtPct(oneil?.oneil_earnings_growth_yoy_pct) }
+	]);
 </script>
 
 <article
@@ -218,14 +234,9 @@
 						</span>
 					{/snippet}
 					{#snippet bodyRich()}
-						<ul class="list-disc pl-4 space-y-0.5 marker:text-amber">
-							<li>owner-earnings yield <span class="whitespace-nowrap font-bold text-fg">{fmtPct(buf?.buffett_owner_earnings_yield_pct)}</span></li>
-							<li>ROIC 3y <span class="whitespace-nowrap font-bold text-fg">{fmtPct(buf?.buffett_roic_3y_avg)}</span></li>
-							<li>margin of safety <span class="whitespace-nowrap font-bold text-fg">{fmtPct(buf?.buffett_margin_of_safety_pct)}</span></li>
-							<li>coverage <span class="whitespace-nowrap font-bold text-fg">{buffCovN ?? '—'}/6</span></li>
-						</ul>
-						<p class="mt-1.5 text-fg-muted">
-							margin of safety = <Formula name="margin_of_safety" />
+						<MetricGrid rows={buffRows} align="right" />
+						<p class="mt-2 text-center text-[15px] text-fg-dim">
+							<Formula name="margin_of_safety" />
 						</p>
 						{#if buffScore === null}
 							<p class="mt-1 text-fg-muted">not enough fundamentals to score</p>
@@ -248,11 +259,7 @@
 						</span>
 					{/snippet}
 					{#snippet bodyRich()}
-						<ul class="list-disc pl-4 space-y-0.5 marker:text-amber">
-							<li>off 52w high <span class="whitespace-nowrap font-bold text-fg">{fmtPct(oneil?.oneil_pct_off_52w_high)}</span></li>
-							<li>MA200 slope <span class="whitespace-nowrap font-bold text-fg">{fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2)}/d</span></li>
-							<li>earnings YoY <span class="whitespace-nowrap font-bold text-fg">{fmtPct(oneil?.oneil_earnings_growth_yoy_pct)}</span></li>
-						</ul>
+						<MetricGrid rows={oneilRows} align="right" />
 						{#if oneilScore === null}
 							<p class="mt-1 text-fg-muted">momentum terms incomplete to score</p>
 						{/if}
@@ -365,14 +372,8 @@
 							format={(v) => fmtPctile(v) + '%ile'}
 						>
 							{#snippet tooltipRich()}
-								<span class="block">composite sector-%ile rank across 5 multiples:</span>
-								<ul class="list-disc pl-4 mt-1 space-y-0.5 marker:text-amber">
-									<li>PE</li>
-									<li>PS</li>
-									<li>EV/Revenue</li>
-									<li>EV/EBITDA</li>
-									<li>FCF margin</li>
-								</ul>
+								<span class="block">Composite sector-%ile rank across 5 multiples:</span>
+								<BulletList items={['PE', 'PS', 'EV/Revenue', 'EV/EBITDA', 'FCF margin']} />
 								<TooltipNote>higher = cheaper than sector peers on several multiples at once</TooltipNote>
 							{/snippet}
 						</SignalBar>
@@ -383,11 +384,9 @@
 						>
 							{#snippet tooltipRich()}
 								<span class="block">Layer-4 catalyst-floor score (0–1), combining:</span>
-								<ul class="list-disc pl-4 mt-1 space-y-0.5 marker:text-amber">
-									<li>news novelty</li>
-									<li>thematic alignment with the source event</li>
-									<li>freshness</li>
-								</ul>
+								<BulletList
+									items={['news novelty', 'thematic alignment with the source event', 'freshness']}
+								/>
 								<TooltipNote
 									>higher = stronger event-driven setup; <span class="font-bold">below</span> the
 									<span class="whitespace-nowrap font-bold">0.55 floor</span> → candidate
@@ -402,11 +401,14 @@
 						>
 							{#snippet tooltipRich()}
 								<span class="block">Relative Strength Index, 14-day:</span>
-								<ul class="list-disc pl-4 mt-1 space-y-0.5 marker:text-amber">
-									<li><span class="whitespace-nowrap">&lt;30</span> oversold (potential reversal)</li>
-									<li><span class="whitespace-nowrap">~50</span> neutral</li>
-									<li><span class="whitespace-nowrap">&gt;70</span> overbought (potential pullback)</li>
-								</ul>
+								<MetricGrid
+									rows={[
+										{ key: '<30', value: 'oversold (potential reversal)' },
+										{ key: '~50', value: 'neutral' },
+										{ key: '>70', value: 'overbought (potential pullback)' }
+									]}
+									class="mt-1"
+								/>
 								<span class="block mt-1 text-fg-muted"
 									>combined with MA200 distance + 52w drawdown for the deep-drawdown-reversal flag</span
 								>
@@ -438,14 +440,13 @@
 						>
 							{#snippet tooltipRich()}
 								<span class="block">20-day volume z-score:</span>
-								<ul class="list-disc pl-4 mt-1 space-y-0.5 marker:text-amber">
-									<li>
-										<span class="whitespace-nowrap">&gt;+2σ</span> unusual buying interest (catalyst confirmation)
-									</li>
-									<li>
-										<span class="whitespace-nowrap">&lt;−2σ</span> drying volume (waning thesis)
-									</li>
-								</ul>
+								<MetricGrid
+									rows={[
+										{ key: '>+2σ', value: 'unusual buying interest (catalyst confirmation)' },
+										{ key: '<−2σ', value: 'drying volume (waning thesis)' }
+									]}
+									class="mt-1"
+								/>
 								<span class="block mt-1 text-fg-muted"
 									>sign matters; the bar shows <span class="whitespace-nowrap">|z|</span></span
 								>

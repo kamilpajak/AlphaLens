@@ -70,14 +70,6 @@ math {
 	font-family: 'Latin Modern Math', math;
 }
 
-/* Single source of truth for the TooltipBubble inner-box padding. TooltipNote
-   bleeds its footer panel flush to the bubble edges by negating exactly these,
-   so the two stay in sync from one place rather than duplicated literals. */
-:root {
-	--tt-pad-x: 0.75rem;
-	--tt-pad-y: 0.5rem;
-}
-
 html,
 body {
 	background: var(--color-bg);

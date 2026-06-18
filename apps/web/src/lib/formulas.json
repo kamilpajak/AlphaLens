@@ -1,5 +1,5 @@
 {
-  "margin_of_safety": "1 - \\dfrac{\\text{price}}{\\text{intrinsic value}}",
+  "margin_of_safety": "\\text{margin of safety} = 1 - \\dfrac{\\text{price}}{\\text{intrinsic value}}",
   "owner_earnings_yield": "\\dfrac{\\text{owner earnings}}{\\text{EV}}",
   "pe": "\\dfrac{\\text{price}}{\\text{EPS}}",
   "ps": "\\dfrac{\\text{mkt cap}}{\\text{revenue}}",

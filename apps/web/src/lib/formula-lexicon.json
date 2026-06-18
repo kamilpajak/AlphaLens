@@ -4,7 +4,7 @@
     "EV", "EPS", "EBITDA", "FCF", "FCFF", "ROE", "EY", "ROC",
     "MA50", "MA200", "price", "revenue", "equity", "close",
     "entry", "stop", "size", "alloc", "mkt cap", "net income",
-    "owner earnings", "intrinsic value", "tier price"
+    "owner earnings", "intrinsic value", "tier price", "margin of safety"
   ],
   "operators": ["mean", "rank"],
   "labels": ["cand", "bench", "actual", "expected"],
