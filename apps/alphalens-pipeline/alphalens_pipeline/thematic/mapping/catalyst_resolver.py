@@ -52,6 +52,17 @@ _NOISE_FILTERS_PATH = Path(__file__).parent.parent / "config" / "catalyst_noise_
 ENTITY_JACCARD_THRESHOLD = text_similarity.ENTITY_JACCARD_THRESHOLD
 MIN_TRIGGER_ENTITIES = 2
 
+# Eligibility gate (DISTINCT from MIN_TRIGGER_ENTITIES). MIN_TRIGGER_ENTITIES
+# is the story-arc vs single-event-degraded threshold applied AFTER the
+# trigger is picked. MIN_CATALYST_ENTITIES is the ELIGIBILITY gate applied
+# BEFORE: a catalyst event must name >=1 company entity to be a catalyst at
+# all. Generic articles that name NO company (primary_entities=[]) — e.g. a
+# macro/geopolitical or state-media "build a tech power" piece — must not be
+# attached as the catalyst to tickers that share only the THEME. The
+# discriminator is entity PRESENCE, not language: legit foreign-language news
+# resolves entities (NVDA, MSFT, TSM, SKHYNIX) and stays eligible.
+MIN_CATALYST_ENTITIES = 1
+
 # PR-2 precedence rule: when both a template event AND a Flash event exist
 # for the same (primary_entity_ticker, event_type) within this window, the
 # template event wins and the Flash event is dropped to holdout. 24h is the
@@ -139,6 +150,31 @@ def _apply_noise_and_blocklist_filters(joined: pd.DataFrame) -> pd.DataFrame:
             ~joined["url"].astype(str).apply(lambda u: _url_matches_blocklist(u, blocklist))
         ]
     return joined
+
+
+def _filter_entityless_events(joined: pd.DataFrame) -> pd.DataFrame:
+    """Drop rows whose ``primary_entities`` names fewer than ``MIN_CATALYST_ENTITIES``.
+
+    Entity-less events are a noise class: a generic article that names no
+    company (``primary_entities=[]``) would otherwise be attached as the
+    catalyst to every ticker that shares only the THEME. Reuses the existing
+    :func:`_entity_set` row coercion (upper-cased set of tickers).
+
+    The gate fires only when the ``primary_entities`` column is PRESENT —
+    a parquet that predates the column is left untouched (mirroring the
+    ``event_type``-column guard in :func:`_apply_noise_and_blocklist_filters`),
+    so forward/backward schema drift degrades to "no entity filter" rather
+    than dropping every row.
+    """
+    if "primary_entities" not in joined.columns:
+        return joined
+    before = len(joined)
+    keep = joined.apply(lambda row: len(_entity_set(row)) >= MIN_CATALYST_ENTITIES, axis=1)
+    filtered = joined[keep]
+    dropped = before - len(filtered)
+    if dropped:
+        logger.info("catalyst entity-anchor dropped %d entity-less event(s)", dropped)
+    return filtered
 
 
 def _primary_ticker(value: Any) -> str | None:
@@ -298,7 +334,15 @@ def _entity_set(row: pd.Series) -> set[str]:
         stripped = val.strip().upper()
         return {stripped} if stripped else set()
     try:
-        return {str(e).strip().upper() for e in val if str(e).strip()}
+        # Skip NaN-in-list (e.g. ``["AAPL", nan]`` from a malformed parquet):
+        # ``str(nan)`` is ``"nan"`` which would otherwise enter the set as the
+        # spurious entity ``"NAN"`` — both poisoning the entity-overlap arc and
+        # letting an otherwise entity-less row slip past the catalyst gate.
+        return {
+            str(e).strip().upper()
+            for e in val
+            if not (isinstance(e, float) and pd.isna(e)) and str(e).strip()
+        }
     except TypeError:
         return set()
 
@@ -440,6 +484,14 @@ def find_trigger_event(
     if joined.empty:
         return None
 
+    # Entity-anchor eligibility gate: drop events that name no company.
+    # Entity-less rows are a noise class, so this sits beside the noise
+    # filters above. A theme whose only events are entity-less yields NO
+    # catalyst — we deliberately do not surface candidates off generic noise.
+    joined = _filter_entityless_events(joined)
+    if joined.empty:
+        return None
+
     time_col = _resolve_time_column(joined)
     if time_col is None:
         return None
@@ -469,6 +521,9 @@ def find_trigger_event(
 
     joined = joined.reset_index(drop=True)
     trigger = joined.sort_values(time_col, ascending=False).iloc[0]
+    # Empty set for a legacy parquet that predates the ``primary_entities``
+    # column (the entity gate above is a no-op there) -> the < threshold below
+    # deliberately routes such a trigger into single-event degraded mode.
     trigger_entities = _entity_set(trigger)
 
     if len(trigger_entities) < MIN_TRIGGER_ENTITIES:
