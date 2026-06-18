@@ -24,6 +24,27 @@ _PUBLISHER_TITLE = (
     "outbreak — when could they be ready?"
 )
 
+# Real-world truncation cases. Benzinga truncates its own og:title /
+# twitter:title / <title> to ~104 chars mid-token (verified live 2026-06-18),
+# while the RSS/GDELT source title that reaches us as the fallback is complete.
+# Accepting the truncated og:title produced the broken card title reported by
+# the user ("... Google's AI Leap A", "... (NASDAQ:S").
+_BENZINGA_TRUNCATED_OG_PREFIX = (
+    "Weekend Round-Up: Nvidia's Q1 Triumph, SpaceX's IPO Filing, "
+    "Musk's OpenAI Controversy, Google's AI Leap A"
+)
+_BENZINGA_COMPLETE_FALLBACK = (
+    "Weekend Round-Up: Nvidia's Q1 Triumph, SpaceX's IPO Filing, "
+    "Musk's OpenAI Controversy, Google's AI Leap And More"
+)
+_BENZINGA_TRUNCATED_OG_BRACKET = (
+    "SpaceX Trading Volume Exceeds Apple, Microsoft, Tesla, Meta "
+    "And Google Stocks Combined - SpaceX (NASDAQ:S"
+)
+_BENZINGA_BRACKET_FALLBACK = (
+    "SpaceX Trading Volume Exceeds Apple, Microsoft, Tesla, Meta And Google Stocks Combined"
+)
+
 
 def _html(*, og=None, twitter=None, title=None) -> str:
     parts = ["<html><head>"]
@@ -213,6 +234,67 @@ class TestCanonicalTitleFor(unittest.TestCase):
             "https://x.test/a", fallback=_GDELT_TITLE, cache_dir=self.cache_dir, fetcher=boom
         )
         self.assertEqual(out, _GDELT_TITLE)
+
+    def test_keeps_fallback_when_og_is_truncated_prefix(self):
+        # Benzinga's og:title is the same headline cut mid-word ("... Leap A");
+        # the complete RSS fallback ("... Leap And More") must win.
+        f = _fetcher_returning(_html(og=_BENZINGA_TRUNCATED_OG_PREFIX))
+        out = ct.canonical_title_for(
+            "https://x.test/a",
+            fallback=_BENZINGA_COMPLETE_FALLBACK,
+            cache_dir=self.cache_dir,
+            fetcher=f,
+        )
+        self.assertEqual(out, _BENZINGA_COMPLETE_FALLBACK)
+
+    def test_keeps_fallback_when_og_has_unbalanced_bracket(self):
+        # Benzinga's og:title is cut inside a "(NASDAQ:S" parenthetical; the
+        # unbalanced "(" marks it truncated → keep the complete fallback.
+        f = _fetcher_returning(_html(og=_BENZINGA_TRUNCATED_OG_BRACKET))
+        out = ct.canonical_title_for(
+            "https://x.test/a",
+            fallback=_BENZINGA_BRACKET_FALLBACK,
+            cache_dir=self.cache_dir,
+            fetcher=f,
+        )
+        self.assertEqual(out, _BENZINGA_BRACKET_FALLBACK)
+
+    def test_accepts_clean_shorter_og_that_drops_publisher_suffix(self):
+        # A clean og:title that is a *word-boundary* prefix of the fallback
+        # (publisher suffix stripped, no mid-word cut) is NOT a truncation and
+        # is still accepted.
+        fallback = "Apple Reports Record Q1 Earnings - CNBC"
+        f = _fetcher_returning(_html(og="Apple Reports Record Q1 Earnings"))
+        out = ct.canonical_title_for(
+            "https://x.test/a", fallback=fallback, cache_dir=self.cache_dir, fetcher=f
+        )
+        self.assertEqual(out, "Apple Reports Record Q1 Earnings")
+
+
+class TestTruncationHeuristics(unittest.TestCase):
+    def test_unbalanced_open_bracket_is_truncated(self):
+        self.assertTrue(ct._has_unbalanced_bracket("Combined - SpaceX (NASDAQ:S"))
+        self.assertTrue(ct._has_unbalanced_bracket("Markets open [live"))
+
+    def test_balanced_brackets_not_truncated(self):
+        self.assertFalse(ct._has_unbalanced_bracket("Apple (AAPL) rises 3%"))
+        self.assertFalse(ct._has_unbalanced_bracket("Why I Love (Most) Of It"))
+        self.assertFalse(ct._has_unbalanced_bracket("No brackets here at all"))
+
+    def test_midword_prefix_is_truncated(self):
+        self.assertTrue(ct._is_midword_prefix("Google's AI Leap A", "Google's AI Leap And More"))
+
+    def test_word_boundary_prefix_is_not_truncated(self):
+        self.assertFalse(
+            ct._is_midword_prefix("Apple Reports Earnings", "Apple Reports Earnings - CNBC")
+        )
+
+    def test_apostrophe_variant_prefix_still_detected(self):
+        # og uses a curly apostrophe, fallback a straight one — normalize first.
+        self.assertTrue(ct._is_midword_prefix("Google’s AI Leap A", "Google's AI Leap And More"))
+
+    def test_unrelated_title_is_not_prefix(self):
+        self.assertFalse(ct._is_midword_prefix(_PUBLISHER_TITLE, _GDELT_TITLE))
 
 
 if __name__ == "__main__":
