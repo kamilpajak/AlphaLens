@@ -151,6 +151,53 @@ def _is_junk(title: str) -> bool:
     return any(sub in low for sub in _JUNK_SUBSTRINGS)
 
 
+_BRACKET_PAIRS = (("(", ")"), ("[", "]"), ("{", "}"))
+_PREFIX_APOSTROPHES = ("’", "ʼ", "‘", "`")
+
+
+def _has_unbalanced_bracket(title: str) -> bool:
+    """True if ``title`` has more openers than closers for any bracket pair.
+
+    Publishers that truncate their ``og:title`` at a fixed character budget cut
+    mid-token, leaving an open parenthesis with no close — e.g. Benzinga's
+    ``... Combined - SpaceX (NASDAQ:S``. A complete headline almost never leaves
+    a bracket open, so an excess opener is a high-precision truncation signal.
+    The reverse (excess closer) is not flagged: it is not a tail-truncation.
+    """
+    return any(title.count(opener) > title.count(closer) for opener, closer in _BRACKET_PAIRS)
+
+
+def _norm_for_prefix(s: str) -> str:
+    """Lowercase, unify apostrophe glyphs, collapse whitespace — for prefix cmp."""
+    s = s.lower()
+    for ap in _PREFIX_APOSTROPHES:
+        s = s.replace(ap, "'")
+    return " ".join(s.split())
+
+
+def _is_midword_prefix(og: str, fallback: str) -> bool:
+    """True if ``og`` is ``fallback`` cut short *inside a word*.
+
+    Benzinga also truncates the round-up headline itself (``... Google's AI Leap
+    A`` vs the complete ``... Google's AI Leap And More``). The shorter string is
+    a character-prefix of the longer one and the cut lands between two word
+    characters. A clean publisher title that merely drops a ``- Publisher``
+    suffix ends on a word boundary (the next char in ``fallback`` is a space /
+    dash), so it is NOT treated as truncated.
+    """
+    a = _norm_for_prefix(og)
+    b = _norm_for_prefix(fallback)
+    if not a or len(a) >= len(b) or not b.startswith(a):
+        return False
+    return a[-1].isalnum() and b[len(a)].isalnum()
+
+
+def _looks_truncated(og: str, fallback: str) -> bool:
+    """The og:title is a truncated fragment we must not show in place of a
+    complete source title (see :func:`canonical_title_for`)."""
+    return _has_unbalanced_bracket(og) or _is_midword_prefix(og, fallback)
+
+
 def _cache_path(cache_dir: Path, url: str) -> Path:
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
     return cache_dir / f"{digest}.txt"
@@ -241,6 +288,10 @@ def canonical_title_for(
         # og:title is the only title for this exact URL and already passed the
         # junk filter, so take it.
         return og
+    if _looks_truncated(og, fallback):
+        # Publisher truncated its own og:title mid-token (Benzinga caps at
+        # ~104 chars). The fallback is the complete source headline — keep it.
+        return fallback
     shared = text_similarity.normalize_title(og) & norm_fallback
     if len(shared) >= _MIN_SHARED_TOKENS:
         return og
