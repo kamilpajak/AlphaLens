@@ -9,7 +9,7 @@
 </script>
 
 <ul class="list-[square] pl-4 space-y-0.5 marker:text-amber {cls}">
-	{#each items as item}
+	{#each items as item (item)}
 		<li>{item}</li>
 	{/each}
 </ul>

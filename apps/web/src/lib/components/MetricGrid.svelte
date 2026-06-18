@@ -23,14 +23,14 @@
 
 {#if align === 'right'}
 	<dl class="grid grid-cols-[1fr_auto] gap-x-4 gap-y-0.5 {cls}">
-		{#each rows as row}
+		{#each rows as row (row.key)}
 			<dt>{row.key}</dt>
 			<dd class="text-right font-bold text-fg whitespace-nowrap">{row.value}</dd>
 		{/each}
 	</dl>
 {:else}
 	<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 {cls}">
-		{#each rows as row}
+		{#each rows as row (row.key)}
 			<dt class="whitespace-nowrap font-bold text-fg">{row.key}</dt>
 			<dd>{row.value}</dd>
 		{/each}
