@@ -288,38 +288,34 @@ def _filter_entityless_events(joined: pd.DataFrame) -> pd.DataFrame:
     ``event_type``-column guard in :func:`_apply_noise_and_blocklist_filters`),
     so forward/backward schema drift degrades to "no entity filter".
     """
-    if "primary_entities" not in joined.columns:
+    if "primary_entities" not in joined.columns or joined.empty:
         return joined
     blocked_domains, state_countries = _load_state_media_filters()
 
-    domain_drops = 0
-    country_drops = 0
-
-    def _keep(row: pd.Series) -> bool:
-        nonlocal domain_drops, country_drops
+    def _verdict(row: pd.Series) -> str:
+        """One of ``keep`` / ``domain`` / ``country`` (a per-row scalar, so the
+        ``apply`` stays a plain Series — no closure-mutated counters)."""
         if len(_entity_set(row)) >= 1:
-            return True  # entity-rich rows always pass
+            return "keep"  # entity-rich rows always pass
         domain_hit, country_hit = _is_state_media_row(row, blocked_domains, state_countries)
         if domain_hit:
-            domain_drops += 1
-            return False
+            return "domain"
         if country_hit:
-            country_drops += 1
-            return False
-        return True  # entity-less but non-state-media -> kept (default-allow)
+            return "country"
+        return "keep"  # entity-less but non-state-media -> kept (default-allow)
 
-    keep = joined.apply(_keep, axis=1)
-    filtered = joined[keep]
-    dropped = domain_drops + country_drops
-    if dropped:
+    verdict = joined.apply(_verdict, axis=1)
+    domain_drops = int((verdict == "domain").sum())
+    country_drops = int((verdict == "country").sum())
+    if domain_drops or country_drops:
         logger.info(
             "catalyst source-gate dropped %d entity-less state-media event(s) "
             "(%d domain, %d country)",
-            dropped,
+            domain_drops + country_drops,
             domain_drops,
             country_drops,
         )
-    return filtered
+    return joined[verdict == "keep"]
 
 
 def _primary_ticker(value: Any) -> str | None:

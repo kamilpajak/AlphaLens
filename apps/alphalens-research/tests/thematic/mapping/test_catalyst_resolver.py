@@ -1665,5 +1665,48 @@ class TestCatalystEntityAnchor(unittest.TestCase):
         self.assertEqual(catalyst_resolver._entity_set(all_null), set())
 
 
+class TestStateMediaHelpers(unittest.TestCase):
+    """Unit coverage for the source-gate primitives."""
+
+    def test_extra_field_reads_value(self):
+        extra = json.dumps({"domain": "voc.com.cn", "sourcecountry": "China"})
+        self.assertEqual(catalyst_resolver._extra_field(extra, "domain"), "voc.com.cn")
+        self.assertEqual(catalyst_resolver._extra_field(extra, "sourcecountry"), "China")
+
+    def test_extra_field_none_safe(self):
+        ef = catalyst_resolver._extra_field
+        self.assertIsNone(ef(None, "domain"))  # missing column
+        self.assertIsNone(ef(float("nan"), "domain"))  # NaN cell
+        self.assertIsNone(ef(123, "domain"))  # non-str
+        self.assertIsNone(ef("", "domain"))  # empty
+        self.assertIsNone(ef("{not json", "domain"))  # malformed JSON
+        self.assertIsNone(ef("[1, 2]", "domain"))  # JSON but not a dict
+        self.assertIsNone(ef(json.dumps({"x": 1}), "domain"))  # key absent
+        self.assertIsNone(ef(json.dumps({"domain": 5}), "domain"))  # non-str value
+        self.assertIsNone(ef(json.dumps({"domain": "  "}), "domain"))  # blank value
+
+    def test_domain_blocklisted_exact_and_suffix(self):
+        db = catalyst_resolver._domain_blocklisted
+        blocked = frozenset({"rt.com", "voc.com.cn"})
+        self.assertTrue(db("rt.com", blocked))  # exact
+        self.assertTrue(db("news.rt.com", blocked))  # sub-host
+        self.assertTrue(db("RT.COM", blocked))  # case-insensitive
+        self.assertFalse(db("report.com", blocked))  # NOT a substring match
+        self.assertFalse(db("supportrt.com", blocked))  # NOT a substring match
+        self.assertFalse(db(None, blocked))  # no domain
+        self.assertFalse(db("rt.com", frozenset()))  # empty blocklist
+
+    def test_is_state_media_row_splits_hits(self):
+        ismr = catalyst_resolver._is_state_media_row
+        domains = frozenset({"voc.com.cn"})
+        countries = frozenset({"china"})
+        dom = pd.Series({"extra": json.dumps({"domain": "voc.com.cn", "sourcecountry": "US"})})
+        self.assertEqual(ismr(dom, domains, countries), (True, False))
+        ctry = pd.Series({"extra": json.dumps({"domain": "unlisted.cn", "sourcecountry": "China"})})
+        self.assertEqual(ismr(ctry, domains, countries), (False, True))
+        rss = pd.Series({"extra": json.dumps({"publisher": "Reuters"})})
+        self.assertEqual(ismr(rss, domains, countries), (False, False))
+
+
 if __name__ == "__main__":
     unittest.main()
