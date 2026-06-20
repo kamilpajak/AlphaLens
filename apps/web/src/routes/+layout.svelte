@@ -81,7 +81,6 @@
 			aria-labelledby="session-expired-heading"
 		>
 			<div
-				id="session-expired-heading"
 				class="w-full max-w-[640px] border border-grid bg-bg-1 corners relative p-6 sm:p-10 fade-up"
 			>
 				<SessionExpiredCard />

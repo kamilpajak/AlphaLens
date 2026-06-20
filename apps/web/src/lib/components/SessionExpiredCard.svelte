@@ -37,7 +37,12 @@
 </script>
 
 <div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted mb-3">// session</div>
-<h1 class="font-display font-bold text-4xl sm:text-5xl text-amber tracking-tight">session expired</h1>
+<h1
+	id="session-expired-heading"
+	class="font-display font-bold text-4xl sm:text-5xl text-amber tracking-tight"
+>
+	session expired
+</h1>
 <p class="mt-4 max-w-xl text-fg-dim text-sm leading-relaxed">
 	Your Cloudflare Access session has expired, so the API rejected the request. Re-authenticate, then
 	retry — your briefs are intact.
