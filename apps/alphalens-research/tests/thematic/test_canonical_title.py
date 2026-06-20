@@ -297,5 +297,22 @@ class TestTruncationHeuristics(unittest.TestCase):
         self.assertFalse(ct._is_midword_prefix(_PUBLISHER_TITLE, _GDELT_TITLE))
 
 
+class TestLogSafe(unittest.TestCase):
+    """_log_safe sanitises externally-sourced strings before a log line
+    (Sonar S5145 log-injection): CR/LF collapse to spaces, length capped."""
+
+    def test_strips_crlf(self):
+        out = ct._log_safe("real title\r\nFAKE 2099-01-01 ERROR forged entry")
+        self.assertNotIn("\n", out)
+        self.assertNotIn("\r", out)
+        self.assertIn("real title", out)
+
+    def test_caps_length(self):
+        self.assertEqual(len(ct._log_safe("x" * 500, limit=200)), 200)
+
+    def test_plain_string_unchanged(self):
+        self.assertEqual(ct._log_safe("https://techcrunch.com/a"), "https://techcrunch.com/a")
+
+
 if __name__ == "__main__":
     unittest.main()

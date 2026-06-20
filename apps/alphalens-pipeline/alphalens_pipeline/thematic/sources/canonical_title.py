@@ -34,6 +34,18 @@ from alphalens_pipeline.thematic import text_similarity
 
 logger = logging.getLogger(__name__)
 
+
+def _log_safe(value: str, *, limit: int = 200) -> str:
+    """Strip CR/LF from an externally-sourced string before it enters a log line.
+
+    The og:title + URL are fetched from third-party publisher HTML, so a value
+    carrying ``\\r``/``\\n`` could forge or split log entries (log injection,
+    Sonar S5145). Collapse line breaks to spaces and cap the length so the
+    diagnostic stays single-line and bounded.
+    """
+    return value.replace("\r", " ").replace("\n", " ").strip()[:limit]
+
+
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "og_title_cache"
 # Publisher titles are near-immutable; re-fetch only after a long staleness
 # window so a once-captured title never drifts but a genuinely changed page can
@@ -293,7 +305,7 @@ def canonical_title_for(
         # ~104 chars). The fallback is the complete source headline — keep it.
         # Log so any false-positive (a complete headline wrongly rejected) is
         # visible for tuning the heuristics.
-        logger.info("og:title rejected as truncated for %s: %r", url, og)
+        logger.info("og:title rejected as truncated for %s: %r", _log_safe(url), _log_safe(og))
         return fallback
     shared = text_similarity.normalize_title(og) & norm_fallback
     if len(shared) >= _MIN_SHARED_TOKENS:

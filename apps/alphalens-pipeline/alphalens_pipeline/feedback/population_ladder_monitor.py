@@ -1645,6 +1645,45 @@ def _carry_or_placeholder(
     return _ScreenOutcome("carried", _stamp_theme(row, theme))
 
 
+def _apply_cheap_open_update(
+    row: dict[str, Any],
+    *,
+    prior: dict[str, Any],
+    setup: dict,
+    c_star: float,
+    last_priced_prev: dt.date | None,
+    latest_session: dt.date,
+    trading_days_elapsed,
+) -> None:
+    """Refresh the OPEN-specific marks on a cheap daily advance, in place.
+
+    Extracted from :func:`_cheap_update_row` so that function stays within the
+    cognitive-complexity budget. open_r is recomputed from the daily close;
+    mfe/mae are widened to contain it (a close is a point ON the path, so the
+    stale minute-replay band must at least reach open_r — edge-data audit
+    2026-06-18: 30% of OPEN rows trended outside the carried band);
+    open_return_pct_of_book moves with open_r via the carried realized_risk_pct.
+    """
+    blended_entry = _safe_finite_float(prior.get("blended_entry"))
+    disaster_stop = _safe_finite_float(setup.get("disaster_stop"))
+    open_r = _cheap_open_r(c_star, blended_entry, disaster_stop)
+    row["open_r"] = open_r
+    if open_r is not None:
+        prior_mfe = _safe_finite_float(row.get("mfe"))
+        prior_mae = _safe_finite_float(row.get("mae"))
+        row["mfe"] = open_r if prior_mfe is None else max(prior_mfe, open_r)
+        row["mae"] = open_r if prior_mae is None else min(prior_mae, open_r)
+    row["holding_days_elapsed"] = _cheap_holding_days(
+        prior, last_priced_prev, latest_session, trading_days_elapsed
+    )
+    realized_risk_pct = _safe_finite_float(prior.get("realized_risk_pct"))
+    row["open_return_pct_of_book"] = (
+        open_r * realized_risk_pct
+        if (open_r is not None and realized_risk_pct is not None)
+        else None
+    )
+
+
 def _cheap_update_row(
     setup: dict,
     prior: dict[str, Any],
@@ -1706,30 +1745,14 @@ def _cheap_update_row(
         return row, "terminal"
 
     if classification == "OPEN":
-        blended_entry = _safe_finite_float(prior.get("blended_entry"))
-        disaster_stop = _safe_finite_float(setup.get("disaster_stop"))
-        open_r = _cheap_open_r(c_star, blended_entry, disaster_stop)
-        row["open_r"] = open_r
-        # The cheap path moves the mark from the daily close but carries the older
-        # minute-replay mfe/mae verbatim, so a trending close can land OUTSIDE the
-        # stale band (edge-data audit 2026-06-18: 30% of OPEN rows). A daily close
-        # is a point ON the path, so the running max-favorable excursion is at least
-        # open_r and the max-adverse at most open_r — widen the band to contain it.
-        if open_r is not None:
-            prior_mfe = _safe_finite_float(row.get("mfe"))
-            prior_mae = _safe_finite_float(row.get("mae"))
-            row["mfe"] = open_r if prior_mfe is None else max(prior_mfe, open_r)
-            row["mae"] = open_r if prior_mae is None else min(prior_mae, open_r)
-        row["holding_days_elapsed"] = _cheap_holding_days(
-            prior, last_priced_prev, latest_session, trading_days_elapsed
-        )
-        # open_return_pct_of_book RECOMPUTED from the refreshed open_r and the
-        # carried-invariant realized_risk_pct (it moves with open_r, never carried).
-        realized_risk_pct = _safe_finite_float(prior.get("realized_risk_pct"))
-        row["open_return_pct_of_book"] = (
-            open_r * realized_risk_pct
-            if (open_r is not None and realized_risk_pct is not None)
-            else None
+        _apply_cheap_open_update(
+            row,
+            prior=prior,
+            setup=setup,
+            c_star=c_star,
+            last_priced_prev=last_priced_prev,
+            latest_session=latest_session,
+            trading_days_elapsed=trading_days_elapsed,
         )
 
     return row, "cheap"
