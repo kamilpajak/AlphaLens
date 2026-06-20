@@ -41,7 +41,9 @@ def _theme_row(theme: str, ticker: str) -> dict:
     }
 
 
-def _run_map_themes(themes, theme_novelty, out_dir, *, yield_rows=True):
+def _run_map_themes(
+    themes, theme_novelty, out_dir, *, yield_rows=True, novelty_config_version=None
+):
     """Drive ``map_themes`` with all network/LLM stages mocked so the only thing
     under test is the novelty stamp. ``yield_rows=False`` makes every theme a
     no-catalyst skip → the empty-frame branch."""
@@ -67,6 +69,7 @@ def _run_map_themes(themes, theme_novelty, out_dir, *, yield_rows=True):
             api_key="dummy",
             output_dir=out_dir,
             theme_novelty=theme_novelty,
+            novelty_config_version=novelty_config_version,
             rebuild=True,
         )
 
@@ -125,9 +128,49 @@ class TestMapThemesNoveltyStamp(unittest.TestCase):
 
     def test_novelty_columns_in_schema_tuple(self):
         # write_empty_candidates + the all-dropped branch build the typed-empty
-        # frame from this tuple, so both must include the novelty columns.
+        # frame from this tuple, so all three novelty columns must be present.
         self.assertIn("novelty_rank", orchestrator._MAP_THEMES_COLUMNS)
         self.assertIn("novelty_score", orchestrator._MAP_THEMES_COLUMNS)
+        self.assertIn("novelty_config_version", orchestrator._MAP_THEMES_COLUMNS)
+
+    def test_stamps_novelty_config_version_on_every_row(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            token = '{"schema":1,"window_days":30}'
+            df = _run_map_themes(
+                ["theme_a", "theme_b"],
+                {"theme_a": (1, 9.5), "theme_b": (2, 4.2)},
+                out,
+                novelty_config_version=token,
+            )
+            self.assertIn("novelty_config_version", df.columns)
+            self.assertTrue((df["novelty_config_version"] == token).all())
+
+    def test_empty_day_carries_novelty_config_version_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            df = _run_map_themes(
+                ["theme_a"],
+                {"theme_a": (1, 5.0)},
+                out,
+                yield_rows=False,
+                novelty_config_version='{"schema":1}',
+            )
+            self.assertEqual(len(df), 0)
+            self.assertIn("novelty_config_version", df.columns)
+
+    def test_write_empty_candidates_accepts_and_stamps_novelty_config_version(self):
+        # The zero-novel-themes path (write_empty_candidates) must record the
+        # active novelty config the same way it stamps mapper_config_version, so
+        # the empty-day parquet schema matches the all-dropped branch exactly.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            path = orchestrator.write_empty_candidates(
+                asof=ASOF, output_dir=out, novelty_config_version='{"schema":1}'
+            )
+            roundtrip = pd.read_parquet(path)
+            self.assertEqual(len(roundtrip), 0)
+            self.assertIn("novelty_config_version", roundtrip.columns)
 
 
 if __name__ == "__main__":

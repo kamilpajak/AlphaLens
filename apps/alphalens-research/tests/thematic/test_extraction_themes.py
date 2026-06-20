@@ -160,5 +160,44 @@ class TestRollUp(unittest.TestCase):
             self.assertNotIn("steady", set(novel["theme"]))
 
 
+class TestNoveltyConfigVersion(unittest.TestCase):
+    """The novelty config token pins window/recent/threshold so a future tune of
+    those params makes pre- vs post-change novelty values non-poolable on purpose
+    (mirrors mapper_config_version / ladder_config_version / panel_config_version).
+    """
+
+    def test_stable_for_identical_inputs(self):
+        a = themes.novelty_config_version(window_days=30, recent_days=7, threshold=3.0)
+        b = themes.novelty_config_version(window_days=30, recent_days=7, threshold=3.0)
+        self.assertEqual(a, b)
+
+    def test_changes_with_window_days(self):
+        a = themes.novelty_config_version(window_days=30, recent_days=7, threshold=3.0)
+        b = themes.novelty_config_version(window_days=45, recent_days=7, threshold=3.0)
+        self.assertNotEqual(a, b)
+
+    def test_changes_with_recent_days(self):
+        a = themes.novelty_config_version(window_days=30, recent_days=7, threshold=3.0)
+        b = themes.novelty_config_version(window_days=30, recent_days=5, threshold=3.0)
+        self.assertNotEqual(a, b)
+
+    def test_changes_with_threshold(self):
+        a = themes.novelty_config_version(window_days=30, recent_days=7, threshold=3.0)
+        b = themes.novelty_config_version(window_days=30, recent_days=7, threshold=2.5)
+        self.assertNotEqual(a, b)
+
+    def test_is_canonical_json_with_schema_marker(self):
+        import json
+
+        token = themes.novelty_config_version(window_days=30, recent_days=7, threshold=3.0)
+        payload = json.loads(token)
+        self.assertIn("schema", payload)
+        self.assertEqual(payload["window_days"], 30)
+        self.assertEqual(payload["recent_days"], 7)
+        self.assertEqual(payload["threshold"], 3.0)
+        # canonical: sorted keys, compact separators → byte-stable across runs
+        self.assertEqual(token, json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
 if __name__ == "__main__":
     unittest.main()
