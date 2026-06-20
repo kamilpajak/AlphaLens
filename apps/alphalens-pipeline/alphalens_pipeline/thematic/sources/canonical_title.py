@@ -23,6 +23,7 @@ import html
 import ipaddress
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -33,6 +34,25 @@ from bs4 import BeautifulSoup
 from alphalens_pipeline.thematic import text_similarity
 
 logger = logging.getLogger(__name__)
+
+
+# C0 control characters except CR/LF (which are collapsed to spaces, not
+# dropped, so word boundaries survive). Stripping the rest keeps a crafted
+# og:title from injecting NUL / ESC / form-feed into a log back-end.
+_LOG_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _log_safe(value: str, *, limit: int = 200) -> str:
+    """Sanitise an externally-sourced string before it enters a log line.
+
+    The og:title + URL are fetched from third-party publisher HTML, so a value
+    carrying control characters could forge or split log entries (log injection,
+    Sonar S5145). Collapse ``\\r``/``\\n`` to spaces, drop the other C0 control
+    chars, and cap the length so the diagnostic stays single-line and bounded.
+    """
+    collapsed = value.replace("\r", " ").replace("\n", " ")
+    return _LOG_CONTROL_RE.sub("", collapsed).strip()[:limit]
+
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "og_title_cache"
 # Publisher titles are near-immutable; re-fetch only after a long staleness
@@ -293,7 +313,7 @@ def canonical_title_for(
         # ~104 chars). The fallback is the complete source headline — keep it.
         # Log so any false-positive (a complete headline wrongly rejected) is
         # visible for tuning the heuristics.
-        logger.info("og:title rejected as truncated for %s: %r", url, og)
+        logger.info("og:title rejected as truncated for %s: %r", _log_safe(url), _log_safe(og))
         return fallback
     shared = text_similarity.normalize_title(og) & norm_fallback
     if len(shared) >= _MIN_SHARED_TOKENS:

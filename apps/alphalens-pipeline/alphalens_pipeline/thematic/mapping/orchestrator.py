@@ -477,6 +477,62 @@ def _verify_candidates_for_theme(
     return rows, dropped, dropped_all_unknown
 
 
+def _rows_for_theme(
+    theme: str,
+    *,
+    asof: dt.date,
+    catalyst_cache: dict[str, CatalystPayload | None],
+    api_key: str,
+    pro_client,
+    min_cap: int,
+    max_cap: int,
+    model: str | None,
+    polygon_client: PolygonClient | None,
+    press_df: pd.DataFrame | None,
+    keep_unverified: bool,
+) -> tuple[list[dict], int, int]:
+    """Resolve → propose → verify one theme into ``(rows, dropped, dropped_unknown)``.
+
+    Returns ``([], 0, 0)`` when the theme is skipped (no catalyst event in the
+    window, or Pro proposed no candidates). Extracted from :func:`map_themes`'s
+    loop so the driver stays within the cognitive-complexity budget.
+    """
+    catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
+    if not catalyst:
+        # UI requires source_event_url for provenance. If the theme's events
+        # are all noise (e.g. ``discounts`` → 100% promo, stripped by
+        # NOISE_EVENT_TYPES), skip the theme rather than burn a Pro call to
+        # emit link-less rows.
+        logger.info(
+            "map_themes %s: skipping theme %r (no catalyst event in window)",
+            asof.isoformat(),
+            theme,
+        )
+        return [], 0, 0
+    candidates, in_bracket, keywords = _propose_and_filter_candidates(
+        theme=theme,
+        api_key=api_key,
+        pro_client=pro_client,
+        min_cap=min_cap,
+        max_cap=max_cap,
+        asof=asof,
+        model=model,
+    )
+    if not candidates:
+        return [], 0, 0
+    return _verify_candidates_for_theme(
+        theme=theme,
+        candidates=candidates,
+        in_bracket=in_bracket,
+        keywords=keywords,
+        catalyst=catalyst,
+        asof=asof,
+        polygon_client=polygon_client,
+        press_df=press_df,
+        keep_unverified=keep_unverified,
+    )
+
+
 def map_themes(
     *,
     themes: Iterable[str],
@@ -549,36 +605,15 @@ def map_themes(
     dropped_all_unknown = 0
     catalyst_cache: dict[str, CatalystPayload | None] = {}
     for theme in themes:
-        catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
-        if not catalyst:
-            # UI requires source_event_url for provenance. If the theme's
-            # events are all noise (e.g. ``discounts`` → 100% promo,
-            # stripped by NOISE_EVENT_TYPES), skip the theme rather than
-            # burn a Pro call to emit link-less rows.
-            logger.info(
-                "map_themes %s: skipping theme %r (no catalyst event in window)",
-                asof.isoformat(),
-                theme,
-            )
-            continue
-        candidates, in_bracket, keywords = _propose_and_filter_candidates(
-            theme=theme,
+        theme_rows, dropped, dropped_unknown = _rows_for_theme(
+            theme,
+            asof=asof,
+            catalyst_cache=catalyst_cache,
             api_key=api_key,
             pro_client=pro_client,
             min_cap=min_cap,
             max_cap=max_cap,
-            asof=asof,
             model=model,
-        )
-        if not candidates:
-            continue
-        theme_rows, dropped, dropped_unknown = _verify_candidates_for_theme(
-            theme=theme,
-            candidates=candidates,
-            in_bracket=in_bracket,
-            keywords=keywords,
-            catalyst=catalyst,
-            asof=asof,
             polygon_client=polygon_client,
             press_df=press_df,
             keep_unverified=keep_unverified,

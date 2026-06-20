@@ -577,24 +577,22 @@ def _build_catalyst_payload(top: pd.Series, time_col: str) -> CatalystPayload:
     return _build_catalyst_payload_v2(top, top, time_col, echo_count=1)
 
 
-def find_trigger_event(
+def _load_catalyst_window(
     *,
     theme: str,
     asof: dt.date,
-    events_dir: Path = DEFAULT_EVENTS_DIR,
-    news_dir: Path = DEFAULT_NEWS_DIR,
-    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
-    metrics: TemplateMetrics | None = None,
-) -> CatalystPayload | None:
-    """Return the catalyst payload for a theme.
+    events_dir: Path,
+    news_dir: Path,
+    lookback_days: int,
+    metrics: TemplateMetrics | None,
+) -> tuple[pd.DataFrame, str] | None:
+    """Load + filter the theme's rolling event/news window into a clean frame.
 
-    Walks the rolling events window for events tagged with ``theme``, joins
-    to news, and either:
-      - returns the **latest** event (degraded mode) when the trigger has
-        fewer than ``MIN_TRIGGER_ENTITIES`` primary entities, or
-      - returns the **earliest** event in the entity-overlap story arc
-        (entity Jaccard ≥ ``ENTITY_JACCARD_THRESHOLD`` against the trigger),
-        plus ``echo_count`` / ``trigger_url`` / ``is_amplified`` metadata.
+    Returns ``(joined, time_col)`` — a reset-indexed, noise/state-media/dedup/
+    precedence-filtered join with a coerced datetime column — ready for trigger
+    selection, or ``None`` when no eligible catalyst event survives the filters.
+    Extracted from :func:`find_trigger_event` so each function stays within the
+    cognitive-complexity budget (the many ``if empty: return None`` guards).
     """
     events = _load_window(events_dir, asof, lookback_days)
     if events.empty:
@@ -660,7 +658,40 @@ def find_trigger_event(
     if joined.empty:
         return None
 
-    joined = joined.reset_index(drop=True)
+    return joined.reset_index(drop=True), time_col
+
+
+def find_trigger_event(
+    *,
+    theme: str,
+    asof: dt.date,
+    events_dir: Path = DEFAULT_EVENTS_DIR,
+    news_dir: Path = DEFAULT_NEWS_DIR,
+    lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    metrics: TemplateMetrics | None = None,
+) -> CatalystPayload | None:
+    """Return the catalyst payload for a theme.
+
+    Walks the rolling events window for events tagged with ``theme``, joins
+    to news, and either:
+      - returns the **latest** event (degraded mode) when the trigger has
+        fewer than ``MIN_TRIGGER_ENTITIES`` primary entities, or
+      - returns the **earliest** event in the entity-overlap story arc
+        (entity Jaccard ≥ ``ENTITY_JACCARD_THRESHOLD`` against the trigger),
+        plus ``echo_count`` / ``trigger_url`` / ``is_amplified`` metadata.
+    """
+    window = _load_catalyst_window(
+        theme=theme,
+        asof=asof,
+        events_dir=events_dir,
+        news_dir=news_dir,
+        lookback_days=lookback_days,
+        metrics=metrics,
+    )
+    if window is None:
+        return None
+    joined, time_col = window
+
     trigger = joined.sort_values(time_col, ascending=False).iloc[0]
     # Empty set for a legacy parquet that predates the ``primary_entities``
     # column (the entity gate above is a no-op there) -> the < threshold below
