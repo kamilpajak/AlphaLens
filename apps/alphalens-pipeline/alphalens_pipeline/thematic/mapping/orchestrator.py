@@ -638,6 +638,7 @@ def write_empty_candidates(
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     market_cap_range: tuple[int, int] = DEFAULT_MCAP_RANGE,
     model: str | None = None,
+    novelty_config_version: str | None = None,
 ) -> Path:
     """Write a typed-empty candidates parquet for ``asof`` and return its path.
 
@@ -663,6 +664,9 @@ def write_empty_candidates(
     )
     df = pd.DataFrame(columns=list(_MAP_THEMES_COLUMNS))
     df["mapper_config_version"] = config_version
+    # Mirror the all-dropped branch of map_themes: record the active novelty
+    # config so the empty-day parquet schema is identical to a non-empty day.
+    df["novelty_config_version"] = novelty_config_version
     write_parquet_atomic(df, out_path, index=False)
     logger.info("map_themes %s: 0 novel themes -> wrote empty candidate set", asof.isoformat())
     return out_path

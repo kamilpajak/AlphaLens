@@ -351,16 +351,28 @@ def map_themes_cmd(
         raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
     polygon_key = os.environ.get("POLYGON_API_KEY", "")
 
-    rollup = themes_mod.roll_up(asof=target, events_dir=events_dir, window_days=window_days)
+    # Single source for recent_days so roll_up and the novelty_config_version
+    # token can never diverge: pass the SAME value to both. (recent_days is not a
+    # CLI option today; if it becomes one, threading it here keeps the stamp honest.)
+    recent_days = themes_mod.DEFAULT_RECENT_DAYS
+    rollup = themes_mod.roll_up(
+        asof=target, events_dir=events_dir, window_days=window_days, recent_days=recent_days
+    )
     novel = themes_mod.flag_novel(rollup, threshold=novelty_threshold)
     novel = novel.head(max_themes)
+    # Pin the novelty definition (window/recent/threshold) that produced these
+    # ranks. Computed before the zero-novel branch so the empty-day parquet
+    # records the active config too. Telemetry only.
+    novelty_cfg = themes_mod.novelty_config_version(
+        window_days=window_days, recent_days=recent_days, threshold=novelty_threshold
+    )
     if len(novel) == 0:
         # Quiet day: nothing to map, but still write a typed-empty candidates
         # parquet so `score` finds the file and the run_thematic_day.sh `set -e`
         # chain does not abort before brief + rebuild-cache. The empty set is
         # recompute-eligible, so a later same-date slot with news is not frozen.
         out_path = orchestrator.write_empty_candidates(
-            asof=target, output_dir=output_dir, model=model
+            asof=target, output_dir=output_dir, model=model, novelty_config_version=novelty_cfg
         )
         # Keep the observability contract uniform: emit the true 0/0 volume so
         # the map-themes gauges reflect a quiet day instead of carrying stale
@@ -384,14 +396,6 @@ def map_themes_cmd(
         str(row.theme): (rank, float(getattr(row, "novelty_score", float("nan"))))
         for rank, row in enumerate(novel.itertuples(index=False), start=1)
     }
-    # Pin the novelty definition (lookback window / recent sub-window / flag
-    # threshold) that produced those ranks. recent_days is not a CLI option —
-    # roll_up uses the module default — so source it from there.
-    novelty_cfg = themes_mod.novelty_config_version(
-        window_days=window_days,
-        recent_days=themes_mod.DEFAULT_RECENT_DAYS,
-        threshold=novelty_threshold,
-    )
 
     df = orchestrator.map_themes(
         themes=themes,

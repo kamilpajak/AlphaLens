@@ -159,6 +159,19 @@ class TestMapThemesNoveltyStamp(unittest.TestCase):
             self.assertEqual(len(df), 0)
             self.assertIn("novelty_config_version", df.columns)
 
+    def test_write_empty_candidates_accepts_and_stamps_novelty_config_version(self):
+        # The zero-novel-themes path (write_empty_candidates) must record the
+        # active novelty config the same way it stamps mapper_config_version, so
+        # the empty-day parquet schema matches the all-dropped branch exactly.
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            path = orchestrator.write_empty_candidates(
+                asof=ASOF, output_dir=out, novelty_config_version='{"schema":1}'
+            )
+            roundtrip = pd.read_parquet(path)
+            self.assertEqual(len(roundtrip), 0)
+            self.assertIn("novelty_config_version", roundtrip.columns)
+
 
 if __name__ == "__main__":
     unittest.main()
