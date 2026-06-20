@@ -384,6 +384,14 @@ def map_themes_cmd(
         str(row.theme): (rank, float(getattr(row, "novelty_score", float("nan"))))
         for rank, row in enumerate(novel.itertuples(index=False), start=1)
     }
+    # Pin the novelty definition (lookback window / recent sub-window / flag
+    # threshold) that produced those ranks. recent_days is not a CLI option —
+    # roll_up uses the module default — so source it from there.
+    novelty_cfg = themes_mod.novelty_config_version(
+        window_days=window_days,
+        recent_days=themes_mod.DEFAULT_RECENT_DAYS,
+        threshold=novelty_threshold,
+    )
 
     df = orchestrator.map_themes(
         themes=themes,
@@ -395,6 +403,7 @@ def map_themes_cmd(
         rebuild=rebuild,
         model=model,
         theme_novelty=theme_novelty,
+        novelty_config_version=novelty_cfg,
     )
     # input = novel themes fed to the mapper; output = verified candidate
     # rows. 0 candidates from N novel themes = a DeepSeek Pro mapping /

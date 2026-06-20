@@ -10,6 +10,7 @@ C trigger candidate (per design memo §2 Layer 3 trigger condition).
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -20,6 +21,31 @@ DEFAULT_EVENTS_DIR = Path.home() / ".alphalens" / "thematic_events"
 DEFAULT_WINDOW_DAYS = 30
 DEFAULT_RECENT_DAYS = 7
 DEFAULT_NOVELTY_THRESHOLD = 3.0
+
+# Bump for a code-level change to how novelty is COMPUTED (the roll_up ratio
+# formula or normalization) that the three numeric params below cannot express.
+_NOVELTY_CONFIG_SCHEMA = 1
+
+
+def novelty_config_version(*, window_days: int, recent_days: int, threshold: float) -> str:
+    """Canonical JSON token of the novelty config that ranked a theme.
+
+    Stamped alongside ``novelty_rank``/``novelty_score`` on the candidate parquet
+    so a future EDGE attribution pass can pool only outcomes scored under the
+    SAME novelty definition. A deliberate tune of the lookback window, the recent
+    sub-window, or the flag threshold must make pre- vs post-change novelty values
+    non-comparable — so this token fingerprints all three. Bump
+    :data:`_NOVELTY_CONFIG_SCHEMA` for a code-level formula change the params
+    cannot capture. Mirrors :func:`mapper_config_version` / ``ladder_config_version``.
+    """
+    payload = {
+        "schema": _NOVELTY_CONFIG_SCHEMA,
+        "window_days": int(window_days),
+        "recent_days": int(recent_days),
+        "threshold": float(threshold),
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
 
 _OUTPUT_COLUMNS = [
     "theme",
@@ -122,4 +148,12 @@ def flag_novel(
     return rollup[rollup["novelty_score"] >= threshold].reset_index(drop=True)
 
 
-__all__ = ["DEFAULT_EVENTS_DIR", "DEFAULT_NOVELTY_THRESHOLD", "flag_novel", "roll_up"]
+__all__ = [
+    "DEFAULT_EVENTS_DIR",
+    "DEFAULT_NOVELTY_THRESHOLD",
+    "DEFAULT_RECENT_DAYS",
+    "DEFAULT_WINDOW_DAYS",
+    "flag_novel",
+    "novelty_config_version",
+    "roll_up",
+]

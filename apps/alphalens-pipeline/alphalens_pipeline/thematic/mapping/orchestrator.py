@@ -332,9 +332,12 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     # as ranked by the CLI's truncated head(max_themes). Telemetry only — never
     # feeds selection or ordering — but persisted here so a future N>=30 EDGE
     # attribution pass can join novelty without reconstructing the rollup (the
-    # 30-day event window ages out, making after-the-fact recovery lossy).
+    # 30-day event window ages out, making after-the-fact recovery lossy). The
+    # config-version token pins the window/recent/threshold that produced the
+    # score so a future tune of those params keeps pre/post values non-poolable.
     "novelty_rank",
     "novelty_score",
+    "novelty_config_version",
 )
 
 
@@ -486,6 +489,7 @@ def map_themes(
     rebuild: bool = False,
     model: str | None = None,
     theme_novelty: Mapping[str, tuple[int, float]] | None = None,
+    novelty_config_version: str | None = None,
 ) -> pd.DataFrame:
     """For each theme, propose candidates, post-filter by real-time mcap, then verify.
 
@@ -608,6 +612,7 @@ def map_themes(
     score_map = {theme: score for theme, (_rank, score) in novelty.items()}
     df["novelty_rank"] = df["theme"].map(rank_map).astype("Int64")
     df["novelty_score"] = pd.to_numeric(df["theme"].map(score_map), errors="coerce")
+    df["novelty_config_version"] = novelty_config_version
     # Stamp the freeze fingerprint so a later rerun can decide whether to reuse
     # this set (config match) or recompute (deliberate config bump). Written
     # atomically so a crash mid-write can never leave a partial parquet that a

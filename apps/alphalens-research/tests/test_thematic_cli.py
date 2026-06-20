@@ -163,6 +163,44 @@ class TestMapThemesCLI(unittest.TestCase):
             {"defense_procurement": (1, 9.5), "gas_pipelines": (2, 4.2)},
         )
 
+    def test_map_themes_passes_novelty_config_version_to_mapper(self):
+        # The novelty config token (window/recent/threshold) must reach the mapper
+        # so every stamped candidate records WHICH novelty definition ranked it —
+        # a future tune of those params keeps pre/post outcomes non-poolable.
+        from alphalens_pipeline.thematic.extraction import themes as themes_mod
+
+        novel = pd.DataFrame([{"theme": "t_a", "novelty_score": 5.0, "count_window": 4}])
+        captured = {}
+
+        def _fake_map_themes(*, novelty_config_version, **_kwargs):
+            captured["ncv"] = novelty_config_version
+            return _FAKE_CANDIDATES.copy()
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, self._env(), clear=False),
+            patch("alphalens_cli.commands.thematic.themes_mod.roll_up", return_value=novel.copy()),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel", return_value=novel.copy()
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.orchestrator.map_themes",
+                side_effect=_fake_map_themes,
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                ["thematic", "map-themes", "--date", "2026-05-15", "--output-dir", tmpdir],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        expected = themes_mod.novelty_config_version(
+            window_days=themes_mod.DEFAULT_WINDOW_DAYS,
+            recent_days=themes_mod.DEFAULT_RECENT_DAYS,
+            threshold=themes_mod.DEFAULT_NOVELTY_THRESHOLD,
+        )
+        self.assertEqual(captured["ncv"], expected)
+
     def test_map_themes_missing_novelty_score_does_not_crash(self):
         # The novelty stamp is telemetry only — a malformed novel frame (no
         # novelty_score column) must degrade the score to NA, never abort the
