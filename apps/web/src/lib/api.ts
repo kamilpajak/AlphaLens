@@ -85,6 +85,14 @@ export async function apiFetch(
 		// overlay fires on EVERY route — not just the loaders that escalate
 		// 401 to the full-page error boundary. Marked only here (and on the
 		// login-HTML path below), NOT on the 503 offline return above.
+		//
+		// Known limitation (LOCAL DEV ONLY): a same-origin online fetch that
+		// throws is a genuine connectivity failure (no CF Access in the loop),
+		// yet it is also normalised to a session-expiry here. In production the
+		// SPA is always cross-origin (CF Pages + Tunnel), where an online throw
+		// IS the Access redirect-refusal — and gating on isCrossOrigin() would
+		// still not separate that from a Tunnel-down (both throw cross-origin),
+		// so the dev-only false positive is left as-is.
 		markSessionExpired();
 		return new Response(null, { status: 401, statusText: 'Unauthorized' });
 	}
