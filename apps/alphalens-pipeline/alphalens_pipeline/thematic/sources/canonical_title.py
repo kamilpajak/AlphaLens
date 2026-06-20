@@ -23,6 +23,7 @@ import html
 import ipaddress
 import logging
 import os
+import re
 import tempfile
 from pathlib import Path
 from urllib.parse import urlparse
@@ -35,15 +36,22 @@ from alphalens_pipeline.thematic import text_similarity
 logger = logging.getLogger(__name__)
 
 
+# C0 control characters except CR/LF (which are collapsed to spaces, not
+# dropped, so word boundaries survive). Stripping the rest keeps a crafted
+# og:title from injecting NUL / ESC / form-feed into a log back-end.
+_LOG_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
 def _log_safe(value: str, *, limit: int = 200) -> str:
-    """Strip CR/LF from an externally-sourced string before it enters a log line.
+    """Sanitise an externally-sourced string before it enters a log line.
 
     The og:title + URL are fetched from third-party publisher HTML, so a value
-    carrying ``\\r``/``\\n`` could forge or split log entries (log injection,
-    Sonar S5145). Collapse line breaks to spaces and cap the length so the
-    diagnostic stays single-line and bounded.
+    carrying control characters could forge or split log entries (log injection,
+    Sonar S5145). Collapse ``\\r``/``\\n`` to spaces, drop the other C0 control
+    chars, and cap the length so the diagnostic stays single-line and bounded.
     """
-    return value.replace("\r", " ").replace("\n", " ").strip()[:limit]
+    collapsed = value.replace("\r", " ").replace("\n", " ")
+    return _LOG_CONTROL_RE.sub("", collapsed).strip()[:limit]
 
 
 DEFAULT_CACHE_DIR = Path.home() / ".alphalens" / "og_title_cache"

@@ -313,6 +313,10 @@ class TestLogSafe(unittest.TestCase):
     def test_plain_string_unchanged(self):
         self.assertEqual(ct._log_safe("https://techcrunch.com/a"), "https://techcrunch.com/a")
 
+    def test_strips_other_c0_control_chars(self):
+        out = ct._log_safe("title\x00\x1b\x07with\x7fcontrols")
+        self.assertEqual(out, "titlewithcontrols")
+
 
 if __name__ == "__main__":
     unittest.main()
