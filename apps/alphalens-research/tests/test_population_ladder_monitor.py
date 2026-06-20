@@ -1979,6 +1979,68 @@ class TestCheapPathNoMultiDayFreeze(unittest.TestCase):
         self.assertAlmostEqual(row["forward_return"], (100.0 - 100.0) / 100.0, places=9)
 
 
+class TestCheapAdvanceWidensExcursionBand(unittest.TestCase):
+    """A cheap daily advance refreshes ``open_r`` from the close, so the carried
+    minute-replay ``mfe`` / ``mae`` band MUST be widened to keep containing it.
+
+    edge-data audit 2026-06-18: 30% of OPEN rows had ``open_r`` outside ``[mae, mfe]``
+    because the cheap path moved the mark but left the (older) minute-replay band
+    frozen. A daily close is a point ON the path, so the running max-favorable
+    excursion is at least ``open_r`` and the max-adverse at most ``open_r``.
+    """
+
+    def _advance(self, c_star: float, *, prior_mfe, prior_mae) -> dict:
+        from alphalens_pipeline.feedback.population_ladder_monitor import _cheap_update_row
+
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        arrival = cutoffs[0]
+        last_priced = advance_trading_sessions(arrival, 1, _XNYS)
+        new_session = advance_trading_sessions(arrival, 2, _XNYS)
+        prior = _open_prior(setup=_OK_SETUP, last_priced_session=last_priced)
+        prior["mfe"] = prior_mfe
+        prior["mae"] = prior_mae
+        grouped = {new_session: _grouped(NVDA=(c_star, c_star, c_star, c_star, 1000))}
+        result = _cheap_update_row(
+            _OK_SETUP,
+            prior,
+            "NVDA",
+            [new_session],
+            grouped,
+            cutoffs,
+            new_session,
+            reference_close=100.0,
+        )
+        assert result is not None
+        row, category = result
+        self.assertEqual(category, "cheap")
+        return row
+
+    def test_upside_close_extends_mfe_so_band_contains_open_r(self):
+        # c*=108 -> open_r = (108-100)/5 = 1.6, far above the stale mfe 0.2.
+        row = self._advance(108.0, prior_mfe=0.2, prior_mae=-0.1)
+        self.assertAlmostEqual(row["open_r"], 1.6, places=9)
+        self.assertGreaterEqual(row["mfe"], row["open_r"])  # band contains the mark
+        self.assertAlmostEqual(row["mfe"], 1.6, places=9)  # widened up to the mark
+        self.assertAlmostEqual(row["mae"], -0.1, places=9)  # downside bound untouched
+
+    def test_downside_close_extends_mae_so_band_contains_open_r(self):
+        # c*=97 -> open_r = (97-100)/5 = -0.6, below the stale mae -0.1.
+        row = self._advance(97.0, prior_mfe=0.2, prior_mae=-0.1)
+        self.assertAlmostEqual(row["open_r"], -0.6, places=9)
+        self.assertLessEqual(row["mae"], row["open_r"])  # band contains the mark
+        self.assertAlmostEqual(row["mae"], -0.6, places=9)  # widened down to the mark
+        self.assertAlmostEqual(row["mfe"], 0.2, places=9)  # upside bound untouched
+
+    def test_band_seeded_from_open_r_when_prior_has_no_excursions(self):
+        # A prior with no mfe/mae (e.g. first cheap night after a fill) seeds the
+        # band from the live open_r rather than leaving it null/NaN.
+        row = self._advance(108.0, prior_mfe=None, prior_mae=None)
+        self.assertAlmostEqual(row["open_r"], 1.6, places=9)
+        self.assertAlmostEqual(row["mfe"], 1.6, places=9)
+        self.assertAlmostEqual(row["mae"], 1.6, places=9)
+
+
 class TestCheapOpenRMatchesReplay(unittest.TestCase):
     """The load-bearing property: cheap open_r == full replay_ladder open_r."""
 
