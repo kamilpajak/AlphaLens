@@ -1710,6 +1710,16 @@ def _cheap_update_row(
         disaster_stop = _safe_finite_float(setup.get("disaster_stop"))
         open_r = _cheap_open_r(c_star, blended_entry, disaster_stop)
         row["open_r"] = open_r
+        # The cheap path moves the mark from the daily close but carries the older
+        # minute-replay mfe/mae verbatim, so a trending close can land OUTSIDE the
+        # stale band (edge-data audit 2026-06-18: 30% of OPEN rows). A daily close
+        # is a point ON the path, so the running max-favorable excursion is at least
+        # open_r and the max-adverse at most open_r — widen the band to contain it.
+        if open_r is not None:
+            prior_mfe = _safe_finite_float(row.get("mfe"))
+            prior_mae = _safe_finite_float(row.get("mae"))
+            row["mfe"] = open_r if prior_mfe is None else max(prior_mfe, open_r)
+            row["mae"] = open_r if prior_mae is None else min(prior_mae, open_r)
         row["holding_days_elapsed"] = _cheap_holding_days(
             prior, last_priced_prev, latest_session, trading_days_elapsed
         )
