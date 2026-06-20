@@ -129,8 +129,9 @@ test.describe('MarketSession chip — closed', () => {
 		// Regression: the old standalone always-green "live" dot is gone. When the
 		// venue is closed the prices are anchored to the last close, so NOTHING in
 		// the footer reads "live" — the indicator is now strictly per-exchange and
-		// lights only while trading.
-		await expect(page.locator('footer')).not.toContainText(/\blive\b/i);
+		// lights only while trading. Match any "live" substring (not \blive\b) so a
+		// re-added dot is caught even if it ever sits mid-token.
+		await expect(page.locator('footer')).not.toContainText(/live/i);
 	});
 });
 
