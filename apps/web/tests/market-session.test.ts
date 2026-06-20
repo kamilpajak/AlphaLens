@@ -103,6 +103,9 @@ test.describe('MarketSession chip — open', () => {
 		// The merge is one-way: "live" appears ONLY inside the chip, so the
 		// footer carries exactly one "live" (a re-added standalone dot fails this).
 		await expect(page.locator('footer').getByText('live', { exact: true })).toHaveCount(1);
+		// The green open-dot pulses (restored liveness animation). Gating it to the
+		// open branch makes the motion itself per-exchange, not a global signal.
+		await expect(chip.locator('.dot.blink')).toHaveCount(1);
 	});
 });
 
@@ -132,6 +135,8 @@ test.describe('MarketSession chip — closed', () => {
 		// lights only while trading. Match any "live" substring (not \blive\b) so a
 		// re-added dot is caught even if it ever sits mid-token.
 		await expect(page.locator('footer')).not.toContainText(/live/i);
+		// The pulse is per-exchange too: a closed venue's dot is static (no animation).
+		await expect(chip.locator('.blink')).toHaveCount(0);
 	});
 });
 
