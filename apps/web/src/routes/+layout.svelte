@@ -5,9 +5,24 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import { tickerThematic, tickerExperiments } from '$lib/pipelineFacts';
 	import MarketSession from '$lib/components/MarketSession.svelte';
+	import SessionExpiredCard from '$lib/components/SessionExpiredCard.svelte';
 	import { startMarketStatusPoll } from '$lib/marketStatus.svelte';
+	import { sessionExpired } from '$lib/session.svelte';
 
 	let { children } = $props();
+
+	// The global re-auth overlay. Suppressed when page.status===401 so it does
+	// not stack on top of +error.svelte's own session-expired card (the rare
+	// case where a loader still escalates a 401 to the error boundary).
+	const overlayOpen = $derived(sessionExpired() && page.status !== 401);
+
+	// Move focus into the blocking dialog when it opens (a11y); the page chrome
+	// is marked `inert` while it is up so keyboard/AT users can't reach the
+	// obscured content behind it.
+	let dialogEl = $state<HTMLElement>();
+	$effect(() => {
+		if (overlayOpen) dialogEl?.focus();
+	});
 
 	let now = $state('');
 	$effect(() => {
@@ -66,10 +81,32 @@
 	class="scanlines grain min-h-screen flex flex-col"
 	data-sveltekit-reload={updated.current ? '' : 'off'}
 >
+	<!-- Global re-auth overlay. Renders ONLY while the session-expiry store is
+	     set (apiFetch flips it on the two CF-Access synthetic-401 paths), so it
+	     never traps the page in the common case. Sits above all route content
+	     (z-50) on EVERY route, replacing the old per-loader-only "session
+	     expired" full-page error. Matches the +error.svelte card chrome. -->
+	{#if overlayOpen}
+		<div
+			class="fixed inset-0 z-50 flex items-center justify-center px-4 py-16 bg-bg/80 backdrop-blur-sm"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="session-expired-heading"
+			tabindex="-1"
+			bind:this={dialogEl}
+		>
+			<div
+				class="w-full max-w-[640px] border border-grid bg-bg-1 corners relative p-6 sm:p-10 fade-up"
+			>
+				<SessionExpiredCard />
+			</div>
+		</div>
+	{/if}
+
 	<!-- Top bar — identity + navigation only. Ambient telemetry (live /
 	     session / db / clock) lives in the footer so this row never wraps
 	     accidentally on narrow viewports. -->
-	<header class="border-b border-grid bg-bg-1 text-[11px] uppercase tracking-widest">
+	<header class="border-b border-grid bg-bg-1 text-[11px] uppercase tracking-widest" inert={overlayOpen}>
 		<div class="flex flex-wrap items-center gap-x-4 gap-y-1 sm:gap-x-6 px-3 sm:px-4 py-2">
 			<a href="/" class="flex items-center gap-2 font-display font-bold text-amber text-base tracking-[0.2em]">
 				<Triangle class="size-4 fill-amber stroke-amber" />
@@ -105,14 +142,17 @@
 		</div>
 	</header>
 
-	<main class="flex-1">
+	<main class="flex-1" inert={overlayOpen}>
 		{@render children()}
 	</main>
 
 	<!-- Bottom status bar. Left: system telemetry (market session / db /
 	     clock) — shrink-0, never clipped. Middle: route-keyed slogan ticker
 	     — flex-1, clips first when space is tight. Right: version. -->
-	<footer class="border-t border-grid bg-bg-1 text-[10px] uppercase tracking-widest text-fg-muted">
+	<footer
+		class="border-t border-grid bg-bg-1 text-[10px] uppercase tracking-widest text-fg-muted"
+		inert={overlayOpen}
+	>
 		<div class="flex items-center gap-x-5 px-4 py-2">
 			<div class="flex shrink-0 items-center gap-3 sm:gap-4">
 				<!-- Liveness is per-exchange, not a global app signal: the

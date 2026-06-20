@@ -11,6 +11,8 @@
 // Leave it unset and you get same-origin behaviour, which is what every
 // existing deploy expects.
 
+import { markSessionExpired } from './session.svelte';
+
 const RAW_BASE = (import.meta.env.VITE_API_BASE ?? '').trim();
 
 // Strip a trailing slash so callers can use `api('/v1/days')` without
@@ -78,6 +80,20 @@ export async function apiFetch(
 		// Normalise to a synthetic 401 so callers' `if (!res.ok)` branch
 		// handles it as an auth failure instead of the raw throw bubbling
 		// into SvelteKit's generic "500 Internal Error" page.
+		//
+		// Flip the global session-expiry flag so the layout-level re-auth
+		// overlay fires on EVERY route — not just the loaders that escalate
+		// 401 to the full-page error boundary. Marked only here (and on the
+		// login-HTML path below), NOT on the 503 offline return above.
+		//
+		// Known limitation (LOCAL DEV ONLY): a same-origin online fetch that
+		// throws is a genuine connectivity failure (no CF Access in the loop),
+		// yet it is also normalised to a session-expiry here. In production the
+		// SPA is always cross-origin (CF Pages + Tunnel), where an online throw
+		// IS the Access redirect-refusal — and gating on isCrossOrigin() would
+		// still not separate that from a Tunnel-down (both throw cross-origin),
+		// so the dev-only false positive is left as-is.
+		markSessionExpired();
 		return new Response(null, { status: 401, statusText: 'Unauthorized' });
 	}
 	// CF Access session expiry: when the CF_Authorization cookie is invalid
@@ -93,6 +109,8 @@ export async function apiFetch(
 	// masking that as 401 would bounce the user into an infinite SSO loop
 	// during a transient outage, so let it through as the real error.
 	if (res.ok && contentType.includes('text/html')) {
+		// Same auth-expiry signal as the catch branch — fire the global overlay.
+		markSessionExpired();
 		return new Response(null, { status: 401, statusText: 'Unauthorized' });
 	}
 	return res;
