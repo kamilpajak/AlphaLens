@@ -109,20 +109,21 @@
 		{@render children()}
 	</main>
 
-	<!-- Bottom status bar. Left: system telemetry (live / market session /
-	     db / clock) — shrink-0, never clipped. Middle: route-keyed slogan
-	     ticker — flex-1, clips first when space is tight. Right: version. -->
+	<!-- Bottom status bar. Left: system telemetry (market session / db /
+	     clock) — shrink-0, never clipped. Middle: route-keyed slogan ticker
+	     — flex-1, clips first when space is tight. Right: version. -->
 	<footer class="border-t border-grid bg-bg-1 text-[10px] uppercase tracking-widest text-fg-muted">
 		<div class="flex items-center gap-x-5 px-4 py-2">
 			<div class="flex shrink-0 items-center gap-3 sm:gap-4">
-				<span class="flex items-center gap-1.5">
-					<span class="dot bg-green blink"></span>
-					<span class="text-green">live</span>
-				</span>
+				<!-- Liveness is per-exchange, not a global app signal: the
+				     MarketSession chip shows a green "● live" only while a venue
+				     trades ("○ closed" otherwise), since every brief's prices are
+				     anchored to the last close when the market is shut. The old
+				     always-on standalone "live" dot was merged in here. -->
 				<MarketSession />
 				<!-- db path + clock are pure ambient flavour — desktop only (lg+).
-				     On mobile the footer keeps just live + the session chip so
-				     it never overflows a narrow viewport. -->
+				     On mobile the footer keeps just the session chip so it never
+				     overflows a narrow viewport. -->
 				<span data-testid="footer-db" class="hidden lg:flex items-center gap-1.5">
 					<Database class="size-3" />
 					<span>~/.alphalens</span>

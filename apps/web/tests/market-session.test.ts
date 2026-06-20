@@ -79,7 +79,7 @@ function installMockedApi(page: Page, marketStatus: MarketStatusFixture) {
 }
 
 test.describe('MarketSession chip — open', () => {
-	test('shows exchange + "open" + closes-in countdown when trading', async ({ page }) => {
+	test('shows exchange + "live" + closes-in countdown when trading', async ({ page }) => {
 		await installMockedApi(page, {
 			is_trading_day: true,
 			is_half_day: false,
@@ -94,9 +94,15 @@ test.describe('MarketSession chip — open', () => {
 		const chip = page.getByTestId('market-session');
 		await expect(chip).toBeVisible();
 		await expect(chip).toContainText('XNYS');
-		await expect(chip).toContainText(/open/i);
+		// "live" is the per-exchange open indicator (it replaced the chip's old
+		// "open" label when the always-on standalone footer "live" dot was
+		// merged in here).
+		await expect(chip).toContainText(/live/i);
 		// Counts down to the next close (~2h out).
 		await expect(chip).toContainText(/closes in [12]h(?:\s+\d+m)?/i);
+		// The merge is one-way: "live" appears ONLY inside the chip, so the
+		// footer carries exactly one "live" (a re-added standalone dot fails this).
+		await expect(page.locator('footer').getByText('live', { exact: true })).toHaveCount(1);
 	});
 });
 
@@ -120,6 +126,11 @@ test.describe('MarketSession chip — closed', () => {
 		// Next-open label + relative countdown (~1d 12h out).
 		await expect(chip).toContainText(/opens/i);
 		await expect(chip).toContainText(/in \d+[dh]/i);
+		// Regression: the old standalone always-green "live" dot is gone. When the
+		// venue is closed the prices are anchored to the last close, so NOTHING in
+		// the footer reads "live" — the indicator is now strictly per-exchange and
+		// lights only while trading.
+		await expect(page.locator('footer')).not.toContainText(/\blive\b/i);
 	});
 });
 
@@ -165,8 +176,8 @@ test.describe('MarketSession chip — placement + banner removal', () => {
 });
 
 test.describe('MarketSession chip — mobile footer density', () => {
-	// On a narrow viewport the footer must keep only the essentials (live +
-	// session chip + version); the ambient clock + db path are desktop-only
+	// On a narrow viewport the footer must keep only the essentials (the
+	// per-exchange session chip + version); the ambient clock + db path are desktop-only
 	// (lg+). 700px is below the lg breakpoint (1024px) but above sm (640px) —
 	// the width where the old `sm:flex` clock used to appear and could push
 	// the shrink-0 telemetry cluster into horizontal overflow.

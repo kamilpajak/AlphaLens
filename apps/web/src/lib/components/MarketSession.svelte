@@ -3,13 +3,15 @@
 	 * Per-exchange session chip — ambient footer telemetry.
 	 *
 	 * Reads the shared ``/v1/market/status`` poll state and renders one
-	 * compact chip per venue: "XNYS ● open · closes in 2h" while trading,
+	 * compact chip per venue: "XNYS ● live · closes in 2h" while trading,
 	 * "XNYS ○ closed · opens mon 09:30" otherwise. It answers the only
 	 * market-state question this read-only brief tool actually has — are the
 	 * prices live or anchored to the last close — so it lives in the footer
 	 * as ambient context, not a full-width alert (the old closed-market
 	 * banner + its dead "submission deferred" copy were removed once the
-	 * paper-trade/broker chain was decommissioned, ADR 0012).
+	 * paper-trade/broker chain was decommissioned, ADR 0012). The green "live"
+	 * label is also the app's sole liveness indicator: the always-on standalone
+	 * footer "live" dot was merged here so the cue is strictly per-exchange.
 	 *
 	 * Multi-exchange: today only XNYS is wired server-side. When more venues
 	 * arrive the endpoint grows to a per-MIC list and this renders one chip
@@ -63,7 +65,10 @@
 		{#if status.is_open_now}
 			<span class="dot bg-green"></span>
 			<span class="text-fg-dim">{status.exchange}</span>
-			<span class="text-green">open</span>
+			<!-- "live" doubles as the open-state label and the sole liveness cue
+			     (the old always-on footer "live" dot was merged here): prices are
+			     live only while this venue trades. -->
+			<span class="text-green">live</span>
 			<span class="text-fg-muted hidden lg:inline">· closes in {closesIn}</span>
 			{#if status.is_half_day}
 				<span class="text-amber hidden lg:inline" title="half-day — early close">½</span>
