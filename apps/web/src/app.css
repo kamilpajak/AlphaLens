@@ -135,14 +135,6 @@ body {
 	z-index: 999;
 }
 
-@keyframes blink {
-	0%, 50% { opacity: 1; }
-	51%, 100% { opacity: 0; }
-}
-.blink {
-	animation: blink 1.2s steps(1) infinite;
-}
-
 @keyframes ticker {
 	from { transform: translateX(0); }
 	to { transform: translateX(-50%); }
