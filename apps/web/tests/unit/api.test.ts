@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch } from '../../src/lib/api';
+import { clearSessionExpired, sessionExpired } from '../../src/lib/session.svelte';
 
 // `apiFetch` normalizes the failure modes of a Cloudflare-Access-gated,
 // cross-origin SPA → API call into synthetic status codes the callsites'
@@ -21,6 +22,12 @@ function jsonResponse(status: number, body: unknown = {}): Response {
 		headers: { 'content-type': 'application/json' }
 	});
 }
+
+beforeEach(() => {
+	// Isolate the global session-expiry flag between cases — apiFetch mutates
+	// it as a side effect on the two auth-expiry paths.
+	clearSessionExpired();
+});
 
 afterEach(() => {
 	vi.unstubAllGlobals();
@@ -101,5 +108,58 @@ describe('apiFetch normalization branches', () => {
 		expect(init.method).toBe('POST');
 		expect(init.body).toBe('{"x":1}');
 		expect(init.credentials).toBe('include');
+	});
+});
+
+describe('apiFetch session-expiry side effect', () => {
+	it('marks the session expired when fetch throws and the client is online', async () => {
+		// Cross-origin redirect-refusal with a live network = expired CF Access
+		// session → fire the global overlay.
+		vi.stubGlobal('navigator', { onLine: true });
+		const fetcher = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+		const res = await apiFetch('/v1/days', {}, fetcher as unknown as typeof fetch);
+
+		expect(res.status).toBe(401);
+		expect(sessionExpired()).toBe(true);
+	});
+
+	it('marks the session expired when CF Access serves login HTML as 200', async () => {
+		const fetcher = vi.fn().mockResolvedValue(htmlResponse(200));
+
+		const res = await apiFetch('/v1/days', {}, fetcher as unknown as typeof fetch);
+
+		expect(res.status).toBe(401);
+		expect(sessionExpired()).toBe(true);
+	});
+
+	it('does NOT mark the session on a successful JSON response', async () => {
+		const fetcher = vi.fn().mockResolvedValue(jsonResponse(200, { data: [] }));
+
+		await apiFetch('/v1/days', {}, fetcher as unknown as typeof fetch);
+
+		expect(sessionExpired()).toBe(false);
+	});
+
+	it('does NOT mark the session on the offline (503) path', async () => {
+		// A genuinely offline client is a transient connectivity failure, not an
+		// auth expiry — the overlay must stay closed so we don't push the user
+		// into an SSO flow they can't complete.
+		vi.stubGlobal('navigator', { onLine: false });
+		const fetcher = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+		const res = await apiFetch('/v1/days', {}, fetcher as unknown as typeof fetch);
+
+		expect(res.status).toBe(503);
+		expect(sessionExpired()).toBe(false);
+	});
+
+	it('does NOT mark the session on a non-2xx HTML body (real upstream error)', async () => {
+		const fetcher = vi.fn().mockResolvedValue(htmlResponse(502));
+
+		const res = await apiFetch('/v1/days', {}, fetcher as unknown as typeof fetch);
+
+		expect(res.status).toBe(502);
+		expect(sessionExpired()).toBe(false);
 	});
 });

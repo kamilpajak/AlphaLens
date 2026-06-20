@@ -190,52 +190,61 @@ test.describe('smoke — every route renders without errors', () => {
 	});
 });
 
-test.describe('brief detail — graceful session-expiry handling', () => {
-	// Regression: an expired Cloudflare Access session makes the cross-origin
-	// API XHR fail — CF answers the unauthenticated XHR with a 302 to its login
-	// origin, the browser blocks following that cross-origin redirect, and the
-	// fetch throws. The brief-detail load used to let that throw bubble into a
-	// bare "500 Internal Error". It must now surface as a graceful "session
-	// expired" page so the operator knows to re-authenticate.
+test.describe('session-expiry handling — global re-auth overlay', () => {
+	// An expired Cloudflare Access session never reaches the API: CF answers the
+	// cross-origin XHR with a 302 to its login origin (the browser blocks that
+	// redirect → fetch throws) or serves its login HTML as 200. `apiFetch`
+	// normalises both to a synthetic 401 AND flips the global session-expiry
+	// store, so a single overlay modal (role="dialog") renders ABOVE page
+	// content on EVERY route. The loaders themselves degrade to empty state —
+	// the overlay is the only re-auth surface.
 	const DATE = latestDay.date;
 
-	test('aborted API fetch (CF redirect) shows session-expired, not a 500', async ({ page }) => {
+	const overlay = (page: import('@playwright/test').Page) =>
+		page.getByRole('dialog').filter({ hasText: 'session expired' });
+
+	test('aborted API fetch (CF redirect) shows the re-auth overlay, not a 500', async ({
+		page
+	}) => {
 		await page.route(`**/api/v1/days/${DATE}`, (route) => route.abort());
 		await page.goto(`/brief/${DATE}`);
-		await expect(page.getByText('session expired', { exact: false })).toBeVisible();
+		await expect(overlay(page)).toBeVisible();
 		await expect(page.locator('main')).not.toContainText('Internal Error');
 	});
 
-	test('API 401 shows the session-expired re-auth page', async ({ page }) => {
+	test('CF login HTML (200 + text/html) on the brief route fires the overlay', async ({ page }) => {
+		// The canonical "valid fetch, expired cookie" signal: CF Access serves
+		// its login page as 200 + HTML instead of proxying to Django. apiFetch
+		// detects the HTML body and marks the session expired.
 		await page.route(`**/api/v1/days/${DATE}`, (route) =>
 			route.fulfill({
-				status: 401,
-				contentType: 'application/json',
-				body: JSON.stringify({ detail: 'unauthorized' })
+				status: 200,
+				contentType: 'text/html; charset=utf-8',
+				body: '<!doctype html><html>cf access login</html>'
 			})
 		);
 		await page.goto(`/brief/${DATE}`);
-		await expect(page.getByText('session expired', { exact: false })).toBeVisible();
+		await expect(overlay(page)).toBeVisible();
 	});
 
-	test('dashboard surfaces session-expired on 401, not a misleading empty state', async ({
+	test('dashboard renders the overlay on session expiry, not a misleading empty state', async ({
 		page
 	}) => {
-		// The index endpoint (pathname /api/v1/days, any query) → 401. The
-		// dashboard load must raise the session-expired error page instead of
-		// degrading to the "no briefs yet" empty state (which reads as data loss).
+		// The index endpoint (pathname /api/v1/days, any query) returns the CF
+		// login HTML. apiFetch normalises it to a synthetic 401 + marks the
+		// session; the overlay covers the (empty) dashboard rather than letting
+		// the bare "no captured sessions" empty state read as data loss.
 		await page.route(
 			(url) => url.pathname === '/api/v1/days',
 			(route) =>
 				route.fulfill({
-					status: 401,
-					contentType: 'application/json',
-					body: JSON.stringify({ detail: 'unauthorized' })
+					status: 200,
+					contentType: 'text/html; charset=utf-8',
+					body: '<!doctype html><html>cf access login</html>'
 				})
 		);
 		await page.goto('/');
-		await expect(page.getByText('session expired', { exact: false })).toBeVisible();
-		await expect(page.locator('main')).not.toContainText('no captured sessions');
+		await expect(overlay(page)).toBeVisible();
 	});
 });
 

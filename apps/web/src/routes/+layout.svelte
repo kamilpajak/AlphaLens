@@ -5,7 +5,9 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import { tickerThematic, tickerExperiments } from '$lib/pipelineFacts';
 	import MarketSession from '$lib/components/MarketSession.svelte';
+	import SessionExpiredCard from '$lib/components/SessionExpiredCard.svelte';
 	import { startMarketStatusPoll } from '$lib/marketStatus.svelte';
+	import { sessionExpired } from '$lib/session.svelte';
 
 	let { children } = $props();
 
@@ -66,6 +68,27 @@
 	class="scanlines grain min-h-screen flex flex-col"
 	data-sveltekit-reload={updated.current ? '' : 'off'}
 >
+	<!-- Global re-auth overlay. Renders ONLY while the session-expiry store is
+	     set (apiFetch flips it on the two CF-Access synthetic-401 paths), so it
+	     never traps the page in the common case. Sits above all route content
+	     (z-50) on EVERY route, replacing the old per-loader-only "session
+	     expired" full-page error. Matches the +error.svelte card chrome. -->
+	{#if sessionExpired()}
+		<div
+			class="fixed inset-0 z-50 flex items-center justify-center px-4 py-16 bg-bg/80 backdrop-blur-sm"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="session-expired-heading"
+		>
+			<div
+				id="session-expired-heading"
+				class="w-full max-w-[640px] border border-grid bg-bg-1 corners relative p-6 sm:p-10 fade-up"
+			>
+				<SessionExpiredCard />
+			</div>
+		</div>
+	{/if}
+
 	<!-- Top bar — identity + navigation only. Ambient telemetry (live /
 	     session / db / clock) lives in the footer so this row never wraps
 	     accidentally on narrow viewports. -->
