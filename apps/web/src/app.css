@@ -135,6 +135,16 @@ body {
 	z-index: 999;
 }
 
+/* Liveness pulse — applied ONLY to the MarketSession open-state dot, so the
+   motion is itself per-exchange (a closed venue's dot is static). */
+@keyframes blink {
+	0%, 50% { opacity: 1; }
+	51%, 100% { opacity: 0; }
+}
+.blink {
+	animation: blink 1.2s steps(1) infinite;
+}
+
 @keyframes ticker {
 	from { transform: translateX(0); }
 	to { transform: translateX(-50%); }

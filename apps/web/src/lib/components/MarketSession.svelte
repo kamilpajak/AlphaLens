@@ -63,7 +63,9 @@
 {#if ready && status}
 	<span data-testid="market-session" class="flex items-center gap-1.5 whitespace-nowrap">
 		{#if status.is_open_now}
-			<span class="dot bg-green"></span>
+			<!-- `blink` pulses the dot while the venue trades; the closed branch
+			     below uses a static dot, so the motion is itself per-exchange. -->
+			<span class="dot bg-green blink"></span>
 			<span class="text-fg-dim">{status.exchange}</span>
 			<!-- "live" doubles as the open-state label and the sole liveness cue
 			     (the old always-on footer "live" dot was merged here): prices are
