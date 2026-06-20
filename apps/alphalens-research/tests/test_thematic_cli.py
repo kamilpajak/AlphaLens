@@ -117,6 +117,86 @@ class TestMapThemesCLI(unittest.TestCase):
         self.assertIn("QUBT", result.output)
         self.assertIn("tenk,press", result.output)
 
+    def test_map_themes_passes_theme_novelty_mapping_to_mapper(self):
+        # The CLI ranks the rolled-up novel themes and truncates to
+        # head(max_themes); that rank + novelty_score is the selection covariate
+        # the EDGE attribution pass needs. It must reach the mapper as
+        # ``theme_novelty={theme: (rank, score)}`` (rank = 1-based position in
+        # the truncated, already-sorted novel frame) — not be dropped.
+        novel = pd.DataFrame(
+            [
+                {"theme": "defense_procurement", "novelty_score": 9.5, "count_window": 7},
+                {"theme": "gas_pipelines", "novelty_score": 4.2, "count_window": 3},
+            ]
+        )
+        captured = {}
+
+        def _fake_map_themes(*, themes, theme_novelty, **_kwargs):
+            captured["themes"] = list(themes)
+            captured["theme_novelty"] = theme_novelty
+            return _FAKE_CANDIDATES.copy()
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, self._env(), clear=False),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.roll_up",
+                return_value=novel.copy(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel",
+                return_value=novel.copy(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.orchestrator.map_themes",
+                side_effect=_fake_map_themes,
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                ["thematic", "map-themes", "--date", "2026-05-15", "--output-dir", tmpdir],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(
+            captured["theme_novelty"],
+            {"defense_procurement": (1, 9.5), "gas_pipelines": (2, 4.2)},
+        )
+
+    def test_map_themes_missing_novelty_score_does_not_crash(self):
+        # The novelty stamp is telemetry only — a malformed novel frame (no
+        # novelty_score column) must degrade the score to NA, never abort the
+        # daily build. Rank still derives from position.
+        novel = pd.DataFrame({"theme": ["alpha_theme", "beta_theme"]})
+        captured = {}
+
+        def _fake_map_themes(*, theme_novelty, **_kwargs):
+            captured["theme_novelty"] = theme_novelty
+            return _FAKE_CANDIDATES.copy()
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, self._env(), clear=False),
+            patch("alphalens_cli.commands.thematic.themes_mod.roll_up", return_value=novel.copy()),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel", return_value=novel.copy()
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.orchestrator.map_themes",
+                side_effect=_fake_map_themes,
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                ["thematic", "map-themes", "--date", "2026-05-15", "--output-dir", tmpdir],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        mapping = captured["theme_novelty"]
+        self.assertEqual(mapping["alpha_theme"][0], 1)
+        self.assertEqual(mapping["beta_theme"][0], 2)
+        self.assertTrue(np.isnan(mapping["alpha_theme"][1]))
+
     def test_map_themes_no_novel_themes_writes_empty_parquet(self):
         # A genuinely quiet news day yields 0 novel themes — a documented,
         # EXPECTED state. map-themes must still write a typed-empty candidates

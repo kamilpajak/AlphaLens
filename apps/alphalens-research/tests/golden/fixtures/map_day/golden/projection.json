@@ -14,6 +14,8 @@
     "n_gates_failed",
     "n_gates_passed",
     "n_gates_unknown",
+    "novelty_rank",
+    "novelty_score",
     "rationale",
     "source_event_published_at",
     "source_event_title",
