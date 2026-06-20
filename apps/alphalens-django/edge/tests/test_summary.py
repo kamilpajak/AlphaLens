@@ -59,6 +59,24 @@ def _no_fill(ticker: str) -> dict:
     }
 
 
+def _pending_fill(ticker: str) -> dict:
+    """Non-terminal NO_FILL: entry order still live, no tier filled, no open_r mark.
+
+    This is a tracked candidate with ZERO capital deployed — not an open position.
+    """
+    return {
+        "ticker": ticker,
+        "brief_date": "2026-05-27",
+        "plannable": True,
+        "terminal": False,
+        "ladder_classification": "NO_FILL",
+        "open_r": None,
+        "tiers_filled_count": 0.0,
+        "market_excess_return": None,
+        "realized_r": None,
+    }
+
+
 class TestNGate:
     def test_below_threshold_is_insufficient_no_means(self):
         rows = [_terminal(f"T{i}", excess=0.01 * i, realized_r=0.5) for i in range(5)]
@@ -103,6 +121,19 @@ class TestOpenExcludedFromExpectancy:
         assert out["open_positions"]["near_sl"] == 1
         # n_matured counts only the terminal excess rows, NOT the open ones.
         assert out["edge"]["n_matured"] == N_GATE_THRESHOLD
+
+    def test_pending_fill_is_not_counted_as_open_position(self):
+        # A non-terminal NO_FILL candidate (entry order still live, no tier filled)
+        # has deployed zero capital and carries no open_r mark — it is NOT an open
+        # position and must not inflate n_open (edge-data audit 2026-06-18).
+        rows = [_ongoing("OP1", open_r=0.3), _ongoing("OP2", open_r=-0.2)]
+        rows += [_pending_fill("PF1"), _pending_fill("PF2"), _pending_fill("PF3")]
+        out = build_edge_summary(rows)
+        assert out["open_positions"]["n_open"] == 2
+        assert out["open_positions"]["near_tp"] == 1
+        assert out["open_positions"]["near_sl"] == 1
+        # ...but pending-fills remain plannable candidates (in the plannable denom).
+        assert out["n_plannable"] == 5
 
 
 class TestDeploymentIsNIndependent:
@@ -222,7 +253,10 @@ class TestFullPayloadCharacterization:
                 "mean_tiers_filled_count": 1.9444444444444444,
             },
             "open_positions": {
-                "n_open": 4,
+                # 4 ongoing rows, but _char_ongoing(None) carries no open_r mark
+                # (pending-fill / unmarkable) so it is NOT an open position → 3.
+                # The flat _char_ongoing(0.0) stays (open but in neither bucket).
+                "n_open": 3,
                 "near_tp": 1,
                 "near_sl": 1,
                 "note": "descriptive only — excluded from expectancy (memo §3.3)",

@@ -143,12 +143,24 @@ def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
 
 
 def _accumulate_open(acc: _Accumulator, row: dict[str, Any]) -> None:
-    """Fold one ongoing row into the descriptive open distribution (§3.3)."""
-    acc.n_open += 1
+    """Fold one ongoing row into the descriptive open distribution (§3.3).
+
+    A pending-fill candidate (entry order still live, no tier filled) has deployed
+    zero capital and carries no ``open_r`` mark — it is NOT an open position and
+    must not inflate ``n_open``. The monitor marks these non-terminal rows with
+    ``ladder_classification == "NO_FILL"`` and a NaN ``open_r``; gating on a finite
+    ``open_r`` (the live mark) is the exact discriminator (edge-data audit
+    2026-06-18). ``n_open`` thus counts markable open positions; ``near_tp`` /
+    ``near_sl`` are its directional sub-split (a flat ``open_r == 0`` mark is open
+    but in neither bucket, so ``near_tp + near_sl <= n_open``).
+    """
     ov = _finite(row.get("open_r"))
-    if ov is not None and ov > 0:
+    if ov is None:
+        return
+    acc.n_open += 1
+    if ov > 0:
         acc.open_near_tp += 1
-    elif ov is not None and ov < 0:
+    elif ov < 0:
         acc.open_near_sl += 1
 
 
