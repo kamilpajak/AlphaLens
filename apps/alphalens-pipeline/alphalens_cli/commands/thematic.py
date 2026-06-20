@@ -375,6 +375,15 @@ def map_themes_cmd(
 
     typer.echo(f"Mapping {len(novel)} novel themes via DeepSeek v4-pro ({model})...")
     themes = list(novel["theme"])
+    # The novelty rank (1-based position in this truncated, already-sorted
+    # head(max_themes) frame) + score is the selection covariate "how novel was
+    # the theme that surfaced this ticker". It is computed only here and would
+    # otherwise be discarded — pass it down so map_themes stamps it onto the
+    # candidate parquet for a future N>=30 EDGE attribution join. Telemetry only.
+    theme_novelty = {
+        str(row.theme): (rank, float(getattr(row, "novelty_score", float("nan"))))
+        for rank, row in enumerate(novel.itertuples(index=False), start=1)
+    }
 
     df = orchestrator.map_themes(
         themes=themes,
@@ -385,6 +394,7 @@ def map_themes_cmd(
         keep_unverified=keep_unverified,
         rebuild=rebuild,
         model=model,
+        theme_novelty=theme_novelty,
     )
     # input = novel themes fed to the mapper; output = verified candidate
     # rows. 0 candidates from N novel themes = a DeepSeek Pro mapping /
