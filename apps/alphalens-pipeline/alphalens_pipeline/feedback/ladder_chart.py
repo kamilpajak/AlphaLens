@@ -677,7 +677,12 @@ def _payload_for_row(
 ) -> dict[str, Any]:
     """Build one row's chart payload; never raises (NO_DATA on any failure)."""
     try:
-        from alphalens_pipeline.feedback.population_ladder_monitor import _filter_bars_to_rth
+        # Lazy import (population_ladder_monitor <-> ladder_chart would be a top-level
+        # import cycle): _filter_bars_to_rth and _engine_cutoffs both live there.
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            _engine_cutoffs,
+            _filter_bars_to_rth,
+        )
 
         brief_date = _as_date(row.get("brief_date"))
         ticker = str(row.get("ticker") or "").upper()
@@ -695,7 +700,23 @@ def _payload_for_row(
 
         horizon_session = _horizon_session(arrival_session, raw_bars, exchange)
         rth_bars = _filter_bars_to_rth(raw_bars, arrival_session, horizon_session, exchange)
-        outcome = replay_ladder(setup, rth_bars)
+        # Replay with the SAME entry-TTL / position-TTL cutoffs the classification used
+        # (population_ladder_monitor). Without them the chart re-replays TTL-less and
+        # fills a limit touched only AFTER the order expired -> a stale E1 marker on a
+        # NO_FILL row (and a missing TIME_STOP past the position TTL). The cutoffs make
+        # the chart's modeled fills match the stored ladder_classification.
+        # Named unpack (over cutoffs[5]/[6]) so the two ms scalars are self-documenting.
+        (_arr, _ent_s, _pos_s, _ent_ttl, _pos_ttl, entry_expiry_ms, position_expiry_ms) = (
+            _engine_cutoffs(brief_date, setup, exchange)
+        )
+        # reference_close is intentionally omitted: it only anchors forward_return,
+        # which the chart markers / sequence do not use.
+        outcome = replay_ladder(
+            setup,
+            rth_bars,
+            entry_expiry_ms=entry_expiry_ms,
+            position_expiry_ms=position_expiry_ms,
+        )
         return build_chart_payload(
             setup,
             rth_bars,
