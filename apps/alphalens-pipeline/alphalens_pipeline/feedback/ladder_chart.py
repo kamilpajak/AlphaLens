@@ -705,8 +705,12 @@ def _payload_for_row(
         # fills a limit touched only AFTER the order expired -> a stale E1 marker on a
         # NO_FILL row (and a missing TIME_STOP past the position TTL). The cutoffs make
         # the chart's modeled fills match the stored ladder_classification.
-        cutoffs = _engine_cutoffs(brief_date, setup, exchange)
-        entry_expiry_ms, position_expiry_ms = cutoffs[5], cutoffs[6]
+        # Named unpack (over cutoffs[5]/[6]) so the two ms scalars are self-documenting.
+        (_arr, _ent_s, _pos_s, _ent_ttl, _pos_ttl, entry_expiry_ms, position_expiry_ms) = (
+            _engine_cutoffs(brief_date, setup, exchange)
+        )
+        # reference_close is intentionally omitted: it only anchors forward_return,
+        # which the chart markers / sequence do not use.
         outcome = replay_ladder(
             setup,
             rth_bars,
