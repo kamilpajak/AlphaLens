@@ -38,6 +38,7 @@ from alphalens_pipeline.paper.calendar import (
     previous_trading_day,
     session_open_utc,
 )
+from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
 
 UTC = dt.UTC
 
@@ -725,6 +726,139 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
                 exchange=_EXCHANGE,
             )
             self.assertEqual(sorted(tickers_fetched), ["AMD", "NVDA"])
+
+
+def _entry_expiry_ms(arrival: dt.date, order_ttl_days: int) -> int:
+    """The engine entry cutoff: open ms of the session ``order_ttl_days`` after arrival.
+
+    Recomputed here from the public calendar helpers (NOT imported from the monitor)
+    so the test independently pins the same math the classification path uses in
+    ``population_ladder_monitor._engine_cutoffs``.
+    """
+    expiry_session = advance_trading_sessions(arrival, order_ttl_days, _EXCHANGE)
+    return int(session_open_utc(expiry_session, _EXCHANGE).timestamp() * 1000)
+
+
+def _position_expiry_ms(arrival: dt.date, position_ttl_days: int) -> int:
+    expiry_session = advance_trading_sessions(arrival, position_ttl_days, _EXCHANGE)
+    return int(session_open_utc(expiry_session, _EXCHANGE).timestamp() * 1000)
+
+
+def _enrich_and_load(store_dir: Path, briefs_dir: Path, ticker: str, brief_date: dt.date, bars):
+    """Run the store enricher with an injected (hermetic) bar source and return the
+    persisted payload dict for ``ticker``."""
+
+    def bar_fetch(t: str, arrival_session: dt.date) -> list[dict]:
+        return bars if t.upper() == ticker and arrival_session == brief_date else []
+
+    enrich_store_with_chart_payloads(
+        store_dir,
+        briefs_dir,
+        bar_fetch=bar_fetch,
+        daily_bar_fetch=lambda *_a, **_k: [],  # hermetic: no context, no real Polygon
+        exchange=_EXCHANGE,
+    )
+    df = pd.read_parquet(store_dir / f"{brief_date.isoformat()}.parquet")
+    return json.loads(df.set_index("ticker").loc[ticker, "chart_payload_json"])
+
+
+class TestChartReplayHonoursTtlCutoffs(unittest.TestCase):
+    """The chart payload's replay MUST use the same entry-TTL / position-TTL cutoffs
+    as the classification (``population_ladder_monitor``). Otherwise the chart draws
+    fills the status never recorded — the KVYO bug: status ``NO_FILL`` but an ``E1``
+    entry marker, because the chart re-replayed without the entry cutoff so a limit
+    touched only AFTER the order expired filled on the chart.
+
+    These are the cross-cutting guards for chart-vs-status divergence: each first
+    asserts the TTL-aware and TTL-less replays actually DISAGREE on the scenario
+    (so the test cannot rot to a no-op), then pins the chart to the TTL-aware one.
+    """
+
+    def test_stale_entry_touched_after_ttl_draws_no_entry_marker(self) -> None:
+        """Entry limit first touched AFTER the entry-TTL expiry -> NO_FILL, so the
+        chart must carry NO entry (E*) marker (the KVYO regression)."""
+        order_ttl = _OK_SETUP["order_ttl_days"]  # 7
+        # arrival bar stays above the 100 entry (no touch); a much-later bar, well
+        # past the entry-TTL expiry session, finally dips to the entry.
+        stale_session = advance_trading_sessions(_ARRIVAL, order_ttl + 2, _EXCHANGE)
+        bars = [
+            _bar(_session_open_ms(_ARRIVAL), o=105.0, h=106.0, low=101.0, c=104.0),
+            _bar(_session_open_ms(stale_session), o=101.0, h=102.0, low=99.0, c=100.5),
+        ]
+
+        # Anti-rot: the bug-path (TTL-less) replay DOES fill; the TTL-aware one does not.
+        ttl_less = replay_ladder(_OK_SETUP, bars)
+        ttl_aware = replay_ladder(
+            _OK_SETUP,
+            bars,
+            entry_expiry_ms=_entry_expiry_ms(_ARRIVAL, order_ttl),
+            position_expiry_ms=_position_expiry_ms(_ARRIVAL, TIME_STOP_DAYS),
+        )
+        self.assertIn("E1", [c.level_id for c in ttl_less.sequence])  # bug-path fills
+        self.assertEqual(ttl_aware.classification, "NO_FILL")  # cutoff-aware does not
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            _write_store_row(store_dir, _ARRIVAL, "KVYO")
+            _write_brief(briefs_dir, _ARRIVAL, "KVYO", _OK_SETUP)
+            payload = _enrich_and_load(store_dir, briefs_dir, "KVYO", _ARRIVAL, bars)
+
+        self.assertEqual(payload["status"], "OK")  # bars exist -> a plan chart still renders
+        entry_markers = [m for m in payload["markers"] if m["kind"] == "ENTRY"]
+        self.assertEqual(entry_markers, [], "NO_FILL status must not draw an entry marker")
+
+    def test_entry_touched_within_ttl_keeps_entry_marker(self) -> None:
+        """Positive control: an entry touched INSIDE the entry-TTL window still draws
+        its E1 marker (the fix must not suppress legitimate fills)."""
+        bars = [
+            _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+            _bar(_session_open_ms(_NEXT_SESSION), o=100.0, h=101.0, low=99.5, c=100.0),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            _write_store_row(store_dir, _ARRIVAL, "NVDA")
+            _write_brief(briefs_dir, _ARRIVAL, "NVDA", _OK_SETUP)
+            payload = _enrich_and_load(store_dir, briefs_dir, "NVDA", _ARRIVAL, bars)
+
+        entry_markers = [m for m in payload["markers"] if m["kind"] == "ENTRY"]
+        self.assertEqual([m["label"] for m in entry_markers], ["E1"])
+
+    def test_open_position_past_position_ttl_draws_time_stop_marker(self) -> None:
+        """An entry fills, then never hits TP/SL: at the position-TTL the engine forces
+        a TIME_STOP. The chart must honour the position cutoff and draw that marker;
+        without it the chart would show an open position that never resolves."""
+        sessions = [_ARRIVAL]
+        for _ in range(TIME_STOP_DAYS + 2):
+            sessions.append(advance_trading_sessions(sessions[-1], 1, _EXCHANGE))
+        # Arrival bar fills the entry (low 99 <= 100); every later bar drifts between
+        # the stop (95) and the TP (110) so neither exit ever fires.
+        bars = [_bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.0)]
+        bars += [
+            _bar(_session_open_ms(s), o=100.0, h=101.0, low=99.0, c=100.0) for s in sessions[1:]
+        ]
+
+        # Anti-rot: TTL-less replay never time-stops; the TTL-aware one does.
+        ttl_less = replay_ladder(_OK_SETUP, bars)
+        ttl_aware = replay_ladder(
+            _OK_SETUP,
+            bars,
+            entry_expiry_ms=_entry_expiry_ms(_ARRIVAL, _OK_SETUP["order_ttl_days"]),
+            position_expiry_ms=_position_expiry_ms(_ARRIVAL, TIME_STOP_DAYS),
+        )
+        self.assertNotIn("TIME_STOP", [c.level_id for c in ttl_less.sequence])
+        self.assertEqual(ttl_aware.classification, "TIME_STOP")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            _write_store_row(store_dir, _ARRIVAL, "TSLA")
+            _write_brief(briefs_dir, _ARRIVAL, "TSLA", _OK_SETUP)
+            payload = _enrich_and_load(store_dir, briefs_dir, "TSLA", _ARRIVAL, bars)
+
+        time_stops = [m for m in payload["markers"] if m["kind"] == "TIME_STOP"]
+        self.assertEqual(len(time_stops), 1, "position-TTL must draw exactly one TIME_STOP marker")
 
 
 if __name__ == "__main__":
