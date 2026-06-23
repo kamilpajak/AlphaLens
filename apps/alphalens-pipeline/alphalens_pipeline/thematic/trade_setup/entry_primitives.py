@@ -31,6 +31,11 @@ from alphalens_pipeline.feedback.bar_window import (
     ARRIVAL_VWAP_WINDOW_MIN,
     _window_vwap,
 )
+from alphalens_pipeline.thematic.trade_setup import builder, ladder
+
+# Re-export the canonical stop-ATR-buffer constant so callers do not need
+# to reach into the private builder namespace directly.
+STOP_ATR_BUFFER_K: float = builder._STOP_ATR_BUFFER
 
 # Tolerance for detecting a late open: if the first in-window bar starts more
 # than 2 minutes after the nominal session open, ``late_open`` is set True.
@@ -176,9 +181,215 @@ def vwap_arrival_fill(
     )
 
 
+def arm_disaster_stop(
+    arm_blended: float,
+    atr: float,
+    close: float,
+    *,
+    k: float = STOP_ATR_BUFFER_K,
+) -> float:
+    """Compute the disaster stop for a given arm's blended entry.
+
+    Applies the standard stop-ATR-buffer below ``arm_blended`` using
+    ``builder._jitter_stop``, then re-validates against the −25% disaster
+    floor (``arm_blended * builder._DISASTER_FLOOR_FRAC``).  The floor is
+    the same guard used in the full builder pipeline so that no arm can
+    silently produce a stop that implies more than 25% risk from entry.
+
+    Args:
+        arm_blended: Blended entry reference price for the arm.
+        atr: Average True Range (absolute price units, must be > 0).
+        close: Closing price at setup time (used by ``_jitter_stop`` to
+            detect round-ATR multiples that are stop-hunt targets).
+        k: ATR buffer multiplier.  Defaults to ``STOP_ATR_BUFFER_K``
+            (``builder._STOP_ATR_BUFFER``).
+
+    Returns:
+        Hard stop price (always finite; floored at ``arm_blended * 0.75``).
+    """
+    raw_stop = arm_blended - k * atr
+    jittered = builder._jitter_stop(close, raw_stop, atr)
+    floor = arm_blended * builder._DISASTER_FLOOR_FRAC
+    return max(jittered, floor)
+
+
+def build_baseline_arm(trade_setup: Mapping[str, Any]) -> ArmSetup:
+    """Verbatim-passthrough control arm wrapping a pre-computed TradeSetup.
+
+    Carries the source setup's ``entry_tiers``, ``tp_tranches``, and
+    ``disaster_stop`` directly into an :class:`ArmSetup` without any
+    geometry transformation.  The ``status`` is taken from the source's
+    parse state (key ``"status"``).
+
+    This arm is the *control* in the entry-model counterfactual: it
+    reproduces exactly what the production builder decided, so all other
+    arms can be measured relative to it.
+
+    Args:
+        trade_setup: Mapping with at minimum the keys ``"status"``,
+            ``"entry_tiers"``, ``"tp_tranches"``, and ``"disaster_stop"``.
+
+    Returns:
+        :class:`ArmSetup` with ``arm="baseline"`` and geometry from the
+        source mapping.
+    """
+    return ArmSetup(
+        arm="baseline",
+        status=str(trade_setup.get("status", "UNKNOWN")),
+        arm_blended=None,
+        disaster_stop=trade_setup.get("disaster_stop"),
+        entry_tiers=tuple(trade_setup.get("entry_tiers", ())),
+        tp_tranches=tuple(trade_setup.get("tp_tranches", ())),
+        geometry_collapsed=False,
+    )
+
+
+def build_narrow_tiers_arm(
+    *,
+    close: float,
+    atr: float,
+    mults: tuple[float, ...] = (0.10, 0.175, 0.25),
+    min_spacing_mult: float,
+    min_stop_dist_mult: float,
+) -> ArmSetup:
+    """Build a compact dip-buy arm with tiers clustered near the close.
+
+    Candidate tiers are placed at ``close - m*atr`` for each ``m`` in
+    ``mults``.  The arm's disaster stop is computed via
+    :func:`arm_disaster_stop` using the *deepest* candidate as the blended
+    reference (conservative: anchors the stop to the lowest proposed entry).
+    Tiers that violate ``min_spacing_mult`` or ``min_stop_dist_mult``
+    constraints are dropped by :func:`ladder.build_entry_tiers`; if fewer
+    tiers survive than candidates, ``geometry_collapsed`` is set ``True``.
+
+    Args:
+        close: Most-recent closing price (> 0).
+        atr: Average True Range in absolute price units (> 0).
+        mults: ATR offset multipliers for candidate tier placement.
+        min_spacing_mult: Minimum gap between adjacent tiers (× ATR).
+        min_stop_dist_mult: Minimum distance from each tier to the stop (× ATR).
+
+    Returns:
+        :class:`ArmSetup` with ``arm="narrow_tiers"``.  ``status`` is
+        ``"NO_STRUCTURE"`` when ``atr <= 0`` or ``close <= 0``; ``"BAD_GEOMETRY"``
+        when the −25% floor raises the stop above the min-stop-distance
+        (all tiers fail the stop-distance filter after floor enforcement);
+        ``"OK"`` otherwise (even when geometry_collapsed is True — collapse
+        is informational, not an error).
+    """
+    if atr <= 0 or close <= 0:
+        return ArmSetup(
+            arm="narrow_tiers",
+            status="NO_STRUCTURE",
+            arm_blended=None,
+            disaster_stop=None,
+            entry_tiers=(),
+            tp_tranches=(),
+            geometry_collapsed=False,
+        )
+
+    candidates = [(close - m * atr, "narrow") for m in mults]
+    # Use the deepest candidate as the blended reference for the stop —
+    # conservative: anchors the stop to the furthest-out proposed entry.
+    deepest_candidate = min(p for p, _ in candidates)
+    stop = arm_disaster_stop(arm_blended=deepest_candidate, atr=atr, close=close)
+
+    chosen = ladder.build_entry_tiers(
+        close,
+        atr,
+        candidates,
+        stop,
+        min_spacing_mult=min_spacing_mult,
+        min_stop_dist_mult=min_stop_dist_mult,
+    )
+
+    geometry_collapsed = len(chosen) < len(mults)
+
+    if not chosen:
+        # All tiers filtered — the floor-enforced stop left no room.
+        return ArmSetup(
+            arm="narrow_tiers",
+            status="BAD_GEOMETRY",
+            arm_blended=None,
+            disaster_stop=stop,
+            entry_tiers=(),
+            tp_tranches=(),
+            geometry_collapsed=geometry_collapsed,
+        )
+
+    tier_dicts = tuple({"limit": float(p), "tag": tag} for p, tag in chosen)
+    arm_blended = sum(t["limit"] for t in tier_dicts) / len(tier_dicts)
+
+    return ArmSetup(
+        arm="narrow_tiers",
+        status="OK",
+        arm_blended=arm_blended,
+        disaster_stop=stop,
+        entry_tiers=tier_dicts,
+        tp_tranches=(),
+        geometry_collapsed=geometry_collapsed,
+    )
+
+
+def build_single_at_close_arm(
+    *,
+    close: float,
+    atr: float,
+    just_below_mult: float = 0.0,
+) -> ArmSetup:
+    """Build a single-entry arm placed at (or just below) the closing price.
+
+    Suitable for momentum / breakout setups where the trade rationale is
+    "buy at market now" rather than "wait for a dip".  A small
+    ``just_below_mult`` can shift the tier fractionally below the close to
+    avoid buying into a gap open.
+
+    Args:
+        close: Most-recent closing price (> 0).
+        atr: Average True Range in absolute price units (> 0).
+        just_below_mult: ATR fraction subtracted from ``close`` to place the
+            tier.  ``0.0`` (default) = exactly at close.
+
+    Returns:
+        :class:`ArmSetup` with ``arm="single_at_close"``.  ``status`` is
+        ``"NO_STRUCTURE"`` when ``atr <= 0`` or ``close <= 0``; ``"OK"``
+        otherwise.
+    """
+    if atr <= 0 or close <= 0:
+        return ArmSetup(
+            arm="single_at_close",
+            status="NO_STRUCTURE",
+            arm_blended=None,
+            disaster_stop=None,
+            entry_tiers=(),
+            tp_tranches=(),
+            geometry_collapsed=False,
+        )
+
+    limit = close - just_below_mult * atr
+    stop = arm_disaster_stop(arm_blended=limit, atr=atr, close=close)
+
+    tier_dicts: tuple[Mapping[str, Any], ...] = ({"limit": limit, "tag": "single_at_close"},)
+
+    return ArmSetup(
+        arm="single_at_close",
+        status="OK",
+        arm_blended=limit,
+        disaster_stop=stop,
+        entry_tiers=tier_dicts,
+        tp_tranches=(),
+        geometry_collapsed=False,
+    )
+
+
 __all__ = [
+    "STOP_ATR_BUFFER_K",
     "ArmFill",
     "ArmSetup",
+    "arm_disaster_stop",
+    "build_baseline_arm",
+    "build_narrow_tiers_arm",
+    "build_single_at_close_arm",
     "market_at_arrival_fill",
     "vwap_arrival_fill",
 ]
