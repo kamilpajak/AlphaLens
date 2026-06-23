@@ -38,6 +38,16 @@ class TestEventAnchor(unittest.TestCase):
         )
         self.assertEqual((stock, spy), (None, 505.0))
 
+    def test_arrival_vwap_mode_propagates_missing_spy_open_as_none(self):
+        stock, spy = event_anchor(
+            ANCHOR_ARRIVAL_VWAP,
+            prior_close_stock=100.0,
+            prior_close_spy=500.0,
+            arrival_vwap_stock=110.0,
+            arrival_open_spy=None,
+        )
+        self.assertEqual((stock, spy), (110.0, None))
+
     def test_unknown_mode_raises(self):
         with self.assertRaises(ValueError):
             event_anchor(

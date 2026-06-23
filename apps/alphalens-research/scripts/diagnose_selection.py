@@ -122,10 +122,16 @@ def main() -> None:
         anchor_session = previous_trading_day(arrival, args.exchange)
         prior_close_stock = _close(grouped.get(anchor_session), ticker)
         prior_close_spy = _close(grouped.get(anchor_session), _SPY)
+        # reference_close is the arrival 30-min VWAP (the price an arrival entry pays).
+        # Coerce missing / NaN to None so car_for_event treats it as an incomputable window.
         ref_close = row.get("reference_close")
         arrival_vwap_stock = (
             float(ref_close) if ref_close is not None and not pd.isna(ref_close) else None
         )
+        if arrival_vwap_stock is not None and pd.isna(arrival_vwap_stock):
+            arrival_vwap_stock = None
+        # SPY arrival OPEN is the closest single-price market proxy at the start of the entry
+        # window; first-session drift vs the stock's 30-min VWAP is negligible over the CAR.
         arrival_open_spy = _open(grouped.get(arrival), _SPY)
         a_stock, a_spy = anchor_mod.event_anchor(
             args.anchor,
