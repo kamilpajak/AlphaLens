@@ -1,16 +1,21 @@
 """Tests for the pure helpers in diagnose_entry_grid.py.
 
 Only the importable pure functions are tested here — main() I/O is excluded
-(scripts are coverage-excluded per CI config). The three helpers under test:
+(scripts are coverage-excluded per CI config). The four helpers / attributes
+under test:
 
   _common_support  -- keeps only events where all 5 arms are non-None
   _market_cap_index -- maps (brief_date, TICKER) -> float | None from a briefs
                        DataFrame, with numpy-float64 -> plain float coercion
+  _counter_split_contract -- verifies main() uses two distinct counters
+                             (n_missing_setup and n_missing_bars, NOT one
+                             conflated n_missing_bars)
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import inspect
 import unittest
 
 import numpy as np
@@ -29,15 +34,74 @@ def _import_helpers():
     return mod
 
 
+class TestMissingCounterSplit(unittest.TestCase):
+    """main() must use two distinct counters: n_missing_setup and n_missing_bars.
+
+    Before Fix 1, a single n_missing_bars counter conflated "setup is None"
+    (no trade setup found for the ticker) with "bars cache is empty" (setup
+    present but minute-bar cache is empty for the arrival session).  The fix
+    introduces n_missing_setup and n_missing_bars as separate counters with
+    separate continue paths, and the report line names them both.
+
+    We verify this by inspecting the source of main() for the presence of
+    both counter identifiers and the absence of the old conflated usage.
+    """
+
+    def setUp(self):
+        self.mod = _import_helpers()
+        self.main_src = inspect.getsource(self.mod.main)
+
+    def test_n_missing_setup_counter_exists_in_main(self):
+        """main() must declare and increment n_missing_setup."""
+        self.assertIn(
+            "n_missing_setup",
+            self.main_src,
+            "main() must have a separate n_missing_setup counter (Fix 1)",
+        )
+
+    def test_n_missing_bars_counter_exists_in_main(self):
+        """main() must still have n_missing_bars (for the empty-bars branch)."""
+        self.assertIn(
+            "n_missing_bars",
+            self.main_src,
+            "main() must retain n_missing_bars counter for the empty-bars branch (Fix 1)",
+        )
+
+    def test_report_line_names_both_counters(self):
+        """The printed report line must mention both n_missing_setup and n_missing_bars."""
+        # The print statement must contain both counter values so the report
+        # distinguishes them.  We check the format string contains both names.
+        self.assertIn(
+            "n_missing_setup",
+            self.main_src,
+            "report line must reference n_missing_setup",
+        )
+        self.assertIn(
+            "n_missing_bars",
+            self.main_src,
+            "report line must reference n_missing_bars",
+        )
+
+    def test_old_conflated_counter_removed(self):
+        """The old conflated 'missing-bars/setup' label must not appear in the report."""
+        # Before Fix 1, the report line read 'missing-bars/setup' (one combined value).
+        # After the fix it names the two counters separately.
+        self.assertNotIn(
+            "missing-bars/setup",
+            self.main_src,
+            "old conflated 'missing-bars/setup' label must be removed from the report (Fix 1)",
+        )
+
+
 class TestCommonSupport(unittest.TestCase):
     """_common_support keeps only events where ALL arms are non-None."""
 
     def setUp(self):
         self.mod = _import_helpers()
 
-    def _arm_row(self, **overrides) -> dict:
+    def _arm_row(self, **overrides: float | None) -> dict[str, float | None]:
         """Return a full 5-arm row with all arms set to 0.0 by default."""
-        row = dict.fromkeys(
+        row: dict[str, float | None] = dict.fromkeys(
             ("baseline", "narrow_tiers", "single_at_close", "market_at_arrival", "vwap_arrival"),
             0.0,
         )
@@ -107,12 +171,12 @@ class TestEqualFillRateSimulationProof(unittest.TestCase):
 
         # Arm A (baseline) fills all 10 events with values [0.10]*5 + [-0.05]*5.
         # Arm B (narrow_tiers) fills only the first 5 events (value=0.10); others=None.
-        rows = []
+        rows: list[dict[str, float | None]] = []
         for _ in range(5):
             rows.append(dict.fromkeys(arm_names, 0.10))  # both arms match
         for _ in range(5):
             # arm A (baseline) gets cash -0.05; arm B (narrow_tiers) gets None
-            row = dict.fromkeys(arm_names, -0.05)
+            row: dict[str, float | None] = dict.fromkeys(arm_names, -0.05)
             row["narrow_tiers"] = None
             rows.append(row)
 

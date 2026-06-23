@@ -44,6 +44,10 @@ import pandas as pd
 from alphalens_pipeline.data import rs_history
 from alphalens_pipeline.feedback.ladder_replay import ENTRY_GRID_ARMS, replay_entry_grid
 from alphalens_pipeline.feedback.population_ladder_monitor import (
+    # Intentional reuse of private helpers: these share the canonical minute-bar cache reader
+    # for the same population_ladders/bars/ directory that the monitor writes.  Inlining would
+    # duplicate the read logic.  A rename in the monitor surfaces as a loud ImportError here,
+    # which is acceptable for research tooling and preferred over a silent divergence.
     _read_cached_bars,
     _rth_window_utc,
 )
@@ -201,7 +205,10 @@ def main() -> None:
     plannable = outcomes[outcomes["plannable"] == True].copy()  # noqa: E712
 
     # Counters for the coverage report.
+    # n_missing_setup: plannable events where no trade setup was found (brief_date, ticker)
+    # n_missing_bars:  plannable events where the minute-bar cache is empty for the arrival session
     n_plannable = len(plannable)
+    n_missing_setup = 0
     n_missing_bars = 0
     n_unevaluable = 0  # benchmark window not elapsed or SPY data absent
 
@@ -213,7 +220,7 @@ def main() -> None:
 
         setup = setups.get((brief_date, ticker))
         if setup is None:
-            n_missing_bars += 1
+            n_missing_setup += 1
             continue
 
         arrival = session_on_or_after(brief_date, args.exchange)
@@ -288,7 +295,8 @@ def main() -> None:
 
     print(
         f"plannable: {n_plannable}  |  "
-        f"missing-bars/setup: {n_missing_bars}  |  "
+        f"missing-setup: {n_missing_setup}  |  "
+        f"missing-bars: {n_missing_bars}  |  "
         f"unevaluable (window not elapsed / SPY absent): {n_unevaluable}  |  "
         f"full-coverage N: {n_full_coverage}  |  "
         f"common-support N: {n_common}  |  "

@@ -145,12 +145,21 @@ def parse_ladder(trade_setup: Mapping[str, Any] | None) -> _ParsedLadder:
     ]
     total_entry_alloc = sum(lvl.weight for lvl in entries)
     raw_atr = trade_setup.get("atr")
-    atr = float(raw_atr) if raw_atr is not None else None
+    try:
+        atr = float(raw_atr) if raw_atr is not None else None
+    except (ValueError, TypeError):
+        atr = None
+    # Guard: a malformed disaster_stop (non-numeric string, wrong type) must not raise;
+    # treat it as a missing stop -> not a valid ladder.
+    try:
+        stop_f = float(stop)
+    except (ValueError, TypeError):
+        return _ParsedLadder(ok=False)
     return _ParsedLadder(
         ok=True,
         entries=entries,
         tps=tps,
-        disaster_stop=float(stop),
+        disaster_stop=stop_f,
         total_entry_alloc=total_entry_alloc,
         atr=atr,
     )
@@ -1051,10 +1060,18 @@ def replay_entry_grid(
     assert trade_setup is not None  # parse_ladder(None).ok is False; ok=True => not None
 
     # Extract scalar inputs needed by the alternative arm builders.
+    # Guard: malformed (non-numeric) values fall back to NaN so the downstream
+    # math.isfinite checks route the affected arms to None without raising.
     raw_atr = trade_setup.get("atr")
     raw_close = trade_setup.get("asof_close")
-    atr: float = float(raw_atr) if raw_atr is not None else float("nan")
-    close: float = float(raw_close) if raw_close is not None else float("nan")
+    try:
+        atr: float = float(raw_atr) if raw_atr is not None else float("nan")
+    except (ValueError, TypeError):
+        atr = float("nan")
+    try:
+        close: float = float(raw_close) if raw_close is not None else float("nan")
+    except (ValueError, TypeError):
+        close = float("nan")
 
     # Sort bars ascending once; all arm replays share this ordering.
     ordered_bars = sorted(bars, key=lambda b: int(b["t"]))
@@ -1151,8 +1168,13 @@ def replay_entry_grid(
         )
 
     # baseline: pass-through control arm; its own stop is the source setup's stop.
+    # Guard: a non-numeric disaster_stop falls back to NaN so the isfinite check
+    # in _touch_arm_reward returns None (uncomputable) instead of raising.
     baseline_setup = build_baseline_arm(trade_setup)
-    baseline_stop = float(trade_setup.get("disaster_stop", float("nan")))
+    try:
+        baseline_stop = float(trade_setup.get("disaster_stop", float("nan")))
+    except (ValueError, TypeError):
+        baseline_stop = float("nan")
     result["baseline"] = _touch_arm_reward("baseline", baseline_setup, baseline_stop)
 
     # narrow_tiers: compact dip-buy arm built from close + atr.

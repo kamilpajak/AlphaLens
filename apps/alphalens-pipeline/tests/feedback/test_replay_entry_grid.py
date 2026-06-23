@@ -413,6 +413,7 @@ class TestReplayEntryGridTouchArmReward(unittest.TestCase):
             _GRID_SETUP, self.bars, position_expiry_ms=_POS_EXPIRY
         ).realized_r
         self.assertIsNotNone(realized_r)
+        assert realized_r is not None  # narrow type for pyright
         self.assertFalse(
             math.isclose(baseline_reward, realized_r, rel_tol=1e-6),
             f"reward must NOT equal realized_r={realized_r}, but got {baseline_reward}",
@@ -675,7 +676,6 @@ class TestReplayEntryGridExitHeldFixed(unittest.TestCase):
         # exit_mark = 110 for baseline: (110-99)/99 - 0.01 = 11/99 - 0.01
         exit_mark = 110.0
         baseline_blended = 99.0
-        market_blended = 100.0
 
         # baseline: resting -> 0 haircut
         expected_baseline = (exit_mark - baseline_blended) / baseline_blended - _BENCHMARK
@@ -1236,6 +1236,102 @@ class TestNoStructureVsBadGeometrySplit(unittest.TestCase):
             math.isclose(baseline_reward, cash, rel_tol=1e-9),
             f"BAD_GEOMETRY arm must return cash={cash}, got {baseline_reward}",
         )
+
+
+class TestFloatCastGuardInReplayEntryGrid(unittest.TestCase):
+    """Fix 2: non-numeric disaster_stop / atr must not raise.
+
+    A malformed string in the trade_setup dict triggers ValueError in the
+    unguarded float() casts.  After Fix 2 those casts fall back to NaN and the
+    downstream math.isfinite guards route the arm to None (uncomputable).
+    """
+
+    _BARS: list[dict] = []  # populated in setUpClass
+
+    @classmethod
+    def setUpClass(cls):
+        cls._BARS = [_bar(_T0 + i * _BAR_MS, o=100.0, h=101.0, low=98.0, c=100.0) for i in range(6)]
+
+    def _call(self, setup: dict) -> dict:
+        return replay_entry_grid(
+            setup,
+            self._BARS,
+            arrival_open_ms=_T0,
+            arrival_close_ms=_T0 + 2 * _BAR_MS,
+            benchmark_window_return=0.01,
+            market_cap=None,
+            position_expiry_ms=_T0 + 6 * _BAR_MS,
+        )
+
+    def test_non_numeric_disaster_stop_does_not_raise(self):
+        """replay_entry_grid must not raise when disaster_stop is a non-numeric string.
+
+        disaster_stop="abc" surfaces at two float() sites: parse_ladder (guarded
+        to return ok=False) and baseline_stop extraction (guarded to NaN).
+        When parse_ladder returns ok=False the grid returns all-None rather than
+        raising, which is the correct no-raise / uncomputable behaviour.
+        """
+        setup = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "disaster_stop": "abc",  # malformed -- triggers ValueError in unguarded float()
+            "atr": 3.0,
+            "asof_close": 100.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [{"limit": 99.0, "alloc_pct": 100.0}],
+            "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
+        }
+        # Must NOT raise; parse_ladder returns ok=False -> all arms None.
+        try:
+            result = self._call(setup)
+        except (ValueError, TypeError) as exc:
+            self.fail(f"replay_entry_grid raised {type(exc).__name__}: {exc}")
+        # parse_ladder guard: ok=False on bad stop -> shared unevaluability -> all None.
+        for arm in ENTRY_GRID_ARMS:
+            self.assertIsNone(
+                result.get(arm),
+                f"arm={arm} must be None when disaster_stop is non-numeric; got {result.get(arm)}",
+            )
+
+    def test_non_numeric_atr_does_not_raise_and_baseline_still_computes(self):
+        """replay_entry_grid must not raise when atr is a non-numeric string.
+
+        atr is used ONLY by the narrow_tiers / single_at_close / non-touch arm
+        builders, NOT by the baseline arm (which passes the source entry tiers
+        through unchanged).  After Fix 2, float("abc") falls back to NaN, and
+        the atr-dependent arms return None (uncomputable via math.isfinite guard)
+        while baseline computes a normal finite reward.
+        """
+        setup = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "disaster_stop": 90.0,
+            "atr": "abc",  # malformed atr
+            "asof_close": 100.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [{"limit": 99.0, "alloc_pct": 100.0}],
+            "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
+        }
+        try:
+            result = self._call(setup)
+        except (ValueError, TypeError) as exc:
+            self.fail(f"replay_entry_grid raised {type(exc).__name__}: {exc}")
+        # baseline does NOT use atr; must still compute a finite reward.
+        self.assertIsNotNone(
+            result.get("baseline"),
+            f"baseline must compute even when atr is malformed; got {result.get('baseline')}",
+        )
+        assert result.get("baseline") is not None
+        self.assertTrue(
+            math.isfinite(result["baseline"]),
+            f"baseline reward must be finite, got {result['baseline']}",
+        )
+        # atr-dependent arms must return None (uncomputable), not raise.
+        for arm in ("narrow_tiers", "single_at_close", "market_at_arrival", "vwap_arrival"):
+            self.assertIsNone(
+                result.get(arm),
+                f"arm={arm} must be None when atr is malformed; got {result.get(arm)}",
+            )
 
 
 if __name__ == "__main__":
