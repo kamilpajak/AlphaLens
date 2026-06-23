@@ -22,6 +22,7 @@ canonical module.
 from __future__ import annotations
 
 import datetime as dt
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -118,8 +119,12 @@ def market_at_arrival_fill(
     first_ts_ms = int(earliest["t"])
     late_open = first_ts_ms > arrival_open_ms + _LATE_OPEN_TOLERANCE_MS
 
+    price = float(earliest["o"])
+    if math.isnan(price):
+        return ArmFill(fill_price=None, fill_ts_ms=None, status="NO_FILL")
+
     return ArmFill(
-        fill_price=float(earliest["o"]),
+        fill_price=price,
         fill_ts_ms=first_ts_ms,
         late_open=late_open,
         status="OK",
@@ -161,7 +166,7 @@ def vwap_arrival_fill(
     end_dt = dt.datetime.fromtimestamp(window_end_ms / 1000.0, tz=dt.UTC)
 
     vwap = _window_vwap(bars, start_dt, end_dt)
-    if vwap is None:
+    if vwap is None or math.isnan(vwap):
         return ArmFill(fill_price=None, fill_ts_ms=None, status="NO_FILL")
 
     return ArmFill(

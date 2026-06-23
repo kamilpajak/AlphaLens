@@ -64,6 +64,23 @@ class TestMarketAtArrival(unittest.TestCase):
         self.assertTrue(f.late_open)
 
 
+class TestMarketAtArrivalNaN(unittest.TestCase):
+    """NaN-safety: a bar with o=NaN must yield NO_FILL, not propagate NaN."""
+
+    def test_nan_open_price_returns_no_fill(self):
+        # The earliest in-window bar has o=NaN — must not propagate as fill_price.
+        bars = [
+            _bar(_OPEN, float("nan"), float("nan"), float("nan"), float("nan")),
+        ]
+        f = market_at_arrival_fill(
+            bars,
+            arrival_open_ms=_OPEN,
+            arrival_close_ms=_OPEN + 6 * 3600 * 1000,
+        )
+        self.assertEqual(f.status, "NO_FILL")
+        self.assertIsNone(f.fill_price)
+
+
 class TestVwapArrival(unittest.TestCase):
     def test_volume_weighted_vwap(self):
         # Two 1-min bars in the 30-min window.
@@ -81,6 +98,16 @@ class TestVwapArrival(unittest.TestCase):
         bars = [_bar(_OPEN + 40 * _MIN, 100.0, 100.0, 100.0, 100.0)]  # outside 30-min window
         f = vwap_arrival_fill(bars, arrival_open_ms=_OPEN)
         self.assertEqual(f.status, "NO_FILL")
+
+    def test_nan_close_price_returns_no_fill(self):
+        # _window_vwap: NaN close passes the `close is None` guard and propagates
+        # through the weighted sum → vwap_arrival_fill must catch the NaN result.
+        bars = [
+            _bar(_OPEN, float("nan"), float("nan"), float("nan"), float("nan")),
+        ]
+        f = vwap_arrival_fill(bars, arrival_open_ms=_OPEN)
+        self.assertEqual(f.status, "NO_FILL")
+        self.assertIsNone(f.fill_price)
 
 
 if __name__ == "__main__":
