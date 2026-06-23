@@ -201,5 +201,53 @@ class TestArmBuilders(unittest.TestCase):
         self.assertEqual(STOP_ATR_BUFFER_K, builder._STOP_ATR_BUFFER)
 
 
+class TestNaNGuards(unittest.TestCase):
+    """NaN inputs must produce NO_STRUCTURE / NaN, never propagate silently."""
+
+    def test_narrow_tiers_nan_close_returns_no_structure(self):
+        arm = build_narrow_tiers_arm(
+            close=float("nan"),
+            atr=10.0,
+            min_spacing_mult=0.05,
+            min_stop_dist_mult=0.05,
+        )
+        self.assertEqual(arm.status, "NO_STRUCTURE")
+
+    def test_narrow_tiers_nan_atr_returns_no_structure(self):
+        arm = build_narrow_tiers_arm(
+            close=100.0,
+            atr=float("nan"),
+            min_spacing_mult=0.05,
+            min_stop_dist_mult=0.05,
+        )
+        self.assertEqual(arm.status, "NO_STRUCTURE")
+
+    def test_single_at_close_nan_atr_returns_no_structure(self):
+        arm = build_single_at_close_arm(close=100.0, atr=float("nan"))
+        self.assertEqual(arm.status, "NO_STRUCTURE")
+
+    def test_single_at_close_nan_close_returns_no_structure(self):
+        arm = build_single_at_close_arm(close=float("nan"), atr=10.0)
+        self.assertEqual(arm.status, "NO_STRUCTURE")
+
+    def test_arm_disaster_stop_nan_blended_returns_nan(self):
+        import math
+
+        result = arm_disaster_stop(arm_blended=float("nan"), atr=10.0, close=100.0)
+        self.assertTrue(math.isnan(result))
+
+    def test_arm_disaster_stop_nan_atr_returns_nan(self):
+        import math
+
+        result = arm_disaster_stop(arm_blended=100.0, atr=float("nan"), close=100.0)
+        self.assertTrue(math.isnan(result))
+
+    def test_arm_disaster_stop_nan_close_returns_nan(self):
+        import math
+
+        result = arm_disaster_stop(arm_blended=100.0, atr=10.0, close=float("nan"))
+        self.assertTrue(math.isnan(result))
+
+
 if __name__ == "__main__":
     unittest.main()

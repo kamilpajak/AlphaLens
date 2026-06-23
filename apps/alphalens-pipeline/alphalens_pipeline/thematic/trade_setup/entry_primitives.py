@@ -73,9 +73,9 @@ class ArmSetup:
         disaster_stop: Hard stop price below which the position is closed
             regardless of ladder TTL (None on failure).
         entry_tiers: Ordered tuple of tier dicts, each with at least
-            ``{"price": float, "weight": float}``.
+            ``{"limit": float, "tag": str}``.
         tp_tranches: Ordered tuple of take-profit dicts, each with at least
-            ``{"price": float, "weight": float}``.
+            ``{"limit": float, "tag": str}``.
         geometry_collapsed: True when the computed levels are too compressed
             to be tradeable (entry ≥ tp or stop ≥ entry).
     """
@@ -206,7 +206,11 @@ def arm_disaster_stop(
 
     Returns:
         Hard stop price (always finite; floored at ``arm_blended * 0.75``).
+        Returns ``float("nan")`` when any input is NaN or ``atr <= 0``, which
+        signals an undefined stop to callers that guard upstream.
     """
+    if math.isnan(arm_blended) or math.isnan(atr) or math.isnan(close) or atr <= 0:
+        return float("nan")
     raw_stop = arm_blended - k * atr
     jittered = builder._jitter_stop(close, raw_stop, atr)
     floor = arm_blended * builder._DISASTER_FLOOR_FRAC
@@ -277,7 +281,7 @@ def build_narrow_tiers_arm(
         ``"OK"`` otherwise (even when geometry_collapsed is True — collapse
         is informational, not an error).
     """
-    if atr <= 0 or close <= 0:
+    if math.isnan(atr) or math.isnan(close) or atr <= 0 or close <= 0:
         return ArmSetup(
             arm="narrow_tiers",
             status="NO_STRUCTURE",
@@ -355,7 +359,7 @@ def build_single_at_close_arm(
         ``"NO_STRUCTURE"`` when ``atr <= 0`` or ``close <= 0``; ``"OK"``
         otherwise.
     """
-    if atr <= 0 or close <= 0:
+    if math.isnan(atr) or math.isnan(close) or atr <= 0 or close <= 0:
         return ArmSetup(
             arm="single_at_close",
             status="NO_STRUCTURE",
