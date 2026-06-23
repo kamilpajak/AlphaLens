@@ -15,7 +15,7 @@ and a UTC window and return Polygon minute aggregates (or a VWAP over them).
 from __future__ import annotations
 
 import datetime as dt
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 # Opening window (minutes from the session open) over which the arrival /
@@ -47,7 +47,7 @@ BarFetch = Callable[[str, dt.datetime, dt.datetime], Sequence[dict[str, Any]]]
 
 
 def _window_vwap(
-    bars: Sequence[dict[str, Any]],
+    bars: Sequence[Mapping[str, Any]],
     start: dt.datetime,
     end: dt.datetime,
 ) -> float | None:

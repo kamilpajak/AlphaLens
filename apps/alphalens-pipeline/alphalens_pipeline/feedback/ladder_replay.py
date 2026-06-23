@@ -145,12 +145,21 @@ def parse_ladder(trade_setup: Mapping[str, Any] | None) -> _ParsedLadder:
     ]
     total_entry_alloc = sum(lvl.weight for lvl in entries)
     raw_atr = trade_setup.get("atr")
-    atr = float(raw_atr) if raw_atr is not None else None
+    try:
+        atr = float(raw_atr) if raw_atr is not None else None
+    except (ValueError, TypeError):
+        atr = None
+    # Guard: a malformed disaster_stop (non-numeric string, wrong type) must not raise;
+    # treat it as a missing stop -> not a valid ladder.
+    try:
+        stop_f = float(stop)
+    except (ValueError, TypeError):
+        return _ParsedLadder(ok=False)
     return _ParsedLadder(
         ok=True,
         entries=entries,
         tps=tps,
-        disaster_stop=float(stop),
+        disaster_stop=stop_f,
         total_entry_alloc=total_entry_alloc,
         atr=atr,
     )
@@ -369,6 +378,112 @@ def _with_entry_tiers(
     swapped = dict(trade_setup)
     swapped["entry_tiers"] = entries
     return swapped
+
+
+def _with_disaster_stop(trade_setup: Mapping[str, Any], stop: float) -> dict[str, Any]:
+    """Shallow-copy the setup with its disaster stop replaced (entries/tps untouched).
+
+    Mirror of :func:`_with_tp_tranches` / :func:`_with_entry_tiers`: swaps ONLY
+    the ``disaster_stop`` key; never mutates the source dict and leaves
+    ``entry_tiers`` / ``tp_tranches`` (and all other keys) intact as the same
+    objects (shallow copy depth is sufficient because this function does not
+    create new nested structures).
+    """
+    swapped = dict(trade_setup)
+    swapped["disaster_stop"] = stop
+    return swapped
+
+
+def _replay_synthetic_fill(
+    trade_setup: Mapping[str, Any],
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    fill_price: float,
+    fill_ts_ms: int,
+    own_stop: float,
+    position_expiry_ms: int | None = None,
+) -> LadderOutcome:
+    """Replay the EXIT walk for a non-touch arm whose entry is force-filled.
+
+    The entry-side fill primitives (open / VWAP) bypass the ``low <= limit``
+    touch gate that :func:`replay_ladder` uses.  This helper pre-seeds a single
+    synthetic fill at ``fill_price`` / ``fill_ts_ms`` into a :class:`_LadderWalk`
+    and then runs the SAME per-bar exit walk (TP targets + ``own_stop`` + optional
+    ``position_expiry_ms`` time-stop) over the bars that follow, returning a
+    :class:`LadderOutcome` whose terminal state yields the exit mark.
+
+    Key invariants
+    --------------
+    * The touch gate is **bypassed**: ``fill_price`` need not be touched by any
+      bar's low.  The synthetic fill is pre-seeded directly into the walk state
+      before the bar loop starts.
+    * ``own_stop`` is the disaster stop used for this arm (NOT ``trade_setup``'s
+      ``disaster_stop``).  The two may differ, e.g. because the entry-grid engine
+      sets a per-arm stop based on the fill price.
+    * TP targets come from ``trade_setup["tp_tranches"]`` unchanged.
+    * No new entry fills happen during the exit walk: ``entry_expiry_ms`` is set
+      to ``fill_ts_ms`` so all bars (ts >= fill_ts_ms) block new entry fills.
+    * Bars before ``fill_ts_ms`` are excluded (the position does not exist yet).
+
+    Implementation notes
+    --------------------
+    Reuses :class:`_LadderWalk` by constructing it with a modified
+    :class:`_ParsedLadder` (``disaster_stop=own_stop``) and directly seeding the
+    ``filled``, ``filled_ids``, and ``seq`` attributes to represent the synthetic
+    entry.  The walk then iterates ``step(bar)`` normally over the post-fill bars
+    and :func:`_finalize` computes the outcome.
+    """
+    # Fix 2: guard against a stale/missing fill price or stop passed by the caller.
+    # Mirrors how replay_ladder returns a degenerate outcome on bad inputs.
+    if not math.isfinite(fill_price) or not math.isfinite(own_stop):
+        return LadderOutcome(status="NO_DATA")
+
+    # Swap the disaster stop so the parsed ladder and _finalize both use own_stop.
+    modified_setup = _with_disaster_stop(trade_setup, own_stop)
+    ladder = parse_ladder(modified_setup)
+    if not ladder.ok:
+        return LadderOutcome(status="NO_STRUCTURE")
+
+    if not bars:
+        return LadderOutcome(status="NO_DATA")
+
+    # Intentional duplication of parse_ladder + sorted(bars, ...) + empty-bar guards:
+    # must track replay_ladder's defensive bar sort (bug #4) and degenerate-input guards.
+    ordered = sorted(bars, key=lambda b: int(b["t"]))
+
+    # Exclude bars that predate the fill: the position does not exist yet.
+    post_fill = [b for b in ordered if int(b["t"]) >= fill_ts_ms]
+    if not post_fill:
+        return LadderOutcome(status="NO_DATA")
+
+    # Construct the walk.  entry_expiry_ms=fill_ts_ms blocks all new entry fills
+    # for bars at ts >= fill_ts_ms (the only bars we iterate), so the pre-seeded
+    # synthetic level is the only fill that ever appears.
+    walk = _LadderWalk(
+        ladder,
+        own_stop,
+        entry_expiry_ms=fill_ts_ms,
+        position_expiry_ms=position_expiry_ms,
+    )
+
+    # Pre-seed the synthetic entry -- bypass the low<=limit touch gate entirely.
+    # level_id "E_SYNTH" is deliberately NOT in ladder.entries, so it cannot be
+    # accidentally re-added by _fill_entries.
+    # Fix 1: weight = total_entry_alloc so _filled_frac returns exactly 1.0 by
+    # construction (synthetic fill is by definition a FULL fill of the position).
+    synth_level = _Level(
+        level_id="E_SYNTH", price=fill_price, weight=ladder.total_entry_alloc or 100.0
+    )
+    walk.filled.append(synth_level)
+    walk.filled_ids.add("E_SYNTH")
+    walk.seq.append(LevelCrossing("E_SYNTH", _ENTRY, fill_price, fill_ts_ms))
+
+    # Run the per-bar exit walk over post-fill bars.
+    for bar in post_fill:
+        walk.step(bar)
+
+    blended = fill_price  # single synthetic fill -> blended = fill_price
+    return _finalize(walk, blended=blended, reference_close=None, ratchet_r=None)
 
 
 def realized_r_full_fill(
@@ -824,10 +939,474 @@ def _classify(
     return "OPEN"
 
 
+ENTRY_GRID_ARMS: tuple[str, ...] = (
+    "baseline",
+    "narrow_tiers",
+    "single_at_close",
+    "market_at_arrival",
+    "vwap_arrival",
+)
+"""Canonical ordered arm names for the 5-arm entry-grid counterfactual.
+
+Touch arms (resting-limit dip-buy): baseline, narrow_tiers, single_at_close.
+Non-touch arms (always-fill): market_at_arrival, vwap_arrival.
+"""
+
+
+def _arm_excess_from_outcome(
+    outcome: LadderOutcome,
+    *,
+    own_stop: float,
+    benchmark_window_return: float,
+    market_cap: float | None,
+    first_rth_bar: Mapping[str, Any] | None,
+    arm_name: str,
+    apply_haircut_fn: Any,
+    implausible_threshold: float,
+    cash_reward: float,
+    check_outcome_status: bool = False,
+) -> float | None:
+    """Shared reward-finalization step for all five entry-grid arms.
+
+    Called after the arm-specific replay (touch or non-touch) has produced a
+    :class:`LadderOutcome`.  Both paths share identical finalization logic:
+    cash-classification check, ``exit_mark`` derivation, implausible-return guard,
+    raw-excess computation, and haircut application.
+
+    Parameters
+    ----------
+    outcome:
+        The :class:`LadderOutcome` from the arm's replay pass.
+    own_stop:
+        The disaster-stop price used in the arm's replay (may differ from the
+        source setup's ``disaster_stop`` for the alternative-geometry arms).
+    benchmark_window_return:
+        Market benchmark return over the same hold window (already validated
+        finite by the caller).
+    market_cap:
+        Issuer market cap in USD; passed through to the haircut model.
+    first_rth_bar:
+        First bar inside the arrival RTH window; used by the haircut spread model.
+    arm_name:
+        The arm identifier string passed through to :func:`apply_haircut_fn`.
+    apply_haircut_fn:
+        Reference to :func:`~alphalens_pipeline.feedback.execution_cost.apply_haircut_to_excess`.
+        Passed in to avoid re-importing from a hot path.
+    implausible_threshold:
+        The ``IMPLAUSIBLE_RETURN_THRESHOLD`` constant from
+        :mod:`alphalens_pipeline.feedback.bar_window`.
+    cash_reward:
+        Pre-computed ``-benchmark_window_return`` (cash = 0 gross, so excess =
+        minus the benchmark).
+    check_outcome_status:
+        When ``True``, also maps ``outcome.status in {"NO_DATA", "NO_STRUCTURE"}``
+        to ``cash_reward``.  Set for non-touch arms whose synthetic-fill replay
+        can produce these status codes on degenerate bar inputs.
+    """
+    if outcome.classification in ("NO_FILL", "BAD_GEOMETRY"):
+        return cash_reward
+    if check_outcome_status and outcome.status in ("NO_DATA", "NO_STRUCTURE"):
+        return cash_reward
+
+    b = outcome.blended_entry
+    r = outcome.realized_r
+    if b is None or r is None or not math.isfinite(b) or not math.isfinite(r):
+        return cash_reward
+
+    exit_mark = b + r * (b - own_stop)
+
+    if not math.isfinite(exit_mark) or abs(exit_mark / b - 1.0) > implausible_threshold:
+        return None
+
+    raw_excess = (exit_mark - b) / b - benchmark_window_return
+    return apply_haircut_fn(
+        raw_excess,
+        arm=arm_name,
+        market_cap=market_cap,
+        first_rth_bar=first_rth_bar,
+    )
+
+
+def _touch_arm_reward(
+    arm_name: str,
+    arm_setup: Any,
+    own_stop: float,
+    *,
+    trade_setup: Mapping[str, Any],
+    ordered_bars: Sequence[Mapping[str, Any]],
+    entry_expiry_ms: int | None,
+    position_expiry_ms: int | None,
+    benchmark_window_return: float,
+    market_cap: float | None,
+    first_rth_bar: Mapping[str, Any] | None,
+    apply_haircut_fn: Any,
+    implausible_threshold: float,
+    cash_reward: float,
+) -> float | None:
+    """Replay a touch arm and return its net haircut-adjusted excess (or None).
+
+    Distinguishes two failure modes:
+
+    - ``NO_STRUCTURE``: arm could not be built (uncomputable) → ``None``,
+      so the common-support filter in the offline script can drop the event.
+    - ``BAD_GEOMETRY``: arm was built but geometry collapsed → ``cash_reward``.
+
+    Non-finite ``own_stop`` also signals an uncomputable arm → ``None``.
+    """
+    if arm_setup.status == "NO_STRUCTURE":
+        # Arm could not be built (e.g. NaN atr, zero close) -> uncomputable.
+        return None
+    if arm_setup.status != "OK":
+        # BAD_GEOMETRY (or any other non-OK non-NO_STRUCTURE status) -> cash.
+        return cash_reward
+
+    # Guard: a non-finite own_stop means the arm's stop geometry is undefined
+    # (e.g. arm_disaster_stop returned NaN because atr was missing/NaN).
+    # This is an uncomputable arm, not a resting-arm that hit cash.
+    if not math.isfinite(own_stop):
+        return None
+
+    # Build the modified setup: swap entry tiers + disaster stop.
+    modified = _with_entry_tiers(trade_setup, list(arm_setup.entry_tiers))  # type: ignore[arg-type]
+    modified = _with_disaster_stop(modified, own_stop)
+
+    outcome = replay_ladder(
+        modified,
+        ordered_bars,
+        entry_expiry_ms=entry_expiry_ms,
+        position_expiry_ms=position_expiry_ms,
+    )
+
+    return _arm_excess_from_outcome(
+        outcome,
+        own_stop=own_stop,
+        benchmark_window_return=benchmark_window_return,
+        market_cap=market_cap,
+        first_rth_bar=first_rth_bar,
+        arm_name=arm_name,
+        apply_haircut_fn=apply_haircut_fn,
+        implausible_threshold=implausible_threshold,
+        cash_reward=cash_reward,
+    )
+
+
+def _notouch_arm_reward(
+    arm_name: str,
+    arm_fill: Any,
+    *,
+    trade_setup: Mapping[str, Any],
+    ordered_bars: Sequence[Mapping[str, Any]],
+    arrival_open_ms: int,
+    position_expiry_ms: int | None,
+    atr: float,
+    close: float,
+    benchmark_window_return: float,
+    market_cap: float | None,
+    first_rth_bar: Mapping[str, Any] | None,
+    apply_haircut_fn: Any,
+    implausible_threshold: float,
+    cash_reward: float,
+) -> float | None:
+    """Process a non-touch fill result and return net excess (or None).
+
+    ``NO_FILL`` or a non-finite fill price → cash (resting-cash alternative).
+    Non-finite ``own_stop`` (NaN atr or close) → ``None`` (uncomputable arm).
+    """
+    if arm_fill.status == "NO_FILL" or arm_fill.fill_price is None:
+        return cash_reward
+
+    fill_price: float = arm_fill.fill_price
+    fill_ts_ms: int = arm_fill.fill_ts_ms if arm_fill.fill_ts_ms is not None else arrival_open_ms
+
+    if not math.isfinite(fill_price):
+        return cash_reward
+
+    from alphalens_pipeline.thematic.trade_setup.entry_primitives import arm_disaster_stop
+
+    own_stop = arm_disaster_stop(fill_price, atr, close)
+    if not math.isfinite(own_stop):
+        # own_stop is NaN (atr or close is NaN/non-positive) — the arm's stop
+        # geometry is undefined, so it is uncomputable, NOT a cash position.
+        return None
+
+    outcome = _replay_synthetic_fill(
+        trade_setup,
+        ordered_bars,
+        fill_price=fill_price,
+        fill_ts_ms=fill_ts_ms,
+        own_stop=own_stop,
+        position_expiry_ms=position_expiry_ms,
+    )
+
+    return _arm_excess_from_outcome(
+        outcome,
+        own_stop=own_stop,
+        benchmark_window_return=benchmark_window_return,
+        market_cap=market_cap,
+        first_rth_bar=first_rth_bar,
+        arm_name=arm_name,
+        apply_haircut_fn=apply_haircut_fn,
+        implausible_threshold=implausible_threshold,
+        cash_reward=cash_reward,
+        check_outcome_status=True,
+    )
+
+
+def replay_entry_grid(
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    arrival_open_ms: int,
+    arrival_close_ms: int,
+    benchmark_window_return: float | None,
+    market_cap: float | None,
+    entry_expiry_ms: int | None = None,
+    position_expiry_ms: int | None = None,
+) -> dict[str, float | None]:
+    """Replay five entry-arm counterfactuals and return per-arm net excess rewards.
+
+    For each arm in :data:`ENTRY_GRID_ARMS` the function:
+
+    1. Builds or resolves the arm's entry geometry.
+    2. Replays the price path (same ``bars``) with that geometry, holding the
+       TP targets and baseline disaster-stop structure **fixed** across arms.
+    3. Derives ``arm_blended`` (the arm's fill denominator) and ``exit_mark``
+       (the terminal mark — TP price, own disaster-stop, or time-stop close).
+    4. Computes ``raw_excess = (exit_mark − arm_blended) / arm_blended − benchmark_window_return``.
+    5. Applies :func:`alphalens_pipeline.feedback.execution_cost.apply_haircut_to_excess`
+       (0 bps for resting-limit touch arms; half-spread + market-impact for always-fill arms).
+
+    Returns ``{arm_name: net_reward_or_None}`` for all five arms.
+
+    Shared unevaluability — ALL arms return ``None`` when:
+    * ``bars`` is empty,
+    * ``trade_setup`` is ``None`` or unparseable (status != "OK"),
+    * ``benchmark_window_return`` is ``None``.
+
+    Per-arm cash handling — ``NO_FILL`` or ``BAD_GEOMETRY`` maps to
+    ``−benchmark_window_return`` (cash = 0 raw return, so excess = minus the
+    benchmark). These two conditions are treated identically.
+
+    Per-arm implausible-return guard — when ``|(exit_mark / arm_blended) − 1|``
+    exceeds :data:`alphalens_pipeline.feedback.bar_window.IMPLAUSIBLE_RETURN_THRESHOLD`
+    (0.60) the arm returns ``None`` individually (a split or bad data on that
+    arm's path; other arms are unaffected).
+
+    The exit is held FIXED across arms by absolute TP/SL prices.  Only the
+    entry denominator and per-arm disaster stop vary; a difference in reward
+    across arms is therefore attributable to entry execution, not to exit
+    management.
+
+    Parameters
+    ----------
+    trade_setup:
+        The parsed ``brief_trade_setup`` dict.  Must contain ``status``,
+        ``entry_tiers``, ``tp_tranches``, ``disaster_stop``, ``atr``, and
+        ``asof_close`` (the latter two feed the alternative arm builders).
+    bars:
+        Minute OHLCV bars with keys ``t``, ``o``, ``h``, ``l``, ``c``, ``v``,
+        covering the full position horizon.
+    arrival_open_ms:
+        Epoch ms of the session open (RTH start for the arrival date).
+    arrival_close_ms:
+        Epoch ms of the session close (RTH end for the arrival date).
+    benchmark_window_return:
+        The market benchmark return over the same holding window.  ``None``
+        renders the whole grid unevaluable.
+    market_cap:
+        Issuer market cap in USD; passed through to the haircut model.
+        ``None`` uses the conservative default impact bps.
+    entry_expiry_ms:
+        Epoch ms after which touch-gate entry fills are blocked (touch arms).
+        Defaults to ``None`` (no TTL).
+    position_expiry_ms:
+        Epoch ms at which an open position is synthetically time-stopped and
+        marked to the expiry-bar close.  Defaults to ``None`` (horizon-open
+        positions are marked to the last bar close).
+    """
+    # --- Lazy import: entry_primitives and execution_cost are in sibling modules;
+    # keeping them as function-local imports avoids circular-import risk and mirrors
+    # the pattern used by other ladder_replay helpers.
+    from alphalens_pipeline.feedback.bar_window import IMPLAUSIBLE_RETURN_THRESHOLD
+    from alphalens_pipeline.feedback.execution_cost import apply_haircut_to_excess
+    from alphalens_pipeline.thematic.trade_setup.entry_primitives import (
+        build_baseline_arm,
+        build_narrow_tiers_arm,
+        build_single_at_close_arm,
+        market_at_arrival_fill,
+        vwap_arrival_fill,
+    )
+    from alphalens_pipeline.thematic.trade_setup.ladder import (
+        _MIN_SPACING_MULT,
+        _MIN_STOP_DIST_MULT,
+    )
+
+    none_grid: dict[str, float | None] = dict.fromkeys(ENTRY_GRID_ARMS, None)
+
+    # Shared unevaluability checks.
+    if benchmark_window_return is None:
+        return dict(none_grid)
+    if not math.isfinite(benchmark_window_return):
+        return dict(none_grid)
+    if not bars:
+        return dict(none_grid)
+    parsed = parse_ladder(trade_setup)
+    if not parsed.ok:
+        return dict(none_grid)
+    assert trade_setup is not None  # parse_ladder(None).ok is False; ok=True => not None
+
+    # Extract scalar inputs needed by the alternative arm builders.
+    # Guard: malformed (non-numeric) values fall back to NaN so the downstream
+    # math.isfinite checks route the affected arms to None without raising.
+    raw_atr = trade_setup.get("atr")
+    raw_close = trade_setup.get("asof_close")
+    try:
+        atr: float = float(raw_atr) if raw_atr is not None else float("nan")
+    except (ValueError, TypeError):
+        atr = float("nan")
+    try:
+        close: float = float(raw_close) if raw_close is not None else float("nan")
+    except (ValueError, TypeError):
+        close = float("nan")
+
+    # Sort bars ascending once; all arm replays share this ordering.
+    ordered_bars = sorted(bars, key=lambda b: int(b["t"]))
+
+    # First in-arrival-window bar — used by the haircut model for the spread estimate.
+    first_rth_bar: Mapping[str, Any] | None = next(
+        (b for b in ordered_bars if arrival_open_ms <= int(b["t"]) <= arrival_close_ms),
+        None,
+    )
+
+    cash_reward = -benchmark_window_return
+
+    # Shared keyword arguments forwarded to both arm-reward helpers.
+    _arm_kwargs: dict[str, Any] = {
+        "trade_setup": trade_setup,
+        "ordered_bars": ordered_bars,
+        "benchmark_window_return": benchmark_window_return,
+        "market_cap": market_cap,
+        "first_rth_bar": first_rth_bar,
+        "apply_haircut_fn": apply_haircut_to_excess,
+        "implausible_threshold": IMPLAUSIBLE_RETURN_THRESHOLD,
+        "cash_reward": cash_reward,
+    }
+
+    result: dict[str, float | None] = dict(none_grid)
+
+    # ------------------------------------------------------------------
+    # Touch arms: baseline, narrow_tiers, single_at_close
+    # ------------------------------------------------------------------
+    # Each touch arm is replayed via replay_ladder with its own entry tiers and
+    # own disaster stop.  The TP targets from trade_setup are kept unchanged so
+    # the exit mark is the same absolute TP price across all arms.
+    #
+    # exit_mark derivation:
+    #   Given blended_entry (b) and realized_r (R) from the outcome, and the stop
+    #   used in the replay (s):
+    #       R = (exit_mark − b) / (b − s)
+    #       exit_mark = b + R × (b − s)
+    #
+    # This algebraically recovers the absolute exit price:
+    #   - TP hit: exit_mark = TP price (independent of s)
+    #   - SL hit: exit_mark = s (the arm's own stop)
+    #   - Time-stop: exit_mark = expiry bar close (independent of s)
+    #   - Horizon-open: exit_mark = last close (independent of s)
+
+    # baseline: pass-through control arm; its own stop is the source setup's stop.
+    # Guard: a non-numeric disaster_stop falls back to NaN so the isfinite check
+    # in _touch_arm_reward returns None (uncomputable) instead of raising.
+    baseline_setup = build_baseline_arm(trade_setup)
+    try:
+        baseline_stop = float(trade_setup.get("disaster_stop", float("nan")))
+    except (ValueError, TypeError):
+        baseline_stop = float("nan")
+    result["baseline"] = _touch_arm_reward(
+        "baseline",
+        baseline_setup,
+        baseline_stop,
+        entry_expiry_ms=entry_expiry_ms,
+        position_expiry_ms=position_expiry_ms,
+        **_arm_kwargs,
+    )
+
+    # narrow_tiers: compact dip-buy arm built from close + atr.
+    narrow_setup = build_narrow_tiers_arm(
+        close=close,
+        atr=atr,
+        min_spacing_mult=_MIN_SPACING_MULT,
+        min_stop_dist_mult=_MIN_STOP_DIST_MULT,
+    )
+    # narrow_tiers own_stop is embedded in the ArmSetup; extract it.
+    narrow_stop = (
+        narrow_setup.disaster_stop if narrow_setup.disaster_stop is not None else float("nan")
+    )
+    result["narrow_tiers"] = _touch_arm_reward(
+        "narrow_tiers",
+        narrow_setup,
+        narrow_stop,
+        entry_expiry_ms=entry_expiry_ms,
+        position_expiry_ms=position_expiry_ms,
+        **_arm_kwargs,
+    )
+
+    # single_at_close: single entry at or just below close.
+    sac_setup = build_single_at_close_arm(close=close, atr=atr)
+    sac_stop = sac_setup.disaster_stop if sac_setup.disaster_stop is not None else float("nan")
+    result["single_at_close"] = _touch_arm_reward(
+        "single_at_close",
+        sac_setup,
+        sac_stop,
+        entry_expiry_ms=entry_expiry_ms,
+        position_expiry_ms=position_expiry_ms,
+        **_arm_kwargs,
+    )
+
+    # ------------------------------------------------------------------
+    # Non-touch arms: market_at_arrival, vwap_arrival
+    # ------------------------------------------------------------------
+    # Fill primitives bypass the low<=limit touch gate.  On a successful fill
+    # the exit walk is driven by _replay_synthetic_fill with the arm's own stop.
+    # On NO_FILL -> cash.
+
+    maa_fill = market_at_arrival_fill(
+        list(ordered_bars),
+        arrival_open_ms=arrival_open_ms,
+        arrival_close_ms=arrival_close_ms,
+    )
+    result["market_at_arrival"] = _notouch_arm_reward(
+        "market_at_arrival",
+        maa_fill,
+        arrival_open_ms=arrival_open_ms,
+        position_expiry_ms=position_expiry_ms,
+        atr=atr,
+        close=close,
+        **_arm_kwargs,
+    )
+
+    vwap_fill = vwap_arrival_fill(
+        list(ordered_bars),
+        arrival_open_ms=arrival_open_ms,
+    )
+    result["vwap_arrival"] = _notouch_arm_reward(
+        "vwap_arrival",
+        vwap_fill,
+        arrival_open_ms=arrival_open_ms,
+        position_expiry_ms=position_expiry_ms,
+        atr=atr,
+        close=close,
+        **_arm_kwargs,
+    )
+
+    return result
+
+
 __all__ = [
+    "ENTRY_GRID_ARMS",
     "TIE_BREAK_SL_FIRST",
     "LadderOutcome",
     "LevelCrossing",
     "parse_ladder",
+    "replay_entry_grid",
     "replay_ladder",
 ]

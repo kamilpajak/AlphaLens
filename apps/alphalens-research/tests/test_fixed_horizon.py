@@ -48,5 +48,87 @@ class TestBootstrapCi(unittest.TestCase):
         self.assertAlmostEqual(mean, 0.03)
 
 
+class TestDayBlockBootstrapCi(unittest.TestCase):
+    def test_empty_returns_none_triple(self):
+        self.assertEqual(fh.day_block_bootstrap_ci({}), (None, None, None))
+
+    def test_all_none_values_returns_none_triple(self):
+        self.assertEqual(
+            fh.day_block_bootstrap_ci({"d1": [None, None], "d2": [None]}),
+            (None, None, None),
+        )
+
+    def test_single_non_empty_day_is_degenerate(self):
+        # n_eff = 1 because resampling 1 day always draws the same day
+        lo, mean, hi = fh.day_block_bootstrap_ci(
+            {"d1": [0.01, 0.02, 0.03, 0.04, 0.05]}, n_resamples=1000, seed=7
+        )
+        expected = (0.01 + 0.02 + 0.03 + 0.04 + 0.05) / 5
+        import math
+
+        self.assertTrue(math.isclose(lo, expected))
+        self.assertTrue(math.isclose(mean, expected))
+        self.assertTrue(math.isclose(hi, expected))
+
+    def test_grand_mean_equals_bootstrap_ci_mean(self):
+        import math
+
+        d1 = [0.01, 0.02, 0.03]
+        d2 = [0.05, 0.06]
+        flat = d1 + d2
+        _, db_mean, _ = fh.day_block_bootstrap_ci({"d1": d1, "d2": d2}, n_resamples=500, seed=0)
+        _, bs_mean, _ = fh.bootstrap_ci(flat, n_resamples=500, seed=0)
+        # grand mean must be equal (NOT mean-of-day-means)
+        self.assertTrue(math.isclose(db_mean, bs_mean))
+
+    def test_ci_width_contrast_single_day_vs_multi_row(self):
+        # 5 rows all in ONE day: day_block is degenerate; bootstrap_ci is not
+        vals = [0.01, 0.02, 0.03, 0.04, 0.05]
+        db_lo, _, db_hi = fh.day_block_bootstrap_ci({"d1": vals}, n_resamples=5000, seed=0)
+        bs_lo, _, bs_hi = fh.bootstrap_ci(vals, n_resamples=5000, seed=0)
+        # day_block degenerate
+        import math
+
+        self.assertTrue(math.isclose(db_lo, db_hi))
+        # bootstrap_ci is non-degenerate
+        self.assertLess(bs_lo, bs_hi)
+
+    def test_two_single_row_days_gives_real_ci(self):
+        # 2 days, each 1 row — resampling draws either day, so CI is non-degenerate
+        lo, _mean, hi = fh.day_block_bootstrap_ci(
+            {"d1": [0.10], "d2": [-0.10]}, n_resamples=5000, seed=0
+        )
+        self.assertLess(lo, hi)
+
+    def test_determinism_same_seed(self):
+        data = {"d1": [0.01, 0.02], "d2": [0.03, 0.04, 0.05]}
+        r1 = fh.day_block_bootstrap_ci(data, n_resamples=1000, seed=42)
+        r2 = fh.day_block_bootstrap_ci(data, n_resamples=1000, seed=42)
+        self.assertEqual(r1, r2)
+
+    def test_different_seeds_differ(self):
+        # Use 5 days with distinct mean values so the CI endpoints are seed-sensitive.
+        data = {
+            "d1": [0.10, 0.12],
+            "d2": [-0.05, -0.08],
+            "d3": [0.20, 0.22],
+            "d4": [-0.15, -0.12],
+            "d5": [0.30, 0.28],
+        }
+        r1 = fh.day_block_bootstrap_ci(data, n_resamples=1000, seed=1)
+        r2 = fh.day_block_bootstrap_ci(data, n_resamples=1000, seed=2)
+        self.assertNotEqual(r1, r2)
+
+    def test_none_dropped_within_day(self):
+        import math
+
+        # day with [1.0, None, 3.0] should contribute 1.0 and 3.0 (mean=2.0)
+        # single day → degenerate (lo==mean==hi==2.0)
+        lo, mean, hi = fh.day_block_bootstrap_ci({"d1": [1.0, None, 3.0]}, n_resamples=500, seed=0)
+        self.assertTrue(math.isclose(mean, 2.0))
+        self.assertTrue(math.isclose(lo, 2.0))
+        self.assertTrue(math.isclose(hi, 2.0))
+
+
 if __name__ == "__main__":
     unittest.main()
