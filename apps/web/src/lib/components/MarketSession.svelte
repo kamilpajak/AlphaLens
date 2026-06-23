@@ -22,6 +22,7 @@
 	 */
 
 	import { marketStatus, formatCountdown } from '$lib/marketStatus.svelte';
+	import { formatLocalWeekdayTime } from '$lib/localTime';
 
 	// One-second tick drives the live countdown. Bound to the component
 	// lifecycle via $effect so unmounting clears the interval.
@@ -36,21 +37,13 @@
 	const status = $derived(marketStatus.value);
 	const ready = $derived(marketStatus.hasLoaded && status !== null);
 
-	// Next-open label in the venue's local time (ET for XNYS). The exchange
-	// MIC prefix on the chip signals the timezone, so we omit a tz token to
-	// stay compact — e.g. "mon 09:30".
-	const nextOpenLabel = $derived.by(() => {
-		if (!status) return '';
-		return new Intl.DateTimeFormat('en-US', {
-			weekday: 'short',
-			hour: '2-digit',
-			minute: '2-digit',
-			hour12: false,
-			timeZone: 'America/New_York'
-		})
-			.format(new Date(status.next_open_iso))
-			.toLowerCase();
-	});
+	// Next-open label in the *viewer's* local zone (DST-aware), matching the
+	// ambient footer clock so the two readings agree. The clock right beside it
+	// carries the zone label (e.g. "CEST"), so we omit a tz token here to stay
+	// compact — e.g. "mon 15:30" for a Warsaw viewer, "mon 09:30" in New York.
+	const nextOpenLabel = $derived.by(() =>
+		status ? formatLocalWeekdayTime(status.next_open_iso) : ''
+	);
 
 	const closesIn = $derived.by(() =>
 		status ? formatCountdown(new Date(status.next_close_iso).getTime() - nowMs) : ''

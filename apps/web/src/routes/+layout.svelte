@@ -7,6 +7,7 @@
 	import MarketSession from '$lib/components/MarketSession.svelte';
 	import SessionExpiredCard from '$lib/components/SessionExpiredCard.svelte';
 	import { startMarketStatusPoll } from '$lib/marketStatus.svelte';
+	import { formatLocalClock } from '$lib/localTime';
 	import { sessionExpired } from '$lib/session.svelte';
 
 	let { children } = $props();
@@ -27,10 +28,12 @@
 	let now = $state('');
 	$effect(() => {
 		const tick = () => {
-			// Minute precision (drop seconds): narrower in the footer and the
-			// per-second interval becomes a no-op assignment for 59s of every
-			// minute (Svelte skips equal-value $state writes), so no churn.
-			now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+			// Viewer-local clock (DST-aware) with a trailing zone label, so it
+			// agrees with the next-open chip beside it instead of mixing UTC with
+			// the exchange-local open time. Minute precision (no seconds): narrower
+			// in the footer and the per-second interval becomes a no-op assignment
+			// for 59s of every minute (Svelte skips equal-value $state writes).
+			now = formatLocalClock(new Date());
 		};
 		tick();
 		const id = setInterval(tick, 1000);
@@ -170,7 +173,7 @@
 				</span>
 				<span data-testid="footer-clock" class="hidden lg:flex items-center gap-1.5">
 					<Activity class="size-3" />
-					<span class="whitespace-nowrap">{now} utc</span>
+					<span class="whitespace-nowrap">{now}</span>
 				</span>
 			</div>
 			<!-- Slogan ticker clips first when space is tight; the right-edge

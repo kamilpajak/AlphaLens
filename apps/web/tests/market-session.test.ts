@@ -222,6 +222,14 @@ test.describe('MarketSession chip — mobile footer density', () => {
 		await expect(page.getByTestId('market-session')).toBeVisible();
 		await expect(page.getByTestId('footer-clock')).toBeVisible();
 		await expect(page.getByTestId('footer-db')).toBeVisible();
+		// The clock now renders in the viewer's local zone WITH a trailing zone
+		// label (CEST / JST / EDT / GMT+8 / UTC …) so it no longer mixes an
+		// unlabelled UTC stamp with the exchange-local open time. Assert the
+		// shape — date + 24h time + a non-empty zone token — without pinning the
+		// zone itself (it tracks the CI runner's system zone, not a fixed value).
+		await expect(page.getByTestId('footer-clock')).toHaveText(
+			/\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+\S+/
+		);
 		// Slogan ticker (now sourced from $lib/pipelineFacts) still renders —
 		// the first chip is left-aligned and fully visible at this width.
 		await expect(page.getByText('PRESS-GATE')).toBeVisible();
