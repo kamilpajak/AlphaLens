@@ -424,6 +424,11 @@ def _replay_synthetic_fill(
     entry.  The walk then iterates ``step(bar)`` normally over the post-fill bars
     and :func:`_finalize` computes the outcome.
     """
+    # Fix 2: guard against a stale/missing fill price or stop passed by the caller.
+    # Mirrors how replay_ladder returns a degenerate outcome on bad inputs.
+    if not math.isfinite(fill_price) or not math.isfinite(own_stop):
+        return LadderOutcome(status="NO_DATA")
+
     # Swap the disaster stop so the parsed ladder and _finalize both use own_stop.
     modified_setup = _with_disaster_stop(trade_setup, own_stop)
     ladder = parse_ladder(modified_setup)
@@ -433,7 +438,8 @@ def _replay_synthetic_fill(
     if not bars:
         return LadderOutcome(status="NO_DATA")
 
-    # Sort ascending by timestamp (defensive, mirrors replay_ladder bug #4 guard).
+    # Intentional duplication of parse_ladder + sorted(bars, ...) + empty-bar guards:
+    # must track replay_ladder's defensive bar sort (bug #4) and degenerate-input guards.
     ordered = sorted(bars, key=lambda b: int(b["t"]))
 
     # Exclude bars that predate the fill: the position does not exist yet.
@@ -454,7 +460,11 @@ def _replay_synthetic_fill(
     # Pre-seed the synthetic entry -- bypass the low<=limit touch gate entirely.
     # level_id "E_SYNTH" is deliberately NOT in ladder.entries, so it cannot be
     # accidentally re-added by _fill_entries.
-    synth_level = _Level(level_id="E_SYNTH", price=fill_price, weight=100.0)
+    # Fix 1: weight = total_entry_alloc so _filled_frac returns exactly 1.0 by
+    # construction (synthetic fill is by definition a FULL fill of the position).
+    synth_level = _Level(
+        level_id="E_SYNTH", price=fill_price, weight=ladder.total_entry_alloc or 100.0
+    )
     walk.filled.append(synth_level)
     walk.filled_ids.add("E_SYNTH")
     walk.seq.append(LevelCrossing("E_SYNTH", _ENTRY, fill_price, fill_ts_ms))

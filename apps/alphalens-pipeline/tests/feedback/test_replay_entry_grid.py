@@ -214,5 +214,77 @@ class TestReplaySyntheticFillTPExit(unittest.TestCase):
         self.assertFalse(outcome.horizon_open)
 
 
+class TestReplaySyntheticFillFullFillByConstruction(unittest.TestCase):
+    """Fix 1: filled_fraction must be 1.0 regardless of entry-tier alloc sum."""
+
+    def test_filled_fraction_one_when_alloc_not_100(self):
+        # Setup with a SINGLE entry tier whose alloc_pct=60 (does NOT sum to 100).
+        # Before Fix 1, _filled_frac returned 100/60 > 1.0, then clamped to 1.0
+        # by the min/max, so the bug was hidden — OR weight=100 / total_alloc=60 gave
+        # frac=1.67 clamped to 1.0.  After Fix 1, synthetic weight == total_entry_alloc
+        # so frac = total_entry_alloc / total_entry_alloc = 1.0 exactly.
+        setup_single_tier_60 = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            "disaster_stop": 90.0,
+            "atr": 2.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [
+                {"limit": 100.0, "alloc_pct": 60.0},  # only tier, alloc=60 NOT 100
+            ],
+            "tp_tranches": [{"target": 108.0, "tranche_pct": 100.0}],
+        }
+        # Flat bars well above fill_price; position stays open (no SL, no TP).
+        flat_bars = _bars_constant(_T0, 5, price=104.0)
+        outcome = _replay_synthetic_fill(
+            setup_single_tier_60,
+            flat_bars,
+            fill_price=_FILL_PRICE,
+            fill_ts_ms=_FILL_TS,
+            own_stop=_OWN_STOP,
+        )
+        self.assertIsNotNone(outcome.filled_fraction)
+        # Synthetic fill is by definition a FULL fill — fraction must be exactly 1.0.
+        self.assertEqual(outcome.filled_fraction, 1.0)
+
+
+class TestReplaySyntheticFillFiniteGuard(unittest.TestCase):
+    """Fix 2: non-finite fill_price or own_stop returns NO_DATA."""
+
+    def test_nan_fill_price_returns_no_data(self):
+        flat_bars = _bars_constant(_T0, 5, price=104.0)
+        outcome = _replay_synthetic_fill(
+            _SETUP,
+            flat_bars,
+            fill_price=float("nan"),
+            fill_ts_ms=_FILL_TS,
+            own_stop=_OWN_STOP,
+        )
+        self.assertEqual(outcome.status, "NO_DATA")
+
+    def test_inf_fill_price_returns_no_data(self):
+        flat_bars = _bars_constant(_T0, 5, price=104.0)
+        outcome = _replay_synthetic_fill(
+            _SETUP,
+            flat_bars,
+            fill_price=float("inf"),
+            fill_ts_ms=_FILL_TS,
+            own_stop=_OWN_STOP,
+        )
+        self.assertEqual(outcome.status, "NO_DATA")
+
+    def test_nan_own_stop_returns_no_data(self):
+        flat_bars = _bars_constant(_T0, 5, price=104.0)
+        outcome = _replay_synthetic_fill(
+            _SETUP,
+            flat_bars,
+            fill_price=_FILL_PRICE,
+            fill_ts_ms=_FILL_TS,
+            own_stop=float("nan"),
+        )
+        self.assertEqual(outcome.status, "NO_DATA")
+
+
 if __name__ == "__main__":
     unittest.main()
