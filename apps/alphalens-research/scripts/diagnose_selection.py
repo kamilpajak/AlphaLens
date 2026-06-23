@@ -23,6 +23,7 @@ from alphalens_pipeline.paper.calendar import (
     session_on_or_after,
 )
 from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
+from alphalens_research.diagnostics import anchor as anchor_mod
 from alphalens_research.diagnostics import edge_stores, fill_survival, fixed_horizon, nofill
 
 _SPY = "SPY"
@@ -54,6 +55,19 @@ def _low(snapshot: dict | None, ticker: str) -> float | None:
         return None
 
 
+def _open(snapshot: dict | None, ticker: str) -> float | None:
+    if not snapshot:
+        return None
+    bar = snapshot.get(ticker.upper())
+    if not bar:
+        return None
+    try:
+        o = float(bar["o"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return o if o > 0.0 else None
+
+
 def _e1(setup: dict | None) -> float | None:
     if not setup or setup.get("status") != "OK":
         return None
@@ -74,6 +88,12 @@ def main() -> None:
     ap.add_argument("--exchange", default=DEFAULT_EXCHANGE)
     ap.add_argument("--ttl", type=int, default=DEFAULT_ORDER_TTL_DAYS)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--anchor",
+        choices=anchor_mod.ANCHOR_MODES,
+        default=anchor_mod.ANCHOR_PRIOR_CLOSE,
+        help="CAR anchor: prior_close (legacy) or arrival_vwap (price an arrival entry pays)",
+    )
     ap.add_argument(
         "--out", type=Path, default=edge_stores.HOME / "diagnostics" / "selection.parquet"
     )
@@ -99,9 +119,21 @@ def main() -> None:
         ticker = str(row["ticker"]).upper()
         classification = str(row.get("ladder_classification") or "")
         arrival = session_on_or_after(brief_date, args.exchange)
-        anchor = previous_trading_day(arrival, args.exchange)
-        a_stock = _close(grouped.get(anchor), ticker)
-        a_spy = _close(grouped.get(anchor), _SPY)
+        anchor_session = previous_trading_day(arrival, args.exchange)
+        prior_close_stock = _close(grouped.get(anchor_session), ticker)
+        prior_close_spy = _close(grouped.get(anchor_session), _SPY)
+        ref_close = row.get("reference_close")
+        arrival_vwap_stock = (
+            float(ref_close) if ref_close is not None and not pd.isna(ref_close) else None
+        )
+        arrival_open_spy = _open(grouped.get(arrival), _SPY)
+        a_stock, a_spy = anchor_mod.event_anchor(
+            args.anchor,
+            prior_close_stock=prior_close_stock,
+            prior_close_spy=prior_close_spy,
+            arrival_vwap_stock=arrival_vwap_stock,
+            arrival_open_spy=arrival_open_spy,
+        )
 
         rec: dict = {"brief_date": brief_date, "ticker": ticker, "classification": classification}
         for k in fixed_horizon.K_WINDOWS:
@@ -146,7 +178,10 @@ def main() -> None:
     print(f"plannable: {len(plannable)}; wrote {args.out} rows: {len(table)}")
 
     # ---- Selection: per-k CAR with bootstrap CI (all / filled / unfilled) ----
-    print("\nfixed-horizon CAR (market-adjusted BHAR vs SPY), bootstrap 90% CI:")
+    print(
+        f"\nfixed-horizon CAR (market-adjusted BHAR vs SPY, anchor={args.anchor}), "
+        "bootstrap 90% CI:"
+    )
     for k in fixed_horizon.K_WINDOWS:
         col = table.get(f"car_{k}", None)
         if col is None:
