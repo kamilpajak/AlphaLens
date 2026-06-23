@@ -136,7 +136,10 @@ def _select_universe(args: argparse.Namespace) -> list[str]:
 
 def _drop_known_gaps(tickers: list[str]) -> list[str]:
     """Filter out tickers AV has no EARNINGS data for (see
-    ``_KNOWN_AV_EARNINGS_GAPS``) so the daily run skips them entirely."""
+    ``_KNOWN_AV_EARNINGS_GAPS``) so the daily run skips them entirely.
+
+    Matching is exact on the canonical uppercase symbol; PIT rosters use the
+    same form, so no case-folding is needed."""
     kept = [t for t in tickers if t not in _KNOWN_AV_EARNINGS_GAPS]
     skipped = [t for t in tickers if t in _KNOWN_AV_EARNINGS_GAPS]
     for ticker in skipped:

@@ -115,6 +115,21 @@ class TestKnownGapsSkipped(unittest.TestCase):
         mod = _import_script()
         self.assertIn("CTRA", mod._KNOWN_AV_EARNINGS_GAPS)
 
+    def test_drop_known_gaps_filters_only_gap_tickers_and_preserves_order(self) -> None:
+        """Unit-level guard on the filter helper itself — both universe
+        branches of ``_select_universe`` funnel through this single call, so
+        pinning the helper covers sp500_union and sp1500_union alike without
+        standing up three PIT rosters."""
+        mod = _import_script()
+        self.assertEqual(
+            mod._drop_known_gaps(["MSFT", "CTRA", "AAPL"]),
+            ["MSFT", "AAPL"],
+        )
+
+    def test_drop_known_gaps_noop_when_no_gap_present(self) -> None:
+        mod = _import_script()
+        self.assertEqual(mod._drop_known_gaps(["AAPL", "MSFT"]), ["AAPL", "MSFT"])
+
 
 class TestRateLimitExitClean(unittest.TestCase):
     def test_persistent_rate_limit_returns_zero_not_raises(self) -> None:
