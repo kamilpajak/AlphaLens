@@ -90,7 +90,7 @@ class ArmSetup:
 
 
 def market_at_arrival_fill(
-    bars: Sequence[dict[str, Any]],
+    bars: Sequence[Mapping[str, Any]],
     *,
     arrival_open_ms: int,
     arrival_close_ms: int,
@@ -137,7 +137,7 @@ def market_at_arrival_fill(
 
 
 def vwap_arrival_fill(
-    bars: Sequence[dict[str, Any]],
+    bars: Sequence[Mapping[str, Any]],
     *,
     arrival_open_ms: int,
     window_min: int = ARRIVAL_VWAP_WINDOW_MIN,
@@ -322,7 +322,7 @@ def build_narrow_tiers_arm(
         )
 
     tier_dicts = tuple({"limit": float(p), "tag": tag} for p, tag in chosen)
-    arm_blended = sum(t["limit"] for t in tier_dicts) / len(tier_dicts)
+    arm_blended = sum(p for p, _tag in chosen) / len(chosen)
 
     return ArmSetup(
         arm="narrow_tiers",
