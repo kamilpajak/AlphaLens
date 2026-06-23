@@ -74,6 +74,63 @@ class TestUniverseSelection(unittest.TestCase):
             self.assertEqual(sorted(tickers_arg), ["AAPL", "MSFT"])
 
 
+class TestKnownGapsSkipped(unittest.TestCase):
+    """Tickers AV has no EARNINGS data for (under any symbol) are filtered out
+    before the fetch batch so the daily run does not burn a quota call on them
+    and does not log a spurious ``failed=1``. CTRA (Coterra Energy) is the
+    standing case: AV returns an empty ``{}`` payload for CTRA and for both
+    legacy symbols (COG / XEC) it was formed from in 2021."""
+
+    def test_known_gap_ticker_excluded_from_fetch_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_root = Path(tmp) / "data"
+            _write_sp500_snapshot(
+                data_root / "sp500_pit" / "2024.yaml",
+                as_of="2024-01-01",
+                tickers=["AAPL", "CTRA", "MSFT"],
+            )
+            cache = Path(tmp) / "cache"
+
+            mod = _import_script()
+            with patch.object(mod, "fetch_earnings_batch") as fetch_mock:
+                fetch_mock.return_value = {"AAPL": "fetched", "MSFT": "fetched"}
+                rc = mod.main(
+                    [
+                        "--cache-dir",
+                        str(cache),
+                        "--data-root",
+                        str(data_root),
+                        "--throttle-seconds",
+                        "0",
+                    ]
+                )
+
+            self.assertEqual(rc, 0)
+            fetch_mock.assert_called_once()
+            tickers_arg = fetch_mock.call_args.args[0]
+            self.assertNotIn("CTRA", tickers_arg)
+            self.assertEqual(sorted(tickers_arg), ["AAPL", "MSFT"])
+
+    def test_ctra_registered_in_known_gaps(self) -> None:
+        mod = _import_script()
+        self.assertIn("CTRA", mod._KNOWN_AV_EARNINGS_GAPS)
+
+    def test_drop_known_gaps_filters_only_gap_tickers_and_preserves_order(self) -> None:
+        """Unit-level guard on the filter helper itself — both universe
+        branches of ``_select_universe`` funnel through this single call, so
+        pinning the helper covers sp500_union and sp1500_union alike without
+        standing up three PIT rosters."""
+        mod = _import_script()
+        self.assertEqual(
+            mod._drop_known_gaps(["MSFT", "CTRA", "AAPL"]),
+            ["MSFT", "AAPL"],
+        )
+
+    def test_drop_known_gaps_noop_when_no_gap_present(self) -> None:
+        mod = _import_script()
+        self.assertEqual(mod._drop_known_gaps(["AAPL", "MSFT"]), ["AAPL", "MSFT"])
+
+
 class TestRateLimitExitClean(unittest.TestCase):
     def test_persistent_rate_limit_returns_zero_not_raises(self) -> None:
         """Cron job must not error-alert on rate-limit — tomorrow's quota

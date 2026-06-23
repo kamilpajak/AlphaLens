@@ -66,6 +66,21 @@ _UNIVERSES = {
     "sp1500_union": load_sp1500_pit_union,
 }
 
+# Tickers Alpha Vantage has no EARNINGS data for under any symbol. Filtered out
+# before the fetch batch so the daily run does not burn a quota call on them and
+# does not log a spurious ``failed=1`` every night (a false alarm for the
+# ``failed`` metric the cron-observability dashboard tracks).
+#
+# CTRA (Coterra Energy) returns an empty ``{}`` payload from the EARNINGS
+# endpoint; so do both legacy symbols it was formed from in the Oct-2021
+# Cabot Oil & Gas + Cimarex merger (COG -> CTRA, XEC absorbed). AV dropped the
+# pre-merger earnings history and never backfilled it under the new symbol, so
+# no symbol substitution recovers the data (confirmed live 2026-06-23). A
+# single missing name in a ~503-ticker cross-sectional universe is immaterial.
+_KNOWN_AV_EARNINGS_GAPS = {
+    "CTRA": "AV EARNINGS empty under CTRA + legacy COG/XEC (2021 merger); no symbol recovers it",
+}
+
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
@@ -113,8 +128,27 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _select_universe(args: argparse.Namespace) -> list[str]:
     loader = _UNIVERSES[args.universe]
     if args.universe == "sp500_union":
-        return loader(data_dir=args.data_root / "sp500_pit")
-    return loader(data_root=args.data_root)
+        tickers = loader(data_dir=args.data_root / "sp500_pit")
+    else:
+        tickers = loader(data_root=args.data_root)
+    return _drop_known_gaps(tickers)
+
+
+def _drop_known_gaps(tickers: list[str]) -> list[str]:
+    """Filter out tickers AV has no EARNINGS data for (see
+    ``_KNOWN_AV_EARNINGS_GAPS``) so the daily run skips them entirely.
+
+    Matching is exact on the canonical uppercase symbol; PIT rosters use the
+    same form, so no case-folding is needed."""
+    kept = [t for t in tickers if t not in _KNOWN_AV_EARNINGS_GAPS]
+    skipped = [t for t in tickers if t in _KNOWN_AV_EARNINGS_GAPS]
+    for ticker in skipped:
+        logger.info(
+            "skipping known AV EARNINGS gap %s: %s",
+            ticker,
+            _KNOWN_AV_EARNINGS_GAPS[ticker],
+        )
+    return kept
 
 
 def _nextcloud_sync(cache_dir: Path, remote: str, rclone_bin: str) -> None:
