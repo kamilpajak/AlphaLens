@@ -371,6 +371,102 @@ def _with_entry_tiers(
     return swapped
 
 
+def _with_disaster_stop(trade_setup: Mapping[str, Any], stop: float) -> dict[str, Any]:
+    """Shallow-copy the setup with its disaster stop replaced (entries/tps untouched).
+
+    Mirror of :func:`_with_tp_tranches` / :func:`_with_entry_tiers`: swaps ONLY
+    the ``disaster_stop`` key; never mutates the source dict and leaves
+    ``entry_tiers`` / ``tp_tranches`` (and all other keys) intact as the same
+    objects (shallow copy depth is sufficient because this function does not
+    create new nested structures).
+    """
+    swapped = dict(trade_setup)
+    swapped["disaster_stop"] = stop
+    return swapped
+
+
+def _replay_synthetic_fill(
+    trade_setup: Mapping[str, Any],
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    fill_price: float,
+    fill_ts_ms: int,
+    own_stop: float,
+    position_expiry_ms: int | None = None,
+) -> LadderOutcome:
+    """Replay the EXIT walk for a non-touch arm whose entry is force-filled.
+
+    The entry-side fill primitives (open / VWAP) bypass the ``low <= limit``
+    touch gate that :func:`replay_ladder` uses.  This helper pre-seeds a single
+    synthetic fill at ``fill_price`` / ``fill_ts_ms`` into a :class:`_LadderWalk`
+    and then runs the SAME per-bar exit walk (TP targets + ``own_stop`` + optional
+    ``position_expiry_ms`` time-stop) over the bars that follow, returning a
+    :class:`LadderOutcome` whose terminal state yields the exit mark.
+
+    Key invariants
+    --------------
+    * The touch gate is **bypassed**: ``fill_price`` need not be touched by any
+      bar's low.  The synthetic fill is pre-seeded directly into the walk state
+      before the bar loop starts.
+    * ``own_stop`` is the disaster stop used for this arm (NOT ``trade_setup``'s
+      ``disaster_stop``).  The two may differ, e.g. because the entry-grid engine
+      sets a per-arm stop based on the fill price.
+    * TP targets come from ``trade_setup["tp_tranches"]`` unchanged.
+    * No new entry fills happen during the exit walk: ``entry_expiry_ms`` is set
+      to ``fill_ts_ms`` so all bars (ts >= fill_ts_ms) block new entry fills.
+    * Bars before ``fill_ts_ms`` are excluded (the position does not exist yet).
+
+    Implementation notes
+    --------------------
+    Reuses :class:`_LadderWalk` by constructing it with a modified
+    :class:`_ParsedLadder` (``disaster_stop=own_stop``) and directly seeding the
+    ``filled``, ``filled_ids``, and ``seq`` attributes to represent the synthetic
+    entry.  The walk then iterates ``step(bar)`` normally over the post-fill bars
+    and :func:`_finalize` computes the outcome.
+    """
+    # Swap the disaster stop so the parsed ladder and _finalize both use own_stop.
+    modified_setup = _with_disaster_stop(trade_setup, own_stop)
+    ladder = parse_ladder(modified_setup)
+    if not ladder.ok:
+        return LadderOutcome(status="NO_STRUCTURE")
+
+    if not bars:
+        return LadderOutcome(status="NO_DATA")
+
+    # Sort ascending by timestamp (defensive, mirrors replay_ladder bug #4 guard).
+    ordered = sorted(bars, key=lambda b: int(b["t"]))
+
+    # Exclude bars that predate the fill: the position does not exist yet.
+    post_fill = [b for b in ordered if int(b["t"]) >= fill_ts_ms]
+    if not post_fill:
+        return LadderOutcome(status="NO_DATA")
+
+    # Construct the walk.  entry_expiry_ms=fill_ts_ms blocks all new entry fills
+    # for bars at ts >= fill_ts_ms (the only bars we iterate), so the pre-seeded
+    # synthetic level is the only fill that ever appears.
+    walk = _LadderWalk(
+        ladder,
+        own_stop,
+        entry_expiry_ms=fill_ts_ms,
+        position_expiry_ms=position_expiry_ms,
+    )
+
+    # Pre-seed the synthetic entry -- bypass the low<=limit touch gate entirely.
+    # level_id "E_SYNTH" is deliberately NOT in ladder.entries, so it cannot be
+    # accidentally re-added by _fill_entries.
+    synth_level = _Level(level_id="E_SYNTH", price=fill_price, weight=100.0)
+    walk.filled.append(synth_level)
+    walk.filled_ids.add("E_SYNTH")
+    walk.seq.append(LevelCrossing("E_SYNTH", _ENTRY, fill_price, fill_ts_ms))
+
+    # Run the per-bar exit walk over post-fill bars.
+    for bar in post_fill:
+        walk.step(bar)
+
+    blended = fill_price  # single synthetic fill -> blended = fill_price
+    return _finalize(walk, blended=blended, reference_close=None, ratchet_r=None)
+
+
 def realized_r_full_fill(
     trade_setup: Mapping[str, Any] | None,
     bars: Sequence[Mapping[str, Any]],
