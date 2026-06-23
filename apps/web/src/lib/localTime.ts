@@ -13,10 +13,13 @@
  * system zone.
  */
 
-interface ZoneOpts {
+interface ZoneOpt {
 	/** IANA zone (e.g. ``Europe/Warsaw``). Omit in production to inherit the
 	 *  runtime's local zone. */
 	timeZone?: string;
+}
+
+interface ClockOpts extends ZoneOpt {
 	/** BCP-47 locale for the zone *abbreviation* only. Omit in production to
 	 *  inherit the browser locale so a pl-PL viewer gets "CEST", ja-JP "JST". */
 	locale?: string;
@@ -30,7 +33,7 @@ interface ZoneOpts {
  * — the ambient clock right beside it carries the label, and both are now the
  * same zone, so repeating it on the chip would be noise.
  */
-export function formatLocalWeekdayTime(iso: string, opts: ZoneOpts = {}): string {
+export function formatLocalWeekdayTime(iso: string, opts: ZoneOpt = {}): string {
 	return new Intl.DateTimeFormat('en-US', {
 		weekday: 'short',
 		hour: '2-digit',
@@ -51,24 +54,30 @@ export function formatLocalWeekdayTime(iso: string, opts: ZoneOpts = {}): string
  * locale so it reads as the name they expect (CEST / JST / EDT), falling back
  * to a "GMT+N" offset where the locale has no named abbreviation.
  */
-export function formatLocalClock(date: Date, opts: ZoneOpts = {}): string {
-	const dateTime = new Intl.DateTimeFormat('en-CA', {
+export function formatLocalClock(date: Date, opts: ClockOpts = {}): string {
+	const zoneOpt = opts.timeZone ? { timeZone: opts.timeZone } : {};
+	// Date and time are formatted separately and joined with a single space, so
+	// the result never depends on a locale's date↔time separator punctuation:
+	// 'en-CA' gives the ISO "YYYY-MM-DD" date, 'en-GB' the 24h "HH:MM" time.
+	const datePart = new Intl.DateTimeFormat('en-CA', {
 		year: 'numeric',
 		month: '2-digit',
 		day: '2-digit',
+		...zoneOpt
+	}).format(date);
+	const timePart = new Intl.DateTimeFormat('en-GB', {
 		hour: '2-digit',
 		minute: '2-digit',
 		hour12: false,
-		...(opts.timeZone ? { timeZone: opts.timeZone } : {})
-	})
-		.format(date)
-		.replace(', ', ' ');
+		...zoneOpt
+	}).format(date);
+	const dateTime = `${datePart} ${timePart}`;
 
 	const parts = new Intl.DateTimeFormat(opts.locale, {
 		hour: '2-digit',
 		minute: '2-digit',
 		timeZoneName: 'short',
-		...(opts.timeZone ? { timeZone: opts.timeZone } : {})
+		...zoneOpt
 	}).formatToParts(date);
 	const zone = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
 

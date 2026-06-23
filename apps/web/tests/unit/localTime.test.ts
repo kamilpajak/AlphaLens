@@ -19,11 +19,11 @@ describe('formatLocalWeekdayTime — next-open label in the viewer local zone', 
 		expect(formatLocalWeekdayTime(open, { timeZone: 'Asia/Tokyo' })).toBe('mon 22:30');
 	});
 
-	it('keeps English weekday names regardless of locale (the footer copy is English)', () => {
-		// Even a pl-PL viewer sees "mon", not "pon." — only the time shifts zone.
-		expect(formatLocalWeekdayTime(open, { timeZone: 'Europe/Warsaw', locale: 'pl-PL' })).toBe(
-			'mon 15:30'
-		);
+	it('keeps English weekday names regardless of the viewer locale (footer copy is English)', () => {
+		// The weekday is hardcoded to 'en-US', so even a pl-PL viewer sees "mon",
+		// not "pon." — only the clock reading shifts zone. (No `locale` option is
+		// accepted here: it would not affect output, so the type omits it.)
+		expect(formatLocalWeekdayTime(open, { timeZone: 'Europe/Warsaw' })).toBe('mon 15:30');
 	});
 });
 
