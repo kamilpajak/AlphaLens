@@ -803,5 +803,440 @@ class TestReplayEntryGridSharedUnevaluability(unittest.TestCase):
             self.assertIsNone(result.get(arm), f"arm={arm} should be None when setup is None")
 
 
+# ---------------------------------------------------------------------------
+# Task 5 FIX tests (RED first): partial-fill, SL-negative, split-guard, NaN-atr
+# ---------------------------------------------------------------------------
+
+
+class TestPartialFillTouchArm(unittest.TestCase):
+    """Fix test 1: partial-fill touch arm reward = hand-computed blended return."""
+
+    def _make_partial_fill_bars(self) -> list[dict]:
+        """E1=99 (alloc=60%) fills (low=98<=99); E2=95 (alloc=40%) does NOT fill
+        (all bars hold low>=96). TP1=110 hits on bar 3 (high=112).
+
+        Partial fill: only E1 filled -> blended=99, filled_fraction=0.6/1.0=0.60.
+        TP exit at 110; exit_mark=110.
+        """
+        return [
+            _bar(_T0 + 0 * _BAR_MS, o=100.0, h=101.0, low=98.0, c=100.0),
+            _bar(_T0 + 1 * _BAR_MS, o=100.0, h=101.0, low=98.0, c=100.0),
+            _bar(_T0 + 2 * _BAR_MS, o=101.0, h=101.0, low=98.0, c=101.0),
+            _bar(_T0 + 3 * _BAR_MS, o=102.0, h=112.0, low=98.0, c=111.0),
+            _bar(_T0 + 4 * _BAR_MS, o=111.0, h=112.0, low=98.0, c=111.0),
+            _bar(_T0 + 5 * _BAR_MS, o=111.0, h=112.0, low=98.0, c=111.0),
+        ]
+
+    def setUp(self):
+        # Two-tier setup: E1=99@60%, E2=95@40% (deep enough that low=98 never reaches 95)
+        self.setup_two_tier = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            "disaster_stop": 88.0,
+            "atr": 3.0,
+            "asof_close": 100.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [
+                {"limit": 99.0, "alloc_pct": 60.0},
+                {"limit": 95.0, "alloc_pct": 40.0},
+            ],
+            "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
+        }
+        self.bars = self._make_partial_fill_bars()
+        self.result = replay_entry_grid(
+            self.setup_two_tier,
+            self.bars,
+            arrival_open_ms=_ARRIVAL_OPEN,
+            arrival_close_ms=_ARRIVAL_CLOSE,
+            benchmark_window_return=_BENCHMARK,
+            market_cap=None,
+            position_expiry_ms=_POS_EXPIRY,
+        )
+
+    def test_baseline_partial_fill_reward_matches_hand_computation(self):
+        """baseline partial-fill: only E1 fills; exit_mark=110; reward = (110-99)/99 - benchmark."""
+        # Only E1=99 fills (low=98 <= 99); E2=95 never fills (low=98 > 95 is FALSE, but
+        # wait: 98 > 95, so low=98 IS <= 99 but NOT <= 95? 98 > 95, so low=98 does NOT
+        # touch E2=95. Correct: E1 fills (98<=99), E2 does NOT fill (98 > 95 is... wait:
+        # 98 < 95? No. 98 > 95. So low=98 is NOT <= 95. E2 does not fill. Good.)
+        #
+        # baseline arm: passes through the two-tier setup as-is.
+        # arm_blended (only E1 filled) = 99.0
+        # exit_mark = 110.0 (TP1 hit)
+        # raw_excess = (110 - 99)/99 - 0.01
+        arm_blended = 99.0
+        exit_mark = 110.0
+        expected_reward = (exit_mark - arm_blended) / arm_blended - _BENCHMARK
+
+        reward = self.result.get("baseline")
+        self.assertIsNotNone(reward)
+        assert reward is not None
+        self.assertTrue(
+            math.isclose(reward, expected_reward, rel_tol=1e-6),
+            f"partial-fill baseline: expected {expected_reward}, got {reward}",
+        )
+
+    def test_partial_fill_reward_not_full_fill_formula(self):
+        """The partial-fill reward is NOT the formula for a hypothetical E1+E2 full-fill."""
+        # full-fill blended = (99*60 + 95*40)/100 = (5940+3800)/100 = 97.4
+        # full-fill reward = (110 - 97.4)/97.4 - 0.01 ≠ partial-fill reward
+        full_fill_blended = (99.0 * 60.0 + 95.0 * 40.0) / 100.0  # 97.4
+        full_fill_reward = (110.0 - full_fill_blended) / full_fill_blended - _BENCHMARK
+
+        reward = self.result.get("baseline")
+        self.assertIsNotNone(reward)
+        assert reward is not None
+        # These must differ (partial fill vs full fill produce different rewards)
+        self.assertFalse(
+            math.isclose(reward, full_fill_reward, rel_tol=1e-6),
+            f"partial-fill reward {reward} must differ from full-fill reward {full_fill_reward}",
+        )
+
+
+class TestSLHitNegativeReward(unittest.TestCase):
+    """Fix test 2: SL-hit → negative arm reward == hand-computed (stop - blended)/blended - benchmark."""
+
+    def setUp(self):
+        # Simple setup: E1=99, stop=88, TP1=110 (but price hits stop first)
+        self.setup = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            "disaster_stop": 88.0,
+            "atr": 3.0,
+            "asof_close": 100.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [
+                {"limit": 99.0, "alloc_pct": 100.0},
+            ],
+            "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
+        }
+        # bars: bar 0 fills E1=99 (low=98); bars 1-3 drift down; bar 4 hits stop=88
+        self.bars = [
+            _bar(_T0 + 0 * _BAR_MS, o=100.0, h=101.0, low=98.0, c=99.0),
+            _bar(_T0 + 1 * _BAR_MS, o=99.0, h=100.0, low=96.0, c=97.0),
+            _bar(_T0 + 2 * _BAR_MS, o=97.0, h=98.0, low=93.0, c=94.0),
+            _bar(_T0 + 3 * _BAR_MS, o=94.0, h=95.0, low=91.0, c=91.0),
+            _bar(_T0 + 4 * _BAR_MS, o=91.0, h=91.0, low=87.0, c=88.0),
+        ]
+        self.result = replay_entry_grid(
+            self.setup,
+            self.bars,
+            arrival_open_ms=_ARRIVAL_OPEN,
+            arrival_close_ms=_ARRIVAL_CLOSE,
+            benchmark_window_return=_BENCHMARK,
+            market_cap=None,
+        )
+
+    def test_baseline_sl_hit_reward_is_negative(self):
+        """SL-hit baseline reward must be negative."""
+        reward = self.result.get("baseline")
+        self.assertIsNotNone(reward)
+        assert reward is not None
+        self.assertLess(reward, 0.0, f"SL-hit reward must be negative, got {reward}")
+
+    def test_baseline_sl_hit_reward_matches_hand_computation(self):
+        """SL-hit: exit_mark=stop=88; reward = (88 - 99)/99 - benchmark.
+
+        Note: cash-haircut NOT applied to a resting arm that DID fill and hit SL.
+        """
+        arm_blended = 99.0
+        stop = 88.0
+        exit_mark = stop  # SL exit
+        expected_reward = (exit_mark - arm_blended) / arm_blended - _BENCHMARK
+
+        reward = self.result.get("baseline")
+        self.assertIsNotNone(reward)
+        assert reward is not None
+        self.assertTrue(
+            math.isclose(reward, expected_reward, rel_tol=1e-6),
+            f"SL-hit reward: expected {expected_reward}, got {reward}",
+        )
+
+
+class TestSplitGuardReturnsNone(unittest.TestCase):
+    """Fix test 3: implausible exit_mark (|exit/blended - 1| > 0.60) → arm returns None."""
+
+    def setUp(self):
+        # Entry fills at E1=99; then price jumps to 200 (>60% gain) – corporate action / bad data
+        self.setup = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            "disaster_stop": 88.0,
+            "atr": 3.0,
+            "asof_close": 100.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [
+                {"limit": 99.0, "alloc_pct": 100.0},
+            ],
+            "tp_tranches": [{"target": 170.0, "tranche_pct": 100.0}],  # 170/99 - 1 = 0.717 > 0.60
+        }
+        self.bars = [
+            _bar(_T0 + 0 * _BAR_MS, o=100.0, h=101.0, low=98.0, c=100.0),  # fills E1=99
+            _bar(_T0 + 1 * _BAR_MS, o=100.0, h=180.0, low=100.0, c=175.0),  # TP=170 hit
+        ]
+        self.result = replay_entry_grid(
+            self.setup,
+            self.bars,
+            arrival_open_ms=_ARRIVAL_OPEN,
+            arrival_close_ms=_ARRIVAL_CLOSE,
+            benchmark_window_return=_BENCHMARK,
+            market_cap=None,
+        )
+
+    def test_baseline_implausible_return_returns_none(self):
+        """exit_mark/blended - 1 > 0.60 → baseline arm returns None (split guard)."""
+        # arm_blended=99, exit_mark=170: |170/99 - 1| = 0.717 > 0.60
+        arm_blended = 99.0
+        exit_mark = 170.0
+        ratio = abs(exit_mark / arm_blended - 1.0)
+        self.assertGreater(ratio, 0.60, f"Sanity check: ratio={ratio} must exceed 0.60 threshold")
+
+        reward = self.result.get("baseline")
+        self.assertIsNone(
+            reward,
+            f"Implausible return should give None (split guard), got {reward}",
+        )
+
+    def test_split_guard_is_none_not_cash(self):
+        """Split guard must return None, NOT cash (-benchmark)."""
+        reward = self.result.get("baseline")
+        # Ensure it's specifically None, not the cash value
+        self.assertIsNone(reward)
+        # And confirm it's not masquerading as cash
+        cash = -_BENCHMARK
+        self.assertNotEqual(reward, cash)
+
+
+class TestNanAtrUncomputableArms(unittest.TestCase):
+    """Fix test 4: NaN atr → narrow_tiers/single_at_close/market_at_arrival/vwap_arrival
+    return None (uncomputable); baseline still computes a finite reward.
+    """
+
+    def _make_nan_atr_setup(self) -> dict:
+        """Setup identical to _GRID_SETUP but with atr=NaN (missing atr field removed)."""
+        setup = dict(_GRID_SETUP)
+        del setup["atr"]  # missing atr -> float("nan") in replay_entry_grid
+        return setup
+
+    def setUp(self):
+        self.nan_atr_setup = self._make_nan_atr_setup()
+        self.bars = _make_tp_bars()
+        self.result = replay_entry_grid(
+            self.nan_atr_setup,
+            self.bars,
+            arrival_open_ms=_ARRIVAL_OPEN,
+            arrival_close_ms=_ARRIVAL_CLOSE,
+            benchmark_window_return=_BENCHMARK,
+            market_cap=None,
+            position_expiry_ms=_POS_EXPIRY,
+        )
+
+    def test_narrow_tiers_is_none_when_atr_nan(self):
+        """narrow_tiers arm requires atr; returns None (not cash) when atr=NaN."""
+        reward = self.result.get("narrow_tiers")
+        self.assertIsNone(
+            reward,
+            f"narrow_tiers must be None when atr=NaN (uncomputable), got {reward}",
+        )
+
+    def test_single_at_close_is_none_when_atr_nan(self):
+        """single_at_close arm requires atr; returns None (not cash) when atr=NaN."""
+        reward = self.result.get("single_at_close")
+        self.assertIsNone(
+            reward,
+            f"single_at_close must be None when atr=NaN (uncomputable), got {reward}",
+        )
+
+    def test_market_at_arrival_is_none_when_atr_nan(self):
+        """market_at_arrival arm: arm_disaster_stop(fill_price, NaN, close) = NaN → None."""
+        reward = self.result.get("market_at_arrival")
+        self.assertIsNone(
+            reward,
+            f"market_at_arrival must be None when atr=NaN (own_stop=NaN → uncomputable), got {reward}",
+        )
+
+    def test_vwap_arrival_is_none_when_atr_nan(self):
+        """vwap_arrival arm: arm_disaster_stop(fill_price, NaN, close) = NaN → None."""
+        reward = self.result.get("vwap_arrival")
+        self.assertIsNone(
+            reward,
+            f"vwap_arrival must be None when atr=NaN (own_stop=NaN → uncomputable), got {reward}",
+        )
+
+    def test_baseline_computes_when_atr_nan(self):
+        """baseline arm does NOT use atr; it must still compute a finite reward."""
+        reward = self.result.get("baseline")
+        self.assertIsNotNone(
+            reward,
+            "baseline must compute a finite reward even when atr=NaN (baseline does not use atr)",
+        )
+        assert reward is not None
+        self.assertTrue(
+            math.isfinite(reward),
+            f"baseline reward must be finite, got {reward}",
+        )
+
+
+class TestNanOwnStopReturnsNone(unittest.TestCase):
+    """Fix test 5: NaN own_stop (from arm builder or missing disaster_stop) → arm returns None."""
+
+    def test_missing_disaster_stop_baseline_returns_none(self):
+        """baseline arm: missing disaster_stop in setup → own_stop=NaN → arm returns None."""
+        # baseline_stop = float(trade_setup.get("disaster_stop", float("nan")))
+        # If disaster_stop key is missing, own_stop = NaN → uncomputable → None (not cash)
+        setup_no_stop = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            # disaster_stop intentionally absent -- own_stop will be NaN
+            "atr": 3.0,
+            "asof_close": 100.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [
+                {"limit": 99.0, "alloc_pct": 100.0},
+            ],
+            "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
+        }
+        # parse_ladder requires disaster_stop; it returns ok=False → shared unevaluability
+        # Actually, parse_ladder checks stop is not None; without it -> ok=False -> all None.
+        # This tests the unevaluability at the ladder parse level.
+        bars = _make_tp_bars()
+        result = replay_entry_grid(
+            setup_no_stop,
+            bars,
+            arrival_open_ms=_ARRIVAL_OPEN,
+            arrival_close_ms=_ARRIVAL_CLOSE,
+            benchmark_window_return=_BENCHMARK,
+            market_cap=None,
+            position_expiry_ms=_POS_EXPIRY,
+        )
+        # parse_ladder returns ok=False (no disaster_stop) -> shared unevaluability -> all None
+        for arm in ENTRY_GRID_ARMS:
+            self.assertIsNone(
+                result.get(arm),
+                f"arm={arm} must be None when disaster_stop missing from setup",
+            )
+
+    def test_nan_own_stop_in_touch_arm_returns_none(self):
+        """_touch_arm_reward: when own_stop is NaN (from arm builder), arm returns None.
+
+        We simulate this by using a setup where build_baseline_arm passes disaster_stop=NaN.
+        The baseline_stop extraction is:
+            baseline_stop = float(trade_setup.get("disaster_stop", float("nan")))
+        If disaster_stop is math.nan in the setup dict, own_stop=NaN → Fix A → return None.
+        """
+        setup_nan_stop = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            "disaster_stop": float("nan"),
+            "atr": 3.0,
+            "asof_close": 100.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [
+                {"limit": 99.0, "alloc_pct": 100.0},
+            ],
+            "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
+        }
+        # parse_ladder: stop = float(raw) -> NaN; ok check: stop is None? No (it's NaN).
+        # Actually parse_ladder does: stop = trade_setup.get("disaster_stop"); if stop is None -> ok=False
+        # NaN is not None, so parse_ladder returns ok=True with disaster_stop=NaN.
+        # Then baseline_stop = float(NaN) = NaN.
+        # Fix A: in _touch_arm_reward, `if not math.isfinite(own_stop): return None`
+        bars = _make_tp_bars()
+        result = replay_entry_grid(
+            setup_nan_stop,
+            bars,
+            arrival_open_ms=_ARRIVAL_OPEN,
+            arrival_close_ms=_ARRIVAL_CLOSE,
+            benchmark_window_return=_BENCHMARK,
+            market_cap=None,
+            position_expiry_ms=_POS_EXPIRY,
+        )
+        baseline_reward = result.get("baseline")
+        # With NaN own_stop, Fix A must return None (uncomputable), not cash
+        self.assertIsNone(
+            baseline_reward,
+            f"baseline with NaN own_stop must return None (uncomputable), got {baseline_reward}",
+        )
+
+
+class TestNoStructureVsBadGeometrySplit(unittest.TestCase):
+    """Fix A semantics: NO_STRUCTURE → None; BAD_GEOMETRY → cash.
+
+    Verifies the split between "arm could not be built" (uncomputable → None)
+    and "built arm's geometry collapsed" (BAD_GEOMETRY → cash).
+    """
+
+    def test_no_structure_arm_returns_none_not_cash(self):
+        """narrow_tiers with NaN atr → NO_STRUCTURE → None (not cash = -benchmark)."""
+        setup_nan_atr = dict(_GRID_SETUP)
+        del setup_nan_atr["atr"]
+
+        bars = _make_tp_bars()
+        result = replay_entry_grid(
+            setup_nan_atr,
+            bars,
+            arrival_open_ms=_ARRIVAL_OPEN,
+            arrival_close_ms=_ARRIVAL_CLOSE,
+            benchmark_window_return=_BENCHMARK,
+            market_cap=None,
+            position_expiry_ms=_POS_EXPIRY,
+        )
+        narrow_reward = result.get("narrow_tiers")
+        # Must be None (uncomputable), NOT cash (-0.01)
+        self.assertIsNone(
+            narrow_reward,
+            f"NO_STRUCTURE arm must return None, not cash; got {narrow_reward}",
+        )
+        # Explicitly: must not equal cash reward
+        cash = -_BENCHMARK
+        if narrow_reward is not None:
+            self.assertFalse(
+                math.isclose(narrow_reward, cash, rel_tol=1e-9),
+                f"NO_STRUCTURE arm must not return cash={cash}; got {narrow_reward}",
+            )
+
+    def test_bad_geometry_arm_returns_cash_not_none(self):
+        """baseline with stop > entry → BAD_GEOMETRY in replay → cash (not None)."""
+        # setup: disaster_stop=101 > E1=99 → risk = 99-101 < 0 → BAD_GEOMETRY in _finalize
+        bad_geom_setup = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            "disaster_stop": 101.0,
+            "atr": 3.0,
+            "asof_close": 100.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [{"limit": 99.0, "alloc_pct": 100.0}],
+            "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
+        }
+        bars = _make_tp_bars()
+        result = replay_entry_grid(
+            bad_geom_setup,
+            bars,
+            arrival_open_ms=_ARRIVAL_OPEN,
+            arrival_close_ms=_ARRIVAL_CLOSE,
+            benchmark_window_return=_BENCHMARK,
+            market_cap=None,
+            position_expiry_ms=_POS_EXPIRY,
+        )
+        baseline_reward = result.get("baseline")
+        # BAD_GEOMETRY → cash (not None)
+        self.assertIsNotNone(
+            baseline_reward,
+            "BAD_GEOMETRY arm must return cash (not None)",
+        )
+        cash = -_BENCHMARK
+        assert baseline_reward is not None
+        self.assertTrue(
+            math.isclose(baseline_reward, cash, rel_tol=1e-9),
+            f"BAD_GEOMETRY arm must return cash={cash}, got {baseline_reward}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

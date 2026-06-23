@@ -1022,6 +1022,7 @@ def replay_entry_grid(
     from alphalens_pipeline.feedback.bar_window import IMPLAUSIBLE_RETURN_THRESHOLD
     from alphalens_pipeline.feedback.execution_cost import apply_haircut_to_excess
     from alphalens_pipeline.thematic.trade_setup.entry_primitives import (
+        ArmFill,
         ArmSetup,
         arm_disaster_stop,
         build_baseline_arm,
@@ -1092,10 +1093,26 @@ def replay_entry_grid(
         arm_setup: ArmSetup,
         own_stop: float,
     ) -> float | None:
-        """Replay a touch arm and return its net haircut-adjusted excess (or None)."""
+        """Replay a touch arm and return its net haircut-adjusted excess (or None).
+
+        Distinguishes two failure modes:
+        - ``NO_STRUCTURE``: arm could not be built (uncomputable) → ``None``,
+          so the common-support filter in the offline script can drop the event.
+        - ``BAD_GEOMETRY``: arm was built but geometry collapsed → ``cash_reward``.
+        Non-finite ``own_stop`` also signals an uncomputable arm → ``None``.
+        """
+        if arm_setup.status == "NO_STRUCTURE":
+            # Arm could not be built (e.g. NaN atr, zero close) -> uncomputable.
+            return None
         if arm_setup.status != "OK":
-            # BAD_GEOMETRY or NO_STRUCTURE from the arm builder -> cash.
+            # BAD_GEOMETRY (or any other non-OK non-NO_STRUCTURE status) -> cash.
             return cash_reward
+
+        # Guard: a non-finite own_stop means the arm's stop geometry is undefined
+        # (e.g. arm_disaster_stop returned NaN because atr was missing/NaN).
+        # This is an uncomputable arm, not a resting-arm that hit cash.
+        if not math.isfinite(own_stop):
+            return None
 
         # Build the modified setup: swap entry tiers + disaster stop.
         modified = _with_entry_tiers(trade_setup, list(arm_setup.entry_tiers))  # type: ignore[arg-type]
@@ -1163,8 +1180,12 @@ def replay_entry_grid(
     # the exit walk is driven by _replay_synthetic_fill with the arm's own stop.
     # On NO_FILL -> cash.
 
-    def _notouch_arm_reward(arm_name: str, arm_fill) -> float | None:  # type: ignore[no-untyped-def]
-        """Process a non-touch fill result and return net excess (or None)."""
+    def _notouch_arm_reward(arm_name: str, arm_fill: ArmFill) -> float | None:
+        """Process a non-touch fill result and return net excess (or None).
+
+        ``NO_FILL`` or a non-finite fill price → cash (resting-cash alternative).
+        Non-finite ``own_stop`` (NaN atr or close) → ``None`` (uncomputable arm).
+        """
         if arm_fill.status == "NO_FILL" or arm_fill.fill_price is None:
             return cash_reward
 
@@ -1178,7 +1199,9 @@ def replay_entry_grid(
 
         own_stop = arm_disaster_stop(fill_price, atr, close)
         if not math.isfinite(own_stop):
-            return cash_reward
+            # own_stop is NaN (atr or close is NaN/non-positive) — the arm's stop
+            # geometry is undefined, so it is uncomputable, NOT a cash position.
+            return None
 
         outcome = _replay_synthetic_fill(
             trade_setup,
