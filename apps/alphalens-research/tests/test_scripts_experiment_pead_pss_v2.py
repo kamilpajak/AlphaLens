@@ -106,6 +106,60 @@ class TestFormatResultLine(unittest.TestCase):
         self.assertTrue(line.startswith("cost=15bps | n=90 |"))
 
 
+class TestDropUncompletableTailEvents(unittest.TestCase):
+    """At the factor-data tail, an event whose entry + 20-day hold extends past
+    the available trading calendar cannot have its drift observed yet. The
+    pre-reg ``build_daily_weights``/``compute_exit_day`` RAISE on such an event,
+    which crashed the full/FL windows (the 2018-Q1 smoke never reached the
+    tail). The driver must right-censor those events BEFORE building weights."""
+
+    def _cal(self, n: int) -> list:
+        return [d.date() for d in pd.bdate_range("2018-01-01", periods=n)]
+
+    def _ev(self, ticker: str, rd, report_time: str = "pre-market"):
+        from alphalens_research.screeners.event_drift.av_earnings_ingestion import (
+            AVEarningsAnnouncement,
+        )
+
+        return AVEarningsAnnouncement(
+            ticker=ticker,
+            period_end=rd,
+            reported_date=rd,
+            reported_eps=1.0,
+            estimated_eps=0.5,
+            report_time=report_time,  # type: ignore[arg-type]
+        )
+
+    def test_drops_event_whose_hold_exceeds_calendar(self) -> None:
+        mod = _import_script()
+        cal = self._cal(30)
+        early = self._ev("AAA", cal[0])  # entry idx 0 → 0+20 < 30 → keep
+        late = self._ev("BBB", cal[15])  # entry idx 15 → 15+20 ≥ 30 → drop
+        kept = mod._drop_uncompletable_tail_events([early, late], cal, hold_days=20)
+        tickers = {e.ticker for e in kept}
+        self.assertIn("AAA", tickers)
+        self.assertNotIn("BBB", tickers)
+
+    def test_drops_event_reported_after_calendar_end(self) -> None:
+        mod = _import_script()
+        cal = self._cal(30)
+        after = self._ev("CCC", date(2030, 1, 1))  # no entry day → ValueError → drop
+        self.assertEqual(mod._drop_uncompletable_tail_events([after], cal, hold_days=20), [])
+
+    def test_kept_events_survive_build_daily_weights(self) -> None:
+        mod = _import_script()
+        from alphalens_research.screeners.event_drift.pead_pss_scorer import (
+            build_daily_weights,
+        )
+
+        cal = self._cal(60)
+        evs = [self._ev("AAA", cal[5]), self._ev("BBB", cal[55])]  # BBB: 55+20 ≥ 60 → drop
+        kept = mod._drop_uncompletable_tail_events(evs, cal, hold_days=20)
+        # The whole point: build_daily_weights must not raise on the kept set.
+        weights = build_daily_weights(events=kept, calendar=cal, n_fixed=150, hold_days=20)
+        self.assertEqual(list(weights.columns), ["AAA"])
+
+
 class TestInferenceDiagnostics(unittest.TestCase):
     """Gate #4 (§18.2 bootstrap-CI) + §18.1 all-days companion αt — both are
     REPORTED diagnostics (no v3, no Bonferroni increment). The driver must

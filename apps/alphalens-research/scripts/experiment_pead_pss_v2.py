@@ -22,6 +22,7 @@ at Phase E launch.
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import logging
 import sys
@@ -48,6 +49,7 @@ from alphalens_research.screeners.event_drift.av_earnings_ingestion import (
 )
 from alphalens_research.screeners.event_drift.pead_pss_scorer import (
     build_daily_weights,
+    compute_entry_day,
     portfolio_returns_from_weights,
 )
 
@@ -202,6 +204,40 @@ def _ensure_business_calendar(
     factors are published on US trading days, so the index is canonical."""
     mask = (factors.index >= pd.Timestamp(start)) & (factors.index <= pd.Timestamp(end))
     return [d.date() for d in factors.index[mask]]
+
+
+def _drop_uncompletable_tail_events(
+    events: list[AVEarningsAnnouncement],
+    calendar: list[date],
+    *,
+    hold_days: int,
+) -> list[AVEarningsAnnouncement]:
+    """Right-censor events whose ``hold_days``-day exit falls past the calendar.
+
+    At the factor-data tail an event entered within ``hold_days`` trading days
+    of ``calendar[-1]`` cannot complete its hold — its post-announcement drift
+    is simply not observable yet. The pre-reg ``compute_exit_day`` RAISES on
+    such an event (``entry_day + hold_days extends past calendar``), which
+    crashed the full / FL windows once the audit reached 2026 (the 2018-Q1
+    smoke never touched the tail). Dropping these events is the correct
+    right-censoring semantics, applied here in the driver glue so the pinned
+    scorer stays untouched. Events whose ``reported_date`` has no eligible
+    entry day in the calendar (``compute_entry_day`` raises) are also dropped.
+
+    Keep iff ``entry_idx + hold_days < len(calendar)`` — the exact complement
+    of ``compute_exit_day``'s ``exit_idx >= len(calendar)`` raise condition.
+    """
+    n = len(calendar)
+    kept: list[AVEarningsAnnouncement] = []
+    for event in events:
+        try:
+            entry = compute_entry_day(event, calendar)
+        except ValueError:
+            continue  # no eligible entry day at/after the calendar tail
+        entry_idx = bisect.bisect_left(calendar, entry)
+        if entry_idx + hold_days < n:
+            kept.append(event)
+    return kept
 
 
 def _restrict_to_is_window(weights: pd.DataFrame, is_end: date) -> pd.DataFrame:
@@ -560,6 +596,29 @@ def main() -> int:
         sys.stderr.write("ERROR: empty Carhart factor frame for the window.\n")
         return 6
     calendar = _ensure_business_calendar(factors, start=args.is_start, end=calendar_end)
+
+    # Right-censor events whose 20-day hold would extend past the factor-data
+    # tail (``compute_exit_day`` raises on them — crashed full/FL once the audit
+    # reached 2026). Their drift is not yet observable, so drop them.
+    n_before = len(qualifying)
+    qualifying = _drop_uncompletable_tail_events(qualifying, calendar, hold_days=_HOLDING_LOCK)
+    n_censored = n_before - len(qualifying)
+    if n_censored:
+        logger.info(
+            "Right-censored %d/%d events whose %d-day hold extends past the "
+            "calendar tail (last=%s)",
+            n_censored,
+            n_before,
+            _HOLDING_LOCK,
+            calendar[-1] if calendar else "n/a",
+        )
+    if not qualifying:
+        sys.stderr.write(
+            "ERROR: all qualifying events right-censored (hold extends past "
+            "the available factor calendar). Widen the factor data or shorten "
+            "the window.\n"
+        )
+        return 7
 
     weights = build_daily_weights(
         events=qualifying,
