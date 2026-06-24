@@ -106,5 +106,36 @@ class TestFormatResultLine(unittest.TestCase):
         self.assertTrue(line.startswith("cost=15bps | n=90 |"))
 
 
+class TestInvestedFractionDiag(unittest.TestCase):
+    """Memo §6.3 / success-criterion-6 + §17.2 launch gate: a window with
+    invested-fraction < 0.40 must be FLAGGED (low deployment maximises the
+    masking lift, a false-PASS direction). The code previously only checked
+    absolute n_invested >= 20."""
+
+    def test_below_floor_is_flagged(self) -> None:
+        mod = _import_script()
+        d = mod._invested_fraction_diag(30, 100)
+        self.assertAlmostEqual(d["invested_fraction"], 0.30)
+        self.assertTrue(d["below_floor"])
+        self.assertEqual(d["n_invested"], 30)
+        self.assertEqual(d["n_total"], 100)
+
+    def test_at_or_above_floor_not_flagged(self) -> None:
+        mod = _import_script()
+        d = mod._invested_fraction_diag(63, 100)
+        self.assertAlmostEqual(d["invested_fraction"], 0.63)
+        self.assertFalse(d["below_floor"])
+
+    def test_zero_total_is_safe_and_flagged(self) -> None:
+        mod = _import_script()
+        d = mod._invested_fraction_diag(0, 0)
+        self.assertEqual(d["invested_fraction"], 0.0)
+        self.assertTrue(d["below_floor"])
+
+    def test_floor_constant_is_0_40(self) -> None:
+        mod = _import_script()
+        self.assertEqual(mod._INVESTED_FRACTION_FLOOR, 0.40)
+
+
 if __name__ == "__main__":
     unittest.main()
