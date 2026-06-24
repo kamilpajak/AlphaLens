@@ -70,11 +70,13 @@ def parse_stories(content: str) -> list[dict]:
     for s in stories:
         if not isinstance(s, dict):
             continue
-        headline = str(s.get("headline", "")).strip()
-        url = str(s.get("url", "")).strip()
+        headline = str(s.get("headline") or "").strip()
+        url = str(s.get("url") or "").strip()
         if not headline or not url:
             continue
-        out.append({"headline": headline, "summary": str(s.get("summary", "")).strip(), "url": url})
+        out.append(
+            {"headline": headline, "summary": str(s.get("summary") or "").strip(), "url": url}
+        )
     return out
 
 

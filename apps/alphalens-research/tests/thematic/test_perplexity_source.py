@@ -47,6 +47,12 @@ class TestPerplexityHelpers(unittest.TestCase):
         content = '{"stories": ["notadict", {"headline": "", "summary": "s", "url": "u"}, {"headline": "OK", "summary": "s", "url": "u"}]}'
         self.assertEqual([s["headline"] for s in perplexity.parse_stories(content)], ["OK"])
 
+    def test_parse_skips_explicit_null_fields(self):
+        content = '{"stories": [{"headline": null, "url": null, "summary": "s"}, {"headline": "OK", "url": "https://ok.com", "summary": null}]}'
+        out = perplexity.parse_stories(content)
+        self.assertEqual([s["headline"] for s in out], ["OK"])
+        self.assertEqual(out[0]["summary"], "")  # null summary coerced to empty string, not "None"
+
     def test_stable_id_deterministic(self):
         self.assertEqual(
             perplexity._stable_id("https://a.com"), perplexity._stable_id("https://a.com")
