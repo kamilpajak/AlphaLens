@@ -1,6 +1,14 @@
+import datetime as dt
+import json as _json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
+import pandas as pd
+from alphalens_pipeline.literature_scanner.perplexity_client import AskResult
 from alphalens_pipeline.thematic.sources import perplexity
+from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
 
 
 class TestPerplexityHelpers(unittest.TestCase):
@@ -46,3 +54,58 @@ class TestPerplexityHelpers(unittest.TestCase):
         self.assertNotEqual(
             perplexity._stable_id("https://a.com"), perplexity._stable_id("https://b.com")
         )
+
+
+class TestFetchDailyNews(unittest.TestCase):
+    def _client(self):
+        c = mock.Mock()
+        c.ask_with_citations.return_value = AskResult(
+            content='{"stories": [{"headline": "SpaceX IPO", "summary": "Debut.", "url": "https://a.com"}]}',
+            citations=["https://a.com", "https://b.com"],
+            search_results=[{"url": "https://a.com"}, {"url": "https://b.com"}],
+        )
+        return c
+
+    def test_maps_to_news_columns(self):
+        with tempfile.TemporaryDirectory() as d:
+            df = perplexity.fetch_daily_news(
+                date=dt.date(2026, 6, 12), client=self._client(), cache_dir=Path(d)
+            )
+        self.assertEqual(list(df.columns), NEWS_COLUMNS)
+        self.assertEqual(len(df), 1)
+        row = df.iloc[0]
+        self.assertEqual(row["source"], "perplexity")
+        self.assertEqual(row["title"], "SpaceX IPO")
+        self.assertEqual(row["body"], "Debut.")
+        self.assertEqual(row["url"], "https://a.com")
+        self.assertEqual(list(row["tickers"]), [])
+        self.assertEqual(_json.loads(row["extra"])["citation_count"], 2)
+        self.assertTrue(str(row["id"]).startswith("perplexity:"))
+        self.assertEqual(row["timestamp"], pd.Timestamp("2026-06-12", tz="UTC"))
+
+    def test_passes_pit_date_filters(self):
+        c = self._client()
+        with tempfile.TemporaryDirectory() as d:
+            perplexity.fetch_daily_news(date=dt.date(2026, 6, 12), client=c, cache_dir=Path(d))
+        kw = c.ask_with_citations.call_args.kwargs
+        self.assertEqual(kw["search_after_date_filter"], "06/11/2026")
+        self.assertEqual(kw["search_before_date_filter"], "06/13/2026")
+        self.assertEqual(kw["search_context_size"], "high")
+
+    def test_caches_raw_and_skips_second_call(self):
+        c = self._client()
+        with tempfile.TemporaryDirectory() as d:
+            perplexity.fetch_daily_news(date=dt.date(2026, 6, 12), client=c, cache_dir=Path(d))
+            self.assertTrue((Path(d) / "2026-06-12.json").exists())
+            perplexity.fetch_daily_news(date=dt.date(2026, 6, 12), client=c, cache_dir=Path(d))
+        self.assertEqual(c.ask_with_citations.call_count, 1)  # second run hit the cache
+
+    def test_empty_stories_returns_empty_frame(self):
+        c = mock.Mock()
+        c.ask_with_citations.return_value = AskResult(
+            content="no json here", citations=[], search_results=[]
+        )
+        with tempfile.TemporaryDirectory() as d:
+            df = perplexity.fetch_daily_news(date=dt.date(2026, 6, 12), client=c, cache_dir=Path(d))
+        self.assertEqual(list(df.columns), NEWS_COLUMNS)
+        self.assertEqual(len(df), 0)
