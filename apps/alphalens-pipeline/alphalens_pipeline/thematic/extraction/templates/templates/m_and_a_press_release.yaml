@@ -1,4 +1,4 @@
-# M&A press-release template — design memo §2.2 dnia jeden #1.
+# M&A press-release template — design memo §2.2 day one #1.
 #
 # Fires on company-issued (press_release source / IR domain / title marker)
 # announcements that contain a currency amount AND have at least two

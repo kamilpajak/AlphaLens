@@ -66,7 +66,7 @@ Template engine attempts match
 | 40-60% | Hybrid stable; consider expanding template library |
 | < 40% | Stay hybrid; expand templates or accept gap |
 
-**Important — don't panic early on aggregate rate:** with only 5 templates dnia jeden against a 39-class event_type enum on a 200-article/day feed, the aggregate `template_match_rate` will sit in the **20-35% range** for the first several months. That is the **expected coexistence baseline**, not failure. The aggregate threshold table becomes directional only after the template library reaches ~10+ templates. The actionable alert is per-template (§2.4): `AlphalensTemplateMatchRateLow` fires when a *specific* template drops below 20% over 7d — that catches pattern rot in one template without burning attention on the expected steady-state aggregate.
+**Important — don't panic early on aggregate rate:** with only 5 templates day one against a 39-class event_type enum on a 200-article/day feed, the aggregate `template_match_rate` will sit in the **20-35% range** for the first several months. That is the **expected coexistence baseline**, not failure. The aggregate threshold table becomes directional only after the template library reaches ~10+ templates. The actionable alert is per-template (§2.4): `AlphalensTemplateMatchRateLow` fires when a *specific* template drops below 20% over 7d — that catches pattern rot in one template without burning attention on the expected steady-state aggregate.
 
 ---
 
@@ -201,7 +201,7 @@ Ideal-shape §4 ("Done looks like") explicitly names M&A leak push and earnings 
 
 **Why 5 and not 10:** the ideal-shape near-term roadmap (§8) competes — PR #292 feedback ledger is critical path, paper-submit ExecStartPost (Track F) and L3 weekly review stub (Track C) are ahead in the queue. 5 templates well-tested + tightly integrated with hybrid pipeline > 10 templates rushed. Per `quality over speed` doctrine.
 
-### §2.3 Predicate library scope — **6 named predicates dnia jeden**
+### §2.3 Predicate library scope — **6 named predicates day one**
 
 Drop one redundant from the original suggestion, add two that the ideal-shape anti-features filter argues for:
 
@@ -218,7 +218,7 @@ Drop one redundant from the original suggestion, add two that the ideal-shape an
 
 **Why `is_press_release` matters operationally:** primary-source articles carry deterministic facts (amounts, tickers, dates) in normalized form. Third-party commentary paraphrases — exactly the surface where LLM extraction is on safer ground. The split aligns hybrid mode with the strength of each path.
 
-**Why `not_listicle` is in dnia jeden:** the original #143 deferral was triggered by a listicle/promo page firing as catalyst. Predicate is the direct fix to the originating concern.
+**Why `not_listicle` is in day one:** the original #143 deferral was triggered by a listicle/promo page firing as catalyst. Predicate is the direct fix to the originating concern.
 
 Every predicate emits Prometheus counter on call: `alphalens_template_predicate_total{name=..., outcome="pass|fail"}` (no black-box doctrine).
 
@@ -266,7 +266,7 @@ Sequenced for review-friendly chunks. Each PR is independently mergeable.
 
 - `engine.py` — `TemplateEngine` class: loads YAML files, compiles to `TemplateSpec`, exposes `match(article, entities) -> TemplateEvent | None`
 - `spec.py` — `TemplateSpec` + `TemplateEvent` dataclasses
-- `predicates.py` — named predicate registry (6 dnia jeden) with telemetry hooks
+- `predicates.py` — named predicate registry (6 day one) with telemetry hooks
 - `yaml_schema.py` — JSON Schema for YAML validation
 - `templates/*.yaml` — 5 template files
 - `entity_resolver.py` — wraps `company_tickers.json` lookup + alias table; pre-template resolution stage
