@@ -6,7 +6,7 @@ Guidance for Claude Code (claude.ai/code) when working in this repo.
 
 **Two parallel research tracks active:**
 
-1. **Factor-paradigm-search** — paradigm #14 PEAD v2 audit in-flight (gated on VPS av_cache backfill, ~21d AV free-tier quota). 14 prior paradigm-class failures + 2 inconclusive retrospectives + 1 slippage-fail catalogued in [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md). No standing PASS; capital deployment off-table per pre-reg `capital_deploy_clause`.
+1. **Factor-paradigm-search** — paradigm #14 PEAD v2 audit **COMPLETE 2026-06-24: doctrine FAIL** (full-sample net αt 0.15 vs the 3.5 bar; large-cap PEAD effectively dead since ~2006). 15 paradigm-class failures + 2 inconclusive retrospectives + 1 slippage-fail catalogued in [`docs/research/paradigm_failures_postmortem.md`](docs/research/paradigm_failures_postmortem.md). No standing PASS; capital deployment off-table per pre-reg `capital_deploy_clause`. Search stays open-ended (no #16 currently scheduled).
 
 2. **Thematic event-driven research assistant** — MVP Phase A-E shipped 2026-05-17 (PRs #128-#134). Buy-side decision-support tool augmenting WhatsApp investing group workflow. Tool is **augmentation, NOT replacement** — user cherry-picks → group discusses → each member decides. Design: [`docs/research/thematic_event_tool_v1_design_2026_05_15.md`](docs/research/thematic_event_tool_v1_design_2026_05_15.md). Remaining: Telegram bot, Form-4 independent path, feedback ledger sqlite.
 
@@ -176,7 +176,7 @@ Sites with an injected client (edgar_detector `SECEdgarSource`, `CIKLoader`; the
 
 **Keep searching screeners — never close the door** — discipline bounds the search, not closure. Don't write "no further prospecting" / "abandon factors". New hypotheses can operate on a new layer (ADR 0007); pre-reg ledger raises the Bonferroni bar for each new test.
 
-**No passive pivot** — despite 14 paradigm failures, user has rejected the pivot to passive indexing. Active quant research continues.
+**No passive pivot** — despite 15 paradigm failures, user has rejected the pivot to passive indexing. Active quant research continues.
 
 ## Where to find "why"
 
