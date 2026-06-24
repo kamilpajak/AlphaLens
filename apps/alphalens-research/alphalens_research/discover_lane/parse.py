@@ -17,7 +17,9 @@ def _extract_json(content: str) -> object:
     candidates = [i for i in (text.find("{"), text.find("[")) if i != -1]
     if not candidates:
         raise ValueError("no JSON object found")
-    return json.loads(text[min(candidates) :])
+    start = min(candidates)
+    obj, _end = json.JSONDecoder().raw_decode(text[start:])
+    return obj
 
 
 def parse_discover_response(content: str, search_results: list[dict]) -> list[DiscoverCandidate]:

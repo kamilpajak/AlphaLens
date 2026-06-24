@@ -36,3 +36,12 @@ class TestParse(unittest.TestCase):
 
     def test_non_json_returns_empty(self):
         self.assertEqual(parse_discover_response("sorry, no JSON here", _SOURCES), [])
+
+    def test_parses_json_with_trailing_prose(self):
+        content = (
+            '{"stories": [{"event_title": "t", "event_url": "u",'
+            ' "beneficiaries": [{"ticker": "AAA", "company": "A Co", "reason": "r"}]}]}'
+            "\n\nHope this helps!"
+        )
+        out = parse_discover_response(content, _SOURCES)
+        self.assertEqual([c.ticker for c in out], ["AAA"])
