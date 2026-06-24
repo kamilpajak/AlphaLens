@@ -45,7 +45,7 @@ def _discover_card(c: DiscoverCandidate, shared: set[str]) -> str:
         f'<div class="{cls}"><span class="tk">{escape(c.ticker)}</span> '
         f'{escape(c.company)} <span class="mcap">{_fmt_mcap(c.mcap)}</span>{badges}<br>'
         f'<span class="src">{escape(c.theme)}</span><br>{escape(c.rationale)}<br>'
-        f'{src} · <span class="src">{c.citation_count} sources</span></div>'
+        f'{src} · <span class="src">{escape(str(c.citation_count))} sources</span></div>'
     )
 
 
