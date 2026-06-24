@@ -315,3 +315,19 @@ REQUIRES v3 + Bonferroni (n=3→4) — DECISION, not auto-applied:
 - Gating the 3.5 bar on the all-days (cash-inclusive) regressand instead of / in addition to invested-only.
 - Adding bootstrap-CI-excludes-0 as a NAMED required pre-reg success gate (vs the diagnostic in item 4).
 - Recomputing the binding Bonferroni threshold from the program-wide registered-hypothesis count if it exceeds the flat 3.5 (§17.4).
+
+## 18. v3 decisions resolved (2026-06-24) — all NO-v3, spec + Bonferroni unchanged
+
+The three §17.5 "REQUIRES v3" questions were adjudicated by the operator on 2026-06-24. All three resolve **without a v3 memo and without a Bonferroni increment (n stays 3)**: the locked hypothesis, regressand, and success bars are unchanged. The common rationale: the audit is expected to FAIL (literature: large-cap PEAD effectively dead since ~2006), so paying the Bonferroni cost of a stricter named gate now is premature; the chosen options instead **strengthen the false-PASS guards as reported diagnostics** and **formalize into a v3 only if the audit returns a surprising non-FAIL**.
+
+### 18.1 Regressand (gate 1) — keep invested-days-only; report all-days as a companion
+The locked invested-days-only regression stays the binding gate (it is the correct signal-quality test: alpha conditional on being deployed). To counter the §17 "invested-only can inflate t" concern, the driver additionally **reports an all-days (cash-inclusive) Carhart αt** beside the invested-only number. Any candidate PASS where `invested_only_αt − all_days_αt` exceeds ~0.2 t is flagged **suspect** (the gap signals masking lift). Diagnostic only — the locked regressand is unchanged, so NO v3.
+
+### 18.2 Bootstrap inference — reported diagnostic now, named gate only on non-FAIL
+`bootstrap_carhart_alpha_ci` (moving-block) is run as a **reported triangulation** of the single HAC SE (which can be downward-biased on overlapping 20-day holds → inflate t). Its 95% CI on net Carhart-4F α is **required by convention to exclude 0 for any candidate PASS**, but it is NOT a pre-registered named success criterion. It is promoted to a named criterion #6 (v3 + Bonferroni n=3→4) **only if the audit returns a non-FAIL** result that would actually be affected by it. No v3 now.
+
+### 18.3 Bonferroni bar — 3.5 still binds (no recompute); justification
+The burnt-holdout escalation precedent (`distress_credit_v1` reached 3.50 after 23 touches on the 2024-04..2026-04 window that PEAD's FL phase overlaps) does **NOT** raise PEAD's bar, for four reasons: (a) PEAD's mechanism is **earnings-surprise (PSS)**, a distinct hypothesis class from the OHLCV-momentum class `distress_credit_v1` escalated for — they are not the same test re-run; (b) PEAD's IS (2018-2020) and OOS (2021-2023) phases **pre-date** the burnt 2024-04..2026-04 window entirely; (c) the burnt-holdout doctrine penalises **re-testing a holdout already seen** — PEAD has never peeked at its FL holdout, so the re-use rationale does not apply; (d) the locked 3.5 already sits **well above** the strict program-wide Bonferroni at k=14 (= 2.91), absorbing the residual FL-overlap multiplicity. The bar stays **3.5**; no program-wide recompute.
+
+### 18.4 Remaining launch work (all NO-v3)
+With the v3 questions closed, the open §17.5 launch gates are now unambiguous and all no-v3 implementation: gate #3 reportTime guard uses the **spot-check** form (validate `reportTime` on the §3.1 anchor events; the force-all-post-market alternative was the only v3-triggering option and is NOT taken); gate #4 + §18.2 bootstrap CI is a **reported diagnostic** requiring `assess()` to expose the net returns series; §18.1 all-days companion αt is a reported diagnostic. None require a new memo version.
