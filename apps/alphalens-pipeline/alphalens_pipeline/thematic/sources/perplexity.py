@@ -121,11 +121,10 @@ def fetch_daily_news(
     citation_urls = [str(r.get("url", "")) for r in search_results if isinstance(r, dict)]
     extra = json.dumps({"citation_count": len(citation_urls), "citations": citation_urls})
     ts = pd.Timestamp(date, tz="UTC")
-    now = pd.Timestamp.now(tz="UTC")
 
     rows = [
         {
-            "id": _stable_id(s["url"] or s["headline"]),
+            "id": _stable_id(s["url"]),
             "source": "perplexity",
             "timestamp": ts,
             "tickers": [],
@@ -134,7 +133,6 @@ def fetch_daily_news(
             "url": s["url"],
             "keywords": [],
             "extra": extra,
-            "ingested_at": now,
         }
         for s in stories
     ]
@@ -142,5 +140,4 @@ def fetch_daily_news(
         return empty_news_frame()
     df = pd.DataFrame(rows, columns=NEWS_COLUMNS)
     df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
-    df["ingested_at"] = pd.to_datetime(df["ingested_at"], utc=True)
     return df

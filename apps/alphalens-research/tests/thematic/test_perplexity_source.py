@@ -115,3 +115,12 @@ class TestFetchDailyNews(unittest.TestCase):
             df = perplexity.fetch_daily_news(date=dt.date(2026, 6, 12), client=c, cache_dir=Path(d))
         self.assertEqual(list(df.columns), NEWS_COLUMNS)
         self.assertEqual(len(df), 0)
+
+    def test_adapter_does_not_stamp_ingested_at(self):
+        # ingested_at is owned by ingest_daily (one injectable transaction-time
+        # per run); the adapter must leave it unset, like the other 4 sources.
+        with tempfile.TemporaryDirectory() as d:
+            df = perplexity.fetch_daily_news(
+                date=dt.date(2026, 6, 12), client=self._client(), cache_dir=Path(d)
+            )
+        self.assertTrue(df["ingested_at"].isna().all())
