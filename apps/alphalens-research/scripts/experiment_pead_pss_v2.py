@@ -284,7 +284,7 @@ def assess(
     }
 
 
-def _format_result_line(stats: dict) -> str:
+def _format_result_line(stats: dict, cost_bps: float) -> str:
     """Canonical per-cost result line consumed by
     ``phase_robust_backtesting.audit_multi_phase._RESULT_LINE``.
 
@@ -292,9 +292,11 @@ def _format_result_line(stats: dict) -> str:
     the ``Sh gross=.. net=.. | excess gross=..% net=..%`` prefix the regex
     misses the line and ``run_audit`` aggregates zero rows (empty verdict).
     The ``cost=..bps | n=..`` prefix is the per-cost config key (split on
-    `` | n=`` by ``_config_key_from_line``)."""
+    `` | n=`` by ``_config_key_from_line``). ``cost_bps`` is passed explicitly
+    (not read from ``stats``) so the function is self-contained — ``assess()``
+    does not stamp it; the caller does, after the fact."""
     return (
-        f"cost={stats['cost_bps']:.0f}bps | n={stats['n']:d} | "
+        f"cost={cost_bps:.0f}bps | n={stats['n']:d} | "
         f"Sh gross={stats['sharpe_gross']:.2f} net={stats['sharpe_net']:.2f} | "
         f"excess gross={stats['excess_gross_ann'] * 100:.1f}% "
         f"net={stats['excess_net_ann'] * 100:.1f}% | "
@@ -439,7 +441,7 @@ def main() -> int:
         stats["cost_bps"] = cost_bps
         all_rows.append(stats)
         if stats.get("n", 0) > 0:
-            logger.info("%s", _format_result_line(stats))
+            logger.info("%s", _format_result_line(stats, cost_bps))
 
     # Per-window diagnostics — informational only. Pre-reg gates (1)-(3)
     # (full-sample net αt ≥ 3.5, phase-mean net αt ≥ 2.5, per-phase positive)

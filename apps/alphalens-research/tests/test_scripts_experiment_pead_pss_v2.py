@@ -64,7 +64,6 @@ class TestFormatResultLine(unittest.TestCase):
 
         mod = _import_script()
         stats = {
-            "cost_bps": 5.0,
             "n": 117,
             "sharpe_gross": 0.42,
             "sharpe_net": 0.21,
@@ -75,7 +74,7 @@ class TestFormatResultLine(unittest.TestCase):
             "alpha_net_4f": 0.255,
             "t_net_4f": 1.20,
         }
-        line = mod._format_result_line(stats)
+        line = mod._format_result_line(stats, 5.0)
         m = _RESULT_LINE.search(line)
         self.assertIsNotNone(m, f"orchestrator _RESULT_LINE did not match: {line!r}")
         assert m is not None  # narrow Optional[Match] for the type-checker
@@ -93,7 +92,6 @@ class TestFormatResultLine(unittest.TestCase):
         # first so each cost groups across phases under its own key.
         mod = _import_script()
         stats = {
-            "cost_bps": 15.0,
             "n": 90,
             "sharpe_gross": 0.1,
             "sharpe_net": 0.0,
@@ -104,7 +102,7 @@ class TestFormatResultLine(unittest.TestCase):
             "alpha_net_4f": 0.0,
             "t_net_4f": 0.4,
         }
-        line = mod._format_result_line(stats)
+        line = mod._format_result_line(stats, 15.0)
         self.assertTrue(line.startswith("cost=15bps | n=90 |"))
 
 
