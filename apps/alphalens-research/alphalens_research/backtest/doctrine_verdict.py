@@ -118,7 +118,10 @@ def net_alpha_t_from_audit(audit: dict, cost_bps: float) -> float:
     ``run_audit`` output JSON. Raises ``KeyError`` if the cost config or the
     aggregated ``alpha_t_net`` is absent (a silent fallback would mask a
     broken audit and could manufacture a false verdict)."""
-    config_key = f"cost={int(cost_bps)}bps"
+    # Match run_audit's exact key format (``cost={cost_bps:.0f}bps``) so a
+    # fractional arm rounds the same way the producer does rather than
+    # truncating into a silent KeyError.
+    config_key = f"cost={cost_bps:.0f}bps"
     for cfg in audit.get("configs", []):
         if cfg.get("config") == config_key:
             summary = cfg.get("summary", {})
