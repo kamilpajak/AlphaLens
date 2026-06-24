@@ -1,4 +1,4 @@
-# Earnings-surprise template — design memo §2.2 dnia jeden #2.
+# Earnings-surprise template — design memo §2.2 day one #2.
 #
 # Fires on reporter's own earnings statement (press release or IR feed)
 # that uses the standard beat/miss vocabulary. No amount predicate — the
