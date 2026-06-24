@@ -39,6 +39,7 @@ from alphalens_pipeline.data.universes.sp1500_pit import load_sp500_pit_union
 from alphalens_research.attribution.factor_analysis import (
     fit_carhart_4f_invested_only,
 )
+from alphalens_research.backtest.metrics import sharpe
 from alphalens_research.screeners.event_drift.av_earnings_ingestion import (
     AVEarningsAnnouncement,
     load_av_earnings,
@@ -47,6 +48,9 @@ from alphalens_research.screeners.event_drift.pead_pss_scorer import (
     build_daily_weights,
     portfolio_returns_from_weights,
 )
+
+# Trading days per year — annualisation constant for Sharpe / excess return.
+_PERIODS_PER_YEAR = 252
 
 logger = logging.getLogger(__name__)
 
@@ -251,10 +255,24 @@ def assess(
         invested_mask=invested_mask,
         maxlags=_HAC_MAXLAGS_LOCK,
     )
+
+    # Sharpe + annualised return over the invested days. This is a long-only
+    # scaffold with no benchmark, so "excess" is the portfolio's own
+    # annualised invested-day return (gross / net of the scalar cost drag);
+    # the benchmark-relative excess is a Phase-E orchestrator concern. These
+    # feed the canonical ``Sh gross=.. net=.. | excess gross=..% net=..%``
+    # result line that ``audit_multi_phase.run_audit`` parses (see
+    # ``_format_result_line``).
+    gross_invested_vals = gross_invested.dropna()
+    net_invested_vals = net_invested.dropna()
     return {
         "n": n_invested,
         "n_invested_days": n_invested,
         "gross_per_day_mean": gross_per_day,
+        "sharpe_gross": sharpe(gross_invested_vals.tolist(), periods_per_year=_PERIODS_PER_YEAR),
+        "sharpe_net": sharpe(net_invested_vals.tolist(), periods_per_year=_PERIODS_PER_YEAR),
+        "excess_gross_ann": float(gross_invested_vals.mean() * _PERIODS_PER_YEAR),
+        "excess_net_ann": float(net_invested_vals.mean() * _PERIODS_PER_YEAR),
         "alpha_gross_4f": float(res_gross.alpha_annualized),
         "t_4f": float(res_gross.alpha_tstat),
         "beta_smb": float(res_gross.betas.get("SMB", 0.0)),
@@ -264,6 +282,27 @@ def assess(
         "alpha_net_4f": float(res_net.alpha_annualized),
         "t_net_4f": float(res_net.alpha_tstat),
     }
+
+
+def _format_result_line(stats: dict, cost_bps: float) -> str:
+    """Canonical per-cost result line consumed by
+    ``phase_robust_backtesting.audit_multi_phase._RESULT_LINE``.
+
+    The orchestrator parses each phase's stderr for this exact shape; without
+    the ``Sh gross=.. net=.. | excess gross=..% net=..%`` prefix the regex
+    misses the line and ``run_audit`` aggregates zero rows (empty verdict).
+    The ``cost=..bps | n=..`` prefix is the per-cost config key (split on
+    `` | n=`` by ``_config_key_from_line``). ``cost_bps`` is passed explicitly
+    (not read from ``stats``) so the function is self-contained — ``assess()``
+    does not stamp it; the caller does, after the fact."""
+    return (
+        f"cost={cost_bps:.0f}bps | n={stats['n']:d} | "
+        f"Sh gross={stats['sharpe_gross']:.2f} net={stats['sharpe_net']:.2f} | "
+        f"excess gross={stats['excess_gross_ann'] * 100:.1f}% "
+        f"net={stats['excess_net_ann'] * 100:.1f}% | "
+        f"α 4F={stats['alpha_gross_4f'] * 100:.1f}% t={stats['t_4f']:.2f} | "
+        f"α-net 4F={stats['alpha_net_4f'] * 100:.1f}% t-net={stats['t_net_4f']:.2f}"
+    )
 
 
 def _daily_returns_panel(
@@ -402,15 +441,7 @@ def main() -> int:
         stats["cost_bps"] = cost_bps
         all_rows.append(stats)
         if stats.get("n", 0) > 0:
-            logger.info(
-                "cost=%.0fbps | n=%d | α 4F=%.1f%% t=%.2f | α-net 4F=%.1f%% t-net=%.2f",
-                cost_bps,
-                stats["n"],
-                stats["alpha_gross_4f"] * 100,
-                stats["t_4f"],
-                stats["alpha_net_4f"] * 100,
-                stats["t_net_4f"],
-            )
+            logger.info("%s", _format_result_line(stats, cost_bps))
 
     # Per-window diagnostics — informational only. Pre-reg gates (1)-(3)
     # (full-sample net αt ≥ 3.5, phase-mean net αt ≥ 2.5, per-phase positive)

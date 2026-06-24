@@ -53,5 +53,58 @@ class TestRestrictToIsWindow(unittest.TestCase):
         self.assertEqual(list(out.index), [date(2018, 3, 29), date(2018, 3, 30)])
 
 
+class TestFormatResultLine(unittest.TestCase):
+    """The per-cost result line MUST match the multi-phase orchestrator's
+    ``_RESULT_LINE`` regex, or ``run_audit`` parses zero rows and the verdict
+    is empty. PEAD v2 was the only experiment script not emitting the canonical
+    ``Sh gross=.. net=.. | excess gross=..% net=..% | α 4F=..% t=..`` line."""
+
+    def test_line_matches_orchestrator_regex_and_roundtrips(self) -> None:
+        from phase_robust_backtesting.audit_multi_phase import _RESULT_LINE
+
+        mod = _import_script()
+        stats = {
+            "n": 117,
+            "sharpe_gross": 0.42,
+            "sharpe_net": 0.21,
+            "excess_gross_ann": 0.187,
+            "excess_net_ann": 0.161,
+            "alpha_gross_4f": 0.278,
+            "t_4f": 1.37,
+            "alpha_net_4f": 0.255,
+            "t_net_4f": 1.20,
+        }
+        line = mod._format_result_line(stats, 5.0)
+        m = _RESULT_LINE.search(line)
+        self.assertIsNotNone(m, f"orchestrator _RESULT_LINE did not match: {line!r}")
+        assert m is not None  # narrow Optional[Match] for the type-checker
+        self.assertAlmostEqual(float(m.group("sg")), 0.42)
+        self.assertAlmostEqual(float(m.group("sn")), 0.21)
+        self.assertAlmostEqual(float(m.group("eg")), 18.7)
+        self.assertAlmostEqual(float(m.group("en")), 16.1)
+        self.assertAlmostEqual(float(m.group("a")), 27.8)
+        self.assertAlmostEqual(float(m.group("t")), 1.37)
+        self.assertAlmostEqual(float(m.group("an")), 25.5)
+        self.assertAlmostEqual(float(m.group("tn")), 1.20)
+
+    def test_config_key_survives_the_n_split(self) -> None:
+        # _config_key_from_line splits on " | n=" — the cost prefix must come
+        # first so each cost groups across phases under its own key.
+        mod = _import_script()
+        stats = {
+            "n": 90,
+            "sharpe_gross": 0.1,
+            "sharpe_net": 0.0,
+            "excess_gross_ann": 0.05,
+            "excess_net_ann": 0.04,
+            "alpha_gross_4f": 0.01,
+            "t_4f": 0.5,
+            "alpha_net_4f": 0.0,
+            "t_net_4f": 0.4,
+        }
+        line = mod._format_result_line(stats, 15.0)
+        self.assertTrue(line.startswith("cost=15bps | n=90 |"))
+
+
 if __name__ == "__main__":
     unittest.main()
