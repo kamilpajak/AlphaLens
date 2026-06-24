@@ -39,6 +39,21 @@ class TestAskWithCitations(unittest.TestCase):
         self.assertEqual(sent["search_after_date_filter"], "06/16/2026")
         self.assertEqual(sent["search_before_date_filter"], "06/23/2026")
 
+    def test_citations_as_bare_string_not_exploded(self):
+        client = PerplexityClient(api_key="k")
+        fake = mock.Mock()
+        fake.json.return_value = {
+            "choices": [{"message": {"content": "x"}}],
+            "citations": "https://only.com",
+        }
+        fake.raise_for_status.return_value = None
+        with mock.patch(
+            "alphalens_pipeline.literature_scanner.perplexity_client.requests.post",
+            return_value=fake,
+        ):
+            result = client.ask_with_citations("q")
+        self.assertEqual(result.citations, ["https://only.com"])
+
     def test_missing_sources_default_empty(self):
         client = PerplexityClient(api_key="k")
         fake = mock.Mock()

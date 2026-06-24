@@ -87,8 +87,12 @@ class PerplexityClient:
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
-        citations = data.get("citations") or []
-        search_results = data.get("search_results") or []
+        raw_citations = data.get("citations") or []
+        if isinstance(raw_citations, str):
+            raw_citations = [raw_citations]
+        raw_results = data.get("search_results") or []
+        if isinstance(raw_results, dict):
+            raw_results = [raw_results]
         return AskResult(
-            content=content, citations=list(citations), search_results=list(search_results)
+            content=content, citations=list(raw_citations), search_results=list(raw_results)
         )
