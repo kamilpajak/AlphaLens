@@ -26,7 +26,7 @@ import json
 import logging
 import sys
 from collections.abc import Iterable
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -181,6 +181,29 @@ def _ensure_business_calendar(
     factors are published on US trading days, so the index is canonical."""
     mask = (factors.index >= pd.Timestamp(start)) & (factors.index <= pd.Timestamp(end))
     return [d.date() for d in factors.index[mask]]
+
+
+def _restrict_to_is_window(weights: pd.DataFrame, is_end: date) -> pd.DataFrame:
+    """Drop post-``is_end`` rows that exist only to satisfy B2's calendar
+    contract. ``weights`` is indexed by ``datetime.date`` (the trading
+    calendar from ``_ensure_business_calendar``), so compare against the
+    ``date`` directly — wrapping ``is_end`` in a ``pd.Timestamp`` raises
+    'Cannot compare Timestamp with datetime.date' against the object-dtype
+    date index."""
+    return weights.loc[weights.index <= is_end]
+
+
+def _factor_window_end(is_end: date, hold_days: int) -> date:
+    """Calendar end for the factor / trading-calendar window.
+
+    Extends past ``is_end`` by ~1.5x ``hold_days`` so ``build_daily_weights``
+    can complete the hold window for events whose ``reported_date`` falls near
+    ``is_end``. Returns a ``datetime.date`` because the callees
+    (``load_carhart_daily`` / ``_ensure_business_calendar``) are typed on
+    ``date`` — ``date + timedelta`` stays a ``date`` (a prior version added a
+    pandas offset and called ``.date()`` on the result, which is already a
+    ``date`` and has no such attribute, crashing the smoke)."""
+    return is_end + timedelta(days=int(hold_days * 1.5))
 
 
 def assess(
@@ -350,12 +373,12 @@ def main() -> int:
     # scaffold crashes. The post-``is_end`` returns are computed but will
     # not enter the regression because we restrict the invested mask to
     # ``[is_start, is_end]`` at the assess() boundary.
-    calendar_end = args.is_end + pd.Timedelta(days=int(_HOLDING_LOCK * 1.5))
-    factors = load_carhart_daily(start=args.is_start, end=calendar_end.date())
+    calendar_end = _factor_window_end(args.is_end, _HOLDING_LOCK)
+    factors = load_carhart_daily(start=args.is_start, end=calendar_end)
     if factors.empty:
         sys.stderr.write("ERROR: empty Carhart factor frame for the window.\n")
         return 6
-    calendar = _ensure_business_calendar(factors, start=args.is_start, end=calendar_end.date())
+    calendar = _ensure_business_calendar(factors, start=args.is_start, end=calendar_end)
 
     weights = build_daily_weights(
         events=qualifying,
@@ -365,8 +388,7 @@ def main() -> int:
     )
     # Restrict regression input to the canonical IS window — post-is_end
     # rows in ``weights`` exist only to satisfy B2's calendar contract.
-    is_end_ts = pd.Timestamp(args.is_end)
-    weights = weights.loc[weights.index <= is_end_ts]
+    weights = _restrict_to_is_window(weights, args.is_end)
     daily_panel = _daily_returns_panel(weights.columns, histories, calendar)
 
     all_rows: list[dict] = []
