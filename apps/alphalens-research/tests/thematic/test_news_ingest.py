@@ -2,11 +2,12 @@ import datetime as dt
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from unittest.mock import patch
 
 import pandas as pd
 from alphalens_pipeline.thematic import news_ingest
-from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS
+from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS, empty_news_frame
 
 
 def _row(id_, source, ts, tickers, title):
@@ -602,7 +603,7 @@ class TestNewsIngestStrictWindow(unittest.TestCase):
         edgar_count = len(df[df["source"] == "edgar_press_release"])
         rss_count = len(df[df["source"] == "rss"])
 
-        # Quota weights {gdelt:0.20, polygon:0.30, edgar:0.30, rss:0.20}:
+        # Quota weights {edgar:0.25, polygon:0.25, gdelt:0.20, rss:0.15, perplexity:0.15}:
         # GDELT capped to ~40 (not allowed to fill 150 slots), every other
         # source fully admitted (each has < its quota). Backfill of unused
         # budget pulls the rest of GDELT to reach 200.
@@ -801,6 +802,38 @@ class TestSourceRowCountsOutParam(unittest.TestCase):
                     source_row_counts=counts,
                 )
         self.assertEqual(counts, {})
+
+
+class TestPerplexitySourceRegistration(unittest.TestCase):
+    def test_quota_weights_sum_to_one(self):
+        self.assertAlmostEqual(sum(news_ingest._SOURCE_QUOTA_WEIGHTS.values()), 1.0, places=9)
+
+    def test_perplexity_registered_in_priority_and_quota(self):
+        self.assertEqual(news_ingest._SOURCE_PRIORITY["perplexity"], 4)
+        self.assertIn("perplexity", news_ingest._SOURCE_QUOTA_WEIGHTS)
+
+    def test_fetch_perplexity_off_by_default_does_not_call_adapter(self):
+        import os
+
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("ALPHALENS_PERPLEXITY_SOURCE", None)
+            with mock.patch(
+                "alphalens_pipeline.thematic.sources.perplexity.fetch_daily_news"
+            ) as adapter:
+                df = news_ingest._fetch_perplexity(date=dt.date(2026, 6, 12))
+        adapter.assert_not_called()
+        self.assertEqual(len(df), 0)
+
+    def test_fetch_perplexity_on_calls_adapter(self):
+        import os
+
+        with mock.patch.dict(os.environ, {"ALPHALENS_PERPLEXITY_SOURCE": "1"}):
+            with mock.patch(
+                "alphalens_pipeline.thematic.sources.perplexity.fetch_daily_news",
+                return_value=empty_news_frame(),
+            ) as adapter:
+                news_ingest._fetch_perplexity(date=dt.date(2026, 6, 12))
+        adapter.assert_called_once()
 
 
 if __name__ == "__main__":

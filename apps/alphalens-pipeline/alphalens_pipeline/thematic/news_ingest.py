@@ -31,12 +31,19 @@ import datetime as dt
 import json
 import logging
 import math
+import os
 from pathlib import Path
 
 import pandas as pd
 
 from alphalens_pipeline.thematic import text_similarity
-from alphalens_pipeline.thematic.sources import edgar_press_release, gdelt, polygon_news, rss
+from alphalens_pipeline.thematic.sources import (
+    edgar_press_release,
+    gdelt,
+    perplexity,
+    polygon_news,
+    rss,
+)
 from alphalens_pipeline.thematic.sources.schema import NEWS_COLUMNS, empty_news_frame
 
 logger = logging.getLogger(__name__)
@@ -54,7 +61,7 @@ DEFAULT_MAX_ITEMS = 200
 # two cluster members share a timestamp).
 # Issuer-direct (8-K EX-99.1) is the richest source — it outranks the
 # aggregators at URL-canonical dedup and cluster-representative tie-break.
-_SOURCE_PRIORITY = {"edgar_press_release": 0, "polygon": 1, "gdelt": 2, "rss": 3}
+_SOURCE_PRIORITY = {"edgar_press_release": 0, "polygon": 1, "gdelt": 2, "rss": 3, "perplexity": 4}
 
 # Per-source quota weights for the cap-``max_items`` allocation. They allocate a
 # guaranteed minimum fraction to each source so a single high-volume aggregator
@@ -64,10 +71,11 @@ _SOURCE_PRIORITY = {"edgar_press_release": 0, "polygon": 1, "gdelt": 2, "rss": 3
 # global remainder pool, backfilled by recency — so a slow GDELT day never wastes
 # slots.
 _SOURCE_QUOTA_WEIGHTS = {
-    "edgar_press_release": 0.30,  # richest — 8-K EX-99.1 issuer-direct
-    "polygon": 0.30,  # curated / ticker-tagged
+    "edgar_press_release": 0.25,  # richest — 8-K EX-99.1 issuer-direct
+    "polygon": 0.25,  # curated / ticker-tagged
     "gdelt": 0.20,  # high-volume, lower signal-to-noise
-    "rss": 0.20,  # high-volume, lower signal-to-noise
+    "rss": 0.15,  # high-volume, lower signal-to-noise
+    "perplexity": 0.15,  # edited multi-source top-stories (flag-gated)
 }
 
 
@@ -89,6 +97,14 @@ def _fetch_gdelt(*, date: dt.date) -> pd.DataFrame:
 
 def _fetch_rss(*, date: dt.date) -> pd.DataFrame:
     return rss.fetch_daily_news(date=date)
+
+
+def _fetch_perplexity(*, date: dt.date) -> pd.DataFrame:
+    # Flag-gated: off by default so production is unchanged. When off, the
+    # client is never constructed. Routed through the canonical PerplexityClient.
+    if os.environ.get("ALPHALENS_PERPLEXITY_SOURCE") != "1":
+        return empty_news_frame()
+    return perplexity.fetch_daily_news(date=date)
 
 
 def _safe_call(name: str, fn, **kwargs) -> pd.DataFrame:
@@ -408,6 +424,7 @@ def ingest_daily(
     polygon_df = _safe_call("polygon", _fetch_polygon, date=date)
     gdelt_df = _safe_call("gdelt", _fetch_gdelt, date=date)
     rss_df = _safe_call("rss", _fetch_rss, date=date)
+    perplexity_df = _safe_call("perplexity", _fetch_perplexity, date=date)
 
     if source_row_counts is not None:
         # RAW, pre-dedup, unconditional (0 on a swallowed 403 IS the #384 signal).
@@ -419,12 +436,15 @@ def ingest_daily(
             "polygon": polygon_df,
             "gdelt": gdelt_df,
             "rss": rss_df,
+            "perplexity": perplexity_df,
         }
         for name in _SOURCE_PRIORITY:
             source_row_counts[name] = len(source_frames[name])
 
     frames = [
-        _decode_title_entities(df) for df in (edgar_df, polygon_df, gdelt_df, rss_df) if len(df) > 0
+        _decode_title_entities(df)
+        for df in (edgar_df, polygon_df, gdelt_df, rss_df, perplexity_df)
+        if len(df) > 0
     ]
     if not frames:
         merged = empty_news_frame()
