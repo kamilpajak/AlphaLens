@@ -37,7 +37,13 @@ DEFAULT_OUT_DIR = Path.home() / ".alphalens" / "discover_lane_experiment"
 
 
 def _brief_dates(briefs_dir: Path, last: int) -> list[str]:
-    dates = sorted(p.stem for p in briefs_dir.glob("*.parquet"))
+    dates = []
+    for p in sorted(briefs_dir.glob("*.parquet")):
+        try:
+            dt.date.fromisoformat(p.stem)
+        except ValueError:
+            continue
+        dates.append(p.stem)
     return dates[-last:]
 
 
