@@ -106,6 +106,125 @@ class TestFormatResultLine(unittest.TestCase):
         self.assertTrue(line.startswith("cost=15bps | n=90 |"))
 
 
+class TestInferenceDiagnostics(unittest.TestCase):
+    """Gate #4 (§18.2 bootstrap-CI) + §18.1 all-days companion αt — both are
+    REPORTED diagnostics (no v3, no Bonferroni increment). The driver must
+    expose the net returns series so it can compute, beside the binding
+    invested-days-only αt: (a) an all-days (cash-inclusive) Carhart αt whose
+    gap from the invested-only number flags masking lift (§18.1 suspect
+    >0.2t), and (b) a moving-block bootstrap 95% CI on the net Carhart-4F α
+    (§18.2; required to exclude 0 for any candidate PASS)."""
+
+    def _synthetic(self, n: int = 90, seed: int = 0):
+        import numpy as np
+
+        rng = np.random.default_rng(seed)
+        idx = pd.bdate_range("2018-01-02", periods=n)
+        factors = pd.DataFrame(
+            {
+                "Mkt-RF": rng.normal(0.0, 0.01, n),
+                "SMB": rng.normal(0.0, 0.005, n),
+                "HML": rng.normal(0.0, 0.005, n),
+                "Mom": rng.normal(0.0, 0.005, n),
+                "RF": [0.0001] * n,
+            },
+            index=idx,
+        )
+        n_invested = int(n * 0.75)
+        invested_mask = pd.Series([True] * n_invested + [False] * (n - n_invested), index=idx)
+        net = pd.Series(rng.normal(0.001, 0.01, n), index=idx)
+        # uninvested days hold cash → 0.0 return (NOT NaN), matching the B2
+        # adapter contract the all-days regressand depends on.
+        net = net.where(invested_mask, 0.0)
+        return net, invested_mask, factors
+
+    def test_alldays_companion_returns_float(self) -> None:
+        mod = _import_script()
+        net, _, factors = self._synthetic()
+        t = mod._alldays_companion_alpha_t(net, factors, maxlags=5)
+        self.assertIsInstance(t, float)
+
+    def test_alldays_companion_none_when_too_few_obs(self) -> None:
+        mod = _import_script()
+        # run_regression needs >=20 overlapping obs → ValueError → None.
+        net, _, factors = self._synthetic(n=12)
+        self.assertIsNone(mod._alldays_companion_alpha_t(net, factors, maxlags=5))
+
+    def test_bootstrap_none_below_50_obs(self) -> None:
+        mod = _import_script()
+        net, mask, factors = self._synthetic(n=40)  # 30 invested < 50
+        self.assertIsNone(mod._bootstrap_net_alpha_ci(net.where(mask), factors, iterations=50))
+
+    def test_bootstrap_returns_ordered_tuple(self) -> None:
+        mod = _import_script()
+        net, mask, factors = self._synthetic(n=120)  # 90 invested >= 50
+        ci = mod._bootstrap_net_alpha_ci(net.where(mask), factors, iterations=100)
+        self.assertIsNotNone(ci)
+        assert ci is not None
+        lo, hi = ci
+        self.assertLessEqual(lo, hi)
+
+    def test_inference_diagnostics_assembles_and_flags_suspect(self) -> None:
+        mod = _import_script()
+        net, mask, factors = self._synthetic(n=120)
+        d = mod._inference_diagnostics(
+            invested_only_alpha_t_net=3.0,
+            net_daily=net,
+            invested_mask=mask,
+            factors=factors,
+            maxlags=5,
+            bootstrap_iterations=100,
+        )
+        self.assertIn("alldays_alpha_t_net", d)
+        self.assertIn("bootstrap_net_alpha_ci_95", d)
+        self.assertIn("bootstrap_ci_excludes_zero", d)
+        self.assertEqual(d["invested_only_alpha_t_net"], 3.0)
+        # suspect = (invested_only − all_days) > 0.2t
+        gap = 3.0 - d["alldays_alpha_t_net"]
+        self.assertAlmostEqual(d["invested_minus_alldays_t"], gap)
+        self.assertEqual(d["suspect_masking_lift"], gap > mod._ALLDAYS_GAP_SUSPECT_T)
+
+    def test_inference_diagnostics_handles_missing_alldays(self) -> None:
+        mod = _import_script()
+        # Too few obs → all-days αt is None; gap/suspect degrade gracefully.
+        net, mask, factors = self._synthetic(n=12)
+        d = mod._inference_diagnostics(
+            invested_only_alpha_t_net=4.0,
+            net_daily=net,
+            invested_mask=mask,
+            factors=factors,
+            maxlags=5,
+            bootstrap_iterations=50,
+        )
+        self.assertIsNone(d["alldays_alpha_t_net"])
+        self.assertIsNone(d["invested_minus_alldays_t"])
+        self.assertFalse(d["suspect_masking_lift"])
+
+    def test_suspect_threshold_constant_is_0_2(self) -> None:
+        mod = _import_script()
+        self.assertEqual(mod._ALLDAYS_GAP_SUSPECT_T, 0.2)
+
+
+class TestWindowReturns(unittest.TestCase):
+    """``_window_returns`` factors the gross/net/invested-mask construction out
+    of ``assess()`` so both the cost-grid regression AND the §18.1/§18.2
+    diagnostics consume the SAME net series (no drift between the binding
+    number and its companion)."""
+
+    def test_net_is_gross_minus_drag_and_mask_tracks_weights(self) -> None:
+        mod = _import_script()
+        idx = [date(2018, 1, 2), date(2018, 1, 3), date(2018, 1, 4)]
+        # AAA live on days 0,1; flat day 2 → invested mask [T,T,F].
+        weights = pd.DataFrame({"AAA": [1 / 150, 1 / 150, 0.0]}, index=idx)
+        panel = pd.DataFrame({"AAA": [0.01, -0.02, 0.03]}, index=pd.DatetimeIndex(idx))
+        gross, net, mask = mod._window_returns(weights, panel, 5.0)
+        self.assertEqual(list(mask), [True, True, False])
+        # net = gross − constant scalar drag (same shift every day).
+        diff = (gross - net).round(12)
+        self.assertEqual(diff.nunique(), 1)
+        self.assertGreater(float(diff.iloc[0]), 0.0)
+
+
 class TestInvestedFractionDiag(unittest.TestCase):
     """Memo §6.3 / success-criterion-6 + §17.2 launch gate: a window with
     invested-fraction < 0.40 must be FLAGGED (low deployment maximises the
