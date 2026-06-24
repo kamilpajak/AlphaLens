@@ -237,14 +237,14 @@ export const paradigms: Paradigm[] = [
 	},
 	{
 		id: 'P14', display: '#14', name: 'PEAD v2 (post-earnings drift)', layer_id: 'L2', axis_a: 'screener', axis_b: ['event-drift'],
-		status: 'IN-FLIGHT', date: '2026-05-14',
-		story: 'Post-earnings announcement drift (PEAD) is a textbook anomaly — stocks that beat or miss earnings tend to continue drifting in that direction for weeks. Version 1 was rejected after adversarial review; version 2 has the full infrastructure built (Alpha Vantage earnings feed, Little\'s Law position-size lock, daily-rebalance adapter, invested-days Carhart regression). The actual audit is waiting on a ~21-day Alpha Vantage backfill at the free-tier 25-symbols-per-day quota.',
+		status: 'FAIL', date: '2026-06-24',
+		story: 'Post-earnings announcement drift (PEAD) is a textbook anomaly — stocks that beat or miss earnings tend to keep drifting in that direction for weeks. We built the full version-2 machine (Alpha Vantage earnings feed, Little\'s Law position-size lock, daily-rebalance adapter, invested-days Carhart regression, plus a doctrine-verdict gate that enforces the 3.5 bar in code) and ran the real audit on a cloud pod across all four windows. Result: a clean, decisive FAIL — full-sample alpha t-stat 0.15 against a 3.5 bar, with the final-lock window actually negative. This is exactly what the literature predicts: large-cap PEAD has been effectively arbitraged away since the mid-2000s. Paradigm #14 is closed.',
 		hypothesis: 'canonical post-announcement [PEAD] with PSS + [NW HAC] + invested-days regression on S&P 500 [PIT] clears [Bonferroni correction|Bonferroni] 3.5.',
-		mechanism: '[Phase A/B/C/D/E|Phase A-D] done (AV EARNINGS backfill, B0 N_FIXED=150 via Little\'s Law, daily-rebalance, invested-days [Carhart 4F|Carhart-4F]). Phase E pending VPS rsync.',
-		metric: 'pending — backfill ~21 days at AV free-tier 25/day quota.',
-		lesson: '(in-flight). Pre-reg `pead_v5_pss_2026_05_13` strict n=3 critical |t|=2.39; doctrine 3.5 binds.',
+		mechanism: 'runpod cpu3c pod EUR-IS-1, ~$0.08 spend, ~20 min wall; 4-window doctrine audit (full / [IS] / [OOS] / [FL] x 5-cost grid), `audit-verdict` applies the 3.5 / 2.5 / per-phase>0 / net-15bps / AV-PIT bars in code.',
+		metric: 'doctrine FAIL — full-sample net [αt] 0.15 (G1<3.5); phase-mean 0.07 (G2<2.5); per-window net [αt] 0.00 / 0.44 / -0.23 ([IS]/[OOS]/[FL], G3 fails on negative [FL]); net-15bps <0 every window (G4). AV-PIT only PASS. Excess net +3.6% / +5.0% / +6.4%.',
+		lesson: 'large-cap [PEAD] effectively dead since ~2006 — vindicates the literature, not the signal. All four launch gates + the in-code doctrine bar landed first, so a methodology-inflated marginal t could not be mistaken for a PASS. Class `event_drift_search_2026_05_03` closed.',
 		evidence: 'paradigm14_pead_v2_design_2026_05_13.md',
-		is_t: null, oos_t: null
+		is_t: 0.0, oos_t: 0.44
 	},
 	{
 		id: 'P15', display: '#15', name: 'idiosyncratic_momentum', layer_id: 'L2', axis_a: 'screener', axis_b: ['price'],

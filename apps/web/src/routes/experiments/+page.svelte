@@ -315,8 +315,8 @@
 			<JargonTip {...tipProps('multi-phase audit')}>multi-phase audit</JargonTip>
 			where the same backtest is run with 5 different rebalance start-day offsets —
 			<JargonTip {...tipProps('single-phase')}>single-phase</JargonTip>
-			results are sample-of-one artifacts (see pattern #07). Separately, the in-flight PEAD paradigm
-			(#14) is built in
+			results are sample-of-one artifacts (see pattern #07). Separately, the PEAD paradigm
+			(#14) was built in
 			<JargonTip {...tipProps('Phase A/B/C/D/E')}>Phase A/B/C/D/E</JargonTip>
 			sequential implementation milestones — different concept entirely (project phases of building
 			the audit, not statistical replicates).
