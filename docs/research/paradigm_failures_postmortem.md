@@ -560,3 +560,80 @@ PASS_MARGINAL — instead it was caught before any results landed in
 the canonical record. **Adversarial review pre-compute remains the
 load-bearing rule** for protecting headline numbers from silent
 statsmodels behavior.
+
+## Continuation 2026-06-24 — PEAD v2 (paradigm #14)
+
+> Note: the per-paradigm narrative paused after 2026-05-09. The canonical
+> record for the intervening paradigm-class results (#12 insider_pc_compound
+> FAIL, #13 ev_fcff_yield FAIL-below-bar, #15 idiosyncratic_momentum FAIL)
+> lives in the `/experiments` ledger (`apps/web/src/lib/data/research-ledger.ts`)
+> and `docs/research/preregistration/ledger.json`, each with its own design
+> memo. This section closes out #14, the most recent full holdout audit.
+
+### Failure 12 — PEAD v2 (post-earnings drift), 2026-06-24
+
+Canonical post-earnings-announcement-drift on the S&P 500: rank firms
+cross-sectionally by price-scaled earnings surprise `PSS = (reportedEPS −
+estimatedEPS) / close(t−1)`, go long-only the top quintile, hold 20 trading
+days, α2 sub-leveraged weight `1/N_FIXED` (N_FIXED=150 via Little's Law),
+invested-days-only Carhart-4F with Newey-West HAC maxlags=20. Pre-registered
+as `pead_v5_pss_2026_05_13` (class `event_drift_search_2026_05_03`); design
+memo `docs/research/paradigm14_pead_v2_design_2026_05_13.md`.
+
+**The audit machinery was hardened before the run, not after.** Four launch
+gates + an in-code doctrine verdict landed first (PRs #660/#661/#664): the
+invested-fraction ≥ 0.40 guard, the AV `reportTime` spot-check (5/5 anchors
+agree, 0 dangerous against the real cache), the all-days companion αt +
+bootstrap-CI diagnostics, and — the dominant fix — `alphalens audit-verdict`,
+which enforces the 3.5 / 2.5 / per-phase>0 / net-15bps≥2.0 / AV-PIT bars **in
+executable code**. The harness's own `robust_verdict` only checks offset-phase
+stability at αt≥1.5; without the doctrine gate, a methodology-inflated marginal
+t could have been mistaken for a PASS. The three v3 spec questions were
+adjudicated NO-v3 (Bonferroni stays n=3) before launch (memo §18).
+
+**Verdict: FAIL — decisive, every doctrine gate except AV-PIT.** Ran the full
+4-window audit (full 2018-2026.04 / IS 2018-2020 / OOS 2021-2023 / FL
+2024-2026.04, each × the {0,5,10,15,25}bps cost grid) on a runpod cpu3c pod
+(EUR-IS-1, ~$0.08, ~20 min wall) 2026-06-24.
+
+| Gate | Bar | Result |
+|---|---|---|
+| G1 joint | full-sample net αt ≥ 3.5 | **0.15** — FAIL |
+| G2 phase-mean | mean net αt ≥ 2.5 | **0.07** — FAIL |
+| G3 per-phase | net αt > 0 each phase | IS +0.00 / OOS +0.44 / **FL −0.23** — FAIL |
+| G4 cost-stress | net-15bps αt ≥ 2.0 | <0 every window — FAIL |
+| G5 AV-PIT | ≥4/5 anchors | PASS_5_5 — the only PASS |
+
+Excess net was economically positive (+3.6% / +5.0% / +6.4% IS/OOS/FL) but the
+factor-adjusted t-stat is indistinguishable from zero — the returns are
+beta/size loadings, not alpha. This is exactly what the modern literature
+predicts: **large-cap PEAD has been effectively arbitraged away since the
+mid-2000s** (perplexity adversarial review pre-compute flagged FAIL as the
+expected outcome). Class `event_drift_search_2026_05_03` closes (v3/v4 were
+ABANDONED on breadth-collapse; v5 is the first in-class to clear breadth and
+run a full holdout → FAIL). Artifacts:
+`~/.alphalens/audit/pead_v2_runpod_2026_06_24/{pead_{full,is,oos,fl},pead_doctrine_verdict}.json`;
+ledger `pead_v5_pss_2026_05_13.outcome`.
+
+**Mid-run bug, caught and fixed before the verdict landed.** The full/FL
+windows initially crashed: an event entered within 20 trading days of the
+factor-data tail (FF factors end 2026-02-27) cannot complete its hold, and the
+pre-reg `compute_exit_day` raises rather than truncating. The 2018-Q1 preaudit
+smoke never reaches the tail, so it slipped through. Fixed with
+`_drop_uncompletable_tail_events` in the driver glue (the pinned scorer
+untouched) — right-censoring not-yet-observable drift at the data tail (PR
+#666, TDD + zen-clean). Same lesson as the HAC-units catch on
+insider_form4_opportunistic: **the data tail and the orchestrator boundary are
+where un-smoked glue bugs hide.**
+
+### Pattern 14: Economic edge without statistical edge is still a FAIL
+
+PEAD v2 joins #13 (ev_fcff_yield) and #15 (idiosyncratic_momentum) as a
+mechanism that produces a positive, plausible *economic* return (+3-6%/y excess
+net here) while the factor-adjusted t-stat sits far below the bar. The doctrine
+3.5 exists precisely to reject this class: a textbook anomaly whose published
+edge has decayed into the factor soup. The in-code doctrine verdict (new this
+paradigm) makes the rejection mechanical — the headline number can no longer be
+talked up by reporting gross α, a single lucky phase, or the harness's lenient
+1.5 stability check. **Build the kill-switch into the code before the run, so
+the verdict is computed, not argued.**

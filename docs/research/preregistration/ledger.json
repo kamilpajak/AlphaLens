@@ -3353,8 +3353,17 @@
         "honest_prior_survival_probability": "Adversarial review (perplexity reasoning_effort=high) puts pre-cost survival probability ~25-40% and net-cost survival ~5-15%, citing Chordia-Subrahmanyam-Tong 2014 (~50% PEAD attenuation post-decimalization), Kettell-McInnis-Zhao 2022 (declining earnings persistence), 'Rest in Peace' Emerald CFR 2024."
       },
       "registered_at": "2026-05-13",
-      "status": "registered",
+      "status": "completed",
       "outcome": {
+        "verdict": "FAIL",
+        "mean_alpha_t": 0.07,
+        "mean_excess_net": 0.05,
+        "completed_at": "2026-06-24",
+        "audit_path": "~/.alphalens/audit/pead_v2_runpod_2026_06_24/pead_doctrine_verdict.json",
+        "full_sample_alpha_t_net": 0.15,
+        "per_window_alpha_t_net": { "IS": 0.0, "OOS": 0.44, "FL": -0.23 },
+        "doctrine_gates": { "g1_joint_3_5": false, "g2_phase_mean_2_5": false, "g3_per_phase_positive": false, "g4_net15_2_0": false, "g5_av_pit": true },
+        "notes": "DOCTRINE FAIL — ran the full 4-window audit (full / IS 2018-2020 / OOS 2021-2023 / FL 2024-2026.04, each x 5-cost grid) on a runpod cpu3c pod (EUR-IS-1, ~$0.08, ~20min) 2026-06-24, then `alphalens audit-verdict` applied the 3.5 / 2.5 / per-phase>0 / net-15bps>=2.0 / AV-PIT bars in code. Full-sample net alpha_t=0.15 (G1<3.5); phase-mean net alpha_t=0.07 (G2<2.5); per-window net alpha_t 0.00 / 0.44 / -0.23 (IS/OOS/FL, G3 fails on negative FL); net-15bps alpha_t<0 every window (G4 fails). AV-PIT the only passing gate (g5, PASS_5_5). Excess net +3.6% / +5.0% / +6.4% (IS/OOS/FL). Exactly as the literature predicts: large-cap PEAD effectively dead since ~2006. Class event_drift_search_2026_05_03 closes (was 2/2 ABANDONED on the v3/v4 breadth-collapse; this v5 is the first to clear breadth + run a full holdout -> FAIL). Mid-run driver bug fixed before the verdict: events whose 20-day hold extended past the factor-data tail (factors end 2026-02-27) crashed full/FL; right-censored via _drop_uncompletable_tail_events (PR #666). All four launch gates + the in-code doctrine bar (PRs #660/#661/#664) landed first, so a methodology-inflated marginal t could not be mistaken for a PASS. Postmortem: docs/research/paradigm_failures_postmortem.md (PEAD v2 section); design memo docs/research/paradigm14_pead_v2_design_2026_05_13.md.",
         "av_pit_validation_status": "PASS_5_5",
         "av_pit_validation_artifact": "~/.alphalens/av_cache/pit_validation_2026_05_13.json",
         "av_pit_validation_date": "2026-05-13",
