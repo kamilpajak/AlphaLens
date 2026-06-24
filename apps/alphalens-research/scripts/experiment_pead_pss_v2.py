@@ -52,6 +52,13 @@ from alphalens_research.screeners.event_drift.pead_pss_scorer import (
 # Trading days per year — annualisation constant for Sharpe / excess return.
 _PERIODS_PER_YEAR = 252
 
+# Memo §6.3 / success-criterion-6: flag any window whose invested-days fraction
+# (n_invested / n_total trading days in the IS window) falls below this floor.
+# A low-deployment window maximises the masking lift of the invested-days-only
+# regression (a false-PASS direction per §17.2), so it must surface as a
+# diagnostic, not silently pass the absolute n_invested >= 20 check.
+_INVESTED_FRACTION_FLOOR = 0.40
+
 logger = logging.getLogger(__name__)
 
 # Pre-reg locks per memo + ledger pead_v5_pss_2026_05_13.
@@ -195,6 +202,23 @@ def _restrict_to_is_window(weights: pd.DataFrame, is_end: date) -> pd.DataFrame:
     'Cannot compare Timestamp with datetime.date' against the object-dtype
     date index."""
     return weights.loc[weights.index <= is_end]
+
+
+def _invested_fraction_diag(
+    n_invested: int, n_total: int, floor: float = _INVESTED_FRACTION_FLOOR
+) -> dict:
+    """Invested-days-fraction diagnostic (memo §6.3 / §17.2 launch gate).
+
+    Returns the fraction, its inputs, and whether it is below ``floor``. A
+    zero-trading-day window is treated as 0.0 (and therefore below floor) so a
+    degenerate window is flagged rather than dividing by zero."""
+    fraction = (n_invested / n_total) if n_total > 0 else 0.0
+    return {
+        "invested_fraction": fraction,
+        "n_invested": int(n_invested),
+        "n_total": int(n_total),
+        "below_floor": fraction < floor,
+    }
 
 
 def _factor_window_end(is_end: date, hold_days: int) -> date:
@@ -469,6 +493,24 @@ def main() -> int:
             "memo_gate_4_threshold": 2.0,
             "this_window_meets_threshold": stress_15bps["t_net_4f"] >= 2.0,
         }
+
+    # Invested-days-fraction guard (memo §6.3 / §17.2). n_total = trading days
+    # in the canonical IS window (weights are already restricted to is_end);
+    # n_invested is cost-independent so any row carries it.
+    n_total = len(weights.index)
+    n_invested = int(all_rows[0].get("n_invested_days", 0)) if all_rows else 0
+    inv_frac = _invested_fraction_diag(n_invested, n_total)
+    window_diagnostics["invested_fraction"] = inv_frac
+    if inv_frac["below_floor"]:
+        logger.warning(
+            "invested-fraction %.2f below floor %.2f (n_invested=%d / n_total=%d) "
+            "— flag for spec review per memo §6.3; low deployment maximises the "
+            "invested-days-only masking lift (false-PASS direction)",
+            inv_frac["invested_fraction"],
+            _INVESTED_FRACTION_FLOOR,
+            n_invested,
+            n_total,
+        )
 
     payload = {
         "strategy": "pead_pss_v2_2026_05_13",

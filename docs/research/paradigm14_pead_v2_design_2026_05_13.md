@@ -272,3 +272,46 @@ Amendments below were applied 2026-05-13 (same session as memo lock) following r
 - TRADE-OFF: forfeits substantial average gross (lower than original N_FIXED=30 estimate). Price of mathematically rigorous α2 mechanics; alternative options (α1 + weight-based turnover engineering, or dynamic cap re-introducing churn at peak) rejected per audit memo §5.2.
 - BONFERRONI: no increment. α1/α2 was explicit `weighting_decision_pending` in v2 memo §5 + ledger params_frozen; this is the audit-driven resolution the pre-reg anticipated, not a post-hoc spec change.
 - B1 IMPL IMPLICATION: `score_pead_pss.py` returns daily weight DataFrame with per-position weight = 1/150 (constant), gross variable. Engine adapter (Option α B2) consumes as-is. Phase B1 must run an empirical p95 concurrent-count validation per audit memo §5.3 before final N_FIXED lock — if empirical p95 > 100, bump N_FIXED to `1.5 × empirical_p95`.
+
+---
+
+## 17. Pre-compute adversarial re-review (2026-06-24, audit-trail)
+
+Fresh adversarial review run before audit launch, per the CLAUDE.md "Adversarial review pre-compute" doctrine (the lock-time review in §0/§16 is ~6 weeks stale and pre-dates the built harness). Method: `mcp__zen__thinkdeep` (deepseek-v4-pro, thinking=high) + `mcp__perplexity__perplexity_research` (reasoning_effort=high) + a 14-agent code-grounded multi-lens Workflow (7 adversarial lenses × adversarial refutation of every FATAL/HIGH finding). The locked spec is NOT reopened; this section is audit-trail + a launch-gate checklist. **Verdict: PROCEED-WITH-FIXES** — the low net-cost survival prior (5–15%; a fresh literature pass concludes large-cap PEAD is "effectively dead since ~2006" and net αt ≥ 3.5 is "extremely low" probability) is NOT grounds to halt: this is an honest falsification test and a FAIL is the expected, informative outcome. The fixes below exist only to stop a marginal, methodology-inflated t from being mistaken for a doctrine PASS.
+
+### 17.1 Dominant finding — automated verdict is decoupled from the doctrine bars (HARNESS, blocking)
+
+`phase_robust_backtesting.multi_phase.robust_verdict` returns **PASS at `all(αt ≥ 1.5)`** and FAIL at `mean_t < 1.0` (`multi_phase.py:137`, verified at source). The doctrine stack (3.5 joint / 2.5 phase-mean / per-phase αt > 0 / net-15bps αt ≥ 2.0) is enforced **nowhere in executable code** — it lives only in this memo, the ledger prose, and a dead `score_pead_pss.py::_BONFERRONI_PROJECT_THRESHOLD = 3.5` constant. So a harness "PASS" means αt ≥ 1.5, not 3.5, and any PASS/FAIL today rests on a manual JSON read against a 3.5 bar that sits in the same payload as the relaxed class-internal 2.39. With true edge ≈ 0, this is the single channel through which an inflated marginal t could be waved through. **Fix:** wire the doctrine bars into code and refuse to record a PASS otherwise.
+
+### 17.2 Surviving secondary concerns (after adversarial refutation)
+
+- **invested-fraction guard not implemented (HARNESS, blocking).** §6.3 / success-criterion-6 promise a `n_invested/n_total ≥ 0.40` flag; the code only checks absolute `n_invested ≥ 20`. A low-invested window maximises the masking lift — a false-PASS direction. Emit `invested_fraction` and hard-flag below 0.40.
+- **`reportTime` mislabel → jump-as-drift (BOTH, blocking).** Entry timing in `pead_pss_scorer.build_daily_weights` is itself clean (post-market events first capture `close(t+1)→close(t+2)`, excluding the announcement gap — verified). But a pre-market mislabel on a truly post-market event books `close(t)→close(t+1)` (the jump) as day-1 drift, inflating α. Add a `reportTime` spot-check to the §3.1 AV PIT gate, OR conservatively force all events to the post-market (entry-one-day-later) rule (a conservative guard, no Bonferroni increment).
+- **Inference triangulation (BOTH, diagnostic).** Newey-West HAC maxlags=20 on overlapping 20-day holds can be downward-biased → inflate t (Neuberger et al.). `bootstrap_carhart_alpha_ci` already exists (n≈525 > 50); require its 95% CI on net Carhart-4F α to exclude 0 for any candidate PASS.
+- **Survivorship asserted, not measured (BOTH, diagnostic).** Universe uses the survivorship-biased current-membership union (`load_sp500_pit_union`), not the mandated `load_sp1500_pit_for_date_augmented(include_delisted=True)`. Either run the true-PIT augmented path, or compute the haircut quantitatively (phase-span-scaled; IS carries the longest forward window) and subtract it before the gate. The prose "≤ +0.3 t" must not be accepted unsupported, and the M&A / cash-takeout positive-delisting direction (NOT null for a long-only top-quintile book) must be addressed explicitly.
+- **Companion diagnostics (HARNESS, diagnostic).** Report an all-days (cash-inclusive) αt beside the invested-only number, and an equal-weight-of-active αt beside the 1/150-book level. If either gap exceeds ~0.2 t, treat a PASS that relies on it as suspect.
+
+### 17.3 Concerns RAISED then REFUTED (dropped, recorded for honesty)
+
+- **Cost-gate-4 "mirage" — DROPPED.** The sub-leveraged book makes the per-day cost shift tiny, but the Carhart **t-stat is scale-invariant** (a constant multiple of the return scales α and its SE equally), so cost stress does not become a false-PASS channel — it only shrinks the reported α *level*, not t. The gate is a near-no-op duplicate of the gross gate, but that is benign.
+- **α2-vs-3.5-bar "self-consistency" — DROPPED**, same scale-invariance reason: sub-leverage changes the reported α level, not αt.
+- **Survivorship IS-concentration carrying the verdict — DOWNGRADED.** Already memo-acknowledged; a ≤ 0.3 t IS-only tailwind cannot carry the joint / phase-mean bars.
+
+### 17.4 New multiplicity finding (SPEC-adjacent, decision required)
+
+PEAD's FL phase (2024-01..2026-04) overlaps the 2024-04..2026-04 window the program escalated to a 3.50 burnt-holdout threshold for after 23 touches (`distress_credit_v1` precedent). The defensible-but-unstated argument (mechanism is earnings-surprise, not OHLCV; IS/OOS pre-date the burnt window) must be written down, or the binding threshold recomputed from the program-wide S&P500-touching hypothesis count.
+
+### 17.5 Launch-gate checklist
+
+BLOCKING (harness/diagnostic-only, no v3 / no Bonferroni increment):
+1. Wire the doctrine bars (3.5 joint / 2.5 phase-mean / per-phase αt > 0 / net-15bps αt ≥ 2.0) into executable code; refuse to record a PASS otherwise (§17.1).
+2. Implement the invested-fraction ≥ 0.40 guard (§17.2).
+3. `reportTime` spot-check OR force-all-post-market conservative guard (§17.2).
+4. Bootstrap-CI-excludes-0 required for any candidate PASS (§17.2).
+
+Already resolved (prior commits this session): the crash cascade (#656) and the canonical result-line / `excess_net_ann` plumbing so `robust_verdict` actually runs (#657).
+
+REQUIRES v3 + Bonferroni (n=3→4) — DECISION, not auto-applied:
+- Gating the 3.5 bar on the all-days (cash-inclusive) regressand instead of / in addition to invested-only.
+- Adding bootstrap-CI-excludes-0 as a NAMED required pre-reg success gate (vs the diagnostic in item 4).
+- Recomputing the binding Bonferroni threshold from the program-wide registered-hypothesis count if it exceeds the flat 3.5 (§17.4).
