@@ -37,7 +37,9 @@ from alphalens_pipeline.data.alt_data.yfinance_cache import load_cached_historie
 from alphalens_pipeline.data.factors import load_carhart_daily
 from alphalens_pipeline.data.universes.sp1500_pit import load_sp500_pit_union
 from alphalens_research.attribution.factor_analysis import (
+    bootstrap_carhart_alpha_ci,
     fit_carhart_4f_invested_only,
+    run_regression,
 )
 from alphalens_research.backtest.metrics import sharpe
 from alphalens_research.screeners.event_drift.av_earnings_ingestion import (
@@ -58,6 +60,14 @@ _PERIODS_PER_YEAR = 252
 # regression (a false-PASS direction per §17.2), so it must surface as a
 # diagnostic, not silently pass the absolute n_invested >= 20 check.
 _INVESTED_FRACTION_FLOOR = 0.40
+
+# Memo §18.1 (all-days companion diagnostic): if the binding invested-days-only
+# net αt exceeds the all-days (cash-inclusive) net αt by more than this many
+# t-units, the gap signals masking lift (the false-PASS direction §17.2 warns
+# about) and the window is flagged SUSPECT. Diagnostic only — the locked
+# regressand stays invested-days-only, so this carries no v3 / no Bonferroni
+# increment.
+_ALLDAYS_GAP_SUSPECT_T = 0.2
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +244,121 @@ def _factor_window_end(is_end: date, hold_days: int) -> date:
     return is_end + timedelta(days=int(hold_days * 1.5))
 
 
+def _drag_per_day(weights: pd.DataFrame, cost_bps: float) -> float:
+    """Scalar daily cost drag shared by ``_window_returns`` and ``assess()``.
+
+    ``cost_bps × 2 (entry + exit) × daily turnover proxy``, where the daily
+    turnover ≈ ``gross / hold_days`` for the α2 sub-leveraged weighting
+    (conservative). Single source of truth so the net series and the reported
+    ``cost_drag_ann`` can never disagree."""
+    gross_per_day = float(weights.sum(axis=1).mean())
+    daily_turnover_proxy = gross_per_day / _HOLDING_LOCK
+    return 2.0 * (cost_bps / 10_000.0) * daily_turnover_proxy
+
+
+def _window_returns(
+    weights: pd.DataFrame,
+    daily_returns_panel: pd.DataFrame,
+    cost_bps: float,
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Build ``(gross_daily, net_daily, invested_mask)`` for one cost arm.
+
+    Factored out of ``assess()`` so the cost-grid regression and the §18.1 /
+    §18.2 inference diagnostics consume the IDENTICAL net series — the binding
+    invested-only αt and its all-days companion / bootstrap CI must never drift
+    apart by recomputing the drag two different ways.
+
+    Cost drag is a scalar daily proxy: ``cost_bps × 2 (entry + exit) × daily
+    turnover proxy``, where the daily turnover ≈ ``gross / hold_days`` for the
+    α2 sub-leveraged weighting (conservative). Uninvested days enter ``net``
+    and ``gross`` as their real cash return (the B2 adapter yields ``0.0``, not
+    NaN); the invested-only regressand masks them downstream, the all-days
+    companion keeps them.
+    """
+    gross_daily = portfolio_returns_from_weights(weights, daily_returns_panel)
+    invested_mask = (weights.abs().sum(axis=1) > 0).reindex(gross_daily.index, fill_value=False)
+    net_daily = gross_daily - _drag_per_day(weights, cost_bps)
+    return gross_daily, net_daily, invested_mask
+
+
+def _alldays_companion_alpha_t(
+    net_daily: pd.Series, factors: pd.DataFrame, *, maxlags: int
+) -> float | None:
+    """All-days (cash-inclusive) Carhart-4F net αt over the FULL window calendar
+    (memo §18.1 companion to the binding invested-only number).
+
+    Uninvested days enter as their real ``0.0`` cash return — NOT masked — so
+    this is the deployment-diluted αt. The gap ``invested_only − all_days``
+    quantifies the masking lift. Returns ``None`` when ``run_regression`` cannot
+    fit (e.g. < 20 overlapping obs), so a degenerate window degrades gracefully
+    rather than crashing the diagnostic."""
+    try:
+        res = run_regression(
+            net_daily,
+            factors,
+            ["Mkt-RF", "SMB", "HML", "Mom"],
+            periods_per_year=_PERIODS_PER_YEAR,
+            hac_maxlags=maxlags,
+            spec_name="Carhart-4F (all-days)",
+        )
+    except ValueError:
+        return None
+    return float(res.alpha_tstat)
+
+
+def _bootstrap_net_alpha_ci(
+    net_invested: pd.Series,
+    factors: pd.DataFrame,
+    *,
+    iterations: int = 10_000,
+) -> tuple[float, float] | None:
+    """Moving-block bootstrap 95% CI on the net Carhart-4F α (memo §18.2 / gate
+    #4). ``net_invested`` carries NaN on uninvested days; the bootstrap's
+    inner-join + dropna keeps only realised-P&L observations, so the CI answers
+    the same question as the invested-only HAC αt. Returns ``None`` when the
+    helper cannot run (it requires ≥ 50 obs)."""
+    try:
+        return bootstrap_carhart_alpha_ci(net_invested, factors, iterations=iterations)
+    except ValueError:
+        return None
+
+
+def _inference_diagnostics(
+    *,
+    invested_only_alpha_t_net: float,
+    net_daily: pd.Series,
+    invested_mask: pd.Series,
+    factors: pd.DataFrame,
+    maxlags: int,
+    bootstrap_iterations: int = 10_000,
+) -> dict:
+    """Assemble the §18.1 all-days companion + §18.2 bootstrap-CI diagnostics.
+
+    Both are REPORTED diagnostics (no v3, no Bonferroni increment). The all-days
+    αt and its gap from the binding invested-only αt flag masking lift (suspect
+    when the gap exceeds ``_ALLDAYS_GAP_SUSPECT_T``); the bootstrap CI on net α
+    triangulates the single HAC SE (which can be downward-biased on overlapping
+    20-day holds) and is required by convention to exclude 0 for any candidate
+    PASS."""
+    net_invested = net_daily.where(invested_mask)
+    alldays_t = _alldays_companion_alpha_t(net_daily, factors, maxlags=maxlags)
+    ci = _bootstrap_net_alpha_ci(net_invested, factors, iterations=bootstrap_iterations)
+    out: dict = {
+        "invested_only_alpha_t_net": float(invested_only_alpha_t_net),
+        "alldays_alpha_t_net": alldays_t,
+        "bootstrap_net_alpha_ci_95": list(ci) if ci is not None else None,
+        "bootstrap_ci_excludes_zero": bool(ci is not None and (ci[0] > 0.0 or ci[1] < 0.0)),
+    }
+    if alldays_t is not None:
+        gap = invested_only_alpha_t_net - alldays_t
+        out["invested_minus_alldays_t"] = float(gap)
+        out["suspect_masking_lift"] = bool(gap > _ALLDAYS_GAP_SUSPECT_T)
+    else:
+        out["invested_minus_alldays_t"] = None
+        out["suspect_masking_lift"] = False
+    return out
+
+
 def assess(
     *,
     weights: pd.DataFrame,
@@ -248,20 +373,13 @@ def assess(
     drag with the regime-conditional cost-stress matrix; this scaffold uses
     the simpler scalar form for the single-window smoke.
     """
-    gross_daily = portfolio_returns_from_weights(weights, daily_returns_panel)
-    invested_mask = (weights.abs().sum(axis=1) > 0).reindex(gross_daily.index, fill_value=False)
+    gross_daily, net_daily, invested_mask = _window_returns(weights, daily_returns_panel, cost_bps)
     n_invested = int(invested_mask.sum())
     if n_invested < 20:
         return {"n": n_invested, "n_invested_days": n_invested}
 
-    # Scalar cost: cost_bps × 2 (entry + exit) × daily turnover proxy.
-    # Daily turnover = 1/n_fixed per new position; for α2 sub-leveraged
-    # weighting the mean daily turnover ≈ gross/hold_days. Conservative.
     gross_per_day = float(weights.sum(axis=1).mean())
-    daily_turnover_proxy = gross_per_day / _HOLDING_LOCK
-    drag_per_day = 2.0 * (cost_bps / 10_000.0) * daily_turnover_proxy
-    drag_ann = drag_per_day * 252.0
-    net_daily = gross_daily - drag_per_day
+    drag_ann = _drag_per_day(weights, cost_bps) * 252.0
 
     # Mask uninvested days as NaN for Phase-C invested-only regression.
     gross_invested = gross_daily.where(invested_mask)
@@ -511,6 +629,30 @@ def main() -> int:
             n_invested,
             n_total,
         )
+
+    # §18.1 all-days companion αt + §18.2 / gate #4 bootstrap-CI on net α.
+    # Computed once at the 5bps baseline arm (the canonical reporting cost) from
+    # the SAME net series the cost grid used. Reported diagnostics only — no v3,
+    # no Bonferroni increment. Skipped when the baseline window has too few
+    # invested days for a Carhart fit.
+    if baseline_5bps and baseline_5bps.get("n", 0) > 0:
+        _, base_net_daily, base_mask = _window_returns(weights, daily_panel, 5.0)
+        window_diagnostics["inference"] = _inference_diagnostics(
+            invested_only_alpha_t_net=float(baseline_5bps["t_net_4f"]),
+            net_daily=base_net_daily,
+            invested_mask=base_mask,
+            factors=factors,
+            maxlags=_HAC_MAXLAGS_LOCK,
+        )
+        if window_diagnostics["inference"]["suspect_masking_lift"]:
+            logger.warning(
+                "invested-only net αt %.2f exceeds all-days net αt %.2f by > %.1ft "
+                "— window flagged SUSPECT for masking lift (memo §18.1, false-PASS "
+                "direction)",
+                window_diagnostics["inference"]["invested_only_alpha_t_net"],
+                window_diagnostics["inference"]["alldays_alpha_t_net"],
+                _ALLDAYS_GAP_SUSPECT_T,
+            )
 
     payload = {
         "strategy": "pead_pss_v2_2026_05_13",

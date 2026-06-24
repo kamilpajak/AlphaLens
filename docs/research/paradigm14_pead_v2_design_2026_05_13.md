@@ -303,11 +303,11 @@ PEAD's FL phase (2024-01..2026-04) overlaps the 2024-04..2026-04 window the prog
 
 ### 17.5 Launch-gate checklist
 
-BLOCKING (harness/diagnostic-only, no v3 / no Bonferroni increment):
-1. Wire the doctrine bars (3.5 joint / 2.5 phase-mean / per-phase αt > 0 / net-15bps αt ≥ 2.0) into executable code; refuse to record a PASS otherwise (§17.1).
-2. Implement the invested-fraction ≥ 0.40 guard (§17.2).
-3. `reportTime` spot-check OR force-all-post-market conservative guard (§17.2).
-4. Bootstrap-CI-excludes-0 required for any candidate PASS (§17.2).
+BLOCKING (harness/diagnostic-only, no v3 / no Bonferroni increment) — **all four DONE**:
+1. ✅ Wire the doctrine bars (3.5 joint / 2.5 phase-mean / per-phase αt > 0 / net-15bps αt ≥ 2.0) into executable code; refuse to record a PASS otherwise (§17.1). — `alphalens_research.backtest.doctrine_verdict` + CLI `alphalens audit-verdict` (PR #661).
+2. ✅ Implement the invested-fraction ≥ 0.40 guard (§17.2). — driver `_invested_fraction_diag` (PR #660).
+3. ✅ `reportTime` spot-check (the chosen form per §18.4; NOT force-all-post-market). — `alphalens_research.screeners.event_drift.av_report_time_validation` + CLI `scripts/validate_av_report_time_pit.py`. Validates the **coerced** `report_time` the engine consumes on the five §3.1 anchors; distinguishes BENIGN (`post`-where-reality-`pre`, conservative) from DANGEROUS (`pre`-where-reality-`post`, the only lookahead direction); PASS = ≥ 4/5 agree AND zero dangerous. Ground truth cross-checked against contemporaneous sources (2026-06-24). **Ran against the real AV cache: 5/5 agree, 0 dangerous → PASS.**
+4. ✅ Bootstrap-CI-excludes-0 + §18.1 all-days companion αt, both as reported diagnostics (§17.2 / §18.2). — driver `_inference_diagnostics` (`_alldays_companion_alpha_t`, `_bootstrap_net_alpha_ci`); emitted into `window_diagnostics.inference` at the 5bps baseline arm; `suspect_masking_lift` flags an invested-only−all-days gap > 0.2t.
 
 Already resolved (prior commits this session): the crash cascade (#656) and the canonical result-line / `excess_net_ann` plumbing so `robust_verdict` actually runs (#657).
 
@@ -331,3 +331,5 @@ The burnt-holdout escalation precedent (`distress_credit_v1` reached 3.50 after 
 
 ### 18.4 Remaining launch work (all NO-v3)
 With the v3 questions closed, the open §17.5 launch gates are now unambiguous and all no-v3 implementation: gate #3 reportTime guard uses the **spot-check** form (validate `reportTime` on the §3.1 anchor events; the force-all-post-market alternative was the only v3-triggering option and is NOT taken); gate #4 + §18.2 bootstrap CI is a **reported diagnostic** requiring `assess()` to expose the net returns series; §18.1 all-days companion αt is a reported diagnostic. None require a new memo version.
+
+**Status (2026-06-24): all four §17.5 BLOCKING gates implemented (see the ✅ checklist above).** With gates #1–#4 closed, the only remaining pre-launch step is data consolidation onto one host (av_cache + prices + factors) before the runpod multi-phase audit. The audit is still expected to FAIL on the doctrine 3.5 bar (literature: large-cap PEAD effectively dead since ~2006); the gates exist to stop a methodology-inflated marginal t from being recorded as a PASS, not to manufacture one.
