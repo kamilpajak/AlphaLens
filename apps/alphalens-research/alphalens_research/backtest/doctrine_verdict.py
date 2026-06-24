@@ -22,6 +22,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import fmean
+from typing import Any, cast
 
 # Pre-registered doctrine bars (memo §8 / ledger pead_v5_pss_2026_05_13).
 DOCTRINE_JOINT_T = 3.5  # gate 1 — full-sample net αt
@@ -46,7 +47,7 @@ class DoctrineVerdict:
     phase_mean_alpha_t: float
     reason: str
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         return {
             "verdict": self.verdict,
             "gates": self.gates,
@@ -113,7 +114,7 @@ def evaluate_doctrine(
     )
 
 
-def net_alpha_t_from_audit(audit: dict, cost_bps: float) -> float:
+def net_alpha_t_from_audit(audit: dict[str, Any], cost_bps: float) -> float:
     """Mean-across-offset-phases net Carhart αt for the given cost arm in a
     ``run_audit`` output JSON. Raises ``KeyError`` if the cost config or the
     aggregated ``alpha_t_net`` is absent (a silent fallback would mask a
@@ -122,16 +123,17 @@ def net_alpha_t_from_audit(audit: dict, cost_bps: float) -> float:
     # fractional arm rounds the same way the producer does rather than
     # truncating into a silent KeyError.
     config_key = f"cost={cost_bps:.0f}bps"
-    for cfg in audit.get("configs", []):
+    configs: list[dict[str, Any]] = audit.get("configs", [])
+    for cfg in configs:
         if cfg.get("config") == config_key:
-            summary = cfg.get("summary", {})
-            net = summary.get("alpha_t_net")
+            summary: dict[str, Any] = cfg.get("summary", {})
+            net: dict[str, Any] | None = summary.get("alpha_t_net")
             if not net or "mean" not in net:
                 raise KeyError(
                     f"config {config_key!r} has no aggregated alpha_t_net.mean "
                     "(audit produced no parseable net-of-cost rows)"
                 )
-            return float(net["mean"])
+            return float(cast(float, net["mean"]))
     raise KeyError(f"cost arm {config_key!r} not found in audit configs")
 
 
@@ -146,8 +148,8 @@ def evaluate_doctrine_from_jsons(
     """Read the four per-window ``run_audit`` JSONs and apply the doctrine
     stack. ``full`` is the full-span (2018..2026) run for gate 1; ``is_`` /
     ``oos`` / ``fl`` are the phase runs for gates 2-4."""
-    full_audit = json.loads(Path(full).read_text())
-    phase_audits = [json.loads(Path(p).read_text()) for p in (is_, oos, fl)]
+    full_audit: dict[str, Any] = json.loads(Path(full).read_text())
+    phase_audits: list[dict[str, Any]] = [json.loads(Path(p).read_text()) for p in (is_, oos, fl)]
     return evaluate_doctrine(
         full_sample_alpha_t=net_alpha_t_from_audit(full_audit, _BASELINE_COST_BPS),
         per_phase_alpha_t=[net_alpha_t_from_audit(a, _BASELINE_COST_BPS) for a in phase_audits],
