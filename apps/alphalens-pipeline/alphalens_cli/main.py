@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from alphalens_cli.commands.audit import audit_command
 from alphalens_cli.commands.buffett import buffett_app
 from alphalens_cli.commands.cache import cache_app
+from alphalens_cli.commands.doctrine import audit_verdict_command
 from alphalens_cli.commands.edgar import edgar_app
 from alphalens_cli.commands.experts import experts_app
 from alphalens_cli.commands.feedback import feedback_app
@@ -75,6 +76,11 @@ app.command(
     name="preaudit",
     help="Fail-fast env check (coverage + smoke) before a long audit.",
 )(preaudit_command)
+app.command(
+    name="audit-verdict",
+    help="Apply the pre-registered doctrine bars (3.5/2.5/per-phase/15bps/AV-PIT) "
+    "to per-window audit JSONs — distinct from audit's offset-stability gate.",
+)(audit_verdict_command)
 
 
 if __name__ == "__main__":
