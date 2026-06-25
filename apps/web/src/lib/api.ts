@@ -15,9 +15,21 @@ import { markSessionExpired } from './session.svelte';
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE ?? '').trim();
 
-// Strip a trailing slash so callers can use `api('/v1/days')` without
-// producing `//v1/days` for VITE_API_BASE='https://api.example.com/'.
-const API_BASE = RAW_BASE.replace(/\/+$/, '');
+/**
+ * Strip trailing slashes so callers can use `api('/v1/days')` without
+ * producing `//v1/days` for VITE_API_BASE='https://api.example.com/'.
+ *
+ * A linear character scan rather than a `/\/+$/` regex: the anchored greedy
+ * quantifier triggers Sonar's super-linear-backtracking warning (S8786), and
+ * this is unambiguously O(n).
+ */
+export function stripTrailingSlashes(value: string): string {
+	let end = value.length;
+	while (end > 0 && value[end - 1] === '/') end--;
+	return value.slice(0, end);
+}
+
+const API_BASE = stripTrailingSlashes(RAW_BASE);
 
 /**
  * Build a fully-qualified API URL.

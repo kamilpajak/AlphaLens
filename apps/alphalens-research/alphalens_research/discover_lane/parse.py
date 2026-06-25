@@ -22,10 +22,43 @@ def _extract_json(content: str) -> object:
     return obj
 
 
+def _candidates_from_story(
+    story: dict,
+    citation_urls: list[str],
+    citation_count: int,
+) -> list[DiscoverCandidate]:
+    """Build the candidate rows for one story's beneficiaries (skipping malformed)."""
+    event_title = str(story.get("event_title", "")).strip()
+    event_url = str(story.get("event_url", "")).strip()
+    out: list[DiscoverCandidate] = []
+    for b in story.get("beneficiaries") or []:
+        if not isinstance(b, dict):
+            continue
+        ticker = str(b.get("ticker", "")).strip().upper()
+        company = str(b.get("company", "")).strip()
+        reason = str(b.get("reason", "")).strip()
+        if not ticker or not company:
+            continue
+        out.append(
+            DiscoverCandidate(
+                ticker=ticker,
+                company=company,
+                theme=event_title,
+                rationale=reason,
+                citation_count=citation_count,
+                citation_urls=citation_urls,
+                source_event_title=event_title,
+                source_event_url=event_url,
+            )
+        )
+    return out
+
+
 def parse_discover_response(content: str, search_results: list[dict]) -> list[DiscoverCandidate]:
     try:
         data = _extract_json(content)
-    except (ValueError, json.JSONDecodeError):
+    except ValueError:
+        # json.JSONDecodeError is a subclass of ValueError, so this catches both.
         logger.warning("discover_lane: response was not parseable JSON")
         return []
 
@@ -38,28 +71,6 @@ def parse_discover_response(content: str, search_results: list[dict]) -> list[Di
 
     out: list[DiscoverCandidate] = []
     for story in stories:
-        if not isinstance(story, dict):
-            continue
-        event_title = str(story.get("event_title", "")).strip()
-        event_url = str(story.get("event_url", "")).strip()
-        for b in story.get("beneficiaries") or []:
-            if not isinstance(b, dict):
-                continue
-            ticker = str(b.get("ticker", "")).strip().upper()
-            company = str(b.get("company", "")).strip()
-            reason = str(b.get("reason", "")).strip()
-            if not ticker or not company:
-                continue
-            out.append(
-                DiscoverCandidate(
-                    ticker=ticker,
-                    company=company,
-                    theme=event_title,
-                    rationale=reason,
-                    citation_count=citation_count,
-                    citation_urls=citation_urls,
-                    source_event_title=event_title,
-                    source_event_url=event_url,
-                )
-            )
+        if isinstance(story, dict):
+            out.extend(_candidates_from_story(story, citation_urls, citation_count))
     return out

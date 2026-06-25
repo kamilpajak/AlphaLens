@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiFetch } from '../../src/lib/api';
+import { apiFetch, stripTrailingSlashes } from '../../src/lib/api';
 import { clearSessionExpired, sessionExpired } from '../../src/lib/session.svelte';
 
 // `apiFetch` normalizes the failure modes of a Cloudflare-Access-gated,
@@ -32,6 +32,32 @@ beforeEach(() => {
 afterEach(() => {
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
+});
+
+describe('stripTrailingSlashes', () => {
+	it('removes a single trailing slash', () => {
+		expect(stripTrailingSlashes('https://api.example.com/')).toBe('https://api.example.com');
+	});
+
+	it('removes multiple trailing slashes', () => {
+		expect(stripTrailingSlashes('https://api.example.com///')).toBe('https://api.example.com');
+	});
+
+	it('leaves a slash-free string untouched', () => {
+		expect(stripTrailingSlashes('https://api.example.com')).toBe('https://api.example.com');
+	});
+
+	it('returns empty string for empty input', () => {
+		expect(stripTrailingSlashes('')).toBe('');
+	});
+
+	it('returns empty string for an all-slashes input', () => {
+		expect(stripTrailingSlashes('////')).toBe('');
+	});
+
+	it('preserves internal slashes', () => {
+		expect(stripTrailingSlashes('https://api.example.com/v1/')).toBe('https://api.example.com/v1');
+	});
 });
 
 describe('apiFetch normalization branches', () => {
