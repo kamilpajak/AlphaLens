@@ -1,5 +1,6 @@
 {
   "columns": [
+    "atr_penalty",
     "catalyst_confidence",
     "catalyst_event_type",
     "catalyst_strength",
@@ -33,7 +34,9 @@
     "rationale",
     "roe_pct",
     "roic_pct",
+    "scorer_config_version",
     "sector_name",
+    "selection_score",
     "source_event_published_at",
     "source_event_title",
     "source_event_url",

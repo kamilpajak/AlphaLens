@@ -322,14 +322,18 @@ def _write_sidecar(output_dir: Path, asof: dt.date, n_pro: int, n_flash: int) ->
     )
 
 
-# Sort priorities for the brief-render chain (zen-revised 2026-05-18).
-# Primary on layer4_weighted_score; continuous tiebreakers (catalyst_strength,
-# insider_score_usd) precede the binary deep_drawdown_reversal flag because
-# a strong continuous catalyst is structurally safer than a weak catalyst
-# with an oversold setup. Magic Formula rank is ASCENDING (1 = best); all
-# other keys are DESCENDING. Neutral defaults backfill missing columns so
-# older parquets and partial enrichments don't crash the sort.
+# Sort priorities for the brief-render chain (updated 2026-06-25).
+# Primary on selection_score (= layer4_weighted_score − ATR_penalty), so
+# high-volatility names sort lower than equally-scored calm names. Falls back
+# to layer4_weighted_score so older parquets without selection_score degrade
+# gracefully. Continuous tiebreakers (catalyst_strength, insider_score_usd)
+# precede the binary deep_drawdown_reversal flag because a strong continuous
+# catalyst is structurally safer than a weak catalyst with an oversold setup.
+# Magic Formula rank is ASCENDING (1 = best); all other keys are DESCENDING.
+# Neutral defaults backfill missing columns so older parquets and partial
+# enrichments don't crash the sort.
 _BRIEF_SORT_KEYS: tuple[tuple[str, bool, float | int | bool], ...] = (
+    ("selection_score", False, 0.0),
     ("layer4_weighted_score", False, 0.0),
     ("catalyst_strength", False, 0.0),
     ("insider_score_usd", False, 0.0),
