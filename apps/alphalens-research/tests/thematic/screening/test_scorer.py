@@ -317,8 +317,51 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
             "technical_volume_zscore",
             "technicals_summary_str",
             "layer4_weighted_score",
+            "atr_penalty",
+            "selection_score",
+            "scorer_config_version",
         ):
             self.assertIn(col, out.columns, f"missing column {col}")
+
+    def test_scorer_config_version_is_stamped(self):
+        from alphalens_pipeline.thematic.screening import selection_score as ss_mod
+
+        candidates = _candidates_df(["QUBT", "IONQ"])
+        out = scorer.score_candidates(candidates, asof=dt.date(2026, 4, 14))
+        for _, row in out.iterrows():
+            self.assertEqual(row["scorer_config_version"], ss_mod.SCORER_CONFIG_VERSION)
+
+    def test_selection_score_equals_layer4_minus_atr_penalty(self):
+        candidates = _candidates_df(["QUBT", "IONQ"])
+        out = scorer.score_candidates(candidates, asof=dt.date(2026, 4, 14))
+        for _, row in out.iterrows():
+            expected = float(row["layer4_weighted_score"]) - float(row["atr_penalty"])
+            self.assertAlmostEqual(float(row["selection_score"]), expected, places=9)
+
+    def test_atr_penalty_is_zero_when_atr_at_or_below_ramp_lo(self):
+        # QUBT mock: technical_atr_pct = 5.0, which is <= ATR_RAMP_LO (5.77)
+        candidates = _candidates_df(["QUBT"])
+        out = scorer.score_candidates(candidates, asof=dt.date(2026, 4, 14))
+        row = out.iloc[0]
+        self.assertAlmostEqual(float(row["atr_penalty"]), 0.0, places=9)
+        self.assertAlmostEqual(
+            float(row["selection_score"]), float(row["layer4_weighted_score"]), places=9
+        )
+
+    def test_scorer_config_version_survives_parquet_roundtrip(self):
+        import tempfile
+        from pathlib import Path
+
+        candidates = _candidates_df(["QUBT"])
+        out = scorer.score_candidates(candidates, asof=dt.date(2026, 4, 14))
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "scored.parquet"
+            out.to_parquet(p, index=False)
+            loaded = __import__("pandas").read_parquet(p)
+        self.assertIn("scorer_config_version", loaded.columns)
+        from alphalens_pipeline.thematic.screening import selection_score as ss_mod
+
+        self.assertEqual(loaded.iloc[0]["scorer_config_version"], ss_mod.SCORER_CONFIG_VERSION)
 
     def test_magic_formula_columns_reflect_health_and_rank(self):
         candidates = _candidates_df(["QUBT", "IONQ"])

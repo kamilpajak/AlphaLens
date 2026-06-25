@@ -40,13 +40,17 @@ def _row(**overrides) -> dict:
         "llm_confidence": 0.85,
     }
     base.update(overrides)
+    # Mirror scorer.py: selection_score defaults to layer4_weighted_score so
+    # existing tests remain valid unless a test explicitly overrides it.
+    if "selection_score" not in overrides:
+        base["selection_score"] = float(base["layer4_weighted_score"])
     return base
 
 
 class TestSortAndDedupForBrief(unittest.TestCase):
     """Order assertions for the brief-render sort chain."""
 
-    def test_primary_sort_is_layer4_weighted_score_desc(self):
+    def test_primary_sort_is_selection_score_desc(self):
         df = pd.DataFrame(
             [
                 _row(ticker="LOW", layer4_weighted_score=2),
@@ -56,6 +60,22 @@ class TestSortAndDedupForBrief(unittest.TestCase):
         )
         out = orchestrator._sort_and_dedup_for_brief(df)
         self.assertEqual(list(out["ticker"]), ["HIGH", "MID", "LOW"])
+
+    def test_high_atr_name_demoted_below_equal_layer4_calm_name(self):
+        # When two rows share the same layer4_weighted_score, the one with a
+        # LOWER selection_score (penalized by ATR) sorts below the calm name.
+        df = pd.DataFrame(
+            [
+                _row(ticker="VOLATILE", layer4_weighted_score=4, selection_score=3.0),
+                _row(ticker="CALM", layer4_weighted_score=4, selection_score=4.0),
+            ]
+        )
+        out = orchestrator._sort_and_dedup_for_brief(df)
+        self.assertEqual(
+            list(out["ticker"]),
+            ["CALM", "VOLATILE"],
+            "high-ATR (lower selection_score) name must rank below calm name with equal layer4",
+        )
 
     def test_tiebreak_catalyst_strength_before_reversal_zen_correction(self):
         # Zen pre-design HIGH finding: catalyst_strength is CONTINUOUS [0,1]
@@ -273,6 +293,34 @@ class TestDedupKeepsStrongestThemeRow(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(list(out.iloc[0]["also_in_themes"]), [])
 
+    def test_atr_tilt_does_not_change_multi_theme_dedup_survivor(self):
+        # Invariant: atr_penalty is a per-TICKER constant (same value for all
+        # of a ticker's theme-rows).  Because selection_score = layer4 - penalty
+        # and the penalty is identical on every row, the relative ordering among
+        # a ticker's theme-rows is identical to the ordering by layer4 alone.
+        # Consequence: which theme-row survives drop_duplicates(keep="first") is
+        # unchanged by the ATR tilt.
+        #
+        # This test is a guard, not a red→green cycle.  It passes immediately
+        # and will fail only if a future maintainer folds a theme-dependent term
+        # (e.g. per-theme novelty) into selection_score.
+        rows = [
+            _row(ticker="ABC", theme="ai", layer4_weighted_score=5, selection_score=4.0),
+            _row(ticker="ABC", theme="space", layer4_weighted_score=3, selection_score=2.0),
+        ]
+        out = orchestrator._sort_and_dedup_for_brief(pd.DataFrame(rows))
+        self.assertEqual(len(out), 1, "dedup must collapse the two ABC rows to one")
+        self.assertEqual(
+            out.iloc[0]["theme"],
+            "ai",
+            f"theme 'ai' (higher selection_score) must survive; got {out.iloc[0]['theme']!r}",
+        )
+        self.assertEqual(
+            sorted(out.iloc[0]["also_in_themes"]),
+            ["space"],
+            "dropped theme must appear in also_in_themes badge",
+        )
+
 
 class TestRankInDayColumn(unittest.TestCase):
     """After sort + dedup, each surviving row gets a 1-based ``rank_in_day``
@@ -313,6 +361,7 @@ class TestRankInDayColumn(unittest.TestCase):
 # and the ordered equality pin below — one without the other fails a test.
 _NON_EXPERT_SORT_ALLOWLIST: frozenset[str] = frozenset(
     {
+        "selection_score",
         "layer4_weighted_score",
         "catalyst_strength",
         "insider_score_usd",
@@ -418,6 +467,7 @@ class TestSortKeyExpertLock(unittest.TestCase):
         self.assertEqual(
             _sort_chain_keys(),
             (
+                "selection_score",
                 "layer4_weighted_score",
                 "catalyst_strength",
                 "insider_score_usd",

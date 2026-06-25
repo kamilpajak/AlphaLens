@@ -33,6 +33,9 @@ from alphalens_pipeline.thematic.screening import (
     technicals_signal,
     valuation_signal,
 )
+from alphalens_pipeline.thematic.screening import (
+    selection_score as selection_score_mod,
+)
 from alphalens_pipeline.thematic.screening._common import filter_peers_by_mcap_price
 
 logger = logging.getLogger(__name__)
@@ -366,6 +369,10 @@ def _build_candidate_row(
         # the deferred Insider×EDGE calibration partitions old vs new signal
         # semantics and never pools across versions. Mirrors panel_config_version.
         "insider_signal_version": insider_signal.INSIDER_SIGNAL_VERSION,
+        # Poolability key for the selection scorer (ATR tilt + weights). Partitions
+        # EDGE cohort so old briefs (pre-scorer) stay a frozen pool; recalibration
+        # bumps this string.
+        "scorer_config_version": selection_score_mod.SCORER_CONFIG_VERSION,
         "fcff_yield_pct": fcff["yield_pct"],
         "fcff_yield_sector_percentile": fcff_pctl,
         "valuation_pe": val["pe"],
@@ -598,6 +605,13 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
         for _, row in enrichment.iterrows()
     ]
     enrichment = enrichment.drop(columns=["_fcff_positive", "_technicals_positive"])
+
+    # selection_score = layer4 − atr_penalty; reuse the just-computed penalty
+    # column (don't recompute it per row) so the two can't drift apart.
+    enrichment["atr_penalty"] = enrichment["technical_atr_pct"].map(selection_score_mod.atr_penalty)
+    enrichment["selection_score"] = (
+        enrichment["layer4_weighted_score"].astype(float) - enrichment["atr_penalty"]
+    )
 
     # Merge on ticker to preserve original order + Phase C columns.
     merged = candidates.copy().reset_index(drop=True)
