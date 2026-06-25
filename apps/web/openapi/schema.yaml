@@ -526,6 +526,9 @@ components:
           type: number
           format: double
           nullable: true
+        insider_signal_version:
+          type: string
+          maxLength: 128
         fcff_yield_pct:
           type: number
           format: double
@@ -639,6 +642,17 @@ components:
           maximum: 9223372036854775807
           minimum: -9223372036854775808
           format: int64
+        selection_score:
+          type: number
+          format: double
+          nullable: true
+        atr_penalty:
+          type: number
+          format: double
+          nullable: true
+        scorer_config_version:
+          type: string
+          maxLength: 128
         also_in_themes: {}
         rank_in_day:
           type: integer
@@ -767,6 +781,9 @@ components:
           type: number
           format: double
           nullable: true
+        insider_signal_version:
+          type: string
+          maxLength: 128
         fcff_yield_pct:
           type: number
           format: double
@@ -880,6 +897,17 @@ components:
           maximum: 9223372036854775807
           minimum: -9223372036854775808
           format: int64
+        selection_score:
+          type: number
+          format: double
+          nullable: true
+        atr_penalty:
+          type: number
+          format: double
+          nullable: true
+        scorer_config_version:
+          type: string
+          maxLength: 128
         also_in_themes: {}
         rank_in_day:
           type: integer

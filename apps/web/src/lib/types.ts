@@ -43,6 +43,7 @@ export interface Candidate {
 	peer_cohort_level: string | null;
 	insider_score_usd: number | null;
 	insider_score_sector_percentile: number | null;
+	insider_signal_version: string | null;
 	fcff_yield_pct: number | null;
 	fcff_yield_sector_percentile: number | null;
 	valuation_pe: number | null;
@@ -71,6 +72,9 @@ export interface Candidate {
 	magic_formula_cohort_n: number | null;
 	deep_drawdown_reversal: boolean | null;
 	layer4_weighted_score: number | null;
+	selection_score: number | null;
+	atr_penalty: number | null;
+	scorer_config_version: string | null;
 	// Expert-panel blob (PR-5a/5b) — the per-expert assessment the card READS. PR-5b
 	// (#547) dropped the 13 flat buffett_* fields that used to sit here; the blob is
 	// now the SOLE Buffett surface on the wire. Keyed by expert id; SPARSE — a key may
