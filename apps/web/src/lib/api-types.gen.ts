@@ -264,6 +264,7 @@ export interface components {
             insider_score_usd?: number | null;
             /** Format: double */
             insider_score_sector_percentile?: number | null;
+            insider_signal_version?: string;
             /** Format: double */
             fcff_yield_pct?: number | null;
             /** Format: double */
@@ -317,6 +318,11 @@ export interface components {
             deep_drawdown_reversal?: boolean;
             /** Format: int64 */
             layer4_weighted_score?: number;
+            /** Format: double */
+            selection_score?: number | null;
+            /** Format: double */
+            atr_penalty?: number | null;
+            scorer_config_version?: string;
             also_in_themes?: unknown;
             /** Format: int64 */
             rank_in_day?: number | null;
@@ -377,6 +383,7 @@ export interface components {
             insider_score_usd?: number | null;
             /** Format: double */
             insider_score_sector_percentile?: number | null;
+            insider_signal_version?: string;
             /** Format: double */
             fcff_yield_pct?: number | null;
             /** Format: double */
@@ -430,6 +437,11 @@ export interface components {
             deep_drawdown_reversal?: boolean;
             /** Format: int64 */
             layer4_weighted_score?: number;
+            /** Format: double */
+            selection_score?: number | null;
+            /** Format: double */
+            atr_penalty?: number | null;
+            scorer_config_version?: string;
             also_in_themes?: unknown;
             /** Format: int64 */
             rank_in_day?: number | null;

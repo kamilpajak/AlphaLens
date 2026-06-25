@@ -199,6 +199,24 @@
 					>{c.layer4_weighted_score ?? '—'}</span
 				>
 			</span>
+			<!-- Extended band: shown only when atr_penalty > 0 (high realized-vol /
+			     extended at entry — deprioritized). Tone-neutral / muted — a soft flag,
+			     not a hard gate. Precise penalty number + scorer_config_version live in
+			     the expert.panel drawer (manufactured-authority discipline). -->
+			{#if (c.atr_penalty ?? 0) > 0}
+				<ChipTip
+					term="extended"
+					body="High realized volatility / extended at entry — deprioritized (suggestive, not yet validated)"
+				>
+					{#snippet chip()}
+						<span
+							class="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-sm border border-fg-muted/30 px-2 py-0.5 cursor-help"
+						>
+							<span class="text-[8px] uppercase tracking-widest text-fg-muted">extended</span>
+						</span>
+					{/snippet}
+				</ChipTip>
+			{/if}
 			<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap">
 				<span class="text-[9px] uppercase tracking-widest text-fg-muted">conf</span>
 				<span
@@ -498,7 +516,13 @@
 			     audit flags). Hidden by default; renders nothing when no lens has
 			     content for this name. The transition shim lives inside (reads the
 			     persisted panel.expert_spread, never recomputes). -->
-			<ExpertPanel assessments={c.expert_assessments} />
+			<ExpertPanel
+				assessments={c.expert_assessments}
+				layer4Score={c.layer4_weighted_score}
+				atrPenalty={c.atr_penalty}
+				selectionScore={c.selection_score}
+				scorerConfigVersion={c.scorer_config_version}
+			/>
 		</div>
 
 		<!-- RIGHT column -->

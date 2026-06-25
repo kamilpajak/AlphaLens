@@ -192,7 +192,9 @@
 				<h2 class="font-display font-bold text-sm tracking-widest uppercase">
 					Top picks // <span class="whitespace-nowrap">{data.latestBrief!.date}</span>
 				</h2>
-				<span class="text-[10px] text-fg-muted uppercase tracking-widest ml-auto">rank by layer4</span>
+				<span class="text-[10px] text-fg-muted uppercase tracking-widest ml-auto">
+					<span class="whitespace-nowrap">top {topCandidates.length} of {data.latestBrief!.n_candidates}</span>
+				</span>
 			</div>
 			<div class="divide-y divide-grid">
 				{#each topCandidates as c, i}
