@@ -133,6 +133,7 @@ class EdgeOutcomesView(APIView):
                 # brief by the population monitor) — no fragile re-join. "" (older
                 # / unstamped rows) maps to null so the SPA renders an em dash.
                 "theme": o.theme or None,
+                "scorer_config_version": o.scorer_config_version or None,
                 "ladder_classification": o.ladder_classification,
                 "terminal": o.terminal,
                 "realized_r": o.realized_r,

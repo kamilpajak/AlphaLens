@@ -137,6 +137,30 @@ def test_outcomes_shape_and_theme_from_record(tmp_path: Path):
 
 
 @pytest.mark.django_db
+def test_outcomes_scorer_config_version(tmp_path: Path):
+    # scorer_config_version is stamped at the brief by the population monitor and
+    # carried on the outcome record — no re-join required.  A row with a version
+    # string must appear verbatim in the response; an unstamped row renders None.
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [
+            {
+                **_terminal("AMPL", excess=0.04, realized_r=1.2),
+                "scorer_config_version": "scorer-v1-test",
+            },
+            {**_terminal("BLBD", excess=0.02, realized_r=0.5)},  # no version → None
+        ],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    body = APIClient().get("/v1/edge/outcomes").json()
+    rows = {r["ticker"]: r for r in body["data"]}
+    assert rows["AMPL"]["scorer_config_version"] == "scorer-v1-test"
+    assert rows["BLBD"]["scorer_config_version"] is None
+
+
+@pytest.mark.django_db
 def test_outcomes_status_filter(tmp_path: Path):
     _write_parquet(
         tmp_path,
