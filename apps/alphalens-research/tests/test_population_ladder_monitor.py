@@ -29,10 +29,12 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _SPLIT_SCREEN_THRESHOLD,
     _TOUCH_EPS,
     MONITOR_LOOKBACK_DAYS,
+    _carry_prior,
     _cheap_open_r,
     _coerce_session,
     _engine_cutoffs,
     _screen_decision,
+    _stamp_scorer_version,
     _stamp_theme,
     replay_population_ladders,
     summarize_population_ladders,
@@ -368,6 +370,61 @@ class TestThemeProvenance(_MonitorTestBase):
         )
         row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
         self.assertEqual(row["theme"], "defense")
+
+
+class TestScorerVersionUnit(unittest.TestCase):
+    def test_stamp_scorer_version_sets_column(self):
+        # _stamp_scorer_version writes scorer_config_version onto the row.
+        row = _stamp_scorer_version({}, "scorer-v1-test")
+        self.assertEqual(row["scorer_config_version"], "scorer-v1-test")
+
+    def test_stamp_scorer_version_none_when_falsy(self):
+        # A falsy version (empty string / None) stores None, not "".
+        self.assertIsNone(_stamp_scorer_version({}, None)["scorer_config_version"])
+        self.assertIsNone(_stamp_scorer_version({}, "")["scorer_config_version"])
+
+    def test_carry_prior_backfills_scorer_config_version(self):
+        # _carry_prior must back-fill scorer_config_version to None for rows that
+        # predate the column (old-format parquets).
+        carried = _carry_prior({"ticker": "X"})
+        self.assertIn("scorer_config_version", carried)
+        self.assertIsNone(carried["scorer_config_version"])
+
+
+class TestScorerVersionProvenance(_MonitorTestBase):
+    def test_replayed_row_carries_scorer_config_version(self):
+        # GIVEN a candidate whose brief carries scorer_config_version. WHEN replayed.
+        # THEN the store row carries that version (provenance from the brief).
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+
+        # Write a brief parquet that includes scorer_config_version.
+        df = pd.DataFrame(
+            [
+                {
+                    "ticker": "NVDA",
+                    "theme": "ai",
+                    "verified": True,
+                    "brief_trade_setup": json.dumps(_OK_SETUP),
+                    "scorer_config_version": "scorer-v1-test",
+                }
+            ]
+        )
+        df.to_parquet(self.briefs_dir / f"{brief_date.isoformat()}.parquet")
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["scorer_config_version"], "scorer-v1-test")
 
 
 class TestTerminalOutcomes(_MonitorTestBase):

@@ -185,6 +185,11 @@ _SCREEN_COLUMNS = (
 # stable; the next successful replay repopulates it.
 _CONFIG_COLUMNS = ("ladder_config_version",)
 
+# Brief-provenance columns: stamped from the CandidateBrief, not computed by the
+# replay engine. Like ``theme``, they travel WITH the outcome record so they stay
+# queryable even after the brief is rebuilt or the candidate churns out.
+_PROVENANCE_COLUMNS = ("scorer_config_version",)
+
 # The alternate-exit-ladder grid (PR-2): a JSON map {config -> realized_r} from
 # re-replaying the SAME bars under each EXIT policy. Carried/back-filled like the
 # other additive measurement columns.
@@ -941,6 +946,7 @@ def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
         *_CONFIG_COLUMNS,
         *_GRID_COLUMNS,
         *_ENTRY_CF_COLUMNS,
+        *_PROVENANCE_COLUMNS,
     ):
         carried.setdefault(col, None)
     return carried
@@ -962,6 +968,17 @@ def _stamp_theme(row: dict[str, Any], theme: str | None) -> dict[str, Any]:
     existing = row.get("theme")
     canonical = slugify_theme(existing) if existing else slugify_theme(theme or "")
     row["theme"] = canonical or None
+    return row
+
+
+def _stamp_scorer_version(row: dict[str, Any], scorer_config_version: str | None) -> dict[str, Any]:
+    """Stamp the scorer-config version onto a store row (provenance from the brief).
+
+    Like ``theme``, this value travels WITH the outcome record rather than being
+    re-joined downstream from the briefs cache.  Stored as ``None`` when falsy so
+    the read side can distinguish "version known and empty" from "version missing".
+    """
+    row["scorer_config_version"] = scorer_config_version or None
     return row
 
 
@@ -1556,16 +1573,22 @@ def _screen_one(
     """Screen one candidate → a finished row, or a queued minute resolve."""
     ticker = c.ticker.upper()
     theme = c.theme or None
+    scorer_version = c.scorer_config_version or None
     plannable, reason = _is_plannable(c)
     if not plannable:
         row = _nonplannable_row(brief_date, ticker, reason or "not plannable")
-        return _ScreenOutcome("nonplannable", _stamp_theme(row, theme))
+        return _ScreenOutcome(
+            "nonplannable", _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
+        )
     assert c.trade_setup is not None
     prior = existing.get(ticker)
 
     # FREEZE: a terminal prior row is copied forward verbatim, no screen / resolve.
     if prior is not None and bool(prior.get("terminal")):
-        return _ScreenOutcome("terminal", _stamp_theme(_carry_prior(prior), theme))
+        return _ScreenOutcome(
+            "terminal",
+            _stamp_scorer_version(_stamp_theme(_carry_prior(prior), theme), scorer_version),
+        )
 
     cutoffs = _engine_cutoffs(brief_date, c.trade_setup, exchange)
     arrival_session = cutoffs[0]
@@ -1577,7 +1600,7 @@ def _screen_one(
     if horizon < arrival_session:
         # Arrival not yet closed — carry prior (or retryable placeholder) without
         # consuming budget; nothing new to price.
-        return _carry_or_placeholder(c, brief_date, prior, cutoffs, theme)
+        return _carry_or_placeholder(c, brief_date, prior, cutoffs, theme, scorer_version)
 
     start = last_priced_session if last_priced_session is not None else arrival_session
     new_sessions = _sessions_between(
@@ -1626,9 +1649,12 @@ def _screen_one(
     )
     if cheap is None:
         # Implausible cheap move (split guard) — carry prior verbatim.
-        return _ScreenOutcome("carried", _stamp_theme(_carry_prior(prior), theme))
+        return _ScreenOutcome(
+            "carried",
+            _stamp_scorer_version(_stamp_theme(_carry_prior(prior), theme), scorer_version),
+        )
     row, category = cheap
-    return _ScreenOutcome(category, _stamp_theme(row, theme))
+    return _ScreenOutcome(category, _stamp_scorer_version(_stamp_theme(row, theme), scorer_version))
 
 
 def _carry_or_placeholder(
@@ -1637,12 +1663,18 @@ def _carry_or_placeholder(
     prior: dict[str, Any] | None,
     cutoffs: tuple[dt.date, dt.date, dt.date, int, int, int, int],
     theme: str | None,
+    scorer_version: str | None = None,
 ) -> _ScreenOutcome:
     """Carry the prior row (or a retryable placeholder for a brand-new ticker)."""
     if prior is not None:
-        return _ScreenOutcome("carried", _stamp_theme(_carry_prior(prior), theme))
+        return _ScreenOutcome(
+            "carried",
+            _stamp_scorer_version(_stamp_theme(_carry_prior(prior), theme), scorer_version),
+        )
     row = _placeholder_row(brief_date, c.ticker.upper(), cutoffs)
-    return _ScreenOutcome("carried", _stamp_theme(row, theme))
+    return _ScreenOutcome(
+        "carried", _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
+    )
 
 
 def _apply_cheap_open_update(
@@ -1725,6 +1757,7 @@ def _cheap_update_row(
         *_CONFIG_COLUMNS,
         *_GRID_COLUMNS,
         *_ENTRY_CF_COLUMNS,
+        *_PROVENANCE_COLUMNS,
     ):
         row.setdefault(col, None)
     row["last_close"] = c_star
@@ -1871,6 +1904,7 @@ def _resolve_queue(
     for item in ordered:
         ticker = item.candidate.ticker.upper()
         theme = item.candidate.theme or None
+        scorer_version = item.candidate.scorer_config_version or None
         use_budget = forced_budget if item.forced else budget
         assert item.candidate.trade_setup is not None
         result = _replay_candidate(
@@ -1887,7 +1921,9 @@ def _resolve_queue(
         if result is None:
             # Budget exhausted / fetch fail / implausible — carry prior (or a
             # retryable placeholder for a brand-new ticker) and record the age.
-            rows_by_ticker[ticker] = _stamp_theme(_carried_row(item), theme)
+            rows_by_ticker[ticker] = _stamp_scorer_version(
+                _stamp_theme(_carried_row(item), theme), scorer_version
+            )
             counts["carried"] += 1
             age = _deferred_age(item, last_closed_session)
             if age is not None:
@@ -1907,7 +1943,7 @@ def _resolve_queue(
             grid_realized_r=result.grid_realized_r,
             realized_r_full=result.realized_r_full,
         )
-        rows_by_ticker[ticker] = _stamp_theme(row, theme)
+        rows_by_ticker[ticker] = _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
         counts["terminal" if row["terminal"] else "ongoing"] += 1
     return deferred_ages
 
