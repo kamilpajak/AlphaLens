@@ -173,6 +173,23 @@ class TestLoadBrief(unittest.TestCase):
         candidates = load_brief(d, self.tmpdir)
         self.assertEqual(candidates[0].scorer_config_version, "")
 
+    def test_scorer_config_version_nan_cell_coerces_to_empty_string(self):
+        """A present-but-NaN scorer_config_version cell (e.g. float NaN from
+        pandas when the column exists but the row has no value) must coerce to
+        ``""`` rather than the string ``"nan"`` that the old ``str(...) or ""``
+        expression would produce for a non-NaN float, or the unexpected ``"nan"``
+        string that ``str(float('nan'))`` gives."""
+        import numpy as np
+
+        d = dt.date(2026, 6, 25)
+        # Write a DataFrame that has the column but with a NaN value for this row.
+        path = self.tmpdir / f"{d.isoformat()}.parquet"
+        pd.DataFrame(
+            [{"ticker": "TSLA", "theme": "ev", "scorer_config_version": np.nan}]
+        ).to_parquet(path, index=False)
+        candidates = load_brief(d, self.tmpdir)
+        self.assertEqual(candidates[0].scorer_config_version, "")
+
 
 if __name__ == "__main__":
     unittest.main()

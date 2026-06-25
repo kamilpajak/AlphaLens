@@ -45,6 +45,36 @@ class CandidateBrief:
     scorer_config_version: str
 
 
+def _int_or_zero(row: pd.Series, key: str) -> int:
+    """Return ``int(row[key])`` or ``0`` when the key is absent, null, or un-castable."""
+    if key not in row.index:
+        return 0
+    val = row[key]
+    try:
+        return int(val) if pd.notna(val) else 0
+    except (TypeError, ValueError):
+        return 0
+
+
+def _float_or_none(row: pd.Series, key: str) -> float | None:
+    """Return ``float(row[key])`` or ``None`` when the key is absent, null, or un-castable."""
+    if key not in row.index:
+        return None
+    val = row[key]
+    try:
+        return float(val) if pd.notna(val) else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _str_or_empty(row: pd.Series, key: str) -> str:
+    """Return ``str(row[key])`` or ``""`` when the key is absent or null (including NaN)."""
+    if key not in row.index:
+        return ""
+    val = row[key]
+    return "" if pd.isna(val) else str(val)
+
+
 def _coerce_trade_setup(raw: object) -> dict | None:
     """Best-effort decode of the ``brief_trade_setup`` column.
 
@@ -77,25 +107,6 @@ def _row_to_candidate(row: pd.Series, brief_date: dt.date) -> CandidateBrief:
         if setup and setup.get("suggested_size_pct") is not None
         else None
     )
-
-    def _int_or_zero(key: str) -> int:
-        if key not in row.index:
-            return 0
-        val = row[key]
-        try:
-            return int(val) if pd.notna(val) else 0
-        except (TypeError, ValueError):
-            return 0
-
-    def _float_or_none(key: str) -> float | None:
-        if key not in row.index:
-            return None
-        val = row[key]
-        try:
-            return float(val) if pd.notna(val) else None
-        except (TypeError, ValueError):
-            return None
-
     return CandidateBrief(
         brief_date=brief_date,
         ticker=str(row["ticker"]),
@@ -103,10 +114,10 @@ def _row_to_candidate(row: pd.Series, brief_date: dt.date) -> CandidateBrief:
         verified=bool(row.get("verified", False)),
         suggested_size_pct=suggested,
         trade_setup=setup,
-        n_gates_passed=_int_or_zero("n_gates_passed"),
-        n_gates_failed=_int_or_zero("n_gates_failed"),
-        layer4_weighted_score=_float_or_none("layer4_weighted_score"),
-        scorer_config_version=str(row.get("scorer_config_version", "") or ""),
+        n_gates_passed=_int_or_zero(row, "n_gates_passed"),
+        n_gates_failed=_int_or_zero(row, "n_gates_failed"),
+        layer4_weighted_score=_float_or_none(row, "layer4_weighted_score"),
+        scorer_config_version=_str_or_empty(row, "scorer_config_version"),
     )
 
 

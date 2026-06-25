@@ -427,6 +427,111 @@ class TestScorerVersionProvenance(_MonitorTestBase):
         self.assertEqual(row["scorer_config_version"], "scorer-v1-test")
 
 
+class TestScorerVersionFreshBrief(_MonitorTestBase):
+    """Cover the _carry_or_placeholder path (horizon < arrival_session).
+
+    When the monitor runs on the SAME day the brief was published (market has not
+    yet closed for that session), the replay horizon is strictly before the arrival
+    session.  _screen_one delegates to _carry_or_placeholder without fetching any
+    bars.  Two sub-cases:
+
+    * prior is None (first run ever): a retryable placeholder is written (line 1675).
+    * prior is not None (second run, same narrow window): the placeholder from run 1
+      is carried forward verbatim (line 1670).
+
+    Both cases must stamp scorer_config_version from the brief.
+    """
+
+    def _write_brief_with_version(
+        self, brief_date: dt.date, ticker: str, scorer_version: str
+    ) -> None:
+        # Write a brief parquet with scorer_config_version so the loader picks it up.
+        df = pd.DataFrame(
+            [
+                {
+                    "ticker": ticker,
+                    "theme": "ai",
+                    "verified": True,
+                    "brief_trade_setup": json.dumps(_OK_SETUP),
+                    "scorer_config_version": scorer_version,
+                }
+            ]
+        )
+        df.to_parquet(self.briefs_dir / f"{brief_date.isoformat()}.parquet")
+
+    def test_fresh_brief_no_prior_yields_placeholder_with_scorer_version(self):
+        # GIVEN a plannable candidate published TODAY (brief_date == now.date()).
+        # WHEN the monitor runs before the session closes (last_closed_session is
+        # the day before brief_date). THEN the arrival session is in the future
+        # relative to the horizon, so _carry_or_placeholder is called with
+        # prior=None and a retryable placeholder row is written that carries the
+        # brief's scorer_config_version.
+        brief_date = dt.date(2026, 5, 5)  # Tuesday
+        # now is early morning of brief_date: last_closed_session = 2026-05-04 (Monday)
+        # arrival_session = session_on_or_after(2026-05-05) = 2026-05-05
+        # horizon = min(position_expiry, 2026-05-04) < arrival_session → placeholder.
+        now = dt.datetime(2026, 5, 5, 7, 0, tzinfo=UTC)
+        self._write_brief_with_version(brief_date, "AAPL", "scorer-fresh-v1")
+
+        fetched: list[str] = []
+
+        def _fetch(ticker, start, end):
+            fetched.append(ticker)
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 150.0, "h": 151.0, "l": 149.0, "c": 150.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        # No bars should be fetched — the horizon is before arrival, so the cheap
+        # path and the minute resolve are both skipped.
+        self.assertNotIn("AAPL", fetched)
+        row = self._read_store(brief_date).set_index("ticker").loc["AAPL"]
+        # Placeholder row: not terminal, scorer_config_version propagated from brief.
+        self.assertFalse(bool(row["terminal"]))
+        self.assertEqual(row["scorer_config_version"], "scorer-fresh-v1")
+
+    def test_fresh_brief_with_prior_carries_prior_with_scorer_version(self):
+        # GIVEN the same fresh-brief scenario run TWICE with the same narrow now.
+        # WHEN run 2 sees the placeholder written by run 1 as an existing prior.
+        # THEN _carry_or_placeholder is called with prior=not-None and carries
+        # that prior forward, stamping scorer_config_version from the current brief.
+        brief_date = dt.date(2026, 5, 5)
+        now = dt.datetime(2026, 5, 5, 7, 0, tzinfo=UTC)
+        self._write_brief_with_version(brief_date, "AAPL", "scorer-fresh-v2")
+
+        def _no_fetch(ticker, start, end):
+            return []
+
+        # Run 1: prior=None → placeholder written (line 1675).
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_no_fetch,
+            now=now,
+        )
+        row_run1 = self._read_store(brief_date).set_index("ticker").loc["AAPL"]
+        self.assertFalse(bool(row_run1["terminal"]))
+
+        # Run 2: prior=placeholder from run 1 → _carry_or_placeholder with prior
+        # not None → carried row (line 1670); scorer_config_version must propagate.
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_no_fetch,
+            now=now,
+        )
+        row_run2 = self._read_store(brief_date).set_index("ticker").loc["AAPL"]
+        self.assertFalse(bool(row_run2["terminal"]))
+        self.assertEqual(row_run2["scorer_config_version"], "scorer-fresh-v2")
+
+
 class TestTerminalOutcomes(_MonitorTestBase):
     def test_matured_sideways_drifter_is_time_stop(self):
         # GIVEN a matured candidate whose price fills E1 then drifts sideways for
