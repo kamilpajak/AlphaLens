@@ -975,8 +975,8 @@ def _stamp_scorer_version(row: dict[str, Any], scorer_config_version: str | None
     """Stamp the scorer-config version onto a store row (provenance from the brief).
 
     Like ``theme``, this value travels WITH the outcome record rather than being
-    re-joined downstream from the briefs cache.  Stored as ``None`` when falsy so
-    the read side can distinguish "version known and empty" from "version missing".
+    re-joined downstream from the briefs cache.  An empty/absent brief value is
+    stored as ``None`` so the read side renders an em dash (mirrors ``_stamp_theme``).
     """
     row["scorer_config_version"] = scorer_config_version or None
     return row
