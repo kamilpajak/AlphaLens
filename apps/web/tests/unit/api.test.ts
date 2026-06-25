@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch, stripTrailingSlashes } from '../../src/lib/api';
-import { clearSessionExpired, sessionExpired } from '../../src/lib/session.svelte';
+import { clearSessionExpired, markSessionExpired, sessionExpired } from '../../src/lib/session.svelte';
 
 // `apiFetch` normalizes the failure modes of a Cloudflare-Access-gated,
 // cross-origin SPA → API call into synthetic status codes the callsites'
@@ -186,6 +186,95 @@ describe('apiFetch session-expiry side effect', () => {
 		const res = await apiFetch('/v1/days', {}, fetcher as unknown as typeof fetch);
 
 		expect(res.status).toBe(502);
+		expect(sessionExpired()).toBe(false);
+	});
+});
+
+describe('apiFetch auto-clears the overlay on proof-of-life', () => {
+	// A single transient failure (network-wake race, tunnel restart, CORS blip)
+	// latches the overlay because nothing resets the flag. Any 2xx response
+	// proves CF Access let the request through to Django → the session is
+	// alive → clear the flag so a stale overlay self-heals on the next success.
+	it('clears a previously-set flag on a successful JSON response', async () => {
+		markSessionExpired();
+		const fetcher = vi.fn().mockResolvedValue(jsonResponse(200, { data: [] }));
+
+		await apiFetch('/v1/days', {}, fetcher as unknown as typeof fetch);
+
+		expect(sessionExpired()).toBe(false);
+	});
+
+	it('does NOT clear the flag on a non-2xx response (ambiguous — could be cloudflared down)', async () => {
+		// A 500/502 does not prove the CF Access session is alive (the error may
+		// originate at the tunnel before Django). Stay conservative: only a
+		// confirmed 2xx clears the overlay.
+		markSessionExpired();
+		const fetcher = vi.fn().mockResolvedValue(jsonResponse(500, { detail: 'boom' }));
+
+		await apiFetch('/v1/days', {}, fetcher as unknown as typeof fetch);
+
+		expect(sessionExpired()).toBe(true);
+	});
+
+	it('does NOT clear the flag on the offline (503) path', async () => {
+		markSessionExpired();
+		vi.stubGlobal('navigator', { onLine: false });
+		const fetcher = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+		await apiFetch('/v1/days', {}, fetcher as unknown as typeof fetch);
+
+		expect(sessionExpired()).toBe(true);
+	});
+});
+
+describe('apiFetch silentAuth — background polls do not raise the overlay', () => {
+	// The /v1/market/status poll runs every 60s and on every tab focus; it is
+	// explicitly "fail silent" noise. With silentAuth it still returns the
+	// synthetic 401 (so the callsite's `!res.ok` branch behaves), but it must
+	// NOT raise the global re-auth overlay — only fetches the user cares about
+	// (briefs, edge) do. Kills the dominant false-positive (tab-wake races).
+	it('returns synthetic 401 but does NOT mark the session when fetch throws online', async () => {
+		vi.stubGlobal('navigator', { onLine: true });
+		const fetcher = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+
+		const res = await apiFetch(
+			'/v1/market/status',
+			{},
+			fetcher as unknown as typeof fetch,
+			{ silentAuth: true }
+		);
+
+		expect(res.status).toBe(401);
+		expect(sessionExpired()).toBe(false);
+	});
+
+	it('returns synthetic 401 but does NOT mark the session on CF login HTML 200', async () => {
+		const fetcher = vi.fn().mockResolvedValue(htmlResponse(200));
+
+		const res = await apiFetch(
+			'/v1/market/status',
+			{},
+			fetcher as unknown as typeof fetch,
+			{ silentAuth: true }
+		);
+
+		expect(res.status).toBe(401);
+		expect(sessionExpired()).toBe(false);
+	});
+
+	it('still auto-clears the flag on a successful response even when silent', async () => {
+		// silentAuth suppresses RAISING the overlay, not the proof-of-life clear:
+		// a successful poll should self-heal a stale overlay regardless.
+		markSessionExpired();
+		const fetcher = vi.fn().mockResolvedValue(jsonResponse(200, {}));
+
+		await apiFetch(
+			'/v1/market/status',
+			{},
+			fetcher as unknown as typeof fetch,
+			{ silentAuth: true }
+		);
+
 		expect(sessionExpired()).toBe(false);
 	});
 });

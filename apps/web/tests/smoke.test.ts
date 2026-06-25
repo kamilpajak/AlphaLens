@@ -203,6 +203,25 @@ test.describe('session-expiry handling — global re-auth overlay', () => {
 	const overlay = (page: import('@playwright/test').Page) =>
 		page.getByRole('dialog').filter({ hasText: 'session expired' });
 
+	// Under a genuinely expired CF Access session the cookie is rejected at the
+	// Access layer, so EVERY path on api.<domain> is blocked identically — the
+	// /v1/market/status background poll included. Block it here too (overriding
+	// the global open-market stub) so these tests model that all-or-nothing
+	// reality. Without this the poll would succeed and apiFetch's proof-of-life
+	// clear would race against the data fetch that raises the overlay, making
+	// the assertions timing-dependent. The poll opts into `silentAuth`, so a
+	// blocked poll neither raises nor clears the overlay — the data fetch is the
+	// sole, deterministic trigger.
+	test.beforeEach(async ({ page }) => {
+		await page.route('**/api/v1/market/status', (route) =>
+			route.fulfill({
+				status: 200,
+				contentType: 'text/html; charset=utf-8',
+				body: '<!doctype html><html>cf access login</html>'
+			})
+		);
+	});
+
 	test('aborted API fetch (CF redirect) shows the re-auth overlay, not a 500', async ({
 		page
 	}) => {
@@ -245,6 +264,19 @@ test.describe('session-expiry handling — global re-auth overlay', () => {
 		);
 		await page.goto('/');
 		await expect(overlay(page)).toBeVisible();
+	});
+
+	test('a failing market-status poll alone does NOT raise the overlay', async ({ page }) => {
+		// Regression guard for the "session expired pops up suspiciously often"
+		// bug: the 60s /v1/market/status poll (failed here via the describe-level
+		// route) is fail-silent noise and opts into `silentAuth`, so its failure
+		// must NOT raise the global overlay while the data the user cares about
+		// (dashboard index + latest brief) loads fine from the global mock.
+		await page.goto('/');
+		// The dashboard content renders…
+		await expect(page.getByTestId('session-tiles')).toBeVisible();
+		// …and the overlay stays down despite the poll failing every cycle.
+		await expect(overlay(page)).toBeHidden();
 	});
 });
 
