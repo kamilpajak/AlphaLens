@@ -556,11 +556,19 @@
 								<td class="hidden md:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
 									{o.terminal ? fmtFracPct(o.realized_return_pct_of_book, 2) : '—'}
 								</td>
-								<td class="hidden md:table-cell py-2.5 pr-3 text-amber lowercase truncate max-w-[140px]">
-									{#if !o.terminal}
-										<Clock class="inline size-3 text-fg-muted" aria-label="ongoing" />
-									{/if}
-									{o.theme ?? '—'}
+								<td class="hidden md:table-cell py-2.5 pr-3 max-w-[140px]">
+									<div class="flex flex-col gap-0.5">
+										<span class="text-amber lowercase truncate">
+											{#if !o.terminal}
+												<Clock class="inline size-3 text-fg-muted" aria-label="ongoing" />
+											{/if}
+											{o.theme ?? '—'}
+										</span>
+										{#if o.scorer_config_version}
+											<span class="whitespace-nowrap rounded-sm border border-fg-muted/30 px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-fg-muted"
+											      title="Scorer config version (cohort / poolability key)">{o.scorer_config_version}</span>
+										{/if}
+									</div>
 								</td>
 							</tr>
 							{#if isOpen}

@@ -176,3 +176,28 @@ describe('statsUnlocked / statusLabel', () => {
 		expect(statusLabel('ok')).toBe('unlocked');
 	});
 });
+
+// Mirrors the /edge outcomes table guard:
+// `{#if row.scorer_config_version}` — truthy-only, so empty string and null both hide.
+function showsScorerVersionChip(scorer_config_version: string | null | undefined): boolean {
+	return !!scorer_config_version;
+}
+
+describe('scorer_config_version chip visibility (/edge outcomes row)', () => {
+	it('shows when scorer_config_version is a non-empty string', () => {
+		expect(showsScorerVersionChip('atr-tilt-v1')).toBe(true);
+		expect(showsScorerVersionChip('v2')).toBe(true);
+	});
+
+	it('does NOT show when scorer_config_version is null', () => {
+		expect(showsScorerVersionChip(null)).toBe(false);
+	});
+
+	it('does NOT show when scorer_config_version is undefined', () => {
+		expect(showsScorerVersionChip(undefined)).toBe(false);
+	});
+
+	it('does NOT show when scorer_config_version is an empty string', () => {
+		expect(showsScorerVersionChip('')).toBe(false);
+	});
+});

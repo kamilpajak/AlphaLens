@@ -176,3 +176,28 @@ def test_ingest_still_raises_on_nonempty_parquet_missing_required_columns(tmp_pa
     pd.DataFrame([{"realized_r": 1.0}]).to_parquet(path, index=False)
     with pytest.raises(ValueError, match="missing required columns"):
         rebuild_from_parquet(tmp_path)
+
+
+@pytest.mark.django_db
+def test_ingest_persists_scorer_config_version(tmp_path: Path):
+    """A parquet WITH scorer_config_version flows through to the DB row."""
+    row = _terminal_row("SCVT", excess=0.03)
+    row["scorer_config_version"] = "scorer-v1-test"
+    _write_parquet(tmp_path, "2026-05-27", [row])
+    rebuild_from_parquet(tmp_path)
+
+    outcome = LadderOutcome.objects.get(ticker="SCVT")
+    assert outcome.scorer_config_version == "scorer-v1-test"
+
+
+@pytest.mark.django_db
+def test_ingest_scorer_config_version_defaults_to_empty_when_column_absent(tmp_path: Path):
+    """A parquet WITHOUT scorer_config_version ingests with the field defaulting to ''."""
+    row = _terminal_row("OLDROW", excess=0.01)
+    # Explicitly ensure the column is absent (not just None).
+    row.pop("scorer_config_version", None)
+    _write_parquet(tmp_path, "2026-05-27", [row])
+    rebuild_from_parquet(tmp_path)
+
+    outcome = LadderOutcome.objects.get(ticker="OLDROW")
+    assert outcome.scorer_config_version == ""

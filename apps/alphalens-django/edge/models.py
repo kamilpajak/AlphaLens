@@ -99,6 +99,12 @@ class LadderOutcome(models.Model):
     # geometries into one mean. Empty for non-plannable rows (never replayed).
     ladder_config_version = models.CharField(max_length=256, blank=True, default="")
 
+    # Canonical token identifying which scorer produced the population-monitor
+    # rows in this parquet (e.g. "scorer-v1-absdiff-2x"). Allows a tuning
+    # analyst to GROUP BY scorer_config_version to avoid blending runs produced
+    # by different scoring configs. Empty for rows predating the stamp.
+    scorer_config_version = models.CharField(max_length=128, blank=True, default="")
+
     # Alternate-exit-ladder grid (PR-2): JSON map {config -> realized_r} from
     # re-replaying the SAME bars under each exit policy (single_tp_first /
     # single_tp_last / no_tp_ride). Holds the candidate + entry + stop fixed, so

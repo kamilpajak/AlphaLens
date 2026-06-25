@@ -330,6 +330,7 @@ export interface EdgeOutcome {
 	ticker: string;
 	brief_date: string;
 	theme: string | null;
+	scorer_config_version: string | null;
 	ladder_classification: string;
 	terminal: boolean;
 	realized_r: number | null;

@@ -144,6 +144,52 @@ class TestLoadBrief(unittest.TestCase):
         self.assertEqual(candidates[0].n_gates_failed, 0)
         self.assertIsNone(candidates[0].layer4_weighted_score)
 
+    def test_scorer_config_version_populated_when_present(self):
+        """Rows that carry scorer_config_version pass the value through."""
+        d = dt.date(2026, 6, 25)
+        _write_brief(
+            self.tmpdir,
+            d,
+            [
+                {
+                    "ticker": "AAPL",
+                    "theme": "tech",
+                    "verified": True,
+                    "scorer_config_version": "scorer-v2-oneil-r",
+                }
+            ],
+        )
+        candidates = load_brief(d, self.tmpdir)
+        self.assertEqual(candidates[0].scorer_config_version, "scorer-v2-oneil-r")
+
+    def test_scorer_config_version_defaults_to_empty_string_when_absent(self):
+        """Legacy rows without scorer_config_version yield an empty string."""
+        d = dt.date(2026, 6, 25)
+        _write_brief(
+            self.tmpdir,
+            d,
+            [{"ticker": "MSFT", "theme": "cloud"}],
+        )
+        candidates = load_brief(d, self.tmpdir)
+        self.assertEqual(candidates[0].scorer_config_version, "")
+
+    def test_scorer_config_version_nan_cell_coerces_to_empty_string(self):
+        """A present-but-NaN scorer_config_version cell (e.g. float NaN from
+        pandas when the column exists but the row has no value) must coerce to
+        ``""`` rather than the string ``"nan"`` that the old ``str(...) or ""``
+        expression would produce for a non-NaN float, or the unexpected ``"nan"``
+        string that ``str(float('nan'))`` gives."""
+        import numpy as np
+
+        d = dt.date(2026, 6, 25)
+        # Write a DataFrame that has the column but with a NaN value for this row.
+        path = self.tmpdir / f"{d.isoformat()}.parquet"
+        pd.DataFrame(
+            [{"ticker": "TSLA", "theme": "ev", "scorer_config_version": np.nan}]
+        ).to_parquet(path, index=False)
+        candidates = load_brief(d, self.tmpdir)
+        self.assertEqual(candidates[0].scorer_config_version, "")
+
 
 if __name__ == "__main__":
     unittest.main()
