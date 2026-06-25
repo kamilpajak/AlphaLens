@@ -127,6 +127,15 @@ class Brief(models.Model):
 
     layer4_weighted_score = models.IntegerField(default=0)
 
+    # ATR-tilt scorer fields (PR-2 of the atr-tilt epic): the pipeline score
+    # stage emits these three columns so the API can surface them and the EDGE
+    # calibration can partition by scorer_config_version.
+    selection_score = models.FloatField(null=True, blank=True)
+    atr_penalty = models.FloatField(null=True, blank=True)
+    # Poolability key: deferred calibration must not pool rows written by
+    # different scorer versions.  Blank for pre-atr-tilt dates.
+    scorer_config_version = models.CharField(max_length=128, blank=True, default="")
+
     also_in_themes = models.JSONField(default=list, blank=True)
     rank_in_day = models.IntegerField(null=True, blank=True)
     cohort_size_in_day = models.IntegerField(null=True, blank=True)

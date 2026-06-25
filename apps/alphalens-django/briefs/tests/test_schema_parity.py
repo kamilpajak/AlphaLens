@@ -120,6 +120,15 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     # the brief PARQUET (the pipeline still emits them) as the ingest assembly source
     # — buffett_qual_config_version rides INSIDE the blob (it never had a flat field).
     "expert_assessments",
+    # Post-legacy extension (2026-06-25, atr-tilt PR-2): ATR-penalised composite
+    # score + ATR penalty term emitted by the pipeline score stage.  Serialised by
+    # Task 2.2; registered here to satisfy the no-orphan-model-field guard.
+    "selection_score",
+    "atr_penalty",
+    # Backend-only poolability key (atr-tilt scorer): deferred calibration must
+    # not pool rows written by different scorer versions.  Blank for pre-atr-tilt
+    # dates.  NOT API-serialised yet (Task 2.2); registered here for the guard.
+    "scorer_config_version",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.
