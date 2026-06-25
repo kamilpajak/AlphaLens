@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
 
@@ -14,6 +15,16 @@ import { defineConfig } from 'vitest/config';
 // imported from a unit test.
 export default defineConfig({
 	plugins: [svelte()],
+	resolve: {
+		// SvelteKit's `$lib` alias is normally injected by the `svelte-kit sync`
+		// tsconfig + the SvelteKit Vite plugin, neither of which runs under the
+		// bare vitest config. Map it explicitly so unit tests can import rune
+		// modules that resolve sibling modules via `$lib/...` internally (e.g.
+		// `marketStatus.svelte.ts` → `$lib/api`).
+		alias: {
+			$lib: fileURLToPath(new URL('./src/lib', import.meta.url))
+		}
+	},
 	test: {
 		include: ['tests/unit/**/*.test.ts'],
 		environment: 'node'

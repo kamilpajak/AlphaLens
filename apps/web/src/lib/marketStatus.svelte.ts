@@ -68,7 +68,13 @@ export const marketStatus = $state<MarketStatusState>({
  */
 export async function refreshMarketStatus(fetcher: typeof fetch = fetch): Promise<void> {
 	try {
-		const res = await apiFetch('/v1/market/status', {}, fetcher);
+		// silentAuth: this poll is fail-silent "noise" (see the catch below) and
+		// runs every 60s + on every tab focus. It must NOT raise the global
+		// re-auth overlay on a transient blip — that turned a tab-wake network
+		// race into a blocking modal. Genuine expiry is surfaced by the data
+		// fetches the user cares about. A successful poll still clears a stale
+		// overlay (proof-of-life clearing in apiFetch is not suppressed).
+		const res = await apiFetch('/v1/market/status', {}, fetcher, { silentAuth: true });
 		if (!res.ok) {
 			marketStatus.lastError = `HTTP ${res.status}`;
 			marketStatus.hasLoaded = true;

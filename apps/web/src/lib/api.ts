@@ -11,7 +11,7 @@
 // Leave it unset and you get same-origin behaviour, which is what every
 // existing deploy expects.
 
-import { markSessionExpired } from './session.svelte';
+import { clearSessionExpired, markSessionExpired } from './session.svelte';
 
 const RAW_BASE = (import.meta.env.VITE_API_BASE ?? '').trim();
 
@@ -68,11 +68,22 @@ export function isCrossOrigin(): boolean {
  * Accepts the same second-arg shape as `fetch` plus a `fetcher` slot for
  * the SvelteKit page-load `fetch` (preserves SSR cookie hand-off if we
  * ever bring SSR back).
+ *
+ * `opts.silentAuth` suppresses RAISING the global re-auth overlay on the two
+ * synthetic-401 paths (the call still returns a 401 so the callsite's
+ * `!res.ok` branch behaves). Used by the high-frequency, fail-silent
+ * `/v1/market/status` background poll so a transient blip (tab-wake network
+ * race, tunnel restart) on the most frequent fetch in the app no longer
+ * latches a blocking full-screen modal. Genuine expiry is still surfaced by
+ * the data fetches the user cares about (briefs, edge), which leave
+ * `silentAuth` unset. Proof-of-life clearing below is NOT suppressed — a
+ * successful silent poll still self-heals a stale overlay.
  */
 export async function apiFetch(
 	path: string,
 	init: RequestInit = {},
-	fetcher: typeof fetch = fetch
+	fetcher: typeof fetch = fetch,
+	opts: { silentAuth?: boolean } = {}
 ): Promise<Response> {
 	let res: Response;
 	try {
@@ -96,7 +107,8 @@ export async function apiFetch(
 		// Flip the global session-expiry flag so the layout-level re-auth
 		// overlay fires on EVERY route — not just the loaders that escalate
 		// 401 to the full-page error boundary. Marked only here (and on the
-		// login-HTML path below), NOT on the 503 offline return above.
+		// login-HTML path below), NOT on the 503 offline return above, and NOT
+		// when the caller opted into `silentAuth` (the background poll).
 		//
 		// Known limitation (LOCAL DEV ONLY): a same-origin online fetch that
 		// throws is a genuine connectivity failure (no CF Access in the loop),
@@ -105,7 +117,7 @@ export async function apiFetch(
 		// IS the Access redirect-refusal — and gating on isCrossOrigin() would
 		// still not separate that from a Tunnel-down (both throw cross-origin),
 		// so the dev-only false positive is left as-is.
-		markSessionExpired();
+		if (!opts.silentAuth) markSessionExpired();
 		return new Response(null, { status: 401, statusText: 'Unauthorized' });
 	}
 	// CF Access session expiry: when the CF_Authorization cookie is invalid
@@ -121,10 +133,19 @@ export async function apiFetch(
 	// masking that as 401 would bounce the user into an infinite SSO loop
 	// during a transient outage, so let it through as the real error.
 	if (res.ok && contentType.includes('text/html')) {
-		// Same auth-expiry signal as the catch branch — fire the global overlay.
-		markSessionExpired();
+		// Same auth-expiry signal as the catch branch — fire the global overlay
+		// (unless the caller opted into `silentAuth`).
+		if (!opts.silentAuth) markSessionExpired();
 		return new Response(null, { status: 401, statusText: 'Unauthorized' });
 	}
+	// Proof of life: a 2xx response means CF Access let the request through to
+	// Django, so the session is valid. Clear any stale overlay that a prior
+	// transient failure latched — nothing else resets the flag except the
+	// manual "retry" button, so without this a single blip stuck the overlay up
+	// until a hard reload. Only a confirmed 2xx clears it; a non-2xx (500/502)
+	// is ambiguous (could originate at the tunnel before Django), so it leaves
+	// the flag untouched.
+	if (res.ok) clearSessionExpired();
 	return res;
 }
 
