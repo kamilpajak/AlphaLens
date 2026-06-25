@@ -953,17 +953,30 @@ Non-touch arms (always-fill): market_at_arrival, vwap_arrival.
 """
 
 
+@dataclass(frozen=True)
+class _ArmExcessContext:
+    """Finalization inputs shared by every entry-grid arm.
+
+    Computed once per event in :func:`replay_entry_grid` and threaded into the
+    touch / non-touch reward helpers and :func:`_arm_excess_from_outcome`,
+    keeping each helper's parameter list small. All fields are arm-independent;
+    the per-arm ``arm_name`` is passed alongside (it varies per call).
+    """
+
+    benchmark_window_return: float
+    market_cap: float | None
+    first_rth_bar: Mapping[str, Any] | None
+    apply_haircut_fn: Any
+    implausible_threshold: float
+    cash_reward: float
+
+
 def _arm_excess_from_outcome(
     outcome: LadderOutcome,
     *,
     own_stop: float,
-    benchmark_window_return: float,
-    market_cap: float | None,
-    first_rth_bar: Mapping[str, Any] | None,
     arm_name: str,
-    apply_haircut_fn: Any,
-    implausible_threshold: float,
-    cash_reward: float,
+    ctx: _ArmExcessContext,
     check_outcome_status: bool = False,
 ) -> float | None:
     """Shared reward-finalization step for all five entry-grid arms.
@@ -980,50 +993,38 @@ def _arm_excess_from_outcome(
     own_stop:
         The disaster-stop price used in the arm's replay (may differ from the
         source setup's ``disaster_stop`` for the alternative-geometry arms).
-    benchmark_window_return:
-        Market benchmark return over the same hold window (already validated
-        finite by the caller).
-    market_cap:
-        Issuer market cap in USD; passed through to the haircut model.
-    first_rth_bar:
-        First bar inside the arrival RTH window; used by the haircut spread model.
     arm_name:
-        The arm identifier string passed through to :func:`apply_haircut_fn`.
-    apply_haircut_fn:
-        Reference to :func:`~alphalens_pipeline.feedback.execution_cost.apply_haircut_to_excess`.
-        Passed in to avoid re-importing from a hot path.
-    implausible_threshold:
-        The ``IMPLAUSIBLE_RETURN_THRESHOLD`` constant from
-        :mod:`alphalens_pipeline.feedback.bar_window`.
-    cash_reward:
-        Pre-computed ``-benchmark_window_return`` (cash = 0 gross, so excess =
-        minus the benchmark).
+        The arm identifier string passed through to ``ctx.apply_haircut_fn``.
+    ctx:
+        The arm-independent finalization inputs (benchmark return, market cap,
+        first RTH bar, haircut fn, implausible threshold, cash reward) — see
+        :class:`_ArmExcessContext`.
     check_outcome_status:
         When ``True``, also maps ``outcome.status in {"NO_DATA", "NO_STRUCTURE"}``
-        to ``cash_reward``.  Set for non-touch arms whose synthetic-fill replay
-        can produce these status codes on degenerate bar inputs.
+        to ``ctx.cash_reward``.  Set for non-touch arms whose synthetic-fill
+        replay can produce these status codes on degenerate bar inputs.
     """
     if outcome.classification in ("NO_FILL", "BAD_GEOMETRY"):
-        return cash_reward
+        return ctx.cash_reward
     if check_outcome_status and outcome.status in ("NO_DATA", "NO_STRUCTURE"):
-        return cash_reward
+        return ctx.cash_reward
 
     b = outcome.blended_entry
     r = outcome.realized_r
     if b is None or r is None or not math.isfinite(b) or not math.isfinite(r):
-        return cash_reward
+        return ctx.cash_reward
 
     exit_mark = b + r * (b - own_stop)
 
-    if not math.isfinite(exit_mark) or abs(exit_mark / b - 1.0) > implausible_threshold:
+    if not math.isfinite(exit_mark) or abs(exit_mark / b - 1.0) > ctx.implausible_threshold:
         return None
 
-    raw_excess = (exit_mark - b) / b - benchmark_window_return
-    return apply_haircut_fn(
+    raw_excess = (exit_mark - b) / b - ctx.benchmark_window_return
+    return ctx.apply_haircut_fn(
         raw_excess,
         arm=arm_name,
-        market_cap=market_cap,
-        first_rth_bar=first_rth_bar,
+        market_cap=ctx.market_cap,
+        first_rth_bar=ctx.first_rth_bar,
     )
 
 
@@ -1036,12 +1037,7 @@ def _touch_arm_reward(
     ordered_bars: Sequence[Mapping[str, Any]],
     entry_expiry_ms: int | None,
     position_expiry_ms: int | None,
-    benchmark_window_return: float,
-    market_cap: float | None,
-    first_rth_bar: Mapping[str, Any] | None,
-    apply_haircut_fn: Any,
-    implausible_threshold: float,
-    cash_reward: float,
+    ctx: _ArmExcessContext,
 ) -> float | None:
     """Replay a touch arm and return its net haircut-adjusted excess (or None).
 
@@ -1058,7 +1054,7 @@ def _touch_arm_reward(
         return None
     if arm_setup.status != "OK":
         # BAD_GEOMETRY (or any other non-OK non-NO_STRUCTURE status) -> cash.
-        return cash_reward
+        return ctx.cash_reward
 
     # Guard: a non-finite own_stop means the arm's stop geometry is undefined
     # (e.g. arm_disaster_stop returned NaN because atr was missing/NaN).
@@ -1080,13 +1076,8 @@ def _touch_arm_reward(
     return _arm_excess_from_outcome(
         outcome,
         own_stop=own_stop,
-        benchmark_window_return=benchmark_window_return,
-        market_cap=market_cap,
-        first_rth_bar=first_rth_bar,
         arm_name=arm_name,
-        apply_haircut_fn=apply_haircut_fn,
-        implausible_threshold=implausible_threshold,
-        cash_reward=cash_reward,
+        ctx=ctx,
     )
 
 
@@ -1100,12 +1091,7 @@ def _notouch_arm_reward(
     position_expiry_ms: int | None,
     atr: float,
     close: float,
-    benchmark_window_return: float,
-    market_cap: float | None,
-    first_rth_bar: Mapping[str, Any] | None,
-    apply_haircut_fn: Any,
-    implausible_threshold: float,
-    cash_reward: float,
+    ctx: _ArmExcessContext,
 ) -> float | None:
     """Process a non-touch fill result and return net excess (or None).
 
@@ -1113,13 +1099,13 @@ def _notouch_arm_reward(
     Non-finite ``own_stop`` (NaN atr or close) → ``None`` (uncomputable arm).
     """
     if arm_fill.status == "NO_FILL" or arm_fill.fill_price is None:
-        return cash_reward
+        return ctx.cash_reward
 
     fill_price: float = arm_fill.fill_price
     fill_ts_ms: int = arm_fill.fill_ts_ms if arm_fill.fill_ts_ms is not None else arrival_open_ms
 
     if not math.isfinite(fill_price):
-        return cash_reward
+        return ctx.cash_reward
 
     from alphalens_pipeline.thematic.trade_setup.entry_primitives import arm_disaster_stop
 
@@ -1141,13 +1127,8 @@ def _notouch_arm_reward(
     return _arm_excess_from_outcome(
         outcome,
         own_stop=own_stop,
-        benchmark_window_return=benchmark_window_return,
-        market_cap=market_cap,
-        first_rth_bar=first_rth_bar,
         arm_name=arm_name,
-        apply_haircut_fn=apply_haircut_fn,
-        implausible_threshold=implausible_threshold,
-        cash_reward=cash_reward,
+        ctx=ctx,
         check_outcome_status=True,
     )
 
@@ -1280,16 +1261,21 @@ def replay_entry_grid(
 
     cash_reward = -benchmark_window_return
 
+    # Arm-independent finalization inputs, computed once and shared by all arms.
+    excess_ctx = _ArmExcessContext(
+        benchmark_window_return=benchmark_window_return,
+        market_cap=market_cap,
+        first_rth_bar=first_rth_bar,
+        apply_haircut_fn=apply_haircut_to_excess,
+        implausible_threshold=IMPLAUSIBLE_RETURN_THRESHOLD,
+        cash_reward=cash_reward,
+    )
+
     # Shared keyword arguments forwarded to both arm-reward helpers.
     _arm_kwargs: dict[str, Any] = {
         "trade_setup": trade_setup,
         "ordered_bars": ordered_bars,
-        "benchmark_window_return": benchmark_window_return,
-        "market_cap": market_cap,
-        "first_rth_bar": first_rth_bar,
-        "apply_haircut_fn": apply_haircut_to_excess,
-        "implausible_threshold": IMPLAUSIBLE_RETURN_THRESHOLD,
-        "cash_reward": cash_reward,
+        "ctx": excess_ctx,
     }
 
     result: dict[str, float | None] = dict(none_grid)

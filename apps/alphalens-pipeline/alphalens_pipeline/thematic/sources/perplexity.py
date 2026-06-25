@@ -60,7 +60,8 @@ def _extract_json(content: str) -> object:
 def parse_stories(content: str) -> list[dict]:
     try:
         data = _extract_json(content)
-    except (ValueError, json.JSONDecodeError):
+    except ValueError:
+        # json.JSONDecodeError is a subclass of ValueError, so this catches both.
         logger.warning("perplexity source: response was not parseable JSON")
         return []
     stories = data.get("stories") if isinstance(data, dict) else data

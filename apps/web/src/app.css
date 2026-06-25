@@ -1,5 +1,7 @@
+/* All `@import` rules must precede every other at-rule (except `@charset` /
+   `@layer`) per the CSS spec — `@plugin` below would otherwise make these
+   invalid (Sonar css:S8778). Tailwind still resolves its own layer ordering. */
 @import 'tailwindcss';
-@plugin '@tailwindcss/typography';
 
 /* Self-hosted fonts via @fontsource — replaces the Google Fonts <link> in
    app.html. Google Fonts' CSS endpoint cannot be SRI-pinned (response varies
@@ -16,6 +18,8 @@
    face. Vite rewrites the relative font URL and self-hosts the woff2 into the
    Cloudflare Pages build output. */
 @import 'temml/dist/Temml-Local.css';
+
+@plugin '@tailwindcss/typography';
 
 /* Tailwind v4 module-graph detection for SvelteKit components is fragile —
    explicit @source globs are the canonical fix per upstream guidance. */
