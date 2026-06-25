@@ -121,13 +121,14 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     # — buffett_qual_config_version rides INSIDE the blob (it never had a flat field).
     "expert_assessments",
     # Post-legacy extension (2026-06-25, atr-tilt PR-2): ATR-penalised composite
-    # score + ATR penalty term emitted by the pipeline score stage.  Serialised by
-    # Task 2.2; registered here to satisfy the no-orphan-model-field guard.
+    # score + ATR penalty term emitted by the pipeline score stage.  Auto-served
+    # via the exclude=("pk",) serializers; registered here for the no-orphan guard.
     "selection_score",
     "atr_penalty",
-    # Backend-only poolability key (atr-tilt scorer): deferred calibration must
-    # not pool rows written by different scorer versions.  Blank for pre-atr-tilt
-    # dates.  NOT API-serialised yet (Task 2.2); registered here for the guard.
+    # Poolability key (atr-tilt scorer): deferred calibration must not pool rows
+    # written by different scorer versions.  Blank for pre-atr-tilt dates.  Like
+    # insider_signal_version it is auto-served (exclude=("pk",)) — surfaced as the
+    # version chip in PR-3 (SPA); registered here for the no-orphan guard.
     "scorer_config_version",
 )
 

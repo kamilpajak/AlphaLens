@@ -614,6 +614,31 @@ class TestAtrTiltFieldsIngest:
         assert brief.atr_penalty is None
         assert brief.scorer_config_version == ""
 
+    def test_present_but_nan_atr_columns_coerce_to_null_and_blank(self, tmp_path: Path):
+        """Defensive: the pipeline never emits NaN/None for these columns, but if a
+        column is present-but-NaN (float) or present-but-None (string), the ingest
+        finite-scrubs it (coerce_float -> None, CharField -> "") so no NaN ever
+        reaches Postgres / the JSON wire. Mirrors the expert_spread NaN guard above."""
+        _write_parquet(
+            tmp_path,
+            "2026-06-25",
+            [
+                {
+                    "ticker": "NANROW",
+                    "theme": "legacy",
+                    "layer4_weighted_score": 2,
+                    "selection_score": float("nan"),
+                    "atr_penalty": float("nan"),
+                    "scorer_config_version": None,
+                }
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        brief = Brief.objects.get(ticker="NANROW")
+        assert brief.selection_score is None
+        assert brief.atr_penalty is None
+        assert brief.scorer_config_version == ""
+
 
 @pytest.mark.django_db
 class TestInsiderSignalVersionIngest:
