@@ -573,6 +573,74 @@ class TestExpertAssessments:
 
 
 @pytest.mark.django_db
+class TestAtrTiltFieldsIngest:
+    """PR-2 contract guard: selection_score, atr_penalty, and scorer_config_version
+    are picked up from matching parquet columns by the field-name-driven ingest path
+    (same mechanism as insider_signal_version).  These tests exist so a future rename
+    or type change in the model cannot silently drop or mis-coerce the columns."""
+
+    def test_atr_fields_round_trip(self, tmp_path: Path):
+        """All three ATR-tilt fields land on the Brief model with correct types."""
+        _write_parquet(
+            tmp_path,
+            "2026-06-25",
+            [
+                {
+                    "ticker": "NVDA",
+                    "theme": "ai-infra",
+                    "selection_score": 72.5,
+                    "atr_penalty": 3.1,
+                    "scorer_config_version": "atr-tilt-v1",
+                }
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        brief = Brief.objects.get(ticker="NVDA")
+        assert brief.selection_score == pytest.approx(72.5)
+        assert brief.atr_penalty == pytest.approx(3.1)
+        assert brief.scorer_config_version == "atr-tilt-v1"
+
+    def test_missing_atr_columns_default_to_null_and_blank(self, tmp_path: Path):
+        """A pre-atr-tilt parquet that omits these columns ingests without error:
+        the two floats default to None and the version string defaults to ''."""
+        _write_parquet(
+            tmp_path,
+            "2026-06-25",
+            [{"ticker": "OLD", "theme": "legacy"}],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        brief = Brief.objects.get(ticker="OLD")
+        assert brief.selection_score is None
+        assert brief.atr_penalty is None
+        assert brief.scorer_config_version == ""
+
+    def test_present_but_nan_atr_columns_coerce_to_null_and_blank(self, tmp_path: Path):
+        """Defensive: the pipeline never emits NaN/None for these columns, but if a
+        column is present-but-NaN (float) or present-but-None (string), the ingest
+        finite-scrubs it (coerce_float -> None, CharField -> "") so no NaN ever
+        reaches Postgres / the JSON wire. Mirrors the expert_spread NaN guard above."""
+        _write_parquet(
+            tmp_path,
+            "2026-06-25",
+            [
+                {
+                    "ticker": "NANROW",
+                    "theme": "legacy",
+                    "layer4_weighted_score": 2,
+                    "selection_score": float("nan"),
+                    "atr_penalty": float("nan"),
+                    "scorer_config_version": None,
+                }
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        brief = Brief.objects.get(ticker="NANROW")
+        assert brief.selection_score is None
+        assert brief.atr_penalty is None
+        assert brief.scorer_config_version == ""
+
+
+@pytest.mark.django_db
 class TestInsiderSignalVersionIngest:
     """The insider-signal poolability key round-trips so the deferred
     Insider×EDGE calibration can partition old vs new signal semantics."""
