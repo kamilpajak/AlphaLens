@@ -606,14 +606,11 @@ def score_candidates(candidates: pd.DataFrame, *, asof: dt.date) -> pd.DataFrame
     ]
     enrichment = enrichment.drop(columns=["_fcff_positive", "_technicals_positive"])
 
-    enrichment["atr_penalty"] = enrichment["technical_atr_pct"].apply(
-        selection_score_mod.atr_penalty
-    )
-    enrichment["selection_score"] = enrichment.apply(
-        lambda row: selection_score_mod.selection_score(
-            row["layer4_weighted_score"], row["technical_atr_pct"]
-        ),
-        axis=1,
+    # selection_score = layer4 − atr_penalty; reuse the just-computed penalty
+    # column (don't recompute it per row) so the two can't drift apart.
+    enrichment["atr_penalty"] = enrichment["technical_atr_pct"].map(selection_score_mod.atr_penalty)
+    enrichment["selection_score"] = (
+        enrichment["layer4_weighted_score"].astype(float) - enrichment["atr_penalty"]
     )
 
     # Merge on ticker to preserve original order + Phase C columns.
