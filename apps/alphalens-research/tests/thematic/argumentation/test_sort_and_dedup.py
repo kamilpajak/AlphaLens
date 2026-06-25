@@ -293,6 +293,34 @@ class TestDedupKeepsStrongestThemeRow(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertEqual(list(out.iloc[0]["also_in_themes"]), [])
 
+    def test_atr_tilt_does_not_change_multi_theme_dedup_survivor(self):
+        # Invariant: atr_penalty is a per-TICKER constant (same value for all
+        # of a ticker's theme-rows).  Because selection_score = layer4 - penalty
+        # and the penalty is identical on every row, the relative ordering among
+        # a ticker's theme-rows is identical to the ordering by layer4 alone.
+        # Consequence: which theme-row survives drop_duplicates(keep="first") is
+        # unchanged by the ATR tilt.
+        #
+        # This test is a guard, not a red→green cycle.  It passes immediately
+        # and will fail only if a future maintainer folds a theme-dependent term
+        # (e.g. per-theme novelty) into selection_score.
+        rows = [
+            _row(ticker="ABC", theme="ai", layer4_weighted_score=5, selection_score=4.0),
+            _row(ticker="ABC", theme="space", layer4_weighted_score=3, selection_score=2.0),
+        ]
+        out = orchestrator._sort_and_dedup_for_brief(pd.DataFrame(rows))
+        self.assertEqual(len(out), 1, "dedup must collapse the two ABC rows to one")
+        self.assertEqual(
+            out.iloc[0]["theme"],
+            "ai",
+            f"theme 'ai' (higher selection_score) must survive; got {out.iloc[0]['theme']!r}",
+        )
+        self.assertEqual(
+            sorted(out.iloc[0]["also_in_themes"]),
+            ["space"],
+            "dropped theme must appear in also_in_themes badge",
+        )
+
 
 class TestRankInDayColumn(unittest.TestCase):
     """After sort + dedup, each surviving row gets a 1-based ``rank_in_day``
