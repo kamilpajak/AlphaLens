@@ -144,6 +144,35 @@ class TestLoadBrief(unittest.TestCase):
         self.assertEqual(candidates[0].n_gates_failed, 0)
         self.assertIsNone(candidates[0].layer4_weighted_score)
 
+    def test_scorer_config_version_populated_when_present(self):
+        """Rows that carry scorer_config_version pass the value through."""
+        d = dt.date(2026, 6, 25)
+        _write_brief(
+            self.tmpdir,
+            d,
+            [
+                {
+                    "ticker": "AAPL",
+                    "theme": "tech",
+                    "verified": True,
+                    "scorer_config_version": "scorer-v2-oneil-r",
+                }
+            ],
+        )
+        candidates = load_brief(d, self.tmpdir)
+        self.assertEqual(candidates[0].scorer_config_version, "scorer-v2-oneil-r")
+
+    def test_scorer_config_version_defaults_to_empty_string_when_absent(self):
+        """Legacy rows without scorer_config_version yield an empty string."""
+        d = dt.date(2026, 6, 25)
+        _write_brief(
+            self.tmpdir,
+            d,
+            [{"ticker": "MSFT", "theme": "cloud"}],
+        )
+        candidates = load_brief(d, self.tmpdir)
+        self.assertEqual(candidates[0].scorer_config_version, "")
+
 
 if __name__ == "__main__":
     unittest.main()

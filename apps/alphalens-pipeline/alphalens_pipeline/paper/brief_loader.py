@@ -42,6 +42,7 @@ class CandidateBrief:
     n_gates_passed: int
     n_gates_failed: int
     layer4_weighted_score: float | None
+    scorer_config_version: str
 
 
 def _coerce_trade_setup(raw: object) -> dict | None:
@@ -105,6 +106,7 @@ def _row_to_candidate(row: pd.Series, brief_date: dt.date) -> CandidateBrief:
         n_gates_passed=_int_or_zero("n_gates_passed"),
         n_gates_failed=_int_or_zero("n_gates_failed"),
         layer4_weighted_score=_float_or_none("layer4_weighted_score"),
+        scorer_config_version=str(row.get("scorer_config_version", "") or ""),
     )
 
 
