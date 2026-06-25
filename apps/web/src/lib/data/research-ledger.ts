@@ -244,7 +244,7 @@ export const paradigms: Paradigm[] = [
 		metric: 'doctrine FAIL — full-sample net [αt] 0.15 (G1<3.5); phase-mean 0.07 (G2<2.5); per-window net [αt] 0.00 / 0.44 / -0.23 ([IS]/[OOS]/[FL], G3 fails on negative [FL]); net-15bps <0 every window (G4). AV-PIT only PASS. Excess net +3.6% / +5.0% / +6.4%.',
 		lesson: 'large-cap [PEAD] effectively dead since ~2006 — vindicates the literature, not the signal. All four launch gates + the in-code doctrine bar landed first, so a methodology-inflated marginal t could not be mistaken for a PASS. Class `event_drift_search_2026_05_03` closed.',
 		evidence: 'paradigm14_pead_v2_design_2026_05_13.md',
-		is_t: 0.0, oos_t: 0.44
+		is_t: 0, oos_t: 0.44
 	},
 	{
 		id: 'P15', display: '#15', name: 'idiosyncratic_momentum', layer_id: 'L2', axis_a: 'screener', axis_b: ['price'],
