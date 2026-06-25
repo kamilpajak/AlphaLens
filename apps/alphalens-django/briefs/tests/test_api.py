@@ -453,5 +453,71 @@ class TestExpertAssessmentsInBulkLists:
         assert ea["panel"]["panel_config_version"] == "panel-v1-absdiff-2x"
 
 
+@pytest.mark.django_db
+class TestAtrTiltFieldsOnAPI:
+    """PR-2 contract guard: selection_score, atr_penalty, scorer_config_version must
+    appear as keys in every candidate-bearing API response.  The serializers use
+    Meta.exclude=("pk",), so all three fields are auto-exposed; these tests act as
+    regression guards against a future _LIST_EXCLUDE / _DETAIL_EXCLUDE change or
+    a model refactor silently dropping the fields (the SPA in PR-3 depends on them).
+    """
+
+    @staticmethod
+    def _atr_fixture(tmp_path: "Path") -> None:
+        _write_parquet(
+            tmp_path,
+            "2026-05-22",
+            [
+                {
+                    "ticker": "NVDA",
+                    "theme": "ai-infra",
+                    "layer4_weighted_score": 15,
+                    "selection_score": 72.5,
+                    "atr_penalty": 3.1,
+                    "scorer_config_version": "atr-tilt-v1",
+                }
+            ],
+        )
+        from briefs.ingest.parquet import rebuild_from_parquet
+
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+    def test_atr_fields_present_on_candidate_list(self, client, tmp_path):
+        """LIST endpoint (/v1/days/<date>/candidates) exposes all three fields."""
+        self._atr_fixture(tmp_path)
+        body = client.get("/v1/days/2026-05-22/candidates").json()
+        cand = body["data"][0]
+        assert "selection_score" in cand
+        assert "atr_penalty" in cand
+        assert "scorer_config_version" in cand
+
+    def test_atr_fields_present_on_candidate_detail(self, client, tmp_path):
+        """DETAIL endpoint (/v1/candidates/<date>/<ticker>) exposes all three fields."""
+        self._atr_fixture(tmp_path)
+        body = client.get("/v1/candidates/2026-05-22/NVDA").json()
+        assert "selection_score" in body
+        assert "atr_penalty" in body
+        assert "scorer_config_version" in body
+
+    def test_atr_field_values_round_trip_correctly(self, client, tmp_path):
+        """Values written in the parquet arrive unchanged on the detail endpoint."""
+        self._atr_fixture(tmp_path)
+        body = client.get("/v1/candidates/2026-05-22/NVDA").json()
+        assert body["selection_score"] == pytest.approx(72.5)
+        assert body["atr_penalty"] == pytest.approx(3.1)
+        assert body["scorer_config_version"] == "atr-tilt-v1"
+
+    def test_atr_fields_present_in_both_serializers(self):
+        """CandidateSerializer and CandidateDetailSerializer both expose the fields
+        (they share _LIST_EXCLUDE / _DETAIL_EXCLUDE = ('pk',) today, but pin this
+        explicitly so a future split cannot silently drop the fields from one)."""
+        assert "selection_score" in CandidateSerializer().fields
+        assert "atr_penalty" in CandidateSerializer().fields
+        assert "scorer_config_version" in CandidateSerializer().fields
+        assert "selection_score" in CandidateDetailSerializer().fields
+        assert "atr_penalty" in CandidateDetailSerializer().fields
+        assert "scorer_config_version" in CandidateDetailSerializer().fields
+
+
 # silence linter when datetime isn't used in this file path-wise
 _ = dt
