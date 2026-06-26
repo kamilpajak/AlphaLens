@@ -48,6 +48,7 @@ import json
 import logging
 import math
 import os
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,6 +104,46 @@ _MAX_FETCHES_PER_RUN = 150
 # crash night cannot starve a long-quiet candidate's forced re-pricing. Total
 # nightly minute fetches are bounded by ``_MAX_FETCHES_PER_RUN + _FORCED_RESOLVE_BUDGET``.
 _FORCED_RESOLVE_BUDGET = 50
+
+_FETCH_DEADLINE_S_DEFAULT = 75 * 60  # wall-clock budget, under TimeoutStartSec=90min
+_BREAKER_CONSECUTIVE_FAILS = 6  # consecutive real Polygon errors before fast-bail
+
+
+class _RunDeadline:
+    """Per-run wall-clock budget + consecutive-Polygon-error breaker.
+
+    ``should_stop()`` latches: once the wall-clock budget is spent OR
+    ``breaker_fails`` real Polygon errors arrive back-to-back, every later call
+    returns True so the run stops issuing NEW fetches and defers the rest via
+    the existing carry-forward path. ``record_fetch_result(ok=False)`` is fed
+    ONLY on retry-exhausting PolygonError/timeout — never on a clean empty /
+    NO_FILL / implausible carry.
+    """
+
+    def __init__(
+        self,
+        budget_s: float,
+        breaker_fails: int = _BREAKER_CONSECUTIVE_FAILS,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._mono = monotonic
+        self._deadline = self._mono() + budget_s
+        self._consecutive_fails = 0
+        self._breaker_fails = breaker_fails
+        self.stopped_reason: str | None = None
+
+    def should_stop(self) -> bool:
+        if self.stopped_reason is not None:
+            return True
+        if self._mono() >= self._deadline:
+            self.stopped_reason = "deadline"
+        elif self._consecutive_fails >= self._breaker_fails:
+            self.stopped_reason = "breaker"
+        return self.stopped_reason is not None
+
+    def record_fetch_result(self, *, ok: bool) -> None:
+        self._consecutive_fails = 0 if ok else self._consecutive_fails + 1
+
 
 # Regular-trading-hours session length in minutes (09:30→16:00 ET = 390). Half-days
 # derive their own (shorter) span from the calendar; see ``_session_rth_span_min``.
