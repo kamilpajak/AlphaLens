@@ -1,0 +1,23 @@
+[Unit]
+Description=AlphaLens edge mirror — rebuild ladder-outcome Postgres cache from population-ladder parquets
+After=network-online.target docker.service
+Wants=network-online.target
+# Triggered by alphalens-feedback-shadow-returns.service (OnSuccess=/OnFailure=)
+# AND by alphalens-edge-mirror.timer (mandatory hourly self-heal — the backstop
+# that keeps /edge fresh even if the OnSuccess= handoff is unavailable on this
+# systemd version, or a split deploy leaves the handoff target missing).
+
+[Service]
+Type=oneshot
+TimeoutStartSec=20min
+# Tame any re-trigger storm (handoff + timer firing close together).
+StartLimitIntervalSec=300
+StartLimitBurst=3
+# The mgmt command is mtime-gated + idempotent, so redundant runs are ~free.
+ExecStart=/usr/bin/docker compose \
+    -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
+    --profile maintenance run --rm rebuild-ladder-outcomes
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics edge-mirror
+
+[Install]
+WantedBy=default.target

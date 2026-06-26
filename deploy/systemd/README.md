@@ -598,3 +598,88 @@ systemctl --user list-timers alphalens-thematic-build
 journalctl --user -u alphalens-thematic-build.service --since today
 systemctl --user start alphalens-thematic-build.service     # manual fire
 ```
+
+## Edge mirror (decoupled) — alphalens-edge-mirror.service + .timer
+
+The Postgres cache rebuild for the `/edge` dashboard has been decoupled from
+the compute job (`alphalens-feedback-shadow-returns.service`) into its own
+unit fired on **every terminal outcome** (success OR failure/timeout) PLUS an
+**hourly self-heal timer**.
+
+### Why decoupled
+
+The original ExecStartPost on the compute unit ran only after a successful
+ExecStart. When the compute job timed out (90-min backstop kill), the
+ExecStartPost never fired, leaving the `/edge` dashboard frozen at the last
+completed run's date — potentially 2+ days stale on a backlog. Decoupling the
+mirror into its own unit fired by `OnSuccess=` and `OnFailure=` ensures the
+cache refreshes even if the compute job times out or errors. The hourly timer
+provides a self-heal backstop independent of the compute job — keeping `/edge`
+fresh even if systemd fires the handoff units out of order or a partial deploy
+leaves the target missing.
+
+### Install (ATOMIC DEPLOY REQUIREMENT)
+
+The compute-unit edit and both new unit files **must land together** in a
+single deploy:
+
+```bash
+# Step 1: Add the three modified/new files to systemd-user.
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/alphalens-feedback-shadow-returns.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-edge-mirror.service            ~/.config/systemd/user/
+cp deploy/systemd/alphalens-edge-mirror.timer              ~/.config/systemd/user/
+
+# Step 2: Reload and enable the timer (triggers the service on every fire,
+# and on the next fire of the compute job).
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-edge-mirror.timer
+
+# Step 3: Verify the timer is active.
+systemctl --user list-timers alphalens-edge-mirror.timer
+```
+
+**CRITICAL:** Do NOT deploy the compute-unit edit alone. The OnSuccess=/OnFailure=
+directives point to `alphalens-edge-mirror.service`, which must exist before
+`daemon-reload` runs. If the mirror unit is missing, systemd will fail to load
+the compute unit and block all future fires.
+
+### systemd version requirement
+
+`OnSuccess=` and `OnFailure=` directives require **systemd ≥ 249**. Check your
+version:
+
+```bash
+systemctl --version   # first line: "systemd X.Y"
+```
+
+On older versions, the `OnSuccess=`/`OnFailure=` lines are parsed but ignored —
+so the hourly timer becomes the **sole** self-heal mechanism (not a loss, since
+the timer fires every hour). A systemd upgrade is outside the scope of this
+deploy; if the version is older than 249 and you want the instant handoff, that
+requires a VPS OS upgrade.
+
+### Inspect
+
+```bash
+systemctl --user status alphalens-edge-mirror.timer
+systemctl --user list-timers alphalens-edge-mirror
+journalctl --user -u alphalens-edge-mirror.service --since today
+systemctl --user start alphalens-edge-mirror.service       # manual fire
+```
+
+### How it works
+
+1. The compute job (`alphalens-feedback-shadow-returns.service`) completes —
+   either successfully (ExecStart exit 0) or fails/times out (exit non-0).
+2. systemd fires `alphalens-edge-mirror.service` immediately via the
+   `OnSuccess=` or `OnFailure=` directive (requires systemd ≥ 249).
+3. The mirror runs `docker compose --profile maintenance run --rm rebuild-ladder-outcomes`
+   to sync the freshly written (or stale-on-failure) population-ladder parquets
+   into the Postgres-backed briefs cache.
+4. Independently, the hourly timer fires `alphalens-edge-mirror.service` at
+   `*:05:00 UTC` each hour as a self-heal backstop.
+
+The mirror command is **idempotent and mtime-gated** — redundant runs (e.g. both
+the OnFailure handoff and the hourly timer fire within seconds) are cheap,
+re-mirroring unchanged parquets and exiting quickly.

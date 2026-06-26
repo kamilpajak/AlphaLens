@@ -27,6 +27,13 @@
 Description=AlphaLens nightly broker-free ladder + population-monitor backfill
 After=network-online.target docker.service
 Wants=network-online.target
+# The edge mirror (rebuild-ladder-outcomes) has been decoupled into its own
+# unit (alphalens-edge-mirror.service) fired on every terminal outcome (success
+# OR failure/timeout) to prevent timeout-kills from skipping the mirror. See
+# deploy/systemd/README.md "Edge mirror (decoupled)" for deployment atomic
+# requirements.
+OnSuccess=alphalens-edge-mirror.service
+OnFailure=alphalens-edge-mirror.service
 
 [Service]
 Type=oneshot
@@ -45,20 +52,6 @@ EnvironmentFile=/etc/alphalens/env
 # pick the dates that need replaying. The ladder + population replays need no
 # broker / account, so no --account flag.
 ExecStart=%h/AlphaLens/.venv/bin/alphalens feedback backfill-shadow-returns
-
-# Mirror the population-ladder parquet this recompute just (re)wrote into the
-# edge Postgres cache via the maintenance ``rebuild-ladder-outcomes`` one-shot
-# from the django-prod compose stack. This job is the SOLE writer of the
-# parquet, so the mirror belongs HERE — it was moved off thematic-build, which
-# re-synced unchanged data 5× per day and left the edge dashboard up to one
-# slot (~2h) behind this recompute. ExecStartPost runs only after a successful
-# ExecStart, so a failed recompute leaves the cache untouched. The spawned
-# container runs under dockerd's cgroup, not this unit's, so it does not count
-# against MemoryMax/TasksMax below. ``--profile maintenance`` opt-in isolates
-# it from the always-on ``django`` service.
-ExecStartPost=/usr/bin/docker compose \
-    -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
-    --profile maintenance run --rm rebuild-ladder-outcomes
 
 # Prometheus textfile metrics (see alphalens-edgar-detect.service for the
 # pattern). A clean run that prices 0 matured dates still counts as success
