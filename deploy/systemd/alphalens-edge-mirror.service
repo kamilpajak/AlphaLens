@@ -6,13 +6,13 @@ Wants=network-online.target
 # AND by alphalens-edge-mirror.timer (mandatory hourly self-heal — the backstop
 # that keeps /edge fresh even if the OnSuccess= handoff is unavailable on this
 # systemd version, or a split deploy leaves the handoff target missing).
+# Tame any re-trigger storm (handoff + timer firing close together).
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
 TimeoutStartSec=20min
-# Tame any re-trigger storm (handoff + timer firing close together).
-StartLimitIntervalSec=300
-StartLimitBurst=3
 # The mgmt command is mtime-gated + idempotent, so redundant runs are ~free.
 ExecStart=/usr/bin/docker compose \
     -f %h/AlphaLens/deploy/docker/django-prod/docker-compose.yaml \
