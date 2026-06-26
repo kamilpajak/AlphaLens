@@ -1,6 +1,7 @@
 import unittest
 
 from alphalens_pipeline.thematic.argumentation import prompts
+from alphalens_pipeline.thematic.argumentation.prompts import _format_gates_passed
 
 
 def _sample_facts():
@@ -90,8 +91,13 @@ class TestProPrompt(unittest.TestCase):
 
     def test_injects_all_numerical_facts(self):
         p = prompts.build_pro_prompt(_sample_facts())
-        for token in ("QUBT", "quantum_computing", "Computer Hardware", "RSI 60", "tenk,press"):
+        # gates_passed_str is translated to reader phrases, not injected verbatim
+        for token in ("QUBT", "quantum_computing", "Computer Hardware", "RSI 60"):
             self.assertIn(token, p, f"missing fact {token!r}")
+        # gates are rendered as reader-neutral phrases, not raw token strings
+        self.assertIn("10-K filing mentions the theme", p)
+        self.assertIn("recent press coverage of the theme", p)
+        self.assertNotIn("tenk,press", p)
 
     def test_requires_bear_case_mandatory(self):
         p = prompts.build_pro_prompt(_sample_facts())
@@ -134,6 +140,43 @@ class TestEnglishLanguageDirective(unittest.TestCase):
     def test_flash_prompt_pins_english_output(self):
         p = prompts.build_flash_prompt(_sample_facts())
         self.assertIn("English", p)
+
+
+class TestFormatGatesPassed(unittest.TestCase):
+    """Unit tests for the _format_gates_passed helper that translates internal
+    gate token strings (tenk, press, insider) to reader-neutral phrases."""
+
+    def test_tenk_and_press_render_to_reader_phrases(self):
+        result = _format_gates_passed("tenk,press")
+        self.assertEqual(
+            result,
+            "10-K filing mentions the theme, recent press coverage of the theme",
+        )
+
+    def test_insider_renders_to_reader_phrase(self):
+        result = _format_gates_passed("insider")
+        self.assertEqual(result, "recent insider buying")
+
+    def test_unknown_token_passes_through_verbatim(self):
+        result = _format_gates_passed("foo")
+        self.assertEqual(result, "foo")
+
+    def test_empty_string_renders_empty(self):
+        self.assertEqual(_format_gates_passed(""), "")
+
+    def test_all_three_gates(self):
+        result = _format_gates_passed("tenk,press,insider")
+        self.assertEqual(
+            result,
+            "10-K filing mentions the theme, recent press coverage of the theme, recent insider buying",
+        )
+
+    def test_whitespace_around_tokens_is_stripped(self):
+        result = _format_gates_passed(" tenk , press ")
+        self.assertEqual(
+            result,
+            "10-K filing mentions the theme, recent press coverage of the theme",
+        )
 
 
 if __name__ == "__main__":
