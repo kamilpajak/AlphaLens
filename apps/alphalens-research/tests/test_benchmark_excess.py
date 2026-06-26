@@ -188,5 +188,58 @@ class TestEnrichStore(unittest.TestCase):
             self.assertEqual(n2, 1)
 
 
+class TestEnrichDeadline(unittest.TestCase):
+    """A tripped deadline stops all fetching before the first row is processed."""
+
+    def test_enrich_stops_fetching_when_deadline_tripped(self):
+        # GIVEN a store with two rows that both have forward_return (both would
+        # normally trigger a benchmark fetch) and a deadline that has already
+        # expired (budget=-1.0, monotonic fixed at 0.0 so deadline = -1.0 < 0.0
+        # and should_stop() is True from the very first call).
+        from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
+
+        dead = _RunDeadline(-1.0, monotonic=lambda: 0.0)
+        calls: list[str] = []
+
+        def _fetch(t, s, e):
+            calls.append(t)
+            return []
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            brief_date = dt.date(2026, 5, 18)
+            df = pd.DataFrame(
+                [
+                    {
+                        "brief_date": brief_date,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                    },
+                    {
+                        "brief_date": brief_date,
+                        "ticker": "BB",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 28),
+                        "forward_return": 0.03,
+                    },
+                ]
+            )
+            df.to_parquet(store / f"{brief_date.isoformat()}.parquet")
+
+            # WHEN enrichment runs with a tripped deadline
+            n = enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=_fetch,
+                now=dt.datetime(2026, 6, 3, tzinfo=UTC),
+                deadline=dead,
+            )
+
+        # THEN no fetch was issued and the function returned cleanly with 0
+        self.assertEqual(calls, [])
+        self.assertEqual(n, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

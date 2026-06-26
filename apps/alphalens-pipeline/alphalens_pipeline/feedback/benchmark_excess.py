@@ -205,6 +205,7 @@ def enrich_store_with_benchmark_excess(
     now: dt.datetime | None = None,
     benchmark_ticker: str = DEFAULT_BENCHMARK_TICKER,
     exchange: str = DEFAULT_EXCHANGE,
+    deadline: Any = None,
 ) -> int:
     """Add / refresh the benchmark-excess columns on every store parquet.
 
@@ -215,6 +216,13 @@ def enrich_store_with_benchmark_excess(
     The benchmark window per (arrival, exit) is fetched once per distinct window
     via a small in-run cache so repeated tickers on the same date pay a single
     Polygon call for the shared index window.
+
+    When ``deadline`` is provided and ``deadline.should_stop()`` is True at the
+    top of the per-row loop, the row loop breaks early. Rows left unprocessed
+    keep their existing (None) values in the store — they are not marked as done
+    and will be retried on the next run. ``deadline`` is typed ``Any`` to avoid a
+    circular import with ``population_ladder_monitor``; callers pass a
+    ``_RunDeadline`` instance.
     """
     from alphalens_pipeline.paper.calendar import previous_trading_day
 
@@ -240,7 +248,11 @@ def enrich_store_with_benchmark_excess(
 
         bench_col: list[float | None] = []
         excess_col: list[float | None] = []
+        stopped_early = False
         for _, row in df.iterrows():
+            if deadline is not None and deadline.should_stop():
+                stopped_early = True
+                break
             row_d = dict(row)
             bench, excess = _row_excess_cached(
                 row_d,
@@ -254,6 +266,11 @@ def enrich_store_with_benchmark_excess(
             excess_col.append(excess)
             if excess is not None:
                 n_enriched += 1
+
+        if stopped_early:
+            # Deadline tripped mid-file: leave the parquet untouched so
+            # unprocessed rows are retried on the next run.
+            continue
 
         df["benchmark_window_return"] = bench_col
         df["market_excess_return"] = excess_col

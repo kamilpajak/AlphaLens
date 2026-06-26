@@ -2225,7 +2225,12 @@ def _needs_size_enrichment(row: dict[str, Any]) -> bool:
         return True
 
 
-def enrich_store_with_size_fields(store_dir: Path | str, briefs_dir: Path | str) -> int:
+def enrich_store_with_size_fields(
+    store_dir: Path | str,
+    briefs_dir: Path | str,
+    *,
+    deadline: _RunDeadline | None = None,
+) -> int:
     """Backfill the size overlay onto store rows frozen BEFORE the size feature.
 
     The monitor freezes terminal rows and carries them forward verbatim, so a row
@@ -2249,6 +2254,10 @@ def enrich_store_with_size_fields(store_dir: Path | str, briefs_dir: Path | str)
     * Resilient: one bad row / missing brief is logged and skipped; the sweep
       never aborts.
 
+    When ``deadline`` is provided and ``deadline.should_stop()`` is True at the
+    start of a per-parquet-file iteration, the file loop breaks early. Files left
+    unprocessed keep their existing store values and are retried on the next run.
+
     Returns the count of rows newly populated with a size overlay.
     """
     store = Path(store_dir)
@@ -2258,6 +2267,8 @@ def enrich_store_with_size_fields(store_dir: Path | str, briefs_dir: Path | str)
 
     n_enriched = 0
     for path in sorted(store.glob("*.parquet")):
+        if deadline is not None and deadline.should_stop():
+            break
         try:
             df = pd.read_parquet(path)
         except (OSError, ValueError) as exc:

@@ -614,6 +614,7 @@ def enrich_store_with_chart_payloads(
     bar_fetch: ChartBarFetch | None = None,
     daily_bar_fetch: DailyBarFetch | None = None,
     exchange: str = DEFAULT_EXCHANGE,
+    deadline: Any = None,
 ) -> int:
     """Add / refresh the ``chart_payload_json`` column on every store parquet.
 
@@ -626,6 +627,12 @@ def enrich_store_with_chart_payloads(
     Mirrors :func:`benchmark_excess.enrich_store_with_benchmark_excess`: never
     raises per row (a bad row / missing brief leaves a NO_DATA payload and is
     logged), idempotent + self-healing over every store parquet, atomic write.
+
+    When ``deadline`` is provided and ``deadline.should_stop()`` is True at the
+    top of the per-row loop, the loop breaks early. Rows left unprocessed keep
+    their existing values in the store and are retried on the next run. ``deadline``
+    is typed ``Any`` to avoid a circular import; callers pass a ``_RunDeadline``
+    instance.
     """
     store = Path(store_dir)
     briefs = Path(briefs_dir)
@@ -647,7 +654,11 @@ def enrich_store_with_chart_payloads(
             continue
 
         payload_col: list[str] = []
+        stopped_early = False
         for _, row in df.iterrows():
+            if deadline is not None and deadline.should_stop():
+                stopped_early = True
+                break
             payload = _payload_for_row(
                 dict(row),
                 fetch=fetch,
@@ -659,6 +670,11 @@ def enrich_store_with_chart_payloads(
             if payload.get("status") == "OK":
                 n_with_chart += 1
             payload_col.append(json.dumps(payload))
+
+        if stopped_early:
+            # Deadline tripped mid-file: leave the parquet untouched so
+            # unprocessed rows are retried on the next run.
+            continue
 
         df[CHART_PAYLOAD_COLUMN] = payload_col
         _write_atomic(path, df)

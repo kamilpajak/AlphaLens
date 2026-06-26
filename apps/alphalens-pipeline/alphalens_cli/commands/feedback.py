@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import typer
 
@@ -69,14 +70,30 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     replay's 14-day window. Folded into the nightly tail so it reuses the 06:30
     UTC timer (no new systemd unit / alert rule). Intentionally swallow-all: a
     replay / Polygon failure must NOT change the command's exit behaviour.
+
+    One ``_RunDeadline`` is constructed here and shared across the replay and all
+    three enrichment passes so they draw from the SAME wall-clock budget.
     """
+    import os
+
+    # Construct one deadline for the whole run (replay + all three enrichments).
+    # If the import itself fails, fall back to deadline=None so the enrichments
+    # still run without a deadline rather than crashing the nightly timer.
+    deadline: Any = None
     try:
         from alphalens_pipeline.feedback.population_ladder_monitor import (
+            _FETCH_DEADLINE_S_DEFAULT,
             MONITOR_LOOKBACK_DAYS,
+            _RunDeadline,
             replay_population_ladders,
         )
 
-        reports = replay_population_ladders(briefs_dir, lookback_days=MONITOR_LOOKBACK_DAYS)
+        deadline = _RunDeadline(
+            float(os.environ.get("ALPHALENS_FEEDBACK_FETCH_DEADLINE_S", _FETCH_DEADLINE_S_DEFAULT))
+        )
+        reports = replay_population_ladders(
+            briefs_dir, lookback_days=MONITOR_LOOKBACK_DAYS, deadline=deadline
+        )
         terminal = sum(r.terminal for r in reports)
         ongoing = sum(r.ongoing for r in reports)
         typer.echo(
@@ -86,14 +103,21 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     except Exception:
         logger.exception("population-monitor refresh failed; continuing")
 
-    # Both enrichments operate on the EXISTING store parquets (independent of the
-    # fresh replay above), so they run even when the live replay failed.
-    _enrich_population_benchmark_excess()
-    _enrich_population_size_fields(briefs_dir)
-    _enrich_population_chart_payloads(briefs_dir)
+    if deadline is not None and deadline.stopped_reason:
+        logger.warning(
+            "population-monitor: stopped fetching early (%s); remaining work deferred to next run.",
+            deadline.stopped_reason,
+        )
+
+    # All enrichments operate on the EXISTING store parquets (independent of the
+    # fresh replay above), so they run even when the live replay failed. The same
+    # deadline instance is passed through so they respect the shared budget.
+    _enrich_population_benchmark_excess(deadline=deadline)
+    _enrich_population_size_fields(briefs_dir, deadline=deadline)
+    _enrich_population_chart_payloads(briefs_dir, deadline=deadline)
 
 
-def _enrich_population_size_fields(briefs_dir: Path) -> None:
+def _enrich_population_size_fields(briefs_dir: Path, *, deadline: Any = None) -> None:
     """Backfill the size overlay on terminal rows frozen before PR #431. Never raises.
 
     The monitor freezes terminal rows, so a row that resolved before the
@@ -108,13 +132,15 @@ def _enrich_population_size_fields(briefs_dir: Path) -> None:
             enrich_store_with_size_fields,
         )
 
-        n = enrich_store_with_size_fields(_ALPHALENS_HOME / "population_ladders", briefs_dir)
+        n = enrich_store_with_size_fields(
+            _ALPHALENS_HOME / "population_ladders", briefs_dir, deadline=deadline
+        )
         typer.echo(f"size-enrichment: backfilled size fields on {n} terminal rows.")
     except Exception:
         logger.exception("size-field enrichment failed; continuing")
 
 
-def _enrich_population_chart_payloads(briefs_dir: Path) -> None:
+def _enrich_population_chart_payloads(briefs_dir: Path, *, deadline: Any = None) -> None:
     """Add the ladder-chart payload column to the population-ladder store. Never raises.
 
     Builds the pre-computed chart payload (daily OHLC candles + entry/TP/stop price
@@ -130,13 +156,15 @@ def _enrich_population_chart_payloads(briefs_dir: Path) -> None:
             enrich_store_with_chart_payloads,
         )
 
-        n = enrich_store_with_chart_payloads(_ALPHALENS_HOME / "population_ladders", briefs_dir)
+        n = enrich_store_with_chart_payloads(
+            _ALPHALENS_HOME / "population_ladders", briefs_dir, deadline=deadline
+        )
         typer.echo(f"chart-payload: enriched {n} rows with a chart payload.")
     except Exception:
         logger.exception("chart-payload enrichment failed; continuing")
 
 
-def _enrich_population_benchmark_excess() -> None:
+def _enrich_population_benchmark_excess(*, deadline: Any = None) -> None:
     """Add benchmark-excess columns to the population-ladder store. Never raises.
 
     Computes ``benchmark_window_return`` + ``market_excess_return`` per row
@@ -151,7 +179,9 @@ def _enrich_population_benchmark_excess() -> None:
             enrich_store_with_benchmark_excess,
         )
 
-        n = enrich_store_with_benchmark_excess(_ALPHALENS_HOME / "population_ladders")
+        n = enrich_store_with_benchmark_excess(
+            _ALPHALENS_HOME / "population_ladders", deadline=deadline
+        )
         typer.echo(f"benchmark-excess: enriched {n} rows with market-excess return.")
     except Exception:
         logger.exception("benchmark-excess enrichment failed; continuing")
