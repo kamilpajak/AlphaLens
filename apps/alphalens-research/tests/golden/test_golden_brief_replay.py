@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,6 +37,16 @@ _GOLDEN = _FIXTURES / "golden" / "projection.json"
 
 _PRO = "deepseek/deepseek-v4-pro"
 _FLASH = "deepseek/deepseek-v4-flash"
+
+# Descriptor-anchored regex that matches internal pipeline-stage labels that
+# must NOT appear in reader-facing brief output.  The descriptor anchor
+# (?:signal|signals|rationale|score|scored|alignment) prevents false positives
+# on biotech clinical-phase prose ("Phase B clinical trial", "phase 1/2") which
+# do not carry those descriptors.
+_INTERNAL_PHASE_RE = re.compile(
+    r"\bPhase\s+[A-E]\b\s+(?:signal|signals|rationale|score|scored|alignment)",
+    re.IGNORECASE,
+)
 
 
 def _ohlcv_loader(ticker: str, asof: dt.date) -> pd.DataFrame:
@@ -109,6 +120,71 @@ class TestGoldenBriefReplay(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             _replay_briefs(Path(td))
             self.assertTrue((Path(td) / f"{_ASOF.isoformat()}.parquet").exists())
+
+
+class TestInternalPhaseRegex(unittest.TestCase):
+    """Pure-unit tests proving _INTERNAL_PHASE_RE matches internal pipeline
+    labels and misses clinical-trial lettered-phase prose.
+
+    No live replay — these tests run without any fixtures."""
+
+    def test_matches_phase_d_signal_alignment(self):
+        self.assertIsNotNone(_INTERNAL_PHASE_RE.search("Phase D signal alignment"))
+
+    def test_matches_phase_c_rationale(self):
+        self.assertIsNotNone(_INTERNAL_PHASE_RE.search("Phase C rationale"))
+
+    def test_matches_phase_d_signals(self):
+        self.assertIsNotNone(_INTERNAL_PHASE_RE.search("Phase D signals"))
+
+    def test_matches_case_insensitive(self):
+        self.assertIsNotNone(_INTERNAL_PHASE_RE.search("phase d signal alignment"))
+        self.assertIsNotNone(_INTERNAL_PHASE_RE.search("PHASE C RATIONALE"))
+
+    def test_misses_phase_3_trial(self):
+        self.assertIsNone(_INTERNAL_PHASE_RE.search("phase 3 trial results"))
+
+    def test_misses_phase_iii(self):
+        self.assertIsNone(_INTERNAL_PHASE_RE.search("Phase III clinical trial"))
+
+    def test_misses_phase_1_2(self):
+        self.assertIsNone(_INTERNAL_PHASE_RE.search("phase 1/2 trial"))
+
+    def test_misses_phase_b_clinical_trial(self):
+        self.assertIsNone(_INTERNAL_PHASE_RE.search("Phase B clinical trial"))
+
+    def test_misses_phase_ab_crossover(self):
+        self.assertIsNone(_INTERNAL_PHASE_RE.search("Phase A/B crossover study"))
+
+
+class TestGoldenBriefNoInternalPhaseJargon(unittest.TestCase):
+    """Regression guard: no brief output field contains internal pipeline-stage
+    labels after the prompt relabelling in §2/§3 of the jargon-reframe design.
+
+    This test REQUIRES valid golden cassettes.  It will fail with
+    CassetteMissError when the prompt hash changes (expected during the
+    re-record window) and will be re-enabled automatically once the controller
+    re-records the cassettes."""
+
+    _BRIEF_TEXT_FIELDS = [
+        "brief_tldr",
+        "brief_supply_chain_reasoning",
+        "brief_bear_summary",
+        "brief_catalyst_failure_exit",
+    ]
+
+    def test_no_internal_phase_labels_in_brief_output(self):
+        with tempfile.TemporaryDirectory() as td:
+            brief = _replay_briefs(Path(td))
+        for field in self._BRIEF_TEXT_FIELDS:
+            if field not in brief.columns:
+                continue
+            for _, row in brief.iterrows():
+                value = str(row[field]) if row[field] is not None else ""
+                self.assertIsNone(
+                    _INTERNAL_PHASE_RE.search(value),
+                    f"Internal phase jargon found in {field} for {row.get('ticker', '?')!r}: {value!r}",
+                )
 
 
 if __name__ == "__main__":

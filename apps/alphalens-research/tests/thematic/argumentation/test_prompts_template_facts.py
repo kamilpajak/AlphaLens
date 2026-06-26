@@ -99,9 +99,10 @@ class TestProPromptTemplateFacts(unittest.TestCase):
         p = prompts.build_pro_prompt(_facts_with_template())
         self.assertIn("<template_facts>", p)
         self.assertIn("</template_facts>", p)
-        # template_id is in-prompt so the LLM and any audit log can tie
-        # the typed facts back to the source template.
-        self.assertIn("m_and_a_press_release", p)
+        # template_id is no longer model-visible (§6 of jargon-reframe design:
+        # provenance stays as brief_template_id column, not in LLM prompt).
+        self.assertNotIn("template_id:", p)
+        self.assertNotIn("m_and_a_press_release", p)
         # Every key/value rendered for citation.
         self.assertIn("acquirer_ticker", p)
         self.assertIn("NVDA", p)
@@ -118,10 +119,14 @@ class TestProPromptTemplateFacts(unittest.TestCase):
         # The doctrinal instruction: the LLM must use template_facts
         # values without paraphrase / unit conversion / rounding.
         p = prompts.build_pro_prompt(_facts_with_template())
-        normalized = p.lower()
-        # Either spelling: "verbatim" or "exactly" or "without paraphrase".
+        # Collapse newlines to allow matching across line boundaries.
+        normalized = p.lower().replace("\n", " ")
+        # Either spelling: "verbatim", "exactly", or "do not paraphrase".
         self.assertTrue(
-            any(token in normalized for token in ("verbatim", "do not paraphrase")),
+            any(
+                token in normalized
+                for token in ("verbatim", "do not paraphrase", "quote these values exactly")
+            ),
             "Pro prompt missing verbatim-citation instruction",
         )
 
@@ -203,13 +208,19 @@ class TestFlashPromptTemplateFacts(unittest.TestCase):
         p = prompts.build_flash_prompt(_facts_with_template())
         self.assertIn("<template_facts>", p)
         self.assertIn("NVDA", p)
-        self.assertIn("m_and_a_press_release", p)
+        # template_id is no longer model-visible (§6 of jargon-reframe design)
+        self.assertNotIn("template_id:", p)
+        self.assertNotIn("m_and_a_press_release", p)
 
     def test_present_template_facts_includes_verbatim_instruction(self):
         p = prompts.build_flash_prompt(_facts_with_template())
-        normalized = p.lower()
+        # Collapse newlines to allow matching across line boundaries.
+        normalized = p.lower().replace("\n", " ")
         self.assertTrue(
-            any(token in normalized for token in ("verbatim", "do not paraphrase")),
+            any(
+                token in normalized
+                for token in ("verbatim", "do not paraphrase", "quote these values exactly")
+            ),
             "Flash prompt missing verbatim-citation instruction",
         )
 
