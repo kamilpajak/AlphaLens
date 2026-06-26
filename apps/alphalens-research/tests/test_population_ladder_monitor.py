@@ -33,6 +33,7 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _cheap_open_r,
     _coerce_session,
     _engine_cutoffs,
+    _RunDeadline,
     _screen_decision,
     _stamp_scorer_version,
     _stamp_theme,
@@ -2836,6 +2837,81 @@ class TestRunDeadlineIntegration(_MonitorTestBase):
             now=now,  # deadline defaults to None -> never stops
         )
         self.assertTrue(all(r.stopped_for_deadline == 0 for r in reports))
+
+
+class TestBreakerOnlyCountsPolygonError(_MonitorTestBase):
+    """Breaker must count ONLY PolygonError, not local data/IO faults."""
+
+    def test_value_error_does_not_trip_breaker(self):
+        # GIVEN a bar_fetch that raises ValueError (local data fault, NOT a
+        # Polygon network/auth error). WHEN replay runs and the fetch raises many
+        # times. THEN the deadline breaker is NOT tripped — repeated local errors
+        # must NOT advance the consecutive-fail counter.
+
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [
+                {"ticker": "AAA", "setup": _OK_SETUP},
+                {"ticker": "BBB", "setup": _OK_SETUP},
+                {"ticker": "CCC", "setup": _OK_SETUP},
+            ],
+        )
+
+        def _fetch_value_error(ticker, start, end):
+            raise ValueError("bad parquet cache — local fault, not polygon")
+
+        # breaker_fails=2 so only 2 consecutive PolygonErrors would stop it;
+        # 3 ValueError raises must leave it running.
+        deadline = _RunDeadline(10_000.0, breaker_fails=2, monotonic=lambda: 0.0)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch_value_error,
+            now=now,
+            deadline=deadline,
+        )
+        # Breaker must NOT have stopped — ValueError is not a Polygon fault.
+        self.assertFalse(deadline.should_stop(), "breaker must not trip on ValueError")
+        self.assertEqual(deadline.stopped_reason, None)
+
+    def test_polygon_error_trips_breaker_after_consecutive_threshold(self):
+        # GIVEN a bar_fetch that raises PolygonError (a real Polygon network error).
+        # WHEN replay runs and the fetch raises consecutively past the threshold.
+        # THEN the deadline breaker IS tripped.
+        from alphalens_pipeline.data.alt_data.polygon_client import PolygonError
+
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [
+                {"ticker": "AAA", "setup": _OK_SETUP},
+                {"ticker": "BBB", "setup": _OK_SETUP},
+                {"ticker": "CCC", "setup": _OK_SETUP},
+            ],
+        )
+
+        def _fetch_polygon_error(ticker, start, end):
+            raise PolygonError("upstream timeout")
+
+        # breaker_fails=2: trips after 2 consecutive PolygonErrors.
+        deadline = _RunDeadline(10_000.0, breaker_fails=2, monotonic=lambda: 0.0)
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch_polygon_error,
+            now=now,
+            deadline=deadline,
+        )
+        # Breaker MUST have stopped after consecutive PolygonErrors.
+        self.assertTrue(deadline.should_stop(), "breaker must trip after consecutive PolygonErrors")
+        self.assertEqual(deadline.stopped_reason, "breaker")
 
 
 if __name__ == "__main__":

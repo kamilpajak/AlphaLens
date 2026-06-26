@@ -2070,7 +2070,7 @@ def _replay_candidate(
         logger.warning(
             "population-monitor: fetch failed for %s — carrying prior (%s).", ticker, exc
         )
-        if deadline is not None:
+        if deadline is not None and isinstance(exc, PolygonError):
             deadline.record_fetch_result(ok=False)
         return None
     if deadline is not None:
