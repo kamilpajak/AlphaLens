@@ -692,3 +692,125 @@ not been refreshed for >36h. This is independent of whether the compute job
 (`feedback-shadow-returns`) succeeded — it directly measures /edge Postgres
 freshness, closing the blind spot where a timed-out compute job left /edge
 frozen with no alert.
+
+### Deployment runbook (ordered steps)
+
+**Step 1: Pull pipeline code into the host venv**
+
+The compute unit `alphalens-feedback-shadow-returns.service` runs
+`~/.local/bin/alphalens` directly (NOT a docker image), so pipeline code
+lives in the editable host venv. After merging the PR to main, pull on the VPS:
+
+```bash
+cd ~/AlphaLens && git pull --ff-only origin main
+# The venv is editable (installed via `uv sync --editable`), so
+# the code is live immediately — no reinstall needed.
+```
+
+**Step 2: Verify systemd version supports handoff directives**
+
+The compute unit uses `OnSuccess=` and `OnFailure=` to trigger the mirror,
+which requires **systemd ≥ 249**. Check your version:
+
+```bash
+systemctl --version   # first line: "systemd X.Y"
+```
+
+If the version is < 249, the `OnSuccess=`/`OnFailure=` lines are ignored, and
+only the hourly timer (`*:05:00 UTC`) fires the mirror — a viable fallback
+(one-hour max staleness) but not ideal. A full systemd upgrade is outside this
+runbook; if you need instant handoff, that requires a VPS OS upgrade.
+
+**Step 3: Copy the three unit files and reload systemd**
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp deploy/systemd/alphalens-feedback-shadow-returns.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-edge-mirror.service            ~/.config/systemd/user/
+cp deploy/systemd/alphalens-edge-mirror.timer              ~/.config/systemd/user/
+
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-edge-mirror.timer
+```
+
+**CRITICAL:** The compute-unit edit and both new unit files must land
+together. If the mirror unit is missing when `daemon-reload` runs, systemd
+will fail to parse the compute unit (unknown target in `OnSuccess=`) and
+block future fires.
+
+**Step 4: Verify a clean run**
+
+Trigger the compute job manually (or wait for the next scheduled 06:30 UTC
+fire):
+
+```bash
+systemctl --user start alphalens-feedback-shadow-returns.service
+```
+
+Monitor the compute job and mirror in separate terminals:
+
+```bash
+# Terminal 1: watch compute job progress
+journalctl --user -u alphalens-feedback-shadow-returns.service -f
+
+# Terminal 2: wait for mirror handoff (exit after 1 min to avoid tail loop)
+journalctl --user -u alphalens-edge-mirror.service -f --since "1 min ago" &
+sleep 60 && kill %1
+```
+
+Verify the mirror fired and `/edge` refreshed:
+
+```bash
+# Check mirror ran successfully
+systemctl --user status alphalens-edge-mirror.service
+# Expected: "Active: inactive (dead)" with exit code 0
+
+# Check Postgres timestamp updated
+docker compose -f deploy/docker/django-prod/docker-compose.yaml exec postgres \
+  psql -U alphalens -c \
+  "SELECT last_rebuild_at FROM edge_rebuild_log ORDER BY last_rebuild_at DESC LIMIT 1;"
+# Expected: a timestamp within the last ~2 min
+
+# Verify metrics updated
+curl -s localhost:9100/metrics | grep 'alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}'
+# Expected: a recent Unix timestamp
+```
+
+**Step 5: Simulate the failure path**
+
+Test that the mirror still fires and `/edge` reflects carried state even when
+the compute job times out or errors. Run one compute cycle with a short deadline
+to trigger early exit:
+
+```bash
+ALPHALENS_FEEDBACK_FETCH_DEADLINE_S=1 \
+  systemctl --user start alphalens-feedback-shadow-returns.service
+```
+
+Monitor the sequence:
+
+```bash
+# Terminal 1: compute exits early (deadline exceeded)
+journalctl --user -u alphalens-feedback-shadow-returns.service -f --since "now"
+# Expected: exit code non-0, "stopped_for_deadline" in output
+
+# Terminal 2: mirror fires via OnFailure handoff
+journalctl --user -u alphalens-edge-mirror.service -f --since "now"
+# Expected: mirror runs and exits 0 (carries prior parquet state)
+```
+
+Verify `/edge` still serves with carried data:
+
+```bash
+# Check Postgres timestamp (should be from the OnFailure mirror)
+docker compose -f deploy/docker/django-prod/docker-compose.yaml exec postgres \
+  psql -U alphalens -c \
+  "SELECT last_rebuild_at FROM edge_rebuild_log ORDER BY last_rebuild_at DESC LIMIT 1;"
+# Expected: a recent timestamp (within 1 min, from the carried data)
+
+# View dashboard at https://app.kamilpajak.pl/edge — should show yesterday's
+# population rows with NO new refreshes (stale-on-failure), and NO 503 errors.
+```
+
+**Done.** The edge mirror is now running decoupled, resilient to compute
+timeouts, and monitored for staleness via the Prometheus alert.
