@@ -27,7 +27,7 @@ _GATE_READER_PHRASES = {
 
 
 def _format_gates_passed(gates_passed_str: str) -> str:
-    tokens = [t.strip() for t in (gates_passed_str or "").split(",") if t.strip()]
+    tokens = [t.strip() for t in str(gates_passed_str or "").split(",") if t.strip()]
     return ", ".join(_GATE_READER_PHRASES.get(t, t) for t in tokens)
 
 
