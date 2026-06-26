@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly self-heal for the AlphaLens edge mirror (keeps /edge fresh independent of the compute job)
+
+[Timer]
+OnCalendar=*-*-* *:05:00 UTC
+Persistent=true
+Unit=alphalens-edge-mirror.service
+
+[Install]
+WantedBy=timers.target

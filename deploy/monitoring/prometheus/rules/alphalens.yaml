@@ -175,6 +175,29 @@ groups:
           summary: "thematic-build success metric missing"
           description: "No success metric for thematic-build. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
+      # edge-mirror fires on every terminal outcome of the compute job
+      # (OnSuccess= + OnFailure=) PLUS an hourly self-heal timer. It is the
+      # Postgres mirror for the /edge dashboard. 36h = 1.5× the 24h daily
+      # cadence — deliberately looser than the 48h compute-job threshold so the
+      # two alerts do not fire simultaneously on a routine delay. The ``max()``
+      # aggregation is used (not a direct series reference) because the edge-mirror
+      # unit fires frequently (compute handoff + hourly timer) and the alert is
+      # meant to detect a SUSTAINED absence, not a single missed run. The
+      # description calls out that /edge staleness is independent of whether the
+      # compute job itself succeeded — the key blind spot this alert closes
+      # (the original incident: compute job SIGKILL-timed-out, ExecStartPost never
+      # fired, /edge frozen 2+ days with no page).
+      - alert: AlphalensEdgeStale
+        expr: time() - max(alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}) > 129600  # 36h
+        for: 15m
+        labels:
+          severity: warning
+          route: telegram
+          unit: edge-mirror
+        annotations:
+          summary: "/edge Postgres mirror has not refreshed in >36h"
+          description: "alphalens-edge-mirror has not succeeded for {{ $value | humanizeDuration }} — /edge is stale regardless of whether the compute job 'succeeded'."
+
       # feedback-shadow-returns runs nightly at 06:30 UTC (Track A v2
       # PR-T). 172800s = 48h = 2× the daily cadence, matching
       # av-earnings-backfill. The sweep exits 0 even on nights that price

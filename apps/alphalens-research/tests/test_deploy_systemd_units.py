@@ -56,6 +56,10 @@ EMIT_JOB_METRICS_HOOK = SYSTEMD_DIR / "bin" / "alphalens-emit-job-metrics"
 SHADOW_SERVICE = SYSTEMD_DIR / "alphalens-feedback-shadow-returns.service"
 SHADOW_TIMER = SYSTEMD_DIR / "alphalens-feedback-shadow-returns.timer"
 
+# Decoupled edge-mirror unit (rebuild-ladder-outcomes Postgres cache).
+EDGE_MIRROR_SERVICE = SYSTEMD_DIR / "alphalens-edge-mirror.service"
+EDGE_MIRROR_TIMER = SYSTEMD_DIR / "alphalens-edge-mirror.timer"
+
 ACTIVE_SERVICES = (
     EDGAR_SERVICE,
     LIT_WEEKLY_SERVICE,
@@ -64,6 +68,7 @@ ACTIVE_SERVICES = (
     SYSTEMD_DIR / "alphalens-thematic-build.service",
     SHADOW_SERVICE,
     SYSTEMD_DIR / "alphalens-form4-incremental.service",
+    EDGE_MIRROR_SERVICE,
 )
 
 
@@ -218,13 +223,14 @@ class TestSystemdUnits(unittest.TestCase):
         )
 
     def test_thematic_build_no_longer_rebuilds_ladder_outcomes(self):
-        # rebuild-ladder-outcomes MOVED to the shadow-returns ExecStartPost —
-        # the only job that (re)writes the population-ladder parquet. Leaving
-        # it here too re-synced unchanged data 5× per day AND was the source of
-        # the up-to-one-slot (~2h) dashboard lag behind the nightly recompute
-        # (the recompute lands after the morning thematic-build slot, so the
-        # mirror waited for the next slot). Directive-line match (multiline
-        # ``^``) so a leftover explanatory comment does not falsely trip it.
+        # rebuild-ladder-outcomes was MOVED out of thematic-build — it now lives
+        # in the decoupled alphalens-edge-mirror.service, triggered via
+        # OnSuccess=/OnFailure= on the shadow-returns compute unit. Leaving it
+        # here re-synced unchanged data 5× per day AND caused up-to-one-slot
+        # (~2h) dashboard lag (the recompute lands after the morning
+        # thematic-build slot; the mirror had to wait for the next slot).
+        # Directive-line match (multiline ``^``) so a leftover explanatory
+        # comment does not falsely trip it.
         self.assertNotRegex(
             self.unit_text,
             re.compile(
@@ -872,35 +878,69 @@ class TestShadowReturnsUnit(unittest.TestCase):
         )
 
     def test_service_orders_after_docker_for_compose_post(self) -> None:
-        # The rebuild-ladder-outcomes ExecStartPost runs `docker compose`, so
-        # the unit must order After=docker.service (matching thematic-build).
-        # Without it, a freshly-booted VPS could fire the timer before dockerd
-        # is ready, the compose call fails, and the whole unit is marked failed
-        # until the next nightly run (~24h). (zen MEDIUM, PR #493.)
+        # The decoupled edge-mirror (alphalens-edge-mirror.service) runs
+        # `docker compose` and is triggered via OnSuccess=/OnFailure=. The
+        # compute unit itself must still order After=docker.service so that
+        # systemd can activate the mirror target on a freshly booted VPS
+        # before dockerd is ready; without this the handoff target fails and
+        # the edge cache is left stale until the hourly timer self-heals.
+        # (zen MEDIUM, PR #493.)
         self.assertRegex(
             SHADOW_SERVICE.read_text(),
             re.compile(r"^After=.*\bdocker\.service\b.*$", re.MULTILINE),
-            "Unit runs `docker compose` in ExecStartPost — must order "
-            "After=docker.service so the daemon is ready.",
+            "Unit must order After=docker.service — the OnSuccess=/OnFailure= "
+            "mirror target needs dockerd ready on a freshly booted VPS.",
         )
 
     def test_service_rebuilds_ladder_outcomes_post_run(self) -> None:
         # The population-ladder parquet is (re)written ONLY by this nightly
-        # recompute, so the edge Postgres mirror (the maintenance
-        # ``rebuild-ladder-outcomes`` one-shot from the django-prod compose
-        # stack) belongs here as an ExecStartPost. It fires only after a
-        # successful ExecStart, so a failed recompute leaves the cache
-        # untouched. This makes the edge dashboard fresh right after the
-        # recompute rather than waiting for the next thematic-build slot.
-        self.assertRegex(
+        # recompute. The edge Postgres mirror (`rebuild-ladder-outcomes` from
+        # the django-prod compose stack) has been DECOUPLED into a separate
+        # unit (alphalens-edge-mirror.service) so that a timeout-kill on the
+        # compute unit no longer skips the mirror. The compute unit fires the
+        # mirror on every terminal outcome via OnSuccess= and OnFailure=.
+
+        # 1. Compute unit must NO LONGER carry an ExecStartPost for the mirror.
+        self.assertNotRegex(
             SHADOW_SERVICE.read_text(),
             re.compile(
                 r"^ExecStartPost=[^\n]*(?:\\\n[^\n]*)*rebuild-ladder-outcomes\b",
                 re.MULTILINE,
             ),
-            "Missing or malformed ExecStartPost — the edge Postgres cache will "
-            "not pick up the freshly recomputed population-ladder parquet until "
-            "the next thematic-build slot (~2h lag).",
+            "rebuild-ladder-outcomes must NOT be an ExecStartPost on the "
+            "compute unit — it now lives in the decoupled edge-mirror unit.",
+        )
+
+        # 2. Compute unit must hand off to the mirror on BOTH success and failure.
+        compute_text = SHADOW_SERVICE.read_text()
+        self.assertRegex(
+            compute_text,
+            re.compile(r"^OnSuccess=alphalens-edge-mirror\.service\s*$", re.MULTILINE),
+            "Missing OnSuccess=alphalens-edge-mirror.service on the compute "
+            "unit — a successful recompute would not trigger the edge mirror.",
+        )
+        self.assertRegex(
+            compute_text,
+            re.compile(r"^OnFailure=alphalens-edge-mirror\.service\s*$", re.MULTILINE),
+            "Missing OnFailure=alphalens-edge-mirror.service on the compute "
+            "unit — a timeout-kill/failure would not trigger the edge mirror.",
+        )
+
+        # 3. The mirror unit must exist and its ExecStart must run the
+        #    rebuild-ladder-outcomes maintenance one-shot.
+        self.assertTrue(
+            EDGE_MIRROR_SERVICE.is_file(),
+            f"alphalens-edge-mirror.service missing at {EDGE_MIRROR_SERVICE}",
+        )
+        self.assertRegex(
+            EDGE_MIRROR_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart=[^\n]*(?:\\\n[^\n]*)*rebuild-ladder-outcomes\b",
+                re.MULTILINE,
+            ),
+            "alphalens-edge-mirror.service ExecStart must run the "
+            "rebuild-ladder-outcomes maintenance one-shot so the edge "
+            "Postgres cache picks up the freshly recomputed parquet.",
         )
 
     def test_service_documents_polygon_api_key_requirement(self) -> None:
@@ -921,12 +961,12 @@ class TestShadowReturnsUnit(unittest.TestCase):
 
     def test_service_sets_generous_timeout_for_rate_limited_sweep(self) -> None:
         # The 14-day sweep × Polygon ~5 req/min throttle can run long after a
-        # VPS-downtime backlog (Persistent replay = the largest run). The
-        # ExecStartPost Postgres mirror runs only after a SUCCESSFUL ExecStart,
-        # so a timeout-kill is NOT self-healing — it strands the edge dashboard
-        # at the last completed run's brief_date. The ongoing-position backlog
-        # grew past the old 45min ceiling and started dying before the mirror,
-        # so the timeout was bumped to 90min to keep reaching ExecStartPost.
+        # VPS-downtime backlog (Persistent replay = the largest run). The edge
+        # mirror (alphalens-edge-mirror.service) now fires on OnSuccess= AND
+        # OnFailure=, so a timeout-kill is self-healing (the mirror still runs
+        # via OnFailure=). 90min still gives the nightly sweep enough headroom
+        # that the common case (sweep completes) reaches OnSuccess= promptly,
+        # keeping the edge dashboard fresh right after the recompute.
         self.assertRegex(
             SHADOW_SERVICE.read_text(),
             re.compile(r"^TimeoutStartSec=90min\s*$", re.MULTILINE),
@@ -941,6 +981,50 @@ class TestShadowReturnsUnit(unittest.TestCase):
         text = SHADOW_TIMER.read_text()
         self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
         self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
+
+
+class TestEdgeMirrorUnit(unittest.TestCase):
+    """Decoupled edge mirror — alphalens-edge-mirror.{service,timer}.
+
+    The edge mirror was extracted from the shadow-returns ExecStartPost into its
+    own unit so that a timeout-kill on the nightly compute job no longer skips
+    the Postgres cache refresh. It is triggered by OnSuccess=/OnFailure= on the
+    compute unit AND by an hourly self-heal timer.
+    """
+
+    def test_mirror_service_exists(self) -> None:
+        self.assertTrue(
+            EDGE_MIRROR_SERVICE.is_file(),
+            f"alphalens-edge-mirror.service missing at {EDGE_MIRROR_SERVICE}",
+        )
+
+    def test_mirror_service_execstart_runs_rebuild_ladder_outcomes(self) -> None:
+        self.assertRegex(
+            EDGE_MIRROR_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart=[^\n]*(?:\\\n[^\n]*)*rebuild-ladder-outcomes\b",
+                re.MULTILINE,
+            ),
+            "mirror ExecStart must invoke the rebuild-ladder-outcomes "
+            "maintenance one-shot from the django-prod compose stack.",
+        )
+
+    def test_mirror_timer_exists_and_targets_mirror_service(self) -> None:
+        self.assertTrue(
+            EDGE_MIRROR_TIMER.is_file(),
+            f"alphalens-edge-mirror.timer missing at {EDGE_MIRROR_TIMER}",
+        )
+        self.assertRegex(
+            EDGE_MIRROR_TIMER.read_text(),
+            re.compile(r"^Unit=alphalens-edge-mirror\.service\s*$", re.MULTILINE),
+            "mirror timer must explicitly target alphalens-edge-mirror.service "
+            "so the self-heal fires the right unit.",
+        )
+
+    def test_mirror_timer_is_persistent(self) -> None:
+        # Persistent=true ensures the self-heal timer catches up after a VPS
+        # reboot without waiting for the next hour tick.
+        self.assertIn("Persistent=true", EDGE_MIRROR_TIMER.read_text())
 
 
 class TestStartLimitInUnitSection(unittest.TestCase):

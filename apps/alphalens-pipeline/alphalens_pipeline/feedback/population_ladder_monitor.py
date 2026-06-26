@@ -48,6 +48,7 @@ import json
 import logging
 import math
 import os
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,6 +104,46 @@ _MAX_FETCHES_PER_RUN = 150
 # crash night cannot starve a long-quiet candidate's forced re-pricing. Total
 # nightly minute fetches are bounded by ``_MAX_FETCHES_PER_RUN + _FORCED_RESOLVE_BUDGET``.
 _FORCED_RESOLVE_BUDGET = 50
+
+_FETCH_DEADLINE_S_DEFAULT = 75 * 60  # wall-clock budget, under TimeoutStartSec=90min
+_BREAKER_CONSECUTIVE_FAILS = 6  # consecutive real Polygon errors before fast-bail
+
+
+class _RunDeadline:
+    """Per-run wall-clock budget + consecutive-Polygon-error breaker.
+
+    ``should_stop()`` latches: once the wall-clock budget is spent OR
+    ``breaker_fails`` real Polygon errors arrive back-to-back, every later call
+    returns True so the run stops issuing NEW fetches and defers the rest via
+    the existing carry-forward path. ``record_fetch_result(ok=False)`` is fed
+    ONLY on retry-exhausting PolygonError/timeout — never on a clean empty /
+    NO_FILL / implausible carry.
+    """
+
+    def __init__(
+        self,
+        budget_s: float,
+        breaker_fails: int = _BREAKER_CONSECUTIVE_FAILS,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._mono = monotonic
+        self._deadline = self._mono() + budget_s
+        self._consecutive_fails = 0
+        self._breaker_fails = breaker_fails
+        self.stopped_reason: str | None = None
+
+    def should_stop(self) -> bool:
+        if self.stopped_reason is not None:
+            return True
+        if self._mono() >= self._deadline:
+            self.stopped_reason = "deadline"
+        elif self._consecutive_fails >= self._breaker_fails:
+            self.stopped_reason = "breaker"
+        return self.stopped_reason is not None
+
+    def record_fetch_result(self, *, ok: bool) -> None:
+        self._consecutive_fails = 0 if ok else self._consecutive_fails + 1
+
 
 # Regular-trading-hours session length in minutes (09:30→16:00 ET = 390). Half-days
 # derive their own (shorter) span from the calendar; see ``_session_rth_span_min``.
@@ -218,6 +259,7 @@ class PopulationMonitorReport:
     oldest_deferred_touch_age: int = (
         0  # max sessions a deferred-touch row is behind (dead-man-switch)
     )
+    stopped_for_deadline: int = 0  # items deferred because the run deadline tripped
 
 
 def _default_bar_fetch(
@@ -1019,6 +1061,7 @@ def replay_population_ladders(
     grouped_fetch: GroupedFetch | None = None,
     now: dt.datetime | None = None,
     exchange: str = DEFAULT_EXCHANGE,
+    deadline: _RunDeadline | None = None,
 ) -> list[PopulationMonitorReport]:
     """Replay every brief candidate's ladder to terminal over the monitor window.
 
@@ -1045,6 +1088,8 @@ def replay_population_ladders(
     forced_budget = _FetchBudget(_FORCED_RESOLVE_BUDGET)
     reports: list[PopulationMonitorReport] = []
     for offset in range(lookback_days + 1):  # inclusive both ends; newest -> oldest
+        if deadline is not None and deadline.should_stop():
+            break
         brief_date = end - dt.timedelta(days=offset)
         report = _replay_one_date(
             store,
@@ -1056,6 +1101,7 @@ def replay_population_ladders(
             exchange=exchange,
             budget=budget,
             forced_budget=forced_budget,
+            deadline=deadline,
         )
         if report is not None:
             reports.append(report)
@@ -1100,6 +1146,7 @@ def _replay_one_date(
     exchange: str,
     budget: _FetchBudget,
     forced_budget: _FetchBudget,
+    deadline: _RunDeadline | None = None,
 ) -> PopulationMonitorReport | None:
     """Two-tier screen + resolve every candidate on one brief date. ``None`` when no brief.
 
@@ -1168,6 +1215,7 @@ def _replay_one_date(
         exchange=exchange,
         budget=budget,
         forced_budget=forced_budget,
+        deadline=deadline,
     )
 
     rows = [rows_by_ticker[t] for t in order]
@@ -1184,6 +1232,7 @@ def _replay_one_date(
         resolve_queue_depth=len(resolve_queue),
         deferred_touches=len(deferred_ages),
         oldest_deferred_touch_age=max(deferred_ages, default=0),
+        stopped_for_deadline=counts.get("stopped_for_deadline", 0),
     )
 
 
@@ -1888,6 +1937,7 @@ def _resolve_queue(
     exchange: str,
     budget: _FetchBudget,
     forced_budget: _FetchBudget,
+    deadline: _RunDeadline | None = None,
 ) -> list[int]:
     """Pass 2 — resolve the queued candidates under the main + reserved budgets.
 
@@ -1905,6 +1955,16 @@ def _resolve_queue(
         ticker = item.candidate.ticker.upper()
         theme = item.candidate.theme or None
         scorer_version = item.candidate.scorer_config_version or None
+        if deadline is not None and deadline.should_stop():
+            rows_by_ticker[ticker] = _stamp_scorer_version(
+                _stamp_theme(_carried_row(item), theme), scorer_version
+            )
+            counts["carried"] += 1
+            counts["stopped_for_deadline"] = counts.get("stopped_for_deadline", 0) + 1
+            age = _deferred_age(item, last_closed_session)
+            if age is not None:
+                deferred_ages.append(age)
+            continue
         use_budget = forced_budget if item.forced else budget
         assert item.candidate.trade_setup is not None
         result = _replay_candidate(
@@ -1917,6 +1977,7 @@ def _resolve_queue(
             use_budget,
             exchange,
             reference_close_override=item.reference_close,
+            deadline=deadline,
         )
         if result is None:
             # Budget exhausted / fetch fail / implausible — carry prior (or a
@@ -1970,6 +2031,7 @@ def _replay_candidate(
     exchange: str,
     *,
     reference_close_override: float | None = None,
+    deadline: _RunDeadline | None = None,
 ) -> _ResolveResult | None:
     """RTH-only minute fetch + replay one ticker. ``None`` on fetch fail / defer / skip.
 
@@ -2010,7 +2072,11 @@ def _replay_candidate(
         logger.warning(
             "population-monitor: fetch failed for %s — carrying prior (%s).", ticker, exc
         )
+        if deadline is not None and isinstance(exc, PolygonError):
+            deadline.record_fetch_result(ok=False)
         return None
+    if deadline is not None:
+        deadline.record_fetch_result(ok=True)
     # RTH-only minute path: drop pre/post-market prints so grouped-daily [low,high]
     # is a true superset (applied to the raw cache record at replay time only).
     bars = _filter_bars_to_rth(bars, arrival_session, horizon_session, exchange)
@@ -2161,7 +2227,12 @@ def _needs_size_enrichment(row: dict[str, Any]) -> bool:
         return True
 
 
-def enrich_store_with_size_fields(store_dir: Path | str, briefs_dir: Path | str) -> int:
+def enrich_store_with_size_fields(
+    store_dir: Path | str,
+    briefs_dir: Path | str,
+    *,
+    deadline: _RunDeadline | None = None,
+) -> int:
     """Backfill the size overlay onto store rows frozen BEFORE the size feature.
 
     The monitor freezes terminal rows and carries them forward verbatim, so a row
@@ -2185,6 +2256,10 @@ def enrich_store_with_size_fields(store_dir: Path | str, briefs_dir: Path | str)
     * Resilient: one bad row / missing brief is logged and skipped; the sweep
       never aborts.
 
+    When ``deadline`` is provided and ``deadline.should_stop()`` is True at the
+    start of a per-parquet-file iteration, the file loop breaks early. Files left
+    unprocessed keep their existing store values and are retried on the next run.
+
     Returns the count of rows newly populated with a size overlay.
     """
     store = Path(store_dir)
@@ -2194,6 +2269,8 @@ def enrich_store_with_size_fields(store_dir: Path | str, briefs_dir: Path | str)
 
     n_enriched = 0
     for path in sorted(store.glob("*.parquet")):
+        if deadline is not None and deadline.should_stop():
+            break
         try:
             df = pd.read_parquet(path)
         except (OSError, ValueError) as exc:

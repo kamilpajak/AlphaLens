@@ -189,6 +189,13 @@ echo "alphalens_job_last_success_timestamp_seconds{job=\"edgar-detect\"} 0" \
 systemctl --user start alphalens-edgar-detect.service
 ```
 
+### AlphalensEdgeStale
+
+`AlphalensEdgeStale` fires when `alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}` has
+not been refreshed for >36h (15-min debounce, severity warning). It measures /edge Postgres
+freshness directly — independent of whether `alphalens-feedback-shadow-returns.service` itself
+succeeded, closing the blind spot where a timed-out compute job left /edge frozen with no alert.
+
 ## Grafana dashboard
 
 `grafana/dashboards/alphalens-cron-health.json` is the cron-health
