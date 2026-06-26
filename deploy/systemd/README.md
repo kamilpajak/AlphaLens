@@ -683,3 +683,12 @@ systemctl --user start alphalens-edge-mirror.service       # manual fire
 The mirror command is **idempotent and mtime-gated** — redundant runs (e.g. both
 the OnFailure handoff and the hourly timer fire within seconds) are cheap,
 re-mirroring unchanged parquets and exiting quickly.
+
+### Alerting
+
+`AlphalensEdgeStale` (in `deploy/monitoring/prometheus/rules/alphalens.yaml`)
+fires when `alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}` has
+not been refreshed for >36h. This is independent of whether the compute job
+(`feedback-shadow-returns`) succeeded — it directly measures /edge Postgres
+freshness, closing the blind spot where a timed-out compute job left /edge
+frozen with no alert.
