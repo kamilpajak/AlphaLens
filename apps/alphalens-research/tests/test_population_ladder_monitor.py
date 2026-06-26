@@ -2785,5 +2785,58 @@ class TestLastPricedSessionBackfill(_MonitorTestBase):
             self.assertTrue(pd.isna(after[col]))
 
 
+class TestRunDeadlineIntegration(_MonitorTestBase):
+    def test_tripped_deadline_carries_without_fetching(self):
+        import datetime as dt
+
+        from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
+
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+        fetched = []
+
+        def _fetch(t, s, e):
+            fetched.append(t)
+            base = int(s.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1e3}]
+
+        # deadline already past at construction (budget -1s) -> should_stop() True immediately
+        dead = _RunDeadline(-1.0, monotonic=lambda: 0.0)
+        reports = replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+            deadline=dead,
+        )
+        self.assertEqual(fetched, [])  # no Polygon fetch issued once stopped
+        self.assertTrue(any(r.stopped_for_deadline >= 1 for r in reports))
+        # the row is still written (carried/placeholder), not missing
+        df = self._read_store(brief_date)
+        self.assertIn("NVDA", set(df["ticker"]))
+
+    def test_no_deadline_resolves_normally(self):
+        import datetime as dt
+
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": _OK_SETUP}])
+
+        def _fetch(t, s, e):
+            base = int(s.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1e3}]
+
+        reports = replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,  # deadline defaults to None -> never stops
+        )
+        self.assertTrue(all(r.stopped_for_deadline == 0 for r in reports))
+
+
 if __name__ == "__main__":
     unittest.main()

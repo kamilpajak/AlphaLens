@@ -259,6 +259,7 @@ class PopulationMonitorReport:
     oldest_deferred_touch_age: int = (
         0  # max sessions a deferred-touch row is behind (dead-man-switch)
     )
+    stopped_for_deadline: int = 0  # items deferred because the run deadline tripped
 
 
 def _default_bar_fetch(
@@ -1060,6 +1061,7 @@ def replay_population_ladders(
     grouped_fetch: GroupedFetch | None = None,
     now: dt.datetime | None = None,
     exchange: str = DEFAULT_EXCHANGE,
+    deadline: _RunDeadline | None = None,
 ) -> list[PopulationMonitorReport]:
     """Replay every brief candidate's ladder to terminal over the monitor window.
 
@@ -1097,6 +1099,7 @@ def replay_population_ladders(
             exchange=exchange,
             budget=budget,
             forced_budget=forced_budget,
+            deadline=deadline,
         )
         if report is not None:
             reports.append(report)
@@ -1141,6 +1144,7 @@ def _replay_one_date(
     exchange: str,
     budget: _FetchBudget,
     forced_budget: _FetchBudget,
+    deadline: _RunDeadline | None = None,
 ) -> PopulationMonitorReport | None:
     """Two-tier screen + resolve every candidate on one brief date. ``None`` when no brief.
 
@@ -1209,6 +1213,7 @@ def _replay_one_date(
         exchange=exchange,
         budget=budget,
         forced_budget=forced_budget,
+        deadline=deadline,
     )
 
     rows = [rows_by_ticker[t] for t in order]
@@ -1225,6 +1230,7 @@ def _replay_one_date(
         resolve_queue_depth=len(resolve_queue),
         deferred_touches=len(deferred_ages),
         oldest_deferred_touch_age=max(deferred_ages, default=0),
+        stopped_for_deadline=counts.get("stopped_for_deadline", 0),
     )
 
 
@@ -1929,6 +1935,7 @@ def _resolve_queue(
     exchange: str,
     budget: _FetchBudget,
     forced_budget: _FetchBudget,
+    deadline: _RunDeadline | None = None,
 ) -> list[int]:
     """Pass 2 — resolve the queued candidates under the main + reserved budgets.
 
@@ -1946,6 +1953,16 @@ def _resolve_queue(
         ticker = item.candidate.ticker.upper()
         theme = item.candidate.theme or None
         scorer_version = item.candidate.scorer_config_version or None
+        if deadline is not None and deadline.should_stop():
+            rows_by_ticker[ticker] = _stamp_scorer_version(
+                _stamp_theme(_carried_row(item), theme), scorer_version
+            )
+            counts["carried"] += 1
+            counts["stopped_for_deadline"] = counts.get("stopped_for_deadline", 0) + 1
+            age = _deferred_age(item, last_closed_session)
+            if age is not None:
+                deferred_ages.append(age)
+            continue
         use_budget = forced_budget if item.forced else budget
         assert item.candidate.trade_setup is not None
         result = _replay_candidate(
@@ -1958,6 +1975,7 @@ def _resolve_queue(
             use_budget,
             exchange,
             reference_close_override=item.reference_close,
+            deadline=deadline,
         )
         if result is None:
             # Budget exhausted / fetch fail / implausible — carry prior (or a
@@ -2011,6 +2029,7 @@ def _replay_candidate(
     exchange: str,
     *,
     reference_close_override: float | None = None,
+    deadline: _RunDeadline | None = None,
 ) -> _ResolveResult | None:
     """RTH-only minute fetch + replay one ticker. ``None`` on fetch fail / defer / skip.
 
@@ -2051,7 +2070,11 @@ def _replay_candidate(
         logger.warning(
             "population-monitor: fetch failed for %s — carrying prior (%s).", ticker, exc
         )
+        if deadline is not None:
+            deadline.record_fetch_result(ok=False)
         return None
+    if deadline is not None:
+        deadline.record_fetch_result(ok=True)
     # RTH-only minute path: drop pre/post-market prints so grouped-daily [low,high]
     # is a true superset (applied to the raw cache record at replay time only).
     bars = _filter_bars_to_rth(bars, arrival_session, horizon_session, exchange)
