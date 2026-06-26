@@ -234,3 +234,7 @@ docs/research/preregistration/ledger.json.bak.*
 
 # Playwright MCP cache (browser snapshots, console logs)
 .playwright-mcp/
+
+# subagent-driven-development scratch (task briefs/reports + run ledger)
+.sdd-scratch/
+.superpowers/
