@@ -269,8 +269,10 @@ def enrich_store_with_benchmark_excess(
 
         if stopped_early:
             # Deadline tripped mid-file: leave the parquet untouched so
-            # unprocessed rows are retried on the next run.
-            continue
+            # unprocessed rows are retried on the next run. Break rather
+            # than continue — every subsequent file would be opened only to
+            # immediately skip (deadline latches), so skip the open entirely.
+            break
 
         df["benchmark_window_return"] = bench_col
         df["market_excess_return"] = excess_col

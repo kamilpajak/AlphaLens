@@ -2787,7 +2787,14 @@ class TestLastPricedSessionBackfill(_MonitorTestBase):
 
 
 class TestRunDeadlineIntegration(_MonitorTestBase):
-    def test_tripped_deadline_carries_without_fetching(self):
+    def test_date_loop_exits_immediately_when_deadline_pre_tripped(self):
+        """Date loop breaks at the top once the deadline has latched.
+
+        When should_stop() is True before the first offset, no date is processed:
+        - no fetch issued
+        - reports list is empty
+        - no store parquet written for any lookback date
+        """
         import datetime as dt
 
         from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
@@ -2812,11 +2819,12 @@ class TestRunDeadlineIntegration(_MonitorTestBase):
             now=now,
             deadline=dead,
         )
-        self.assertEqual(fetched, [])  # no Polygon fetch issued once stopped
-        self.assertTrue(any(r.stopped_for_deadline >= 1 for r in reports))
-        # the row is still written (carried/placeholder), not missing
-        df = self._read_store(brief_date)
-        self.assertIn("NVDA", set(df["ticker"]))
+        # Date loop must break at the very first offset — zero dates processed.
+        self.assertEqual(fetched, [])
+        self.assertEqual(reports, [])
+        # No store file written for the brief date (loop never reached _replay_one_date).
+        store_file = self.store_dir / f"{brief_date.isoformat()}.parquet"
+        self.assertFalse(store_file.exists())
 
     def test_no_deadline_resolves_normally(self):
         import datetime as dt

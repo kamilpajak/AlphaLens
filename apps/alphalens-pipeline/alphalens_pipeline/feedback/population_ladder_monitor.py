@@ -1088,6 +1088,8 @@ def replay_population_ladders(
     forced_budget = _FetchBudget(_FORCED_RESOLVE_BUDGET)
     reports: list[PopulationMonitorReport] = []
     for offset in range(lookback_days + 1):  # inclusive both ends; newest -> oldest
+        if deadline is not None and deadline.should_stop():
+            break
         brief_date = end - dt.timedelta(days=offset)
         report = _replay_one_date(
             store,
