@@ -73,7 +73,14 @@ EMIT_HOOK_RE = re.compile(
 # fires on a fixed daily/weekly cadence and DOES carry a staleness rule. Add
 # a job here only if a future trading-day-only unit would false-page on a
 # weekend staleness window.
-STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset()
+STALENESS_EXEMPT_JOBS: frozenset[str] = frozenset(
+    {
+        # edge-mirror is covered by the dedicated AlphalensEdgeStale alert (watches
+        # /edge freshness via job="edge-mirror" last-success) rather than the generic
+        # AlphalensJobStale per-job rule. See deploy/monitoring/prometheus/rules/alphalens.yaml.
+        "edge-mirror",
+    }
+)
 
 
 def _emitting_jobs() -> set[str]:

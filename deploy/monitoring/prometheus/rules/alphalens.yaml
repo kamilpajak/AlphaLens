@@ -188,7 +188,7 @@ groups:
       # (the original incident: compute job SIGKILL-timed-out, ExecStartPost never
       # fired, /edge frozen 2+ days with no page).
       - alert: AlphalensEdgeStale
-        expr: time() - max(alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}) > 36 * 3600
+        expr: time() - max(alphalens_job_last_success_timestamp_seconds{job="edge-mirror"}) > 129600  # 36h
         for: 15m
         labels:
           severity: warning
