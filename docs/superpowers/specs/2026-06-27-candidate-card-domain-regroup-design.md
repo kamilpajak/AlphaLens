@@ -164,6 +164,25 @@ Three judgment calls (confirmed with user):
   add a one-line pointer: "numeric readouts shown in Momentum & Technicals."
 - `hasOneil` predicate stays so the drawer still offers an O'Neil section when flags exist.
 
+### Recently-merged features to PRESERVE (do not drop in the reorg)
+
+The card already carries the `selection_score` ATR-tilt surfaces (PRs #673/#675/#676). They
+are orthogonal to this reorg and **stay exactly as-is**:
+
+- **Meta-bar `extended` chip** — rendered when `(c.atr_penalty ?? 0) > 0` (tone-neutral, no
+  number on the face). It is an ordering/selection flag tied to LAYER-4, so it **stays in the
+  meta bar** alongside LAYER-4 + CONF (it is NOT one of the removed catalyst / expert chips).
+- **`SCORER BREAKDOWN` section in the ExpertPanel drawer** — layer-4 → atr-penalty →
+  selection-score → `scorer_config_version` → "suggestive — not yet validated". Gated on
+  `hasScoreBreakdown`. The `ExpertPanel` props `layer4Score / atrPenalty / selectionScore /
+  scorerConfigVersion` and this block **stay unchanged**. (This is why the drawer is NOT
+  empty after the O'Neil readout grid moves out — the scale + Buffett prose + O'Neil flags +
+  scorer-breakdown remain.)
+
+So the meta bar after the reorg = identity cluster (sector/industry · mcap) ‖ LAYER-4 ·
+[`extended` when penalised] · CONF. Removed from meta: catalyst type+strength, Buffett chip,
+O'Neil chip.
+
 ### Unchanged
 
 `TradeSetup.svelte`, `TemplateFacts.svelte` (only its mount point moves), the narrative
@@ -186,19 +205,38 @@ helpers, all data contracts.
 
 ## Testing
 
-TDD per repo convention. Touch `apps/web/tests/unit/candidateCard.test.ts` and
-`expertPanel.test.ts`; the card has a Playwright smoke path too.
+TDD per repo convention, but matched to the actual harness:
 
-- **Dedup assertions (new)** — a rendered card shows each of: `catalyst strength`, `fcff yield`,
-  `off 52w high`, `ma200 dist`, `ma200 slope` **exactly once** (regression guard against the
-  duplicates this PR removes). Query by label text count.
-- **Domain placement** — Buffett score within the Valuation block, O'Neil within Momentum;
-  meta bar contains neither expert chip nor the catalyst chip.
-- **ExpertPanel** — O'Neil section no longer renders the numeric readout grid; audit flags
-  still render on `=== true`; disagreement scale still gated on finite `expert_spread`.
-- **Null / sparse** — existing null-path tests keep passing (scores `—`, suppressed bars `—`).
-- **Storybook** — update the card / ExpertPanel stories to the new structure (dev-only).
-- Visual confirmation via Playwright MCP against `pnpm dev` before opening the PR.
+- **Unit suite** (`pnpm test:unit`, vitest, **node env, no DOM**) — pure-function mirrors of
+  template guards (see `tests/unit/candidateCard.test.ts`, `expertPanel.test.ts`). Use this
+  layer only for extractable logic: the merged **fcff-yield display** helper (the one piece of
+  new branching logic — "show %ile + raw, whichever present"). Keep the existing
+  `showsExtendedChip` / `hasScoreBreakdown` / tone-helper tests green (they cover preserved
+  features and must not regress).
+- **Playwright smoke** (`pnpm test`, real built app + `tests/fixtures/api-mock/` fixtures) —
+  this is where DOM structure is asserted. Add a `card — domain grouping` describe block in
+  `tests/smoke.test.ts` (or a sibling `tests/card-domain.test.ts`) that loads the latest
+  fixture brief and asserts on the **first `article[id]`** card:
+  - **Dedup** — each label `off 52w high`, `ma200 dist`, `ma200 slope`, `catalyst strength`,
+    `fcff yield` appears **exactly once** in the card (`locator.count()` regression guard).
+  - **Domain placement** — the `BUFFETT <n>` score node is inside the `VALUATION & QUALITY`
+    block; `O'NEIL <n>` inside `MOMENTUM & TECHNICALS`.
+  - **Meta-bar slimming** — the meta bar contains LAYER-4 + CONF but **no** Buffett / O'Neil /
+    catalyst chip text; the `extended` chip still appears for a fixture row with `atr_penalty>0`.
+  - **Drawer** — opening `expert.panel` shows the disagreement scale + `SCORER BREAKDOWN` but
+    the O'Neil section no longer renders the numeric readout grid.
+  - Existing smoke guarantees (per-day candidate count, console-clean) must stay green —
+    fixture day files may need the new structure's labels but **not** new candidate rows.
+- **Storybook** — no change. There is no `CandidateCard` / `ExpertPanel` story (the catalog
+  covers only primitives: `SignalBar`, `ChipTip`, `ExpertPillar`, …). `SignalBar`'s API is
+  unchanged by this reorg, so its story stays valid.
+- **Visual confirmation** via Playwright MCP against `pnpm dev` before opening the PR.
+
+Fixture note: the three `tests/fixtures/api-mock/days/*.json` already carry candidates with
+Buffett/O'Neil blobs; confirm at least one fixture candidate has `atr_penalty > 0` (for the
+`extended`-chip assertion) and one has a full O'Neil blob (for the momentum-block assertions).
+If not present, extend an existing fixture candidate's fields (do not add new candidate rows,
+which would break the count assertions).
 
 ## Out of scope
 
