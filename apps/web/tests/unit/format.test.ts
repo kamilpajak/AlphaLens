@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fmtPct, fmtPctile } from '../../src/lib/format';
+import { fmtPct, fmtPctile, fcffYieldDisplay } from '../../src/lib/format';
 
 describe('fmtPctile — percentile RANK (O\'Neil rel-strength uses this, not fmtPct)', () => {
 	it('rounds to an integer with no sign and no % suffix', () => {
@@ -28,5 +28,24 @@ describe('fmtPct — signed % change (the WRONG formatter for a percentile rank)
 		// This is exactly the misleading "+4.8%" the rel-strength readout used to show.
 		expect(fmtPct(4.84)).toBe('+4.8%');
 		expect(fmtPct(-78.5)).toBe('-78.5%');
+	});
+});
+
+describe('fcffYieldDisplay (merged valuation fcff row)', () => {
+	it('both finite → %ile headline + raw annotation', () => {
+		expect(fcffYieldDisplay(31, 5.09)).toEqual({ pctileText: '31%ile', rawText: '+5.09%' });
+	});
+	it('raw negative keeps its sign', () => {
+		expect(fcffYieldDisplay(12, -2.5)).toEqual({ pctileText: '12%ile', rawText: '-2.50%' });
+	});
+	it('pctile null → no headline, raw still shown', () => {
+		expect(fcffYieldDisplay(null, 5.09)).toEqual({ pctileText: null, rawText: '+5.09%' });
+	});
+	it('raw null → headline only', () => {
+		expect(fcffYieldDisplay(31, null)).toEqual({ pctileText: '31%ile', rawText: null });
+	});
+	it('both null / non-finite → both null', () => {
+		expect(fcffYieldDisplay(null, undefined)).toEqual({ pctileText: null, rawText: null });
+		expect(fcffYieldDisplay(NaN, NaN)).toEqual({ pctileText: null, rawText: null });
 	});
 });
