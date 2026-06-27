@@ -1040,14 +1040,13 @@ test.describe('card — domain grouping', () => {
 		await expect(card).toBeVisible();
 
 		// Domain section headings present.
-		for (const heading of [
-			'catalyst & event',
-			'valuation & quality',
-			'momentum & technicals',
-			'insider / flow'
-		]) {
+		for (const heading of ['catalyst & event', 'valuation & quality', 'momentum & technicals']) {
 			await expect(card.getByText(heading, { exact: false })).toBeVisible();
 		}
+		// Insider is a compact one-line row (not a full strip): the `insider 90d`
+		// row renders, but the old `insider / flow` section heading is gone.
+		await expect(card.getByText('insider 90d', { exact: false })).toBeVisible();
+		await expect(card.getByText('insider / flow', { exact: false })).toHaveCount(0);
 
 		// Dedup: each label renders exactly once in the card BODY. getByText does
 		// case-insensitive substring matching and also matches hidden tooltip text

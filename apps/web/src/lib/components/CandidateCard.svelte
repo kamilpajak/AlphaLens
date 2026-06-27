@@ -495,23 +495,39 @@
 				</div>
 			</div>
 
-			<!-- INSIDER / FLOW — ownership-flow domain (one metric, its own strip). -->
-			<div class="px-4 sm:px-5 py-4 border-t border-grid">
-				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">insider / flow</div>
+			<!-- INSIDER / FLOW — a compact one-line row, not a full strip. Net
+			     opportunistic buying is rare (~1 in 400 cards in production) and the
+			     ✗ INSIDER header gate already carries the no-buys case, so a whole
+			     section with an always-empty bar wasn't earning its space. The rare
+			     buy signal stands out in amber; the no-buys/selling state is muted. -->
+			<div
+				class="flex items-baseline justify-between gap-3 border-t border-grid px-4 py-2.5 text-[11px] sm:px-5"
+			>
+				<span class="uppercase tracking-widest text-fg-muted">insider 90d</span>
 				{#if insider.mode === 'bar'}
-					<SignalBar
-						label="insider 90d (sector %ile)"
-						value={insider.percentile}
-						format={(v) => fmtPctile(v) + '%ile'}
-						tooltip="Net opportunistic insider buying ({fmtUsdCompact(insider.netUsd)}) in the last 90 days, ranked within sector — shown only when there is net buying. Cohen-Malloy opportunistic classification; paradigm #11 scorer."
-					/>
+					<ChipTip
+						term="insider buying (90d)"
+						body="Net opportunistic insider buying ({fmtUsdCompact(insider.netUsd)}) in the last 90 days, ranked within sector. Cohen-Malloy opportunistic classification; paradigm #11 scorer."
+					>
+						{#snippet chip()}
+							<span class="cursor-help font-bold text-amber whitespace-nowrap"
+								>{insider.percentile != null
+									? fmtPctile(insider.percentile) + '%ile · '
+									: ''}{fmtUsdCompact(insider.netUsd)}</span
+							>
+						{/snippet}
+					</ChipTip>
 				{:else}
-					<SignalBar
-						label="insider 90d"
-						value={null}
-						placeholder={insider.label}
-						tooltip="No net opportunistic insider buying in the last 90 days. The sector percentile is suppressed: a 0/negative dollar signal ranks high only relative to net-selling peers, which is not a buy signal. Cohen-Malloy opportunistic classification."
-					/>
+					<ChipTip
+						term="insider buying (90d)"
+						body="No net opportunistic insider buying in the last 90 days. The sector percentile is suppressed: a 0/negative dollar signal ranks high only relative to net-selling peers, which is not a buy signal. Cohen-Malloy opportunistic classification."
+					>
+						{#snippet chip()}
+							<span class="cursor-help uppercase tracking-widest text-fg-muted whitespace-nowrap"
+								>{insider.label}</span
+							>
+						{/snippet}
+					</ChipTip>
 				{/if}
 			</div>
 
