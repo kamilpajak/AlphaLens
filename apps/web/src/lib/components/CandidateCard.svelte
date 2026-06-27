@@ -12,7 +12,8 @@
 		oneilTone,
 		insiderDisplay,
 		magicFormulaDisplay,
-		fcffYieldRawDisplay
+		fcffYieldRawDisplay,
+		tenkAvailable
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -526,6 +527,7 @@
 				atrPenalty={c.atr_penalty}
 				selectionScore={c.selection_score}
 				scorerConfigVersion={c.scorer_config_version}
+				tenkAvailable={tenkAvailable(c.gates_passed, c.gates_failed)}
 			/>
 		</div>
 
