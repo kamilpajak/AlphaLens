@@ -1115,6 +1115,22 @@ test.describe('card — domain grouping', () => {
 		// No qualitative pillars for this name.
 		await expect(drawer.getByText('moat', { exact: false })).toHaveCount(0);
 	});
+
+	test(`lens-score labels are stacked in separate rows on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		await card.getByRole('button', { name: /expert.panel/i }).click();
+		const buf = card.locator('[data-testid="lens-label-buffett"]');
+		const oneil = card.locator('[data-testid="lens-label-oneil"]');
+		await expect(buf).toBeVisible();
+		await expect(oneil).toBeVisible();
+		await expect(buf).toContainText('Buffett');
+		await expect(oneil).toContainText("O'Neil");
+		// Stacked, not overlapping: the buffett label sits above the o'neil label.
+		const b = await buf.boundingBox();
+		const o = await oneil.boundingBox();
+		expect(b && o && b.y < o.y).toBeTruthy();
+	});
 });
 
 test.describe('smoke — SvelteKit stale-import recovery (version polling)', () => {

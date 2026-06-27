@@ -197,8 +197,18 @@
 							<span>lens score</span>
 							<span>0–100</span>
 						</div>
-						<!-- track -->
-						<div class="relative mt-2 mb-7 h-1.5 rounded-full bg-grid" aria-hidden="true">
+						<!-- Buffett label row (above the track) -->
+						<div class="relative mt-2 h-3.5">
+							<span
+								data-testid="lens-label-buffett"
+								class="absolute bottom-0 text-[9px] whitespace-nowrap {toneText(buffT)}"
+								style="left: {buffScore}%; transform: {labelShift(buffScore!)}"
+							>
+								Buffett {buffScore}
+							</span>
+						</div>
+						<!-- track (overflow-hidden clips the dots cleanly at 0/100) -->
+						<div class="relative h-1.5 overflow-hidden rounded-full bg-grid" aria-hidden="true">
 							<span
 								class="absolute top-0 h-1.5 rounded-full"
 								class:bg-green={bandTone === 'green'}
@@ -206,7 +216,6 @@
 								class:bg-red={bandTone === 'red'}
 								style="left: {gapLeft}%; width: {gapWidth}%; opacity: 0.22"
 							></span>
-							<!-- Buffett marker + label -->
 							<span
 								class="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg {toneDot(
 									buffT
@@ -214,20 +223,17 @@
 								style="left: {buffScore}%"
 							></span>
 							<span
-								class="absolute top-full mt-1 text-[9px] whitespace-nowrap {toneText(buffT)}"
-								style="left: {buffScore}%; transform: {labelShift(buffScore!)}"
-							>
-								Buffett {buffScore}
-							</span>
-							<!-- O'Neil marker + label -->
-							<span
 								class="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg {toneDot(
 									oneilT
 								)}"
 								style="left: {oneilScore}%"
 							></span>
+						</div>
+						<!-- O'Neil label row (below the track) -->
+						<div class="relative mb-1 h-3.5">
 							<span
-								class="absolute top-full mt-1 text-[9px] whitespace-nowrap {toneText(oneilT)}"
+								data-testid="lens-label-oneil"
+								class="absolute top-0 text-[9px] whitespace-nowrap {toneText(oneilT)}"
 								style="left: {oneilScore}%; transform: {labelShift(oneilScore!)}"
 							>
 								O'Neil {oneilScore}
