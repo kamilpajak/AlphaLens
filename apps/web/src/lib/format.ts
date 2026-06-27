@@ -220,3 +220,17 @@ export function consensusBand(spread: number | null | undefined): string {
 export function fcffYieldRawDisplay(rawPct: number | null | undefined): string | null {
 	return Number.isFinite(rawPct) ? fmtPct(rawPct, 2) : null;
 }
+
+/**
+ * Whether a 10-K exists for the ticker, read from the gate arrays. The `tenk`
+ * gate is `passed` when theme keywords matched the 10-K and `failed` when the
+ * 10-K exists but no keyword hit — both mean the filing is available; only
+ * `unknown` (absent from both) means no 10-K. Used to explain an absent Buffett
+ * qualitative read (which reads the 10-K).
+ */
+export function tenkAvailable(
+	gatesPassed: string[] | null | undefined,
+	gatesFailed: string[] | null | undefined
+): boolean {
+	return Boolean(gatesPassed?.includes('tenk') || gatesFailed?.includes('tenk'));
+}
