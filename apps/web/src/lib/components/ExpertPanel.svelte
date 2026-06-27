@@ -35,9 +35,18 @@
 		atrPenalty?: number | null;
 		selectionScore?: number | null;
 		scorerConfigVersion?: string | null;
+		/** Whether a 10-K exists (from the tenk gate) — explains an absent Buffett
+		 *  qualitative read. */
+		tenkAvailable?: boolean | null;
 	}
-	let { assessments, layer4Score, atrPenalty, selectionScore, scorerConfigVersion }: Props =
-		$props();
+	let {
+		assessments,
+		layer4Score,
+		atrPenalty,
+		selectionScore,
+		scorerConfigVersion,
+		tenkAvailable
+	}: Props = $props();
 
 	// Score breakdown: show the ATR-penalty breakdown row when any of the three
 	// scorer cols is present. The precise numbers live HERE (drawer), not on the
@@ -117,12 +126,14 @@
 
 	// The drawer is offered when ANY expert has renderable content, a spread exists,
 	// or the scorer breakdown (selection_score / atr_penalty / config_version) is present.
-	const hasContent = $derived(hasBuffQual || hasOneil || spread !== null || hasScoreBreakdown);
+	const hasContent = $derived(
+		hasBuffQual || hasOneil || spread !== null || hasScoreBreakdown || buffScore !== null
+	);
 
 	// Registry order (buffett, oneil). A 3rd expert is one entry in EXPERT_KIND.
 	const sections = $derived(
 		['buffett', 'oneil'].filter((id) =>
-			id === 'buffett' ? hasBuffQual : id === 'oneil' ? hasOneil : false
+			id === 'buffett' ? hasBuffQual || buffScore !== null : id === 'oneil' ? hasOneil : false
 		)
 	);
 
@@ -255,24 +266,35 @@
 						</div>
 
 						{#if isBuf}
-							<div class="mt-3 flex flex-wrap gap-2">
-								{#each buffPillars as pillar (pillar.label)}
-									<ExpertPillar label={pillar.label} value={pillar.value} tone={pillar.tone} body={pillar.body} />
-								{/each}
-							</div>
-							{#if buf?.buffett_qualitative_rationale}
-								<blockquote class="mt-3 border-l-2 border-cyan pl-4">
-									<p class="text-fg-dim text-xs leading-relaxed">{buf.buffett_qualitative_rationale}</p>
-								</blockquote>
+							{#if hasBuffQual}
+								<div class="mt-3 flex flex-wrap gap-2">
+									{#each buffPillars as pillar (pillar.label)}
+										<ExpertPillar label={pillar.label} value={pillar.value} tone={pillar.tone} body={pillar.body} />
+									{/each}
+								</div>
+								{#if buf?.buffett_qualitative_rationale}
+									<blockquote class="mt-3 border-l-2 border-cyan pl-4">
+										<p class="text-fg-dim text-xs leading-relaxed">{buf.buffett_qualitative_rationale}</p>
+									</blockquote>
+								{/if}
+								<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] leading-snug text-fg-muted">
+									{#if buf?.buffett_used_scuttlebutt}
+										<span class="text-amber whitespace-nowrap">scuttlebutt: web-grounded, unverified</span>
+									{/if}
+									{#if buf?.buffett_qual_computed_at}
+										<span class="whitespace-nowrap">classified {fmtDate(buf.buffett_qual_computed_at)}</span>
+									{/if}
+								</div>
+							{:else}
+								<p class="mt-3 text-[10px] leading-snug text-fg-muted">
+									numeric score only —
+									<span class="text-fg-dim"
+										>{tenkAvailable
+											? 'qualitative read not computed'
+											: 'no 10-K for a qualitative read'}</span
+									>
+								</p>
 							{/if}
-							<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] leading-snug text-fg-muted">
-								{#if buf?.buffett_used_scuttlebutt}
-									<span class="text-amber whitespace-nowrap">scuttlebutt: web-grounded, unverified</span>
-								{/if}
-								{#if buf?.buffett_qual_computed_at}
-									<span class="whitespace-nowrap">classified {fmtDate(buf.buffett_qual_computed_at)}</span>
-								{/if}
-							</div>
 						{:else}
 							{#if oneil?.oneil_new_high_split_suspected === true || oneil?.oneil_earnings_growth_near_zero_base === true}
 								<div class="mt-3 flex flex-wrap gap-2">

@@ -1103,6 +1103,18 @@ test.describe('card — domain grouping', () => {
 			anchor.locator('[role="tooltip"]').getByText('owner-earnings yield', { exact: false })
 		).toBeVisible();
 	});
+
+	test(`buffett drawer card is symmetric (score + empty state, no pillars) on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		await card.getByRole('button', { name: /expert.panel/i }).click();
+		const drawer = card.locator('[data-testid="expert-panel-body"]');
+		await expect(drawer).toBeVisible();
+		// The Buffett card renders its empty state (numeric score, no qual).
+		await expect(drawer.getByText('qualitative read not computed', { exact: false })).toBeVisible();
+		// No qualitative pillars for this name.
+		await expect(drawer.getByText('moat', { exact: false })).toHaveCount(0);
+	});
 });
 
 test.describe('smoke — SvelteKit stale-import recovery (version polling)', () => {
