@@ -107,12 +107,9 @@
 	);
 	const oneilScoreTone = $derived(oneilTone(oneil?.oneil_score));
 	// Rows for the o'neil momentum tooltip's key→value grid.
-	// Keys avoid the exact substrings used by visible signal bar labels
-	// ("off 52w high", "ma200 slope") to prevent DOM dedup collisions —
-	// Playwright toHaveCount counts hidden tooltip text alongside visible.
 	const oneilRows = $derived([
-		{ key: 'high drawdown', value: fmtPct(oneil?.oneil_pct_off_52w_high) },
-		{ key: '200d trend slope', value: `${fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2)}/d` },
+		{ key: 'off 52w high', value: fmtPct(oneil?.oneil_pct_off_52w_high) },
+		{ key: 'MA200 slope', value: `${fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2)}/d` },
 		{ key: 'earnings YoY', value: fmtPct(oneil?.oneil_earnings_growth_yoy_pct) }
 	]);
 </script>
@@ -171,12 +168,11 @@
 		</div>
 	</header>
 
-	<!-- Meta bar: sector / industry on the left; the headline metrics on the right,
-	     grouped so the eye lands on the layer-4 score first — a filled L4 badge
-	     (the ordering signal) leads, then confidence / mcap / catalyst, then the
-	     display-only expert chips (buffett + panel) set apart behind a divider.
-	     Pattern: small dim uppercase key + bold value, replacing the old uniform
-	     uppercase ticker-tape. -->
+	<!-- Meta bar: sector / industry + mcap on the left (identity cluster); the
+	     ordering signals on the right — a filled L4 badge leads, then the extended
+	     flag (only when atr_penalty > 0) and confidence. Catalyst and the expert
+	     lenses (buffett / o'neil) moved into their domain blocks below as part of
+	     the domain regroup, so they no longer sit here. -->
 	<div data-testid="card-meta" class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 sm:px-5 py-2 border-b border-grid">
 		<!-- Identity cluster: what the company is (sector / industry) and how big it is
 		     (market cap). Mcap lives here, not with the right-side scores — it is a
