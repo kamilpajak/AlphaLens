@@ -169,8 +169,18 @@ Stacked PR on `feature/card-domain-regroup`. Base = `feature/card-domain-regroup
 open; rebase onto `main` once #682 merges. DCO sign-off on every commit. Zen `deepseek/deepseek-v4-pro`
 (thinking=high) pre-merge review per repo convention. CF Pages auto-deploys after merge to main.
 
+## Added after the initial review (#3)
+
+- **#3** Insider/Flow → **compact one-line row** (added 2026-06-27). A live audit of 39
+  briefs / 431 candidates found net opportunistic buying exactly **once** (GME 2026-06-16,
+  $114k, 100%ile), so the full strip rendered an always-empty bar ~99.8% of the time and
+  duplicated the header `✗ INSIDER` gate. Replaced the cyan-headed section + `SignalBar` with
+  a single muted row (`insider 90d` label + value): no-buys/selling → muted text; the rare
+  net-buying → `<pctile>%ile · <$>` in amber so it stands out. Tooltip kept (term
+  `insider buying (90d)` so it doesn't echo the row label). The `INSIDER / FLOW` heading is
+  retired; smoke updated.
+
 ## Out of scope (deferred from the same review)
 
 - **#1** empty right column when no ladder (layout rebalance) — larger refactor, separate effort.
-- **#3** Insider/Flow compact empty state — deferred.
 - **#4** bar-semantics consistency (percentile vs signed-magnitude) — a design decision, separate.
