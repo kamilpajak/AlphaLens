@@ -1096,8 +1096,12 @@ test.describe('card — domain grouping', () => {
 		await expect(anchor).toBeVisible();
 		await anchor.hover();
 		// A bodyRich row label from buffRows — proves the tooltip is wired to the
-		// score token after moving the flex row out of ChipTip.
-		await expect(card.getByText('owner-earnings yield', { exact: false })).toBeVisible();
+		// score token after moving the flex row out of ChipTip. Scoped to the
+		// anchor's own tooltip so it cannot false-pass if the label ever appears
+		// on the card face.
+		await expect(
+			anchor.locator('[role="tooltip"]').getByText('owner-earnings yield', { exact: false })
+		).toBeVisible();
 	});
 });
 
