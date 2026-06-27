@@ -295,9 +295,9 @@
 								<p class="mt-3 text-[10px] leading-snug text-fg-muted">
 									numeric score only —
 									<span class="text-fg-dim"
-										>{tenkAvailable
-											? 'qualitative read not computed'
-											: 'no 10-K for a qualitative read'}</span
+										>{tenkAvailable === false
+											? 'no 10-K for a qualitative read'
+											: 'qualitative read not computed'}</span
 									>
 								</p>
 							{/if}
