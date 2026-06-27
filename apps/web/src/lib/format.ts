@@ -213,17 +213,10 @@ export function consensusBand(spread: number | null | undefined): string {
 }
 
 /**
- * Merged fcff-yield Valuation row. Was duplicated on the card (a sector-%ile
- * bar in SYSTEM.SIGNALS + a raw % in FUNDAMENTALS); the domain regroup shows
- * the %ile as the bar headline and the raw % as an annotation, each only when
- * finite. Both null is the honest empty state (the row renders an em-dash).
+ * Raw fcff-yield annotation for the merged Valuation row. The sector-%ile drives
+ * the SignalBar headline; this returns the raw % shown beneath it — null (no
+ * annotation row) when the raw value is absent/non-finite.
  */
-export function fcffYieldDisplay(
-	pctile: number | null | undefined,
-	rawPct: number | null | undefined
-): { pctileText: string | null; rawText: string | null } {
-	return {
-		pctileText: Number.isFinite(pctile) ? `${fmtPctile(pctile)}%ile` : null,
-		rawText: Number.isFinite(rawPct) ? fmtPct(rawPct, 2) : null
-	};
+export function fcffYieldRawDisplay(rawPct: number | null | undefined): string | null {
+	return Number.isFinite(rawPct) ? fmtPct(rawPct, 2) : null;
 }

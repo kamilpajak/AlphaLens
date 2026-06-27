@@ -14,7 +14,6 @@
 	import type { BuffettAssessment, ExpertAssessments, ONeilAssessment } from '$lib/types';
 	import { EXPERT_KIND } from '$lib/types';
 	import {
-		fmtPct,
 		fmtDate,
 		buffettTone,
 		oneilTone,

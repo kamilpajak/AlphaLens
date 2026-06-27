@@ -1088,6 +1088,17 @@ test.describe('card — domain grouping', () => {
 		// Pointer to the momentum block present.
 		await expect(drawer.getByText('momentum & technicals', { exact: false })).toBeVisible();
 	});
+
+	test(`buffett anchor tooltip reveals on hover on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		const anchor = card.locator('[data-testid="chip-tip"][data-term="buffett quality"]');
+		await expect(anchor).toBeVisible();
+		await anchor.hover();
+		// A bodyRich row label from buffRows — proves the tooltip is wired to the
+		// score token after moving the flex row out of ChipTip.
+		await expect(card.getByText('owner-earnings yield', { exact: false })).toBeVisible();
+	});
 });
 
 test.describe('smoke — SvelteKit stale-import recovery (version polling)', () => {

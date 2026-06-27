@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fmtPct, fmtPctile, fcffYieldDisplay } from '../../src/lib/format';
+import { fmtPct, fmtPctile, fcffYieldRawDisplay } from '../../src/lib/format';
 
 describe('fmtPctile — percentile RANK (O\'Neil rel-strength uses this, not fmtPct)', () => {
 	it('rounds to an integer with no sign and no % suffix', () => {
@@ -31,21 +31,16 @@ describe('fmtPct — signed % change (the WRONG formatter for a percentile rank)
 	});
 });
 
-describe('fcffYieldDisplay (merged valuation fcff row)', () => {
-	it('both finite → %ile headline + raw annotation', () => {
-		expect(fcffYieldDisplay(31, 5.09)).toEqual({ pctileText: '31%ile', rawText: '+5.09%' });
+describe('fcffYieldRawDisplay (merged valuation fcff raw annotation)', () => {
+	it('finite → signed 2-decimal %', () => {
+		expect(fcffYieldRawDisplay(5.09)).toBe('+5.09%');
 	});
-	it('raw negative keeps its sign', () => {
-		expect(fcffYieldDisplay(12, -2.5)).toEqual({ pctileText: '12%ile', rawText: '-2.50%' });
+	it('negative keeps its sign', () => {
+		expect(fcffYieldRawDisplay(-2.5)).toBe('-2.50%');
 	});
-	it('pctile null → no headline, raw still shown', () => {
-		expect(fcffYieldDisplay(null, 5.09)).toEqual({ pctileText: null, rawText: '+5.09%' });
-	});
-	it('raw null → headline only', () => {
-		expect(fcffYieldDisplay(31, null)).toEqual({ pctileText: '31%ile', rawText: null });
-	});
-	it('both null / non-finite → both null', () => {
-		expect(fcffYieldDisplay(null, undefined)).toEqual({ pctileText: null, rawText: null });
-		expect(fcffYieldDisplay(NaN, NaN)).toEqual({ pctileText: null, rawText: null });
+	it('null / undefined / NaN → null', () => {
+		expect(fcffYieldRawDisplay(null)).toBe(null);
+		expect(fcffYieldRawDisplay(undefined)).toBe(null);
+		expect(fcffYieldRawDisplay(NaN)).toBe(null);
 	});
 });

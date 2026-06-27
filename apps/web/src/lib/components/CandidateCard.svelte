@@ -12,7 +12,7 @@
 		oneilTone,
 		insiderDisplay,
 		magicFormulaDisplay,
-		fcffYieldDisplay
+		fcffYieldRawDisplay
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -59,9 +59,8 @@
 	// fundamentals row, not the verbose phrase. See format.ts.
 	const magic = $derived(magicFormulaDisplay(c.magic_formula_rank, c.magic_formula_cohort_n));
 	// Merged fcff-yield Valuation row: the %ile drives the bar; the raw % is an
-	// annotation shown below it (see fcffYieldDisplay). Replaces the old duplicate
-	// raw-% row in FUNDAMENTALS.
-	const fcffRaw = $derived(fcffYieldDisplay(c.fcff_yield_sector_percentile, c.fcff_yield_pct));
+	// annotation shown below it. Replaces the old duplicate raw-% row in FUNDAMENTALS.
+	const fcffRaw = $derived(fcffYieldRawDisplay(c.fcff_yield_pct));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 
@@ -326,33 +325,36 @@
 							</ChipTip>
 						{/if}
 					</div>
-					<!-- Expert anchor: Buffett value/quality lens. -->
-					<ChipTip term="buffett quality">
-						{#snippet chip()}
-							<div
-								class="mb-4 flex items-baseline justify-between gap-2 cursor-help"
-								class:opacity-60={buffLowCov}
-							>
-								<span class="text-[10px] uppercase tracking-widest text-fg-muted">buffett <span class="normal-case text-fg-dim">· value / quality</span></span>
+					<!-- Expert anchor: Buffett value/quality lens. The full-width row lives in
+					     the card markup; only the score token is wrapped in ChipTip so the hover
+					     trigger stays phrasing content (no div-in-span) and justify-between can
+					     push the score to the column's right edge. -->
+					<div
+						class="mb-4 flex items-baseline justify-between gap-2"
+						class:opacity-60={buffLowCov}
+					>
+						<span class="text-[10px] uppercase tracking-widest text-fg-muted">buffett <span class="normal-case text-fg-dim">· value / quality</span></span>
+						<ChipTip term="buffett quality">
+							{#snippet chip()}
 								<span
-									class="font-display text-base font-bold leading-none"
+									class="font-display text-base font-bold leading-none cursor-help"
 									class:text-green={buffTone === 'green'}
 									class:text-amber={buffTone === 'amber'}
 									class:text-fg-muted={buffTone === 'muted'}
 									>{buffScore ?? '—'}<span class="text-[10px] font-normal text-fg-muted">/100</span></span
 								>
-							</div>
-						{/snippet}
-						{#snippet bodyRich()}
-							<MetricGrid rows={buffRows} align="right" />
-							<p class="mt-2 text-center text-[15px] text-fg-dim"><Formula name="margin_of_safety" /></p>
-							{#if buffScore === null}
-								<p class="mt-1 text-fg-muted">not enough fundamentals to score</p>
-							{:else if buffLowCov}
-								<p class="mt-1 text-fg-muted">thin data, score down-weighted</p>
-							{/if}
-						{/snippet}
-					</ChipTip>
+							{/snippet}
+							{#snippet bodyRich()}
+								<MetricGrid rows={buffRows} align="right" />
+								<p class="mt-2 text-center text-[15px] text-fg-dim"><Formula name="margin_of_safety" /></p>
+								{#if buffScore === null}
+									<p class="mt-1 text-fg-muted">not enough fundamentals to score</p>
+								{:else if buffLowCov}
+									<p class="mt-1 text-fg-muted">thin data, score down-weighted</p>
+								{/if}
+							{/snippet}
+						</ChipTip>
+					</div>
 					<div class="flex flex-col gap-y-4">
 						<SignalBar
 							label="fcff yield (sector %ile)"
@@ -360,9 +362,9 @@
 							format={(v) => fmtPctile(v) + '%ile'}
 							tooltip="Free-cash-flow-to-firm yield = FCFF / EV, ranked within sector. Higher = cheaper on a cash-generation basis. Paradigm #13 scorer (αt 1.18 IS, multi-signal corroboration only)."
 						/>
-						{#if fcffRaw.rawText}
+						{#if fcffRaw}
 							<div class="-mt-3 text-[10px] uppercase tracking-widest text-fg-muted">
-								raw <span class="text-fg-dim font-bold normal-case whitespace-nowrap">{fcffRaw.rawText}</span>
+								raw <span class="text-fg-dim font-bold normal-case whitespace-nowrap">{fcffRaw}</span>
 							</div>
 						{/if}
 						<SignalBar
@@ -400,27 +402,28 @@
 				<!-- MOMENTUM & TECHNICALS (O'Neil anchors) -->
 				<div data-testid="block-momentum" class="px-4 sm:px-5 py-4 border-t md:border-t-0 border-grid">
 					<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">momentum &amp; technicals</div>
-					<!-- Expert anchor: O'Neil momentum lens. -->
-					<ChipTip term="o'neil momentum">
-						{#snippet chip()}
-							<div class="mb-4 flex items-baseline justify-between gap-2 cursor-help">
-								<span class="text-[10px] uppercase tracking-widest text-fg-muted">o'neil <span class="normal-case text-fg-dim">· momentum</span></span>
+					<!-- Expert anchor: O'Neil momentum lens. Same pattern — full-width row in
+					     the card; only the score token is the ChipTip trigger. -->
+					<div class="mb-4 flex items-baseline justify-between gap-2">
+						<span class="text-[10px] uppercase tracking-widest text-fg-muted">o'neil <span class="normal-case text-fg-dim">· momentum</span></span>
+						<ChipTip term="o'neil momentum">
+							{#snippet chip()}
 								<span
-									class="font-display text-base font-bold leading-none"
+									class="font-display text-base font-bold leading-none cursor-help"
 									class:text-green={oneilScoreTone === 'green'}
 									class:text-amber={oneilScoreTone === 'amber'}
 									class:text-fg-muted={oneilScoreTone === 'muted'}
 									>{oneilScore ?? '—'}<span class="text-[10px] font-normal text-fg-muted">/100</span></span
 								>
-							</div>
-						{/snippet}
-						{#snippet bodyRich()}
-							<MetricGrid rows={oneilRows} align="right" />
-							{#if oneilScore === null}
-								<p class="mt-1 text-fg-muted">momentum terms incomplete to score</p>
-							{/if}
-						{/snippet}
-					</ChipTip>
+							{/snippet}
+							{#snippet bodyRich()}
+								<MetricGrid rows={oneilRows} align="right" />
+								{#if oneilScore === null}
+									<p class="mt-1 text-fg-muted">momentum terms incomplete to score</p>
+								{/if}
+							{/snippet}
+						</ChipTip>
+					</div>
 					<div class="flex flex-col gap-y-4">
 						<SignalBar
 							label="rsi 14d"
