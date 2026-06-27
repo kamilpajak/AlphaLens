@@ -1073,6 +1073,21 @@ test.describe('card — domain grouping', () => {
 		await expect(card.locator('[data-testid="block-valuation"]')).toContainText('buffett');
 		await expect(card.locator('[data-testid="block-momentum"]')).toContainText("o'neil");
 	});
+
+	test(`expert.panel drawer omits the O'Neil numeric grid on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		// Open the drawer.
+		await card.getByRole('button', { name: /expert.panel/i }).click();
+		const drawer = card.locator('[data-testid="expert-panel-body"]');
+		await expect(drawer).toBeVisible();
+		// Scorer breakdown preserved.
+		await expect(drawer.getByText('scorer breakdown', { exact: false })).toBeVisible();
+		// O'Neil numeric readout grid is gone (rel strength now only in the momentum block).
+		await expect(drawer.getByText('rel strength', { exact: false })).toHaveCount(0);
+		// Pointer to the momentum block present.
+		await expect(drawer.getByText('momentum & technicals', { exact: false })).toBeVisible();
+	});
 });
 
 test.describe('smoke — SvelteKit stale-import recovery (version polling)', () => {

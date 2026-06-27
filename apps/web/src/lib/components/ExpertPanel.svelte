@@ -15,7 +15,6 @@
 	import { EXPERT_KIND } from '$lib/types';
 	import {
 		fmtPct,
-		fmtPctile,
 		fmtDate,
 		buffettTone,
 		oneilTone,
@@ -106,8 +105,9 @@
 		}
 	]);
 
-	// O'Neil numeric readouts + the two audit flags (badges only on strict `=== true`,
+	// O'Neil audit flags (badges only on strict `=== true`,
 	// which is why the parquet bool-as-float must round-trip through coerce_optional_bool).
+	// Numeric readouts have moved to the Momentum & Technicals block on the card face.
 	const hasOneil = $derived(
 		oneilScore !== null ||
 			Number.isFinite(oneil?.oneil_pct_off_52w_high) ||
@@ -115,20 +115,6 @@
 			Number.isFinite(oneil?.oneil_earnings_growth_yoy_pct) ||
 			Number.isFinite(oneil?.oneil_rs_approx_pct)
 	);
-	const oneilReadouts = $derived([
-		{ label: 'off 52w high', value: fmtPct(oneil?.oneil_pct_off_52w_high) },
-		// Relative-strength is a 0-100 percentile RANK (O'Neil RS), not a signed % change:
-		// render it as "N%ile" (matching the sector-percentile readouts), never fmtPct (+N%).
-		{
-			label: 'rel strength',
-			value: Number.isFinite(oneil?.oneil_rs_approx_pct)
-				? `${fmtPctile(oneil?.oneil_rs_approx_pct)}%ile`
-				: '—'
-		},
-		{ label: 'MA200 slope/d', value: fmtPct(oneil?.oneil_ma200_slope_pct_per_day, 2) },
-		{ label: 'MA200 dist', value: fmtPct(oneil?.oneil_ma200_distance_pct) },
-		{ label: 'earnings YoY', value: fmtPct(oneil?.oneil_earnings_growth_yoy_pct) }
-	]);
 
 	// The drawer is offered when ANY expert has renderable content, a spread exists,
 	// or the scorer breakdown (selection_score / atr_penalty / config_version) is present.
@@ -188,7 +174,7 @@
 		</div>
 
 		{#if open}
-			<div class="mt-3 space-y-4">
+			<div data-testid="expert-panel-body" class="mt-3 space-y-4">
 				<!-- Disagreement scale: the two lens scores on one 0-100 track, the gap
 				     between them shaded. Replaces the old thin dot-lane + headline sentence.
 				     Renders only when the persisted spread is finite (>=2 lenses scored). -->
@@ -289,14 +275,6 @@
 								{/if}
 							</div>
 						{:else}
-							<dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-xs sm:grid-cols-3">
-								{#each oneilReadouts as r (r.label)}
-									<div>
-										<dt class="text-[9px] uppercase tracking-widest text-fg-muted">{r.label}</dt>
-										<dd class="font-bold text-fg-dim whitespace-nowrap">{r.value}</dd>
-									</div>
-								{/each}
-							</dl>
 							{#if oneil?.oneil_new_high_split_suspected === true || oneil?.oneil_earnings_growth_near_zero_base === true}
 								<div class="mt-3 flex flex-wrap gap-2">
 									{#if oneil?.oneil_new_high_split_suspected === true}
@@ -321,6 +299,9 @@
 								<span class="uppercase tracking-wider">source</span>
 								<span class="text-fg-dim">price panel + EDGAR fundamentals</span>
 								<span class="text-grid-strong"> · </span>numeric-only, no LLM
+							</p>
+							<p class="mt-1 text-[10px] leading-snug text-fg-muted">
+								numeric readouts shown in <span class="text-fg-dim">Momentum &amp; Technicals</span>.
 							</p>
 						{/if}
 					</div>
