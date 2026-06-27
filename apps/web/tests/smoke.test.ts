@@ -1131,6 +1131,13 @@ test.describe('card — domain grouping', () => {
 		const o = await oneil.boundingBox();
 		expect(b && o && b.y < o.y).toBeTruthy();
 	});
+
+	test(`no TTL chip when there is no structured ladder on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const setup = page.locator('article[id]').first().locator('[data-testid="trade-setup"]');
+		await expect(setup.getByText('no structured ladder', { exact: false })).toBeVisible();
+		await expect(setup.getByText('ttl:', { exact: false })).toHaveCount(0);
+	});
 });
 
 test.describe('smoke — SvelteKit stale-import recovery (version polling)', () => {
