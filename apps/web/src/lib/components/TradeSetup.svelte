@@ -39,7 +39,7 @@
 
 	<div class="relative flex items-center justify-between gap-2 mb-3">
 		<div class="text-[10px] uppercase tracking-widest text-cyan">trade.execution.setup</div>
-		{#if setup?.order_ttl_days != null}
+		{#if hasStructure && setup?.order_ttl_days != null}
 			<span
 				class="px-2 py-0.5 border border-grid-strong text-[9px] uppercase tracking-widest text-fg-muted whitespace-nowrap"
 			>
