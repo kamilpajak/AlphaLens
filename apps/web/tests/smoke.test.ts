@@ -551,31 +551,24 @@ test.describe('smoke — brief detail interactions', () => {
 		// The full-markdown <details> expander was retired (2026-05-26);
 		// candidate cards must no longer render any <details>.
 		await expect(page.locator('article[id] details')).toHaveCount(0);
-		// Core structured sections render: fundamentals table + the trade-execution
-		// setup panel (re-added 2026-05-27 in the two-column layout — brief_trade_setup
-		// data was always generated server-side, now rendered again).
-		// The fundamentals section header now carries a leading icon, so the
-		// label div's text content is " fundamentals" — tolerate surrounding
-		// whitespace rather than anchoring on the bare word.
+		// Core structured sections render: domain blocks (valuation/momentum) + trade-
+		// execution setup panel. After Task 3 domain-regroup, the old "fundamentals"
+		// heading became "multiples" inside the valuation block.
 		await expect(
-			page.locator('article[id] div').filter({ hasText: /^\s*fundamentals\s*$/i }).first()
+			page.locator('article[id] [data-testid="block-valuation"]').first()
 		).toBeVisible();
 		await expect(page.locator('article[id] [data-testid="trade-setup"]').first()).toBeVisible();
 	});
 
-	test('expert chips render symmetrically (buffett + o\'neil) as non-wrapping tokens', async ({ page }) => {
-		// The meta bar names BOTH expert lenses symmetrically (buffett + o'neil), each
-		// a raw 0-100 score. With no expert_assessments in the fixture both read "—" —
-		// they must still render (always shown, like the other meta-bar figures) and
-		// carry whitespace-nowrap so "buffett 11" / "o'neil 62" can never break across
-		// two lines. The disagreement verdict stays in the drawer, never on the face.
+	test('expert lens anchors render in their domain blocks (buffett in valuation, o\'neil in momentum)', async ({ page }) => {
+		// After the domain-regroup (Task 3) the Buffett and O'Neil scores moved from
+		// the meta bar into their respective domain blocks. Both still always render
+		// (shows "—" when absent) — but now as block-level anchors, not inline chips.
 		await page.goto(`/brief/${latestDay.date}`);
 		await expect(page.locator('article[id]').first()).toBeVisible();
-		for (const lens of [/^\s*buffett\s+(\d+|—)\s*$/i, /^\s*o'neil\s+(\d+|—)\s*$/i]) {
-			const chip = page.locator('article[id] span').filter({ hasText: lens }).first();
-			await expect(chip).toBeVisible();
-			await expect(chip).toHaveClass(/whitespace-nowrap/);
-		}
+		const card = page.locator('article[id]').first();
+		await expect(card.locator('[data-testid="block-valuation"]')).toContainText('buffett');
+		await expect(card.locator('[data-testid="block-momentum"]')).toContainText("o'neil");
 	});
 
 	test('trade-setup percentages render with bounded precision (no raw floats)', async ({ page }) => {
@@ -1037,6 +1030,48 @@ test.describe('smoke — api fixture integrity', () => {
 		// 404 inside one of the route handlers downstream.
 		const missing = days.filter((day) => !DAY_BODIES[day.date]);
 		expect(missing, `fixtures missing per-day JSON for: ${missing.map((d) => d.date)}`).toEqual([]);
+	});
+});
+
+test.describe('card — domain grouping', () => {
+	test(`first card on /brief/${latestDay.date} is domain-grouped`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		await expect(card).toBeVisible();
+
+		// Domain section headings present.
+		for (const heading of [
+			'catalyst & event',
+			'valuation & quality',
+			'momentum & technicals',
+			'insider / flow'
+		]) {
+			await expect(card.getByText(heading, { exact: false })).toBeVisible();
+		}
+
+		// Dedup: each label renders exactly once in the card BODY. getByText does
+		// case-insensitive substring matching and also matches hidden tooltip text
+		// (the [role="tooltip"] bubbles render at opacity-0), so subtract tooltip
+		// occurrences — the real duplication guard is about visible rows, not the
+		// incidental mention of a metric inside a lens tooltip.
+		for (const label of ['off 52w high', 'ma200 dist', 'ma200 slope', 'fcff yield']) {
+			const total = await card.getByText(label, { exact: false }).count();
+			const inTooltip = await card.locator('[role="tooltip"]').getByText(label, { exact: false }).count();
+			expect(total - inTooltip, `${label} body occurrences`).toBe(1);
+		}
+
+		// Meta bar slimmed: no buffett/o'neil/catalyst chip in the meta row.
+		const meta = card.locator('[data-testid="card-meta"]');
+		await expect(meta.getByText('buffett', { exact: false })).toHaveCount(0);
+		await expect(meta.getByText("o'neil", { exact: false })).toHaveCount(0);
+		await expect(meta.getByText('catalyst', { exact: false })).toHaveCount(0);
+		await expect(meta.getByText('layer-4', { exact: false })).toBeVisible();
+
+		// Lens scores anchor their domain blocks. toContainText asserts the block's
+		// text includes the lens name regardless of how many descendants match (the
+		// chip label + its hidden tooltip title both contain it).
+		await expect(card.locator('[data-testid="block-valuation"]')).toContainText('buffett');
+		await expect(card.locator('[data-testid="block-momentum"]')).toContainText("o'neil");
 	});
 });
 
