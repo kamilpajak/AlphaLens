@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fmtPct, fmtPctile, fcffYieldRawDisplay } from '../../src/lib/format';
+import { fmtPct, fmtPctile, fcffYieldRawDisplay, tenkAvailable } from '../../src/lib/format';
 
 describe('fmtPctile — percentile RANK (O\'Neil rel-strength uses this, not fmtPct)', () => {
 	it('rounds to an integer with no sign and no % suffix', () => {
@@ -42,5 +42,21 @@ describe('fcffYieldRawDisplay (merged valuation fcff raw annotation)', () => {
 		expect(fcffYieldRawDisplay(null)).toBe(null);
 		expect(fcffYieldRawDisplay(undefined)).toBe(null);
 		expect(fcffYieldRawDisplay(NaN)).toBe(null);
+	});
+});
+
+describe('tenkAvailable (10-K presence from gate arrays)', () => {
+	it('true when tenk passed (keywords matched)', () => {
+		expect(tenkAvailable(['tenk'], ['press'])).toBe(true);
+	});
+	it('true when tenk failed (10-K exists, no keyword match)', () => {
+		expect(tenkAvailable(['press'], ['tenk'])).toBe(true);
+	});
+	it('false when tenk only unknown / absent from both arrays', () => {
+		expect(tenkAvailable(['press'], ['insider'])).toBe(false);
+	});
+	it('false / safe on null / undefined inputs', () => {
+		expect(tenkAvailable(null, undefined)).toBe(false);
+		expect(tenkAvailable(undefined, null)).toBe(false);
 	});
 });
