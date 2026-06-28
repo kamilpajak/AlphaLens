@@ -1,5 +1,29 @@
 import { describe, it, expect } from 'vitest';
-import { fmtPct, fmtPctile, fcffYieldRawDisplay, tenkAvailable } from '../../src/lib/format';
+import {
+	fmtPct,
+	fmtPctile,
+	fcffYieldRawDisplay,
+	tenkAvailable,
+	selectionBadge
+} from '../../src/lib/format';
+
+describe('selectionBadge — meta-bar headline (operative ranking score)', () => {
+	it('shows selection_score, no decimals when integer-valued (penalty=0)', () => {
+		expect(selectionBadge(3, 3)).toBe('3');
+	});
+	it('shows 2 decimals when an ATR tilt makes it fractional', () => {
+		expect(selectionBadge(1.4933603274784968, 2)).toBe('1.49');
+		expect(selectionBadge(0.4879744561060064, 1)).toBe('0.49');
+	});
+	it('falls back to layer4 when selection_score is absent', () => {
+		expect(selectionBadge(null, 2)).toBe('2');
+		expect(selectionBadge(undefined, 3)).toBe('3');
+	});
+	it('em-dash when neither is finite', () => {
+		expect(selectionBadge(null, null)).toBe('—');
+		expect(selectionBadge(NaN, undefined)).toBe('—');
+	});
+});
 
 describe('fmtPctile — percentile RANK (O\'Neil rel-strength uses this, not fmtPct)', () => {
 	it('rounds to an integer with no sign and no % suffix', () => {

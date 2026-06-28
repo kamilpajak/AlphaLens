@@ -13,7 +13,8 @@
 		insiderDisplay,
 		magicFormulaDisplay,
 		fcffYieldRawDisplay,
-		tenkAvailable
+		tenkAvailable,
+		selectionBadge
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -194,13 +195,17 @@
 			</span>
 		</div>
 		<div class="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
-			<!-- Layer-4 score — the headline ordering signal, given a filled badge. -->
+			<!-- Headline score — the OPERATIVE ranking signal, given a filled badge.
+			     The brief is ranked by selection_score (= layer4 − atr_penalty), so the
+			     badge next to "RANK" is that score, not the raw layer4 input. layer4 +
+			     the ATR penalty live in the drawer's SCORER BREAKDOWN; the `extended`
+			     chip (below) flags when the penalty pulled this below its layer4. -->
 			<span
 				class="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-sm border border-amber/35 bg-amber/10 px-2 py-0.5"
 			>
-				<span class="text-[8px] uppercase tracking-widest text-amber">layer-4</span>
+				<span class="text-[8px] uppercase tracking-widest text-amber">score</span>
 				<span class="font-display text-[15px] font-bold leading-none text-amber"
-					>{c.layer4_weighted_score ?? '—'}</span
+					>{selectionBadge(c.selection_score, c.layer4_weighted_score)}</span
 				>
 			</span>
 			<!-- Extended band: shown only when atr_penalty > 0 (high realized-vol /

@@ -169,6 +169,22 @@ Stacked PR on `feature/card-domain-regroup`. Base = `feature/card-domain-regroup
 open; rebase onto `main` once #682 merges. DCO sign-off on every commit. Zen `deepseek/deepseek-v4-pro`
 (thinking=high) pre-merge review per repo convention. CF Pages auto-deploys after merge to main.
 
+## Added after the initial review (#7 — meta-bar headline badge)
+
+- **#7** Meta-bar badge → **selection_score** (added 2026-06-28). The brief is ranked by
+  `selection_score` (= `layer4_weighted_score − atr_penalty`; pipeline `orchestrator.py` sorts
+  on it, `rank_in_day` follows), but the filled amber badge next to "RANK" showed the raw
+  `layer4_weighted_score` — the input, not the operative ranking number. A live audit (39
+  briefs / 437 candidates) found `atr_penalty > 0` in 6 cases (~1.4%) where the two diverge
+  materially (e.g. SNAP `layer4=1 → selection=0.49`, SABR `2 → 1.49`); there the old badge
+  **overstated** the card's standing. Fix: the badge renders `selectionBadge(c.selection_score,
+  c.layer4_weighted_score)` and is relabelled `score`. `layer4` + the ATR penalty stay in the
+  drawer's SCORER BREAKDOWN; the `extended` chip continues to flag a non-zero penalty. Helper
+  `selectionBadge` (integer-valued → no decimals `3.0→"3"`; fractional → 2 dp; falls back to
+  layer4, then `—`). New unit tests + smoke updated (meta shows `score`, not `layer-4`).
+  Validation note: `selection_score` is "suggestive — not yet validated", but it already drives
+  rank, so naming the operative number is more honest than hiding it behind layer4.
+
 ## Added after the initial review (#3)
 
 - **#3** Insider/Flow → **compact one-line row** (added 2026-06-27). A live audit of 39

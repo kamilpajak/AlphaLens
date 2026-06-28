@@ -234,3 +234,24 @@ export function tenkAvailable(
 ): boolean {
 	return Boolean(gatesPassed?.includes('tenk') || gatesFailed?.includes('tenk'));
 }
+
+/**
+ * The meta-bar headline score. The brief is ranked by `selection_score`
+ * (= layer4_weighted_score − atr_penalty), so the badge next to "RANK" shows
+ * that operative score, not the raw layer4 input (which lives in the drawer's
+ * SCORER BREAKDOWN). Falls back to layer4 for older briefs without a
+ * selection_score. Integer-valued scores render without decimals (3.0 → "3");
+ * an ATR tilt makes it fractional (1.49).
+ */
+export function selectionBadge(
+	selectionScore: number | null | undefined,
+	layer4: number | null | undefined
+): string {
+	const v = Number.isFinite(selectionScore)
+		? (selectionScore as number)
+		: Number.isFinite(layer4)
+			? (layer4 as number)
+			: null;
+	if (v === null) return '—';
+	return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
