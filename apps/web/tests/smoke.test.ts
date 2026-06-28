@@ -1065,9 +1065,13 @@ test.describe('card — domain grouping', () => {
 		await expect(meta.getByText("o'neil", { exact: false })).toHaveCount(0);
 		await expect(meta.getByText('catalyst', { exact: false })).toHaveCount(0);
 		// The headline badge is the operative ranking score (selection_score),
-		// labelled `score` — not the raw `layer-4` input (which moved to the drawer).
-		await expect(meta.getByText('score', { exact: false })).toBeVisible();
-		await expect(meta.getByText('layer-4', { exact: false })).toHaveCount(0);
+		// labelled `score` — not the raw `layer-4` input. `layer-4` now lives only in
+		// the badge's hover tooltip, so exclude [role="tooltip"] when checking the face.
+		const scoreBadge = meta.locator('[data-testid="chip-tip"][data-term="ranking score"]');
+		await expect(scoreBadge).toBeVisible();
+		const l4Total = await meta.getByText('layer-4', { exact: false }).count();
+		const l4InTip = await meta.locator('[role="tooltip"]').getByText('layer-4', { exact: false }).count();
+		expect(l4Total - l4InTip, 'layer-4 on the visible meta face').toBe(0);
 
 		// Lens scores anchor their domain blocks. toContainText asserts the block's
 		// text includes the lens name regardless of how many descendants match (the
@@ -1083,12 +1087,24 @@ test.describe('card — domain grouping', () => {
 		await card.getByRole('button', { name: /expert.panel/i }).click();
 		const drawer = card.locator('[data-testid="expert-panel-body"]');
 		await expect(drawer).toBeVisible();
-		// Scorer breakdown preserved.
-		await expect(drawer.getByText('scorer breakdown', { exact: false })).toBeVisible();
+		// Scorer breakdown moved OUT of the drawer into the score-badge tooltip.
+		await expect(drawer.getByText('scorer breakdown', { exact: false })).toHaveCount(0);
 		// O'Neil numeric readout grid is gone (rel strength now only in the momentum block).
 		await expect(drawer.getByText('rel strength', { exact: false })).toHaveCount(0);
 		// Pointer to the momentum block present.
 		await expect(drawer.getByText('momentum & technicals', { exact: false })).toBeVisible();
+	});
+
+	test(`score badge tooltip carries the scorer breakdown on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		const badge = card.locator('[data-testid="chip-tip"][data-term="ranking score"]');
+		await expect(badge).toBeVisible();
+		await badge.hover();
+		// Derivation + the not-yet-validated caveat live in the badge's own tooltip.
+		const tip = badge.locator('[role="tooltip"]');
+		await expect(tip.getByText('selection score', { exact: false })).toBeVisible();
+		await expect(tip.getByText('suggestive', { exact: false })).toBeVisible();
 	});
 
 	test(`buffett anchor tooltip reveals on hover on /brief/${latestDay.date}`, async ({ page }) => {
