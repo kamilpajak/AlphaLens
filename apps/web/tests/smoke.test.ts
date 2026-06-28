@@ -1064,7 +1064,10 @@ test.describe('card — domain grouping', () => {
 		await expect(meta.getByText('buffett', { exact: false })).toHaveCount(0);
 		await expect(meta.getByText("o'neil", { exact: false })).toHaveCount(0);
 		await expect(meta.getByText('catalyst', { exact: false })).toHaveCount(0);
-		await expect(meta.getByText('layer-4', { exact: false })).toBeVisible();
+		// The headline badge is the operative ranking score (selection_score),
+		// labelled `score` — not the raw `layer-4` input (which moved to the drawer).
+		await expect(meta.getByText('score', { exact: false })).toBeVisible();
+		await expect(meta.getByText('layer-4', { exact: false })).toHaveCount(0);
 
 		// Lens scores anchor their domain blocks. toContainText asserts the block's
 		// text includes the lens name regardless of how many descendants match (the
