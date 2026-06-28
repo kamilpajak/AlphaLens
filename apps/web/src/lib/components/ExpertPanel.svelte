@@ -31,29 +31,11 @@
 
 	interface Props {
 		assessments: ExpertAssessments | null | undefined;
-		layer4Score?: number | null;
-		atrPenalty?: number | null;
-		selectionScore?: number | null;
-		scorerConfigVersion?: string | null;
 		/** Whether a 10-K exists (from the tenk gate) — explains an absent Buffett
 		 *  qualitative read. */
 		tenkAvailable?: boolean | null;
 	}
-	let {
-		assessments,
-		layer4Score,
-		atrPenalty,
-		selectionScore,
-		scorerConfigVersion,
-		tenkAvailable
-	}: Props = $props();
-
-	// Score breakdown: show the ATR-penalty breakdown row when any of the three
-	// scorer cols is present. The precise numbers live HERE (drawer), not on the
-	// card face (the extended chip carries no number — manufactured-authority guard).
-	const hasScoreBreakdown = $derived(
-		selectionScore != null || atrPenalty != null || scorerConfigVersion != null
-	);
+	let { assessments, tenkAvailable }: Props = $props();
 
 	const buf = $derived((assessments?.buffett ?? null) as BuffettAssessment | null);
 	const oneil = $derived((assessments?.oneil ?? null) as ONeilAssessment | null);
@@ -124,11 +106,8 @@
 			Number.isFinite(oneil?.oneil_rs_approx_pct)
 	);
 
-	// The drawer is offered when ANY expert has renderable content, a spread exists,
-	// or the scorer breakdown (selection_score / atr_penalty / config_version) is present.
-	const hasContent = $derived(
-		hasBuffQual || hasOneil || spread !== null || hasScoreBreakdown || buffScore !== null
-	);
+	// The drawer is offered when ANY expert has renderable content or a spread exists.
+	const hasContent = $derived(hasBuffQual || hasOneil || spread !== null || buffScore !== null);
 
 	// Registry order (buffett, oneil). A 3rd expert is one entry in EXPERT_KIND.
 	const sections = $derived(
@@ -333,43 +312,6 @@
 						{/if}
 					</div>
 				{/each}
-
-				<!-- Score breakdown: layer-4 → ATR penalty → selection_score.
-				     Precise numbers live here (drawer), NOT on the card face.
-				     Shown only when at least one scorer col is present. -->
-				{#if hasScoreBreakdown}
-					<div class="border-t border-grid pt-4">
-						<div class="text-[9px] uppercase tracking-widest text-fg-muted mb-2">
-							scorer breakdown
-						</div>
-						<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-							<dt class="text-[10px] uppercase tracking-widest text-fg-muted">layer-4</dt>
-							<dd class="text-right font-bold text-fg-dim whitespace-nowrap">
-								{layer4Score != null ? layer4Score.toFixed(2) : '—'}
-							</dd>
-							{#if atrPenalty != null && atrPenalty > 0}
-								<dt class="text-[10px] uppercase tracking-widest text-fg-muted">atr penalty</dt>
-								<dd class="text-right font-bold text-fg-muted whitespace-nowrap">
-									<span class="whitespace-nowrap">−{atrPenalty.toFixed(2)}</span>
-								</dd>
-							{/if}
-							<dt class="text-[10px] uppercase tracking-widest text-fg-muted">selection score</dt>
-							<dd class="text-right font-bold text-fg whitespace-nowrap">
-								<span class="whitespace-nowrap"
-									>{selectionScore != null ? selectionScore.toFixed(2) : '—'}</span
-								>
-							</dd>
-						</dl>
-						{#if scorerConfigVersion}
-							<p class="mt-2 text-[10px] text-fg-muted">
-								<span class="whitespace-nowrap">{scorerConfigVersion}</span>
-							</p>
-						{/if}
-						<p class="mt-1 text-[10px] italic text-fg-muted">
-							suggestive — not yet validated
-						</p>
-					</div>
-				{/if}
 			</div>
 		{/if}
 	</div>

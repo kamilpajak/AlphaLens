@@ -169,6 +169,20 @@ Stacked PR on `feature/card-domain-regroup`. Base = `feature/card-domain-regroup
 open; rebase onto `main` once #682 merges. DCO sign-off on every commit. Zen `deepseek/deepseek-v4-pro`
 (thinking=high) pre-merge review per repo convention. CF Pages auto-deploys after merge to main.
 
+## Added after the initial review (#8 — SCORER BREAKDOWN → badge tooltip)
+
+- **#8** SCORER BREAKDOWN moved from the `ExpertPanel` drawer into the **score-badge tooltip**
+  (added 2026-06-28). Once the badge became `selection_score` (#7), the derivation belongs on
+  the badge itself, and the breakdown was a poor fit inside the expert-lens drawer (it was
+  bolted on there by the atr-tilt PRs). The badge now wraps in a `ChipTip` whose tooltip shows
+  `layer-4 → atr penalty (only when > 0) → selection score`, the `scorer_config_version`, and
+  the `suggestive — not yet validated` caveat (all hover-only). `ExpertPanel` loses the whole
+  `{#if hasScoreBreakdown}` section, the `hasScoreBreakdown` predicate, and its four scorer
+  props (`layer4Score / atrPenalty / selectionScore / scorerConfigVersion`) — it is now purely
+  the expert-lens consensus drawer. The `hasScoreBreakdown` unit mirror is removed; smoke
+  asserts the breakdown is gone from the drawer and present in the badge tooltip. The `score`
+  badge + tooltip read `c.*` directly, so no data plumbing through `ExpertPanel`.
+
 ## Added after the initial review (#7 — meta-bar headline badge)
 
 - **#7** Meta-bar badge → **selection_score** (added 2026-06-28). The brief is ranked by

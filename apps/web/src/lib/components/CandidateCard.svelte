@@ -63,6 +63,24 @@
 	// Merged fcff-yield Valuation row: the %ile drives the bar; the raw % is an
 	// annotation shown below it. Replaces the old duplicate raw-% row in FUNDAMENTALS.
 	const fcffRaw = $derived(fcffYieldRawDisplay(c.fcff_yield_pct));
+	// Rows for the headline-score badge tooltip: the derivation of selection_score
+	// (= layer4 − atr_penalty). The ATR-penalty row is shown only when it bit. This
+	// replaces the old SCORER BREAKDOWN section that used to sit in the expert drawer.
+	const scorerRows = $derived([
+		{ key: 'layer-4', value: c.layer4_weighted_score != null ? c.layer4_weighted_score.toFixed(2) : '—' },
+		...(c.atr_penalty != null && c.atr_penalty > 0
+			? [{ key: 'atr penalty', value: `−${c.atr_penalty.toFixed(2)}` }]
+			: []),
+		{
+			key: 'selection score',
+			value:
+				c.selection_score != null
+					? c.selection_score.toFixed(2)
+					: c.layer4_weighted_score != null
+						? c.layer4_weighted_score.toFixed(2)
+						: '—'
+		}
+	]);
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 
@@ -197,17 +215,30 @@
 		<div class="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
 			<!-- Headline score — the OPERATIVE ranking signal, given a filled badge.
 			     The brief is ranked by selection_score (= layer4 − atr_penalty), so the
-			     badge next to "RANK" is that score, not the raw layer4 input. layer4 +
-			     the ATR penalty live in the drawer's SCORER BREAKDOWN; the `extended`
-			     chip (below) flags when the penalty pulled this below its layer4. -->
-			<span
-				class="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-sm border border-amber/35 bg-amber/10 px-2 py-0.5"
-			>
-				<span class="text-[8px] uppercase tracking-widest text-amber">score</span>
-				<span class="font-display text-[15px] font-bold leading-none text-amber"
-					>{selectionBadge(c.selection_score, c.layer4_weighted_score)}</span
-				>
-			</span>
+			     badge next to "RANK" is that score, not the raw layer4 input. The hover
+			     carries the derivation (layer4 → ATR penalty → selection + config + the
+			     not-yet-validated caveat); the `extended` chip (below) flags a tilt. -->
+			<ChipTip term="ranking score">
+				{#snippet chip()}
+					<span
+						class="inline-flex cursor-help items-baseline gap-1.5 whitespace-nowrap rounded-sm border border-amber/35 bg-amber/10 px-2 py-0.5"
+					>
+						<span class="text-[8px] uppercase tracking-widest text-amber">score</span>
+						<span class="font-display text-[15px] font-bold leading-none text-amber"
+							>{selectionBadge(c.selection_score, c.layer4_weighted_score)}</span
+						>
+					</span>
+				{/snippet}
+				{#snippet bodyRich()}
+					<MetricGrid rows={scorerRows} align="right" />
+					{#if c.scorer_config_version}
+						<p class="mt-2 text-[10px] text-fg-muted">
+							<span class="whitespace-nowrap">{c.scorer_config_version}</span>
+						</p>
+					{/if}
+					<p class="mt-1 text-[10px] italic text-fg-muted">suggestive — not yet validated</p>
+				{/snippet}
+			</ChipTip>
 			<!-- Extended band: shown only when atr_penalty > 0 (high realized-vol /
 			     extended at entry — deprioritized). Tone-neutral / muted — a soft flag,
 			     not a hard gate. Precise penalty number + scorer_config_version live in
@@ -544,10 +575,6 @@
 			     persisted panel.expert_spread, never recomputes). -->
 			<ExpertPanel
 				assessments={c.expert_assessments}
-				layer4Score={c.layer4_weighted_score}
-				atrPenalty={c.atr_penalty}
-				selectionScore={c.selection_score}
-				scorerConfigVersion={c.scorer_config_version}
 				tenkAvailable={tenkAvailable(c.gates_passed, c.gates_failed)}
 			/>
 		</div>
