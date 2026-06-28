@@ -66,19 +66,19 @@
 	// Rows for the headline-score badge tooltip: the derivation of selection_score
 	// (= layer4 − atr_penalty). The ATR-penalty row is shown only when it bit. This
 	// replaces the old SCORER BREAKDOWN section that used to sit in the expert drawer.
+	const fmt2 = (v: number | null | undefined): string =>
+		Number.isFinite(v) ? (v as number).toFixed(2) : '—';
 	const scorerRows = $derived([
-		{ key: 'layer-4', value: c.layer4_weighted_score != null ? c.layer4_weighted_score.toFixed(2) : '—' },
-		...(c.atr_penalty != null && c.atr_penalty > 0
-			? [{ key: 'atr penalty', value: `−${c.atr_penalty.toFixed(2)}` }]
+		{ key: 'layer-4', value: fmt2(c.layer4_weighted_score) },
+		// Only when the penalty rounds to a visible ≥0.01 at 2dp, so a sub-0.005 tilt
+		// never renders a misleading "−0.00" and layer4 − penalty = selection stays
+		// internally consistent at the displayed precision.
+		...(Number.isFinite(c.atr_penalty) && (c.atr_penalty as number) >= 0.005
+			? [{ key: 'atr penalty', value: `−${(c.atr_penalty as number).toFixed(2)}` }]
 			: []),
 		{
 			key: 'selection score',
-			value:
-				c.selection_score != null
-					? c.selection_score.toFixed(2)
-					: c.layer4_weighted_score != null
-						? c.layer4_weighted_score.toFixed(2)
-						: '—'
+			value: fmt2(Number.isFinite(c.selection_score) ? c.selection_score : c.layer4_weighted_score)
 		}
 	]);
 	const rank = $derived(c.rank_in_day ?? index + 1);
