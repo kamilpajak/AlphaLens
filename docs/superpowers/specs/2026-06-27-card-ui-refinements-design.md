@@ -169,6 +169,21 @@ Stacked PR on `feature/card-domain-regroup`. Base = `feature/card-domain-regroup
 open; rebase onto `main` once #682 merges. DCO sign-off on every commit. Zen `deepseek/deepseek-v4-pro`
 (thinking=high) pre-merge review per repo convention. CF Pages auto-deploys after merge to main.
 
+## Added after the initial review (#9 — catalyst label + correct tooltip)
+
+- **#9** Catalyst row: humanise the event type + fix a wrong tooltip (added 2026-06-28). The
+  `CATALYST & EVENT` bar showed the raw enum (`M_AND_A`) and a tooltip that was wrong on three
+  counts vs the pipeline (`compute_catalyst_strength` = 0.4·event-type-tier + 0.4·confidence +
+  0.2·second-order-implications; `catalyst_floor` = a 0/+1/+2 cohort-score lift at 0.45/0.70):
+  it claimed the inputs were "news novelty / thematic alignment / freshness", that there was a
+  "0.55 floor", and that a sub-floor catalyst is "filtered out". A user caught it via a 0.52
+  catalyst that was NOT filtered (correct: 0.52 ≥ 0.45 → +1 lift; selection is the OR-gate
+  funnel, not a catalyst cutoff). Fix: new `catalystLabel(eventType)` helper (`m_and_a` → "M&A",
+  `ipo` → "IPO", else underscores→spaces; null when absent so the suffix drops) + a corrected
+  tooltip describing the real inputs and the lift mechanism (≥0.45 → +1, ≥0.70 → +2; weak adds
+  no lift but does not drop the name). Helper unit-tested. The bug pre-dates #682 (carried from
+  the original SYSTEM.SIGNALS catalyst bar).
+
 ## Added after the initial review (#8 — SCORER BREAKDOWN → badge tooltip)
 
 - **#8** SCORER BREAKDOWN moved from the `ExpertPanel` drawer into the **score-badge tooltip**

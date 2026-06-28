@@ -14,7 +14,8 @@
 		magicFormulaDisplay,
 		fcffYieldRawDisplay,
 		tenkAvailable,
-		selectionBadge
+		selectionBadge,
+		catalystLabel
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -63,6 +64,9 @@
 	// Merged fcff-yield Valuation row: the %ile drives the bar; the raw % is an
 	// annotation shown below it. Replaces the old duplicate raw-% row in FUNDAMENTALS.
 	const fcffRaw = $derived(fcffYieldRawDisplay(c.fcff_yield_pct));
+	// Humanised catalyst event type for the CATALYST & EVENT bar label (M&A / IPO /
+	// underscores→spaces); null when absent so the " · <type>" suffix is dropped.
+	const catLabel = $derived(catalystLabel(c.catalyst_event_type));
 	// Rows for the headline-score badge tooltip: the derivation of selection_score
 	// (= layer4 − atr_penalty). The ATR-penalty row is shown only when it bit. This
 	// replaces the old SCORER BREAKDOWN section that used to sit in the expert drawer.
@@ -281,19 +285,24 @@
 				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">catalyst &amp; event</div>
 				<div class="mb-4">
 					<SignalBar
-						label={`catalyst${c.catalyst_event_type ? ' · ' + c.catalyst_event_type : ''}`}
+						label={`catalyst${catLabel ? ' · ' + catLabel : ''}`}
 						value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
 						format={(v) => (v / 100).toFixed(2)}
 					>
 						{#snippet tooltipRich()}
-							<span class="block">Layer-4 catalyst-floor score (0–1), combining:</span>
+							<span class="block">Catalyst strength (0–1) of the source event, combining:</span>
 							<BulletList
-								items={['news novelty', 'thematic alignment with the source event', 'freshness']}
+								items={[
+									'event-type tier (M&A 1.0 … other 0.3)',
+									'extraction confidence',
+									'second-order implications'
+								]}
 							/>
 							<TooltipNote
-								>higher = stronger event-driven setup; <span class="font-bold">below</span> the
-								<span class="whitespace-nowrap font-bold">0.55 floor</span> → candidate
-								<span class="font-bold">filtered out</span></TooltipNote
+								>a cohort-score <span class="font-bold">lift</span>, not a filter:
+								<span class="whitespace-nowrap font-bold">≥0.45 → +1</span>,
+								<span class="whitespace-nowrap font-bold">≥0.70 → +2</span>; a weak catalyst adds no
+								lift but does <span class="font-bold">not</span> drop the name</TooltipNote
 							>
 						{/snippet}
 					</SignalBar>

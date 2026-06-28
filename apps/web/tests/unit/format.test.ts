@@ -4,8 +4,26 @@ import {
 	fmtPctile,
 	fcffYieldRawDisplay,
 	tenkAvailable,
-	selectionBadge
+	selectionBadge,
+	catalystLabel
 } from '../../src/lib/format';
+
+describe('catalystLabel — humanise the raw event-type enum', () => {
+	it('maps acronyms', () => {
+		expect(catalystLabel('m_and_a')).toBe('M&A');
+		expect(catalystLabel('ipo')).toBe('IPO');
+	});
+	it('replaces underscores with spaces otherwise', () => {
+		expect(catalystLabel('product_launch')).toBe('product launch');
+		expect(catalystLabel('exec_change')).toBe('exec change');
+		expect(catalystLabel('macro')).toBe('macro');
+	});
+	it('null/empty → null (caller drops the suffix)', () => {
+		expect(catalystLabel(null)).toBe(null);
+		expect(catalystLabel(undefined)).toBe(null);
+		expect(catalystLabel('')).toBe(null);
+	});
+});
 
 describe('selectionBadge — meta-bar headline (operative ranking score)', () => {
 	it('shows selection_score, no decimals when integer-valued (penalty=0)', () => {

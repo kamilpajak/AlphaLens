@@ -255,3 +255,18 @@ export function selectionBadge(
 	if (v === null) return '—';
 	return Number.isInteger(v) ? String(v) : v.toFixed(2);
 }
+
+// Acronyms the generic underscore→space rule would mangle. The card uppercases
+// the label via CSS, so these are stored in the form they should READ as.
+const CATALYST_LABELS: Record<string, string> = { m_and_a: 'M&A', ipo: 'IPO' };
+
+/**
+ * Humanise a raw `catalyst_event_type` enum for display: `m_and_a` → "M&A",
+ * `ipo` → "IPO", otherwise replace underscores with spaces (`product_launch` →
+ * "product launch"; the card's CSS uppercases it). Empty/absent → null so the
+ * caller drops the " · <type>" suffix entirely.
+ */
+export function catalystLabel(eventType: string | null | undefined): string | null {
+	if (!eventType) return null;
+	return CATALYST_LABELS[eventType] ?? eventType.replace(/_/g, ' ');
+}
