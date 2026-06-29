@@ -53,7 +53,7 @@
 	role="tooltip"
 >
 	<span
-		class="block border border-amber bg-bg-3 px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl"
+		class="block border border-amber bg-surface-pop px-3 py-2 text-[11px] leading-snug text-fg-dim normal-case tracking-normal shadow-2xl"
 	>
 		<span class="block text-amber font-bold uppercase tracking-widest text-[10px] mb-1">
 			{@render header()}
@@ -61,7 +61,7 @@
 		{@render children()}
 	</span>
 	<span
-		class="absolute left-1/2 top-full w-2 h-2 border-r border-b border-amber bg-bg-3 -mt-1"
+		class="absolute left-1/2 top-full w-2 h-2 border-r border-b border-amber bg-surface-pop -mt-1"
 		style="transform: translateX(calc(-50% + var(--tt-arrow, 0px))) rotate(45deg)"
 	></span>
 </span>

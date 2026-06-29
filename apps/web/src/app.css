@@ -33,6 +33,12 @@
 	--color-bg-1: #0b0d12;
 	--color-bg-2: #11141b;
 	--color-bg-3: #181c25;
+	/* Elevated popover surface (tooltips). Semantic alias for "this floats ABOVE
+	   the page/card and must read as a distinct layer". Currently equals bg-3,
+	   but it is named so the intent is explicit and the shade can be tuned for
+	   popovers independently of the bg-* surface scale. The card it overlays is
+	   bg-1 — a popover must never reuse bg-1 or it blends and reads transparent. */
+	--color-surface-pop: #181c25;
 	--color-grid: #1f2430;
 	--color-grid-strong: #2b3142;
 
