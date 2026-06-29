@@ -428,13 +428,9 @@
 							label="fcff yield (sector %ile)"
 							value={c.fcff_yield_sector_percentile}
 							format={(v) => fmtPctile(v) + '%ile'}
+							subValue={fcffRaw}
 							tooltip="Free-cash-flow-to-firm yield = FCFF / EV, ranked within sector. Higher = cheaper on a cash-generation basis. Paradigm #13 scorer (αt 1.18 IS, multi-signal corroboration only)."
 						/>
-						{#if fcffRaw}
-							<div class="-mt-3 text-[10px] uppercase tracking-widest text-fg-muted">
-								raw <span class="text-fg-dim font-bold normal-case whitespace-nowrap">{fcffRaw}</span>
-							</div>
-						{/if}
 						<SignalBar
 							label="valuation composite"
 							value={c.valuation_composite_sector_percentile}
