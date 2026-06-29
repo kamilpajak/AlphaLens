@@ -15,6 +15,27 @@ The `predev` hook runs `scripts/sync-research-docs.mjs` to copy the
 markdown/JSON evidence files referenced from `/experiments` into
 `static/docs/research/`. The script exits 1 on missing references.
 
+Plain `pnpm dev` proxies `/api/*` to `VITE_API_TARGET` (default
+`http://127.0.0.1:8081`) — i.e. a local backend — and the Playwright smoke
+suite serves hand-authored fixtures, so neither needs the production API.
+
+### `pnpm dev:vps` — render the latest LIVE brief
+
+To develop against the real latest brief from the VPS instead of fixtures:
+
+```sh
+cp .env.example .env                 # then set DEV_API_URL=https://api.<your-domain>
+cloudflared access login --app=https://api.<your-domain>   # one-time, opens Google SSO
+pnpm dev:vps                         # http://localhost:5173, real data
+```
+
+`scripts/dev-api-proxy.mjs` starts a tiny local proxy that forwards the SPA's
+`/v1/*` calls to `DEV_API_URL`, attaching a short-lived Cloudflare Access token
+(`cloudflared access token`), then launches `pnpm dev` pointed at it. Read-only
+(GET) — it is a viewer, not a write path. The token lasts ~24h; the proxy
+refreshes it automatically on a 401. `DEV_API_URL` lives in the gitignored
+`.env`, so your domain stays out of the repo.
+
 ## Production build
 
 ```sh
