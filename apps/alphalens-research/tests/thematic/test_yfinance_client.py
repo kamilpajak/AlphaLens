@@ -324,6 +324,32 @@ class TestLastPrice(unittest.TestCase):
         ):
             self.assertEqual(_client().last_price("x"), 50.0)
 
+    def test_last_price_none_on_exchange_timezone_keyerror(self):
+        """Regression: yfinance 1.5.x raises KeyError('exchangeTimezoneName') for
+        delisted / no-data tickers instead of AttributeError('_dividends') (1.3.x).
+        The client must treat bare KeyError as a permanent error and return None —
+        no exception propagates, no retry attempt is made."""
+
+        class _KeyErrorFastInfo:
+            @property
+            def last_price(self):
+                raise KeyError("exchangeTimezoneName")
+
+        class _KeyErrorTicker:
+            fast_info = _KeyErrorFastInfo()
+
+        with patch("yfinance.Ticker", return_value=_KeyErrorTicker()):
+            result = _client().last_price("KMCM")
+        self.assertIsNone(result)
+
+    def test_is_transient_keyerror_is_false(self):
+        """Classifier unit: any KeyError — with or without keyword in the message —
+        must be classified as permanent so delisted names do not burn retry budget."""
+        from alphalens_pipeline.data.alt_data.yfinance_client import _is_transient
+
+        self.assertFalse(_is_transient(KeyError("exchangeTimezoneName")))
+        self.assertFalse(_is_transient(KeyError("anything")))
+
 
 class TestBatchLastClose(unittest.TestCase):
     @staticmethod
