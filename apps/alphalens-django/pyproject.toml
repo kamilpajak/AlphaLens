@@ -13,13 +13,13 @@ dependencies = [
     "djangorestframework>=3.17",
     "drf-spectacular>=0.29",
     "django-cors-headers>=4.9",
-    "django-environ>=0.13",
-    "psycopg[binary]>=3.3",
+    "django-environ>=0.14.0",
+    "psycopg[binary]>=3.3.4",
     "gunicorn>=26.0",
-    "uvicorn[standard]>=0.47",
+    "uvicorn[standard]>=0.49.0",
     "pyarrow>=24.0",
     "pandas>=2.3",
-    "pyjwt[crypto]>=2.9",
+    "pyjwt[crypto]>=2.13.0",
     "httpx>=0.28",
     # XNYS trading calendar — backs the /v1/market/status endpoint that
     # the SPA polls to render its closed-market banner. Same library the

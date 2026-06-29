@@ -92,7 +92,9 @@ def fit_global_lasso(
     X = scaler.fit_transform(X_raw)
 
     model = LassoCV(
-        n_alphas=cast(Any, lambda_grid_points),
+        # scikit-learn 1.9 removed `n_alphas`; `alphas` now accepts an int
+        # (number of alphas along the path) — same behavior.
+        alphas=cast(Any, lambda_grid_points),
         cv=n_folds,
         eps=eps,
         random_state=random_state,
