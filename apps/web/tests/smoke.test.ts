@@ -1039,8 +1039,9 @@ test.describe('card — domain grouping', () => {
 		const card = page.locator('article[id]').first();
 		await expect(card).toBeVisible();
 
-		// Domain section headings present.
-		for (const heading of ['catalyst & event', 'valuation & quality', 'momentum & technicals']) {
+		// Domain section headings present (dot-separated WORD.WORD, matching the
+		// card's other cyan headers like live.equity.thesis / trade.execution.setup).
+		for (const heading of ['catalyst.event', 'valuation.quality', 'momentum.technicals']) {
 			await expect(card.getByText(heading, { exact: false })).toBeVisible();
 		}
 		// Insider is a compact one-line row (not a full strip): the `insider 90d`
