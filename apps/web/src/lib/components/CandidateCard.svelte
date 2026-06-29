@@ -11,7 +11,8 @@
 		buffettTone,
 		oneilTone,
 		insiderDisplay,
-		magicFormulaDisplay
+		magicFormulaDisplay,
+		fcffYieldRawDisplay
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -57,6 +58,9 @@
 	// Unranked (health-gate fail) renders a muted "—" like every sibling
 	// fundamentals row, not the verbose phrase. See format.ts.
 	const magic = $derived(magicFormulaDisplay(c.magic_formula_rank, c.magic_formula_cohort_n));
+	// Merged fcff-yield Valuation row: the %ile drives the bar; the raw % is an
+	// annotation shown below it. Replaces the old duplicate raw-% row in FUNDAMENTALS.
+	const fcffRaw = $derived(fcffYieldRawDisplay(c.fcff_yield_pct));
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 
@@ -163,13 +167,12 @@
 		</div>
 	</header>
 
-	<!-- Meta bar: sector / industry on the left; the headline metrics on the right,
-	     grouped so the eye lands on the layer-4 score first — a filled L4 badge
-	     (the ordering signal) leads, then confidence / mcap / catalyst, then the
-	     display-only expert chips (buffett + panel) set apart behind a divider.
-	     Pattern: small dim uppercase key + bold value, replacing the old uniform
-	     uppercase ticker-tape. -->
-	<div class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 sm:px-5 py-2 border-b border-grid">
+	<!-- Meta bar: sector / industry + mcap on the left (identity cluster); the
+	     ordering signals on the right — a filled L4 badge leads, then the extended
+	     flag (only when atr_penalty > 0) and confidence. Catalyst and the expert
+	     lenses (buffett / o'neil) moved into their domain blocks below as part of
+	     the domain regroup, so they no longer sit here. -->
+	<div data-testid="card-meta" class="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 sm:px-5 py-2 border-b border-grid">
 		<!-- Identity cluster: what the company is (sector / industry) and how big it is
 		     (market cap). Mcap lives here, not with the right-side scores — it is a
 		     descriptive company fact (kin to sector), and it is a SELECTION-gate input
@@ -227,67 +230,6 @@
 					class:text-fg-muted={confTone === 'muted'}>{confidenceLabel(c.llm_confidence)}</span
 				>
 			</span>
-			<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap">
-				<span class="text-[9px] uppercase tracking-widest text-fg-muted">catalyst</span>
-				<span class="text-xs font-bold lowercase text-violet">{c.catalyst_event_type ?? '—'}</span>
-				<span class="text-[11px] text-fg-muted">{fmtNum(c.catalyst_strength, 2)}</span>
-			</span>
-			<!-- Display-only expert lenses, named symmetrically + set apart behind a
-			     divider (not ranking inputs). Both raw 0-100 scores on the face; the
-			     disagreement verdict + the full read live in the <ExpertPanel> drawer. -->
-			<div class="flex items-center gap-x-4 border-l border-grid pl-4">
-				<ChipTip term="buffett quality">
-					{#snippet chip()}
-						<span
-							class="inline-flex items-baseline gap-1.5 whitespace-nowrap cursor-help"
-							class:opacity-60={buffLowCov}
-							class:underline={buffLowCov}
-							class:decoration-dashed={buffLowCov}
-							class:underline-offset-2={buffLowCov}
-						>
-							<span class="text-[9px] uppercase tracking-widest text-fg-muted">buffett</span>
-							<span
-								class="text-xs font-bold"
-								class:text-green={buffTone === 'green'}
-								class:text-amber={buffTone === 'amber'}
-								class:text-fg-muted={buffTone === 'muted'}
-								>{buffScore ?? '—'}</span
-							>
-						</span>
-					{/snippet}
-					{#snippet bodyRich()}
-						<MetricGrid rows={buffRows} align="right" />
-						<p class="mt-2 text-center text-[15px] text-fg-dim">
-							<Formula name="margin_of_safety" />
-						</p>
-						{#if buffScore === null}
-							<p class="mt-1 text-fg-muted">not enough fundamentals to score</p>
-						{:else if buffLowCov}
-							<p class="mt-1 text-fg-muted">thin data, score down-weighted</p>
-						{/if}
-					{/snippet}
-				</ChipTip>
-				<ChipTip term="o'neil momentum">
-					{#snippet chip()}
-						<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap cursor-help">
-							<span class="text-[9px] uppercase tracking-widest text-fg-muted">o'neil</span>
-							<span
-								class="text-xs font-bold"
-								class:text-green={oneilScoreTone === 'green'}
-								class:text-amber={oneilScoreTone === 'amber'}
-								class:text-fg-muted={oneilScoreTone === 'muted'}
-								>{oneilScore ?? '—'}</span
-							>
-						</span>
-					{/snippet}
-					{#snippet bodyRich()}
-						<MetricGrid rows={oneilRows} align="right" />
-						{#if oneilScore === null}
-							<p class="mt-1 text-fg-muted">momentum terms incomplete to score</p>
-						{/if}
-					{/snippet}
-				</ChipTip>
-			</div>
 		</div>
 	</div>
 
@@ -295,9 +237,30 @@
 	<div class="grid grid-cols-1 lg:grid-cols-12">
 		<!-- LEFT column -->
 		<div class="lg:col-span-7 lg:border-r border-grid">
-			<!-- Live equity thesis -->
+			<!-- CATALYST & EVENT — the reason this name surfaced: catalyst strength,
+			     the thesis it drives, the source event, and the deterministic typed
+			     facts. (Retires the standalone live.equity.thesis heading.) -->
 			<div class="px-4 sm:px-5 py-4 border-b border-grid">
-				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">live.equity.thesis</div>
+				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">catalyst &amp; event</div>
+				<div class="mb-4">
+					<SignalBar
+						label={`catalyst${c.catalyst_event_type ? ' · ' + c.catalyst_event_type : ''}`}
+						value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
+						format={(v) => (v / 100).toFixed(2)}
+					>
+						{#snippet tooltipRich()}
+							<span class="block">Layer-4 catalyst-floor score (0–1), combining:</span>
+							<BulletList
+								items={['news novelty', 'thematic alignment with the source event', 'freshness']}
+							/>
+							<TooltipNote
+								>higher = stronger event-driven setup; <span class="font-bold">below</span> the
+								<span class="whitespace-nowrap font-bold">0.55 floor</span> → candidate
+								<span class="font-bold">filtered out</span></TooltipNote
+							>
+						{/snippet}
+					</SignalBar>
+				</div>
 				<blockquote class="border-l-2 border-violet pl-4">
 					{#if c.brief_tldr}
 						<p class="text-fg text-sm leading-relaxed">{c.brief_tldr}</p>
@@ -305,7 +268,6 @@
 						<p class="text-fg-dim text-sm leading-relaxed italic">{c.rationale}</p>
 					{/if}
 				</blockquote>
-
 				<div class="mt-3 flex items-start gap-3 text-[11px]">
 					<span class="text-fg-muted whitespace-nowrap">{fmtDate(c.source_event_published_at)}</span>
 					<span class="w-px self-stretch bg-grid-strong" aria-hidden="true"></span>
@@ -320,24 +282,27 @@
 						<ExternalLink class="size-3 flex-shrink-0 mt-0.5" />
 					</a>
 				</div>
+				{#if c.brief_template_id}
+					<div class="mt-4 border-t border-grid pt-4">
+						<TemplateFacts templateId={c.brief_template_id} facts={c.brief_template_facts} />
+					</div>
+				{/if}
 			</div>
 
-			<!-- Signals | Fundamentals + Technicals -->
+			<!-- Valuation & Quality | Momentum & Technicals — two analytical domains
+			     side by side, each anchored by its expert lens score. -->
 			<div class="grid grid-cols-1 md:grid-cols-2">
-				<!-- System signals -->
-				<div class="px-4 sm:px-5 py-4 md:border-r border-grid">
+				<!-- VALUATION & QUALITY (Buffett anchors) -->
+				<div data-testid="block-valuation" class="px-4 sm:px-5 py-4 md:border-r border-grid">
 					<div class="flex flex-wrap items-baseline gap-x-2 gap-y-1 mb-3">
-						<div class="text-[10px] uppercase tracking-widest text-cyan">system.signals</div>
+						<div class="text-[10px] uppercase tracking-widest text-cyan">valuation &amp; quality</div>
 						{#if c.peer_cohort_level === 'thin'}
 							<ChipTip
 								term="THIN cohort"
-								body="SIC peer cohort too small to compute a meaningful percentile (4-digit + 3-digit fallback both below 8 members). Sector-percentile bars below are suppressed (shown as —)."
+								body="SIC peer cohort too small to compute a meaningful percentile (4-digit + 3-digit fallback both below 8 members). Sector-percentile bars are suppressed (shown as —)."
 							>
 								{#snippet chip()}
-									<span
-										class="inline-flex items-center px-1.5 py-0.5 bg-red/10 text-red text-[9px] uppercase tracking-widest border border-red/40 cursor-help"
-										>thin cohort</span
-									>
+									<span class="inline-flex items-center px-1.5 py-0.5 bg-red/10 text-red text-[9px] uppercase tracking-widest border border-red/40 cursor-help">thin cohort</span>
 								{/snippet}
 							</ChipTip>
 						{:else if c.peer_cohort_level === 'sic3'}
@@ -346,48 +311,62 @@
 								body="4-digit SIC cohort was too small; widened to the 3-digit prefix. Percentile computed over a broader peer set — still trustworthy but looser."
 							>
 								{#snippet chip()}
-									<span
-										class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30 cursor-help"
-										>sic-3 cohort</span
-									>
+									<span class="inline-flex items-center px-1.5 py-0.5 bg-cyan/10 text-cyan text-[9px] uppercase tracking-widest border border-cyan/30 cursor-help">sic-3 cohort</span>
 								{/snippet}
 							</ChipTip>
 						{:else if c.peer_cohort_level === 'ff48'}
 							<ChipTip
 								term="FF-48 cohort"
-								body="4-digit + 3-digit SIC cohorts were both too small; widened to the Fama-French 48-industry bucket (academic SIC aggregation, free from Ken French's data library). Percentile reflects a broader but economically coherent peer set."
+								body="4-digit + 3-digit SIC cohorts were both too small; widened to the Fama-French 48-industry bucket. Percentile reflects a broader but economically coherent peer set."
 							>
 								{#snippet chip()}
-									<span
-										class="inline-flex items-center px-1.5 py-0.5 bg-fg-muted/10 text-fg-muted text-[9px] uppercase tracking-widest border border-fg-muted/40 cursor-help"
-										>ff-48 cohort</span
-									>
+									<span class="inline-flex items-center px-1.5 py-0.5 bg-fg-muted/10 text-fg-muted text-[9px] uppercase tracking-widest border border-fg-muted/40 cursor-help">ff-48 cohort</span>
 								{/snippet}
 							</ChipTip>
 						{/if}
 					</div>
+					<!-- Expert anchor: Buffett value/quality lens. The full-width row lives in
+					     the card markup; only the score token is wrapped in ChipTip so the hover
+					     trigger stays phrasing content (no div-in-span) and justify-between can
+					     push the score to the column's right edge. -->
+					<div
+						class="mb-4 flex items-baseline justify-between gap-2"
+						class:opacity-60={buffLowCov}
+					>
+						<span class="text-[10px] uppercase tracking-widest text-fg-muted">buffett <span class="normal-case text-fg-dim">· value / quality</span></span>
+						<ChipTip term="buffett quality">
+							{#snippet chip()}
+								<span
+									class="font-display text-base font-bold leading-none cursor-help"
+									class:text-green={buffTone === 'green'}
+									class:text-amber={buffTone === 'amber'}
+									class:text-fg-muted={buffTone === 'muted'}
+									>{buffScore ?? '—'}<span class="text-[10px] font-normal text-fg-muted">/100</span></span
+								>
+							{/snippet}
+							{#snippet bodyRich()}
+								<MetricGrid rows={buffRows} align="right" />
+								<p class="mt-2 text-center text-[15px] text-fg-dim"><Formula name="margin_of_safety" /></p>
+								{#if buffScore === null}
+									<p class="mt-1 text-fg-muted">not enough fundamentals to score</p>
+								{:else if buffLowCov}
+									<p class="mt-1 text-fg-muted">thin data, score down-weighted</p>
+								{/if}
+							{/snippet}
+						</ChipTip>
+					</div>
 					<div class="flex flex-col gap-y-4">
-						{#if insider.mode === 'bar'}
-							<SignalBar
-								label="insider 90d (sector %ile)"
-								value={insider.percentile}
-								format={(v) => fmtPctile(v) + '%ile'}
-								tooltip="Net opportunistic insider buying ({fmtUsdCompact(insider.netUsd)}) in the last 90 days, ranked within the ticker's sector — shown only when there is net buying. Cohen-Malloy opportunistic classification; paradigm #11 scorer (αt 2.71 IS, SLIPPAGE-FAIL standalone)."
-							/>
-						{:else}
-							<SignalBar
-								label="insider 90d"
-								value={null}
-								placeholder={insider.label}
-								tooltip="No net opportunistic insider buying in the last 90 days. The sector percentile is suppressed on purpose: a 0/negative dollar signal ranks high only relative to net-selling peers, which is not a buy signal. Cohen-Malloy opportunistic classification; paradigm #11 scorer."
-							/>
-						{/if}
 						<SignalBar
 							label="fcff yield (sector %ile)"
 							value={c.fcff_yield_sector_percentile}
 							format={(v) => fmtPctile(v) + '%ile'}
-							tooltip="Free-cash-flow-to-firm yield = FCFF / EV, ranked within sector. Higher = cheaper on cash-generation basis. Paradigm #13 scorer (αt 1.18 IS, every-phase positive, multi-signal corroboration use only)."
+							tooltip="Free-cash-flow-to-firm yield = FCFF / EV, ranked within sector. Higher = cheaper on a cash-generation basis. Paradigm #13 scorer (αt 1.18 IS, multi-signal corroboration only)."
 						/>
+						{#if fcffRaw}
+							<div class="-mt-3 text-[10px] uppercase tracking-widest text-fg-muted">
+								raw <span class="text-fg-dim font-bold normal-case whitespace-nowrap">{fcffRaw}</span>
+							</div>
+						{/if}
 						<SignalBar
 							label="valuation composite"
 							value={c.valuation_composite_sector_percentile}
@@ -399,23 +378,53 @@
 								<TooltipNote>higher = cheaper than sector peers on several multiples at once</TooltipNote>
 							{/snippet}
 						</SignalBar>
-						<SignalBar
-							label="catalyst strength"
-							value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
-							format={(v) => (v / 100).toFixed(2)}
-						>
-							{#snippet tooltipRich()}
-								<span class="block">Layer-4 catalyst-floor score (0–1), combining:</span>
-								<BulletList
-									items={['news novelty', 'thematic alignment with the source event', 'freshness']}
-								/>
-								<TooltipNote
-									>higher = stronger event-driven setup; <span class="font-bold">below</span> the
-									<span class="whitespace-nowrap font-bold">0.55 floor</span> → candidate
-									<span class="font-bold">filtered out</span></TooltipNote
+					</div>
+					<div class="text-[10px] uppercase tracking-widest text-fg-muted mt-4 mb-2">multiples</div>
+					<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PE')}>pe</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_pe, 1)}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PS')}>ps</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ps, 1)}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('EV/REV')}>ev/rev</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ev_rev, 1)}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('EV/EBITDA')}>ev/ebitda</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ev_ebitda, 1)}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('FCF margin')}>fcf margin</JargonTip></dt><dd class="text-fg text-right">{c.valuation_fcf_margin !== null ? fmtPct(c.valuation_fcf_margin * 100) : '—'}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ROE')}>roe</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.roe_pct)}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('magic formula')}>magic formula</JargonTip></dt><dd class="text-fg text-right">
+							{#if magic.mode === 'rank'}
+								<span class="text-amber font-bold">#{magic.rank}</span>{#if magic.cohortN !== null}/{magic.cohortN}{/if}
+							{:else}
+								{magic.label}
+							{/if}
+						</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('financials age')}>financials age</JargonTip></dt><dd class="text-fg text-right">{c.valuation_financials_age_days != null ? Math.round(c.valuation_financials_age_days) + 'd' : '—'}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('next earnings')}>next earnings</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{fmtDate(c.next_earnings_date)}</dd>
+					</dl>
+				</div>
+
+				<!-- MOMENTUM & TECHNICALS (O'Neil anchors) -->
+				<div data-testid="block-momentum" class="px-4 sm:px-5 py-4 border-t md:border-t-0 border-grid">
+					<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">momentum &amp; technicals</div>
+					<!-- Expert anchor: O'Neil momentum lens. Same pattern — full-width row in
+					     the card; only the score token is the ChipTip trigger. -->
+					<div class="mb-4 flex items-baseline justify-between gap-2">
+						<span class="text-[10px] uppercase tracking-widest text-fg-muted">o'neil <span class="normal-case text-fg-dim">· momentum</span></span>
+						<ChipTip term="o'neil momentum">
+							{#snippet chip()}
+								<span
+									class="font-display text-base font-bold leading-none cursor-help"
+									class:text-green={oneilScoreTone === 'green'}
+									class:text-amber={oneilScoreTone === 'amber'}
+									class:text-fg-muted={oneilScoreTone === 'muted'}
+									>{oneilScore ?? '—'}<span class="text-[10px] font-normal text-fg-muted">/100</span></span
 								>
 							{/snippet}
-						</SignalBar>
+							{#snippet bodyRich()}
+								<MetricGrid rows={oneilRows} align="right" />
+								{#if oneilScore === null}
+									<p class="mt-1 text-fg-muted">momentum terms incomplete to score</p>
+								{/if}
+							{/snippet}
+						</ChipTip>
+					</div>
+					<div class="flex flex-col gap-y-4">
 						<SignalBar
 							label="rsi 14d"
 							value={c.technical_rsi}
@@ -431,9 +440,6 @@
 									]}
 									class="mt-1"
 								/>
-								<span class="block mt-1 text-fg-muted"
-									>combined with MA200 distance + 52w drawdown for the deep-drawdown-reversal flag</span
-								>
 							{/snippet}
 						</SignalBar>
 						<SignalBar
@@ -443,7 +449,6 @@
 							max={95}
 							format={(v) => '-' + v.toFixed(1) + '%'}
 							inverted
-							tooltip="% below the 52-week high. Deeper drawdown = potential reversal candidate OR continuation of secular decline. Pair with MA200 slope to discriminate."
 						/>
 						<SignalBar
 							label="off 52w low"
@@ -451,7 +456,13 @@
 							min={0}
 							max={200}
 							format={(v) => '+' + v.toFixed(1) + '%'}
-							tooltip="% above the 52-week low. Larger = stronger recovery from recent bottom. Combined with off-52w-high to gauge where the price sits within its annual range."
+							tooltip="% above the 52-week low. Larger = stronger recovery from recent bottom."
+						/>
+						<SignalBar
+							label="rel strength (sector %ile)"
+							value={oneil?.oneil_rs_approx_pct ?? null}
+							format={(v) => fmtPctile(v) + '%ile'}
+							tooltip="O'Neil relative-strength rank — the stock's trailing return ranked against peers. Higher = stronger leadership. From the O'Neil momentum lens."
 						/>
 						<SignalBar
 							label="vol z-score"
@@ -469,45 +480,38 @@
 									]}
 									class="mt-1"
 								/>
-								<span class="block mt-1 text-fg-muted"
-									>sign matters; the bar shows <span class="whitespace-nowrap">|z|</span></span
-								>
 							{/snippet}
 						</SignalBar>
 					</div>
-				</div>
-
-				<!-- Fundamentals + technicals context -->
-				<div class="px-4 sm:px-5 py-4 border-t md:border-t-0 border-grid text-[11px]">
-					<div class="text-[10px] uppercase tracking-widest text-cyan mb-2">fundamentals</div>
-					<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PE')}>pe</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_pe, 1)}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PS')}>ps</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ps, 1)}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('EV/REV')}>ev/rev</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ev_rev, 1)}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('EV/EBITDA')}>ev/ebitda</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ev_ebitda, 1)}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('FCF margin')}>fcf margin</JargonTip></dt><dd class="text-fg text-right">{c.valuation_fcf_margin !== null ? fmtPct(c.valuation_fcf_margin * 100) : '—'}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ROE')}>roe</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.roe_pct)}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('FCFF')}>fcff yield</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.fcff_yield_pct, 2)}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('magic formula')}>magic formula</JargonTip></dt><dd class="text-fg text-right">
-							{#if magic.mode === 'rank'}
-								<span class="text-amber font-bold">#{magic.rank}</span>
-								{#if magic.cohortN !== null}/{magic.cohortN}{/if}
-							{:else}
-								{magic.label}
-							{/if}
-						</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('financials age')}>financials age</JargonTip></dt><dd class="text-fg text-right">{c.valuation_financials_age_days != null ? Math.round(c.valuation_financials_age_days) + 'd' : '—'}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('next earnings')}>next earnings</JargonTip></dt><dd class="text-fg text-right">{fmtDate(c.next_earnings_date)}</dd>
-					</dl>
-
-					<div class="text-[10px] uppercase tracking-widest text-cyan mt-4 mb-2">technicals.context</div>
-					<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5">
+					<div class="text-[10px] uppercase tracking-widest text-fg-muted mt-4 mb-2">trend</div>
+					<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA50')}>ma50 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma50_distance_pct)}</dd>
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200')}>ma200 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma200_distance_pct)}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200 slope')}>ma200 slope</JargonTip></dt><dd class="text-fg text-right">{c.technical_ma200_slope_pct_per_day !== null ? fmtPct(c.technical_ma200_slope_pct_per_day, 3) + '/d' : '—'}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200 slope')}>ma200 slope</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{c.technical_ma200_slope_pct_per_day !== null ? fmtPct(c.technical_ma200_slope_pct_per_day, 3) + '/d' : '—'}</dd>
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ATR')}>atr</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_atr_pct)}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest">earnings yoy</dt><dd class="text-fg text-right whitespace-nowrap">{fmtPct(oneil?.oneil_earnings_growth_yoy_pct)}</dd>
 					</dl>
 				</div>
+			</div>
+
+			<!-- INSIDER / FLOW — ownership-flow domain (one metric, its own strip). -->
+			<div class="px-4 sm:px-5 py-4 border-t border-grid">
+				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">insider / flow</div>
+				{#if insider.mode === 'bar'}
+					<SignalBar
+						label="insider 90d (sector %ile)"
+						value={insider.percentile}
+						format={(v) => fmtPctile(v) + '%ile'}
+						tooltip="Net opportunistic insider buying ({fmtUsdCompact(insider.netUsd)}) in the last 90 days, ranked within sector — shown only when there is net buying. Cohen-Malloy opportunistic classification; paradigm #11 scorer."
+					/>
+				{:else}
+					<SignalBar
+						label="insider 90d"
+						value={null}
+						placeholder={insider.label}
+						tooltip="No net opportunistic insider buying in the last 90 days. The sector percentile is suppressed: a 0/negative dollar signal ranks high only relative to net-selling peers, which is not a buy signal. Cohen-Malloy opportunistic classification."
+					/>
+				{/if}
 			</div>
 
 			<!-- Expert-panel deep-read (PR-8b): the generalized drawer — disagreement
@@ -531,18 +535,6 @@
 			<div class="px-4 sm:px-5 py-4">
 				<TradeSetup setup={c.brief_trade_setup} />
 			</div>
-			<!-- Typed facts panel — PR-3 epic #321. Hidden when the catalyst
-			     came from the flash path (brief_template_id is empty); shown
-			     above the analyst narrative so the deterministic citations
-			     anchor the supply_chain / bear / exit prose below. -->
-			{#if c.brief_template_id}
-				<div class="px-4 sm:px-5 pb-4 border-t border-grid pt-4">
-					<TemplateFacts
-						templateId={c.brief_template_id}
-						facts={c.brief_template_facts}
-					/>
-				</div>
-			{/if}
 		</div>
 	</div>
 

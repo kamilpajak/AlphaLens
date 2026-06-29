@@ -211,3 +211,12 @@ export function consensusBand(spread: number | null | undefined): string {
 	if (spread < 50) return 'mixed';
 	return 'split';
 }
+
+/**
+ * Raw fcff-yield annotation for the merged Valuation row. The sector-%ile drives
+ * the SignalBar headline; this returns the raw % shown beneath it — null (no
+ * annotation row) when the raw value is absent/non-finite.
+ */
+export function fcffYieldRawDisplay(rawPct: number | null | undefined): string | null {
+	return Number.isFinite(rawPct) ? fmtPct(rawPct, 2) : null;
+}

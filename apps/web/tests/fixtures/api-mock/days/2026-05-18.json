@@ -87,6 +87,26 @@
       "magic_formula_cohort_n": 3,
       "deep_drawdown_reversal": false,
       "layer4_weighted_score": 3,
+      "selection_score": 2.5,
+      "atr_penalty": 0.5,
+      "scorer_config_version": "atr-tilt-v1",
+      "expert_assessments": {
+        "buffett": {
+          "buffett_quality_score": 62
+        },
+        "oneil": {
+          "oneil_score": 55,
+          "oneil_pct_off_52w_high": -59.85394434206203,
+          "oneil_rs_approx_pct": 24,
+          "oneil_ma200_slope_pct_per_day": -0.4227497553645656,
+          "oneil_ma200_distance_pct": -34.14783255940499,
+          "oneil_earnings_growth_yoy_pct": -3.3
+        },
+        "panel": {
+          "expert_spread": 7,
+          "panel_config_version": "panel-v1-absdiff-2x"
+        }
+      },
       "also_in_themes": [],
       "rank_in_day": 1,
       "cohort_size_in_day": 16,

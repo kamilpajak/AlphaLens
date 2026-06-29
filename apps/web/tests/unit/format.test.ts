@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fmtPct, fmtPctile } from '../../src/lib/format';
+import { fmtPct, fmtPctile, fcffYieldRawDisplay } from '../../src/lib/format';
 
 describe('fmtPctile — percentile RANK (O\'Neil rel-strength uses this, not fmtPct)', () => {
 	it('rounds to an integer with no sign and no % suffix', () => {
@@ -28,5 +28,19 @@ describe('fmtPct — signed % change (the WRONG formatter for a percentile rank)
 		// This is exactly the misleading "+4.8%" the rel-strength readout used to show.
 		expect(fmtPct(4.84)).toBe('+4.8%');
 		expect(fmtPct(-78.5)).toBe('-78.5%');
+	});
+});
+
+describe('fcffYieldRawDisplay (merged valuation fcff raw annotation)', () => {
+	it('finite → signed 2-decimal %', () => {
+		expect(fcffYieldRawDisplay(5.09)).toBe('+5.09%');
+	});
+	it('negative keeps its sign', () => {
+		expect(fcffYieldRawDisplay(-2.5)).toBe('-2.50%');
+	});
+	it('null / undefined / NaN → null', () => {
+		expect(fcffYieldRawDisplay(null)).toBe(null);
+		expect(fcffYieldRawDisplay(undefined)).toBe(null);
+		expect(fcffYieldRawDisplay(NaN)).toBe(null);
 	});
 });
