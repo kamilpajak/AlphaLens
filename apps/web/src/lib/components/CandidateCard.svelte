@@ -562,19 +562,19 @@
 				</div>
 			</div>
 
-			<!-- INSIDER / FLOW — a compact one-line row, not a full strip. Net
-			     opportunistic buying is rare (~1 in 400 cards in production) and the
-			     ✗ INSIDER header gate already carries the no-buys case, so a whole
-			     section with an always-empty bar wasn't earning its space. The rare
-			     buy signal stands out in amber; the no-buys/selling state is muted. -->
-			<div
-				class="flex items-baseline justify-between gap-3 border-t border-grid px-4 py-2.5 text-[11px] sm:px-5"
-			>
-				<span class="uppercase tracking-widest text-fg-muted">insider 90d</span>
-				{#if insider.mode === 'bar'}
+			<!-- INSIDER (paradigm #11) — a compact one-line row that renders ONLY when
+			     there is net opportunistic buying (~1 in 400 cards in production). The
+			     no-buys case is carried by the header ✗ INSIDER gate, so no always-empty
+			     row. NOTE: this score is a 180-day buy-only signal (the header gate is a
+			     separate 90-day binary check — different window, can disagree). -->
+			{#if insider.mode === 'bar'}
+				<div
+					class="flex items-baseline justify-between gap-3 border-t border-grid px-4 py-2.5 text-[11px] sm:px-5"
+				>
+					<span class="uppercase tracking-widest text-fg-muted">insider buys · 180d</span>
 					<ChipTip
-						term="insider buying (90d)"
-						body="Net opportunistic insider buying ({fmtUsdCompact(insider.netUsd)}) in the last 90 days, ranked within sector. Cohen-Malloy opportunistic classification; paradigm #11 scorer."
+						term="opportunistic insider buys (180d)"
+						body="Buy-only opportunistic insider purchases ({fmtUsdCompact(insider.netUsd)}) over the last 180 days, ranked within sector. Cohen-Malloy opportunistic classification; paradigm #11 scorer. (Distinct from the 90-day INSIDER header gate.)"
 					>
 						{#snippet chip()}
 							<span class="cursor-help font-bold text-amber whitespace-nowrap"
@@ -584,19 +584,8 @@
 							>
 						{/snippet}
 					</ChipTip>
-				{:else}
-					<ChipTip
-						term="insider buying (90d)"
-						body="No net opportunistic insider buying in the last 90 days. The sector percentile is suppressed: a 0/negative dollar signal ranks high only relative to net-selling peers, which is not a buy signal. Cohen-Malloy opportunistic classification."
-					>
-						{#snippet chip()}
-							<span class="cursor-help uppercase tracking-widest text-fg-muted whitespace-nowrap"
-								>{insider.label}</span
-							>
-						{/snippet}
-					</ChipTip>
-				{/if}
-			</div>
+				</div>
+			{/if}
 
 			<!-- Expert-panel deep-read (PR-8b): the generalized drawer — disagreement
 			     headline + dot-lane (only when >=2 lenses scored) + one section per

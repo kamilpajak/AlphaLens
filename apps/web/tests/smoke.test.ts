@@ -1044,9 +1044,10 @@ test.describe('card — domain grouping', () => {
 		for (const heading of ['catalyst.event', 'valuation.quality', 'momentum.technicals']) {
 			await expect(card.getByText(heading, { exact: false })).toBeVisible();
 		}
-		// Insider is a compact one-line row (not a full strip): the `insider 90d`
-		// row renders, but the old `insider / flow` section heading is gone.
-		await expect(card.getByText('insider 90d', { exact: false })).toBeVisible();
+		// Insider renders ONLY on a net opportunistic buy (rare, ~1/400). The fixture's
+		// first card has no buys, so there is no insider row at all (the old `insider 90d`
+		// / `insider buys` row and the `insider / flow` heading are both absent).
+		await expect(card.getByText('insider buys · 180d', { exact: false })).toHaveCount(0);
 		await expect(card.getByText('insider / flow', { exact: false })).toHaveCount(0);
 
 		// Dedup: each label renders exactly once in the card BODY. getByText does
@@ -1106,6 +1107,20 @@ test.describe('card — domain grouping', () => {
 		const tip = badge.locator('[role="tooltip"]');
 		await expect(tip.getByText('selection score', { exact: false })).toBeVisible();
 		await expect(tip.getByText('suggestive', { exact: false })).toBeVisible();
+	});
+
+	test(`insider-buys row renders only on a net buy on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		// The DFIN fixture has insider_score_usd > 0 (a 180-day opportunistic buy) on a
+		// ✗ 90-day INSIDER gate — the GME-like divergence. The 180d row renders for it...
+		const dfin = page.locator('article[id="DFIN"]');
+		// Match the full row label so it doesn't also catch the tooltip header
+		// ("opportunistic insider buys (180d)").
+		await expect(dfin.getByText('insider buys · 180d', { exact: false })).toBeVisible();
+		await expect(dfin.getByText('88%ile', { exact: false })).toBeVisible();
+		// ...but NOT for the no-buy first card.
+		const first = page.locator('article[id]').first();
+		await expect(first.getByText('insider buys · 180d', { exact: false })).toHaveCount(0);
 	});
 
 	test(`buffett anchor tooltip reveals on hover on /brief/${latestDay.date}`, async ({ page }) => {

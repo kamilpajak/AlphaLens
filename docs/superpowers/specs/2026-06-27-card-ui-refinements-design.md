@@ -222,6 +222,19 @@ open; rebase onto `main` once #682 merges. DCO sign-off on every commit. Zen `de
   Validation note: `selection_score` is "suggestive — not yet validated", but it already drives
   rank, so naming the operative number is more honest than hiding it behind layer4.
 
+## Added after the initial review (#3c — insider row is conditional, 180d-labelled)
+
+- **#3c** (revises #3/#3b, 2026-06-29): the insider element now renders **only when there is a
+  net opportunistic buy** (`insider.mode === 'bar'`, ~1/444 cards); the no-buy case shows **no
+  row at all** (the header `✗ INSIDER` gate carries it). Root cause discovered with the user:
+  the card has TWO different insider signals — the **90-day** binary `INSIDER` header gate
+  (`has_opportunistic_buy`, passes 0/444 in prod) and the **180-day** buy-only `insider_score_usd`
+  (paradigm #11, ranked in sector; buys 1/444 = GME, on a ✗ 90d gate). They use different windows
+  and can disagree (GME). The body row shows the 180d SCORE; the gate stays the separate 90d
+  signal in the header (unchanged). Fixed the stale label `insider 90d` → `insider buys · 180d`
+  and the tooltip (buy-only, 180d, ranked-in-sector, distinct-from-the-90d-gate). Smoke: a
+  fixture candidate (DFIN) given a buy to cover the row; the no-buy first card asserts no row.
+
 ## Added after the initial review (#3)
 
 - **#3** Insider/Flow → **compact one-line row** (added 2026-06-27). A live audit of 39
