@@ -124,7 +124,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.32.0" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "typer", specifier = ">=0.25.1" },
-    { name = "yfinance", specifier = ">=1.5.1" },
+    { name = "yfinance", specifier = ">=1.5.1,<2" },
 ]
 
 [[package]]
