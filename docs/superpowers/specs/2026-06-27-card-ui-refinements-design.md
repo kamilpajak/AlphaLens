@@ -169,6 +169,14 @@ Stacked PR on `feature/card-domain-regroup`. Base = `feature/card-domain-regroup
 open; rebase onto `main` once #682 merges. DCO sign-off on every commit. Zen `deepseek/deepseek-v4-pro`
 (thinking=high) pre-merge review per repo convention. CF Pages auto-deploys after merge to main.
 
+## Added after the initial review (#10 — dot-separated domain headers)
+
+- **#10** The three new domain headers used ` & ` (`catalyst & event` …), breaking the card's
+  cyan-header convention (`live.equity.thesis`, `trade.execution.setup`, `supply.chain` — all
+  dot-separated WORD.WORD). Renamed to `catalyst.event` / `valuation.quality` /
+  `momentum.technicals`; smoke heading assertions updated. (The drawer's prose pointer
+  "Momentum & Technicals" stays — it's a readable sentence, not a stylized header.)
+
 ## Added after the initial review (#9 — catalyst label + correct tooltip)
 
 - **#9** Catalyst row: humanise the event type + fix a wrong tooltip (added 2026-06-28). The

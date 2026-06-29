@@ -282,7 +282,7 @@
 			     the thesis it drives, the source event, and the deterministic typed
 			     facts. (Retires the standalone live.equity.thesis heading.) -->
 			<div class="px-4 sm:px-5 py-4 border-b border-grid">
-				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">catalyst &amp; event</div>
+				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">catalyst.event</div>
 				<div class="mb-4">
 					<SignalBar
 						label={`catalyst${catLabel ? ' · ' + catLabel : ''}`}
@@ -341,7 +341,7 @@
 				<!-- VALUATION & QUALITY (Buffett anchors) -->
 				<div data-testid="block-valuation" class="px-4 sm:px-5 py-4 md:border-r border-grid">
 					<div class="flex flex-wrap items-baseline gap-x-2 gap-y-1 mb-3">
-						<div class="text-[10px] uppercase tracking-widest text-cyan">valuation &amp; quality</div>
+						<div class="text-[10px] uppercase tracking-widest text-cyan">valuation.quality</div>
 						{#if c.peer_cohort_level === 'thin'}
 							<ChipTip
 								term="THIN cohort"
@@ -447,7 +447,7 @@
 
 				<!-- MOMENTUM & TECHNICALS (O'Neil anchors) -->
 				<div data-testid="block-momentum" class="px-4 sm:px-5 py-4 border-t md:border-t-0 border-grid">
-					<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">momentum &amp; technicals</div>
+					<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">momentum.technicals</div>
 					<!-- Expert anchor: O'Neil momentum lens. Same pattern — full-width row in
 					     the card; only the score token is the ChipTip trigger. -->
 					<div class="mb-4 flex items-baseline justify-between gap-2">
