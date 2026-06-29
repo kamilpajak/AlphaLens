@@ -96,9 +96,11 @@ class TelegramClient:
         """
         if not chat_id:
             raise ValueError("chat_id required")
-        # One sendMessage per ≤4096-char chunk; success only if every chunk
-        # lands (a partial digest is worse than a retryable failure flag).
-        ok = True
+        # One sendMessage per ≤4096-char chunk, in order. Stop at the first
+        # failed chunk: the chunks share chat_id / parse_mode, so a permanent
+        # 400 (e.g. malformed Markdown) would repeat on every later chunk —
+        # firing them all just burns API calls. Stopping early also keeps the
+        # delivered prefix header-first instead of leaving a headerless tail.
         for chunk in self._split_text(text):
             payload = {
                 "chat_id": chat_id,
@@ -106,8 +108,9 @@ class TelegramClient:
                 "parse_mode": parse_mode,
                 "disable_web_page_preview": disable_web_page_preview,
             }
-            ok = self._deliver(payload) and ok
-        return ok
+            if not self._deliver(payload):
+                return False
+        return True
 
     # ----- internals -----
 
@@ -131,9 +134,13 @@ class TelegramClient:
     @classmethod
     def _split_text(cls, text: str) -> list[str]:
         """Split ``text`` into chunks of at most ``_MAX_MESSAGE_CHARS``, breaking
-        on the last newline inside each window so message boundaries fall between
-        lines; a single line longer than the limit is hard-cut. The concatenation
-        of the returned chunks always reproduces ``text`` exactly."""
+        on the last newline at a positive offset inside each window so message
+        boundaries fall between lines. A single line longer than the limit (no
+        newline in the window, or only a leading one at offset 0) is hard-cut at
+        the limit — so a Markdown entity spanning that cut would render across
+        two messages; the literature digest is many short lines, so this only
+        bites pathological single-line input. The concatenation of the returned
+        chunks always reproduces ``text`` exactly."""
         limit = cls._MAX_MESSAGE_CHARS
         if len(text) <= limit:
             return [text]

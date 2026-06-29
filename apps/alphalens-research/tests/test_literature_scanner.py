@@ -348,6 +348,52 @@ class TestRunnerOrchestration(unittest.TestCase):
         self.assertEqual(kwargs.get("search_recency_filter"), "year")
 
 
+class TestRunnerTelegramSplitIntegration(unittest.TestCase):
+    """End-to-end: a long scan body must reach Telegram as multiple ≤4096-char
+    sends through the real ``TelegramHandler`` → ``TelegramClient`` chain (only
+    the network ``Session`` is faked), with the full content preserved.
+    """
+
+    def test_long_weekly_digest_splits_across_real_client(self):
+        import tempfile
+        from unittest.mock import patch
+
+        from alphalens_pipeline.literature_scanner.runner import run_weekly
+
+        resp_ok = MagicMock()
+        resp_ok.status_code = 200
+        resp_ok.raise_for_status.return_value = None
+
+        long_response = "# Weekly RSS — 2026-W26\n\n" + "\n".join(
+            f"{i}. Paper {i} — a fairly long verdict line about retail edge" for i in range(300)
+        )
+        self.assertGreater(len(long_response), 4096)  # guards the split is exercised
+
+        with (
+            patch("alphalens_pipeline.literature_scanner.runner.PerplexityClient") as pcls,
+            patch("alphalens_pipeline.data.alt_data.telegram_client.requests.Session") as scls,
+        ):
+            pcls.return_value.ask.return_value = long_response
+            fake_session = scls.return_value
+            fake_session.post.return_value = resp_ok
+            with tempfile.TemporaryDirectory() as tmp:
+                run_weekly(
+                    output_dir=Path(tmp),
+                    perplexity_api_key="pplx-x",
+                    telegram_bot_token="bot",
+                    telegram_chat_id="chat",
+                    period="2026-W26",
+                )
+
+        sent = [c.kwargs["json"]["text"] for c in fake_session.post.call_args_list]
+        self.assertGreater(len(sent), 1)  # actually split
+        for chunk in sent:
+            self.assertLessEqual(len(chunk), 4096)
+        joined = "".join(sent)
+        self.assertIn("Literature weekly 2026-W26 — no trigger", joined)
+        self.assertIn("299. Paper 299", joined)  # tail survives end-to-end
+
+
 class TestPeriodFormat(unittest.TestCase):
     def test_default_monthly_period_is_yyyy_mm(self):
         from datetime import date

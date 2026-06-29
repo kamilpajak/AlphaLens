@@ -167,11 +167,20 @@ class TestChunking(unittest.TestCase):
         sess.post.return_value = _resp(200)
         self.assertTrue(_client(sess).send_message("C", "z" * 9000))
 
-    def test_one_chunk_failure_returns_false(self):
+    def test_later_chunk_failure_returns_false(self):
         sess = MagicMock()
         # first chunk ok, second chunk permanent 400 → overall False
         sess.post.side_effect = [_resp(200), _resp(400)]
         self.assertFalse(_client(sess).send_message("C", "z" * 5000))
+
+    def test_first_chunk_failure_stops_remaining_sends(self):
+        sess = MagicMock()
+        # chunk 1 fails permanently → later chunks must NOT be attempted
+        # (they share parse_mode/chat_id and would fail the same way).
+        sess.post.side_effect = [_resp(400), _resp(200)]
+        ok = _client(sess).send_message("C", "z" * 9000)
+        self.assertFalse(ok)
+        self.assertEqual(sess.post.call_count, 1)
 
     def test_each_chunk_carries_parse_mode(self):
         sess = MagicMock()
