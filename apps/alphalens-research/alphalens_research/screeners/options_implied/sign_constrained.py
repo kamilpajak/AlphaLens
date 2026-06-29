@@ -41,7 +41,7 @@ expectation, not undesirable surprise.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, cast
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -125,7 +125,9 @@ def fit_sign_constrained_lasso(
         X_aug[:, n_options + n_equity + j] = -X_std[:, idx]
 
     model = LassoCV(
-        n_alphas=cast(Any, lambda_grid_points),
+        # scikit-learn 1.9 removed `n_alphas`; `alphas` now accepts an int
+        # (number of alphas along the path) — same behavior.
+        alphas=lambda_grid_points,
         cv=n_folds,
         eps=eps,
         random_state=random_state,
