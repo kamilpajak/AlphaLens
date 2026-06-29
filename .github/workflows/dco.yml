@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0  # full history so the base..head range is reachable
