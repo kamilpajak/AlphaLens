@@ -1,7 +1,7 @@
 # Dependabot — security alerts + version-update PRs.
 #
-# Three ecosystems live in this repo: pip (3 Python workspace members),
-# npm (apps/web/ SvelteKit + Tailwind), github-actions (workflow pins).
+# Three ecosystems live in this repo: uv (the root Python workspace, 4
+# members), npm (apps/web/ SvelteKit + Tailwind), github-actions (pins).
 # Security alerts fire continuously regardless of the schedule below; the
 # `schedule` knobs control cadence of non-security version-update PRs only.
 # Update PRs target the default branch (main); no `target-branch:` override.
@@ -10,10 +10,16 @@ version: 2
 updates:
   # ---------------------------------------------------------------------
   # Python — uv workspace lives at repo root (pyproject.toml + uv.lock).
-  # The pip ecosystem reads pyproject.toml directly; uv.lock pin updates
-  # are picked up via Dependabot's uv support (rolled out late 2025).
+  # Uses the dedicated `uv` ecosystem (GA Dec 2025) so Dependabot updates
+  # BOTH pyproject.toml AND uv.lock in the same PR. The old `pip` ecosystem
+  # only edited pyproject.toml and left uv.lock stale, so every PR failed
+  # CI on `uv lock --check` and had to be recreated by hand.
+  # NOTE: uv-ecosystem support is still maturing and some setups (uv
+  # workspaces + PEP 735 dependency-groups, both used here) are not yet
+  # explicitly confirmed, so the CI `uv lock --check` gate stays as a
+  # backstop. Docs: https://docs.astral.sh/uv/guides/integration/dependabot/
   # ---------------------------------------------------------------------
-  - package-ecosystem: "pip"
+  - package-ecosystem: "uv"
     directory: "/"
     schedule:
       interval: "weekly"
