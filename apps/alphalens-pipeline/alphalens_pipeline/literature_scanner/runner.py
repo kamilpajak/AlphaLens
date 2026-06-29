@@ -34,8 +34,6 @@ TRIGGER_HEADING_RE = re.compile(
     re.MULTILINE,
 )
 NEXT_HEADING_RE = re.compile(r"^#{1,3}\s", re.MULTILINE)
-TELEGRAM_DIGEST_LIMIT = 600
-WEEKLY_TELEGRAM_LIMIT = 400
 
 
 @dataclass
@@ -78,15 +76,14 @@ def default_period(today: date, cadence: Cadence) -> str:
     return f"{iso_year:04d}-W{iso_week:02d}"
 
 
-def _digest_for(period: str, response: str, has_trigger: bool, limit: int, cadence: Cadence) -> str:
+def _digest_for(period: str, response: str, has_trigger: bool, cadence: Cadence) -> str:
+    """Build the full Telegram digest: a one-line header plus the entire scan
+    body. The canonical :class:`TelegramClient` splits anything over Telegram's
+    per-message ceiling, so the digest is never truncated here."""
     header = "monthly" if cadence == "monthly" else "weekly"
     flag = "TRIGGER" if has_trigger else "no trigger"
     head = f"Literature {header} {period} — {flag}\n\n"
-    excerpt = response.strip()
-    remaining = limit - len(head) - 4
-    if len(excerpt) > remaining:
-        excerpt = excerpt[: max(remaining, 0)] + "..."
-    return head + excerpt
+    return head + response.strip()
 
 
 def _persist(path: Path, content: str) -> None:
@@ -116,7 +113,7 @@ def run_monthly(
     path = output_dir / f"{period}.md"
     _persist(path, response)
     has_trigger = has_reactivation_trigger(response)
-    digest = _digest_for(period, response, has_trigger, TELEGRAM_DIGEST_LIMIT, "monthly")
+    digest = _digest_for(period, response, has_trigger, "monthly")
     _maybe_dispatch(telegram_bot_token, telegram_chat_id, digest)
 
     return ReviewResult(path=path, has_trigger=has_trigger, cadence="monthly", period=period)
@@ -136,7 +133,7 @@ def run_weekly(
     path = output_dir / "weekly" / f"{period}.md"
     _persist(path, response)
     has_trigger = has_reactivation_trigger(response)
-    digest = _digest_for(period, response, has_trigger, WEEKLY_TELEGRAM_LIMIT, "weekly")
+    digest = _digest_for(period, response, has_trigger, "weekly")
     _maybe_dispatch(telegram_bot_token, telegram_chat_id, digest)
 
     return ReviewResult(path=path, has_trigger=has_trigger, cadence="weekly", period=period)
