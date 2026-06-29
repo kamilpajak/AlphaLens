@@ -1,6 +1,6 @@
 # Dependabot — security alerts + version-update PRs.
 #
-# Three ecosystems live in this repo: uv (the root Python workspace, 4
+# Three ecosystems live in this repo: pip (the root Python workspace, 4
 # members), npm (apps/web/ SvelteKit + Tailwind), github-actions (pins).
 # Security alerts fire continuously regardless of the schedule below; the
 # `schedule` knobs control cadence of non-security version-update PRs only.
@@ -10,16 +10,19 @@ version: 2
 updates:
   # ---------------------------------------------------------------------
   # Python — uv workspace lives at repo root (pyproject.toml + uv.lock).
-  # Uses the dedicated `uv` ecosystem (GA Dec 2025) so Dependabot updates
-  # BOTH pyproject.toml AND uv.lock in the same PR. The old `pip` ecosystem
-  # only edited pyproject.toml and left uv.lock stale, so every PR failed
-  # CI on `uv lock --check` and had to be recreated by hand.
-  # NOTE: uv-ecosystem support is still maturing and some setups (uv
-  # workspaces + PEP 735 dependency-groups, both used here) are not yet
-  # explicitly confirmed, so the CI `uv lock --check` gate stays as a
-  # backstop. Docs: https://docs.astral.sh/uv/guides/integration/dependabot/
+  # Uses the `pip` ecosystem ON PURPOSE: it edits the version constraints in
+  # pyproject.toml (the source of truth uv resolves from) and leaves uv.lock
+  # for us to regenerate. The `.github/workflows/dependabot-uv-relock.yml`
+  # workflow then runs `uv lock` on the PR and pushes the synced lockfile back,
+  # so `uv lock --check` passes automatically — no manual recreate.
+  # Why not the `uv` ecosystem: it writes the new constraint into uv.lock's
+  # requires-dist but NOT pyproject.toml, which also fails `uv lock --check`
+  # and is the WRONG direction for auto-relock (running `uv lock` would revert
+  # the bump, since uv reads pyproject.toml as truth). See dependabot-core
+  # #12788. The CI `uv lock --check` gate stays as the backstop if the
+  # auto-relock workflow is ever disabled or its token is missing.
   # ---------------------------------------------------------------------
-  - package-ecosystem: "uv"
+  - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"

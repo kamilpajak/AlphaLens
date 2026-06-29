@@ -1,0 +1,88 @@
+name: Dependabot uv relock
+
+# Dependabot's `pip` ecosystem edits the version constraints in pyproject.toml
+# but does NOT regenerate uv.lock, so every Python bump PR fails the CI
+# `uv lock --check` gate. This workflow regenerates uv.lock on such PRs and
+# pushes the synced lockfile back to the PR branch so the gate passes without a
+# manual recreate.
+#
+# Security model:
+#   - Triggered by `pull_request` (NOT `pull_request_target`), so it runs with
+#     the PR's own (low) privileges and never executes untrusted fork code with
+#     a write token. Dependabot branches live in THIS repo, not a fork.
+#   - Gated to the `dependabot[bot]` actor, so it only ever runs on
+#     Dependabot-authored PRs.
+#   - `uv lock` resolves the dependency graph from the bumped pyproject.toml.
+#     That is the same supply-chain surface any dependency bump already carries;
+#     the workflow adds no new package execution beyond resolution.
+#
+# Re-running CI after the push:
+#   A push made with the default GITHUB_TOKEN does NOT re-trigger other
+#   workflows (loop prevention), so the synced commit would carry no fresh
+#   checks and the PR could not merge. To re-trigger ci.yml on the new commit
+#   the push must come from a real token. Provide a fine-grained PAT with
+#   `contents: write` on this repo as the **Dependabot** secret
+#   `DEPENDABOT_RELOCK_TOKEN` (Settings -> Secrets and variables -> Dependabot —
+#   NOT Actions secrets; Dependabot-triggered runs only see Dependabot secrets).
+#   Without it the lockfile is still synced and pushed, but a warning is emitted
+#   and you must re-run CI by hand (or close/reopen the PR).
+
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "apps/**/pyproject.toml"
+      - "uv.lock"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relock:
+    name: Sync uv.lock
+    # Only Dependabot PRs. The re-triggered run after our own push is authored
+    # by the PAT user (not dependabot[bot]), so this guard also stops the
+    # workflow from looping on its own commit.
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref }}
+          # PAT (Dependabot secret) re-triggers CI on the pushed commit; falls
+          # back to GITHUB_TOKEN (push works, but no CI re-run — see warning).
+          token: ${{ secrets.DEPENDABOT_RELOCK_TOKEN || github.token }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Regenerate uv.lock
+        env:
+          UV_PYTHON: "3.13"
+        run: uv lock
+
+      - name: Commit and push synced lockfile
+        env:
+          HAS_PAT: ${{ secrets.DEPENDABOT_RELOCK_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- uv.lock; then
+            echo "uv.lock already in sync with pyproject.toml — nothing to do."
+            exit 0
+          fi
+          git config user.name "dependabot[bot]"
+          git config user.email "49699333+dependabot[bot]@users.noreply.github.com"
+          git add uv.lock
+          git commit -m "chore(deps): sync uv.lock with pyproject.toml"
+          git push
+          if [ "$HAS_PAT" != "true" ]; then
+            echo "::warning::Synced uv.lock pushed with GITHUB_TOKEN, so CI will not re-run automatically. Set the DEPENDABOT_RELOCK_TOKEN Dependabot secret (fine-grained PAT, contents:write) to re-trigger checks, or re-run CI / close-reopen the PR by hand."
+          fi
