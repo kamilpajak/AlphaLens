@@ -59,10 +59,16 @@ logger = logging.getLogger(__name__)
 # at ~100th whenever peers were net sellers).
 INSIDER_SIGNAL_VERSION = "insider-v2-buyonly-180d-withinbuyers"
 
-# The insider signal's own look-back. Distinct from the shared
-# ``DEFAULT_LOOKBACK_DAYS`` (90) used by the Layer-3 verification gate: the
-# opportunistic-buy alpha effect is concentrated 6–12 months out (Cohen-Malloy
-# 2012; Lakonishok-Lee 2001), so 90d under-captures it.
+# The insider signal's own look-back: how far back we AGGREGATE opportunistic
+# buys (NOT a holding horizon — that is a separate question). 180d matches the
+# 6-month aggregation window that is standard for sparse, clustered insider
+# trades (Lakonishok-Lee 2001 Net-Purchase-Ratio); a 90d window splits a single
+# multi-month buying cluster and under-counts conviction. Distinct from the
+# shared ``DEFAULT_LOOKBACK_DAYS`` (90) used by the Layer-3 verification gate,
+# which is a recency check ("is there a fresh opportunistic buy?"), not an
+# aggregation window. NB: the opportunistic-buy alpha itself is front-loaded —
+# it accrues over the months FOLLOWING the buy (Cohen-Malloy-Pomorski 2012),
+# which is the holding horizon and unrelated to this look-back length.
 INSIDER_SIGNAL_LOOKBACK_DAYS = 180
 
 
