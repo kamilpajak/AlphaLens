@@ -53,12 +53,17 @@ jobs:
             [ -z "$sha" ] && continue
             author="$(git show -s --format='%an <%ae>' "$sha")"
             subject="$(git show -s --format='%s' "$sha")"
-            # Bot authors (dependabot[bot], etc.) are exempt: a GitHub App is
-            # not a developer with an origin to certify, and it cannot add a
-            # Signed-off-by. Matches the GitHub noreply bot email suffix; the
-            # quoted bracket text is a literal, not a glob character class.
+            # Bot authors are exempt: a GitHub App is not a developer with an
+            # origin to certify and cannot add a Signed-off-by. Allowlist the
+            # EXACT bot identity (dependabot's canonical user-id email) rather
+            # than a broad `*[bot]@...` suffix, to keep the exemption narrow.
+            # NOTE: a commit author email is attacker-settable, so this is a
+            # heuristic, not a cryptographic gate — acceptable here because this
+            # solo repo takes no untrusted commits (PR-flow, owner-only push).
+            # Add new bots to the case. The quoted text is a literal, not a glob
+            # character class.
             case "$author" in
-              *"[bot]@users.noreply.github.com>")
+              *"<49699333+dependabot[bot]@users.noreply.github.com>")
                 echo "  bot  ${sha:0:12}  $subject (DCO-exempt)"
                 continue
                 ;;
