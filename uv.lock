@@ -65,7 +65,7 @@ requires-dist = [
     { name = "gunicorn", specifier = ">=26.0" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "pandas", specifier = ">=2.3" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.3" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.3.4" },
     { name = "pyarrow", specifier = ">=24.0" },
     { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.47" },
