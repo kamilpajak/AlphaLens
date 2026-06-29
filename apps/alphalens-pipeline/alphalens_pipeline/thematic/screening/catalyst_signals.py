@@ -152,7 +152,7 @@ def catalyst_floor(strength: float) -> int:
     """Discretise catalyst_strength into a 0-2 weighted-score bonus.
 
     Strong catalyst (≥0.70) → +2 (lifts entire cohort by two notches).
-    Moderate (≥0.25) → +1. Weak (<0.25) → 0 (no lift).
+    Moderate (≥0.45) → +1. Weak (<0.45) → 0 (no lift).
     """
     s = _safe_float(strength)
     if s is None:

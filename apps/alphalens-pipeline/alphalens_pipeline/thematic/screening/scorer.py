@@ -154,7 +154,7 @@ def compose_weighted_score(
       (mature value pick) OR deep-drawdown-reversal (thematic momentum
       pick) — two different alpha drivers, same slot
     - catalyst_floor 0-2: strong catalyst (≥0.70) lifts cohort by 2;
-      moderate (≥0.25) by 1; weak by 0
+      moderate (≥0.45) by 1; weak by 0
 
     Insider is INTENTIONALLY ABSENT (was a 2× term per Cohen-Malloy paradigm
     #11 doctrine): the old absolute $50k gate never fired in practice, so the
