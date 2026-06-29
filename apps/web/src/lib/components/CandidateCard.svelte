@@ -447,7 +447,7 @@
 							{/snippet}
 						</SignalBar>
 					</div>
-					<div class="text-[10px] uppercase tracking-widest text-fg-muted mt-4 mb-2">multiples</div>
+					<div class="mt-4 mb-3 border-t border-grid" aria-hidden="true"></div>
 					<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PE')}>pe</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_pe, 1)}</dd>
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('PS')}>ps</JargonTip></dt><dd class="text-fg text-right">{fmtNum(c.valuation_ps, 1)}</dd>
@@ -551,7 +551,7 @@
 							{/snippet}
 						</SignalBar>
 					</div>
-					<div class="text-[10px] uppercase tracking-widest text-fg-muted mt-4 mb-2">trend</div>
+					<div class="mt-4 mb-3 border-t border-grid" aria-hidden="true"></div>
 					<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA50')}>ma50 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma50_distance_pct)}</dd>
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200')}>ma200 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma200_distance_pct)}</dd>
