@@ -60,3 +60,24 @@ describe('transition-shim precedence (pure-function level)', () => {
 		expect(renders(Infinity)).toBe(false);
 	});
 });
+
+// Mirrors the ExpertPanel `sections` Buffett-arm rule: the Buffett card shows
+// when it has qualitative data OR a numeric score (symmetry with O'Neil).
+function showsBuffettCard(hasBuffQual: boolean, buffScore: number | null): boolean {
+	return hasBuffQual || buffScore !== null;
+}
+
+describe('Buffett card inclusion (symmetry)', () => {
+	it('shows on qual only', () => {
+		expect(showsBuffettCard(true, null)).toBe(true);
+	});
+	it('shows on numeric score only', () => {
+		expect(showsBuffettCard(false, 62)).toBe(true);
+	});
+	it('shows on both', () => {
+		expect(showsBuffettCard(true, 62)).toBe(true);
+	});
+	it('hidden when neither', () => {
+		expect(showsBuffettCard(false, null)).toBe(false);
+	});
+});

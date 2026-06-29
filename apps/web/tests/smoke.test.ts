@@ -1039,15 +1039,16 @@ test.describe('card — domain grouping', () => {
 		const card = page.locator('article[id]').first();
 		await expect(card).toBeVisible();
 
-		// Domain section headings present.
-		for (const heading of [
-			'catalyst & event',
-			'valuation & quality',
-			'momentum & technicals',
-			'insider / flow'
-		]) {
+		// Domain section headings present (dot-separated WORD.WORD, matching the
+		// card's other cyan headers like live.equity.thesis / trade.execution.setup).
+		for (const heading of ['catalyst.event', 'valuation.quality', 'momentum.technicals']) {
 			await expect(card.getByText(heading, { exact: false })).toBeVisible();
 		}
+		// Insider renders ONLY on a net opportunistic buy (rare, ~1/400). The fixture's
+		// first card has no buys, so there is no insider row at all (the old `insider 90d`
+		// / `insider buys` row and the `insider / flow` heading are both absent).
+		await expect(card.getByText('insider buys · 180d', { exact: false })).toHaveCount(0);
+		await expect(card.getByText('insider / flow', { exact: false })).toHaveCount(0);
 
 		// Dedup: each label renders exactly once in the card BODY. getByText does
 		// case-insensitive substring matching and also matches hidden tooltip text
@@ -1065,7 +1066,14 @@ test.describe('card — domain grouping', () => {
 		await expect(meta.getByText('buffett', { exact: false })).toHaveCount(0);
 		await expect(meta.getByText("o'neil", { exact: false })).toHaveCount(0);
 		await expect(meta.getByText('catalyst', { exact: false })).toHaveCount(0);
-		await expect(meta.getByText('layer-4', { exact: false })).toBeVisible();
+		// The headline badge is the operative ranking score (selection_score),
+		// labelled `score` — not the raw `layer-4` input. `layer-4` now lives only in
+		// the badge's hover tooltip, so exclude [role="tooltip"] when checking the face.
+		const scoreBadge = meta.locator('[data-testid="chip-tip"][data-term="ranking score"]');
+		await expect(scoreBadge).toBeVisible();
+		const l4Total = await meta.getByText('layer-4', { exact: false }).count();
+		const l4InTip = await meta.locator('[role="tooltip"]').getByText('layer-4', { exact: false }).count();
+		expect(l4Total - l4InTip, 'layer-4 on the visible meta face').toBe(0);
 
 		// Lens scores anchor their domain blocks. toContainText asserts the block's
 		// text includes the lens name regardless of how many descendants match (the
@@ -1081,12 +1089,38 @@ test.describe('card — domain grouping', () => {
 		await card.getByRole('button', { name: /expert.panel/i }).click();
 		const drawer = card.locator('[data-testid="expert-panel-body"]');
 		await expect(drawer).toBeVisible();
-		// Scorer breakdown preserved.
-		await expect(drawer.getByText('scorer breakdown', { exact: false })).toBeVisible();
+		// Scorer breakdown moved OUT of the drawer into the score-badge tooltip.
+		await expect(drawer.getByText('scorer breakdown', { exact: false })).toHaveCount(0);
 		// O'Neil numeric readout grid is gone (rel strength now only in the momentum block).
 		await expect(drawer.getByText('rel strength', { exact: false })).toHaveCount(0);
 		// Pointer to the momentum block present.
 		await expect(drawer.getByText('momentum & technicals', { exact: false })).toBeVisible();
+	});
+
+	test(`score badge tooltip carries the scorer breakdown on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		const badge = card.locator('[data-testid="chip-tip"][data-term="ranking score"]');
+		await expect(badge).toBeVisible();
+		await badge.hover();
+		// Derivation + the not-yet-validated caveat live in the badge's own tooltip.
+		const tip = badge.locator('[role="tooltip"]');
+		await expect(tip.getByText('selection score', { exact: false })).toBeVisible();
+		await expect(tip.getByText('suggestive', { exact: false })).toBeVisible();
+	});
+
+	test(`insider-buys row renders only on a net buy on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		// The DFIN fixture has insider_score_usd > 0 (a 180-day opportunistic buy) on a
+		// ✗ 90-day INSIDER gate — the GME-like divergence. The 180d row renders for it...
+		const dfin = page.locator('article[id="DFIN"]');
+		// Match the full row label so it doesn't also catch the tooltip header
+		// ("opportunistic insider buys (180d)").
+		await expect(dfin.getByText('insider buys · 180d', { exact: false })).toBeVisible();
+		await expect(dfin.getByText('88%ile', { exact: false })).toBeVisible();
+		// ...but NOT for the no-buy first card.
+		const first = page.locator('article[id]').first();
+		await expect(first.getByText('insider buys · 180d', { exact: false })).toHaveCount(0);
 	});
 
 	test(`buffett anchor tooltip reveals on hover on /brief/${latestDay.date}`, async ({ page }) => {
@@ -1102,6 +1136,41 @@ test.describe('card — domain grouping', () => {
 		await expect(
 			anchor.locator('[role="tooltip"]').getByText('owner-earnings yield', { exact: false })
 		).toBeVisible();
+	});
+
+	test(`buffett drawer card is symmetric (score + empty state, no pillars) on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		await card.getByRole('button', { name: /expert.panel/i }).click();
+		const drawer = card.locator('[data-testid="expert-panel-body"]');
+		await expect(drawer).toBeVisible();
+		// The Buffett card renders its empty state (numeric score, no qual).
+		await expect(drawer.getByText('qualitative read not computed', { exact: false })).toBeVisible();
+		// No qualitative pillars for this name.
+		await expect(drawer.getByText('moat', { exact: false })).toHaveCount(0);
+	});
+
+	test(`lens-score labels are stacked in separate rows on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const card = page.locator('article[id]').first();
+		await card.getByRole('button', { name: /expert.panel/i }).click();
+		const buf = card.locator('[data-testid="lens-label-buffett"]');
+		const oneil = card.locator('[data-testid="lens-label-oneil"]');
+		await expect(buf).toBeVisible();
+		await expect(oneil).toBeVisible();
+		await expect(buf).toContainText('Buffett');
+		await expect(oneil).toContainText("O'Neil");
+		// Stacked, not overlapping: the buffett label sits above the o'neil label.
+		const b = await buf.boundingBox();
+		const o = await oneil.boundingBox();
+		expect(b && o && b.y < o.y).toBeTruthy();
+	});
+
+	test(`no TTL chip when there is no structured ladder on /brief/${latestDay.date}`, async ({ page }) => {
+		await page.goto(`/brief/${latestDay.date}`);
+		const setup = page.locator('article[id]').first().locator('[data-testid="trade-setup"]');
+		await expect(setup.getByText('no structured ladder', { exact: false })).toBeVisible();
+		await expect(setup.getByText('ttl:', { exact: false })).toHaveCount(0);
 	});
 });
 

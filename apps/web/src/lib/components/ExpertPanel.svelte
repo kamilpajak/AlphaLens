@@ -31,20 +31,11 @@
 
 	interface Props {
 		assessments: ExpertAssessments | null | undefined;
-		layer4Score?: number | null;
-		atrPenalty?: number | null;
-		selectionScore?: number | null;
-		scorerConfigVersion?: string | null;
+		/** Whether a 10-K exists (from the tenk gate) — explains an absent Buffett
+		 *  qualitative read. */
+		tenkAvailable?: boolean | null;
 	}
-	let { assessments, layer4Score, atrPenalty, selectionScore, scorerConfigVersion }: Props =
-		$props();
-
-	// Score breakdown: show the ATR-penalty breakdown row when any of the three
-	// scorer cols is present. The precise numbers live HERE (drawer), not on the
-	// card face (the extended chip carries no number — manufactured-authority guard).
-	const hasScoreBreakdown = $derived(
-		selectionScore != null || atrPenalty != null || scorerConfigVersion != null
-	);
+	let { assessments, tenkAvailable }: Props = $props();
 
 	const buf = $derived((assessments?.buffett ?? null) as BuffettAssessment | null);
 	const oneil = $derived((assessments?.oneil ?? null) as ONeilAssessment | null);
@@ -115,14 +106,13 @@
 			Number.isFinite(oneil?.oneil_rs_approx_pct)
 	);
 
-	// The drawer is offered when ANY expert has renderable content, a spread exists,
-	// or the scorer breakdown (selection_score / atr_penalty / config_version) is present.
-	const hasContent = $derived(hasBuffQual || hasOneil || spread !== null || hasScoreBreakdown);
+	// The drawer is offered when ANY expert has renderable content or a spread exists.
+	const hasContent = $derived(hasBuffQual || hasOneil || spread !== null || buffScore !== null);
 
 	// Registry order (buffett, oneil). A 3rd expert is one entry in EXPERT_KIND.
 	const sections = $derived(
 		['buffett', 'oneil'].filter((id) =>
-			id === 'buffett' ? hasBuffQual : id === 'oneil' ? hasOneil : false
+			id === 'buffett' ? hasBuffQual || buffScore !== null : id === 'oneil' ? hasOneil : false
 		)
 	);
 
@@ -186,8 +176,18 @@
 							<span>lens score</span>
 							<span>0–100</span>
 						</div>
-						<!-- track -->
-						<div class="relative mt-2 mb-7 h-1.5 rounded-full bg-grid" aria-hidden="true">
+						<!-- Buffett label row (above the track) -->
+						<div class="relative mt-2 h-3.5">
+							<span
+								data-testid="lens-label-buffett"
+								class="absolute bottom-0 text-[9px] whitespace-nowrap {toneText(buffT)}"
+								style="left: {buffScore}%; transform: {labelShift(buffScore!)}"
+							>
+								Buffett {buffScore}
+							</span>
+						</div>
+						<!-- track (overflow-hidden clips the dots cleanly at 0/100) -->
+						<div class="relative h-1.5 overflow-hidden rounded-full bg-grid" aria-hidden="true">
 							<span
 								class="absolute top-0 h-1.5 rounded-full"
 								class:bg-green={bandTone === 'green'}
@@ -195,7 +195,6 @@
 								class:bg-red={bandTone === 'red'}
 								style="left: {gapLeft}%; width: {gapWidth}%; opacity: 0.22"
 							></span>
-							<!-- Buffett marker + label -->
 							<span
 								class="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg {toneDot(
 									buffT
@@ -203,20 +202,17 @@
 								style="left: {buffScore}%"
 							></span>
 							<span
-								class="absolute top-full mt-1 text-[9px] whitespace-nowrap {toneText(buffT)}"
-								style="left: {buffScore}%; transform: {labelShift(buffScore!)}"
-							>
-								Buffett {buffScore}
-							</span>
-							<!-- O'Neil marker + label -->
-							<span
 								class="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg {toneDot(
 									oneilT
 								)}"
 								style="left: {oneilScore}%"
 							></span>
+						</div>
+						<!-- O'Neil label row (below the track) -->
+						<div class="relative mb-1 h-3.5">
 							<span
-								class="absolute top-full mt-1 text-[9px] whitespace-nowrap {toneText(oneilT)}"
+								data-testid="lens-label-oneil"
+								class="absolute top-0 text-[9px] whitespace-nowrap {toneText(oneilT)}"
 								style="left: {oneilScore}%; transform: {labelShift(oneilScore!)}"
 							>
 								O'Neil {oneilScore}
@@ -255,24 +251,35 @@
 						</div>
 
 						{#if isBuf}
-							<div class="mt-3 flex flex-wrap gap-2">
-								{#each buffPillars as pillar (pillar.label)}
-									<ExpertPillar label={pillar.label} value={pillar.value} tone={pillar.tone} body={pillar.body} />
-								{/each}
-							</div>
-							{#if buf?.buffett_qualitative_rationale}
-								<blockquote class="mt-3 border-l-2 border-cyan pl-4">
-									<p class="text-fg-dim text-xs leading-relaxed">{buf.buffett_qualitative_rationale}</p>
-								</blockquote>
+							{#if hasBuffQual}
+								<div class="mt-3 flex flex-wrap gap-2">
+									{#each buffPillars as pillar (pillar.label)}
+										<ExpertPillar label={pillar.label} value={pillar.value} tone={pillar.tone} body={pillar.body} />
+									{/each}
+								</div>
+								{#if buf?.buffett_qualitative_rationale}
+									<blockquote class="mt-3 border-l-2 border-cyan pl-4">
+										<p class="text-fg-dim text-xs leading-relaxed">{buf.buffett_qualitative_rationale}</p>
+									</blockquote>
+								{/if}
+								<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] leading-snug text-fg-muted">
+									{#if buf?.buffett_used_scuttlebutt}
+										<span class="text-amber whitespace-nowrap">scuttlebutt: web-grounded, unverified</span>
+									{/if}
+									{#if buf?.buffett_qual_computed_at}
+										<span class="whitespace-nowrap">classified {fmtDate(buf.buffett_qual_computed_at)}</span>
+									{/if}
+								</div>
+							{:else}
+								<p class="mt-3 text-[10px] leading-snug text-fg-muted">
+									numeric score only —
+									<span class="text-fg-dim"
+										>{tenkAvailable === false
+											? 'no 10-K for a qualitative read'
+											: 'qualitative read not computed'}</span
+									>
+								</p>
 							{/if}
-							<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] leading-snug text-fg-muted">
-								{#if buf?.buffett_used_scuttlebutt}
-									<span class="text-amber whitespace-nowrap">scuttlebutt: web-grounded, unverified</span>
-								{/if}
-								{#if buf?.buffett_qual_computed_at}
-									<span class="whitespace-nowrap">classified {fmtDate(buf.buffett_qual_computed_at)}</span>
-								{/if}
-							</div>
 						{:else}
 							{#if oneil?.oneil_new_high_split_suspected === true || oneil?.oneil_earnings_growth_near_zero_base === true}
 								<div class="mt-3 flex flex-wrap gap-2">
@@ -305,43 +312,6 @@
 						{/if}
 					</div>
 				{/each}
-
-				<!-- Score breakdown: layer-4 → ATR penalty → selection_score.
-				     Precise numbers live here (drawer), NOT on the card face.
-				     Shown only when at least one scorer col is present. -->
-				{#if hasScoreBreakdown}
-					<div class="border-t border-grid pt-4">
-						<div class="text-[9px] uppercase tracking-widest text-fg-muted mb-2">
-							scorer breakdown
-						</div>
-						<dl class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-							<dt class="text-[10px] uppercase tracking-widest text-fg-muted">layer-4</dt>
-							<dd class="text-right font-bold text-fg-dim whitespace-nowrap">
-								{layer4Score != null ? layer4Score.toFixed(2) : '—'}
-							</dd>
-							{#if atrPenalty != null && atrPenalty > 0}
-								<dt class="text-[10px] uppercase tracking-widest text-fg-muted">atr penalty</dt>
-								<dd class="text-right font-bold text-fg-muted whitespace-nowrap">
-									<span class="whitespace-nowrap">−{atrPenalty.toFixed(2)}</span>
-								</dd>
-							{/if}
-							<dt class="text-[10px] uppercase tracking-widest text-fg-muted">selection score</dt>
-							<dd class="text-right font-bold text-fg whitespace-nowrap">
-								<span class="whitespace-nowrap"
-									>{selectionScore != null ? selectionScore.toFixed(2) : '—'}</span
-								>
-							</dd>
-						</dl>
-						{#if scorerConfigVersion}
-							<p class="mt-2 text-[10px] text-fg-muted">
-								<span class="whitespace-nowrap">{scorerConfigVersion}</span>
-							</p>
-						{/if}
-						<p class="mt-1 text-[10px] italic text-fg-muted">
-							suggestive — not yet validated
-						</p>
-					</div>
-				{/if}
 			</div>
 		{/if}
 	</div>

@@ -220,3 +220,53 @@ export function consensusBand(spread: number | null | undefined): string {
 export function fcffYieldRawDisplay(rawPct: number | null | undefined): string | null {
 	return Number.isFinite(rawPct) ? fmtPct(rawPct, 2) : null;
 }
+
+/**
+ * Whether a 10-K exists for the ticker, read from the gate arrays. The `tenk`
+ * gate is `passed` when theme keywords matched the 10-K and `failed` when the
+ * 10-K exists but no keyword hit — both mean the filing is available; only
+ * `unknown` (absent from both) means no 10-K. Used to explain an absent Buffett
+ * qualitative read (which reads the 10-K).
+ */
+export function tenkAvailable(
+	gatesPassed: string[] | null | undefined,
+	gatesFailed: string[] | null | undefined
+): boolean {
+	return Boolean(gatesPassed?.includes('tenk') || gatesFailed?.includes('tenk'));
+}
+
+/**
+ * The meta-bar headline score. The brief is ranked by `selection_score`
+ * (= layer4_weighted_score − atr_penalty), so the badge next to "RANK" shows
+ * that operative score, not the raw layer4 input (which lives in the drawer's
+ * SCORER BREAKDOWN). Falls back to layer4 for older briefs without a
+ * selection_score. Integer-valued scores render without decimals (3.0 → "3");
+ * an ATR tilt makes it fractional (1.49).
+ */
+export function selectionBadge(
+	selectionScore: number | null | undefined,
+	layer4: number | null | undefined
+): string {
+	const v = Number.isFinite(selectionScore)
+		? (selectionScore as number)
+		: Number.isFinite(layer4)
+			? (layer4 as number)
+			: null;
+	if (v === null) return '—';
+	return Number.isInteger(v) ? String(v) : v.toFixed(2);
+}
+
+// Acronyms the generic underscore→space rule would mangle. The card uppercases
+// the label via CSS, so these are stored in the form they should READ as.
+const CATALYST_LABELS: Record<string, string> = { m_and_a: 'M&A', ipo: 'IPO' };
+
+/**
+ * Humanise a raw `catalyst_event_type` enum for display: `m_and_a` → "M&A",
+ * `ipo` → "IPO", otherwise replace underscores with spaces (`product_launch` →
+ * "product launch"; the card's CSS uppercases it). Empty/absent → null so the
+ * caller drops the " · <type>" suffix entirely.
+ */
+export function catalystLabel(eventType: string | null | undefined): string | null {
+	if (!eventType) return null;
+	return CATALYST_LABELS[eventType] ?? eventType.replace(/_/g, ' ');
+}

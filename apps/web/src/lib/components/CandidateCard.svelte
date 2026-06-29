@@ -12,7 +12,10 @@
 		oneilTone,
 		insiderDisplay,
 		magicFormulaDisplay,
-		fcffYieldRawDisplay
+		fcffYieldRawDisplay,
+		tenkAvailable,
+		selectionBadge,
+		catalystLabel
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -61,6 +64,38 @@
 	// Merged fcff-yield Valuation row: the %ile drives the bar; the raw % is an
 	// annotation shown below it. Replaces the old duplicate raw-% row in FUNDAMENTALS.
 	const fcffRaw = $derived(fcffYieldRawDisplay(c.fcff_yield_pct));
+	// Humanised catalyst event type for the CATALYST & EVENT bar label (M&A / IPO /
+	// underscores→spaces); null when absent so the " · <type>" suffix is dropped.
+	const catLabel = $derived(catalystLabel(c.catalyst_event_type));
+	// Tier colour for the catalyst-strength chip: strong (≥0.70, +2) green, moderate
+	// (≥0.45, +1) amber, weak (no lift) muted — mirrors the lift the tooltip explains.
+	const catalystTone = $derived(
+		c.catalyst_strength == null
+			? 'text-fg-muted'
+			: c.catalyst_strength >= 0.7
+				? 'text-green'
+				: c.catalyst_strength >= 0.45
+					? 'text-amber'
+					: 'text-fg-muted'
+	);
+	// Rows for the headline-score badge tooltip: the derivation of selection_score
+	// (= layer4 − atr_penalty). The ATR-penalty row is shown only when it bit. This
+	// replaces the old SCORER BREAKDOWN section that used to sit in the expert drawer.
+	const fmt2 = (v: number | null | undefined): string =>
+		Number.isFinite(v) ? (v as number).toFixed(2) : '—';
+	const scorerRows = $derived([
+		{ key: 'layer-4', value: fmt2(c.layer4_weighted_score) },
+		// Only when the penalty rounds to a visible ≥0.01 at 2dp, so a sub-0.005 tilt
+		// never renders a misleading "−0.00" and layer4 − penalty = selection stays
+		// internally consistent at the displayed precision.
+		...(Number.isFinite(c.atr_penalty) && (c.atr_penalty as number) >= 0.005
+			? [{ key: 'atr penalty', value: `−${(c.atr_penalty as number).toFixed(2)}` }]
+			: []),
+		{
+			key: 'selection score',
+			value: fmt2(Number.isFinite(c.selection_score) ? c.selection_score : c.layer4_weighted_score)
+		}
+	]);
 	const rank = $derived(c.rank_in_day ?? index + 1);
 	const cohort = $derived(c.cohort_size_in_day ?? '?');
 
@@ -193,15 +228,32 @@
 			</span>
 		</div>
 		<div class="ml-auto flex flex-wrap items-center gap-x-4 gap-y-2">
-			<!-- Layer-4 score — the headline ordering signal, given a filled badge. -->
-			<span
-				class="inline-flex items-baseline gap-1.5 whitespace-nowrap rounded-sm border border-amber/35 bg-amber/10 px-2 py-0.5"
-			>
-				<span class="text-[8px] uppercase tracking-widest text-amber">layer-4</span>
-				<span class="font-display text-[15px] font-bold leading-none text-amber"
-					>{c.layer4_weighted_score ?? '—'}</span
-				>
-			</span>
+			<!-- Headline score — the OPERATIVE ranking signal, given a filled badge.
+			     The brief is ranked by selection_score (= layer4 − atr_penalty), so the
+			     badge next to "RANK" is that score, not the raw layer4 input. The hover
+			     carries the derivation (layer4 → ATR penalty → selection + config + the
+			     not-yet-validated caveat); the `extended` chip (below) flags a tilt. -->
+			<ChipTip term="ranking score">
+				{#snippet chip()}
+					<span
+						class="inline-flex cursor-help items-baseline gap-1.5 whitespace-nowrap rounded-sm border border-amber/35 bg-amber/10 px-2 py-0.5"
+					>
+						<span class="text-[8px] uppercase tracking-widest text-amber">score</span>
+						<span class="font-display text-[15px] font-bold leading-none text-amber"
+							>{selectionBadge(c.selection_score, c.layer4_weighted_score)}</span
+						>
+					</span>
+				{/snippet}
+				{#snippet bodyRich()}
+					<MetricGrid rows={scorerRows} align="right" />
+					{#if c.scorer_config_version}
+						<p class="mt-2 text-[10px] text-fg-muted">
+							<span class="whitespace-nowrap">{c.scorer_config_version}</span>
+						</p>
+					{/if}
+					<p class="mt-1 text-[10px] italic text-fg-muted">suggestive — not yet validated</p>
+				{/snippet}
+			</ChipTip>
 			<!-- Extended band: shown only when atr_penalty > 0 (high realized-vol /
 			     extended at entry — deprioritized). Tone-neutral / muted — a soft flag,
 			     not a hard gate. Precise penalty number + scorer_config_version live in
@@ -241,25 +293,41 @@
 			     the thesis it drives, the source event, and the deterministic typed
 			     facts. (Retires the standalone live.equity.thesis heading.) -->
 			<div class="px-4 sm:px-5 py-4 border-b border-grid">
-				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">catalyst &amp; event</div>
-				<div class="mb-4">
-					<SignalBar
-						label={`catalyst${c.catalyst_event_type ? ' · ' + c.catalyst_event_type : ''}`}
-						value={c.catalyst_strength != null ? c.catalyst_strength * 100 : null}
-						format={(v) => (v / 100).toFixed(2)}
-					>
-						{#snippet tooltipRich()}
-							<span class="block">Layer-4 catalyst-floor score (0–1), combining:</span>
-							<BulletList
-								items={['news novelty', 'thematic alignment with the source event', 'freshness']}
-							/>
-							<TooltipNote
-								>higher = stronger event-driven setup; <span class="font-bold">below</span> the
-								<span class="whitespace-nowrap font-bold">0.55 floor</span> → candidate
-								<span class="font-bold">filtered out</span></TooltipNote
-							>
-						{/snippet}
-					</SignalBar>
+				<!-- Header row: section title left, the catalyst strength top-right, in
+				     place of the old full-width bar. Unboxed lens-score style — a small
+				     muted event-type label + the tier-coloured strength; the corrected
+				     lift explanation is in its hover. -->
+				<div class="flex items-baseline justify-between gap-2 mb-3">
+					<div class="text-[10px] uppercase tracking-widest text-cyan">catalyst.event</div>
+					{#if c.catalyst_strength != null}
+						<ChipTip term="catalyst strength">
+							{#snippet chip()}
+								<span class="inline-flex items-baseline gap-1.5 whitespace-nowrap cursor-help">
+									{#if catLabel}<span class="text-[10px] uppercase tracking-widest text-fg-muted"
+											>{catLabel}</span
+										>{/if}<span class="font-display text-base font-bold leading-none {catalystTone}"
+										>{fmtNum(c.catalyst_strength, 2)}</span
+									>
+								</span>
+							{/snippet}
+							{#snippet bodyRich()}
+								<span class="block">Catalyst strength (0–1) of the source event, combining:</span>
+								<BulletList
+									items={[
+										'event-type tier (M&A 1.0 … other 0.3)',
+										'extraction confidence',
+										'second-order implications'
+									]}
+								/>
+								<TooltipNote
+									>a cohort-score <span class="font-bold">lift</span>, not a filter:
+									<span class="whitespace-nowrap font-bold">≥0.45 → +1</span>,
+									<span class="whitespace-nowrap font-bold">≥0.70 → +2</span>; a weak catalyst adds no
+									lift but does <span class="font-bold">not</span> drop the name</TooltipNote
+								>
+							{/snippet}
+						</ChipTip>
+					{/if}
 				</div>
 				<blockquote class="border-l-2 border-violet pl-4">
 					{#if c.brief_tldr}
@@ -295,7 +363,7 @@
 				<!-- VALUATION & QUALITY (Buffett anchors) -->
 				<div data-testid="block-valuation" class="px-4 sm:px-5 py-4 md:border-r border-grid">
 					<div class="flex flex-wrap items-baseline gap-x-2 gap-y-1 mb-3">
-						<div class="text-[10px] uppercase tracking-widest text-cyan">valuation &amp; quality</div>
+						<div class="text-[10px] uppercase tracking-widest text-cyan">valuation.quality</div>
 						{#if c.peer_cohort_level === 'thin'}
 							<ChipTip
 								term="THIN cohort"
@@ -401,7 +469,7 @@
 
 				<!-- MOMENTUM & TECHNICALS (O'Neil anchors) -->
 				<div data-testid="block-momentum" class="px-4 sm:px-5 py-4 border-t md:border-t-0 border-grid">
-					<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">momentum &amp; technicals</div>
+					<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">momentum.technicals</div>
 					<!-- Expert anchor: O'Neil momentum lens. Same pattern — full-width row in
 					     the card; only the score token is the ChipTip trigger. -->
 					<div class="mb-4 flex items-baseline justify-between gap-2">
@@ -494,25 +562,30 @@
 				</div>
 			</div>
 
-			<!-- INSIDER / FLOW — ownership-flow domain (one metric, its own strip). -->
-			<div class="px-4 sm:px-5 py-4 border-t border-grid">
-				<div class="text-[10px] uppercase tracking-widest text-cyan mb-3">insider / flow</div>
-				{#if insider.mode === 'bar'}
-					<SignalBar
-						label="insider 90d (sector %ile)"
-						value={insider.percentile}
-						format={(v) => fmtPctile(v) + '%ile'}
-						tooltip="Net opportunistic insider buying ({fmtUsdCompact(insider.netUsd)}) in the last 90 days, ranked within sector — shown only when there is net buying. Cohen-Malloy opportunistic classification; paradigm #11 scorer."
-					/>
-				{:else}
-					<SignalBar
-						label="insider 90d"
-						value={null}
-						placeholder={insider.label}
-						tooltip="No net opportunistic insider buying in the last 90 days. The sector percentile is suppressed: a 0/negative dollar signal ranks high only relative to net-selling peers, which is not a buy signal. Cohen-Malloy opportunistic classification."
-					/>
-				{/if}
-			</div>
+			<!-- INSIDER (paradigm #11) — a compact one-line row that renders ONLY when
+			     there is net opportunistic buying (~1 in 400 cards in production). The
+			     no-buys case is carried by the header ✗ INSIDER gate, so no always-empty
+			     row. NOTE: this score is a 180-day buy-only signal (the header gate is a
+			     separate 90-day binary check — different window, can disagree). -->
+			{#if insider.mode === 'bar'}
+				<div
+					class="flex items-baseline justify-between gap-3 border-t border-grid px-4 py-2.5 text-[11px] sm:px-5"
+				>
+					<span class="uppercase tracking-widest text-fg-muted">insider buys · 180d</span>
+					<ChipTip
+						term="opportunistic insider buys (180d)"
+						body="Buy-only opportunistic insider purchases ({fmtUsdCompact(insider.netUsd)}) over the last 180 days, ranked within sector. Cohen-Malloy opportunistic classification; paradigm #11 scorer. (Distinct from the 90-day INSIDER header gate.)"
+					>
+						{#snippet chip()}
+							<span class="cursor-help font-bold text-amber whitespace-nowrap"
+								>{insider.percentile != null
+									? fmtPctile(insider.percentile) + '%ile · '
+									: ''}{fmtUsdCompact(insider.netUsd)}</span
+							>
+						{/snippet}
+					</ChipTip>
+				</div>
+			{/if}
 
 			<!-- Expert-panel deep-read (PR-8b): the generalized drawer — disagreement
 			     headline + dot-lane (only when >=2 lenses scored) + one section per
@@ -522,10 +595,7 @@
 			     persisted panel.expert_spread, never recomputes). -->
 			<ExpertPanel
 				assessments={c.expert_assessments}
-				layer4Score={c.layer4_weighted_score}
-				atrPenalty={c.atr_penalty}
-				selectionScore={c.selection_score}
-				scorerConfigVersion={c.scorer_config_version}
+				tenkAvailable={tenkAvailable(c.gates_passed, c.gates_failed)}
 			/>
 		</div>
 
