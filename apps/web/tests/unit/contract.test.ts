@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import yaml from 'js-yaml';
+import { load as loadYaml } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import type { Candidate } from '../../src/lib/types';
 
@@ -25,7 +25,7 @@ interface OpenApiSchema {
 }
 
 function schemaCandidateKeys(): Set<string> {
-	const doc = yaml.load(readFileSync(SCHEMA_PATH, 'utf-8')) as OpenApiSchema;
+	const doc = loadYaml(readFileSync(SCHEMA_PATH, 'utf-8')) as OpenApiSchema;
 	const cand = doc.components.schemas.Candidate;
 	expect(cand, 'schema.yaml must declare a Candidate component').toBeDefined();
 	return new Set(Object.keys(cand.properties ?? {}));
