@@ -69,6 +69,25 @@
 	play={openOnMount}
 />
 
+<!-- (1b) subValue annotation: the FCFF-yield bar shows the raw yield (dimmed,
+     normal weight) just left of the tone-coloured sector-%ile. The %ile stays
+     right-anchored so a column of stacked bars keeps a flush right edge. -->
+<Story
+	name="subValue (FCFF raw yield + sector %ile)"
+	args={{
+		label: 'FCFF yield (sector %ile)',
+		value: 58,
+		subValue: '+8.36%',
+		format: (v: number) => `${v.toFixed(0)}%ile`,
+		tooltip:
+			'Free-cash-flow-to-firm yield = FCFF / EV, ranked within sector. Higher = cheaper on a cash-generation basis.'
+	}}
+	play={async ({ canvas }: { canvas: any }) => {
+		await waitFor(() => expect(canvas.getByText('+8.36%')).toBeVisible());
+		await expect(canvas.getByText('58%ile')).toBeVisible();
+	}}
+/>
+
 <!-- (2) Rich tooltip via MetricGrid (align="left"): RSI-style
      threshold -> meaning rows. value 0–100, inverted so a hot RSI reads red. -->
 <Story name="Rich tooltip (MetricGrid / RSI thresholds)" play={openOnMount}>

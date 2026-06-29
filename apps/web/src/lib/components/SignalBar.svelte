@@ -18,6 +18,13 @@
 		 *  to an em-dash. Used to render an honest "no buys" / "net selling" state
 		 *  instead of a misleading percentile. */
 		placeholder?: string;
+		/** Pre-formatted secondary annotation rendered (dimmed, normal weight) just
+		 *  left of the main tone-coloured value on the value line. Used by the FCFF
+		 *  YIELD bar to show the raw yield (e.g. "+8.36%") beside its sector-%ile.
+		 *  The main value stays right-anchored so a column of stacked bars keeps a
+		 *  flush right edge whether or not each carries a subValue. Omitted/empty →
+		 *  nothing renders. */
+		subValue?: string | null;
 	}
 	let {
 		label,
@@ -28,7 +35,8 @@
 		inverted = false,
 		tooltip,
 		tooltipRich,
-		placeholder = '—'
+		placeholder = '—',
+		subValue
 	}: Props = $props();
 
 	// A bubble shows when either body form is supplied; the trigger affordances
@@ -68,13 +76,18 @@
 >
 	<div class="flex items-center justify-between mb-1.5 gap-2">
 		<span class="text-fg-muted truncate">{label}</span>
-		<span
-			class="font-bold whitespace-nowrap"
-			class:text-green={tone === 'green'}
-			class:text-amber={tone === 'amber'}
-			class:text-red={tone === 'red'}
-			class:text-fg-muted={tone === 'muted'}
-		>{display}</span>
+		<span class="flex items-baseline gap-2 whitespace-nowrap">
+			{#if subValue}
+				<span class="text-fg-dim">{subValue}</span>
+			{/if}
+			<span
+				class="font-bold"
+				class:text-green={tone === 'green'}
+				class:text-amber={tone === 'amber'}
+				class:text-red={tone === 'red'}
+				class:text-fg-muted={tone === 'muted'}
+			>{display}</span>
+		</span>
 	</div>
 	<div class="h-1.5 bg-bg-3 relative overflow-hidden">
 		<div
