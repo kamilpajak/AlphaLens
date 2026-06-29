@@ -57,6 +57,10 @@ class TelegramClient:
 
     _MAX_ATTEMPTS = 3  # 1 + 2 retries, like the SEC / yfinance clients
     _BACKOFFS = (1, 3)  # seconds; Telegram 429s carry a retry_after but are rare here
+    # The Bot API rejects a sendMessage whose text exceeds 4096 chars. The
+    # literature-scan digest is the only caller that can cross this, so the
+    # client splits long text into multiple sends rather than truncating.
+    _MAX_MESSAGE_CHARS = 4096
 
     def __init__(
         self,
@@ -92,12 +96,24 @@ class TelegramClient:
         """
         if not chat_id:
             raise ValueError("chat_id required")
-        payload = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": parse_mode,
-            "disable_web_page_preview": disable_web_page_preview,
-        }
+        # One sendMessage per ≤4096-char chunk; success only if every chunk
+        # lands (a partial digest is worse than a retryable failure flag).
+        ok = True
+        for chunk in self._split_text(text):
+            payload = {
+                "chat_id": chat_id,
+                "text": chunk,
+                "parse_mode": parse_mode,
+                "disable_web_page_preview": disable_web_page_preview,
+            }
+            ok = self._deliver(payload) and ok
+        return ok
+
+    # ----- internals -----
+
+    def _deliver(self, payload: dict) -> bool:
+        """Deliver one already-sized payload with the transient-retry safety net;
+        return ``True`` on success, ``False`` on permanent / exhausted failure."""
         for attempt in range(self._MAX_ATTEMPTS):
             outcome, reason, exc = self._send_once(payload)
             if outcome == "ok":
@@ -112,7 +128,24 @@ class TelegramClient:
                 return False
         return False
 
-    # ----- internals -----
+    @classmethod
+    def _split_text(cls, text: str) -> list[str]:
+        """Split ``text`` into chunks of at most ``_MAX_MESSAGE_CHARS``, breaking
+        on the last newline inside each window so message boundaries fall between
+        lines; a single line longer than the limit is hard-cut. The concatenation
+        of the returned chunks always reproduces ``text`` exactly."""
+        limit = cls._MAX_MESSAGE_CHARS
+        if len(text) <= limit:
+            return [text]
+        chunks: list[str] = []
+        remaining = text
+        while len(remaining) > limit:
+            newline = remaining.rfind("\n", 0, limit)
+            cut = newline + 1 if newline > 0 else limit
+            chunks.append(remaining[:cut])
+            remaining = remaining[cut:]
+        chunks.append(remaining)
+        return chunks
 
     def _send_once(self, payload: dict) -> tuple[str, str, Exception | None]:
         """One POST attempt classified as ``("ok"|"permanent"|"transient", reason, exc)``.

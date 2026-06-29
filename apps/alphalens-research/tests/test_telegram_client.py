@@ -111,5 +111,75 @@ class TestCredentialSafety(unittest.TestCase):
         self.assertIn("***", joined)
 
 
+class TestChunking(unittest.TestCase):
+    """Telegram's Bot API rejects a ``sendMessage`` whose ``text`` exceeds 4096
+    characters. The literature-scan digest is the only caller that can cross
+    that ceiling, so the canonical client splits a long message into ≤4096-char
+    sends (preferring newline boundaries) and reports success only if EVERY
+    chunk lands.
+    """
+
+    @staticmethod
+    def _sent_texts(sess: MagicMock) -> list[str]:
+        return [c.kwargs["json"]["text"] for c in sess.post.call_args_list]
+
+    def test_short_text_sends_single_message(self):
+        sess = MagicMock()
+        sess.post.return_value = _resp(200)
+        ok = _client(sess).send_message("C", "short body")
+        self.assertTrue(ok)
+        self.assertEqual(sess.post.call_count, 1)
+
+    def test_long_text_split_into_multiple_messages_each_within_limit(self):
+        sess = MagicMock()
+        sess.post.return_value = _resp(200)
+        text = "x" * 9000  # > 2 * 4096
+        ok = _client(sess).send_message("C", text)
+        self.assertTrue(ok)
+        sent = self._sent_texts(sess)
+        self.assertGreater(len(sent), 1)
+        for chunk in sent:
+            self.assertLessEqual(len(chunk), tc.TelegramClient._MAX_MESSAGE_CHARS)
+
+    def test_split_preserves_full_content_when_joined(self):
+        sess = MagicMock()
+        sess.post.return_value = _resp(200)
+        # multi-line body comfortably over one message
+        text = "\n".join(f"line {i} " + "y" * 50 for i in range(200))
+        _client(sess).send_message("C", text)
+        self.assertEqual("".join(self._sent_texts(sess)), text)
+
+    def test_split_prefers_newline_boundary(self):
+        sess = MagicMock()
+        sess.post.return_value = _resp(200)
+        limit = tc.TelegramClient._MAX_MESSAGE_CHARS
+        # a newline sits 10 chars under the limit, then a long unbroken tail.
+        head = "a" * (limit - 10)
+        text = head + "\n" + "b" * 200
+        _client(sess).send_message("C", text)
+        sent = self._sent_texts(sess)
+        # first chunk must end at the newline, not mid-run at the hard limit.
+        self.assertEqual(sent[0], head + "\n")
+        self.assertEqual(sent[1], "b" * 200)
+
+    def test_all_chunks_succeed_returns_true(self):
+        sess = MagicMock()
+        sess.post.return_value = _resp(200)
+        self.assertTrue(_client(sess).send_message("C", "z" * 9000))
+
+    def test_one_chunk_failure_returns_false(self):
+        sess = MagicMock()
+        # first chunk ok, second chunk permanent 400 → overall False
+        sess.post.side_effect = [_resp(200), _resp(400)]
+        self.assertFalse(_client(sess).send_message("C", "z" * 5000))
+
+    def test_each_chunk_carries_parse_mode(self):
+        sess = MagicMock()
+        sess.post.return_value = _resp(200)
+        _client(sess).send_message("C", "z" * 9000, parse_mode="Markdown")
+        for call in sess.post.call_args_list:
+            self.assertEqual(call.kwargs["json"]["parse_mode"], "Markdown")
+
+
 if __name__ == "__main__":
     unittest.main()

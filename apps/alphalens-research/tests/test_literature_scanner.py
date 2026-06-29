@@ -250,8 +250,32 @@ class TestRunnerOrchestration(unittest.TestCase):
         self.telegram_instance.send_message.assert_called_once()
         digest = self.telegram_instance.send_message.call_args.args[0]
         self.assertIn("2026-05", digest)
-        # Telegram digest should be terse — under 600 chars per spec
-        self.assertLess(len(digest), 600)
+        # Full digest — the entire scan body is delivered, not truncated.
+        # The client splits anything over Telegram's per-message ceiling.
+        self.assertIn(SAMPLE_MONTHLY_RESPONSE.strip(), digest)
+
+    def test_weekly_digest_is_not_truncated(self):
+        import tempfile
+
+        from alphalens_pipeline.literature_scanner.runner import run_weekly
+
+        # A realistic weekly scan runs well past the old 400-char weekly cap.
+        long_response = "# Weekly RSS — 2026-W26\n\n" + "\n".join(
+            f"{i}. Paper {i} — verdict SKIP (no retail edge)" for i in range(40)
+        )
+        self.client_instance.ask.return_value = long_response
+        with tempfile.TemporaryDirectory() as tmp:
+            run_weekly(
+                output_dir=Path(tmp),
+                perplexity_api_key="pplx-x",
+                telegram_bot_token="bot",
+                telegram_chat_id="chat",
+                period="2026-W26",
+            )
+        digest = self.telegram_instance.send_message.call_args.args[0]
+        # Nothing is dropped: the tail line and the full body both survive.
+        self.assertIn("39. Paper 39", digest)
+        self.assertIn(long_response.strip(), digest)
 
     def test_run_monthly_skips_telegram_when_chat_id_missing(self):
         import tempfile
