@@ -552,8 +552,8 @@ test.describe('smoke — brief detail interactions', () => {
 		// candidate cards must no longer render any <details>.
 		await expect(page.locator('article[id] details')).toHaveCount(0);
 		// Core structured sections render: domain blocks (valuation/momentum) + trade-
-		// execution setup panel. After Task 3 domain-regroup, the old "fundamentals"
-		// heading became "multiples" inside the valuation block.
+		// execution setup panel. The detail grids inside each domain block are split
+		// from the percentile bars by a quiet divider rule, not a text sub-heading.
 		await expect(
 			page.locator('article[id] [data-testid="block-valuation"]').first()
 		).toBeVisible();
