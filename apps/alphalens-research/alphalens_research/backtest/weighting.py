@@ -79,7 +79,7 @@ def weighted_return(returns: np.ndarray, weights: np.ndarray) -> float:
     valid_w = weights[mask]
     if valid_w.sum() == 0:
         return 0.0
-    # np.asarray(..., dtype=float) pins the element type on both operands so
+    # np.asarray(..., dtype=np.float64) pins the element type on both operands so
     # np.sum stays statically typed under numpy 2.5's stubs (untyped ndarray
     # arithmetic otherwise resolves to an unknown type in strict mode).
     ret = np.asarray(returns[mask], dtype=np.float64)
