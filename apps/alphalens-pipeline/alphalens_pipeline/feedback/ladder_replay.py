@@ -925,8 +925,6 @@ def replay_ladder_breakeven(
     *,
     mfe_trigger_r: float,
     trail_frac: float | None = None,
-    entry_expiry_ms: int | None = None,
-    position_expiry_ms: int | None = None,
 ) -> float | None:
     """What-if realized R under an MFE-triggered break-even / trailing stop.
 
@@ -945,6 +943,13 @@ def replay_ladder_breakeven(
     never mutates the setup and never touches the headline ``realized_r``.
     ``mfe_trigger_r = inf`` with ``trail_frac=None`` reduces to a static
     disaster-stop walk (baseline parity with :func:`replay_ladder`'s ``realized_r``).
+
+    Like :func:`_replay_ratchet`, this what-if honours NO entry-TTL / position
+    TIME_STOP — it terminates on SL / full-TP / horizon only. It therefore takes no
+    ``entry_expiry_ms`` / ``position_expiry_ms``: exposing them would invite a
+    biased what-if where the fill set (and ``filled_frac``) is determined under an
+    expiry the second walk's re-derivation ignores. Both walks here re-derive fills
+    without an expiry, so they stay internally consistent (zen review, PR #722).
     """
     ladder = parse_ladder(trade_setup)
     if not ladder.ok or not bars:
@@ -952,9 +957,9 @@ def replay_ladder_breakeven(
     ordered = sorted(bars, key=lambda b: int(b["t"]))
     stop = ladder.disaster_stop
     assert stop is not None  # ok=True guarantees it
-    walk = _LadderWalk(
-        ladder, stop, entry_expiry_ms=entry_expiry_ms, position_expiry_ms=position_expiry_ms
-    )
+    # No entry-TTL / time-stop in the what-if (see docstring): both walks re-derive
+    # fills without an expiry, keeping filled_frac and the second walk consistent.
+    walk = _LadderWalk(ladder, stop, entry_expiry_ms=None, position_expiry_ms=None)
     for bar in ordered:
         walk.step(bar)
     if not walk.filled:

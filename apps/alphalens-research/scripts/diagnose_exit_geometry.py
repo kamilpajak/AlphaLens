@@ -175,9 +175,16 @@ def main() -> None:
         variants["baseline(replayed)"].append(base)
         for label, trig, trail in _GRID:
             cf = replay_ladder_breakeven(setup, bars, mfe_trigger_r=trig, trail_frac=trail)
+            # When the what-if is undefined (None: no-fill / risk<=0) we substitute the
+            # stored baseline so the event is not dropped; this mixes a few unreachable
+            # outcomes into a variant's mean. Fine for exploration; a formal eval would
+            # carry a variant-specific n + an "undefined" count instead.
             variants[label].append(cf if cf is not None else base)
-            # Floor-interaction co-validation: did the policy turn a stored winner into
-            # a worse outcome? (It must not — break-even only arms above +0.5R MFE.)
+            # Floor-interaction co-validation: did the policy turn a stored winner into a
+            # worse outcome? For a PURE break-even (trail is None) this MUST be 0 — it
+            # only arms above the +0.5R MFE trigger, so it never cuts a not-yet-profitable
+            # position. A TRAILING variant CAN legitimately exit a winner earlier, so a
+            # positive count there is not a bug (matches the printed note below).
             if cf is not None and stored > 0 and cf < stored - 1e-9:
                 winners_changed[label] += 1
 
