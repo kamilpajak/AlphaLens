@@ -95,7 +95,7 @@
 			     inert. `group relative` anchors the popover to this span (mirrors
 			     JargonTip). -->
 			<span
-				class="group relative min-w-0 cursor-help hover:z-50 focus-within:z-50"
+				class="group relative min-w-0 hover:z-50 focus-within:z-50"
 				tabindex="0"
 				role="group"
 				onpointerdown={onPointerDown}
@@ -103,7 +103,7 @@
 				use:clampToViewport
 			>
 				<span
-					class="block truncate text-fg-muted underline decoration-dotted decoration-fg-muted underline-offset-2"
+					class="block truncate cursor-help text-fg-muted underline decoration-dotted decoration-fg-muted underline-offset-2"
 					>{label}</span
 				>
 				<TooltipBubble id={tooltipId}>
