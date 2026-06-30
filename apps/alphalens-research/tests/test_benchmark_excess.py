@@ -23,7 +23,9 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
+from alphalens_pipeline.feedback.bar_window import ARRIVAL_VWAP_WINDOW_MIN, _window_vwap
 from alphalens_pipeline.feedback.benchmark_excess import (
+    _HORIZON_SESSION_SPAN_MIN,
     BENCHMARK_COLUMNS,
     compute_market_excess_for_row,
     enrich_store_with_benchmark_excess,
@@ -239,6 +241,125 @@ class TestEnrichDeadline(unittest.TestCase):
         # THEN no fetch was issued and the function returned cleanly with 0
         self.assertEqual(calls, [])
         self.assertEqual(n, 0)
+
+
+class TestBenchmarkAnchorInvariants(unittest.TestCase):
+    """Pins the verified market_excess anchor invariants (NO anchor bug exists).
+
+    A false-alarm investigation back-solved an implied SPY reference from SPY's
+    DAILY cash close and concluded the benchmark leg was anchored one session
+    early. It is not: production anchors BOTH legs to the same arrival session
+    (``session_on_or_after`` -> ``session_open_utc`` -> arrival 30-min VWAP), and
+    the exit leg uses the LAST available minute bar (an after-hours print ~480 min
+    past the exit-session open), NOT the 16:00 ET cash close. These tests lock
+    those invariants so a future refactor cannot silently introduce the anchor
+    shift the scare implied.
+    """
+
+    _EXCHANGE = "XNYS"
+
+    @staticmethod
+    def _ms(d: dt.datetime) -> int:
+        return int(d.timestamp() * 1000)
+
+    def test_arrival_anchor_is_brief_date_open_when_holiday_inside_window(self) -> None:
+        # brief_date 2026-06-18 (Thu). Juneteenth 2026-06-19 (Fri) is a market
+        # holiday STRICTLY INSIDE the [arrival, exit] holding window — it must
+        # never pull the arrival anchor back to the prior session.
+        self.assertEqual(
+            session_on_or_after(dt.date(2026, 6, 18), self._EXCHANGE), dt.date(2026, 6, 18)
+        )
+        self.assertEqual(
+            session_open_utc(dt.date(2026, 6, 18), self._EXCHANGE),
+            dt.datetime(2026, 6, 18, 13, 30, tzinfo=UTC),
+        )
+        # Juneteenth itself is not a session -> rolls forward to Monday June 22.
+        self.assertEqual(
+            session_on_or_after(dt.date(2026, 6, 19), self._EXCHANGE), dt.date(2026, 6, 22)
+        )
+
+    def test_window_vwap_excludes_prior_session_and_post_window_bars(self) -> None:
+        # The arrival reference VWAP must use ONLY bars in [arrival_open, +30min):
+        # a prior-session (June-17) bar and a bar past the 30-min window are both
+        # rejected, so no June-17 / overnight price leaks into the SPY reference.
+        arrival_open = dt.datetime(2026, 6, 18, 13, 30, tzinfo=UTC)
+        end = arrival_open + dt.timedelta(minutes=ARRIVAL_VWAP_WINDOW_MIN)
+        bars = [
+            {"t": self._ms(dt.datetime(2026, 6, 17, 19, 0, tzinfo=UTC)), "c": 740.0, "v": 1000},
+            {"t": self._ms(arrival_open), "c": 747.0, "v": 1000},
+            {"t": self._ms(arrival_open + dt.timedelta(minutes=10)), "c": 745.0, "v": 1000},
+            {"t": self._ms(arrival_open + dt.timedelta(minutes=45)), "c": 760.0, "v": 1000},
+        ]
+        vwap = _window_vwap(bars, arrival_open, end)
+        # Mean of the two in-window closes (747, 745); never pulled to 740 or 760.
+        assert vwap is not None
+        self.assertAlmostEqual(vwap, 746.0, places=6)
+
+    def test_exit_leg_uses_last_minute_bar_not_intermediate_cash_close(self) -> None:
+        # The CRL/2026-06-18 case that triggered the false alarm. The exit leg must
+        # take the LAST bar (an after-hours print, 737.96 at June-24 21:30 UTC),
+        # NOT an earlier 16:00-ET cash-close bar (733.24). Using the cash close
+        # manufactures an implied ~740.7 (June-17-looking) reference.
+        arrival_open = session_open_utc(
+            session_on_or_after(dt.date(2026, 6, 18), self._EXCHANGE), self._EXCHANGE
+        )
+        seen_start: list[dt.datetime] = []
+
+        def _fetch(ticker, start, end):
+            seen_start.append(start)
+            self.assertEqual(ticker, "SPY")
+            return [
+                {"t": self._ms(arrival_open), "c": 745.4737, "v": 1000},  # arrival 30-min VWAP
+                {
+                    "t": self._ms(dt.datetime(2026, 6, 24, 20, 0, tzinfo=UTC)),
+                    "c": 733.24,
+                    "v": 1000,
+                },
+                {
+                    "t": self._ms(dt.datetime(2026, 6, 24, 21, 30, tzinfo=UTC)),
+                    "c": 737.96,
+                    "v": 1000,
+                },
+            ]
+
+        row = {
+            "brief_date": dt.date(2026, 6, 18),
+            "ticker": "CRL",
+            "terminal": True,
+            "matured_at": dt.date(2026, 6, 24),
+            "forward_return": 0.104290606614145,  # CRL/06-18 stored value
+        }
+        bench, excess = compute_market_excess_for_row(
+            row,
+            bar_fetch=_fetch,
+            last_closed_session=dt.date(2026, 6, 30),
+            exchange=self._EXCHANGE,
+        )
+        # The SPY fetch anchored to the June-18 arrival open (NOT June-17).
+        self.assertEqual(seen_start[0], dt.datetime(2026, 6, 18, 13, 30, tzinfo=UTC))
+        assert bench is not None and excess is not None
+        # Benchmark uses the LAST bar (737.96), not the cash-close bar (733.24).
+        self.assertAlmostEqual(bench, (737.96 - 745.4737) / 745.4737, places=6)
+        # Reproduces the stored CRL/06-18 market_excess (~+11.44%) — the +0.8pp
+        # "understatement" the daily-close back-out reported does not exist.
+        self.assertAlmostEqual(excess, 0.11436972113938475, places=4)
+
+    def test_window_span_constants(self) -> None:
+        # The two moving parts of the anchor convention; a silent change to either
+        # is exactly what would shift the metric.
+        self.assertEqual(ARRIVAL_VWAP_WINDOW_MIN, 30)
+        self.assertEqual(_HORIZON_SESSION_SPAN_MIN, 480)
+
+    def test_mid_week_and_post_holiday_arrivals_anchor_to_their_own_open(self) -> None:
+        # No-regression: a plain mid-week arrival (Thu June-11) and the session
+        # immediately AFTER a holiday (Mon June-22, after Juneteenth) both anchor
+        # to their own session open at 13:30 UTC.
+        for d in (dt.date(2026, 6, 11), dt.date(2026, 6, 22)):
+            self.assertEqual(session_on_or_after(d, self._EXCHANGE), d)
+            self.assertEqual(
+                session_open_utc(d, self._EXCHANGE),
+                dt.datetime(d.year, d.month, d.day, 13, 30, tzinfo=UTC),
+            )
 
 
 if __name__ == "__main__":

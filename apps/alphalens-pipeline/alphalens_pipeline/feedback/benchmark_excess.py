@@ -27,8 +27,15 @@ For every row that carries a non-null ``forward_return`` and a recoverable
 
 * ``benchmark_window_return`` — the market index (SPY) raw close-to-close return
   over the SAME window, computed with the SAME arrival-window-VWAP reference
-  anchor and horizon-end last-close as ``forward_return`` (see
-  :func:`alphalens_pipeline.feedback.ladder_replay._forward_return`).
+  anchor and exit print as ``forward_return`` (see
+  :func:`alphalens_pipeline.feedback.ladder_replay._forward_return`). The exit
+  print is the LAST AVAILABLE MINUTE BAR, not the 16:00 ET cash close: the window
+  runs ``_HORIZON_SESSION_SPAN_MIN`` (480) minutes past the exit-session open and
+  Polygon minute aggs include after-hours, so the last bar is typically an
+  ~21:30 UTC after-hours print. This convention is applied SYMMETRICALLY to both
+  legs, so it cancels in ``market_excess_return`` and never biases the excess —
+  a naive daily-close back-out of the SPY reference will look one session early,
+  but production does not use the daily close.
 * ``market_excess_return`` — ``forward_return − benchmark_window_return``.
 
 Rows whose window is not recoverable, or whose benchmark fetch returns no bars,
