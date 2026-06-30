@@ -17,6 +17,7 @@ from alphalens_pipeline.feedback.ladder_replay import (
     parse_ladder,
     realized_r_full_fill,
     replay_ladder,
+    replay_ladder_breakeven,
     replay_ladder_grid,
 )
 
@@ -377,6 +378,85 @@ class TestRatchetPass(unittest.TestCase):
         # static: blended=100, risk=5. TP1 share 0.5 -> +0.5*(105-100)/5 = +0.5.
         # remainder 0.5 at SL(95) -> 0.5*(95-100)/5 = -0.5. realized_r = 0.0.
         self.assertAlmostEqual(outcome.realized_r, 0.0, places=4)
+
+
+class TestBreakevenPass(unittest.TestCase):
+    """MFE-triggered break-even / trailing what-if (exit-geometry diagnosis).
+
+    Distinct from the TP-hit ratchet: the stop moves to break-even once the
+    running in-trade MFE crosses ``mfe_trigger_r`` R — which fires for losers that
+    peak ~+0.6R before reversing to the full -1R, where the TP-hit ratchet never
+    triggers. Pure what-if: never touches the headline ``realized_r``.
+    """
+
+    def test_breakeven_rescues_loser_that_reached_trigger(self):
+        # E1=100, stop=90 (risk=10). Price fills, peaks +0.6R (high=106), then
+        # falls back to entry and crashes to the stop. Static replay = full -1R;
+        # the +0.5R break-even stop exits the remainder at break-even = 0R.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(200.0, 100.0)], stop=90.0)
+        bars = [
+            _bar(1, low=99.0, high=101.0, close=100.0),  # fill E1(100)
+            _bar(2, low=103.0, high=106.0, close=105.0),  # MFE +0.6R -> BE stop -> 100
+            _bar(3, low=99.0, high=102.0, close=100.0),  # dips to 99: BE(100) exits at 0R
+            _bar(4, low=89.0, high=95.0, close=90.0),  # static SL(90) -> -1R
+        ]
+        baseline = replay_ladder(setup, bars).realized_r
+        be = replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5)
+        self.assertAlmostEqual(baseline, -1.0, places=4)
+        self.assertAlmostEqual(be, 0.0, places=4)
+        self.assertGreater(be, baseline)
+
+    def test_no_rescue_when_trigger_not_reached(self):
+        # Same path but the peak is only +0.4R (high=104) < 0.5R trigger, so the
+        # break-even stop never arms and the trade takes the full -1R like static.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(200.0, 100.0)], stop=90.0)
+        bars = [
+            _bar(1, low=99.0, high=101.0, close=100.0),
+            _bar(2, low=103.0, high=104.0, close=103.5),  # MFE +0.4R < trigger
+            _bar(3, low=99.0, high=102.0, close=100.0),
+            _bar(4, low=89.0, high=95.0, close=90.0),
+        ]
+        baseline = replay_ladder(setup, bars).realized_r
+        be = replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5)
+        self.assertAlmostEqual(baseline, -1.0, places=4)
+        self.assertAlmostEqual(be, -1.0, places=4)
+
+    def test_baseline_parity_when_trigger_unreachable(self):
+        # mfe_trigger_r=inf, no trail -> a pure static-disaster-stop walk, which
+        # must reproduce the headline realized_r on a clean fill->TP1->SL path.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(105.0, 50.0), (110.0, 50.0)], stop=95.0)
+        bars = [
+            _bar(1, low=99.0, high=101.0, close=100.0),
+            _bar(2, low=100.0, high=105.0, close=104.0),  # TP1
+            _bar(3, low=94.0, high=99.0, close=96.0),  # SL on remainder
+        ]
+        headline = replay_ladder(setup, bars).realized_r
+        be = replay_ladder_breakeven(setup, bars, mfe_trigger_r=float("inf"))
+        self.assertAlmostEqual(be, headline, places=6)
+
+    def test_trail_captures_fraction_of_peak(self):
+        # Winner runs to +2R (high=120) then pulls back. With trail_frac=0.6 the
+        # stop trails to blended + 0.6*(120-100) = 112, locking in +1.2R.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(300.0, 100.0)], stop=90.0)
+        bars = [
+            _bar(1, low=99.0, high=101.0, close=100.0),  # fill
+            _bar(2, low=109.0, high=120.0, close=118.0),  # +2R peak -> trail -> 112
+            _bar(3, low=111.0, high=115.0, close=112.0),  # dips to 111 <= 112 -> exit +1.2R
+        ]
+        be = replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5, trail_frac=0.6)
+        self.assertAlmostEqual(be, 1.2, places=4)
+
+    def test_no_fill_returns_none(self):
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(200.0, 100.0)], stop=90.0)
+        bars = [_bar(1, low=101.0, high=105.0, close=103.0)]  # never touches 100
+        self.assertIsNone(replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5))
+
+    def test_unparseable_or_no_bars_returns_none(self):
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(200.0, 100.0)], stop=90.0)
+        self.assertIsNone(
+            replay_ladder_breakeven(None, [_bar(1, 99.0, 101.0, 100.0)], mfe_trigger_r=0.5)
+        )
+        self.assertIsNone(replay_ladder_breakeven(setup, [], mfe_trigger_r=0.5))
 
 
 class TestTimeAwareness(unittest.TestCase):
