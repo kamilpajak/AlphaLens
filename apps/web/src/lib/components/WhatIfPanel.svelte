@@ -22,6 +22,12 @@
 	// The realized R headline (de-emphasised) the what-if is compared against —
 	// always shown beside the what-if so the two are never confused.
 	const realizedR = $derived(summary.edge.gross_realized_r_mean);
+
+	// Drive the banner emphasis off the SELECTED lens's status (client registry),
+	// not a hard-coded string: an in_sample lens warns "in-sample · not validated";
+	// once a lens graduates to validated the banner softens to "validated forward"
+	// instead of falsely warning. Every lens stays a COUNTERFACTUAL either way.
+	const activeStatus = $derived(selected?.status ?? 'in_sample');
 </script>
 
 {#if hasWhatif(wf)}
@@ -43,10 +49,14 @@
 				<AlertTriangle class="mt-0.5 size-3.5 shrink-0 text-violet" />
 				<p>
 					<span class="text-violet font-bold uppercase tracking-widest text-[10px]">
-						what-if · in-sample · not validated
+						{activeStatus === 'validated'
+							? 'what-if · validated forward'
+							: 'what-if · in-sample · not validated'}
 					</span>
 					— realized R recomputed under an alternative exit-stop on the
-					<span class="whitespace-nowrap">SAME picks</span>; tuned on this sample, so optimistic.
+					<span class="whitespace-nowrap">SAME picks</span>{activeStatus === 'validated'
+						? ''
+						: '; tuned on this sample, so optimistic'}.
 					<span class="font-bold">Never the realized result</span> — the panels above are what the tool
 					actually emitted.
 				</p>
