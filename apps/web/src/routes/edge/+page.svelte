@@ -273,6 +273,26 @@
 					</div>
 				{:else}
 					<!--
+						Suggested risk per name is the one honestly-rescalable per-name geometry
+						(each member multiplies by their own capital), so it stays visible — but
+						it lives HERE (gated with the sizing model) rather than in the deployment
+						panel, which is N-independent / live from day one.
+					-->
+					<div
+						class="flex items-center justify-between text-[10px] uppercase tracking-widest text-fg-muted mb-3"
+					>
+						<span>
+							<JargonTip
+								term={SIZING_MODEL_RISK_LABEL}
+								body="Average risk-at-stop per trade as a percent of a 1% per-name budget (independent member sizing): position size × distance from blended entry to the disaster stop. Equal-weighted across the matured population, not a portfolio aggregate."
+								formula="mean_risk">{SIZING_MODEL_RISK_LABEL}</JargonTip
+							>
+						</span>
+						<span class="text-fg-dim font-bold normal-case whitespace-nowrap">
+							{fmtFracPct(summary.portfolio.mean_realized_risk_pct, 2, false)}
+						</span>
+					</div>
+					<!--
 						Demoted out of headline status: the size-weighted / book aggregations
 						assume one shared capital book that does not exist (ADR 0012 vestige).
 						Collapsed into a <details> drawer and rendered small + muted so they no
@@ -354,19 +374,6 @@
 						</span>
 						<span class="text-fg-dim font-bold normal-case whitespace-nowrap">
 							{fmtNum(summary.deployment.mean_tiers_filled_count, 1)}
-						</span>
-					</div>
-					<div class="flex items-center justify-between">
-						<span class="text-fg-muted">
-							<JargonTip
-								term={SIZING_MODEL_RISK_LABEL}
-								body="Average risk-at-stop per trade as a percent of a 1% per-name budget (independent member sizing): position size × distance from blended entry to the disaster stop. Equal-weighted across the matured population, not a portfolio aggregate."
-								formula="mean_risk"
-								>{SIZING_MODEL_RISK_LABEL}</JargonTip
-							>
-						</span>
-						<span class="text-fg-dim font-bold normal-case whitespace-nowrap">
-							{fmtFracPct(summary.portfolio.mean_realized_risk_pct, 2, false)}
 						</span>
 					</div>
 					<div class="border-t border-grid pt-2 text-fg-muted whitespace-nowrap">
