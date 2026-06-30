@@ -919,6 +919,117 @@ def _replay_ratchet(
     return contrib
 
 
+def replay_ladder_breakeven(
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    mfe_trigger_r: float,
+    trail_frac: float | None = None,
+    entry_expiry_ms: int | None = None,
+    position_expiry_ms: int | None = None,
+) -> float | None:
+    """What-if realized R under an MFE-triggered break-even / trailing stop.
+
+    Distinct from :func:`_replay_ratchet` (which raises the stop only on a TP-target
+    HIT): this pass raises the effective stop to the blended entry (break-even) once
+    the running in-trade MFE first reaches ``mfe_trigger_r`` R. That threshold fires
+    far more often than a TP target, because losers in this book peak around +0.6R
+    MFE before reversing to the full -1R disaster stop (the exit-geometry diagnosis,
+    ``docs/research/exit_geometry_reward_risk_2026_06_30.md``). When ``trail_frac`` is
+    set, once triggered the effective stop trails at
+    ``blended + trail_frac * (peak_high - blended)`` — locking in a fraction of the
+    best price reached (a winner-trailing runner).
+
+    Returns realized R (fill-anchored, like ``realized_r``) or ``None`` when the
+    setup is unparseable, no bars are given, nothing filled, or risk <= 0. Pure: it
+    never mutates the setup and never touches the headline ``realized_r``.
+    ``mfe_trigger_r = inf`` with ``trail_frac=None`` reduces to a static
+    disaster-stop walk (baseline parity with :func:`replay_ladder`'s ``realized_r``).
+    """
+    ladder = parse_ladder(trade_setup)
+    if not ladder.ok or not bars:
+        return None
+    ordered = sorted(bars, key=lambda b: int(b["t"]))
+    stop = ladder.disaster_stop
+    assert stop is not None  # ok=True guarantees it
+    walk = _LadderWalk(
+        ladder, stop, entry_expiry_ms=entry_expiry_ms, position_expiry_ms=position_expiry_ms
+    )
+    for bar in ordered:
+        walk.step(bar)
+    if not walk.filled:
+        return None
+    blended = _blended_entry(walk.filled)
+    risk = blended - stop
+    if risk <= 0:
+        return None
+    filled_frac = _filled_frac(ladder, walk.filled)
+    return _replay_breakeven(
+        ladder, ordered, blended, risk, stop, filled_frac, mfe_trigger_r, trail_frac
+    )
+
+
+def _replay_breakeven(
+    ladder: _ParsedLadder,
+    ordered_bars: Sequence[Mapping[str, Any]],
+    blended: float,
+    risk: float,
+    stop: float,
+    filled_frac: float,
+    mfe_trigger_r: float,
+    trail_frac: float | None,
+) -> float:
+    """Second walk with an MFE-triggered break-even / trailing effective stop.
+
+    Mirrors :func:`_replay_ratchet`'s self-contained re-derivation (SL-first on
+    ambiguity, same filled-frac re-basing of TP shares) but swaps the TP-hit ratchet
+    for an MFE-R-threshold break-even (optionally trailing). The running MFE is
+    measured against the FINAL ``blended`` (same anchor as the stored ``mfe``). The
+    position TIME_STOP is intentionally NOT applied — the what-if terminates on
+    SL / full-TP / horizon only, matching the ratchet pass.
+    """
+    eff_stop = stop
+    hit_tp_ids: set[str] = set()
+    sl_hit = False
+    last_close: float | None = None
+    filled_ids: set[str] = set()
+    peak_high: float | None = None
+    triggered = False
+    for bar in ordered_bars:
+        _ts, low, high, close = _bar_lhc(bar)
+        last_close = close
+        _fill_entry_ids(ladder, filled_ids, low)
+        if not filled_ids:
+            continue
+        # SL-first on ambiguity: a pierce of the (possibly ratcheted) stop ends the
+        # walk before any new TP / break-even raise recorded on the SAME bar.
+        if low <= eff_stop:
+            sl_hit = True
+            break
+        for t in ladder.tps:
+            if t.level_id not in hit_tp_ids and high >= t.price:
+                hit_tp_ids.add(t.level_id)
+        if peak_high is None or high > peak_high:
+            peak_high = high
+        if (peak_high - blended) / risk >= mfe_trigger_r:
+            triggered = True
+        if triggered:
+            eff_stop = max(eff_stop, _breakeven_eff_stop(blended, peak_high, trail_frac))
+        if len(hit_tp_ids) == len(ladder.tps):
+            break  # fully scaled out
+    contrib, _open = _realized_r_with_frac(
+        ladder, hit_tp_ids, blended, eff_stop, risk, sl_hit, last_close, filled_frac
+    )
+    return contrib
+
+
+def _breakeven_eff_stop(blended: float, peak_high: float, trail_frac: float | None) -> float:
+    """Break-even (``blended``), or a trailing lock-in at ``trail_frac`` of the peak gain."""
+    if trail_frac is None:
+        return blended
+    return max(blended, blended + trail_frac * (peak_high - blended))
+
+
 def _classify(
     any_tp: bool, sl_hit: bool, all_tp: bool, horizon_open: bool, time_stop: bool = False
 ) -> str:
