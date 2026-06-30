@@ -242,7 +242,7 @@ export const paradigms: Paradigm[] = [
 		hypothesis: 'canonical post-announcement [PEAD] with PSS + [NW HAC] + invested-days regression on S&P 500 [PIT] clears [Bonferroni correction|Bonferroni] 3.5.',
 		mechanism: 'runpod cpu3c pod EUR-IS-1, ~$0.08 spend, ~20 min wall; 4-window doctrine audit (full / [IS] / [OOS] / [FL] x 5-cost grid), `audit-verdict` applies the 3.5 / 2.5 / per-phase>0 / net-15bps / AV-PIT bars in code.',
 		metric: 'doctrine FAIL — full-sample net [αt] 0.15 (G1<3.5); phase-mean 0.07 (G2<2.5); per-window net [αt] 0.00 / 0.44 / -0.23 ([IS]/[OOS]/[FL], G3 fails on negative [FL]); net-15bps <0 every window (G4). AV-PIT only PASS. Excess net +3.6% / +5.0% / +6.4%.',
-		lesson: 'large-cap [PEAD] effectively dead since ~2006 — vindicates the literature, not the signal. All four launch gates + the in-code doctrine bar landed first, so a methodology-inflated marginal t could not be mistaken for a PASS. Class `event_drift_search_2026_05_03` closed.',
+		lesson: 'large-cap PEAD effectively dead since ~2006 — vindicates the literature, not the signal. All four launch gates + the in-code doctrine bar landed first, so a methodology-inflated marginal t could not be mistaken for a PASS. Class `event_drift_search_2026_05_03` closed.',
 		evidence: 'paradigm14_pead_v2_design_2026_05_13.md',
 		is_t: 0, oos_t: 0.44
 	},
