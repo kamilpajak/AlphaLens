@@ -302,12 +302,16 @@ for (const term of alwaysTerms) {
 function wordPatternFor(term) {
 	// Build a regex that matches `term` as a whole token. For `αt` use literal
 	// (Greek + ASCII boundary); for ASCII tokens use word boundaries.
+	// The boundary classes include `-` so an acronym embedded in a hyphenated
+	// identifier (e.g. `IS` inside the RunPod region code `EUR-IS-1`, or `FL`
+	// inside `IN-FLIGHT`) is NOT mistaken for a bare jargon occurrence — those
+	// are tokens, not the standalone term that policy asks authors to wrap.
 	const esc = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	if (/^[A-Za-z][A-Za-z0-9]*$/.test(term)) {
-		return new RegExp(`(?<![A-Za-z0-9_])${esc}(?![A-Za-z0-9_])`, 'g');
+		return new RegExp(`(?<![A-Za-z0-9_-])${esc}(?![A-Za-z0-9_-])`, 'g');
 	}
 	// αt and similar: rely on negative lookarounds for letters
-	return new RegExp(`(?<![A-Za-z\\[])${esc}(?![A-Za-z\\]])`, 'g');
+	return new RegExp(`(?<![A-Za-z\\[-])${esc}(?![A-Za-z\\]-])`, 'g');
 }
 
 // ---------- Definition drift ----------
