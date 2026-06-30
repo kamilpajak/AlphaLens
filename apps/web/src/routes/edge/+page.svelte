@@ -10,11 +10,16 @@
 	import { getEdgeChart } from '$lib/api';
 	import { fmtNum } from '$lib/format';
 	import {
+		BOOK_CONTRIBUTION_TIP,
 		classificationTone,
 		EXCESS_RETURN_BAR_DOMAIN,
 		excessBarGeometry,
 		fmtFracPct,
 		fmtR,
+		SIZE_WEIGHTED_R_TIP,
+		SIZING_MODEL_DISCLAIMER,
+		SIZING_MODEL_PANEL_TITLE,
+		SIZING_MODEL_RISK_LABEL,
 		statsUnlocked,
 		toneClasses
 	} from '$lib/edge';
@@ -246,10 +251,16 @@
 				data-testid="portfolio-panel"
 			>
 				<div class="flex items-center justify-between gap-2 mb-3">
-					<div class="text-[10px] uppercase tracking-widest text-cyan">// portfolio (size-wtd)</div>
+					<div class="text-[10px] uppercase tracking-widest text-cyan">
+						{SIZING_MODEL_PANEL_TITLE}
+					</div>
 					{#if !statsUnlocked(summary.portfolio.status)}
 						<Lock class="size-3 text-fg-muted" />
 					{/if}
+				</div>
+
+				<div class="text-[10px] text-fg-dim italic leading-snug mt-2 mb-3">
+					{SIZING_MODEL_DISCLAIMER}
 				</div>
 
 				{#if !statsUnlocked(summary.portfolio.status)}
@@ -261,48 +272,64 @@
 						<span class="text-sm text-fg-muted">(&lt; {summary.portfolio.threshold})</span>
 					</div>
 				{:else}
-					<div class="grid grid-cols-1 gap-y-3 text-[10px] uppercase tracking-widest">
-						<div>
-							<div class="text-fg-muted">
-								<JargonTip
-									term="size-weighted R"
-									body="Realized R weighted by each trade's risk-as-percent-of-book — what the population's edge looks like once position sizing is folded in, rather than equal-weighting every name."
-									>size-weighted R</JargonTip
-								>
-							</div>
-							<div class="text-fg text-xl font-bold normal-case whitespace-nowrap">
-								{fmtR(summary.portfolio.size_weighted_realized_r)}
-							</div>
-						</div>
-						<div>
-							<div class="text-fg-muted">
-								<JargonTip
-									term="book contribution"
-									body="Sum of every matured trade's realized return as a percent of the whole book — the aggregate P&L contribution of the surfaced population. Gross of cost."
-									>book contribution</JargonTip
-								>
-							</div>
-							<div class="text-fg text-lg font-bold normal-case whitespace-nowrap">
-								{fmtFracPct(summary.portfolio.total_realized_contribution_pct_of_book, 2)}
-							</div>
-						</div>
-						<div class="flex items-center justify-between text-fg-muted">
-							<span>
-								<JargonTip
-									term="mean risk%"
-									body="Average risk-at-stop per trade as a percent of the book: position size × distance from blended entry to the disaster stop."
-									formula="mean_risk"
-									>mean risk%</JargonTip
-								>
-								<span class="text-fg-dim font-bold normal-case whitespace-nowrap">
-									{fmtFracPct(summary.portfolio.mean_realized_risk_pct, 2, false)}
-								</span>
-							</span>
-							<span class="whitespace-nowrap">
-								tiers x̄ {fmtNum(summary.portfolio.mean_tiers_filled_count, 1)}
-							</span>
-						</div>
+					<!--
+						Suggested risk per name is the one honestly-rescalable per-name geometry
+						(each member multiplies by their own capital), so it stays visible — but
+						it lives HERE (gated with the sizing model) rather than in the deployment
+						panel, which is N-independent / live from day one.
+					-->
+					<div
+						class="flex items-center justify-between text-[10px] uppercase tracking-widest text-fg-muted mb-3"
+					>
+						<span>
+							<JargonTip
+								term={SIZING_MODEL_RISK_LABEL}
+								body="Average risk-at-stop per trade as a percent of a 1% per-name budget (independent member sizing): position size × distance from blended entry to the disaster stop. Equal-weighted across the matured population, not a portfolio aggregate."
+								formula="mean_risk">{SIZING_MODEL_RISK_LABEL}</JargonTip
+							>
+						</span>
+						<span class="text-fg-dim font-bold normal-case whitespace-nowrap">
+							{fmtFracPct(summary.portfolio.mean_realized_risk_pct, 2, false)}
+						</span>
 					</div>
+					<!--
+						Demoted out of headline status: the size-weighted / book aggregations
+						assume one shared capital book that does not exist (ADR 0012 vestige).
+						Collapsed into a <details> drawer and rendered small + muted so they no
+						longer read as a co-equal portfolio truth beside the EDGE panel.
+					-->
+					<details class="group">
+						<summary
+							class="cursor-pointer list-none text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-dim select-none"
+						>
+							<ChevronRight
+								class="inline-block size-3 align-middle transition-transform group-open:rotate-90"
+							/>
+							illustrative sizing geometry
+						</summary>
+						<div class="grid grid-cols-1 gap-y-3 text-[10px] uppercase tracking-widest mt-3">
+							<div class="flex items-center justify-between text-fg-muted">
+								<span>
+									<JargonTip term="size-weighted R" body={SIZE_WEIGHTED_R_TIP}
+										>size-weighted R</JargonTip
+									>
+								</span>
+								<span class="text-sm text-fg-muted normal-case whitespace-nowrap">
+									{fmtR(summary.portfolio.size_weighted_realized_r)}
+								</span>
+							</div>
+							<div class="flex items-center justify-between text-fg-muted">
+								<span>
+									<JargonTip term="book contribution" body={BOOK_CONTRIBUTION_TIP}
+										>book contribution</JargonTip
+									>
+								</span>
+								<span class="text-sm text-fg-muted normal-case whitespace-nowrap">
+									{fmtFracPct(summary.portfolio.total_realized_contribution_pct_of_book, 2)}
+								</span>
+							</div>
+						</div>
+					</details>
 				{/if}
 			</section>
 

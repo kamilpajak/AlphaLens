@@ -125,6 +125,31 @@ export function fmtFracPct(
 	return fmtPct(value * 100, digits, withSign);
 }
 
+/**
+ * Copy for the single-book "sizing model" panel (formerly "// portfolio
+ * (size-wtd)"). The size-weighted-R / book-contribution aggregations assume one
+ * shared capital book that does NOT exist for this decision-support tool — each
+ * WhatsApp-group member sizes independently, budget is effectively unlimited.
+ * The size/book model is a vestige of the decommissioned Alpaca paper-trade
+ * chain (ADR 0012). These strings are surfaced as the panel title / disclaimer /
+ * tooltips so the metrics read as illustrative sizing geometry, not portfolio
+ * truth. The real, capital-free portfolio lens (equal-weight benchmark-excess)
+ * is the separate EDGE panel. Pinned by tests/unit/edge.test.ts so the copy
+ * cannot silently drift back to the misleading "portfolio" framing.
+ */
+export const SIZING_MODEL_PANEL_TITLE = '// sizing model (single-book, illustrative)';
+
+export const SIZING_MODEL_DISCLAIMER =
+	'These aggregations assume a single shared capital book. Each member sizes independently — treat as illustrative sizing geometry only, not your portfolio.';
+
+export const SIZING_MODEL_RISK_LABEL = 'suggested risk per name (1% budget)';
+
+export const SIZE_WEIGHTED_R_TIP =
+	"Realized R weighted by each trade's risk under a single fixed capital book (a relic of the decommissioned paper-trade model). Each group member sizes independently, so this assumes a shared pool that does not exist. Illustrative only.";
+
+export const BOOK_CONTRIBUTION_TIP =
+	"Sum of every matured trade's realized return as a percent of a single fixed capital book (a relic of the decommissioned paper-trade model). Each group member sizes independently, so this assumes a shared pool that does not exist. Gross of cost; illustrative only.";
+
 /** Human label for the N-gate status used in panel chrome. */
 export function statusLabel(status: EdgeStatus): string {
 	if (status === 'insufficient') return 'insufficient data';
