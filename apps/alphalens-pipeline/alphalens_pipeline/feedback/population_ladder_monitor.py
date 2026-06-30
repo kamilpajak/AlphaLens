@@ -2478,12 +2478,11 @@ class _PopulationAccumulator:
         self.realized: list[float] = []
         self.open_marks: list[float] = []
         self.holding_days: list[float] = []
-        # Size layer: ``contributions`` sums portfolio P&L as % of book; the
-        # risk-weighted mean R weights each trade by the capital-at-risk deployed.
-        self.contributions: list[float] = []
+        # Size layer: per-name risk geometry only. The portfolio-level
+        # shared-book aggregates (summed contribution, risk-weighted mean R) were
+        # removed — each member sizes independently, so a single shared capital
+        # book never existed for this tool (ADR 0012).
         self.realized_risk_pcts: list[float] = []
-        self.risk_weighted_r_num = 0.0  # Σ realized_r × realized_risk_pct
-        self.risk_weighted_r_den = 0.0  # Σ realized_risk_pct
         self.tiers_filled: list[float] = []
 
     def add_row(self, row: Any) -> None:
@@ -2506,15 +2505,9 @@ class _PopulationAccumulator:
         hd = _finite(row.get("holding_days_elapsed"))
         if hd is not None:
             self.holding_days.append(hd)
-        contrib = _finite(row.get("realized_return_pct_of_book"))
-        if contrib is not None:
-            self.contributions.append(contrib)
         risk = _finite(row.get("realized_risk_pct"))
         if risk is not None:
             self.realized_risk_pcts.append(risk)
-            if rv is not None:
-                self.risk_weighted_r_num += rv * risk
-                self.risk_weighted_r_den += risk
         tfc = _finite(row.get("tiers_filled_count"))
         if tfc is not None:
             self.tiers_filled.append(tfc)
@@ -2533,14 +2526,8 @@ class _PopulationAccumulator:
             "holding_days_p95": _percentile(self.holding_days, 95.0),
             "regime_stratified": False,
             # ---- Size / portfolio layer (additive, NOT the edge) — terminal only.
-            "total_realized_contribution_pct_of_book": (
-                sum(self.contributions) if self.contributions else None
-            ),
-            "size_weighted_realized_r": (
-                self.risk_weighted_r_num / self.risk_weighted_r_den
-                if self.risk_weighted_r_den > 0
-                else None
-            ),
+            # Only per-name risk geometry is reported; the shared-book aggregates
+            # were removed (no single capital book exists for this tool, ADR 0012).
             "mean_realized_risk_pct": _mean(self.realized_risk_pcts),
             "mean_tiers_filled_count": _mean(self.tiers_filled),
         }

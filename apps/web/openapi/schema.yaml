@@ -1486,7 +1486,11 @@ components:
               example: 0
     PortfolioPanel:
       type: object
-      description: The PORTFOLIO (size-weighted) panel — gated, same N-gate as EDGE.
+      description: |-
+        The PORTFOLIO (per-name size) panel — gated, same N-gate as EDGE.
+
+        Reports per-name risk geometry only; the shared-book aggregates were removed
+        (no single capital book exists for this tool, ADR 0012).
       properties:
         status:
           $ref: '#/components/schemas/Status3b9Enum'
@@ -1494,14 +1498,6 @@ components:
           type: integer
         threshold:
           type: integer
-        total_realized_contribution_pct_of_book:
-          type: number
-          format: double
-          nullable: true
-        size_weighted_realized_r:
-          type: number
-          format: double
-          nullable: true
         mean_realized_risk_pct:
           type: number
           format: double
@@ -1517,10 +1513,8 @@ components:
       - mean_realized_risk_pct
       - mean_tiers_filled_count
       - n_matured
-      - size_weighted_realized_r
       - status
       - threshold
-      - total_realized_contribution_pct_of_book
     Stats:
       type: object
       description: Top-line counters and most-frequent themes for ``/v1/stats``.

@@ -280,13 +280,11 @@ export interface EdgePanel {
 	regime_stratified: boolean;
 }
 
-/** The size-weighted PORTFOLIO panel (§ additive size layer). N-gated. */
+/** The per-name PORTFOLIO size panel (§ additive size layer). N-gated. */
 export interface PortfolioPanel {
 	status: EdgeStatus;
 	n_matured: number;
 	threshold: number;
-	total_realized_contribution_pct_of_book: number | null;
-	size_weighted_realized_r: number | null;
 	mean_realized_risk_pct: number | null;
 	mean_tiers_filled_count: number | null;
 	gross_of_cost: boolean;

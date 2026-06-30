@@ -1,14 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
-	BOOK_CONTRIBUTION_TIP,
 	classificationTone,
 	EXCESS_RETURN_BAR_DOMAIN,
 	excessBarGeometry,
 	fmtFracPct,
 	fmtR,
-	SIZE_WEIGHTED_R_TIP,
-	SIZING_MODEL_DISCLAIMER,
-	SIZING_MODEL_PANEL_TITLE,
 	SIZING_MODEL_RISK_LABEL,
 	statsUnlocked,
 	statusLabel,
@@ -190,33 +186,13 @@ describe('statsUnlocked / statusLabel', () => {
 	});
 });
 
-describe('sizing-model panel copy (single-book / illustrative framing)', () => {
-	// The former "// portfolio (size-wtd)" panel mislabelled size-weighted /
-	// book aggregations as a portfolio truth. They assume one shared capital
-	// book that does NOT exist for this decision-support tool (a vestige of the
-	// decommissioned paper-trade chain, ADR 0012). These pins keep the copy from
-	// drifting back to the misleading "portfolio" framing.
-	it('titles the panel as an illustrative single-book sizing model', () => {
-		expect(SIZING_MODEL_PANEL_TITLE).toBe('// sizing model (single-book, illustrative)');
-	});
-
-	it('carries the shared-book disclaimer verbatim', () => {
-		expect(SIZING_MODEL_DISCLAIMER).toBe(
-			'These aggregations assume a single shared capital book. Each member sizes independently — treat as illustrative sizing geometry only, not your portfolio.'
-		);
-	});
-
+describe('per-name sizing panel copy', () => {
+	// The shared-book aggregates (size-weighted R, book contribution) were removed
+	// — they assumed one shared capital book that does NOT exist for this
+	// decision-support tool (a vestige of the decommissioned paper-trade chain,
+	// ADR 0012). Only the per-name suggested risk remains.
 	it('relabels mean-risk as a per-name suggestion against a 1% budget', () => {
 		expect(SIZING_MODEL_RISK_LABEL).toBe('suggested risk per name (1% budget)');
-	});
-
-	it('flags the size-weighted-R + book-contribution tooltips as a non-existent shared pool', () => {
-		for (const tip of [SIZE_WEIGHTED_R_TIP, BOOK_CONTRIBUTION_TIP]) {
-			expect(tip).toContain('single fixed capital book');
-			expect(tip).toContain('decommissioned paper-trade model');
-			expect(tip).toContain('does not exist');
-			expect(tip.toLowerCase()).toContain('illustrative');
-		}
 	});
 });
 

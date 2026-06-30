@@ -104,11 +104,11 @@ class _Accumulator:
     excess: list[float] = field(default_factory=list)  # market_excess_return (HEADLINE)
     realized_r: list[float] = field(default_factory=list)  # gross/risk-norm (de-emphasised)
     holding_days: list[float] = field(default_factory=list)
-    # Portfolio / size layer (terminal only).
-    contributions: list[float] = field(default_factory=list)
+    # Portfolio / size layer (terminal only) — per-name risk geometry only. The
+    # shared-book aggregates (summed contribution, risk-weighted mean R) were
+    # removed: each member sizes independently, so no single capital book exists
+    # for this tool (ADR 0012).
     realized_risk_pcts: list[float] = field(default_factory=list)
-    risk_weighted_r_num: float = 0.0
-    risk_weighted_r_den: float = 0.0
     tiers_filled: list[float] = field(default_factory=list)
     # Deployment (N-independent) — over the whole plannable population.
     n_filled: int = 0
@@ -138,15 +138,9 @@ def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
     hd = _finite(row.get("holding_days_elapsed"))
     if hd is not None:
         acc.holding_days.append(hd)
-    contrib = _finite(row.get("realized_return_pct_of_book"))
-    if contrib is not None:
-        acc.contributions.append(contrib)
     risk = _finite(row.get("realized_risk_pct"))
     if risk is not None:
         acc.realized_risk_pcts.append(risk)
-        if rv is not None:
-            acc.risk_weighted_r_num += rv * risk
-            acc.risk_weighted_r_den += risk
     tfc = _finite(row.get("tiers_filled_count"))
     if tfc is not None:
         acc.tiers_filled.append(tfc)
@@ -221,17 +215,17 @@ def _build_edge(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, Any
 
 
 def _build_portfolio(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, Any]:
-    """Portfolio / size panel — stable keys; statistic fields nulled when gated."""
-    total_contribution = sum(acc.contributions) if acc.contributions else None
-    size_weighted_r = (
-        acc.risk_weighted_r_num / acc.risk_weighted_r_den if acc.risk_weighted_r_den > 0 else None
-    )
+    """Portfolio / size panel — per-name risk geometry only.
+
+    The shared-book aggregates (summed contribution, risk-weighted mean R) were
+    removed: each member sizes independently, so a single shared capital book
+    never existed for this tool (ADR 0012). Only the per-name suggested risk and
+    tiers-filled remain. Statistic fields are nulled when gated.
+    """
     return {
         "status": status,
         "n_matured": len(acc.excess),
         "threshold": N_GATE_THRESHOLD,
-        "total_realized_contribution_pct_of_book": None if gated else total_contribution,
-        "size_weighted_realized_r": None if gated else size_weighted_r,
         "mean_realized_risk_pct": None if gated else _mean(acc.realized_risk_pcts),
         "mean_tiers_filled_count": None if gated else _mean(acc.tiers_filled),
         "gross_of_cost": True,

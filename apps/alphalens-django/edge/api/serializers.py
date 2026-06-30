@@ -73,13 +73,15 @@ class EdgePanelSerializer(serializers.Serializer):
 
 
 class PortfolioPanelSerializer(serializers.Serializer):
-    """The PORTFOLIO (size-weighted) panel — gated, same N-gate as EDGE."""
+    """The PORTFOLIO (per-name size) panel — gated, same N-gate as EDGE.
+
+    Reports per-name risk geometry only; the shared-book aggregates were removed
+    (no single capital book exists for this tool, ADR 0012).
+    """
 
     status = serializers.ChoiceField(choices=["insufficient", "early", "ok"])
     n_matured = serializers.IntegerField()
     threshold = serializers.IntegerField()
-    total_realized_contribution_pct_of_book = serializers.FloatField(allow_null=True)
-    size_weighted_realized_r = serializers.FloatField(allow_null=True)
     mean_realized_risk_pct = serializers.FloatField(allow_null=True)
     mean_tiers_filled_count = serializers.FloatField(allow_null=True)
     gross_of_cost = serializers.BooleanField()
