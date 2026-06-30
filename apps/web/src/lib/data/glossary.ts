@@ -388,6 +388,13 @@ export const GLOSSARY: GlossaryEntry[] = [
 		pages: ['briefs']
 	},
 	{
+		term: 'earnings YoY',
+		full: 'year-over-year earnings growth',
+		body: "Most recent reported earnings vs the year-ago period, as a percent change. O'Neil's earnings-growth check — accelerating year-over-year earnings is a core momentum-quality signal. From the O'Neil lens.",
+		category: 'first-per-section',
+		pages: ['briefs']
+	},
+	{
 		term: 'MA50',
 		full: '50-day moving average',
 		formula: 'ma50_dist',

@@ -1,3 +1,11 @@
+<script module lang="ts">
+	// Module-level counter for hydration-stable tooltip ids — same rationale as
+	// JargonTip: adapter-static prerenders then the client re-instantiates in
+	// the same order, so the deterministic counter keeps SSR and hydrated
+	// `id` / `aria-describedby` linkages in agreement.
+	let __signalBarTipIdCounter = 0;
+</script>
+
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import { clampToViewport } from '$lib/actions/clampToViewport';
@@ -39,9 +47,22 @@
 		subValue
 	}: Props = $props();
 
-	// A bubble shows when either body form is supplied; the trigger affordances
-	// (cursor-help, focusability) follow the same condition.
+	// A bubble shows when either body form is supplied. The trigger is the LABEL
+	// itself (the dotted-underlined name) — NOT the whole bar row — so the
+	// tooltip only opens on the name a reader would hover, not on the bar track.
 	const hasTooltip = $derived(Boolean(tooltip || tooltipRich));
+
+	// Per-instance id linking the focusable label trigger to its tooltip body
+	// via aria-describedby (mirrors JargonTip; module counter ⇒ SSR/hydration
+	// stable).
+	const tooltipId = `signal-bar-tip-${__signalBarTipIdCounter++}`;
+
+	// Touch-device support: tapping focuses the label so the popover's
+	// `group-focus-within:opacity-100` reveals it (iOS/Android don't fire :hover
+	// on tap). Mirrors JargonTip.
+	function onPointerDown(e: PointerEvent) {
+		(e.currentTarget as HTMLElement).focus();
+	}
 
 	const pct = $derived(
 		value === null || value === undefined || !Number.isFinite(value)
@@ -66,20 +87,33 @@
 	});
 </script>
 
-<div
-	data-testid="signal-bar"
-	class="group relative text-[10px] uppercase tracking-widest hover:z-50 focus-within:z-50"
-	class:cursor-help={hasTooltip}
-	tabindex={hasTooltip ? 0 : undefined}
-	role={hasTooltip ? 'group' : undefined}
-	use:clampToViewport
->
+<div data-testid="signal-bar" class="text-[10px] uppercase tracking-widest">
 	<div class="flex items-center justify-between mb-1.5 gap-2">
-		<span
-			class="text-fg-muted truncate {hasTooltip
-				? 'underline decoration-dotted decoration-fg-muted underline-offset-2'
-				: ''}">{label}</span
-		>
+		{#if hasTooltip}
+			<!-- Tooltip trigger scoped to the label only: hovering/focusing the
+			     dotted-underlined name opens the bubble; the bar track below is
+			     inert. `group relative` anchors the popover to this span (mirrors
+			     JargonTip). -->
+			<span
+				class="group relative min-w-0 hover:z-50 focus-within:z-50"
+				tabindex="0"
+				role="group"
+				onpointerdown={onPointerDown}
+				aria-describedby={tooltipId}
+				use:clampToViewport
+			>
+				<span
+					class="block truncate cursor-help text-fg-muted underline decoration-dotted decoration-fg-muted underline-offset-2"
+					>{label}</span
+				>
+				<TooltipBubble id={tooltipId}>
+					{#snippet header()}{label}{/snippet}
+					{#if tooltipRich}{@render tooltipRich()}{:else}<span class="block">{tooltip}</span>{/if}
+				</TooltipBubble>
+			</span>
+		{:else}
+			<span class="text-fg-muted truncate">{label}</span>
+		{/if}
 		<span class="flex items-baseline gap-2 whitespace-nowrap">
 			{#if subValue}
 				<span class="text-fg-dim">{subValue}</span>
@@ -93,7 +127,7 @@
 			>{display}</span>
 		</span>
 	</div>
-	<div class="h-1.5 bg-bg-3 relative overflow-hidden">
+	<div data-testid="signal-bar-track" class="h-1.5 bg-bg-3 relative overflow-hidden">
 		<div
 			class="absolute inset-y-0 left-0"
 			class:bg-green={tone === 'green'}
@@ -103,11 +137,4 @@
 			style="width: {pct}%"
 		></div>
 	</div>
-
-	{#if hasTooltip}
-		<TooltipBubble>
-			{#snippet header()}{label}{/snippet}
-			{#if tooltipRich}{@render tooltipRich()}{:else}<span class="block">{tooltip}</span>{/if}
-		</TooltipBubble>
-	{/if}
 </div>

@@ -8,12 +8,13 @@
 
 	type SignalBarProps = ComponentProps<typeof SignalBar>;
 
-	// Force the bubble open for visual review + assertion. The bar wrapper is
-	// `tabindex=0` only when a tooltip is present, and focusing it drives
+	// Force the bubble open for visual review + assertion. The tooltip trigger
+	// is the label span (role="group", tabindex=0 when a tooltip is present) —
+	// NOT the whole bar row — and focusing it drives
 	// `group-focus-within:opacity-100` on TooltipBubble — deterministic under
 	// headless capture, unlike :hover.
 	const openOnMount = async ({ canvas }: { canvas: any }) => {
-		canvas.getByTestId('signal-bar').focus();
+		canvas.getByRole('group').focus();
 	};
 
 	const { Story } = defineMeta({
@@ -49,7 +50,7 @@
 			'Cluster-buy percentile vs all S&P 1500 issuers over the trailing 90 days. Higher = more unusual recent insider buying.'
 	}}
 	play={async ({ canvas }: { canvas: any }) => {
-		canvas.getByTestId('signal-bar').focus();
+		canvas.getByRole('group').focus();
 		await waitFor(() =>
 			expect(canvas.getByText(/Cluster-buy percentile/)).toBeVisible()
 		);
@@ -116,7 +117,7 @@
 <Story
 	name="Rich tooltip (MetricGrid, forced)"
 	play={async ({ canvas }: { canvas: any }) => {
-		canvas.getByTestId('signal-bar').focus();
+		canvas.getByRole('group').focus();
 		await waitFor(() => expect(canvas.getByText('oversold')).toBeVisible());
 	}}
 >
@@ -161,7 +162,7 @@
 <Story
 	name="Rich tooltip (BulletList, forced)"
 	play={async ({ canvas }: { canvas: any }) => {
-		canvas.getByTestId('signal-bar').focus();
+		canvas.getByRole('group').focus();
 		await waitFor(() => expect(canvas.getByText('EV / Revenue')).toBeVisible());
 	}}
 >
