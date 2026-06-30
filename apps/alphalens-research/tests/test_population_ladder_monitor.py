@@ -26,9 +26,11 @@ from pathlib import Path
 import pandas as pd
 from alphalens_pipeline.feedback.ladder_replay import GRID_CONFIGS, replay_ladder
 from alphalens_pipeline.feedback.population_ladder_monitor import (
+    _CHART_PAYLOAD_COLUMN,
     _SPLIT_SCREEN_THRESHOLD,
     _TOUCH_EPS,
     MONITOR_LOOKBACK_DAYS,
+    _carried_chart,
     _carry_prior,
     _cheap_open_r,
     _coerce_session,
@@ -37,6 +39,7 @@ from alphalens_pipeline.feedback.population_ladder_monitor import (
     _screen_decision,
     _stamp_scorer_version,
     _stamp_theme,
+    _terminal_row,
     replay_population_ladders,
     summarize_population_ladders,
 )
@@ -802,6 +805,201 @@ class TestCarryForward(_MonitorTestBase):
         self.assertTrue(
             row["ladder_classification"] is None or pd.isna(row["ladder_classification"])
         )
+
+
+class TestChartColumnLiteralParity(unittest.TestCase):
+    def test_monitor_chart_column_literal_matches_ladder_chart(self):
+        # The monitor keeps a LOCAL literal (monitor <-> ladder_chart is a genuine
+        # bidirectional lazy-import cycle, so it cannot import the constant). Pin it
+        # to the canonical source so the duplicate cannot silently drift — same
+        # duplicate-with-parity precedent as _DEFAULT_SMOKE_TIMEOUT_S.
+        from alphalens_pipeline.feedback.ladder_chart import CHART_PAYLOAD_COLUMN
+
+        self.assertEqual(_CHART_PAYLOAD_COLUMN, CHART_PAYLOAD_COLUMN)
+
+
+class TestCarriedChartHelper(_MonitorTestBase):
+    """``_carried_chart`` returns a prior row's chart payload ONLY when it is a real
+    non-empty JSON string, coercing the on-disk blank (pandas float-NaN), the empty
+    string, and a missing/None prior to ``None``."""
+
+    def test_returns_string_when_prior_has_nonempty_chart(self):
+        chart = '{"status": "OK", "bars": [], "markers": []}'
+        self.assertEqual(_carried_chart({_CHART_PAYLOAD_COLUMN: chart}), chart)
+
+    def test_coerces_empty_and_none_and_missing_to_none(self):
+        self.assertIsNone(_carried_chart({_CHART_PAYLOAD_COLUMN: ""}))
+        self.assertIsNone(_carried_chart({_CHART_PAYLOAD_COLUMN: "   "}))
+        self.assertIsNone(_carried_chart({_CHART_PAYLOAD_COLUMN: None}))
+        self.assertIsNone(_carried_chart({}))
+        self.assertIsNone(_carried_chart(None))
+
+    def test_coerces_real_on_disk_nan_sentinel_to_none(self):
+        # A blank chart column round-tripped through parquet surfaces as a float NaN,
+        # NOT None — assert the guard catches the sentinel that actually lands on disk.
+        path = self.store_dir
+        path.mkdir(parents=True, exist_ok=True)
+        pq = path / "nan_probe.parquet"
+        pd.DataFrame(
+            [
+                {"ticker": "A", _CHART_PAYLOAD_COLUMN: '{"status": "OK"}'},
+                {"ticker": "B", _CHART_PAYLOAD_COLUMN: None},
+            ]
+        ).to_parquet(pq)
+        back = pd.read_parquet(pq).set_index("ticker")
+        nan_cell = back.loc["B", _CHART_PAYLOAD_COLUMN]
+        self.assertTrue(pd.isna(nan_cell), "precondition: blank cell is a NaN sentinel")
+        self.assertIsNone(_carried_chart({_CHART_PAYLOAD_COLUMN: nan_cell}))
+
+
+class TestChartPayloadCarryForward(_MonitorTestBase):
+    """The nightly resolve rebuilds an ongoing row from scratch via ``_terminal_row``,
+    which historically dropped ``chart_payload_json``; when the shared chart-enrich
+    deadline was starved (a Polygon 429 storm) the freshly-blanked column persisted
+    and /edge served NO_DATA. The resolve seam must carry the prior row's last-good
+    chart forward — mirroring the ``_carry_prior`` idiom that already keeps terminal
+    charts — so a starved deadline can no longer blank an open position's chart."""
+
+    _CHART = '{"status": "OK", "bars": [{"time": "2026-05-02"}], "markers": []}'
+
+    # A two-tranche-TP setup: one bar fills E1 (low<=100) and hits TP1 (>=105) but
+    # not TP2 (130) and not the stop (90) -> PARTIAL_TP_OPEN. A PARTIAL_TP_OPEN prior
+    # ALWAYS re-resolves via the minute path (never the cheap daily screen), so the
+    # rebuild deterministically goes through the resolve seam under test.
+    _PARTIAL_SETUP = {
+        "status": "OK",
+        "schema_version": "1.0.0",
+        "suggested_size_pct": 2.0,
+        "disaster_stop": 90.0,
+        "atr": 2.0,
+        "order_ttl_days": 7,
+        "entry_tiers": [{"limit": 100.0, "alloc_pct": 100.0}],
+        "tp_tranches": [
+            {"target": 105.0, "tranche_pct": 50.0},
+            {"target": 130.0, "tranche_pct": 50.0},
+        ],
+    }
+
+    @staticmethod
+    def _fetch_partial(ticker, start, end):
+        base = int(start.timestamp() * 1000)
+        # Fill E1 (low<=100) + hit TP1 (high>=105), miss TP2 (130) and stop (90).
+        return [{"t": base, "o": 100.0, "h": 106.0, "l": 99.0, "c": 104.0, "v": 1000.0}]
+
+    def _seed_partial_open_with_chart(self, brief_date, now):
+        _write_brief(
+            self.briefs_dir, brief_date, [{"ticker": "NVDA", "setup": self._PARTIAL_SETUP}]
+        )
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=self._fetch_partial,
+            grouped_fetch=lambda _date: {},
+            now=now,
+        )
+        df = self._read_store(brief_date)
+        seeded = df.set_index("ticker").loc["NVDA"]
+        self.assertEqual(seeded["ladder_classification"], "PARTIAL_TP_OPEN")
+        self.assertFalse(bool(seeded["terminal"]))
+        # Simulate the separate chart-enrich pass having populated the column.
+        df[_CHART_PAYLOAD_COLUMN] = self._CHART
+        df.to_parquet(self.store_dir / f"{brief_date.isoformat()}.parquet")
+
+    def _build_ongoing_outcome(self):
+        # A real OPEN outcome: E1 (limit 100) fills on low<=100, no TP(110)/SL(95).
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, "XNYS")
+        arrival = cutoffs[0]
+        base = int(session_open_utc(arrival, "XNYS").timestamp() * 1000)
+        bars = [{"t": base, "o": 100.0, "h": 103.0, "l": 99.0, "c": 102.0, "v": 1000.0}]
+        outcome = replay_ladder(
+            _OK_SETUP, bars, entry_expiry_ms=cutoffs[5], position_expiry_ms=cutoffs[6]
+        )
+        return brief_date, cutoffs, outcome
+
+    def test_terminal_row_carries_prior_chart_payload_string(self):
+        # Unit: the resolve seam stamps the carried chart on the rebuilt ongoing row.
+        brief_date, cutoffs, outcome = self._build_ongoing_outcome()
+        row = _terminal_row(
+            brief_date,
+            "NVDA",
+            _OK_SETUP,
+            outcome,
+            cutoffs,
+            dt.date(2026, 5, 15),
+            prior_chart_payload=self._CHART,
+        )
+        self.assertFalse(row["terminal"], "precondition: ongoing row")
+        self.assertEqual(row[_CHART_PAYLOAD_COLUMN], self._CHART)
+
+    def test_terminal_row_brand_new_chart_payload_is_none(self):
+        # Unit: a brand-new row (no prior to carry) gets an explicit-None chart, not
+        # a KeyError / missing key.
+        brief_date, cutoffs, outcome = self._build_ongoing_outcome()
+        row = _terminal_row(
+            brief_date,
+            "NVDA",
+            _OK_SETUP,
+            outcome,
+            cutoffs,
+            dt.date(2026, 5, 15),
+            prior_chart_payload=None,
+        )
+        self.assertIn(_CHART_PAYLOAD_COLUMN, row)
+        self.assertIsNone(row[_CHART_PAYLOAD_COLUMN])
+
+    def test_resolve_ongoing_row_preserves_prior_chart_payload(self):
+        # Integration (the live CNS 2026-06-25 failure mode): a PARTIAL_TP_OPEN row
+        # gets a chart populated by the separate enrich pass; a later night
+        # re-resolves it (still PARTIAL_TP_OPEN) with NO enrich pass in between. The
+        # rewritten row must keep the chart instead of serving NO_DATA.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)  # < 42 sessions -> stays open
+        self._seed_partial_open_with_chart(brief_date, now)
+
+        # Run 2: a PARTIAL_TP_OPEN prior ALWAYS re-resolves via the minute path, so
+        # this rebuilds the row through the resolve seam (no enrich pass between).
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=self._fetch_partial,
+            grouped_fetch=lambda _date: {},
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertEqual(row["ladder_classification"], "PARTIAL_TP_OPEN", "precondition")
+        self.assertFalse(bool(row["terminal"]), "precondition: still open")
+        self.assertEqual(row[_CHART_PAYLOAD_COLUMN], self._CHART)
+
+    def test_resolve_to_terminal_carries_prior_chart_payload(self):
+        # A resolve that turns the row TERMINAL on a starved night still carries the
+        # prior chart (better than NO_DATA; the enrich pass upgrades it when it runs).
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 5, 15, 7, 0, tzinfo=UTC)
+        self._seed_partial_open_with_chart(brief_date, now)
+
+        def _fetch_stop(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            minute = 60_000
+            return [
+                {"t": base, "o": 100.0, "h": 106.0, "l": 99.0, "c": 104.0, "v": 1000.0},
+                # Next bar breaks the disaster stop (low <= 90) -> terminal.
+                {"t": base + minute, "o": 100.0, "h": 100.0, "l": 89.0, "c": 90.0, "v": 1000.0},
+            ]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch_stop,
+            grouped_fetch=lambda _date: {},
+            now=now,
+        )
+        row = self._read_store(brief_date).set_index("ticker").loc["NVDA"]
+        self.assertTrue(bool(row["terminal"]), "precondition: resolved terminal")
+        self.assertEqual(row[_CHART_PAYLOAD_COLUMN], self._CHART)
 
 
 class TestIncrementalCache(_MonitorTestBase):

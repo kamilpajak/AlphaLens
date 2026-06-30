@@ -221,6 +221,16 @@ _SCREEN_COLUMNS = (
     "reference_close",
 )
 
+# The pre-computed /edge ladder-chart projection column, owned + written by the
+# separate ``ladder_chart.enrich_store_with_chart_payloads`` pass. Duplicated as a
+# LOCAL literal (NOT imported) because ``population_ladder_monitor`` <-> ``ladder_chart``
+# is a genuine bidirectional lazy-import cycle; parity to the canonical
+# ``ladder_chart.CHART_PAYLOAD_COLUMN`` is pinned by a test (same duplicate-with-parity
+# precedent as ``_DEFAULT_SMOKE_TIMEOUT_S``). The monitor never builds a payload; it
+# only CARRIES a prior row's last-good chart across a resolve rewrite so a
+# deadline-starved enrich pass cannot blank an ongoing position's chart.
+_CHART_PAYLOAD_COLUMN = "chart_payload_json"
+
 # The load-bearing replay-config stamp (PR-1). Like the size/screen columns, a
 # carried OLD-format row predating it is back-filled to None so the schema stays
 # stable; the next successful replay repopulates it.
@@ -780,6 +790,7 @@ def _terminal_row(
     reference_close: float | None = None,
     grid_realized_r: dict[str, float | None] | None = None,
     realized_r_full: float | None = None,
+    prior_chart_payload: str | None = None,
 ) -> dict[str, Any]:
     """Build a monitor store row from a replay outcome (terminal or ongoing).
 
@@ -849,6 +860,13 @@ def _terminal_row(
         "last_resolved_session": last_resolved_session,
         "reference_close": reference_close,
     }
+    # Carry the prior row's last-good /edge chart across this rewrite (None for a
+    # brand-new row with nothing to carry). The resolve path rebuilds the row from
+    # scratch and would otherwise drop the column written by the separate enrich
+    # pass; a deadline-starved enrich pass could then never repopulate it, leaving
+    # an ongoing position's chart blank. The enrich pass still UPGRADES the carried
+    # payload whenever it runs.
+    row[_CHART_PAYLOAD_COLUMN] = prior_chart_payload
     row.update(_size_fields(setup, outcome, realized_r=realized_r, open_r=open_r))
     return row
 
@@ -992,6 +1010,23 @@ def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
     ):
         carried.setdefault(col, None)
     return carried
+
+
+def _carried_chart(prior: dict[str, Any] | None) -> str | None:
+    """The prior row's last-good chart payload to carry across a resolve rewrite.
+
+    Returns the prior ``chart_payload_json`` ONLY when it is a real, non-empty JSON
+    string; the on-disk blank surfaces as a pandas float-NaN (NOT ``None``) and an
+    enrich-skipped row can hold an empty string — both coerce to ``None`` so a
+    rebuilt ongoing row is born either carrying a usable chart or honestly blank,
+    never carrying a NaN sentinel.
+    """
+    if not prior:
+        return None
+    value = prior.get(_CHART_PAYLOAD_COLUMN)
+    if isinstance(value, str) and value.strip():
+        return value
+    return None
 
 
 def _stamp_theme(row: dict[str, Any], theme: str | None) -> dict[str, Any]:
@@ -2003,6 +2038,7 @@ def _resolve_queue(
             reference_close=result.reference_close,
             grid_realized_r=result.grid_realized_r,
             realized_r_full=result.realized_r_full,
+            prior_chart_payload=_carried_chart(item.prior),
         )
         rows_by_ticker[ticker] = _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
         counts["terminal" if row["terminal"] else "ongoing"] += 1
