@@ -147,6 +147,14 @@ describe('fmtFracPct', () => {
 		expect(fmtFracPct(0, 2)).toBe('+0.00%');
 	});
 
+	it('renders a whole-percent rate unsigned (hit-rate: 0 → 0%, not — / +0%)', () => {
+		// The EDGE-panel hit-rate cell uses fmtFracPct(rate, 0, false): a 0% hit
+		// rate is a real, meaningful value and must render as "0%", never hidden.
+		expect(fmtFracPct(0, 0, false)).toBe('0%');
+		expect(fmtFracPct(0.6944, 0, false)).toBe('69%');
+		expect(fmtFracPct(1, 0, false)).toBe('100%');
+	});
+
 	it('renders an em dash for null / undefined / non-finite', () => {
 		expect(fmtFracPct(null)).toBe('—');
 		expect(fmtFracPct(undefined)).toBe('—');
