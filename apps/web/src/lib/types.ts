@@ -308,6 +308,27 @@ export interface OpenPositionsPanel {
 	note: string;
 }
 
+/** One break-even lens's gated R aggregate (keyed by `lens_id` in the panel map).
+ *  `mean_r` / `median_r` are null below the N-gate; `n` (fill-coverage) survives. */
+export interface WhatIfLens {
+	n: number;
+	mean_r: number | null;
+	median_r: number | null;
+}
+
+/** The WHAT-IF panel — DISPLAY-ONLY, in-sample counterfactual exit-stop lenses.
+ *  Never the realized result; the realized panels stay the default view. Lens labels
+ *  + in_sample/validated status live client-side (see `$lib/edgeWhatif`); the map is
+ *  keyed by `lens_id` only. N-gated exactly like the EDGE panel. */
+export interface WhatIfPanel {
+	status: EdgeStatus;
+	n_matured: number;
+	threshold: number;
+	in_sample: boolean;
+	note: string;
+	lenses: Record<string, WhatIfLens>;
+}
+
 export interface EdgeSummary {
 	n_brief: number;
 	n_plannable: number;
@@ -318,6 +339,7 @@ export interface EdgeSummary {
 	metric_note: string;
 	edge: EdgePanel;
 	portfolio: PortfolioPanel;
+	whatif: WhatIfPanel;
 	deployment: DeploymentPanel;
 	open_positions: OpenPositionsPanel;
 }

@@ -642,6 +642,7 @@ export interface components {
             metric_note: string;
             edge: components["schemas"]["EdgePanel"];
             portfolio: components["schemas"]["PortfolioPanel"];
+            whatif: components["schemas"]["WhatIfPanel"];
             deployment: components["schemas"]["DeploymentPanel"];
             open_positions: components["schemas"]["OpenPositions"];
         };
@@ -745,6 +746,36 @@ export interface components {
             theme: string;
             n_days: number;
             n_candidates: number;
+        };
+        /**
+         * @description One break-even lens's gated R aggregate (keyed by lens_id in the parent map).
+         *
+         *     ``mean_r`` / ``median_r`` are null below the N-gate; ``n`` survives so the UI can
+         *     show coverage.
+         */
+        WhatIfLens: {
+            n: number;
+            /** Format: double */
+            mean_r: number | null;
+            /** Format: double */
+            median_r: number | null;
+        };
+        /**
+         * @description The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit-stop lenses.
+         *
+         *     Gated like EDGE. The realized headline is never touched by this block. The lens
+         *     registry (labels + ``in_sample``/``validated`` status) lives client-side, so the
+         *     ``lenses`` map is keyed by ``lens_id`` only.
+         */
+        WhatIfPanel: {
+            status: components["schemas"]["Status3b9Enum"];
+            n_matured: number;
+            threshold: number;
+            in_sample: boolean;
+            note: string;
+            lenses: {
+                [key: string]: components["schemas"]["WhatIfLens"];
+            };
         };
         _Quantiles: {
             /** Format: double */
