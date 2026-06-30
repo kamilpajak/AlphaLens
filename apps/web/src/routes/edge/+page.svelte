@@ -6,6 +6,7 @@
 	import ChipTip from '$lib/components/ChipTip.svelte';
 	import LadderChart from '$lib/components/LadderChart.svelte';
 	import LadderStatusLegend from '$lib/components/LadderStatusLegend.svelte';
+	import WhatIfPanel from '$lib/components/WhatIfPanel.svelte';
 	import { isPendingStatus, ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
 	import { getEdgeChart } from '$lib/api';
 	import { fmtNum } from '$lib/format';
@@ -353,6 +354,11 @@
 				</div>
 			</section>
 		</div>
+
+		<!-- WHAT-IF sandbox — display-only, in-sample counterfactual exit-stop lenses.
+		     Collapsed by default; the realized panels above stay the production view.
+		     Never a primary KPI card. -->
+		<WhatIfPanel {summary} />
 
 		<!-- OPEN POSITIONS — descriptive only (§3.3). Never a mean open_R. -->
 		<section class="mb-6 fade-up" data-testid="open-positions">

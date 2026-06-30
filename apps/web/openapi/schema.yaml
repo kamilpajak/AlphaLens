@@ -1348,6 +1348,8 @@ components:
           $ref: '#/components/schemas/EdgePanel'
         portfolio:
           $ref: '#/components/schemas/PortfolioPanel'
+        whatif:
+          $ref: '#/components/schemas/WhatIfPanel'
         deployment:
           $ref: '#/components/schemas/DeploymentPanel'
         open_positions:
@@ -1364,6 +1366,7 @@ components:
       - n_terminal
       - open_positions
       - portfolio
+      - whatif
     MarketStatus:
       type: object
       properties:
@@ -1594,6 +1597,58 @@ components:
       - n_candidates
       - n_days
       - theme
+    WhatIfLens:
+      type: object
+      description: |-
+        One break-even lens's gated R aggregate (keyed by lens_id in the parent map).
+
+        ``mean_r`` / ``median_r`` are null below the N-gate; ``n`` survives so the UI can
+        show coverage.
+      properties:
+        n:
+          type: integer
+        mean_r:
+          type: number
+          format: double
+          nullable: true
+        median_r:
+          type: number
+          format: double
+          nullable: true
+      required:
+      - mean_r
+      - median_r
+      - n
+    WhatIfPanel:
+      type: object
+      description: |-
+        The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit-stop lenses.
+
+        Gated like EDGE. The realized headline is never touched by this block. The lens
+        registry (labels + ``in_sample``/``validated`` status) lives client-side, so the
+        ``lenses`` map is keyed by ``lens_id`` only.
+      properties:
+        status:
+          $ref: '#/components/schemas/Status3b9Enum'
+        n_matured:
+          type: integer
+        threshold:
+          type: integer
+        in_sample:
+          type: boolean
+        note:
+          type: string
+        lenses:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/WhatIfLens'
+      required:
+      - in_sample
+      - lenses
+      - n_matured
+      - note
+      - status
+      - threshold
     _Quantiles:
       type: object
       properties:

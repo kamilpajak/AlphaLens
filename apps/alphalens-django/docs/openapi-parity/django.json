@@ -1823,6 +1823,9 @@
                     "portfolio": {
                         "$ref": "#/components/schemas/PortfolioPanel"
                     },
+                    "whatif": {
+                        "$ref": "#/components/schemas/WhatIfPanel"
+                    },
                     "deployment": {
                         "$ref": "#/components/schemas/DeploymentPanel"
                     },
@@ -1841,7 +1844,8 @@
                     "n_plannable",
                     "n_terminal",
                     "open_positions",
-                    "portfolio"
+                    "portfolio",
+                    "whatif"
                 ]
             },
             "MarketStatus": {
@@ -2149,6 +2153,65 @@
                     "n_candidates",
                     "n_days",
                     "theme"
+                ]
+            },
+            "WhatIfLens": {
+                "type": "object",
+                "description": "One break-even lens's gated R aggregate (keyed by lens_id in the parent map).\n\n``mean_r`` / ``median_r`` are null below the N-gate; ``n`` survives so the UI can\nshow coverage.",
+                "properties": {
+                    "n": {
+                        "type": "integer"
+                    },
+                    "mean_r": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "median_r": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "mean_r",
+                    "median_r",
+                    "n"
+                ]
+            },
+            "WhatIfPanel": {
+                "type": "object",
+                "description": "The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit-stop lenses.\n\nGated like EDGE. The realized headline is never touched by this block. The lens\nregistry (labels + ``in_sample``/``validated`` status) lives client-side, so the\n``lenses`` map is keyed by ``lens_id`` only.",
+                "properties": {
+                    "status": {
+                        "$ref": "#/components/schemas/Status3b9Enum"
+                    },
+                    "n_matured": {
+                        "type": "integer"
+                    },
+                    "threshold": {
+                        "type": "integer"
+                    },
+                    "in_sample": {
+                        "type": "boolean"
+                    },
+                    "note": {
+                        "type": "string"
+                    },
+                    "lenses": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "$ref": "#/components/schemas/WhatIfLens"
+                        }
+                    }
+                },
+                "required": [
+                    "in_sample",
+                    "lenses",
+                    "n_matured",
+                    "note",
+                    "status",
+                    "threshold"
                 ]
             },
             "_Quantiles": {

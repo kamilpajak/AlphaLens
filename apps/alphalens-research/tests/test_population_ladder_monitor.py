@@ -24,6 +24,7 @@ import unittest
 from pathlib import Path
 
 import pandas as pd
+from alphalens_pipeline.feedback.breakeven_lenses import BREAKEVEN_LENSES
 from alphalens_pipeline.feedback.ladder_replay import GRID_CONFIGS, replay_ladder
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     _CHART_PAYLOAD_COLUMN,
@@ -230,6 +231,39 @@ class TestGridRealizedRStamp(_MonitorTestBase):
         # Non-plannable was never replayed -> no grid (None -> NaN in the column).
         xyz_grid = df.loc["XYZ", "grid_realized_r_json"]
         self.assertTrue(pd.isna(xyz_grid) or xyz_grid in (None, ""))
+
+    def test_resolved_plannable_row_carries_breakeven_whatif_json(self):
+        # GIVEN a resolved plannable candidate. THEN the row carries a
+        # breakeven_realized_r_json map keyed by every registered break-even lens
+        # (display-only what-if); the non-plannable row carries none.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [
+                {"ticker": "NVDA", "setup": _OK_SETUP},
+                {"ticker": "XYZ", "setup": _NO_STRUCTURE_SETUP},
+            ],
+        )
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0}]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        df = self._read_store(brief_date).set_index("ticker")
+        self.assertIn("breakeven_realized_r_json", df.columns)
+        grid = json.loads(str(df.loc["NVDA", "breakeven_realized_r_json"]))
+        self.assertEqual(set(grid), {lens.lens_id for lens in BREAKEVEN_LENSES})
+        xyz = df.loc["XYZ", "breakeven_realized_r_json"]
+        self.assertTrue(pd.isna(xyz) or xyz in (None, ""))
 
     def test_resolved_plannable_row_carries_entry_counterfactual(self):
         # The entry-side counterfactual (realized_r_full_fill) is stamped on a

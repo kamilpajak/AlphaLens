@@ -22,6 +22,7 @@ The DEPLOYMENT block (fill-rate, mean tiers filled, NO_FILL %) is N-INDEPENDENT
 
 from __future__ import annotations
 
+import json
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -90,6 +91,24 @@ def _is_truthy(value: Any) -> bool:
     return bool(value) and value is not None
 
 
+def _breakeven_map(row: dict[str, Any]) -> dict[str, Any]:
+    """Parse a row's ``breakeven_realized_r_json`` into ``{lens_id: value}``.
+
+    Tolerates the empty-string / None / malformed cases (a non-resolved row), all
+    of which yield an empty map. Never raises.
+    """
+    raw = row.get("breakeven_realized_r_json")
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
 @dataclass
 class _Accumulator:
     """Single pass over the rows accumulates here (memo §3 layers).
@@ -110,6 +129,10 @@ class _Accumulator:
     # for this tool (ADR 0012).
     realized_risk_pcts: list[float] = field(default_factory=list)
     tiers_filled: list[float] = field(default_factory=list)
+    # Break-even exit-stop WHAT-IF (terminal only) — realized R per lens_id, parsed
+    # from breakeven_realized_r_json. Display-only, in-sample; the registry of lens
+    # labels/status lives client-side, so this is keyed by lens_id only.
+    breakeven_r: dict[str, list[float]] = field(default_factory=dict)
     # Deployment (N-independent) — over the whole plannable population.
     n_filled: int = 0
     n_no_fill: int = 0
@@ -144,6 +167,10 @@ def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
     tfc = _finite(row.get("tiers_filled_count"))
     if tfc is not None:
         acc.tiers_filled.append(tfc)
+    for lens_id, value in _breakeven_map(row).items():
+        rb = _finite(value)
+        if rb is not None:
+            acc.breakeven_r.setdefault(lens_id, []).append(rb)
 
 
 def _accumulate_open(acc: _Accumulator, row: dict[str, Any]) -> None:
@@ -232,6 +259,45 @@ def _build_portfolio(acc: _Accumulator, *, gated: bool, status: str) -> dict[str
     }
 
 
+def _build_whatif(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, Any]:
+    """Break-even what-if panel — per-lens R aggregates keyed by ``lens_id``.
+
+    DISPLAY-ONLY, in-sample counterfactual: the realized headline is untouched and
+    these means are recomputed under an alternative exit-stop on the SAME picks.
+    N-gated exactly like the edge panel (the per-lens ``n`` survives the gate so the
+    UI can show coverage; ``mean_r`` / ``median_r`` are nulled below the gate). The
+    lens labels + ``in_sample``/``validated`` status live client-side (the registry),
+    so this block is keyed by ``lens_id`` only.
+
+    Coverage note (zen review): a per-lens ``n`` is the count of matured rows that
+    carry a finite break-even R, so it can be SMALLER than ``n_matured`` (a NO_FILL
+    terminal has no fill and no break-even value). The UI must read lens ``n`` as
+    fill-coverage, not as the gate count. ``in_sample`` is block-level ``True`` while
+    every registered lens is ``status="in_sample"``; once a lens graduates the SPA
+    registry surfaces per-lens status (the slim Django image cannot read the registry).
+    """
+    lenses = {
+        lens_id: {
+            "n": len(values),
+            "mean_r": None if gated else _mean(values),
+            "median_r": None if gated else _median(values),
+        }
+        for lens_id, values in sorted(acc.breakeven_r.items())
+    }
+    return {
+        "status": status,
+        "n_matured": len(acc.excess),
+        "threshold": N_GATE_THRESHOLD,
+        "in_sample": True,
+        "note": (
+            "counterfactual: realized R recomputed under an alternative exit-stop on "
+            "the SAME picks + price paths; in-sample (tuned on this sample) and NOT "
+            "validated — never the realized result."
+        ),
+        "lenses": lenses,
+    }
+
+
 def _build_deployment(acc: _Accumulator) -> dict[str, Any]:
     """Deployment block — ALWAYS returned (N-independent)."""
     n = acc.n_terminal
@@ -283,6 +349,7 @@ def build_edge_summary(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         ),
         "edge": _build_edge(acc, gated=gated, status=status),
         "portfolio": _build_portfolio(acc, gated=gated, status=status),
+        "whatif": _build_whatif(acc, gated=gated, status=status),
         "deployment": _build_deployment(acc),
         "open_positions": _build_open(acc),
     }

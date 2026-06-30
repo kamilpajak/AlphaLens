@@ -112,6 +112,12 @@ class LadderOutcome(models.Model):
     # Empty until a minute resolve computes it (non-plannable / placeholder rows).
     grid_realized_r_json = models.TextField(blank=True, default="")
 
+    # Break-even exit-stop WHAT-IF grid (Stage A): JSON map {lens_id -> realized_r}
+    # from re-replaying the SAME bars under each registered break-even lens. DISPLAY-
+    # ONLY counterfactual (never overrides realized_r); the /edge selector reads it as
+    # a labelled, in-sample what-if. Empty until a minute resolve computes it.
+    breakeven_realized_r_json = models.TextField(blank=True, default="")
+
     # Entry-side counterfactual (PR-3): realized R if all tiers had filled at the
     # full-ladder blended entry, same exit ladder + bars. Paired with
     # full_ladder_blended_entry; the gap realized_r - realized_r_full_fill is the

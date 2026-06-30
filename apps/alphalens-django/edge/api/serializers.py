@@ -178,6 +178,34 @@ class ChartResponseSerializer(serializers.Serializer):
     rth_only = serializers.BooleanField()
 
 
+class WhatIfLensSerializer(serializers.Serializer):
+    """One break-even lens's gated R aggregate (keyed by lens_id in the parent map).
+
+    ``mean_r`` / ``median_r`` are null below the N-gate; ``n`` survives so the UI can
+    show coverage.
+    """
+
+    n = serializers.IntegerField()
+    mean_r = serializers.FloatField(allow_null=True)
+    median_r = serializers.FloatField(allow_null=True)
+
+
+class WhatIfPanelSerializer(serializers.Serializer):
+    """The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit-stop lenses.
+
+    Gated like EDGE. The realized headline is never touched by this block. The lens
+    registry (labels + ``in_sample``/``validated`` status) lives client-side, so the
+    ``lenses`` map is keyed by ``lens_id`` only.
+    """
+
+    status = serializers.ChoiceField(choices=["insufficient", "early", "ok"])
+    n_matured = serializers.IntegerField()
+    threshold = serializers.IntegerField()
+    in_sample = serializers.BooleanField()
+    note = serializers.CharField()
+    lenses = serializers.DictField(child=WhatIfLensSerializer())
+
+
 class EdgeSummarySerializer(serializers.Serializer):
     """``/v1/edge/summary`` — the full N-gated, benchmark-relative aggregate."""
 
@@ -190,5 +218,6 @@ class EdgeSummarySerializer(serializers.Serializer):
     metric_note = serializers.CharField()
     edge = EdgePanelSerializer()
     portfolio = PortfolioPanelSerializer()
+    whatif = WhatIfPanelSerializer()
     deployment = DeploymentPanelSerializer()
     open_positions = OpenPositionsSerializer()
