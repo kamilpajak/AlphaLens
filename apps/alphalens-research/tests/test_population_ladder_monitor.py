@@ -834,6 +834,19 @@ class TestCarriedChartHelper(_MonitorTestBase):
         self.assertIsNone(_carried_chart({}))
         self.assertIsNone(_carried_chart(None))
 
+    def test_carry_prior_backfills_chart_payload_to_none(self):
+        # An OLD-format carried row predating the chart column gets an explicit None
+        # (schema parity with the size/screen/config back-fill), not a missing key.
+        carried = _carry_prior({"ticker": "X"})
+        self.assertIn(_CHART_PAYLOAD_COLUMN, carried)
+        self.assertIsNone(carried[_CHART_PAYLOAD_COLUMN])
+
+    def test_carry_prior_preserves_existing_chart_payload(self):
+        # The back-fill must NOT clobber a real carried chart (setdefault semantics).
+        chart = '{"status": "OK"}'
+        carried = _carry_prior({"ticker": "X", _CHART_PAYLOAD_COLUMN: chart})
+        self.assertEqual(carried[_CHART_PAYLOAD_COLUMN], chart)
+
     def test_coerces_real_on_disk_nan_sentinel_to_none(self):
         # A blank chart column round-tripped through parquet surfaces as a float NaN,
         # NOT None — assert the guard catches the sentinel that actually lands on disk.

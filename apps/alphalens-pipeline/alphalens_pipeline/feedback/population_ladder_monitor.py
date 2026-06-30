@@ -860,14 +860,15 @@ def _terminal_row(
         "last_resolved_session": last_resolved_session,
         "reference_close": reference_close,
     }
+    row.update(_size_fields(setup, outcome, realized_r=realized_r, open_r=open_r))
     # Carry the prior row's last-good /edge chart across this rewrite (None for a
     # brand-new row with nothing to carry). The resolve path rebuilds the row from
     # scratch and would otherwise drop the column written by the separate enrich
     # pass; a deadline-starved enrich pass could then never repopulate it, leaving
     # an ongoing position's chart blank. The enrich pass still UPGRADES the carried
-    # payload whenever it runs.
+    # payload whenever it runs. Assigned AFTER ``_size_fields`` so a future size key
+    # can never silently clobber the carried chart.
     row[_CHART_PAYLOAD_COLUMN] = prior_chart_payload
-    row.update(_size_fields(setup, outcome, realized_r=realized_r, open_r=open_r))
     return row
 
 
@@ -1007,7 +1008,10 @@ def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
         *_GRID_COLUMNS,
         *_ENTRY_CF_COLUMNS,
         *_PROVENANCE_COLUMNS,
+        _CHART_PAYLOAD_COLUMN,
     ):
+        # ``setdefault`` so an OLD-format row predating the chart column gets an
+        # explicit None (schema parity) WITHOUT clobbering a real carried chart.
         carried.setdefault(col, None)
     return carried
 
@@ -1020,6 +1024,9 @@ def _carried_chart(prior: dict[str, Any] | None) -> str | None:
     enrich-skipped row can hold an empty string — both coerce to ``None`` so a
     rebuilt ongoing row is born either carrying a usable chart or honestly blank,
     never carrying a NaN sentinel.
+
+    No JSON validation — a (vanishingly unlikely) corrupt carried string is served as
+    NO_DATA by the Django view's graceful-degradation path, never a 500.
     """
     if not prior:
         return None
