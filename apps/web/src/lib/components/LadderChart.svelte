@@ -35,6 +35,7 @@
 	} from 'lightweight-charts';
 	import type { ChartPayload, ChartMarker } from '$lib/types';
 	import { fmtR } from '$lib/edge';
+	import { finalExitMarkerTime } from './ladderChart';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
 	import { Crosshair } from 'lucide-svelte';
@@ -260,16 +261,16 @@
 			// hide the band rather than mis-paint it. No band for PLANNED
 			// (nothing is held yet).
 			const bandStart = firstEntryTime;
-			// Band end: the terminal exit marker time on CLOSED, else the last bar
-			// (OPEN runs to "now").
-			const exitMarker = payload.markers.find(
-				(m) => m.kind === 'TP' || m.kind === 'SL' || m.kind === 'TIME_STOP'
-			);
+			// Band end: the FINAL exit marker time on CLOSED, else the last bar
+			// (OPEN runs to "now"). A multi-tranche scale-out closes only at its
+			// last take-profit, so the band must run to that terminal exit — not
+			// the first partial TP.
+			const exitTime = finalExitMarkerTime(payload.markers);
 			const lastBarTime = payload.bars.length
 				? (payload.bars[payload.bars.length - 1].time as Time)
 				: null;
 			const bandEnd =
-				lifecycle === 'CLOSED' && exitMarker ? (exitMarker.time as Time) : lastBarTime;
+				lifecycle === 'CLOSED' && exitTime ? (exitTime as Time) : lastBarTime;
 
 			const updateBand = () => {
 				if (!shadeBand || !timeScale || lifecycle === 'PLANNED') return;
