@@ -268,6 +268,13 @@ def _build_whatif(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, A
     UI can show coverage; ``mean_r`` / ``median_r`` are nulled below the gate). The
     lens labels + ``in_sample``/``validated`` status live client-side (the registry),
     so this block is keyed by ``lens_id`` only.
+
+    Coverage note (zen review): a per-lens ``n`` is the count of matured rows that
+    carry a finite break-even R, so it can be SMALLER than ``n_matured`` (a NO_FILL
+    terminal has no fill and no break-even value). The UI must read lens ``n`` as
+    fill-coverage, not as the gate count. ``in_sample`` is block-level ``True`` while
+    every registered lens is ``status="in_sample"``; once a lens graduates the SPA
+    registry surfaces per-lens status (the slim Django image cannot read the registry).
     """
     lenses = {
         lens_id: {
