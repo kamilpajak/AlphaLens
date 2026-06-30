@@ -513,6 +513,7 @@
 							max={95}
 							format={(v) => '-' + v.toFixed(1) + '%'}
 							inverted
+							tooltip="% below the 52-week high. Larger = deeper drawdown from the recent peak."
 						/>
 						<SignalBar
 							label="off 52w low"
@@ -553,7 +554,7 @@
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200')}>ma200 dist</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_ma200_distance_pct)}</dd>
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('MA200 slope')}>ma200 slope</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{c.technical_ma200_slope_pct_per_day !== null ? fmtPct(c.technical_ma200_slope_pct_per_day, 3) + '/d' : '—'}</dd>
 						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('ATR')}>atr</JargonTip></dt><dd class="text-fg text-right">{fmtPct(c.technical_atr_pct)}</dd>
-						<dt class="text-fg-muted uppercase tracking-widest">earnings yoy</dt><dd class="text-fg text-right whitespace-nowrap">{fmtPct(oneil?.oneil_earnings_growth_yoy_pct)}</dd>
+						<dt class="text-fg-muted uppercase tracking-widest"><JargonTip {...tipProps('earnings YoY')}>earnings yoy</JargonTip></dt><dd class="text-fg text-right whitespace-nowrap">{fmtPct(oneil?.oneil_earnings_growth_yoy_pct)}</dd>
 					</dl>
 				</div>
 			</div>

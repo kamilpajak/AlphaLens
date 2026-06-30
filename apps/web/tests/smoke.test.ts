@@ -506,13 +506,26 @@ test.describe('smoke — brief detail interactions', () => {
 		);
 	});
 
-	test('signal-bar tooltip renders on hover (CSS regression guard)', async ({ page }) => {
+	test('signal-bar tooltip opens on the underlined label, not the bar track', async ({ page }) => {
 		await page.goto(`/brief/${latestDay.date}`);
-		// data-testid is stable across Tailwind class refactors.
-		const firstBar = page.locator('article[id] [data-testid="signal-bar"]').first();
-		await firstBar.hover();
-		const tooltip = page.locator('article[id] [role="tooltip"]').first();
-		await expect(tooltip).toBeVisible();
+		// data-testid is stable across Tailwind class refactors. Pick a bar that
+		// actually carries a tooltip (its dotted-underlined label is the trigger).
+		const bar = page
+			.locator('article[id] [data-testid="signal-bar"]:has([role="tooltip"])')
+			.first();
+		const trigger = bar.locator('[role="group"]').first();
+		const tooltip = trigger.locator('> [role="tooltip"]');
+
+		// Hovering the bar track must NOT reveal the bubble — the trigger is the
+		// name only, not the whole bar row (the hover-anchor contract). Asserting
+		// computed opacity rather than toBeVisible(), which ignores opacity.
+		await bar.getByTestId('signal-bar-track').hover();
+		await expect(tooltip).toHaveCSS('opacity', '0');
+
+		// Hovering the dotted-underlined label opens it (group-hover:opacity-100 —
+		// doubles as the CSS regression guard the old test provided).
+		await trigger.hover();
+		await expect(tooltip).toHaveCSS('opacity', '1');
 	});
 
 	test('jargon-tip tooltip renders on hover (CSS regression guard)', async ({ page }) => {
