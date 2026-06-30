@@ -397,15 +397,20 @@
 					     the card markup; only the score token is wrapped in ChipTip so the hover
 					     trigger stays phrasing content (no div-in-span) and justify-between can
 					     push the score to the column's right edge. -->
-					<div
-						class="mb-4 flex items-baseline justify-between gap-2"
-						class:opacity-60={buffLowCov}
-					>
-						<span class="text-[10px] uppercase tracking-widest text-fg-muted">buffett <span class="normal-case text-fg-dim">· value / quality</span></span>
+					<!-- The thin-coverage dim (buffLowCov) is applied ONLY to the visible
+					     trigger pieces — the label and the score token — NOT to this
+					     container. CSS `opacity` caps its whole subtree, so dimming the
+					     container would also dim the ChipTip popover (which lives inside
+					     it); the popover's own opacity-100 cannot exceed the ancestor's
+					     0.6, so it would render see-through over the card text beneath.
+					     See tooltip-lowcov-opacity.spec.ts. -->
+					<div class="mb-4 flex items-baseline justify-between gap-2">
+						<span class="text-[10px] uppercase tracking-widest text-fg-muted" class:opacity-60={buffLowCov}>buffett <span class="normal-case text-fg-dim">· value / quality</span></span>
 						<ChipTip term="buffett quality">
 							{#snippet chip()}
 								<span
 									class="font-display text-base font-bold leading-none cursor-help"
+									class:opacity-60={buffLowCov}
 									class:text-green={buffTone === 'green'}
 									class:text-amber={buffTone === 'amber'}
 									class:text-fg-muted={buffTone === 'muted'}
