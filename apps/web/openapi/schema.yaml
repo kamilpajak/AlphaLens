@@ -1211,6 +1211,9 @@ components:
         theme:
           type: string
           nullable: true
+        scorer_config_version:
+          type: string
+          nullable: true
         ladder_classification:
           type: string
         terminal:
@@ -1279,6 +1282,10 @@ components:
           nullable: true
         market_excess_quantiles:
           $ref: '#/components/schemas/_Quantiles'
+        hit_rate:
+          type: number
+          format: double
+          nullable: true
         gross_realized_r_mean:
           type: number
           format: double
@@ -1308,6 +1315,7 @@ components:
       - gross_realized_r_mean
       - gross_realized_r_median
       - gross_realized_r_n
+      - hit_rate
       - holding_days_n
       - holding_days_p50
       - holding_days_p95

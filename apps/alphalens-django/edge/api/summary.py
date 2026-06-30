@@ -53,6 +53,16 @@ def _mean(values: Sequence[float]) -> float | None:
     return (sum(values) / len(values)) if values else None
 
 
+def _hit_rate(values: Sequence[float]) -> float | None:
+    """Share of matured names with a STRICTLY positive market-excess return.
+
+    Breadth of the edge (how OFTEN we beat the benchmark) alongside its average
+    size; equal-weight, size-free, same arrival→exit window as ``excess``. A flat
+    ``0.0`` excess is not a hit (strict ``> 0``). ``None`` for an empty window.
+    """
+    return (sum(1 for v in values if v > 0) / len(values)) if values else None
+
+
 def _median(values: Sequence[float]) -> float | None:
     return _percentile(values, 50.0)
 
@@ -196,6 +206,8 @@ def _build_edge(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, Any
         "market_excess_mean": None if gated else _mean(acc.excess),
         "market_excess_median": None if gated else _median(acc.excess),
         "market_excess_quantiles": quantiles_null if gated else _quantiles(acc.excess),
+        # Breadth — share of matured names that beat the benchmark (strict > 0).
+        "hit_rate": None if gated else _hit_rate(acc.excess),
         # De-emphasised gross / risk-normalised R (NOT the headline).
         "gross_realized_r_mean": None if gated else _mean(acc.realized_r),
         "gross_realized_r_median": None if gated else _median(acc.realized_r),

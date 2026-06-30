@@ -159,8 +159,8 @@
 						[unlocks at n ≥ {summary.edge.threshold}]
 					</div>
 				{:else}
-					<!-- Unlocked: excess expectancy + median + 10/50/90 quantiles. -->
-					<div class="grid grid-cols-2 gap-x-6 gap-y-3 text-[10px] uppercase tracking-widest mb-3">
+					<!-- Unlocked: excess expectancy + median + hit rate + 10/50/90 quantiles. -->
+					<div class="grid grid-cols-3 gap-x-4 gap-y-3 text-[10px] uppercase tracking-widest mb-3">
 						<div>
 							<div class="text-fg-muted">
 								<JargonTip
@@ -184,6 +184,18 @@
 							</div>
 							<div class="text-fg text-xl font-bold normal-case whitespace-nowrap">
 								{fmtFracPct(summary.edge.market_excess_median, 1)}
+							</div>
+						</div>
+						<div>
+							<div class="text-fg-muted">
+								<JargonTip
+									term="hit rate"
+									body="Share of matured trades that beat the benchmark — the percent with a positive market-excess return. The breadth of the edge (how OFTEN), read alongside its average size (how MUCH)."
+									>hit rate</JargonTip
+								>
+							</div>
+							<div class="text-fg text-xl font-bold normal-case whitespace-nowrap">
+								{fmtFracPct(summary.edge.hit_rate, 0, false)}
 							</div>
 						</div>
 					</div>

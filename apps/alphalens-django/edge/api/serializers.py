@@ -61,6 +61,7 @@ class EdgePanelSerializer(serializers.Serializer):
     market_excess_mean = serializers.FloatField(allow_null=True)
     market_excess_median = serializers.FloatField(allow_null=True)
     market_excess_quantiles = _QuantilesSerializer()
+    hit_rate = serializers.FloatField(allow_null=True)
     gross_realized_r_mean = serializers.FloatField(allow_null=True)
     gross_realized_r_median = serializers.FloatField(allow_null=True)
     gross_realized_r_n = serializers.IntegerField()
