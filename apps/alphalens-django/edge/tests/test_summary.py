@@ -11,6 +11,10 @@ Pins the binding guardrails (memo §3):
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from edge.api.summary import N_EARLY_THRESHOLD, N_GATE_THRESHOLD, build_edge_summary
 
 
@@ -261,6 +265,20 @@ class TestFullPayloadCharacterization:
                 "mean_tiers_filled_count": 1.9444444444444444,
                 "gross_of_cost": True,
             },
+            "whatif": {
+                # The characterization rows carry no breakeven_realized_r_json, so the
+                # lens map is empty; the block shape + in-sample framing still ship.
+                "status": "early",
+                "n_matured": 36,
+                "threshold": 30,
+                "in_sample": True,
+                "note": (
+                    "counterfactual: realized R recomputed under an alternative "
+                    "exit-stop on the SAME picks + price paths; in-sample (tuned on "
+                    "this sample) and NOT validated — never the realized result."
+                ),
+                "lenses": {},
+            },
             "deployment": {
                 "n_terminal": 38,
                 "n_filled": 36,
@@ -313,3 +331,48 @@ class TestFullPayloadCharacterization:
         assert out["deployment"]["n_filled"] == 5
         assert out["deployment"]["n_no_fill"] == 1
         assert out["open_positions"]["n_open"] == 1
+
+
+def _terminal_be(ticker: str, *, excess: float, realized_r: float, be_r: float | None) -> dict:
+    row = _terminal(ticker, excess=excess, realized_r=realized_r)
+    row["breakeven_realized_r_json"] = json.dumps({"be_0p5r": be_r})
+    return row
+
+
+class TestWhatIfBlock:
+    """The break-even what-if block aggregates per-lens R, keyed by lens_id, and is
+    N-gated exactly like the edge panel (display-only, in-sample counterfactual)."""
+
+    def test_whatif_aggregates_per_lens_above_gate(self):
+        rows = [
+            _terminal_be(f"T{i}", excess=0.02, realized_r=-0.5, be_r=0.1)
+            for i in range(N_EARLY_THRESHOLD)
+        ]
+        wf = build_edge_summary(rows)["whatif"]
+        assert wf["status"] == "ok"
+        lens = wf["lenses"]["be_0p5r"]
+        assert lens["n"] == N_EARLY_THRESHOLD
+        assert lens["mean_r"] == pytest.approx(0.1)
+        assert lens["median_r"] == pytest.approx(0.1)
+
+    def test_whatif_gated_below_threshold_keeps_n_nulls_mean(self):
+        rows = [
+            _terminal_be(f"T{i}", excess=0.02, realized_r=-0.5, be_r=0.1)
+            for i in range(N_GATE_THRESHOLD - 1)
+        ]
+        wf = build_edge_summary(rows)["whatif"]
+        assert wf["status"] == "insufficient"
+        lens = wf["lenses"]["be_0p5r"]
+        assert lens["n"] == N_GATE_THRESHOLD - 1
+        assert lens["mean_r"] is None
+
+    def test_whatif_skips_null_lens_values_and_missing_column(self):
+        # A null lens value contributes to neither n nor the mean; a row without the
+        # column at all is simply absent from the lens map.
+        rows = [
+            _terminal_be(f"A{i}", excess=0.02, realized_r=-0.5, be_r=(0.1 if i else None))
+            for i in range(N_EARLY_THRESHOLD)
+        ]
+        rows += [_terminal(f"B{i}", excess=0.02, realized_r=-0.5) for i in range(5)]
+        lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r"]
+        assert lens["n"] == N_EARLY_THRESHOLD - 1  # the single None dropped

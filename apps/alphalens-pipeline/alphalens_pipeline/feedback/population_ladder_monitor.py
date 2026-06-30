@@ -61,6 +61,7 @@ from alphalens_pipeline.feedback.bar_window import (
     IMPLAUSIBLE_RETURN_THRESHOLD,
     _window_vwap,
 )
+from alphalens_pipeline.feedback.breakeven_lenses import breakeven_grid
 from alphalens_pipeline.feedback.ladder_config import ladder_config_version
 from alphalens_pipeline.feedback.ladder_replay import (
     LadderOutcome,
@@ -245,6 +246,11 @@ _PROVENANCE_COLUMNS = ("scorer_config_version",)
 # re-replaying the SAME bars under each EXIT policy. Carried/back-filled like the
 # other additive measurement columns.
 _GRID_COLUMNS = ("grid_realized_r_json",)
+
+# The break-even exit-stop WHAT-IF grid (Stage A): a JSON map {lens_id -> realized_r}
+# from re-replaying the SAME bars under each registered break-even lens. Display-only
+# (never overrides the headline realized_r); carried/back-filled like the grid above.
+_BREAKEVEN_COLUMNS = ("breakeven_realized_r_json",)
 
 # The entry-side counterfactual (PR-3): realized R if all tiers had filled at the
 # full-ladder blended entry. Paired with full_ladder_blended_entry; the gap vs
@@ -789,6 +795,7 @@ def _terminal_row(
     last_resolved_session: dt.date | None = None,
     reference_close: float | None = None,
     grid_realized_r: dict[str, float | None] | None = None,
+    breakeven_grid_r: dict[str, float | None] | None = None,
     realized_r_full: float | None = None,
     prior_chart_payload: str | None = None,
 ) -> dict[str, Any]:
@@ -851,6 +858,8 @@ def _terminal_row(
         "ladder_config_version": ladder_config_version(order_ttl_days=entry_ttl),
         # Alternate-exit-ladder grid (None until a minute resolve computes it).
         "grid_realized_r_json": json.dumps(grid_realized_r) if grid_realized_r else None,
+        # Break-even exit-stop WHAT-IF grid (display-only, None until a minute resolve).
+        "breakeven_realized_r_json": json.dumps(breakeven_grid_r) if breakeven_grid_r else None,
         # Entry-side counterfactual: realized R at the full-fill blended entry.
         "realized_r_full_fill": realized_r_full,
         # Grouped-daily screen columns: the session this resolve priced, the same
@@ -940,6 +949,7 @@ def _nonplannable_row(brief_date: dt.date, ticker: str, reason: str) -> dict[str
         # this row -- leave the stamp empty rather than invent a config.
         "ladder_config_version": None,
         "grid_realized_r_json": None,
+        "breakeven_realized_r_json": None,
         "realized_r_full_fill": None,
         "last_priced_session": None,
         "last_resolved_session": None,
@@ -985,6 +995,7 @@ def _placeholder_row(
         "ladder_config_version": ladder_config_version(order_ttl_days=entry_ttl),
         # Grid + entry counterfactual need minute bars; empty until first resolve.
         "grid_realized_r_json": None,
+        "breakeven_realized_r_json": None,
         "realized_r_full_fill": None,
         "last_priced_session": None,
         "last_resolved_session": None,
@@ -1006,6 +1017,7 @@ def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
         *_SCREEN_COLUMNS,
         *_CONFIG_COLUMNS,
         *_GRID_COLUMNS,
+        *_BREAKEVEN_COLUMNS,
         *_ENTRY_CF_COLUMNS,
         *_PROVENANCE_COLUMNS,
         _CHART_PAYLOAD_COLUMN,
@@ -1847,6 +1859,7 @@ def _cheap_update_row(
         *_SCREEN_COLUMNS,
         *_CONFIG_COLUMNS,
         *_GRID_COLUMNS,
+        *_BREAKEVEN_COLUMNS,
         *_ENTRY_CF_COLUMNS,
         *_PROVENANCE_COLUMNS,
     ):
@@ -2044,6 +2057,7 @@ def _resolve_queue(
             last_resolved_session=result.horizon_session,
             reference_close=result.reference_close,
             grid_realized_r=result.grid_realized_r,
+            breakeven_grid_r=result.breakeven_grid_r,
             realized_r_full=result.realized_r_full,
             prior_chart_payload=_carried_chart(item.prior),
         )
@@ -2060,6 +2074,7 @@ class _ResolveResult:
     reference_close: float | None
     horizon_session: dt.date
     grid_realized_r: dict[str, float | None] | None = None
+    breakeven_grid_r: dict[str, float | None] | None = None
     realized_r_full: float | None = None
 
 
@@ -2161,6 +2176,10 @@ def _replay_candidate(
         entry_expiry_ms=entry_expiry_ms,
         position_expiry_ms=position_expiry_ms,
     )
+    # Break-even exit-stop WHAT-IF grid (Stage A): re-replay the SAME bars under each
+    # registered break-even lens. Display-only; the entry-TTL / time-stop are not
+    # honoured in the what-if (matching replay_ladder_breakeven's contract).
+    breakeven_grid_r = breakeven_grid(setup, bars)
     # Entry-side counterfactual (PR-3): realized R at the full-fill blended entry,
     # same exit ladder + bars. Also zero extra Polygon cost.
     realized_r_full = realized_r_full_fill(
@@ -2174,6 +2193,7 @@ def _replay_candidate(
         reference_close=reference_close,
         horizon_session=horizon_session,
         grid_realized_r=grid_realized_r,
+        breakeven_grid_r=breakeven_grid_r,
         realized_r_full=realized_r_full,
     )
 
