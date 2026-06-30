@@ -583,6 +583,7 @@ export interface components {
             /** Format: date */
             brief_date: string;
             theme?: string | null;
+            scorer_config_version?: string | null;
             ladder_classification: string;
             terminal: boolean;
             /** Format: double */
@@ -615,6 +616,8 @@ export interface components {
             /** Format: double */
             market_excess_median: number | null;
             market_excess_quantiles: components["schemas"]["_Quantiles"];
+            /** Format: double */
+            hit_rate: number | null;
             /** Format: double */
             gross_realized_r_mean: number | null;
             /** Format: double */

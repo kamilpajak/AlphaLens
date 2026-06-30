@@ -107,6 +107,24 @@ class TestNGate:
         assert out["edge"]["status"] == "ok"
 
 
+class TestHitRate:
+    def test_hit_rate_is_share_of_strictly_positive_excess(self):
+        # 18 winners (excess > 0), 11 losers (< 0), 1 flat (== 0, NOT a hit) = 30.
+        rows = [_terminal(f"W{i}", excess=0.02, realized_r=0.5) for i in range(18)]
+        rows += [_terminal(f"L{i}", excess=-0.01, realized_r=-0.5) for i in range(11)]
+        rows += [_terminal("FLAT", excess=0.0, realized_r=0.0)]
+        out = build_edge_summary(rows)
+        assert out["edge"]["n_matured"] == N_GATE_THRESHOLD
+        # Strict > 0: the flat row is not a hit, so 18/30, not 19/30.
+        assert abs(out["edge"]["hit_rate"] - 18 / 30) < 1e-9
+
+    def test_hit_rate_nulled_below_gate(self):
+        rows = [_terminal(f"T{i}", excess=0.02, realized_r=0.5) for i in range(5)]
+        out = build_edge_summary(rows)
+        assert out["edge"]["status"] == "insufficient"
+        assert out["edge"]["hit_rate"] is None
+
+
 class TestOpenExcludedFromExpectancy:
     def test_open_positions_are_distribution_only(self):
         rows = [_terminal(f"T{i}", excess=0.02, realized_r=0.5) for i in range(N_GATE_THRESHOLD)]
@@ -225,6 +243,7 @@ class TestFullPayloadCharacterization:
                 "market_excess_mean": 0.015000000000000001,
                 "market_excess_median": 0.014,
                 "market_excess_quantiles": {"p10": -0.014, "p50": 0.014, "p90": 0.044},
+                "hit_rate": 0.6944444444444444,
                 "gross_realized_r_mean": 0.011111111111111112,
                 "gross_realized_r_median": 0.0,
                 "gross_realized_r_n": 36,
@@ -275,6 +294,7 @@ class TestFullPayloadCharacterization:
             "market_excess_mean": None,
             "market_excess_median": None,
             "market_excess_quantiles": {"p10": None, "p50": None, "p90": None},
+            "hit_rate": None,
             "gross_realized_r_mean": None,
             "gross_realized_r_median": None,
             "gross_realized_r_n": 5,

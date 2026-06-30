@@ -269,6 +269,7 @@ export interface EdgePanel {
 	market_excess_mean: number | null;
 	market_excess_median: number | null;
 	market_excess_quantiles: EdgeQuantiles;
+	hit_rate: number | null;
 	gross_realized_r_mean: number | null;
 	gross_realized_r_median: number | null;
 	gross_realized_r_n: number;
