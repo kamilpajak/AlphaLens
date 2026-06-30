@@ -695,15 +695,16 @@ export interface components {
                 offset: number;
             };
         };
-        /** @description The PORTFOLIO (size-weighted) panel — gated, same N-gate as EDGE. */
+        /**
+         * @description The PORTFOLIO (per-name size) panel — gated, same N-gate as EDGE.
+         *
+         *     Reports per-name risk geometry only; the shared-book aggregates were removed
+         *     (no single capital book exists for this tool, ADR 0012).
+         */
         PortfolioPanel: {
             status: components["schemas"]["Status3b9Enum"];
             n_matured: number;
             threshold: number;
-            /** Format: double */
-            total_realized_contribution_pct_of_book: number | null;
-            /** Format: double */
-            size_weighted_realized_r: number | null;
             /** Format: double */
             mean_realized_risk_pct: number | null;
             /** Format: double */

@@ -801,6 +801,10 @@
                         "format": "double",
                         "nullable": true
                     },
+                    "insider_signal_version": {
+                        "type": "string",
+                        "maxLength": 128
+                    },
                     "fcff_yield_pct": {
                         "type": "number",
                         "format": "double",
@@ -942,6 +946,20 @@
                         "maximum": 9223372036854775807,
                         "minimum": -9223372036854775808,
                         "format": "int64"
+                    },
+                    "selection_score": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "atr_penalty": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "scorer_config_version": {
+                        "type": "string",
+                        "maxLength": 128
                     },
                     "also_in_themes": {},
                     "rank_in_day": {
@@ -1103,6 +1121,10 @@
                         "format": "double",
                         "nullable": true
                     },
+                    "insider_signal_version": {
+                        "type": "string",
+                        "maxLength": 128
+                    },
                     "fcff_yield_pct": {
                         "type": "number",
                         "format": "double",
@@ -1244,6 +1266,20 @@
                         "maximum": 9223372036854775807,
                         "minimum": -9223372036854775808,
                         "format": "int64"
+                    },
+                    "selection_score": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "atr_penalty": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "scorer_config_version": {
+                        "type": "string",
+                        "maxLength": 128
                     },
                     "also_in_themes": {},
                     "rank_in_day": {
@@ -1615,6 +1651,10 @@
                         "type": "string",
                         "nullable": true
                     },
+                    "scorer_config_version": {
+                        "type": "string",
+                        "nullable": true
+                    },
                     "ladder_classification": {
                         "type": "string"
                     },
@@ -1696,6 +1736,11 @@
                     "market_excess_quantiles": {
                         "$ref": "#/components/schemas/_Quantiles"
                     },
+                    "hit_rate": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
                     "gross_realized_r_mean": {
                         "type": "number",
                         "format": "double",
@@ -1734,6 +1779,7 @@
                     "gross_realized_r_mean",
                     "gross_realized_r_median",
                     "gross_realized_r_n",
+                    "hit_rate",
                     "holding_days_n",
                     "holding_days_p50",
                     "holding_days_p95",
@@ -1968,7 +2014,7 @@
             },
             "PortfolioPanel": {
                 "type": "object",
-                "description": "The PORTFOLIO (size-weighted) panel — gated, same N-gate as EDGE.",
+                "description": "The PORTFOLIO (per-name size) panel — gated, same N-gate as EDGE.\n\nReports per-name risk geometry only; the shared-book aggregates were removed\n(no single capital book exists for this tool, ADR 0012).",
                 "properties": {
                     "status": {
                         "$ref": "#/components/schemas/Status3b9Enum"
@@ -1978,16 +2024,6 @@
                     },
                     "threshold": {
                         "type": "integer"
-                    },
-                    "total_realized_contribution_pct_of_book": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
-                    },
-                    "size_weighted_realized_r": {
-                        "type": "number",
-                        "format": "double",
-                        "nullable": true
                     },
                     "mean_realized_risk_pct": {
                         "type": "number",
@@ -2008,10 +2044,8 @@
                     "mean_realized_risk_pct",
                     "mean_tiers_filled_count",
                     "n_matured",
-                    "size_weighted_realized_r",
                     "status",
-                    "threshold",
-                    "total_realized_contribution_pct_of_book"
+                    "threshold"
                 ]
             },
             "Stats": {

@@ -26,8 +26,6 @@
 		"status": "ok",
 		"n_matured": 118,
 		"threshold": 30,
-		"total_realized_contribution_pct_of_book": 3.42,
-		"size_weighted_realized_r": 0.33,
 		"mean_realized_risk_pct": 0.94,
 		"mean_tiers_filled_count": 1.6,
 		"gross_of_cost": true

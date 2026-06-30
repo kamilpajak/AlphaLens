@@ -26,8 +26,6 @@
 		"status": "insufficient",
 		"n_matured": 3,
 		"threshold": 30,
-		"total_realized_contribution_pct_of_book": null,
-		"size_weighted_realized_r": null,
 		"mean_realized_risk_pct": null,
 		"mean_tiers_filled_count": null,
 		"gross_of_cost": true

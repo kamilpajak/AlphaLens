@@ -10,15 +10,11 @@
 	import { getEdgeChart } from '$lib/api';
 	import { fmtNum } from '$lib/format';
 	import {
-		BOOK_CONTRIBUTION_TIP,
 		classificationTone,
 		EXCESS_RETURN_BAR_DOMAIN,
 		excessBarGeometry,
 		fmtFracPct,
 		fmtR,
-		SIZE_WEIGHTED_R_TIP,
-		SIZING_MODEL_DISCLAIMER,
-		SIZING_MODEL_PANEL_TITLE,
 		SIZING_MODEL_RISK_LABEL,
 		statsUnlocked,
 		toneClasses
@@ -264,7 +260,7 @@
 			>
 				<div class="flex items-center justify-between gap-2 mb-3">
 					<div class="text-[10px] uppercase tracking-widest text-cyan">
-						{SIZING_MODEL_PANEL_TITLE}
+						// suggested position sizing
 					</div>
 					{#if !statsUnlocked(summary.portfolio.status)}
 						<Lock class="size-3 text-fg-muted" />
@@ -272,7 +268,8 @@
 				</div>
 
 				<div class="text-[10px] text-fg-dim italic leading-snug mt-2 mb-3">
-					{SIZING_MODEL_DISCLAIMER}
+					Per-name risk geometry only. Each member sizes independently — rescale by your own
+					capital.
 				</div>
 
 				{#if !statsUnlocked(summary.portfolio.status)}
@@ -304,44 +301,6 @@
 							{fmtFracPct(summary.portfolio.mean_realized_risk_pct, 2, false)}
 						</span>
 					</div>
-					<!--
-						Demoted out of headline status: the size-weighted / book aggregations
-						assume one shared capital book that does not exist (ADR 0012 vestige).
-						Collapsed into a <details> drawer and rendered small + muted so they no
-						longer read as a co-equal portfolio truth beside the EDGE panel.
-					-->
-					<details class="group">
-						<summary
-							class="cursor-pointer list-none text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-dim select-none"
-						>
-							<ChevronRight
-								class="inline-block size-3 align-middle transition-transform group-open:rotate-90"
-							/>
-							illustrative sizing geometry
-						</summary>
-						<div class="grid grid-cols-1 gap-y-3 text-[10px] uppercase tracking-widest mt-3">
-							<div class="flex items-center justify-between text-fg-muted">
-								<span>
-									<JargonTip term="size-weighted R" body={SIZE_WEIGHTED_R_TIP}
-										>size-weighted R</JargonTip
-									>
-								</span>
-								<span class="text-sm text-fg-muted normal-case whitespace-nowrap">
-									{fmtR(summary.portfolio.size_weighted_realized_r)}
-								</span>
-							</div>
-							<div class="flex items-center justify-between text-fg-muted">
-								<span>
-									<JargonTip term="book contribution" body={BOOK_CONTRIBUTION_TIP}
-										>book contribution</JargonTip
-									>
-								</span>
-								<span class="text-sm text-fg-muted normal-case whitespace-nowrap">
-									{fmtFracPct(summary.portfolio.total_realized_contribution_pct_of_book, 2)}
-								</span>
-							</div>
-						</div>
-					</details>
 				{/if}
 			</section>
 

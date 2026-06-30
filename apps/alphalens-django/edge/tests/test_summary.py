@@ -87,7 +87,7 @@ class TestNGate:
         # Stable shape: the key is present but nulled (N-gate hides the number).
         assert out["edge"]["market_excess_mean"] is None
         assert out["portfolio"]["status"] == "insufficient"
-        assert out["portfolio"]["size_weighted_realized_r"] is None
+        assert out["portfolio"]["mean_realized_risk_pct"] is None
 
     def test_at_threshold_is_early_with_means(self):
         rows = [_terminal(f"T{i}", excess=0.02, realized_r=0.5) for i in range(N_GATE_THRESHOLD)]
@@ -257,8 +257,6 @@ class TestFullPayloadCharacterization:
                 "status": "early",
                 "n_matured": 36,
                 "threshold": 30,
-                "total_realized_contribution_pct_of_book": 0.73,
-                "size_weighted_realized_r": 0.009898477157360403,
                 "mean_realized_risk_pct": 0.010944444444444444,
                 "mean_tiers_filled_count": 1.9444444444444444,
                 "gross_of_cost": True,
@@ -308,8 +306,6 @@ class TestFullPayloadCharacterization:
             "status": "insufficient",
             "n_matured": 5,
             "threshold": 30,
-            "total_realized_contribution_pct_of_book": None,
-            "size_weighted_realized_r": None,
             "mean_realized_risk_pct": None,
             "mean_tiers_filled_count": None,
             "gross_of_cost": True,

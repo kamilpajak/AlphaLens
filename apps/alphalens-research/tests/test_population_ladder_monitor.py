@@ -1578,14 +1578,12 @@ class TestSizeAwareSummary(_MonitorTestBase):
         self.assertIs(summary["regime_stratified"], False)
 
         # Size layer present + correct (per-trade realized_risk_pct = 0.02*0.05 = 0.001).
-        self.assertIn("total_realized_contribution_pct_of_book", summary)
-        self.assertIn("size_weighted_realized_r", summary)
+        # Only per-name risk geometry remains; the shared-book aggregates
+        # (total contribution, size-weighted R) were removed (ADR 0012).
+        self.assertNotIn("total_realized_contribution_pct_of_book", summary)
+        self.assertNotIn("size_weighted_realized_r", summary)
         self.assertIn("mean_realized_risk_pct", summary)
         self.assertIn("mean_tiers_filled_count", summary)
-        # Each contributes 2.0 * 0.001 = 0.002; two trades -> 0.004 total.
-        self.assertAlmostEqual(summary["total_realized_contribution_pct_of_book"], 0.004, places=9)
-        # size_weighted_realized_r = sum(r*risk)/sum(risk) = (2*0.001+2*0.001)/(0.002) = 2.0.
-        self.assertAlmostEqual(summary["size_weighted_realized_r"], 2.0, places=6)
         self.assertAlmostEqual(summary["mean_realized_risk_pct"], 0.001, places=9)
         self.assertAlmostEqual(summary["mean_tiers_filled_count"], 1.0, places=6)
 
@@ -1593,9 +1591,10 @@ class TestSizeAwareSummary(_MonitorTestBase):
         summary = summarize_population_ladders(self.store_dir)
         self.assertEqual(summary["realized_n"], 0)
         self.assertIsNone(summary["realized_mean"])
-        # New size keys present + null/zero, never crash on an empty store.
-        self.assertIsNone(summary["total_realized_contribution_pct_of_book"])
-        self.assertIsNone(summary["size_weighted_realized_r"])
+        # Per-name size keys present + null/zero, never crash on an empty store.
+        # The shared-book aggregates were removed (ADR 0012).
+        self.assertNotIn("total_realized_contribution_pct_of_book", summary)
+        self.assertNotIn("size_weighted_realized_r", summary)
         self.assertIsNone(summary["mean_realized_risk_pct"])
         self.assertIsNone(summary["mean_tiers_filled_count"])
 
