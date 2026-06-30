@@ -75,7 +75,11 @@
 	use:clampToViewport
 >
 	<div class="flex items-center justify-between mb-1.5 gap-2">
-		<span class="text-fg-muted truncate">{label}</span>
+		<span
+			class="text-fg-muted truncate {hasTooltip
+				? 'underline decoration-dotted decoration-fg-muted underline-offset-2'
+				: ''}">{label}</span
+		>
 		<span class="flex items-baseline gap-2 whitespace-nowrap">
 			{#if subValue}
 				<span class="text-fg-dim">{subValue}</span>
