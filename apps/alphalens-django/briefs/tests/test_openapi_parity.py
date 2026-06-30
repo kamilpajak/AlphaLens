@@ -69,3 +69,51 @@ def test_no_breaking_openapi_drift(parity):
         f"the dropped name to scripts/openapi_parity.INTENTIONAL_DROPS with "
         f"justification.\nDiff: {json.dumps(breaking_endpoints, indent=2)}"
     )
+
+
+# The committed Django schema snapshot the parity diff above consumes.
+DJANGO_SNAPSHOT = DOCS_DIR / "django.json"
+
+
+def _normalise(schema: dict) -> dict:
+    """JSON round-trip so OrderedDict / tuple / date types compare structurally."""
+    return json.loads(json.dumps(schema, default=str, sort_keys=True))
+
+
+def _drift_summary(live: dict, committed: dict) -> str:
+    """Compact hint at WHAT drifted: added / removed schema components + paths."""
+    lc = set((live.get("components") or {}).get("schemas") or {})
+    cc = set((committed.get("components") or {}).get("schemas") or {})
+    lp = set(live.get("paths") or {})
+    cp = set(committed.get("paths") or {})
+    parts = []
+    if lc - cc:
+        parts.append(f"+schemas {sorted(lc - cc)}")
+    if cc - lc:
+        parts.append(f"-schemas {sorted(cc - lc)}")
+    if lp - cp:
+        parts.append(f"+paths {sorted(lp - cp)}")
+    if cp - lp:
+        parts.append(f"-paths {sorted(cp - lp)}")
+    return "; ".join(parts) or "a field/type within an existing schema changed"
+
+
+@pytest.mark.django_db
+def test_django_snapshot_is_fresh():
+    """``docs/openapi-parity/django.json`` must match the LIVE drf-spectacular schema.
+
+    The snapshot feeds the parity diff above and documents the API contract, but
+    nothing regenerated it automatically — so it silently drifted as serializers
+    changed across PRs (caught + corrected in #720). This gate fails when it goes
+    stale. Compared STRUCTURALLY (parsed + key-sorted) so formatting / key order
+    never cause a false failure.
+    """
+    assert DJANGO_SNAPSHOT.exists(), f"snapshot missing: {DJANGO_SNAPSHOT}"
+    live = _normalise(SchemaGenerator().get_schema(request=None, public=True))
+    committed = _normalise(json.loads(DJANGO_SNAPSHOT.read_text()))
+    assert live == committed, (
+        "docs/openapi-parity/django.json is STALE (drifted from the live schema). "
+        "Regenerate: `python manage.py spectacular --format openapi-json "
+        "--file docs/openapi-parity/django.json` and commit.\nDrift: "
+        + _drift_summary(live, committed)
+    )
