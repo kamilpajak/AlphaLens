@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { statusRail, alphaBadgeTone } from '../../src/lib/data/research-ledger';
+import { statusRail, alphaBadgeTone, stripLedgerMarkup } from '../../src/lib/data/research-ledger';
 
 // Pins the two pure UI helpers behind the /experiments scannability pass:
 // - statusRail turns a "text-X border-X" tone into a left-rail class so each
@@ -42,5 +42,27 @@ describe('alphaBadgeTone', () => {
 	it('doctrine bar (≥3.5) → green', () => {
 		expect(alphaBadgeTone(3.5)).toBe('text-green border-green');
 		expect(alphaBadgeTone(4.2)).toBe('text-green border-green');
+	});
+});
+
+// Strips the [term] / [term|label] tooltip markup down to plain text — the
+// status-chip tooltips render the definition as a plain body (the JargonTip
+// popover is pointer-events-none, so nested inline tips can't live inside it).
+describe('stripLedgerMarkup', () => {
+	it('leaves plain text unchanged', () => {
+		expect(stripLedgerMarkup('tested and rejected')).toBe('tested and rejected');
+	});
+	it('[term] → term', () => {
+		expect(stripLedgerMarkup('rejected on [multi-phase audit] gates')).toBe(
+			'rejected on multi-phase audit gates'
+		);
+	});
+	it('[term|label] → label', () => {
+		expect(stripLedgerMarkup('the [R² vs benchmark|R²] rule')).toBe('the R² rule');
+	});
+	it('handles multiple + mixed tokens', () => {
+		expect(stripLedgerMarkup('[multi-phase audit] gates ([αt] below)')).toBe(
+			'multi-phase audit gates (αt below)'
+		);
 	});
 });

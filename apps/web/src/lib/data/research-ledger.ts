@@ -426,6 +426,14 @@ export function alphaBadgeTone(t: number | null): string {
 	return 'text-green border-green';
 }
 
+/** Strip the [term] / [term|label] tooltip markup down to plain text, so a
+ *  status-chip tooltip can render a definition that itself references jargon
+ *  (the popover is pointer-events-none — nested inline tips can't live in it).
+ *  [term|label] → label; [term] → term. */
+export function stripLedgerMarkup(text: string): string {
+	return text.replace(/\[([^|\]]+)(?:\|([^\]]+))?\]/g, (_m, term, label) => label ?? term);
+}
+
 // Numbers below are one dated snapshot: VPS `~/.alphalens` stores as of
 // 2026-07-01 (372 plannable / 89 terminal outcomes over 43 brief-days).
 export const toolExperiments: ToolExperiment[] = [

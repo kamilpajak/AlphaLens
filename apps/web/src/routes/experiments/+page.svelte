@@ -15,6 +15,7 @@
 	// should also get a row in the `GLOSSARY` array in `$lib/data/glossary`.
 
 	import JargonTip from '$lib/components/JargonTip.svelte';
+	import ChipTip from '$lib/components/ChipTip.svelte';
 	import EvidenceDrawer from '$lib/components/EvidenceDrawer.svelte';
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
@@ -28,11 +29,23 @@
 		toolStatusTone,
 		statusRail,
 		alphaBadgeTone,
+		stripLedgerMarkup,
 		ALPHA_T_MARGINAL,
 		ALPHA_T_DOCTRINE,
 		type ParadigmStatus,
 		type LiveStatus
 	} from '$lib/data/research-ledger';
+
+	// Plain-text status definitions for the on-hover chip tooltips (ChipTip) that
+	// replace the two written legend blocks. Paradigm defs carry [jargon] markup —
+	// stripped to plain text because the popover is pointer-events-none and can't
+	// host nested inline tips. The legend arrays stay the single source of truth.
+	const paradigmStatusDef = new Map(
+		statusLegend.map((s) => [s.status, stripLedgerMarkup(s.definition)])
+	);
+	const toolStatusDef = new Map(
+		toolStatusLegend.map((s) => [s.status, stripLedgerMarkup(s.definition)])
+	);
 
 	// Tooltip helper — looks term up in the shared GLOSSARY (single source of
 	// truth). Any text rendered through `parseMarkup` can wrap a term inline
@@ -165,7 +178,6 @@
 	// currently-visible section highlighted via IntersectionObserver. The
 	// items match the in-page <section id="..."> anchors created above.
 	const TOC_ITEMS = [
-		{ id: 'status', label: 'status.legend' },
 		{ id: 'how-to-read', label: 'how.to.read' },
 		{ id: 'paradigms', label: 'paradigms.ledger' },
 		{ id: 'tool-experiments', label: 'tool.experiments' },
@@ -174,7 +186,7 @@
 		{ id: 'methodology', label: 'methodology.artifacts' },
 		{ id: 'glossary', label: 'glossary.terms' }
 	];
-	let activeSection = $state<string>('status');
+	let activeSection = $state<string>('how-to-read');
 
 	$effect(() => {
 		// Bail on SSR / when DOM isn't ready. IntersectionObserver lives only
@@ -270,29 +282,6 @@
 		</div>
 	</header>
 
-	<!-- C: status taxonomy legend. Five chips, defined. -->
-	<section id="status" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.05s">
-		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<h2 class="font-normal">status.legend</h2>
-			<span class="text-fg-dim normal-case tracking-normal">what each verdict means</span>
-		</div>
-		<ul class="divide-y divide-grid">
-			{#each statusLegend as s}
-				<li class="px-4 sm:px-5 py-2.5 flex flex-wrap items-baseline gap-3 text-sm">
-					<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest shrink-0 {statusTone(s.status)}">{s.status}</span>
-					<span class="text-fg-dim text-xs sm:text-sm flex-1 min-w-0">
-						{#each parseMarkup(s.definition) as seg}
-							{#if seg.kind === 'term'}
-								<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>
-							{:else}
-								{seg.text}
-							{/if}
-						{/each}
-					</span>
-				</li>
-			{/each}
-		</ul>
-	</section>
 
 	<!-- D: αt scale "how to read this" block. Sets up the mini-bars below. -->
 	<section id="how-to-read" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.08s">
@@ -390,7 +379,11 @@
 									aria-label="out-of-sample αt {v.toFixed(2)} (Carhart 4-factor t-statistic)"
 								>αt {v >= 0 ? '+' : ''}{v.toFixed(2)}</span>
 							{/if}
-							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest {statusTone(p.status)}">{p.status}</span>
+							<ChipTip term={p.status} body={paradigmStatusDef.get(p.status) ?? ''}>
+								{#snippet chip()}
+									<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest cursor-help {statusTone(p.status)}">{p.status}</span>
+								{/snippet}
+							</ChipTip>
 							<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{p.date}</span>
 						</span>
 					</header>
@@ -497,15 +490,6 @@
 			real trade record and has not passed a fresh forward test.
 		</div>
 
-		<ul class="divide-y divide-grid border-b border-grid">
-			{#each toolStatusLegend as s}
-				<li class="px-4 sm:px-5 py-2 flex flex-wrap items-baseline gap-3 text-xs">
-					<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest shrink-0 {toolStatusTone(s.status)}">{s.status}</span>
-					<span class="text-fg-dim flex-1 min-w-0">{s.definition}</span>
-				</li>
-			{/each}
-		</ul>
-
 		<div class="divide-y divide-grid">
 			{#each toolExperiments as t}
 				<article id={t.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors {statusRail(toolStatusTone(t.status))}">
@@ -513,7 +497,11 @@
 						<span class="font-display font-bold text-base sm:text-lg text-amber w-8 sm:w-10 shrink-0">{t.display}</span>
 						<h3 class="font-bold text-fg text-sm sm:text-base">{t.name}</h3>
 						<span class="ml-auto flex items-center gap-2">
-							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest {toolStatusTone(t.status)}">{t.status}</span>
+							<ChipTip term={t.status} body={toolStatusDef.get(t.status) ?? ''}>
+								{#snippet chip()}
+									<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest cursor-help {toolStatusTone(t.status)}">{t.status}</span>
+								{/snippet}
+							</ChipTip>
 							<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{t.date}</span>
 						</span>
 					</header>

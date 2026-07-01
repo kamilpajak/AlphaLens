@@ -772,14 +772,15 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(expChips, '/experiments footer does not show thematic vocab').not.toContain('PRESS-GATE');
 	});
 
-	test('sticky TOC renders on xl viewport with 8 section anchors (P3.1)', async ({ page }) => {
+	test('sticky TOC renders on xl viewport with 7 section anchors (P3.1)', async ({ page }) => {
 		await page.setViewportSize({ width: 1440, height: 900 });
 		await gotoExperiments(page);
 		// Aside rail is `hidden xl:block` — invisible below 1280px.
 		const tocLinks = await page.locator('nav[aria-label="Section table of contents"] a').count();
-		expect(tocLinks, '8 section anchors in TOC').toBe(8);
-		// Section ids the TOC points to must exist on the page.
-		for (const id of ['status', 'how-to-read', 'paradigms', 'tool-experiments', 'patterns', 'infra', 'methodology', 'glossary']) {
+		expect(tocLinks, '7 section anchors in TOC').toBe(7);
+		// Section ids the TOC points to must exist on the page. (status.legend was
+		// replaced by on-hover ChipTip tooltips on the status chips themselves.)
+		for (const id of ['how-to-read', 'paradigms', 'tool-experiments', 'patterns', 'infra', 'methodology', 'glossary']) {
 			const ok = await page.locator(`section#${id}`).count();
 			expect(ok, `section#${id} exists`).toBe(1);
 		}
@@ -813,7 +814,7 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		await gotoExperiments(page);
 		const h2 = await page.locator('h2').count();
 		const h3 = await page.locator('h3').count();
-		expect(h2, '≥7 h2 (status.legend, how.to.read, paradigms.ledger, failure.patterns, infrastructure.live, methodology.artifacts, glossary.terms)').toBeGreaterThanOrEqual(7);
+		expect(h2, '≥7 h2 (how.to.read, paradigms.ledger, tool.experiments, failure.patterns, infrastructure.live, methodology.artifacts, glossary.terms)').toBeGreaterThanOrEqual(7);
 		expect(h3, '≥31 h3 (18 paradigm names + 13 pattern names)').toBeGreaterThanOrEqual(31);
 	});
 
