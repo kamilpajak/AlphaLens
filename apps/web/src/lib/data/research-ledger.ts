@@ -377,6 +377,27 @@ export const toolStatusLegend: ToolStatusDef[] = [
 	{ status: 'FINDING', definition: 'a diagnostic result that taught us something but shipped no change to the tool.' }
 ];
 
+// Tailwind tone (text + border colour) per tool status — colocated with the
+// legend so the vocabulary has ONE source of truth. Exhaustive over ToolStatus:
+// adding a status without a case is a compile error via the `never` fallback,
+// and `toolExperiments.test.ts` pins legend↔tone parity.
+export function toolStatusTone(s: ToolStatus): string {
+	switch (s) {
+		case 'SHIPPED':
+			return 'text-green border-green';
+		case 'FORWARD-LOG':
+			return 'text-cyan border-cyan';
+		case 'AWAITING-N':
+			return 'text-amber border-amber';
+		case 'NO-GO':
+			return 'text-red border-red';
+		case 'FINDING':
+			return 'text-magenta border-magenta';
+	}
+	const _exhaustive: never = s;
+	return _exhaustive;
+}
+
 // Numbers below are one dated snapshot: VPS `~/.alphalens` stores as of
 // 2026-07-01 (372 plannable / 89 terminal outcomes over 43 brief-days).
 export const toolExperiments: ToolExperiment[] = [

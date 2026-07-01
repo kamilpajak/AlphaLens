@@ -25,9 +25,9 @@
 		statusLegend,
 		toolExperiments,
 		toolStatusLegend,
+		toolStatusTone,
 		type ParadigmStatus,
-		type LiveStatus,
-		type ToolStatus
+		type LiveStatus
 	} from '$lib/data/research-ledger';
 
 	// Tooltip helper — looks term up in the shared GLOSSARY (single source of
@@ -98,25 +98,6 @@
 		}
 	}
 
-	// tool.experiments status palette — distinct vocabulary from the paradigm
-	// ledger. Green = shipped, cyan = display-only forward log, amber = waiting
-	// on sample size, red = rejected, magenta = a diagnostic finding.
-	function toolStatusTone(s: ToolStatus): string {
-		switch (s) {
-			case 'SHIPPED':
-				return 'text-green border-green';
-			case 'FORWARD-LOG':
-				return 'text-cyan border-cyan';
-			case 'AWAITING-N':
-				return 'text-amber border-amber';
-			case 'NO-GO':
-				return 'text-red border-red';
-			case 'FINDING':
-				return 'text-magenta border-magenta';
-			default:
-				return 'text-fg-dim border-grid';
-		}
-	}
 
 	const T_SCALE_MAX = 4.0;
 	const T_MARGINAL = 2.0;
@@ -152,6 +133,10 @@
 	function expandRowForHash() {
 		const id = location.hash.slice(1);
 		if (!id) return;
+		// Only a matched element with a nested <details> auto-opens. A section-level
+		// hash (e.g. #tool-experiments) scrolls to the section but intentionally
+		// does NOT open the first row's detail; per-row hashes (#T1's article id)
+		// still open that row.
 		const article = document.getElementById(id);
 		if (!article) return;
 		const det = article.querySelector('details');
@@ -510,7 +495,12 @@
 						</span>
 					</header>
 
-					<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">{t.metric}</p>
+					<!-- Persistent in-sample marker on the always-visible metric line so a
+					     FORWARD-LOG number (e.g. T1's +0.075R) never reads as validated edge
+					     without expanding the detail drawer. -->
+					<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">
+						{#if t.status === 'FORWARD-LOG'}<span class="text-[10px] uppercase tracking-widest text-cyan border border-cyan px-1 py-0.5 mr-2 align-middle whitespace-nowrap">in-sample</span>{/if}{t.metric}
+					</p>
 
 					<details class="sm:ml-10 group/details">
 						<summary class="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none list-none [&::-webkit-details-marker]:hidden py-1.5">

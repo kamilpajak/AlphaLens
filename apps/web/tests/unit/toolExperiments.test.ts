@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	toolExperiments,
 	toolStatusLegend,
+	toolStatusTone,
 	type ToolStatus
 } from '../../src/lib/data/research-ledger';
 
@@ -57,11 +58,21 @@ describe('tool.experiments ledger data', () => {
 		}
 	});
 
-	it('evidence is null or a .md path', () => {
+	it('evidence is null or a .md/.json path', () => {
 		for (const r of toolExperiments) {
 			if (r.evidence !== null) {
-				expect(r.evidence.endsWith('.md')).toBe(true);
+				expect(r.evidence.endsWith('.md') || r.evidence.endsWith('.json')).toBe(true);
 			}
+		}
+	});
+
+	// Pins legend↔tone parity: every status in the legend maps to a concrete
+	// (non-empty text+border) tone, so the two status vocabularies cannot drift.
+	it('every legend status maps to a concrete tone', () => {
+		for (const s of toolStatusLegend) {
+			const tone = toolStatusTone(s.status);
+			expect(tone).toContain('text-');
+			expect(tone).toContain('border-');
 		}
 	});
 });
