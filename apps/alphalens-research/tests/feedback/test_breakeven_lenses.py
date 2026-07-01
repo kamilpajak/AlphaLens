@@ -8,7 +8,9 @@ the grid is a `{lens_id: realized_r}` map stamped display-only.
 
 from __future__ import annotations
 
+import re
 import unittest
+from pathlib import Path
 
 from alphalens_pipeline.feedback.breakeven_lenses import (
     BREAKEVEN_LENSES,
@@ -63,6 +65,26 @@ class TestBreakevenRegistry(unittest.TestCase):
         for lens in BREAKEVEN_LENSES:
             self.assertIn(lens.status, {"in_sample", "validated"})
             self.assertTrue(lens.label)
+
+    def test_spa_registry_mirrors_pipeline_lenses(self):
+        """Cross-language parity guard: every pipeline lens must appear in the SPA
+        mirror (WHATIF_LENS_REGISTRY in edgeWhatif.ts) with a matching label +
+        status. The slim Django image serves only lens_id, so labels/status live
+        SPA-side; sync is otherwise convention-only, and a pipeline lens forgotten
+        in the mirror ships with a raw-id label. This binds the two so a new lens
+        cannot silently diverge."""
+        repo_root = Path(__file__).resolve().parents[4]
+        src = (repo_root / "apps/web/src/lib/edgeWhatif.ts").read_text(encoding="utf-8")
+        for lens in BREAKEVEN_LENSES:
+            # Flat object literals (no nested braces) -> capture id: { ... } up to
+            # the first closing brace; matches both single- and multi-line entries.
+            m = re.search(re.escape(lens.lens_id) + r"\s*:\s*\{(.*?)\}", src, re.DOTALL)
+            assert m is not None, f"{lens.lens_id} missing from SPA WHATIF_LENS_REGISTRY"
+            block = m.group(1)
+            self.assertIn(f"label: '{lens.label}'", block, f"{lens.lens_id} label drift in mirror")
+            self.assertIn(
+                f"status: '{lens.status}'", block, f"{lens.lens_id} status drift in mirror"
+            )
 
     def test_grid_keyed_by_lens_id_matches_replay(self):
         grid = breakeven_grid(_SETUP, _BARS)

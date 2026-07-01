@@ -37,7 +37,7 @@
 		>
 			<FlaskConical class="size-3.5" />
 			<span class="font-bold">// what-if · experimental</span>
-			<span class="text-fg-muted normal-case tracking-normal">break-even exit-stop · counterfactual</span>
+			<span class="text-fg-muted normal-case tracking-normal">exit-stop · counterfactual</span>
 		</summary>
 
 		<div class="px-4 pb-4">
