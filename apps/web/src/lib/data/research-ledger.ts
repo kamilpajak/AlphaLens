@@ -415,15 +415,16 @@ export function statusRail(tone: string): string {
 	return `border-l-2 ${border}`;
 }
 
-/** Tone (text + border) for the glanceable αt header badge, coloured by the SAME
- *  doctrine thresholds the IS/OOS bars use: <0 red · <2 muted · <3.5 amber ·
- *  ≥3.5 green. null / non-finite → muted. */
-export function alphaBadgeTone(t: number | null): string {
-	if (t === null || !Number.isFinite(t)) return 'text-fg-muted border-grid';
-	if (t < 0) return 'text-red border-red';
-	if (t < ALPHA_T_MARGINAL) return 'text-fg-muted border-grid';
-	if (t < ALPHA_T_DOCTRINE) return 'text-amber border-amber';
-	return 'text-green border-green';
+/** Text colour for an IS/OOS αt bar VALUE, by the doctrine thresholds the bar
+ *  fill uses: <0 red · <2 muted (noise) · <3.5 amber (marginal) · ≥3.5 green
+ *  (deploy-eligible). null / non-finite → muted. Text-only (no border) — it
+ *  tints the number next to the bar, so the verdict reads off the value itself. */
+export function alphaValueTone(t: number | null): string {
+	if (t === null || !Number.isFinite(t)) return 'text-fg-muted';
+	if (t < 0) return 'text-red';
+	if (t < ALPHA_T_MARGINAL) return 'text-fg-muted';
+	if (t < ALPHA_T_DOCTRINE) return 'text-amber';
+	return 'text-green';
 }
 
 /** Strip the [term] / [term|label] tooltip markup down to plain text, so a
