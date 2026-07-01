@@ -377,7 +377,12 @@
 						</span>
 					</header>
 
-					<p class="text-[13px] text-fg-dim leading-relaxed mb-3 sm:pl-12 max-w-[72ch]">{p.story}</p>
+					<!-- Body two-column on lg+: narrative left (capped measure), IS/OOS αt
+					     bars right (the quantitative evidence, under the verdict cluster) — so a
+					     wide card fills both edges instead of leaving the right half empty.
+					     Stacks vertically on smaller screens. -->
+					<div class="sm:pl-12 mb-3 lg:flex lg:items-start lg:justify-between lg:gap-8">
+						<p class="text-[13px] text-fg-dim leading-relaxed mb-3 lg:mb-0 lg:max-w-[72ch]">{p.story}</p>
 
 					{#if p.is_t !== null || p.oos_t !== null}
 						<!-- IS/OOS αt bars. Track is width-capped (max-w-lg) so a 0–4 scalar
@@ -386,7 +391,7 @@
 						     is a hairline; the 3.5 deploy marker is a bolder green line (the
 						     decision-relevant threshold reads loudest). The value is tinted by
 						     its own doctrine band via alphaValueTone. -->
-						<div class="sm:pl-12 mb-3 text-[11px] max-w-lg">
+						<div class="text-[11px] w-full lg:w-[28rem] lg:shrink-0">
 							<div class="flex items-center gap-2 mb-1">
 								<span class="w-10 text-fg-muted uppercase tracking-widest">
 									<JargonTip {...tipProps('IS')}>IS</JargonTip>
@@ -415,6 +420,7 @@
 							</div>
 						</div>
 					{/if}
+					</div>
 
 					<!-- Detail fields (hypothesis / mechanism / metric / lesson / evidence)
 					     collapsed by default. Header + story + IS/OOS mini-bar stay
