@@ -106,6 +106,10 @@ def test_next_open_parity_across_holiday_halfday_and_dst():
         # Fri 2025-03-07 22:00 UTC — after close, spring-forward weekend ahead;
         # reopen Mon 2025-03-10.
         dt.datetime(2025, 3, 7, 22, 0, tzinfo=dt.UTC),
+        # Exact open minute (Fri 2025-03-07 14:30 UTC == 09:30 EST). ``next_open``
+        # is strictly-after, so both wrappers must skip today and give Monday —
+        # a boundary where an off-by-one-minute rule in one side would surface.
+        dt.datetime(2025, 3, 7, 14, 30, tzinfo=dt.UTC),
     ]
     for instant in instants:
         paper_open = paper_cal.next_trading_open(instant)
