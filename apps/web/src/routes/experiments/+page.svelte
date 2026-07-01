@@ -26,6 +26,8 @@
 		toolExperiments,
 		toolStatusLegend,
 		toolStatusTone,
+		statusRail,
+		alphaBadgeTone,
 		type ParadigmStatus,
 		type LiveStatus
 	} from '$lib/data/research-ledger';
@@ -333,13 +335,23 @@
 	</section>
 
 	<section id="paradigms" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.1s">
-		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<h2 class="font-normal">paradigms.ledger</h2>
-			<span class="text-fg-dim normal-case tracking-normal">{paradigms.length} rows · click each "show detail" for hypothesis / mechanism / outcome / lesson</span>
+		<div class="px-4 sm:px-5 py-3 border-b border-grid">
+			<div class="text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
+				<h2 class="font-normal">paradigms.ledger</h2>
+				<span class="text-fg-dim normal-case tracking-normal">{paradigms.length} rows · click each "show detail" for hypothesis / mechanism / outcome / lesson</span>
+			</div>
+			<!-- Track band: names this ledger's axis + cross-links the sibling track,
+			     so a mid-page reader grasps the two tracks measure different things. -->
+			<p class="text-[11px] text-fg-dim mt-1.5 leading-relaxed">
+				<span class="text-cyan">paradigm-search track</span> — falsifying standalone alpha hypotheses, measured in
+				<JargonTip {...tipProps('αt')}>αt</JargonTip> (Carhart-4F t-stat). The live-tool track is
+				<a href="#tool-experiments" class="text-cyan hover:text-amber underline decoration-dotted underline-offset-2">tool.experiments</a>
+				below.
+			</p>
 		</div>
 		<div class="divide-y divide-grid">
 			{#each paradigms as p}
-				<article id={p.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors">
+				<article id={p.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors {statusRail(statusTone(p.status))}">
 					<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
 						<span class="font-display font-bold text-base sm:text-lg text-amber w-10 sm:w-12 shrink-0">{p.display}</span>
 						<h3 class="font-bold text-fg text-sm sm:text-base">{p.name}</h3>
@@ -367,12 +379,22 @@
 							{/if}
 						</span>
 						<span class="ml-auto flex items-center gap-2">
+							{#if (p.oos_t ?? p.is_t) !== null}
+								{@const v = (p.oos_t ?? p.is_t)!}
+								<!-- Glanceable αt: the out-of-sample t-stat (falls back to IS when OOS
+								     unmeasured), coloured by the same doctrine thresholds as the bars
+								     below, so the verdict reads without parsing the bar. -->
+								<span
+									class="px-1.5 py-0.5 border text-[10px] tracking-wide whitespace-nowrap {alphaBadgeTone(v)}"
+									title="out-of-sample αt (Carhart-4F); in-sample when OOS not measured"
+								>αt {v >= 0 ? '+' : ''}{v.toFixed(2)}</span>
+							{/if}
 							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest {statusTone(p.status)}">{p.status}</span>
 							<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{p.date}</span>
 						</span>
 					</header>
 
-					<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-12 italic">{p.story}</p>
+					<p class="text-[13px] text-fg-dim leading-relaxed mb-3 sm:pl-12 max-w-[72ch]">{p.story}</p>
 
 					{#if p.is_t !== null || p.oos_t !== null}
 						<div class="sm:pl-12 mb-3 text-[11px]">
@@ -485,7 +507,7 @@
 
 		<div class="divide-y divide-grid">
 			{#each toolExperiments as t}
-				<article id={t.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors">
+				<article id={t.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors {statusRail(toolStatusTone(t.status))}">
 					<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
 						<span class="font-display font-bold text-base sm:text-lg text-amber w-8 sm:w-10 shrink-0">{t.display}</span>
 						<h3 class="font-bold text-fg text-sm sm:text-base">{t.name}</h3>
