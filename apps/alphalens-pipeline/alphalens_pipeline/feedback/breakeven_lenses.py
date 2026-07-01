@@ -93,16 +93,23 @@ def _lens_realized_r(
     trade_setup: Mapping[str, Any] | None,
     bars: Sequence[Mapping[str, Any]],
 ) -> float | None:
-    """Dispatch one lens to its replay, returning realized R (or ``None``)."""
+    """Dispatch one lens to its replay, returning realized R (or ``None``).
+
+    Raises ``ValueError`` on an unregistered ``kind`` — a new lens kind must be a
+    conscious two-step change (register + add a branch here), never a silent
+    fall-through to the break-even path that would produce wrong R.
+    """
     if lens.kind == "fill_anchored":
         mult = lens.stop_atr_mult if lens.stop_atr_mult is not None else _DEFAULT_STOP_ATR_MULT
         return realized_r_fill_anchored(trade_setup, bars, stop_atr_mult=mult)
-    # default: MFE-triggered break-even / trailing. A missing trigger reduces to a
-    # static disaster-stop walk (baseline parity), never an error.
-    trigger = lens.mfe_trigger_r if lens.mfe_trigger_r is not None else float("inf")
-    return replay_ladder_breakeven(
-        trade_setup, bars, mfe_trigger_r=trigger, trail_frac=lens.trail_frac
-    )
+    if lens.kind == "breakeven":
+        # MFE-triggered break-even / trailing. A missing trigger reduces to a static
+        # disaster-stop walk (mfe_trigger_r=inf never arms it -> baseline parity).
+        trigger = lens.mfe_trigger_r if lens.mfe_trigger_r is not None else float("inf")
+        return replay_ladder_breakeven(
+            trade_setup, bars, mfe_trigger_r=trigger, trail_frac=lens.trail_frac
+        )
+    raise ValueError(f"unknown exit-lens kind: {lens.kind!r}")
 
 
 def breakeven_grid(

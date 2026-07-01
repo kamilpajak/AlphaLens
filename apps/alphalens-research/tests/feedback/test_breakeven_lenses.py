@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import unittest
 
-from alphalens_pipeline.feedback.breakeven_lenses import BREAKEVEN_LENSES, breakeven_grid
+from alphalens_pipeline.feedback.breakeven_lenses import (
+    BREAKEVEN_LENSES,
+    BreakevenLens,
+    _lens_realized_r,
+    breakeven_grid,
+)
 from alphalens_pipeline.feedback.ladder_replay import (
     realized_r_fill_anchored,
     replay_ladder_breakeven,
@@ -82,6 +87,15 @@ class TestBreakevenRegistry(unittest.TestCase):
         setup = _setup(entries=[(100.0, 100.0)], tps=[(110.0, 100.0)], stop=90.0, atr=2.0)
         bars = [_bar(1, 99.5, 101.0, 100.0), _bar(2, 105.0, 111.0, 110.0)]
         self.assertAlmostEqual(breakeven_grid(setup, bars)["fill_anchored_0p5atr"], 10.0, places=6)
+
+    def test_unknown_lens_kind_raises(self):
+        # A registered lens with an unrecognised kind is a config error that must
+        # fail loudly at dispatch, not silently fall through to the break-even path.
+        bogus = BreakevenLens(
+            lens_id="bogus", label="bogus", category="exit-stop", status="in_sample", kind="bogus"
+        )
+        with self.assertRaises(ValueError):
+            _lens_realized_r(bogus, _SETUP, _BARS)
 
     def test_grid_none_when_no_fill(self):
         grid = breakeven_grid(_SETUP, [_bar(1, 101.0, 105.0, 103.0)])  # never touches 100
