@@ -582,6 +582,8 @@ export interface components {
             ticker: string;
             /** Format: date */
             brief_date: string;
+            /** Format: date */
+            matured_at?: string | null;
             theme?: string | null;
             scorer_config_version?: string | null;
             ladder_classification: string;

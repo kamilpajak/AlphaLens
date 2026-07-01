@@ -129,6 +129,9 @@ class EdgeOutcomesView(APIView):
             {
                 "ticker": o.ticker,
                 "brief_date": o.brief_date,
+                # When the decision terminated (null while ongoing) — lets the table
+                # sort by most-recently-completed, distinct from brief_date (recommended).
+                "matured_at": o.matured_at,
                 # Theme + scorer_config_version are carried on the outcome record
                 # itself (stamped at the brief by the population monitor) — no fragile
                 # re-join. "" (older / unstamped rows) maps to null so the SPA renders
