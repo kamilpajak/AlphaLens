@@ -58,3 +58,15 @@ export function whatifLenses(panel: WhatIfPanel): WhatIfLensView[] {
 export function hasWhatif(panel: WhatIfPanel | null | undefined): boolean {
 	return !!panel && Object.keys(panel.lenses).length > 0;
 }
+
+/** Whether the sandbox has EARNED a permanent render (doctrine: surface a lens
+ *  only when it earns display). True once >=2 lenses are populated (n>0 — a real
+ *  head-to-head) OR any lens is validated. A single in-sample lens — the current
+ *  live state (be_0p5r only, fill_anchored forward-only) — does NOT qualify, so the
+ *  panel stays hidden until the head-to-head matures, then reappears with zero
+ *  code change (the registry + Django aggregate stay wired). */
+export function whatifEarnsDisplay(panel: WhatIfPanel | null | undefined): boolean {
+	if (!panel) return false;
+	const views = whatifLenses(panel);
+	return views.filter((v) => v.n > 0).length >= 2 || views.some((v) => v.status === 'validated');
+}

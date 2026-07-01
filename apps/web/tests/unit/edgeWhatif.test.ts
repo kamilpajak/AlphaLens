@@ -3,6 +3,7 @@ import {
 	WHATIF_LENS_REGISTRY,
 	hasWhatif,
 	resolveLensMeta,
+	whatifEarnsDisplay,
 	whatifLenses
 } from '../../src/lib/edgeWhatif';
 import type { WhatIfPanel } from '../../src/lib/types';
@@ -49,6 +50,44 @@ describe('whatifLenses', () => {
 		expect(be?.meanR).toBe(0.069);
 		expect(be?.medianR).toBe(0.044);
 		expect(be?.n).toBe(100);
+	});
+});
+
+describe('whatifEarnsDisplay', () => {
+	// The sandbox renders only once the what-if "earns display": >=2 populated
+	// lenses (a real head-to-head) OR a validated lens. A single in-sample lens —
+	// the current live state (be_0p5r only) — does NOT earn a permanent panel.
+	it('is false for null / empty', () => {
+		expect(whatifEarnsDisplay(null)).toBe(false);
+		expect(whatifEarnsDisplay(panel({}))).toBe(false);
+	});
+
+	it('is false for a single populated in-sample lens (current live state)', () => {
+		expect(whatifEarnsDisplay(panel({ be_0p5r: { n: 55, mean_r: 0.075, median_r: 0.044 } }))).toBe(
+			false
+		);
+	});
+
+	it('is true once a second lens is populated (head-to-head)', () => {
+		expect(
+			whatifEarnsDisplay(
+				panel({
+					be_0p5r: { n: 55, mean_r: 0.075, median_r: 0.044 },
+					fill_anchored_0p5atr: { n: 12, mean_r: 0.2, median_r: 0.1 }
+				})
+			)
+		).toBe(true);
+	});
+
+	it('does not count an empty (n=0) lens toward the head-to-head', () => {
+		expect(
+			whatifEarnsDisplay(
+				panel({
+					be_0p5r: { n: 55, mean_r: 0.075, median_r: 0.044 },
+					fill_anchored_0p5atr: { n: 0, mean_r: null, median_r: null }
+				})
+			)
+		).toBe(false);
 	});
 });
 

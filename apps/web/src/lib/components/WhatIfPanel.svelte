@@ -2,7 +2,12 @@
 	import { AlertTriangle, FlaskConical } from 'lucide-svelte';
 	import type { EdgeSummary } from '$lib/types';
 	import { fmtR, statsUnlocked } from '$lib/edge';
-	import { hasWhatif, whatifLenses, type WhatIfLensView } from '$lib/edgeWhatif';
+	import {
+		hasWhatif,
+		whatifEarnsDisplay,
+		whatifLenses,
+		type WhatIfLensView
+	} from '$lib/edgeWhatif';
 
 	// DISPLAY-ONLY counterfactual sandbox. Collapsed by default so the REALIZED
 	// panels stay the default production view; the what-if is strictly opt-in and
@@ -30,7 +35,7 @@
 	const activeStatus = $derived(selected?.status ?? 'in_sample');
 </script>
 
-{#if hasWhatif(wf)}
+{#if whatifEarnsDisplay(wf)}
 	<details class="mb-6 border border-dashed border-violet/40 bg-violet/5 corners fade-up" data-testid="whatif-panel">
 		<summary
 			class="flex cursor-pointer items-center gap-2 px-4 py-3 text-[10px] uppercase tracking-widest text-violet select-none"
