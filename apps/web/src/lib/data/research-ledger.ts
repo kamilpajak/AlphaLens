@@ -398,6 +398,34 @@ export function toolStatusTone(s: ToolStatus): string {
 	return _exhaustive;
 }
 
+// --- /experiments ledger UI helpers (pure; unit-tested in
+// experimentsLedgerUi.test.ts) ---------------------------------------------
+
+// Doctrine αt thresholds (Carhart-4F t-stat): marginal = paper-trade-only,
+// doctrine = deploy-eligible. Single source of truth — the /experiments IS/OOS
+// bar tones import these too, so the badge and the bars can never disagree.
+export const ALPHA_T_MARGINAL = 2.0;
+export const ALPHA_T_DOCTRINE = 3.5;
+
+/** Turn a "text-X border-X" status tone into a left-rail class, so each ledger
+ *  row carries a status-coloured edge (a scannable verdict column). Falls back
+ *  to the grid border when the tone has no border-* token. */
+export function statusRail(tone: string): string {
+	const border = tone.split(/\s+/).find((c) => c.startsWith('border-')) ?? 'border-grid';
+	return `border-l-2 ${border}`;
+}
+
+/** Tone (text + border) for the glanceable αt header badge, coloured by the SAME
+ *  doctrine thresholds the IS/OOS bars use: <0 red · <2 muted · <3.5 amber ·
+ *  ≥3.5 green. null / non-finite → muted. */
+export function alphaBadgeTone(t: number | null): string {
+	if (t === null || !Number.isFinite(t)) return 'text-fg-muted border-grid';
+	if (t < 0) return 'text-red border-red';
+	if (t < ALPHA_T_MARGINAL) return 'text-fg-muted border-grid';
+	if (t < ALPHA_T_DOCTRINE) return 'text-amber border-amber';
+	return 'text-green border-green';
+}
+
 // Numbers below are one dated snapshot: VPS `~/.alphalens` stores as of
 // 2026-07-01 (372 plannable / 89 terminal outcomes over 43 brief-days).
 export const toolExperiments: ToolExperiment[] = [
