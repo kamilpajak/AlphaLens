@@ -28,7 +28,7 @@
 		toolStatusLegend,
 		toolStatusTone,
 		statusRail,
-		alphaBadgeTone,
+		alphaValueTone,
 		stripLedgerMarkup,
 		ALPHA_T_MARGINAL,
 		ALPHA_T_DOCTRINE,
@@ -368,17 +368,6 @@
 							{/if}
 						</span>
 						<span class="ml-auto flex items-center gap-2">
-							{#if (p.oos_t ?? p.is_t) !== null}
-								{@const v = (p.oos_t ?? p.is_t)!}
-								<!-- Glanceable αt: the out-of-sample t-stat (falls back to IS when OOS
-								     unmeasured), coloured by the same doctrine thresholds as the bars
-								     below, so the verdict reads without parsing the bar. -->
-								<span
-									class="px-1.5 py-0.5 border text-[10px] tracking-wide whitespace-nowrap {alphaBadgeTone(v)}"
-									title="out-of-sample αt (Carhart-4F); in-sample when OOS not measured"
-									aria-label="out-of-sample αt {v.toFixed(2)} (Carhart 4-factor t-statistic)"
-								>αt {v >= 0 ? '+' : ''}{v.toFixed(2)}</span>
-							{/if}
 							<ChipTip term={p.status} body={paradigmStatusDef.get(p.status) ?? ''}>
 								{#snippet chip()}
 									<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest cursor-help {statusTone(p.status)}">{p.status}</span>
@@ -391,32 +380,38 @@
 					<p class="text-[13px] text-fg-dim leading-relaxed mb-3 sm:pl-12 max-w-[72ch]">{p.story}</p>
 
 					{#if p.is_t !== null || p.oos_t !== null}
-						<div class="sm:pl-12 mb-3 text-[11px]">
+						<!-- IS/OOS αt bars. Track is width-capped (max-w-lg) so a 0–4 scalar
+						     isn't stretched across the whole card; a ring bounds the full scale
+						     so the extent is legible regardless of fill. The 2.0 marginal marker
+						     is a hairline; the 3.5 deploy marker is a bolder green line (the
+						     decision-relevant threshold reads loudest). The value is tinted by
+						     its own doctrine band via alphaValueTone. -->
+						<div class="sm:pl-12 mb-3 text-[11px] max-w-lg">
 							<div class="flex items-center gap-2 mb-1">
 								<span class="w-10 text-fg-muted uppercase tracking-widest">
 									<JargonTip {...tipProps('IS')}>IS</JargonTip>
 								</span>
-								<div class="relative h-2 flex-1 bg-bg-3 overflow-hidden">
+								<div class="relative h-2 flex-1 bg-bg-3 overflow-hidden ring-1 ring-inset ring-grid">
 									{#if p.is_t !== null}
 										<div class="absolute inset-y-0 left-0 {tBarTone(p.is_t)}" style="width: {tBarWidthPct(p.is_t)}%"></div>
 									{/if}
 									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(ALPHA_T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
-									<div class="absolute inset-y-0 border-l border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
+									<div class="absolute inset-y-0 border-l-2 border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
 								</div>
-								<span class="w-14 text-right font-mono text-fg">{p.is_t === null ? '—' : (p.is_t >= 0 ? '+' : '') + p.is_t.toFixed(2)}</span>
+								<span class="w-14 text-right font-mono {alphaValueTone(p.is_t)}">{p.is_t === null || !Number.isFinite(p.is_t) ? '—' : (p.is_t >= 0 ? '+' : '') + p.is_t.toFixed(2)}</span>
 							</div>
 							<div class="flex items-center gap-2">
 								<span class="w-10 text-fg-muted uppercase tracking-widest">
 									<JargonTip {...tipProps('OOS')}>OOS</JargonTip>
 								</span>
-								<div class="relative h-2 flex-1 bg-bg-3 overflow-hidden">
+								<div class="relative h-2 flex-1 bg-bg-3 overflow-hidden ring-1 ring-inset ring-grid">
 									{#if p.oos_t !== null}
 										<div class="absolute inset-y-0 left-0 {tBarTone(p.oos_t)}" style="width: {tBarWidthPct(p.oos_t)}%"></div>
 									{/if}
 									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(ALPHA_T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
-									<div class="absolute inset-y-0 border-l border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
+									<div class="absolute inset-y-0 border-l-2 border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
 								</div>
-								<span class="w-14 text-right font-mono text-fg">{p.oos_t === null ? '—' : (p.oos_t >= 0 ? '+' : '') + p.oos_t.toFixed(2)}</span>
+								<span class="w-14 text-right font-mono {alphaValueTone(p.oos_t)}">{p.oos_t === null || !Number.isFinite(p.oos_t) ? '—' : (p.oos_t >= 0 ? '+' : '') + p.oos_t.toFixed(2)}</span>
 							</div>
 						</div>
 					{/if}
