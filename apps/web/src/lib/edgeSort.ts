@@ -20,6 +20,18 @@ export function defaultDir(key: SortKey): SortDir {
 	return DESC_FIRST.has(key) ? 'desc' : 'asc';
 }
 
+// Columns that only carry a value once a decision has matured: `closed`
+// (matured_at) and `book` (realized_return_pct_of_book). Ongoing rows render an
+// em-dash for both, so their columns are hidden in the ongoing view — and a sort
+// on either must fall back to a shared column so the indicator is never orphaned
+// on an invisible header.
+const TERMINAL_ONLY_KEYS: ReadonlySet<SortKey> = new Set(['closed', 'book']);
+
+/** Whether `key`'s column is shown for the given outcomes-table `filter`. */
+export function isSortKeyVisible(key: SortKey, filter: 'terminal' | 'ongoing'): boolean {
+	return filter === 'terminal' || !TERMINAL_ONLY_KEYS.has(key);
+}
+
 function keyValue(row: EdgeOutcome, key: SortKey): string | number | null {
 	switch (key) {
 		case 'ticker':
