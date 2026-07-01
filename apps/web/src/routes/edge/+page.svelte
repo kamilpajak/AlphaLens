@@ -489,6 +489,7 @@
 							{@render sortHead('class', 'class', '')}
 							{@render sortHead('value', valueLabel, 'min-w-[8rem]')}
 							{@render sortHead('hold', 'hold', 'hidden sm:table-cell text-right')}
+							{@render sortHead('brief', 'brief', 'hidden sm:table-cell text-right')}
 							{@render sortHead('closed', 'closed', 'hidden sm:table-cell text-right')}
 							{@render sortHead('book', '% book', 'hidden md:table-cell text-right')}
 							{@render sortHead('theme', 'theme', 'hidden md:table-cell')}
@@ -589,6 +590,9 @@
 									{o.holding_days_elapsed != null ? `${o.holding_days_elapsed}d` : '—'}
 								</td>
 								<td class="hidden sm:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
+									{o.brief_date.slice(5)}
+								</td>
+								<td class="hidden sm:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
 									{o.matured_at ? o.matured_at.slice(5) : '—'}
 								</td>
 								<td class="hidden md:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
@@ -613,7 +617,7 @@
 								<!-- Inline-accordion detail row: full-width ladder-replay chart,
 								     lazy-mounted on first expand. -->
 								<tr class="border-b border-grid bg-bg-2/40">
-									<td colspan="7" class="px-2 sm:px-4 py-4">
+									<td colspan="9" class="px-2 sm:px-4 py-4">
 										<div class="border border-grid bg-bg-1 px-4 sm:px-5 py-4">
 											{#if !chart || chart.loading}
 												<div class="text-[10px] uppercase tracking-widest text-fg-muted py-6 text-center">

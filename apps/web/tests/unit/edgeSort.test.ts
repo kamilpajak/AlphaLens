@@ -34,6 +34,7 @@ describe('defaultDir', () => {
 		expect(defaultDir('closed')).toBe('desc');
 		expect(defaultDir('hold')).toBe('desc');
 		expect(defaultDir('book')).toBe('desc');
+		expect(defaultDir('brief')).toBe('desc');
 		expect(defaultDir('ticker')).toBe('asc');
 		expect(defaultDir('class')).toBe('asc');
 		expect(defaultDir('theme')).toBe('asc');
@@ -74,6 +75,26 @@ describe('sortOutcomes', () => {
 			o({ ticker: 'B', terminal: false, open_r: 0.5, market_excess_return: -9 })
 		];
 		expect(tk(sortOutcomes(rows, 'value', 'desc'))).toEqual(['B', 'A']);
+	});
+
+	it('sorts by brief (brief_date) as a primary key honoring direction', () => {
+		const rows = [
+			o({ ticker: 'OLD', brief_date: '2026-06-01' }),
+			o({ ticker: 'NEW', brief_date: '2026-06-28' }),
+			o({ ticker: 'MID', brief_date: '2026-06-15' })
+		];
+		// asc = oldest recommendation first. The secondary fallback (brief_date DESC)
+		// would order these newest-first, so this asserts the 'brief' PRIMARY case runs.
+		expect(tk(sortOutcomes(rows, 'brief', 'asc'))).toEqual(['OLD', 'MID', 'NEW']);
+		expect(tk(sortOutcomes(rows, 'brief', 'desc'))).toEqual(['NEW', 'MID', 'OLD']);
+	});
+
+	it('breaks equal brief_date ties by ticker asc', () => {
+		const rows = [
+			o({ ticker: 'Z', brief_date: '2026-06-05' }),
+			o({ ticker: 'A', brief_date: '2026-06-05' })
+		];
+		expect(tk(sortOutcomes(rows, 'brief', 'asc'))).toEqual(['A', 'Z']);
 	});
 
 	it('sorts ticker alphabetically', () => {
