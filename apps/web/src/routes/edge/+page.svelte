@@ -100,9 +100,12 @@
 		}
 	}
 
-	// Terminal-only columns (matured_at, realized book %) collapse the table from
-	// 9 → 7 columns in the ongoing view; the accordion detail row spans all of them.
-	const colSpan = $derived(filter === 'terminal' ? 9 : 7);
+	// Full table width: the leading expand chevron + 8 sortable headers (ticker,
+	// class, value, hold, brief, closed, book, theme). The ongoing view hides the
+	// two terminal-only columns (closed, % book), so the accordion detail row spans
+	// TERMINAL_COLS − 2 there. Keep this in step with the <th> list below.
+	const TERMINAL_COLS = 9;
+	const colSpan = $derived(filter === 'terminal' ? TERMINAL_COLS : TERMINAL_COLS - 2);
 
 	const rows = $derived(
 		sortOutcomes(
