@@ -23,6 +23,11 @@ describe('alphaBadgeTone', () => {
 	it('null → muted', () => {
 		expect(alphaBadgeTone(null)).toContain('border-grid');
 	});
+	it('non-finite (NaN / ±Infinity) → muted', () => {
+		expect(alphaBadgeTone(NaN)).toBe('text-fg-muted border-grid');
+		expect(alphaBadgeTone(Infinity)).toBe('text-fg-muted border-grid');
+		expect(alphaBadgeTone(-Infinity)).toBe('text-fg-muted border-grid');
+	});
 	it('negative → red', () => {
 		expect(alphaBadgeTone(-1.2)).toBe('text-red border-red');
 	});

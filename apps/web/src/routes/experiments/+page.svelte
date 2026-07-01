@@ -28,6 +28,8 @@
 		toolStatusTone,
 		statusRail,
 		alphaBadgeTone,
+		ALPHA_T_MARGINAL,
+		ALPHA_T_DOCTRINE,
 		type ParadigmStatus,
 		type LiveStatus
 	} from '$lib/data/research-ledger';
@@ -102,8 +104,6 @@
 
 
 	const T_SCALE_MAX = 4.0;
-	const T_MARGINAL = 2.0;
-	const T_DOCTRINE = 3.5;
 	function tBarWidthPct(t: number | null): number {
 		if (t === null || !Number.isFinite(t)) return 0;
 		const clamped = Math.max(0, Math.min(t, T_SCALE_MAX));
@@ -112,8 +112,8 @@
 	function tBarTone(t: number | null): string {
 		if (t === null) return 'bg-fg-muted';
 		if (t < 0) return 'bg-red';
-		if (t < T_MARGINAL) return 'bg-amber-dim';
-		if (t < T_DOCTRINE) return 'bg-amber';
+		if (t < ALPHA_T_MARGINAL) return 'bg-amber-dim';
+		if (t < ALPHA_T_DOCTRINE) return 'bg-amber';
 		return 'bg-green';
 	}
 
@@ -387,6 +387,7 @@
 								<span
 									class="px-1.5 py-0.5 border text-[10px] tracking-wide whitespace-nowrap {alphaBadgeTone(v)}"
 									title="out-of-sample αt (Carhart-4F); in-sample when OOS not measured"
+									aria-label="out-of-sample αt {v.toFixed(2)} (Carhart 4-factor t-statistic)"
 								>αt {v >= 0 ? '+' : ''}{v.toFixed(2)}</span>
 							{/if}
 							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest {statusTone(p.status)}">{p.status}</span>
@@ -406,8 +407,8 @@
 									{#if p.is_t !== null}
 										<div class="absolute inset-y-0 left-0 {tBarTone(p.is_t)}" style="width: {tBarWidthPct(p.is_t)}%"></div>
 									{/if}
-									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
-									<div class="absolute inset-y-0 border-l border-green" style="left: {(T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
+									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(ALPHA_T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
+									<div class="absolute inset-y-0 border-l border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
 								</div>
 								<span class="w-14 text-right font-mono text-fg">{p.is_t === null ? '—' : (p.is_t >= 0 ? '+' : '') + p.is_t.toFixed(2)}</span>
 							</div>
@@ -419,8 +420,8 @@
 									{#if p.oos_t !== null}
 										<div class="absolute inset-y-0 left-0 {tBarTone(p.oos_t)}" style="width: {tBarWidthPct(p.oos_t)}%"></div>
 									{/if}
-									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
-									<div class="absolute inset-y-0 border-l border-green" style="left: {(T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
+									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(ALPHA_T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
+									<div class="absolute inset-y-0 border-l border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
 								</div>
 								<span class="w-14 text-right font-mono text-fg">{p.oos_t === null ? '—' : (p.oos_t >= 0 ? '+' : '') + p.oos_t.toFixed(2)}</span>
 							</div>

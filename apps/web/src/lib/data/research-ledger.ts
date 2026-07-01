@@ -401,8 +401,11 @@ export function toolStatusTone(s: ToolStatus): string {
 // --- /experiments ledger UI helpers (pure; unit-tested in
 // experimentsLedgerUi.test.ts) ---------------------------------------------
 
-const ALPHA_T_MARGINAL = 2.0;
-const ALPHA_T_DOCTRINE = 3.5;
+// Doctrine αt thresholds (Carhart-4F t-stat): marginal = paper-trade-only,
+// doctrine = deploy-eligible. Single source of truth — the /experiments IS/OOS
+// bar tones import these too, so the badge and the bars can never disagree.
+export const ALPHA_T_MARGINAL = 2.0;
+export const ALPHA_T_DOCTRINE = 3.5;
 
 /** Turn a "text-X border-X" status tone into a left-rail class, so each ledger
  *  row carries a status-coloured edge (a scannable verdict column). Falls back
