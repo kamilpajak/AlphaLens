@@ -529,6 +529,48 @@ def realized_r_full_fill(
     ).realized_r
 
 
+def realized_r_fill_anchored(
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    stop_atr_mult: float = 0.5,
+) -> float | None:
+    """What-if realized R under a FILL-ANCHORED disaster stop (exit-geometry path b).
+
+    "Size the stop to the ACTUAL fill, not the planned deep ladder." A stop placed
+    ``stop_atr_mult*ATR`` below the shallowest tier E1 collapses the averaging-down
+    ladder — that tight stop is pierced (SL-first) before a deeper dip can fill
+    E2/E3 — so the faithful model is a SINGLE-tier entry at E1 with a
+    ``stop_atr_mult*ATR`` disaster stop and the SAME TP targets, replayed over the
+    SAME bars. Because it re-runs the walk (changing fills + stop-outs) it is a
+    display-only counterfactual like :func:`replay_ladder_breakeven` / the exit grid
+    — NEVER the headline ``realized_r``, and NOT a validated rule (in_sample). It
+    isolates the winner-R compression the far stop imposes on shallow fills
+    (``docs/research/exit_geometry_reward_risk_2026_06_30.md``).
+
+    Returns ``None`` for an unparseable setup, no bars, a missing / non-finite /
+    non-positive ATR, no finite entry tier, a non-positive risk
+    (``stop_atr_mult <= 0``), or when the single E1 limit never fills on this path.
+    """
+    ladder = parse_ladder(trade_setup)
+    if trade_setup is None or not bars or not ladder.ok:
+        return None
+    atr = ladder.atr
+    if atr is None or not math.isfinite(atr) or atr <= 0:
+        return None
+    finite_entries = [lvl for lvl in ladder.entries if math.isfinite(lvl.price)]
+    if not finite_entries:
+        return None
+    # Shallowest tier = highest price (E1); max() is robust to input ordering.
+    e1 = max(lvl.price for lvl in finite_entries)
+    anchored_stop = e1 - stop_atr_mult * atr
+    if e1 - anchored_stop <= 0:  # stop_atr_mult <= 0 -> risk undefined
+        return None
+    setup_single = _with_entry_tiers(trade_setup, [{"limit": e1, "alloc_pct": 100.0}])
+    setup_single = _with_disaster_stop(setup_single, anchored_stop)
+    return replay_ladder(setup_single, bars).realized_r
+
+
 class _LadderWalk:
     """Single full-horizon pass state for the as-specified ladder replay.
 

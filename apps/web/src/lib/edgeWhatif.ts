@@ -19,7 +19,12 @@ export interface WhatIfLensMeta {
 
 /** Mirror of the pipeline BREAKEVEN_LENSES registry (labels + status only). */
 export const WHATIF_LENS_REGISTRY: Record<string, WhatIfLensMeta> = {
-	be_0p5r: { label: 'break-even +0.5R', status: 'in_sample', category: 'exit-stop' }
+	be_0p5r: { label: 'break-even +0.5R', status: 'in_sample', category: 'exit-stop' },
+	fill_anchored_0p5atr: {
+		label: 'fill-anchored stop (0.5·ATR)',
+		status: 'in_sample',
+		category: 'exit-stop'
+	}
 };
 
 /** Resolve a served `lens_id` to its display metadata. Unknown ids fall back to
