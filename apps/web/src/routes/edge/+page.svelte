@@ -606,10 +606,6 @@
 											{/if}
 											{o.theme ?? '—'}
 										</span>
-										{#if o.scorer_config_version}
-											<span class="whitespace-nowrap rounded-sm border border-fg-muted/30 px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-fg-muted"
-											      title="Scorer config version (cohort / poolability key)">{o.scorer_config_version}</span>
-										{/if}
 									</div>
 								</td>
 							</tr>
