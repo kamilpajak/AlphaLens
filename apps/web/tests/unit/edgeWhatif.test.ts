@@ -62,8 +62,14 @@ describe('hasWhatif', () => {
 });
 
 describe('WHATIF_LENS_REGISTRY', () => {
-	it('declares the MVP break-even lens (mirror of pipeline BREAKEVEN_LENSES)', () => {
+	it('declares the break-even lens (mirror of pipeline BREAKEVEN_LENSES)', () => {
 		expect(WHATIF_LENS_REGISTRY.be_0p5r).toBeDefined();
 		expect(WHATIF_LENS_REGISTRY.be_0p5r.status).toBe('in_sample');
+	});
+
+	it('declares the fill-anchored lens (exit-geometry path b)', () => {
+		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr).toBeDefined();
+		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.status).toBe('in_sample');
+		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.category).toBe('exit-stop');
 	});
 });

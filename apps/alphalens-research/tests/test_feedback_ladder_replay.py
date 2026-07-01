@@ -15,6 +15,7 @@ import unittest
 from alphalens_pipeline.feedback.ladder_replay import (
     GRID_CONFIGS,
     parse_ladder,
+    realized_r_fill_anchored,
     realized_r_full_fill,
     replay_ladder,
     replay_ladder_breakeven,
@@ -579,6 +580,79 @@ class TestStatusGuards(unittest.TestCase):
 
     def test_no_data(self):
         self.assertEqual(replay_ladder(_setup(**_EQUAL_3), []).status, "NO_DATA")
+
+
+# Single tier E1=100 with a FAR disaster stop (deep ladder), ATR=2. Only E1 fills.
+# Headline realized_r is compressed by the far-stop denominator (100-90=10); the
+# fill-anchored lens re-runs the SAME pick as a single-tier E1 entry with a tight
+# 0.5*ATR stop (100-1=99), measuring R against the risk the shallow position
+# actually carried.
+_FILL_ANCHOR_SETUP = _setup(entries=[(100.0, 100.0)], tps=[(110.0, 100.0)], stop=90.0, atr=2.0)
+
+
+class TestFillAnchoredWhatIf(unittest.TestCase):
+    """Fill-anchored exit-stop what-if (path b): a display-only counterfactual that
+    re-runs the pick as a single-tier E1 entry with a stop 0.5*ATR below E1 — the
+    faithful collapse of a fill-anchored stop (the tight stop pierces before E2/E3
+    can fill). Never overrides the headline realized_r."""
+
+    def test_winner_uncompressed_vs_far_stop_headline(self):
+        # Fill E1 (low 99.5 <= 100 but > the tight stop 99), rally through TP1=110.
+        bars = [_bar(1, 99.5, 101.0, 100.0), _bar(2, 105.0, 111.0, 110.0)]
+        headline = replay_ladder(_FILL_ANCHOR_SETUP, bars).realized_r
+        anchored = realized_r_fill_anchored(_FILL_ANCHOR_SETUP, bars)
+        assert headline is not None
+        assert anchored is not None
+        # headline: (110-100)/(100-90) = +1.0R; anchored: (110-100)/(100-99) = +10.0R.
+        self.assertAlmostEqual(headline, 1.0, places=6)
+        self.assertAlmostEqual(anchored, 10.0, places=6)
+        self.assertGreater(anchored, headline)
+
+    def test_loser_is_minus_one_r_at_tight_stop(self):
+        # Fill E1 (low 99.5), then dip to 98 (<= anchored stop 99, but > far stop 90).
+        bars = [_bar(1, 99.5, 101.0, 100.0), _bar(2, 98.0, 100.0, 99.0)]
+        anchored = realized_r_fill_anchored(_FILL_ANCHOR_SETUP, bars)
+        assert anchored is not None
+        self.assertAlmostEqual(anchored, -1.0, places=6)
+
+    def test_none_when_e1_never_fills(self):
+        bars = [_bar(1, 101.0, 105.0, 103.0)]  # low never touches 100
+        self.assertIsNone(realized_r_fill_anchored(_FILL_ANCHOR_SETUP, bars))
+
+    def test_none_when_atr_absent(self):
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(110.0, 100.0)], stop=90.0)  # no atr
+        bars = [_bar(1, 99.0, 111.0, 110.0)]
+        self.assertIsNone(realized_r_fill_anchored(setup, bars))
+
+    def test_none_on_unparseable_and_no_bars(self):
+        self.assertIsNone(realized_r_fill_anchored(None, [_bar(1, 99.0, 111.0, 110.0)]))
+        self.assertIsNone(realized_r_fill_anchored(_FILL_ANCHOR_SETUP, []))
+
+    def test_uses_shallowest_tier_e1_in_multi_tier(self):
+        # Descending entries E1=99 > E2=97 > E3=95, single TP=110, far stop=92, ATR=2.
+        setup = _setup(
+            entries=[(99.0, 33.3), (97.0, 33.3), (95.0, 33.3)],
+            tps=[(110.0, 100.0)],
+            stop=92.0,
+            atr=2.0,
+        )
+        # Path fills ONLY E1 (low 98.5 <= 99 but > 97), then rallies to TP=110.
+        bars = [_bar(1, 98.5, 100.0, 99.5), _bar(2, 105.0, 111.0, 110.0)]
+        anchored = realized_r_fill_anchored(setup, bars)
+        assert anchored is not None
+        # Anchored uses E1=99, stop=99-1=98, risk=1 -> (110-99)/1 = +11.0R.
+        self.assertAlmostEqual(anchored, 11.0, places=6)
+
+    def test_parity_when_setup_already_single_tier_tight(self):
+        # Already single-tier E1=100 with stop exactly E1 - 0.5*ATR = 99: the
+        # fill-anchored reconstruction is identical, so R matches replay_ladder.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(110.0, 100.0)], stop=99.0, atr=2.0)
+        bars = [_bar(1, 99.5, 101.0, 100.0), _bar(2, 105.0, 111.0, 110.0)]
+        headline = replay_ladder(setup, bars).realized_r
+        anchored = realized_r_fill_anchored(setup, bars)
+        assert headline is not None
+        assert anchored is not None
+        self.assertAlmostEqual(anchored, headline, places=6)
 
 
 if __name__ == "__main__":
