@@ -40,9 +40,9 @@ class TestTradingDay:
         assert body["is_trading_day"] is True
         assert body["is_half_day"] is False
         assert body["exchange"] == "XNYS"
-        # next_open is the NEXT session open relative to the anchor (the
-        # following Monday's 13:30 UTC), not the current day's open.
-        assert body["next_open_iso"] == "2026-06-01T13:30:00+00:00"
+        # ``next_open_iso`` is a wall-clock field (keyed off now, not the
+        # ``as_of`` anchor) — its value is pinned deterministically in
+        # ``TestNextSessionOpen``; here we only exercise the day-level pair.
 
 
 class TestWeekend:
@@ -55,8 +55,6 @@ class TestWeekend:
         body = res.json()
         assert body["is_trading_day"] is False
         assert body["is_half_day"] is False
-        # Next session is Monday 2026-06-01.
-        assert body["next_open_iso"] == "2026-06-01T13:30:00+00:00"
 
 
 class TestUSHoliday:
@@ -69,8 +67,6 @@ class TestUSHoliday:
         body = res.json()
         assert body["is_trading_day"] is False
         assert body["is_half_day"] is False
-        # Next session is Tue 2026-01-20.
-        assert body["next_open_iso"] == "2026-01-20T14:30:00+00:00"
 
 
 class TestHalfDay:
@@ -83,9 +79,6 @@ class TestHalfDay:
         body = res.json()
         assert body["is_trading_day"] is True
         assert body["is_half_day"] is True
-        # Half-day still has a regular 09:30 ET open; next_open refers to
-        # the FOLLOWING session (Mon 2026-11-30).
-        assert body["next_open_iso"] == "2026-11-30T14:30:00+00:00"
 
 
 class TestInvalidAsOf:
@@ -205,6 +198,67 @@ class TestIntradaySession:
         # a library default-``side`` change silently shifting the boundary.
         instant = dt.datetime(2026, 5, 29, 20, 0, 0, tzinfo=dt.UTC)
         assert is_session_open_at(instant) is False
+
+
+class TestNextSessionOpen:
+    """Minute-resolution ``next_session_open_utc`` — the wall-clock "when does
+    the venue next open" that feeds the SPA's "opens in HH:MM" countdown.
+
+    Distinct from a day-anchored "next session after day D": this answers the
+    question from the *current instant*. The critical case is the pre-open
+    window on a trading day — the market opens later TODAY, so the countdown
+    must point to today's open, not tomorrow's. A day-anchored helper skipped
+    today's still-future session and reported the next day (the bug this class
+    pins). ``instant`` is normalised to UTC exactly as the close twin does.
+
+    All instants are EDT (UTC-4): XNYS opens 09:30 ET == 13:30 UTC.
+    """
+
+    def test_preopen_on_trading_day_is_todays_open(self):
+        from market.calendar import next_session_open_utc
+
+        # Fri 2026-05-29 09:00 UTC == 05:00 ET — pre-market on a full session.
+        # The venue opens later TODAY at 13:30 UTC, so THAT is the next open,
+        # not the following Monday. This is the bug: a day-anchored lookup
+        # skipped today's not-yet-happened session.
+        instant = dt.datetime(2026, 5, 29, 9, 0, tzinfo=dt.UTC)
+        nxt = next_session_open_utc(instant)
+        assert nxt.isoformat() == "2026-05-29T13:30:00+00:00"
+
+    def test_in_session_is_next_days_open(self):
+        from market.calendar import next_session_open_utc
+
+        # Mid-session Fri 15:00 UTC — today's open already passed, so the next
+        # open is the following Monday's 13:30 UTC.
+        instant = dt.datetime(2026, 5, 29, 15, 0, tzinfo=dt.UTC)
+        nxt = next_session_open_utc(instant)
+        assert nxt.isoformat() == "2026-06-01T13:30:00+00:00"
+
+    def test_after_close_is_next_days_open(self):
+        from market.calendar import next_session_open_utc
+
+        # Fri 21:00 UTC == 17:00 ET — after the 16:00 ET close. Next open is
+        # Monday 13:30 UTC.
+        instant = dt.datetime(2026, 5, 29, 21, 0, tzinfo=dt.UTC)
+        nxt = next_session_open_utc(instant)
+        assert nxt.isoformat() == "2026-06-01T13:30:00+00:00"
+
+    def test_weekend_is_next_sessions_open(self):
+        from market.calendar import next_session_open_utc
+
+        # Sat 2026-05-30 15:00 UTC — no session; next open is Monday 13:30 UTC.
+        instant = dt.datetime(2026, 5, 30, 15, 0, tzinfo=dt.UTC)
+        nxt = next_session_open_utc(instant)
+        assert nxt.isoformat() == "2026-06-01T13:30:00+00:00"
+
+    def test_naive_instant_assumed_utc(self):
+        from market.calendar import next_session_open_utc
+
+        # A naive datetime is read as UTC, mirroring the close twin — the view
+        # passes tz-aware now() but the helper is robust either way.
+        instant = dt.datetime(2026, 5, 29, 9, 0)  # noqa: DTZ001 — UTC assumed
+        nxt = next_session_open_utc(instant)
+        assert nxt.isoformat() == "2026-05-29T13:30:00+00:00"
 
 
 class TestSchema:
