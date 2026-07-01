@@ -398,7 +398,7 @@
 									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(ALPHA_T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
 									<div class="absolute inset-y-0 border-l-2 border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
 								</div>
-								<span class="w-14 text-right font-mono {alphaValueTone(p.is_t)}">{p.is_t === null ? '—' : (p.is_t >= 0 ? '+' : '') + p.is_t.toFixed(2)}</span>
+								<span class="w-14 text-right font-mono {alphaValueTone(p.is_t)}">{p.is_t === null || !Number.isFinite(p.is_t) ? '—' : (p.is_t >= 0 ? '+' : '') + p.is_t.toFixed(2)}</span>
 							</div>
 							<div class="flex items-center gap-2">
 								<span class="w-10 text-fg-muted uppercase tracking-widest">
@@ -411,7 +411,7 @@
 									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(ALPHA_T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
 									<div class="absolute inset-y-0 border-l-2 border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
 								</div>
-								<span class="w-14 text-right font-mono {alphaValueTone(p.oos_t)}">{p.oos_t === null ? '—' : (p.oos_t >= 0 ? '+' : '') + p.oos_t.toFixed(2)}</span>
+								<span class="w-14 text-right font-mono {alphaValueTone(p.oos_t)}">{p.oos_t === null || !Number.isFinite(p.oos_t) ? '—' : (p.oos_t >= 0 ? '+' : '') + p.oos_t.toFixed(2)}</span>
 							</div>
 						</div>
 					{/if}
