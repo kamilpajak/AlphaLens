@@ -429,7 +429,13 @@ export function alphaBadgeTone(t: number | null): string {
 /** Strip the [term] / [term|label] tooltip markup down to plain text, so a
  *  status-chip tooltip can render a definition that itself references jargon
  *  (the popover is pointer-events-none — nested inline tips can't live in it).
- *  [term|label] → label; [term] → term. */
+ *  [term|label] → label; [term] → term.
+ *
+ *  The pattern mirrors `parseMarkup` in +page.svelte but is INTENTIONALLY a
+ *  separate regex instance: parseMarkup drives a stateful `.exec()` loop (shared
+ *  `.lastIndex`), whereas this uses stateless `.replace()` — sharing one `/g`
+ *  object between the two risks lastIndex corruption. Keep the two in sync by
+ *  eye if the markup grammar ever changes (both are unit-tested). */
 export function stripLedgerMarkup(text: string): string {
 	return text.replace(/\[([^|\]]+)(?:\|([^\]]+))?\]/g, (_m, term, label) => label ?? term);
 }
