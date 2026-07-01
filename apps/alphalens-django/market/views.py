@@ -57,10 +57,11 @@ class MarketStatusView(APIView):
             "half-day, whether the venue is in a regular session right now, "
             "and the UTC ISO 8601 timestamps of the next session open and "
             "next session close. The day-level fields (``is_trading_day``, "
-            "``is_half_day``, ``next_open_iso``) are anchored on UTC today "
-            "unless ``?as_of=YYYY-MM-DD`` is supplied; the intraday fields "
-            "(``is_open_now``, ``next_close_iso``) always reflect the "
-            "current wall-clock instant."
+            "``is_half_day``) are anchored on UTC today unless "
+            "``?as_of=YYYY-MM-DD`` is supplied; the intraday fields "
+            "(``is_open_now``, ``next_open_iso``, ``next_close_iso``) always "
+            "reflect the current wall-clock instant, so a pre-open trading "
+            "day reports today's open rather than the following session."
         ),
         parameters=[
             OpenApiParameter(
@@ -91,6 +92,11 @@ class MarketStatusView(APIView):
         },
     )
     def get(self, request: Request) -> Response:
+        # Single wall-clock read shared by both the day-level anchor default
+        # and the intraday fields below — reading the clock twice could land
+        # on opposite sides of UTC midnight, so ``is_trading_day`` would answer
+        # for one date while the intraday fields compute from the next.
+        now = dt.datetime.now(dt.UTC)
         raw_as_of = request.query_params.get("as_of")
         if raw_as_of is not None:
             try:
@@ -101,20 +107,24 @@ class MarketStatusView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
         else:
-            anchor = dt.datetime.now(dt.UTC).date()
+            anchor = now.date()
 
         exchange = market_calendar.DEFAULT_EXCHANGE
         is_trading = market_calendar.is_trading_day(anchor, exchange=exchange)
         is_half = market_calendar.is_half_day(anchor, exchange=exchange)
-        next_open = market_calendar.next_trading_open_utc(anchor, exchange=exchange)
 
         # Intraday fields reflect the real current instant regardless of
-        # ``as_of`` — "is the venue open right now / when does it next close"
-        # is a wall-clock question, while the day-level fields above answer
-        # "what about the anchor date". The SPA's session chip reads
-        # ``next_close_iso`` only while ``is_open_now`` is true.
-        now = dt.datetime.now(dt.UTC)
+        # ``as_of`` — "is the venue open right now / when does it next
+        # open/close" is a wall-clock question, while the day-level fields
+        # above answer "what about the anchor date". ``next_open`` belongs
+        # here (not with the day-level pair): keying it off ``now`` makes the
+        # pre-open window on a trading day point at *today's* open, where a
+        # day-anchored lookup wrongly skipped to the following session. The
+        # SPA reads ``next_open_iso`` only while ``is_open_now`` is false and
+        # ``next_close_iso`` only while it is true. ``now`` was captured once
+        # at the top of the handler (shared with the day-level anchor).
         is_open_now = market_calendar.is_session_open_at(now, exchange=exchange)
+        next_open = market_calendar.next_session_open_utc(now, exchange=exchange)
         next_close = market_calendar.next_session_close_utc(now, exchange=exchange)
 
         # ``isoformat`` on a tz-aware datetime emits ``+00:00`` rather

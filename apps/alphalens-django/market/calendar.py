@@ -1,9 +1,10 @@
 """Thin exchange-calendar wrapper for the ``/v1/market/status`` endpoint.
 
 This is a deliberately small subset of the pipeline's
-``alphalens_pipeline.paper.calendar`` helpers — only the three projections
-the SPA banner needs (``is_trading_day``, ``is_half_day``,
-``next_trading_open_utc``). Both wrappers delegate to the same backing
+``alphalens_pipeline.paper.calendar`` helpers — only the projections the SPA
+banner needs: the day-level ``is_trading_day`` / ``is_half_day`` plus the
+wall-clock ``is_session_open_at`` / ``next_session_open_utc`` /
+``next_session_close_utc``. Both wrappers delegate to the same backing
 library (``exchange_calendars``); the algorithms are direct reads off the
 library's session metadata so divergence risk is bounded by the library
 itself, not by hand-rolled logic on either side.
@@ -101,36 +102,34 @@ def is_half_day(d: dt.date, exchange: str = DEFAULT_EXCHANGE) -> bool:
     return actual_local < regular_close_time
 
 
-def next_trading_open_utc(
-    anchor: dt.date,
+def next_session_open_utc(
+    instant: dt.datetime,
     exchange: str = DEFAULT_EXCHANGE,
 ) -> dt.datetime:
-    """UTC datetime of the next session open on ``exchange`` strictly
-    after the end of the day named by ``anchor``.
+    """UTC datetime of the next session open on ``exchange`` strictly after
+    ``instant``.
 
-    "Strictly after the end of the day" — even if ``anchor`` is itself a
-    trading day, the result is the NEXT session, not the current one.
-    The SPA uses this to render a "next open in HH:MM" countdown that
-    points to tomorrow's open during after-hours, not back to today's
-    long-past open.
+    Wall-clock, minute-resolution — the mirror of ``next_session_close_utc``.
+    Because it keys off the current instant (not a day anchor) it answers the
+    "opens in HH:MM" countdown correctly in every phase:
 
-    Implementation note: ``next_open`` operates on a UTC timestamp; we
-    anchor at 23:59 UTC of the requested date so a same-day session is
-    skipped consistently regardless of how the venue's local tz lines up
-    with UTC.
+    * pre-open on a trading day → *today's* open (the market opens later today,
+      so the countdown must point at today, not the following session);
+    * in-session or after-hours → the *next* session's open (today's open has
+      already passed);
+    * non-trading day → the next session's open.
 
-    **Venue-scope limitation (XNYS-optimized cutoff).** The 23:59 UTC
-    cutoff is safely past close for every Mon-Fri venue we currently
-    care about (XNYS closes 20:00-21:00 UTC; XWAR 16:00-17:00 UTC;
-    XSHG/XHKG 07:00-08:00 UTC; XTKS 06:00 UTC). When future wiring adds
-    a venue with weekend sessions (e.g. XKAR, XCSE Saturday windows),
-    a per-exchange cutoff aware of the venue's weekend schedule will
-    be needed — otherwise a Friday anchor + 23:59 UTC could silently
-    skip the Saturday session and report Monday as the next open. Flag
-    surfaced by zen review 2026-05-30.
+    ``instant`` is normalised to UTC (naive datetimes assumed UTC). The SPA
+    reads the result only while ``is_open_now`` is false.
+
+    Superseded the day-anchored ``next_trading_open_utc(date)``, which always
+    anchored at 23:59 UTC of the anchor day and so skipped a still-future
+    same-day open — reporting tomorrow during the pre-open window. Keying off
+    the live instant removes that class of error and drops the XNYS-specific
+    23:59 UTC cutoff caveat (the library resolves the next open from the exact
+    instant regardless of the venue's local tz).
     """
-    after_ts = pd.Timestamp(anchor, tz="UTC") + pd.Timedelta(hours=23, minutes=59)
-    nxt = _calendar(exchange).next_open(after_ts)
+    nxt = _calendar(exchange).next_open(_utc_minute_ts(instant))
     return nxt.to_pydatetime().astimezone(dt.UTC)
 
 

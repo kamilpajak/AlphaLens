@@ -80,23 +80,40 @@ def test_parity_test_is_not_vacuous():
 def test_next_open_parity_across_holiday_halfday_and_dst():
     """The next-session-open instant agrees across both wrappers.
 
-    Django ``next_trading_open_utc(anchor)`` = the next session open strictly
-    after the end of ``anchor``'s day. The pipeline ``next_trading_open(now)``
-    takes a datetime; anchoring it at 23:59:59 UTC of the same day makes both
-    answer "the next session open after this day" identically. Checked across a
-    plain Friday->Monday, a pre-Thanksgiving anchor (skips the holiday + reopens
-    on the half-day), a Christmas-Eve anchor, and a spring-DST-eve anchor.
+    Both wrappers expose an instant-based helper — the pipeline's
+    ``next_trading_open(instant)`` and the Django ``next_session_open_utc(instant)``
+    — each returning "the next session open strictly after this instant".
+    Feeding the same UTC instants must yield identical results. The instants
+    exercise the branches that could drift:
+
+    * a pre-open instant on a trading day (must resolve to *today's* open — the
+      case the old day-anchored helper got wrong);
+    * an after-hours instant the evening before Thanksgiving (skips the holiday,
+      reopens on the half-day);
+    * a Christmas-Eve after-hours instant (reopens after Christmas);
+    * a spring-DST-eve after-hours instant (crosses the clock change).
     """
-    anchors = [
-        dt.date(2025, 3, 7),  # Fri before spring-forward weekend (Mon 2025-03-10 open)
-        dt.date(2025, 11, 26),  # Wed before Thanksgiving -> reopen Fri 11-28 (half-day)
-        dt.date(2025, 12, 24),  # Christmas Eve (half-day) -> reopen Fri 12-26
-        dt.date(2025, 7, 3),  # half-day before Independence Day -> reopen Mon 07-07
+    instants = [
+        # Fri 2025-03-07 12:00 UTC == 07:00 EST — pre-open, must resolve to
+        # TODAY's 14:30 UTC open, not the following session. Catches the bug.
+        dt.datetime(2025, 3, 7, 12, 0, tzinfo=dt.UTC),
+        # Wed 2025-11-26 22:00 UTC — after close, eve of Thanksgiving; reopen
+        # Fri 11-28 (half-day).
+        dt.datetime(2025, 11, 26, 22, 0, tzinfo=dt.UTC),
+        # Christmas Eve 2025-12-24 22:00 UTC — after its early close; reopen
+        # Fri 12-26.
+        dt.datetime(2025, 12, 24, 22, 0, tzinfo=dt.UTC),
+        # Fri 2025-03-07 22:00 UTC — after close, spring-forward weekend ahead;
+        # reopen Mon 2025-03-10.
+        dt.datetime(2025, 3, 7, 22, 0, tzinfo=dt.UTC),
+        # Exact open minute (Fri 2025-03-07 14:30 UTC == 09:30 EST). ``next_open``
+        # is strictly-after, so both wrappers must skip today and give Monday —
+        # a boundary where an off-by-one-minute rule in one side would surface.
+        dt.datetime(2025, 3, 7, 14, 30, tzinfo=dt.UTC),
     ]
-    for anchor in anchors:
-        end_of_day = dt.datetime(anchor.year, anchor.month, anchor.day, 23, 59, 59, tzinfo=dt.UTC)
-        paper_open = paper_cal.next_trading_open(end_of_day)
-        market_open = market_cal.next_trading_open_utc(anchor)
+    for instant in instants:
+        paper_open = paper_cal.next_trading_open(instant)
+        market_open = market_cal.next_session_open_utc(instant)
         assert paper_open == market_open, (
-            f"next-open drift for anchor {anchor}: pipeline={paper_open} django={market_open}"
+            f"next-open drift for instant {instant}: pipeline={paper_open} django={market_open}"
         )
