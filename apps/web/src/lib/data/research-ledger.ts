@@ -332,3 +332,143 @@ export const statusLegend: StatusDef[] = [
 	{ status: 'SLIPPAGE-FAIL', definition: '[PASS_MARGINAL] knocked back when realistic spread (50 bps half-spread) brought net [αt] below threshold in both windows.' },
 	{ status: 'IN-FLIGHT', definition: 'hypothesis pre-registered, audit infrastructure built, awaiting data backfill or compute window.' }
 ];
+
+// ---------------------------------------------------------------------------
+// tool.experiments — the OTHER track's ledger. Where the paradigm ledger above
+// falsifies standalone alpha hypotheses (measured in Carhart-4F alpha t-stat),
+// this section logs experiments that tune the LIVE thematic tool's SELECTION
+// and EXIT behaviour. Different metric axis (realized_r / market-excess return /
+// live sample size N, not alpha-t), a different status vocabulary, and forward
+// validation instead of terminal audits. Honesty rule: FORWARD-LOG / in-sample
+// numbers are what-if replays that never touched the real trade record and have
+// NOT passed a fresh forward test.
+//
+// WHEN ADDING A ROW: append to `toolExperiments`, use a status defined in
+// `toolStatusLegend`, and if the row cites an evidence memo add that filename
+// to scripts/sync-research-docs.mjs::REFERENCED (the Playwright smoke test
+// asserts every rendered evidence file resolves 200).
+export type ToolStatus = 'SHIPPED' | 'FORWARD-LOG' | 'AWAITING-N' | 'NO-GO' | 'FINDING';
+
+export type ToolExperiment = {
+	display: string;
+	id: string;
+	name: string;
+	status: ToolStatus;
+	metric: string;
+	date: string;
+	hypothesis: string;
+	mechanism: string;
+	outcome: string;
+	lesson: string;
+	prs: string[];
+	evidence: string | null;
+};
+
+export type ToolStatusDef = {
+	status: ToolStatus;
+	definition: string;
+};
+
+export const toolStatusLegend: ToolStatusDef[] = [
+	{ status: 'SHIPPED', definition: 'wired into the live tool (changes the order names are shown in); forward results still being collected.' },
+	{ status: 'FORWARD-LOG', definition: 'display-only what-if; logs what would have happened on live trades without touching the real record. In-sample, not yet validated.' },
+	{ status: 'AWAITING-N', definition: 'built and logging, but too few finished trades to judge; the verdict waits for at least 30 matured outcomes (~Sept 2026).' },
+	{ status: 'NO-GO', definition: 'tested and rejected; the idea did not beat what the tool already does.' },
+	{ status: 'FINDING', definition: 'a diagnostic result that taught us something but shipped no change to the tool.' }
+];
+
+// Tailwind tone (text + border colour) per tool status — colocated with the
+// legend so the vocabulary has ONE source of truth. Exhaustive over ToolStatus:
+// adding a status without a case is a compile error via the `never` fallback,
+// and `toolExperiments.test.ts` pins legend↔tone parity.
+export function toolStatusTone(s: ToolStatus): string {
+	switch (s) {
+		case 'SHIPPED':
+			return 'text-green border-green';
+		case 'FORWARD-LOG':
+			return 'text-cyan border-cyan';
+		case 'AWAITING-N':
+			return 'text-amber border-amber';
+		case 'NO-GO':
+			return 'text-red border-red';
+		case 'FINDING':
+			return 'text-magenta border-magenta';
+	}
+	const _exhaustive: never = s;
+	return _exhaustive;
+}
+
+// Numbers below are one dated snapshot: VPS `~/.alphalens` stores as of
+// 2026-07-01 (372 plannable / 89 terminal outcomes over 43 brief-days).
+export const toolExperiments: ToolExperiment[] = [
+	{
+		display: 'T1',
+		id: 'exit_stop_lenses',
+		name: 'Exit-stop what-if lenses (break-even + fill-anchored)',
+		status: 'FORWARD-LOG',
+		metric: 'break-even lens +0.075R vs −0.258R realized (N~55 live); fill-anchored lens: no matured outcomes yet',
+		date: '2026-06-30',
+		hypothesis: 'Our exit stop is set for a deep entry ladder, but trades often fill shallow — so a smarter stop might turn small losers into small wins.',
+		mechanism: 'Two display-only lenses replay past trades with different stops (move to break-even after +0.5R; or stop 0.5×ATR below the tier that actually filled) and record the result without touching the real ledger.',
+		outcome: 'On replay the break-even stop flips the average from −0.371R to positive with zero real winners hurt (+0.075R vs −0.258R on the live sample). The fill-anchored lens has no matured data yet.',
+		lesson: 'This is in-sample and not validated. Moving a live price level links which tiers fill to when the trade stops, so it must pass a fresh forward test before any real stop change.',
+		prs: ['#722', '#723', '#724', '#727'],
+		evidence: 'exit_geometry_reward_risk_2026_06_30.md'
+	},
+	{
+		display: 'T2',
+		id: 'entry_not_the_lever',
+		name: 'Is entry timing the lever? (dip-buy vs market / VWAP)',
+		status: 'NO-GO',
+		metric: 'dip-buy baseline ~flat (−0.0%, CI includes 0) beats market-at-arrival −1.9% and VWAP −1.9%; N=250 (refreshed 2026-07-01)',
+		date: '2026-06-23',
+		hypothesis: 'Buying at the market price on arrival, at VWAP, or fitting a best-possible ladder might beat our usual wait-for-a-dip entry.',
+		mechanism: 'We replayed 5 entry styles over the same prices with the same exit rule and equal position size, compared returns to the S&P 500, and checked whether there was enough data to fit a custom ladder.',
+		outcome: 'The dip-buy entry was the best of the five and came out roughly break-even; buying at market or VWAP lost clearly. There are too few finished trades to fit a custom ladder without overfitting.',
+		lesson: 'Entry timing is not the lever — the real question is which names get picked. An earlier "dip-buy is an anti-signal" read was a measurement trap and is now corrected.',
+		prs: ['#652', '#654'],
+		evidence: 'entry_model_redesign_design_2026_06_23.md'
+	},
+	{
+		display: 'T3',
+		id: 'selection_is_the_lever',
+		name: 'Where the weakness is: selection, and the first real signal',
+		status: 'FINDING',
+		metric: 'all picks lag SPY, deepening: −1.9% / −3.0% / −5.6% at 5 / 10 / 20 days (N=372, 43 brief-days). Confirmed separator: entry-time volatility (ATR) ρ −0.39, clears the strict bar.',
+		date: '2026-06-25',
+		hypothesis: 'The name-picker may have no real edge; and if it has any signal, it may just be chasing stocks that already jumped.',
+		mechanism: 'We compared every pick to the S&P 500 over 1–20 days and tested ~50 numeric signals against a strict multiple-testing bar to see which ones separate winners from losers.',
+		outcome: 'Picks lose to the market on average and the loss grows with time. On a fresh 43-day sample exactly one signal holds up: high-volatility / already-stretched names (ATR) fade hardest (ρ −0.39). Two related "already-popped" measures point the same way but are not yet robustness-checked, and our own composite score is a weak positive.',
+		lesson: 'The lever is which names get picked, not how we enter. Even the confirmed signal only makes picks "less bad" versus the market — the list as a whole still lags, so nothing here is a proven money-maker yet. (An earlier raw 5-day run-up signal did not replicate.)',
+		prs: ['#643', '#644', '#674'],
+		evidence: 'edge_signal_attribution_2026_06_25.md'
+	},
+	{
+		display: 'T4',
+		id: 'atr_soft_tilt',
+		name: 'ATR-soft-tilt: show volatile / popped names lower',
+		status: 'SHIPPED',
+		metric: 'live since 2026-06-25; the ATR signal it rests on replicated on fresh data (ρ −0.39); 0 matured outcomes under the new cohort yet; forward verdict pre-registered ~early-Aug 2026',
+		date: '2026-06-25',
+		hypothesis: 'Very volatile or already run-up names tend to do worse afterward (finding T3), so the tool should show them lower in the daily list.',
+		mechanism: 'A new sort score lowers a candidate rank based on recent price choppiness (ATR). It only changes the order shown, never which names get tracked, so it can be measured fairly later.',
+		outcome: 'Wired into live ordering and logging under a new cohort version. The signal it rests on held up when re-checked on a fresh 43-day sample, but no matured results exist yet to confirm the tilt itself helped.',
+		lesson: 'Shipped as a conservative re-ranking only; the tracked list is unchanged. The forward verdict is pre-registered for early August 2026 once enough finished outcomes exist — until then it is unproven.',
+		prs: ['#673', '#675', '#676', '#677'],
+		evidence: 'edge_signal_attribution_2026_06_25.md'
+	},
+	{
+		display: 'T5',
+		id: 'expert_edge_calibration',
+		name: 'Do the expert lenses (Buffett / O’Neil) predict winners?',
+		status: 'AWAITING-N',
+		metric: 'no fresh-data verdict yet; expert scores are underpowered so far (none clear the multiple-testing bar); needs N≥30 matured outcomes (~Sept 2026)',
+		date: '2026-06-11',
+		hypothesis: 'Names the Buffett / O’Neil lenses rate as higher quality should go on to beat the market more often than names they rate poorly.',
+		mechanism: 'A job tags each finished trade with the expert score the pick had on its arrival day, then checks whether that score lines up with the actual market-beating return.',
+		outcome: 'Not answered yet. The expert panel is built and logging scores live but stays display-only, and there are too few finished trades to measure any link.',
+		lesson: 'Wait for real finished outcomes before scoring a lens. An early hint (lowest-quality names did worst) is suggestive but not proof, so the check is parked until about September 2026.',
+		prs: ['#514'],
+		evidence: null
+	}
+];

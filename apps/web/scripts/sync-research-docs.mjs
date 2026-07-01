@@ -31,7 +31,11 @@ const REFERENCED = [
 	'idiosyncratic_momentum_audit_verdict_2026_05_14.md',
 	'v9d_retrospective_pre_2018_postmortem_2026_05_05.md',
 	'pc_abnormal_retrospective_pre_2018_verdict.json',
-	'insider_form4_opportunistic_slippage_stress_postmortem_2026_05_12.md'
+	'insider_form4_opportunistic_slippage_stress_postmortem_2026_05_12.md',
+	// tool.experiments ledger evidence
+	'exit_geometry_reward_risk_2026_06_30.md',
+	'entry_model_redesign_design_2026_06_23.md',
+	'edge_signal_attribution_2026_06_25.md'
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

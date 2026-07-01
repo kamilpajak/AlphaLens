@@ -23,6 +23,9 @@
 		artifacts,
 		patterns,
 		statusLegend,
+		toolExperiments,
+		toolStatusLegend,
+		toolStatusTone,
 		type ParadigmStatus,
 		type LiveStatus
 	} from '$lib/data/research-ledger';
@@ -95,6 +98,7 @@
 		}
 	}
 
+
 	const T_SCALE_MAX = 4.0;
 	const T_MARGINAL = 2.0;
 	const T_DOCTRINE = 3.5;
@@ -129,6 +133,10 @@
 	function expandRowForHash() {
 		const id = location.hash.slice(1);
 		if (!id) return;
+		// Only a matched element with a nested <details> auto-opens. A section-level
+		// hash (e.g. #tool-experiments) scrolls to the section but intentionally
+		// does NOT open the first row's detail; per-row hashes (#T1's article id)
+		// still open that row.
 		const article = document.getElementById(id);
 		if (!article) return;
 		const det = article.querySelector('details');
@@ -158,6 +166,7 @@
 		{ id: 'status', label: 'status.legend' },
 		{ id: 'how-to-read', label: 'how.to.read' },
 		{ id: 'paradigms', label: 'paradigms.ledger' },
+		{ id: 'tool-experiments', label: 'tool.experiments' },
 		{ id: 'patterns', label: 'failure.patterns' },
 		{ id: 'infra', label: 'infrastructure.live' },
 		{ id: 'methodology', label: 'methodology.artifacts' },
@@ -435,6 +444,102 @@
 											aria-label="open evidence: {p.evidence}"
 										>
 											{p.evidence} ↗
+										</button>
+									</dd>
+								</div>
+							{/if}
+						</dl>
+					</details>
+				</article>
+			{/each}
+		</div>
+	</section>
+
+	<!-- tool.experiments — sibling ledger for the LIVE thematic tool (selection /
+	     entry / exit tuning). Distinct track from the paradigm ledger above:
+	     measured on realized R / market-excess / live-N, not αt. Own status
+	     vocabulary (toolStatusLegend) + tone map (toolStatusTone). -->
+	<section id="tool-experiments" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.12s">
+		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
+			<h2 class="font-normal">tool.experiments</h2>
+			<span class="text-fg-dim normal-case tracking-normal">{toolExperiments.length} rows · tuning the live tool</span>
+		</div>
+
+		<div class="px-4 sm:px-5 py-3 border-b border-grid text-sm text-fg-dim leading-relaxed">
+			A running log of changes tested on the <span class="text-amber">live thematic tool</span> — how it
+			picks names (selection) and how trades enter and exit. Different from the paradigm ledger above:
+			these are measured on realized R, market-excess return, and live sample size (N), not
+			<JargonTip {...tipProps('αt')}>αt</JargonTip>. Honesty rule: anything marked
+			<span class="text-cyan">FORWARD-LOG</span> or in-sample is a what-if replay that never touched the
+			real trade record and has not passed a fresh forward test.
+		</div>
+
+		<ul class="divide-y divide-grid border-b border-grid">
+			{#each toolStatusLegend as s}
+				<li class="px-4 sm:px-5 py-2 flex flex-wrap items-baseline gap-3 text-xs">
+					<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest shrink-0 {toolStatusTone(s.status)}">{s.status}</span>
+					<span class="text-fg-dim flex-1 min-w-0">{s.definition}</span>
+				</li>
+			{/each}
+		</ul>
+
+		<div class="divide-y divide-grid">
+			{#each toolExperiments as t}
+				<article id={t.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors">
+					<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
+						<span class="font-display font-bold text-base sm:text-lg text-amber w-8 sm:w-10 shrink-0">{t.display}</span>
+						<h3 class="font-bold text-fg text-sm sm:text-base">{t.name}</h3>
+						<span class="ml-auto flex items-center gap-2">
+							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest {toolStatusTone(t.status)}">{t.status}</span>
+							<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{t.date}</span>
+						</span>
+					</header>
+
+					<!-- Persistent in-sample marker on the always-visible metric line so a
+					     FORWARD-LOG number (e.g. T1's +0.075R) never reads as validated edge
+					     without expanding the detail drawer. -->
+					<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">
+						{#if t.status === 'FORWARD-LOG'}<span class="text-[10px] uppercase tracking-widest text-cyan border border-cyan px-1 py-0.5 mr-2 align-middle whitespace-nowrap">in-sample</span>{/if}{t.metric}
+					</p>
+
+					<details class="sm:ml-10 group/details">
+						<summary class="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none list-none [&::-webkit-details-marker]:hidden py-1.5">
+							<span class="text-amber transition-transform inline-block group-open/details:rotate-90">▸</span>
+							<span class="group-open/details:hidden">show detail</span>
+							<span class="hidden group-open/details:inline">hide detail</span>
+						</summary>
+						<dl class="text-xs sm:text-sm text-fg-dim space-y-1.5 pt-1.5">
+							<div class="flex gap-2">
+								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Hypothesis</dt>
+								<dd>{t.hypothesis}</dd>
+							</div>
+							<div class="flex gap-2">
+								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Mechanism</dt>
+								<dd>{t.mechanism}</dd>
+							</div>
+							<div class="flex gap-2">
+								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Outcome</dt>
+								<dd class="text-fg">{t.outcome}</dd>
+							</div>
+							<div class="flex gap-2">
+								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Lesson</dt>
+								<dd>{t.lesson}</dd>
+							</div>
+							<div class="flex gap-2">
+								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">PRs</dt>
+								<dd class="font-mono text-[11px] text-fg-muted">{t.prs.join(' · ')}</dd>
+							</div>
+							{#if t.evidence}
+								<div class="flex gap-2">
+									<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Evidence</dt>
+									<dd>
+										<button
+											type="button"
+											class="font-mono text-[11px] text-cyan hover:text-amber underline decoration-dotted underline-offset-2 break-all text-left"
+											onclick={() => evidenceDrawer.open(t.evidence!)}
+											aria-label="open evidence: {t.evidence}"
+										>
+											{t.evidence} ↗
 										</button>
 									</dd>
 								</div>
