@@ -9,12 +9,12 @@
  */
 import type { EdgeOutcome } from './types';
 
-export type SortKey = 'ticker' | 'class' | 'value' | 'hold' | 'closed' | 'book' | 'theme';
+export type SortKey = 'ticker' | 'class' | 'value' | 'hold' | 'brief' | 'closed' | 'book' | 'theme';
 export type SortDir = 'asc' | 'desc';
 
 // Columns whose natural first-click direction is descending (numbers + dates read
 // best high-to-low / newest-first); text columns default to ascending (A→Z).
-const DESC_FIRST: ReadonlySet<SortKey> = new Set(['value', 'hold', 'closed', 'book']);
+const DESC_FIRST: ReadonlySet<SortKey> = new Set(['value', 'hold', 'brief', 'closed', 'book']);
 
 export function defaultDir(key: SortKey): SortDir {
 	return DESC_FIRST.has(key) ? 'desc' : 'asc';
@@ -31,6 +31,9 @@ function keyValue(row: EdgeOutcome, key: SortKey): string | number | null {
 			return row.terminal ? row.market_excess_return : row.open_r;
 		case 'hold':
 			return row.holding_days_elapsed;
+		case 'brief':
+			// recommendation date; 'YYYY-MM-DD' sorts lexicographically = chronologically.
+			return row.brief_date;
 		case 'closed':
 			// 'YYYY-MM-DD' sorts lexicographically = chronologically.
 			return row.matured_at;
