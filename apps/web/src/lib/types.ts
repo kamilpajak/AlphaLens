@@ -350,6 +350,9 @@ export interface EdgeSummary {
 export interface EdgeOutcome {
 	ticker: string;
 	brief_date: string;
+	/** When the decision terminated (`YYYY-MM-DD`); null while ongoing. Distinct from
+	 *  `brief_date` (recommended) — lets the table sort by most-recently-completed. */
+	matured_at: string | null;
 	theme: string | null;
 	scorer_config_version: string | null;
 	ladder_classification: string;

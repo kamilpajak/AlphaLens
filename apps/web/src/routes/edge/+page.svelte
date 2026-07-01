@@ -20,6 +20,7 @@
 		statsUnlocked,
 		toneClasses
 	} from '$lib/edge';
+	import { defaultDir, sortOutcomes, type SortDir, type SortKey } from '$lib/edgeSort';
 
 	let { data }: { data: PageData } = $props();
 
@@ -66,8 +67,28 @@
 	type Filter = 'terminal' | 'ongoing';
 	let filter = $state<Filter>('terminal');
 
+	// Client-side sort of the outcomes table (data is already fully loaded). Default
+	// `closed` desc surfaces the most-recently-completed decision at the top for the
+	// terminal view; ongoing rows (no matured_at) fall back to brief_date desc.
+	let sortKey = $state<SortKey>('closed');
+	let sortDir = $state<SortDir>('desc');
+	const valueLabel = $derived(filter === 'terminal' ? 'excess return' : 'open R');
+
+	function toggleSort(key: SortKey) {
+		if (sortKey === key) {
+			sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+		} else {
+			sortKey = key;
+			sortDir = defaultDir(key);
+		}
+	}
+
 	const rows = $derived(
-		(data.outcomes ?? []).filter((o) => (filter === 'terminal' ? o.terminal : !o.terminal))
+		sortOutcomes(
+			(data.outcomes ?? []).filter((o) => (filter === 'terminal' ? o.terminal : !o.terminal)),
+			sortKey,
+			sortDir
+		)
 	);
 
 	// Counts for the filter chips — computed off the full outcome list so both
@@ -435,32 +456,42 @@
 					no {filter} outcomes in window
 				</div>
 			{:else}
+				{#snippet sortHead(key: SortKey, label: string, cls: string)}
+					<th
+						class="py-2 pr-3 {cls}"
+						aria-sort={sortKey === key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+					>
+						<button
+							type="button"
+							onclick={() => toggleSort(key)}
+							class="group/s inline-flex items-center gap-1 uppercase tracking-widest transition-colors {sortKey ===
+							key
+								? 'text-amber'
+								: 'text-fg-muted hover:text-fg-dim'}"
+						>
+							<span>{label}</span>
+							<span
+								class="text-[8px] leading-none {sortKey === key
+									? 'opacity-100'
+									: 'opacity-0 group-hover/s:opacity-50'}"
+								aria-hidden="true">{(sortKey === key ? sortDir : defaultDir(key)) === 'asc' ? '▲' : '▼'}</span>
+						</button>
+					</th>
+				{/snippet}
+
 				<table class="w-full text-sm">
 					<thead>
 						<tr
 							class="text-[10px] uppercase tracking-widest text-fg-muted text-left border-b border-grid"
 						>
 							<th class="py-2 pr-1 w-4" aria-label="expand"></th>
-							<th class="py-2 pr-3">ticker</th>
-							<th class="py-2 pr-3">class</th>
-							<th class="py-2 pr-3">
-								{#if filter === 'terminal'}
-									<JargonTip
-										term="excess return"
-										body="Raw window return minus the benchmark return over the same arrival-to-exit window. Centered bar: zero in the middle, green right (beat the benchmark), red left (trailed it). Gross of cost."
-										>excess return</JargonTip
-									>
-								{:else}
-									<JargonTip
-										term="open R"
-										body="Unrealized R-multiple of the open position — current paper P&L in units of the trade's initial risk. Not yet benchmark-excess; the row matures to an excess-return figure on exit."
-										>open R</JargonTip
-									>
-								{/if}
-							</th>
-							<th class="hidden sm:table-cell py-2 pr-3 text-right">hold</th>
-							<th class="hidden md:table-cell py-2 pr-3 text-right">% book</th>
-							<th class="hidden md:table-cell py-2 pr-3">theme</th>
+							{@render sortHead('ticker', 'ticker', '')}
+							{@render sortHead('class', 'class', '')}
+							{@render sortHead('value', valueLabel, 'min-w-[8rem]')}
+							{@render sortHead('hold', 'hold', 'hidden sm:table-cell text-right')}
+							{@render sortHead('closed', 'closed', 'hidden sm:table-cell text-right')}
+							{@render sortHead('book', '% book', 'hidden md:table-cell text-right')}
+							{@render sortHead('theme', 'theme', 'hidden md:table-cell')}
 						</tr>
 					</thead>
 					<tbody>
@@ -556,6 +587,9 @@
 								</td>
 								<td class="hidden sm:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
 									{o.holding_days_elapsed != null ? `${o.holding_days_elapsed}d` : '—'}
+								</td>
+								<td class="hidden sm:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
+									{o.matured_at ? o.matured_at.slice(5) : '—'}
 								</td>
 								<td class="hidden md:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
 									{o.terminal ? fmtFracPct(o.realized_return_pct_of_book, 2) : '—'}

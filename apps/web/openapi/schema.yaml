@@ -1208,6 +1208,10 @@ components:
         brief_date:
           type: string
           format: date
+        matured_at:
+          type: string
+          format: date
+          nullable: true
         theme:
           type: string
           nullable: true

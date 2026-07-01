@@ -3,6 +3,7 @@
     {
       "ticker": "AMPL",
       "brief_date": "2026-05-18",
+      "matured_at": "2026-05-29",
       "theme": "high-gas",
       "ladder_classification": "TP_FULL",
       "terminal": true,
@@ -17,6 +18,7 @@
     {
       "ticker": "RGTI",
       "brief_date": "2026-05-18",
+      "matured_at": "2026-05-25",
       "theme": "quantum_computing",
       "ladder_classification": "SL_HIT",
       "terminal": true,
@@ -31,6 +33,7 @@
     {
       "ticker": "IONQ",
       "brief_date": "2026-04-14",
+      "matured_at": "2026-05-26",
       "theme": "quantum_computing",
       "ladder_classification": "TIME_STOP",
       "terminal": true,
@@ -45,6 +48,7 @@
     {
       "ticker": "PLTR",
       "brief_date": "2026-04-14",
+      "matured_at": "2026-05-03",
       "theme": "enterprise AI",
       "ladder_classification": "PARTIAL_TP_THEN_SL",
       "terminal": true,
@@ -59,6 +63,7 @@
     {
       "ticker": "BBAI",
       "brief_date": "2026-05-18",
+      "matured_at": "2026-05-27",
       "theme": null,
       "ladder_classification": "TP_FULL",
       "terminal": true,
@@ -73,6 +78,7 @@
     {
       "ticker": "BLBD",
       "brief_date": "2026-05-18",
+      "matured_at": null,
       "theme": "high-gas",
       "ladder_classification": "OPEN",
       "terminal": false,
@@ -87,6 +93,7 @@
     {
       "ticker": "RKLB",
       "brief_date": "2026-04-14",
+      "matured_at": null,
       "theme": "enterprise AI",
       "ladder_classification": "OPEN",
       "terminal": false,
@@ -101,6 +108,7 @@
     {
       "ticker": "PEND",
       "brief_date": "2026-05-18",
+      "matured_at": null,
       "theme": "ai_assistant",
       "ladder_classification": "",
       "terminal": false,

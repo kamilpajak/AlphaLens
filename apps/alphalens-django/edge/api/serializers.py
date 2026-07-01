@@ -27,6 +27,7 @@ class EdgeOutcomeRowSerializer(serializers.Serializer):
 
     ticker = serializers.CharField()
     brief_date = serializers.DateField()
+    matured_at = serializers.DateField(allow_null=True, required=False)
     theme = serializers.CharField(allow_null=True, required=False)
     scorer_config_version = serializers.CharField(allow_null=True, required=False)
     ladder_classification = serializers.CharField(allow_blank=True)
