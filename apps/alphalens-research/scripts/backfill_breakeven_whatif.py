@@ -30,12 +30,14 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pandas.testing as pdt
 from alphalens_pipeline.feedback.breakeven_lenses import breakeven_grid
 from alphalens_research.diagnostics.breakeven_backfill import apply_backfill
 
-# RTH for the summer sample (EDT = UTC-4): 09:30-16:00 ET = 13:30-20:00 UTC. Mirrors
-# diagnose_exit_geometry.py, whose fidelity check pins that this reproduces the stored
-# realized_r exactly on this data.
+# WARNING: EDT (UTC-4) SUMMER ONLY. RTH = 09:30-16:00 ET = 13:30-20:00 UTC. This is a
+# one-off backfill over a summer sample; a winter (EST) or half-day date would need a
+# session-aware filter. Mirrors diagnose_exit_geometry.py, whose fidelity check pins
+# that this reproduces the stored realized_r exactly on this data (42/42 to 0.0000).
 _RTH_START_S = 13 * 3600 + 30 * 60
 _RTH_END_S = 20 * 3600
 
@@ -132,8 +134,25 @@ def main() -> None:
         if n:
             print(f"  {os.path.basename(f)}: +{n}")
             if args.write:
-                tmp = f + ".tmp"
+                # Unique temp name (avoid collisions on a manual re-run), same dir as
+                # the target so os.replace is an atomic rename on one filesystem.
+                tmp = f"{f}.{os.getpid()}.{os.urandom(4).hex()}.tmp"
                 out.to_parquet(tmp, index=False)
+                # SoT guard: the round-trip must preserve every NON-backfill column
+                # (dtype-tolerant, value-strict). Abort rather than replace on drift.
+                check = pd.read_parquet(tmp)
+                others = [c for c in df.columns if c != "breakeven_realized_r_json"]
+                try:
+                    pdt.assert_frame_equal(
+                        df[others].reset_index(drop=True),
+                        check[others].reset_index(drop=True),
+                        check_dtype=False,
+                    )
+                except AssertionError as exc:
+                    os.remove(tmp)
+                    raise SystemExit(
+                        f"ABORT: parquet round-trip altered {os.path.basename(f)} — {exc}"
+                    ) from exc
                 os.replace(tmp, f)  # atomic
 
     mode = "WRITTEN" if args.write else "DRY-RUN (pass --write to persist)"
