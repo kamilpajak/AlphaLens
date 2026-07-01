@@ -52,8 +52,10 @@ export function sortOutcomes(rows: EdgeOutcome[], key: SortKey, dir: SortDir): E
 	return [...rows].sort((x, y) => {
 		const a = keyValue(x, key);
 		const b = keyValue(y, key);
-		const aNull = a === null;
-		const bNull = b === null;
+		// `== null` (not `===`) so a missing field (undefined) is also forced last,
+		// defensive against contract drift / a hand-built fixture omitting a key.
+		const aNull = a == null;
+		const bNull = b == null;
 		if (aNull && bNull) return secondary(x, y);
 		if (aNull) return 1; // nulls last, independent of dir
 		if (bNull) return -1;

@@ -474,7 +474,7 @@
 								class="text-[8px] leading-none {sortKey === key
 									? 'opacity-100'
 									: 'opacity-0 group-hover/s:opacity-50'}"
-								aria-hidden="true">{sortKey === key && sortDir === 'asc' ? '▲' : '▼'}</span>
+								aria-hidden="true">{(sortKey === key ? sortDir : defaultDir(key)) === 'asc' ? '▲' : '▼'}</span>
 						</button>
 					</th>
 				{/snippet}
