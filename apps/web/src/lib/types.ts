@@ -308,7 +308,7 @@ export interface OpenPositionsPanel {
 	note: string;
 }
 
-/** One break-even lens's gated R aggregate (keyed by `lens_id` in the panel map).
+/** One exit-stop lens's gated R aggregate (keyed by `lens_id` in the panel map).
  *  `mean_r` / `median_r` are null below the N-gate; `n` (fill-coverage) survives. */
 export interface WhatIfLens {
 	n: number;
