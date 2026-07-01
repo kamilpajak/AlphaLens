@@ -20,7 +20,13 @@
 		statsUnlocked,
 		toneClasses
 	} from '$lib/edge';
-	import { defaultDir, sortOutcomes, type SortDir, type SortKey } from '$lib/edgeSort';
+	import {
+		defaultDir,
+		isSortKeyVisible,
+		sortOutcomes,
+		type SortDir,
+		type SortKey
+	} from '$lib/edgeSort';
 
 	let { data }: { data: PageData } = $props();
 
@@ -82,6 +88,24 @@
 			sortDir = defaultDir(key);
 		}
 	}
+
+	// Switching the view can hide the active sort column (terminal-only `closed`
+	// / `book` have no ongoing column). Fall back to `brief` so the sort indicator
+	// never lands on an invisible header.
+	function setFilter(next: Filter) {
+		filter = next;
+		if (!isSortKeyVisible(sortKey, next)) {
+			sortKey = 'brief';
+			sortDir = defaultDir('brief');
+		}
+	}
+
+	// Full table width: the leading expand chevron + 8 sortable headers (ticker,
+	// class, value, hold, brief, closed, book, theme). The ongoing view hides the
+	// two terminal-only columns (closed, % book), so the accordion detail row spans
+	// TERMINAL_COLS − 2 there. Keep this in step with the <th> list below.
+	const TERMINAL_COLS = 9;
+	const colSpan = $derived(filter === 'terminal' ? TERMINAL_COLS : TERMINAL_COLS - 2);
 
 	const rows = $derived(
 		sortOutcomes(
@@ -433,7 +457,7 @@
 						class:text-amber={filter === 'terminal'}
 						class:border-grid={filter !== 'terminal'}
 						class:text-fg-muted={filter !== 'terminal'}
-						onclick={() => (filter = 'terminal')}
+						onclick={() => setFilter('terminal')}
 					>
 						terminal [{nTerminal}]
 					</button>
@@ -444,7 +468,7 @@
 						class:text-amber={filter === 'ongoing'}
 						class:border-grid={filter !== 'ongoing'}
 						class:text-fg-muted={filter !== 'ongoing'}
-						onclick={() => (filter = 'ongoing')}
+						onclick={() => setFilter('ongoing')}
 					>
 						ongoing [{nOngoing}]
 					</button>
@@ -490,8 +514,10 @@
 							{@render sortHead('value', valueLabel, 'min-w-[8rem]')}
 							{@render sortHead('hold', 'hold', 'hidden sm:table-cell text-right')}
 							{@render sortHead('brief', 'brief', 'hidden sm:table-cell text-right')}
-							{@render sortHead('closed', 'closed', 'hidden sm:table-cell text-right')}
-							{@render sortHead('book', '% book', 'hidden md:table-cell text-right')}
+							{#if filter === 'terminal'}
+								{@render sortHead('closed', 'closed', 'hidden sm:table-cell text-right')}
+								{@render sortHead('book', '% book', 'hidden md:table-cell text-right')}
+							{/if}
 							{@render sortHead('theme', 'theme', 'hidden md:table-cell')}
 						</tr>
 					</thead>
@@ -592,12 +618,14 @@
 								<td class="hidden sm:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
 									{o.brief_date.slice(5)}
 								</td>
-								<td class="hidden sm:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
-									{o.matured_at ? o.matured_at.slice(5) : '—'}
-								</td>
-								<td class="hidden md:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
-									{o.terminal ? fmtFracPct(o.realized_return_pct_of_book, 2) : '—'}
-								</td>
+								{#if filter === 'terminal'}
+									<td class="hidden sm:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
+										{o.matured_at ? o.matured_at.slice(5) : '—'}
+									</td>
+									<td class="hidden md:table-cell py-2.5 pr-3 text-right text-fg-dim whitespace-nowrap">
+										{fmtFracPct(o.realized_return_pct_of_book, 2)}
+									</td>
+								{/if}
 								<td class="hidden md:table-cell py-2.5 pr-3 max-w-[140px]">
 									<div>
 										<span class="text-amber lowercase truncate">
@@ -613,7 +641,7 @@
 								<!-- Inline-accordion detail row: full-width ladder-replay chart,
 								     lazy-mounted on first expand. -->
 								<tr class="border-b border-grid bg-bg-2/40">
-									<td colspan="9" class="px-2 sm:px-4 py-4">
+									<td colspan={colSpan} class="px-2 sm:px-4 py-4">
 										<div class="border border-grid bg-bg-1 px-4 sm:px-5 py-4">
 											{#if !chart || chart.loading}
 												<div class="text-[10px] uppercase tracking-widest text-fg-muted py-6 text-center">

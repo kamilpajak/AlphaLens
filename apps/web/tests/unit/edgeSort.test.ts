@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { defaultDir, sortOutcomes, type SortKey } from '../../src/lib/edgeSort';
+import { defaultDir, isSortKeyVisible, sortOutcomes, type SortKey } from '../../src/lib/edgeSort';
 import type { EdgeOutcome } from '../../src/lib/types';
+
+const ALL_KEYS: SortKey[] = [
+	'ticker',
+	'class',
+	'value',
+	'hold',
+	'brief',
+	'closed',
+	'book',
+	'theme'
+];
 
 // Pins the pure client-side sort for the /edge outcomes table: nulls always sort
 // LAST (so em-dash rows never jump to the top), a stable secondary tiebreaker
@@ -27,6 +38,28 @@ function o(p: Partial<EdgeOutcome>): EdgeOutcome {
 }
 
 const tk = (rows: EdgeOutcome[]) => rows.map((r) => r.ticker);
+
+describe('isSortKeyVisible', () => {
+	it('hides the terminal-only columns (closed, book) in the ongoing view', () => {
+		// Ongoing rows have no matured_at and no realized book %, so both columns
+		// would render an em-dash for every row — sorting by them is meaningless.
+		expect(isSortKeyVisible('closed', 'ongoing')).toBe(false);
+		expect(isSortKeyVisible('book', 'ongoing')).toBe(false);
+	});
+
+	it('keeps every column visible in the terminal view', () => {
+		for (const key of ALL_KEYS) {
+			expect(isSortKeyVisible(key, 'terminal')).toBe(true);
+		}
+	});
+
+	it('keeps the shared columns visible in the ongoing view', () => {
+		const shared: SortKey[] = ['ticker', 'class', 'value', 'hold', 'brief', 'theme'];
+		for (const key of shared) {
+			expect(isSortKeyVisible(key, 'ongoing')).toBe(true);
+		}
+	});
+});
 
 describe('defaultDir', () => {
 	it('is desc for numeric/date columns, asc for text', () => {
