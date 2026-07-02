@@ -22,6 +22,7 @@
 	import JargonTip from '$lib/components/JargonTip.svelte';
 	import ChipTip from '$lib/components/ChipTip.svelte';
 	import LedgerFilterBar, { type FilterChip } from '$lib/components/LedgerFilterBar.svelte';
+	import StatusPill from '$lib/components/StatusPill.svelte';
 	import EvidenceDrawer from '$lib/components/EvidenceDrawer.svelte';
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
@@ -470,7 +471,7 @@
 								<span class="ml-auto flex items-center gap-2">
 									<ChipTip term={p.status} body={paradigmStatusDef.get(p.status) ?? ''}>
 										{#snippet chip()}
-											<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest cursor-help {statusTone(p.status)}">{p.status}</span>
+											<StatusPill tone={statusTone(p.status)} label={p.status} interactive />
 										{/snippet}
 									</ChipTip>
 									<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{p.date}</span>
@@ -601,7 +602,7 @@
 						<span class="ml-auto flex items-center gap-2">
 							<ChipTip term={t.status} body={toolStatusDef.get(t.status) ?? ''}>
 								{#snippet chip()}
-									<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest cursor-help {toolStatusTone(t.status)}">{t.status}</span>
+									<StatusPill tone={toolStatusTone(t.status)} label={t.status} interactive />
 								{/snippet}
 							</ChipTip>
 							<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{t.date}</span>
@@ -719,12 +720,12 @@
 							<div class="font-bold text-fg">{l.name}</div>
 							<div class="text-fg-dim text-xs mt-0.5">{l.what}</div>
 							<div class="sm:hidden text-[10px] uppercase tracking-widest mt-1 flex flex-wrap gap-2">
-								<span class="px-1.5 py-0.5 border {statusTone(l.status)}">{l.status}</span>
+								<StatusPill tone={statusTone(l.status)} label={l.status} />
 								<span class="text-fg-muted normal-case tracking-normal">{l.deploy}</span>
 							</div>
 						</td>
 						<td class="hidden sm:table-cell px-2 py-3 align-top">
-							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest {statusTone(l.status)}">{l.status}</span>
+							<StatusPill tone={statusTone(l.status)} label={l.status} />
 						</td>
 						<td class="hidden sm:table-cell px-4 sm:px-5 py-3 text-right align-top text-xs text-fg-muted">{l.deploy}</td>
 					</tr>
@@ -749,12 +750,12 @@
 							<div class="font-bold text-fg">{a.name}</div>
 							<div class="text-fg-dim text-xs mt-0.5 leading-relaxed">{a.description}</div>
 							<div class="sm:hidden text-[10px] uppercase tracking-widest mt-1 flex flex-wrap gap-2">
-								<span class="px-1.5 py-0.5 border {statusTone(a.status)}">{a.status}</span>
+								<StatusPill tone={statusTone(a.status)} label={a.status} />
 								<span class="text-cyan normal-case tracking-normal break-all">{a.link}</span>
 							</div>
 						</td>
 						<td class="hidden sm:table-cell px-2 py-3 align-top">
-							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest {statusTone(a.status)}">{a.status}</span>
+							<StatusPill tone={statusTone(a.status)} label={a.status} />
 						</td>
 						<td class="hidden sm:table-cell px-4 sm:px-5 py-3 text-right align-top text-xs text-cyan font-mono break-all max-w-[260px]">{a.link}</td>
 					</tr>
