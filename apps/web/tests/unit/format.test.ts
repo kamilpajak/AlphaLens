@@ -5,8 +5,29 @@ import {
 	fcffYieldRawDisplay,
 	tenkAvailable,
 	selectionBadge,
-	catalystLabel
+	catalystLabel,
+	fmtSigned
 } from '../../src/lib/format';
+
+describe('fmtSigned — a signed fixed-decimal number (+1.20 / -1.20 / —)', () => {
+	it('prefixes non-negative values with +', () => {
+		expect(fmtSigned(1.2, 2)).toBe('+1.20');
+		expect(fmtSigned(0, 2)).toBe('+0.00');
+	});
+	it('leaves the built-in minus for negatives (no double sign)', () => {
+		expect(fmtSigned(-1.2, 2)).toBe('-1.20');
+	});
+	it('rounds to the requested digits (default 2)', () => {
+		expect(fmtSigned(1.23, 1)).toBe('+1.2');
+		expect(fmtSigned(3.456)).toBe('+3.46');
+	});
+	it('null / undefined / non-finite → em dash', () => {
+		expect(fmtSigned(null)).toBe('—');
+		expect(fmtSigned(undefined)).toBe('—');
+		expect(fmtSigned(NaN)).toBe('—');
+		expect(fmtSigned(Infinity)).toBe('—');
+	});
+});
 
 describe('catalystLabel — humanise the raw event-type enum', () => {
 	it('maps acronyms', () => {

@@ -4,6 +4,7 @@
 		fmtUsdCompact,
 		fmtPct,
 		fmtNum,
+		fmtSigned,
 		fmtPctile,
 		fmtDate,
 		confidenceTone,
@@ -539,7 +540,7 @@
 							value={c.technical_volume_zscore !== null ? Math.abs(c.technical_volume_zscore) : null}
 							min={0}
 							max={5}
-							format={(v) => (c.technical_volume_zscore! >= 0 ? '+' : '-') + v.toFixed(1) + 'σ'}
+							format={() => fmtSigned(c.technical_volume_zscore, 1) + 'σ'}
 						>
 							{#snippet tooltipRich()}
 								<span class="block">20-day volume z-score:</span>
