@@ -929,6 +929,35 @@ test.describe('experiments — hybrid tooltip policy', () => {
 	}
 });
 
+test.describe('experiments — appendix card layout', () => {
+	// The reference appendix holds independent peer items, not sequences: the
+	// failure patterns and the surviving methodology artifacts read as cards, not
+	// a stacked list / table. Infrastructure stays a genuine table (id/status/
+	// deploy is tabular). These pins guard the container choice from silent
+	// reversion to the old list/table markup.
+
+	test('failure.patterns renders 13 lesson cards in a grid (P-cards.1)', async ({ page }) => {
+		await gotoExperiments(page);
+		const cards = await page.locator('section#patterns [data-testid="pattern-card"]').count();
+		expect(cards, '13 lesson cards under failure.patterns').toBe(13);
+	});
+
+	test('methodology.artifacts renders 4 feature cards, not table rows (P-cards.2)', async ({ page }) => {
+		await gotoExperiments(page);
+		const cards = await page.locator('section#methodology [data-testid="artifact-card"]').count();
+		expect(cards, '4 artifact cards under methodology.artifacts').toBe(4);
+		// The artifact section must NOT fall back to a table.
+		const tables = await page.locator('section#methodology table').count();
+		expect(tables, 'methodology.artifacts is card grid, not a table').toBe(0);
+	});
+
+	test('infrastructure.live stays a table (intentionally tabular) (P-cards.3)', async ({ page }) => {
+		await gotoExperiments(page);
+		const rows = await page.locator('section#infra table tbody tr').count();
+		expect(rows, 'infra remains a 4-row table').toBe(4);
+	});
+});
+
 test.describe('glossary auto-discovery (per-page coverage)', () => {
 	// For every entry in $lib/data/glossary, assert at least one inline
 	// JargonTip with the corresponding data-term attribute renders on every

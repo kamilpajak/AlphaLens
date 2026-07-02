@@ -632,12 +632,19 @@
 			<span class="text-fg-dim normal-case tracking-normal">{patterns.length} reusable lessons · hover dotted terms for definitions</span>
 		{/snippet}
 		{#snippet children()}
-		<ul class="divide-y divide-grid">
+		<!-- Lesson-card grid. These reusable lessons are independent, self-contained
+		     takeaways — index cards, not a sequence — so they read as a 2-up grid of
+		     quiet bordered cards rather than a stacked list. Each keeps its <h3> name
+		     + inline JargonTips; the amber index number is the card's tab. -->
+		<ul class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
 			{#each patterns as p}
-				<li class="px-4 sm:px-5 py-3 text-sm flex gap-3">
-					<span class="text-amber font-display font-bold w-6 shrink-0">{p.n}</span>
-					<div>
-						<h3 class="font-bold text-fg">
+				<li
+					data-testid="pattern-card"
+					class="flex gap-3 border border-grid bg-bg-2/30 px-4 py-3.5 text-sm transition-colors hover:border-grid-strong hover:bg-bg-2"
+				>
+					<span class="font-display font-bold text-lg leading-none text-amber tabular-nums shrink-0 w-7 pt-0.5">{p.n}</span>
+					<div class="min-w-0">
+						<h3 class="font-bold text-fg leading-snug">
 							{#each parseMarkup(p.name) as seg}
 								{#if seg.kind === 'term'}
 									<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>
@@ -646,7 +653,7 @@
 								{/if}
 							{/each}
 						</h3>
-						<div class="text-fg-dim text-xs mt-0.5 leading-relaxed">
+						<div class="text-fg-dim text-xs mt-1 leading-relaxed">
 							{#each parseMarkup(p.body) as seg}
 								{#if seg.kind === 'term'}
 									<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>
@@ -698,29 +705,31 @@
 			<span class="text-fg-dim normal-case tracking-normal">{artifacts.length} items · what survived</span>
 		{/snippet}
 		{#snippet children()}
-		<table class="w-full text-sm">
-			<tbody>
-				{#each artifacts as a}
-					<tr class="border-b border-grid last:border-b-0 hover:bg-bg-2">
-						<td class="px-4 sm:px-5 py-3 w-14 sm:w-20 align-top">
-							<div class="font-display font-bold text-base sm:text-lg text-amber">{a.id}</div>
-						</td>
-						<td class="px-2 py-3 align-top">
-							<div class="font-bold text-fg">{a.name}</div>
-							<div class="text-fg-dim text-xs mt-0.5 leading-relaxed">{a.description}</div>
-							<div class="sm:hidden text-[10px] uppercase tracking-widest mt-1 flex flex-wrap gap-2">
-								<StatusPill tone={statusTone(a.status)} label={a.status} />
-								<span class="text-cyan normal-case tracking-normal break-all">{a.link}</span>
-							</div>
-						</td>
-						<td class="hidden sm:table-cell px-2 py-3 align-top">
-							<StatusPill tone={statusTone(a.status)} label={a.status} />
-						</td>
-						<td class="hidden sm:table-cell px-4 sm:px-5 py-3 text-right align-top text-xs text-cyan font-mono break-all max-w-[260px]">{a.link}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+		<!-- Feature-card grid — "what survived". Unlike the live-infra table above
+		     (genuinely tabular id/status/deploy), the durable methodology artifacts
+		     are the proud outputs of the whole search, so they get the elevated
+		     card treatment: the hero's amber corner-bracket motif, a bright bg, the
+		     status pill, and the repo/doc reference pinned to the card footer. -->
+		<div class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
+			{#each artifacts as a}
+				<!-- <div>, not <article>: the page reserves <article> for an
+				     expandable ledger row (one <details> each — see P0.1). A static
+				     artifact card carries no drawer, so it must not inflate that
+				     invariant's article count. -->
+				<div
+					data-testid="artifact-card"
+					class="corners relative flex flex-col border border-grid bg-bg-1 p-4 transition-colors hover:border-grid-strong hover:bg-bg-2"
+				>
+					<div class="flex items-start gap-2.5 mb-2">
+						<span class="font-display font-bold text-lg leading-none text-amber shrink-0 pt-0.5">{a.id}</span>
+						<span class="font-bold text-fg leading-snug min-w-0">{a.name}</span>
+						<span class="ml-auto shrink-0"><StatusPill tone={statusTone(a.status)} label={a.status} /></span>
+					</div>
+					<p class="text-fg-dim text-xs leading-relaxed">{a.description}</p>
+					<div class="mt-auto pt-3 text-[11px] font-mono text-cyan break-all">{a.link}</div>
+				</div>
+			{/each}
+		</div>
 		{/snippet}
 	</SectionPanel>
 
