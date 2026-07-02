@@ -110,6 +110,12 @@
 						<span class="text-fg-muted">
 							vs realized
 							<span class="text-fg-dim font-bold normal-case">{fmtR(realizedR)}</span>
+							{#if selected.realizedRBaselineN !== selected.n}
+								<!-- The baseline covers only rows with a realized outcome, so its n
+								     can be < the what-if n (never-filled counterfactuals). Surface it
+								     when they diverge so "vs realized" is not misread as same-n. -->
+								<span class="text-[10px] text-fg-muted whitespace-nowrap">n {selected.realizedRBaselineN}</span>
+							{/if}
 						</span>
 					</div>
 				{/if}

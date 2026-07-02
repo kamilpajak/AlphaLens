@@ -176,13 +176,15 @@ def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
     tfc = _finite(row.get("tiers_filled_count"))
     if tfc is not None:
         acc.tiers_filled.append(tfc)
+    # ``rv`` is the row's OWN realized R — the same value for every lens this row
+    # feeds, so it is the shared baseline for each lens_id below.
     for lens_id, value in _breakeven_map(row).items():
         rb = _finite(value)
         if rb is not None:
             acc.breakeven_r.setdefault(lens_id, []).append(rb)
             # Same-cohort realized baseline: pair this lens's counterfactual with
-            # the row's OWN realized_r (``rv`` above). A never-filled NO_FILL has a
-            # break-even value but rv is None → it drops out of the baseline only.
+            # the row's realized_r. A never-filled NO_FILL has a break-even value
+            # but rv is None → it drops out of the baseline only (still counts in n).
             if rv is not None:
                 acc.breakeven_realized_baseline.setdefault(lens_id, []).append(rv)
 
