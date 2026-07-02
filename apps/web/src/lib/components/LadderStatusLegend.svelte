@@ -25,7 +25,7 @@
 <Disclosure
 	detailsClass="mb-6 border border-grid bg-bg-1 fade-up"
 	summaryClass="px-3 py-2 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-dim flex items-center gap-2"
-	chevronClass="text-amber duration-150"
+	chevronClass="text-amber"
 >
 	{#snippet summary()}
 		<span>what do these statuses mean?</span>
