@@ -16,6 +16,7 @@
 	import { FileCode2 } from 'lucide-svelte';
 	import ChipTip from './ChipTip.svelte';
 	import StatusPill from './StatusPill.svelte';
+	import { fmtUsdCompact } from '$lib/format';
 
 	interface Props {
 		templateId: string | null;
@@ -58,24 +59,20 @@
 	}
 
 	/**
-	 * Compact currency formatter for *_usd fields. Doctrine: the LLM
-	 * prompt-side instructs verbatim citation (no unit conversion). The
-	 * SPA-side renderer is allowed to format for readability — that
-	 * contract scopes only the LLM, not the renderer. The brief prose
-	 * still names the raw value if the model decided to mention it; the
-	 * panel here shows the same number in a human-readable shape.
+	 * Compact currency for *_usd fields via the shared `fmtUsdCompact`.
+	 * Doctrine: the LLM prompt-side instructs verbatim citation (no unit
+	 * conversion). The SPA-side renderer is allowed to format for
+	 * readability — that contract scopes only the LLM, not the renderer;
+	 * the raw integer stays on `data-raw` for the audit trail. Using the
+	 * one house formatter keeps a $9B revenue fact reading the same as a
+	 * $9B market cap on the same card (billions as `$9.00B`), instead of
+	 * the old local 1-decimal `$9.0B` that diverged from every other USD
+	 * site. Fact `_usd` values are structurally >= $1M (extractor floor),
+	 * so only the shared formatter's B/M bands ever render here.
 	 */
-	function formatUsd(n: number): string {
-		const abs = Math.abs(n);
-		if (abs >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
-		if (abs >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-		if (abs >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-		return `$${n.toFixed(2)}`;
-	}
-
 	function formatValue(key: string, v: unknown): string {
 		if (v == null) return '—';
-		if (typeof v === 'number' && key.endsWith('_usd')) return formatUsd(v);
+		if (typeof v === 'number' && key.endsWith('_usd')) return fmtUsdCompact(v);
 		if (typeof v === 'object') return JSON.stringify(v);
 		return String(v);
 	}

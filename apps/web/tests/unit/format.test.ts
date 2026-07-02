@@ -6,7 +6,8 @@ import {
 	tenkAvailable,
 	selectionBadge,
 	catalystLabel,
-	fmtSigned
+	fmtSigned,
+	fmtUsdCompact
 } from '../../src/lib/format';
 
 describe('fmtSigned — a signed fixed-decimal number (+1.20 / -1.20 / —)', () => {
@@ -26,6 +27,26 @@ describe('fmtSigned — a signed fixed-decimal number (+1.20 / -1.20 / —)', ()
 		expect(fmtSigned(undefined)).toBe('—');
 		expect(fmtSigned(NaN)).toBe('—');
 		expect(fmtSigned(Infinity)).toBe('—');
+	});
+});
+
+describe('fmtUsdCompact — the single compact USD formatter (market caps AND typed facts)', () => {
+	// TemplateFacts *_usd values are structurally >= $1M (the extractor's
+	// _normalize_amount_usd returns None below that), so only the B and M
+	// bands ever render for fact data. Pin the fact magnitudes here since no
+	// unit test covered any fmtUsdCompact currency string before the fold.
+	it('renders billions with two decimals ($5.00B / $9.00B) — matches market-cap style', () => {
+		expect(fmtUsdCompact(5_000_000_000)).toBe('$5.00B');
+		expect(fmtUsdCompact(9_000_000_000)).toBe('$9.00B');
+		expect(fmtUsdCompact(1_230_000_000)).toBe('$1.23B');
+	});
+	it('renders millions with one decimal ($450.0M)', () => {
+		expect(fmtUsdCompact(450_000_000)).toBe('$450.0M');
+	});
+	it('null / undefined / non-finite → em dash', () => {
+		expect(fmtUsdCompact(null)).toBe('—');
+		expect(fmtUsdCompact(undefined)).toBe('—');
+		expect(fmtUsdCompact(NaN)).toBe('—');
 	});
 });
 
