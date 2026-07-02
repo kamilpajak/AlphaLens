@@ -29,7 +29,9 @@
 		chips: FilterChip[];
 		/** The key that clears the selection. */
 		allKey?: string;
-		/** The selected non-ALL keys; empty = ALL. Bindable. */
+		/** The selected non-ALL keys; empty = ALL. Bindable. Both sides must
+		 *  REASSIGN this (e.g. `selected = new Set(...)`), never mutate the Set in
+		 *  place — Svelte 5 reactivity tracks the assignment, not `.add`/`.delete`. */
 		selected: Set<string>;
 	}
 
