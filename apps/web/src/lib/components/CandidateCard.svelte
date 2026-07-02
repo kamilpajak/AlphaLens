@@ -535,6 +535,10 @@
 							format={(v) => fmtPctile(v) + '%ile'}
 							tooltip="O'Neil relative-strength rank — the stock's trailing return ranked against peers. Higher = stronger leadership. From the O'Neil momentum lens."
 						/>
+						<!-- `value` is abs() so the bar fills from 0; `format` deliberately
+						     ignores its (abs) arg and re-derives the SIGN from the raw
+						     z-score via fmtSigned — do NOT switch it back to `(v) => …v…`
+						     or the +/- sign is lost. -->
 						<SignalBar
 							label="vol z-score"
 							value={c.technical_volume_zscore !== null ? Math.abs(c.technical_volume_zscore) : null}
