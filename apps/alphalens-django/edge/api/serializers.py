@@ -189,6 +189,12 @@ class WhatIfLensSerializer(serializers.Serializer):
     n = serializers.IntegerField()
     mean_r = serializers.FloatField(allow_null=True)
     median_r = serializers.FloatField(allow_null=True)
+    # Same-cohort realized baseline for "vs realized" — the realized R of exactly
+    # this lens's contributing rows (not the panel-wide gross mean). Null below the
+    # gate; ``realized_r_baseline_n`` can be < ``n`` (never-filled NO_FILL rows carry
+    # a counterfactual value but no realized outcome).
+    realized_r_baseline = serializers.FloatField(allow_null=True)
+    realized_r_baseline_n = serializers.IntegerField()
 
 
 class WhatIfPanelSerializer(serializers.Serializer):

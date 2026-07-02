@@ -244,9 +244,10 @@ paths:
         a session on the anchor date, whether that session is a half-day, whether
         the venue is in a regular session right now, and the UTC ISO 8601 timestamps
         of the next session open and next session close. The day-level fields (``is_trading_day``,
-        ``is_half_day``, ``next_open_iso``) are anchored on UTC today unless ``?as_of=YYYY-MM-DD``
-        is supplied; the intraday fields (``is_open_now``, ``next_close_iso``) always
-        reflect the current wall-clock instant.
+        ``is_half_day``) are anchored on UTC today unless ``?as_of=YYYY-MM-DD`` is
+        supplied; the intraday fields (``is_open_now``, ``next_open_iso``, ``next_close_iso``)
+        always reflect the current wall-clock instant, so a pre-open trading day reports
+        today's open rather than the following session.
       summary: Current market-status snapshot
       parameters:
       - in: query
@@ -1619,10 +1620,18 @@ components:
           type: number
           format: double
           nullable: true
+        realized_r_baseline:
+          type: number
+          format: double
+          nullable: true
+        realized_r_baseline_n:
+          type: integer
       required:
       - mean_r
       - median_r
       - n
+      - realized_r_baseline
+      - realized_r_baseline_n
     WhatIfPanel:
       type: object
       description: |-

@@ -314,6 +314,12 @@ export interface WhatIfLens {
 	n: number;
 	mean_r: number | null;
 	median_r: number | null;
+	/** Same-cohort realized-R baseline for "vs realized" — the realized R of exactly
+	 *  this lens's contributing rows (not the panel-wide gross mean). Null below the
+	 *  gate; `realized_r_baseline_n` can be < `n` (never-filled NO_FILL rows carry a
+	 *  counterfactual value but no realized outcome). */
+	realized_r_baseline: number | null;
+	realized_r_baseline_n: number;
 }
 
 /** The WHAT-IF panel — DISPLAY-ONLY, in-sample counterfactual exit-stop lenses.

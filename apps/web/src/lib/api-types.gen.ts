@@ -137,7 +137,7 @@ export interface paths {
         };
         /**
          * Current market-status snapshot
-         * @description Returns whether the requested venue (defaulting to XNYS) holds a session on the anchor date, whether that session is a half-day, whether the venue is in a regular session right now, and the UTC ISO 8601 timestamps of the next session open and next session close. The day-level fields (``is_trading_day``, ``is_half_day``, ``next_open_iso``) are anchored on UTC today unless ``?as_of=YYYY-MM-DD`` is supplied; the intraday fields (``is_open_now``, ``next_close_iso``) always reflect the current wall-clock instant.
+         * @description Returns whether the requested venue (defaulting to XNYS) holds a session on the anchor date, whether that session is a half-day, whether the venue is in a regular session right now, and the UTC ISO 8601 timestamps of the next session open and next session close. The day-level fields (``is_trading_day``, ``is_half_day``) are anchored on UTC today unless ``?as_of=YYYY-MM-DD`` is supplied; the intraday fields (``is_open_now``, ``next_open_iso``, ``next_close_iso``) always reflect the current wall-clock instant, so a pre-open trading day reports today's open rather than the following session.
          */
         get: operations["market_status_retrieve"];
         put?: never;
@@ -761,6 +761,9 @@ export interface components {
             mean_r: number | null;
             /** Format: double */
             median_r: number | null;
+            /** Format: double */
+            realized_r_baseline: number | null;
+            realized_r_baseline_n: number;
         };
         /**
          * @description The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit-stop lenses.

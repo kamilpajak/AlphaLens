@@ -39,6 +39,10 @@ export interface WhatIfLensView extends WhatIfLensMeta {
 	n: number;
 	meanR: number | null;
 	medianR: number | null;
+	/** Same-cohort realized-R baseline (this lens's own contributing rows) the
+	 *  "vs realized" figure compares against — NOT the panel-wide gross mean. */
+	realizedRBaseline: number | null;
+	realizedRBaselineN: number;
 }
 
 /** Flatten the served lens map into sorted, metadata-resolved view rows. */
@@ -49,7 +53,9 @@ export function whatifLenses(panel: WhatIfPanel): WhatIfLensView[] {
 			...resolveLensMeta(lensId),
 			n: agg.n,
 			meanR: agg.mean_r,
-			medianR: agg.median_r
+			medianR: agg.median_r,
+			realizedRBaseline: agg.realized_r_baseline,
+			realizedRBaselineN: agg.realized_r_baseline_n
 		}))
 		.sort((a, b) => a.lensId.localeCompare(b.lensId));
 }

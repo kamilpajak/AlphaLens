@@ -339,6 +339,18 @@ def _terminal_be(ticker: str, *, excess: float, realized_r: float, be_r: float |
     return row
 
 
+def _no_fill_be(ticker: str, *, be_r: float) -> dict:
+    """A NO_FILL terminal that still carries a break-even counterfactual value.
+
+    Mirrors production: the ladder never filled (``realized_r`` is None) but the
+    replay stamps a break-even R for the never-entered position. It counts toward
+    the lens ``n`` but has no realized outcome to feed the realized baseline.
+    """
+    row = _no_fill(ticker)
+    row["breakeven_realized_r_json"] = json.dumps({"be_0p5r": be_r})
+    return row
+
+
 class TestWhatIfBlock:
     """The break-even what-if block aggregates per-lens R, keyed by lens_id, and is
     N-gated exactly like the edge panel (display-only, in-sample counterfactual)."""
@@ -376,3 +388,45 @@ class TestWhatIfBlock:
         rows += [_terminal(f"B{i}", excess=0.02, realized_r=-0.5) for i in range(5)]
         lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r"]
         assert lens["n"] == N_EARLY_THRESHOLD - 1  # the single None dropped
+
+    def test_whatif_realized_baseline_is_the_lens_own_cohort_not_panel_wide(self):
+        # The realized baseline the what-if is compared against must be the realized
+        # R of EXACTLY the lens's contributing rows — NOT the panel-wide gross mean.
+        # A fill that carries realized_r but NO break-even value must not lift the
+        # baseline (superset drift). Here the lens cohort realized -0.5; five extra
+        # break-even-less fills realized +2.0 and must be excluded from the baseline.
+        rows = [
+            _terminal_be(f"L{i}", excess=0.02, realized_r=-0.5, be_r=0.1)
+            for i in range(N_EARLY_THRESHOLD)
+        ]
+        rows += [_terminal(f"X{i}", excess=0.02, realized_r=2.0) for i in range(5)]
+        out = build_edge_summary(rows)
+        lens = out["whatif"]["lenses"]["be_0p5r"]
+        assert lens["realized_r_baseline"] == pytest.approx(-0.5)
+        assert lens["realized_r_baseline_n"] == N_EARLY_THRESHOLD
+        # Proof it is NOT sourced from the panel-wide gross mean (blends the +2.0).
+        assert out["edge"]["gross_realized_r_mean"] != pytest.approx(-0.5)
+
+    def test_whatif_realized_baseline_excludes_no_fill_counterfactuals(self):
+        # A NO_FILL terminal can carry a break-even counterfactual (so it counts
+        # toward the lens n) but has no realized_r — it must be absent from the
+        # realized baseline and its n. This is the production N (lens) vs N-2
+        # (baseline) split from the two never-filled counterfactual rows.
+        rows = [
+            _terminal_be(f"F{i}", excess=0.02, realized_r=-0.5, be_r=0.1)
+            for i in range(N_EARLY_THRESHOLD)
+        ]
+        rows += [_no_fill_be(f"NF{i}", be_r=0.0) for i in range(2)]
+        lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r"]
+        assert lens["n"] == N_EARLY_THRESHOLD + 2  # both NO_FILL counterfactuals count
+        assert lens["realized_r_baseline_n"] == N_EARLY_THRESHOLD  # but not the baseline
+        assert lens["realized_r_baseline"] == pytest.approx(-0.5)
+
+    def test_whatif_realized_baseline_nulled_below_gate_but_n_survives(self):
+        rows = [
+            _terminal_be(f"T{i}", excess=0.02, realized_r=-0.5, be_r=0.1)
+            for i in range(N_GATE_THRESHOLD - 1)
+        ]
+        lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r"]
+        assert lens["realized_r_baseline"] is None
+        assert lens["realized_r_baseline_n"] == N_GATE_THRESHOLD - 1

@@ -133,6 +133,15 @@ class _Accumulator:
     # from breakeven_realized_r_json. Display-only, in-sample; the registry of lens
     # labels/status lives client-side, so this is keyed by lens_id only.
     breakeven_r: dict[str, list[float]] = field(default_factory=dict)
+    # The realized-R baseline the what-if is compared against, restricted PER LENS to
+    # exactly the rows that fed that lens's counterfactual (finite break-even R AND
+    # finite realized_r). Keeping it same-cohort (not the panel-wide realized mean)
+    # guards the "vs realized" comparison against superset drift — a fill carrying
+    # realized_r but no break-even value must not lift the baseline. A never-filled
+    # NO_FILL counterfactual (break-even value, realized_r None) counts toward the
+    # lens n but has no realized outcome here, so this list can be SHORTER than
+    # ``breakeven_r[lens_id]``.
+    breakeven_realized_baseline: dict[str, list[float]] = field(default_factory=dict)
     # Deployment (N-independent) — over the whole plannable population.
     n_filled: int = 0
     n_no_fill: int = 0
@@ -171,6 +180,11 @@ def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
         rb = _finite(value)
         if rb is not None:
             acc.breakeven_r.setdefault(lens_id, []).append(rb)
+            # Same-cohort realized baseline: pair this lens's counterfactual with
+            # the row's OWN realized_r (``rv`` above). A never-filled NO_FILL has a
+            # break-even value but rv is None → it drops out of the baseline only.
+            if rv is not None:
+                acc.breakeven_realized_baseline.setdefault(lens_id, []).append(rv)
 
 
 def _accumulate_open(acc: _Accumulator, row: dict[str, Any]) -> None:
@@ -281,6 +295,14 @@ def _build_whatif(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, A
             "n": len(values),
             "mean_r": None if gated else _mean(values),
             "median_r": None if gated else _median(values),
+            # Same-cohort realized baseline (this lens's own contributing rows), so
+            # "vs realized" compares the identical picks the counterfactual scored —
+            # not the panel-wide gross mean. ``realized_r_baseline_n`` can be < ``n``
+            # (never-filled NO_FILL counterfactuals have no realized outcome).
+            "realized_r_baseline": None
+            if gated
+            else _mean(acc.breakeven_realized_baseline.get(lens_id, [])),
+            "realized_r_baseline_n": len(acc.breakeven_realized_baseline.get(lens_id, [])),
         }
         for lens_id, values in sorted(acc.breakeven_r.items())
     }

@@ -24,9 +24,12 @@
 		lenses.find((l) => l.lensId === selectedId) ?? lenses[0] ?? null
 	);
 
-	// The realized R headline (de-emphasised) the what-if is compared against —
-	// always shown beside the what-if so the two are never confused.
-	const realizedR = $derived(summary.edge.gross_realized_r_mean);
+	// The realized R the what-if is compared against — the SELECTED lens's own
+	// same-cohort baseline (the realized R of exactly the rows that fed that lens's
+	// counterfactual), NOT the panel-wide gross mean. This keeps "vs realized"
+	// apples-to-apples with the what-if mean and guards against superset drift (a
+	// fill that carries realized_r but no break-even value must not lift it).
+	const realizedR = $derived(selected?.realizedRBaseline ?? null);
 
 	// Drive the banner emphasis off the SELECTED lens's status (client registry),
 	// not a hard-coded string: an in_sample lens warns "in-sample · not validated";
