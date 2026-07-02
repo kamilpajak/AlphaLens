@@ -1,18 +1,23 @@
 <script lang="ts">
 	// Research ledger route — thin view layer over the experiments page.
 	//
-	// The static data (paradigm experiments, live infrastructure, methodology
-	// artifacts, failure patterns, status legend) lives in
-	// `$lib/data/research-ledger`. The evidence-drawer FSM + the sanitized
-	// markdown pipeline live in `$lib/components/EvidenceDrawer.svelte`. This
-	// file keeps the page layout, the JargonTip tooltip wiring, the αt mini-bar
-	// helpers, the TOC IntersectionObserver, and the hash-deep-link handling.
+	// Greenfield layout (2026-07): a cover-sheet hero (kill-rate `0 / 18` + the
+	// αt-distribution strip) leads, the paradigm ledger is the payload — grouped
+	// into research-class chapters with a sticky filter/legend bar — a `// NOW`
+	// divider separates it from the live-tool ledger (tool.experiments), and the
+	// reference material (patterns / infra / methodology / glossary) is demoted to
+	// a "supporting material" appendix. The static data (paradigms, tool
+	// experiments, live infra, artifacts, patterns, status legends, group chapters)
+	// lives in `$lib/data/research-ledger`; the evidence-drawer FSM lives in
+	// `$lib/components/EvidenceDrawer.svelte`. This file keeps the layout, the
+	// JargonTip / ChipTip wiring, the αt bar + scatter helpers, the status filter,
+	// the TOC IntersectionObserver, and the hash-deep-link handling.
 	//
 	// WHEN CLOSING A NEW PARADIGM: append a row to `paradigms` in
-	// `$lib/data/research-ledger`, populate ALL fields including `story` (plain
-	// English) and `is_t`/`oos_t` (numeric, nullable), and add the evidence
-	// filename to scripts/sync-research-docs.mjs::REFERENCED. New acronyms
-	// should also get a row in the `GLOSSARY` array in `$lib/data/glossary`.
+	// `$lib/data/research-ledger` (populate ALL fields incl. `story`, `group`, and
+	// `is_t`/`oos_t`), add the evidence filename to
+	// scripts/sync-research-docs.mjs::REFERENCED, and add any new acronym to the
+	// `GLOSSARY` array in `$lib/data/glossary`.
 
 	import JargonTip from '$lib/components/JargonTip.svelte';
 	import ChipTip from '$lib/components/ChipTip.svelte';
@@ -30,6 +35,9 @@
 		statusRail,
 		alphaValueTone,
 		stripLedgerMarkup,
+		groupedParadigms,
+		paradigmScatter,
+		PARADIGM_GROUPS,
 		ALPHA_T_MARGINAL,
 		ALPHA_T_DOCTRINE,
 		type ParadigmStatus,
@@ -50,8 +58,7 @@
 	// Tooltip helper — looks term up in the shared GLOSSARY (single source of
 	// truth). Any text rendered through `parseMarkup` can wrap a term inline
 	// via [term] or [term|visible-label] syntax; the tooltip body comes from
-	// the glossary entry. Adding a new tooltip = one entry in $lib/data/glossary
-	// + one `[term]` marker in the prose.
+	// the glossary entry.
 	function tipProps(term: string) {
 		const g = GLOSSARY_BY_TERM.get(term);
 		return { term: g?.term ?? term, full: g?.full ?? '', body: g?.body ?? '' };
@@ -79,18 +86,18 @@
 		return out;
 	}
 
-	// Glossary subset scoped to /experiments — drops brief-only entries
-	// (PE, PS, EV/EBITDA, ROE, etc. — pages: ['briefs']) so the lookup table
-	// here only lists terms actually used by paradigms / patterns above.
+	// Glossary subset scoped to /experiments — drops brief-only entries.
 	const experimentsGlossary = GLOSSARY.filter(
 		(g) => !g.pages || g.pages.includes('experiments')
 	);
 
-	const summaryCounts = $derived.by(() => {
-		const c: Record<ParadigmStatus, number> = { FAIL: 0, 'SLIPPAGE-FAIL': 0, 'IN-FLIGHT': 0, INCONCLUSIVE: 0, PASS_MARGINAL: 0 };
-		for (const p of paradigms) c[p.status]++;
-		return c;
-	});
+	// --- Ledger derivations ---------------------------------------------------
+	// Research-class chapters (pure helper); the hero αt-distribution strip; and
+	// the aggregate verdict (0 of 18 ever cleared the deploy bar).
+	const grouped = groupedParadigms(paradigms, PARADIGM_GROUPS);
+	const scatter = paradigmScatter(paradigms);
+	const nTested = paradigms.length;
+	const nDeployed = paradigms.filter((p) => (p.oos_t ?? p.is_t ?? 0) >= ALPHA_T_DOCTRINE).length;
 
 	function statusTone(s: ParadigmStatus | LiveStatus | 'OSS' | 'INTERNAL'): string {
 		switch (s) {
@@ -115,8 +122,56 @@
 		}
 	}
 
+	// --- Status filter (the sticky chip bar doubles as the visible legend) ----
+	// Default ALL → every row shown, so smoke assertions (which never click a
+	// chip) see the full ledger. Only statuses actually present get a chip.
+	// Multi-select status filter: a Set of chosen statuses. Empty = ALL (every row
+	// shown), so smoke assertions (which never click a chip) see the full ledger.
+	// Several statuses can be active at once; a row shows if its status is selected.
+	let selected = $state<Set<ParadigmStatus>>(new Set());
+	const showP = (p: (typeof paradigms)[number]) => selected.size === 0 || selected.has(p.status);
 
+	// Toggle a status in/out of the selection ('ALL' clears it), then blur both the
+	// button (a click focuses it) and the ChipTip wrapper (its onpointerdown
+	// focuses it) so the clicked chip's tooltip doesn't stay pinned via
+	// focus-within while the next chip is hovered (two tooltips at once).
+	function toggleFilter(key: 'ALL' | ParadigmStatus, e: Event) {
+		if (key === 'ALL') {
+			selected = new Set();
+		} else {
+			const next = new Set(selected);
+			if (next.has(key)) next.delete(key);
+			else next.add(key);
+			selected = next;
+		}
+		const btn = e.currentTarget as HTMLElement;
+		btn.blur();
+		const wrap = btn.closest('[data-testid="chip-tip"]');
+		if (wrap instanceof HTMLElement) wrap.blur();
+	}
+	function clearFilter() {
+		selected = new Set();
+	}
+	const statusCount = (s: ParadigmStatus) => paradigms.filter((p) => p.status === s).length;
+	const filterChips: { key: 'ALL' | ParadigmStatus; label: string; count: number; tone: string; def: string }[] = [
+		{ key: 'ALL', label: 'all', count: nTested, tone: 'text-fg border-fg-muted', def: 'every hypothesis in the ledger' },
+		...(['FAIL', 'INCONCLUSIVE', 'SLIPPAGE-FAIL'] as ParadigmStatus[])
+			.filter((s) => statusCount(s) > 0)
+			.map((s) => ({
+				key: s as ParadigmStatus,
+				label: s.toLowerCase(),
+				count: statusCount(s),
+				tone: statusTone(s),
+				def: paradigmStatusDef.get(s) ?? ''
+			}))
+	];
+
+	// αt bar + scatter geometry. The 0–4 scale, the 2.0 marginal hairline, and the
+	// 3.5 deploy marker are shared by the per-row bars and the hero strip so they
+	// can never disagree.
 	const T_SCALE_MAX = 4.0;
+	const MARGINAL_PCT = (ALPHA_T_MARGINAL / T_SCALE_MAX) * 100;
+	const DOCTRINE_PCT = (ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100;
 	function tBarWidthPct(t: number | null): number {
 		if (t === null || !Number.isFinite(t)) return 0;
 		const clamped = Math.max(0, Math.min(t, T_SCALE_MAX));
@@ -130,36 +185,30 @@
 		return 'bg-green';
 	}
 
-	// Evidence drawer instance — bound via `bind:this`. The drawer owns its own
-	// open/loading/content/error FSM, the synced-doc fetch, the sanitized
-	// markdown pipeline, and Esc-to-close; the row buttons just call
-	// `evidenceDrawer.open(path)`. See $lib/components/EvidenceDrawer.svelte.
+	// Evidence drawer instance — bound via `bind:this`. Owns its open/loading/
+	// content/error FSM, the synced-doc fetch, the sanitized markdown pipeline,
+	// and Esc-to-close; row buttons just call `evidenceDrawer.open(path)`.
 	let evidenceDrawer: EvidenceDrawer;
 
-	// Hash auto-expand. When a reader lands on /experiments#P14 (deep-linked
-	// from a postmortem markdown / commit body / external doc), open the
-	// matching paradigm row's <details> and scroll it into view — otherwise
-	// the row's detail fields stay collapsed (P0.1 default) and the deep link
-	// loses its meaning.
-	//
-	// Match the fragment to <article id="..."> and toggle the nested <details>
-	// open. Re-run on `hashchange` so client-side anchor navigation behaves
-	// the same as initial load.
+	// Hash auto-expand + filter reconciliation. Landing on /experiments#P14 (deep
+	// linked from a postmortem / commit body) opens that paradigm's <details> and
+	// scrolls it into view. If the active status filter would hide the target row,
+	// reset to ALL first so the deep link never lands on a hidden element. A
+	// section-level hash (#tool-experiments) scrolls but does NOT force-open a
+	// row; only an <article> row (or the how-to-read primer) auto-opens.
 	function expandRowForHash() {
 		const id = location.hash.slice(1);
 		if (!id) return;
-		// Only a matched element with a nested <details> auto-opens. A section-level
-		// hash (e.g. #tool-experiments) scrolls to the section but intentionally
-		// does NOT open the first row's detail; per-row hashes (#T1's article id)
-		// still open that row.
-		const article = document.getElementById(id);
-		if (!article) return;
-		const det = article.querySelector('details');
-		if (det && !det.open) det.open = true;
-		// Defer scroll to next frame so the just-opened details has its final
-		// height before the browser computes the target scroll offset.
+		const p = paradigms.find((x) => x.id === id);
+		if (p && selected.size > 0 && !selected.has(p.status)) selected = new Set();
+		// Defer one frame so a filter reset has re-rendered the row before we
+		// query + open + scroll it.
 		requestAnimationFrame(() => {
-			article.scrollIntoView({ block: 'start', behavior: 'instant' });
+			const el = document.getElementById(id);
+			if (!el) return;
+			const det = el.querySelector('details');
+			if (det && !det.open && (el.tagName === 'ARTICLE' || id === 'how-to-read')) det.open = true;
+			requestAnimationFrame(() => el.scrollIntoView({ block: 'start', behavior: 'instant' }));
 		});
 	}
 
@@ -167,16 +216,13 @@
 		expandRowForHash();
 	}
 
-	// Run once after hydration so the initial-load hash is honoured (the
-	// hashchange listener below only fires on subsequent changes, not on
-	// first paint). $effect inherently runs after the DOM is wired up.
+	// Run once after hydration so the initial-load hash is honoured.
 	$effect(() => {
 		expandRowForHash();
 	});
 
-	// Sticky TOC — section anchor list rendered on xl+ screens, with the
-	// currently-visible section highlighted via IntersectionObserver. The
-	// items match the in-page <section id="..."> anchors created above.
+	// Sticky TOC — section anchor list on xl+ screens, current section highlighted
+	// via IntersectionObserver. Items match the in-page <section id> anchors.
 	const TOC_ITEMS = [
 		{ id: 'how-to-read', label: 'how.to.read' },
 		{ id: 'paradigms', label: 'paradigms.ledger' },
@@ -189,20 +235,9 @@
 	let activeSection = $state<string>('how-to-read');
 
 	$effect(() => {
-		// Bail on SSR / when DOM isn't ready. IntersectionObserver lives only
-		// in browser env; $effect doesn't run server-side anyway, but the
-		// guard makes the code unit-testable without jsdom.
 		if (typeof IntersectionObserver === 'undefined') return;
-		// rootMargin pulls the active boundary up so a section counts as
-		// "visible" once its top hits ~33% from the viewport top — feels more
-		// natural than the default "any pixel" rule for tall sections.
 		const io = new IntersectionObserver(
 			(entries) => {
-				// When the user scrolls fast, the callback can receive several
-				// intersecting entries in a single batch — picking any one of
-				// them caused activeSection to flicker as the array order is
-				// not document-order. Filter to intersecting only and take the
-				// last (which is the section deepest into the viewport).
 				const visible = entries.filter((e) => e.isIntersecting);
 				if (visible.length > 0) {
 					activeSection = (visible[visible.length - 1].target as HTMLElement).id;
@@ -222,22 +257,21 @@
      Esc-to-close <svelte:window> lives inside EvidenceDrawer.svelte. -->
 <svelte:window onhashchange={onHashChange} />
 
-<div class="max-w-[1400px] mx-auto px-3 sm:px-4 py-8 sm:py-10 xl:grid xl:grid-cols-[160px_minmax(0,1fr)] xl:gap-6">
-	<!-- Section TOC rail (xl+ only). Sticky to the viewport top so the section
-	     list stays visible regardless of scroll depth. Matches in-page section
-	     ids; the IntersectionObserver wired in <script> updates activeSection
-	     so the current section reads as the amber accent. -->
+<div class="max-w-[1400px] mx-auto px-3 sm:px-4 py-8 sm:py-10 xl:grid xl:grid-cols-[15rem_minmax(0,1fr)] xl:gap-8">
+	<!-- Section TOC sidebar (xl+), sticky, IntersectionObserver-driven active.
+	     Styled loosely on the dashboard mockup (mono type kept): no boxed border,
+	     the active section reads as amber text on an amber-tint background block. -->
 	<aside class="hidden xl:block">
-		<nav aria-label="Section table of contents" class="sticky top-4 border border-grid bg-bg-1 px-3 py-3">
-			<div class="text-[10px] uppercase tracking-widest text-fg-muted mb-2">// toc</div>
-			<ul class="space-y-1 text-[11px]">
+		<nav aria-label="Section table of contents" class="sticky top-4">
+			<div class="px-3 text-[10px] uppercase tracking-widest text-fg-muted mb-3">// toc</div>
+			<ul class="flex flex-col gap-0.5 text-xs">
 				{#each TOC_ITEMS as item}
 					<li>
 						<a
 							href="#{item.id}"
-							class="block py-0.5 hover:text-amber transition-colors"
-							class:text-amber={activeSection === item.id}
-							class:text-fg-dim={activeSection !== item.id}
+							class="block px-3 py-2 transition-colors {activeSection === item.id
+								? 'text-amber bg-amber/10'
+								: 'text-fg-dim hover:text-fg hover:bg-bg-2'}"
 						>{item.label}</a>
 					</li>
 				{/each}
@@ -246,254 +280,351 @@
 	</aside>
 
 	<div class="xl:min-w-0">
-	<header class="mb-10 fade-up">
+	<!-- ============================ COVER SHEET / HERO ======================= -->
+	<header class="mb-8 fade-up">
 		<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted mb-2">// experiments</div>
-		<h1 class="font-display font-bold text-2xl sm:text-3xl lg:text-4xl tracking-tight text-fg">
+		<h1 class="font-display font-bold text-3xl sm:text-4xl lg:text-5xl tracking-tight text-fg">
 			Research <span class="text-amber">ledger</span>
 		</h1>
 
-		<!-- A: project context. Outsiders need to know which track this is + that
-		     failure is the expected outcome. -->
 		<div class="text-fg-dim mt-3 max-w-3xl text-sm leading-relaxed space-y-3">
 			<p>
 				AlphaLens runs two parallel research tracks. This page is the
 				<span class="text-amber">paradigm-search</span> track — a systematic protocol for
 				falsifying alpha hypotheses on US equities under pre-registration discipline. The
 				<a href="/about" class="text-cyan hover:text-amber underline decoration-dotted underline-offset-2">other track</a>
-				is the thematic event-driven research assistant (dashboard / briefs).
+				is the thematic event-driven research assistant (dashboard / briefs), logged below in
+				<a href="#tool-experiments" class="text-cyan hover:text-amber underline decoration-dotted underline-offset-2">tool.experiments</a>.
 			</p>
 			<p>
-				Failure is the expected outcome — markets are largely efficient. The methodology bundle
-				that survived the failures (<JargonTip {...tipProps('pre-registration ledger')}>pre-registration ledger</JargonTip>,
+				Failure is the expected outcome — markets are largely efficient. The durable artifact is the
+				<em>method</em> that survived the failures (<JargonTip {...tipProps('pre-registration ledger')}>pre-registration ledger</JargonTip>,
 				<JargonTip {...tipProps('multi-phase audit')}>multi-phase audit</JargonTip>,
 				<JargonTip {...tipProps('Bonferroni correction')}>Bonferroni</JargonTip>-correct
-				multiple testing), <em>not</em> any individual paradigm, is the actual artifact. Below: every
-				hypothesis we tested, how we tested it, why it didn't work, and the general lesson that
-				came out of it.
+				multiple testing), not any individual strategy. We kill our own ideas, and none has ever
+				cleared the bar to deploy real capital.
 			</p>
 		</div>
 
-		<div class="mt-5 flex flex-wrap gap-2 text-[10px] uppercase tracking-widest">
-			<span class="px-2 py-1 border border-red text-red">{summaryCounts.FAIL} FAIL</span>
-			<span class="px-2 py-1 border border-red text-red">{summaryCounts['SLIPPAGE-FAIL']} SLIPPAGE-FAIL</span>
-			<span class="px-2 py-1 border border-magenta text-magenta">{summaryCounts.INCONCLUSIVE} INCONCLUSIVE</span>
-			<span class="px-2 py-1 border border-cyan text-cyan">{summaryCounts['IN-FLIGHT']} IN-FLIGHT</span>
-			<span class="px-2 py-1 border border-fg-muted text-fg-muted">{paradigms.length} total tests</span>
+		<!-- Cover sheet: the aggregate verdict at a glance — `0 deployed / 18
+		     tested` + the αt-distribution strip where every measured t-stat piles
+		     up short of the green 3.5 deploy line. -->
+		<!-- No overflow-hidden here: it would clip the αt tooltip that pops above
+		     the scatter label (and the amber corner brackets). The scanline below
+		     is `absolute inset-0`, so it stays within bounds without clipping. -->
+		<div class="corners relative border border-grid bg-bg-1 mt-6 px-4 sm:px-6 py-5 sm:py-6">
+			<!-- Subtle CRT scanline confined to the cover; off under reduced-motion. -->
+			<div
+				aria-hidden="true"
+				class="pointer-events-none absolute inset-0 opacity-60 motion-reduce:hidden"
+				style="background-image: repeating-linear-gradient(to bottom, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 3px);"
+			></div>
+
+			<div class="relative grid gap-6 sm:gap-8 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+				<!-- Kill-rate: giant amber 0 (deployed) over tested. -->
+				<div class="flex items-end gap-3">
+					<span class="font-display font-bold text-amber leading-[0.8] text-6xl sm:text-7xl">{nDeployed}</span>
+					<div class="pb-1.5">
+						<div class="text-[10px] uppercase tracking-[0.2em] text-fg-dim">deployed</div>
+						<div class="text-[11px] text-fg-muted">of {nTested} tested</div>
+					</div>
+				</div>
+
+				<!-- αt distribution strip. -->
+				<div>
+					<div class="flex items-center justify-between text-[10px] uppercase tracking-widest text-fg-muted mb-1.5">
+						<span><span class="normal-case"><JargonTip {...tipProps('αt')}>αt</JargonTip></span> distribution · every measured hypothesis</span>
+						<span class="text-fg-dim normal-case tracking-normal">scale 0 – 4.0</span>
+					</div>
+					<!-- 0–4 chart: a thin track with zone tints (noise / marginal / deploy)
+					     behind the 2.0 + 3.5 threshold lines, plus one tick per measured
+					     hypothesis (max amber + wider). Axis labels positioned at the two
+					     thresholds. -->
+					<div class="relative h-10 flex items-center" role="img" aria-label="alpha t-stat distribution: {scatter.nWithT} of {nTested} hypotheses produced a t-statistic; none reached the 3.5 deploy threshold (best {scatter.maxT?.toFixed(2) ?? 'n/a'})">
+						<div class="absolute inset-x-0 h-1 bg-bg-3 overflow-hidden">
+							<div class="absolute inset-y-0 left-0 w-1/2 bg-bg-2"></div>
+							<div class="absolute inset-y-0 bg-amber/10" style="left: {MARGINAL_PCT}%; width: {DOCTRINE_PCT - MARGINAL_PCT}%"></div>
+							<div class="absolute inset-y-0 right-0 bg-green/10" style="left: {DOCTRINE_PCT}%"></div>
+						</div>
+						<div class="absolute inset-y-0 w-px bg-grid-strong" style="left: {MARGINAL_PCT}%"></div>
+						<div class="absolute inset-y-0 w-px bg-green/60" style="left: {DOCTRINE_PCT}%"></div>
+						{#each scatter.ticks as tk}
+							<div
+								class="absolute top-2 bottom-2 {tk.isMax ? 'w-[3px] bg-amber' : 'w-[2px] ' + tBarTone(tk.t)}"
+								style="left: {tBarWidthPct(tk.t)}%"
+							></div>
+						{/each}
+					</div>
+					<div class="relative h-3 mt-2 text-[10px] uppercase tracking-wider">
+						<span class="absolute left-0 text-fg-muted">&lt; 2.0 noise</span>
+						<span class="absolute text-amber -translate-x-1/2" style="left: {MARGINAL_PCT}%">2.0 marginal</span>
+						<span class="absolute text-green -translate-x-full whitespace-nowrap" style="left: {DOCTRINE_PCT}%">3.5 deploy →</span>
+					</div>
+					<p class="text-[11px] text-fg-muted mt-2 leading-relaxed">
+						{scatter.nWithT} of {nTested} produced a t-stat; the other {nTested - scatter.nWithT} were
+						killed pre-audit. The closest call reached
+						<span class="text-amber">≈ {scatter.maxT?.toFixed(2)}</span> — an inconclusive options
+						retrospective sent to paper-trade, still short of 3.5. Nothing has ever crossed the green line.
+					</p>
+				</div>
+			</div>
 		</div>
 	</header>
 
-
-	<!-- D: αt scale "how to read this" block. Sets up the mini-bars below. -->
-	<section id="how-to-read" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.08s">
-		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted">
-			<h2 class="font-normal inline">how.to.read</h2>
-		</div>
-		<div class="px-4 sm:px-5 py-3 text-sm text-fg-dim leading-relaxed">
-			Each paradigm row carries a t-statistic on
-			<JargonTip {...tipProps('Carhart 4F')}>Carhart-4F</JargonTip>
-			α — abbreviated
-			<JargonTip {...tipProps('αt')}>αt</JargonTip>.
-			Higher means stronger statistical evidence the strategy worked. Project doctrine:
-			<span class="text-green"><JargonTip {...tipProps('αt')}>αt</JargonTip> ≥ 3.5 = deploy-eligible</span>,
-			<span class="text-amber">2.0–3.5 = marginal</span> (paper-trade only),
-			<span class="text-fg-muted">&lt; 2.0 = noise</span>. Strategies are evaluated on three windows:
-			<JargonTip {...tipProps('IS')}>IS</JargonTip>
-			(training),
-			<JargonTip {...tipProps('OOS')}>OOS</JargonTip>
-			(fresh holdout), and where applicable
-			<JargonTip {...tipProps('FL')}>FL</JargonTip>
-			(an even more recent independent window for confirmation). The two horizontal bars per row
-			visualise
-			<JargonTip {...tipProps('IS')}>IS</JargonTip>
-			vs
-			<JargonTip {...tipProps('OOS')}>OOS</JargonTip>
-			<JargonTip {...tipProps('αt')}>αt</JargonTip>;
-			<JargonTip {...tipProps('FL')}>FL</JargonTip>
-			values appear in the Outcome field where measured. Vertical reference lines mark 2.0 and 3.5.
-			<br /><br />
-			You'll see the word "phase" used two different ways across the rows. Most paradigms run a
-			<JargonTip {...tipProps('multi-phase audit')}>multi-phase audit</JargonTip>
-			where the same backtest is run with 5 different rebalance start-day offsets —
-			<JargonTip {...tipProps('single-phase')}>single-phase</JargonTip>
-			results are sample-of-one artifacts (see pattern #07). Separately, the PEAD paradigm
-			(#14) was built in
-			<JargonTip {...tipProps('Phase A/B/C/D/E')}>Phase A/B/C/D/E</JargonTip>
-			sequential implementation milestones — different concept entirely (project phases of building
-			the audit, not statistical replicates).
-		</div>
+	<!-- ==================== how.to.read (collapsed primer) =================== -->
+	<section id="how-to-read" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.05s">
+		<details class="group/htr">
+			<summary class="px-4 sm:px-5 py-3 text-[10px] uppercase tracking-widest text-fg-muted hover:bg-bg-2 cursor-pointer flex items-center justify-between list-none [&::-webkit-details-marker]:hidden">
+				<span class="flex items-center gap-2">
+					<span class="text-amber transition-transform inline-block group-open/htr:rotate-90">▸</span>
+					<h2 class="font-normal">how.to.read</h2>
+				</span>
+				<span class="text-fg-dim normal-case tracking-normal">the αt scale · IS / OOS / FL windows · click to expand</span>
+			</summary>
+			<div class="px-4 sm:px-5 py-3 border-t border-grid text-sm text-fg-dim leading-relaxed">
+				Each paradigm row carries a t-statistic on
+				<JargonTip {...tipProps('Carhart 4F')}>Carhart-4F</JargonTip>
+				α — abbreviated
+				<JargonTip {...tipProps('αt')}>αt</JargonTip>.
+				Higher means stronger statistical evidence the strategy worked. Project doctrine:
+				<span class="text-green"><JargonTip {...tipProps('αt')}>αt</JargonTip> ≥ 3.5 = deploy-eligible</span>,
+				<span class="text-amber">2.0–3.5 = marginal</span> (paper-trade only),
+				<span class="text-fg-muted">&lt; 2.0 = noise</span>. Strategies are evaluated on three windows:
+				<JargonTip {...tipProps('IS')}>IS</JargonTip>
+				(training),
+				<JargonTip {...tipProps('OOS')}>OOS</JargonTip>
+				(fresh holdout), and where applicable
+				<JargonTip {...tipProps('FL')}>FL</JargonTip>
+				(an even more recent independent window for confirmation). The two horizontal bars per row
+				visualise
+				<JargonTip {...tipProps('IS')}>IS</JargonTip>
+				vs
+				<JargonTip {...tipProps('OOS')}>OOS</JargonTip>
+				<JargonTip {...tipProps('αt')}>αt</JargonTip>;
+				<JargonTip {...tipProps('FL')}>FL</JargonTip>
+				values appear in the Outcome field where measured. Vertical reference lines mark 2.0 and 3.5.
+				<br /><br />
+				You'll see the word "phase" used two different ways across the rows. Most paradigms run a
+				<JargonTip {...tipProps('multi-phase audit')}>multi-phase audit</JargonTip>
+				where the same backtest is run with 5 different rebalance start-day offsets —
+				<JargonTip {...tipProps('single-phase')}>single-phase</JargonTip>
+				results are sample-of-one artifacts (see pattern #07). Separately, the PEAD paradigm
+				(#14) was built in
+				<JargonTip {...tipProps('Phase A/B/C/D/E')}>Phase A/B/C/D/E</JargonTip>
+				sequential implementation milestones — different concept entirely (project phases of building
+				the audit, not statistical replicates).
+			</div>
+		</details>
 	</section>
 
+	<!-- ============================ LEDGER 1 · paradigms ===================== -->
 	<section id="paradigms" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.1s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid">
 			<div class="text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 				<h2 class="font-normal">paradigms.ledger</h2>
-				<span class="text-fg-dim normal-case tracking-normal">{paradigms.length} rows · click each "show detail" for hypothesis / mechanism / outcome / lesson</span>
+				<span class="text-fg-dim normal-case tracking-normal">{nTested} hypotheses · {nDeployed} cleared the bar</span>
 			</div>
-			<!-- Track band: names this ledger's axis + cross-links the sibling track,
-			     so a mid-page reader grasps the two tracks measure different things. -->
 			<p class="text-[11px] text-fg-dim mt-1.5 leading-relaxed">
 				<span class="text-cyan">paradigm-search track</span> — falsifying standalone alpha hypotheses, measured in
-				<JargonTip {...tipProps('αt')}>αt</JargonTip> (Carhart-4F t-stat). The live-tool track is
+				<JargonTip {...tipProps('αt')}>αt</JargonTip> (Carhart-4F t-stat), grouped by research class. The live-tool track is
 				<a href="#tool-experiments" class="text-cyan hover:text-amber underline decoration-dotted underline-offset-2">tool.experiments</a>
 				below.
 			</p>
 		</div>
-		<div class="divide-y divide-grid">
-			{#each paradigms as p}
-				<article id={p.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors {statusRail(statusTone(p.status))}">
-					<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
-						<span class="font-display font-bold text-base sm:text-lg text-amber w-10 sm:w-12 shrink-0">{p.display}</span>
-						<h3 class="font-bold text-fg text-sm sm:text-base">{p.name}</h3>
-						<span class="text-[10px] uppercase tracking-widest">
-							<!-- Two-axis layer tag. Renders Layer · A / B (or A × B+B for
-							     compounds). Each token (layer_id, axis_a, axis_b) is wrapped
-							     in a JargonTip so first-time readers can hover for the inline
-							     definition — replaces the upfront architecture.layers primer.
-							     `axis_a` = screener is the default structural choice —
-							     rendered muted to subordinate it visually so combo/compound/
-							     gate read louder. Layer 4 (overlay) uses axis_a only, no
-							     axis_b. -->
-							<span class="text-fg-muted">
-								<JargonTip {...tipProps(p.layer_id)}>{p.layer_id}</JargonTip> ·&nbsp;</span>
-							{#if p.axis_a === 'screener'}
-								<span class="text-fg-muted"><JargonTip {...tipProps('screener')}>screener</JargonTip></span>
-							{:else}
-								<span class="text-fg-dim font-bold"><JargonTip {...tipProps(p.axis_a)}>{p.axis_a}</JargonTip></span>
-							{/if}
-							{#if p.axis_b && p.axis_b.length > 0}
-								<span class="text-fg-muted"> / </span>
-								{#each p.axis_b as b, i}
-									{#if i > 0}<span class="text-fg-muted"> × </span>{/if}<span class="text-fg-dim font-bold"><JargonTip {...tipProps(b)}>{b}</JargonTip></span>
-								{/each}
-							{/if}
-						</span>
-						<span class="ml-auto flex items-center gap-2">
-							<ChipTip term={p.status} body={paradigmStatusDef.get(p.status) ?? ''}>
-								{#snippet chip()}
-									<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest cursor-help {statusTone(p.status)}">{p.status}</span>
-								{/snippet}
-							</ChipTip>
-							<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{p.date}</span>
-						</span>
-					</header>
 
-					<!-- Body two-column on lg+: narrative left (capped measure), IS/OOS αt
-					     bars right (the quantitative evidence, under the verdict cluster) — so a
-					     wide card fills both edges instead of leaving the right half empty.
-					     Stacks vertically on smaller screens. -->
-					<div class="sm:pl-12 mb-3 lg:flex lg:items-start lg:justify-between lg:gap-8">
-						<p class="text-[13px] text-fg-dim leading-relaxed mb-3 lg:mb-0 lg:max-w-[72ch]">{p.story}</p>
-
-					{#if p.is_t !== null || p.oos_t !== null}
-						<!-- IS/OOS αt bars. Track is width-capped (max-w-lg) so a 0–4 scalar
-						     isn't stretched across the whole card; a ring bounds the full scale
-						     so the extent is legible regardless of fill. The 2.0 marginal marker
-						     is a hairline; the 3.5 deploy marker is a bolder green line (the
-						     decision-relevant threshold reads loudest). The value is tinted by
-						     its own doctrine band via alphaValueTone. -->
-						<div class="text-[11px] w-full lg:w-[28rem] lg:shrink-0">
-							<div class="flex items-center gap-2 mb-1">
-								<span class="w-10 text-fg-muted uppercase tracking-widest">
-									<JargonTip {...tipProps('IS')}>IS</JargonTip>
-								</span>
-								<div class="relative h-2 flex-1 bg-bg-3 overflow-hidden ring-1 ring-inset ring-grid">
-									{#if p.is_t !== null}
-										<div class="absolute inset-y-0 left-0 {tBarTone(p.is_t)}" style="width: {tBarWidthPct(p.is_t)}%"></div>
-									{/if}
-									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(ALPHA_T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
-									<div class="absolute inset-y-0 border-l-2 border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
-								</div>
-								<span class="w-14 text-right font-mono {alphaValueTone(p.is_t)}">{p.is_t === null || !Number.isFinite(p.is_t) ? '—' : (p.is_t >= 0 ? '+' : '') + p.is_t.toFixed(2)}</span>
-							</div>
-							<div class="flex items-center gap-2">
-								<span class="w-10 text-fg-muted uppercase tracking-widest">
-									<JargonTip {...tipProps('OOS')}>OOS</JargonTip>
-								</span>
-								<div class="relative h-2 flex-1 bg-bg-3 overflow-hidden ring-1 ring-inset ring-grid">
-									{#if p.oos_t !== null}
-										<div class="absolute inset-y-0 left-0 {tBarTone(p.oos_t)}" style="width: {tBarWidthPct(p.oos_t)}%"></div>
-									{/if}
-									<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {(ALPHA_T_MARGINAL / T_SCALE_MAX) * 100}%"></div>
-									<div class="absolute inset-y-0 border-l-2 border-green" style="left: {(ALPHA_T_DOCTRINE / T_SCALE_MAX) * 100}%"></div>
-								</div>
-								<span class="w-14 text-right font-mono {alphaValueTone(p.oos_t)}">{p.oos_t === null || !Number.isFinite(p.oos_t) ? '—' : (p.oos_t >= 0 ? '+' : '') + p.oos_t.toFixed(2)}</span>
-							</div>
-						</div>
-					{/if}
-					</div>
-
-					<!-- Detail fields (hypothesis / mechanism / metric / lesson / evidence)
-					     collapsed by default. Header + story + IS/OOS mini-bar stay
-					     always visible above so the row is glanceable; user opts in to
-					     technical detail per row. Mirrors the brief CandidateCard
-					     details-toggle pattern (see CandidateCard.svelte:251). -->
-					<details class="sm:ml-12 group/details">
-						<summary class="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none list-none [&::-webkit-details-marker]:hidden py-1.5">
-							<span class="text-amber transition-transform inline-block group-open/details:rotate-90">▸</span>
-							<span class="group-open/details:hidden">show detail</span>
-							<span class="hidden group-open/details:inline">hide detail</span>
-						</summary>
-						<dl class="text-xs sm:text-sm text-fg-dim space-y-1.5 pt-1.5">
-							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Hypothesis</dt>
-								<dd>{#each parseMarkup(p.hypothesis) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-							</div>
-							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Mechanism</dt>
-								<dd>{#each parseMarkup(p.mechanism) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-							</div>
-							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Outcome</dt>
-								<dd class="text-fg">{#each parseMarkup(p.metric) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-							</div>
-							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Lesson</dt>
-								<dd>{#each parseMarkup(p.lesson) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-							</div>
-							{#if p.evidence}
-								<div class="flex gap-2">
-									<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Evidence</dt>
-									<dd>
-										<button
-											type="button"
-											class="font-mono text-[11px] text-cyan hover:text-amber underline decoration-dotted underline-offset-2 break-all text-left"
-											onclick={() => evidenceDrawer.open(p.evidence!)}
-											aria-label="open evidence: {p.evidence}"
-										>
-											{p.evidence} ↗
-										</button>
-									</dd>
-								</div>
-							{/if}
-						</dl>
-					</details>
-				</article>
+		<!-- Sticky filter bar = the visible status legend. Each chip filters the
+		     ledger and carries a ChipTip with the verdict's definition. -->
+		<div class="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-grid bg-bg-1/95 px-4 sm:px-5 py-2.5 backdrop-blur">
+			<span class="text-[10px] uppercase tracking-widest text-fg-muted mr-0.5">filter</span>
+			{#each filterChips as fc}
+				{@const active = fc.key === 'ALL' ? selected.size === 0 : selected.has(fc.key)}
+				<ChipTip term={fc.key === 'ALL' ? 'ALL' : fc.key} body={fc.def}>
+					{#snippet chip()}
+						<button
+							type="button"
+							onclick={(e) => toggleFilter(fc.key, e)}
+							aria-pressed={active}
+							class="border px-2 py-0.5 text-[10px] uppercase tracking-widest transition-colors {fc.tone} {active
+								? 'bg-bg-3 ring-1 ring-inset ring-current'
+								: 'opacity-70 hover:opacity-100'}"
+						>{fc.label} <span class="font-mono">{fc.count}</span></button>
+					{/snippet}
+				</ChipTip>
 			{/each}
+			{#if selected.size > 0}
+				<button type="button" onclick={clearFilter} class="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber ml-auto">clear ✕</button>
+			{/if}
 		</div>
+
+		<!-- Research-class chapters. Each group is a labelled band; within it the
+		     paradigm rows carry a status-coloured left rail. -->
+		{#each grouped as g}
+			{@const vis = g.items.filter(showP)}
+			{#if vis.length > 0}
+				<div class="border-t-2 border-grid-strong bg-bg-2/30 px-4 sm:px-5 pt-4 pb-2.5">
+					<div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+						<span class="font-display font-bold text-[11px] uppercase tracking-[0.22em] text-amber whitespace-nowrap">{g.label}</span>
+						<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{g.tested} tested · {g.cleared} cleared</span>
+					</div>
+					<p class="text-[11px] text-fg-dim mt-1 leading-relaxed max-w-3xl">{g.gloss}</p>
+				</div>
+				<div class="divide-y divide-grid">
+					{#each vis as p}
+						<article id={p.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors {statusRail(statusTone(p.status))}">
+							<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
+								<span class="font-display font-bold text-base sm:text-lg text-amber w-10 sm:w-12 shrink-0">{p.display}</span>
+								<h3 class="font-bold text-fg text-sm sm:text-base">{p.name}</h3>
+								<span class="text-[10px] uppercase tracking-widest">
+									<!-- Layer · axis_a / axis_b two-axis tag; each token is a JargonTip. -->
+									<span class="text-fg-muted">
+										<JargonTip {...tipProps(p.layer_id)}>{p.layer_id}</JargonTip> ·&nbsp;</span>
+									{#if p.axis_a === 'screener'}
+										<span class="text-fg-muted"><JargonTip {...tipProps('screener')}>screener</JargonTip></span>
+									{:else}
+										<span class="text-fg-dim font-bold"><JargonTip {...tipProps(p.axis_a)}>{p.axis_a}</JargonTip></span>
+									{/if}
+									{#if p.axis_b && p.axis_b.length > 0}
+										<span class="text-fg-muted"> / </span>
+										{#each p.axis_b as b, i}
+											{#if i > 0}<span class="text-fg-muted"> × </span>{/if}<span class="text-fg-dim font-bold"><JargonTip {...tipProps(b)}>{b}</JargonTip></span>
+										{/each}
+									{/if}
+								</span>
+								<span class="ml-auto flex items-center gap-2">
+									<ChipTip term={p.status} body={paradigmStatusDef.get(p.status) ?? ''}>
+										{#snippet chip()}
+											<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest cursor-help {statusTone(p.status)}">{p.status}</span>
+										{/snippet}
+									</ChipTip>
+									<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{p.date}</span>
+								</span>
+							</header>
+
+							<!-- Narrative left, IS/OOS αt bars right (under the verdict) on lg+;
+							     stacks on smaller screens. -->
+							<div class="sm:pl-12 mb-3 lg:flex lg:items-start lg:justify-between lg:gap-8">
+								<p class="text-[13px] text-fg-dim leading-relaxed mb-3 lg:mb-0 lg:max-w-[72ch]">{p.story}</p>
+
+								{#if p.is_t !== null || p.oos_t !== null}
+									<div class="text-[11px] w-full lg:w-[28rem] lg:shrink-0">
+										<div class="flex items-center gap-2 mb-1">
+											<span class="w-10 text-fg-muted uppercase tracking-widest">
+												<JargonTip {...tipProps('IS')}>IS</JargonTip>
+											</span>
+											<div class="relative h-2 flex-1 bg-bg-3 overflow-hidden ring-1 ring-inset ring-grid">
+												{#if p.is_t !== null}
+													<div class="absolute inset-y-0 left-0 {tBarTone(p.is_t)}" style="width: {tBarWidthPct(p.is_t)}%"></div>
+												{/if}
+												<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {MARGINAL_PCT}%"></div>
+												<div class="absolute inset-y-0 border-l-2 border-green" style="left: {DOCTRINE_PCT}%"></div>
+											</div>
+											<span class="w-14 text-right font-mono {alphaValueTone(p.is_t)}">{p.is_t === null || !Number.isFinite(p.is_t) ? '—' : (p.is_t >= 0 ? '+' : '') + p.is_t.toFixed(2)}</span>
+										</div>
+										<div class="flex items-center gap-2">
+											<span class="w-10 text-fg-muted uppercase tracking-widest">
+												<JargonTip {...tipProps('OOS')}>OOS</JargonTip>
+											</span>
+											<div class="relative h-2 flex-1 bg-bg-3 overflow-hidden ring-1 ring-inset ring-grid">
+												{#if p.oos_t !== null}
+													<div class="absolute inset-y-0 left-0 {tBarTone(p.oos_t)}" style="width: {tBarWidthPct(p.oos_t)}%"></div>
+												{/if}
+												<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {MARGINAL_PCT}%"></div>
+												<div class="absolute inset-y-0 border-l-2 border-green" style="left: {DOCTRINE_PCT}%"></div>
+											</div>
+											<span class="w-14 text-right font-mono {alphaValueTone(p.oos_t)}">{p.oos_t === null || !Number.isFinite(p.oos_t) ? '—' : (p.oos_t >= 0 ? '+' : '') + p.oos_t.toFixed(2)}</span>
+										</div>
+									</div>
+								{/if}
+							</div>
+
+							<details class="sm:ml-12 group/details">
+								<summary class="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none list-none [&::-webkit-details-marker]:hidden py-1.5">
+									<span class="text-amber transition-transform inline-block group-open/details:rotate-90">▸</span>
+									<span class="group-open/details:hidden">show case detail</span>
+									<span class="hidden group-open/details:inline">hide case detail</span>
+								</summary>
+								<dl class="text-xs sm:text-sm text-fg-dim space-y-1.5 pt-1.5">
+									<div class="flex gap-2">
+										<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Hypothesis</dt>
+										<dd>{#each parseMarkup(p.hypothesis) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
+									</div>
+									<div class="flex gap-2">
+										<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Mechanism</dt>
+										<dd>{#each parseMarkup(p.mechanism) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
+									</div>
+									<div class="flex gap-2">
+										<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Outcome</dt>
+										<dd class="text-fg">{#each parseMarkup(p.metric) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
+									</div>
+									<div class="flex gap-2">
+										<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Lesson</dt>
+										<dd>{#each parseMarkup(p.lesson) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
+									</div>
+									{#if p.evidence}
+										<div class="flex gap-2">
+											<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Evidence</dt>
+											<dd>
+												<button
+													type="button"
+													class="font-mono text-[11px] text-cyan hover:text-amber underline decoration-dotted underline-offset-2 break-all text-left"
+													onclick={() => evidenceDrawer.open(p.evidence!)}
+													aria-label="open evidence: {p.evidence}"
+												>
+													{p.evidence} ↗
+												</button>
+											</dd>
+										</div>
+									{/if}
+								</dl>
+							</details>
+						</article>
+					{/each}
+				</div>
+			{/if}
+		{/each}
 	</section>
 
-	<!-- tool.experiments — sibling ledger for the LIVE thematic tool (selection /
-	     entry / exit tuning). Distinct track from the paradigm ledger above:
-	     measured on realized R / market-excess / live-N, not αt. Own status
-	     vocabulary (toolStatusLegend) + tone map (toolStatusTone). -->
-	<section id="tool-experiments" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.12s">
+	<!-- ============================ // NOW divider ========================== -->
+	<div class="my-10 flex items-center gap-3 fade-up" style="animation-delay: 0.12s">
+		<span class="h-px flex-1 bg-gradient-to-r from-transparent to-amber-dim"></span>
+		<span class="text-[10px] uppercase tracking-[0.25em] text-amber-dim whitespace-nowrap">// now · 2026-07 — closed files end, open experiments begin</span>
+		<span class="h-px flex-1 bg-gradient-to-l from-transparent to-amber-dim"></span>
+	</div>
+
+	<!-- ============================ LEDGER 2 · tool.experiments ============== -->
+	<section id="tool-experiments" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.14s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 			<h2 class="font-normal">tool.experiments</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{toolExperiments.length} rows · tuning the live tool</span>
 		</div>
 
-		<div class="px-4 sm:px-5 py-3 border-b border-grid text-sm text-fg-dim leading-relaxed">
-			A running log of changes tested on the <span class="text-amber">live thematic tool</span> — how it
-			picks names (selection) and how trades enter and exit. Different from the paradigm ledger above:
-			these are measured on realized R, market-excess return, and live sample size (N), not
-			<JargonTip {...tipProps('αt')}>αt</JargonTip>. Honesty rule: anything marked
-			<span class="text-cyan">FORWARD-LOG</span> or in-sample is a what-if replay that never touched the
-			real trade record and has not passed a fresh forward test.
+		<div class="px-4 sm:px-5 py-3 border-b border-grid">
+			<p class="text-[11px] text-fg-dim leading-relaxed">
+				<span class="text-cyan">live-tool track</span> — changes tested on how the tool picks names (selection) and how
+				trades enter and exit. Measured on realized R, market-excess return, and live sample size (N), not
+				<JargonTip {...tipProps('αt')}>αt</JargonTip>. These are open, forward experiments — no terminal verdict.
+			</p>
+			<p class="text-[11px] text-fg-dim leading-relaxed mt-2">
+				<span class="text-amber">Honesty rule:</span> anything marked
+				<span class="text-cyan">FORWARD-LOG</span> or in-sample is a what-if replay that never touched the real
+				trade record and has not passed a fresh forward test.
+				<span class="text-fg-muted">Snapshot 2026-07-01 · 372 plannable / 89 terminal / 43 brief-days.</span>
+			</p>
+			<!-- Visible tool-status legend (chips carry definitions on hover). -->
+			<div class="mt-2.5 flex flex-wrap items-center gap-1.5">
+				{#each toolStatusLegend as s}
+					<ChipTip term={s.status} body={toolStatusDef.get(s.status) ?? ''}>
+						{#snippet chip()}
+							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest cursor-help {toolStatusTone(s.status)}">{s.status}</span>
+						{/snippet}
+					</ChipTip>
+				{/each}
+			</div>
 		</div>
 
 		<div class="divide-y divide-grid">
 			{#each toolExperiments as t}
-				<article id={t.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors {statusRail(toolStatusTone(t.status))}">
+				<article id={t.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors border-dashed {statusRail(toolStatusTone(t.status))}">
 					<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
 						<span class="font-display font-bold text-base sm:text-lg text-amber w-8 sm:w-10 shrink-0">{t.display}</span>
 						<h3 class="font-bold text-fg text-sm sm:text-base">{t.name}</h3>
@@ -508,8 +639,7 @@
 					</header>
 
 					<!-- Persistent in-sample marker on the always-visible metric line so a
-					     FORWARD-LOG number (e.g. T1's +0.075R) never reads as validated edge
-					     without expanding the detail drawer. -->
+					     FORWARD-LOG number never reads as validated edge without expanding. -->
 					<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">
 						{#if t.status === 'FORWARD-LOG'}<span class="text-[10px] uppercase tracking-widest text-cyan border border-cyan px-1 py-0.5 mr-2 align-middle whitespace-nowrap">in-sample</span>{/if}{t.metric}
 					</p>
@@ -563,7 +693,13 @@
 		</div>
 	</section>
 
-	<section id="patterns" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.15s">
+	<!-- ============================ APPENDIX ================================= -->
+	<div class="mt-10 mb-4 flex items-center gap-3">
+		<span class="text-[10px] uppercase tracking-[0.25em] text-fg-muted whitespace-nowrap">// supporting material</span>
+		<span class="h-px flex-1 bg-grid"></span>
+	</div>
+
+	<section id="patterns" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.16s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 			<h2 class="font-normal">failure.patterns</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{patterns.length} reusable lessons · hover dotted terms for definitions</span>
@@ -627,7 +763,7 @@
 		</table>
 	</section>
 
-	<section id="methodology" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.25s">
+	<section id="methodology" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.24s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
 			<h2 class="font-normal">methodology.artifacts</h2>
 			<span class="text-fg-dim normal-case tracking-normal">{artifacts.length} items · what survived</span>
@@ -657,13 +793,10 @@
 		</table>
 	</section>
 
-	<!-- B3: glossary section. Non-quant-friendly definitions of the jargon used
-	     throughout this page. Acronyms also referenced via inline JargonTip in
-	     the "how.to.read" block above — the inline tooltips are the primary
-	     reference, this <details> is the secondary lookup table. Brief-only
-	     terms (PE, PS, EV/EBITDA, etc.) are filtered out so the table matches
-	     terms actually used on /experiments. -->
-	<section id="glossary" class="border border-grid bg-bg-1 fade-up" style="animation-delay: 0.3s">
+	<!-- glossary section — secondary lookup table (inline JargonTips above are the
+	     primary reference). Brief-only terms filtered out. No JargonTips inside
+	     (they define the terms; a tip here would be self-referential). -->
+	<section id="glossary" class="border border-grid bg-bg-1 fade-up" style="animation-delay: 0.28s">
 		<details class="group/glossary">
 			<summary class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted hover:bg-bg-2 cursor-pointer flex items-center justify-between list-none [&::-webkit-details-marker]:hidden">
 				<span class="flex items-center gap-2">
