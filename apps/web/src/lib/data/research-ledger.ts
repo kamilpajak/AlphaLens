@@ -16,6 +16,8 @@
 // scripts/sync-research-docs.mjs::REFERENCED. New acronyms should also get
 // a row in the `GLOSSARY` array in `$lib/data/glossary`.
 
+import { toneClass, type SemanticTone } from '$lib/tone';
+
 export type ParadigmStatus = 'FAIL' | 'SLIPPAGE-FAIL' | 'IN-FLIGHT' | 'INCONCLUSIVE' | 'PASS_MARGINAL';
 export type LiveStatus = 'LIVE' | 'SHIPPED' | 'DONE';
 
@@ -446,15 +448,15 @@ export const toolStatusLegend: ToolStatusDef[] = [
 export function toolStatusTone(s: ToolStatus): string {
 	switch (s) {
 		case 'SHIPPED':
-			return 'text-green border-green';
+			return toneClass('green');
 		case 'FORWARD-LOG':
-			return 'text-cyan border-cyan';
+			return toneClass('cyan');
 		case 'AWAITING-N':
-			return 'text-amber border-amber';
+			return toneClass('amber');
 		case 'NO-GO':
-			return 'text-red border-red';
+			return toneClass('red');
 		case 'FINDING':
-			return 'text-magenta border-magenta';
+			return toneClass('magenta');
 	}
 	const _exhaustive: never = s;
 	return _exhaustive;
@@ -469,6 +471,20 @@ export function toolStatusTone(s: ToolStatus): string {
 export const ALPHA_T_MARGINAL = 2.0;
 export const ALPHA_T_DOCTRINE = 3.5;
 
+export type AlphaBand = 'negative' | 'noise' | 'marginal' | 'deploy';
+
+/** The αt doctrine ladder shared by `alphaValueTone` (text) and `tBarTone` (bar
+ *  fill): <0 negative · [0, 2) noise · [2, 3.5) marginal · ≥3.5 deploy. null for
+ *  null / non-finite. Single source so the two colour maps can never disagree
+ *  on where the bands fall. */
+export function alphaBand(t: number | null): AlphaBand | null {
+	if (t === null || !Number.isFinite(t)) return null;
+	if (t < 0) return 'negative';
+	if (t < ALPHA_T_MARGINAL) return 'noise';
+	if (t < ALPHA_T_DOCTRINE) return 'marginal';
+	return 'deploy';
+}
+
 /** Turn a "text-X border-X" status tone into a left-rail class, so each ledger
  *  row carries a status-coloured edge (a scannable verdict column). Falls back
  *  to the grid border when the tone has no border-* token. */
@@ -482,11 +498,16 @@ export function statusRail(tone: string): string {
  *  (deploy-eligible). null / non-finite → muted. Text-only (no border) — it
  *  tints the number next to the bar, so the verdict reads off the value itself. */
 export function alphaValueTone(t: number | null): string {
-	if (t === null || !Number.isFinite(t)) return 'text-fg-muted';
-	if (t < 0) return 'text-red';
-	if (t < ALPHA_T_MARGINAL) return 'text-fg-muted';
-	if (t < ALPHA_T_DOCTRINE) return 'text-amber';
-	return 'text-green';
+	switch (alphaBand(t)) {
+		case 'negative':
+			return toneClass('red', ['text']);
+		case 'marginal':
+			return toneClass('amber', ['text']);
+		case 'deploy':
+			return toneClass('green', ['text']);
+		default: // noise + null → muted
+			return toneClass('muted', ['text']);
+	}
 }
 
 /** Strip the [term] / [term|label] tooltip markup down to plain text, so a
