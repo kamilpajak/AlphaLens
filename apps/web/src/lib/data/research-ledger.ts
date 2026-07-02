@@ -48,6 +48,9 @@ export type Paradigm = {
 	layer_id: 'L2' | 'L4';
 	axis_a: AxisA;
 	axis_b: AxisB[] | null;
+	/** Research-class chapter key (see PARADIGM_GROUPS) — buckets the ledger
+	 *  into themed campaigns for display; does not affect ids / dates / αt. */
+	group: string;
 	status: ParadigmStatus;
 	date: string;
 	story: string;
@@ -93,7 +96,7 @@ export type StatusDef = {
 
 export const paradigms: Paradigm[] = [
 	{
-		id: 'P01', display: '#1', name: 'Layer 2b — small-cap themed momentum', layer_id: 'L2', axis_a: 'screener', axis_b: ['price'],
+		id: 'P01', display: '#1', name: 'Layer 2b — small-cap themed momentum', layer_id: 'L2', axis_a: 'screener', axis_b: ['price'], group: 'price',
 		status: 'FAIL', date: '2026-04-22',
 		story: 'We picked stocks from a hand-curated list of 113 theme names (quantum / AI / biotech) by a 7-metric momentum score and bought the top 15 each day. The result looked statistically strong on 2017-2022 training data, but the signal collapsed on fresh 2023-2026 data. Two reasons: some stocks had been added to the universe after the fact (which inflated training results), and we did not correct for testing many strategy variants.',
 		hypothesis: '7-metric momentum scorer on a 113-ticker curated theme universe (quantum / AI / biotech) produces phase-robust [αt] > 2 [OOS].',
@@ -104,7 +107,7 @@ export const paradigms: Paradigm[] = [
 		is_t: 2.62, oos_t: 0.82
 	},
 	{
-		id: 'P02', display: '#2', name: 'Layer 2d — insider Form-4 cluster-buy', layer_id: 'L2', axis_a: 'screener', axis_b: ['insider'],
+		id: 'P02', display: '#2', name: 'Layer 2d — insider Form-4 cluster-buy', layer_id: 'L2', axis_a: 'screener', axis_b: ['insider'], group: 'insider',
 		status: 'FAIL', date: '2026-04-24',
 		story: 'We bought small-cap stocks whenever at least 3 company insiders bought ≥5% notional of their holdings in the same window — a classic "cluster-buy" signal. Looked statistically borderline on training data; collapsed on fresh data. Most likely cause: the same Form-4 filings are visible to HFT and quant funds about 10 seconds after submission, so by the time a retail investor sees them, the alpha is already traded out.',
 		hypothesis: '≥3 insiders × ≥5% notional cluster-buys on R2000 produce [αt] > 2 [OOS].',
@@ -115,7 +118,7 @@ export const paradigms: Paradigm[] = [
 		is_t: 2.14, oos_t: 0.68
 	},
 	{
-		id: 'P03', display: '#3', name: 'Layer 2e — tactical sector rotation', layer_id: 'L2', axis_a: 'gate', axis_b: ['macro'],
+		id: 'P03', display: '#3', name: 'Layer 2e — tactical sector rotation', layer_id: 'L2', axis_a: 'gate', axis_b: ['macro'], group: 'macro',
 		status: 'FAIL', date: '2026-04-24',
 		story: 'We tilted a passive 60/30/10 SPY/QQQ/IWM portfolio by up to ±10% based on 4 macro signals (yield curve, VIX, momentum). The training-period result looked decent until we checked correlation — the tilted portfolio was 99.9% identical to the passive benchmark. A ±25 basis-point tilt on a portfolio with ~100 bps daily moves is mathematically invisible. We should have spotted this at design time.',
 		hypothesis: '4-rule macro overlay (yield curve × VIX × QQQ/IWM spread) on SPY/QQQ/IWM 60/30/10 core beats passive by [αt] > 1.5 [OOS].',
@@ -126,7 +129,7 @@ export const paradigms: Paradigm[] = [
 		is_t: 1.96, oos_t: 0.33
 	},
 	{
-		id: 'P04', display: '#4', name: 'Layer 2f — 8-K event-driven go/no-go', layer_id: 'L2', axis_a: 'screener', axis_b: ['event-drift'],
+		id: 'P04', display: '#4', name: 'Layer 2f — 8-K event-driven go/no-go', layer_id: 'L2', axis_a: 'screener', axis_b: ['event-drift'], group: 'event',
 		status: 'FAIL', date: '2026-04-25',
 		story: 'Companies file an 8-K with the SEC whenever something material happens (executive changes, material agreements, big losses). We hoped specific 8-K Item types would predict short-term outperformance. A simple 1-day pilot killed the idea: almost every Item type produces negative average returns after filing. Why? Most material 8-K events are bad news — good news goes through earnings calls and press releases instead.',
 		hypothesis: 'specific 8-K Item types (1.01, 5.02, 8.01) produce positive [CAR] at +1/+5/+20/+60d post-filing.',
@@ -137,7 +140,7 @@ export const paradigms: Paradigm[] = [
 		is_t: null, oos_t: null
 	},
 	{
-		id: 'P05', display: '#5', name: 'Layer 2g — GuruAgent Buffett-style LLM', layer_id: 'L2', axis_a: 'screener', axis_b: ['fundamental'],
+		id: 'P05', display: '#5', name: 'Layer 2g — GuruAgent Buffett-style LLM', layer_id: 'L2', axis_a: 'screener', axis_b: ['fundamental'], group: 'value',
 		status: 'FAIL', date: '2026-04-25',
 		story: 'We asked Gemini Pro to pick 10 stocks per year using Warren Buffett\'s value-investing criteria, and tested across 4 different market regimes (2018, 2020, 2022, 2024). The portfolio beat the S&P by less than 1% on average, with very high correlation (97%). The reason: value-style screening systematically avoids speculative growth stocks, but mega-cap tech (NVDA, MSFT, GOOG, META, AMZN) is now > 25% of the index. Avoiding speculative growth in the 2020s ≈ missing the index return.',
 		hypothesis: 'Gemini 3.1 Pro with Polygon-backed Buffett-style prompt picks 10 stocks per year that beat SPY by >2pp mean and >−5pp min-year across 4 regimes.',
@@ -148,7 +151,7 @@ export const paradigms: Paradigm[] = [
 		is_t: null, oos_t: null
 	},
 	{
-		id: 'P06', display: '#6', name: 'tri-factor (momentum × value × quality)', layer_id: 'L2', axis_a: 'combo', axis_b: ['price', 'fundamental'],
+		id: 'P06', display: '#6', name: 'tri-factor (momentum × value × quality)', layer_id: 'L2', axis_a: 'combo', axis_b: ['price', 'fundamental'], group: 'price',
 		status: 'FAIL', date: '2026-04-29',
 		story: 'We combined three classical factors (12-month momentum × price-to-book × return-on-equity) into one composite score. One particular slice of the training data showed a statistically borderline result. But running the same backtest with the rebalance schedule shifted by 1-4 days each time produced wildly different results — the "winning" slice was just one of five phase offsets. Average across all five was noise. This was the first empirical proof of "phase-aliasing" and triggered building the multi-phase audit framework.',
 		hypothesis: 'top-decile composite of 12-1 momentum × P/B × ROE on R2000 [PIT] produces [αt] > 2.5 phase-robust.',
@@ -159,7 +162,7 @@ export const paradigms: Paradigm[] = [
 		is_t: 2.24, oos_t: 0.34
 	},
 	{
-		id: 'P07', display: '#7', name: 'momentum × low-volatility combo', layer_id: 'L2', axis_a: 'combo', axis_b: ['price'],
+		id: 'P07', display: '#7', name: 'momentum × low-volatility combo', layer_id: 'L2', axis_a: 'combo', axis_b: ['price'], group: 'price',
 		status: 'FAIL', date: '2026-04-29',
 		story: 'A two-factor combo (momentum × inverse-volatility) was the first hypothesis tested under the newly-built pre-registration framework. Single-phase IS would have called it a survivor (one phase showed positive signal); the multi-phase audit killed it with a mean of +0.49 and 44.5pp dispersion across phases. The pre-registration framework worked exactly as designed — it caught a false positive that single-phase reporting would have missed.',
 		hypothesis: 'top-decile composite of 12-1 momentum × inverse-vol on R2000 [PIT] produces [αt] > 2.5 phase-robust.',
@@ -170,7 +173,7 @@ export const paradigms: Paradigm[] = [
 		is_t: null, oos_t: 0.49
 	},
 	{
-		id: 'P08', display: '#8', name: 'regime-gate rescue (mom+lowvol)', layer_id: 'L2', axis_a: 'gate', axis_b: ['macro'],
+		id: 'P08', display: '#8', name: 'regime-gate rescue (mom+lowvol)', layer_id: 'L2', axis_a: 'gate', axis_b: ['macro'], group: 'macro',
 		status: 'FAIL', date: '2026-04-29',
 		story: 'After mom+lowvol failed, we tried to rescue it by switching the strategy off during "bad regimes" identified by 5 macro classifiers (yield curve, VIX, credit spreads, etc.). Before running any backtest, we measured how much of the actual failure window each classifier covered. The flagship classifier (Perplexity\'s top recommendation, cross-sectional dispersion) covered only 4.5% of the failure window — incoherent with the failure mechanism. 30 minutes of coverage diagnostics saved 3-4 hours of theatrical backtesting.',
 		hypothesis: '5 macro classifiers (yield-curve / VIX>20 / NFCI>+1 / HY-OAS>400bp / cross-sectional dispersion) gate the failure window of P07.',
@@ -181,7 +184,7 @@ export const paradigms: Paradigm[] = [
 		is_t: null, oos_t: null
 	},
 	{
-		id: 'P09', display: '#9', name: 'quality × momentum', layer_id: 'L2', axis_a: 'combo', axis_b: ['price', 'fundamental'],
+		id: 'P09', display: '#9', name: 'quality × momentum', layer_id: 'L2', axis_a: 'combo', axis_b: ['price', 'fundamental'], group: 'price',
 		status: 'FAIL', date: '2026-04-30',
 		story: 'We added a return-on-equity (quality) factor to momentum, hoping ROE would rescue the strategy through the 2017-2022 underperformance window. Result: dispersion across 5 rebalance phases was 167.8 percentage points — same signal, range from +112% to −56% depending only on which day we started rebalancing. One phase looked great (would have passed the publication threshold in single-phase reporting); average across all five was noise. The strongest empirical evidence yet for the phase-aliasing pattern.',
 		hypothesis: 'z(mom_12_1) + z(roe_ttm) top-15 on R2000-PIT + EDGAR fundamentals produces [αt] > 2.5 phase-robust.',
@@ -192,7 +195,7 @@ export const paradigms: Paradigm[] = [
 		is_t: 0.58, oos_t: 0.38
 	},
 	{
-		id: 'P10', display: '#10', name: 'vol-target overlay (Layer 4)', layer_id: 'L4', axis_a: 'overlay', axis_b: null,
+		id: 'P10', display: '#10', name: 'vol-target overlay (Layer 4)', layer_id: 'L4', axis_a: 'overlay', axis_b: null, group: 'overlay',
 		status: 'FAIL', date: '2026-04-30',
 		story: 'Moreira & Muir 2017 published a famous result: scaling portfolio exposure inversely to recent volatility improves Sharpe on the aggregate market. We applied it to our mom+lowvol base. Result: zero alpha added (identical to the ungated base), AND the overlay AMPLIFIED the worst-phase loss from −44% to −78%. The mechanism is reactive — it uses past volatility to decide leverage, so when a regime shift hits with loss + volatility spike at the same time (common in event-driven small-cap regimes), the overlay levers UP before de-risking. M-M\'s positive result was on monthly aggregate-market data — it does not generalise to weekly small-cap factors.',
 		hypothesis: 'Moreira-Muir vol-targeting (target_vol=0.10 ann, lookback=5w, max_lev=1.5) wrapping mom+lowvol base recovers Sharpe.',
@@ -203,7 +206,7 @@ export const paradigms: Paradigm[] = [
 		is_t: 0.37, oos_t: 0.49
 	},
 	{
-		id: 'P11', display: '#11', name: 'distress_credit v1', layer_id: 'L2', axis_a: 'screener', axis_b: ['fundamental'],
+		id: 'P11', display: '#11', name: 'distress_credit v1', layer_id: 'L2', axis_a: 'screener', axis_b: ['fundamental'], group: 'value',
 		status: 'FAIL', date: '2026-05-04',
 		story: 'We built a distress-credit screener using a KMV-style "distance to default" metric (how close a company\'s assets are to its liabilities, in standard deviations). The training data coverage was thin so we auto-pivoted to a relaxed variant (per the pre-registration trigger). The relaxed variant still failed the burnt-holdout audit on a SP1500 universe — at least one phase had negative αt and the multi-phase mean sat below the escalated threshold.',
 		hypothesis: 'KMV distance-to-default + companyfacts liabilities on SP1500 [PIT] produces phase-robust [αt] > 2 on [burnt holdout].',
@@ -214,7 +217,7 @@ export const paradigms: Paradigm[] = [
 		is_t: null, oos_t: null
 	},
 	{
-		id: 'P12', display: '#12', name: 'insider_pc_compound', layer_id: 'L2', axis_a: 'compound', axis_b: ['insider', 'options'],
+		id: 'P12', display: '#12', name: 'insider_pc_compound', layer_id: 'L2', axis_a: 'compound', axis_b: ['insider', 'options'], group: 'insider',
 		status: 'FAIL', date: '2026-05-11',
 		story: 'Our first attempt at combining two different data sources: opportunistic insider buys (Form-4) × abnormal put/call ratios (options flow). The hope was that two independently-positive signals would compound into a stronger combined signal that clears the strict 3.5 threshold. Reality: on fresh out-of-sample data the compound result was αt = −0.03 — worse than either component alone. Compounding two weak signals does not create a strong signal; it just adds Bonferroni cost. Six launch attempts on a 64GB pod to land the final audit (precheck data gap, stride-5 conflation, framework bugs, artifact collision, OOM at 16GB, success at 64GB).',
 		hypothesis: 'cross-data compound: opportunistic insider buys × abnormal P/C ratio produces phase-robust [αt] > 3.5.',
@@ -225,7 +228,7 @@ export const paradigms: Paradigm[] = [
 		is_t: null, oos_t: -0.03
 	},
 	{
-		id: 'P13', display: '#13', name: 'ev_fcff_yield', layer_id: 'L2', axis_a: 'screener', axis_b: ['fundamental'],
+		id: 'P13', display: '#13', name: 'ev_fcff_yield', layer_id: 'L2', axis_a: 'screener', axis_b: ['fundamental'], group: 'value',
 		status: 'FAIL', date: '2026-05-13',
 		story: 'Buying small-caps with the highest free-cash-flow yield (an academic-textbook value signal) produced positive returns on EVERY single phase across all three test windows (IS, OOS, final-lock) — 15 out of 15 phases positive, with an economic excess of 1-12% per year. But the statistical strength sat at αt ≈ 1.2 — well below the 3.5 threshold the project doctrine requires before deploying capital. The signal is real but small; deploying it is off-table by self-imposed discipline. As a side finding, we discovered an orchestrator bug where one of the cost-stress gates was a no-op duplicate of another.',
 		hypothesis: '[FCFF] yield rank on R2000 [PIT] 2007-2026 produces phase-robust [αt] > 3.5.',
@@ -236,7 +239,7 @@ export const paradigms: Paradigm[] = [
 		is_t: 1.25, oos_t: 1.34
 	},
 	{
-		id: 'P14', display: '#14', name: 'PEAD v2 (post-earnings drift)', layer_id: 'L2', axis_a: 'screener', axis_b: ['event-drift'],
+		id: 'P14', display: '#14', name: 'PEAD v2 (post-earnings drift)', layer_id: 'L2', axis_a: 'screener', axis_b: ['event-drift'], group: 'event',
 		status: 'FAIL', date: '2026-06-24',
 		story: 'Post-earnings announcement drift (PEAD) is a textbook anomaly — stocks that beat or miss earnings tend to keep drifting in that direction for weeks. We built the full version-2 machine (Alpha Vantage earnings feed, Little\'s Law position-size lock, daily-rebalance adapter, invested-days Carhart regression, plus a doctrine-verdict gate that enforces the 3.5 bar in code) and ran the real audit on a cloud pod across all four windows. Result: a clean, decisive FAIL — full-sample alpha t-stat 0.15 against a 3.5 bar, with the final-lock window actually negative. This is exactly what the literature predicts: large-cap PEAD has been effectively arbitraged away since the mid-2000s. Paradigm #14 is closed.',
 		hypothesis: 'canonical post-announcement [PEAD] with PSS + [NW HAC] + invested-days regression on S&P 500 [PIT] clears [Bonferroni correction|Bonferroni] 3.5.',
@@ -247,7 +250,7 @@ export const paradigms: Paradigm[] = [
 		is_t: 0, oos_t: 0.44
 	},
 	{
-		id: 'P15', display: '#15', name: 'idiosyncratic_momentum', layer_id: 'L2', axis_a: 'screener', axis_b: ['price'],
+		id: 'P15', display: '#15', name: 'idiosyncratic_momentum', layer_id: 'L2', axis_a: 'screener', axis_b: ['price'], group: 'price',
 		status: 'FAIL', date: '2026-05-14',
 		story: 'Standard momentum (last 12 months minus last 1) on stock returns; but we first stripped out the part of returns explained by the three Fama-French factors (market, size, value), leaving only the stock-specific "idiosyncratic" part. Result: statistically strengthens monotonically across the 3 test windows (IS 0.02 → OOS 0.71 → final-lock 1.58), opposite to the anticipated momentum-crisis penalty for 2023-2024. But the entire trajectory still sits below the 3.5 doctrine bar. The mechanism is partially vindicated; the whole price-factor research class is now dead at 5/5 FAILs.',
 		hypothesis: 'idiosyncratic-momentum (residual-of-FF3 12-1) on S&P 1500 [PIT] produces phase-robust [αt] > 3.5.',
@@ -258,7 +261,7 @@ export const paradigms: Paradigm[] = [
 		is_t: 0.02, oos_t: 0.71
 	},
 	{
-		id: 'R01', display: 'R1', name: 'v9D options-implied retrospective', layer_id: 'L2', axis_a: 'screener', axis_b: ['options'],
+		id: 'R01', display: 'R1', name: 'v9D options-implied retrospective', layer_id: 'L2', axis_a: 'screener', axis_b: ['options'], group: 'options',
 		status: 'INCONCLUSIVE', date: '2026-05-05',
 		story: 'A retrospective re-run of an old options-implied-volatility scorer on fresh 2009-2017 data that no version of the scorer had ever seen. The pooled t-statistic across 3 sub-periods × 5 phases landed at +2.45 — short of the strict multiple-testing threshold (2.86), but with a lower confidence-interval bound (+2.15) that excludes zero. Not strong enough to deploy capital; strong enough to start a 12-month paper-trade observation.',
 		hypothesis: 'v9D options-implied-vol scorer replicated on 2009-2017 (pre-2018 [OOS], unseen) produces [αt] > 2.86 ([Bonferroni correction|Bonferroni] n=27 naive).',
@@ -269,7 +272,7 @@ export const paradigms: Paradigm[] = [
 		is_t: null, oos_t: 2.45
 	},
 	{
-		id: 'R02', display: 'R2', name: 'P/C abnormal-volume retrospective', layer_id: 'L2', axis_a: 'screener', axis_b: ['options'],
+		id: 'R02', display: 'R2', name: 'P/C abnormal-volume retrospective', layer_id: 'L2', axis_a: 'screener', axis_b: ['options'], group: 'options',
 		status: 'INCONCLUSIVE', date: '2026-05-05',
 		story: 'Same setup as R01 but a different scorer — abnormal put/call option volume. Pooled t-statistic +2.65, again in the ambiguous band between zero and the strict threshold. The methodology bundle\'s "inconclusive → paper-trade for 12 months, no capital deploy" handling worked as designed.',
 		hypothesis: 'put/call abnormal-volume scorer replicated on 2009-2017 produces [αt] > 2.86.',
@@ -280,7 +283,7 @@ export const paradigms: Paradigm[] = [
 		is_t: null, oos_t: 2.65
 	},
 	{
-		id: 'S01', display: 'S1', name: 'insider_form4_opportunistic (post-PASS_MARGINAL)', layer_id: 'L2', axis_a: 'screener', axis_b: ['insider'],
+		id: 'S01', display: 'S1', name: 'insider_form4_opportunistic (post-PASS_MARGINAL)', layer_id: 'L2', axis_a: 'screener', axis_b: ['insider'], group: 'insider',
 		status: 'SLIPPAGE-FAIL', date: '2026-05-12',
 		story: 'The project\'s first phase-robust positive: a Cohen-Malloy "opportunistic" Form-4 insider scorer reached gross αt = +2.71 (PASS_MARGINAL) on both an OOS window and a fresh final-lock window. Then we modelled realistic trading friction — bid-ask spreads of about 50 basis points on the small-cap names involved — and the net signal collapsed to αt = +1.27 (OOS) and +1.95 (final-lock), both below the threshold. The strong-looking signal sat exactly in the high-spread corner of the small-cap universe, so it was a cost-mirage. Paper-trade suspended; capital deploy stays off-table.',
 		hypothesis: 'Cohen-Malloy-Pomorski opportunistic [Form-4] on [R2000-PIT|R2000 PIT] 2018-2023 produces phase-robust [αt] > 2.0 net of realistic costs.',
@@ -291,6 +294,65 @@ export const paradigms: Paradigm[] = [
 		is_t: 2.71, oos_t: 1.27
 	}
 ];
+
+// --- Research-class chapters for the paradigm ledger -----------------------
+// Each paradigm carries a `group` key; the ledger renders one chapter per group
+// (in this order), so the wall of 18 rows reads as themed research campaigns
+// ("we attacked price factors 5 ways, none cleared the bar") instead of a flat
+// list. Ordering is narrative — biggest / most-decisive class first; within a
+// chapter the paradigms keep their declared order. Grouping changes only visual
+// bucketing: ids, dates, and αt values are untouched.
+export type ParadigmGroup = { key: string; label: string; gloss: string };
+
+export const PARADIGM_GROUPS: ParadigmGroup[] = [
+	{ key: 'price', label: 'price-factor', gloss: 'Classical price signals — momentum, low-volatility, idiosyncratic residuals. The whole class died on fresh data.' },
+	{ key: 'value', label: 'fundamental / value', gloss: 'Value & quality screens — Buffett-style, distress-credit, free-cash-flow yield. Vindicated in places, never cleared the bar.' },
+	{ key: 'event', label: 'event-driven', gloss: '8-K item drift and post-earnings drift — textbook anomalies that have been arbitraged away.' },
+	{ key: 'macro', label: 'macro / regime', gloss: 'Macro tilts and regime gates — mathematically dominated by the benchmark, or incoherent with the failure window.' },
+	{ key: 'insider', label: 'insider', gloss: 'Form-4 insider signals, including the project’s single closest call (S1), killed by realistic trading costs.' },
+	{ key: 'options', label: 'options-implied', gloss: 'Options-implied volatility and flow — the two inconclusive retrospectives (~2.5 αt) sent to paper-trade, not capital.' },
+	{ key: 'overlay', label: 'risk-overlay', gloss: 'A Layer-4 vol-targeting overlay — added no alpha and amplified the worst-phase loss.' }
+];
+
+export type GroupedParadigms = ParadigmGroup & {
+	items: Paradigm[];
+	tested: number;
+	cleared: number;
+};
+
+/** Bucket the paradigm ledger into ordered research-class chapters. Empty groups
+ *  are dropped; `cleared` counts paradigms that reached the deploy bar (0 across
+ *  the whole ledger — that is the page's thesis). Pure; unit-tested. */
+export function groupedParadigms(items: Paradigm[], groups: ParadigmGroup[]): GroupedParadigms[] {
+	return groups
+		.map((g) => {
+			const gi = items.filter((p) => p.group === g.key);
+			const cleared = gi.filter((p) => (p.oos_t ?? p.is_t ?? 0) >= ALPHA_T_DOCTRINE).length;
+			return { ...g, items: gi, tested: gi.length, cleared };
+		})
+		.filter((g) => g.items.length > 0);
+}
+
+export type ScatterTick = { id: string; display: string; t: number; isMax: boolean };
+
+/** Reduce the ledger to the hero αt-distribution strip: one representative
+ *  out-of-sample-preferred t per paradigm that produced one, sorted ascending,
+ *  max flagged. `nWithT` / `nTotal` give the honest "N of 18 produced a t-stat;
+ *  the rest were killed pre-audit" split. Pure; unit-tested. */
+export function paradigmScatter(items: Paradigm[]): {
+	ticks: ScatterTick[];
+	maxT: number | null;
+	nWithT: number;
+	nTotal: number;
+} {
+	const rep = items
+		.map((p) => ({ id: p.id, display: p.display, t: p.oos_t ?? p.is_t ?? NaN }))
+		.filter((r) => Number.isFinite(r.t))
+		.sort((a, b) => a.t - b.t);
+	const maxT = rep.length ? rep[rep.length - 1].t : null;
+	const ticks = rep.map((r) => ({ ...r, isMax: r.t === maxT }));
+	return { ticks, maxT, nWithT: ticks.length, nTotal: items.length };
+}
 
 export const live: Live[] = [
 	{ id: 'L1', name: 'EDGAR watchdog', what: 'detects S&P 100 EDGAR filings → classifies → writes candidates.db. Worker archived per ADR 0008.', status: 'LIVE', deploy: 'systemd `detect` every 15 min', date: 'continuous' },

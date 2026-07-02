@@ -753,6 +753,61 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(details, 'one <details> per paradigm article').toBe(articles);
 	});
 
+	test('status filter chips filter the ledger and do not pin their tooltip on click (P3.2)', async ({ page }) => {
+		await gotoExperiments(page);
+		const failChip = page.locator('#paradigms button', { hasText: /^fail 15$/i });
+		await failChip.click();
+		// The filter applied: only the 15 FAIL rows remain in the paradigm ledger.
+		const shown = await page.locator('#paradigms article').count();
+		expect(shown, 'FAIL filter shows only the 15 FAIL paradigms').toBe(15);
+		// The click must NOT leave the chip's ChipTip wrapper focused — otherwise
+		// its tooltip stays pinned (focus-within) while the next chip is hovered,
+		// showing two tooltips at once. selectFilter() blurs the button + wrapper.
+		const pinned = await page.evaluate(() =>
+			[...document.querySelectorAll('#paradigms [data-testid="chip-tip"]')].some((w) =>
+				w.matches(':focus-within')
+			)
+		);
+		expect(pinned, 'no filter chip tooltip stays pinned via focus after a click').toBe(false);
+	});
+
+	test('status filter is multi-select and CLEAR resets to all (P3.3)', async ({ page }) => {
+		await gotoExperiments(page);
+		const fail = page.locator('#paradigms button', { hasText: /^fail 15$/i });
+		const inconclusive = page.locator('#paradigms button', { hasText: /^inconclusive 2$/i });
+		// Selecting two statuses shows the union (15 FAIL + 2 INCONCLUSIVE = 17),
+		// and both chips read pressed — proving multi-select, not single-select.
+		await fail.click();
+		await inconclusive.click();
+		expect(await page.locator('#paradigms article').count(), 'FAIL + INCONCLUSIVE = 17 rows').toBe(17);
+		expect(await fail.getAttribute('aria-pressed')).toBe('true');
+		expect(await inconclusive.getAttribute('aria-pressed')).toBe('true');
+		// Toggling a selected chip off narrows back to just the other.
+		await fail.click();
+		expect(await page.locator('#paradigms article').count(), 'toggling FAIL off leaves 2 INCONCLUSIVE').toBe(2);
+		// CLEAR resets to the full ledger.
+		await page.locator('#paradigms button', { hasText: /^clear/i }).click();
+		expect(await page.locator('#paradigms article').count(), 'CLEAR shows all 18').toBe(18);
+	});
+
+	test('tool.experiments has its own independent multi-select filter (P3.4)', async ({ page }) => {
+		await gotoExperiments(page);
+		// Both ledgers use the shared LedgerFilterBar. The tool filter is a second,
+		// independent instance — filtering it must NOT touch the paradigm ledger.
+		const noGo = page.locator('#tool-experiments button', { hasText: /^no-go 1$/i });
+		const finding = page.locator('#tool-experiments button', { hasText: /^finding 1$/i });
+		await noGo.click();
+		await finding.click();
+		expect(await page.locator('#tool-experiments article').count(), 'NO-GO + FINDING = 2 tool rows').toBe(2);
+		expect(await noGo.getAttribute('aria-pressed')).toBe('true');
+		expect(await finding.getAttribute('aria-pressed')).toBe('true');
+		// The paradigm ledger is a separate filter instance — untouched (all 18).
+		expect(await page.locator('#paradigms article').count(), 'paradigm ledger unaffected by tool filter').toBe(18);
+		// CLEAR restores the full tool ledger (5 rows).
+		await page.locator('#tool-experiments button', { hasText: /^clear/i }).click();
+		expect(await page.locator('#tool-experiments article').count(), 'CLEAR shows all 5 tool rows').toBe(5);
+	});
+
 	test('footer ticker switches vocabulary on /experiments vs other routes (P1.2)', async ({ page }) => {
 		await page.goto('/');
 		// Auto-wait until the layout's $derived ticker computation has
