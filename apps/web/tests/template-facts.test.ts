@@ -180,16 +180,16 @@ test('template-facts panel renders when brief_template_id is present', async ({ 
 	await expect(keys.first()).toHaveText('acquirer_ticker');
 
 	// Values: tickers + date render verbatim; *_usd fields are formatted
-	// compactly ($5.0B) but the raw integer is preserved on data-raw.
+	// compactly ($5.00B) but the raw integer is preserved on data-raw.
 	const values = page.getByTestId('template-fact-value');
 	const valueTexts = await values.allInnerTexts();
 	expect(valueTexts).toContain('NVDA');
 	expect(valueTexts).toContain('XYZ');
-	expect(valueTexts).toContain('$5.0B');
+	expect(valueTexts).toContain('$5.00B');
 	expect(valueTexts).toContain('2026-05-31');
 	// Audit trail: raw integer survives on data-raw even though the
-	// rendered text is the compact $5.0B form.
-	const considerationCell = values.filter({ hasText: '$5.0B' });
+	// rendered text is the compact $5.00B form.
+	const considerationCell = values.filter({ hasText: '$5.00B' });
 	await expect(considerationCell).toHaveAttribute('data-raw', '5000000000');
 });
 
