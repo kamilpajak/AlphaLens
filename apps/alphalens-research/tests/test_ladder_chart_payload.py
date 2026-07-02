@@ -728,6 +728,192 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
             self.assertEqual(sorted(tickers_fetched), ["AMD", "NVDA"])
 
 
+def _write_terminal_store_row(
+    store_dir: Path,
+    brief_date: dt.date,
+    ticker: str,
+    *,
+    terminal: bool,
+    chart_payload: dict | None,
+) -> None:
+    """Write a one-row store parquet carrying a ``terminal`` flag and (optionally)
+    a pre-existing ``chart_payload_json`` — the shape the monitor's ``_terminal_row``
+    / ``_ongoing_row`` produce, so the enricher's skip predicate has real inputs."""
+    store_dir.mkdir(parents=True, exist_ok=True)
+    row: dict = {"brief_date": brief_date, "ticker": ticker, "forward_return": 0.05}
+    row["terminal"] = terminal
+    if chart_payload is not None:
+        row["chart_payload_json"] = json.dumps(chart_payload)
+    pd.DataFrame([row]).to_parquet(store_dir / f"{brief_date.isoformat()}.parquet")
+
+
+class TestEnrichSkipsFrozenTerminalRows(unittest.TestCase):
+    """The Polygon-429 fast-follow: a resolved (terminal) row whose chart is already
+    OK never changes, so the nightly enrich pass must NOT re-fetch it. Cutting those
+    fetches is what stops the pass starving the Polygon budget and hanging."""
+
+    def _two_bars(self, arrival: dt.date, nxt: dt.date) -> list[dict]:
+        return [
+            _bar(_session_open_ms(arrival), o=101.0, h=102.0, low=99.0, c=100.5),
+            _bar(_session_open_ms(nxt), o=105.0, h=111.0, low=104.0, c=110.5),
+        ]
+
+    def test_frozen_terminal_ok_row_is_not_refetched(self) -> None:
+        """A terminal row that already carries an OK chart payload is preserved
+        verbatim and its bars are NEVER fetched again."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            frozen = {"status": "OK", "bars": [{"time": _ARRIVAL.isoformat()}], "markers": []}
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "OLD", terminal=True, chart_payload=frozen
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "OLD", _OK_SETUP)
+
+            calls: list[str] = []
+
+            def bar_fetch(ticker: str, arrival_session: dt.date) -> list[dict]:
+                calls.append(ticker)
+                return self._two_bars(_ARRIVAL, _NEXT_SESSION)
+
+            n = enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=lambda *_a, **_k: [],
+                exchange=_EXCHANGE,
+            )
+            self.assertEqual(calls, [])  # frozen -> no Polygon fetch at all
+            df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+            # Preserved byte-for-byte, and still counted as an OK chart.
+            self.assertEqual(json.loads(df.loc[0, "chart_payload_json"]), frozen)
+            self.assertGreaterEqual(n, 1)
+
+    def test_terminal_row_missing_ok_chart_is_retried(self) -> None:
+        """A terminal row whose existing chart is NO_DATA (a prior transient gap)
+        is NOT frozen — it is re-priced so it can self-heal to OK."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            _write_terminal_store_row(
+                store_dir,
+                _ARRIVAL,
+                "HEAL",
+                terminal=True,
+                chart_payload={"status": "NO_DATA", "bars": []},
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "HEAL", _OK_SETUP)
+
+            calls: list[str] = []
+
+            def bar_fetch(ticker: str, arrival_session: dt.date) -> list[dict]:
+                calls.append(ticker)
+                return self._two_bars(_ARRIVAL, _NEXT_SESSION)
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=lambda *_a, **_k: [],
+                exchange=_EXCHANGE,
+            )
+            self.assertEqual(calls, ["HEAL"])  # retried
+            df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+            self.assertEqual(json.loads(df.loc[0, "chart_payload_json"])["status"], "OK")
+
+    def test_ongoing_row_is_reprocessed_despite_ok_chart(self) -> None:
+        """An ongoing (terminal=False) row is always re-priced even with an existing
+        OK chart, because its price path can still extend the next night."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            ok = {"status": "OK", "bars": [{"time": _ARRIVAL.isoformat()}], "markers": []}
+            _write_terminal_store_row(store_dir, _ARRIVAL, "OPEN", terminal=False, chart_payload=ok)
+            _write_brief(briefs_dir, _ARRIVAL, "OPEN", _OK_SETUP)
+
+            calls: list[str] = []
+
+            def bar_fetch(ticker: str, arrival_session: dt.date) -> list[dict]:
+                calls.append(ticker)
+                return self._two_bars(_ARRIVAL, _NEXT_SESSION)
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=lambda *_a, **_k: [],
+                exchange=_EXCHANGE,
+            )
+            self.assertEqual(calls, ["OPEN"])  # ongoing -> always re-priced
+
+    def test_processes_newest_store_file_first(self) -> None:
+        """Store parquets are enriched newest-date first so a starved deadline
+        spends the Polygon budget on recent (ongoing) rows before old ones."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            d_old, d_new = _ARRIVAL, _NEXT_SESSION  # 2026-05-01 < 2026-05-04
+            _write_store_row(store_dir, d_old, "AAA")
+            _write_store_row(store_dir, d_new, "BBB")
+            _write_brief(briefs_dir, d_old, "AAA", _OK_SETUP)
+            _write_brief(briefs_dir, d_new, "BBB", _OK_SETUP)
+
+            order: list[str] = []
+
+            def bar_fetch(ticker: str, arrival_session: dt.date) -> list[dict]:
+                order.append(ticker)
+                return []  # NO_DATA is fine — we only pin the visit order
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=lambda *_a, **_k: [],
+                exchange=_EXCHANGE,
+            )
+            self.assertEqual(order, ["BBB", "AAA"])  # newest date visited first
+
+    def test_all_frozen_file_is_not_rewritten(self) -> None:
+        """A store parquet whose every row is frozen terminal-OK is NOT rewritten:
+        the pass does zero I/O (not just zero fetches) on the fully-resolved tail,
+        instead of re-persisting a byte-identical column every night."""
+        import alphalens_pipeline.feedback.ladder_chart as lc
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            frozen = {"status": "OK", "bars": [{"time": _ARRIVAL.isoformat()}], "markers": []}
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "OLD", terminal=True, chart_payload=frozen
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "OLD", _OK_SETUP)
+
+            writes: list[str] = []
+            orig_write = lc._write_atomic
+
+            def spy(path, df):
+                writes.append(Path(path).name)
+                return orig_write(path, df)
+
+            lc._write_atomic = spy
+            try:
+                enrich_store_with_chart_payloads(
+                    store_dir,
+                    briefs_dir,
+                    bar_fetch=lambda *_a, **_k: [],
+                    daily_bar_fetch=lambda *_a, **_k: [],
+                    exchange=_EXCHANGE,
+                )
+            finally:
+                lc._write_atomic = orig_write
+            self.assertEqual(writes, [])  # fully-resolved file untouched
+
+
 def _entry_expiry_ms(arrival: dt.date, order_ttl_days: int) -> int:
     """The engine entry cutoff: open ms of the session ``order_ttl_days`` after arrival.
 

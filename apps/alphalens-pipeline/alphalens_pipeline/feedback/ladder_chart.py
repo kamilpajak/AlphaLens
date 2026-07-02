@@ -607,6 +607,33 @@ def _memoized_daily_fetch(daily_fetch: DailyBarFetch) -> DailyBarFetch:
     return cached
 
 
+def _is_frozen_terminal_ok(row: Any) -> bool:
+    """Whether a store row is a resolved position whose chart is already final.
+
+    A terminal row whose ``chart_payload_json`` is already OK never changes — its
+    price path is frozen and its ladder is fully resolved — so the nightly enrich
+    pass can preserve it verbatim and skip the Polygon re-fetch. It is NOT frozen
+    (must be re-priced) when:
+
+    * ``terminal`` is falsy / NaN / absent — an ongoing position whose path can
+      still extend the next session; or
+    * the existing chart is missing / not OK (a NO_DATA payload from a prior
+      transient Polygon gap) — so a later run can self-heal it to OK.
+    """
+    terminal = row.get("terminal")
+    # pd.isna guards a NaN terminal (bool(nan) is True) and a missing column
+    # (None); only a real truthy flag counts as terminal.
+    if pd.isna(terminal) or not bool(terminal):
+        return False
+    existing = row.get(CHART_PAYLOAD_COLUMN)
+    if not isinstance(existing, str) or not existing:
+        return False
+    try:
+        return json.loads(existing).get("status") == "OK"
+    except (ValueError, TypeError):
+        return False
+
+
 def enrich_store_with_chart_payloads(
     store_dir: Path | str,
     briefs_dir: Path | str,
@@ -621,8 +648,11 @@ def enrich_store_with_chart_payloads(
     For each ``YYYY-MM-DD.parquet`` row: resolve the brief's trade setup, fetch the
     row's cached minute bars (keyed by ticker + arrival session), filter to RTH,
     replay the ladder, build the chart payload, and persist it as a JSON string.
-    Rewrites the frame atomically. Returns the number of rows that got a non-empty
-    (non-NO_DATA / non-NO_STRUCTURE) payload.
+    Rewrites the frame atomically. Returns the number of rows that have an OK chart
+    payload after the pass — freshly built this run, OR preserved from a prior run
+    for a frozen terminal row (see the fast-follow note below). So the count stays
+    stable across nights even as more rows freeze, rather than cratering to only the
+    rows recomputed this run.
 
     Mirrors :func:`benchmark_excess.enrich_store_with_benchmark_excess`: never
     raises per row (a bad row / missing brief leaves a NO_DATA payload and is
@@ -633,6 +663,15 @@ def enrich_store_with_chart_payloads(
     their existing values in the store and are retried on the next run. ``deadline``
     is typed ``Any`` to avoid a circular import; callers pass a ``_RunDeadline``
     instance.
+
+    Polygon-budget fast-follow: parquets are visited NEWEST-date first, and a
+    frozen terminal-OK row (a resolved position that already carries an OK chart —
+    :func:`_is_frozen_terminal_ok`) is preserved verbatim WITHOUT re-fetching, since
+    its price path and ladder never change. Together these stop the pass from
+    re-pricing the ~90 resolved rows every night, which is what starved the Polygon
+    quota into a 429 storm and hung the run. Newest-first means a deadline that
+    trips mid-run has already spent the budget on the recent, still-ongoing rows
+    (the ones whose charts actually move) rather than on old resolved ones.
     """
     store = Path(store_dir)
     briefs = Path(briefs_dir)
@@ -644,7 +683,7 @@ def enrich_store_with_chart_payloads(
     n_with_chart = 0
     setups_by_date: dict[dt.date, dict[str, dict] | None] = {}
 
-    for path in sorted(store.glob("*.parquet")):
+    for path in sorted(store.glob("*.parquet"), reverse=True):
         try:
             df = pd.read_parquet(path)
         except (OSError, ValueError) as exc:
@@ -655,7 +694,14 @@ def enrich_store_with_chart_payloads(
 
         payload_col: list[str] = []
         stopped_early = False
+        recomputed_any = False
         for _, row in df.iterrows():
+            if _is_frozen_terminal_ok(row):
+                # Resolved position with an OK chart — never changes. Preserve the
+                # existing payload byte-for-byte and spend no Polygon budget on it.
+                payload_col.append(str(row[CHART_PAYLOAD_COLUMN]))
+                n_with_chart += 1
+                continue
             if deadline is not None and deadline.should_stop():
                 stopped_early = True
                 break
@@ -670,6 +716,7 @@ def enrich_store_with_chart_payloads(
             if payload.get("status") == "OK":
                 n_with_chart += 1
             payload_col.append(json.dumps(payload))
+            recomputed_any = True
 
         if stopped_early:
             # Deadline tripped mid-file: leave the parquet untouched so
@@ -678,8 +725,12 @@ def enrich_store_with_chart_payloads(
             # immediately skip (deadline latches), so skip the open entirely.
             break
 
-        df[CHART_PAYLOAD_COLUMN] = payload_col
-        _write_atomic(path, df)
+        if recomputed_any:
+            # An all-frozen file's payload_col is byte-identical to what is on
+            # disk — skip the rewrite so the fully-resolved tail costs zero I/O
+            # (not just zero fetches) every night.
+            df[CHART_PAYLOAD_COLUMN] = payload_col
+            _write_atomic(path, df)
 
     return n_with_chart
 
