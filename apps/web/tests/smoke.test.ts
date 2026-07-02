@@ -827,15 +827,16 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(expChips, '/experiments footer does not show thematic vocab').not.toContain('PRESS-GATE');
 	});
 
-	test('sticky TOC renders on xl viewport with 7 section anchors (P3.1)', async ({ page }) => {
+	test('sticky TOC renders on xl viewport with 6 section anchors (P3.1)', async ({ page }) => {
 		await page.setViewportSize({ width: 1440, height: 900 });
 		await gotoExperiments(page);
 		// Aside rail is `hidden xl:block` — invisible below 1280px.
 		const tocLinks = await page.locator('nav[aria-label="Section table of contents"] a').count();
-		expect(tocLinks, '7 section anchors in TOC').toBe(7);
+		expect(tocLinks, '6 section anchors in TOC').toBe(6);
 		// Section ids the TOC points to must exist on the page. (status.legend was
-		// replaced by on-hover ChipTip tooltips on the status chips themselves.)
-		for (const id of ['how-to-read', 'paradigms', 'tool-experiments', 'patterns', 'infra', 'methodology', 'glossary']) {
+		// replaced by on-hover ChipTip tooltips on the status chips themselves;
+		// infrastructure.live was removed — it lives in deploy/systemd + CLAUDE.md.)
+		for (const id of ['how-to-read', 'paradigms', 'tool-experiments', 'patterns', 'methodology', 'glossary']) {
 			const ok = await page.locator(`section#${id}`).count();
 			expect(ok, `section#${id} exists`).toBe(1);
 		}
@@ -869,7 +870,7 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		await gotoExperiments(page);
 		const h2 = await page.locator('h2').count();
 		const h3 = await page.locator('h3').count();
-		expect(h2, '≥7 h2 (how.to.read, paradigms.ledger, tool.experiments, failure.patterns, infrastructure.live, methodology.artifacts, glossary.terms)').toBeGreaterThanOrEqual(7);
+		expect(h2, '≥6 h2 (how.to.read, paradigms.ledger, tool.experiments, failure.patterns, methodology.artifacts, glossary.terms)').toBeGreaterThanOrEqual(6);
 		expect(h3, '≥31 h3 (18 paradigm names + 13 pattern names)').toBeGreaterThanOrEqual(31);
 	});
 
@@ -951,10 +952,12 @@ test.describe('experiments — appendix card layout', () => {
 		expect(tables, 'methodology.artifacts is card grid, not a table').toBe(0);
 	});
 
-	test('infrastructure.live stays a table (intentionally tabular) (P-cards.3)', async ({ page }) => {
+	test('infrastructure.live section is gone (lived in deploy/systemd + CLAUDE.md) (P-cards.3)', async ({ page }) => {
 		await gotoExperiments(page);
-		const rows = await page.locator('section#infra table tbody tr').count();
-		expect(rows, 'infra remains a 4-row table').toBe(4);
+		// The static live-infra snapshot drifted from reality and duplicated the
+		// authoritative VPS-backfills table in CLAUDE.md, so it was removed.
+		const infra = await page.locator('section#infra').count();
+		expect(infra, 'no infrastructure.live section on /experiments').toBe(0);
 	});
 });
 

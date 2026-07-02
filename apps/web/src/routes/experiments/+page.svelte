@@ -5,10 +5,12 @@
 	// αt-distribution strip) leads, the paradigm ledger is the payload — grouped
 	// into research-class chapters with a sticky filter/legend bar — a `// NOW`
 	// divider separates it from the live-tool ledger (tool.experiments), and the
-	// reference material (patterns / infra / methodology / glossary) is demoted to
-	// a "supporting material" appendix. The static data (paradigms, tool
-	// experiments, live infra, artifacts, patterns, status legends, group chapters)
-	// lives in `$lib/data/research-ledger`; the evidence-drawer FSM lives in
+	// reference material (patterns / methodology / glossary) is demoted to a
+	// "supporting material" appendix. The patterns + artifacts appendix sections
+	// are card grids (independent peer items), not the stacked list/table the rest
+	// of the page uses. The static data (paradigms, tool experiments, artifacts,
+	// patterns, status legends, group chapters) lives in
+	// `$lib/data/research-ledger`; the evidence-drawer FSM lives in
 	// `$lib/components/EvidenceDrawer.svelte`. This file keeps the layout, the
 	// JargonTip / ChipTip wiring, the αt bar + scatter helpers, the status filter,
 	// the TOC IntersectionObserver, and the hash-deep-link handling.
@@ -34,7 +36,6 @@
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
 		paradigms,
-		live,
 		artifacts,
 		patterns,
 		statusLegend,
@@ -50,8 +51,7 @@
 		PARADIGM_GROUPS,
 		ALPHA_T_MARGINAL,
 		ALPHA_T_DOCTRINE,
-		type ParadigmStatus,
-		type LiveStatus
+		type ParadigmStatus
 	} from '$lib/data/research-ledger';
 
 	// Plain-text status definitions for the on-hover chip tooltips (ChipTip) that
@@ -109,7 +109,7 @@
 	const nTested = paradigms.length;
 	const nDeployed = paradigms.filter((p) => (p.oos_t ?? p.is_t ?? 0) >= ALPHA_T_DOCTRINE).length;
 
-	function statusTone(s: ParadigmStatus | LiveStatus | 'OSS' | 'INTERNAL'): string {
+	function statusTone(s: ParadigmStatus | 'OSS' | 'INTERNAL'): string {
 		switch (s) {
 			case 'FAIL':
 			case 'SLIPPAGE-FAIL':
@@ -120,10 +120,6 @@
 			case 'IN-FLIGHT':
 			case 'INTERNAL':
 				return toneClass('cyan');
-			case 'LIVE':
-			case 'SHIPPED':
-			case 'DONE':
-				return toneClass('green');
 			case 'OSS':
 				return toneClass('amber');
 			default:
@@ -245,7 +241,6 @@
 		{ id: 'paradigms', label: 'paradigms.ledger' },
 		{ id: 'tool-experiments', label: 'tool.experiments' },
 		{ id: 'patterns', label: 'failure.patterns' },
-		{ id: 'infra', label: 'infrastructure.live' },
 		{ id: 'methodology', label: 'methodology.artifacts' },
 		{ id: 'glossary', label: 'glossary.terms' }
 	];
@@ -671,47 +666,15 @@
 		{/snippet}
 	</SectionPanel>
 
-	<SectionPanel id="infra" title="infrastructure.live" style="animation-delay: 0.2s">
-		{#snippet meta()}
-			<span class="text-fg-dim normal-case tracking-normal">{live.length} tracks · what is currently running</span>
-		{/snippet}
-		{#snippet children()}
-		<table class="w-full text-sm">
-			<tbody>
-				{#each live as l}
-					<tr class="border-b border-grid last:border-b-0 hover:bg-bg-2">
-						<td class="px-4 sm:px-5 py-3 w-14 sm:w-20 align-top">
-							<div class="font-display font-bold text-base sm:text-lg text-amber">{l.id}</div>
-						</td>
-						<td class="px-2 py-3 align-top">
-							<div class="font-bold text-fg">{l.name}</div>
-							<div class="text-fg-dim text-xs mt-0.5">{l.what}</div>
-							<div class="sm:hidden text-[10px] uppercase tracking-widest mt-1 flex flex-wrap gap-2">
-								<StatusPill tone={statusTone(l.status)} label={l.status} />
-								<span class="text-fg-muted normal-case tracking-normal">{l.deploy}</span>
-							</div>
-						</td>
-						<td class="hidden sm:table-cell px-2 py-3 align-top">
-							<StatusPill tone={statusTone(l.status)} label={l.status} />
-						</td>
-						<td class="hidden sm:table-cell px-4 sm:px-5 py-3 text-right align-top text-xs text-fg-muted">{l.deploy}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
-		{/snippet}
-	</SectionPanel>
-
-	<SectionPanel id="methodology" title="methodology.artifacts" style="animation-delay: 0.24s">
+	<SectionPanel id="methodology" title="methodology.artifacts" style="animation-delay: 0.2s">
 		{#snippet meta()}
 			<span class="text-fg-dim normal-case tracking-normal">{artifacts.length} items · what survived</span>
 		{/snippet}
 		{#snippet children()}
-		<!-- Feature-card grid — "what survived". Unlike the live-infra table above
-		     (genuinely tabular id/status/deploy), the durable methodology artifacts
-		     are the proud outputs of the whole search, so they get the elevated
-		     card treatment: the hero's amber corner-bracket motif, a bright bg, the
-		     status pill, and the repo/doc reference pinned to the card footer. -->
+		<!-- Feature-card grid — "what survived". The durable methodology artifacts
+		     are the proud outputs of the whole search, so they get the elevated card
+		     treatment: the hero's amber corner-bracket motif, a bright bg, the status
+		     pill, and the repo/doc reference pinned to the card footer. -->
 		<!-- <ul>/<li>, not <article>: the page reserves <article> for an expandable
 		     ledger row (one <details> each — see P0.1), so a static card must not
 		     inflate that count. role="list" keeps list semantics under Preflight's
