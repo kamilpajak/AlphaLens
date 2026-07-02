@@ -564,7 +564,7 @@
 			</p>
 			<p class="text-[11px] text-fg-dim leading-relaxed mt-2">
 				<span class="text-amber">Honesty rule:</span> anything marked
-				<span class="text-cyan">FORWARD-LOG</span> or in-sample is a what-if replay that never touched the real
+				<span class="text-cyan">FORWARD-LOG</span> is an in-sample what-if replay that never touched the real
 				trade record and has not passed a fresh forward test.
 				<span class="text-fg-muted">Snapshot 2026-07-01 · 372 plannable / 89 terminal / 43 brief-days.</span>
 			</p>
@@ -592,9 +592,11 @@
 							</ChipTip>
 						{/snippet}
 						{#snippet preface()}
-							<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">
-								{#if t.status === 'FORWARD-LOG'}<span class="text-[10px] uppercase tracking-widest text-cyan border border-cyan px-1 py-0.5 mr-2 align-middle whitespace-nowrap">in-sample</span>{/if}{t.metric}
-							</p>
+							<!-- No inline in-sample badge: it only ever appeared on FORWARD-LOG
+							     rows, which already carry the FORWARD-LOG pill (its ChipTip + the
+							     section "Honesty rule" define it as an in-sample what-if replay).
+							     The badge duplicated that pill, so the metric line stands alone. -->
+							<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">{t.metric}</p>
 						{/snippet}
 						{#snippet fields()}
 							<DetailField label="Hypothesis">{t.hypothesis}</DetailField>
