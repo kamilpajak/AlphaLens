@@ -25,6 +25,9 @@
 	import StatusPill from '$lib/components/StatusPill.svelte';
 	import Disclosure from '$lib/components/Disclosure.svelte';
 	import SectionPanel from '$lib/components/SectionPanel.svelte';
+	import LedgerRow from '$lib/components/LedgerRow.svelte';
+	import DetailField from '$lib/components/DetailField.svelte';
+	import EvidenceLink from '$lib/components/EvidenceLink.svelte';
 	import EvidenceDrawer from '$lib/components/EvidenceDrawer.svelte';
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
@@ -449,38 +452,39 @@
 				</div>
 				<div class="divide-y divide-grid">
 					{#each vis as p}
-						<article id={p.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors {statusRail(statusTone(p.status))}">
-							<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
-								<span class="font-display font-bold text-base sm:text-lg text-amber w-10 sm:w-12 shrink-0">{p.display}</span>
-								<h3 class="font-bold text-fg text-sm sm:text-base">{p.name}</h3>
-								<span class="text-[10px] uppercase tracking-widest">
-									<!-- Layer · axis_a / axis_b two-axis tag; each token is a JargonTip. -->
-									<span class="text-fg-muted">
-										<JargonTip {...tipProps(p.layer_id)}>{p.layer_id}</JargonTip> ·&nbsp;</span>
-									{#if p.axis_a === 'screener'}
-										<span class="text-fg-muted"><JargonTip {...tipProps('screener')}>screener</JargonTip></span>
-									{:else}
-										<span class="text-fg-dim font-bold"><JargonTip {...tipProps(p.axis_a)}>{p.axis_a}</JargonTip></span>
-									{/if}
-									{#if p.axis_b && p.axis_b.length > 0}
-										<span class="text-fg-muted"> / </span>
-										{#each p.axis_b as b, i}
-											{#if i > 0}<span class="text-fg-muted"> × </span>{/if}<span class="text-fg-dim font-bold"><JargonTip {...tipProps(b)}>{b}</JargonTip></span>
-										{/each}
-									{/if}
-								</span>
-								<span class="ml-auto flex items-center gap-2">
+							<LedgerRow
+								id={p.id}
+								rail={statusRail(statusTone(p.status))}
+								display={p.display}
+								name={p.name}
+								date={p.date}
+								detailNoun="case detail"
+							>
+								{#snippet status()}
 									<ChipTip term={p.status} body={paradigmStatusDef.get(p.status) ?? ''}>
 										{#snippet chip()}
 											<StatusPill tone={statusTone(p.status)} label={p.status} interactive />
 										{/snippet}
 									</ChipTip>
-									<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{p.date}</span>
-								</span>
-							</header>
-
-							<!-- Narrative left, IS/OOS αt bars right (under the verdict) on lg+;
-							     stacks on smaller screens. -->
+								{/snippet}
+								{#snippet tags()}
+									<span class="text-[10px] uppercase tracking-widest">
+										<span class="text-fg-muted">
+											<JargonTip {...tipProps(p.layer_id)}>{p.layer_id}</JargonTip> ·&nbsp;</span>
+										{#if p.axis_a === 'screener'}
+											<span class="text-fg-muted"><JargonTip {...tipProps('screener')}>screener</JargonTip></span>
+										{:else}
+											<span class="text-fg-dim font-bold"><JargonTip {...tipProps(p.axis_a)}>{p.axis_a}</JargonTip></span>
+										{/if}
+										{#if p.axis_b && p.axis_b.length > 0}
+											<span class="text-fg-muted"> / </span>
+											{#each p.axis_b as b, i}
+												{#if i > 0}<span class="text-fg-muted"> × </span>{/if}<span class="text-fg-dim font-bold"><JargonTip {...tipProps(b)}>{b}</JargonTip></span>
+											{/each}
+										{/if}
+									</span>
+								{/snippet}
+								{#snippet preface()}
 							<div class="sm:pl-12 mb-3 lg:flex lg:items-start lg:justify-between lg:gap-8">
 								<p class="text-[13px] text-fg-dim leading-relaxed mb-3 lg:mb-0 lg:max-w-[72ch]">{p.story}</p>
 
@@ -515,48 +519,17 @@
 									</div>
 								{/if}
 							</div>
-
-							<Disclosure detailsClass="sm:ml-12" summaryClass="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber flex items-center gap-2 py-1.5">
-								{#snippet summary(open)}
-									<span>{open ? 'hide case detail' : 'show case detail'}</span>
 								{/snippet}
-								{#snippet children()}
-								<dl class="text-xs sm:text-sm text-fg-dim space-y-1.5 pt-1.5">
-									<div class="flex gap-2">
-										<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Hypothesis</dt>
-										<dd>{#each parseMarkup(p.hypothesis) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-									</div>
-									<div class="flex gap-2">
-										<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Mechanism</dt>
-										<dd>{#each parseMarkup(p.mechanism) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-									</div>
-									<div class="flex gap-2">
-										<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Outcome</dt>
-										<dd class="text-fg">{#each parseMarkup(p.metric) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-									</div>
-									<div class="flex gap-2">
-										<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Lesson</dt>
-										<dd>{#each parseMarkup(p.lesson) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</dd>
-									</div>
+								{#snippet fields()}
+									<DetailField label="Hypothesis">{#each parseMarkup(p.hypothesis) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</DetailField>
+									<DetailField label="Mechanism">{#each parseMarkup(p.mechanism) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</DetailField>
+									<DetailField label="Outcome" ddClass="text-fg">{#each parseMarkup(p.metric) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</DetailField>
+									<DetailField label="Lesson">{#each parseMarkup(p.lesson) as seg}{#if seg.kind === 'term'}<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>{:else}{seg.text}{/if}{/each}</DetailField>
 									{#if p.evidence}
-										<div class="flex gap-2">
-											<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Evidence</dt>
-											<dd>
-												<button
-													type="button"
-													class="font-mono text-[11px] text-cyan hover:text-amber underline decoration-dotted underline-offset-2 break-all text-left"
-													onclick={() => evidenceDrawer.open(p.evidence!)}
-													aria-label="open evidence: {p.evidence}"
-												>
-													{p.evidence} ↗
-												</button>
-											</dd>
-										</div>
+										<DetailField label="Evidence"><EvidenceLink path={p.evidence} onopen={(pth) => evidenceDrawer.open(pth)} /></DetailField>
 									{/if}
-								</dl>
 								{/snippet}
-							</Disclosure>
-						</article>
+							</LedgerRow>
 					{/each}
 				</div>
 			{/if}
@@ -596,71 +569,40 @@
 
 		<div class="divide-y divide-grid">
 			{#each toolExperiments.filter(showT) as t}
-				<article id={t.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors border-dashed {statusRail(toolStatusTone(t.status))}">
-					<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
-						<span class="font-display font-bold text-base sm:text-lg text-amber w-8 sm:w-10 shrink-0">{t.display}</span>
-						<h3 class="font-bold text-fg text-sm sm:text-base">{t.name}</h3>
-						<span class="ml-auto flex items-center gap-2">
+					<LedgerRow
+						id={t.id}
+						rail={statusRail(toolStatusTone(t.status))}
+						dashed
+						display={t.display}
+						displayWidth="w-8 sm:w-10"
+						name={t.name}
+						date={t.date}
+						detailMargin="sm:ml-10"
+						detailNoun="detail"
+					>
+						{#snippet status()}
 							<ChipTip term={t.status} body={toolStatusDef.get(t.status) ?? ''}>
 								{#snippet chip()}
 									<StatusPill tone={toolStatusTone(t.status)} label={t.status} interactive />
 								{/snippet}
 							</ChipTip>
-							<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{t.date}</span>
-						</span>
-					</header>
-
-					<!-- Persistent in-sample marker on the always-visible metric line so a
-					     FORWARD-LOG number never reads as validated edge without expanding. -->
-					<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">
-						{#if t.status === 'FORWARD-LOG'}<span class="text-[10px] uppercase tracking-widest text-cyan border border-cyan px-1 py-0.5 mr-2 align-middle whitespace-nowrap">in-sample</span>{/if}{t.metric}
-					</p>
-
-					<Disclosure detailsClass="sm:ml-10" summaryClass="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber flex items-center gap-2 py-1.5">
-						{#snippet summary(open)}
-							<span>{open ? 'hide detail' : 'show detail'}</span>
 						{/snippet}
-						{#snippet children()}
-						<dl class="text-xs sm:text-sm text-fg-dim space-y-1.5 pt-1.5">
-							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Hypothesis</dt>
-								<dd>{t.hypothesis}</dd>
-							</div>
-							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Mechanism</dt>
-								<dd>{t.mechanism}</dd>
-							</div>
-							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Outcome</dt>
-								<dd class="text-fg">{t.outcome}</dd>
-							</div>
-							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Lesson</dt>
-								<dd>{t.lesson}</dd>
-							</div>
-							<div class="flex gap-2">
-								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">PRs</dt>
-								<dd class="font-mono text-[11px] text-fg-muted">{t.prs.join(' · ')}</dd>
-							</div>
+						{#snippet preface()}
+							<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">
+								{#if t.status === 'FORWARD-LOG'}<span class="text-[10px] uppercase tracking-widest text-cyan border border-cyan px-1 py-0.5 mr-2 align-middle whitespace-nowrap">in-sample</span>{/if}{t.metric}
+							</p>
+						{/snippet}
+						{#snippet fields()}
+							<DetailField label="Hypothesis">{t.hypothesis}</DetailField>
+							<DetailField label="Mechanism">{t.mechanism}</DetailField>
+							<DetailField label="Outcome" ddClass="text-fg">{t.outcome}</DetailField>
+							<DetailField label="Lesson">{t.lesson}</DetailField>
+							<DetailField label="PRs" ddClass="font-mono text-[11px] text-fg-muted">{t.prs.join(' · ')}</DetailField>
 							{#if t.evidence}
-								<div class="flex gap-2">
-									<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Evidence</dt>
-									<dd>
-										<button
-											type="button"
-											class="font-mono text-[11px] text-cyan hover:text-amber underline decoration-dotted underline-offset-2 break-all text-left"
-											onclick={() => evidenceDrawer.open(t.evidence!)}
-											aria-label="open evidence: {t.evidence}"
-										>
-											{t.evidence} ↗
-										</button>
-									</dd>
-								</div>
+								<DetailField label="Evidence"><EvidenceLink path={t.evidence} onopen={(pth) => evidenceDrawer.open(pth)} /></DetailField>
 							{/if}
-						</dl>
 						{/snippet}
-					</Disclosure>
-				</article>
+					</LedgerRow>
 			{/each}
 		</div>
 		{/snippet}
