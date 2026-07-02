@@ -636,7 +636,9 @@
 		     takeaways — index cards, not a sequence — so they read as a 2-up grid of
 		     quiet bordered cards rather than a stacked list. Each keeps its <h3> name
 		     + inline JargonTips; the amber index number is the card's tab. -->
-		<ul class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
+		<!-- role="list" restores list semantics under Tailwind Preflight's
+		     list-style:none (Safari drops them otherwise). -->
+		<ul role="list" class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
 			{#each patterns as p}
 				<li
 					data-testid="pattern-card"
@@ -710,13 +712,13 @@
 		     are the proud outputs of the whole search, so they get the elevated
 		     card treatment: the hero's amber corner-bracket motif, a bright bg, the
 		     status pill, and the repo/doc reference pinned to the card footer. -->
-		<div class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
+		<!-- <ul>/<li>, not <article>: the page reserves <article> for an expandable
+		     ledger row (one <details> each — see P0.1), so a static card must not
+		     inflate that count. role="list" keeps list semantics under Preflight's
+		     list-style:none, matching the pattern grid above. -->
+		<ul role="list" class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
 			{#each artifacts as a}
-				<!-- <div>, not <article>: the page reserves <article> for an
-				     expandable ledger row (one <details> each — see P0.1). A static
-				     artifact card carries no drawer, so it must not inflate that
-				     invariant's article count. -->
-				<div
+				<li
 					data-testid="artifact-card"
 					class="corners relative flex flex-col border border-grid bg-bg-1 p-4 transition-colors hover:border-grid-strong hover:bg-bg-2"
 				>
@@ -727,9 +729,9 @@
 					</div>
 					<p class="text-fg-dim text-xs leading-relaxed">{a.description}</p>
 					<div class="mt-auto pt-3 text-[11px] font-mono text-cyan break-all">{a.link}</div>
-				</div>
+				</li>
 			{/each}
-		</div>
+		</ul>
 		{/snippet}
 	</SectionPanel>
 
