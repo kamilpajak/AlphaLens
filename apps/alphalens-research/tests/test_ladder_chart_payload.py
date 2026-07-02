@@ -877,6 +877,42 @@ class TestEnrichSkipsFrozenTerminalRows(unittest.TestCase):
             )
             self.assertEqual(order, ["BBB", "AAA"])  # newest date visited first
 
+    def test_all_frozen_file_is_not_rewritten(self) -> None:
+        """A store parquet whose every row is frozen terminal-OK is NOT rewritten:
+        the pass does zero I/O (not just zero fetches) on the fully-resolved tail,
+        instead of re-persisting a byte-identical column every night."""
+        import alphalens_pipeline.feedback.ladder_chart as lc
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir = root / "population_ladders"
+            briefs_dir = root / "briefs"
+            frozen = {"status": "OK", "bars": [{"time": _ARRIVAL.isoformat()}], "markers": []}
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "OLD", terminal=True, chart_payload=frozen
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "OLD", _OK_SETUP)
+
+            writes: list[str] = []
+            orig_write = lc._write_atomic
+
+            def spy(path, df):
+                writes.append(Path(path).name)
+                return orig_write(path, df)
+
+            lc._write_atomic = spy
+            try:
+                enrich_store_with_chart_payloads(
+                    store_dir,
+                    briefs_dir,
+                    bar_fetch=lambda *_a, **_k: [],
+                    daily_bar_fetch=lambda *_a, **_k: [],
+                    exchange=_EXCHANGE,
+                )
+            finally:
+                lc._write_atomic = orig_write
+            self.assertEqual(writes, [])  # fully-resolved file untouched
+
 
 def _entry_expiry_ms(arrival: dt.date, order_ttl_days: int) -> int:
     """The engine entry cutoff: open ms of the session ``order_ttl_days`` after arrival.

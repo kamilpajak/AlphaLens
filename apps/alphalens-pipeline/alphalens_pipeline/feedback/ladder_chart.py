@@ -648,8 +648,11 @@ def enrich_store_with_chart_payloads(
     For each ``YYYY-MM-DD.parquet`` row: resolve the brief's trade setup, fetch the
     row's cached minute bars (keyed by ticker + arrival session), filter to RTH,
     replay the ladder, build the chart payload, and persist it as a JSON string.
-    Rewrites the frame atomically. Returns the number of rows that got a non-empty
-    (non-NO_DATA / non-NO_STRUCTURE) payload.
+    Rewrites the frame atomically. Returns the number of rows that have an OK chart
+    payload after the pass — freshly built this run, OR preserved from a prior run
+    for a frozen terminal row (see the fast-follow note below). So the count stays
+    stable across nights even as more rows freeze, rather than cratering to only the
+    rows recomputed this run.
 
     Mirrors :func:`benchmark_excess.enrich_store_with_benchmark_excess`: never
     raises per row (a bad row / missing brief leaves a NO_DATA payload and is
@@ -691,6 +694,7 @@ def enrich_store_with_chart_payloads(
 
         payload_col: list[str] = []
         stopped_early = False
+        recomputed_any = False
         for _, row in df.iterrows():
             if _is_frozen_terminal_ok(row):
                 # Resolved position with an OK chart — never changes. Preserve the
@@ -712,6 +716,7 @@ def enrich_store_with_chart_payloads(
             if payload.get("status") == "OK":
                 n_with_chart += 1
             payload_col.append(json.dumps(payload))
+            recomputed_any = True
 
         if stopped_early:
             # Deadline tripped mid-file: leave the parquet untouched so
@@ -720,8 +725,12 @@ def enrich_store_with_chart_payloads(
             # immediately skip (deadline latches), so skip the open entirely.
             break
 
-        df[CHART_PAYLOAD_COLUMN] = payload_col
-        _write_atomic(path, df)
+        if recomputed_any:
+            # An all-frozen file's payload_col is byte-identical to what is on
+            # disk — skip the rewrite so the fully-resolved tail costs zero I/O
+            # (not just zero fetches) every night.
+            df[CHART_PAYLOAD_COLUMN] = payload_col
+            _write_atomic(path, df)
 
     return n_with_chart
 
