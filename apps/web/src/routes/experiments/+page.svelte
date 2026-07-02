@@ -29,6 +29,7 @@
 	import DetailField from '$lib/components/DetailField.svelte';
 	import EvidenceLink from '$lib/components/EvidenceLink.svelte';
 	import EvidenceDrawer from '$lib/components/EvidenceDrawer.svelte';
+	import { toneClass } from '$lib/tone';
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
 		paradigms,
@@ -41,6 +42,7 @@
 		toolStatusTone,
 		statusRail,
 		alphaValueTone,
+		alphaBand,
 		stripLedgerMarkup,
 		groupedParadigms,
 		paradigmScatter,
@@ -110,22 +112,21 @@
 		switch (s) {
 			case 'FAIL':
 			case 'SLIPPAGE-FAIL':
-				return 'text-red border-red';
+				return toneClass('red');
 			case 'INCONCLUSIVE':
 			case 'PASS_MARGINAL':
-				return 'text-magenta border-magenta';
+				return toneClass('magenta');
 			case 'IN-FLIGHT':
-				return 'text-cyan border-cyan';
+			case 'INTERNAL':
+				return toneClass('cyan');
 			case 'LIVE':
 			case 'SHIPPED':
 			case 'DONE':
-				return 'text-green border-green';
+				return toneClass('green');
 			case 'OSS':
-				return 'text-amber border-amber';
-			case 'INTERNAL':
-				return 'text-cyan border-cyan';
+				return toneClass('amber');
 			default:
-				return 'text-fg-dim border-grid';
+				return toneClass('muted');
 		}
 	}
 
@@ -179,12 +180,23 @@
 		const clamped = Math.max(0, Math.min(t, T_SCALE_MAX));
 		return (clamped / T_SCALE_MAX) * 100;
 	}
+	// Bar-fill colour by the shared αt band. Note the `noise` band uses the dim
+	// `bg-amber-dim` (a quieter bar), NOT the muted fg colour that alphaValueTone
+	// uses for the same band — the two intentionally diverge on colour while
+	// sharing the band thresholds via `alphaBand`.
 	function tBarTone(t: number | null): string {
-		if (t === null) return 'bg-fg-muted';
-		if (t < 0) return 'bg-red';
-		if (t < ALPHA_T_MARGINAL) return 'bg-amber-dim';
-		if (t < ALPHA_T_DOCTRINE) return 'bg-amber';
-		return 'bg-green';
+		switch (alphaBand(t)) {
+			case 'negative':
+				return toneClass('red', ['bg']);
+			case 'noise':
+				return 'bg-amber-dim';
+			case 'marginal':
+				return toneClass('amber', ['bg']);
+			case 'deploy':
+				return toneClass('green', ['bg']);
+			default: // null
+				return toneClass('muted', ['bg']);
+		}
 	}
 
 	// Evidence drawer instance — bound via `bind:this`. Owns its open/loading/

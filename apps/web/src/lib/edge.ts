@@ -5,9 +5,11 @@
 // N-gate is server-side; these helpers only render what the API returns.
 
 import { fmtPct } from './format';
+import { toneClass } from './tone';
 import type { EdgeStatus } from './types';
 
-/** Tailwind palette tone for the terminal-ops language. */
+/** Tailwind palette tone for the terminal-ops language. A subset of the shared
+ *  `SemanticTone` vocabulary in `./tone`. */
 export type EdgeTone = 'green' | 'red' | 'amber' | 'cyan' | 'violet' | 'muted';
 
 /**
@@ -28,23 +30,11 @@ export function classificationTone(classification: string | null | undefined): E
 	return 'muted';
 }
 
-/** A chip tone → its Tailwind `border-*` + `text-*` classes. Shared by the
- *  /edge outcomes table and the ladder-status legend so both stay in sync. */
+/** A chip tone → its Tailwind `border-*` + `text-*` classes (border-first, the
+ *  /edge outcomes table + ladder-legend convention). Thin wrapper over the shared
+ *  `toneClass` so the /edge and /experiments palettes can never drift. */
 export function toneClasses(tone: EdgeTone): string {
-	switch (tone) {
-		case 'green':
-			return 'border-green text-green';
-		case 'red':
-			return 'border-red text-red';
-		case 'amber':
-			return 'border-amber text-amber';
-		case 'cyan':
-			return 'border-cyan text-cyan';
-		case 'violet':
-			return 'border-violet text-violet';
-		default:
-			return 'border-grid-strong text-fg-muted';
-	}
+	return toneClass(tone, ['border', 'text']);
 }
 
 /**
