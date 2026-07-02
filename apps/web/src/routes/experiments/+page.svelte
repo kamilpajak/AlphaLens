@@ -23,6 +23,7 @@
 	import ChipTip from '$lib/components/ChipTip.svelte';
 	import LedgerFilterBar, { type FilterChip } from '$lib/components/LedgerFilterBar.svelte';
 	import StatusPill from '$lib/components/StatusPill.svelte';
+	import Disclosure from '$lib/components/Disclosure.svelte';
 	import EvidenceDrawer from '$lib/components/EvidenceDrawer.svelte';
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
@@ -372,14 +373,12 @@
 
 	<!-- ==================== how.to.read (collapsed primer) =================== -->
 	<section id="how-to-read" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.05s">
-		<details class="group/htr">
-			<summary class="px-4 sm:px-5 py-3 text-[10px] uppercase tracking-widest text-fg-muted hover:bg-bg-2 cursor-pointer flex items-center justify-between list-none [&::-webkit-details-marker]:hidden">
-				<span class="flex items-center gap-2">
-					<span class="text-amber transition-transform inline-block group-open/htr:rotate-90">▸</span>
-					<h2 class="font-normal">how.to.read</h2>
-				</span>
-				<span class="text-fg-dim normal-case tracking-normal">the αt scale · IS / OOS / FL windows · click to expand</span>
-			</summary>
+		<Disclosure summaryClass="px-4 sm:px-5 py-3 text-[10px] uppercase tracking-widest text-fg-muted hover:bg-bg-2 flex items-center gap-2">
+			{#snippet summary()}
+				<h2 class="font-normal">how.to.read</h2>
+				<span class="ml-auto text-fg-dim normal-case tracking-normal">the αt scale · IS / OOS / FL windows · click to expand</span>
+			{/snippet}
+			{#snippet children()}
 			<div class="px-4 sm:px-5 py-3 border-t border-grid text-sm text-fg-dim leading-relaxed">
 				Each paradigm row carries a t-statistic on
 				<JargonTip {...tipProps('Carhart 4F')}>Carhart-4F</JargonTip>
@@ -413,7 +412,8 @@
 				sequential implementation milestones — different concept entirely (project phases of building
 				the audit, not statistical replicates).
 			</div>
-		</details>
+			{/snippet}
+		</Disclosure>
 	</section>
 
 	<!-- ============================ LEDGER 1 · paradigms ===================== -->
@@ -515,12 +515,11 @@
 								{/if}
 							</div>
 
-							<details class="sm:ml-12 group/details">
-								<summary class="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none list-none [&::-webkit-details-marker]:hidden py-1.5">
-									<span class="text-amber transition-transform inline-block group-open/details:rotate-90">▸</span>
-									<span class="group-open/details:hidden">show case detail</span>
-									<span class="hidden group-open/details:inline">hide case detail</span>
-								</summary>
+							<Disclosure detailsClass="sm:ml-12" summaryClass="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber flex items-center gap-2 py-1.5">
+								{#snippet summary(open)}
+									<span>{open ? 'hide case detail' : 'show case detail'}</span>
+								{/snippet}
+								{#snippet children()}
 								<dl class="text-xs sm:text-sm text-fg-dim space-y-1.5 pt-1.5">
 									<div class="flex gap-2">
 										<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Hypothesis</dt>
@@ -554,7 +553,8 @@
 										</div>
 									{/if}
 								</dl>
-							</details>
+								{/snippet}
+							</Disclosure>
 						</article>
 					{/each}
 				</div>
@@ -615,12 +615,11 @@
 						{#if t.status === 'FORWARD-LOG'}<span class="text-[10px] uppercase tracking-widest text-cyan border border-cyan px-1 py-0.5 mr-2 align-middle whitespace-nowrap">in-sample</span>{/if}{t.metric}
 					</p>
 
-					<details class="sm:ml-10 group/details">
-						<summary class="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber cursor-pointer flex items-center gap-2 select-none list-none [&::-webkit-details-marker]:hidden py-1.5">
-							<span class="text-amber transition-transform inline-block group-open/details:rotate-90">▸</span>
-							<span class="group-open/details:hidden">show detail</span>
-							<span class="hidden group-open/details:inline">hide detail</span>
-						</summary>
+					<Disclosure detailsClass="sm:ml-10" summaryClass="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber flex items-center gap-2 py-1.5">
+						{#snippet summary(open)}
+							<span>{open ? 'hide detail' : 'show detail'}</span>
+						{/snippet}
+						{#snippet children()}
 						<dl class="text-xs sm:text-sm text-fg-dim space-y-1.5 pt-1.5">
 							<div class="flex gap-2">
 								<dt class="text-cyan font-bold w-20 sm:w-24 shrink-0">Hypothesis</dt>
@@ -658,7 +657,8 @@
 								</div>
 							{/if}
 						</dl>
-					</details>
+						{/snippet}
+					</Disclosure>
 				</article>
 			{/each}
 		</div>
@@ -768,14 +768,12 @@
 	     primary reference). Brief-only terms filtered out. No JargonTips inside
 	     (they define the terms; a tip here would be self-referential). -->
 	<section id="glossary" class="border border-grid bg-bg-1 fade-up" style="animation-delay: 0.28s">
-		<details class="group/glossary">
-			<summary class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted hover:bg-bg-2 cursor-pointer flex items-center justify-between list-none [&::-webkit-details-marker]:hidden">
-				<span class="flex items-center gap-2">
-					<span class="text-amber transition-transform inline-block group-open/glossary:rotate-90">▸</span>
-					<h2 class="font-normal">glossary.terms</h2>
-				</span>
-				<span class="text-fg-dim normal-case tracking-normal">{experimentsGlossary.length} terms · click to expand · hover dotted-underlined inline terms above for primary reference</span>
-			</summary>
+		<Disclosure summaryClass="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted hover:bg-bg-2 flex items-center gap-2">
+			{#snippet summary()}
+				<h2 class="font-normal">glossary.terms</h2>
+				<span class="ml-auto text-fg-dim normal-case tracking-normal">{experimentsGlossary.length} terms · click to expand · hover dotted-underlined inline terms above for primary reference</span>
+			{/snippet}
+			{#snippet children()}
 			<dl class="divide-y divide-grid">
 				{#each experimentsGlossary as g}
 					<div class="px-4 sm:px-5 py-3 grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-x-4 gap-y-1 text-sm">
@@ -787,7 +785,8 @@
 					</div>
 				{/each}
 			</dl>
-		</details>
+			{/snippet}
+		</Disclosure>
 	</section>
 	</div>
 </div>

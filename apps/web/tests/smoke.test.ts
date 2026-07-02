@@ -879,6 +879,23 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		await page.locator('article#P14 details[open]').waitFor({ timeout: 2000 });
 		const opened = await page.locator('article#P14 details[open]').count();
 		expect(opened, 'P14 details must be open after hash deep-link').toBe(1);
+		// The shared <Disclosure> chevron rotates off a reactive bind:open, so a
+		// programmatic hash-open must also rotate it (not just CSS group-open).
+		const chevron = page.locator('article#P14 summary span[aria-hidden="true"]').first();
+		await expect(chevron).toHaveClass(/rotate-90/);
+	});
+
+	test('Disclosure hides the native marker and toggles the chevron on click (P3.5)', async ({ page }) => {
+		await gotoExperiments(page);
+		const details = page.locator('section#how-to-read details');
+		const summary = details.locator('summary');
+		const chevron = summary.locator('span[aria-hidden="true"]').first();
+		// Native disclosure triangle is suppressed via the shared component.
+		await expect(summary).toHaveClass(/\[&::-webkit-details-marker\]:hidden/);
+		expect(await chevron.getAttribute('class'), 'chevron not rotated while closed').not.toContain('rotate-90');
+		await summary.click();
+		await expect(details).toHaveAttribute('open', '');
+		await expect(chevron, 'chevron rotates when opened').toHaveClass(/rotate-90/);
 	});
 
 	// The fix is a global CSS rule, so the test sweeps every route that ships

@@ -7,6 +7,7 @@
 	import { LADDER_STATUS, PENDING_STATUS, type LadderGroup } from '$lib/data/ladderStatus';
 	import { classificationTone, toneClasses } from '$lib/edge';
 	import StatusPill from '$lib/components/StatusPill.svelte';
+	import Disclosure from '$lib/components/Disclosure.svelte';
 
 	const GROUPS: { key: LadderGroup; label: string }[] = [
 		{ key: 'ongoing', label: 'ongoing' },
@@ -21,16 +22,15 @@
 	}
 </script>
 
-<details class="group/legend mb-6 border border-grid bg-bg-1 fade-up">
-	<summary
-		class="cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden px-3 py-2 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-dim flex items-center gap-2"
-	>
-		<span
-			class="inline-block text-amber transition-transform duration-150 group-open/legend:rotate-90"
-			aria-hidden="true">▸</span
-		>
+<Disclosure
+	detailsClass="mb-6 border border-grid bg-bg-1 fade-up"
+	summaryClass="px-3 py-2 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg-dim flex items-center gap-2"
+	chevronClass="text-amber"
+>
+	{#snippet summary()}
 		<span>what do these statuses mean?</span>
-	</summary>
+	{/snippet}
+	{#snippet children()}
 	<div class="border-t border-grid px-3 py-3 grid grid-cols-1 sm:grid-cols-3 gap-x-5 gap-y-3">
 		{#each GROUPS as g (g.key)}
 			<div>
@@ -53,4 +53,5 @@
 			</div>
 		{/each}
 	</div>
-</details>
+	{/snippet}
+</Disclosure>
