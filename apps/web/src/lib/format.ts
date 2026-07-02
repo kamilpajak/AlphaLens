@@ -29,6 +29,15 @@ export function fmtNum(value: number | null | undefined, digits = 1): string {
 	return value.toFixed(digits);
 }
 
+/** A signed fixed-decimal number: `+1.20` / `-1.20` (the built-in minus, no
+ *  double sign) / `—` for null/non-finite. The unit-less sibling of `fmtPct` —
+ *  used for the αt bar values and the vol z-score chip (append a suffix like
+ *  `σ` at the call site). */
+export function fmtSigned(value: number | null | undefined, digits = 2): string {
+	if (value === null || value === undefined || !Number.isFinite(value)) return '—';
+	return `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`;
+}
+
 export function fmtPctile(value: number | null | undefined): string {
 	if (value === null || value === undefined || !Number.isFinite(value)) return '—';
 	return `${Math.round(value)}`;

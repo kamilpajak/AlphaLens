@@ -30,6 +30,7 @@
 	import EvidenceLink from '$lib/components/EvidenceLink.svelte';
 	import EvidenceDrawer from '$lib/components/EvidenceDrawer.svelte';
 	import { toneClass } from '$lib/tone';
+	import { fmtSigned } from '$lib/format';
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
 		paradigms,
@@ -513,7 +514,7 @@
 												<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {MARGINAL_PCT}%"></div>
 												<div class="absolute inset-y-0 border-l-2 border-green" style="left: {DOCTRINE_PCT}%"></div>
 											</div>
-											<span class="w-14 text-right font-mono {alphaValueTone(p.is_t)}">{p.is_t === null || !Number.isFinite(p.is_t) ? '—' : (p.is_t >= 0 ? '+' : '') + p.is_t.toFixed(2)}</span>
+											<span class="w-14 text-right font-mono {alphaValueTone(p.is_t)}">{fmtSigned(p.is_t)}</span>
 										</div>
 										<div class="flex items-center gap-2">
 											<span class="w-10 text-fg-muted uppercase tracking-widest">
@@ -526,7 +527,7 @@
 												<div class="absolute inset-y-0 border-l border-grid-strong" style="left: {MARGINAL_PCT}%"></div>
 												<div class="absolute inset-y-0 border-l-2 border-green" style="left: {DOCTRINE_PCT}%"></div>
 											</div>
-											<span class="w-14 text-right font-mono {alphaValueTone(p.oos_t)}">{p.oos_t === null || !Number.isFinite(p.oos_t) ? '—' : (p.oos_t >= 0 ? '+' : '') + p.oos_t.toFixed(2)}</span>
+											<span class="w-14 text-right font-mono {alphaValueTone(p.oos_t)}">{fmtSigned(p.oos_t)}</span>
 										</div>
 									</div>
 								{/if}
