@@ -42,7 +42,6 @@
 		toolExperiments,
 		toolStatusLegend,
 		toolStatusTone,
-		statusRail,
 		alphaValueTone,
 		alphaBand,
 		stripLedgerMarkup,
@@ -462,7 +461,6 @@
 					{#each vis as p}
 							<LedgerRow
 								id={p.id}
-								rail={statusRail(statusTone(p.status))}
 								display={p.display}
 								name={p.name}
 								date={p.date}
@@ -579,8 +577,6 @@
 			{#each toolExperiments.filter(showT) as t}
 					<LedgerRow
 						id={t.id}
-						rail={statusRail(toolStatusTone(t.status))}
-						dashed
 						display={t.display}
 						displayWidth="w-8 sm:w-10"
 						name={t.name}

@@ -468,14 +468,6 @@ export function alphaBand(t: number | null): AlphaBand | null {
 	return 'deploy';
 }
 
-/** Turn a "text-X border-X" status tone into a left-rail class, so each ledger
- *  row carries a status-coloured edge (a scannable verdict column). Falls back
- *  to the grid border when the tone has no border-* token. */
-export function statusRail(tone: string): string {
-	const border = tone.split(/\s+/).find((c) => c.startsWith('border-')) ?? 'border-grid';
-	return `border-l-2 ${border}`;
-}
-
 /** Text colour for an IS/OOS αt bar VALUE, by the doctrine thresholds the bar
  *  fill uses: <0 red · <2 muted (noise) · <3.5 amber (marginal) · ≥3.5 green
  *  (deploy-eligible). null / non-finite → muted. Text-only (no border) — it

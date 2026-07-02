@@ -1,23 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { statusRail, alphaValueTone, stripLedgerMarkup } from '../../src/lib/data/research-ledger';
+import { alphaValueTone, stripLedgerMarkup } from '../../src/lib/data/research-ledger';
 
-// Pins the two pure UI helpers behind the /experiments scannability pass:
-// - statusRail turns a "text-X border-X" tone into a left-rail class so each
-//   ledger row carries a status-coloured edge (glanceable verdict column).
+// Pins the pure UI helpers behind the /experiments scannability pass:
 // - alphaValueTone colours the IS/OOS bar VALUE by the doctrine thresholds
 //   (<0 red · <2 muted · <3.5 amber · ≥3.5 green) — text colour only, no border.
-
-describe('statusRail', () => {
-	it('extracts the border colour into a left rail', () => {
-		expect(statusRail('text-red border-red')).toBe('border-l-2 border-red');
-		expect(statusRail('text-cyan border-cyan')).toBe('border-l-2 border-cyan');
-		expect(statusRail('text-green border-green')).toBe('border-l-2 border-green');
-	});
-	it('falls back to the grid border when no border token is present', () => {
-		expect(statusRail('')).toBe('border-l-2 border-grid');
-		expect(statusRail('text-fg-dim')).toBe('border-l-2 border-grid');
-	});
-});
+// (The status-coloured left rail was removed — verdict colour now reads off the
+// status pill alone, so the row carries no coloured edge and statusRail is gone.)
 
 describe('alphaValueTone', () => {
 	it('null / non-finite → muted', () => {
