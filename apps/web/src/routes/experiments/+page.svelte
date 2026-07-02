@@ -24,6 +24,7 @@
 	import LedgerFilterBar, { type FilterChip } from '$lib/components/LedgerFilterBar.svelte';
 	import StatusPill from '$lib/components/StatusPill.svelte';
 	import Disclosure from '$lib/components/Disclosure.svelte';
+	import SectionPanel from '$lib/components/SectionPanel.svelte';
 	import EvidenceDrawer from '$lib/components/EvidenceDrawer.svelte';
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
@@ -570,11 +571,11 @@
 	</div>
 
 	<!-- ============================ LEDGER 2 · tool.experiments ============== -->
-	<section id="tool-experiments" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.14s">
-		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<h2 class="font-normal">tool.experiments</h2>
+	<SectionPanel id="tool-experiments" title="tool.experiments" style="animation-delay: 0.14s">
+		{#snippet meta()}
 			<span class="text-fg-dim normal-case tracking-normal">{toolExperiments.length} rows · tuning the live tool</span>
-		</div>
+		{/snippet}
+		{#snippet children()}
 
 		<div class="px-4 sm:px-5 py-3 border-b border-grid">
 			<p class="text-[11px] text-fg-dim leading-relaxed">
@@ -662,7 +663,8 @@
 				</article>
 			{/each}
 		</div>
-	</section>
+		{/snippet}
+	</SectionPanel>
 
 	<!-- ============================ APPENDIX ================================= -->
 	<div class="mt-10 mb-4 flex items-center gap-3">
@@ -670,11 +672,11 @@
 		<span class="h-px flex-1 bg-grid"></span>
 	</div>
 
-	<section id="patterns" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.16s">
-		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<h2 class="font-normal">failure.patterns</h2>
+	<SectionPanel id="patterns" title="failure.patterns" style="animation-delay: 0.16s">
+		{#snippet meta()}
 			<span class="text-fg-dim normal-case tracking-normal">{patterns.length} reusable lessons · hover dotted terms for definitions</span>
-		</div>
+		{/snippet}
+		{#snippet children()}
 		<ul class="divide-y divide-grid">
 			{#each patterns as p}
 				<li class="px-4 sm:px-5 py-3 text-sm flex gap-3">
@@ -702,13 +704,14 @@
 				</li>
 			{/each}
 		</ul>
-	</section>
+		{/snippet}
+	</SectionPanel>
 
-	<section id="infra" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.2s">
-		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<h2 class="font-normal">infrastructure.live</h2>
+	<SectionPanel id="infra" title="infrastructure.live" style="animation-delay: 0.2s">
+		{#snippet meta()}
 			<span class="text-fg-dim normal-case tracking-normal">{live.length} tracks · what is currently running</span>
-		</div>
+		{/snippet}
+		{#snippet children()}
 		<table class="w-full text-sm">
 			<tbody>
 				{#each live as l}
@@ -732,13 +735,14 @@
 				{/each}
 			</tbody>
 		</table>
-	</section>
+		{/snippet}
+	</SectionPanel>
 
-	<section id="methodology" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.24s">
-		<div class="px-4 sm:px-5 py-3 border-b border-grid text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-			<h2 class="font-normal">methodology.artifacts</h2>
+	<SectionPanel id="methodology" title="methodology.artifacts" style="animation-delay: 0.24s">
+		{#snippet meta()}
 			<span class="text-fg-dim normal-case tracking-normal">{artifacts.length} items · what survived</span>
-		</div>
+		{/snippet}
+		{#snippet children()}
 		<table class="w-full text-sm">
 			<tbody>
 				{#each artifacts as a}
@@ -762,7 +766,8 @@
 				{/each}
 			</tbody>
 		</table>
-	</section>
+		{/snippet}
+	</SectionPanel>
 
 	<!-- glossary section — secondary lookup table (inline JargonTips above are the
 	     primary reference). Brief-only terms filtered out. No JargonTips inside
