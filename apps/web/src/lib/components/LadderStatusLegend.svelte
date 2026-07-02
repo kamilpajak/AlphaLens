@@ -6,6 +6,7 @@
 
 	import { LADDER_STATUS, PENDING_STATUS, type LadderGroup } from '$lib/data/ladderStatus';
 	import { classificationTone, toneClasses } from '$lib/edge';
+	import StatusPill from '$lib/components/StatusPill.svelte';
 
 	const GROUPS: { key: LadderGroup; label: string }[] = [
 		{ key: 'ongoing', label: 'ongoing' },
@@ -37,13 +38,14 @@
 				<ul class="flex flex-col gap-1.5">
 					{#each entriesFor(g.key) as e (e.code)}
 						<li class="flex items-baseline gap-2 text-[11px] leading-snug">
-							<span
-								class="inline-block shrink-0 px-1.5 py-0.5 border text-[9px] uppercase tracking-widest whitespace-nowrap {toneClasses(
-									classificationTone(e.code)
-								)} {e.code === PENDING_STATUS.code ? 'border-dashed' : ''}"
-							>
-								{e.code}
-							</span>
+							<StatusPill
+								tone={toneClasses(classificationTone(e.code))}
+								label={e.code}
+								size="9"
+								nowrap
+								dashed={e.code === PENDING_STATUS.code}
+								class="inline-block shrink-0"
+							/>
 							<span class="text-fg-dim">{e.short}</span>
 						</li>
 					{/each}

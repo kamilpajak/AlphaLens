@@ -15,6 +15,7 @@
 	 */
 	import { FileCode2 } from 'lucide-svelte';
 	import ChipTip from './ChipTip.svelte';
+	import StatusPill from './StatusPill.svelte';
 
 	interface Props {
 		templateId: string | null;
@@ -90,13 +91,15 @@
 				body={`Every fact below was extracted by a deterministic YAML rule — no LLM in the loop, replayable, audited. Cite these values verbatim; the surrounding prose is LLM-generated, the typed facts are not. Internal id: ${templateId}.`}
 			>
 				{#snippet chip()}
-					<span
-						class="px-1.5 py-0.5 border border-grid text-[9px] uppercase tracking-widest text-fg-muted whitespace-nowrap cursor-help"
+					<StatusPill
+						tone="border-grid text-fg-muted"
+						label={templateLabel(templateId!)}
+						size="9"
+						nowrap
+						interactive
 						data-testid="template-id"
 						data-template-id={templateId}
-					>
-						{templateLabel(templateId!)}
-					</span>
+					/>
 				{/snippet}
 			</ChipTip>
 		</div>

@@ -6,6 +6,7 @@
 	import ChipTip from '$lib/components/ChipTip.svelte';
 	import LadderChart from '$lib/components/LadderChart.svelte';
 	import LadderStatusLegend from '$lib/components/LadderStatusLegend.svelte';
+	import StatusPill from '$lib/components/StatusPill.svelte';
 	import WhatIfPanel from '$lib/components/WhatIfPanel.svelte';
 	import { isPendingStatus, ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
 	import { getEdgeChart } from '$lib/api';
@@ -564,13 +565,14 @@
 										body={ladderStatusBody(o.ladder_classification)}
 									>
 										{#snippet chip()}
-											<span
-												class="inline-block px-1.5 py-0.5 border text-[9px] uppercase tracking-widest whitespace-nowrap {toneClasses(
-													tone
-												)} {isPendingStatus(o.ladder_classification) ? 'border-dashed' : ''}"
-											>
-												{ladderStatusLabel(o.ladder_classification)}
-											</span>
+											<StatusPill
+												tone={toneClasses(tone)}
+												label={ladderStatusLabel(o.ladder_classification)}
+												size="9"
+												nowrap
+												dashed={isPendingStatus(o.ladder_classification)}
+												class="inline-block"
+											/>
 										{/snippet}
 									</ChipTip>
 								</td>
