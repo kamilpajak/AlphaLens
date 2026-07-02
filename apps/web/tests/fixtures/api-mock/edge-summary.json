@@ -1,65 +1,67 @@
 {
-  "n_brief": 168,
-  "n_plannable": 132,
-  "n_terminal": 121,
-  "n_matured": 118,
-  "n_gate_threshold": 30,
-  "benchmark": "SPY",
-  "metric_note": "excess-of-benchmark, gross of cost, mechanical ladder",
-  "edge": {
-    "status": "ok",
-    "n_matured": 118,
-    "threshold": 30,
-    "market_excess_mean": 0.27,
-    "market_excess_median": 0.18,
-    "market_excess_quantiles": {
-      "p10": -1.12,
-      "p50": 0.18,
-      "p90": 1.94
-    },
-    "gross_realized_r_mean": 0.41,
-    "gross_realized_r_median": 0.3,
-    "gross_realized_r_n": 118,
-    "holding_days_n": 118,
-    "holding_days_p50": 11,
-    "holding_days_p95": 38,
-    "gross_of_cost": true,
-    "regime_stratified": false
-  },
-  "portfolio": {
-    "status": "ok",
-    "n_matured": 118,
-    "threshold": 30,
-    "mean_realized_risk_pct": 0.94,
-    "mean_tiers_filled_count": 1.6,
-    "gross_of_cost": true
-  },
-  "whatif": {
-    "status": "ok",
-    "n_matured": 118,
-    "threshold": 30,
-    "in_sample": true,
-    "note": "counterfactual: realized R recomputed under an alternative exit-stop on the SAME picks + price paths; in-sample (tuned on this sample) and NOT validated \u2014 never the realized result.",
-    "lenses": {
-      "be_0p5r": {
-        "n": 112,
-        "mean_r": 0.069,
-        "median_r": 0.044
-      }
-    }
-  },
-  "deployment": {
-    "n_terminal": 121,
-    "n_filled": 89,
-    "n_no_fill": 32,
-    "fill_rate": 0.74,
-    "no_fill_rate": 0.26,
-    "mean_tiers_filled_count": 1.4
-  },
-  "open_positions": {
-    "n_open": 99,
-    "near_tp": 22,
-    "near_sl": 14,
-    "note": "descriptive only; open positions are never reduced to a mean R"
-  }
+	"n_brief": 168,
+	"n_plannable": 132,
+	"n_terminal": 121,
+	"n_matured": 118,
+	"n_gate_threshold": 30,
+	"benchmark": "SPY",
+	"metric_note": "excess-of-benchmark, gross of cost, mechanical ladder",
+	"edge": {
+		"status": "ok",
+		"n_matured": 118,
+		"threshold": 30,
+		"market_excess_mean": 0.27,
+		"market_excess_median": 0.18,
+		"market_excess_quantiles": {
+			"p10": -1.12,
+			"p50": 0.18,
+			"p90": 1.94
+		},
+		"gross_realized_r_mean": 0.41,
+		"gross_realized_r_median": 0.3,
+		"gross_realized_r_n": 118,
+		"holding_days_n": 118,
+		"holding_days_p50": 11,
+		"holding_days_p95": 38,
+		"gross_of_cost": true,
+		"regime_stratified": false
+	},
+	"portfolio": {
+		"status": "ok",
+		"n_matured": 118,
+		"threshold": 30,
+		"mean_realized_risk_pct": 0.94,
+		"mean_tiers_filled_count": 1.6,
+		"gross_of_cost": true
+	},
+	"whatif": {
+		"status": "ok",
+		"n_matured": 118,
+		"threshold": 30,
+		"in_sample": true,
+		"note": "counterfactual: realized R recomputed under an alternative exit-stop on the SAME picks + price paths; in-sample (tuned on this sample) and NOT validated \u2014 never the realized result.",
+		"lenses": {
+			"be_0p5r": {
+				"n": 112,
+				"mean_r": 0.069,
+				"median_r": 0.044,
+				"realized_r_baseline": -0.22,
+				"realized_r_baseline_n": 110
+			}
+		}
+	},
+	"deployment": {
+		"n_terminal": 121,
+		"n_filled": 89,
+		"n_no_fill": 32,
+		"fill_rate": 0.74,
+		"no_fill_rate": 0.26,
+		"mean_tiers_filled_count": 1.4
+	},
+	"open_positions": {
+		"n_open": 99,
+		"near_tp": 22,
+		"near_sl": 14,
+		"note": "descriptive only; open positions are never reduced to a mean R"
+	}
 }

@@ -2176,12 +2176,22 @@
                         "type": "number",
                         "format": "double",
                         "nullable": true
+                    },
+                    "realized_r_baseline": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "realized_r_baseline_n": {
+                        "type": "integer"
                     }
                 },
                 "required": [
                     "mean_r",
                     "median_r",
-                    "n"
+                    "n",
+                    "realized_r_baseline",
+                    "realized_r_baseline_n"
                 ]
             },
             "WhatIfPanel": {
