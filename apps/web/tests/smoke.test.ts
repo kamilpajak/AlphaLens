@@ -790,6 +790,24 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(await page.locator('#paradigms article').count(), 'CLEAR shows all 18').toBe(18);
 	});
 
+	test('tool.experiments has its own independent multi-select filter (P3.4)', async ({ page }) => {
+		await gotoExperiments(page);
+		// Both ledgers use the shared LedgerFilterBar. The tool filter is a second,
+		// independent instance — filtering it must NOT touch the paradigm ledger.
+		const noGo = page.locator('#tool-experiments button', { hasText: /^no-go 1$/i });
+		const finding = page.locator('#tool-experiments button', { hasText: /^finding 1$/i });
+		await noGo.click();
+		await finding.click();
+		expect(await page.locator('#tool-experiments article').count(), 'NO-GO + FINDING = 2 tool rows').toBe(2);
+		expect(await noGo.getAttribute('aria-pressed')).toBe('true');
+		expect(await finding.getAttribute('aria-pressed')).toBe('true');
+		// The paradigm ledger is a separate filter instance — untouched (all 18).
+		expect(await page.locator('#paradigms article').count(), 'paradigm ledger unaffected by tool filter').toBe(18);
+		// CLEAR restores the full tool ledger (5 rows).
+		await page.locator('#tool-experiments button', { hasText: /^clear/i }).click();
+		expect(await page.locator('#tool-experiments article').count(), 'CLEAR shows all 5 tool rows').toBe(5);
+	});
+
 	test('footer ticker switches vocabulary on /experiments vs other routes (P1.2)', async ({ page }) => {
 		await page.goto('/');
 		// Auto-wait until the layout's $derived ticker computation has

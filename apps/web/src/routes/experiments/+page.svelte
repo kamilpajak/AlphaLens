@@ -21,6 +21,7 @@
 
 	import JargonTip from '$lib/components/JargonTip.svelte';
 	import ChipTip from '$lib/components/ChipTip.svelte';
+	import LedgerFilterBar, { type FilterChip } from '$lib/components/LedgerFilterBar.svelte';
 	import EvidenceDrawer from '$lib/components/EvidenceDrawer.svelte';
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
@@ -123,46 +124,41 @@
 	}
 
 	// --- Status filter (the sticky chip bar doubles as the visible legend) ----
-	// Default ALL → every row shown, so smoke assertions (which never click a
-	// chip) see the full ledger. Only statuses actually present get a chip.
-	// Multi-select status filter: a Set of chosen statuses. Empty = ALL (every row
+	// Multi-select status filters — one Set per ledger. Empty = ALL (every row
 	// shown), so smoke assertions (which never click a chip) see the full ledger.
-	// Several statuses can be active at once; a row shows if its status is selected.
-	let selected = $state<Set<ParadigmStatus>>(new Set());
+	// The shared <LedgerFilterBar> owns the toggle / clear / blur-on-click
+	// behaviour and binds these sets; the page owns the row-level predicates.
+	let selected = $state<Set<string>>(new Set());
 	const showP = (p: (typeof paradigms)[number]) => selected.size === 0 || selected.has(p.status);
 
-	// Toggle a status in/out of the selection ('ALL' clears it), then blur both the
-	// button (a click focuses it) and the ChipTip wrapper (its onpointerdown
-	// focuses it) so the clicked chip's tooltip doesn't stay pinned via
-	// focus-within while the next chip is hovered (two tooltips at once).
-	function toggleFilter(key: 'ALL' | ParadigmStatus, e: Event) {
-		if (key === 'ALL') {
-			selected = new Set();
-		} else {
-			const next = new Set(selected);
-			if (next.has(key)) next.delete(key);
-			else next.add(key);
-			selected = next;
-		}
-		const btn = e.currentTarget as HTMLElement;
-		btn.blur();
-		const wrap = btn.closest('[data-testid="chip-tip"]');
-		if (wrap instanceof HTMLElement) wrap.blur();
-	}
-	function clearFilter() {
-		selected = new Set();
-	}
+	let toolSelected = $state<Set<string>>(new Set());
+	const showT = (t: (typeof toolExperiments)[number]) =>
+		toolSelected.size === 0 || toolSelected.has(t.status);
+
 	const statusCount = (s: ParadigmStatus) => paradigms.filter((p) => p.status === s).length;
-	const filterChips: { key: 'ALL' | ParadigmStatus; label: string; count: number; tone: string; def: string }[] = [
+	const filterChips: FilterChip[] = [
 		{ key: 'ALL', label: 'all', count: nTested, tone: 'text-fg border-fg-muted', def: 'every hypothesis in the ledger' },
 		...(['FAIL', 'INCONCLUSIVE', 'SLIPPAGE-FAIL'] as ParadigmStatus[])
 			.filter((s) => statusCount(s) > 0)
 			.map((s) => ({
-				key: s as ParadigmStatus,
+				key: s,
 				label: s.toLowerCase(),
 				count: statusCount(s),
 				tone: statusTone(s),
 				def: paradigmStatusDef.get(s) ?? ''
+			}))
+	];
+	const toolStatusCount = (s: string) => toolExperiments.filter((t) => t.status === s).length;
+	const toolFilterChips: FilterChip[] = [
+		{ key: 'ALL', label: 'all', count: toolExperiments.length, tone: 'text-fg border-fg-muted', def: 'every live-tool experiment' },
+		...toolStatusLegend
+			.filter((s) => toolStatusCount(s.status) > 0)
+			.map((s) => ({
+				key: s.status,
+				label: s.status.toLowerCase(),
+				count: toolStatusCount(s.status),
+				tone: toolStatusTone(s.status),
+				def: toolStatusDef.get(s.status) ?? ''
 			}))
 	];
 
@@ -201,6 +197,8 @@
 		if (!id) return;
 		const p = paradigms.find((x) => x.id === id);
 		if (p && selected.size > 0 && !selected.has(p.status)) selected = new Set();
+		const t = toolExperiments.find((x) => x.id === id);
+		if (t && toolSelected.size > 0 && !toolSelected.has(t.status)) toolSelected = new Set();
 		// Defer one frame so a filter reset has re-rendered the row before we
 		// query + open + scroll it.
 		requestAnimationFrame(() => {
@@ -432,29 +430,8 @@
 			</p>
 		</div>
 
-		<!-- Sticky filter bar = the visible status legend. Each chip filters the
-		     ledger and carries a ChipTip with the verdict's definition. -->
-		<div class="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-grid bg-bg-1/95 px-4 sm:px-5 py-2.5 backdrop-blur">
-			<span class="text-[10px] uppercase tracking-widest text-fg-muted mr-0.5">filter</span>
-			{#each filterChips as fc}
-				{@const active = fc.key === 'ALL' ? selected.size === 0 : selected.has(fc.key)}
-				<ChipTip term={fc.key === 'ALL' ? 'ALL' : fc.key} body={fc.def}>
-					{#snippet chip()}
-						<button
-							type="button"
-							onclick={(e) => toggleFilter(fc.key, e)}
-							aria-pressed={active}
-							class="border px-2 py-0.5 text-[10px] uppercase tracking-widest transition-colors {fc.tone} {active
-								? 'bg-bg-3 ring-1 ring-inset ring-current'
-								: 'opacity-70 hover:opacity-100'}"
-						>{fc.label} <span class="font-mono">{fc.count}</span></button>
-					{/snippet}
-				</ChipTip>
-			{/each}
-			{#if selected.size > 0}
-				<button type="button" onclick={clearFilter} class="text-[10px] uppercase tracking-widest text-fg-muted hover:text-amber ml-auto">clear ✕</button>
-			{/if}
-		</div>
+		<!-- Multi-select status filter = the visible legend (shared component). -->
+		<LedgerFilterBar chips={filterChips} bind:selected />
 
 		<!-- Research-class chapters. Each group is a labelled band; within it the
 		     paradigm rows carry a status-coloured left rail. -->
@@ -610,20 +587,13 @@
 				trade record and has not passed a fresh forward test.
 				<span class="text-fg-muted">Snapshot 2026-07-01 · 372 plannable / 89 terminal / 43 brief-days.</span>
 			</p>
-			<!-- Visible tool-status legend (chips carry definitions on hover). -->
-			<div class="mt-2.5 flex flex-wrap items-center gap-1.5">
-				{#each toolStatusLegend as s}
-					<ChipTip term={s.status} body={toolStatusDef.get(s.status) ?? ''}>
-						{#snippet chip()}
-							<span class="px-1.5 py-0.5 border text-[10px] uppercase tracking-widest cursor-help {toolStatusTone(s.status)}">{s.status}</span>
-						{/snippet}
-					</ChipTip>
-				{/each}
-			</div>
 		</div>
 
+		<!-- Multi-select status filter = the visible legend (shared component). -->
+		<LedgerFilterBar chips={toolFilterChips} bind:selected={toolSelected} />
+
 		<div class="divide-y divide-grid">
-			{#each toolExperiments as t}
+			{#each toolExperiments.filter(showT) as t}
 				<article id={t.id} class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors border-dashed {statusRail(toolStatusTone(t.status))}">
 					<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
 						<span class="font-display font-bold text-base sm:text-lg text-amber w-8 sm:w-10 shrink-0">{t.display}</span>
