@@ -205,6 +205,45 @@ def compute_market_excess_for_row(
     return benchmark_return, excess
 
 
+def _enrich_frame_rows(
+    df: pd.DataFrame,
+    *,
+    fetch: BarFetch,
+    last_closed_session: dt.date,
+    benchmark_ticker: str,
+    exchange: str,
+    window_cache: dict[tuple[dt.date, dt.date], float | None],
+    deadline: Any,
+) -> tuple[list[float | None], list[float | None], int, bool]:
+    """Compute the two benchmark columns for one frame.
+
+    Returns ``(bench_col, excess_col, n_enriched, stopped_early)``. When the
+    deadline trips mid-frame the partial columns are returned with
+    ``stopped_early=True`` so the caller can leave the parquet untouched; rows
+    already processed still count toward ``n_enriched`` (matching the pre-refactor
+    behaviour where the counter incremented before the break).
+    """
+    bench_col: list[float | None] = []
+    excess_col: list[float | None] = []
+    n_enriched = 0
+    for _, row in df.iterrows():
+        if deadline is not None and deadline.should_stop():
+            return bench_col, excess_col, n_enriched, True
+        bench, excess = _row_excess_cached(
+            dict(row),
+            fetch=fetch,
+            last_closed_session=last_closed_session,
+            benchmark_ticker=benchmark_ticker,
+            exchange=exchange,
+            window_cache=window_cache,
+        )
+        bench_col.append(bench)
+        excess_col.append(excess)
+        if excess is not None:
+            n_enriched += 1
+    return bench_col, excess_col, n_enriched, False
+
+
 def enrich_store_with_benchmark_excess(
     store_dir: Path | str,
     *,
@@ -253,26 +292,16 @@ def enrich_store_with_benchmark_excess(
             logger.warning("benchmark-excess: bad store parquet %s — %s; skipping.", path, exc)
             continue
 
-        bench_col: list[float | None] = []
-        excess_col: list[float | None] = []
-        stopped_early = False
-        for _, row in df.iterrows():
-            if deadline is not None and deadline.should_stop():
-                stopped_early = True
-                break
-            row_d = dict(row)
-            bench, excess = _row_excess_cached(
-                row_d,
-                fetch=fetch,
-                last_closed_session=last_closed_session,
-                benchmark_ticker=benchmark_ticker,
-                exchange=exchange,
-                window_cache=window_cache,
-            )
-            bench_col.append(bench)
-            excess_col.append(excess)
-            if excess is not None:
-                n_enriched += 1
+        bench_col, excess_col, n_delta, stopped_early = _enrich_frame_rows(
+            df,
+            fetch=fetch,
+            last_closed_session=last_closed_session,
+            benchmark_ticker=benchmark_ticker,
+            exchange=exchange,
+            window_cache=window_cache,
+            deadline=deadline,
+        )
+        n_enriched += n_delta
 
         if stopped_early:
             # Deadline tripped mid-file: leave the parquet untouched so

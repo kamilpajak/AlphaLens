@@ -56,9 +56,16 @@ function keyValue(row: EdgeOutcome, key: SortKey): string | number | null {
 	}
 }
 
+/** 3-way comparator: -1 / 0 / +1 for a < b / a === b / a > b. */
+function cmp(a: string | number, b: string | number): number {
+	if (a < b) return -1;
+	if (a > b) return 1;
+	return 0;
+}
+
 function secondary(x: EdgeOutcome, y: EdgeOutcome): number {
 	if (x.brief_date !== y.brief_date) return x.brief_date < y.brief_date ? 1 : -1; // desc
-	return x.ticker < y.ticker ? -1 : x.ticker > y.ticker ? 1 : 0; // asc
+	return cmp(x.ticker, y.ticker); // asc
 }
 
 /** Return a NEW array sorted by `key`/`dir`; nulls last; stable secondary order. */
@@ -74,7 +81,7 @@ export function sortOutcomes(rows: EdgeOutcome[], key: SortKey, dir: SortDir): E
 		if (aNull && bNull) return secondary(x, y);
 		if (aNull) return 1; // nulls last, independent of dir
 		if (bNull) return -1;
-		const primary = (a < b ? -1 : a > b ? 1 : 0) * sign;
-		return primary !== 0 ? primary : secondary(x, y);
+		const primary = cmp(a, b) * sign;
+		return primary === 0 ? secondary(x, y) : primary;
 	});
 }

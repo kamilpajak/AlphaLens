@@ -1016,6 +1016,13 @@ def replay_ladder_breakeven(
     )
 
 
+def _scan_tp_hits(ladder: _ParsedLadder, hit_tp_ids: set[str], high: float) -> None:
+    """Record (in place) any TP level newly pierced by ``high``."""
+    for t in ladder.tps:
+        if t.level_id not in hit_tp_ids and high >= t.price:
+            hit_tp_ids.add(t.level_id)
+
+
 def _replay_breakeven(
     ladder: _ParsedLadder,
     ordered_bars: Sequence[Mapping[str, Any]],
@@ -1053,9 +1060,7 @@ def _replay_breakeven(
         if low <= eff_stop:
             sl_hit = True
             break
-        for t in ladder.tps:
-            if t.level_id not in hit_tp_ids and high >= t.price:
-                hit_tp_ids.add(t.level_id)
+        _scan_tp_hits(ladder, hit_tp_ids, high)
         if peak_high is None or high > peak_high:
             peak_high = high
         if (peak_high - blended) / risk >= mfe_trigger_r:

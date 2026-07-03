@@ -59,9 +59,9 @@ class BreakevenLens:
     category: str
     status: str
     kind: str = "breakeven"
-    mfe_trigger_r: float | None = None  # kind="breakeven"
-    trail_frac: float | None = None  # kind="breakeven"
-    stop_atr_mult: float | None = None  # kind="fill_anchored"
+    mfe_trigger_r: float | None = None  # breakeven-kind replay param
+    trail_frac: float | None = None  # breakeven-kind replay param
+    stop_atr_mult: float | None = None  # fill_anchored-kind replay param
 
 
 # Adding another lens is a single entry here — the JSON-map column and the

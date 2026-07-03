@@ -1981,6 +1981,32 @@ def _deferred_age(item: _ResolveItem, last_closed_session: dt.date) -> int | Non
     return None
 
 
+def _carry_deferred(
+    item: _ResolveItem,
+    *,
+    rows_by_ticker: dict[str, dict[str, Any]],
+    counts: dict[str, int],
+    deferred_ages: list[int],
+    theme: str | None,
+    scorer_version: str | None,
+    last_closed_session: dt.date,
+) -> None:
+    """Persist a carried-forward row for an unresolved item and record its age.
+
+    Shared by the deadline-stop and budget-exhausted / fetch-fail paths: both
+    carry the prior forward (denominator never shrinks), bump ``carried``, and
+    append the deferred-touch age for the dead-man switch.
+    """
+    ticker = item.candidate.ticker.upper()
+    rows_by_ticker[ticker] = _stamp_scorer_version(
+        _stamp_theme(_carried_row(item), theme), scorer_version
+    )
+    counts["carried"] += 1
+    age = _deferred_age(item, last_closed_session)
+    if age is not None:
+        deferred_ages.append(age)
+
+
 def _resolve_queue(
     resolve_queue: list[_ResolveItem],
     rows_by_ticker: dict[str, dict[str, Any]],
@@ -2011,14 +2037,16 @@ def _resolve_queue(
         theme = item.candidate.theme or None
         scorer_version = item.candidate.scorer_config_version or None
         if deadline is not None and deadline.should_stop():
-            rows_by_ticker[ticker] = _stamp_scorer_version(
-                _stamp_theme(_carried_row(item), theme), scorer_version
-            )
-            counts["carried"] += 1
             counts["stopped_for_deadline"] = counts.get("stopped_for_deadline", 0) + 1
-            age = _deferred_age(item, last_closed_session)
-            if age is not None:
-                deferred_ages.append(age)
+            _carry_deferred(
+                item,
+                rows_by_ticker=rows_by_ticker,
+                counts=counts,
+                deferred_ages=deferred_ages,
+                theme=theme,
+                scorer_version=scorer_version,
+                last_closed_session=last_closed_session,
+            )
             continue
         use_budget = forced_budget if item.forced else budget
         assert item.candidate.trade_setup is not None
@@ -2037,13 +2065,15 @@ def _resolve_queue(
         if result is None:
             # Budget exhausted / fetch fail / implausible — carry prior (or a
             # retryable placeholder for a brand-new ticker) and record the age.
-            rows_by_ticker[ticker] = _stamp_scorer_version(
-                _stamp_theme(_carried_row(item), theme), scorer_version
+            _carry_deferred(
+                item,
+                rows_by_ticker=rows_by_ticker,
+                counts=counts,
+                deferred_ages=deferred_ages,
+                theme=theme,
+                scorer_version=scorer_version,
+                last_closed_session=last_closed_session,
             )
-            counts["carried"] += 1
-            age = _deferred_age(item, last_closed_session)
-            if age is not None:
-                deferred_ages.append(age)
             continue
 
         row = _terminal_row(

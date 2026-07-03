@@ -16,7 +16,7 @@
 // scripts/sync-research-docs.mjs::REFERENCED. New acronyms should also get
 // a row in the `GLOSSARY` array in `$lib/data/glossary`.
 
-import { toneClass, type SemanticTone } from '$lib/tone';
+import { toneClass } from '$lib/tone';
 
 export type ParadigmStatus = 'FAIL' | 'SLIPPAGE-FAIL' | 'IN-FLIGHT' | 'INCONCLUSIVE' | 'PASS_MARGINAL';
 export type LiveStatus = 'LIVE' | 'SHIPPED' | 'DONE';
@@ -348,10 +348,10 @@ export function paradigmScatter(items: Paradigm[]): {
 	nTotal: number;
 } {
 	const rep = items
-		.map((p) => ({ id: p.id, display: p.display, t: p.oos_t ?? p.is_t ?? NaN }))
+		.map((p) => ({ id: p.id, display: p.display, t: p.oos_t ?? p.is_t ?? Number.NaN }))
 		.filter((r) => Number.isFinite(r.t))
 		.sort((a, b) => a.t - b.t);
-	const maxT = rep.length ? rep[rep.length - 1].t : null;
+	const maxT = rep.length ? rep.at(-1)!.t : null;
 	const ticks = rep.map((r) => ({ ...r, isMax: r.t === maxT }));
 	return { ticks, maxT, nWithT: ticks.length, nTotal: items.length };
 }
@@ -468,7 +468,7 @@ export function toolStatusTone(s: ToolStatus): string {
 // Doctrine αt thresholds (Carhart-4F t-stat): marginal = paper-trade-only,
 // doctrine = deploy-eligible. Single source of truth — the /experiments IS/OOS
 // bar tones import these too, so the badge and the bars can never disagree.
-export const ALPHA_T_MARGINAL = 2.0;
+export const ALPHA_T_MARGINAL = 2;
 export const ALPHA_T_DOCTRINE = 3.5;
 
 export type AlphaBand = 'negative' | 'noise' | 'marginal' | 'deploy';
@@ -519,9 +519,15 @@ export function alphaValueTone(t: number | null): string {
  *  separate regex instance: parseMarkup drives a stateful `.exec()` loop (shared
  *  `.lastIndex`), whereas this uses stateless `.replace()` — sharing one `/g`
  *  object between the two risks lastIndex corruption. Keep the two in sync by
- *  eye if the markup grammar ever changes (both are unit-tested). */
+ *  eye if the markup grammar ever changes (both are unit-tested).
+ *
+ *  The term class uses the atomic-group emulation `(?=([^|\]]+))\1` (a
+ *  lookahead never backtracks its internal quantifier) so an unterminated `[…`
+ *  run cannot backtrack char-by-char — otherwise `.replace(/…/g)` is O(n²) on
+ *  a long bracket-only string (Sonar S8786). Groups are unchanged: 1 = term
+ *  (captured in the lookahead), 2 = label. */
 export function stripLedgerMarkup(text: string): string {
-	return text.replace(/\[([^|\]]+)(?:\|([^\]]+))?\]/g, (_m, term, label) => label ?? term);
+	return text.replace(/\[(?=([^|\]]+))\1(?:\|([^\]]+))?\]/g, (_m, term, label) => label ?? term);
 }
 
 // Numbers below are one dated snapshot: VPS `~/.alphalens` stores as of
