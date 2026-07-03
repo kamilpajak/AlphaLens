@@ -1,12 +1,13 @@
 [Unit]
-# Nightly broker-free ladder + population-monitor backfill (market-behavior
-# feedback). Replays each matured ledger decision's trade ladder over the last 14
-# calendar days, then runs the population monitor over its own larger window —
-# both deterministic price-path replays over Polygon minute bars (no broker).
+# Nightly broker-free population-monitor backfill (market-behavior feedback).
+# Runs the population monitor (every brief candidate) over its own multi-week
+# window — deterministic price-path replay over Polygon minute bars (no broker).
 # The legacy shadow-return / execution-quality metrics were removed with the
 # broker chain (ADR 0012), and the Track-A user-action click ledger was removed
-# later; the population-monitor replay (every brief candidate) is the primary
-# market-behavior feedback that survives. The unit + command name are retained so
+# later (#465/#467) — the per-decision ladder replay that read it is gone too,
+# and the old ~/.alphalens/feedback.db file (if present on a host) is an orphan
+# that nothing opens at runtime. The population-monitor replay is now the sole
+# market-behavior feedback signal (parquet + Postgres edge_ladderoutcome). The unit + command name are retained so
 # the existing timer keeps working (a rename is a deferred follow-up). The Polygon
 # minute-bar pull is rate-limited and the horizon must have closed (Polygon Basic
 # serves only closed sessions).
