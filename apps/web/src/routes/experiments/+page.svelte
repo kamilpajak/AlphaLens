@@ -455,7 +455,11 @@
 						<span class="font-display font-bold text-[11px] uppercase tracking-[0.22em] text-amber whitespace-nowrap">{g.label}</span>
 						<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{g.tested} tested · {g.cleared} cleared</span>
 					</div>
-					<p class="text-[11px] text-fg-dim mt-1 leading-relaxed max-w-3xl">{g.gloss}</p>
+					<!-- No max-w cap: the panel already bounds the line (~1094px at the
+				     widest), and a 768px cap left ~326px empty to the right while
+				     wrapping the last word to a lone second line. text-pretty avoids a
+				     single-word widow if a gloss does wrap on a narrower viewport. -->
+				<p class="text-[11px] text-fg-dim mt-1 leading-relaxed text-pretty">{g.gloss}</p>
 				</div>
 				<div class="divide-y divide-grid">
 					{#each vis as p}
