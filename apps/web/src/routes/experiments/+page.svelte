@@ -3,10 +3,10 @@
 	//
 	// Greenfield layout (2026-07): a cover-sheet hero (kill-rate `0 / 18` + the
 	// αt-distribution strip) leads, the paradigm ledger is the payload — grouped
-	// into research-class chapters with a sticky filter/legend bar — a `// NOW`
-	// divider separates it from the live-tool ledger (tool.experiments), and the
-	// reference material (patterns / methodology / glossary) is demoted to a
-	// "supporting material" appendix. The patterns + artifacts appendix sections
+	// into research-class chapters with a sticky filter/legend bar — the live-tool
+	// ledger (tool.experiments) follows, and the reference material (patterns /
+	// methodology / glossary) is demoted to a "supporting material" appendix (its
+	// own divider). The patterns + artifacts appendix sections
 	// are card grids (independent peer items), not the stacked list/table the rest
 	// of the page uses. The static data (paradigms, tool experiments, artifacts,
 	// patterns, status legends, group chapters) lives in
@@ -541,13 +541,6 @@
 			{/if}
 		{/each}
 	</section>
-
-	<!-- ============================ // NOW divider ========================== -->
-	<div class="my-10 flex items-center gap-3 fade-up" style="animation-delay: 0.12s">
-		<span class="h-px flex-1 bg-gradient-to-r from-transparent to-amber-dim"></span>
-		<span class="text-[10px] uppercase tracking-[0.25em] text-amber-dim whitespace-nowrap">// now · 2026-07 — closed files end, open experiments begin</span>
-		<span class="h-px flex-1 bg-gradient-to-l from-transparent to-amber-dim"></span>
-	</div>
 
 	<!-- ============================ LEDGER 2 · tool.experiments ============== -->
 	<SectionPanel id="tool-experiments" title="tool.experiments" style="animation-delay: 0.14s">
