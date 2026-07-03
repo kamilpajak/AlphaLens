@@ -634,6 +634,53 @@ def _is_frozen_terminal_ok(row: Any) -> bool:
         return False
 
 
+def _chart_frame_payloads(
+    df: pd.DataFrame,
+    *,
+    fetch: ChartBarFetch,
+    daily_fetch: DailyBarFetch,
+    exchange: str,
+    setups_by_date: dict[dt.date, dict[str, dict] | None],
+    briefs: Path,
+    deadline: Any,
+) -> tuple[list[str], int, bool, bool]:
+    """Build the ``chart_payload_json`` column for one frame.
+
+    Returns ``(payload_col, n_with_chart, stopped_early, recomputed_any)``. A
+    frozen terminal-OK row is preserved verbatim (no fetch); the deadline breaks
+    the loop mid-frame with ``stopped_early=True`` so the caller leaves the
+    parquet untouched. Rows counted before an early break still contribute to
+    ``n_with_chart`` (matching the pre-refactor accounting).
+    """
+    payload_col: list[str] = []
+    n_with_chart = 0
+    stopped_early = False
+    recomputed_any = False
+    for _, row in df.iterrows():
+        if _is_frozen_terminal_ok(row):
+            # Resolved position with an OK chart — never changes. Preserve the
+            # existing payload byte-for-byte and spend no Polygon budget on it.
+            payload_col.append(str(row[CHART_PAYLOAD_COLUMN]))
+            n_with_chart += 1
+            continue
+        if deadline is not None and deadline.should_stop():
+            stopped_early = True
+            break
+        payload = _payload_for_row(
+            dict(row),
+            fetch=fetch,
+            daily_fetch=daily_fetch,
+            exchange=exchange,
+            setups_by_date=setups_by_date,
+            briefs_dir=briefs,
+        )
+        if payload.get("status") == "OK":
+            n_with_chart += 1
+        payload_col.append(json.dumps(payload))
+        recomputed_any = True
+    return payload_col, n_with_chart, stopped_early, recomputed_any
+
+
 def enrich_store_with_chart_payloads(
     store_dir: Path | str,
     briefs_dir: Path | str,
@@ -692,31 +739,16 @@ def enrich_store_with_chart_payloads(
         if df.empty:
             continue
 
-        payload_col: list[str] = []
-        stopped_early = False
-        recomputed_any = False
-        for _, row in df.iterrows():
-            if _is_frozen_terminal_ok(row):
-                # Resolved position with an OK chart — never changes. Preserve the
-                # existing payload byte-for-byte and spend no Polygon budget on it.
-                payload_col.append(str(row[CHART_PAYLOAD_COLUMN]))
-                n_with_chart += 1
-                continue
-            if deadline is not None and deadline.should_stop():
-                stopped_early = True
-                break
-            payload = _payload_for_row(
-                dict(row),
-                fetch=fetch,
-                daily_fetch=daily_fetch,
-                exchange=exchange,
-                setups_by_date=setups_by_date,
-                briefs_dir=briefs,
-            )
-            if payload.get("status") == "OK":
-                n_with_chart += 1
-            payload_col.append(json.dumps(payload))
-            recomputed_any = True
+        payload_col, n_delta, stopped_early, recomputed_any = _chart_frame_payloads(
+            df,
+            fetch=fetch,
+            daily_fetch=daily_fetch,
+            exchange=exchange,
+            setups_by_date=setups_by_date,
+            briefs=briefs,
+            deadline=deadline,
+        )
+        n_with_chart += n_delta
 
         if stopped_early:
             # Deadline tripped mid-file: leave the parquet untouched so

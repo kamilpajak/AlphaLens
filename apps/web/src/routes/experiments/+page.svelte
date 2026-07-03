@@ -76,7 +76,10 @@
 
 	type MarkupSeg = { kind: 'text'; text: string } | { kind: 'term'; term: string; label: string };
 
-	const MARKUP_RE = /\[([^|\]]+)(?:\|([^\]]+))?\]/g;
+	// Atomic-group emulation `(?=([^|\]]+))\1` keeps an unterminated `[…` run from
+	// backtracking char-by-char (O(n²)); groups unchanged (1 = term, 2 = label).
+	// Mirrors `stripLedgerMarkup` in $lib/data/research-ledger — keep in sync.
+	const MARKUP_RE = /\[(?=([^|\]]+))\1(?:\|([^\]]+))?\]/g;
 
 	function parseMarkup(text: string): MarkupSeg[] {
 		const out: MarkupSeg[] = [];

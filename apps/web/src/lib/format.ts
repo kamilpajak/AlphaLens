@@ -256,11 +256,9 @@ export function selectionBadge(
 	selectionScore: number | null | undefined,
 	layer4: number | null | undefined
 ): string {
-	const v = Number.isFinite(selectionScore)
-		? (selectionScore as number)
-		: Number.isFinite(layer4)
-			? (layer4 as number)
-			: null;
+	let v: number | null = null;
+	if (Number.isFinite(selectionScore)) v = selectionScore as number;
+	else if (Number.isFinite(layer4)) v = layer4 as number;
 	if (v === null) return '—';
 	return Number.isInteger(v) ? String(v) : v.toFixed(2);
 }
@@ -277,5 +275,5 @@ const CATALYST_LABELS: Record<string, string> = { m_and_a: 'M&A', ipo: 'IPO' };
  */
 export function catalystLabel(eventType: string | null | undefined): string | null {
 	if (!eventType) return null;
-	return CATALYST_LABELS[eventType] ?? eventType.replace(/_/g, ' ');
+	return CATALYST_LABELS[eventType] ?? eventType.replaceAll('_', ' ');
 }
