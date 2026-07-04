@@ -21,6 +21,7 @@
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
 	import GatePill from './GatePill.svelte';
+	import { orderedGates } from '$lib/gates';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
 	import Formula from './Formula.svelte';
@@ -189,15 +190,12 @@
 				</ChipTip>
 			{/if}
 
+			<!-- Fixed per-gate slot order (tenk → press → insider → etf) so a gate
+			     keeps the same position regardless of pass/fail; only the pill
+			     colour / ✓ ✗ ? symbol signals the status. See $lib/gates. -->
 			<div class="flex flex-wrap items-center gap-1.5 ml-auto">
-				{#each c.gates_passed as g}
-					<GatePill name={g} status="passed" />
-				{/each}
-				{#each c.gates_failed as g}
-					<GatePill name={g} status="failed" />
-				{/each}
-				{#each c.gates_unknown as g}
-					<GatePill name={g} status="unknown" />
+				{#each orderedGates(c) as g (g.name)}
+					<GatePill name={g.name} status={g.status} />
 				{/each}
 			</div>
 		</div>
