@@ -46,6 +46,17 @@ describe('orderedGates — fixed per-gate slot order', () => {
 		expect(out.at(-1)).toEqual({ name: 'newgate', status: 'passed' });
 	});
 
+	it('appends multiple unknown gate names in passed → failed → unknown then array order', () => {
+		const out = orderedGates(c(['zeta'], ['alpha'], ['omega', 'beta']));
+		// Known gates absent here → the leftovers pin the fallback order exactly.
+		expect(out).toEqual([
+			{ name: 'zeta', status: 'passed' },
+			{ name: 'alpha', status: 'failed' },
+			{ name: 'omega', status: 'unknown' },
+			{ name: 'beta', status: 'unknown' }
+		]);
+	});
+
 	it('returns an empty list when there are no gates', () => {
 		expect(orderedGates(c())).toEqual([]);
 	});

@@ -38,18 +38,15 @@ export function orderedGates(c: GateArrays): OrderedGate[] {
 	for (const g of c.gates_unknown) if (!status.has(g)) status.set(g, 'unknown');
 
 	const out: OrderedGate[] = [];
-	const seen = new Set<string>();
 	for (const name of GATE_ORDER) {
 		const s = status.get(name);
-		if (s !== undefined) {
-			out.push({ name, status: s });
-			seen.add(name);
-		}
+		if (s !== undefined) out.push({ name, status: s });
 	}
 	// Map preserves insertion order, so leftovers come in passed → failed →
 	// unknown then array order — stable and never dropped.
+	const known = new Set<string>(GATE_ORDER);
 	for (const [name, s] of status) {
-		if (!seen.has(name)) out.push({ name, status: s });
+		if (!known.has(name)) out.push({ name, status: s });
 	}
 	return out;
 }
