@@ -11,7 +11,10 @@ ATR% quantile stays low: that pins the vol axis on VIX (the OR's other leg),
 letting each state be selected deterministically.
 """
 
+import datetime as dt
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -178,6 +181,129 @@ class TestConfigVersion(unittest.TestCase):
 
         self.assertIn("market_state", MARKET_STATE_COLUMNS)
         self.assertIn("market_state_config_version", MARKET_STATE_COLUMNS)
+
+
+def _seed_store(root: Path, *, n: int = 300, drift: float = 0.0008):
+    """Populate a temp grouped-daily store with SPY (+ a NOISE ticker) bars."""
+    from alphalens_pipeline.data.rs_history import write_grouped_day_atomic
+
+    dates = pd.bdate_range("2019-01-01", periods=n)
+    closes = 100.0 * (1.0 + drift) ** np.arange(n)
+    spreads = np.linspace(4.0, 0.3, n)
+    for d, c, sp in zip(dates, closes, spreads, strict=True):
+        spy = {"t": 0, "o": c, "h": c + sp / 2, "l": c - sp / 2, "c": c, "v": 1000, "vw": c}
+        noise = {"t": 0, "o": 1, "h": 1, "l": 1, "c": 1, "v": 1, "vw": 1}
+        write_grouped_day_atomic(root, d.date(), {"SPY": spy, "NOISE": noise})
+    return dates
+
+
+def _fake_fred(dates, *, last: float = 10.0, body: float = 15.0):
+    v = np.full(len(dates), body)
+    v[-1] = last
+    series = pd.Series(v, index=pd.DatetimeIndex([pd.Timestamp(d) for d in dates]))
+
+    class _Fred:
+        def fetch_series(self, series_id):
+            assert series_id == "VIXCLS"
+            return series
+
+    return _Fred()
+
+
+class TestEnrichBroadcast(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.root = Path(cls._tmp.name)
+        cls.dates = _seed_store(cls.root, n=300)
+        cls.asof = cls.dates[-1].date()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def test_broadcasts_same_state_to_every_row(self):
+        from alphalens_pipeline.market.market_state import (
+            MARKET_STATE_COLUMNS,
+            MARKET_STATE_CONFIG_VERSION,
+            enrich,
+        )
+
+        frame = pd.DataFrame({"ticker": ["AAA", "BBB", "CCC"]})
+        out = enrich(
+            frame,
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_fake_fred(self.dates, last=10.0),
+        )
+
+        for col in MARKET_STATE_COLUMNS:
+            self.assertIn(col, out.columns)
+        self.assertEqual(len(out), 3)
+        self.assertIn("ticker", out.columns)  # original columns preserved
+        self.assertEqual(out["market_state"].nunique(), 1)  # index-level: same value
+        self.assertEqual(out["market_state"].iloc[0], "bull_quiet")
+        self.assertTrue((out["market_state_config_version"] == MARKET_STATE_CONFIG_VERSION).all())
+
+    def test_high_vix_flips_broadcast_to_bull_volatile(self):
+        from alphalens_pipeline.market.market_state import enrich
+
+        out = enrich(
+            pd.DataFrame({"ticker": ["AAA"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_fake_fred(self.dates, last=30.0),
+        )
+
+        self.assertEqual(out["market_state"].iloc[0], "bull_volatile")
+
+    def test_failsoft_on_fred_error_stamps_unknown(self):
+        from alphalens_pipeline.market.market_state import MARKET_STATE_COLUMNS, enrich
+
+        class _BoomFred:
+            def fetch_series(self, series_id):
+                raise RuntimeError("FRED down")
+
+        # A store/FRED hiccup must degrade to 'unknown', never abort the score stage.
+        out = enrich(
+            pd.DataFrame({"ticker": ["AAA", "BBB"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_BoomFred(),
+        )
+
+        for col in MARKET_STATE_COLUMNS:
+            self.assertIn(col, out.columns)
+        self.assertTrue((out["market_state"] == "unknown").all())
+
+
+class TestEnrichEmptyAndUnknown(unittest.TestCase):
+    def test_empty_frame_adds_columns_with_stable_dtypes(self):
+        from alphalens_pipeline.market.market_state import MARKET_STATE_COLUMNS, enrich
+
+        # empty frame short-circuits before any I/O (store/fred untouched)
+        out = enrich(pd.DataFrame(), asof=dt.date(2020, 1, 1), grouped_root=None, fred_client=None)
+
+        for col in MARKET_STATE_COLUMNS:
+            self.assertIn(col, out.columns)
+        self.assertEqual(len(out), 0)
+        self.assertEqual(out["market_state"].dtype, object)
+        self.assertEqual(out["market_state_atr_pct"].dtype, np.dtype("float64"))
+
+    def test_unknown_broadcast_when_store_too_short(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            dates = _seed_store(root, n=60)  # < 252 → ATR% quantile undefined → unknown
+            from alphalens_pipeline.market.market_state import enrich
+
+            out = enrich(
+                pd.DataFrame({"ticker": ["AAA", "BBB"]}),
+                asof=dates[-1].date(),
+                grouped_root=root,
+                fred_client=_fake_fred(dates, last=10.0),
+            )
+
+            self.assertTrue((out["market_state"] == "unknown").all())
 
 
 if __name__ == "__main__":

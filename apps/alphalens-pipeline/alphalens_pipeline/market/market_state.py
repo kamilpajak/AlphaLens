@@ -28,10 +28,14 @@ the broadcast ``enrich`` stamp are added in a later step of this PR.
 
 from __future__ import annotations
 
+import datetime as dt
 import math
+from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
+from alphalens_pipeline.data.rs_history import DEFAULT_RS_HISTORY_ROOT
 from alphalens_pipeline.market.primitives import (
     atr_pct,
     bollinger_keltner_squeeze,
@@ -82,6 +86,19 @@ _STATE_MAP = {
 }
 
 
+def _unknown_result() -> dict[str, Any]:
+    """The fully-unknown classification — used when inputs are missing or I/O fails."""
+    return {
+        "market_state": _UNKNOWN,
+        "market_state_atr_pct": float("nan"),
+        "market_state_atr_pct_q": float("nan"),
+        "market_state_dist200": float("nan"),
+        "market_state_vix": float("nan"),
+        "market_state_vix_decile": float("nan"),
+        "market_state_squeeze_on": None,
+    }
+
+
 def _last(series: pd.Series) -> float:
     """Last value as a float, or NaN when the series is empty."""
     if len(series) == 0:
@@ -95,7 +112,7 @@ def classify_state(
     high: pd.Series,
     low: pd.Series,
     vix: pd.Series,
-) -> dict[str, object]:
+) -> dict[str, Any]:
     """Classify the market state at the LAST bar of the trailing input series.
 
     ``close``/``high``/``low`` are the trailing index (SPY) daily bars ending at
@@ -104,7 +121,7 @@ def classify_state(
     missing/insufficient input yields ``market_state == 'unknown'`` with NaN
     telemetry where a driver could not be computed. Pure — no I/O.
     """
-    telemetry: dict[str, object] = {
+    telemetry: dict[str, Any] = {
         "market_state_atr_pct": float("nan"),
         "market_state_atr_pct_q": float("nan"),
         "market_state_dist200": float("nan"),
@@ -172,8 +189,153 @@ def classify_state(
     return {"market_state": _STATE_MAP[(trend, vol)], **telemetry}
 
 
+# --- I/O wrapper + broadcast enrich (mirrors disagreement.enrich) --------------
+
+INDEX_TICKER = "SPY"
+VIX_SERIES_ID = "VIXCLS"
+# Trailing sessions to load: the ATR% quantile (252) is the binding window; the
+# margin absorbs holidays/gaps. Fewer on disk → classify_state returns 'unknown'.
+_HISTORY_SESSIONS = 300
+
+# Explicit empty-frame dtypes (memo §3.1): object for the two string columns,
+# float64 for the drivers, nullable boolean for the squeeze flag. Missing
+# conventions: ``'unknown'`` label / ``NaN`` driver floats / ``pd.NA`` squeeze.
+_EMPTY_COLUMN_DTYPES: dict[str, str] = {
+    "market_state": "object",
+    "market_state_atr_pct": "float64",
+    "market_state_atr_pct_q": "float64",
+    "market_state_dist200": "float64",
+    "market_state_vix": "float64",
+    "market_state_vix_decile": "float64",
+    "market_state_squeeze_on": "boolean",
+    "market_state_config_version": "object",
+}
+
+
+def _session_dates_on_or_before(grouped_root: Path, asof: dt.date, limit: int) -> list[dt.date]:
+    """The newest ``limit`` stored session dates on or before ``asof`` (PIT)."""
+    if not grouped_root.is_dir():
+        return []
+    cutoff = asof.isoformat()
+    stems = sorted(
+        p.stem for p in grouped_root.glob("*.parquet") if len(p.stem) == 10 and p.stem <= cutoff
+    )
+    dates: list[dt.date] = []
+    for stem in stems[-limit:]:
+        try:
+            dates.append(dt.date.fromisoformat(stem))
+        except ValueError:
+            continue
+    return dates
+
+
+def _load_index_ohlc(
+    grouped_root: Path, ticker: str, asof: dt.date, sessions: int
+) -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Assemble the trailing (close, high, low) series for ``ticker`` from the
+    whole-market grouped-daily store — disk-only, PIT, split-adjusted."""
+    tkr = ticker.upper()
+    index: list[pd.Timestamp] = []
+    closes: list[float] = []
+    highs: list[float] = []
+    lows: list[float] = []
+    for d in _session_dates_on_or_before(grouped_root, asof, sessions):
+        path = grouped_root / f"{d.isoformat()}.parquet"
+        try:
+            df = pd.read_parquet(path, columns=["T", "h", "l", "c"])
+        except (OSError, ValueError):
+            continue
+        sub = df[df["T"].astype(str).str.upper() == tkr]
+        if sub.empty:
+            continue
+        row = sub.iloc[-1]
+        try:
+            c, h, low_v = float(row["c"]), float(row["h"]), float(row["l"])
+        except (TypeError, ValueError):
+            continue
+        index.append(pd.Timestamp(d))
+        closes.append(c)
+        highs.append(h)
+        lows.append(low_v)
+    return (
+        pd.Series(closes, index=index, dtype=float),
+        pd.Series(highs, index=index, dtype=float),
+        pd.Series(lows, index=index, dtype=float),
+    )
+
+
+def classify(
+    asof: dt.date,
+    *,
+    grouped_root: Path | str | None = None,
+    fred_client=None,
+    ticker: str = INDEX_TICKER,
+    sessions: int = _HISTORY_SESSIONS,
+) -> dict[str, Any]:
+    """Load the trailing index bars + VIX and classify the state at ``asof``.
+
+    Disk-only for the index bars (grouped store); VIX via the canonical FRED
+    client (injected in tests, ``FREDClient.from_env()`` in production). No raw
+    HTTP — the store is local parquet and FRED routes through its one client.
+    """
+    root = Path(grouped_root) if grouped_root is not None else DEFAULT_RS_HISTORY_ROOT
+    close, high, low = _load_index_ohlc(root, ticker, asof, sessions)
+    if fred_client is None:
+        from alphalens_pipeline.data.macro.fred_client import FREDClient
+
+        fred_client = FREDClient.from_env()
+    vix = fred_client.fetch_series(VIX_SERIES_ID)
+    vix = vix[vix.index <= pd.Timestamp(asof)]  # PIT: never a future VIX print
+    return classify_state(close=close, high=high, low=low, vix=vix)
+
+
+def enrich(
+    frame: pd.DataFrame,
+    *,
+    asof: dt.date,
+    grouped_root: Path | str | None = None,
+    fred_client=None,
+    ticker: str = INDEX_TICKER,
+    sessions: int = _HISTORY_SESSIONS,
+) -> pd.DataFrame:
+    """Return ``frame`` with the index-level market_state columns broadcast onto
+    every row (the ``disagreement.enrich`` idiom).
+
+    Market state is computed ONCE for ``asof`` and stamped identically on every
+    candidate row; ``market_state_config_version`` is stamped unconditionally.
+    With no rows, all columns are still added (zero length, stable dtypes) for a
+    stable parquet schema.
+    """
+    out = frame.copy()
+    if len(out) == 0:
+        for col, dtype in _EMPTY_COLUMN_DTYPES.items():
+            out[col] = pd.Series([], dtype=dtype)
+        return out
+
+    try:
+        result = classify(
+            asof,
+            grouped_root=grouped_root,
+            fred_client=fred_client,
+            ticker=ticker,
+            sessions=sessions,
+        )
+    except Exception:  # best-effort context enrichment
+        # A store read / FRED fetch hiccup degrades to 'unknown' rather than
+        # aborting the score stage (the buffett/oneil fail-soft precedent).
+        result = _unknown_result()
+    for col in MARKET_STATE_COLUMNS:
+        if col == "market_state_config_version":
+            continue
+        out[col] = result[col]  # scalar broadcast to every row
+    out["market_state_config_version"] = MARKET_STATE_CONFIG_VERSION
+    return out
+
+
 __all__ = [
     "MARKET_STATE_COLUMNS",
     "MARKET_STATE_CONFIG_VERSION",
+    "classify",
     "classify_state",
+    "enrich",
 ]
