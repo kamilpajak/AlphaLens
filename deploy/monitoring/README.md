@@ -24,11 +24,10 @@ rules + Alertmanager Telegram routing + a Grafana dashboard on top.
    domain-specific gauges (events detected, briefs written, AV
    quota remaining, etc.). Atomic via `os.replace`.
 
-3. **ExecStopPost hooks on all 5 active units**:
+3. **ExecStopPost hooks on the active units**:
    - `alphalens-edgar-detect.service`
    - `alphalens-literature-scan-weekly.service`
    - `alphalens-literature-scan-monthly.service`
-   - `alphalens-av-earnings-backfill.service`
    - `alphalens-thematic-build.service`
 
    The `alphalens-form4-backfill.service` is excluded — it is a
@@ -104,7 +103,6 @@ curl -s localhost:9100/metrics | grep '^alphalens_'
 | `edgar-detect` | `alphalens_edgar_events_detected_total`, `alphalens_edgar_events_dispatched_total`, `alphalens_edgar_portfolio_size{class}` |
 | `literature-scan-{weekly,monthly}` | `alphalens_literature_last_run_trigger{window}` |
 | `thematic-build` | `alphalens_thematic_briefs_total`, `alphalens_thematic_briefs_by_model{model}` |
-| `av-earnings-backfill` | `alphalens_av_tickers_total{status}`, `alphalens_av_quota_remaining`, `alphalens_av_quota_blocked` |
 
 All metrics are **gauges** — they describe THIS run's outcome, not a
 cumulative counter. A run that emits 0 values is meaningful (and
