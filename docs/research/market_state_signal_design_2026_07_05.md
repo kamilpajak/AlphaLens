@@ -238,6 +238,54 @@ In-workflow skeptic verdict: **NEEDS_REWORK** — "engineering-integration half 
 
 ---
 
+## 8. Data-provider evaluation — verdict: NO PURCHASE (2026-07-05)
+
+**Question:** the usable equity panel is <1y (FATAL-2). Could buying a historical-data provider resolve the memo's validation doubts, so the taxonomy can be fit + firebreak-tested on real history?
+
+**Method:** Perplexity deep-research on the provider landscape + an in-repo grounding workflow (data-window verification, doubt→dataset mapping, platform/canonical-client cost) + an adversarial skeptic pass. Skeptic verdict: **SOUND_WITH_FIXES** — "buy nothing expensive" is correct; "do the free backfill now" is over-sold.
+
+### 8.1 Which doubts are even resolvable by buying data?
+| Doubt | Data-buyable? | Why |
+|---|---|---|
+| FATAL-1 (H-B SPY-on-SPY confound) | **NO** | design confound. No dataset breaks the mechanical entanglement — only the §4.2 decoupling (non-SPY benchmark / residualization) does. |
+| H-B (regime conditions the tool's OWN selection edge) | **NO** | needs the tool's own **forward** ladder outcomes. No vendor backfills the future; N≥30 is ~2026-09+ at the earliest. |
+| FATAL-2 / MEDIUM-overfit (no in-sample window) | **only for H-A** | long index history gives an in-sample fit + OOS window **for H-A** (index-regime hypothesis) only. |
+| HIGH-3 (effective-N = episodes) | **partially, H-A only** | decades of history = dozens of past regime episodes for H-A; H-B episode-N is still forward-bound. |
+| HIGH-5 (breadth survivorship) | **yes, but v2** | needs PIT + delisted rosters — but **breadth was dropped from v1** (§2.5), so this buys nothing v1 uses. |
+
+**So data helps only H-A. It does NOT rescue H-B or fix the confound.**
+
+### 8.2 Why NO expensive provider (verified in-repo)
+- **Norgate** is the *only* retail sub with multi-decade PIT S&P constituents + delisted bars (<$100/mo), but its Python API needs a **Windows desktop Updater running in the background** → dead-on-arrival on the AlphaLens macOS + Linux VPS + Docker + runpod stack. Not an actionable option (kept as a rejected note, §8.5).
+- The expensive datasets (PIT constituents, delisted bars) only buy back **breadth**, which v1 dropped. The augmented loader `load_sp1500_pit_for_date_augmented` is **confirmed unbuilt anywhere in the repo** — no half-wired breadth path exists to tempt an early purchase.
+- Institutional gold-standard (CRSP/WRDS, Bloomberg, FactSet, direct SPDJI) is out on cost/access for a solo quant.
+
+### 8.3 Why NOT even the "free" backfill now
+The cheap path (backfill 20–30y SPY/QQQ daily bars from Polygon/yfinance; VIX already on FRED since 1990) is tempting but **not yet, and not truly free**:
+1. **Not $0.** yfinance long-history split/dividend series have gaps + back-adjustment revisions → real reconciliation work vs Polygon. A 25h free-tier Polygon backfill **contends with live Polygon quota** (6×/day thematic build + nightly feedback/grouped jobs); the project already hit a Polygon-429 hung-run (PR #747). Honest floor ≈ **$29 (one Polygon Starter month) + a few hours**, not $0.
+2. **Non-stationarity undercuts the long-history fit.** Fitting *fixed* thresholds over 20–30y that the memo itself calls non-stationary (2001 vs 2026 microstructure) is incoherent: a threshold fit on 2001–2015 has no reason to transfer to 2016–2026, so a "passing OOS firebreak" is nearly uninterpretable. Either use rolling/expanding-window **self-referential** percentiles (which ATR% already does, §2.3) — in which case there is no cross-era threshold to fit — or restrict to post-2015, which re-hits FATAL-2's too-little-data wall. **Long history does not deliver the clean OOS the fit-then-freeze plan assumed.**
+3. **H-A may be inert.** The backfill validates only H-A, which the memo never shows is useful on its own. If a passing H-A changes no v1 behavior until H-B matures (~2026-09+), validating it now is activity, not progress.
+
+### 8.4 Decision — spend $0, sequence behind free design work
+1. **First (free): make the FATAL-1 decision (D4)** — pick a non-SPY outcome benchmark (peer/sector) or a pre-registered residualization. This gates whether H-A thresholds even aim at the right target; fitting before it risks locking choices that must be re-fit once the benchmark changes.
+2. **Then (free): write "what does a validated H-A license?"** — does a passing H-A change any v1 behavior (badge, soft tilt), or is it inert until H-B? If inert, **the backfill can wait too.**
+3. **Backfill only if** (1) and (2) settle and a validated H-A licenses a shippable v1 behavior — then a **Polygon Starter month (~$29)** run scheduled off all live-job windows is cleaner than the free path (avoids quota starvation). Use **self-referential rolling percentiles**, not fixed cross-era thresholds.
+4. **Breadth re-entry rule:** reconsider breadth-as-signal (and therefore PIT/delisted data) **only after** H-A is validated AND H-B shows a regime-conditioned edge (~2026-09+). Until then, "v1 dropped breadth" is a time-boxed deferral, not a permanent close (project doctrine: never close the door).
+
+### 8.5 Provider reference (for a future breadth-as-signal v2 only — not v1)
+| Provider | Covers | Cost | Individual-usable? |
+|---|---|---|---|
+| Polygon (**already integrated**) | long SPY/QQQ OHLC | $0 free / $29 Starter | yes — **the path if any** |
+| yfinance (**already integrated**) | long SPY/QQQ OHLC + `^VIX` | free | yes (quality caveats) |
+| FRED (**already integrated**) | VIX since 1990 | free | yes — VIX solved |
+| EODHD | PIT S&P constituents (2–12y), delisted, index OHLC | ~$25–80/mo | yes, cross-platform — **best if breadth returns but only ~1 decade deep** |
+| Norgate | multi-decade PIT + delisted + index OHLC | <$100/mo | **NO — Windows-Updater-locked, dead on this stack** |
+| CRSP/WRDS, Bloomberg, FactSet, SPDJI | gold-standard multi-decade PIT | institutional | **NO — out on cost/access** |
+
+**Bottom line:** don't buy anything. The one provider that could give multi-decade survivorship-free breadth (Norgate) doesn't run on this stack; everything else v1 needs (long index OHLC + VIX) is already available for ~$0. The real blockers — the FATAL-1 confound and the tool's own selection edge (H-B) — are unbuyable at any price. Settle the free design decision first; spend engineering time (and maybe $29) only if a validated H-A is shown to license a shippable v1 behavior.
+
+---
+
 ## Verified file citations (confirmed present on `main`)
 - Enrich/config-version/empty-frame idiom: `apps/alphalens-pipeline/alphalens_pipeline/experts/disagreement.py` (L71–101, `PANEL_CONFIG_VERSION` L47).
 - Poolability key: `apps/alphalens-pipeline/alphalens_pipeline/thematic/screening/selection_score.py`.
