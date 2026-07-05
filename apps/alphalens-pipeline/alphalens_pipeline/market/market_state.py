@@ -29,6 +29,7 @@ the broadcast ``enrich`` stamp are added in a later step of this PR.
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import math
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,8 @@ from alphalens_pipeline.market.primitives import (
     rolling_quantile_rank,
     sma,
 )
+
+logger = logging.getLogger(__name__)
 
 # --- Frozen hyperparameters (memo §2.2 manifest). All UNVALIDATED literal priors;
 # --- any change ⇒ bump MARKET_STATE_CONFIG_VERSION so old rows are not pooled.
@@ -117,6 +120,10 @@ def classify_state(
 
     ``close``/``high``/``low`` are the trailing index (SPY) daily bars ending at
     the as-of date; ``vix`` is the trailing VIX series ending at the same date.
+    The two series' last values are read INDEPENDENTLY (``.iloc[-1]`` on each),
+    so the SPY session and the VIX print may fall on slightly different calendar
+    dates — acceptable for a daily regime label; the caller (:func:`classify`)
+    is responsible for the ``<= asof`` PIT constraint on both.
     Returns the label under ``market_state`` plus the raw driver telemetry. Any
     missing/insufficient input yields ``market_state == 'unknown'`` with NaN
     telemetry where a driver could not be computed. Pure — no I/O.
@@ -323,12 +330,22 @@ def enrich(
     except Exception:  # best-effort context enrichment
         # A store read / FRED fetch hiccup degrades to 'unknown' rather than
         # aborting the score stage (the buffett/oneil fail-soft precedent).
+        logger.warning(
+            "market_state: classify failed for %s — stamping 'unknown'",
+            asof,
+            exc_info=True,
+        )
         result = _unknown_result()
-    for col in MARKET_STATE_COLUMNS:
+
+    # Broadcast each column with its DECLARED dtype so a populated frame matches
+    # the empty-frame schema exactly — in particular the nullable boolean squeeze
+    # (a fail-soft ``None`` becomes ``<NA>``, not an object column).
+    n = len(out)
+    for col, dtype in _EMPTY_COLUMN_DTYPES.items():
         if col == "market_state_config_version":
-            continue
-        out[col] = result[col]  # scalar broadcast to every row
-    out["market_state_config_version"] = MARKET_STATE_CONFIG_VERSION
+            out[col] = MARKET_STATE_CONFIG_VERSION
+        else:
+            out[col] = pd.Series([result[col]] * n, index=out.index, dtype=dtype)
     return out
 
 

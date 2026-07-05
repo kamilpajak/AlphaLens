@@ -145,6 +145,14 @@ class TestClassifyStateUnknown(unittest.TestCase):
 
         self.assertEqual(out["market_state"], "unknown")
 
+    def test_empty_bars_with_present_vix_is_unknown(self):
+        from alphalens_pipeline.market.market_state import classify_state
+
+        empty = pd.Series([], dtype=float)
+        out = classify_state(close=empty, high=empty, low=empty, vix=_vix(last=10.0))
+
+        self.assertEqual(out["market_state"], "unknown")
+
 
 class TestClassifyStateTelemetry(unittest.TestCase):
     def test_returns_all_columns_with_sane_ranges(self):
@@ -275,6 +283,19 @@ class TestEnrichBroadcast(unittest.TestCase):
         for col in MARKET_STATE_COLUMNS:
             self.assertIn(col, out.columns)
         self.assertTrue((out["market_state"] == "unknown").all())
+
+    def test_broadcast_squeeze_column_is_nullable_boolean(self):
+        from alphalens_pipeline.market.market_state import enrich
+
+        # populated-frame dtype must match the empty-frame schema (nullable bool)
+        out = enrich(
+            pd.DataFrame({"ticker": ["AAA"]}),
+            asof=self.asof,
+            grouped_root=self.root,
+            fred_client=_fake_fred(self.dates, last=10.0),
+        )
+
+        self.assertEqual(out["market_state_squeeze_on"].dtype, pd.BooleanDtype())
 
 
 class TestEnrichEmptyAndUnknown(unittest.TestCase):
