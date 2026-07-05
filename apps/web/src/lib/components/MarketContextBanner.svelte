@@ -65,7 +65,7 @@
 
 <section class="mb-5 fade-up" style="animation-delay: 0.08s" aria-label="market context">
 	<div class="flex items-center gap-x-3 gap-y-2 flex-wrap">
-		<JargonTip {...tipProps('market context')}>
+		<JargonTip {...tipProps('market context')} placement="below">
 			<span class="text-[10px] uppercase tracking-widest text-fg-muted">market context</span>
 		</JargonTip>
 
