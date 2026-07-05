@@ -201,5 +201,33 @@ class TestBollingerKeltnerSqueeze(unittest.TestCase):
         self.assertEqual(sq.dtype, bool)
 
 
+class TestEmptyInputs(unittest.TestCase):
+    """Degenerate empty-series inputs return empty, never raise (zen PR-0 review)."""
+
+    def _empty(self) -> pd.Series:
+        return pd.Series([], dtype=float)
+
+    def test_true_range_empty_returns_empty(self):
+        from alphalens_pipeline.market.primitives import true_range
+
+        out = true_range(self._empty(), self._empty(), self._empty())
+
+        self.assertTrue(out.empty)
+
+    def test_atr_empty_returns_empty(self):
+        from alphalens_pipeline.market.primitives import atr
+
+        out = atr(self._empty(), self._empty(), self._empty(), window=14)
+
+        self.assertTrue(out.empty)
+
+    def test_squeeze_empty_returns_empty(self):
+        from alphalens_pipeline.market.primitives import bollinger_keltner_squeeze
+
+        out = bollinger_keltner_squeeze(self._empty(), self._empty(), self._empty())
+
+        self.assertTrue(out.empty)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -37,7 +37,8 @@ def normalized_slope(series: pd.Series, *, window: int) -> pd.Series:
     """Fractional change over ``window`` bars: ``(s_t − s_{t−window}) / s_t``.
 
     Normalizing by the current value makes the slope scale-free and comparable
-    across price levels. The first ``window`` values are NaN.
+    across price levels. The first ``window`` values are NaN. Assumes a positive
+    series (prices); a zero value yields ``inf``/``NaN`` at that point.
     """
     if window <= 0:
         raise ValueError("window must be positive")
@@ -50,6 +51,9 @@ def rolling_quantile_rank(series: pd.Series, *, lookback: int = 252) -> pd.Serie
     Generalizes ``data.macro.signals.vix_decile``. The first ``lookback − 1``
     observations are NaN. A value equal to the highest in its window ranks 1.0;
     equal to the lowest ranks ``1 / lookback``.
+
+    Performance: O(n·lookback) via a rolling ``apply``; fine for typical daily
+    histories (~7500 bars × lookback 252), not pandas-vectorised.
     """
     if lookback <= 0:
         raise ValueError("lookback must be positive")
@@ -61,8 +65,12 @@ def rolling_quantile_rank(series: pd.Series, *, lookback: int = 252) -> pd.Serie
 def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
     """Wilder true range: ``max(high−low, |high−prev_close|, |low−prev_close|)``.
 
-    The first bar has no prior close, so its true range is ``high−low``.
+    The first bar has no prior close, so its true range is ``high−low``. An
+    empty input returns an empty series (rather than raising on the first-bar
+    assignment below).
     """
+    if len(high) == 0:
+        return pd.Series(dtype=float)
     prev_close = close.shift(1)
     ranges = pd.concat(
         [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
@@ -83,7 +91,10 @@ def atr(high: pd.Series, low: pd.Series, close: pd.Series, *, window: int = 14) 
 
 
 def atr_pct(high: pd.Series, low: pd.Series, close: pd.Series, *, window: int = 14) -> pd.Series:
-    """ATR as a fraction of close — a scale-free realized-volatility proxy."""
+    """ATR as a fraction of close — a scale-free realized-volatility proxy.
+
+    Assumes positive ``close`` (prices); a zero close yields ``inf``/``NaN``.
+    """
     return atr(high, low, close, window=window) / close
 
 
