@@ -95,12 +95,13 @@
 			     grow on mobile (full width when wrapped) → grow-0 from sm up. -->
 			<dl
 				data-testid="brief-header-stats"
-				class="grid grid-cols-2 gap-px bg-grid border border-grid grow sm:grow-0 sm:min-w-[18rem]"
+				class="grid grid-cols-3 gap-px bg-grid border border-grid grow sm:grow-0 sm:min-w-[22rem]"
 			>
 				<!-- dt-before-dd keeps the DOM/spec order (and a sensible "label,
 				     value" screen-reader read); flex-col-reverse renders the value
-				     on top. Column 1 = volume (candidates / verified), column 2 =
-				     themes (count / top), reading top-to-bottom per column. -->
+				     on top. Three day-level counts read left-to-right: candidates,
+				     themes, top theme. (The verified count lives in the "verified
+				     only" filter + per-card badges, not this headline strip.) -->
 				<div class="bg-bg-1 px-4 py-2.5 flex flex-col-reverse gap-0.5">
 					<dt class="text-[10px] uppercase tracking-widest text-fg-muted">candidates</dt>
 					<dd data-testid="stat-candidates" class="font-display font-bold text-2xl text-cyan">
@@ -111,12 +112,6 @@
 					<dt class="text-[10px] uppercase tracking-widest text-fg-muted">themes</dt>
 					<dd data-testid="stat-themes" class="font-display font-bold text-2xl text-amber">
 						{data.brief.n_themes}
-					</dd>
-				</div>
-				<div class="bg-bg-1 px-4 py-2.5 flex flex-col-reverse gap-0.5">
-					<dt class="text-[10px] uppercase tracking-widest text-fg-muted">verified</dt>
-					<dd data-testid="stat-verified" class="font-display font-bold text-2xl text-green">
-						{verifiedCount}
 					</dd>
 				</div>
 				<div class="bg-bg-1 px-4 py-2.5 flex flex-col-reverse gap-0.5 min-w-0">
