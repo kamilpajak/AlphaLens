@@ -136,6 +136,19 @@ class Brief(models.Model):
     # different scorer versions.  Blank for pre-atr-tilt dates.
     scorer_config_version = models.CharField(max_length=128, blank=True, default="")
 
+    # Index-level market-state regime label (PR-2). Computed once per date (SPY
+    # regime) and broadcast to every candidate row; display-only, held out of the
+    # brief sort + selection. ``market_state_config_version`` is the poolability
+    # key for the deferred forward study. Blank / null for pre-market_state dates.
+    market_state = models.CharField(max_length=32, blank=True, default="")
+    market_state_atr_pct = models.FloatField(null=True, blank=True)
+    market_state_atr_pct_q = models.FloatField(null=True, blank=True)
+    market_state_dist200 = models.FloatField(null=True, blank=True)
+    market_state_vix = models.FloatField(null=True, blank=True)
+    market_state_vix_decile = models.FloatField(null=True, blank=True)
+    market_state_squeeze_on = models.BooleanField(null=True, blank=True)
+    market_state_config_version = models.CharField(max_length=128, blank=True, default="")
+
     also_in_themes = models.JSONField(default=list, blank=True)
     rank_in_day = models.IntegerField(null=True, blank=True)
     cohort_size_in_day = models.IntegerField(null=True, blank=True)

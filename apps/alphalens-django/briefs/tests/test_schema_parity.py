@@ -130,6 +130,18 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     # insider_signal_version it is auto-served (exclude=("pk",)) — surfaced as the
     # version chip in PR-3 (SPA); registered here for the no-orphan guard.
     "scorer_config_version",
+    # Index-level market-state context label + raw drivers (PR-2). Broadcast per
+    # date, display-only (out of sort/selection), auto-served via exclude=("pk",);
+    # market_state_config_version is the poolability key. Registered here for the
+    # no-orphan guard.
+    "market_state",
+    "market_state_atr_pct",
+    "market_state_atr_pct_q",
+    "market_state_dist200",
+    "market_state_vix",
+    "market_state_vix_decile",
+    "market_state_squeeze_on",
+    "market_state_config_version",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.
