@@ -71,6 +71,20 @@ class LadderOutcome(models.Model):
     benchmark_window_return = models.FloatField(null=True, blank=True)
     market_excess_return = models.FloatField(null=True, blank=True)
 
+    # Sector-relative excess (PR-2b): ``sector_excess_return = forward_return −
+    # sector_etf_window_return``, the candidate's OWN SPDR sector ETF over the SAME
+    # arrival→exit window. A DIFFERENT series from the SPY-derived market_state
+    # label, so the deferred H-B study is not a pure SPY-on-SPY confound (memo
+    # §4.2, D4 resolution). ``sector_etf_ticker`` is "" for rows whose sector was
+    # unresolvable (never benchmarked against SPY). ``outcome_benchmark_version``
+    # encodes the SIC→ETF map version (poolability key). All NULL / "" for parquets
+    # that predate these columns. Written by
+    # ``alphalens_pipeline.feedback.sector_excess``; the slim Django ingest only READS.
+    sector_etf_ticker = models.CharField(max_length=12, blank=True, default="")
+    sector_etf_window_return = models.FloatField(null=True, blank=True)
+    sector_excess_return = models.FloatField(null=True, blank=True)
+    outcome_benchmark_version = models.CharField(max_length=64, blank=True, default="")
+
     # Sequence + ratchet what-if.
     sequence_str = models.CharField(max_length=256, blank=True, default="")
 

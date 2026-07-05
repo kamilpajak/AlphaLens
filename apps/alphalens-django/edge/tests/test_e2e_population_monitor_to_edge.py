@@ -18,8 +18,9 @@ importable here even though the slim PRODUCTION image deliberately is not):
    mock — the vendor bar source) to write a REAL ``population_ladders/{date}``
    parquet via the real writer.
 2. Run the REAL post-hoc enrichments the production CLI runs in order:
-   ``enrich_store_with_size_fields`` (hermetic) then
-   ``enrich_store_with_benchmark_excess`` (SPY bars injected — same one mock).
+   ``enrich_store_with_size_fields`` (hermetic), ``enrich_store_with_benchmark_excess``
+   and ``enrich_store_with_sector_excess`` (both with injected bars — the sector ETF
+   is resolved offline from the bundled SIC index).
 3. Run the REAL Django ``rebuild_from_parquet`` over that parquet.
 4. Assert ``LadderOutcome`` + ``DayMetaLadderOutcome`` rows materialise with the
    monitor's actual values correctly mapped, and assert ``/v1/edge/summary``
@@ -44,6 +45,7 @@ from rest_framework.test import APIClient
 
 from alphalens_pipeline.feedback.benchmark_excess import enrich_store_with_benchmark_excess
 from alphalens_pipeline.feedback.ladder_chart import enrich_store_with_chart_payloads
+from alphalens_pipeline.feedback.sector_excess import enrich_store_with_sector_excess
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     enrich_store_with_size_fields,
     replay_population_ladders,
@@ -133,8 +135,12 @@ def _build_real_store(root: Path) -> Path:
     )
     # Size overlay (hermetic — reads the brief, no vendor call).
     enrich_store_with_size_fields(store_dir, briefs_dir)
-    # Benchmark excess (the ONLY other vendor touch — SPY bars injected).
+    # Benchmark excess (SPY bars injected).
     enrich_store_with_benchmark_excess(store_dir, bar_fetch=_spy_bars, now=_NOW)
+    # Sector excess (per-row SPDR sector ETF; NVDA -> XLK via the bundled SIC
+    # index, offline). Reuse the same synthetic bar path — the contract test only
+    # needs the columns present, not a specific excess value.
+    enrich_store_with_sector_excess(store_dir, bar_fetch=_spy_bars, now=_NOW)
     # Chart payload (reads the monitor's per-(ticker, arrival) bar cache the real
     # replay just wrote under store_dir/bars/, NOT the host ~/.alphalens default,
     # so inject the cache reader bound to this test's store_dir).
