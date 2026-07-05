@@ -146,6 +146,7 @@ class Brief(models.Model):
     market_state_dist200 = models.FloatField(null=True, blank=True)
     market_state_vix = models.FloatField(null=True, blank=True)
     market_state_vix_decile = models.FloatField(null=True, blank=True)
+    # Tri-state: True (squeeze on) / False (off) / None (unknown — not computed).
     market_state_squeeze_on = models.BooleanField(null=True, blank=True)
     market_state_config_version = models.CharField(max_length=128, blank=True, default="")
 
