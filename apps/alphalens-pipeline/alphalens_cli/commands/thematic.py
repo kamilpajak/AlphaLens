@@ -499,6 +499,16 @@ def score(
 
     enriched = disagreement.enrich(enriched)
 
+    # Index-level market-state context label (PR-1). Computed ONCE for `target`
+    # (SPY regime) and broadcast to every row; display-only, NOT in the brief sort
+    # or selection (kept out by design — see market_state module + guard tests).
+    # enrich is internally fail-soft: a store/FRED hiccup stamps 'unknown', never
+    # aborts. Defaults route the index bars off the disk grouped store + VIX off
+    # the canonical FRED client (no DI needed at the call site).
+    from alphalens_pipeline.market import market_state
+
+    enriched = market_state.enrich(enriched, asof=target)
+
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{target.isoformat()}.parquet"
     enriched.to_parquet(out_path, index=False)
