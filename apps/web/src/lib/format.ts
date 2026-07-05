@@ -221,6 +221,36 @@ export function consensusBand(spread: number | null | undefined): string {
 	return 'split';
 }
 
+// --- Market-state context banner (PR-3) -------------------------------------
+// The index-level regime label (SPY trend × volatility) is DISPLAY-ONLY, frozen
+// a-priori, UNVALIDATED, and held out of every candidate sort/selection. The
+// tone is a descriptive colour, NOT a buy/avoid signal. Its own domain enum (the
+// PillarTone precedent) so the 5 states map independently; `bear_quiet` uses the
+// desaturated `red-dim` token (bearish but calm) to stay distinct from the full
+// `red` of `bear_volatile`. Any unrecognised / absent value → `muted` (never a
+// false regime colour) — this also covers dates that predate the signal.
+export type MarketStateTone = 'green' | 'amber' | 'red' | 'red-dim' | 'muted';
+
+const _MARKET_STATE_TONES: Record<string, MarketStateTone> = {
+	bull_quiet: 'green',
+	bull_volatile: 'amber',
+	bear_volatile: 'red',
+	bear_quiet: 'red-dim'
+};
+
+export function marketStateTone(state: string | null | undefined): MarketStateTone {
+	if (!state) return 'muted';
+	return _MARKET_STATE_TONES[state] ?? 'muted';
+}
+
+/** Hyphenated chip label for a regime state (`bull_quiet` → `bull-quiet`). Any
+ *  null / empty / unrecognised value → `"unknown"` (the first-class no-signal
+ *  state, shown on dates that predate the label). */
+export function marketStateLabel(state: string | null | undefined): string {
+	if (!state || !(state in _MARKET_STATE_TONES)) return 'unknown';
+	return state.replace(/_/g, '-');
+}
+
 /**
  * Raw fcff-yield annotation for the merged Valuation row. The sector-%ile drives
  * the SignalBar headline; this returns the raw % shown beneath it — null (no

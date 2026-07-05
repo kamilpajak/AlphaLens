@@ -436,7 +436,21 @@ export const GLOSSARY: GlossaryEntry[] = [
 		}
 	),
 	briefMetric('next earnings', 'next scheduled earnings date', 'Next confirmed quarterly earnings release for the company. Holding a position through earnings adds a binary event-risk that the trade setup (ATR-based stops / tiers) does not price — the post-print gap can blow through the disaster stop intraday. Blank = no confirmed date available; treat as "unknown, could be soon" if the last filing is >75d old.'),
-	briefMetric('MA200 slope', '200-day moving average slope', 'Day-over-day change in the MA200, expressed as % per day. Positive slope = the long-term trend is still rising (price drawdowns happen against an up-trending base — classic deep-drawdown-reversal setup). Negative slope = secular downtrend; "buy the dip" is fighting the trend. Magnitude is small by construction (typical band ±0.1–0.5%/d).')
+	briefMetric('MA200 slope', '200-day moving average slope', 'Day-over-day change in the MA200, expressed as % per day. Positive slope = the long-term trend is still rising (price drawdowns happen against an up-trending base — classic deep-drawdown-reversal setup). Negative slope = secular downtrend; "buy the dip" is fighting the trend. Magnitude is small by construction (typical band ±0.1–0.5%/d).'),
+	briefMetric(
+		'market context',
+		'index-level market regime',
+		'The broad market (SPY) regime for this date, classified as one of four trend×volatility states (bull/bear × quiet/volatile) from the S&P 500 index — moving-average trend, its own trailing realized-volatility quantile, and the VIX. Context, not a signal · unvalidated: it describes the market backdrop only and NEVER feeds candidate selection or ranking. "unknown" = the label was not computed for this date (e.g. dates before the signal shipped).',
+		{
+			bands: [
+				{ range: 'bull-quiet', label: 'up-trend, calm — the benign backdrop' },
+				{ range: 'bull-volatile', label: 'up-trend, choppy' },
+				{ range: 'bear-volatile', label: 'down-trend, stressed' },
+				{ range: 'bear-quiet', label: 'down-trend, calm — the quiet grind' },
+				{ range: 'unknown', label: 'not computed for this date' }
+			]
+		}
+	)
 ];
 
 export const GLOSSARY_BY_TERM: Map<string, GlossaryEntry> = new Map(

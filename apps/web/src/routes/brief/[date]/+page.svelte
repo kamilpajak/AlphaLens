@@ -1,9 +1,15 @@
 <script lang="ts">
 	import type { PageData } from './$types';
 	import CandidateCard from '$lib/components/CandidateCard.svelte';
+	import MarketContextBanner from '$lib/components/MarketContextBanner.svelte';
 	import { ChevronLeft, ChevronRight, Filter } from 'lucide-svelte';
 
 	let { data }: { data: PageData } = $props();
+
+	// The market-state label is index-level — identical on every candidate for
+	// the date — so read it from the first candidate (undefined on a 0-candidate
+	// day → the banner falls back to the `unknown` state).
+	const marketCtx = $derived(data.brief.candidates[0]);
 
 	let activeTheme = $state<string | null>(null);
 	let onlyVerified = $state(false);
@@ -136,6 +142,16 @@
 			</div>
 		{/if}
 	</header>
+
+	<!-- Market context banner — index-level regime, display-only (PR-3) -->
+	<MarketContextBanner
+		marketState={marketCtx?.market_state}
+		atrPctQ={marketCtx?.market_state_atr_pct_q}
+		dist200={marketCtx?.market_state_dist200}
+		vix={marketCtx?.market_state_vix}
+		vixDecile={marketCtx?.market_state_vix_decile}
+		squeezeOn={marketCtx?.market_state_squeeze_on}
+	/>
 
 	<!-- Filters -->
 	<div class="flex flex-wrap items-center gap-3 mb-5 fade-up" style="animation-delay: 0.1s">

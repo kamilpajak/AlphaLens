@@ -7,7 +7,9 @@ import {
 	selectionBadge,
 	catalystLabel,
 	fmtSigned,
-	fmtUsdCompact
+	fmtUsdCompact,
+	marketStateTone,
+	marketStateLabel
 } from '../../src/lib/format';
 
 describe('fmtSigned — a signed fixed-decimal number (+1.20 / -1.20 / —)', () => {
@@ -142,5 +144,37 @@ describe('tenkAvailable (10-K presence from gate arrays)', () => {
 	it('false / safe on null / undefined inputs', () => {
 		expect(tenkAvailable(null, undefined)).toBe(false);
 		expect(tenkAvailable(undefined, null)).toBe(false);
+	});
+});
+
+describe('marketStateTone — display-only tone for the market-context banner', () => {
+	it('maps each of the 4 regime states to its memo tone', () => {
+		expect(marketStateTone('bull_quiet')).toBe('green');
+		expect(marketStateTone('bull_volatile')).toBe('amber');
+		expect(marketStateTone('bear_volatile')).toBe('red');
+		expect(marketStateTone('bear_quiet')).toBe('red-dim');
+	});
+	it('unknown / absent / unrecognised → muted (never a false regime colour)', () => {
+		expect(marketStateTone('unknown')).toBe('muted');
+		expect(marketStateTone('')).toBe('muted');
+		expect(marketStateTone(null)).toBe('muted');
+		expect(marketStateTone(undefined)).toBe('muted');
+		expect(marketStateTone('bananas')).toBe('muted');
+	});
+});
+
+describe('marketStateLabel — hyphenated regime label for the chip', () => {
+	it('renders each known state as trend-vol hyphenated', () => {
+		expect(marketStateLabel('bull_quiet')).toBe('bull-quiet');
+		expect(marketStateLabel('bull_volatile')).toBe('bull-volatile');
+		expect(marketStateLabel('bear_volatile')).toBe('bear-volatile');
+		expect(marketStateLabel('bear_quiet')).toBe('bear-quiet');
+	});
+	it('null / undefined / empty / unrecognised → "unknown"', () => {
+		expect(marketStateLabel('unknown')).toBe('unknown');
+		expect(marketStateLabel(null)).toBe('unknown');
+		expect(marketStateLabel(undefined)).toBe('unknown');
+		expect(marketStateLabel('')).toBe('unknown');
+		expect(marketStateLabel('bananas')).toBe('unknown');
 	});
 });

@@ -106,7 +106,15 @@ const TS_CANDIDATE_KEYS = [
 	'brief_trade_setup',
 	'brief_template_id',
 	'brief_template_facts',
-	'brief_generated_at'
+	'brief_generated_at',
+	'market_state',
+	'market_state_atr_pct',
+	'market_state_atr_pct_q',
+	'market_state_dist200',
+	'market_state_vix',
+	'market_state_vix_decile',
+	'market_state_squeeze_on',
+	'market_state_config_version'
 ] as const satisfies readonly (keyof Candidate)[];
 
 // Exhaustiveness guard: if the interface gains a key not listed above, this
