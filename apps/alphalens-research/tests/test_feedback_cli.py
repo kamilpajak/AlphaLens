@@ -39,6 +39,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
                 "alphalens_pipeline.feedback.benchmark_excess.enrich_store_with_benchmark_excess",
                 return_value=0,
             ),
+            mock.patch(
+                "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
+                return_value=0,
+            ),
         ):
             result = self.runner.invoke(
                 app,
@@ -48,6 +52,38 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.stdout)
         self.assertIn("population-monitor", result.stdout)
         replay.assert_called_once()
+
+    def test_command_invokes_sector_excess_enrichment(self):
+        # The sector-relative EDGE outcome (PR-2b) runs in the unconditional
+        # enrichment tail alongside benchmark-excess, so the store gets its
+        # sector_excess_return columns on every nightly sweep.
+        fake_report = mock.Mock(terminal=2, ongoing=1)
+        with (
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                return_value=[fake_report],
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.enrich_store_with_size_fields",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.benchmark_excess.enrich_store_with_benchmark_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
+                return_value=3,
+            ) as sector_excess,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["feedback", "backfill-shadow-returns", "--briefs-dir", "/tmp/does-not-matter"],
+            )
+
+        self.assertEqual(result.exit_code, 0, result.stdout)
+        sector_excess.assert_called_once()
+        self.assertIn("sector-excess", result.stdout)
 
     def test_population_failure_is_swallowed_command_still_exits_zero(self):
         # A Polygon outage / replay error must NOT change the command's exit
@@ -66,6 +102,10 @@ class TestFeedbackBackfillCommand(unittest.TestCase):
             ),
             mock.patch(
                 "alphalens_pipeline.feedback.benchmark_excess.enrich_store_with_benchmark_excess",
+                return_value=0,
+            ),
+            mock.patch(
+                "alphalens_pipeline.feedback.sector_excess.enrich_store_with_sector_excess",
                 return_value=0,
             ),
         ):
