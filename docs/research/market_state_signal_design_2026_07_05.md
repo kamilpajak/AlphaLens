@@ -17,7 +17,7 @@ Port the crypto "market state" heuristic to equities as an **index-level (SPY), 
 
 **Three claims, kept strictly separate:**
 - **H-context (ships now, no Bonferroni cost):** the label is descriptive metadata on the brief. Rendering it makes *no statistical claim*.
-- **H-A (regime predicts forward INDEX behavior):** a pre-registered hypothesis, testable purely on index data.
+- **H-A (regime predicts forward INDEX behavior):** a pre-registered hypothesis, testable purely on index data. Its main value is a diagnostic **screen on H-B** + dropping the display `unvalidated` tag — **not** a behavior change (see §4.6).
 - **H-B (regime conditions the tool's own selection edge):** a *separate* pre-registered hypothesis that could eventually change behavior. **Decoupled (D4 resolved 2026-07-05):** tested on a **sector-relative** outcome (`sector_excess_return` = candidate minus its sector ETF), not the SPY-subtracted metric — see §4.2.
 
 Nothing feeds selection until H-B is both decoupled and passes forward-out-of-sample AND pays its Bonferroni cost.
@@ -194,6 +194,20 @@ Because §2 freezes all thresholds a-priori with **no fitting**, there is no in-
 ### 4.5 Harness
 `apps/alphalens-research/scripts/analyze_market_state_edge.py` (research side, Mac/runpod, not hot path): joins `LadderOutcome` / population-ladder parquets to per-date `market_state`, runs the **episode-clustered** tests for H-A (and H-B once decoupled), enforces the episode-N gate in output (no numbers below 30 episodes; "early/high-variance" 30–100; full inference ≥100 — the `feedback_edge_dashboard` §3.2 rule applied at episode level), prints Bonferroni-adjusted p-values vs the ledger threshold. An EDGE-dashboard `?group_by=market_state` slice is deferred (needs Brief⋈LadderOutcome join, same deferral as the `/edge` scorer-version chip).
 
+### 4.6 What a validated H-A licenses (and does not)
+A passing H-A means only that the regime label has real predictive content **for the INDEX** (SPY forward return / drawdown / vol separate across the 4 states). It is a statement about the market, **not** about the tool's picks. Be explicit about what it does and does not earn:
+
+**H-A licenses:**
+- **Dropping the `unvalidated` qualifier on the context banner** — the display label graduates from "descriptive, unproven" to "validated market context." Still display-only; no sort, no gate.
+- **A diagnostic screen on H-B — this is H-A's main value.** If H-A **fails** (the label does not even separate *index* outcomes), the taxonomy is noise: a red flag to collapse states (D3) or drop the signal, and evidence that maturing H-B is probably not worth the wait. If H-A **passes**, the label is real and H-B is worth waiting for. H-A is thus a cheap *pre-screen on H-B*, more than a feature in itself.
+
+**H-A does NOT license (each needs its own pre-registered hypothesis):**
+- **Any selection / ordering change** — that is H-B (regime conditions the tool's OWN edge). A real *index*-regime signal says nothing about whether the tool's picks do better or worse in that regime.
+- **Market-timing prescriptions on the card** ("risk-off — reduce exposure", "wait for `bull_quiet`"). The tool is augmentation, not a market-timing engine (project doctrine: regime timing as alpha is a *separate* hypothesis paying its own Bonferroni; the group decides, the tool informs). At most the banner states the regime factually and non-prescriptively.
+- **Confidence from a long-history OOS pass** — per §8.3, non-stationarity makes a 20–30y H-A firebreak weakly interpretable; a pass is suggestive, not a license to act.
+
+**Consequence for sequencing (ties to §8.4):** because H-A is **near-inert for v1 behavior** — its payoff is a display caveat + a diagnostic screen — validating it is **not urgent**. The backfill to test H-A can wait until H-B forward data is accruing anyway (~2026-09+). Ship the free FATAL-1 work (done, D4) and the display-only PRs (PR-0..3) now; spend backfill effort only when the H-B clock makes H-A worth cashing in as its screen.
+
 ---
 
 ## 5. Scope / phasing (PR breakdown)
@@ -270,7 +284,7 @@ The cheap path (backfill 20–30y SPY/QQQ daily bars from Polygon/yfinance; VIX 
 
 ### 8.4 Decision — spend $0, sequence behind free design work
 1. **First (free): make the FATAL-1 decision (D4)** — pick a non-SPY outcome benchmark (peer/sector) or a pre-registered residualization. This gates whether H-A thresholds even aim at the right target; fitting before it risks locking choices that must be re-fit once the benchmark changes.
-2. **Then (free): write "what does a validated H-A license?"** — does a passing H-A change any v1 behavior (badge, soft tilt), or is it inert until H-B? If inert, **the backfill can wait too.**
+2. **"What does a validated H-A license?" — DONE, see §4.6.** Answer: near-inert — H-A earns only a display caveat drop + a diagnostic screen on H-B, no v1 behavior change. Because it is inert without H-B, **the backfill can wait too.**
 3. **Backfill only if** (1) and (2) settle and a validated H-A licenses a shippable v1 behavior — then a **Polygon Starter month (~$29)** run scheduled off all live-job windows is cleaner than the free path (avoids quota starvation). Use **self-referential rolling percentiles**, not fixed cross-era thresholds.
 4. **Breadth re-entry rule:** reconsider breadth-as-signal (and therefore PIT/delisted data) **only after** H-A is validated AND H-B shows a regime-conditioned edge (~2026-09+). Until then, "v1 dropped breadth" is a time-boxed deferral, not a permanent close (project doctrine: never close the door).
 
