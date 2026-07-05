@@ -668,3 +668,59 @@ class TestInsiderSignalVersionIngest:
         _write_parquet(tmp_path, "2026-06-17", [{"ticker": "AAA", "theme": "t"}])
         rebuild_from_parquet(briefs_dir=tmp_path)
         assert Brief.objects.get(ticker="AAA").insider_signal_version == ""
+
+
+@pytest.mark.django_db
+class TestMarketStateIngest:
+    """PR-2: the index-level market_state columns round-trip into flat Brief fields."""
+
+    _CFG = "mstate-v1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED"
+
+    def _rows(self) -> list[dict]:
+        common = {
+            "theme": "ai-infra",
+            "market_state": "bull_quiet",
+            "market_state_atr_pct": 0.012,
+            "market_state_atr_pct_q": 0.35,
+            "market_state_dist200": 0.081,
+            "market_state_vix": 14.5,
+            "market_state_vix_decile": 0.42,
+            "market_state_config_version": self._CFG,
+        }
+        return [
+            {"ticker": "NVDA", "company_name": "NVIDIA", **common, "market_state_squeeze_on": True},
+            {
+                "ticker": "AVGO",
+                "company_name": "Broadcom",
+                **common,
+                "market_state_squeeze_on": None,
+            },
+        ]
+
+    def test_market_state_columns_round_trip(self, tmp_path: Path):
+        _write_parquet(tmp_path, "2026-06-11", self._rows())
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        nvda = Brief.objects.get(ticker="NVDA")
+        assert nvda.market_state == "bull_quiet"
+        assert nvda.market_state_atr_pct == pytest.approx(0.012)
+        assert nvda.market_state_atr_pct_q == pytest.approx(0.35)
+        assert nvda.market_state_dist200 == pytest.approx(0.081)
+        assert nvda.market_state_vix == pytest.approx(14.5)
+        assert nvda.market_state_vix_decile == pytest.approx(0.42)
+        assert nvda.market_state_squeeze_on is True
+        assert nvda.market_state_config_version.endswith("UNVALIDATED")
+
+        # index-level: same label broadcast; nullable squeeze survives as None.
+        avgo = Brief.objects.get(ticker="AVGO")
+        assert avgo.market_state == "bull_quiet"
+        assert avgo.market_state_squeeze_on is None
+
+    def test_missing_market_state_columns_do_not_crash(self, tmp_path: Path):
+        # A pre-market_state parquet ingests cleanly: CharField "" + nullable floats None.
+        _write_parquet(tmp_path, "2026-06-10", [{"ticker": "AAA", "theme": "t"}])
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        aaa = Brief.objects.get(ticker="AAA")
+        assert aaa.market_state == ""
+        assert aaa.market_state_atr_pct is None
+        assert aaa.market_state_squeeze_on is None
