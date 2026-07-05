@@ -113,6 +113,7 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     # fresh replay above), so they run even when the live replay failed. The same
     # deadline instance is passed through so they respect the shared budget.
     _enrich_population_benchmark_excess(deadline=deadline)
+    _enrich_population_sector_excess(deadline=deadline)
     _enrich_population_size_fields(briefs_dir, deadline=deadline)
     _enrich_population_chart_payloads(briefs_dir, deadline=deadline)
 
@@ -185,6 +186,30 @@ def _enrich_population_benchmark_excess(*, deadline: Any = None) -> None:
         typer.echo(f"benchmark-excess: enriched {n} rows with market-excess return.")
     except Exception:
         logger.exception("benchmark-excess enrichment failed; continuing")
+
+
+def _enrich_population_sector_excess(*, deadline: Any = None) -> None:
+    """Add sector-relative EDGE-outcome columns to the store. Never raises.
+
+    Computes ``sector_etf_window_return`` + ``sector_excess_return`` per row
+    (the candidate's OWN SPDR sector ETF over the SAME arrival→exit window as
+    ``forward_return``), so the outcome benchmark is a different series from the
+    SPY-derived market_state label — breaking the SPY-on-SPY confound (memo §4.2,
+    D4 resolution). Runs HERE in the pipeline (Polygon + calendar + SIC index);
+    the slim Django ingest only READS the columns. Swallow-all like the rest of
+    the nightly tail, and shares the same run deadline as benchmark-excess.
+    """
+    try:
+        from alphalens_pipeline.feedback.sector_excess import (
+            enrich_store_with_sector_excess,
+        )
+
+        n = enrich_store_with_sector_excess(
+            _ALPHALENS_HOME / "population_ladders", deadline=deadline
+        )
+        typer.echo(f"sector-excess: enriched {n} rows with sector-relative return.")
+    except Exception:
+        logger.exception("sector-excess enrichment failed; continuing")
 
 
 @feedback_app.command(name="drop-decisions-table")

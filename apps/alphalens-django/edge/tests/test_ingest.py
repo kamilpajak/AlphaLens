@@ -201,3 +201,47 @@ def test_ingest_scorer_config_version_defaults_to_empty_when_column_absent(tmp_p
 
     outcome = LadderOutcome.objects.get(ticker="OLDROW")
     assert outcome.scorer_config_version == ""
+
+
+@pytest.mark.django_db
+def test_ingest_persists_sector_excess_columns(tmp_path: Path):
+    """A parquet WITH the sector-excess columns (PR-2b) flows through to the DB.
+
+    The sector-relative outcome is measured against the candidate's OWN SPDR
+    sector ETF over the SAME window as market-excess — a different series from the
+    SPY-derived market_state label (memo §4.2, D4 resolution).
+    """
+    row = _terminal_row("NVDA", excess=0.05)
+    row["sector_etf_ticker"] = "XLK"
+    row["sector_etf_window_return"] = 0.03
+    row["sector_excess_return"] = 0.03  # forward_return 0.06 − 0.03
+    row["outcome_benchmark_version"] = "sector-etf-v1-sic2-spdr-v1"
+    _write_parquet(tmp_path, "2026-05-27", [row])
+    rebuild_from_parquet(tmp_path)
+
+    outcome = LadderOutcome.objects.get(ticker="NVDA")
+    assert outcome.sector_etf_ticker == "XLK"
+    assert outcome.sector_etf_window_return == pytest.approx(0.03)
+    assert outcome.sector_excess_return == pytest.approx(0.03)
+    assert outcome.outcome_benchmark_version == "sector-etf-v1-sic2-spdr-v1"
+
+
+@pytest.mark.django_db
+def test_ingest_sector_excess_defaults_when_columns_absent(tmp_path: Path):
+    """A parquet WITHOUT the sector-excess columns ingests floats NULL, tokens ''."""
+    row = _terminal_row("OLDROW", excess=0.01)
+    for col in (
+        "sector_etf_ticker",
+        "sector_etf_window_return",
+        "sector_excess_return",
+        "outcome_benchmark_version",
+    ):
+        row.pop(col, None)
+    _write_parquet(tmp_path, "2026-05-27", [row])
+    rebuild_from_parquet(tmp_path)
+
+    outcome = LadderOutcome.objects.get(ticker="OLDROW")
+    assert outcome.sector_etf_ticker == ""
+    assert outcome.sector_etf_window_return is None
+    assert outcome.sector_excess_return is None
+    assert outcome.outcome_benchmark_version == ""
