@@ -85,7 +85,7 @@
 			aria-controls="market-context-axes"
 			class="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg transition-colors"
 		>
-			axes
+			{open ? 'hide' : 'axes'}
 			<ChevronDown class="size-3 transition-transform {open ? 'rotate-180' : ''}" />
 		</button>
 	</div>
