@@ -24,8 +24,16 @@
 </script>
 
 {#snippet template(args: BannerProps)}
+	<!-- Wrapped in a header-like container: the banner is a border-t footer strip,
+	     so it previews accurately as the bottom row of the brief session box. -->
 	<div style="padding: 1.5rem;">
-		<MarketContextBanner {...args} />
+		<div class="border border-grid bg-bg-1">
+			<div class="px-4 sm:px-6 py-5">
+				<div class="text-[10px] uppercase tracking-[0.3em] text-fg-muted">// session</div>
+				<div class="font-display font-bold text-3xl text-amber tracking-tight mt-1">2026-06-24</div>
+			</div>
+			<MarketContextBanner {...args} />
+		</div>
 	</div>
 {/snippet}
 

@@ -127,6 +127,17 @@
 			</dl>
 		</div>
 
+		<!-- Market context strip — index-level regime, display-only (PR-3). Lives
+		     inside the header as a footer strip, above the catalyst headline. -->
+		<MarketContextBanner
+			marketState={marketCtx?.market_state}
+			atrPctQ={marketCtx?.market_state_atr_pct_q}
+			dist200={marketCtx?.market_state_dist200}
+			vix={marketCtx?.market_state_vix}
+			vixDecile={marketCtx?.market_state_vix_decile}
+			squeezeOn={marketCtx?.market_state_squeeze_on}
+		/>
+
 		<!-- Catalyst footer — full width for the long headline -->
 		{#if firstCatalystUrl}
 			<div class="border-t border-grid px-4 sm:px-6 py-3 text-xs">
@@ -137,16 +148,6 @@
 			</div>
 		{/if}
 	</header>
-
-	<!-- Market context banner — index-level regime, display-only (PR-3) -->
-	<MarketContextBanner
-		marketState={marketCtx?.market_state}
-		atrPctQ={marketCtx?.market_state_atr_pct_q}
-		dist200={marketCtx?.market_state_dist200}
-		vix={marketCtx?.market_state_vix}
-		vixDecile={marketCtx?.market_state_vix_decile}
-		squeezeOn={marketCtx?.market_state_squeeze_on}
-	/>
 
 	<!-- Filters -->
 	<div class="flex flex-wrap items-center gap-3 mb-5 fade-up" style="animation-delay: 0.1s">

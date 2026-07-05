@@ -63,27 +63,32 @@
 	const squeezeLabel = $derived(squeezeOn === true ? 'on' : squeezeOn === false ? 'off' : '—');
 </script>
 
-<section class="mb-5 fade-up" style="animation-delay: 0.08s" aria-label="market context">
-	<div class="flex items-center gap-x-3 gap-y-2 flex-wrap">
-		<JargonTip {...tipProps('market context')} placement="below">
-			<span class="text-[10px] uppercase tracking-widest text-fg-muted">market context</span>
-		</JargonTip>
+<!-- Lives INSIDE the brief header container as a footer strip — a twin of the
+     "top catalyst" strip (same border-grid divider + micro-label typography), so
+     the index-level regime reads as native header chrome, not a floating banner. -->
+<section aria-label="market context" class="border-t border-grid px-4 sm:px-6 py-3">
+	<div class="flex items-center justify-between gap-x-4 gap-y-2 flex-wrap">
+		<div class="flex items-center gap-x-3 gap-y-2 flex-wrap min-w-0">
+			<JargonTip {...tipProps('market context')} placement="below">
+				<span class="text-[10px] uppercase tracking-widest text-fg-muted">market context</span>
+			</JargonTip>
 
-		<span
-			class="inline-flex items-center gap-1.5 px-2 py-1 border text-[11px] uppercase tracking-widest whitespace-nowrap {TONE_CLASS[
-				tone
-			]}"
-		>
-			<span class="size-1.5 rounded-full bg-current" aria-hidden="true"></span>
-			market · {label}
-		</span>
+			<span
+				class="inline-flex items-center gap-1.5 px-2 py-1 border text-[11px] uppercase tracking-widest whitespace-nowrap {TONE_CLASS[
+					tone
+				]}"
+			>
+				<span class="size-1.5 rounded-full bg-current" aria-hidden="true"></span>
+				market · {label}
+			</span>
+		</div>
 
 		<button
 			type="button"
 			onclick={() => (open = !open)}
 			aria-expanded={open}
 			aria-controls="market-context-axes"
-			class="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg transition-colors"
+			class="inline-flex items-center gap-1 text-[10px] uppercase tracking-widest text-fg-muted hover:text-fg transition-colors shrink-0"
 		>
 			{open ? 'hide' : 'axes'}
 			<ChevronDown class="size-3 transition-transform {open ? 'rotate-180' : ''}" />
@@ -91,7 +96,7 @@
 	</div>
 
 	{#if open}
-		<div id="market-context-axes" class="mt-2.5 border-t border-grid pt-2.5">
+		<div id="market-context-axes" class="mt-3 border-t border-grid pt-3">
 			<dl class="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-1.5 text-[11px]">
 				<div class="flex items-center justify-between gap-2">
 					<dt class="text-fg-muted uppercase tracking-widest text-[9px]">trend</dt>
