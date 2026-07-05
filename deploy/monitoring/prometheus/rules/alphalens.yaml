@@ -122,28 +122,6 @@ groups:
           summary: "literature-scan-monthly success metric missing"
           description: "No success metric for literature-scan-monthly. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
-      - alert: AlphalensJobStale
-        expr: time() - alphalens_job_last_success_timestamp_seconds{job="av-earnings-backfill"} > 172800
-        for: 5m
-        labels:
-          severity: warning
-          route: telegram
-          unit: av-earnings-backfill
-        annotations:
-          summary: "av-earnings-backfill stale > 48h (expected daily cadence)"
-          description: "Last successful run was {{ $value | humanizeDuration }} ago."
-
-      - alert: AlphalensJobMetricMissing
-        expr: absent(alphalens_job_last_success_timestamp_seconds{job="av-earnings-backfill"})
-        for: 5m
-        labels:
-          severity: warning
-          route: telegram
-          unit: av-earnings-backfill
-        annotations:
-          summary: "av-earnings-backfill success metric missing"
-          description: "No success metric for av-earnings-backfill. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
-
       # thematic-build moved from 1×/day → 6×/day (every 4h at HH:30
       # UTC) in PR-F (epic #295, issue #300). 43200s = 12h = 3× the
       # 4h interval — DELIBERATELY asymmetric vs the other 4 services
@@ -199,8 +177,8 @@ groups:
           description: "alphalens-edge-mirror has not succeeded for {{ $value | humanizeDuration }} — /edge is stale regardless of whether the compute job 'succeeded'."
 
       # feedback-shadow-returns runs nightly at 06:30 UTC (Track A v2
-      # PR-T). 172800s = 48h = 2× the daily cadence, matching
-      # av-earnings-backfill. The sweep exits 0 even on nights that price
+      # PR-T). 172800s = 48h = 2× the daily cadence, matching the other
+      # daily jobs (form4-incremental). The sweep exits 0 even on nights that price
       # 0 matured dates (per-ticker resilience), so last_success refreshes
       # every night — staleness here cleanly catches "the nightly sweep
       # stopped running", which the exit-code AlphalensJobFailed cannot.
@@ -230,7 +208,7 @@ groups:
 
       # form4-incremental runs daily at 02:30 UTC (Form-4 daily-incremental
       # ingest). 172800s = 48h = 2× the daily cadence, matching
-      # av-earnings-backfill + feedback-shadow-returns. The fixed-lookback window
+      # feedback-shadow-returns. The fixed-lookback window
       # makes a one-night miss self-heal on the next overlapping run, and the job
       # exits 0 even on a transient-403 night, so last_success refreshes nightly —
       # staleness here cleanly catches "the daily ingest stopped running".

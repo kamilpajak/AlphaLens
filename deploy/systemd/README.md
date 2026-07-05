@@ -10,7 +10,6 @@ hosts where launchd is unavailable.
 | `alphalens-edgar-detect.{service,timer}` | every 15 min | Layer 1 EDGAR poll + Telegram alert (migrated from macOS `com.alphalens.edgar-detect` on 2026-05-30) |
 | `alphalens-literature-scan-weekly.{service,timer}` | Sun 18:00 Europe/Warsaw | Perplexity weekly RSS scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
 | `alphalens-literature-scan-monthly.{service,timer}` | 1st of month 09:00 Europe/Warsaw | Perplexity deep scan + Telegram digest + auto-commit to `main` (migrated 2026-05-30) |
-| `alphalens-av-earnings-backfill.{service,timer}` | daily 00:05 UTC | AV EARNINGS daily 25-call quota burn into `~/.alphalens/av_cache/` |
 | `alphalens-thematic-build.{service,timer}` | 6× daily at HH:30 UTC (00/04/08/12/16/20) | docker-run thematic pipeline + verify-cache + Django rebuild-cache (PR-F, epic #295 #300) |
 | `alphalens-feedback-shadow-returns.{service,timer}` | daily 06:30 UTC | host-venv `alphalens feedback backfill-shadow-returns` — runs the broker-free population monitor over its own ~42-session window (price-path replay over Polygon minute bars) and the benchmark-excess + size-field enrichment tail. `Persistent=true` catch-up; idempotent re-stamp. Needs `POLYGON_API_KEY`. NOT trading-day-gated (the per-date maturity guard handles non-trading dates). The unit + command name are retained for the existing timer; the per-decision ladder replay (Track A click ledger) was removed (#465), so the command now drives only the population monitor — a rename is a deferred follow-up. |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) — the one-time historical seed (DONE 2026-05-08) |
@@ -24,9 +23,16 @@ hosts where launchd is unavailable.
 > disable these units and drop the broker keys from `/etc/alphalens/env` (a
 > separate operator runbook step).
 
+> **Decommissioned 2026-07-05:** `alphalens-av-earnings-backfill.{service,timer}`
+> were removed. The only consumer was paradigm #14 (PEAD v2), killed
+> 2026-06-24 (doctrine FAIL). The VPS timer was disabled 2026-07-03 and its
+> Prometheus staleness alert removed 2026-07-05; the `~/.alphalens/av_cache/`
+> snapshot (502 tickers) is archived in Nextcloud `AlphaLens-prod/caches/`
+> (`av_cache_2026-07-05.tar.zst`).
+
 ## Environment file setup (`/etc/alphalens/env`)
 
-All three AlphaLens systemd units load secrets via
+AlphaLens systemd units load secrets via
 `EnvironmentFile=/etc/alphalens/env`:
 - `alphalens-thematic-build.service` — `OPENROUTER_API_KEY`, `POLYGON_API_KEY`,
   `PERPLEXITY_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`,
@@ -34,7 +40,6 @@ All three AlphaLens systemd units load secrets via
   (the `cache refresh-vix` step at the end of `run_thematic_day.sh` pulls
   VIXCLS so the feedback POST path can stamp a real market regime; the step
   is best-effort, so a missing key only degrades regime stamps to "unknown")
-- `alphalens-av-earnings-backfill.service` — `ALPHA_VANTAGE_API_KEY`
 - `alphalens-form4-backfill.service` — `SEC_EDGAR_USER_AGENT`
 - `alphalens-form4-incremental.service` — `SEC_EDGAR_USER_AGENT` (the
   residential-VPS IP must carry the operator contact UA; the canonical client
@@ -464,59 +469,6 @@ overlapping window + the immutable `.idx` are the recovery. See the design memo
 `~/.alphalens/form4_parquet/transaction_year=YYYY/compacted.parquet` — the same
 store the seed wrote, consumed in-place by the Cohen-Malloy / opportunistic-Form4
 scorers. The incremental adds tens of KB/day.
-
-## alphalens-av-earnings-backfill.service + alphalens-av-earnings-backfill.timer
-
-Alpha Vantage `EARNINGS` daily backfill (`apps/alphalens-research/scripts/av_earnings_daily_backfill.py`).
-Unlike the Form-4 daemon, this is a **oneshot** triggered by a daily timer:
-each fire consumes up to the AV free-tier 25-call/day quota then exits. Full
-S&P 500 union backfill (~503 names) takes ~21 calendar days. Cache lives at
-`~/.alphalens/av_cache/earnings_<T>.json` and is general-purpose (any future
-paradigm reading AV EARNINGS hits the same store).
-
-### Install
-
-```bash
-# Prereq: /etc/alphalens/env must exist with ALPHA_VANTAGE_API_KEY=...
-# see "Environment file setup" section at the top of this README.
-
-mkdir -p ~/.config/systemd/user
-cp deploy/systemd/alphalens-av-earnings-backfill.service ~/.config/systemd/user/
-cp deploy/systemd/alphalens-av-earnings-backfill.timer   ~/.config/systemd/user/
-
-systemctl --user daemon-reload
-systemctl --user enable --now alphalens-av-earnings-backfill.timer
-
-# Optional: trigger an immediate fire to validate the unit works.
-systemctl --user start alphalens-av-earnings-backfill.service
-```
-
-### Inspect
-
-```bash
-systemctl --user list-timers --all              # see next-fire / last-fire
-systemctl --user status alphalens-av-earnings-backfill.timer
-journalctl --user -u alphalens-av-earnings-backfill.service -f
-journalctl --user -u alphalens-av-earnings-backfill.service --since "yesterday"
-```
-
-### Optional rclone sync — systemd PATH caveat
-
-If a future operator extends `ExecStart` with `--rclone-remote nextcloud:alphalens/av_cache`,
-note that systemd-user services run with a restricted `$PATH` (typically
-`/usr/local/bin:/usr/bin`). If `rclone` is installed elsewhere (e.g.
-`/usr/local/bin/rclone` on Debian, `~/.local/bin/rclone` on a pip-installed
-copy), pass an absolute path via `--rclone-bin /full/path/to/rclone` in the
-`ExecStart` line to avoid `FileNotFoundError` at fire time.
-
-### Why oneshot + timer (not long-running daemon)
-
-The free-tier quota is the binding constraint, not compute. Holding a
-process resident 23h+ just to wake up for 30s of API calls wastes
-resources and complicates restart semantics. The timer pattern fires
-the script daily, picks up only uncached tickers, exits cleanly on
-`AVRateLimitError` (return code 0 — expected steady-state), and lets
-systemd handle persistence across reboots via `Persistent=true`.
 
 ## alphalens-thematic-build.service / .timer
 

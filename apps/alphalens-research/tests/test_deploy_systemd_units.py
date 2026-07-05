@@ -64,7 +64,6 @@ ACTIVE_SERVICES = (
     EDGAR_SERVICE,
     LIT_WEEKLY_SERVICE,
     LIT_MONTHLY_SERVICE,
-    SYSTEMD_DIR / "alphalens-av-earnings-backfill.service",
     SYSTEMD_DIR / "alphalens-thematic-build.service",
     SHADOW_SERVICE,
     SYSTEMD_DIR / "alphalens-form4-incremental.service",
@@ -723,9 +722,9 @@ class TestThematicBuildCadence(unittest.TestCase):
         # all firing at boot+0. systemd serializes Type=oneshot fires
         # for the same unit (queued, not parallel) so the pipelines
         # themselves don't collide, but the FIRST catch-up fires
-        # simultaneously with the every-15-min EDGAR detector + any
-        # 00:05 UTC av-earnings backfill that the same boot rescues —
-        # contending for the same SEC/Polygon per-IP rate-limit
+        # simultaneously with the every-15-min EDGAR detector + the
+        # other daily backfills the same boot rescues (form4-incremental,
+        # grouped-daily-topup) — contending for the same SEC/Polygon per-IP rate-limit
         # buckets. A 5-min jitter keeps every fire inside its
         # timezone-rotation window (slots are 4h apart; ±5 min still
         # reads as "pre-XNYS open" / "pre-XTKS open" etc.) but

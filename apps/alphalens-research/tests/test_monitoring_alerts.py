@@ -48,7 +48,6 @@ ACTIVE_JOBS = (
     "edgar-detect",
     "literature-scan-weekly",
     "literature-scan-monthly",
-    "av-earnings-backfill",
     "thematic-build",
     "feedback-shadow-returns",
     "form4-incremental",
@@ -149,7 +148,6 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "edgar-detect": 1800,  # 30m = 2× 15-min cadence
             "literature-scan-weekly": 1209600,  # 14d = 2× 7d cadence
             "literature-scan-monthly": 6048000,  # 70d = 2.3× 30d cadence (looser, scan is high-cost)
-            "av-earnings-backfill": 172800,  # 48h = 2× 24h cadence
             # 12h = 3× the new 4h cadence (PR-F, epic #295 / issue
             # #300). Was 172800 (48h) at 1× cadence; tightened
             # alongside the 6×/day timer in

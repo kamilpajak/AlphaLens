@@ -212,64 +212,10 @@
       ]
     },
     {
-      "id": 10,
-      "type": "row",
-      "title": "Domain — Alpha Vantage quota",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 29},
-      "collapsed": false
-    },
-    {
-      "id": 11,
-      "type": "stat",
-      "title": "AV quota remaining today",
-      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 30},
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alphalens_av_quota_remaining",
-          "instant": true
-        }
-      ],
-      "options": {
-        "reduceOptions": {"calcs": ["lastNotNull"]},
-        "colorMode": "background",
-        "graphMode": "none"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "red", "value": null},
-              {"color": "yellow", "value": 3},
-              {"color": "green", "value": 10}
-            ]
-          },
-          "max": 25,
-          "min": 0
-        }
-      }
-    },
-    {
-      "id": 12,
-      "type": "timeseries",
-      "title": "AV tickers by status (last run)",
-      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 30},
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {"type": "prometheus", "uid": "prometheus"},
-          "expr": "alphalens_av_tickers_total",
-          "legendFormat": "{{ status }}"
-        }
-      ]
-    },
-    {
       "id": 13,
       "type": "row",
       "title": "Domain — structured event templates (#143 / epic #321)",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 37},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 29},
       "collapsed": false
     },
     {
@@ -277,7 +223,7 @@
       "type": "timeseries",
       "title": "Per-template match rate (7d rolling)",
       "description": "Sustained < 20% on any template fires AlphalensTemplateMatchRateLow.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 38},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
       "targets": [
         {
           "refId": "A",
@@ -307,7 +253,7 @@
       "type": "timeseries",
       "title": "Holdout drops by reason",
       "description": "Counts of articles dropped to holdout, broken down by reason. Steady-state non-zero is expected (long-tail events that don't match any template); spikes in one reason indicate config drift.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 38},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
       "targets": [
         {
           "refId": "A",
@@ -322,7 +268,7 @@
       "type": "timeseries",
       "title": "Predicate pass/fail rate",
       "description": "Per-predicate pass rate across the matched corpus. A predicate stuck at 100% pass is potentially toothless; stuck at 0% pass is blocking everything (regex rot).",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 46},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 38},
       "targets": [
         {
           "refId": "A",
