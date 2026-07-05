@@ -89,6 +89,25 @@ _STATE_MAP = {
 }
 
 
+def _trend_axis(c: float, sma50: float, sma200: float, slope: float, dist200: float) -> str:
+    """Trend axis {up, down, neutral} (memo §1.3). The ``DIST_FLAT_BAND`` deadband
+    around SMA200 takes precedence → neutral; otherwise price + SMA50 must be on the
+    same side of SMA200 with a same-sign SMA50 slope."""
+    if abs(dist200) <= DIST_FLAT_BAND:
+        return "neutral"
+    if c > sma200 and sma50 > sma200 and slope > SLOPE_EPS:
+        return "up"
+    if c < sma200 and sma50 < sma200 and slope < -SLOPE_EPS:
+        return "down"
+    return "neutral"
+
+
+def _vol_axis(atr_pct_q: float, vix: float) -> str:
+    """Vol axis {low, high}: OR of a realized (ATR% quantile) and an implied (VIX)
+    proxy — either elevation flips the state to 'high' (memo §1.3)."""
+    return "high" if (atr_pct_q >= ATR_HIGH_Q or vix >= VIX_HIGH) else "low"
+
+
 def _unknown_result() -> dict[str, Any]:
     """The fully-unknown classification — used when inputs are missing or I/O fails."""
     return {
@@ -156,7 +175,7 @@ def classify_state(
         atr_pct_q_now = _last(atr_pct_q_series)
         dist200 = (
             (c - sma200_now) / sma200_now
-            if math.isfinite(sma200_now) and sma200_now != 0.0
+            if math.isfinite(sma200_now) and sma200_now > 0.0
             else float("nan")
         )
 
@@ -179,19 +198,10 @@ def classify_state(
     if not all(math.isfinite(x) for x in decision_inputs):
         return {"market_state": _UNKNOWN, **telemetry}
 
-    vol = "high" if (atr_pct_q_now >= ATR_HIGH_Q or vix_now >= VIX_HIGH) else "low"
-
-    if abs(dist200) <= DIST_FLAT_BAND:
-        trend = "neutral"
-    elif c > sma200_now and sma50_now > sma200_now and slope_now > SLOPE_EPS:
-        trend = "up"
-    elif c < sma200_now and sma50_now < sma200_now and slope_now < -SLOPE_EPS:
-        trend = "down"
-    else:
-        trend = "neutral"
-
+    trend = _trend_axis(c, sma50_now, sma200_now, slope_now, dist200)
     if trend == "neutral":
         trend = "up" if dist200 >= 0 else "down"
+    vol = _vol_axis(atr_pct_q_now, vix_now)
 
     return {"market_state": _STATE_MAP[(trend, vol)], **telemetry}
 
