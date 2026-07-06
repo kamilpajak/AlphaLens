@@ -15,6 +15,12 @@ Breakpoints are FROZEN from the historical signal panel (N=328, 2026-06-25):
 p67=5.77 (top-tercile onset), p90=8.37 (deep loser tail, car_5 −7.3%). PROVISIONAL
 — a single 4-week in-sample window. Recalibrating bumps ``SCORER_CONFIG_VERSION``,
 which partitions the EDGE cohort (old briefs stay a frozen pool).
+Re-validated 2026-07-06 on the refreshed panel (N=415 plannable): fresh p67/p90 =
+5.71/8.25, max |score delta| 0.044, ZERO top-3 churn over 38 episode-days —
+constants and version string deliberately unchanged (a bump would fragment the
+EDGE cohort for no ordering change). A scorer-v2 extension axis was calibrated
+and REJECTED the same day; the single pre-registered revisit candidate lives in
+docs/research/selection_score_v2_ext_tilt_decision_2026_07_06.md.
 
 Design: docs/superpowers/specs/2026-06-25-selection-score-atr-tilt-design.md
 """
