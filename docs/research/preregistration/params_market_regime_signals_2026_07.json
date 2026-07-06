@@ -1,0 +1,60 @@
+{
+  "params_frozen": {
+    "class": "market_regime_signals_2026_07",
+    "version": "mstate-v1-spy-sma50x200-atrq70-vix15_25-UNVALIDATED",
+    "design_memo": "docs/research/market_state_signal_design_2026_07_05.md (design RFC, PR #753)",
+    "nature": "OBSERVATIONAL forward-log — NOT a backtest strategy and NOT a capital-deployment candidate. The market_state label is display-only and is ALREADY stamped forward on every Brief (market_state + market_state_* telemetry), with the sector-relative outcome (sector_excess_return) stamped on every matured LadderOutcome. No scorer is run. The hypotheses are tested LATER, once >=30 independent regime EPISODES accumulate, by the deferred analyze_market_state_edge.py harness. This entry exists to lock the estimand + Bonferroni family + threshold + poolability key BEFORE the first look, so the eventual win/loss-by-regime analysis is credible pre-registration and not post-hoc data-dredging.",
+    "signal_definition": {
+      "label": "SPY index-level regime — 4-state trend x volatility grid {bull_quiet, bull_volatile, bear_volatile, bear_quiet} + first-class 'unknown'",
+      "index": "SPY — ONE index (QQQ / alternate indices are NOT in the v1 family)",
+      "trend_axis": "SMA50 vs SMA200 cross + SMA200 slope + distance-to-SMA200 — ONE trend definition (alternate defs NOT in v1 family)",
+      "vol_axis": "trailing realized-vol quantile (ATR% q >= 0.70) OR VIX regime (15 / 25 bands) — ONE combiner (OR); alternate combiners NOT in v1 family",
+      "breadth": "DROPPED from v1 as a signal input (survivorship-biased current-roster snapshot; excluded from every H-A / H-B test until the delisted-augmented PIT loader lands).",
+      "poolability_key": "market_state_config_version — any change to the classifier thresholds/inputs bumps this token; rows are NEVER pooled across versions.",
+      "frozen_locked_at_design_time": true,
+      "modification_invalidates": "Any change to the classifier thresholds or inputs invalidates this pre-registration for the affected rows (they carry a different market_state_config_version)."
+    },
+    "hypotheses": {
+      "H_A_index": {
+        "claim": "The regime label has predictive content for the INDEX: SPY forward {return, max-drawdown, realized-vol} differ across the 4 states.",
+        "estimand": "per-state forward k-day SPY {return, max-drawdown, realized-vol}, k in {5, 10, 21}",
+        "test": "cluster-robust across regime EPISODES (block bootstrap / episode-level test), effect = median spread best-vs-worst state",
+        "family_size": 9,
+        "family_enumeration": "3 metrics {return, maxDD, realized-vol} x 3 horizons {5, 10, 21} = 9 tests, committed a-priori",
+        "executable_on": "index data only (no ladder needed)"
+      },
+      "H_B_selection": {
+        "claim": "Regime conditions the tool's own selection edge: the sector-relative outcome differs across regimes.",
+        "estimand": "cohort mean sector_excess_return grouped by market_state, restricted to the LLM-proposal conditional support (conditional-support OPE, never raw importance weighting)",
+        "confound_resolution": "sector_excess_return (candidate minus its SPDR sector ETF) is a DIFFERENT series from the SPY-derived label, breaking the SPY-on-SPY confound of market_excess_return (memo section 4.2, D4). outcome_benchmark_version = sector-etf-v1-sic2-spdr-v1.",
+        "test": "episode-clustered inference + episode-N gate; SEPARATE Bonferroni class entry from H-A",
+        "family_size": 1,
+        "licensing_note": "Passing H-A does NOT license selection use. Regime-as-filter (feeding selection) stays gated behind an H-B forward-OOS pass + Bonferroni.",
+        "residual_note": "Sector ETFs still load on the market factor, so a second-order residual correlation remains; a beta-neutral variant and an equal-weight peer-cohort benchmark are REGISTERED FUTURE refinements, run only if H-B shows signal on the sector-excess estimand."
+      }
+    },
+    "effective_N": "independent regime EPISODES (contiguous same-state runs), NOT calendar days. Daily labels are heavily autocorrelated (a months-long regime approx 1-2 episodes). Gate: >=30 episodes per state for a per-state number, >=50 for a cross-state claim. Likely YEARS away; bear_quiet may never reach the gate (honest 'insufficient data', never forced). First look != verdict.",
+    "firebreak": "No in-sample fit exists (all thresholds frozen a-priori, zero fitting), so the firebreak is a no-op by construction. Any parameter change => new market_state_config_version => partition old vs new rows, never pool.",
+    "harness_status": "DEFERRED — apps/alphalens-research/scripts/analyze_market_state_edge.py is NOT built yet (YAGNI until episode-N accumulates). Adversarial review (zen + Perplexity) of the locked analysis memo is MANDATORY before any test compute.",
+    "data_already_logging": {
+      "regime_covariate": "Brief.market_state + market_state_* telemetry (per brief_date, broadcast identically to every candidate that date)",
+      "primary_outcome": "LadderOutcome.sector_excess_return (H-B estimand)",
+      "secondary_outcome_kept": "LadderOutcome.market_excess_return (SPY-relative; retained for other uses, NOT the H-B estimand)",
+      "join_key": "(brief_date, ticker)",
+      "forward_only": "older parquets predate the signal (market_state = 'unknown'); each nightly build adds one labelled date. Clock started with PR-1/PR-2b deploy (2026-07)."
+    },
+    "multiplicity_discipline": "The Bonferroni denominators are committed HERE, before any look. H-A family n=9; H-B is a separate class (n=1). No 'log both and let forward data pick': SPY / SMA-cross / OR are the ONLY index / trend / combiner in v1. The HMM alternative, QQQ, alternate trend definitions, and alternate combiners are each a FUTURE class entry that pays its own cost when registered."
+  },
+  "periods": {
+    "note": "No IS / OOS / FL backtest windows — this is an observational forward-log, not a multi-phase audit. The 'period' is the accumulating forward window from first deploy onward; analysis begins ONLY when the episode-N gates are met.",
+    "forward_log_start": "2026-07",
+    "analysis_gate": ">=30 independent regime episodes per state (per-state) / >=50 (cross-state)"
+  },
+  "success_criteria": {
+    "note": "NOT a PASS / MID / FAIL capital-deployment verdict — this hypothesis never deploys capital by itself. Success = a Bonferroni-adjusted, episode-clustered rejection of H0 on the FROZEN estimand, computed later by the deferred harness.",
+    "H_A_index": "cluster-robust test across regime episodes; INTRA-hypothesis Bonferroni family n=9 (alpha = 0.05 / 9 -> two-sided critical |t| approx 2.77), applied by the harness from family_size; effect = median best-vs-worst spread. NOTE: `alphalens preregister threshold --signal-class market_regime_signals_2026_07` reports the CROSS-REGISTRATION class multiplicity (currently 1 registration -> |t| approx 1.96) — a SEPARATE axis from this 9-test family; the binding H-A correction is the n=9 family value, further inflated if more regime hypotheses register in this class.",
+    "H_B_selection": "episode-clustered cohort-mean sector_excess_return by regime; SEPARATE Bonferroni class, family_size n=1 (two-sided critical |t| approx 1.96 at alpha=0.05 before any cross-registration inflation); a rejection does NOT license selection use (regime-as-filter needs its own forward-OOS pass)",
+    "alpha_t_min": null,
+    "abort_conditions": "None to run yet — the only 'abort' is honest insufficiency: if a state never reaches the episode-N gate, its number is reported as 'insufficient data', never forced."
+  }
+}
