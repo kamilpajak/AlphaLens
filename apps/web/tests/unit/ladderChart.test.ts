@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { finalExitMarkerTime } from '$lib/components/ladderChart';
-import type { ChartMarker } from '$lib/types';
+import { briefLineTime, finalExitMarkerTime } from '$lib/components/ladderChart';
+import type { ChartBar, ChartMarker } from '$lib/types';
 
 // Pins the in-trade shading band's END selection. The band runs from the first
 // ENTRY to the position's FINAL exit. Markers are chronological (built from the
@@ -58,5 +58,51 @@ describe('finalExitMarkerTime', () => {
 			marker('ENTRY', '2026-06-16', 'E2')
 		];
 		expect(finalExitMarkerTime(markers)).toBe('2026-06-15');
+	});
+});
+
+// Pins the "brief" vertical-line anchor: the session the candidate appeared in
+// its brief. Bars are chronological daily sessions; brief_date may fall on a
+// non-trading day (weekend brief), so the anchor snaps FORWARD to the first
+// bar at/after it — by construction the arrival session (session_on_or_after).
+// Null means "draw nothing" (no bars, or the brief postdates every bar).
+
+function bar(time: string): ChartBar {
+	return { time, open: 1, high: 2, low: 0.5, close: 1.5, volume: 100 };
+}
+
+describe('briefLineTime', () => {
+	it('returns null for an empty bar list (NO_DATA payloads)', () => {
+		expect(briefLineTime([], '2026-06-13')).toBeNull();
+	});
+
+	it('returns the bar time when brief_date lands exactly on a session', () => {
+		const bars = [bar('2026-06-12'), bar('2026-06-15'), bar('2026-06-16')];
+		expect(briefLineTime(bars, '2026-06-15')).toBe('2026-06-15');
+	});
+
+	it('snaps a weekend brief forward to the next session', () => {
+		// 2026-06-14 is a Sunday; the next session bar is Monday 06-15.
+		const bars = [bar('2026-06-12'), bar('2026-06-15'), bar('2026-06-16')];
+		expect(briefLineTime(bars, '2026-06-14')).toBe('2026-06-15');
+	});
+
+	it('returns null when brief_date postdates every bar', () => {
+		const bars = [bar('2026-06-12'), bar('2026-06-15')];
+		expect(briefLineTime(bars, '2026-06-16')).toBeNull();
+	});
+
+	it('returns the first bar when brief_date predates all bars', () => {
+		// No lead-in history available (sparse listing) — the first bar IS the
+		// arrival session, so anchoring at the left edge is correct, not clamped.
+		const bars = [bar('2026-06-15'), bar('2026-06-16')];
+		expect(briefLineTime(bars, '2026-06-10')).toBe('2026-06-15');
+	});
+
+	it('returns null for a missing brief date', () => {
+		const bars = [bar('2026-06-12')];
+		expect(briefLineTime(bars, null)).toBeNull();
+		expect(briefLineTime(bars, undefined)).toBeNull();
+		expect(briefLineTime(bars, '')).toBeNull();
 	});
 });

@@ -35,7 +35,7 @@
 	} from 'lightweight-charts';
 	import type { ChartPayload, ChartMarker } from '$lib/types';
 	import { fmtR } from '$lib/edge';
-	import { finalExitMarkerTime } from './ladderChart';
+	import { briefLineTime, finalExitMarkerTime } from './ladderChart';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
 	import { Crosshair } from 'lucide-svelte';
@@ -107,6 +107,11 @@
 	// to a DOM node so the time-range subscription + ResizeObserver can update
 	// its left/width without a Svelte re-render (the chart owns its own RAF).
 	let shadeBand = $state<HTMLDivElement | undefined>(undefined);
+	// Vertical dashed "brief" line at the session the candidate appeared in its
+	// brief (snapped forward past non-trading days). Same overlay mechanism as
+	// the band: a bound DOM node repositioned in JS, no Svelte re-render.
+	let briefLine = $state<HTMLDivElement | undefined>(undefined);
+	const briefTime = $derived(briefLineTime(payload.bars, payload.brief_date));
 	// Set true only if the band overlay degraded (coordinate mapping failed); a
 	// tiny footnote then notes the band was skipped without breaking the chart.
 	let shadeDegraded = $state(false);
@@ -298,22 +303,45 @@
 				}
 			};
 
-			if (lifecycle !== 'PLANNED' && shadeBand) {
-				rangeHandler = updateBand;
-				timeScale.subscribeVisibleTimeRangeChange(rangeHandler);
-				// Defer the FIRST paint one frame: right after fitContent the time
-				// scale may not have applied yet, so timeToCoordinate() returns null
-				// and the band stays hidden until the next resize/range event. A RAF
-				// lets the scale settle first (guarded against disposal).
-				requestAnimationFrame(() => {
-					if (!disposed) updateBand();
-				});
-			}
+			// ── "brief" vertical line (best-effort, all lifecycles) ─────────
+			// Anchors the session the candidate appeared in its brief. Purely an
+			// annotation: on failure it hides silently (no shadeDegraded footnote).
+			const updateBriefLine = () => {
+				if (!briefLine || !timeScale || briefTime == null) return;
+				try {
+					const x = timeScale.timeToCoordinate(briefTime as Time);
+					if (x == null) {
+						briefLine.style.display = 'none';
+						return;
+					}
+					briefLine.style.display = 'block';
+					briefLine.style.left = `${x}px`;
+				} catch {
+					briefLine.style.display = 'none';
+				}
+			};
+
+			// One handler drives both overlays. The band self-guards on PLANNED
+			// (its div isn't rendered then); the brief line renders for EVERY
+			// lifecycle — a planned candidate still appeared in a brief.
+			const updateOverlays = () => {
+				updateBand();
+				updateBriefLine();
+			};
+			rangeHandler = updateOverlays;
+			timeScale.subscribeVisibleTimeRangeChange(rangeHandler);
+			// Defer the FIRST paint one frame: right after fitContent the time
+			// scale may not have applied yet, so timeToCoordinate() returns null
+			// and the overlays stay hidden until the next resize/range event. A
+			// RAF lets the scale settle first (guarded against disposal).
+			requestAnimationFrame(() => {
+				if (!disposed) updateOverlays();
+			});
 
 			resizeObserver = new ResizeObserver(() => {
 				if (chart && chartContainer) {
 					chart.applyOptions({ width: chartContainer.clientWidth });
-					updateBand();
+					updateOverlays();
 				}
 			});
 			resizeObserver.observe(chartContainer);
@@ -500,6 +528,22 @@
 					style="display: none;"
 					aria-hidden="true"
 				></div>
+			{/if}
+			{#if briefTime != null}
+				<!-- "brief" marker — dashed vertical line at the session the
+				     candidate appeared in its brief. Label sits LEFT of the line,
+				     in the lead-in region, clear of the green in-trade band. -->
+				<div
+					bind:this={briefLine}
+					class="pointer-events-none absolute inset-y-0 z-0 w-0 border-l border-dashed border-fg-muted/40"
+					style="display: none;"
+					aria-hidden="true"
+				>
+					<span
+						class="absolute bottom-7 right-1 text-[9px] uppercase tracking-widest text-fg-muted/70 whitespace-nowrap"
+						>brief</span
+					>
+				</div>
 			{/if}
 		</div>
 
