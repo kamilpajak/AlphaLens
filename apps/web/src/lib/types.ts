@@ -102,6 +102,26 @@ export interface Candidate {
 	brief_template_id: string | null;
 	brief_template_facts: Record<string, unknown> | null;
 	brief_generated_at: string | null;
+
+	/**
+	 * Market-state context signal (PR-3) — an INDEX-LEVEL (SPY) daily regime
+	 * label, broadcast identically onto every candidate for a given date, so the
+	 * brief-level banner reads it from any candidate in the day's list.
+	 * DISPLAY-ONLY / UNVALIDATED — never feeds selection or the brief sort.
+	 * `market_state` is one of `bull_quiet` / `bull_volatile` / `bear_volatile`
+	 * / `bear_quiet` / `unknown` (or empty on dates that predate the signal).
+	 * The telemetry floats + `market_state_squeeze_on` (tri-state) back the
+	 * optional axis breakdown; `market_state_config_version` is the poolability
+	 * key for the deferred forward study.
+	 */
+	market_state: string;
+	market_state_atr_pct: number | null;
+	market_state_atr_pct_q: number | null;
+	market_state_dist200: number | null;
+	market_state_vix: number | null;
+	market_state_vix_decile: number | null;
+	market_state_squeeze_on: boolean | null;
+	market_state_config_version: string | null;
 }
 
 /**

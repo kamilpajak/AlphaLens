@@ -463,9 +463,8 @@ test.describe('smoke — brief detail interactions', () => {
 		expect(pageErrors).toEqual([]);
 	});
 
-	test('header metric strip renders candidate / verified / theme counts (layout regression guard)', async ({ page }) => {
+	test('header metric strip renders candidate / theme counts (layout regression guard)', async ({ page }) => {
 		const brief = JSON.parse(DAY_BODIES[latestDay.date]);
-		const verifiedCount = brief.candidates.filter((c: { verified: boolean }) => c.verified).length;
 
 		await page.goto(`/brief/${latestDay.date}`);
 
@@ -474,9 +473,12 @@ test.describe('smoke — brief detail interactions', () => {
 		// Each value carries a stable data-testid so the assertion survives
 		// Tailwind class / layout refactors of the metric strip.
 		await expect(strip.getByTestId('stat-candidates')).toHaveText(String(brief.n_candidates));
-		await expect(strip.getByTestId('stat-verified')).toHaveText(String(verifiedCount));
 		await expect(strip.getByTestId('stat-themes')).toHaveText(String(brief.n_themes));
 		await expect(strip.getByTestId('stat-top-theme')).toContainText(brief.top_theme);
+		// The verified count moved out of the headline strip — it is low-signal
+		// there (often == candidates) and stays available via the "verified only"
+		// filter + per-card badges. Pin its removal so it can't silently return.
+		await expect(strip.getByTestId('stat-verified')).toHaveCount(0);
 	});
 
 	test('header metric grid sits beside the date, not below it (vertical-space layout guard)', async ({
@@ -1028,6 +1030,29 @@ test.describe('smoke — mobile (390 + 360 viewports)', () => {
 				`tooltip ${i} right edge must stay within the ${width}px viewport`
 			).toBeLessThanOrEqual(width + 1);
 		}
+	});
+
+	test('market-context tooltip opens below so its tall body is not clipped at the viewport top', async ({
+		page
+	}) => {
+		// The market-context banner sits high on the brief page and its glossary
+		// tooltip is tall (definition + five state bands). A default upward-opening
+		// popover overflows the top of the viewport and gets clipped (the term is
+		// unreadable). The banner opts its JargonTip into `placement="below"`; this
+		// pins the popover top edge on-screen.
+		await page.setViewportSize({ width: 1280, height: 800 });
+		await page.goto(`/brief/${latestDay.date}`);
+		const trigger = page.locator('[data-testid="jargon-tip"][data-term="market context"]');
+		await expect(trigger).toBeVisible();
+		await trigger.hover();
+		const tip = trigger.locator('> [role="tooltip"]');
+		await expect(tip).toBeVisible();
+		const box = await tip.boundingBox();
+		expect(box, 'market-context tooltip should have a layout box').not.toBeNull();
+		expect(
+			box!.y,
+			'market-context tooltip top edge must stay on-screen (opens below the trigger)'
+		).toBeGreaterThanOrEqual(-1);
 	});
 });
 

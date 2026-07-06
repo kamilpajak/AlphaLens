@@ -654,6 +654,35 @@ components:
         scorer_config_version:
           type: string
           maxLength: 128
+        market_state:
+          type: string
+          maxLength: 32
+        market_state_atr_pct:
+          type: number
+          format: double
+          nullable: true
+        market_state_atr_pct_q:
+          type: number
+          format: double
+          nullable: true
+        market_state_dist200:
+          type: number
+          format: double
+          nullable: true
+        market_state_vix:
+          type: number
+          format: double
+          nullable: true
+        market_state_vix_decile:
+          type: number
+          format: double
+          nullable: true
+        market_state_squeeze_on:
+          type: boolean
+          nullable: true
+        market_state_config_version:
+          type: string
+          maxLength: 128
         also_in_themes: {}
         rank_in_day:
           type: integer
@@ -907,6 +936,35 @@ components:
           format: double
           nullable: true
         scorer_config_version:
+          type: string
+          maxLength: 128
+        market_state:
+          type: string
+          maxLength: 32
+        market_state_atr_pct:
+          type: number
+          format: double
+          nullable: true
+        market_state_atr_pct_q:
+          type: number
+          format: double
+          nullable: true
+        market_state_dist200:
+          type: number
+          format: double
+          nullable: true
+        market_state_vix:
+          type: number
+          format: double
+          nullable: true
+        market_state_vix_decile:
+          type: number
+          format: double
+          nullable: true
+        market_state_squeeze_on:
+          type: boolean
+          nullable: true
+        market_state_config_version:
           type: string
           maxLength: 128
         also_in_themes: {}

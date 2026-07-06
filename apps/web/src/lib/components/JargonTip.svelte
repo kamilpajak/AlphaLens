@@ -45,10 +45,14 @@
 		/** Optional threshold/state bands rendered as a small list under the body
 		 *  (RSI-style ranges; ignored when `bodyRich` is set). */
 		bands?: { range: string; label: string }[];
+		/** Open the popover above (default) or below the term. `below` is for terms
+		 *  high on the page whose tall tooltip would clip off the viewport top. */
+		placement?: 'above' | 'below';
 		children?: Snippet;
 	}
 
-	let { term, full = '', body, bodyRich, formula, bands, children }: Props = $props();
+	let { term, full = '', body, bodyRich, formula, bands, placement = 'above', children }: Props =
+		$props();
 
 	// Per-instance id linking the focusable trigger to the tooltip body via
 	// aria-describedby. Sourced from the module-level counter so SSR and
@@ -80,7 +84,7 @@
 		{#if children}{@render children()}{:else}{term}{/if}
 	</span>
 
-	<TooltipBubble id={tooltipId}>
+	<TooltipBubble id={tooltipId} {placement}>
 		{#snippet header()}{term}{#if full} // {full}{/if}{/snippet}
 		{#if bodyRich}
 			{@render bodyRich()}

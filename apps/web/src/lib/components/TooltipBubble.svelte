@@ -25,6 +25,24 @@
 		plain: 'group-hover:opacity-100 group-focus-within:opacity-100',
 		chip: 'group-hover/chip:opacity-100 group-focus-within/chip:opacity-100'
 	} as const;
+
+	// Vertical placement of the bubble relative to its trigger. `above` (default)
+	// is the historical behaviour (opens upward). `below` is for triggers near the
+	// TOP of the page whose tall content would otherwise clip off the viewport top
+	// (e.g. the market-context banner). Both variants are full literal class
+	// strings so Tailwind v4 generates them; clampToViewport still handles the
+	// horizontal edge-clamp independently of this.
+	const PLACEMENT = {
+		above: 'bottom-full mb-2',
+		below: 'top-full mt-2'
+	} as const;
+	// The diamond that points back at the trigger. `above` → on the bubble's
+	// bottom edge pointing down (border-r+border-b); `below` → on the bubble's top
+	// edge pointing up (border-l+border-t).
+	const ARROW = {
+		above: 'top-full -mt-1 border-r border-b',
+		below: 'bottom-full -mb-1 border-l border-t'
+	} as const;
 </script>
 
 <script lang="ts">
@@ -36,6 +54,9 @@
 		id?: string;
 		/** Which wrapper group name reveals this bubble. */
 		group?: keyof typeof VISIBILITY;
+		/** Open above (default) or below the trigger. `below` keeps tall tooltips on
+		 *  high-placed triggers from clipping off the viewport top. */
+		placement?: keyof typeof PLACEMENT;
 		/** Amber uppercase header line (term / label / "name // full"). */
 		header: Snippet;
 		/** Body content below the header. Plain callers pass a single
@@ -43,12 +64,16 @@
 		children: Snippet;
 	}
 
-	let { id, group = 'plain', header, children }: Props = $props();
+	let { id, group = 'plain', placement = 'above', header, children }: Props = $props();
 </script>
 
 <span
 	{id}
-	class="pointer-events-none absolute bottom-full left-1/2 mb-2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 {VISIBILITY[group]}"
+	class="pointer-events-none absolute {PLACEMENT[
+		placement
+	]} left-1/2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 {VISIBILITY[
+		group
+	]}"
 	style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"
 	role="tooltip"
 >
@@ -61,7 +86,7 @@
 		{@render children()}
 	</span>
 	<span
-		class="absolute left-1/2 top-full w-2 h-2 border-r border-b border-amber bg-surface-pop -mt-1"
+		class="absolute left-1/2 w-2 h-2 border-amber bg-surface-pop {ARROW[placement]}"
 		style="transform: translateX(calc(-50% + var(--tt-arrow, 0px))) rotate(45deg)"
 	></span>
 </span>

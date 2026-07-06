@@ -323,6 +323,19 @@ export interface components {
             /** Format: double */
             atr_penalty?: number | null;
             scorer_config_version?: string;
+            market_state?: string;
+            /** Format: double */
+            market_state_atr_pct?: number | null;
+            /** Format: double */
+            market_state_atr_pct_q?: number | null;
+            /** Format: double */
+            market_state_dist200?: number | null;
+            /** Format: double */
+            market_state_vix?: number | null;
+            /** Format: double */
+            market_state_vix_decile?: number | null;
+            market_state_squeeze_on?: boolean | null;
+            market_state_config_version?: string;
             also_in_themes?: unknown;
             /** Format: int64 */
             rank_in_day?: number | null;
@@ -442,6 +455,19 @@ export interface components {
             /** Format: double */
             atr_penalty?: number | null;
             scorer_config_version?: string;
+            market_state?: string;
+            /** Format: double */
+            market_state_atr_pct?: number | null;
+            /** Format: double */
+            market_state_atr_pct_q?: number | null;
+            /** Format: double */
+            market_state_dist200?: number | null;
+            /** Format: double */
+            market_state_vix?: number | null;
+            /** Format: double */
+            market_state_vix_decile?: number | null;
+            market_state_squeeze_on?: boolean | null;
+            market_state_config_version?: string;
             also_in_themes?: unknown;
             /** Format: int64 */
             rank_in_day?: number | null;
