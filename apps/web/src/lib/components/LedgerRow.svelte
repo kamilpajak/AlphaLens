@@ -1,9 +1,10 @@
 <script lang="ts">
 	// One /experiments ledger row — the shared `<article>` + header + collapsible
 	// detail skeleton that the paradigm ledger and the tool.experiments ledger both
-	// hand-rolled. Owns: the status-railed article wrapper, the header layout
-	// (display numeral + name + optional tags + a right-aligned status/date
-	// cluster), and the <Disclosure> that wraps the detail <dl>. The divergent
+	// hand-rolled. Owns: the article wrapper, the header layout (display numeral +
+	// name + optional tags + a right-aligned status/date cluster), and the
+	// <Disclosure> that wraps the detail <dl>. Verdict colour lives on the status
+	// pill only — the row itself carries no status-coloured left edge. The divergent
 	// bits are snippets — `status` (the ChipTip + StatusPill), `tags` (paradigm
 	// layer/axis, optional), `preface` (story + αt bars / metric + in-sample pill),
 	// and `fields` (the <dl> rows, built from <DetailField>s).
@@ -13,10 +14,6 @@
 
 	interface Props {
 		id: string;
-		/** `statusRail(...)` left-edge class. */
-		rail: string;
-		/** Dashed rail (the tool ledger). */
-		dashed?: boolean;
 		/** Display numeral (`#1`, `T1`, …). */
 		display: string;
 		/** Tailwind width for the display cell. */
@@ -39,8 +36,6 @@
 
 	let {
 		id,
-		rail,
-		dashed = false,
 		display,
 		displayWidth = 'w-10 sm:w-12',
 		name,
@@ -56,7 +51,7 @@
 
 <article
 	{id}
-	class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors{dashed ? ' border-dashed' : ''} {rail}"
+	class="px-4 sm:px-5 py-4 hover:bg-bg-2 transition-colors"
 >
 	<header class="flex flex-wrap items-baseline gap-2 sm:gap-3 mb-3">
 		<span class="font-display font-bold text-base sm:text-lg text-amber {displayWidth} shrink-0">{display}</span>

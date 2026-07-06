@@ -1,5 +1,5 @@
-// Research ledger static data — paradigm experiments, live infrastructure,
-// methodology artifacts, durable failure patterns, and the status legend.
+// Research ledger static data — paradigm experiments, methodology artifacts,
+// durable failure patterns, and the status legend.
 //
 // Extracted from `src/routes/experiments/+page.svelte` (the route component now
 // imports these). Keeping the data here keeps the route a thin view layer and
@@ -19,7 +19,6 @@
 import { toneClass } from '$lib/tone';
 
 export type ParadigmStatus = 'FAIL' | 'SLIPPAGE-FAIL' | 'IN-FLIGHT' | 'INCONCLUSIVE' | 'PASS_MARGINAL';
-export type LiveStatus = 'LIVE' | 'SHIPPED' | 'DONE';
 
 // Layer + two-axis taxonomy. Each paradigm header carries a
 // "<layer> · <axis_a> / <axis_b>" tag with inline JargonTips; the tooltips
@@ -63,15 +62,6 @@ export type Paradigm = {
 	evidence: string | null;
 	is_t: number | null;
 	oos_t: number | null;
-};
-
-export type Live = {
-	id: string;
-	name: string;
-	what: string;
-	status: LiveStatus;
-	deploy: string;
-	date: string;
 };
 
 export type Artifact = {
@@ -356,13 +346,6 @@ export function paradigmScatter(items: Paradigm[]): {
 	return { ticks, maxT, nWithT: ticks.length, nTotal: items.length };
 }
 
-export const live: Live[] = [
-	{ id: 'L1', name: 'EDGAR watchdog', what: 'detects S&P 100 EDGAR filings → classifies → writes candidates.db. Worker archived per ADR 0008.', status: 'LIVE', deploy: 'systemd `detect` every 15 min', date: 'continuous' },
-	{ id: 'L2', name: 'Literature review', what: 'weekly RSS scan (arXiv quant-fin + selected blogs) + monthly Perplexity deep scan with reasoning effort = high.', status: 'LIVE', deploy: 'systemd weekly + monthly timers', date: 'continuous' },
-	{ id: 'L3', name: 'Thematic tool MVP (Phase A–E)', what: 'news ingest → Flash extraction → Pro theme→beneficiary mapping → 4 verification gates → Layer 4 quant screen → Layer 5 brief generator. NVDA→QUBT replay end-to-end green.', status: 'SHIPPED', deploy: 'PRs #128–#152 merged', date: '2026-05-17' },
-	{ id: 'L4', name: 'VPS backfills', what: 'Form-4 cross-shard merge DONE (37 MB tar.zst, 2.66M rows). AV EARNINGS daily systemd timer LIVE — ~21d backfill window at free-tier 25/day quota.', status: 'LIVE', deploy: 'jacoren@ VPS systemd-user units', date: '2026-05-08 / running' }
-];
-
 export const artifacts: Artifact[] = [
 	{ id: 'A1', name: 'phase-robust-backtesting', description: 'methodology bundle: preregistration ledger + multi-phase audit + Bonferroni + audit_multi_phase driver. Extracted per ADR 0006 after the methodology proved more durable than any individual paradigm.', link: 'kamilpajak/phase-robust-backtesting v0.2.3+', status: 'OSS' },
 	{ id: 'A2', name: 'ADRs 0001–0008', description: '8 architectural decisions: pivot to research infrastructure, queue contract, screener-agnostic backtest, vendored upstream (superseded), closed-layers anti-pattern policy, OSS extraction, 5-layer architecture, sunset TradingAgents.', link: 'docs/adr/', status: 'INTERNAL' },
@@ -483,14 +466,6 @@ export function alphaBand(t: number | null): AlphaBand | null {
 	if (t < ALPHA_T_MARGINAL) return 'noise';
 	if (t < ALPHA_T_DOCTRINE) return 'marginal';
 	return 'deploy';
-}
-
-/** Turn a "text-X border-X" status tone into a left-rail class, so each ledger
- *  row carries a status-coloured edge (a scannable verdict column). Falls back
- *  to the grid border when the tone has no border-* token. */
-export function statusRail(tone: string): string {
-	const border = tone.split(/\s+/).find((c) => c.startsWith('border-')) ?? 'border-grid';
-	return `border-l-2 ${border}`;
 }
 
 /** Text colour for an IS/OOS αt bar VALUE, by the doctrine thresholds the bar

@@ -3,12 +3,14 @@
 	//
 	// Greenfield layout (2026-07): a cover-sheet hero (kill-rate `0 / 18` + the
 	// αt-distribution strip) leads, the paradigm ledger is the payload — grouped
-	// into research-class chapters with a sticky filter/legend bar — a `// NOW`
-	// divider separates it from the live-tool ledger (tool.experiments), and the
-	// reference material (patterns / infra / methodology / glossary) is demoted to
-	// a "supporting material" appendix. The static data (paradigms, tool
-	// experiments, live infra, artifacts, patterns, status legends, group chapters)
-	// lives in `$lib/data/research-ledger`; the evidence-drawer FSM lives in
+	// into research-class chapters with a sticky filter/legend bar — the live-tool
+	// ledger (tool.experiments) follows, and the reference material (patterns /
+	// methodology / glossary) is demoted to a "supporting material" appendix (its
+	// own divider). The patterns + artifacts appendix sections
+	// are card grids (independent peer items), not the stacked list/table the rest
+	// of the page uses. The static data (paradigms, tool experiments, artifacts,
+	// patterns, status legends, group chapters) lives in
+	// `$lib/data/research-ledger`; the evidence-drawer FSM lives in
 	// `$lib/components/EvidenceDrawer.svelte`. This file keeps the layout, the
 	// JargonTip / ChipTip wiring, the αt bar + scatter helpers, the status filter,
 	// the TOC IntersectionObserver, and the hash-deep-link handling.
@@ -34,14 +36,12 @@
 	import { GLOSSARY, GLOSSARY_BY_TERM } from '$lib/data/glossary';
 	import {
 		paradigms,
-		live,
 		artifacts,
 		patterns,
 		statusLegend,
 		toolExperiments,
 		toolStatusLegend,
 		toolStatusTone,
-		statusRail,
 		alphaValueTone,
 		alphaBand,
 		stripLedgerMarkup,
@@ -50,8 +50,7 @@
 		PARADIGM_GROUPS,
 		ALPHA_T_MARGINAL,
 		ALPHA_T_DOCTRINE,
-		type ParadigmStatus,
-		type LiveStatus
+		type ParadigmStatus
 	} from '$lib/data/research-ledger';
 
 	// Plain-text status definitions for the on-hover chip tooltips (ChipTip) that
@@ -112,7 +111,7 @@
 	const nTested = paradigms.length;
 	const nDeployed = paradigms.filter((p) => (p.oos_t ?? p.is_t ?? 0) >= ALPHA_T_DOCTRINE).length;
 
-	function statusTone(s: ParadigmStatus | LiveStatus | 'OSS' | 'INTERNAL'): string {
+	function statusTone(s: ParadigmStatus | 'OSS' | 'INTERNAL'): string {
 		switch (s) {
 			case 'FAIL':
 			case 'SLIPPAGE-FAIL':
@@ -123,10 +122,6 @@
 			case 'IN-FLIGHT':
 			case 'INTERNAL':
 				return toneClass('cyan');
-			case 'LIVE':
-			case 'SHIPPED':
-			case 'DONE':
-				return toneClass('green');
 			case 'OSS':
 				return toneClass('amber');
 			default:
@@ -248,7 +243,6 @@
 		{ id: 'paradigms', label: 'paradigms.ledger' },
 		{ id: 'tool-experiments', label: 'tool.experiments' },
 		{ id: 'patterns', label: 'failure.patterns' },
-		{ id: 'infra', label: 'infrastructure.live' },
 		{ id: 'methodology', label: 'methodology.artifacts' },
 		{ id: 'glossary', label: 'glossary.terms' }
 	];
@@ -464,13 +458,16 @@
 						<span class="font-display font-bold text-[11px] uppercase tracking-[0.22em] text-amber whitespace-nowrap">{g.label}</span>
 						<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">{g.tested} tested · {g.cleared} cleared</span>
 					</div>
-					<p class="text-[11px] text-fg-dim mt-1 leading-relaxed max-w-3xl">{g.gloss}</p>
-				</div>
+						<!-- No max-w cap: the panel already bounds the line (~1094px at the
+						     widest), and a 768px cap left ~326px empty to the right while
+						     wrapping the last word to a lone second line. text-pretty avoids
+						     a single-word widow if a gloss does wrap on a narrower viewport. -->
+						<p class="text-[11px] text-fg-dim mt-1 leading-relaxed text-pretty">{g.gloss}</p>
+					</div>
 				<div class="divide-y divide-grid">
 					{#each vis as p}
 							<LedgerRow
 								id={p.id}
-								rail={statusRail(statusTone(p.status))}
 								display={p.display}
 								name={p.name}
 								date={p.date}
@@ -552,13 +549,6 @@
 		{/each}
 	</section>
 
-	<!-- ============================ // NOW divider ========================== -->
-	<div class="my-10 flex items-center gap-3 fade-up" style="animation-delay: 0.12s">
-		<span class="h-px flex-1 bg-gradient-to-r from-transparent to-amber-dim"></span>
-		<span class="text-[10px] uppercase tracking-[0.25em] text-amber-dim whitespace-nowrap">// now · 2026-07 — closed files end, open experiments begin</span>
-		<span class="h-px flex-1 bg-gradient-to-l from-transparent to-amber-dim"></span>
-	</div>
-
 	<!-- ============================ LEDGER 2 · tool.experiments ============== -->
 	<SectionPanel id="tool-experiments" title="tool.experiments" style="animation-delay: 0.14s">
 		{#snippet meta()}
@@ -574,7 +564,7 @@
 			</p>
 			<p class="text-[11px] text-fg-dim leading-relaxed mt-2">
 				<span class="text-amber">Honesty rule:</span> anything marked
-				<span class="text-cyan">FORWARD-LOG</span> or in-sample is a what-if replay that never touched the real
+				<span class="text-cyan">FORWARD-LOG</span> is an in-sample what-if replay that never touched the real
 				trade record and has not passed a fresh forward test.
 				<span class="text-fg-muted">Snapshot 2026-07-01 · 372 plannable / 89 terminal / 43 brief-days.</span>
 			</p>
@@ -587,8 +577,6 @@
 			{#each toolExperiments.filter(showT) as t}
 					<LedgerRow
 						id={t.id}
-						rail={statusRail(toolStatusTone(t.status))}
-						dashed
 						display={t.display}
 						displayWidth="w-8 sm:w-10"
 						name={t.name}
@@ -604,9 +592,11 @@
 							</ChipTip>
 						{/snippet}
 						{#snippet preface()}
-							<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">
-								{#if t.status === 'FORWARD-LOG'}<span class="text-[10px] uppercase tracking-widest text-cyan border border-cyan px-1 py-0.5 mr-2 align-middle whitespace-nowrap">in-sample</span>{/if}{t.metric}
-							</p>
+							<!-- No inline in-sample badge: it only ever appeared on FORWARD-LOG
+							     rows, which already carry the FORWARD-LOG pill (its ChipTip + the
+							     section "Honesty rule" define it as an in-sample what-if replay).
+							     The badge duplicated that pill, so the metric line stands alone. -->
+							<p class="text-sm text-fg leading-relaxed mb-3 sm:pl-10">{t.metric}</p>
 						{/snippet}
 						{#snippet fields()}
 							<DetailField label="Hypothesis">{t.hypothesis}</DetailField>
@@ -635,12 +625,21 @@
 			<span class="text-fg-dim normal-case tracking-normal">{patterns.length} reusable lessons · hover dotted terms for definitions</span>
 		{/snippet}
 		{#snippet children()}
-		<ul class="divide-y divide-grid">
+		<!-- Lesson-card grid. These reusable lessons are independent, self-contained
+		     takeaways — index cards, not a sequence — so they read as a 2-up grid of
+		     quiet bordered cards rather than a stacked list. Each keeps its <h3> name
+		     + inline JargonTips; the amber index number is the card's tab. -->
+		<!-- role="list" restores list semantics under Tailwind Preflight's
+		     list-style:none (Safari drops them otherwise). -->
+		<ul role="list" class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
 			{#each patterns as p}
-				<li class="px-4 sm:px-5 py-3 text-sm flex gap-3">
-					<span class="text-amber font-display font-bold w-6 shrink-0">{p.n}</span>
-					<div>
-						<h3 class="font-bold text-fg">
+				<li
+					data-testid="pattern-card"
+					class="flex gap-3 border border-grid bg-bg-2/30 px-4 py-3.5 text-sm transition-colors hover:border-grid-strong hover:bg-bg-2"
+				>
+					<span class="font-display font-bold text-lg leading-none text-amber tabular-nums shrink-0 w-7 pt-0.5">{p.n}</span>
+					<div class="min-w-0">
+						<h3 class="font-bold text-fg leading-snug">
 							{#each parseMarkup(p.name) as seg}
 								{#if seg.kind === 'term'}
 									<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>
@@ -649,7 +648,7 @@
 								{/if}
 							{/each}
 						</h3>
-						<div class="text-fg-dim text-xs mt-0.5 leading-relaxed">
+						<div class="text-fg-dim text-xs mt-1 leading-relaxed">
 							{#each parseMarkup(p.body) as seg}
 								{#if seg.kind === 'term'}
 									<JargonTip {...tipProps(seg.term)}>{seg.label}</JargonTip>
@@ -665,65 +664,35 @@
 		{/snippet}
 	</SectionPanel>
 
-	<SectionPanel id="infra" title="infrastructure.live" style="animation-delay: 0.2s">
-		{#snippet meta()}
-			<span class="text-fg-dim normal-case tracking-normal">{live.length} tracks · what is currently running</span>
-		{/snippet}
-		{#snippet children()}
-		<table class="w-full text-sm">
-			<tbody>
-				{#each live as l}
-					<tr class="border-b border-grid last:border-b-0 hover:bg-bg-2">
-						<td class="px-4 sm:px-5 py-3 w-14 sm:w-20 align-top">
-							<div class="font-display font-bold text-base sm:text-lg text-amber">{l.id}</div>
-						</td>
-						<td class="px-2 py-3 align-top">
-							<div class="font-bold text-fg">{l.name}</div>
-							<div class="text-fg-dim text-xs mt-0.5">{l.what}</div>
-							<div class="sm:hidden text-[10px] uppercase tracking-widest mt-1 flex flex-wrap gap-2">
-								<StatusPill tone={statusTone(l.status)} label={l.status} />
-								<span class="text-fg-muted normal-case tracking-normal">{l.deploy}</span>
-							</div>
-						</td>
-						<td class="hidden sm:table-cell px-2 py-3 align-top">
-							<StatusPill tone={statusTone(l.status)} label={l.status} />
-						</td>
-						<td class="hidden sm:table-cell px-4 sm:px-5 py-3 text-right align-top text-xs text-fg-muted">{l.deploy}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
-		{/snippet}
-	</SectionPanel>
-
-	<SectionPanel id="methodology" title="methodology.artifacts" style="animation-delay: 0.24s">
+	<SectionPanel id="methodology" title="methodology.artifacts" style="animation-delay: 0.2s">
 		{#snippet meta()}
 			<span class="text-fg-dim normal-case tracking-normal">{artifacts.length} items · what survived</span>
 		{/snippet}
 		{#snippet children()}
-		<table class="w-full text-sm">
-			<tbody>
-				{#each artifacts as a}
-					<tr class="border-b border-grid last:border-b-0 hover:bg-bg-2">
-						<td class="px-4 sm:px-5 py-3 w-14 sm:w-20 align-top">
-							<div class="font-display font-bold text-base sm:text-lg text-amber">{a.id}</div>
-						</td>
-						<td class="px-2 py-3 align-top">
-							<div class="font-bold text-fg">{a.name}</div>
-							<div class="text-fg-dim text-xs mt-0.5 leading-relaxed">{a.description}</div>
-							<div class="sm:hidden text-[10px] uppercase tracking-widest mt-1 flex flex-wrap gap-2">
-								<StatusPill tone={statusTone(a.status)} label={a.status} />
-								<span class="text-cyan normal-case tracking-normal break-all">{a.link}</span>
-							</div>
-						</td>
-						<td class="hidden sm:table-cell px-2 py-3 align-top">
-							<StatusPill tone={statusTone(a.status)} label={a.status} />
-						</td>
-						<td class="hidden sm:table-cell px-4 sm:px-5 py-3 text-right align-top text-xs text-cyan font-mono break-all max-w-[260px]">{a.link}</td>
-					</tr>
-				{/each}
-			</tbody>
-		</table>
+		<!-- Feature-card grid — "what survived". The durable methodology artifacts
+		     are the proud outputs of the whole search, so they get the elevated card
+		     treatment: the hero's amber corner-bracket motif, a bright bg, the status
+		     pill, and the repo/doc reference pinned to the card footer. -->
+		<!-- <ul>/<li>, not <article>: the page reserves <article> for an expandable
+		     ledger row (one <details> each — see P0.1), so a static card must not
+		     inflate that count. role="list" keeps list semantics under Preflight's
+		     list-style:none, matching the pattern grid above. -->
+		<ul role="list" class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
+			{#each artifacts as a}
+				<li
+					data-testid="artifact-card"
+					class="corners relative flex flex-col border border-grid bg-bg-1 p-4 transition-colors hover:border-grid-strong hover:bg-bg-2"
+				>
+					<div class="flex items-start gap-2.5 mb-2">
+						<span class="font-display font-bold text-lg leading-none text-amber shrink-0 pt-0.5">{a.id}</span>
+						<span class="font-bold text-fg leading-snug min-w-0">{a.name}</span>
+						<span class="ml-auto shrink-0"><StatusPill tone={statusTone(a.status)} label={a.status} /></span>
+					</div>
+					<p class="text-fg-dim text-xs leading-relaxed">{a.description}</p>
+					<div class="mt-auto pt-3 text-[11px] font-mono text-cyan break-all">{a.link}</div>
+				</li>
+			{/each}
+		</ul>
 		{/snippet}
 	</SectionPanel>
 
