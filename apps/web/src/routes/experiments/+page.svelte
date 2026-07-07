@@ -433,15 +433,16 @@
 	<!-- ============================ LEDGER 1 · paradigms ===================== -->
 	<section id="paradigms" class="border border-grid bg-bg-1 mb-8 fade-up" style="animation-delay: 0.1s">
 		<div class="px-4 sm:px-5 py-3 border-b border-grid">
-			<div class="text-[10px] uppercase tracking-widest text-fg-muted flex items-center justify-between">
-				<h2 class="font-normal">paradigms.ledger</h2>
-				<span class="text-fg-dim normal-case tracking-normal">{nTested} hypotheses · {nDeployed} cleared the bar</span>
+			<!-- This ledger is the page's primary payload, so its header reads louder
+			     than the utility section headers (bigger + bold + full-brightness,
+			     not the tiny muted `// section.name` label). -->
+			<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+				<h2 class="font-display font-bold text-sm sm:text-base uppercase tracking-[0.18em] text-fg">paradigms.ledger</h2>
+				<span class="text-[10px] text-fg-muted">{nTested} hypotheses · {nDeployed} cleared the bar</span>
 			</div>
 			<p class="text-[11px] text-fg-dim mt-1.5 leading-relaxed">
 				<span class="text-cyan">paradigm-search track</span> — falsifying standalone alpha hypotheses, measured in
-				<JargonTip {...tipProps('αt')}>αt</JargonTip> (Carhart-4F t-stat), grouped by research class. The live-tool track is
-				<a href="#tool-experiments" class="text-cyan hover:text-amber underline decoration-dotted underline-offset-2">tool.experiments</a>
-				below.
+				<JargonTip {...tipProps('αt')}>αt</JargonTip> (Carhart-4F t-stat), grouped by research class.
 			</p>
 		</div>
 

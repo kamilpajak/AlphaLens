@@ -868,7 +868,7 @@ test.describe('experiments — hybrid tooltip policy', () => {
 		expect(ratio, '--color-fg-muted vs --color-bg WCAG ratio').toBeGreaterThanOrEqual(4.5);
 	});
 
-	test('heading semantics: ≥7 h2 (one per section), ≥31 h3 (paradigms+patterns) (P0.3)', async ({ page }) => {
+	test('heading semantics: ≥6 h2 (one per section), ≥31 h3 (paradigms+patterns) (P0.3)', async ({ page }) => {
 		await gotoExperiments(page);
 		const h2 = await page.locator('h2').count();
 		const h3 = await page.locator('h3').count();
@@ -975,6 +975,33 @@ test.describe('experiments — appendix card layout', () => {
 				.evaluate((el) => getComputedStyle(el).alignItems);
 			expect(['start', 'flex-start'], `${sel} card grid must not stretch cards (got ${align})`).toContain(align);
 		}
+	});
+});
+
+test.describe('experiments — paradigms.ledger header', () => {
+	// The paradigms ledger is the page's primary payload, so its header must read
+	// louder than the utility section headers, and its intro must not send the
+	// reader off to the other (live-tool) track.
+
+	test('header is more prominent than a utility section header (P-hdr.1)', async ({ page }) => {
+		await gotoExperiments(page);
+		const sizePx = (sel: string) =>
+			page.locator(sel).first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+		const paradigms = await sizePx('section#paradigms h2');
+		const utility = await sizePx('section#tool-experiments h2');
+		expect(paradigms, 'paradigms.ledger header is larger than the tool.experiments header').toBeGreaterThan(utility);
+		const weight = await page
+			.locator('section#paradigms h2')
+			.evaluate((el) => Number(getComputedStyle(el).fontWeight));
+		expect(weight, 'paradigms.ledger header is bold').toBeGreaterThanOrEqual(700);
+	});
+
+	test('paradigms intro drops the live-tool cross-reference (P-hdr.2)', async ({ page }) => {
+		await gotoExperiments(page);
+		const text = (await page.locator('section#paradigms').innerText()).toLowerCase();
+		expect(text, 'paradigms intro no longer mentions the live-tool track').not.toContain('live-tool');
+		const crossLink = await page.locator('section#paradigms a[href="#tool-experiments"]').count();
+		expect(crossLink, 'no tool.experiments cross-link inside the paradigms section').toBe(0);
 	});
 });
 
