@@ -175,3 +175,22 @@ export async function getEdgeChart(
 		return null;
 	}
 }
+
+/**
+ * Fetch the SPY-relative signal telemetry (per-trade excess scatter + gated
+ * smoother/band). Lazy-called from the /edge panel on first expand. Returns the
+ * parsed payload or `null` on any failure (offline, 401, 5xx, malformed) so the
+ * caller renders a clean empty state rather than throwing.
+ */
+export async function getEdgeExcessTelemetry(
+	windowDays = 90,
+	fetcher: typeof fetch = fetch
+): Promise<import('./types').EdgeExcessTelemetry | null> {
+	try {
+		const res = await apiFetch(`/v1/edge/excess-telemetry?window=${windowDays}`, {}, fetcher);
+		if (!res.ok) return null;
+		return (await res.json()) as import('./types').EdgeExcessTelemetry;
+	} catch {
+		return null;
+	}
+}
