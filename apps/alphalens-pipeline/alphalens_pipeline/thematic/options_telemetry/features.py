@@ -219,6 +219,63 @@ def chain_totals(legs: list[tuple[pd.DataFrame, pd.DataFrame]]) -> dict[str, flo
     return totals
 
 
+RV_WINDOW_RETURNS = 20
+RV_ANNUALIZATION = 252.0
+
+
+def trailing_session_closes(
+    root, tickers: list[str], asof: dt.date, n_sessions: int
+) -> dict[str, list[float]]:
+    """Per-ticker closes over the last ``n_sessions`` XNYS sessions ending at
+    the newest session <= ``asof``, read disk-only off the grouped store.
+
+    Loads each grouped-day snapshot ONCE for all tickers (the snapshots are
+    whole-market). A ticker missing from ANY loaded session returns [] —
+    a gapped series would silently understate realized vol.
+    """
+    from alphalens_pipeline.data.rs_history import read_grouped_day
+    from alphalens_pipeline.paper.calendar import is_trading_day, previous_trading_day
+
+    session = asof if is_trading_day(asof) else previous_trading_day(asof)
+    sessions: list[dt.date] = []
+    for _ in range(n_sessions):
+        sessions.append(session)
+        session = previous_trading_day(session)
+    sessions.reverse()
+
+    wanted = {t.upper() for t in tickers}
+    per_ticker: dict[str, list[float]] = {t.upper(): [] for t in tickers}
+    for day in sessions:
+        snapshot = read_grouped_day(root, day)
+        if snapshot is None:
+            continue
+        for t in wanted:
+            bar = snapshot.get(t)
+            if bar is not None and bar.get("c") is not None:
+                per_ticker[t].append(float(bar["c"]))
+    return {t: closes if len(closes) == n_sessions else [] for t, closes in per_ticker.items()}
+
+
+def realized_vol_20d(closes: list[float]) -> float | None:
+    """Annualized stdev of the last 20 daily log returns; None when short."""
+    if len(closes) < RV_WINDOW_RETURNS + 1:
+        return None
+    rets = [
+        math.log(closes[i] / closes[i - 1])
+        for i in range(len(closes) - RV_WINDOW_RETURNS, len(closes))
+    ]
+    mean = sum(rets) / len(rets)
+    var = sum((r - mean) ** 2 for r in rets) / (len(rets) - 1)
+    return math.sqrt(var * RV_ANNUALIZATION)
+
+
+def vrp_ratio(ivx30: float | None, rv20: float | None) -> float | None:
+    """IV30 / 20d realized vol; None on missing or zero RV."""
+    if ivx30 is None or rv20 is None or rv20 <= 0:
+        return None
+    return ivx30 / rv20
+
+
 def classify_chain_quality(
     *,
     has_chain: bool,

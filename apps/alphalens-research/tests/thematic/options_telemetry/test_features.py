@@ -187,5 +187,47 @@ class TestChainQuality(unittest.TestCase):
         self.assertEqual(f.classify_chain_quality(**kw), f.CHAIN_QUALITY_THIN)
 
 
+class TestRealizedVolAndVrp(unittest.TestCase):
+    def test_realized_vol_20d_constant_returns_is_zero(self):
+        closes = [100.0 * (1.01**i) for i in range(21)]  # constant 1% daily
+        self.assertAlmostEqual(f.realized_vol_20d(closes), 0.0, places=10)
+
+    def test_realized_vol_20d_known_value(self):
+        # Alternating +1%/-1% log-ish moves -> non-zero annualized stdev.
+        closes = [100.0]
+        for i in range(20):
+            closes.append(closes[-1] * (1.01 if i % 2 == 0 else 0.99))
+        rv = f.realized_vol_20d(closes)
+        self.assertIsNotNone(rv)
+        self.assertGreater(rv, 0.10)
+
+    def test_too_few_closes_is_none(self):
+        self.assertIsNone(f.realized_vol_20d([100.0] * 20))  # 19 returns < 20
+
+    def test_vrp_ratio(self):
+        self.assertAlmostEqual(f.vrp_ratio(0.5, 0.25), 2.0)
+        self.assertIsNone(f.vrp_ratio(None, 0.25))
+        self.assertIsNone(f.vrp_ratio(0.5, None))
+        self.assertIsNone(f.vrp_ratio(0.5, 0.0))  # zero RV: ratio undefined
+
+
+class TestTrailingSessionCloses(unittest.TestCase):
+    def test_reads_store_once_per_session(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # 3 consecutive XNYS sessions ending Mon 2026-07-06.
+            days = [dt.date(2026, 7, 1), dt.date(2026, 7, 2), dt.date(2026, 7, 6)]
+            for i, day in enumerate(days):
+                pd.DataFrame({"T": ["QUBT", "IONQ"], "c": [10.0 + i, 20.0 + i]}).to_parquet(
+                    root / f"{day.isoformat()}.parquet"
+                )
+            out = f.trailing_session_closes(root, ["QUBT", "MISSING"], dt.date(2026, 7, 6), 3)
+        self.assertEqual(out["QUBT"], [10.0, 11.0, 12.0])
+        self.assertEqual(out["MISSING"], [])
+
+
 if __name__ == "__main__":
     unittest.main()
