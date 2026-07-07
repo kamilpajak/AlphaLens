@@ -160,7 +160,12 @@
 	     mobile (max-sm) the theme chip is reordered up next to the rank badge
 	     (order-*) to save one wrapped line — DOM order is unchanged, so sm+
 	     renders exactly as before. The chip truncates on mobile so a long theme
-	     shares the rank line instead of wrapping whole to its own line. -->
+	     shares the rank line instead of wrapping whole to its own line.
+	     A11y trade-off (accepted): on mobile the VISUAL order (rank, theme,
+	     ticker) diverges from the DOM/reading order (rank, ticker, theme) —
+	     WCAG 1.3.2 gray area. The programmatic sequence stays logical and no
+	     focusable element moves, so screen-reader flow is unharmed; revisit if
+	     the card ever gains public/multi-user reach. -->
 	<header class="px-4 sm:px-5 py-3 border-b border-grid bg-gradient-to-r from-bg-2 to-bg-1">
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-2">
 			<span
@@ -172,6 +177,12 @@
 				<h3 class="font-display font-bold text-2xl sm:text-3xl text-amber leading-none">{c.ticker}</h3>
 				<span class="text-fg-dim text-xs sm:text-sm truncate">{c.company_name}</span>
 			</div>
+			<!-- The 8rem cap is coupled to the rank badge's footprint: px-2 +
+			     text-[9px] tracking-widest "rank NN of NN" ≈ 6.5-7rem worst case
+			     + the gap-x-3. Flex-wrap assigns items to lines at their NATURAL
+			     width (before shrink), so without this cap a long theme wraps
+			     whole to its own line instead of truncating beside the rank.
+			     Re-derive if the badge text/format ever grows. -->
 			<span
 				class="order-2 sm:order-none max-sm:max-w-[calc(100%-8rem)] max-sm:truncate px-2 py-0.5 bg-violet/15 border border-violet/40 text-violet text-[10px] lowercase tracking-widest"
 				>#{c.theme}</span
@@ -181,7 +192,10 @@
 			<!-- to a `patterns: …` group with shared color-coding + a small label. -->
 			{#if c.deep_drawdown_reversal}
 				<!-- Wrapper span carries the mobile flex-order (ChipTip exposes no
-				     class prop); inline-flex keeps it a normal flex item. -->
+				     class prop); inline-flex keeps it a normal flex item. Safe to
+				     wrap because ChipTip's bubble positions itself against the
+				     viewport (clampToViewport), not this ancestor — re-check if
+				     ChipTip ever switches to ancestor-relative positioning. -->
 				<span class="order-4 sm:order-none inline-flex">
 					<ChipTip
 						term="REVERSAL pattern"
