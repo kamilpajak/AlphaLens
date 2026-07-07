@@ -88,7 +88,7 @@ def stamp_window_utc(asof: dt.date, exchange: str = "XNYS") -> tuple[dt.datetime
 
 
 def _null_values() -> dict[str, object]:
-    values: dict[str, object] = dict.fromkeys(OPTIONS_COLUMNS)
+    values = cast("dict[str, object]", dict.fromkeys(OPTIONS_COLUMNS))
     values["options_config_version"] = f.OPTIONS_CONFIG_VERSION
     return values
 
@@ -179,6 +179,8 @@ def _compute_values(
         if iv_term is not None:
             values["options_term_slope"] = iv_term - ivx30
 
+    atm_strike_val: float | None = None
+    spread_pct_val: float | None = None
     if ref_leg is not None:
         calls, puts = ref_leg
         skew = f.skew_xzz(calls, puts, spot)
@@ -186,6 +188,8 @@ def _compute_values(
         quote = f.atm_quote(calls, puts, spot)
         if quote is not None:
             strike, mid, spread_pct = quote
+            atm_strike_val = strike
+            spread_pct_val = spread_pct
             values["options_atm_strike"] = strike
             values["options_atm_mid"] = mid
             values["options_spread_pct_atm"] = spread_pct
@@ -210,11 +214,11 @@ def _compute_values(
         has_chain=True,
         near=near,
         far=far,
-        atm=values["options_atm_strike"],
+        atm=atm_strike_val,
         atm_call_oi=atm_call_oi,
         atm_put_oi=atm_put_oi,
         atm_vol_total=atm_vol_total,
-        spread_pct=values["options_spread_pct_atm"],
+        spread_pct=spread_pct_val,
     )
     return values
 

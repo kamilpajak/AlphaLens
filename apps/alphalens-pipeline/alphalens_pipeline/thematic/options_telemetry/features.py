@@ -171,9 +171,13 @@ def _usable_quote(row: pd.Series | None) -> tuple[float, float] | None:
     """``(mid, spread_pct)`` from a contract row, or ``None`` when untradable."""
     if row is None:
         return None
+    bid_raw = row.get("bid")
+    ask_raw = row.get("ask")
+    if bid_raw is None or ask_raw is None:
+        return None
     try:
-        bid = float(row.get("bid"))
-        ask = float(row.get("ask"))
+        bid = float(bid_raw)
+        ask = float(ask_raw)
     except (TypeError, ValueError):
         return None
     if math.isnan(bid) or math.isnan(ask) or bid <= 0 or ask < bid:
