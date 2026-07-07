@@ -168,7 +168,7 @@ def _apply_options_telemetry(
                 options_cols = [c for c in prev_df.columns if c.startswith("options_")]
                 if options_cols and "options_snapshot_utc" in prev_df.columns:
                     prev_keyed = (
-                        prev_df[["ticker"] + options_cols]
+                        prev_df[["ticker", *options_cols]]
                         .dropna(subset=["options_snapshot_utc"])
                         .drop_duplicates(subset=["ticker"], keep="first")
                     )
