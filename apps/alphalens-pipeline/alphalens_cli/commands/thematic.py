@@ -144,6 +144,12 @@ def _apply_options_telemetry(
     than aborting the score stage. The previous-output read itself happens
     inside the try block so file-level errors are caught. Lazy import keeps
     the frequent-cron `alphalens` startup cheap.
+
+    On enrichment failure, a best-effort attempt carries forward any
+    ``options_*`` columns that were already stamped in the previous output
+    parquet (preserving a successful earlier-slot stamp even if a later slot
+    fails). Only when that nested carry-forward also fails does the frame
+    return unchanged.
     """
     try:
         from alphalens_pipeline.thematic.options_telemetry import enrichment as options_enrichment
@@ -152,7 +158,36 @@ def _apply_options_telemetry(
             previous = pd.read_parquet(out_path) if out_path.exists() else None
         return options_enrichment.enrich(enriched, asof=target, previous=previous)
     except Exception:
-        logger.warning("options telemetry pass failed; columns left absent", exc_info=True)
+        logger.warning(
+            "options telemetry pass failed; attempting to carry previous columns",
+            exc_info=True,
+        )
+        try:
+            if out_path.exists():
+                prev_df = pd.read_parquet(out_path)
+                options_cols = [c for c in prev_df.columns if c.startswith("options_")]
+                if options_cols and "options_snapshot_utc" in prev_df.columns:
+                    prev_keyed = (
+                        prev_df[["ticker"] + options_cols]
+                        .dropna(subset=["options_snapshot_utc"])
+                        .drop_duplicates(subset=["ticker"], keep="first")
+                    )
+                    if not prev_keyed.empty:
+                        result = enriched.copy()
+                        for col in options_cols:
+                            result[col] = None
+                        result.update(
+                            result[["ticker"]].merge(prev_keyed, on="ticker", how="left")[
+                                options_cols
+                            ]
+                        )
+                        logger.warning("options telemetry pass failed; carried previous columns")
+                        return result
+        except Exception:
+            logger.warning(
+                "options telemetry carry-forward also failed; columns left absent",
+                exc_info=True,
+            )
         return enriched
 
 

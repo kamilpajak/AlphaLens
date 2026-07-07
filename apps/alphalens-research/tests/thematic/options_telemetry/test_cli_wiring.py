@@ -91,6 +91,36 @@ class TestScoreCliWiresOptionsEnrichment(unittest.TestCase):
             )
         pd.testing.assert_frame_equal(out, frame)  # unchanged, no raise
 
+    def test_enrich_failure_carries_previous_stamped_columns(self):
+        # When enrichment.enrich raises, the helper must fall back to the
+        # previous parquet's stamped options_* columns (preserving a good
+        # earlier-slot stamp even if a later slot fails).
+        import tempfile
+        from pathlib import Path
+
+        from alphalens_cli.commands import thematic
+
+        frame = pd.DataFrame({"theme": ["q"], "ticker": ["QUBT"], "company_name": ["Q"]})
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "2026-07-06.parquet"
+            # Build a minimal previous parquet with stamped options_* columns.
+            prev = frame.copy()
+            prev["options_snapshot_utc"] = ["2026-07-07T00:30:00+00:00"]
+            prev["options_ivx30"] = [0.42]
+            prev.to_parquet(out_path, index=False)
+
+            with patch(
+                "alphalens_pipeline.thematic.options_telemetry.enrichment.enrich",
+                side_effect=RuntimeError("boom"),
+            ):
+                out = thematic._apply_options_telemetry(
+                    frame, target=dt.date(2026, 7, 6), out_path=out_path
+                )
+
+        # The carried columns must appear on the matching ticker row.
+        self.assertEqual(out.iloc[0]["options_snapshot_utc"], "2026-07-07T00:30:00+00:00")
+        self.assertAlmostEqual(out.iloc[0]["options_ivx30"], 0.42)
+
 
 if __name__ == "__main__":
     unittest.main()

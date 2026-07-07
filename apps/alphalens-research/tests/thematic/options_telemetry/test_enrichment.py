@@ -96,6 +96,7 @@ class TestEnrichInWindow(unittest.TestCase):
         )
 
     def test_no_listed_options_is_quality_none(self):
+        # fetch OK, no chain: stamp marker + NONE quality (freeze — no point retrying).
         out = en.enrich(_frame(), asof=ASOF, now_utc=IN_WINDOW, snapshot_fn=_no_options_snapshot)
         row = out.iloc[0]
         self.assertEqual(row["options_chain_quality"], f.CHAIN_QUALITY_NONE)
@@ -103,17 +104,47 @@ class TestEnrichInWindow(unittest.TestCase):
         self.assertTrue(math.isnan(row["options_put_vol"]))
         self.assertIsNotNone(out.iloc[0]["options_snapshot_utc"])
 
-    def test_fetch_failure_is_quality_none_and_never_raises(self):
+    def test_fetch_failure_leaves_nulls_and_is_retryable(self):
+        # Fetch failure: no marker stamped → a later in-window slot can retry.
         out = en.enrich(_frame(), asof=ASOF, now_utc=IN_WINDOW, snapshot_fn=_failed_snapshot)
-        self.assertEqual(out.iloc[0]["options_chain_quality"], f.CHAIN_QUALITY_NONE)
-        self.assertIsNotNone(out.iloc[0]["options_snapshot_utc"])
+        self.assertIsNone(out.iloc[0]["options_snapshot_utc"])
+        self.assertIsNone(out.iloc[0]["options_chain_quality"])
+        # Second phase: retry in-window with a GOOD snapshot stamps quality OK.
+        out2 = en.enrich(
+            _frame(), asof=ASOF, now_utc=IN_WINDOW, previous=out, snapshot_fn=_good_snapshot
+        )
+        self.assertEqual(out2.iloc[0]["options_chain_quality"], f.CHAIN_QUALITY_OK)
+        self.assertIsNotNone(out2.iloc[0]["options_snapshot_utc"])
 
-    def test_feature_exception_degrades_to_none_quality(self):
+    def test_feature_exception_leaves_nulls_and_is_retryable(self):
+        # Per-ticker exception: no marker stamped → later in-window slot can retry.
         def _raising(ticker: str, asof: dt.date):
             raise RuntimeError("boom")
 
         out = en.enrich(_frame(), asof=ASOF, now_utc=IN_WINDOW, snapshot_fn=_raising)
-        self.assertEqual(out.iloc[0]["options_chain_quality"], f.CHAIN_QUALITY_NONE)
+        self.assertIsNone(out.iloc[0]["options_snapshot_utc"])
+        self.assertIsNone(out.iloc[0]["options_chain_quality"])
+
+    def test_nan_oi_classifies_thin_not_ok(self):
+        # NaN openInterest must not pass the chain-quality gate as OK.
+        # ``float(nan) or 0`` is broken — NaN is truthy; ``_num_or_zero`` must
+        # map NaN → 0.0 so the OI check correctly classifies the chain as THIN.
+        def _nan_oi_snapshot(ticker: str, asof: dt.date) -> en.TickerSnapshot:
+            near = asof + dt.timedelta(days=18)
+            far = asof + dt.timedelta(days=46)
+            nan_chain = _chain_frame(iv=0.60, oi=float("nan"), vol=10)
+            return en.TickerSnapshot(
+                spot=100.0,
+                expiries=[near, far],
+                chains={
+                    near: (nan_chain, nan_chain),
+                    far: (nan_chain, nan_chain),
+                },
+                fetch_failed=False,
+            )
+
+        out = en.enrich(_frame(), asof=ASOF, now_utc=IN_WINDOW, snapshot_fn=_nan_oi_snapshot)
+        self.assertEqual(out.iloc[0]["options_chain_quality"], f.CHAIN_QUALITY_THIN)
 
     def test_duplicate_ticker_rows_get_identical_values_one_fetch(self):
         calls = {"n": 0}

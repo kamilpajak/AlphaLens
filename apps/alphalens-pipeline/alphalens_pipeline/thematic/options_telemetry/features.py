@@ -224,7 +224,7 @@ RV_ANNUALIZATION = 252.0
 
 
 def trailing_session_closes(
-    root, tickers: list[str], asof: dt.date, n_sessions: int
+    root: Path, tickers: list[str], asof: dt.date, n_sessions: int
 ) -> dict[str, list[float]]:
     """Per-ticker closes over the last ``n_sessions`` XNYS sessions ending at
     the newest session <= ``asof``, read disk-only off the grouped store.

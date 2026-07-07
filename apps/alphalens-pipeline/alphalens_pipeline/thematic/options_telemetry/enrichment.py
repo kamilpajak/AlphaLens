@@ -3,12 +3,20 @@
 Mirrors the Buffett/O'Neil ``enrich(frame, *, asof)`` pattern (per-unique-
 ticker computation, tri-state None -> NaN in float64 columns, fail-soft per
 ticker). The §3.1 snapshot-window rule and first-success freeze live here.
+
+Fetch-failure vs no-chain contract (§3.1):
+- ``fetch_failed=True`` → leave ALL columns null except ``options_config_version``
+  (no ``options_snapshot_utc`` marker), so a later in-window slot retries.
+- fetch OK, ``expiries == []`` or no bracketing expiry → stamp marker + ``chain_quality=NONE``
+  (freeze — refetching a ticker with no chain is pointless).
+- fetch OK, ``spot is None`` → treated as transient vendor state; no marker stamped, retryable.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,6 +93,21 @@ def _null_values() -> dict[str, object]:
     return values
 
 
+def _num_or_zero(value: object) -> float:
+    """Coerce a raw chain field to float, mapping None/NaN/unconvertible to 0.0.
+
+    ``float(nan_value) or 0`` does NOT work — NaN is truthy, so it passes the
+    ``or`` branch and survives as NaN. Use ``math.isnan`` (repo bans ``x != x``).
+    """
+    if value is None:
+        return 0.0
+    try:
+        v = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if math.isnan(v) else v
+
+
 def _compute_values(
     snapshot: TickerSnapshot,
     *,
@@ -92,20 +115,32 @@ def _compute_values(
     now_utc: dt.datetime,
     rv20: float | None,
 ) -> dict[str, object]:
+    """Compute options columns for a fetch-OK snapshot (never called on fetch failures).
+
+    Stamps ``options_snapshot_utc`` (the freeze marker) only for fetch-OK paths:
+    - empty expiries or no bracketing expiry: stamp marker + NONE quality (freeze).
+    - ``spot is None``: transient vendor state; return null values WITHOUT marker so
+      a later in-window slot retries.
+    """
     values = _null_values()
-    values["options_snapshot_utc"] = now_utc.isoformat()
     values["options_spot"] = snapshot.spot
 
     near, far = f.select_bracketing_expiries(snapshot.expiries, asof)
     term = f.select_term_expiry(snapshot.expiries, asof)
-    has_chain = (
-        not snapshot.fetch_failed
-        and bool(snapshot.expiries)
-        and (near is not None or far is not None)
-    )
-    if not has_chain or snapshot.spot is None:
+    has_chain = bool(snapshot.expiries) and (near is not None or far is not None)
+
+    if not has_chain:
+        # Fetch OK but no listed chain: freeze with NONE quality (no point retrying).
+        values["options_snapshot_utc"] = now_utc.isoformat()
         values["options_chain_quality"] = f.CHAIN_QUALITY_NONE
         return values
+
+    if snapshot.spot is None:
+        # Fetch OK but spot missing: transient vendor state — no marker, retryable.
+        return values
+
+    # Fetch OK with a usable chain and spot: stamp the freeze marker now.
+    values["options_snapshot_utc"] = now_utc.isoformat()
 
     spot = float(snapshot.spot)
     legs: list[tuple[pd.DataFrame, pd.DataFrame]] = []
@@ -157,13 +192,12 @@ def _compute_values(
             call_row = calls[calls["strike"] == strike]
             put_row = puts[puts["strike"] == strike]
             if not call_row.empty:
-                atm_call_oi = float(call_row.iloc[0].get("openInterest") or 0)
+                atm_call_oi = _num_or_zero(call_row.iloc[0].get("openInterest"))
             if not put_row.empty:
-                atm_put_oi = float(put_row.iloc[0].get("openInterest") or 0)
-            atm_vol_total = float(
-                (0 if call_row.empty else call_row.iloc[0].get("volume") or 0)
-                + (0 if put_row.empty else put_row.iloc[0].get("volume") or 0)
-            )
+                atm_put_oi = _num_or_zero(put_row.iloc[0].get("openInterest"))
+            atm_vol_total = (
+                0.0 if call_row.empty else _num_or_zero(call_row.iloc[0].get("volume"))
+            ) + (0.0 if put_row.empty else _num_or_zero(put_row.iloc[0].get("volume")))
 
     if legs:
         totals = f.chain_totals(legs)
@@ -214,7 +248,7 @@ def _previous_by_ticker(previous: pd.DataFrame | None) -> dict[str, dict[str, ob
 
 
 def _default_snapshot_fn(asof: dt.date) -> SnapshotFn:
-    """Production wiring: canonical yfinance client, max 4 HTTP calls/ticker."""
+    """Production wiring: canonical yfinance client, up to 5 HTTP calls/ticker (expiries + spot + up to 3 chains)."""
     from alphalens_pipeline.data.alt_data.yfinance_client import (
         get_default_yfinance_client,
     )
@@ -255,7 +289,7 @@ def enrich(
     """
     out = frame.copy()
     tickers = [str(t).upper() for t in out["ticker"]] if "ticker" in out.columns else []
-    unique = list(dict.fromkeys(tickers))
+    unique = list(dict.fromkeys(t for t in tickers if t))
 
     now = now_utc or dt.datetime.now(dt.UTC)
     close, next_open = stamp_window_utc(asof)
@@ -287,15 +321,20 @@ def enrich(
         try:
             assert fetch is not None
             snapshot = fetch(ticker, asof)
-            per_ticker[ticker] = _compute_values(
-                snapshot, asof=asof, now_utc=now, rv20=rv_by_ticker.get(ticker)
-            )
+            if snapshot.fetch_failed:
+                # Transient fetch failure: no marker stamped → later in-window slot retries.
+                logger.warning(
+                    "options telemetry: fetch failed for %s; leaving nulls for retry", ticker
+                )
+                per_ticker[ticker] = _null_values()
+            else:
+                per_ticker[ticker] = _compute_values(
+                    snapshot, asof=asof, now_utc=now, rv20=rv_by_ticker.get(ticker)
+                )
         except Exception:
+            # Unexpected exception: no marker stamped → later in-window slot retries.
             logger.warning("options telemetry failed for %s", ticker, exc_info=True)
-            failed = _null_values()
-            failed["options_snapshot_utc"] = now.isoformat()
-            failed["options_chain_quality"] = f.CHAIN_QUALITY_NONE
-            per_ticker[ticker] = failed
+            per_ticker[ticker] = _null_values()
 
     for col in _FLOAT_COLUMNS:
         out[col] = pd.Series(
