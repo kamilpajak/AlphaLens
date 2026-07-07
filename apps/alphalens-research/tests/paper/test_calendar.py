@@ -33,6 +33,7 @@ from alphalens_pipeline.paper.calendar import (
     n_sessions_before,
     next_trading_open,
     previous_trading_day,
+    session_close_utc,
     session_on_or_after,
     session_open_utc,
     trading_days_elapsed,
@@ -351,6 +352,30 @@ class TestSessionHelpersXWAR(unittest.TestCase):
         self.assertEqual(
             advance_trading_sessions(dt.date(2025, 1, 6), 1, exchange="XWAR"), dt.date(2025, 1, 8)
         )
+
+
+# ---------------------------------------------------------------- session_close_utc
+
+
+class TestSessionCloseUtc(unittest.TestCase):
+    def test_xnys_summer_close_is_2000_utc(self):
+        # 2026-07-06 is a regular Monday session; EDT close 16:00 ET = 20:00 UTC.
+        close = session_close_utc(dt.date(2026, 7, 6))
+        self.assertEqual(close, dt.datetime(2026, 7, 6, 20, 0, tzinfo=dt.UTC))
+
+    def test_xnys_winter_close_is_2100_utc(self):
+        # 2026-01-05 is a regular Monday session; EST close 16:00 ET = 21:00 UTC.
+        close = session_close_utc(dt.date(2026, 1, 5))
+        self.assertEqual(close, dt.datetime(2026, 1, 5, 21, 0, tzinfo=dt.UTC))
+
+    def test_non_session_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            session_close_utc(dt.date(2026, 7, 4))  # Saturday
+
+    def test_half_day_close_is_early(self):
+        # 2025-11-28 (Friday after Thanksgiving) closes 13:00 ET = 18:00 UTC (EST).
+        close = session_close_utc(dt.date(2025, 11, 28))
+        self.assertEqual(close, dt.datetime(2025, 11, 28, 18, 0, tzinfo=dt.UTC))
 
 
 if __name__ == "__main__":

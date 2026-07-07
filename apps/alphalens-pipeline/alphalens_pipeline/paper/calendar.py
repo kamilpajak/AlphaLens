@@ -302,6 +302,25 @@ def session_open_utc(
     return cal.session_open(ts).to_pydatetime().astimezone(dt.UTC)
 
 
+def session_close_utc(
+    d: DateLike,
+    exchange: str = DEFAULT_EXCHANGE,
+) -> dt.datetime:
+    """UTC datetime of ``exchange``'s closing auction on session date ``d``.
+
+    Mirror of :func:`session_open_utc` — requires ``d`` to be an EXACT
+    session (raises ``ValueError`` otherwise). Half-days resolve to the
+    early close automatically because ``exchange_calendars`` stores the
+    actual per-session close. For XNYS in summer (EDT) the close is
+    20:00 UTC (16:00 ET); in winter (EST) 21:00 UTC.
+    """
+    ts = _to_session_timestamp(d)
+    cal = _calendar(exchange)
+    if not cal.is_session(ts):
+        raise ValueError(f"{d!r} is not a session on {exchange}; resolve it first")
+    return cal.session_close(ts).to_pydatetime().astimezone(dt.UTC)
+
+
 def trading_days_elapsed(
     start: DateLike,
     end: DateLike,
