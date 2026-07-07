@@ -127,6 +127,33 @@ def _emit_stage_volume(stage: str, *, output_rows: int, input_rows: int) -> None
         logger.exception("emit_domain_metrics failed for stage %s; the run succeeded", stage)
 
 
+def _apply_options_telemetry(
+    enriched: pd.DataFrame,
+    *,
+    target: dt.date,
+    out_path: Path,
+    previous: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Stamp the display-only options telemetry (design memo 2026-07-07).
+
+    yfinance chain snapshot, stamped only inside the post-close window for
+    the asof session; the previous same-date output parquet (earlier run
+    slot) provides carry-forward so the first successful stamp freezes.
+    NOT in the brief sort. Fail-soft: any failure returns the frame
+    unchanged rather than aborting the score stage. Lazy import keeps the
+    frequent-cron `alphalens` startup cheap.
+    """
+    try:
+        from alphalens_pipeline.thematic.options_telemetry import enrichment as options_enrichment
+
+        if previous is None:
+            previous = pd.read_parquet(out_path) if out_path.exists() else None
+        return options_enrichment.enrich(enriched, asof=target, previous=previous)
+    except Exception:
+        logger.warning("options telemetry pass failed; columns left absent", exc_info=True)
+        return enriched
+
+
 def _parquet_num_rows(path: Path) -> int:
     """Row count of a parquet via its footer metadata (no full read).
 
@@ -509,8 +536,14 @@ def score(
 
     enriched = market_state.enrich(enriched, asof=target)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{target.isoformat()}.parquet"
+    # Carry-forward: earlier same-date run slot provides the frozen stamp.
+    previous = pd.read_parquet(out_path) if out_path.exists() else None
+    enriched = _apply_options_telemetry(
+        enriched, target=target, out_path=out_path, previous=previous
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
     enriched.to_parquet(out_path, index=False)
 
     # Left-merge enrich: input == output in the normal case; a divergence
