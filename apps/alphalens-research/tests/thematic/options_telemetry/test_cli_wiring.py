@@ -11,15 +11,20 @@ import pandas as pd
 
 class TestScoreCliWiresOptionsEnrichment(unittest.TestCase):
     def test_score_command_source_wires_options_enrichment(self):
-        # Static wiring pin (cheap, catches accidental removal): the score
-        # command body must import + call the options enricher with previous=.
+        # Static wiring pin (cheap, catches accidental removal): score() must
+        # call _apply_options_telemetry; the helper must contain the
+        # options_telemetry import, the previous parameter, and the
+        # read_parquet carry-forward read inside its fail-soft boundary.
         import inspect
 
         from alphalens_cli.commands import thematic
 
         src = inspect.getsource(thematic.score)
-        self.assertIn("options_telemetry", src)
-        self.assertIn("previous=", src)
+        self.assertIn("_apply_options_telemetry", src)
+        helper_src = inspect.getsource(thematic._apply_options_telemetry)
+        self.assertIn("options_telemetry", helper_src)
+        self.assertIn("previous", helper_src)
+        self.assertIn("read_parquet", helper_src)
 
     def test_enrich_receives_previous_frame_when_output_exists(self):
         # Behavior pin through the helper the CLI calls (keeps the CLI thin).
@@ -51,6 +56,21 @@ class TestScoreCliWiresOptionsEnrichment(unittest.TestCase):
 
         self.assertIsNotNone(captured["previous"])
         self.assertIn("options_snapshot_utc", captured["previous"].columns)
+
+    def test_corrupt_previous_parquet_is_fail_soft(self):
+        import tempfile
+        from pathlib import Path
+
+        from alphalens_cli.commands import thematic
+
+        frame = pd.DataFrame({"theme": ["q"], "ticker": ["QUBT"], "company_name": ["Q"]})
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / "2026-07-06.parquet"
+            out_path.write_bytes(b"not a parquet file")
+            out = thematic._apply_options_telemetry(
+                frame, target=dt.date(2026, 7, 6), out_path=out_path
+            )
+        pd.testing.assert_frame_equal(out, frame)  # unchanged, no raise
 
     def test_helper_is_fail_soft(self):
         import tempfile

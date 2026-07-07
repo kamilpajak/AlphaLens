@@ -139,9 +139,11 @@ def _apply_options_telemetry(
     yfinance chain snapshot, stamped only inside the post-close window for
     the asof session; the previous same-date output parquet (earlier run
     slot) provides carry-forward so the first successful stamp freezes.
-    NOT in the brief sort. Fail-soft: any failure returns the frame
-    unchanged rather than aborting the score stage. Lazy import keeps the
-    frequent-cron `alphalens` startup cheap.
+    NOT in the brief sort. Fail-soft: any failure — including a corrupt or
+    unreadable previous-output parquet — returns the frame unchanged rather
+    than aborting the score stage. The previous-output read itself happens
+    inside the try block so file-level errors are caught. Lazy import keeps
+    the frequent-cron `alphalens` startup cheap.
     """
     try:
         from alphalens_pipeline.thematic.options_telemetry import enrichment as options_enrichment
@@ -537,11 +539,9 @@ def score(
     enriched = market_state.enrich(enriched, asof=target)
 
     out_path = output_dir / f"{target.isoformat()}.parquet"
-    # Carry-forward: earlier same-date run slot provides the frozen stamp.
-    previous = pd.read_parquet(out_path) if out_path.exists() else None
-    enriched = _apply_options_telemetry(
-        enriched, target=target, out_path=out_path, previous=previous
-    )
+    # Carry-forward read happens inside the helper's fail-soft boundary so a
+    # corrupt previous parquet never aborts the score stage.
+    enriched = _apply_options_telemetry(enriched, target=target, out_path=out_path)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     enriched.to_parquet(out_path, index=False)
