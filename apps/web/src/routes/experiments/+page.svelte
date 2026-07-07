@@ -168,6 +168,12 @@
 			}))
 	];
 
+	// Prominent section-header typography — shared by the two primary ledgers
+	// (paradigms.ledger + tool.experiments) so they read louder than the quiet
+	// appendix headers and can never drift apart. Overrides the size/colour/
+	// tracking the SectionPanel header otherwise inherits.
+	const HEADING_PROMINENT = 'font-display font-bold text-sm sm:text-base uppercase tracking-[0.18em] text-fg';
+
 	// αt bar + scatter geometry. The 0–4 scale, the 2.0 marginal hairline, and the
 	// 3.5 deploy marker are shared by the per-row bars and the hero strip so they
 	// can never disagree.
@@ -437,7 +443,7 @@
 			     than the utility section headers (bigger + bold + full-brightness,
 			     not the tiny muted `// section.name` label). -->
 			<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-				<h2 class="font-display font-bold text-sm sm:text-base uppercase tracking-[0.18em] text-fg">paradigms.ledger</h2>
+				<h2 class={HEADING_PROMINENT}>paradigms.ledger</h2>
 				<span class="text-[10px] text-fg-muted">{nTested} hypotheses · {nDeployed} cleared the bar</span>
 			</div>
 			<p class="text-[11px] text-fg-dim mt-1.5 leading-relaxed">
@@ -551,7 +557,7 @@
 	</section>
 
 	<!-- ============================ LEDGER 2 · tool.experiments ============== -->
-	<SectionPanel id="tool-experiments" title="tool.experiments" style="animation-delay: 0.14s">
+	<SectionPanel id="tool-experiments" title="tool.experiments" titleClass={HEADING_PROMINENT} style="animation-delay: 0.14s">
 		{#snippet meta()}
 			<span class="text-fg-dim normal-case tracking-normal">{toolExperiments.length} rows · tuning the live tool</span>
 		{/snippet}

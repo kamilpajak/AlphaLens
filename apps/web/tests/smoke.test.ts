@@ -983,17 +983,18 @@ test.describe('experiments — paradigms.ledger header', () => {
 	// louder than the utility section headers, and its intro must not send the
 	// reader off to the other (live-tool) track.
 
-	test('header is more prominent than a utility section header (P-hdr.1)', async ({ page }) => {
+	test('both ledger headers (paradigms + tool.experiments) read louder than the appendix headers (P-hdr.1)', async ({ page }) => {
 		await gotoExperiments(page);
 		const sizePx = (sel: string) =>
 			page.locator(sel).first().evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-		const paradigms = await sizePx('section#paradigms h2');
-		const utility = await sizePx('section#tool-experiments h2');
-		expect(paradigms, 'paradigms.ledger header is larger than the tool.experiments header').toBeGreaterThan(utility);
-		const weight = await page
-			.locator('section#paradigms h2')
-			.evaluate((el) => Number(getComputedStyle(el).fontWeight));
-		expect(weight, 'paradigms.ledger header is bold').toBeGreaterThanOrEqual(700);
+		const weight = (sel: string) =>
+			page.locator(sel).first().evaluate((el) => Number(getComputedStyle(el).fontWeight));
+		// A quiet appendix section header (methodology.artifacts) is the baseline.
+		const appendix = await sizePx('section#methodology h2');
+		for (const sel of ['section#paradigms h2', 'section#tool-experiments h2']) {
+			expect(await sizePx(sel), `${sel} is larger than the appendix header`).toBeGreaterThan(appendix);
+			expect(await weight(sel), `${sel} is bold`).toBeGreaterThanOrEqual(700);
+		}
 	});
 
 	test('paradigms intro drops the live-tool cross-reference (P-hdr.2)', async ({ page }) => {
