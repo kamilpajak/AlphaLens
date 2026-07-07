@@ -156,44 +156,66 @@
 	style="animation-delay: {index * 0.04}s"
 >
 	<!-- Header: rank + ticker + company + theme on the left, verification gates
-	     pushed to the right. Wraps to a stacked layout on narrow viewports. -->
+	     pushed to the right. Wraps to a stacked layout on narrow viewports; on
+	     mobile (max-sm) the theme chip is reordered up next to the rank badge
+	     (order-*) to save one wrapped line — DOM order is unchanged, so sm+
+	     renders exactly as before. The chip truncates on mobile so a long theme
+	     shares the rank line instead of wrapping whole to its own line.
+	     A11y trade-off (accepted): on mobile the VISUAL order (rank, theme,
+	     ticker) diverges from the DOM/reading order (rank, ticker, theme) —
+	     WCAG 1.3.2 gray area. The programmatic sequence stays logical and no
+	     focusable element moves, so screen-reader flow is unharmed; revisit if
+	     the card ever gains public/multi-user reach. -->
 	<header class="px-4 sm:px-5 py-3 border-b border-grid bg-gradient-to-r from-bg-2 to-bg-1">
 		<div class="flex flex-wrap items-center gap-x-3 gap-y-2">
 			<span
-				class="px-2 py-1 border border-grid-strong text-[9px] uppercase tracking-widest text-fg-muted whitespace-nowrap"
+				class="order-1 sm:order-none px-2 py-1 border border-grid-strong text-[9px] uppercase tracking-widest text-fg-muted whitespace-nowrap"
 			>
 				rank {String(rank).padStart(2, '0')} of {cohort}
 			</span>
-			<div class="flex items-baseline gap-2 min-w-0">
+			<div class="order-3 sm:order-none flex items-baseline gap-2 min-w-0">
 				<h3 class="font-display font-bold text-2xl sm:text-3xl text-amber leading-none">{c.ticker}</h3>
 				<span class="text-fg-dim text-xs sm:text-sm truncate">{c.company_name}</span>
 			</div>
+			<!-- The 8rem cap is coupled to the rank badge's footprint: px-2 +
+			     text-[9px] tracking-widest "rank NN of NN" ≈ 6.5-7rem worst case
+			     + the gap-x-3. Flex-wrap assigns items to lines at their NATURAL
+			     width (before shrink), so without this cap a long theme wraps
+			     whole to its own line instead of truncating beside the rank.
+			     Re-derive if the badge text/format ever grows. -->
 			<span
-				class="px-2 py-0.5 bg-violet/15 border border-violet/40 text-violet text-[10px] lowercase tracking-widest"
+				class="order-2 sm:order-none max-sm:max-w-[calc(100%-8rem)] max-sm:truncate px-2 py-0.5 bg-violet/15 border border-violet/40 text-violet text-[10px] lowercase tracking-widest"
 				>#{c.theme}</span
 			>
 			<!-- Pattern tags: REVERSAL is currently the only one. When a 2nd pattern -->
 			<!-- (e.g. BREAKOUT, INSIDER_CLUSTER, PRE_EARNINGS_DRIFT) arrives, extract -->
 			<!-- to a `patterns: …` group with shared color-coding + a small label. -->
 			{#if c.deep_drawdown_reversal}
-				<ChipTip
-					term="REVERSAL pattern"
-					body="Deep-drawdown-reversal: ≥30% off 52-week high + fresh thematic catalyst (news URL present) + volume z-score ≥ +2σ. Archetype: oversold name on news with institutional accumulation flow. Heuristic — not validated alpha; use as decision-support signal."
-				>
-					{#snippet chip()}
-						<span
-							class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40 cursor-help"
-						>
-							<Sparkle class="size-2.5" /> reversal
-						</span>
-					{/snippet}
-				</ChipTip>
+				<!-- Wrapper span carries the mobile flex-order (ChipTip exposes no
+				     class prop); inline-flex keeps it a normal flex item. Safe to
+				     wrap because ChipTip's bubble positions itself against the
+				     viewport (clampToViewport), not this ancestor — re-check if
+				     ChipTip ever switches to ancestor-relative positioning. -->
+				<span class="order-4 sm:order-none inline-flex">
+					<ChipTip
+						term="REVERSAL pattern"
+						body="Deep-drawdown-reversal: ≥30% off 52-week high + fresh thematic catalyst (news URL present) + volume z-score ≥ +2σ. Archetype: oversold name on news with institutional accumulation flow. Heuristic — not validated alpha; use as decision-support signal."
+					>
+						{#snippet chip()}
+							<span
+								class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-amber/20 text-amber text-[9px] uppercase tracking-widest border border-amber/40 cursor-help"
+							>
+								<Sparkle class="size-2.5" /> reversal
+							</span>
+						{/snippet}
+					</ChipTip>
+				</span>
 			{/if}
 
 			<!-- Fixed per-gate slot order (tenk → press → insider → etf) so a gate
 			     keeps the same position regardless of pass/fail; only the pill
 			     colour / ✓ ✗ ? symbol signals the status. See $lib/gates. -->
-			<div class="flex flex-wrap items-center gap-1.5 ml-auto">
+			<div class="order-5 sm:order-none flex flex-wrap items-center gap-1.5 ml-auto">
 				{#each orderedGates(c) as g (g.name)}
 					<GatePill name={g.name} status={g.status} />
 				{/each}
