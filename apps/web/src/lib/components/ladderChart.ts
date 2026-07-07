@@ -1,4 +1,4 @@
-import type { ChartMarker } from '$lib/types';
+import type { ChartBar, ChartMarker } from '$lib/types';
 
 /** Marker kinds that close (part of) a position. ENTRY is intentionally absent —
  *  it opens the position, never ends the in-trade window. */
@@ -18,4 +18,19 @@ export function finalExitMarkerTime(markers: ChartMarker[]): string | null {
 		if (EXIT_KINDS.has(markers[i].kind)) return markers[i].time;
 	}
 	return null;
+}
+
+/** The bar time anchoring the "brief" vertical line: the first bar at/after
+ *  brief_date, i.e. the arrival session (session_on_or_after semantics), since
+ *  a brief dated on a non-trading day snaps forward to the next session.
+ *  ISO YYYY-MM-DD strings compare correctly lexicographically. Assumes bars
+ *  are chronological — the payload builder always emits them in session order.
+ *  Null means "draw nothing" — no bars (NO_DATA) or the brief postdates every
+ *  bar. */
+export function briefLineTime(
+	bars: ChartBar[],
+	briefDate: string | null | undefined
+): string | null {
+	if (!briefDate) return null;
+	return bars.find((b) => b.time >= briefDate)?.time ?? null;
 }
