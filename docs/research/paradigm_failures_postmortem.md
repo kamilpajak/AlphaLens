@@ -476,6 +476,17 @@ activated for 12-month forward observation rather than capital deploy.
 Validated the methodology bundle's "INCONCLUSIVE → forward observation,
 not deploy" handling.
 
+**Forward-observation close-out (2026-07-07, issue #769):** the
+scorer-level paper-trade observation was retired together with the
+paper-trade chain ([ADR 0012](../adr/0012-decommission-paper-trading-and-broker-chain.md));
+no scorer-level replay replaces it. The options-implied CLASS is observed
+forward instead via the candidate options telemetry (PR #772,
+`docs/research/options_telemetry_design_2026_07_07.md`) — a different
+universe (catalyst-conditioned mid-caps, not the cross-sectional top
+decile) and construction, so it is a class-level partial substitute, not
+a continuation of this scorer's observation. The same applies to the v9D
+entry above.
+
 **Documented:** memory `project_pc_abnormal_retrospective_INCONCLUSIVE_2026_05_05.md`,
 verdict JSON `docs/research/pc_abnormal_retrospective_pre_2018_verdict.json`.
 
