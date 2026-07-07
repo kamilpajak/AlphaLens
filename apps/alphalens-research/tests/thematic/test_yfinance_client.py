@@ -577,5 +577,72 @@ class TestSplits(unittest.TestCase):
             self.assertIsNone(_client().splits("DEAD"))
 
 
+def _fake_chain_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    calls = pd.DataFrame(
+        {
+            "strike": [95.0, 100.0, 105.0],
+            "bid": [6.0, 3.0, 1.2],
+            "ask": [6.4, 3.2, 1.4],
+            "impliedVolatility": [0.52, 0.50, 0.49],
+            "openInterest": [120, 300, 80],
+            "volume": [10, 40, 5],
+        }
+    )
+    puts = calls.copy()
+    return calls, puts
+
+
+class TestOptionExpiries(unittest.TestCase):
+    def test_returns_sorted_dates(self):
+        fake = MagicMock()
+        fake.options = ("2026-08-07", "2026-07-17")
+        client = yc.YFinanceClient(min_interval_s=0.0)
+        with patch("yfinance.Ticker", return_value=fake) as patched:
+            out = client.option_expiries("qubt")
+        patched.assert_called_once_with("QUBT")
+        self.assertEqual(out, [dt.date(2026, 7, 17), dt.date(2026, 8, 7)])
+
+    def test_no_listed_options_returns_empty_list(self):
+        fake = MagicMock()
+        fake.options = ()
+        client = yc.YFinanceClient(min_interval_s=0.0)
+        with patch("yfinance.Ticker", return_value=fake):
+            self.assertEqual(client.option_expiries("QUBT"), [])
+
+    def test_permanent_failure_returns_none(self):
+        class _Raises:
+            @property
+            def options(self):
+                raise RuntimeError("404 Not Found")
+
+        client = yc.YFinanceClient(min_interval_s=0.0)
+        with patch("yfinance.Ticker", return_value=_Raises()):
+            self.assertIsNone(client.option_expiries("QUBT"))
+
+
+class TestOptionChain(unittest.TestCase):
+    def test_returns_calls_and_puts_frames(self):
+        calls, puts = _fake_chain_frames()
+        chain = MagicMock()
+        chain.calls = calls
+        chain.puts = puts
+        fake = MagicMock()
+        fake.option_chain.return_value = chain
+        client = yc.YFinanceClient(min_interval_s=0.0)
+        with patch("yfinance.Ticker", return_value=fake):
+            out = client.option_chain("QUBT", dt.date(2026, 7, 17))
+        fake.option_chain.assert_called_once_with("2026-07-17")
+        self.assertIsNotNone(out)
+        pd.testing.assert_frame_equal(out[0], calls)
+        pd.testing.assert_frame_equal(out[1], puts)
+
+    def test_failure_returns_none(self):
+        fake = MagicMock()
+        fake.option_chain.side_effect = RuntimeError("boom")
+        client = yc.YFinanceClient(min_interval_s=0.0)
+        with patch("yfinance.Ticker", return_value=fake):
+            self.assertIsNone(client.option_chain("QUBT", dt.date(2026, 7, 17)))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -218,6 +218,49 @@ class YFinanceClient:
 
         return self._call_with_retry(_fetch, what=f"calendar({upper})", default=None)
 
+    def option_expiries(self, ticker: str) -> list[dt.date] | None:
+        """Sorted listed option expiries for ``ticker``.
+
+        Wraps ``yfinance.Ticker(T).options`` (a tuple of ISO date strings).
+        Returns an EMPTY list when the ticker genuinely has no listed
+        options, and ``None`` only on a permanent failure / exhausted
+        retries — same tri-state contract as :meth:`splits`.
+        """
+        upper = ticker.upper()
+
+        def _fetch() -> tuple | None:
+            import yfinance as yf
+
+            return yf.Ticker(upper).options
+
+        raw = self._call_with_retry(_fetch, what=f"option_expiries({upper})", default=None)
+        if raw is None:
+            return None
+        return sorted(dt.date.fromisoformat(str(e)) for e in raw)
+
+    def option_chain(
+        self, ticker: str, expiry: dt.date
+    ) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+        """``(calls, puts)`` chain frames for one expiry, or ``None`` on failure.
+
+        Wraps ``yfinance.Ticker(T).option_chain("YYYY-MM-DD")``. Frames are
+        passed through verbatim (per-contract ``strike``, ``bid``, ``ask``,
+        ``impliedVolatility``, ``openInterest``, ``volume``, ...) — the
+        options-telemetry feature layer owns all filtering, because the
+        vendor IV field has documented bugs the caller must sanity-screen.
+        """
+        upper = ticker.upper()
+
+        def _fetch():
+            import yfinance as yf
+
+            return yf.Ticker(upper).option_chain(expiry.isoformat())
+
+        chain = self._call_with_retry(_fetch, what=f"option_chain({upper})", default=None)
+        if chain is None:
+            return None
+        return chain.calls, chain.puts
+
     def market_cap(self, ticker: str) -> float | None:
         """Live market cap via ``fast_info.market_cap``; ``None`` on failure.
 
