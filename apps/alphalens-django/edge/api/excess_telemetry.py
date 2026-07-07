@@ -147,6 +147,10 @@ def _trailing_trend(
     """
     rng = random.Random(seed)
     trend: list[dict[str, Any]] = []
+    # Map each distinct date to the index of its LAST point in the sorted list.
+    # ``points`` is pre-sorted by (date, ticker), so each date's key is inserted at
+    # its first occurrence and the dict preserves that insertion order (Python 3.7+)
+    # — iterating ``.items()`` below therefore walks the dates chronologically.
     last_index_by_date: dict[str, int] = {}
     for i, p in enumerate(points):
         last_index_by_date[p["date"]] = i
