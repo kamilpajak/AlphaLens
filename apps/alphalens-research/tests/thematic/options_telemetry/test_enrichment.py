@@ -101,10 +101,12 @@ class TestEnrichInWindow(unittest.TestCase):
         self.assertEqual(row["options_chain_quality"], f.CHAIN_QUALITY_NONE)
         self.assertTrue(math.isnan(row["options_ivx30"]))
         self.assertTrue(math.isnan(row["options_put_vol"]))
+        self.assertIsNotNone(out.iloc[0]["options_snapshot_utc"])
 
     def test_fetch_failure_is_quality_none_and_never_raises(self):
         out = en.enrich(_frame(), asof=ASOF, now_utc=IN_WINDOW, snapshot_fn=_failed_snapshot)
         self.assertEqual(out.iloc[0]["options_chain_quality"], f.CHAIN_QUALITY_NONE)
+        self.assertIsNotNone(out.iloc[0]["options_snapshot_utc"])
 
     def test_feature_exception_degrades_to_none_quality(self):
         def _raising(ticker: str, asof: dt.date):
@@ -172,6 +174,28 @@ class TestEnrichWindowAndFreeze(unittest.TestCase):
             asof=ASOF,
             now_utc=IN_WINDOW,
             previous=unstamped,
+            snapshot_fn=_good_snapshot,
+        )
+        self.assertEqual(out.iloc[0]["options_chain_quality"], f.CHAIN_QUALITY_OK)
+
+    def test_previous_with_nan_marker_is_not_frozen(self):
+        # A parquet round-trip can turn None markers into NaN/pd.NA; such a
+        # row was never stamped and must NOT freeze the ticker.
+        import tempfile
+        from pathlib import Path
+
+        unstamped = en.enrich(
+            _frame(), asof=ASOF, now_utc=OUT_OF_WINDOW, snapshot_fn=_good_snapshot
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "prev.parquet"
+            unstamped.to_parquet(path, index=False)
+            roundtripped = pd.read_parquet(path)
+        out = en.enrich(
+            _frame(),
+            asof=ASOF,
+            now_utc=IN_WINDOW,
+            previous=roundtripped,
             snapshot_fn=_good_snapshot,
         )
         self.assertEqual(out.iloc[0]["options_chain_quality"], f.CHAIN_QUALITY_OK)

@@ -12,6 +12,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 import pandas as pd
 
@@ -112,19 +113,22 @@ def _compute_values(
     quote = None
     atm_call_oi = atm_put_oi = atm_vol_total = None
 
-    near_leg = snapshot.chains.get(near) if near is not None else None
-    far_leg = snapshot.chains.get(far) if far is not None else None
+    near_leg = None
+    far_leg = None
+    if near is not None:
+        near_leg = snapshot.chains.get(near)
+        if near_leg is not None:
+            legs.append(near_leg)
+            iv_near = f.expiry_atm_iv(near_leg[0], near_leg[1], spot)
+            dte_near = (near - asof).days
+    if far is not None:
+        far_leg = snapshot.chains.get(far)
+        if far_leg is not None:
+            legs.append(far_leg)
+            iv_far = f.expiry_atm_iv(far_leg[0], far_leg[1], spot)
+            dte_far = (far - asof).days
     # The quote/skew/OI reference leg: near when present, else far.
     ref_leg = near_leg or far_leg
-
-    if near_leg is not None:
-        legs.append(near_leg)
-        iv_near = f.expiry_atm_iv(near_leg[0], near_leg[1], spot)
-        dte_near = (near - asof).days
-    if far_leg is not None:
-        legs.append(far_leg)
-        iv_far = f.expiry_atm_iv(far_leg[0], far_leg[1], spot)
-        dte_far = (far - asof).days
 
     ivx30 = f.interpolate_iv30(iv_near, dte_near, iv_far, dte_far)
     values["options_ivx30"] = ivx30
@@ -192,7 +196,7 @@ def _previous_by_ticker(previous: pd.DataFrame | None) -> dict[str, dict[str, ob
     stamped: dict[str, dict[str, object]] = {}
     for _, row in previous.iterrows():
         marker = row.get("options_snapshot_utc")
-        if marker is None or (isinstance(marker, float) and pd.isna(marker)):
+        if marker is None or pd.isna(marker):
             continue
         ticker = str(row.get("ticker", "")).upper()
         if ticker and ticker not in stamped:
@@ -295,13 +299,13 @@ def enrich(
 
     for col in _FLOAT_COLUMNS:
         out[col] = pd.Series(
-            [per_ticker[t][col] if t else None for t in tickers],
+            [cast("float | None", per_ticker[t][col]) if t else None for t in tickers],
             index=out.index,
             dtype="float64",
         )
     for col in _STR_COLUMNS:
         out[col] = pd.Series(
-            [per_ticker[t][col] if t else None for t in tickers],
+            [cast("str | None", per_ticker[t][col]) if t else None for t in tickers],
             index=out.index,
             dtype="object",
         )
