@@ -176,6 +176,16 @@ class TestChainQuality(unittest.TestCase):
         kw.update(spread_pct=0.25)
         self.assertEqual(f.classify_chain_quality(**kw), f.CHAIN_QUALITY_THIN)
 
+    def test_oi_exactly_at_floor_is_ok(self):
+        kw = self._ok_kwargs()
+        kw.update(atm_call_oi=50.0, atm_put_oi=50.0)
+        self.assertEqual(f.classify_chain_quality(**kw), f.CHAIN_QUALITY_OK)
+
+    def test_oi_one_below_floor_is_thin(self):
+        kw = self._ok_kwargs()
+        kw.update(atm_call_oi=49.0)
+        self.assertEqual(f.classify_chain_quality(**kw), f.CHAIN_QUALITY_THIN)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -122,16 +122,14 @@ def interpolate_iv30(
     Telemetry-grade simplification (spec §4 / review §8): NOT a traded
     curve — the audit columns keep it recomputable at analysis time.
     """
-    have_near = iv_near is not None and dte_near is not None
-    have_far = iv_far is not None and dte_far is not None
-    if have_near and have_far:
+    if iv_near is not None and dte_near is not None and iv_far is not None and dte_far is not None:
         if dte_far == dte_near:
             return iv_near
         w = (IV30_TARGET_DTE - dte_near) / (dte_far - dte_near)
         return iv_near + w * (iv_far - iv_near)
-    if have_near:
+    if iv_near is not None:
         return iv_near
-    if have_far:
+    if iv_far is not None:
         return iv_far
     return None
 
