@@ -631,7 +631,7 @@
 		     + inline JargonTips; the amber index number is the card's tab. -->
 		<!-- role="list" restores list semantics under Tailwind Preflight's
 		     list-style:none (Safari drops them otherwise). -->
-		<ul role="list" class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
+		<ul role="list" class="grid grid-cols-1 md:grid-cols-2 items-start gap-3 p-4 sm:p-5">
 			{#each patterns as p}
 				<li
 					data-testid="pattern-card"
@@ -672,12 +672,12 @@
 		<!-- Feature-card grid — "what survived". The durable methodology artifacts
 		     are the proud outputs of the whole search, so they get the elevated card
 		     treatment: the hero's amber corner-bracket motif, a bright bg, the status
-		     pill, and the repo/doc reference pinned to the card footer. -->
+		     pill, and the repo/doc reference at the card footer. -->
 		<!-- <ul>/<li>, not <article>: the page reserves <article> for an expandable
 		     ledger row (one <details> each — see P0.1), so a static card must not
 		     inflate that count. role="list" keeps list semantics under Preflight's
 		     list-style:none, matching the pattern grid above. -->
-		<ul role="list" class="grid grid-cols-1 md:grid-cols-2 gap-3 p-4 sm:p-5">
+		<ul role="list" class="grid grid-cols-1 md:grid-cols-2 items-start gap-3 p-4 sm:p-5">
 			{#each artifacts as a}
 				<li
 					data-testid="artifact-card"
@@ -689,7 +689,7 @@
 						<span class="ml-auto shrink-0"><StatusPill tone={statusTone(a.status)} label={a.status} /></span>
 					</div>
 					<p class="text-fg-dim text-xs leading-relaxed">{a.description}</p>
-					<div class="mt-auto pt-3 text-[11px] font-mono text-cyan break-all">{a.link}</div>
+					<div class="pt-3 text-[11px] font-mono text-cyan break-all">{a.link}</div>
 				</li>
 			{/each}
 		</ul>

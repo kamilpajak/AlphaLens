@@ -961,6 +961,21 @@ test.describe('experiments — appendix card layout', () => {
 		const infra = await page.locator('section#infra').count();
 		expect(infra, 'no infrastructure.live section on /experiments').toBe(0);
 	});
+
+	test('card grids use items-start so cards hug their content height (P-cards.4)', async ({ page }) => {
+		await gotoExperiments(page);
+		// Default CSS-grid rows stretch every card to the tallest in its row, which
+		// left up to ~59px of empty space in the shorter card. align-items:start
+		// makes each card only as tall as its own content.
+		for (const sel of ['section#patterns', 'section#methodology']) {
+			// Tailwind `items-start` computes to `flex-start` (grid treats it as
+			// start). The point is it must NOT be the stretching default.
+			const align = await page
+				.locator(`${sel} ul[role="list"]`)
+				.evaluate((el) => getComputedStyle(el).alignItems);
+			expect(['start', 'flex-start'], `${sel} card grid must not stretch cards (got ${align})`).toContain(align);
+		}
+	});
 });
 
 test.describe('glossary auto-discovery (per-page coverage)', () => {
