@@ -14,12 +14,15 @@ sibling to ``summary.py``. Telemetry / exploratory ONLY:
 from __future__ import annotations
 
 import math
+import random
 from collections.abc import Iterable, Sequence
 from typing import Any
 
 from edge.api.summary import N_GATE_THRESHOLD
 
 SMOOTHER_WINDOW = 20
+BOOTSTRAP_ITERS = 500
+BOOTSTRAP_SEED = 12345
 METRIC_NOTE = (
     "per-trade total excess over SPY across each trade's holding window; all "
     "surfaced candidates, not a user-selected portfolio; gross / pre-cost; "
@@ -87,6 +90,75 @@ def _collect_points(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return raw
 
 
+def _percentile(sorted_vals: list[float], pct: float) -> float:
+    if not sorted_vals:
+        return 0.0
+    if len(sorted_vals) == 1:
+        return sorted_vals[0]
+    rank = pct / 100.0 * (len(sorted_vals) - 1)
+    lo_i = int(math.floor(rank))
+    hi_i = int(math.ceil(rank))
+    if lo_i == hi_i:
+        return sorted_vals[lo_i]
+    frac = rank - lo_i
+    return sorted_vals[lo_i] * (1 - frac) + sorted_vals[hi_i] * frac
+
+
+def _cluster_bootstrap_ci(
+    slice_points: Sequence[dict[str, Any]], *, iters: int, rng: random.Random
+) -> tuple[float, float]:
+    """95% CI of the slice mean, resampling by TICKER cluster (not by row).
+
+    Groups the slice's excesses by ticker, then each iteration draws len(clusters)
+    tickers WITH replacement and pools their rows. Fewer unique tickers -> higher
+    between-draw variance -> wider CI (repeated episodes of one ticker cannot fake
+    precision). A single-cluster slice yields a zero-width CI (undefined from one
+    cluster) — the display gate + n_effective cover that degenerate case.
+    """
+    clusters: dict[str, list[float]] = {}
+    for p in slice_points:
+        clusters.setdefault(p["ticker"], []).append(p["excess"])
+    keys = list(clusters.keys())
+    if not keys:
+        return (0.0, 0.0)
+    means: list[float] = []
+    for _ in range(iters):
+        pooled: list[float] = []
+        for _ in range(len(keys)):
+            pooled.extend(clusters[keys[rng.randrange(len(keys))]])
+        means.append(sum(pooled) / len(pooled))
+    means.sort()
+    return (_percentile(means, 2.5), _percentile(means, 97.5))
+
+
+def _trailing_trend(
+    points: Sequence[dict[str, Any]],
+    *,
+    window: int = SMOOTHER_WINDOW,
+    iters: int = BOOTSTRAP_ITERS,
+    seed: int = BOOTSTRAP_SEED,
+) -> list[dict[str, Any]]:
+    """One {date, mean, lo, hi} per distinct date — trailing-window over ordered pts.
+
+    ``points`` MUST already be sorted by (date, ticker) (as ``_collect_points``
+    returns them). For each distinct date d we take the last ``window`` points up to
+    and including the last point on d, take their mean, and a ticker-clustered
+    bootstrap CI. Deterministic: a single ``random.Random(seed)`` walks all dates.
+    """
+    rng = random.Random(seed)
+    trend: list[dict[str, Any]] = []
+    last_index_by_date: dict[str, int] = {}
+    for i, p in enumerate(points):
+        last_index_by_date[p["date"]] = i
+    for date, last_i in last_index_by_date.items():
+        window_slice = points[max(0, last_i - window + 1) : last_i + 1]
+        excesses = [p["excess"] for p in window_slice]
+        mean = sum(excesses) / len(excesses)
+        lo, hi = _cluster_bootstrap_ci(window_slice, iters=iters, rng=rng)
+        trend.append({"date": date, "mean": mean, "lo": lo, "hi": hi})
+    return trend
+
+
 def build_excess_telemetry(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     points = _collect_points(rows)
     n_total = len(points)
@@ -104,5 +176,5 @@ def build_excess_telemetry(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "metric_note": METRIC_NOTE,
         "benchmark_note": BENCHMARK_NOTE,
         "points": points,
-        "trend": [],  # populated in Task 2 when not gated
+        "trend": [] if gated else _trailing_trend(points),
     }
