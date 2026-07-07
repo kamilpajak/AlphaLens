@@ -127,6 +127,70 @@ def _emit_stage_volume(stage: str, *, output_rows: int, input_rows: int) -> None
         logger.exception("emit_domain_metrics failed for stage %s; the run succeeded", stage)
 
 
+def _apply_options_telemetry(
+    enriched: pd.DataFrame,
+    *,
+    target: dt.date,
+    out_path: Path,
+    previous: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """Stamp the display-only options telemetry (design memo 2026-07-07).
+
+    yfinance chain snapshot, stamped only inside the post-close window for
+    the asof session; the previous same-date output parquet (earlier run
+    slot) provides carry-forward so the first successful stamp freezes.
+    NOT in the brief sort. Fail-soft: any failure — including a corrupt or
+    unreadable previous-output parquet — returns the frame unchanged rather
+    than aborting the score stage. The previous-output read itself happens
+    inside the try block so file-level errors are caught. Lazy import keeps
+    the frequent-cron `alphalens` startup cheap.
+
+    On enrichment failure, a best-effort attempt carries forward any
+    ``options_*`` columns that were already stamped in the previous output
+    parquet (preserving a successful earlier-slot stamp even if a later slot
+    fails). Only when that nested carry-forward also fails does the frame
+    return unchanged.
+    """
+    try:
+        from alphalens_pipeline.thematic.options_telemetry import enrichment as options_enrichment
+
+        if previous is None:
+            previous = pd.read_parquet(out_path) if out_path.exists() else None
+        return options_enrichment.enrich(enriched, asof=target, previous=previous)
+    except Exception:
+        logger.warning(
+            "options telemetry pass failed; attempting to carry previous columns",
+            exc_info=True,
+        )
+        try:
+            if out_path.exists():
+                prev_df = pd.read_parquet(out_path)
+                options_cols = [c for c in prev_df.columns if c.startswith("options_")]
+                if options_cols and "options_snapshot_utc" in prev_df.columns:
+                    prev_keyed = (
+                        prev_df[["ticker", *options_cols]]
+                        .dropna(subset=["options_snapshot_utc"])
+                        .drop_duplicates(subset=["ticker"], keep="first")
+                    )
+                    if not prev_keyed.empty:
+                        result = enriched.copy()
+                        for col in options_cols:
+                            result[col] = None
+                        result.update(
+                            result[["ticker"]].merge(prev_keyed, on="ticker", how="left")[
+                                options_cols
+                            ]
+                        )
+                        logger.warning("options telemetry pass failed; carried previous columns")
+                        return result
+        except Exception:
+            logger.warning(
+                "options telemetry carry-forward also failed; columns left absent",
+                exc_info=True,
+            )
+        return enriched
+
+
 def _parquet_num_rows(path: Path) -> int:
     """Row count of a parquet via its footer metadata (no full read).
 
@@ -509,8 +573,12 @@ def score(
 
     enriched = market_state.enrich(enriched, asof=target)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{target.isoformat()}.parquet"
+    # Carry-forward read happens inside the helper's fail-soft boundary so a
+    # corrupt previous parquet never aborts the score stage.
+    enriched = _apply_options_telemetry(enriched, target=target, out_path=out_path)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
     enriched.to_parquet(out_path, index=False)
 
     # Left-merge enrich: input == output in the normal case; a divergence

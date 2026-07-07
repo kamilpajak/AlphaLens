@@ -43,6 +43,47 @@ def _classify(exc: Exception) -> Exception:
 
 @unittest.skipUnless(_LIVE, "set YFINANCE_LIVE_TEST=1 to run the live yfinance probe")
 class TestYfinanceLive(unittest.TestCase):
+    def test_option_chain_shape(self):
+        # AAPL always has a liquid chain; assert SHAPE only, never values.
+        from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
+
+        def _probe() -> None:
+            client = get_default_yfinance_client()
+            try:
+                expiries = client.option_expiries(_TICKER)
+            except Exception as exc:
+                raise _classify(exc) from exc
+
+            if expiries is None or len(expiries) == 0:
+                raise PermanentProbeError(f"option_expiries({_TICKER!r}) returned no expiry dates")
+
+            try:
+                leg = client.option_chain(_TICKER, expiries[0])
+            except Exception as exc:
+                raise _classify(exc) from exc
+
+            if leg is None:
+                raise PermanentProbeError(f"option_chain({_TICKER!r}, {expiries[0]}) returned None")
+            calls, puts = leg
+            for name, frame in (("calls", calls), ("puts", puts)):
+                if frame.empty:
+                    raise PermanentProbeError(f"option_chain({_TICKER!r}) {name} frame is empty")
+                for col in (
+                    "strike",
+                    "bid",
+                    "ask",
+                    "impliedVolatility",
+                    "openInterest",
+                    "volume",
+                ):
+                    if col not in frame.columns:
+                        raise PermanentProbeError(
+                            f"option_chain({_TICKER!r}) {name} missing column {col!r}; "
+                            f"columns present: {sorted(frame.columns)}"
+                        )
+
+        run_probes(self, {"AAPL/option-chain": _probe}, label="yfinance-options")
+
     def test_three_seams_return_expected_shapes(self):
         import pandas as pd
 

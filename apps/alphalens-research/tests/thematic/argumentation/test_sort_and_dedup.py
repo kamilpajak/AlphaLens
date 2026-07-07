@@ -396,7 +396,9 @@ def _forbidden_expert_prefixes() -> tuple[str, ...]:
     # `oneil_*` sort key is caught the moment it could be added, not only after
     # the registry knows about it. The set union dedups the overlap.
     ids = set(expert_ids()) | {"buffett", "oneil"}
-    return tuple(sorted({f"{eid}_" for eid in ids} | {"expert_"}))
+    # options_* is display-only telemetry (design memo 2026-07-07) — never
+    # a sort input until an Expert-style validation says otherwise.
+    return tuple(sorted({f"{eid}_" for eid in ids} | {"expert_", "options_"}))
 
 
 def _allowlist_offenders(keys: tuple[str, ...]) -> tuple[str, ...]:
@@ -498,6 +500,9 @@ class TestSortKeyExpertLock(unittest.TestCase):
         # lock holds, not that the assertion is unreachable.
         injected = (*_sort_chain_keys(), "oneil_rs_rating")
         self.assertEqual(_allowlist_offenders(injected), ("oneil_rs_rating",))
+
+    def test_options_prefix_is_forbidden_in_sort(self):
+        self.assertIn("options_", _forbidden_expert_prefixes())
 
 
 if __name__ == "__main__":
