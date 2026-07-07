@@ -23,7 +23,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from edge.api.chart import EdgeChartView
-from edge.api.serializers import EdgeOutcomeRowSerializer, EdgeSummarySerializer
+from edge.api.excess_telemetry import build_excess_telemetry
+from edge.api.serializers import (
+    EdgeExcessTelemetrySerializer,
+    EdgeOutcomeRowSerializer,
+    EdgeSummarySerializer,
+)
 from edge.api.summary import build_edge_summary
 from edge.models import LadderOutcome
 
@@ -153,4 +158,28 @@ class EdgeOutcomesView(APIView):
         return Response({"data": EdgeOutcomeRowSerializer(rows, many=True).data})
 
 
-__all__ = ["EdgeChartView", "EdgeOutcomesView", "EdgeSummaryView"]
+class EdgeExcessTelemetryView(APIView):
+    """``/v1/edge/excess-telemetry`` — per-trade SPY-excess scatter + gated trend."""
+
+    @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "window",
+                OpenApiTypes.INT,
+                description="Calendar days back from the latest brief date (default: all).",
+            ),
+        ],
+        responses=EdgeExcessTelemetrySerializer,
+    )
+    def get(self, request: Request) -> Response:
+        window = _parse_window(request)
+        qs = LadderOutcome.objects.all()
+        floor = _window_floor(window)
+        if floor is not None:
+            qs = qs.filter(brief_date__gte=floor)
+        rows = list(qs.values(*_LADDER_FIELD_NAMES))
+        payload = build_excess_telemetry(rows)
+        return Response(EdgeExcessTelemetrySerializer(payload).data)
+
+
+__all__ = ["EdgeChartView", "EdgeExcessTelemetryView", "EdgeOutcomesView", "EdgeSummaryView"]

@@ -173,3 +173,25 @@ def test_outcomes_status_filter(tmp_path: Path):
     assert {r["ticker"] for r in terminal} == {"AMPL"}
     ongoing = APIClient().get("/v1/edge/outcomes?status=ongoing").json()["data"]
     assert {r["ticker"] for r in ongoing} == {"BLBD"}
+
+
+@pytest.mark.django_db
+def test_excess_telemetry_endpoint_shape(tmp_path: Path):
+    # Enough terminal rows to clear the N-gate so ``trend`` is populated.
+    rows = [
+        _terminal(f"T{i}", excess=0.01 * ((i % 5) - 2), realized_r=0.5)
+        for i in range(N_GATE_THRESHOLD)
+    ]
+    _write_parquet(tmp_path, "2026-05-27", rows)
+    rebuild_from_parquet(tmp_path)
+
+    resp = APIClient().get("/v1/edge/excess-telemetry")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["benchmark"] == "SPY"
+    assert body["status"] == "ok"
+    assert body["n_total"] == N_GATE_THRESHOLD
+    assert body["points"] and {"date", "excess", "ticker", "episode_repeat"} <= set(
+        body["points"][0]
+    )
+    assert body["trend"] and {"date", "mean", "lo", "hi"} <= set(body["trend"][0])
