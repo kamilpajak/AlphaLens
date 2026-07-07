@@ -94,6 +94,14 @@ work), OI is the day's cleared value, and quotes/IV are the at-close state
 of the asof session. If all in-window runs fail (DNS storm), that asof
 simply has no options row — best-effort, never a stage failure.
 
+Fetch-failure vs no-chain semantics: a **failed fetch** (network error,
+yfinance error) leaves the row unstamped (no `options_snapshot_utc`) so
+that later in-window slots can retry. Only a fetch-OK ticker with no listed
+chain stamps `options_chain_quality=NONE` and freezes — refetching a ticker
+with no chain is pointless. A missing spot price (fetch OK but spot=None)
+is treated as transient vendor state and also leaves the row unstamped for
+retry.
+
 ## 4. Feature set (~16 `options_*` columns)
 
 Mirror the **validated v9D stack** (`alphalens_research/screeners/
@@ -107,8 +115,8 @@ ingredients of the validated abnormal-P/C construction, plus the XZZ skew
 | `options_term_slope` | ~180d ATM IV − ~30d ATM IV (v9D `ivx180_minus_ivx30`) | yes |
 | `options_vrp_ratio` | `options_ivx30` / 20d realized vol (v9D `ivx30_over_hv20`; HV from the split-adjusted grouped-daily store already read at `score`) | yes |
 | `options_skew_xzz` | Xing-Zhang-Zhao volatility smirk: OTM-put IV (moneyness closest to 0.95 within [0.80, 0.95]) − ATM-call IV (moneyness in [0.95, 1.05]), near expiry. Moneyness-based, no Greeks needed | yes |
-| `options_put_vol`, `options_call_vol` | total put / call contract volume across the near chain (final daily totals per the §3.1 snapshot-window rule) | yes |
-| `options_put_oi`, `options_call_oi` | total put / call open interest across the near chain | yes |
+| `options_put_vol`, `options_call_vol` | total put / call contract volume summed across the two bracketing expiries (near+far; single leg in the degenerate case), final daily totals per the §3.1 snapshot-window rule | yes |
+| `options_put_oi`, `options_call_oi` | total put / call open interest summed across the two bracketing expiries (near+far; single leg in the degenerate case) | yes |
 | `options_spread_pct_atm` | relative bid/ask spread of the ATM contract — tradability / data-quality measure (at-close quotes per §3.1) | yes |
 | `options_chain_quality` | `NONE` / `THIN` / `OK` — see criteria below | yes |
 | `options_asof_expiry_near` | expiry date actually used for the 30d leg (debuggability of interpolation) | yes |
