@@ -25,7 +25,11 @@ def _force_permissive_dev_rest_framework(settings):
     with override_settings(REST_FRAMEWORK=permissive):
         from edge.api import views as edge_views
 
-        view_classes = [edge_views.EdgeSummaryView, edge_views.EdgeOutcomesView]
+        view_classes = [
+            edge_views.EdgeSummaryView,
+            edge_views.EdgeOutcomesView,
+            edge_views.EdgeExcessTelemetryView,
+        ]
         _MISSING = object()
         original = {
             cls: {attr: cls.__dict__.get(attr, _MISSING) for attr in _PERM_ATTRS}
