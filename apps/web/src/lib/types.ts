@@ -452,3 +452,39 @@ export interface ChartPayload {
 	open_r: number | null;
 	realized_r: number | null;
 }
+
+// ── SPY-excess scatter telemetry (GET /v1/edge/excess-telemetry) ─────────────
+// Types mirror the Django JSON contract (Tasks 1-3). All statistics are
+// computed server-side; the SPA only maps prepared numbers to pixels.
+
+/** One per-outcome scatter point — `holding_days` is null for NO_FILL rows. */
+export interface EdgeExcessPoint {
+	date: string;
+	excess: number;
+	ticker: string;
+	holding_days: number | null;
+	episode_repeat: boolean;
+}
+
+/** One rolling-window smoother band vertex (trend array is [] when accumulating). */
+export interface EdgeExcessTrend {
+	date: string;
+	mean: number;
+	lo: number;
+	hi: number;
+}
+
+/** Full response envelope from GET /v1/edge/excess-telemetry. */
+export interface EdgeExcessTelemetry {
+	benchmark: string;
+	status: 'accumulating' | 'ok';
+	gate_threshold: number;
+	n_total: number;
+	n_effective: number;
+	median_holding_days: number | null;
+	smoother_window: number;
+	metric_note: string;
+	benchmark_note: string;
+	points: EdgeExcessPoint[];
+	trend: EdgeExcessTrend[];
+}
