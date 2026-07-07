@@ -158,7 +158,14 @@
 				crosshair: {
 					vertLine: { color: COLOR.grid, labelBackgroundColor: COLOR.bg2 },
 					horzLine: { color: COLOR.grid, labelBackgroundColor: COLOR.bg2 }
-				}
+				},
+				// Static replay viewport: the window is deliberately bounded
+				// (lead-in + trade + trailing, fitContent on mount), so wheel/pinch
+				// zoom and drag-pan only hijack page scroll and can strand the
+				// trade region off-view (overlays then hide with no visible reset).
+				// Crosshair hover is a separate subsystem and stays interactive.
+				handleScroll: false,
+				handleScale: false
 			});
 
 			// Native last-value price line — the live "now" marker. Enabled only
