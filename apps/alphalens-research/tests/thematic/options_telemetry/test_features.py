@@ -255,6 +255,22 @@ class TestTrailingSessionCloses(unittest.TestCase):
             out = f.trailing_session_closes(root, ["QUBT"], dt.date(2026, 7, 6), 2)
         self.assertEqual(out["QUBT"], [10.0, 11.0])
 
+    def test_saturday_asof_walks_back_from_prior_session(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # asof Sat 2026-07-04: session resolves to Thu 07-02 (07-03 is the
+            # observed holiday), whose snapshot is ALSO missing -> anchor walks
+            # back to Wed 07-01.
+            for i, day in enumerate([dt.date(2026, 6, 30), dt.date(2026, 7, 1)]):
+                pd.DataFrame({"T": ["QUBT"], "c": [10.0 + i]}).to_parquet(
+                    root / f"{day.isoformat()}.parquet"
+                )
+            out = f.trailing_session_closes(root, ["QUBT"], dt.date(2026, 7, 4), 2)
+        self.assertEqual(out["QUBT"], [10.0, 11.0])
+
     def test_empty_store_returns_empty_lists(self):
         import tempfile
         from pathlib import Path

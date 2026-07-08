@@ -258,9 +258,11 @@ def trailing_session_closes(
     # Bollerslev-Tauchen-Zhou; backward-looking HV in Goyal-Saretto) and adds
     # ~1-2 vol pts of sampling noise with zero systematic bias.
     anchored = None
+    anchored_snapshot = None
     probe = session
     for _ in range(END_SESSION_MAX_LAG + 1):
-        if read_grouped_day(root, probe) is not None:
+        anchored_snapshot = read_grouped_day(root, probe)
+        if anchored_snapshot is not None:
             anchored = probe
             break
         probe = previous_trading_day(probe)
@@ -276,7 +278,8 @@ def trailing_session_closes(
     wanted = {t.upper() for t in tickers}
     per_ticker: dict[str, list[float]] = {t.upper(): [] for t in tickers}
     for day in sessions:
-        snapshot = read_grouped_day(root, day)
+        # The anchor session was already loaded by the probe loop — reuse it.
+        snapshot = anchored_snapshot if day == anchored else read_grouped_day(root, day)
         if snapshot is None:
             continue
         for t in wanted:
