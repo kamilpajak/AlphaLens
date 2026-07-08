@@ -23,7 +23,8 @@
 
 	import JargonTip from '$lib/components/JargonTip.svelte';
 	import ChipTip from '$lib/components/ChipTip.svelte';
-	import LedgerFilterBar, { type FilterChip } from '$lib/components/LedgerFilterBar.svelte';
+	import LedgerFilterBar from '$lib/components/LedgerFilterBar.svelte';
+	import { buildFilterChips, facetMatches } from '$lib/faceting';
 	import StatusPill from '$lib/components/StatusPill.svelte';
 	import Disclosure from '$lib/components/Disclosure.svelte';
 	import SectionPanel from '$lib/components/SectionPanel.svelte';
@@ -50,7 +51,8 @@
 		PARADIGM_GROUPS,
 		ALPHA_T_MARGINAL,
 		ALPHA_T_DOCTRINE,
-		type ParadigmStatus
+		type ParadigmStatus,
+		type ToolStatus
 	} from '$lib/data/research-ledger';
 
 	// Plain-text status definitions for the on-hover chip tooltips (ChipTip) that
@@ -135,38 +137,37 @@
 	// The shared <LedgerFilterBar> owns the toggle / clear / blur-on-click
 	// behaviour and binds these sets; the page owns the row-level predicates.
 	let selected = $state<Set<string>>(new Set());
-	const showP = (p: (typeof paradigms)[number]) => selected.size === 0 || selected.has(p.status);
+	const showP = (p: (typeof paradigms)[number]) => facetMatches(selected, p.status);
 
 	let toolSelected = $state<Set<string>>(new Set());
-	const showT = (t: (typeof toolExperiments)[number]) =>
-		toolSelected.size === 0 || toolSelected.has(t.status);
+	const showT = (t: (typeof toolExperiments)[number]) => facetMatches(toolSelected, t.status);
 
+	// Chips keep a CURATED legend order (not count-desc), so build the FacetOption
+	// list in that order and hand it to the shared `buildFilterChips`.
 	const statusCount = (s: ParadigmStatus) => paradigms.filter((p) => p.status === s).length;
-	const filterChips: FilterChip[] = [
-		{ key: 'ALL', label: 'all', count: nTested, tone: 'text-fg border-fg-muted', def: 'every hypothesis in the ledger' },
-		...(['FAIL', 'INCONCLUSIVE', 'SLIPPAGE-FAIL'] as ParadigmStatus[])
-			.filter((s) => statusCount(s) > 0)
-			.map((s) => ({
-				key: s,
-				label: s.toLowerCase(),
-				count: statusCount(s),
-				tone: statusTone(s),
-				def: paradigmStatusDef.get(s) ?? ''
-			}))
-	];
+	const filterChips = buildFilterChips(
+		(['FAIL', 'INCONCLUSIVE', 'SLIPPAGE-FAIL'] as ParadigmStatus[])
+			.map((s) => ({ key: s, count: statusCount(s) }))
+			.filter((o) => o.count > 0),
+		{
+			all: { count: nTested, def: 'every hypothesis in the ledger' },
+			label: (k) => k.toLowerCase(),
+			tone: (k) => statusTone(k as ParadigmStatus),
+			def: (k) => paradigmStatusDef.get(k as ParadigmStatus) ?? ''
+		}
+	);
 	const toolStatusCount = (s: string) => toolExperiments.filter((t) => t.status === s).length;
-	const toolFilterChips: FilterChip[] = [
-		{ key: 'ALL', label: 'all', count: toolExperiments.length, tone: 'text-fg border-fg-muted', def: 'every live-tool experiment' },
-		...toolStatusLegend
-			.filter((s) => toolStatusCount(s.status) > 0)
-			.map((s) => ({
-				key: s.status,
-				label: s.status.toLowerCase(),
-				count: toolStatusCount(s.status),
-				tone: toolStatusTone(s.status),
-				def: toolStatusDef.get(s.status) ?? ''
-			}))
-	];
+	const toolFilterChips = buildFilterChips(
+		toolStatusLegend
+			.map((s) => ({ key: s.status, count: toolStatusCount(s.status) }))
+			.filter((o) => o.count > 0),
+		{
+			all: { count: toolExperiments.length, def: 'every live-tool experiment' },
+			label: (k) => k.toLowerCase(),
+			tone: (k) => toolStatusTone(k as ToolStatus),
+			def: (k) => toolStatusDef.get(k as ToolStatus) ?? ''
+		}
+	);
 
 	// Prominent section-header typography — shared by the two primary ledgers
 	// (paradigms.ledger + tool.experiments) so they read louder than the quiet

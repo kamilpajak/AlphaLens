@@ -10,17 +10,7 @@
 	// its key in/out. `selected` holds only the non-ALL keys — empty means ALL.
 
 	import ChipTip from './ChipTip.svelte';
-
-	export type FilterChip = {
-		/** Status key ('ALL' for the clear-all chip, else the status string). */
-		key: string;
-		label: string;
-		count: number;
-		/** Tailwind "text-X border-X" tone for the chip. */
-		tone: string;
-		/** Plain-text definition shown in the chip's ChipTip. */
-		def: string;
-	};
+	import type { FilterChip } from '$lib/faceting';
 
 	interface Props {
 		/** Micro-label to the left of the chips (e.g. "filter"). */
