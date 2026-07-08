@@ -39,7 +39,7 @@
 		type EdgeFilterState
 	} from '$lib/edgeFilter';
 	import { page } from '$app/state';
-	import { replaceState } from '$app/navigation';
+	import { syncParamsToUrl } from '$lib/urlFilterSync.svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -132,22 +132,11 @@
 	const filteredRows = $derived(filterOutcomes(viewRows, filterState));
 	const rows = $derived(sortOutcomes(filteredRows, sortKey, sortDir));
 
-	// Mirror the filter into the URL query without re-running load (client-only;
-	// `$effect` never runs during SSR). The baseline for both the merge and the
-	// diff is the live `location.search`, NOT `page.url` — after `replaceState`,
-	// `$app/state`'s `page.url` can lag, which would make a later "clear" compare
-	// against a stale empty baseline and skip removing the param. Merging the
-	// filter keys INTO the current params (rather than building fresh) preserves
-	// any unrelated query param the route might carry later. Reading only
-	// `filterState` (via `filterToParams`) keeps the effect free of a page.url
-	// dependency, so there is no replace → re-run loop.
-	$effect(() => {
-		const current = window.location.search.replace(/^\?/, '');
-		const next = filterToParams(filterState, new URLSearchParams(current)).toString();
-		if (next !== current) {
-			replaceState(next ? `?${next}` : window.location.pathname, page.state);
-		}
-	});
+	// Mirror the filter into the URL query without re-running load. Merge the
+	// filter keys INTO the current params (rather than building fresh) so any
+	// unrelated query param the route might carry later survives. See
+	// `syncParamsToUrl` for the live-`location.search` diff + no-loop reasoning.
+	syncParamsToUrl(() => filterToParams(filterState, new URLSearchParams(window.location.search)));
 
 	// Counts for the filter chips — computed off the full outcome list so both
 	// counts are stable as the user toggles.

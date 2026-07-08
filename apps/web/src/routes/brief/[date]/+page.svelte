@@ -4,6 +4,9 @@
 	import MarketContextBanner from '$lib/components/MarketContextBanner.svelte';
 	import LedgerFilterBar from '$lib/components/LedgerFilterBar.svelte';
 	import { buildFilterChips, facetMatches } from '$lib/faceting';
+	import { setToParam, paramToSet } from '$lib/urlFilters';
+	import { syncParamsToUrl } from '$lib/urlFilterSync.svelte';
+	import { page } from '$app/state';
 	import { ChevronLeft, ChevronRight } from 'lucide-svelte';
 
 	let { data }: { data: PageData } = $props();
@@ -15,24 +18,38 @@
 
 	// Multi-select theme filter (empty set = all), rendered as the shared
 	// LedgerFilterBar chip bar. Plus the bespoke "verified only" boolean (a toggle,
-	// not a facet — deliberately left as its own control).
-	let selectedThemes = $state<Set<string>>(new Set());
-	let onlyVerified = $state(false);
+	// not a facet — deliberately left as its own control). Both are seeded from
+	// the URL (`?theme=a,b`, `?verified=1`) so a filtered day is deep-linkable.
+	let selectedThemes = $state<Set<string>>(paramToSet(page.url.searchParams.get('theme')));
+	let onlyVerified = $state(page.url.searchParams.get('verified') === '1');
 
 	// SvelteKit reuses this component across /brief/[date] navigations (same
-	// route, changed param), so the filter $state would bleed onto the next
-	// day — showing an empty candidate list if that day lacks the selected
-	// theme. Reset the filters whenever the brief date changes.
-	// Start undefined (don't capture data in the $state initializer — Svelte
-	// flags that) so the first run just records the date; later date changes
-	// clear the filters.
+	// route, changed param), so the filter $state would bleed onto the next day —
+	// showing an empty candidate list if that day lacks the selected theme. Reset
+	// the filters whenever the brief date CHANGES. The first run only records the
+	// date (does NOT clear) so the URL-seeded filters above survive initial load.
 	let lastDate = $state<string | undefined>(undefined);
 	$effect(() => {
+		if (lastDate === undefined) {
+			lastDate = data.brief.date;
+			return;
+		}
 		if (data.brief.date !== lastDate) {
 			lastDate = data.brief.date;
 			selectedThemes = new Set();
 			onlyVerified = false;
 		}
+	});
+
+	// Mirror the theme selection + verified toggle back into the URL.
+	syncParamsToUrl(() => {
+		const params = new URLSearchParams(window.location.search);
+		const theme = setToParam(selectedThemes);
+		if (theme) params.set('theme', theme);
+		else params.delete('theme');
+		if (onlyVerified) params.set('verified', '1');
+		else params.delete('verified');
+		return params;
 	});
 
 	// A candidate with a null/blank theme falls in the empty facet bucket, which

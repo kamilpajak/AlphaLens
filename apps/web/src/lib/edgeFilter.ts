@@ -1,5 +1,6 @@
 import type { EdgeOutcome } from './types';
 import { facetMatches } from './faceting';
+import { setToParam, paramToSet } from './urlFilters';
 
 // Client-side filtering for the /edge outcomes table. Pure + framework-free so
 // the predicate and URL (de)serialization are unit-testable in isolation from
@@ -51,15 +52,6 @@ export function filterOutcomes(rows: EdgeOutcome[], s: EdgeFilterState): EdgeOut
 const PARAM_QUERY = 'q';
 const PARAM_CLASSES = 'class';
 const PARAM_COHORTS = 'cohort';
-
-function setToParam(set: Set<string>): string {
-	return [...set].sort().join(',');
-}
-
-function paramToSet(value: string | null): Set<string> {
-	if (!value) return new Set();
-	return new Set(value.split(',').filter(Boolean));
-}
 
 /** Write the active dimensions into a URLSearchParams (omitting empty ones so a
  *  cleared filter yields a clean URL). Mutates + returns `into` when given, so

@@ -65,3 +65,20 @@ test('theme chips multi-select — two themes show their union', async ({ page }
 	await page.getByRole('button', { name: /^all\b/ }).click();
 	await expect(cards(page)).toHaveCount(16);
 });
+
+test('clicking a theme mirrors it into ?theme=, and a deep link seeds the filter', async ({
+	page
+}) => {
+	await installMock(page);
+
+	// Round-trip: a click writes the param.
+	await page.goto(`/brief/${DATE}`);
+	await expect(cards(page)).toHaveCount(16);
+	await page.getByRole('button', { name: /^#retail\b/ }).click();
+	await expect(cards(page)).toHaveCount(3);
+	await expect.poll(() => new URL(page.url()).searchParams.get('theme')).toBe('retail');
+
+	// Deep link: a ?theme= URL arrives pre-filtered on a fresh load.
+	await page.goto(`/brief/${DATE}?theme=retail`);
+	await expect(cards(page)).toHaveCount(3);
+});
