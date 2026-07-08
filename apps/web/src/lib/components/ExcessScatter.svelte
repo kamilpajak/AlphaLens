@@ -40,7 +40,9 @@
 		return uniq.filter((_, i) => i % step === 0);
 	});
 
-	const tickText = { class: 'fill-fg-muted text-[10px] font-mono' };
+	// LayerChart's axis default is font-weight 300 (thin) — force the app's normal
+	// mono weight so ticks match the rest of the terminal UI.
+	const tickText = { class: 'fill-fg-muted text-[10px] font-mono !font-normal' };
 </script>
 
 <div data-testid="excess-scatter" class="relative">
