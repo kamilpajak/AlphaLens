@@ -494,6 +494,21 @@
 				</div>
 			</div>
 
+			{#if data.outcomesTruncated}
+				<!-- Honest cap notice: the server returns only the newest N rows once the
+				     window exceeds its listing cap. Without this, the oldest rows vanish
+				     silently and the terminal/ongoing chip counts (client-side over the
+				     returned rows) quietly under-count. -->
+				<div
+					data-testid="outcomes-truncation-notice"
+					class="mb-3 border border-amber-dim/40 bg-amber/5 px-3 py-2 text-[11px] leading-relaxed text-amber-dim"
+				>
+					Showing the newest <span class="font-bold text-fg">{data.outcomes.length}</span> of
+					<span class="font-bold text-fg">{data.outcomesTotal}</span> outcomes in window — older rows
+					beyond the server cap are not listed, so the counts above reflect only what is shown.
+				</div>
+			{/if}
+
 			{#if rows.length === 0}
 				<div class="border border-dashed border-grid-strong px-4 py-8 text-center text-sm text-fg-muted">
 					no {filter} outcomes in window

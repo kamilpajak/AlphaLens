@@ -176,6 +176,37 @@ def test_outcomes_status_filter(tmp_path: Path):
 
 
 @pytest.mark.django_db
+def test_outcomes_reports_true_total_and_truncation(tmp_path: Path, monkeypatch):
+    # The listing is capped at `_OUTCOMES_LIMIT`; the response must carry the TRUE
+    # matching total + a truncation flag so the SPA can render an honest
+    # "showing N of M" instead of silently dropping the oldest rows.
+    from edge.api import views as edge_views
+
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [_terminal(f"T{i}", excess=0.01, realized_r=0.5) for i in range(3)],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    # Under the cap: everything returned, not truncated.
+    body = APIClient().get("/v1/edge/outcomes").json()
+    assert len(body["data"]) == 3
+    assert body["total"] == 3
+    assert body["returned"] == 3
+    assert body["truncated"] is False
+
+    # Cap below the match count: rows are capped but `total` still reports the
+    # full match count and `truncated` flags the drop.
+    monkeypatch.setattr(edge_views, "_OUTCOMES_LIMIT", 2)
+    capped = APIClient().get("/v1/edge/outcomes").json()
+    assert len(capped["data"]) == 2
+    assert capped["total"] == 3
+    assert capped["returned"] == 2
+    assert capped["truncated"] is True
+
+
+@pytest.mark.django_db
 def test_excess_telemetry_endpoint_shape(tmp_path: Path):
     # Enough terminal rows to clear the N-gate so ``trend`` is populated.
     rows = [
