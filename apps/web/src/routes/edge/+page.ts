@@ -17,8 +17,12 @@ const WINDOW_DAYS = 90;
 
 export const load: PageLoad = async ({ fetch }) => {
 	const summary = await loadSummary(fetch);
-	const outcomes = await loadOutcomes(fetch);
-	return { summary, outcomes };
+	const { rows, total, truncated } = await loadOutcomes(fetch);
+	// `outcomesTotal` is the TRUE match count in the window (may exceed the
+	// returned rows when the server caps the listing); `outcomesTruncated` flags
+	// that older rows were dropped, so the table can say "showing N of M" rather
+	// than silently under-listing (and under-counting the chip tallies).
+	return { summary, outcomes: rows, outcomesTotal: total, outcomesTruncated: truncated };
 };
 
 async function loadSummary(fetch: typeof globalThis.fetch): Promise<EdgeSummary | null> {
@@ -31,13 +35,17 @@ async function loadSummary(fetch: typeof globalThis.fetch): Promise<EdgeSummary 
 	}
 }
 
-async function loadOutcomes(fetch: typeof globalThis.fetch): Promise<EdgeOutcome[]> {
+async function loadOutcomes(
+	fetch: typeof globalThis.fetch
+): Promise<{ rows: EdgeOutcome[]; total: number; truncated: boolean }> {
 	try {
 		const res = await apiFetch(`/v1/edge/outcomes?window=${WINDOW_DAYS}`, {}, fetch);
-		if (!res.ok) return [];
-		const body: { data: EdgeOutcome[] } = await res.json();
-		return body.data ?? [];
+		if (!res.ok) return { rows: [], total: 0, truncated: false };
+		const body: { data: EdgeOutcome[]; total?: number; truncated?: boolean } = await res.json();
+		const rows = body.data ?? [];
+		// `total`/`truncated` fall back gracefully if an older API build omits them.
+		return { rows, total: body.total ?? rows.length, truncated: body.truncated ?? false };
 	} catch {
-		return [];
+		return { rows: [], total: 0, truncated: false };
 	}
 }

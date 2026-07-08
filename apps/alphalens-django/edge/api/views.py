@@ -127,8 +127,12 @@ class EdgeOutcomesView(APIView):
         elif status_filter == "ongoing":
             qs = qs.filter(terminal=False)
 
-        qs = qs.order_by("-brief_date", "ticker")[:_OUTCOMES_LIMIT]
-        outcomes = list(qs)
+        qs = qs.order_by("-brief_date", "ticker")
+        # True match count BEFORE the per-page cap, so the SPA can render an honest
+        # "showing N of M" + a truncation notice instead of silently dropping the
+        # oldest rows once the window exceeds `_OUTCOMES_LIMIT`.
+        total = qs.count()
+        outcomes = list(qs[:_OUTCOMES_LIMIT])
 
         rows = [
             {
@@ -155,7 +159,14 @@ class EdgeOutcomesView(APIView):
             }
             for o in outcomes
         ]
-        return Response({"data": EdgeOutcomeRowSerializer(rows, many=True).data})
+        return Response(
+            {
+                "data": EdgeOutcomeRowSerializer(rows, many=True).data,
+                "total": total,
+                "returned": len(rows),
+                "truncated": total > _OUTCOMES_LIMIT,
+            }
+        )
 
 
 class EdgeExcessTelemetryView(APIView):
