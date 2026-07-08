@@ -84,7 +84,6 @@
 			<span class="inline-flex items-center gap-1.5 whitespace-nowrap">
 				<svg width="16" height="10" viewBox="0 0 16 10" aria-hidden="true">
 					<rect x="0" y="1" width="16" height="8" class="fill-cyan/12" />
-					<line x1="0" y1="5" x2="16" y2="5" class="stroke-green" stroke-width="1.5" />
 				</svg>
 				95% confidence band
 			</span>
@@ -98,7 +97,7 @@
 					y2="4"
 					class="stroke-fg-muted/50"
 					stroke-width="1"
-					stroke-dasharray="3 2"
+					stroke-dasharray="4 3"
 				/>
 			</svg>
 			SPY parity (0%)

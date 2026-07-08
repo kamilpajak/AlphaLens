@@ -67,4 +67,5 @@ test('excess-telemetry panel expands and renders the trend', async ({ page }) =>
 	await expect(page.getByText(/one closed trade/)).toBeVisible();
 	await expect(page.getByText(/trailing mean/)).toBeVisible();
 	await expect(page.getByText(/95% confidence band/)).toBeVisible();
+	await expect(page.getByText(/SPY parity/)).toBeVisible();
 });
