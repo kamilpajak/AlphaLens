@@ -55,7 +55,9 @@ export interface FacetOption {
 
 /** Distinct values of `pick` over `rows` with their counts, in descending-count
  *  then key order (stable, deterministic). The empty-string bucket is dropped so
- *  a facet with only missing values contributes no chip. */
+ *  a facet with only missing values contributes no chip — a consequence is that
+ *  rows with a missing value (e.g. a PENDING/blank classification) get no chip
+ *  and so can only be excluded by a facet selection, never isolated. */
 export function deriveFacet(
 	rows: EdgeOutcome[],
 	pick: (o: EdgeOutcome) => string | null | undefined

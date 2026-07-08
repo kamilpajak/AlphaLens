@@ -133,15 +133,18 @@
 	const rows = $derived(sortOutcomes(filteredRows, sortKey, sortDir));
 
 	// Mirror the filter into the URL query without re-running load (client-only;
-	// `$effect` never runs during SSR). The diff baseline is the live
-	// `location.search`, NOT `page.url` — after `replaceState`, `$app/state`'s
-	// `page.url` can lag, which would make a later "clear" compare against a stale
-	// empty baseline and skip removing the param. Reading only `filterState` (via
-	// `filterToParams`) keeps the effect free of a page.url dependency, so there is
-	// no replace → re-run loop.
+	// `$effect` never runs during SSR). The baseline for both the merge and the
+	// diff is the live `location.search`, NOT `page.url` — after `replaceState`,
+	// `$app/state`'s `page.url` can lag, which would make a later "clear" compare
+	// against a stale empty baseline and skip removing the param. Merging the
+	// filter keys INTO the current params (rather than building fresh) preserves
+	// any unrelated query param the route might carry later. Reading only
+	// `filterState` (via `filterToParams`) keeps the effect free of a page.url
+	// dependency, so there is no replace → re-run loop.
 	$effect(() => {
-		const next = filterToParams(filterState).toString();
-		if (next !== window.location.search.replace(/^\?/, '')) {
+		const current = window.location.search.replace(/^\?/, '');
+		const next = filterToParams(filterState, new URLSearchParams(current)).toString();
+		if (next !== current) {
 			replaceState(next ? `?${next}` : window.location.pathname, page.state);
 		}
 	});

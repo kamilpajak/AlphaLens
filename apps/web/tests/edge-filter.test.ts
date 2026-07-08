@@ -98,6 +98,17 @@ test('a classification facet chip filters, and clear-all resets', async ({ page 
 	await expect.poll(() => new URL(page.url()).searchParams.has('class')).toBe(false);
 });
 
+test('URL sync preserves an unrelated query param', async ({ page }) => {
+	await stub(page);
+	await page.goto('/edge?ref=email');
+	await expect(page.getByTestId('outcomes-filter')).toBeVisible();
+
+	await page.getByTestId('outcomes-search').fill('nvda');
+	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('nvda');
+	// The unrelated param must survive the filter's replaceState.
+	expect(new URL(page.url()).searchParams.get('ref')).toBe('email');
+});
+
 test('deep-links: a ?q= URL arrives pre-filtered', async ({ page }) => {
 	await stub(page);
 	await page.goto('/edge?q=snap');
