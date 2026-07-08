@@ -2,7 +2,9 @@
 	import type { PageData } from './$types';
 	import CandidateCard from '$lib/components/CandidateCard.svelte';
 	import MarketContextBanner from '$lib/components/MarketContextBanner.svelte';
-	import { ChevronLeft, ChevronRight, Filter } from 'lucide-svelte';
+	import LedgerFilterBar from '$lib/components/LedgerFilterBar.svelte';
+	import { buildFilterChips, facetMatches } from '$lib/faceting';
+	import { ChevronLeft, ChevronRight } from 'lucide-svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -11,7 +13,10 @@
 	// day → the banner falls back to the `unknown` state).
 	const marketCtx = $derived(data.brief.candidates[0]);
 
-	let activeTheme = $state<string | null>(null);
+	// Multi-select theme filter (empty set = all), rendered as the shared
+	// LedgerFilterBar chip bar. Plus the bespoke "verified only" boolean (a toggle,
+	// not a facet — deliberately left as its own control).
+	let selectedThemes = $state<Set<string>>(new Set());
 	let onlyVerified = $state(false);
 
 	// SvelteKit reuses this component across /brief/[date] navigations (same
@@ -25,21 +30,37 @@
 	$effect(() => {
 		if (data.brief.date !== lastDate) {
 			lastDate = data.brief.date;
-			activeTheme = null;
+			selectedThemes = new Set();
 			onlyVerified = false;
 		}
 	});
 
 	const filtered = $derived(
 		data.brief.candidates.filter((c) => {
-			if (activeTheme && c.theme !== activeTheme) return false;
+			if (!facetMatches(selectedThemes, c.theme)) return false;
 			if (onlyVerified && !c.verified) return false;
 			return true;
 		})
 	);
 
-	const themes = $derived(
-		Object.entries(data.brief.theme_counts).sort(([, a], [, b]) => b - a)
+	// Theme facet chips for the shared LedgerFilterBar, in count-desc (then key)
+	// order. Themes carry no formal definition, so the ChipTip just names the tag.
+	const themeChips = $derived(
+		buildFilterChips(
+			Object.entries(data.brief.theme_counts)
+				.map(([key, count]) => ({ key, count }))
+				.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key)),
+			{
+				all: {
+					count: data.brief.n_candidates,
+					tone: 'text-fg-muted border-grid',
+					def: 'Show every candidate.'
+				},
+				label: (k) => `#${k}`,
+				tone: () => 'text-fg-muted border-grid',
+				def: (k) => `Candidates tagged "${k}".`
+			}
+		)
 	);
 
 	const currentIdx = $derived(data.days.findIndex((d) => d.date === data.brief.date));
@@ -149,42 +170,13 @@
 		{/if}
 	</header>
 
-	<!-- Filters -->
-	<div class="flex flex-wrap items-center gap-3 mb-5 fade-up" style="animation-delay: 0.1s">
-		<div class="flex items-center gap-2 text-[10px] uppercase tracking-widest text-fg-muted">
-			<Filter class="size-3" /> filter:
-		</div>
-		<button
-			type="button"
-			onclick={() => (activeTheme = null)}
-			class="px-2 py-1 text-[10px] uppercase tracking-widest border transition-colors"
-			class:border-amber={activeTheme === null}
-			class:text-amber={activeTheme === null}
-			class:border-grid={activeTheme !== null}
-			class:text-fg-dim={activeTheme !== null}
-		>
-			all ({data.brief.n_candidates})
-		</button>
-		{#each themes as [theme, count]}
-			<button
-				type="button"
-				onclick={() => (activeTheme = activeTheme === theme ? null : theme)}
-				class="px-2 py-1 text-[10px] uppercase tracking-widest border transition-colors lowercase"
-				class:border-amber={activeTheme === theme}
-				class:text-amber={activeTheme === theme}
-				class:border-grid={activeTheme !== theme}
-				class:text-fg-dim={activeTheme !== theme}
-			>
-				#{theme} <span class="text-fg-muted">({count})</span>
-			</button>
-		{/each}
+	<!-- Filters: shared multi-select theme chip bar + the bespoke "verified only"
+	     toggle (a boolean, not a facet, so it stays its own control). -->
+	<div class="mb-5 flex flex-col gap-2 fade-up" style="animation-delay: 0.1s">
+		<LedgerFilterBar label="theme" chips={themeChips} bind:selected={selectedThemes} />
 		{#if verifiedCount < data.brief.n_candidates}
-			<label class="ml-auto flex items-center gap-2 text-[10px] uppercase tracking-widest text-fg-dim cursor-pointer">
-				<input
-					type="checkbox"
-					bind:checked={onlyVerified}
-					class="accent-amber"
-				/>
+			<label class="flex items-center justify-end gap-2 text-[10px] uppercase tracking-widest text-fg-dim cursor-pointer">
+				<input type="checkbox" bind:checked={onlyVerified} class="accent-amber" />
 				verified only
 			</label>
 		{/if}
