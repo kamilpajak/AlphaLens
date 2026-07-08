@@ -35,6 +35,11 @@
 		}
 	});
 
+	// A candidate with a null/blank theme falls in the empty facet bucket, which
+	// `buildFilterChips` does not render as a chip — so once ANY theme is selected
+	// an untagged candidate is excluded and cannot be re-included (there is no
+	// "untagged" chip). Intentional: brief candidates are always theme-tagged by
+	// the pipeline; if untagged ones ever need surfacing, add an explicit chip.
 	const filtered = $derived(
 		data.brief.candidates.filter((c) => {
 			if (!facetMatches(selectedThemes, c.theme)) return false;
