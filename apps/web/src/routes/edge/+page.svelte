@@ -29,6 +29,7 @@
 		type SortDir,
 		type SortKey
 	} from '$lib/edgeSort';
+	import { createRowWindow } from '$lib/virtualRows.svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -121,6 +122,17 @@
 	// counts are stable as the user toggles.
 	const nTerminal = $derived((data.outcomes ?? []).filter((o) => o.terminal).length);
 	const nOngoing = $derived((data.outcomes ?? []).filter((o) => !o.terminal).length);
+
+	// Row virtualization: only the rows in (and just around) the viewport are
+	// mounted, so the table stays light even at the 500-row server cap. The engine
+	// reads `rows` and `expanded` reactively; `rowKey` order matches the slice the
+	// template renders. See `$lib/virtualRows.svelte`.
+	const win = createRowWindow({
+		keys: () => rows.map(rowKey),
+		isOpen: (key) => expanded.has(key)
+	});
+	const windowRange = $derived(win.range);
+	const windowRows = $derived(rows.slice(windowRange.start, windowRange.end));
 
 	// SPY-relative signal telemetry panel — collapsed by default, lazy-fetched
 	// on first expand and cached so re-collapsing does not refetch.
@@ -516,7 +528,7 @@
 			{:else}
 				{#snippet sortHead(key: SortKey, label: string, cls: string)}
 					<th
-						class="py-2 pr-3 {cls}"
+						class="sticky top-0 z-10 bg-bg-1 border-b border-grid py-2 pr-3 {cls}"
 						aria-sort={sortKey === key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
 					>
 						<button
@@ -537,12 +549,19 @@
 					</th>
 				{/snippet}
 
+				<!-- Virtualized scroll container: only the windowed row slice is mounted
+				     (see `windowRows` / `win`), with leading/trailing spacer rows holding
+				     the scrollbar honest. The header cells are `position: sticky` so they
+				     stay pinned as the body scrolls. -->
+				<div
+					use:win.scrollContainer
+					data-testid="outcomes-scroll"
+					class="relative max-h-[70vh] overflow-auto"
+				>
 				<table class="w-full text-sm">
 					<thead>
-						<tr
-							class="text-[10px] uppercase tracking-widest text-fg-muted text-left border-b border-grid"
-						>
-							<th class="py-2 pr-1 w-4" aria-label="expand"></th>
+						<tr class="text-[10px] uppercase tracking-widest text-fg-muted text-left">
+							<th class="sticky top-0 z-10 bg-bg-1 border-b border-grid py-2 pr-1 w-4" aria-label="expand"></th>
 							{@render sortHead('ticker', 'ticker', '')}
 							{@render sortHead('class', 'class', '')}
 							{@render sortHead('value', valueLabel, 'min-w-[8rem]')}
@@ -556,7 +575,13 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each rows as o (rowKey(o))}
+						{#if windowRange.padTop > 0}
+							<tr aria-hidden="true">
+								<td colspan={colSpan} style="height: {windowRange.padTop}px; padding: 0; border: 0"
+								></td>
+							</tr>
+						{/if}
+						{#each windowRows as o (rowKey(o))}
 							{@const tone = classificationTone(o.ladder_classification)}
 							{@const rValue = o.terminal ? o.market_excess_return : o.open_r}
 							<!-- Terminal value is an excess RETURN (fraction → % units); ongoing is an
@@ -569,6 +594,7 @@
 							{@const isOpen = expanded.has(key)}
 							{@const chart = chartCache[key]}
 							<tr
+								use:win.measure={{ key, slot: 'row' }}
 								class="border-b border-grid hover:bg-bg-2 group cursor-pointer"
 								onclick={() => toggleRow(o)}
 								aria-expanded={isOpen}
@@ -675,7 +701,7 @@
 							{#if isOpen}
 								<!-- Inline-accordion detail row: full-width ladder-replay chart,
 								     lazy-mounted on first expand. -->
-								<tr class="border-b border-grid bg-bg-2/40">
+								<tr use:win.measure={{ key, slot: 'detail' }} class="border-b border-grid bg-bg-2/40">
 									<td colspan={colSpan} class="px-2 sm:px-4 py-4">
 										<div class="border border-grid bg-bg-1 px-4 sm:px-5 py-4">
 											{#if !chart || chart.loading}
@@ -705,8 +731,15 @@
 								</tr>
 							{/if}
 						{/each}
+						{#if windowRange.padBottom > 0}
+							<tr aria-hidden="true">
+								<td colspan={colSpan} style="height: {windowRange.padBottom}px; padding: 0; border: 0"
+								></td>
+							</tr>
+						{/if}
 					</tbody>
 				</table>
+				</div>
 			{/if}
 		</section>
 	{/if}

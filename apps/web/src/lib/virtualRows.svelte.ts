@@ -72,3 +72,157 @@ export function windowRange(
 
 	return { start, end, padTop: offsets[start], padBottom: total - offsets[end], total };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Runes DOM engine
+//
+// A thin reactive wrapper around the pure functions above. It owns the scroll
+// position + viewport height (`$state`, driven by the scroll container action)
+// and two sticky per-key height maps, and derives the visible `WindowRange`.
+//
+// Why two maps: a logical row in the /edge table is a data `<tr>` plus an
+// OPTIONAL detail `<tr>` (the ladder chart, when the row is expanded). `rowH`
+// holds the always-present data-row height; `detailH` holds the chart-row height
+// and is only ADDED to a key's total when that key is currently open (per the
+// `isOpen` predicate). Both maps are sticky — never pruned on unmount — so an
+// open row scrolled out of the window keeps its tall height in the offsets, and
+// a closed row simply ignores its stale `detailH`. This is what lets a row stay
+// correctly sized whether or not it is in the rendered slice.
+//
+// The estimate for not-yet-measured rows is the running AVERAGE of measured
+// data rows (falling back to a constant before anything is measured). Because
+// closed rows are near-identical in height, the average converges to the true
+// height almost immediately, so predicted (unmeasured) rows match their eventual
+// measured height — no cumulative scroll jump. Residual drift from expanded rows
+// is absorbed by the browser's default CSS scroll-anchoring (we never set
+// `overflow-anchor: none`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const INITIAL_ROW_ESTIMATE = 44;
+const INITIAL_DETAIL_ESTIMATE = 360;
+
+/** Which sub-element of a logical row a `measure` action is reporting. */
+export type MeasureSlot = 'row' | 'detail';
+
+export interface RowWindowOptions {
+	/** Ordered row keys, in the SAME order as the array the caller will slice with
+	 *  `range.start`/`range.end`. Read reactively (e.g. `() => rows.map(rowKey)`). */
+	keys: () => string[];
+	/** Whether a key's detail (chart) row is currently expanded. Read reactively. */
+	isOpen: (key: string) => boolean;
+	/** Extra rows rendered on each side of the visible band (default 6). */
+	overscan?: number;
+}
+
+export interface RowWindow {
+	/** The current visible window + spacer heights. Reactive. */
+	readonly range: WindowRange;
+	/** Svelte action for the scrolling container `<div>`: tracks scrollTop and
+	 *  viewport height. */
+	scrollContainer: (node: HTMLElement) => { destroy(): void };
+	/** Svelte action for a rendered `<tr>`: measures its height into the keyed
+	 *  map for its slot. */
+	measure: (
+		node: HTMLElement,
+		params: { key: string; slot: MeasureSlot }
+	) => { update(params: { key: string; slot: MeasureSlot }): void; destroy(): void };
+}
+
+export function createRowWindow(options: RowWindowOptions): RowWindow {
+	const overscan = options.overscan ?? 6;
+
+	// Non-reactive height maps; reactivity is signalled by bumping `measureVersion`
+	// (avoids copying a Map on every ResizeObserver callback).
+	const rowH = new Map<string, number>();
+	const detailH = new Map<string, number>();
+
+	let scrollTop = $state(0);
+	// Seed a plausible viewport so the first (pre-measure / SSR) render paints a
+	// reasonable window instead of a single row; corrected on mount.
+	let viewportHeight = $state(800);
+	let measureVersion = $state(0);
+
+	function rowEstimate(): number {
+		if (rowH.size === 0) return INITIAL_ROW_ESTIMATE;
+		let sum = 0;
+		for (const h of rowH.values()) sum += h;
+		return sum / rowH.size;
+	}
+
+	function detailEstimate(): number {
+		if (detailH.size === 0) return INITIAL_DETAIL_ESTIMATE;
+		let sum = 0;
+		for (const h of detailH.values()) sum += h;
+		return sum / detailH.size;
+	}
+
+	const heights = $derived.by(() => {
+		measureVersion; // establish dependency on measurements
+		const ks = options.keys();
+		const rowEst = rowEstimate();
+		const detailEst = detailEstimate();
+		return ks.map((k) => {
+			let h = rowH.get(k) ?? rowEst;
+			if (options.isOpen(k)) h += detailH.get(k) ?? detailEst;
+			return h;
+		});
+	});
+
+	const offsets = $derived(prefixOffsets(heights));
+	const range = $derived(windowRange(offsets, scrollTop, viewportHeight, overscan));
+
+	function scrollContainer(node: HTMLElement) {
+		const onScroll = () => {
+			scrollTop = node.scrollTop;
+		};
+		const ro = new ResizeObserver(() => {
+			viewportHeight = node.clientHeight;
+		});
+		node.addEventListener('scroll', onScroll, { passive: true });
+		ro.observe(node);
+		// Prime from the mounted node immediately.
+		viewportHeight = node.clientHeight;
+		scrollTop = node.scrollTop;
+		return {
+			destroy() {
+				node.removeEventListener('scroll', onScroll);
+				ro.disconnect();
+			}
+		};
+	}
+
+	function measure(node: HTMLElement, params: { key: string; slot: MeasureSlot }) {
+		let { key, slot } = params;
+		const report = () => {
+			const h = node.offsetHeight;
+			const map = slot === 'row' ? rowH : detailH;
+			if (map.get(key) !== h) {
+				map.set(key, h);
+				measureVersion++;
+			}
+		};
+		const ro = new ResizeObserver(report);
+		ro.observe(node);
+		report();
+		return {
+			update(next: { key: string; slot: MeasureSlot }) {
+				if (next.key !== key || next.slot !== slot) {
+					key = next.key;
+					slot = next.slot;
+					report();
+				}
+			},
+			destroy() {
+				ro.disconnect();
+			}
+		};
+	}
+
+	return {
+		get range() {
+			return range;
+		},
+		scrollContainer,
+		measure
+	};
+}
