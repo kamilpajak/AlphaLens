@@ -173,7 +173,19 @@ class TestChainQuality(unittest.TestCase):
 
     def test_thin_on_wide_spread(self):
         kw = self._ok_kwargs()
-        kw.update(spread_pct=0.25)
+        kw.update(spread_pct=0.35)
+        self.assertEqual(f.classify_chain_quality(**kw), f.CHAIN_QUALITY_THIN)
+
+    def test_spread_exactly_at_cap_is_ok(self):
+        # 30% at-close cap = IV-trustworthiness gate for mid-cap chains
+        # (v2 recalibration; 10% rejected every real mid-cap chain on day one).
+        kw = self._ok_kwargs()
+        kw.update(spread_pct=0.30)
+        self.assertEqual(f.classify_chain_quality(**kw), f.CHAIN_QUALITY_OK)
+
+    def test_spread_just_above_cap_is_thin(self):
+        kw = self._ok_kwargs()
+        kw.update(spread_pct=0.31)
         self.assertEqual(f.classify_chain_quality(**kw), f.CHAIN_QUALITY_THIN)
 
     def test_oi_exactly_at_floor_is_ok(self):
@@ -227,6 +239,36 @@ class TestTrailingSessionCloses(unittest.TestCase):
             out = f.trailing_session_closes(root, ["QUBT", "MISSING"], dt.date(2026, 7, 6), 3)
         self.assertEqual(out["QUBT"], [10.0, 11.0, 12.0])
         self.assertEqual(out["MISSING"], [])
+
+    def test_falls_back_to_newest_available_session(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Store lags the vendor (session D lands D+2): asof Mon 2026-07-06
+            # has NO snapshot yet; the window must anchor at Thu 2026-07-02.
+            for i, day in enumerate([dt.date(2026, 7, 1), dt.date(2026, 7, 2)]):
+                pd.DataFrame({"T": ["QUBT"], "c": [10.0 + i]}).to_parquet(
+                    root / f"{day.isoformat()}.parquet"
+                )
+            out = f.trailing_session_closes(root, ["QUBT"], dt.date(2026, 7, 6), 2)
+        self.assertEqual(out["QUBT"], [10.0, 11.0])
+
+    def test_empty_store_returns_empty_lists(self):
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = f.trailing_session_closes(Path(tmp), ["QUBT"], dt.date(2026, 7, 6), 2)
+        self.assertEqual(out["QUBT"], [])
+
+
+class TestConfigVersion(unittest.TestCase):
+    def test_v2_poolability_pin(self):
+        # v1 -> v2 bump covers the 30% spread cap + lagged-RV window change;
+        # day-one v1 rows must never pool with v2 rows.
+        self.assertEqual(f.OPTIONS_CONFIG_VERSION, "options-telemetry-v2-yf-snapshot")
 
 
 if __name__ == "__main__":

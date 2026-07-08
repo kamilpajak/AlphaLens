@@ -113,7 +113,7 @@ ingredients of the validated abnormal-P/C construction, plus the XZZ skew
 |---|---|---|
 | `options_ivx30` | ~30d ATM implied vol (interpolated across the two expiries bracketing 30d; nearest-strike-to-spot midpoint IV) | yes |
 | `options_term_slope` | ~180d ATM IV − ~30d ATM IV (v9D `ivx180_minus_ivx30`) | yes |
-| `options_vrp_ratio` | `options_ivx30` / 20d realized vol (v9D `ivx30_over_hv20`; HV from the split-adjusted grouped-daily store already read at `score`) | yes |
+| `options_vrp_ratio` | `options_ivx30` / 20d realized vol (v9D `ivx30_over_hv20`; HV from the split-adjusted grouped-daily store, window ending at the newest ON-DISK session <= asof — the store lags its vendor by ~2 days, and a one-day-lagged RV window is literature-standard: staggered windows in Bollerslev-Tauchen-Zhou, backward HV in Goyal-Saretto; ~1-2 vol pts sampling noise, zero systematic bias) | yes |
 | `options_skew_xzz` | Xing-Zhang-Zhao volatility smirk: OTM-put IV (moneyness closest to 0.95 within [0.80, 0.95]) − ATM-call IV (moneyness in [0.95, 1.05]), near expiry. Moneyness-based, no Greeks needed | yes |
 | `options_put_vol`, `options_call_vol` | total put / call contract volume summed across the two bracketing expiries (near+far; single leg in the degenerate case), final daily totals per the §3.1 snapshot-window rule | yes |
 | `options_put_oi`, `options_call_oi` | total put / call open interest summed across the two bracketing expiries (near+far; single leg in the degenerate case) | yes |
@@ -133,10 +133,19 @@ ingredients of the validated abnormal-P/C construction, plus the XZZ skew
 - `OK` — two expiries bracketing 30d with a near-ATM strike passing the OI /
   volume / spread floors on both legs.
 
-Exact numeric thresholds are fixed in the implementation plan (literature
-uses OI floors in the tens-to-hundreds and single-digit-percent spread
-caps); the dimensions above are locked here so the flag cannot degenerate
-into "any contracts exist".
+Exact numeric thresholds are fixed in the implementation plan; the
+dimensions above are locked here so the flag cannot degenerate into "any
+contracts exist". **The flag measures IV-trustworthiness, NOT tradability**
+(v2 clarification): its purpose is "is the midpoint IV a reliable telemetry
+value", and the spread cap is 30% at the close — mid-cap ATM closing
+spreads run 10-90% (median ~25% in the first live sample) under documented
+end-of-day quote fading, OptionMetrics-based studies use no relative-spread
+cap at all, and vega math bounds the worst-case midpoint-IV error at a 30%
+spread to ~2-4 vol pts. The original 10% cap (an intraday large-cap
+tradability number) rejected 12/12 real chains on day one. Tradability is a
+different question the telemetry does not gate on; the continuous
+`options_spread_pct_atm` column lets analysis slice by spread regardless of
+the flag.
 
 ### Deliberate corrections vs the naive proposal
 
@@ -187,7 +196,7 @@ bracket has no usable chain. This is accepted and is itself information
   parquet→`rebuild_briefs_cache` path; card surfacing (if any) is a
   separate, later decision. Telemetry does not require display.
 - All yfinance calls through `yfinance_client.py`; no new vendor client.
-- Config version string proposal: `options-telemetry-v1-yf-snapshot`.
+- Config version string: `options-telemetry-v1-yf-snapshot` (day one, 2026-07-08 stamps) -> `options-telemetry-v2-yf-snapshot` (30% spread cap + anchored lagged-RV window; v1 rows never pool with v2 per the poolability doctrine).
 
 ## 6. Success criteria / exit conditions
 
@@ -243,6 +252,22 @@ selection-endogeneity — weaker here than the reviewer assumed, since the
 EDGE replay is mechanical over the whole plannable population (no
 discretionary trade filtering on options liquidity). The mandatory zen
 pre-merge codereview still applies to the implementation PR.
+
+**Second Perplexity review (2026-07-08, day-one live-data findings):** two
+production findings were consulted after the first real stamp. (1) VRP was
+structurally null: the grouped store's vendor serves session D only at
+D+2 on the current plan, so the strict "window ends at asof" RV could never
+complete. Verdict: anchor the RV window at the newest on-disk session <=
+asof — one-day-lagged RV is standard practice (Bollerslev-Tauchen-Zhou use
+deliberately staggered windows; Goyal-Saretto HV is backward-looking), no
+systematic bias, ~1-2 vol pts noise; the fresh-but-split-UNADJUSTED
+alternative (yfinance raw history) was rejected as strictly worse (a 1:10
+reverse split fakes a ~230% daily return). (2) The 10% spread cap
+misclassified all 12 day-one chains as THIN despite thousands of contracts
+of OI: closing mid-cap ATM spreads of 20-30% are normal (end-of-day quote
+fading), the literature uses no relative-spread caps, and midpoint IV stays
+usable to ~30% (2-4 vol pts worst-case error via vega). Both fixes shipped
+together as config v2.
 
 ## 9. Out of scope
 
