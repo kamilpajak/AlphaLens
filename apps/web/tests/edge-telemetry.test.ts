@@ -61,4 +61,11 @@ test('excess-telemetry panel expands and renders the trend', async ({ page }) =>
 	await page.getByRole('button', { name: /spy-relative|trend vs spy|effectiveness/i }).click();
 	await expect(page.getByTestId('excess-scatter')).toBeVisible();
 	await expect(page.getByTestId('excess-scatter-trend')).toBeVisible();
+	// The legend explains every mark; with a trend present it shows all four
+	// entries (dot, trailing mean, CI band, SPY parity).
+	await expect(page.getByTestId('excess-scatter-legend')).toBeVisible();
+	await expect(page.getByText(/one closed trade/)).toBeVisible();
+	await expect(page.getByText(/trailing mean/)).toBeVisible();
+	await expect(page.getByText(/95% confidence band/)).toBeVisible();
+	await expect(page.getByText(/SPY parity/)).toBeVisible();
 });
