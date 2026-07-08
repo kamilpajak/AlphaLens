@@ -15,12 +15,18 @@ from pathlib import Path
 
 import pandas as pd
 
-OPTIONS_CONFIG_VERSION = "options-telemetry-v1-yf-snapshot"
+OPTIONS_CONFIG_VERSION = "options-telemetry-v2-yf-snapshot"
 
 IV_SANITY_MIN = 0.01
 IV_SANITY_MAX = 5.0
 ATM_MIN_OI = 50
-ATM_MAX_SPREAD_PCT = 0.10
+# IV-trustworthiness cap, NOT a tradability cap (those differ; see memo §4).
+# 30% at the CLOSE: mid-cap ATM closing spreads run 10-90% (median ~25%, day-one
+# live sample) under end-of-day quote fading; vega math puts the worst-case
+# midpoint-IV error at ~2-4 vol pts for a 30% spread — acceptable for telemetry.
+# OptionMetrics-based studies (Goyal-Saretto, XZZ, Cao-Han) use no relative-spread
+# cap at all. The 10% v1 cap rejected every real chain. Bumped with config v2.
+ATM_MAX_SPREAD_PCT = 0.30
 NEAR_LEG_MIN_DTE = 7
 IV30_TARGET_DTE = 30
 TERM_LEG_DTE_BAND = (120, 270)
@@ -225,6 +231,7 @@ def chain_totals(legs: list[tuple[pd.DataFrame, pd.DataFrame]]) -> dict[str, flo
 
 
 RV_WINDOW_RETURNS = 20
+END_SESSION_MAX_LAG = 3  # sessions to walk back for the RV window anchor
 RV_ANNUALIZATION = 252.0
 
 
@@ -232,7 +239,9 @@ def trailing_session_closes(
     root: Path, tickers: list[str], asof: dt.date, n_sessions: int
 ) -> dict[str, list[float]]:
     """Per-ticker closes over the last ``n_sessions`` XNYS sessions ending at
-    the newest session <= ``asof``, read disk-only off the grouped store.
+    the newest ON-DISK session <= ``asof`` (walks back up to
+    ``END_SESSION_MAX_LAG`` sessions when the store lags the vendor),
+    read disk-only off the grouped store.
 
     Loads each grouped-day snapshot ONCE for all tickers (the snapshots are
     whole-market). A ticker missing from ANY loaded session returns [] —
@@ -242,6 +251,24 @@ def trailing_session_closes(
     from alphalens_pipeline.paper.calendar import is_trading_day, previous_trading_day
 
     session = asof if is_trading_day(asof) else previous_trading_day(asof)
+    # The grouped store lags its vendor's end-of-day availability (session D
+    # lands on D+2 on the current Polygon plan), so anchor the window at the
+    # newest session <= asof whose snapshot is actually ON DISK. A one-day-
+    # lagged RV window is literature-standard (staggered windows in
+    # Bollerslev-Tauchen-Zhou; backward-looking HV in Goyal-Saretto) and adds
+    # ~1-2 vol pts of sampling noise with zero systematic bias.
+    anchored = None
+    anchored_snapshot = None
+    probe = session
+    for _ in range(END_SESSION_MAX_LAG + 1):
+        anchored_snapshot = read_grouped_day(root, probe)
+        if anchored_snapshot is not None:
+            anchored = probe
+            break
+        probe = previous_trading_day(probe)
+    if anchored is None:
+        return {t.upper(): [] for t in tickers}
+    session = anchored
     sessions: list[dt.date] = []
     for _ in range(n_sessions):
         sessions.append(session)
@@ -251,7 +278,8 @@ def trailing_session_closes(
     wanted = {t.upper() for t in tickers}
     per_ticker: dict[str, list[float]] = {t.upper(): [] for t in tickers}
     for day in sessions:
-        snapshot = read_grouped_day(root, day)
+        # The anchor session was already loaded by the probe loop — reuse it.
+        snapshot = anchored_snapshot if day == anchored else read_grouped_day(root, day)
         if snapshot is None:
             continue
         for t in wanted:
