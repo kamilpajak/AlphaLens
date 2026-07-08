@@ -61,6 +61,50 @@
 		{/if}
 	</div>
 
+	<!-- Legend — a swatch per mark so a first-time reader knows how to read the
+	     chart. The mean/band entries only show when the trend is drawn (both are
+	     withheld below the N-gate). Swatch fills/strokes mirror the marks exactly. -->
+	<div
+		data-testid="excess-scatter-legend"
+		class="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] text-fg-dim"
+	>
+		<span class="inline-flex items-center gap-1.5 whitespace-nowrap">
+			<svg width="14" height="8" viewBox="0 0 14 8" aria-hidden="true">
+				<circle cx="7" cy="4" r="2.5" class="fill-fg-muted/50 stroke-fg-muted" />
+			</svg>
+			one closed trade (excess vs SPY)
+		</span>
+		{#if showTrend}
+			<span class="inline-flex items-center gap-1.5 whitespace-nowrap">
+				<svg width="16" height="8" viewBox="0 0 16 8" aria-hidden="true">
+					<line x1="0" y1="4" x2="16" y2="4" class="stroke-green" stroke-width="2" />
+				</svg>
+				trailing mean (last {telemetry.smoother_window})
+			</span>
+			<span class="inline-flex items-center gap-1.5 whitespace-nowrap">
+				<svg width="16" height="10" viewBox="0 0 16 10" aria-hidden="true">
+					<rect x="0" y="1" width="16" height="8" class="fill-cyan/12" />
+					<line x1="0" y1="5" x2="16" y2="5" class="stroke-green" stroke-width="1.5" />
+				</svg>
+				95% confidence band
+			</span>
+		{/if}
+		<span class="inline-flex items-center gap-1.5 whitespace-nowrap">
+			<svg width="16" height="8" viewBox="0 0 16 8" aria-hidden="true">
+				<line
+					x1="0"
+					y1="4"
+					x2="16"
+					y2="4"
+					class="stroke-fg-muted/50"
+					stroke-width="1"
+					stroke-dasharray="3 2"
+				/>
+			</svg>
+			SPY parity (0%)
+		</span>
+	</div>
+
 	<div class="w-full">
 		<Chart
 			data={points}
