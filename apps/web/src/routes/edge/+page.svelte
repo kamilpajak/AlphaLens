@@ -30,6 +30,16 @@
 		type SortKey
 	} from '$lib/edgeSort';
 	import { createRowWindow } from '$lib/virtualRows.svelte';
+	import EdgeOutcomesFilter from '$lib/components/EdgeOutcomesFilter.svelte';
+	import {
+		filterOutcomes,
+		filterFromParams,
+		filterToParams,
+		isFilterActive,
+		type EdgeFilterState
+	} from '$lib/edgeFilter';
+	import { page } from '$app/state';
+	import { replaceState } from '$app/navigation';
 
 	let { data }: { data: PageData } = $props();
 
@@ -110,13 +120,31 @@
 	const TERMINAL_COLS = 9;
 	const colSpan = $derived(filter === 'terminal' ? TERMINAL_COLS : TERMINAL_COLS - 2);
 
-	const rows = $derived(
-		sortOutcomes(
-			(data.outcomes ?? []).filter((o) => (filter === 'terminal' ? o.terminal : !o.terminal)),
-			sortKey,
-			sortDir
-		)
+	// Toolbar filter state, seeded from the URL so an /edge?q=…&class=… link is
+	// deep-linkable. The parent owns it; `EdgeOutcomesFilter` binds it.
+	let filterState = $state<EdgeFilterState>(filterFromParams(page.url.searchParams));
+
+	// Pipeline: terminal/ongoing view → text+facet filter → sort → virtual window.
+	// The view is the facet universe the toolbar draws its chips + counts from.
+	const viewRows = $derived(
+		(data.outcomes ?? []).filter((o) => (filter === 'terminal' ? o.terminal : !o.terminal))
 	);
+	const filteredRows = $derived(filterOutcomes(viewRows, filterState));
+	const rows = $derived(sortOutcomes(filteredRows, sortKey, sortDir));
+
+	// Mirror the filter into the URL query without re-running load (client-only;
+	// `$effect` never runs during SSR). The diff baseline is the live
+	// `location.search`, NOT `page.url` — after `replaceState`, `$app/state`'s
+	// `page.url` can lag, which would make a later "clear" compare against a stale
+	// empty baseline and skip removing the param. Reading only `filterState` (via
+	// `filterToParams`) keeps the effect free of a page.url dependency, so there is
+	// no replace → re-run loop.
+	$effect(() => {
+		const next = filterToParams(filterState).toString();
+		if (next !== window.location.search.replace(/^\?/, '')) {
+			replaceState(next ? `?${next}` : window.location.pathname, page.state);
+		}
+	});
 
 	// Counts for the filter chips — computed off the full outcome list so both
 	// counts are stable as the user toggles.
@@ -134,13 +162,16 @@
 	const windowRange = $derived(win.range);
 	const windowRows = $derived(rows.slice(windowRange.start, windowRange.end));
 
-	// Switching the view (terminal↔ongoing) or the sort produces a wholesale-
-	// different row set; scroll back to the top so the viewport is not stranded
-	// over the previous list's offset (which would show a trailing spacer).
+	// Switching the view (terminal↔ongoing), the sort, or the filter produces a
+	// wholesale-different row set; scroll back to the top so the viewport is not
+	// stranded over the previous list's offset (which would show a trailing spacer).
 	$effect(() => {
 		filter;
 		sortKey;
 		sortDir;
+		filterState.query;
+		filterState.classes;
+		filterState.cohorts;
 		win.resetScroll();
 	});
 
@@ -516,6 +547,12 @@
 				</div>
 			</div>
 
+			<EdgeOutcomesFilter
+				rows={viewRows}
+				matched={filteredRows.length}
+				bind:state={filterState}
+			/>
+
 			{#if data.outcomesTruncated}
 				<!-- Honest cap notice: the server returns only the newest N rows once the
 				     window exceeds its listing cap. Without this, the oldest rows vanish
@@ -533,7 +570,11 @@
 
 			{#if rows.length === 0}
 				<div class="border border-dashed border-grid-strong px-4 py-8 text-center text-sm text-fg-muted">
-					no {filter} outcomes in window
+					{#if isFilterActive(filterState)}
+						no {filter} outcomes match the current filter
+					{:else}
+						no {filter} outcomes in window
+					{/if}
 				</div>
 			{:else}
 				{#snippet sortHead(key: SortKey, label: string, cls: string)}
