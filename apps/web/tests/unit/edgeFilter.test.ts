@@ -3,15 +3,15 @@ import {
 	emptyFilterState,
 	isFilterActive,
 	filterOutcomes,
-	deriveFacet,
 	filterToParams,
 	filterFromParams,
 	type EdgeFilterState
 } from '$lib/edgeFilter';
 import type { EdgeOutcome } from '$lib/types';
 
-// Pure client-side filtering behind the /edge toolbar: the text+facet predicate,
-// facet derivation, and the deep-linkable URL round-trip.
+// Pure client-side filtering behind the /edge toolbar: the text+facet predicate
+// and the deep-linkable URL round-trip. (Generic facet derivation moved to
+// `$lib/faceting` — see tests/unit/faceting.test.ts.)
 
 function row(over: Partial<EdgeOutcome>): EdgeOutcome {
 	return {
@@ -88,21 +88,6 @@ describe('filterOutcomes', () => {
 				(r) => r.ticker
 			)
 		).toEqual(['AMPL']);
-	});
-});
-
-describe('deriveFacet', () => {
-	it('counts distinct values in descending-count then key order', () => {
-		expect(deriveFacet(ROWS, (o) => o.ladder_classification)).toEqual([
-			{ key: 'SL_HIT', count: 2 },
-			{ key: 'TIME_STOP', count: 1 },
-			{ key: 'TP_FULL', count: 1 }
-		]);
-	});
-
-	it('drops the empty/null bucket so a missing value contributes no chip', () => {
-		const withNull = [row({ scorer_config_version: null }), row({ scorer_config_version: 'v9' })];
-		expect(deriveFacet(withNull, (o) => o.scorer_config_version)).toEqual([{ key: 'v9', count: 1 }]);
 	});
 });
 

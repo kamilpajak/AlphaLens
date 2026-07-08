@@ -6,11 +6,11 @@
 	// component just derives the facet chips from the current view and renders the
 	// controls. Reuses the shared `LedgerFilterBar` for the chip rows.
 	import LedgerFilterBar from './LedgerFilterBar.svelte';
-	import type { FilterChip } from './LedgerFilterBar.svelte';
 	import type { EdgeOutcome } from '$lib/types';
 	import { classificationTone, toneClasses } from '$lib/edge';
 	import { ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
-	import { deriveFacet, isFilterActive, type EdgeFilterState } from '$lib/edgeFilter';
+	import { isFilterActive, type EdgeFilterState } from '$lib/edgeFilter';
+	import { buildFilterChips, deriveFacet } from '$lib/faceting';
 
 	interface Props {
 		/** The current terminal/ongoing view — the facet universe + counts. */
@@ -24,35 +24,34 @@
 	let { rows, matched, state = $bindable() }: Props = $props();
 
 	const NEUTRAL = toneClasses('muted');
-
-	function allChip(count: number): FilterChip {
-		return { key: 'ALL', label: 'all', count, tone: NEUTRAL, def: 'Show every row in the current view.' };
-	}
+	// Shared "all" chip config (neutral tone, view-scoped copy) for both facets.
+	const allCfg = $derived({
+		count: rows.length,
+		tone: NEUTRAL,
+		def: 'Show every row in the current view.'
+	});
 
 	const classFacet = $derived(deriveFacet(rows, (o) => o.ladder_classification));
 	const cohortFacet = $derived(deriveFacet(rows, (o) => o.scorer_config_version));
 
-	const classChips = $derived<FilterChip[]>([
-		allChip(rows.length),
-		...classFacet.map((f) => ({
-			key: f.key,
-			label: ladderStatusLabel(f.key),
-			count: f.count,
-			tone: toneClasses(classificationTone(f.key)),
-			def: ladderStatusBody(f.key)
-		}))
-	]);
+	const classChips = $derived(
+		buildFilterChips(classFacet, {
+			all: allCfg,
+			label: (k) => ladderStatusLabel(k),
+			tone: (k) => toneClasses(classificationTone(k)),
+			def: (k) => ladderStatusBody(k)
+		})
+	);
 
-	const cohortChips = $derived<FilterChip[]>([
-		allChip(rows.length),
-		...cohortFacet.map((f) => ({
-			key: f.key,
-			label: f.key,
-			count: f.count,
-			tone: NEUTRAL,
-			def: `Scorer-config cohort ${f.key} — a poolability key; outcomes from different scorer versions are not directly comparable.`
-		}))
-	]);
+	const cohortChips = $derived(
+		buildFilterChips(cohortFacet, {
+			all: allCfg,
+			label: (k) => k,
+			tone: () => NEUTRAL,
+			def: (k) =>
+				`Scorer-config cohort ${k} — a poolability key; outcomes from different scorer versions are not directly comparable.`
+		})
+	);
 
 	const active = $derived(isFilterActive(state));
 

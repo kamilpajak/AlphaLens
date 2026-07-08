@@ -1,9 +1,12 @@
 import type { EdgeOutcome } from './types';
+import { facetMatches } from './faceting';
 
 // Client-side filtering for the /edge outcomes table. Pure + framework-free so
-// the predicate, facet derivation, and URL (de)serialization are unit-testable
-// in isolation from the toolbar component and the virtualization engine. The
-// table pipeline is: outcomes → terminal/ongoing → filterOutcomes → sort →
+// the predicate and URL (de)serialization are unit-testable in isolation from
+// the toolbar component and the virtualization engine. The generic facet
+// primitives (deriveFacet / facetMatches / buildFilterChips) live in
+// `$lib/faceting`; this module is the /edge-specific predicate + URL round-trip.
+// The table pipeline is: outcomes → terminal/ongoing → filterOutcomes → sort →
 // virtual window.
 
 export interface EdgeFilterState {
@@ -24,16 +27,10 @@ export function isFilterActive(s: EdgeFilterState): boolean {
 	return s.query.trim() !== '' || s.classes.size > 0 || s.cohorts.size > 0;
 }
 
-/** Normalize a nullable code to the empty-string bucket so null/missing values
- *  are a single, matchable facet key rather than scattered nullish holes. */
-function codeOf(value: string | null | undefined): string {
-	return value ?? '';
-}
-
 /** Apply the text query + the classification/cohort facet selections. Each facet
- *  is a UNION within itself (any selected class matches) and an INTERSECTION
- *  across facets (class AND cohort AND query) — the standard faceted-search
- *  semantics. An empty facet imposes no constraint. */
+ *  is a UNION within itself (any selected class matches, via `facetMatches`) and
+ *  an INTERSECTION across facets (class AND cohort AND query) — the standard
+ *  faceted-search semantics. An empty facet imposes no constraint. */
 export function filterOutcomes(rows: EdgeOutcome[], s: EdgeFilterState): EdgeOutcome[] {
 	const q = s.query.trim().toLowerCase();
 	return rows.filter((o) => {
@@ -41,36 +38,10 @@ export function filterOutcomes(rows: EdgeOutcome[], s: EdgeFilterState): EdgeOut
 			const hay = `${o.ticker} ${o.theme ?? ''}`.toLowerCase();
 			if (!hay.includes(q)) return false;
 		}
-		if (s.classes.size > 0 && !s.classes.has(codeOf(o.ladder_classification))) return false;
-		if (s.cohorts.size > 0 && !s.cohorts.has(codeOf(o.scorer_config_version))) return false;
+		if (!facetMatches(s.classes, o.ladder_classification)) return false;
+		if (!facetMatches(s.cohorts, o.scorer_config_version)) return false;
 		return true;
 	});
-}
-
-export interface FacetOption {
-	/** The raw value (empty string for null/missing). */
-	key: string;
-	count: number;
-}
-
-/** Distinct values of `pick` over `rows` with their counts, in descending-count
- *  then key order (stable, deterministic). The empty-string bucket is dropped so
- *  a facet with only missing values contributes no chip — a consequence is that
- *  rows with a missing value (e.g. a PENDING/blank classification) get no chip
- *  and so can only be excluded by a facet selection, never isolated. */
-export function deriveFacet(
-	rows: EdgeOutcome[],
-	pick: (o: EdgeOutcome) => string | null | undefined
-): FacetOption[] {
-	const counts = new Map<string, number>();
-	for (const o of rows) {
-		const k = codeOf(pick(o));
-		if (k === '') continue;
-		counts.set(k, (counts.get(k) ?? 0) + 1);
-	}
-	return [...counts.entries()]
-		.map(([key, count]) => ({ key, count }))
-		.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
 }
 
 // ── URL (de)serialization ────────────────────────────────────────────────────
