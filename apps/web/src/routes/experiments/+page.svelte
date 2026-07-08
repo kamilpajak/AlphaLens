@@ -25,6 +25,9 @@
 	import ChipTip from '$lib/components/ChipTip.svelte';
 	import LedgerFilterBar from '$lib/components/LedgerFilterBar.svelte';
 	import { buildFilterChips, facetMatches } from '$lib/faceting';
+	import { setToParam, paramToSet } from '$lib/urlFilters';
+	import { syncParamsToUrl } from '$lib/urlFilterSync.svelte';
+	import { page } from '$app/state';
 	import StatusPill from '$lib/components/StatusPill.svelte';
 	import Disclosure from '$lib/components/Disclosure.svelte';
 	import SectionPanel from '$lib/components/SectionPanel.svelte';
@@ -136,11 +139,24 @@
 	// shown), so smoke assertions (which never click a chip) see the full ledger.
 	// The shared <LedgerFilterBar> owns the toggle / clear / blur-on-click
 	// behaviour and binds these sets; the page owns the row-level predicates.
-	let selected = $state<Set<string>>(new Set());
+	// Seed both status filters from the URL (`?p=` paradigms, `?t=` tools) so a
+	// filtered ledger view is deep-linkable, then mirror any change back.
+	let selected = $state<Set<string>>(paramToSet(page.url.searchParams.get('p')));
 	const showP = (p: (typeof paradigms)[number]) => facetMatches(selected, p.status);
 
-	let toolSelected = $state<Set<string>>(new Set());
+	let toolSelected = $state<Set<string>>(paramToSet(page.url.searchParams.get('t')));
 	const showT = (t: (typeof toolExperiments)[number]) => facetMatches(toolSelected, t.status);
+
+	syncParamsToUrl(() => {
+		const params = new URLSearchParams(window.location.search);
+		const p = setToParam(selected);
+		if (p) params.set('p', p);
+		else params.delete('p');
+		const t = setToParam(toolSelected);
+		if (t) params.set('t', t);
+		else params.delete('t');
+		return params;
+	});
 
 	// Chips keep a CURATED legend order (not count-desc), so build the FacetOption
 	// list in that order and hand it to the shared `buildFilterChips`.
