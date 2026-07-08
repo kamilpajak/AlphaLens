@@ -20,7 +20,11 @@ export function prefixOffsets(heights: number[]): number[] {
 
 /** Height per row: the measured value for its key, else `estimate` (for rows not
  *  yet rendered/measured). Keyed — never index-keyed — so a re-sort or re-filter
- *  carries each row's real measured height instead of corrupting it. */
+ *  carries each row's real measured height instead of corrupting it.
+ *
+ *  NOTE: `createRowWindow` inlines this two-map (row + detail) variant rather than
+ *  calling this helper, so it stays as the unit-tested reference for the pure
+ *  single-map case. */
 export function heightsFromKeys(
 	keys: string[],
 	measured: Map<string, number>,
@@ -126,6 +130,10 @@ export interface RowWindow {
 		node: HTMLElement,
 		params: { key: string; slot: MeasureSlot }
 	) => { update(params: { key: string; slot: MeasureSlot }): void; destroy(): void };
+	/** Scroll the window back to the top. Call when the row set changes wholesale
+	 *  (filter / sort switch) so the viewport is not left stranded over the old
+	 *  scroll offset of a now-different list. */
+	resetScroll: () => void;
 }
 
 export function createRowWindow(options: RowWindowOptions): RowWindow {
@@ -141,6 +149,9 @@ export function createRowWindow(options: RowWindowOptions): RowWindow {
 	// reasonable window instead of a single row; corrected on mount.
 	let viewportHeight = $state(800);
 	let measureVersion = $state(0);
+	// The mounted scroll container, captured by the action so `resetScroll` can
+	// move the real DOM offset (not just the tracked `$state`).
+	let scrollNode: HTMLElement | null = null;
 
 	function rowEstimate(): number {
 		if (rowH.size === 0) return INITIAL_ROW_ESTIMATE;
@@ -172,6 +183,7 @@ export function createRowWindow(options: RowWindowOptions): RowWindow {
 	const range = $derived(windowRange(offsets, scrollTop, viewportHeight, overscan));
 
 	function scrollContainer(node: HTMLElement) {
+		scrollNode = node;
 		const onScroll = () => {
 			scrollTop = node.scrollTop;
 		};
@@ -187,8 +199,14 @@ export function createRowWindow(options: RowWindowOptions): RowWindow {
 			destroy() {
 				node.removeEventListener('scroll', onScroll);
 				ro.disconnect();
+				if (scrollNode === node) scrollNode = null;
 			}
 		};
+	}
+
+	function resetScroll() {
+		scrollTop = 0;
+		if (scrollNode) scrollNode.scrollTop = 0;
 	}
 
 	function measure(node: HTMLElement, params: { key: string; slot: MeasureSlot }) {
@@ -223,6 +241,7 @@ export function createRowWindow(options: RowWindowOptions): RowWindow {
 			return range;
 		},
 		scrollContainer,
-		measure
+		measure,
+		resetScroll
 	};
 }

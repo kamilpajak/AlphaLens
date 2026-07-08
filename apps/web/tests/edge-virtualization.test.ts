@@ -83,6 +83,30 @@ test('renders only a windowed slice of a large outcome list', async ({ page }) =
 	expect(await spacer.count()).toBeGreaterThan(0);
 	const spacerHeight = await spacer.last().evaluate((el) => parseFloat((el as HTMLElement).style.height));
 	expect(spacerHeight).toBeGreaterThan(1000);
+
+	// Screen-reader parity: the true row count + 1-based index survive
+	// virtualization even though only the slice is mounted.
+	await expect(page.getByTestId('outcomes-table').locator('table')).toHaveAttribute(
+		'aria-rowcount',
+		String(N)
+	);
+	await expect(page.locator('tbody tr[aria-rowindex="1"]')).toHaveCount(1);
+});
+
+test('resets scroll to the top when the sort changes', async ({ page }) => {
+	await stubLayout(page);
+	await page.goto('/edge');
+	await expect(page.getByTestId('outcomes-table')).toBeVisible();
+
+	const scroll = page.getByTestId('outcomes-scroll');
+	await scroll.evaluate((el) => {
+		el.scrollTop = 4000;
+	});
+	await expect.poll(async () => scroll.evaluate((el) => el.scrollTop)).toBeGreaterThan(1000);
+
+	// Re-sorting produces a wholesale-different order → jump back to the top.
+	await page.getByRole('button', { name: 'ticker' }).click();
+	await expect.poll(async () => scroll.evaluate((el) => el.scrollTop)).toBe(0);
 });
 
 test('scrolling the container swaps which rows are mounted', async ({ page }) => {

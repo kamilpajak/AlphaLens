@@ -134,6 +134,16 @@
 	const windowRange = $derived(win.range);
 	const windowRows = $derived(rows.slice(windowRange.start, windowRange.end));
 
+	// Switching the view (terminal↔ongoing) or the sort produces a wholesale-
+	// different row set; scroll back to the top so the viewport is not stranded
+	// over the previous list's offset (which would show a trailing spacer).
+	$effect(() => {
+		filter;
+		sortKey;
+		sortDir;
+		win.resetScroll();
+	});
+
 	// SPY-relative signal telemetry panel — collapsed by default, lazy-fetched
 	// on first expand and cached so re-collapsing does not refetch.
 	let telemetryOpen = $state(false);
@@ -558,7 +568,7 @@
 					data-testid="outcomes-scroll"
 					class="relative max-h-[70vh] overflow-auto"
 				>
-				<table class="w-full text-sm">
+				<table class="w-full text-sm" aria-rowcount={rows.length}>
 					<thead>
 						<tr class="text-[10px] uppercase tracking-widest text-fg-muted text-left">
 							<th class="sticky top-0 z-10 bg-bg-1 border-b border-grid py-2 pr-1 w-4" aria-label="expand"></th>
@@ -581,7 +591,7 @@
 								></td>
 							</tr>
 						{/if}
-						{#each windowRows as o (rowKey(o))}
+						{#each windowRows as o, i (rowKey(o))}
 							{@const tone = classificationTone(o.ladder_classification)}
 							{@const rValue = o.terminal ? o.market_excess_return : o.open_r}
 							<!-- Terminal value is an excess RETURN (fraction → % units); ongoing is an
@@ -595,6 +605,7 @@
 							{@const chart = chartCache[key]}
 							<tr
 								use:win.measure={{ key, slot: 'row' }}
+								aria-rowindex={windowRange.start + i + 1}
 								class="border-b border-grid hover:bg-bg-2 group cursor-pointer"
 								onclick={() => toggleRow(o)}
 								aria-expanded={isOpen}
