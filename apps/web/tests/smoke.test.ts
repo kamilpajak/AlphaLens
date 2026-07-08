@@ -439,7 +439,9 @@ test.describe('smoke — brief detail interactions', () => {
 			await chips.nth(i).click();
 			await expect(page.locator('article[id], .text-center')).not.toHaveCount(0);
 		}
-		await page.getByRole('button', { name: /^all \(/ }).click();
+		// The theme filter is the shared LedgerFilterBar; its clear-all chip reads
+		// "all <count>" (label + count span), not the old "all (<count>)".
+		await page.getByRole('button', { name: /^all\b/ }).click();
 		await expect(page.locator('article[id]')).toHaveCount(latestDay.n_candidates);
 
 		// Toggle verified-only — same reactivity guarantee. The filter is
