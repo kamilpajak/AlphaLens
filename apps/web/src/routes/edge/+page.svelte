@@ -556,7 +556,7 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each rows as o (o.brief_date + o.ticker)}
+						{#each rows as o (rowKey(o))}
 							{@const tone = classificationTone(o.ladder_classification)}
 							{@const rValue = o.terminal ? o.market_excess_return : o.open_r}
 							<!-- Terminal value is an excess RETURN (fraction → % units); ongoing is an
