@@ -48,6 +48,7 @@
     "@fontsource-variable/jetbrains-mono": "^5.2.8",
     "@fontsource-variable/space-grotesk": "^5.2.10",
     "isomorphic-dompurify": "^3.18.0",
+    "layerchart": "2.0.1",
     "lightweight-charts": "^5.2.0",
     "lucide-svelte": "^1.0.1",
     "marked": "^18.0.5",

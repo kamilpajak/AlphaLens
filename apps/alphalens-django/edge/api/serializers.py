@@ -228,3 +228,38 @@ class EdgeSummarySerializer(serializers.Serializer):
     whatif = WhatIfPanelSerializer()
     deployment = DeploymentPanelSerializer()
     open_positions = OpenPositionsSerializer()
+
+
+class EdgeExcessPointSerializer(serializers.Serializer):
+    """One per-trade point in the SPY-excess scatter."""
+
+    date = serializers.CharField()
+    excess = serializers.FloatField()
+    ticker = serializers.CharField(allow_blank=True)
+    holding_days = serializers.IntegerField(allow_null=True)
+    episode_repeat = serializers.BooleanField()
+
+
+class EdgeExcessTrendSerializer(serializers.Serializer):
+    """One trailing-window smoothed value in the SPY-excess trend line."""
+
+    date = serializers.CharField()
+    mean = serializers.FloatField()
+    lo = serializers.FloatField()
+    hi = serializers.FloatField()
+
+
+class EdgeExcessTelemetrySerializer(serializers.Serializer):
+    """``/v1/edge/excess-telemetry`` — per-trade SPY-excess scatter + gated trend."""
+
+    benchmark = serializers.CharField()
+    status = serializers.ChoiceField(choices=["accumulating", "ok"])
+    gate_threshold = serializers.IntegerField()
+    n_total = serializers.IntegerField()
+    n_effective = serializers.IntegerField()
+    median_holding_days = serializers.FloatField(allow_null=True)
+    smoother_window = serializers.IntegerField()
+    metric_note = serializers.CharField()
+    benchmark_note = serializers.CharField()
+    points = EdgeExcessPointSerializer(many=True)
+    trend = EdgeExcessTrendSerializer(many=True)

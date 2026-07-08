@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { PageData } from './$types';
-	import type { ChartPayload, EdgeOutcome } from '$lib/types';
+	import type { ChartPayload, EdgeOutcome, EdgeExcessTelemetry } from '$lib/types';
 	import { AlertTriangle, ChevronRight, Clock, Lock } from 'lucide-svelte';
 	import JargonTip from '$lib/components/JargonTip.svelte';
 	import ChipTip from '$lib/components/ChipTip.svelte';
@@ -8,8 +8,9 @@
 	import LadderStatusLegend from '$lib/components/LadderStatusLegend.svelte';
 	import StatusPill from '$lib/components/StatusPill.svelte';
 	import WhatIfPanel from '$lib/components/WhatIfPanel.svelte';
+	import ExcessScatter from '$lib/components/ExcessScatter.svelte';
 	import { isPendingStatus, ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
-	import { getEdgeChart } from '$lib/api';
+	import { getEdgeChart, getEdgeExcessTelemetry } from '$lib/api';
 	import { fmtNum } from '$lib/format';
 	import {
 		classificationTone,
@@ -120,6 +121,23 @@
 	// counts are stable as the user toggles.
 	const nTerminal = $derived((data.outcomes ?? []).filter((o) => o.terminal).length);
 	const nOngoing = $derived((data.outcomes ?? []).filter((o) => !o.terminal).length);
+
+	// SPY-relative signal telemetry panel — collapsed by default, lazy-fetched
+	// on first expand and cached so re-collapsing does not refetch.
+	let telemetryOpen = $state(false);
+	let telemetry = $state<EdgeExcessTelemetry | null>(null);
+	let telemetryLoading = $state(false);
+	let telemetryLoaded = $state(false);
+
+	async function toggleTelemetry() {
+		telemetryOpen = !telemetryOpen;
+		if (telemetryOpen && !telemetryLoaded && !telemetryLoading) {
+			telemetryLoading = true;
+			telemetry = await getEdgeExcessTelemetry(90);
+			telemetryLoaded = true;
+			telemetryLoading = false;
+		}
+	}
 
 </script>
 
@@ -677,4 +695,34 @@
 			{/if}
 		</section>
 	{/if}
+
+	<!-- SPY-RELATIVE SIGNAL TELEMETRY — collapsed by default; lazy-fetched on
+	     first expand. Independent of the N-gate: shows even when the main
+	     edge panels are locked. Not investable performance — telemetry only. -->
+	<section class="mt-6 border border-grid fade-up">
+		<button
+			type="button"
+			class="flex w-full items-center justify-between px-3 py-2 text-left"
+			onclick={toggleTelemetry}
+			aria-expanded={telemetryOpen}
+		>
+			<span class="text-[11px] uppercase tracking-widest text-cyan">
+				SPY-relative signal telemetry (not investable performance)
+			</span>
+			<span class="text-[10px] text-fg-muted">{telemetryOpen ? '−' : '+'}</span>
+		</button>
+		{#if telemetryOpen}
+			<div class="px-3 pb-4">
+				{#if telemetryLoading}
+					<p class="text-[11px] text-fg-muted">loading telemetry…</p>
+				{:else if telemetry}
+					<ExcessScatter {telemetry} />
+				{:else}
+					<div class="border border-dashed border-grid-strong px-3 py-4 text-[11px] text-fg-dim">
+						Telemetry unavailable right now.
+					</div>
+				{/if}
+			</div>
+		{/if}
+	</section>
 </div>
