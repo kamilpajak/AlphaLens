@@ -1,8 +1,8 @@
 # Options retro EXPLORATORY PILOT — reconstruct options features for matured EDGE outcomes
 
-**Status:** DRAFT (amended per Perplexity adversarial review 2026-07-09 — reframed
-as an exploratory pilot, VRP test decomposed, power reality added, gates
-rewritten; zen review pending. Spend blocker removed — fresh iVolatility trial)
+**Status:** LOCKED (adversarial review complete 2026-07-09: Perplexity deep-research
++ zen deepseek-v4-pro, both rounds of findings applied; implementation pending
+the trial-limits probe. Spend blocker removed — fresh iVolatility trial)
 **Date:** 2026-07-09
 **Author:** research session
 **Parent:** `docs/research/options_telemetry_design_2026_07_07.md` (forward telemetry, live since 2026-07-08)
@@ -70,7 +70,7 @@ The v9D-validated stack, read verbatim from smd rows as-of each brief date:
 |---|---|---|
 | `ivx30` | vendor 30d IV index | |
 | `ivx180_minus_ivx30` | vendor term slope | |
-| `ivx30_over_hv20` | vendor VRP ratio | contemporaneous HV — no store-lag issue retro |
+| VRP (decomposed) | vendor `ivx30` + `hv20` jointly | the ratio itself is NOT tested (near-degenerate vs the ATR partial); the VRP hypothesis = the IVX30 coefficient conditional on HV20 |
 | `ivp30` | 1y rolling percentile of ivx30 | computable retro (full daily history available) — the one feature the forward telemetry deliberately dropped |
 
 **Not available: XZZ skew** — smd is a surface-index endpoint, not a
@@ -101,15 +101,21 @@ artifact, not on the candidate parquets.
 ## 6. Analysis plan (amended per adversarial review)
 
 - **Regression, not naive partial correlations:** ten-day market-excess on
-  each feature + controls, with **cluster-by-day robust standard errors**
-  (51 day-clusters; overlapping k=10 windows make naive p-values invalid —
-  Kolari-Pynnonen-class cross-correlation). Block bootstrap only as a
-  sensitivity diagnostic (≈5 independent 10d blocks — too few for primary
-  inference).
-- **VRP decomposed, never ratio-then-partial:** IVX30/HV20 with an ATR
-  partial is near-degenerate (HV20 ≈ ATR in the denominator; suppression /
-  sign-reversal risk). Test instead: returns ~ IVX30 + HV20 (+ controls),
-  reading the IVX30 coefficient as the implied-vs-realized increment.
+  each feature + controls, clustered by brief day (51 day-clusters;
+  overlapping k=10 windows make naive p-values invalid —
+  Kolari-Pynnonen-class cross-correlation). **Primary p-values via wild
+  cluster bootstrap** (51 clusters sits at the boundary where plain CR1
+  cluster-robust SEs are downward-biased); CR2-corrected SEs reported
+  alongside. Moving-block bootstrap only as a sensitivity diagnostic (≈5
+  independent 10d blocks — too few for primary inference).
+- **The family is EXACTLY these 4 tests** (pinned; changing any respec
+  re-opens the memo):
+  | # | Test | Specification |
+  |---|---|---|
+  | 1 | ivx30 level | excess ~ ivx30 + ATR + mcap + earnings30d |
+  | 2 | term slope | excess ~ (ivx180−ivx30) + ATR + mcap + earnings30d |
+  | 3 | VRP (decomposed) | excess ~ ivx30 + hv20 + mcap + earnings30d — read the ivx30 coefficient; NO ATR in this one (hv20 ≈ ATR would be near-collinear); the ratio ivx30/hv20 is never tested directly |
+  | 4 | ivp30 | excess ~ ivp30 + ATR + mcap + earnings30d |
 - **Collinearity diagnostics before inference:** VIF / condition numbers
   across {ivx30, ivp30, term slope, ATR, mcap}; VIF>10 → drop or
   orthogonalize (residualize features on ATR+mcap).
@@ -138,30 +144,44 @@ al. factor-zoo + White reality-check):
 - **September (#774) is the CONFIRMATORY stage:** BEFORE it runs, the
   pilot's surviving candidates get pre-registered as specific directional
   hypotheses with an elevated hurdle (t>3 per Harvey's recommendation for
-  new factors). Feature selection and threshold tuning happen ONLY at that
-  pre-registration moment — not iteratively against the forward data.
+  new factors). Anti-contamination constraints on that pre-registration:
+  (a) it reproduces the pilot's WINNING SPECIFICATION verbatim (controls,
+  clustering, collinearity handling) — no respec based on pilot
+  diagnostics; (b) NO thresholds derived from pilot data (the pilot
+  delivers a directional yes/no, never a cutoff); (c) the outcome stays
+  k=10 — any other horizon looked at in the pilot counts as an extra test
+  now and cannot become September's primary.
 - Anti-leakage rule: the pilot tests exactly the 4 pre-committed features;
   no adding features, horizons, or thresholds after seeing results.
 
 ## 8. Decision gates (amended — the pilot cannot close the class)
 
-- **Pilot surfaces a candidate** (clustered-CI effect surviving the family
-  correction): it becomes a pre-registered directional hypothesis for the
-  September confirmatory stage (#774); NO selection or exit change before
-  confirmation.
+- **Pilot surfaces a candidate** (wild-cluster-bootstrap effect surviving
+  Bonferroni over the pilot's OWN 4 tests — the program-level multiplicity
+  counter applies to eventual DISCOVERY claims, never to this surfacing
+  gate, else the gate would be dead by construction): it becomes a
+  pre-registered directional hypothesis for the September confirmatory
+  stage (#774); NO selection or exit change before confirmation.
 - **Pilot null:** NOT class closure — with effective N~80-150 a null is
   expected even for economically meaningful effects (Type II). Consequence
   is only: no acceleration; #774 proceeds in September as the properly
   powered forward accumulation continues; no further retro spend.
-- **Data-quality failure** (smd coverage <70% of matured pairs, or
-  trial-limit truncation): HALT — report coverage, no verdicts from a
-  censored subsample.
+- **Data-quality failure**: HALT — report coverage, no verdicts from a
+  censored subsample. "Coverage" = the share of matured pairs for which
+  ALL FOUR tests are computable, including ivp30's full 1-year lookback
+  (a ticker present in smd but with history starting mid-window does NOT
+  count as covered). Threshold: <70% → HALT (drop-ivp30-and-shrink-family
+  is the one permitted fallback, re-opening §6's family table).
 
 ## 9. Cost / effort
 
 - $0 — fresh trial account (user-provided). FIRST implementation step:
-  probe the trial's limits (request quota, history depth, smd access at
-  all) on 2-3 tickers BEFORE the full pull; if the trial caps below the
+  probe the trial on 2-3 tickers BEFORE the full pull and verify
+  explicitly: (a) smd endpoint access at all, (b) **>=14 months of daily
+  history returned** (ivp30 needs a 1y lookback before the earliest brief
+  date 2026-05-19), (c) daily AND total request quotas (if <180/day the
+  pull becomes a multi-day resumable job), (d) whether failed calls count
+  against quota (cache-first + resume verified on the probe tickers); if the trial caps below the
   universe's needs, fall back to the metered month (~$399, separate user
   authorization) rather than drawing verdicts from a truncated pull —
   the §8 coverage HALT applies to trial-limit censoring exactly as to
@@ -174,6 +194,9 @@ al. factor-zoo + White reality-check):
 
 ## 10. Risks / honest caveats
 
+- **ivp30 lookback depth:** the trial may silently truncate daily history;
+  a percentile over a shorter window is a DIFFERENT feature — the probe
+  (§9) and the coverage rule (§8) both guard this.
 - **Underpowered by construction:** effective N ~80-150; the pilot's only
   legitimate outputs are "candidate found" or "nothing detectable at this
   N" — never "class dead".
