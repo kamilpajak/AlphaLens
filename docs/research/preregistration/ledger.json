@@ -4495,8 +4495,40 @@
         "secondary_descriptive": "terminal realized_r on the fill-dependent TERMINAL subset - reported, never tested"
       },
       "registered_at": "2026-07-09",
-      "status": "registered",
-      "outcome": null,
+      "status": "completed",
+      "outcome": {
+        "verdict": "NULL_EXPLORATORY",
+        "verdict_reason": "No test in the pinned 4-family clears Bonferroni/4 (wild-cluster-bootstrap p < 0.0125). Closest: term slope beta +0.598 (per-1sd +0.040 on car_10), t_CR2 +2.43, p_WCB 0.039, sign-stable across the sub-window split - reported, NOT promoted (only Bonferroni survivors may become September directional hypotheses per memo section 7). Consequence per memo section 8: no acceleration; NOT class closure; #774 proceeds in September on forward telemetry; no further retro spend.",
+        "completed_at": "2026-07-09",
+        "coverage": 0.9937,
+        "matured_pairs": 319,
+        "episodes_after_dedup": 148,
+        "n_day_clusters": 26,
+        "tests": {
+          "ivx30_level": {
+            "beta": -0.1804,
+            "t_cr2": -1.2,
+            "p_wcb": 0.4022
+          },
+          "term_slope": {
+            "beta": 0.598,
+            "t_cr2": 2.43,
+            "p_wcb": 0.039
+          },
+          "vrp_decomposed": {
+            "beta": -0.1754,
+            "t_cr2": -1.79,
+            "p_wcb": 0.1322
+          },
+          "ivp30": {
+            "beta": -0.0009,
+            "t_cr2": -1.43,
+            "p_wcb": 0.1788
+          }
+        },
+        "artifacts": "~/.alphalens/options_retro_pilot_2026_07/{panel.parquet,results.json}",
+        "results_memo": "docs/research/options_retro_pilot_results_2026_07_09.md"
+      },
       "notes": ""
     }
   ]
