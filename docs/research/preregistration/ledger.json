@@ -4527,7 +4527,13 @@
           }
         },
         "artifacts": "~/.alphalens/options_retro_pilot_2026_07/{panel.parquet,results.json}",
-        "results_memo": "docs/research/options_retro_pilot_results_2026_07_09.md"
+        "results_memo": "docs/research/options_retro_pilot_results_2026_07_09.md",
+        "pattern_sweep_addendum": {
+          "date": "2026-07-09",
+          "specs_examined": "~100-130 (multi-agent exploratory sweep on the same burnt panel; details in docs/research/options_retro_pattern_sweep_2026_07_09.md)",
+          "outcome": "zero new signals; durable kill-evidence: vol LEVELS are ATR restated (R2 0.74-0.78), ivp30 is slope restated (corr -0.63), half-split slope jump is noise-consistent, regime attribution untestable in-window (SPY rv10 doubled exactly at midpoint); term-slope near-miss gained a within-day robustness note AND a 3-brief-day/2-sector concentration warning",
+          "panel_status": "BURNT for confirmation purposes - any September pre-registration must use strictly post-2026-07-09 data"
+        }
       },
       "notes": ""
     }
