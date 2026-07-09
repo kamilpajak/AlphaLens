@@ -91,7 +91,10 @@
 				<input
 					type="search"
 					bind:value={filterState.query}
-					onblur={() => (filterState.query = filterState.query.trim())}
+					onblur={() => {
+						const t = filterState.query.trim();
+						if (t !== filterState.query) filterState.query = t;
+					}}
 					placeholder="search date or theme…"
 					data-testid="briefs-search"
 					class="w-52 border border-grid bg-bg-2 px-2 py-1 text-xs text-fg placeholder:text-fg-muted focus:border-amber focus:outline-none"

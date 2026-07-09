@@ -69,7 +69,10 @@
 			<input
 				type="search"
 				bind:value={state.query}
-				onblur={() => (state.query = state.query.trim())}
+				onblur={() => {
+					const t = state.query.trim();
+					if (t !== state.query) state.query = t;
+				}}
 				placeholder="search ticker or theme…"
 				data-testid="outcomes-search"
 				class="w-52 border border-grid bg-bg-2 px-2 py-1 text-xs text-fg placeholder:text-fg-muted focus:border-amber focus:outline-none"
