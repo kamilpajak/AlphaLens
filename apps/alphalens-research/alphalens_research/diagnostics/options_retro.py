@@ -164,8 +164,12 @@ def _cr2_cov(
         # (I - H_gg)^{-1/2} leverage adjustment via symmetric eigendecomposition.
         h = xg @ xtx_inv @ xg.T
         eigval, eigvec = np.linalg.eigh(np.eye(len(ix)) - h)
-        eigval = np.clip(eigval, 1e-12, None)
-        adj = eigvec @ np.diag(eigval**-0.5) @ eigvec.T
+        # Near-zero eigenvalues (leverage -> 1, e.g. a high-leverage singleton
+        # cluster) would amplify finite-precision noise through the inverse
+        # square root; zero their contribution instead of inverting them.
+        mask = eigval >= 1e-8
+        inv_sqrt = np.where(mask, np.divide(1.0, np.sqrt(np.where(mask, eigval, 1.0))), 0.0)
+        adj = eigvec @ np.diag(inv_sqrt) @ eigvec.T
         s = xg.T @ (adj @ resid[ix])
         meat += np.outer(s, s)
     return xtx_inv @ meat @ xtx_inv
@@ -227,6 +231,7 @@ def wild_cluster_bootstrap_p(
 
     rng = np.random.default_rng(seed)
     hits = 0
+    valid = 0
     proj = xtx_inv @ X.T  # fixed design: refits are one matmul per draw
     for _ in range(n_boot):
         w = rng.choice((-1.0, 1.0), size=len(groups))
@@ -236,12 +241,13 @@ def wild_cluster_bootstrap_p(
         beta_star = proj @ y_star
         resid_star = y_star - X @ beta_star
         se_star = np.sqrt(_cr1_cov(X, resid_star, xtx_inv, groups)[coef_idx, coef_idx])
-        if se_star <= 0:
+        if se_star <= 0:  # degenerate draw: excluded from the p-value denominator
             continue
+        valid += 1
         # Null imposed: beta* is centered on 0 for the tested coefficient.
         if abs(beta_star[coef_idx] / se_star) >= abs(t_obs):
             hits += 1
-    return (1.0 + hits) / (1.0 + n_boot)
+    return (1.0 + hits) / (1.0 + valid)
 
 
 def vif_table(df: pd.DataFrame, columns: list[str]) -> dict[str, float]:

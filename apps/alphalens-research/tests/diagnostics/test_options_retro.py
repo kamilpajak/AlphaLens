@@ -196,6 +196,17 @@ class TestClusterOls(unittest.TestCase):
         naive_var = float(resid @ resid) / (n - k) * np.linalg.inv(X.T @ X)[0, 0]
         self.assertGreater(res.se_cr2[0], np.sqrt(naive_var))  # intercept absorbs cluster shock
 
+    def test_high_leverage_singleton_cluster_does_not_explode_cr2(self):
+        # A singleton cluster with extreme leverage drives (I - H_gg) toward 0;
+        # its inverse square root must be zeroed, not amplified.
+        y, X, g = _clustered_data(n_clusters=10, per_cluster=4, beta=0.5, seed=13)
+        X = np.vstack([X, [1.0, 50.0]])  # leverage point far outside the x range
+        y = np.append(y, 25.0)
+        g = np.append(g, 99)  # its own cluster
+        res = cluster_ols(y, X, g)
+        self.assertTrue(np.all(np.isfinite(res.se_cr2)))
+        self.assertLess(res.se_cr2[1], 10.0 * res.se_cr1[1])
+
     def test_constant_regressor_yields_nan_t_without_warning(self):
         y, X, g = _clustered_data(n_clusters=10, per_cluster=4, beta=0.5, seed=12)
         X = np.column_stack([X, np.zeros(len(y))])  # zero-variance column: SE = 0

@@ -53,7 +53,9 @@ needed, the pinned specs ran unmodified.
 | 4 | ivp30 | −0.0009 | −0.023 | −1.43 | 0.166 | **0.179** | ✗ |
 
 Inference: restricted (null-imposed) wild cluster bootstrap, Rademacher
-weights, 9999 draws, clusters = brief days; CR2 reported alongside. Note
+weights, 9999 draws, clusters = brief days; CR2 reported alongside. The
+"per 1 sd" column uses the sd of the analysis (deduped) sample —
+descriptive scaling only. Note
 the consistent p_WCB > p_CR2 ordering — exactly the CR-downward-bias the
 memo predicted at ~26 clusters; naive/CR1 p-values would have flattered
 every row.
