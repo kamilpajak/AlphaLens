@@ -182,7 +182,10 @@ def cluster_ols(y: np.ndarray, X: np.ndarray, clusters: np.ndarray) -> ClusterOl
     g = len(groups)
     se_cr1 = np.sqrt(np.diag(_cr1_cov(X, resid, xtx_inv, groups)))
     se_cr2 = np.sqrt(np.diag(_cr2_cov(X, resid, xtx_inv, groups)))
-    t_cr2 = beta / se_cr2
+    # A zero-variance regressor (e.g. an indicator constant within a
+    # sub-window) has SE 0 — its t is honestly NaN, not a warning.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_cr2 = np.where(se_cr2 > 0, beta / np.where(se_cr2 > 0, se_cr2, 1.0), np.nan)
     p_cr2 = 2.0 * scipy_stats.t.sf(np.abs(t_cr2), df=max(g - 1, 1))
     return ClusterOlsResult(
         beta=beta, se_cr1=se_cr1, se_cr2=se_cr2, t_cr2=t_cr2, p_cr2=p_cr2, n_clusters=g

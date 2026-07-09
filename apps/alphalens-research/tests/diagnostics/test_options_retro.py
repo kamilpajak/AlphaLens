@@ -196,6 +196,17 @@ class TestClusterOls(unittest.TestCase):
         naive_var = float(resid @ resid) / (n - k) * np.linalg.inv(X.T @ X)[0, 0]
         self.assertGreater(res.se_cr2[0], np.sqrt(naive_var))  # intercept absorbs cluster shock
 
+    def test_constant_regressor_yields_nan_t_without_warning(self):
+        y, X, g = _clustered_data(n_clusters=10, per_cluster=4, beta=0.5, seed=12)
+        X = np.column_stack([X, np.zeros(len(y))])  # zero-variance column: SE = 0
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            res = cluster_ols(y, X, g)
+        self.assertTrue(np.isnan(res.t_cr2[2]))
+        self.assertTrue(np.all(np.isfinite(res.beta[:2])))
+
     def test_p_values_finite_and_in_unit_interval(self):
         y, X, g = _clustered_data(n_clusters=15, per_cluster=5, beta=0.5, seed=9)
         res = cluster_ols(y, X, g)
