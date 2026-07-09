@@ -4434,6 +4434,70 @@
         "notes": "OOS mean αt=+0.49 (same as BASE +0.49 — overlay added no alpha), excess net mean=-7.0% (±40.3pp). FAIL on |t|>=1.96 gate by wide margin. Critical methodological finding: vol-targeting is reactive (uses past realized vol), so it can lever UP just before a regime shift. Phase 3 OOS: BASE excess net was -43.8%; overlay -77.9% (overlay AMPLIFIED losses by levering into the drawdown). Phase 1 OOS: BASE had spurious αt=+2.00; overlay damped to +1.40 by de-leveraging the lucky phase. Net effect: overlay damps both wins and losses asymmetrically given the base's weak expectancy. Time-varying-beta hazard documented in ADR 0007 confirmed empirically. Class risk_management_overlay_2026_04_30 1/1 FAIL."
       },
       "notes": ""
+    },
+    {
+      "id": "options_retro_pilot_2026_07",
+      "signal_class": "options_edge_conditional_2026_07",
+      "hypothesis": "Options-implied features (ivx30, term slope, VRP decomposed, ivp30) measured as-of the brief date separate matured EDGE market-excess k=10 outcomes AFTER the ATR partial, within the catalyst-selected subpopulation. EXPLORATORY look: retro iVolatility smd reconstruction for banked 2026-05-19..2026-07-08 pairs; pinned 4-test family, one primary outcome; survivors go to the September confirmatory stage (#774, t>3) - the pilot itself claims no discovery and cannot close the class.",
+      "scorer_path": "apps/alphalens-research/scripts/run_options_retro_pilot.py",
+      "params_frozen": {
+        "class": "options_edge_conditional_2026_07",
+        "version": "options_retro_ivol_smd_v1",
+        "design_memo": "docs/research/options_retro_firstlook_design_2026_07_09.md",
+        "look_kind": "EXPLORATORY (hypothesis-generating; cannot close the class; no discovery claim)",
+        "data_source": "iVolatility smd deep cache ~/.alphalens/ivolatility_smd_retro_2026_07_deep/ (180 tickers, 2024-01-01..2026-07-08, archived in VPS Nextcloud as ivolatility_smd_retro_2026_07_deep_2026-07-09.tar.zst); features NEVER pool with forward yfinance telemetry",
+        "test_family_pinned": [
+          {
+            "test": 1,
+            "name": "ivx30 level",
+            "spec": "excess_k10 ~ ivx30 + technical_atr_pct + log10_mcap + earnings_within_30d",
+            "read_coefficient": "ivx30"
+          },
+          {
+            "test": 2,
+            "name": "term slope",
+            "spec": "excess_k10 ~ ivx180_minus_ivx30 + technical_atr_pct + log10_mcap + earnings_within_30d",
+            "read_coefficient": "ivx180_minus_ivx30"
+          },
+          {
+            "test": 3,
+            "name": "VRP decomposed",
+            "spec": "excess_k10 ~ ivx30 + hv20 + log10_mcap + earnings_within_30d (NO ATR: hv20~ATR near-collinear; the ratio ivx30/hv20 is never tested directly)",
+            "read_coefficient": "ivx30"
+          },
+          {
+            "test": 4,
+            "name": "ivp30",
+            "spec": "excess_k10 ~ ivp30 + technical_atr_pct + log10_mcap + earnings_within_30d",
+            "read_coefficient": "ivp30"
+          }
+        ],
+        "features_asof_rule": "most recent smd trading row (ivp30 non-null filters weekend/calendar padding) with tradeDate <= brief_date, US primary exchanges only; ivx30/ivx180/hv20 divided by 100 to decimal vol; ivp30 stays 0-100 (vendor 1y percentile, PIT-validated 0.9990 in v7)",
+        "controls_construction": {
+          "technical_atr_pct": "from thematic_briefs (Wilder ATR14 % of close, stamped at score stage)",
+          "log10_mcap": "log10(market_cap) from thematic_briefs",
+          "earnings_within_30d": "1 if next_earnings_date (thematic_briefs, PIT-stamped) is within [brief_date, brief_date+30d], else 0; missing -> 0 with missing-rate reported. NOTE: memo section 5 named the AV earnings cache; that cache is historical-only, next_earnings_date is the PIT forward-looking equivalent already stamped on briefs"
+        },
+        "dedup": "ticker-episode chained rolling 5-session window keep-first (July 2026 attribution doctrine)",
+        "inference": "primary p-values via RESTRICTED wild cluster bootstrap (Rademacher weights, clusters = brief_date, null imposed per test); CR2-corrected cluster SEs reported alongside; naive/CR1 never verdict-bearing",
+        "collinearity_gate": "VIF across {ivx30, ivp30, ivx180_minus_ivx30, technical_atr_pct, log10_mcap} before inference; VIF>10 -> residualize on ATR+mcap and report both",
+        "stability": "coefficients reported split across halves of the brief-date window (hint, not a test)"
+      },
+      "periods": {
+        "brief_dates": "2026-05-19 .. 2026-07-08 (51 brief days, 537 (brief_date,ticker) pairs, 180 tickers)",
+        "matured_subset_rule": "pairs whose k=10 horizon (arrival + 9 trading sessions, XNYS) <= newest session in ~/.alphalens/grouped_daily_history/ at run time"
+      },
+      "success_criteria": {
+        "primary_outcome": "market-excess return at k=10 sessions (car_10: BHAR vs SPY, prior-close anchor) - fill-independent, ONE outcome",
+        "surfacing_gate": "wild-cluster-bootstrap p < 0.05/4 on a pinned coefficient (Bonferroni over this family of 4 ONLY); a survivor becomes a pre-registered directional hypothesis for the September confirmatory stage (#774, t>3 hurdle) - NO selection/exit change before confirmation",
+        "null_consequence": "no acceleration; NOT class closure (effective N ~80-150 is underpowered for |rho|~0.1)",
+        "coverage_halt": "share of matured pairs with ALL FOUR tests computable (all features + all controls present) < 70% -> HALT, no verdicts; only permitted fallback = drop ivp30 and shrink family (re-opens memo section 6)",
+        "secondary_descriptive": "terminal realized_r on the fill-dependent TERMINAL subset - reported, never tested"
+      },
+      "registered_at": "2026-07-09",
+      "status": "registered",
+      "outcome": null,
+      "notes": ""
     }
   ]
 }
