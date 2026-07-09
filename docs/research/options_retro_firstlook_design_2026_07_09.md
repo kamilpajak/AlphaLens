@@ -1,6 +1,6 @@
 # Options retro first-look — reconstruct options features for matured EDGE outcomes
 
-**Status:** DRAFT (pending adversarial review + user spend authorization)
+**Status:** DRAFT (pending adversarial review; spend blocker REMOVED — user opened a fresh iVolatility trial account 2026-07-09)
 **Date:** 2026-07-09
 **Author:** research session
 **Parent:** `docs/research/options_telemetry_design_2026_07_07.md` (forward telemetry, live since 2026-07-08)
@@ -36,8 +36,9 @@ feature source — it must be registered as a look (see §7).
 
 ## 3. Data source
 
-**iVolatility `/equities/stock-market-data` (smd)**, reactivated for one
-metered month (~$399, operator-owned spend).
+**iVolatility `/equities/stock-market-data` (smd)** via the fresh TRIAL
+account the user opened 2026-07-09 (no $399 spend; the metered-month
+fallback stays available if the trial proves too limited).
 
 - Existing infrastructure: `alphalens_pipeline/data/alt_data/
   ivolatility_smd_cache.py` (immutable per-ticker parquet cache, range-mode
@@ -126,7 +127,13 @@ retro is null). No pretending otherwise later.
 
 ## 9. Cost / effort
 
-- $399 one metered month (user authorizes before any subscription).
+- $0 — fresh trial account (user-provided). FIRST implementation step:
+  probe the trial's limits (request quota, history depth, smd access at
+  all) on 2-3 tickers BEFORE the full pull; if the trial caps below the
+  universe's needs, fall back to the metered month (~$399, separate user
+  authorization) rather than drawing verdicts from a truncated pull —
+  the §8 coverage HALT applies to trial-limit censoring exactly as to
+  delisting censoring.
 - ~180 range-mode requests; cache-first; resumable.
 - Engineering: a fetch script reusing `ivolatility_smd_cache`, a join of
   smd rows to (brief_date, ticker) pairs, and a re-run of the existing
@@ -143,9 +150,11 @@ retro is null). No pretending otherwise later.
   measurement-first skepticism applies.
 - **Survivorship in smd:** delisted/renamed tickers may be absent; §8's
   coverage HALT guards the verdict.
-- **Spend-for-speed precedent:** this consciously trades $399 for ~2
-  months; it does NOT reopen the "buy data before evidence" door for
-  selection work — scope is this one look.
+- **Trial-account limits:** quota/history caps could silently censor the
+  pull — mitigated by the pre-pull probe and the §8 coverage HALT.
+- **Speed-for-evidence precedent:** even at $0 this is a deliberate
+  one-look exception, NOT a reopening of the "acquire data before
+  evidence" door for selection work.
 
 ## 11. Out of scope
 
@@ -158,7 +167,8 @@ retro is null). No pretending otherwise later.
 
 1. Adversarial review of this memo (zen + Perplexity) — pre-spend, per
    doctrine.
-2. User authorizes the $399 subscription; operator resubscribes
-   (`IVOLATILITY_API_KEY` in `.env` is expired).
+2. Put the trial account's key into `.env` as `IVOLATILITY_API_KEY`
+   (old key expired); probe trial limits on 2-3 tickers before the full
+   pull.
 3. Register the look in the ledger; implement fetch+join (TDD); run
-   analysis; write the results memo; cancel the subscription.
+   analysis; write the results memo.
