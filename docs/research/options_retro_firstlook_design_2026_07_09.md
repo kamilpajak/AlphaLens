@@ -1,6 +1,8 @@
-# Options retro first-look — reconstruct options features for matured EDGE outcomes
+# Options retro EXPLORATORY PILOT — reconstruct options features for matured EDGE outcomes
 
-**Status:** DRAFT (pending adversarial review; spend blocker REMOVED — user opened a fresh iVolatility trial account 2026-07-09)
+**Status:** DRAFT (amended per Perplexity adversarial review 2026-07-09 — reframed
+as an exploratory pilot, VRP test decomposed, power reality added, gates
+rewritten; zen review pending. Spend blocker removed — fresh iVolatility trial)
 **Date:** 2026-07-09
 **Author:** research session
 **Parent:** `docs/research/options_telemetry_design_2026_07_07.md` (forward telemetry, live since 2026-07-08)
@@ -32,7 +34,11 @@ EDGE outcomes **after the ATR partial** (the ROIC/quality lesson: any
 volatility proxy must show incremental value over realized-vol ATR, which
 is already a confirmed Bonferroni-clear separator). This is the SAME
 hypothesis as issue #774's first look, tested earlier on a different
-feature source — it must be registered as a look (see §7).
+feature source. The question is explicitly CONDITIONAL: incremental
+information within THIS pipeline's catalyst-selected, high-IV subpopulation
+— not a claim about options factors in general (selection truncates the IV
+distribution and creates collider structure between catalyst strength, IV,
+ATR and outcomes). Registered as an exploratory look (see §7).
 
 ## 3. Data source
 
@@ -92,38 +98,64 @@ artifact, not on the candidate parquets.
 - Controls: ATR partial (mandatory), earnings-within-30d indicator (AV
   earnings cache), mcap, the July-rerun covariate set for comparability.
 
-## 6. Analysis plan
+## 6. Analysis plan (amended per adversarial review)
 
-Same apparatus as the July signal-attribution re-run (that code is the
-spec): per-covariate association with market-excess, THEN partial
-correlation given ATR; a feature "shows signal" only if the ATR-partial
-survives the family's multiplicity correction. Weekend/duplicate handling
-and regime clustering per the #774 checklist. Deliverable: one analysis
-memo `options_retro_firstlook_results_<date>.md` with verdict per feature.
+- **Regression, not naive partial correlations:** ten-day market-excess on
+  each feature + controls, with **cluster-by-day robust standard errors**
+  (51 day-clusters; overlapping k=10 windows make naive p-values invalid —
+  Kolari-Pynnonen-class cross-correlation). Block bootstrap only as a
+  sensitivity diagnostic (≈5 independent 10d blocks — too few for primary
+  inference).
+- **VRP decomposed, never ratio-then-partial:** IVX30/HV20 with an ATR
+  partial is near-degenerate (HV20 ≈ ATR in the denominator; suppression /
+  sign-reversal risk). Test instead: returns ~ IVX30 + HV20 (+ controls),
+  reading the IVX30 coefficient as the implied-vs-realized increment.
+- **Collinearity diagnostics before inference:** VIF / condition numbers
+  across {ivx30, ivp30, term slope, ATR, mcap}; VIF>10 → drop or
+  orthogonalize (residualize features on ATR+mcap).
+- **Power reality stated up front:** effective N after ticker-episode dedup
+  and day-clustering is ~80-150 (design effect ~3-4 on ~350-400 pairs), so
+  |rho|~0.1 is undetectable and ~0.2 marginal under the family correction.
+  The pilot can SURFACE candidate effects; it cannot rule the class out.
+- **Sub-window stability:** report effects split across halves of the
+  7-week window (stability hint, not a test).
+- ONE primary outcome (market-excess k=10). Terminal realized_r is
+  descriptive only — reported, never tested (keeps the family at 4 tests).
+- Deliverable: `options_retro_pilot_results_<date>.md` with per-feature
+  coefficients, clustered CIs, VIFs, and the §8 decision mapping.
 
-## 7. Multiplicity / look accounting
+## 7. Multiplicity / look accounting (amended)
 
-This is a TEST and burns a look: registered in the ledger as
-`options_retro_firstlook_2026_07` with a 4-covariate family (ivx30, term
-slope, vrp ratio, ivp30) × 1 primary outcome, Bonferroni within family
-plus the program-level counter. Consequence accepted explicitly: the
-September forward first-look (#774) is then a SECOND look at the class —
-its role shifts from discovery to out-of-sample confirmation of whatever
-the retro finds (or a re-test on a different feature construction if the
-retro is null). No pretending otherwise later.
+Explicit exploratory/confirmatory split (data-snooping doctrine, Harvey et
+al. factor-zoo + White reality-check):
 
-## 8. Decision gates
+- **This pilot is EXPLORATORY** — hypothesis-generating, registered in the
+  ledger as `options_retro_pilot_2026_07` with a 4-feature family × ONE
+  primary outcome, Bonferroni within family AND the program-level counter
+  (the July covariate re-runs on the same outcome panel are part of the
+  broader family; this is why no discovery claim can come out of the
+  pilot).
+- **September (#774) is the CONFIRMATORY stage:** BEFORE it runs, the
+  pilot's surviving candidates get pre-registered as specific directional
+  hypotheses with an elevated hurdle (t>3 per Harvey's recommendation for
+  new factors). Feature selection and threshold tuning happen ONLY at that
+  pre-registration moment — not iteratively against the forward data.
+- Anti-leakage rule: the pilot tests exactly the 4 pre-committed features;
+  no adding features, horizons, or thresholds after seeing results.
 
-- **Retro signal (≥1 feature survives ATR partial + family correction):**
-  forward telemetry (#774) becomes the OOS confirmation; no selection or
-  exit change before that confirmation. iVolatility stays cancelled after
-  the pull (cache is immutable).
-- **Retro null:** the class stays telemetry-only; no further spend; #774
-  proceeds as planned in September (different construction + skew, so a
-  null retro does not pre-empt it, but the look accounting above applies).
-- **Data-quality failure** (smd coverage <70% of matured pairs, e.g.
-  delisted/small names missing): HALT per the vendor-gate spirit — report
-  coverage, do not draw verdicts from a censored subsample.
+## 8. Decision gates (amended — the pilot cannot close the class)
+
+- **Pilot surfaces a candidate** (clustered-CI effect surviving the family
+  correction): it becomes a pre-registered directional hypothesis for the
+  September confirmatory stage (#774); NO selection or exit change before
+  confirmation.
+- **Pilot null:** NOT class closure — with effective N~80-150 a null is
+  expected even for economically meaningful effects (Type II). Consequence
+  is only: no acceleration; #774 proceeds in September as the properly
+  powered forward accumulation continues; no further retro spend.
+- **Data-quality failure** (smd coverage <70% of matured pairs, or
+  trial-limit truncation): HALT — report coverage, no verdicts from a
+  censored subsample.
 
 ## 9. Cost / effort
 
@@ -142,6 +174,12 @@ retro is null). No pretending otherwise later.
 
 ## 10. Risks / honest caveats
 
+- **Underpowered by construction:** effective N ~80-150; the pilot's only
+  legitimate outputs are "candidate found" or "nothing detectable at this
+  N" — never "class dead".
+- **Horizon mismatch:** IVX30 is a 30d surface vs our k=10 outcome; noted,
+  accepted (a 20d secondary outcome may be reported descriptively if the
+  outcome panel supports it).
 - **Vendor-feature mismatch risk:** a retro signal on vendor IVX30 may not
   transfer to our yfinance interpolation (and vice versa). This is why the
   two sets never pool and why September's confirmation matters.
