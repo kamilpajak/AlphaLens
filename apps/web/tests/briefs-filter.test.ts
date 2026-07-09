@@ -69,3 +69,31 @@ test('a top-theme facet chip filters, clear-all resets, and a ?theme= deep link 
 	await page.goto('/briefs?theme=high-gas');
 	await expect(rows(page)).toHaveCount(2);
 });
+
+test('sortable headers reorder the archive', async ({ page }) => {
+	await stub(page);
+	await page.goto('/briefs');
+	const firstDate = () => page.locator('tbody tr').first().locator('a[href^="/brief/"]').first();
+
+	// Default: date desc → the newest day on top.
+	await expect(firstDate()).toHaveText('2026-06-03');
+
+	// Sort by candidate count → desc first: the 7-candidate day (06-02) on top.
+	await page.getByRole('button', { name: 'cand' }).click();
+	await expect(firstDate()).toHaveText('2026-06-02');
+
+	// Toggle → asc: the 2-candidate day (06-03) on top.
+	await page.getByRole('button', { name: 'cand' }).click();
+	await expect(firstDate()).toHaveText('2026-06-03');
+});
+
+test('the search query is trimmed on blur', async ({ page }) => {
+	await stub(page);
+	await page.goto('/briefs');
+	const search = page.getByTestId('briefs-search');
+
+	await search.fill('  quantum  ');
+	await search.blur();
+	await expect(search).toHaveValue('quantum');
+	await expect(rows(page)).toHaveCount(1);
+});

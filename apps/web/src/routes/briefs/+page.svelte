@@ -10,6 +10,7 @@
 	} from '$lib/briefsFilter';
 	import { setToParam, paramToSet } from '$lib/urlFilters';
 	import { syncParamsToUrl } from '$lib/urlFilterSync.svelte';
+	import { sortDays, defaultDir, type BriefsSortKey, type SortDir } from '$lib/briefsSort';
 	import { page } from '$app/state';
 
 	let { data }: { data: PageData } = $props();
@@ -23,6 +24,22 @@
 
 	const filteredDays = $derived(filterDays(data.days, filterState));
 	const active = $derived(isBriefsFilterActive(filterState));
+
+	// Client-side sort (ephemeral, like /edge — not URL-synced). Default date desc
+	// keeps the newest brief on top.
+	let sortKey = $state<BriefsSortKey>('date');
+	let sortDir = $state<SortDir>('desc');
+
+	function toggleSort(key: BriefsSortKey) {
+		if (sortKey === key) {
+			sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+		} else {
+			sortKey = key;
+			sortDir = defaultDir(key);
+		}
+	}
+
+	const sortedDays = $derived(sortDays(filteredDays, sortKey, sortDir));
 
 	// Top-theme facet chips (count-desc). Themes carry no formal definition, so the
 	// ChipTip just names the tag.
@@ -74,6 +91,10 @@
 				<input
 					type="search"
 					bind:value={filterState.query}
+					onblur={() => {
+						const t = filterState.query.trim();
+						if (t !== filterState.query) filterState.query = t;
+					}}
 					placeholder="search date or theme…"
 					data-testid="briefs-search"
 					class="w-52 border border-grid bg-bg-2 px-2 py-1 text-xs text-fg placeholder:text-fg-muted focus:border-amber focus:outline-none"
@@ -107,18 +128,41 @@
 			no briefs match the current filter
 		</div>
 	{:else}
+		{#snippet sortHead(key: BriefsSortKey, label: string, cls: string)}
+			<th
+				class="py-2 {cls}"
+				aria-sort={sortKey === key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+			>
+				<button
+					type="button"
+					onclick={() => toggleSort(key)}
+					class="group/s inline-flex items-center gap-1 uppercase tracking-widest transition-colors {sortKey ===
+					key
+						? 'text-amber'
+						: 'text-fg-muted hover:text-fg-dim'}"
+				>
+					<span>{label}</span>
+					<span
+						class="text-[8px] leading-none {sortKey === key
+							? 'opacity-100'
+							: 'opacity-0 group-hover/s:opacity-50'}"
+						aria-hidden="true">{(sortKey === key ? sortDir : defaultDir(key)) === 'asc' ? '▲' : '▼'}</span>
+				</button>
+			</th>
+		{/snippet}
+
 		<table class="w-full text-sm">
 			<thead>
 				<tr class="text-[10px] uppercase tracking-widest text-fg-muted text-left border-b border-grid">
-					<th class="py-2 pr-3 sm:pr-4">date</th>
-					<th class="py-2 pr-3 sm:pr-4 text-right">cand</th>
-					<th class="hidden sm:table-cell py-2 pr-4 text-right">themes</th>
-					<th class="py-2 pr-3 sm:pr-4">top theme</th>
+					{@render sortHead('date', 'date', 'pr-3 sm:pr-4')}
+					{@render sortHead('cand', 'cand', 'pr-3 sm:pr-4 text-right')}
+					{@render sortHead('themes', 'themes', 'hidden sm:table-cell pr-4 text-right')}
+					{@render sortHead('top', 'top theme', 'pr-3 sm:pr-4')}
 					<th class="py-2"></th>
 				</tr>
 			</thead>
 			<tbody>
-				{#each filteredDays as day, i (day.date)}
+				{#each sortedDays as day, i (day.date)}
 					<tr class="border-b border-grid hover:bg-bg-2 group fade-up" style="animation-delay: {i * 0.05}s">
 						<td class="py-3 pr-3 sm:pr-4">
 							<a
