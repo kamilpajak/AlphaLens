@@ -24,7 +24,7 @@ _ASOF = dt.date(2026, 5, 29)
 _PINNED_NOW = dt.datetime(2026, 5, 29, 12, 30, 0, tzinfo=dt.UTC)
 
 
-def _synthetic_polygon(*, date: dt.date) -> pd.DataFrame:
+def _synthetic_polygon(*, date: dt.date, force: bool = False) -> pd.DataFrame:
     """A tiny in-window polygon frame WITHOUT an ``ingested_at`` column.
 
     Mirrors a real per-source adapter: the lake-entry stamp is ``ingest_daily``'s
@@ -58,7 +58,7 @@ def _synthetic_polygon(*, date: dt.date) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=NEWS_COLUMNS)
 
 
-def _empty(*, date: dt.date) -> pd.DataFrame:
+def _empty(*, date: dt.date, force: bool = False) -> pd.DataFrame:
     return empty_news_frame()
 
 

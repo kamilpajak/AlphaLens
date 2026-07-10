@@ -29,7 +29,7 @@ _FROZEN_NOW = dt.datetime(2026, 5, 29, 12, 0, 0, tzinfo=dt.UTC)
 _FROZEN_NOW_2 = dt.datetime(2026, 5, 29, 18, 30, 15, 123000, tzinfo=dt.UTC)
 
 
-def _synthetic_polygon(*, date: dt.date) -> pd.DataFrame:
+def _synthetic_polygon(*, date: dt.date, force: bool = False) -> pd.DataFrame:
     """A tiny in-window polygon frame WITHOUT an ``ingested_at`` column."""
     ts = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=10)
     rows = [
@@ -59,7 +59,7 @@ def _synthetic_polygon(*, date: dt.date) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=NEWS_COLUMNS)
 
 
-def _synthetic_polygon_three_in_window(*, date: dt.date) -> pd.DataFrame:
+def _synthetic_polygon_three_in_window(*, date: dt.date, force: bool = False) -> pd.DataFrame:
     """Three in-window polygon rows — used with max_items=1 to prove the lake
     keeps rows the current-view CAP drops."""
     base = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=10)
@@ -80,7 +80,7 @@ def _synthetic_polygon_three_in_window(*, date: dt.date) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=NEWS_COLUMNS)
 
 
-def _synthetic_polygon_with_prior_day(*, date: dt.date) -> pd.DataFrame:
+def _synthetic_polygon_with_prior_day(*, date: dt.date, force: bool = False) -> pd.DataFrame:
     """One in-window row + one row in the PRIOR UTC day — used to prove the lake
     keeps rows the current-view strict single-UTC-day filter (P1a) drops. A P2
     session window straddles UTC midnight, so the lake MUST retain the prior-day
@@ -114,7 +114,7 @@ def _synthetic_polygon_with_prior_day(*, date: dt.date) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=NEWS_COLUMNS)
 
 
-def _empty(*, date: dt.date) -> pd.DataFrame:
+def _empty(*, date: dt.date, force: bool = False) -> pd.DataFrame:
     return empty_news_frame()
 
 

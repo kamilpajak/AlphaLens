@@ -319,6 +319,72 @@ class TestNewsIngestOrchestration(unittest.TestCase):
             self.assertEqual(df["id"].tolist(), ["b", "c", "a"])
 
 
+class TestForceThreadedToSources(unittest.TestCase):
+    """`ingest --force` must bust EACH source's own per-day read-through cache,
+    not just the aggregator ``{date}.parquet``. Under the 6x/day cadence all
+    ticks share the yesterday-UTC asof (hence the same per-source cache key), so
+    without threading ``force`` the source caches short-circuit ticks 2-6 and
+    late-arriving items for that asof never re-fetch. No ``setUp`` stub here so
+    the assertion reaches the real ``_fetch_*`` helpers and the source-level
+    ``fetch_daily_news`` they forward to."""
+
+    def _patch_all_sources(self, empty_df):
+        return (
+            patch.object(
+                news_ingest.edgar_press_release, "fetch_daily_news", return_value=empty_df
+            ),
+            patch.object(news_ingest.polygon_news, "fetch_daily_news", return_value=empty_df),
+            patch.object(news_ingest.gdelt, "fetch_daily_news", return_value=empty_df),
+            patch.object(news_ingest.rss, "fetch_daily_news", return_value=empty_df),
+            patch.object(news_ingest.perplexity, "fetch_daily_news", return_value=empty_df),
+        )
+
+    def test_force_is_threaded_to_every_source_fetcher(self):
+        empty_df = news_ingest.empty_news_frame()
+        p_edgar, p_polygon, p_gdelt, p_rss, p_perplexity = self._patch_all_sources(empty_df)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                p_edgar as m_edgar,
+                p_polygon as m_polygon,
+                p_gdelt as m_gdelt,
+                p_rss as m_rss,
+                p_perplexity as m_perplexity,
+                mock.patch.dict("os.environ", {"ALPHALENS_PERPLEXITY_SOURCE": "1"}),
+            ):
+                news_ingest.ingest_daily(
+                    date=dt.date(2026, 5, 15),
+                    cache_dir=Path(tmpdir),
+                    force=True,
+                )
+            for name, m in (
+                ("edgar_press_release", m_edgar),
+                ("polygon", m_polygon),
+                ("gdelt", m_gdelt),
+                ("rss", m_rss),
+                ("perplexity", m_perplexity),
+            ):
+                self.assertTrue(m.called, f"{name} source fetcher was not called")
+                self.assertIs(
+                    m.call_args.kwargs.get("force"),
+                    True,
+                    f"{name} source fetcher was not called with force=True",
+                )
+
+    def test_force_false_is_threaded_as_false(self):
+        empty_df = news_ingest.empty_news_frame()
+        p_edgar, p_polygon, p_gdelt, p_rss, p_perplexity = self._patch_all_sources(empty_df)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                p_edgar as m_edgar,
+                p_polygon,
+                p_gdelt,
+                p_rss,
+                p_perplexity,
+            ):
+                news_ingest.ingest_daily(date=dt.date(2026, 5, 15), cache_dir=Path(tmpdir))
+            self.assertIs(m_edgar.call_args.kwargs.get("force"), False)
+
+
 class TestTier1LexicalClustering(unittest.TestCase):
     """Same-day syndication: collapse echoes into clusters before cap-200."""
 
