@@ -127,6 +127,39 @@ def _emit_stage_volume(stage: str, *, output_rows: int, input_rows: int) -> None
         logger.exception("emit_domain_metrics failed for stage %s; the run succeeded", stage)
 
 
+def _carry_forward_options(enriched: pd.DataFrame, out_path: Path) -> pd.DataFrame:
+    """Best-effort carry-forward of already-stamped ``options_*`` columns from the
+    previous same-date output into ``enriched`` (preserves an earlier slot's
+    successful stamp when a later slot's enrichment fails). Returns ``enriched``
+    unchanged when there is nothing to carry or the read fails."""
+    try:
+        if not out_path.exists():
+            return enriched
+        prev_df = pd.read_parquet(out_path)
+        options_cols = [c for c in prev_df.columns if c.startswith("options_")]
+        if not options_cols or "options_snapshot_utc" not in prev_df.columns:
+            return enriched
+        prev_keyed = (
+            prev_df[["ticker", *options_cols]]
+            .dropna(subset=["options_snapshot_utc"])
+            .drop_duplicates(subset=["ticker"], keep="first")
+        )
+        if prev_keyed.empty:
+            return enriched
+        result = enriched.copy()
+        for col in options_cols:
+            result[col] = None
+        result.update(result[["ticker"]].merge(prev_keyed, on="ticker", how="left")[options_cols])
+        logger.warning("options telemetry pass failed; carried previous columns")
+        return result
+    except Exception:
+        logger.warning(
+            "options telemetry carry-forward also failed; columns left absent",
+            exc_info=True,
+        )
+        return enriched
+
+
 def _apply_options_telemetry(
     enriched: pd.DataFrame,
     *,
@@ -162,33 +195,7 @@ def _apply_options_telemetry(
             "options telemetry pass failed; attempting to carry previous columns",
             exc_info=True,
         )
-        try:
-            if out_path.exists():
-                prev_df = pd.read_parquet(out_path)
-                options_cols = [c for c in prev_df.columns if c.startswith("options_")]
-                if options_cols and "options_snapshot_utc" in prev_df.columns:
-                    prev_keyed = (
-                        prev_df[["ticker", *options_cols]]
-                        .dropna(subset=["options_snapshot_utc"])
-                        .drop_duplicates(subset=["ticker"], keep="first")
-                    )
-                    if not prev_keyed.empty:
-                        result = enriched.copy()
-                        for col in options_cols:
-                            result[col] = None
-                        result.update(
-                            result[["ticker"]].merge(prev_keyed, on="ticker", how="left")[
-                                options_cols
-                            ]
-                        )
-                        logger.warning("options telemetry pass failed; carried previous columns")
-                        return result
-        except Exception:
-            logger.warning(
-                "options telemetry carry-forward also failed; columns left absent",
-                exc_info=True,
-            )
-        return enriched
+        return _carry_forward_options(enriched, out_path)
 
 
 def _parquet_num_rows(path: Path) -> int:

@@ -110,6 +110,54 @@ def _write_atomic(path: Path, df: pd.DataFrame) -> None:
     os.replace(tmp, path)
 
 
+def _enrich_one_file(
+    path: Path,
+    *,
+    fetch: BarFetch,
+    last_closed_session: dt.date,
+    exchange: str,
+    deadline: Any,
+) -> tuple[int, bool]:
+    """Enrich one store parquet in place; return (rows_enriched, stopped_early).
+
+    A read error skips the file ``(0, False)``. A deadline trip mid-file leaves
+    the parquet UNTOUCHED and reports ``stopped_early=True`` so its rows retry
+    next run — the in-memory enriched count up to the trip is still returned to
+    match the pre-refactor running total.
+    """
+    try:
+        df = pd.read_parquet(path)
+    except (OSError, ValueError) as exc:
+        logger.warning("sector-excess: bad store parquet %s — %s; skipping.", path, exc)
+        return 0, False
+
+    etf_col: list[str | None] = []
+    wret_col: list[float | None] = []
+    excess_col: list[float | None] = []
+    n_enriched = 0
+    for _, row in df.iterrows():
+        if deadline is not None and deadline.should_stop():
+            return n_enriched, True
+        etf, wret, excess = compute_sector_excess_for_row(
+            dict(row),
+            bar_fetch=fetch,
+            last_closed_session=last_closed_session,
+            exchange=exchange,
+        )
+        etf_col.append(etf)
+        wret_col.append(wret)
+        excess_col.append(excess)
+        if excess is not None:
+            n_enriched += 1
+
+    df["sector_etf_ticker"] = etf_col
+    df["sector_etf_window_return"] = wret_col
+    df["sector_excess_return"] = excess_col
+    df["outcome_benchmark_version"] = OUTCOME_BENCHMARK_VERSION
+    _write_atomic(path, df)
+    return n_enriched, False
+
+
 def enrich_store_with_sector_excess(
     store_dir: Path | str,
     *,
@@ -134,40 +182,16 @@ def enrich_store_with_sector_excess(
     n_enriched = 0
 
     for path in sorted(store.glob("*.parquet")):
-        try:
-            df = pd.read_parquet(path)
-        except (OSError, ValueError) as exc:
-            logger.warning("sector-excess: bad store parquet %s — %s; skipping.", path, exc)
-            continue
-
-        etf_col: list[str | None] = []
-        wret_col: list[float | None] = []
-        excess_col: list[float | None] = []
-        stopped_early = False
-        for _, row in df.iterrows():
-            if deadline is not None and deadline.should_stop():
-                stopped_early = True
-                break
-            etf, wret, excess = compute_sector_excess_for_row(
-                dict(row),
-                bar_fetch=fetch,
-                last_closed_session=last_closed_session,
-                exchange=exchange,
-            )
-            etf_col.append(etf)
-            wret_col.append(wret)
-            excess_col.append(excess)
-            if excess is not None:
-                n_enriched += 1
-
-        if stopped_early:
+        delta, stopped = _enrich_one_file(
+            path,
+            fetch=fetch,
+            last_closed_session=last_closed_session,
+            exchange=exchange,
+            deadline=deadline,
+        )
+        n_enriched += delta
+        if stopped:
             break
-
-        df["sector_etf_ticker"] = etf_col
-        df["sector_etf_window_return"] = wret_col
-        df["sector_excess_return"] = excess_col
-        df["outcome_benchmark_version"] = OUTCOME_BENCHMARK_VERSION
-        _write_atomic(path, df)
 
     return n_enriched
 
