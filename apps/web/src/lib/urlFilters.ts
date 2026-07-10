@@ -5,7 +5,7 @@
 
 /** A Set → sorted, comma-joined param value (stable regardless of click order). */
 export function setToParam(set: Set<string>): string {
-	return [...set].sort().join(',');
+	return [...set].sort((a, b) => a.localeCompare(b)).join(',');
 }
 
 /** A param value → Set (empty for null/blank; blank segments dropped). */

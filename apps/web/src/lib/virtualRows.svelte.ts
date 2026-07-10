@@ -168,7 +168,7 @@ export function createRowWindow(options: RowWindowOptions): RowWindow {
 	}
 
 	const heights = $derived.by(() => {
-		measureVersion; // establish dependency on measurements
+		measureVersion; // NOSONAR: reading the rune subscribes this $derived to measurement bumps (Svelte 5 dependency tracking)
 		const ks = options.keys();
 		const rowEst = rowEstimate();
 		const detailEst = detailEstimate();

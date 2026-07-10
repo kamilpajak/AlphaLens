@@ -18,18 +18,20 @@ from __future__ import annotations
 
 import pandas as pd
 
+_WINDOW_MUST_BE_POSITIVE = "window must be positive"
+
 
 def sma(series: pd.Series, window: int) -> pd.Series:
     """Simple moving average over a trailing ``window`` of observations."""
     if window <= 0:
-        raise ValueError("window must be positive")
+        raise ValueError(_WINDOW_MUST_BE_POSITIVE)
     return series.rolling(window).mean()
 
 
 def ema(series: pd.Series, window: int) -> pd.Series:
     """Exponential moving average (``span=window, adjust=False`` → seeds on first obs)."""
     if window <= 0:
-        raise ValueError("window must be positive")
+        raise ValueError(_WINDOW_MUST_BE_POSITIVE)
     return series.ewm(span=window, adjust=False).mean()
 
 
@@ -41,7 +43,7 @@ def normalized_slope(series: pd.Series, *, window: int) -> pd.Series:
     series (prices); a zero value yields ``inf``/``NaN`` at that point.
     """
     if window <= 0:
-        raise ValueError("window must be positive")
+        raise ValueError(_WINDOW_MUST_BE_POSITIVE)
     return (series - series.shift(window)) / series
 
 
@@ -85,7 +87,7 @@ def true_range(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
 def atr(high: pd.Series, low: pd.Series, close: pd.Series, *, window: int = 14) -> pd.Series:
     """Average true range via Wilder smoothing (RMA = ``ewm(alpha=1/window)``)."""
     if window <= 0:
-        raise ValueError("window must be positive")
+        raise ValueError(_WINDOW_MUST_BE_POSITIVE)
     tr = true_range(high, low, close)
     return tr.ewm(alpha=1.0 / window, adjust=False).mean()
 

@@ -248,7 +248,7 @@ export function marketStateTone(state: string | null | undefined): MarketStateTo
  *  state, shown on dates that predate the label). */
 export function marketStateLabel(state: string | null | undefined): string {
 	if (!state || !(state in _MARKET_STATE_TONES)) return 'unknown';
-	return state.replace(/_/g, '-');
+	return state.replaceAll('_', '-');
 }
 
 /**

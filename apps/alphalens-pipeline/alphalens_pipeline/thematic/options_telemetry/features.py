@@ -235,6 +235,22 @@ END_SESSION_MAX_LAG = 3  # sessions to walk back for the RV window anchor
 RV_ANNUALIZATION = 252.0
 
 
+def _anchor_on_disk_session(root: Path, session: dt.date) -> tuple[dt.date | None, dict | None]:
+    """Newest session <= ``session`` whose grouped snapshot is actually ON DISK,
+    walking back up to ``END_SESSION_MAX_LAG`` sessions. Returns
+    (session_date, snapshot) or (None, None) when nothing is on disk in range."""
+    from alphalens_pipeline.data.rs_history import read_grouped_day
+    from alphalens_pipeline.paper.calendar import previous_trading_day
+
+    probe = session
+    for _ in range(END_SESSION_MAX_LAG + 1):
+        snapshot = read_grouped_day(root, probe)
+        if snapshot is not None:
+            return probe, snapshot
+        probe = previous_trading_day(probe)
+    return None, None
+
+
 def trailing_session_closes(
     root: Path, tickers: list[str], asof: dt.date, n_sessions: int
 ) -> dict[str, list[float]]:
@@ -257,15 +273,7 @@ def trailing_session_closes(
     # lagged RV window is literature-standard (staggered windows in
     # Bollerslev-Tauchen-Zhou; backward-looking HV in Goyal-Saretto) and adds
     # ~1-2 vol pts of sampling noise with zero systematic bias.
-    anchored = None
-    anchored_snapshot = None
-    probe = session
-    for _ in range(END_SESSION_MAX_LAG + 1):
-        anchored_snapshot = read_grouped_day(root, probe)
-        if anchored_snapshot is not None:
-            anchored = probe
-            break
-        probe = previous_trading_day(probe)
+    anchored, anchored_snapshot = _anchor_on_disk_session(root, session)
     if anchored is None:
         return {t.upper(): [] for t in tickers}
     session = anchored

@@ -224,9 +224,9 @@ def wild_cluster_bootstrap_p(
     t_obs = beta[coef_idx] / se[coef_idx]
 
     keep = [j for j in range(X.shape[1]) if j != coef_idx]
-    Xr = X[:, keep]
-    beta_r, _ = _ols_beta(y, Xr)
-    fitted_r = Xr @ beta_r
+    x_r = X[:, keep]
+    beta_r, _ = _ols_beta(y, x_r)
+    fitted_r = x_r @ beta_r
     resid_r = y - fitted_r
 
     rng = np.random.default_rng(seed)

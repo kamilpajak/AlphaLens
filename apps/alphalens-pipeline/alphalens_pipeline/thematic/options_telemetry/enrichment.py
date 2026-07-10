@@ -108,6 +108,66 @@ def _num_or_zero(value: object) -> float:
     return 0.0 if math.isnan(v) else v
 
 
+def _near_far_legs(
+    snapshot: TickerSnapshot,
+    near: dt.date | None,
+    far: dt.date | None,
+    spot: float,
+    asof: dt.date,
+) -> tuple[
+    list[tuple[pd.DataFrame, pd.DataFrame]],
+    float | None,
+    int | None,
+    float | None,
+    int | None,
+    tuple[pd.DataFrame, pd.DataFrame] | None,
+]:
+    """(legs, iv_near, dte_near, iv_far, dte_far, ref_leg) for the bracketing
+    expiries. ``ref_leg`` is the near leg when present, else the far leg."""
+    legs: list[tuple[pd.DataFrame, pd.DataFrame]] = []
+    iv_near = dte_near = iv_far = dte_far = None
+    near_leg = far_leg = None
+    if near is not None:
+        near_leg = snapshot.chains.get(near)
+        if near_leg is not None:
+            legs.append(near_leg)
+            iv_near = f.expiry_atm_iv(near_leg[0], near_leg[1], spot)
+            dte_near = (near - asof).days
+    if far is not None:
+        far_leg = snapshot.chains.get(far)
+        if far_leg is not None:
+            legs.append(far_leg)
+            iv_far = f.expiry_atm_iv(far_leg[0], far_leg[1], spot)
+            dte_far = (far - asof).days
+    return legs, iv_near, dte_near, iv_far, dte_far, (near_leg or far_leg)
+
+
+def _atm_metrics(
+    ref_leg: tuple[pd.DataFrame, pd.DataFrame],
+    spot: float,
+    values: dict[str, object],
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
+    """Stamp skew + ATM quote/OI columns into ``values``; return
+    (atm_strike, spread_pct, atm_call_oi, atm_put_oi, atm_vol_total)."""
+    calls, puts = ref_leg
+    values["options_skew_xzz"] = f.skew_xzz(calls, puts, spot)
+    quote = f.atm_quote(calls, puts, spot)
+    if quote is None:
+        return None, None, None, None, None
+    strike, mid, spread_pct = quote
+    values["options_atm_strike"] = strike
+    values["options_atm_mid"] = mid
+    values["options_spread_pct_atm"] = spread_pct
+    call_row = calls[calls["strike"] == strike]
+    put_row = puts[puts["strike"] == strike]
+    atm_call_oi = None if call_row.empty else _num_or_zero(call_row.iloc[0].get("openInterest"))
+    atm_put_oi = None if put_row.empty else _num_or_zero(put_row.iloc[0].get("openInterest"))
+    atm_vol_total = (0.0 if call_row.empty else _num_or_zero(call_row.iloc[0].get("volume"))) + (
+        0.0 if put_row.empty else _num_or_zero(put_row.iloc[0].get("volume"))
+    )
+    return strike, spread_pct, atm_call_oi, atm_put_oi, atm_vol_total
+
+
 def _compute_values(
     snapshot: TickerSnapshot,
     *,
@@ -143,27 +203,9 @@ def _compute_values(
     values["options_snapshot_utc"] = now_utc.isoformat()
 
     spot = float(snapshot.spot)
-    legs: list[tuple[pd.DataFrame, pd.DataFrame]] = []
-    iv_near = dte_near = iv_far = dte_far = None
-    quote = None
-    atm_call_oi = atm_put_oi = atm_vol_total = None
-
-    near_leg = None
-    far_leg = None
-    if near is not None:
-        near_leg = snapshot.chains.get(near)
-        if near_leg is not None:
-            legs.append(near_leg)
-            iv_near = f.expiry_atm_iv(near_leg[0], near_leg[1], spot)
-            dte_near = (near - asof).days
-    if far is not None:
-        far_leg = snapshot.chains.get(far)
-        if far_leg is not None:
-            legs.append(far_leg)
-            iv_far = f.expiry_atm_iv(far_leg[0], far_leg[1], spot)
-            dte_far = (far - asof).days
-    # The quote/skew/OI reference leg: near when present, else far.
-    ref_leg = near_leg or far_leg
+    legs, iv_near, dte_near, iv_far, dte_far, ref_leg = _near_far_legs(
+        snapshot, near, far, spot, asof
+    )
 
     ivx30 = f.interpolate_iv30(iv_near, dte_near, iv_far, dte_far)
     values["options_ivx30"] = ivx30
@@ -181,27 +223,11 @@ def _compute_values(
 
     atm_strike_val: float | None = None
     spread_pct_val: float | None = None
+    atm_call_oi = atm_put_oi = atm_vol_total = None
     if ref_leg is not None:
-        calls, puts = ref_leg
-        skew = f.skew_xzz(calls, puts, spot)
-        values["options_skew_xzz"] = skew
-        quote = f.atm_quote(calls, puts, spot)
-        if quote is not None:
-            strike, mid, spread_pct = quote
-            atm_strike_val = strike
-            spread_pct_val = spread_pct
-            values["options_atm_strike"] = strike
-            values["options_atm_mid"] = mid
-            values["options_spread_pct_atm"] = spread_pct
-            call_row = calls[calls["strike"] == strike]
-            put_row = puts[puts["strike"] == strike]
-            if not call_row.empty:
-                atm_call_oi = _num_or_zero(call_row.iloc[0].get("openInterest"))
-            if not put_row.empty:
-                atm_put_oi = _num_or_zero(put_row.iloc[0].get("openInterest"))
-            atm_vol_total = (
-                0.0 if call_row.empty else _num_or_zero(call_row.iloc[0].get("volume"))
-            ) + (0.0 if put_row.empty else _num_or_zero(put_row.iloc[0].get("volume")))
+        atm_strike_val, spread_pct_val, atm_call_oi, atm_put_oi, atm_vol_total = _atm_metrics(
+            ref_leg, spot, values
+        )
 
     if legs:
         totals = f.chain_totals(legs)
@@ -223,6 +249,19 @@ def _compute_values(
     return values
 
 
+def _coerce_stamped_row(row: pd.Series) -> dict[str, object]:
+    """Map a stamped previous-output row to the 16 options columns (NaN -> None,
+    missing column -> None)."""
+    result: dict[str, object] = {}
+    for col in OPTIONS_COLUMNS:
+        if col not in row.index:
+            result[col] = None
+            continue
+        val = row[col]
+        result[col] = None if (isinstance(val, float) and pd.isna(val)) else val
+    return result
+
+
 def _previous_by_ticker(previous: pd.DataFrame | None) -> dict[str, dict[str, object]]:
     """Ticker -> stamped 16-column dict from a previous same-asof output.
 
@@ -238,20 +277,11 @@ def _previous_by_ticker(previous: pd.DataFrame | None) -> dict[str, dict[str, ob
             continue
         ticker = str(row.get("ticker", "")).upper()
         if ticker and ticker not in stamped:
-            stamped[ticker] = {
-                col: (
-                    None
-                    if (col in row.index and isinstance(row[col], float) and pd.isna(row[col]))
-                    else row[col]
-                )
-                if col in row.index
-                else None
-                for col in OPTIONS_COLUMNS
-            }
+            stamped[ticker] = _coerce_stamped_row(row)
     return stamped
 
 
-def _default_snapshot_fn(asof: dt.date) -> SnapshotFn:
+def _default_snapshot_fn() -> SnapshotFn:
     """Production wiring: canonical yfinance client, up to 5 HTTP calls/ticker (expiries + spot + up to 3 chains)."""
     from alphalens_pipeline.data.alt_data.yfinance_client import (
         get_default_yfinance_client,
@@ -274,6 +304,41 @@ def _default_snapshot_fn(asof: dt.date) -> SnapshotFn:
         return TickerSnapshot(spot=spot, expiries=expiries, chains=chains)
 
     return _fetch
+
+
+def _realized_vols(to_fetch: list[str], asof: dt.date, root: Path) -> dict[str, float | None]:
+    """20d realized vol per ticker from the grouped-daily store; RV degrades to
+    None for every ticker if the store is missing/corrupt."""
+    try:
+        closes = f.trailing_session_closes(root, to_fetch, asof, RV_SESSIONS_NEEDED)
+    except Exception:  # store missing/corrupt: RV degrades to None
+        logger.warning("options telemetry: grouped store read failed", exc_info=True)
+        closes = {}
+    return {t: f.realized_vol_20d(closes.get(t, [])) for t in to_fetch}
+
+
+def _ticker_values(
+    ticker: str,
+    fetch: SnapshotFn,
+    *,
+    asof: dt.date,
+    now: dt.datetime,
+    rv20: float | None,
+) -> dict[str, object]:
+    """The 16 options values for one in-window, not-yet-frozen ticker. Per-ticker
+    fail-soft: a fetch failure or any exception leaves nulls WITHOUT a marker, so
+    a later in-window slot retries."""
+    try:
+        snapshot = fetch(ticker, asof)
+        if snapshot.fetch_failed:
+            logger.warning(
+                "options telemetry: fetch failed for %s; leaving nulls for retry", ticker
+            )
+            return _null_values()
+        return _compute_values(snapshot, asof=asof, now_utc=now, rv20=rv20)
+    except Exception:
+        logger.warning("options telemetry failed for %s", ticker, exc_info=True)
+        return _null_values()
 
 
 def enrich(
@@ -306,39 +371,20 @@ def enrich(
 
     to_fetch = [t for t in unique if t not in frozen] if in_window else []
     if to_fetch:
-        fetch = snapshot_fn or _default_snapshot_fn(asof)
+        fetch = snapshot_fn or _default_snapshot_fn()
         root = grouped_root or _DEFAULT_GROUPED_ROOT
-        try:
-            closes = f.trailing_session_closes(root, to_fetch, asof, RV_SESSIONS_NEEDED)
-        except Exception:  # store missing/corrupt: RV degrades to None
-            logger.warning("options telemetry: grouped store read failed", exc_info=True)
-            closes = {}
-        rv_by_ticker = {t: f.realized_vol_20d(closes.get(t, [])) for t in to_fetch}
+        rv_by_ticker = _realized_vols(to_fetch, asof, root)
 
     for ticker in unique:
         if ticker in frozen:
             per_ticker[ticker] = frozen[ticker]
-            continue
-        if not in_window:
+        elif not in_window:
             per_ticker[ticker] = _null_values()
-            continue
-        try:
+        else:
             assert fetch is not None
-            snapshot = fetch(ticker, asof)
-            if snapshot.fetch_failed:
-                # Transient fetch failure: no marker stamped → later in-window slot retries.
-                logger.warning(
-                    "options telemetry: fetch failed for %s; leaving nulls for retry", ticker
-                )
-                per_ticker[ticker] = _null_values()
-            else:
-                per_ticker[ticker] = _compute_values(
-                    snapshot, asof=asof, now_utc=now, rv20=rv_by_ticker.get(ticker)
-                )
-        except Exception:
-            # Unexpected exception: no marker stamped → later in-window slot retries.
-            logger.warning("options telemetry failed for %s", ticker, exc_info=True)
-            per_ticker[ticker] = _null_values()
+            per_ticker[ticker] = _ticker_values(
+                ticker, fetch, asof=asof, now=now, rv20=rv_by_ticker.get(ticker)
+            )
 
     for col in _FLOAT_COLUMNS:
         out[col] = pd.Series(
