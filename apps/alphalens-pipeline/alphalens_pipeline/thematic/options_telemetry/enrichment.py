@@ -154,18 +154,18 @@ def _atm_metrics(
     quote = f.atm_quote(calls, puts, spot)
     if quote is None:
         return None, None, None, None, None
-    strike, mid, spread_pct = quote
-    values["options_atm_strike"] = strike
+    atm_strike, mid, spread_pct = quote
+    values["options_atm_strike"] = atm_strike
     values["options_atm_mid"] = mid
     values["options_spread_pct_atm"] = spread_pct
-    call_row = calls[calls["strike"] == strike]
-    put_row = puts[puts["strike"] == strike]
+    call_row = calls[calls["strike"] == atm_strike]
+    put_row = puts[puts["strike"] == atm_strike]
     atm_call_oi = None if call_row.empty else _num_or_zero(call_row.iloc[0].get("openInterest"))
     atm_put_oi = None if put_row.empty else _num_or_zero(put_row.iloc[0].get("openInterest"))
     atm_vol_total = (0.0 if call_row.empty else _num_or_zero(call_row.iloc[0].get("volume"))) + (
         0.0 if put_row.empty else _num_or_zero(put_row.iloc[0].get("volume"))
     )
-    return strike, spread_pct, atm_call_oi, atm_put_oi, atm_vol_total
+    return atm_strike, spread_pct, atm_call_oi, atm_put_oi, atm_vol_total
 
 
 def _compute_values(
