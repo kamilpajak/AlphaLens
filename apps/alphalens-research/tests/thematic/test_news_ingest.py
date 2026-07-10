@@ -376,13 +376,26 @@ class TestForceThreadedToSources(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             with (
                 p_edgar as m_edgar,
-                p_polygon,
-                p_gdelt,
-                p_rss,
-                p_perplexity,
+                p_polygon as m_polygon,
+                p_gdelt as m_gdelt,
+                p_rss as m_rss,
+                p_perplexity as m_perplexity,
+                mock.patch.dict("os.environ", {"ALPHALENS_PERPLEXITY_SOURCE": "1"}),
             ):
                 news_ingest.ingest_daily(date=dt.date(2026, 5, 15), cache_dir=Path(tmpdir))
-            self.assertIs(m_edgar.call_args.kwargs.get("force"), False)
+            for name, m in (
+                ("edgar_press_release", m_edgar),
+                ("polygon", m_polygon),
+                ("gdelt", m_gdelt),
+                ("rss", m_rss),
+                ("perplexity", m_perplexity),
+            ):
+                self.assertTrue(m.called, f"{name} source fetcher was not called")
+                self.assertIs(
+                    m.call_args.kwargs.get("force"),
+                    False,
+                    f"{name} source fetcher was not called with force=False",
+                )
 
 
 class TestTier1LexicalClustering(unittest.TestCase):
