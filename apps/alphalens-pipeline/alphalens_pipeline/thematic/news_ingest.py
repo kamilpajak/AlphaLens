@@ -79,32 +79,37 @@ _SOURCE_QUOTA_WEIGHTS = {
 }
 
 
-def _fetch_edgar_press_release(*, date: dt.date) -> pd.DataFrame:
+# Every source fetcher forwards ``force`` so ``ingest --force`` busts the
+# source's OWN per-day read-through cache, not just the aggregator
+# ``{date}.parquet``. Without this the 6x/day cadence (all ticks share the
+# yesterday-UTC asof) short-circuits every source cache after the first tick, so
+# late-arriving items for that asof never re-fetch (#336).
+def _fetch_edgar_press_release(*, date: dt.date, force: bool = False) -> pd.DataFrame:
     # SecEdgarClient handles UA + 10 req/s throttle + retry via the canonical
     # client; the adapter discovers 8-Ks through the SEC daily index.
-    return edgar_press_release.fetch_daily_news(date=date)
+    return edgar_press_release.fetch_daily_news(date=date, force=force)
 
 
-def _fetch_polygon(*, date: dt.date) -> pd.DataFrame:
+def _fetch_polygon(*, date: dt.date, force: bool = False) -> pd.DataFrame:
     # PolygonClient reads POLYGON_API_KEY via get_default_polygon_client();
     # rate-limit + Bearer auth + retry are owned by the canonical client.
-    return polygon_news.fetch_daily_news(date=date)
+    return polygon_news.fetch_daily_news(date=date, force=force)
 
 
-def _fetch_gdelt(*, date: dt.date) -> pd.DataFrame:
-    return gdelt.fetch_daily_news(date=date)
+def _fetch_gdelt(*, date: dt.date, force: bool = False) -> pd.DataFrame:
+    return gdelt.fetch_daily_news(date=date, force=force)
 
 
-def _fetch_rss(*, date: dt.date) -> pd.DataFrame:
-    return rss.fetch_daily_news(date=date)
+def _fetch_rss(*, date: dt.date, force: bool = False) -> pd.DataFrame:
+    return rss.fetch_daily_news(date=date, force=force)
 
 
-def _fetch_perplexity(*, date: dt.date) -> pd.DataFrame:
+def _fetch_perplexity(*, date: dt.date, force: bool = False) -> pd.DataFrame:
     # Flag-gated: off by default so production is unchanged. When off, the
     # client is never constructed. Routed through the canonical PerplexityClient.
     if os.environ.get("ALPHALENS_PERPLEXITY_SOURCE") != "1":
         return empty_news_frame()
-    return perplexity.fetch_daily_news(date=date)
+    return perplexity.fetch_daily_news(date=date, force=force)
 
 
 def _safe_call(name: str, fn, **kwargs) -> pd.DataFrame:
@@ -420,11 +425,11 @@ def ingest_daily(
     # from the environment directly. Passing it explicitly is now a no-op
     # — kept so older callers don't blow up at the kwarg boundary.
     del polygon_api_key
-    edgar_df = _safe_call("edgar_press_release", _fetch_edgar_press_release, date=date)
-    polygon_df = _safe_call("polygon", _fetch_polygon, date=date)
-    gdelt_df = _safe_call("gdelt", _fetch_gdelt, date=date)
-    rss_df = _safe_call("rss", _fetch_rss, date=date)
-    perplexity_df = _safe_call("perplexity", _fetch_perplexity, date=date)
+    edgar_df = _safe_call("edgar_press_release", _fetch_edgar_press_release, date=date, force=force)
+    polygon_df = _safe_call("polygon", _fetch_polygon, date=date, force=force)
+    gdelt_df = _safe_call("gdelt", _fetch_gdelt, date=date, force=force)
+    rss_df = _safe_call("rss", _fetch_rss, date=date, force=force)
+    perplexity_df = _safe_call("perplexity", _fetch_perplexity, date=date, force=force)
 
     if source_row_counts is not None:
         # RAW, pre-dedup, unconditional (0 on a swallowed 403 IS the #384 signal).
