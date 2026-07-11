@@ -43,11 +43,16 @@ NOT reimplement scoring — it reuses the frozen scorer via
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections.abc import Iterable, Mapping
 from typing import Any, cast
 
+# NOTE: this module depends on several PRIVATE scorer helpers below. That
+# contract is pinned by tests/golden/test_fabrication_triage.py
+# ::TestScorerHelperContract, which fails loudly in CI if any is renamed/dropped
+# (kept private rather than promoted to public API per extract-on-2nd-use).
 from alphalens_research.eval.faithfulness import (
     _ATOM_UNIT_TO_FACT_KINDS,
     _DIRECTIONAL_FACT_KEYS,
@@ -103,6 +108,8 @@ _TITLE_KEY = "source_event_title"
 # Digit-run matcher: the significant-digit string of a numeric span, used for the
 # title membership test after normalizing away $, commas and %.
 _DIGITS_RE = re.compile(r"\d[\d.]*")
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +448,11 @@ def build_audit_worksheet(
             staged[bucket],
             key=lambda r: (r["bucket"], r["ticker"], r["brief_date"], r["field"], r["span"]),
         )
+        dropped = len(rows_for_bucket) - min(len(rows_for_bucket), per_bucket)
+        if dropped:
+            # Surface the cap so the worksheet is never mistaken for the full
+            # ambiguous population (no silent truncation).
+            _LOGGER.debug("worksheet bucket %s: kept %d, dropped %d", bucket, per_bucket, dropped)
         records.extend(rows_for_bucket[:per_bucket])
     return records
 
