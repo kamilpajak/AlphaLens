@@ -481,8 +481,9 @@ _DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
 # Label tokens where a glued integer is a STRUCTURAL REFERENCE, not a claimed
 # quantitative value (memo §6.2 "score only checkable atoms"). Regexes match the
 # whole label so its digits are masked out before atom extraction:
-#   MA200 / MA50, 52w / 52-week, 200-day, S-1, 10-K / 8-K, 180 days / 180d,
-#   "N weeks/months/days" durations, "1st/2nd/3rd" ordinals, "N)" list markers.
+#   MA200 / MA50, 52w / 52-week, 200-day, S-1, 10-K / 8-K, EX-99.1 exhibit refs,
+#   180 days / 180d, "N weeks/months/days" durations, "1st/2nd/3rd" ordinals,
+#   "N)" list markers.
 # These are world-knowledge / boilerplate labels; the CHECKABLE data atoms the
 # gate scores are the percentages ($, %, x, and bare ratios like P/S 4052.9).
 _LABEL_MASK_RES: tuple[re.Pattern, ...] = (
@@ -494,6 +495,10 @@ _LABEL_MASK_RES: tuple[re.Pattern, ...] = (
     re.compile(r"\b\d+d\b", re.IGNORECASE),  # 180d
     re.compile(r"\bS-\d+\b", re.IGNORECASE),  # Form S-1
     re.compile(r"\b\d+-[KQ]\b", re.IGNORECASE),  # 10-K, 8-K, 10-Q
+    # SEC exhibit label "EX-99.1" / "EX-10.1" — the "-99.1" is NOT a number.
+    # No leading \b (a preceding CJK char is a word char, so \b would miss the
+    # Chinese-brief case); a lookbehind blocks matching inside a word (REX-99).
+    re.compile(r"(?<![A-Za-z])EX-\d+(?:\.\d+)?", re.IGNORECASE),  # EX-99.1, EX-10.1
     re.compile(r"\b\d+(?:st|nd|rd|th)\b", re.IGNORECASE),  # 1st percentile, 200th
     re.compile(r"(?<!\d)\d\)"),  # "1)" "2)" list markers
 )

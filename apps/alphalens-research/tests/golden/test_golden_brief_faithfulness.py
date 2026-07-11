@@ -436,6 +436,23 @@ class TestReviewHardening(unittest.TestCase):
         )
         self.assertEqual(result.fabricated_numeric_date_atoms, 0)
 
+    def test_ex_exhibit_label_is_not_a_fabricated_number(self):
+        # "EX-99.1" is the SEC 8-K exhibit label (a structural document
+        # reference), NOT a quantitative claim; the "-99.1" must be masked, not
+        # extracted as a fabricated number. Surfaced by the corpus measurement
+        # where "EX-99.1" recurred as a false FABRICATED across many tickers.
+        result = score_brief(
+            {"market_cap": 5e8},
+            {"supply_chain_reasoning": "The catalyst is the recent EX-99.1 filing for the deal."},
+        )
+        numeric = [a for a in result.atoms if a.kind == "numeric"]
+        self.assertEqual(
+            numeric,
+            [],
+            f"EX-99.1 mis-extracted as a number: {[(a.span, a.verdict) for a in numeric]}",
+        )
+        self.assertEqual(result.fabricated_numeric_date_atoms, 0)
+
     def test_integer_only_metric_is_not_gated_known_gap(self):
         # DOCUMENTED v1 LIMITATION (memo §6.2 / §10): a fabricated integer-valued
         # metric with no unit or decimal (e.g. "RSI 99") is a structural
