@@ -71,7 +71,7 @@ class TestFactIndexFromBriefRow(unittest.TestCase):
         row = {
             "market_cap": float("nan"),
             "valuation_ps": None,
-            "valuation_pe": 24.0,
+            "valuation_ev_rev": 24.0,
             "fcff_yield_pct": float("nan"),
             "technical_rsi": 53.0,
         }
@@ -79,7 +79,7 @@ class TestFactIndexFromBriefRow(unittest.TestCase):
         self.assertNotIn("market_cap", index)
         self.assertNotIn("valuation_ps", index)
         self.assertNotIn("fcff_yield_pct", index)
-        self.assertEqual(index["valuation_pe"], 24.0)
+        self.assertEqual(index["valuation_ev_rev"], 24.0)
         self.assertEqual(index["technical_rsi"], 53.0)
 
     def test_unmapped_columns_are_ignored(self) -> None:
@@ -96,6 +96,17 @@ class TestFactIndexFromBriefRow(unittest.TestCase):
         }
         index = fact_index_from_brief_row(row)
         self.assertEqual(index, {"valuation_ps": 7.5})
+
+    def test_non_injected_valuation_pe_ev_ebitda_not_mapped(self) -> None:
+        # valuation_pe / valuation_ev_ebitda are NOT rendered into <facts>
+        # (prompts.py valuation line has only P/S, EV/Rev, FCF margin, composite
+        # sector pctile). Mapping them would ground a P/E the LLM never saw — a
+        # false GROUNDED that under-counts fabrications. Pin that they stay
+        # unmapped so a brief citing them reads as fabricated.
+        self.assertNotIn("valuation_pe", _COLUMN_TO_FACT_KEY)
+        self.assertNotIn("valuation_ev_ebitda", _COLUMN_TO_FACT_KEY)
+        index = fact_index_from_brief_row({"valuation_pe": 24.0, "valuation_ev_ebitda": 18.0})
+        self.assertEqual(index, {})
 
     def test_text_grounding_columns_are_carried(self) -> None:
         row = {

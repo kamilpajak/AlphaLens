@@ -68,10 +68,13 @@ from alphalens_research.eval.faithfulness import (
 # dual-emit grounds both and the unit-aware matcher keeps them from cross-matching.
 _COLUMN_TO_FACT_KEY: dict[str, str] = {
     "market_cap": "market_cap",
-    "valuation_pe": "valuation_pe",
+    # valuation_pe + valuation_ev_ebitda are NOT mapped: the valuation line in
+    # prompts.py::_format_facts_block injects only P/S, EV/Rev, FCF margin and the
+    # composite sector percentile -- NOT P/E or EV/EBITDA. Mapping them would let
+    # the scorer ground a P/E the LLM was never given (a false GROUNDED that
+    # under-counts fabrications), violating the injected-only guard.
     "valuation_ps": "valuation_ps",
     "valuation_ev_rev": "valuation_ev_rev",
-    "valuation_ev_ebitda": "valuation_ev_ebitda",
     # --- fraction, kept as a ratio fact; a %-scaled copy is dual-emitted below ---
     "valuation_fcf_margin": "valuation_fcf_margin",
     "fcff_yield_pct": "fcff_yield_pct",
