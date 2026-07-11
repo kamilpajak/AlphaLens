@@ -118,14 +118,17 @@ _ACADEMIC_REFUSAL_RES: tuple[re.Pattern, ...] = (
     # "lacks/absent/insufficient/fails to ... [support] to signal a bargain" — a
     # compliant refusal where the bargain/cheap label is the OBJECT the lack-lexeme
     # denies. BOUND to the bargain lexeme (not a widened shared negation cue), and
-    # the gap must NOT contain a finite CAUSAL/COPULA verb (makes/make/look/looks/
-    # is/are/trades/appears/seems/remains) — those turn "cheap" into an affirmative
-    # predicate, so "insufficient growth makes it look cheap" still FIRES while
+    # the gap must NOT contain a finite CAUSAL/COPULA verb (make/makes/making,
+    # render(ing), leave(s)/leaving, keep(s)/keeping, look(s/ing), is/are/was/were,
+    # trades/appears/seems/remains) — those turn "cheap" into an affirmative
+    # predicate, so "insufficient growth makes/making it cheap" still FIRES while
     # "lacks fundamental support to signal a bargain" is suppressed. The gap window
-    # excludes those verbs as whole words via a tempered negative lookahead.
+    # (bounded to 60 chars so a slightly longer real refusal still matches) excludes
+    # those verbs as whole words via a tempered negative lookahead.
     re.compile(
         r"\b(?:lack(?:s|ing|ed)?|absent|insufficient|fail(?:s|ing|ed)?\s+to)\b"
-        r"(?:(?!\b(?:makes?|look(?:s|ing)?|is|are|was|were|trades?|appears?|seems?|remains?)\b)[^.;]){0,40}?"
+        r"(?:(?!\b(?:mak(?:es?|ing)|render(?:s|ing)?|leav(?:es?|ing)|keep(?:s|ing)?"
+        r"|look(?:s|ing)?|is|are|was|were|trades?|appears?|seems?|remains?)\b)[^.;]){0,60}?"
         r"\b(?:bargain|cheap|on sale|promotion)\b",
         re.IGNORECASE,
     ),

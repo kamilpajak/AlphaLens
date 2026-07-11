@@ -59,7 +59,6 @@ from alphalens_research.eval.fabrication_triage import _coerce_rows, _sentence_w
 # loudly in CI if any is renamed/dropped (kept private rather than promoted to
 # public API per extract-on-2nd-use).
 from alphalens_research.eval.faithfulness import (
-    _NEGATION_CUE_RES,  # noqa: F401 — reused via _is_negated; pinned by the helper contract
     FAITHFULNESS_SCORER_VERSION,
     _clause_before,
     _is_negated,
@@ -69,8 +68,6 @@ from alphalens_research.eval.measurement import (
     _rate_block,
     _year_month_of_row,
     fact_index_from_brief_row,
-    score_row,  # noqa: F401 — reused/pinned by the helper contract (row iteration parity)
-    wilson_interval,  # noqa: F401 — reused via _rate_block; pinned by the helper contract
 )
 
 # --- Poolability key (memo §9) -----------------------------------------------

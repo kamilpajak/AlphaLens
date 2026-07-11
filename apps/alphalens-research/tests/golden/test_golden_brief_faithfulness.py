@@ -419,6 +419,27 @@ class TestLacksBargainNegationPatch(unittest.TestCase):
         )
         self.assertEqual(result.characterization_violations, 1)
 
+    def test_gerund_making_it_cheap_still_fires(self):
+        # zen HIGH: the exclusion list must cover gerund forms too. "making the
+        # stock cheap" is an AFFIRMATIVE cheapness predicate; without 'making' in
+        # the tempered lookahead the lack->cheap pattern would wrongly suppress it.
+        result = score_brief(
+            {},
+            {"tldr": "insufficient earnings, making the stock cheap versus peers"},
+        )
+        self.assertEqual(result.characterization_violations, 1)
+
+    def test_longer_refusal_clause_still_suppressed(self):
+        # zen MEDIUM: a slightly longer but genuine refusal ("lacks any
+        # fundamental support to signal a bargain purchase") must still be
+        # suppressed — the gap window must not be so tight it fires on real
+        # refusals.
+        result = score_brief(
+            {},
+            {"bear_summary": "the stock lacks any fundamental support to signal a bargain here"},
+        )
+        self.assertEqual(result.characterization_violations, 0)
+
 
 class TestReviewHardening(unittest.TestCase):
     """Regressions from the zen pre-merge review: spaced M/K/B magnitude, the
