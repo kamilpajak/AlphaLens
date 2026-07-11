@@ -193,6 +193,9 @@ def fact_index_from_brief_row(row: Mapping[str, Any]) -> dict:
             index[key] = str(value)
         else:
             index[key] = value
+            # Dual-emit ONLY fraction columns (guarded by the explicit map):
+            # never add a non-fraction column to _FRACTION_TO_PERCENT_DUAL_KEY or
+            # its value would be spuriously x100-ed into a bogus percent fact.
             pct_key = _FRACTION_TO_PERCENT_DUAL_KEY.get(column)
             if pct_key is not None:
                 index[pct_key] = float(value) * _FRACTION_TO_PERCENT_SCALE
@@ -284,11 +287,11 @@ def _rate_block(k: int, n: int) -> dict:
     }
 
 
-def _stratum_rates(results: list[tuple[FaithfulnessResult, str]]) -> dict:
-    """any_fabricated / any_violation rate blocks for a list of (result, _) pairs."""
+def _stratum_rates(results: list[FaithfulnessResult]) -> dict:
+    """any_fabricated / any_violation rate blocks for a list of results."""
     n = len(results)
-    k_fab = sum(1 for r, _ in results if r.fabricated_numeric_date_atoms >= 1)
-    k_vio = sum(1 for r, _ in results if r.characterization_violations >= 1)
+    k_fab = sum(1 for r in results if r.fabricated_numeric_date_atoms >= 1)
+    k_vio = sum(1 for r in results if r.characterization_violations >= 1)
     return {
         "any_fabricated": _rate_block(k_fab, n),
         "any_violation": _rate_block(k_vio, n),
@@ -396,19 +399,19 @@ def measure_corpus(
     # --- per-stratum rates (by requested keys + always year-month) ---
     per_stratum: dict[str, dict] = {}
     for key in strata_keys:
-        buckets: dict[str, list[tuple[FaithfulnessResult, str]]] = {}
+        buckets: dict[str, list[FaithfulnessResult]] = {}
         for result, row in scored:
             raw = row.get(key)
             label = "unknown" if _is_missing(raw) else str(raw)
-            buckets.setdefault(label, []).append((result, label))
-        per_stratum[key] = {label: _stratum_rates(pairs) for label, pairs in buckets.items()}
+            buckets.setdefault(label, []).append(result)
+        per_stratum[key] = {label: _stratum_rates(results) for label, results in buckets.items()}
 
-    ym_buckets: dict[str, list[tuple[FaithfulnessResult, str]]] = {}
+    ym_buckets: dict[str, list[FaithfulnessResult]] = {}
     for result, row in scored:
         label = _year_month_of_row(row)
-        ym_buckets.setdefault(label, []).append((result, label))
+        ym_buckets.setdefault(label, []).append(result)
     per_stratum["year_month"] = {
-        label: _stratum_rates(pairs) for label, pairs in ym_buckets.items()
+        label: _stratum_rates(results) for label, results in ym_buckets.items()
     }
 
     return {
