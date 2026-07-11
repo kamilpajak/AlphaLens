@@ -213,7 +213,11 @@ class FaithfulnessResult:
 
     @property
     def characterization_violations(self) -> int:
-        return sum(1 for a in self.atoms if a.gating and a.kind == "characterization")
+        # Tie the count to the verdict (not just gating+kind) so a future
+        # non-VIOLATION characterization atom cannot inflate the gate.
+        return sum(
+            1 for a in self.atoms if a.kind == "characterization" and a.verdict == "VIOLATION"
+        )
 
     # --- SECONDARY (measurement / diagnostic) ---
     @property
@@ -232,6 +236,11 @@ class FaithfulnessResult:
 
     @property
     def checkable_atoms(self) -> int:
+        # "Checkable in principle" = everything except OUT_OF_SCOPE prose. This
+        # deliberately INCLUDES DEFERRED (entity/product) atoms, so it can differ
+        # from the groundedness_rate denominator (which uses only resolved
+        # GROUNDED/DISTORTED/FABRICATED). Harmless in v1 (DEFERRED is structurally
+        # 0); revisit the split when Phase-2 starts emitting DEFERRED atoms.
         return sum(1 for a in self.atoms if a.verdict != "OUT_OF_SCOPE")
 
     @property
@@ -379,6 +388,24 @@ def _parse_rendered_facts(contents: str) -> dict:
             if m:
                 index[key] = float(m.group(1))
 
+    # durability (Buffett quant): "ROIC 12.3% (3y avg 11.0%), owner-earnings
+    # yield 4.5%, DCF margin of safety -8.0%" (prompts.py _format_durability_line).
+    # Standard <facts> line when Buffett data resolved — omitted here, a brief
+    # faithfully citing ROIC would false-fire FABRICATED. Keys carry the _pct
+    # suffix so _fact_unit_kind classifies them as % facts. Absent sub-fields
+    # render as "n/a" and simply do not match.
+    dur = _line_after("- durability (Buffett quant):")
+    if dur:
+        for pattern, key in (
+            (r"ROIC\s+([-+]?[\d.]+)\s*%", "buffett_roic_pct"),
+            (r"3y avg\s+([-+]?[\d.]+)\s*%", "buffett_roic_3y_avg_pct"),
+            (r"owner-earnings yield\s+([-+]?[\d.]+)\s*%", "buffett_owner_earnings_yield_pct"),
+            (r"DCF margin of safety\s+([-+]?[\d.]+)\s*%", "buffett_margin_of_safety_pct"),
+        ):
+            m = re.search(pattern, dur)
+            if m:
+                index[key] = float(m.group(1))
+
     # catalyst title + published date (for entity / date grounding)
     for line in body.splitlines():
         stripped = line.strip()
@@ -434,16 +461,19 @@ def parse_facts_index(typed_facts_json: str | dict | None) -> dict:
 # trailing sentence period ("RSI 53. The") is NOT swallowed into "53." as a
 # decimal — it matches the integer "53".
 #
-# The magnitude word (bn|billion|million) is allowed OPTIONAL whitespace before
-# it: briefs write "$7.5 billion" far more often than "$7.5B", so the suffix
-# group must consume a spaced magnitude word or the billion/million is silently
-# dropped (a $-billion claim would then false-ground against an unrelated
-# same-digit ratio fact — memo §6.4 correctness fix).
+# The magnitude word (bn|billion|million|trillion + the bare abbreviations
+# b|m|k) is allowed OPTIONAL whitespace before it: briefs write "$7.5 billion"
+# or "$500 M" far more often than "$7.5B", so the suffix group must consume a
+# spaced magnitude word or the magnitude is silently dropped (a $-magnitude
+# claim would then false-ground against an unrelated same-digit ratio fact —
+# memo §6.4 correctness fix). A trailing \b bounds the bare abbreviations so a
+# following word is not mis-read as a suffix ("53 breakout" → "53", not 53e9;
+# "500 kW" → "500", not 5e5).
 _ATOM_NUM_RE = re.compile(
     r"(?P<dollar>\$)?"
     r"(?P<sign>[-+])?"
     r"(?P<num>\d[\d,]*\.\d+|\d[\d,]*)"
-    r"(?:(?P<glued>%|x|B|M|k)|\s*(?P<word>bn|billion|million|trillion))?",
+    r"(?:(?P<glued>%|x|B|M|k)|\s*(?P<word>bn|billion|million|trillion|b|m|k)\b)?",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")

@@ -393,5 +393,62 @@ class TestNegationFalseNegativeGuard(unittest.TestCase):
         self.assertGreaterEqual(result.characterization_violations, 1)
 
 
+class TestReviewHardening(unittest.TestCase):
+    """Regressions from the zen pre-merge review: spaced M/K/B magnitude, the
+    durability (Buffett quant) facts line, and the documented integer-only gap."""
+
+    def test_spaced_magnitude_m_grounds_dollar_fact(self):
+        # "$500 M" is 5e8 dollars — a spaced 'M' magnitude must be consumed so a
+        # legit market-cap citation grounds instead of false-firing FABRICATED.
+        result = score_brief(
+            {"market_cap": 5e8},
+            {"tldr": "a $500 M market cap after the drop"},
+        )
+        numeric = [a for a in result.atoms if a.kind == "numeric"]
+        self.assertTrue(
+            any(a.verdict == "GROUNDED" and a.matched_fact == "market_cap" for a in numeric),
+            [(a.span, a.extracted_value, a.verdict, a.matched_fact) for a in numeric],
+        )
+        self.assertEqual(result.fabricated_numeric_date_atoms, 0)
+
+    def test_durability_line_facts_are_parsed_and_ground(self):
+        # The durability (Buffett quant) line is part of the standard <facts>
+        # block; a brief that faithfully cites its ROIC must ground, not FABRICATE.
+        contents = (
+            "<facts>\n"
+            "ticker: TEST\n"
+            "company: Test Co\n"
+            "theme: widgets\n"
+            "- durability (Buffett quant): ROIC 12.3% (3y avg 11.0%),"
+            " owner-earnings yield 4.5%, DCF margin of safety -8.0%\n"
+            "</facts>"
+        )
+        facts = parse_facts_index(contents)
+        self.assertAlmostEqual(facts["buffett_roic_pct"], 12.3, places=1)
+        self.assertAlmostEqual(facts["buffett_roic_3y_avg_pct"], 11.0, places=1)
+        self.assertAlmostEqual(facts["buffett_owner_earnings_yield_pct"], 4.5, places=1)
+        self.assertAlmostEqual(facts["buffett_margin_of_safety_pct"], -8.0, places=1)
+        result = score_brief(facts, {"bear_summary": "ROIC 12.3% durability, plus valuation risk"})
+        numeric = [a for a in result.atoms if a.kind == "numeric"]
+        self.assertTrue(
+            any(a.verdict == "GROUNDED" and a.matched_fact == "buffett_roic_pct" for a in numeric),
+            [(a.span, a.verdict, a.matched_fact) for a in numeric],
+        )
+        self.assertEqual(result.fabricated_numeric_date_atoms, 0)
+
+    def test_integer_only_metric_is_not_gated_known_gap(self):
+        # DOCUMENTED v1 LIMITATION (memo §6.2 / §10): a fabricated integer-valued
+        # metric with no unit or decimal (e.g. "RSI 99") is a structural
+        # reference, not a checkable atom, so it is NOT extracted or gated. Pin
+        # the KNOWN gap so a future change that closes it is noticed.
+        result = score_brief(
+            {"technical_rsi": 53.0},
+            {"tldr": "RSI 99 shows extreme momentum"},
+        )
+        numeric = [a for a in result.atoms if a.kind == "numeric"]
+        self.assertEqual(numeric, [], "integer-only metric unexpectedly extracted")
+        self.assertEqual(result.fabricated_numeric_date_atoms, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
