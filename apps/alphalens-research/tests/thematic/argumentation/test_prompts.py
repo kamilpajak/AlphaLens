@@ -179,5 +179,32 @@ class TestFormatGatesPassed(unittest.TestCase):
         )
 
 
+class TestFinancingFabricationBan(unittest.TestCase):
+    """The facts block carries NO financing or shares-outstanding field, yet the
+    bear case has been observed fabricating a "capital raise -> dilution" story
+    by misreading a revenue / buyback / TAM dollar figure as raise proceeds
+    (issue #801: AVAV Q4 revenue, FCN buyback, C3.ai revenue all rendered as
+    dilutive raises). Both prompt templates must carry an explicit ban so the
+    model cannot invent a financing EVENT (not just a number). The T6 numeric
+    faithfulness gate is blind to this prose mechanism by construction, so the
+    guard lives here at the prompt-builder."""
+
+    def test_both_templates_ban_fabricated_financing_events(self):
+        for build in (prompts.build_pro_prompt, prompts.build_flash_prompt):
+            p = build(_sample_facts()).lower()
+            self.assertIn("capital raise", p)
+            self.assertIn("dilution", p)
+            self.assertIn("offering", p)
+            self.assertIn("buyback", p)
+
+    def test_both_templates_forbid_manufacturing_a_risk_to_reach_the_count(self):
+        # The old "MANDATORY >=2 risks (..., etc.)" wording was the pressure that
+        # induced the fabrication. The risk-source list is now closed and the
+        # count is a preference, never a mandate to invent.
+        for build in (prompts.build_pro_prompt, prompts.build_flash_prompt):
+            p = build(_sample_facts()).lower()
+            self.assertIn("never manufacture", p)
+
+
 if __name__ == "__main__":
     unittest.main()
