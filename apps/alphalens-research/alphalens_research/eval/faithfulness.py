@@ -27,9 +27,20 @@ import re
 from dataclasses import dataclass, field
 
 # --- v1 scorer version (poolability key, memo §9) ----------------------------
-# Bump whenever the matcher logic OR the forbidden-characterization lexicon
-# changes; rates are partitioned by this and never pooled across a change.
-FAITHFULNESS_SCORER_VERSION = "t6-v1.1-2026-07-11"
+# Bump whenever the matcher logic OR the forbidden-characterization lexicon OR
+# the corpus fact-index adapter shape changes; rates are partitioned by this and
+# never pooled across a change.
+#   v1.1 -> v1.2: the corpus adapter (measurement.py::_COLUMN_TO_FACT_KEY) now
+#   maps the three sector-percentile columns (valuation_composite /
+#   insider_score / fcff_yield) to ``*_pct`` fact keys. They are rendered into
+#   the <facts> block but were previously unmapped, so a brief citing "NN%"
+#   false-fired FABRICATED. The fact-index SHAPE changed and the reported corpus
+#   rates moved (any-fabricated 0.1246 -> 0.1103, ~10 atoms reclassified
+#   FABRICATED -> DISTORTED), so per memo §9 the rates are not poolable with a
+#   pre-fix report — hence the bump. The GATING cassette path is unaffected
+#   (cassettes carry brief_template_facts_json / rendered <facts>, not raw
+#   columns), so no golden re-record is required.
+FAITHFULNESS_SCORER_VERSION = "t6-v1.2-2026-07-11"
 
 # --- Forbidden-characterization lexicon (memo §6.1 / §6.4) -------------------
 # Derived VERBATIM from prompts.py ~L231-235 (Pro) / ~L260-262 (Flash):
