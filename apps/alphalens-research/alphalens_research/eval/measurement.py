@@ -33,7 +33,7 @@ import glob
 import math
 import os
 from collections.abc import Iterable, Mapping
-from typing import Any
+from typing import Any, cast
 
 from alphalens_research.eval.faithfulness import (
     FAITHFULNESS_SCORER_VERSION,
@@ -340,14 +340,17 @@ def measure_corpus(
           },
         }
     """
-    materialized = list(rows)
-    if materialized and isinstance(materialized[0], str):
-        materialized = _load_rows_from_parquet(materialized)  # type: ignore[arg-type]
+    raw = list(rows)
+    if raw and isinstance(raw[0], str):
+        row_maps: list[Mapping[str, Any]] = cast(
+            "list[Mapping[str, Any]]", _load_rows_from_parquet(cast("list[str]", raw))
+        )
+    else:
+        row_maps = cast("list[Mapping[str, Any]]", raw)
 
     # Score every row once; keep the row alongside for stratification.
     scored: list[tuple[FaithfulnessResult, Mapping[str, Any]]] = [
-        (score_row(row), row)
-        for row in materialized  # type: ignore[arg-type]
+        (score_row(row), row) for row in row_maps
     ]
     n = len(scored)
 
