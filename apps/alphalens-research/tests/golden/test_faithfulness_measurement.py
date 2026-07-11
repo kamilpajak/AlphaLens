@@ -30,6 +30,7 @@ from alphalens_research.eval.faithfulness import (
     _fact_unit_kind,
 )
 from alphalens_research.eval.measurement import (
+    _COLUMN_TO_FACT_KEY,
     brief_fields_from_row,
     fact_index_from_brief_row,
     measure_corpus,
@@ -83,11 +84,15 @@ class TestFactIndexFromBriefRow(unittest.TestCase):
 
     def test_unmapped_columns_are_ignored(self) -> None:
         # A row with extra pipeline columns not in the mapping must not leak.
+        # These are NOT rendered into the <facts> block (options_* are dropped by
+        # Django ingest / never injected; brief_trade_setup is a JSON blob), so a
+        # brief citing them SHOULD read as fabricated — the mapping must not ground
+        # a value the LLM was never given (design memo doctrine guard).
         row = {
             "valuation_ps": 7.5,
-            "fcff_yield_sector_percentile": 39.0,  # NOT mapped
+            "options_iv_atm_pct": 44.0,  # NOT injected into <facts>, NOT mapped
             "brief_trade_setup": "{}",  # NOT mapped
-            "options_iv_atm_pct": 44.0,  # NOT mapped
+            "valuation_financials_age_days": 94.0,  # rendered but atom is masked → NOT mapped
         }
         index = fact_index_from_brief_row(row)
         self.assertEqual(index, {"valuation_ps": 7.5})
@@ -202,6 +207,99 @@ class TestDirectionalSignStrip(unittest.TestCase):
             ),
             f"expected GROUNDED against technical_pct_off_52w_high, got {[(a.span, a.verdict, a.matched_fact) for a in numeric]}",
         )
+
+
+class TestSectorPercentileCoverage(unittest.TestCase):
+    """The three sector-percentile columns are RENDERED into <facts> as
+    "sector percentile NN" (prompts.py::_format_facts_block) and cited by the
+    brief as "NN%". They must map to a key whose _fact_unit_kind is "%" so the
+    0-100 value grounds a "%" atom (was FABRICATED — the adapter coverage gap
+    this task closes). Doctrine guard: only these injected columns are mapped."""
+
+    _PERCENTILE_COLUMNS = (
+        "valuation_composite_sector_percentile",
+        "insider_score_sector_percentile",
+        "fcff_yield_sector_percentile",
+    )
+
+    def test_percentile_keys_are_percent_facts(self) -> None:
+        # Each mapped key must classify as a "%" fact so a "NN%" atom can match.
+        for column in self._PERCENTILE_COLUMNS:
+            key = _COLUMN_TO_FACT_KEY[column]
+            self.assertEqual(
+                _fact_unit_kind(key),
+                "%",
+                f"{column} -> {key} must be a % fact so a 'NN%' citation grounds",
+            )
+
+    def test_percentile_columns_land_in_fact_index(self) -> None:
+        row = {
+            "valuation_composite_sector_percentile": 82.0,
+            "insider_score_sector_percentile": 94.0,
+            "fcff_yield_sector_percentile": 39.0,
+        }
+        index = fact_index_from_brief_row(row)
+        for column in self._PERCENTILE_COLUMNS:
+            key = _COLUMN_TO_FACT_KEY[column]
+            self.assertIn(key, index)
+            self.assertEqual(index[key], row[column])
+
+    def test_composite_percentile_citation_grounds(self) -> None:
+        from alphalens_research.eval.measurement import score_row
+
+        # The exact triage scenario: "valuation composite percentile at 82%".
+        row = {
+            "ticker": "AB",
+            "valuation_composite_sector_percentile": 82.05,
+            "brief_supply_chain_md": "valuation composite percentile at 82%, mid-pack.",
+        }
+        result = score_row(row)
+        self.assertEqual(result.fabricated_numeric_date_atoms, 0)
+        numeric = [a for a in result.atoms if a.kind == "numeric"]
+        self.assertTrue(
+            any(
+                a.verdict == "GROUNDED"
+                and a.matched_fact == _COLUMN_TO_FACT_KEY["valuation_composite_sector_percentile"]
+                for a in numeric
+            ),
+            f"expected GROUNDED against the composite-percentile key, got "
+            f"{[(a.span, a.verdict, a.matched_fact) for a in numeric]}",
+        )
+
+    def test_insider_percentile_citation_grounds(self) -> None:
+        from alphalens_research.eval.measurement import score_row
+
+        row = {
+            "ticker": "BL",
+            "insider_score_sector_percentile": 94.34,
+            "brief_bear_summary_md": "insider buying sits at the 94% sector percentile.",
+        }
+        result = score_row(row)
+        self.assertEqual(result.fabricated_numeric_date_atoms, 0)
+
+    def test_fcff_percentile_citation_grounds(self) -> None:
+        from alphalens_research.eval.measurement import score_row
+
+        row = {
+            "ticker": "XX",
+            "fcff_yield_sector_percentile": 39.0,
+            "brief_supply_chain_md": "FCFF yield sits at the 39% sector percentile.",
+        }
+        result = score_row(row)
+        self.assertEqual(result.fabricated_numeric_date_atoms, 0)
+
+    def test_percentile_does_not_cross_ground_a_wrong_value(self) -> None:
+        from alphalens_research.eval.measurement import score_row
+
+        # A % atom that is nowhere near the stored percentile still fabricates —
+        # the mapping must not silently ground an unrelated number.
+        row = {
+            "ticker": "ZZ",
+            "valuation_composite_sector_percentile": 12.0,
+            "brief_supply_chain_md": "an out-of-facts 88% figure appears here.",
+        }
+        result = score_row(row)
+        self.assertEqual(result.fabricated_numeric_date_atoms, 1)
 
 
 class TestBriefFieldsFromRow(unittest.TestCase):

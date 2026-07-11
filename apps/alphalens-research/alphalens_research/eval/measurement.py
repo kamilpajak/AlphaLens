@@ -16,9 +16,13 @@ persists ``brief_template_facts_json`` as NULL on ~14/15 rows (the rendered
 ``<facts>`` string is not stored), so :func:`fact_index_from_brief_row` builds the
 normalized fact index directly from the typed row COLUMNS via an explicit column
 -> fact-index-key mapping (:data:`_COLUMN_TO_FACT_KEY`), applying the two ROIC
-renames (``buffett_roic_latest`` -> ``buffett_roic_pct`` etc.) so
-:func:`~alphalens_research.eval.faithfulness._fact_unit_kind` classifies them as
-``%`` facts (the values ARE percentages).
+renames (``buffett_roic_latest`` -> ``buffett_roic_pct`` etc.) AND the three
+sector-percentile renames (``valuation_composite_sector_percentile`` ->
+``*_pct`` etc.) so :func:`~alphalens_research.eval.faithfulness._fact_unit_kind`
+classifies them as ``%`` facts (``_fact_unit_kind`` keys on the substring
+``pct``, NOT ``percentile``; the values ARE 0-100 percentiles cited as ``NN%``).
+Only columns actually rendered into the ``<facts>`` block are mapped — mapping a
+non-injected column would silently ground a value the LLM never saw.
 
 **Doctrine (memo §2, §9): telemetry only.** This module imports NOTHING from any
 outcome/return ledger, touches NO selection/ordering surface, and performs NO
@@ -72,6 +76,19 @@ _COLUMN_TO_FACT_KEY: dict[str, str] = {
     "valuation_fcf_margin": "valuation_fcf_margin",
     "fcff_yield_pct": "fcff_yield_pct",
     "insider_score_usd": "insider_score_usd",
+    # --- sector-percentile columns: RENDERED into <facts> as "sector percentile
+    # NN" (prompts.py::_format_facts_block, lines ~177/179/184) and cited by the
+    # brief as "NN%". The value is a 0-100 percentile. _fact_unit_kind keys on the
+    # substring "pct" (NOT "percentile"), so the column names are RENAMED to a
+    # ``*_pct`` key: without the rename _fact_unit_kind classifies them as bare
+    # ratios and a brief citing "82%" false-fires FABRICATED (the adapter coverage
+    # gap the fabrication triage surfaced as ungrounded_other). Only these three
+    # are injected into <facts>; no other percentile column is rendered, so none
+    # else is mapped (mapping a non-injected column would silently ground a real
+    # hallucination — design memo doctrine guard).
+    "valuation_composite_sector_percentile": "valuation_composite_sector_percentile_pct",
+    "insider_score_sector_percentile": "insider_score_sector_percentile_pct",
+    "fcff_yield_sector_percentile": "fcff_yield_sector_percentile_pct",
     "technical_rsi": "technical_rsi",
     "technical_ma50_distance_pct": "technical_ma50_distance_pct",
     "technical_atr_pct": "technical_atr_pct",
