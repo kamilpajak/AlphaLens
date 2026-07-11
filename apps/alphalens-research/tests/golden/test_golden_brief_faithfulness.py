@@ -393,6 +393,54 @@ class TestNegationFalseNegativeGuard(unittest.TestCase):
         self.assertGreaterEqual(result.characterization_violations, 1)
 
 
+class TestLacksBargainNegationPatch(unittest.TestCase):
+    """T6 negation patch (t6-v1.3): a "lacks ... to signal a bargain" academic
+    refusal must be suppressed WITHOUT widening the shared negation window."""
+
+    def test_negated_bargain_lacks_construction_not_flagged(self):
+        # The T6 false-positive: "lacks fundamental support to signal a bargain"
+        # is a compliant academic refusal (the bargain label is NOT warranted).
+        # 'lacks' is not a shared negation cue, so the fix is a TARGETED
+        # academic-refusal pattern binding the lack-lexeme to the bargain lexeme.
+        result = score_brief(
+            {},
+            {"bear_summary": "the stock lacks fundamental support to signal a bargain"},
+        )
+        self.assertEqual(result.characterization_violations, 0)
+
+    def test_lacks_does_not_over_suppress_real_cheap_violation(self):
+        # Proves the targeted-pattern approach did NOT widen the shared negation
+        # window: 'insufficient' near an AFFIRMATIVE 'cheap' (comma-separated, no
+        # bargain/cheap binding) must STILL fire. Adding 'insufficient' to the
+        # shared _NEGATION_CUES would wrongly suppress this real violation.
+        result = score_brief(
+            {},
+            {"tldr": "insufficient growth makes it look cheap"},
+        )
+        self.assertEqual(result.characterization_violations, 1)
+
+    def test_gerund_making_it_cheap_still_fires(self):
+        # zen HIGH: the exclusion list must cover gerund forms too. "making the
+        # stock cheap" is an AFFIRMATIVE cheapness predicate; without 'making' in
+        # the tempered lookahead the lack->cheap pattern would wrongly suppress it.
+        result = score_brief(
+            {},
+            {"tldr": "insufficient earnings, making the stock cheap versus peers"},
+        )
+        self.assertEqual(result.characterization_violations, 1)
+
+    def test_longer_refusal_clause_still_suppressed(self):
+        # zen MEDIUM: a slightly longer but genuine refusal ("lacks any
+        # fundamental support to signal a bargain purchase") must still be
+        # suppressed — the gap window must not be so tight it fires on real
+        # refusals.
+        result = score_brief(
+            {},
+            {"bear_summary": "the stock lacks any fundamental support to signal a bargain here"},
+        )
+        self.assertEqual(result.characterization_violations, 0)
+
+
 class TestReviewHardening(unittest.TestCase):
     """Regressions from the zen pre-merge review: spaced M/K/B magnitude, the
     durability (Buffett quant) facts line, and the documented integer-only gap."""

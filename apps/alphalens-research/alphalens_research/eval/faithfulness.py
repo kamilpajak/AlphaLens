@@ -40,7 +40,18 @@ from dataclasses import dataclass, field
 #   pre-fix report — hence the bump. The GATING cassette path is unaffected
 #   (cassettes carry brief_template_facts_json / rendered <facts>, not raw
 #   columns), so no golden re-record is required.
-FAITHFULNESS_SCORER_VERSION = "t6-v1.2-2026-07-11"
+#   v1.2 -> v1.3: added ONE targeted academic-refusal pattern binding a
+#   lack-lexeme (lacks/absent/insufficient/fails to) to the bargain/cheap lexeme
+#   so "the stock lacks fundamental support to signal a bargain" no longer
+#   false-fires a characterization VIOLATION. Done as a BOUND pattern (not by
+#   widening the shared _NEGATION_CUES) — a comma is not a clause boundary, so a
+#   shared 'insufficient'/'lacks' cue would wrongly suppress a real affirmative
+#   'cheap'/'on sale' violation in "insufficient growth makes it cheap". The
+#   characterization matcher PATH changed → poolability bump. No golden re-record
+#   needed: no cassette OUTPUT carries an affirmative cheap/on-sale/bargain/
+#   promotion, and the "lacks"/"fails to" cassette occurrences precede no
+#   forbidden phrase, so the new pattern flips nothing on the golden set.
+FAITHFULNESS_SCORER_VERSION = "t6-v1.3-2026-07-11"
 
 # --- Forbidden-characterization lexicon (memo §6.1 / §6.4) -------------------
 # Derived VERBATIM from prompts.py ~L231-235 (Pro) / ~L260-262 (Flash):
@@ -104,6 +115,23 @@ _ACADEMIC_REFUSAL_RES: tuple[re.Pattern, ...] = (
     re.compile(r"(?:does\s+not|doesn't|do\s+not|don't)\s+corroborat", re.IGNORECASE),
     re.compile(r"\b(?:bargain|cheap|on sale|promotion)\b[^.;]{0,40}?requires?\b", re.IGNORECASE),
     re.compile(r"\brequires?\b[^.;]{0,40}?corroborat", re.IGNORECASE),
+    # "lacks/absent/insufficient/fails to ... [support] to signal a bargain" — a
+    # compliant refusal where the bargain/cheap label is the OBJECT the lack-lexeme
+    # denies. BOUND to the bargain lexeme (not a widened shared negation cue), and
+    # the gap must NOT contain a finite CAUSAL/COPULA verb (make/makes/making,
+    # render(ing), leave(s)/leaving, keep(s)/keeping, look(s/ing), is/are/was/were,
+    # trades/appears/seems/remains) — those turn "cheap" into an affirmative
+    # predicate, so "insufficient growth makes/making it cheap" still FIRES while
+    # "lacks fundamental support to signal a bargain" is suppressed. The gap window
+    # (bounded to 60 chars so a slightly longer real refusal still matches) excludes
+    # those verbs as whole words via a tempered negative lookahead.
+    re.compile(
+        r"\b(?:lack(?:s|ing|ed)?|absent|insufficient|fail(?:s|ing|ed)?\s+to)\b"
+        r"(?:(?!\b(?:mak(?:es?|ing)|render(?:s|ing)?|leav(?:es?|ing)|keep(?:s|ing)?"
+        r"|look(?:s|ing)?|is|are|was|were|trades?|appears?|seems?|remains?)\b)[^.;]){0,60}?"
+        r"\b(?:bargain|cheap|on sale|promotion)\b",
+        re.IGNORECASE,
+    ),
 )
 
 # Clause boundary characters — the negation window is the clause CONTAINING the
