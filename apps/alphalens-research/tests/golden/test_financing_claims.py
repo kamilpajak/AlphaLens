@@ -110,6 +110,27 @@ class TestFinancingGuards(unittest.TestCase):
             [(f.matched_phrase, f.suppressed_by) for f in flags],
         )
 
+    def test_mixed_clause_business_context_plus_real_raise_still_fires(self) -> None:
+        # zen HIGH: the business-context guard must bind to the SPECIFIC token, not
+        # the whole clause — a genuine fabrication sharing a clause with a
+        # business-model phrase must still fire (else a real raise is silenced).
+        row = {
+            "ticker": "MIX",
+            "brief_supply_chain_md": (
+                "Burford provides capital in exchange for judgment proceeds and "
+                "will raise capital via a dilutive secondary offering"
+            ),
+        }
+        fired = _fired(row)
+        # The genuine raise fires despite the business-model 'judgment proceeds'
+        # phrase in the same clause (the recovery 'proceeds' token is the same
+        # DILUTIVE subtype, so it collapses behind the fired raise — the point is
+        # that a real fabrication is NOT silenced).
+        self.assertTrue(
+            any("raise" in f.matched_phrase or "offering" in f.matched_phrase for f in fired),
+            [f.matched_phrase for f in fired],
+        )
+
     def test_real_raise_with_nearby_capital_word_still_fires(self) -> None:
         # The business-context guard must NOT swallow a genuine raise just because
         # the word 'capital' is present — "raise capital via a secondary offering"

@@ -200,23 +200,19 @@ _HYPOTHETICAL_CUE_RES: tuple[re.Pattern, ...] = tuple(
     )
 )
 
-# Business-model / revenue-context cues (v1.1). A financing TOKEN inside one of
-# these constructions is NOT a corporate financing EVENT of the subject company
-# — it is the firm's revenue model or a third-party funding description. Two
-# families:
-#   1. the subject PROVIDES/lends/deploys capital to others (litigation finance,
-#      BDCs, asset managers) — inverts the 'capital' anchor, so a co-located
-#      Tier-2 'proceeds'/'raise' must not fire (post-deploy over-fire: ticker BUR
-#      "provides capital to plaintiffs ... a portion of judgment proceeds").
-#   2. '<noun> proceeds' where the noun is a recovery/sale, not an offering
-#      (judgment / settlement / litigation / sale / asset / disposal / insurance).
-# A genuine raise ("raise capital via a secondary offering") matches NEITHER.
+# Business-model / revenue-context cues (v1.1). A financing TOKEN that is PART OF
+# one of these '<recovery> proceeds' constructions is not a corporate financing
+# EVENT — it is a recovery / sale / litigation-finance revenue term (post-deploy
+# over-fire: ticker BUR "...in exchange for a portion of judgment proceeds"). The
+# suppression is TOKEN-bound (see `_in_business_context`): only the 'proceeds'
+# token that sits inside the phrase is suppressed, so a genuine raise sharing the
+# clause ("...judgment proceeds and will raise capital via an offering") still
+# fires. Each phrase therefore ENDS in a financing token (the recovery noun +
+# 'proceeds'). NOTE: the sibling over-fire where a Tier-2 token anchors on a
+# provider 'capital' word ("provides capital to clients, raising leverage") is a
+# residual — that is an ANCHOR-level issue (a false-positive, worksheet-caught),
+# tracked for a v1.2 anchor refinement rather than a token-bound suppressor.
 _BUSINESS_CONTEXT_RES: tuple[re.Pattern, ...] = (
-    re.compile(
-        r"\b(?:provid(?:e|es|ed|ing)|lend(?:s|ing)?|lent|deploy(?:s|ed|ing)?"
-        r"|advanc(?:e|es|ed|ing)|commit(?:s|ted|ting)?|inject(?:s|ed|ing)?)\s+capital\b",
-        re.IGNORECASE,
-    ),
     re.compile(
         r"\b(?:judg(?:e)?ment|settlement|litigation|sale|asset|disposal"
         r"|divestiture|insurance|liquidation|foreclosure)\s+proceeds\b",
@@ -284,11 +280,19 @@ def _is_hypothetical(clause: str) -> bool:
     return any(cue_re.search(clause) for cue_re in _HYPOTHETICAL_CUE_RES)
 
 
-def _is_business_context(clause: str) -> bool:
-    """True if the token's clause is a revenue/business-model construction (the
-    subject provides capital to others, or names recovery/sale proceeds) rather
-    than a corporate financing EVENT of the subject company."""
-    return any(cue_re.search(clause) for cue_re in _BUSINESS_CONTEXT_RES)
+def _in_business_context(norm_low: str, start: int, end: int) -> bool:
+    """True if the matched token span ``[start, end)`` sits INSIDE a business-model
+    / recovery construction (e.g. the ``proceeds`` of ``judgment proceeds``).
+
+    Bound to the TOKEN, not the whole clause: a genuine fabrication elsewhere in
+    the same clause ("...judgment proceeds and will raise capital via an
+    offering") must still fire, so only a token that is literally part of the
+    business-model phrase is suppressed."""
+    for cue_re in _BUSINESS_CONTEXT_RES:
+        for m in cue_re.finditer(norm_low):
+            if m.start() <= start and end <= m.end():
+                return True
+    return False
 
 
 def _suppressor(
@@ -320,7 +324,8 @@ def _suppressor(
     if _is_hypothetical(clause):
         return "hypothetical"
     # v1.1 revenue/business-model context (capital provider, recovery proceeds).
-    if _is_business_context(clause):
+    # Token-bound (span inside the phrase) so a co-clause genuine raise still fires.
+    if _in_business_context(norm_low, start, start + phrase_len):
         return "business_context"
     # Reused quotation guard (a cite of the guidance).
     if _is_quoted(text, start, phrase_len):
