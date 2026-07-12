@@ -19,12 +19,20 @@ negation/quote/clause machinery + the measurement / triage helpers — it does N
 reimplement scoring. The private-helper reuse is pinned by
 ``TestScorerHelperContract`` (mirrors the fabrication_triage meta-test).
 
-**Diagnostic-only in v1.** Telemetry ONLY (memo §2 / §9): joins no outcome/return
-ledger, touches no selection/ordering surface, performs no network I/O, and is
-NOT joined to ``FaithfulnessResult.is_clean``. The first job is a MEASURED
-retroactive baseline (a pre/post prompt-ban rate with Wilson CIs), not a third
-gate — a gate would be green day-one on the 4 all-clean golden cassettes with no
-live positive control.
+**Corpus telemetry + a HERMETIC golden gate (v1.1).** The corpus measurement
+joins no outcome/return ledger, touches no selection/ordering surface, and
+performs no network I/O. It is deliberately **NOT a per-brief production gate**:
+the audited fired-flag precision is ~60% (2026-07-12 audit — the rest are
+language false-positives like "offering no bargain" / a service firm's
+issuance-services business, or real-but-ungrounded raises), so gating a live
+brief on a single fire would cry wolf ~40% of the time. What IS gated is the
+HERMETIC regression tripwire on controlled inputs — see
+:func:`financing_gate_violations`, asserted by
+``tests/golden/test_golden_brief_faithfulness.py::TestGoldenGate``: the 4 frozen
+golden cassettes MUST fire 0, and a seeded synthetic fabrication MUST fire (so
+the detector cannot silently rot to always-pass). Corpus precision is irrelevant
+to this gate — it runs only on clean references + a designed-to-fire control. It
+is still a SEPARATE metric, never folded into ``FaithfulnessResult.is_clean``.
 
 **Grounding has two arms.** (1) :data:`_FINANCING_FACT_KEYS` over the fact index
 (EMPTY today — structurally always False; a forward hook so the detector
@@ -440,6 +448,19 @@ def detect_financing_claims(row: Mapping[str, Any]) -> list[FinancingFlag]:
             continue
         flags.extend(_scan_field(field, str(text), facts, title_subtypes))
     return flags
+
+
+def financing_gate_violations(row: Mapping[str, Any]) -> int:
+    """The count of FIRED financing flags for a brief row — the gate metric.
+
+    This is the named gate surface (mirrors ``FaithfulnessResult`` gating
+    counts). The HERMETIC golden gate asserts it is 0 over the frozen golden
+    cassettes and >= 1 over a seeded synthetic fabrication (see the module
+    docstring). It is deliberately NOT wired as a per-brief production gate: the
+    audited corpus fired-flag precision is ~60%, so a live per-brief block would
+    cry wolf too often — the corpus path stays diagnostic telemetry.
+    """
+    return sum(1 for flag in detect_financing_claims(row) if flag.suppressed_by is None)
 
 
 # ---------------------------------------------------------------------------
