@@ -34,6 +34,10 @@ from alphalens_research.eval.faithfulness import (
     parse_facts_index,
     score_brief,
 )
+from alphalens_research.eval.financing_claims import (
+    detect_financing_claims,
+    financing_gate_violations,
+)
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "brief_day"
 _CASSETTES = _FIXTURES / "cassettes"
@@ -56,6 +60,28 @@ def _load_cassettes() -> dict[str, dict]:
         ticker = facts["ticker"]
         out[ticker] = {"contents": contents, "brief": brief, "facts": facts}
     return out
+
+
+def _cassette_financing_row(data: dict) -> dict:
+    """Build a parquet-style row (the shape the financing detector reads) from a
+    cassette/seed ``{contents?, brief, source_event_title?}``. The catalyst title
+    comes from an explicit ``source_event_title`` or the ``title:`` line of the
+    rendered ``<facts>`` block."""
+    brief = data["brief"]
+    title = data.get("source_event_title", "")
+    if not title:
+        for line in data.get("contents", "").splitlines():
+            stripped = line.strip()
+            if stripped.startswith("title:"):
+                title = stripped[len("title:") :].strip()
+                break
+    return {
+        "brief_tldr": brief.get("tldr", ""),
+        "brief_supply_chain_md": brief.get("supply_chain_reasoning", ""),
+        "brief_bear_summary_md": brief.get("bear_summary", ""),
+        "brief_catalyst_failure_exit": brief.get("catalyst_failure_exit", ""),
+        "source_event_title": title,
+    }
 
 
 # Known typed facts for the 4 golden cassettes, read directly off the rendered
@@ -110,7 +136,11 @@ class TestParserRoundTrip(unittest.TestCase):
 
 
 class TestGoldenGate(unittest.TestCase):
-    """GATING: fabricated_numeric_date == 0 AND characterization_violations == 0."""
+    """GATING over the golden cassettes: fabricated_numeric_date == 0 AND
+    characterization_violations == 0 AND financing_gate_violations == 0 (T6.5
+    promoted to the gate 2026-07-12), each with a seeded positive control so no
+    arm can rot to always-pass. HERMETIC — clean references + designed-to-fire
+    controls only; none of these is a per-brief production gate."""
 
     def test_no_fabricated_numeric_date_over_golden(self):
         cassettes = _load_cassettes()
@@ -139,6 +169,38 @@ class TestGoldenGate(unittest.TestCase):
                 f"{ticker}: unexpected characterization violations: "
                 f"{[a.span for a in result.atoms if a.kind == 'characterization' and a.gating]}",
             )
+
+    def test_no_financing_fabrication_over_golden(self):
+        # T6.5 promoted to the gate (hermetic): the 4 frozen golden cassettes
+        # carry no financing assertion by construction, so the financing detector
+        # must fire 0 on each. Corpus precision (~60%) is irrelevant here — this
+        # runs only on clean reference briefs, and it is NOT a per-brief
+        # production gate.
+        cassettes = _load_cassettes()
+        self.assertEqual(set(cassettes), set(_KNOWN_FACTS))
+        for ticker, data in cassettes.items():
+            row = _cassette_financing_row(data)
+            violations = financing_gate_violations(row)
+            if violations:
+                # Surface the offending spans on failure (recovers the diagnostic
+                # granularity of the consolidated per-cassette test).
+                fired = [f.span for f in detect_financing_claims(row) if f.suppressed_by is None]
+                self.fail(f"{ticker}: {violations} financing fabrication(s): {fired}")
+
+    def test_positive_control_financing_fires(self):
+        # Anti-rot: a seeded fabricated raise (no financing fact, no matching-
+        # subtype title) MUST fire, so the financing gate cannot silently rot to
+        # always-pass (mirrors the numeric/characterization positive control).
+        seed = {
+            "source_event_title": "Company reports a strong quarter",
+            "brief": {
+                "tldr": "solid theme fit",
+                "supply_chain_reasoning": "second-order beneficiary",
+                "bear_summary": "the $500M secondary offering will dilute holders",
+                "catalyst_failure_exit": "exit on a competitor launch",
+            },
+        }
+        self.assertGreaterEqual(financing_gate_violations(_cassette_financing_row(seed)), 1)
 
     def test_manh_negation_guard_does_not_fire(self):
         # MANH bear/reasoning both say "not a bargain" — the compliant framing.

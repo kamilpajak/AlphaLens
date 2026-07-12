@@ -203,42 +203,11 @@ class TestFinancingPositiveControls(unittest.TestCase):
         self.assertEqual(flags[0].subtype, "DILUTIVE")
 
 
-# ---------------------------------------------------------------------------
-# Must-not-fire on real grounded briefs
-# ---------------------------------------------------------------------------
-
-
-class TestFinancingCorpusMustNotFire(unittest.TestCase):
-    """The 4 frozen golden cassettes carry no financing assertion by construction."""
-
-    def test_manh_and_all_golden_cassettes_no_financing_fire(self) -> None:
-        cassettes = sorted(_CASSETTES.glob("*.json"))
-        self.assertEqual(len(cassettes), 4, "expected 4 golden cassettes")
-        for path in cassettes:
-            record = json.loads(path.read_text())
-            contents = record["contents"]
-            brief_json = record["openrouter_response"]["choices"][0]["message"]["content"]
-            brief = json.loads(brief_json)
-            # Map the schema brief fields onto their parquet TEXT columns so the
-            # detector reads them the same way it reads a corpus row.
-            row = {
-                "brief_tldr": brief.get("tldr", ""),
-                "brief_supply_chain_md": brief.get("supply_chain_reasoning", ""),
-                "brief_bear_summary_md": brief.get("bear_summary", ""),
-                "brief_catalyst_failure_exit": brief.get("catalyst_failure_exit", ""),
-                "source_event_title": _title_from_contents(contents),
-            }
-            fired = _fired(row)
-            self.assertEqual(fired, [], f"{path.name}: {[f.span for f in fired]}")
-
-
-def _title_from_contents(contents: str) -> str:
-    """Pull the catalyst title line out of a rendered <facts> block."""
-    for line in contents.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("title:"):
-            return stripped[len("title:") :].strip()
-    return ""
+# NOTE: the "4 golden cassettes must fire 0" invariant is the HERMETIC gate — it
+# now lives once in the canonical gate class
+# ``test_golden_brief_faithfulness.py::TestGoldenGate`` (alongside the numeric /
+# characterization gate + the seeded positive control) via
+# ``financing_gate_violations``. Not duplicated here.
 
 
 # ---------------------------------------------------------------------------
