@@ -7,7 +7,7 @@
 	import { setToParam, paramToSet } from '$lib/urlFilters';
 	import { syncParamsToUrl } from '$lib/urlFilterSync.svelte';
 	import { page } from '$app/state';
-	import { ChevronLeft, ChevronRight } from 'lucide-svelte';
+	import { ChevronLeft, ChevronRight, AlertTriangle } from 'lucide-svelte';
 
 	let { data }: { data: PageData } = $props();
 
@@ -191,6 +191,24 @@
 			</div>
 		{/if}
 	</header>
+
+	<!-- Base-rate frame: one always-visible epistemic banner so the rich, unvalidated
+	     card reads as reasoning material, not a buy case. Mirrors the /edge what-if
+	     banner tone. The selection is net-negative in backtest; every score is
+	     descriptive, none is a validated signal. -->
+	<div
+		data-testid="base-rate-frame"
+		class="mb-5 flex items-start gap-2 border border-amber/50 bg-amber/5 px-3 py-2 text-[11px] leading-snug text-fg-dim fade-up"
+	>
+		<AlertTriangle class="mt-0.5 size-3.5 shrink-0 text-amber" />
+		<p>
+			<span class="text-amber font-bold uppercase tracking-widest text-[10px] whitespace-nowrap">
+				context, not conviction
+			</span>
+			— this selection is <span class="text-fg-muted">unproven / net-negative in backtest</span>;
+			every score below is descriptive, not a validated signal.
+		</p>
+	</div>
 
 	<!-- Filters: shared multi-select theme chip bar + the bespoke "verified only"
 	     toggle (a boolean, not a facet, so it stays its own control). -->

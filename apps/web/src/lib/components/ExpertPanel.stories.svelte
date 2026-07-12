@@ -10,7 +10,7 @@
 	// ── Fixture data ──────────────────────────────────────────────────────────
 	//
 	// BOTH_SCORED: ticker FOUR from tests/fixtures/api-mock/days/2026-05-18.json.
-	// buffett_quality_score=62, oneil_score=55, expert_spread=7 → "consensus" band.
+	// buffett_quality_score=62, oneil_score=55, expert_spread=7 → raw gap 7, no verdict word.
 	// No qualitative Buffett pillars in the fixture (numeric-only enrich run).
 	const BOTH_SCORED: ExpertAssessments = {
 		buffett: {
@@ -69,7 +69,9 @@
 		await waitFor(() =>
 			expect(canvas.getByTestId('lens-label-oneil')).toBeVisible()
 		);
-		await waitFor(() => expect(canvas.getByText(/consensus/i)).toBeVisible());
+		// Tone-neutral: the raw gap + caveat render, NOT a consensus/split verdict word.
+		await waitFor(() => expect(canvas.getByTestId('disagreement-caveat')).toBeVisible());
+		expect(canvas.queryByText(/consensus|split/i)).toBeNull();
 	}}
 >
 	{#snippet template()}
