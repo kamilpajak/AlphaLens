@@ -24,7 +24,7 @@ Design: docs/research/theme_mapper_mechanical_rule_headtohead_design_2026_07_12.
 from __future__ import annotations
 
 import datetime as dt
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -58,13 +58,48 @@ _SHADOW_COLUMNS = (
 
 
 def _iter_list(value: Any) -> list[str]:
-    """Coerce a parquet cell (list / numpy array / None) to a list of strings."""
+    """Coerce a parquet cell (list / numpy array / bare string / None) to a list of strings.
+
+    A bare string is returned whole — never iterated char-by-char (a malformed
+    ``primary_entities="AAPL"`` cell must yield ``["AAPL"]``, not ``["A","A",…]``).
+    """
     if value is None:
         return []
+    if isinstance(value, str):
+        return [value]
     try:
         return [str(v) for v in list(value)]
     except TypeError:
         return []
+
+
+def _load_window_theme_index(
+    asof: dt.date, *, events_dir: Path, lookback_days: int
+) -> dict[str, Counter[str]]:
+    """Read the ``[asof - lookback, asof]`` event parquets ONCE → ``{theme: Counter(ticker)}``.
+
+    The window is inclusive on both ends (``lookback_days + 1`` daily files),
+    matching ``catalyst_resolver._load_window``. Each ticker is counted once per
+    theme-tagged article it appears in. Building the index once here avoids the
+    ``O(themes × window)`` re-read the per-theme entry point would otherwise incur
+    when many themes share the same window.
+    """
+    index: dict[str, Counter[str]] = defaultdict(Counter)
+    for k in range(lookback_days + 1):
+        day = asof - dt.timedelta(days=k)
+        path = Path(events_dir) / f"{day.isoformat()}.parquet"
+        if not path.exists():
+            continue
+        frame = pd.read_parquet(path)
+        if "themes" not in frame.columns or "primary_entities" not in frame.columns:
+            continue
+        for themes_cell, ents_cell in zip(frame["themes"], frame["primary_entities"], strict=True):
+            tickers = [ent.upper() for ent in _iter_list(ents_cell)]
+            if not tickers:
+                continue
+            for theme in _iter_list(themes_cell):
+                index[theme].update(tickers)
+    return index
 
 
 def mechanical_salience_candidates(
@@ -81,19 +116,9 @@ def mechanical_salience_candidates(
     Returned most-frequent-first (descriptor only — the rule is equal-weight, so
     ordering carries no selection meaning). Tickers upper-cased.
     """
-    counts: Counter[str] = Counter()
-    for k in range(lookback_days + 1):
-        day = asof - dt.timedelta(days=k)
-        path = Path(events_dir) / f"{day.isoformat()}.parquet"
-        if not path.exists():
-            continue
-        frame = pd.read_parquet(path)
-        if "themes" not in frame.columns or "primary_entities" not in frame.columns:
-            continue
-        for themes_cell, ents_cell in zip(frame["themes"], frame["primary_entities"], strict=True):
-            if theme in _iter_list(themes_cell):
-                for ent in _iter_list(ents_cell):
-                    counts[ent.upper()] += 1
+    counts = _load_window_theme_index(asof, events_dir=events_dir, lookback_days=lookback_days).get(
+        theme, Counter()
+    )
     return [
         {"ticker": ticker, "mech_article_count": count} for ticker, count in counts.most_common()
     ]
@@ -125,18 +150,18 @@ def build_shadow_frame(
                 "mech_article_count": pd.NA,
             }
         )
+    # Read the event window ONCE for all themes (not per theme).
+    theme_index = _load_window_theme_index(asof, events_dir=events_dir, lookback_days=lookback_days)
     for theme in dict.fromkeys(str(p["theme"]) for p in llm_proposals):
-        for cand in mechanical_salience_candidates(
-            theme, asof, events_dir=events_dir, lookback_days=lookback_days
-        ):
+        for ticker, count in theme_index.get(theme, Counter()).most_common():
             rows.append(
                 {
                     "brief_date": asof,
                     "theme": theme,
-                    "ticker": cand["ticker"],
+                    "ticker": ticker,
                     "source": "mechanical",
                     "llm_confidence": pd.NA,
-                    "mech_article_count": cand["mech_article_count"],
+                    "mech_article_count": count,
                 }
             )
     frame = pd.DataFrame(rows, columns=list(_SHADOW_COLUMNS[:6]))

@@ -82,6 +82,30 @@ class TestMechanicalSalienceCandidates:
         )
         assert out == []
 
+    def test_scalar_string_cell_not_split_into_chars(self, tmp_path: Path):
+        # A malformed events parquet where a cell is a BARE string (not a list)
+        # must not explode into per-character tickers ("AAPL" -> A/A/P/L).
+        ev = tmp_path / "events"
+        ev.mkdir()
+        pd.DataFrame([{"news_id": "x", "primary_entities": "AAPL", "themes": "ai"}]).to_parquet(
+            ev / "2026-06-10.parquet", index=False
+        )
+        out = ps.mechanical_salience_candidates(
+            "ai", dt.date(2026, 6, 10), events_dir=ev, lookback_days=30
+        )
+        assert {c["ticker"] for c in out} == {"AAPL"}
+
+
+class TestIterListScalarGuard:
+    def test_bare_string_returned_whole(self):
+        assert ps._iter_list("AAPL") == ["AAPL"]
+
+    def test_list_passthrough(self):
+        assert ps._iter_list(["A", "B"]) == ["A", "B"]
+
+    def test_none_is_empty(self):
+        assert ps._iter_list(None) == []
+
 
 class TestBuildShadowFrame:
     def test_both_sources_present_with_correct_columns(self, tmp_path: Path):
