@@ -37,7 +37,11 @@ from alphalens_pipeline.data.alt_data.polygon_client import (
     get_default_polygon_client,
 )
 from alphalens_pipeline.data.parquet_io import write_parquet_atomic
-from alphalens_pipeline.thematic.mapping import catalyst_resolver, theme_mapper
+from alphalens_pipeline.thematic.mapping import (
+    catalyst_resolver,
+    proposal_shadow,
+    theme_mapper,
+)
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.verification import (
     insider,
@@ -490,12 +494,15 @@ def _rows_for_theme(
     polygon_client: PolygonClient | None,
     press_df: pd.DataFrame | None,
     keep_unverified: bool,
-) -> tuple[list[dict], int, int]:
-    """Resolve → propose → verify one theme into ``(rows, dropped, dropped_unknown)``.
+) -> tuple[list[dict], int, int, list[dict]]:
+    """Resolve → propose → verify one theme into ``(rows, dropped, dropped_unknown, proposals)``.
 
-    Returns ``([], 0, 0)`` when the theme is skipped (no catalyst event in the
-    window, or Pro proposed no candidates). Extracted from :func:`map_themes`'s
-    loop so the driver stays within the cognitive-complexity budget.
+    ``proposals`` is the LLM's **pre-gate** candidate set (post-mcap, before the
+    verification gates that ``rows`` survives) — captured for the V-forward
+    proposal-shadow log. Returns ``([], 0, 0, [])`` when the theme is skipped (no
+    catalyst event in the window, or Pro proposed no candidates). Extracted from
+    :func:`map_themes`'s loop so the driver stays within the cognitive-complexity
+    budget.
     """
     catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
     if not catalyst:
@@ -508,7 +515,7 @@ def _rows_for_theme(
             asof.isoformat(),
             theme,
         )
-        return [], 0, 0
+        return [], 0, 0, []
     candidates, in_bracket, keywords = _propose_and_filter_candidates(
         theme=theme,
         api_key=api_key,
@@ -519,8 +526,16 @@ def _rows_for_theme(
         model=model,
     )
     if not candidates:
-        return [], 0, 0
-    return _verify_candidates_for_theme(
+        return [], 0, 0, []
+    proposals = [
+        {
+            "theme": theme,
+            "ticker": cand["ticker"],
+            "llm_confidence": cand.get("confidence"),
+        }
+        for cand in candidates
+    ]
+    rows, dropped, dropped_unknown = _verify_candidates_for_theme(
         theme=theme,
         candidates=candidates,
         in_bracket=in_bracket,
@@ -531,6 +546,35 @@ def _rows_for_theme(
         press_df=press_df,
         keep_unverified=keep_unverified,
     )
+    return rows, dropped, dropped_unknown, proposals
+
+
+def _write_proposal_shadow_best_effort(
+    asof: dt.date, llm_proposals: list[dict], config_version: str, out_dir: Path
+) -> None:
+    """Write the V-forward proposal-shadow parquet; swallow any failure.
+
+    The shadow is written under ``out_dir / "proposal_shadow"`` — a sibling of
+    the candidates parquet it mirrors — so it inherits the caller's output
+    location (production ``~/.alphalens/thematic_candidates/proposal_shadow``;
+    tests writing to a tmp dir stay hermetic). Telemetry only — the daily
+    thematic build must never abort because the shadow log could not be written.
+    """
+    if not llm_proposals:
+        return
+    try:
+        proposal_shadow.write_proposal_shadow(
+            asof,
+            llm_proposals,
+            out_dir=Path(out_dir) / "proposal_shadow",
+            mapper_config_version=config_version,
+        )
+    except Exception:
+        logger.warning(
+            "map_themes %s: proposal-shadow write failed (telemetry only, ignored)",
+            asof.isoformat(),
+            exc_info=True,
+        )
 
 
 def map_themes(
@@ -604,8 +648,9 @@ def map_themes(
     dropped_total = 0
     dropped_all_unknown = 0
     catalyst_cache: dict[str, CatalystPayload | None] = {}
+    llm_proposals: list[dict] = []
     for theme in themes:
-        theme_rows, dropped, dropped_unknown = _rows_for_theme(
+        theme_rows, dropped, dropped_unknown, proposals = _rows_for_theme(
             theme,
             asof=asof,
             catalyst_cache=catalyst_cache,
@@ -619,6 +664,7 @@ def map_themes(
             keep_unverified=keep_unverified,
         )
         rows.extend(theme_rows)
+        llm_proposals.extend(proposals)
         dropped_total += dropped
         dropped_all_unknown += dropped_unknown
 
@@ -656,6 +702,12 @@ def map_themes(
     df.attrs["dropped_total"] = dropped_total
     df.attrs["dropped_all_unknown"] = dropped_all_unknown
     write_parquet_atomic(df, out_path, index=False)
+    # V-forward telemetry: log BOTH ungated proposal sources (LLM pre-gate +
+    # mechanical salience) for a clean forward head-to-head (design memo
+    # theme_mapper_mechanical_rule_headtohead_2026_07_12 §8). Best-effort — a
+    # shadow-write failure must never abort the daily build. Only fires on a
+    # fresh (non-frozen) run, alongside the candidates parquet it mirrors.
+    _write_proposal_shadow_best_effort(asof, llm_proposals, config_version, output_dir)
     if dropped_total > 0:
         logger.info(
             "map_themes %s: kept %d / dropped %d (all-unknown %d)",

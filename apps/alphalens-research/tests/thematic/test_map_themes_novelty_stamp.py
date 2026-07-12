@@ -59,9 +59,13 @@ def _run_map_themes(
         patch.object(
             orchestrator,
             "_propose_and_filter_candidates",
-            return_value=(["TIC"], {"TIC": True}, ["kw"]),
+            return_value=([{"ticker": "TIC", "confidence": 0.8}], {"TIC": True}, ["kw"]),
         ),
         patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
+        # This suite pins the novelty stamp, not the V-forward proposal-shadow
+        # side effect — stub the best-effort writer so it never touches the real
+        # ~/.alphalens cache.
+        patch.object(orchestrator, "_write_proposal_shadow_best_effort"),
     ):
         return orchestrator.map_themes(
             themes=themes,

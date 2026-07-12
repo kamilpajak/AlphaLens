@@ -189,6 +189,10 @@ class TestCatalystGateMapThemesIntegration(unittest.TestCase):
             ),
             patch.object(orchestrator, "_propose_and_filter_candidates", propose_mock),
             patch.object(orchestrator, "verify_candidate", side_effect=_passing_verdict),
+            # This suite pins the catalyst source-gate cascade, not the V-forward
+            # proposal-shadow side effect — stub the best-effort writer so it never
+            # touches the real ~/.alphalens cache.
+            patch.object(orchestrator, "_write_proposal_shadow_best_effort"),
         ):
             return orchestrator.map_themes(
                 themes=[STATE_MEDIA_THEME, LEGIT_THEME],
