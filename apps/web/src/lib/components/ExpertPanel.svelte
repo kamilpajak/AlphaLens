@@ -17,8 +17,6 @@
 		fmtDate,
 		buffettTone,
 		oneilTone,
-		consensusBand,
-		consensusTone,
 		moatTone,
 		moatTrendTone,
 		candorTone,
@@ -148,16 +146,10 @@
 				expert.panel
 			</button>
 			{#if open && showScale}
-				{@const bandTone = consensusTone(spread)}
+				<!-- Tone-neutral: the raw gap only, no verdict word / authority colour.
+				     The disagreement scalar is unvalidated telemetry (see caveat below). -->
 				<span class="text-[10px] uppercase tracking-widest text-fg-muted whitespace-nowrap">
-					lenses
-					<span
-						class="font-bold"
-						class:text-green={bandTone === 'green'}
-						class:text-amber={bandTone === 'amber'}
-						class:text-red={bandTone === 'red'}>{consensusBand(spread)}</span
-					>
-					<span class="text-grid-strong">·</span> gap {Math.round(spread!)}
+					lenses <span class="text-grid-strong">·</span> gap {Math.round(spread!)}
 				</span>
 			{/if}
 		</div>
@@ -168,7 +160,6 @@
 				     between them shaded. Replaces the old thin dot-lane + headline sentence.
 				     Renders only when the persisted spread is finite (>=2 lenses scored). -->
 				{#if showScale}
-					{@const bandTone = consensusTone(spread)}
 					{@const buffT = buffettTone(buf?.buffett_quality_score)}
 					{@const oneilT = oneilTone(oneil?.oneil_score)}
 					<div>
@@ -188,12 +179,11 @@
 						</div>
 						<!-- track (overflow-hidden clips the dots cleanly at 0/100) -->
 						<div class="relative h-1.5 overflow-hidden rounded-full bg-grid" aria-hidden="true">
+							<!-- Neutral gap shading — the span between the two lens scores, no
+							     authority green/amber/red (the gap is unvalidated). -->
 							<span
-								class="absolute top-0 h-1.5 rounded-full"
-								class:bg-green={bandTone === 'green'}
-								class:bg-amber={bandTone === 'amber'}
-								class:bg-red={bandTone === 'red'}
-								style="left: {gapLeft}%; width: {gapWidth}%; opacity: 0.22"
+								class="absolute top-0 h-1.5 rounded-full bg-grid-strong"
+								style="left: {gapLeft}%; width: {gapWidth}%; opacity: 0.35"
 							></span>
 							<span
 								class="absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-bg {toneDot(
@@ -218,6 +208,14 @@
 								O'Neil {oneilScore}
 							</span>
 						</div>
+						<!-- Epistemic caveat: the gap is NOT a consensus/split verdict. -->
+						<p
+							data-testid="disagreement-caveat"
+							class="mt-1.5 text-[10px] leading-snug text-fg-dim italic"
+						>
+							Two uncalibrated heuristics on different scales — logged for a future test,
+							not a claim the lenses agree.
+						</p>
 					</div>
 				{/if}
 

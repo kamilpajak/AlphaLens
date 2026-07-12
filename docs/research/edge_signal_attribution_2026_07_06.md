@@ -150,3 +150,7 @@ done
 ```
 
 All figures computed locally on the rsync'd VPS stores; no tracked code touched.
+
+---
+
+**Program-lifetime hypothesis budget.** Per-sweep Bonferroni (α=1.76e-4) does NOT bound the cross-sweep family: re-testing these 16 clusters on the growing-but-overlapping panel each sweep is repeated-peeking. The 16 clusters here are now the FIXED promotable slots of an append-only ledger with α-spending, a frozen discovery panel (≤2026-07-05), a held-out confirmation requirement before any promotion, a retirement rule, and a per-cluster look-log — see [`edge_hypothesis_budget_2026_07.md`](edge_hypothesis_budget_2026_07.md).

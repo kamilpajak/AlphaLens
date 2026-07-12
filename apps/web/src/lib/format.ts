@@ -199,27 +199,12 @@ export function oneilTone(score: number | null | undefined): BuffettTone {
 	return 'muted';
 }
 
-// The disagreement bands over the RAW expert_spread (0-100). UNVALIDATED, hand-
-// chosen cutoffs — used ONLY inside the opened drawer with a visible "not a
-// buy/avoid signal" label, NEVER on the resting card face. The cutoffs are folded
-// into panel_config_version; the deferred Expert×EDGE study correlates the raw
-// scalar, never the bucket. consensusBand returns the descriptive word, consensusTone
-// the colour. `null`/non-finite -> 'muted' / '—' (no band).
-export type ConsensusTone = 'green' | 'amber' | 'red' | 'muted';
-
-export function consensusTone(spread: number | null | undefined): ConsensusTone {
-	if (spread == null || !Number.isFinite(spread)) return 'muted';
-	if (spread < 20) return 'green';
-	if (spread < 50) return 'amber';
-	return 'red';
-}
-
-export function consensusBand(spread: number | null | undefined): string {
-	if (spread == null || !Number.isFinite(spread)) return '—';
-	if (spread < 20) return 'consensus';
-	if (spread < 50) return 'mixed';
-	return 'split';
-}
+// NOTE: the disagreement `expert_spread` (0-100) is surfaced RAW in the expert
+// drawer (the gap number + a "two uncalibrated heuristics" caveat) — NOT bucketed
+// into a consensus/mixed/split verdict word or an authority colour. The old
+// consensusBand/consensusTone display helpers were removed (they signalled a
+// confidence the scalar does not have); the deferred Expert×EDGE study correlates
+// the raw scalar, never a bucket.
 
 // --- Market-state context banner (PR-3) -------------------------------------
 // The index-level regime label (SPY trend × volatility) is DISPLAY-ONLY, frozen
