@@ -76,7 +76,7 @@ from alphalens_research.eval.measurement import (
 # FAITHFULNESS_SCORER_VERSION: the report is DUAL-stamped so a reader partitions
 # on both (the detector reuses score_row's row->fact-index adapter, so the
 # scorer version is a co-poolability key).
-FINANCING_DETECTOR_VERSION = "t6.5-financing-v1-2026-07-11"
+FINANCING_DETECTOR_VERSION = "t6.5-financing-v1.1-2026-07-12"
 
 # --- Subtypes ----------------------------------------------------------------
 SUBTYPE_DILUTIVE = "DILUTIVE"
@@ -200,6 +200,30 @@ _HYPOTHETICAL_CUE_RES: tuple[re.Pattern, ...] = tuple(
     )
 )
 
+# Business-model / revenue-context cues (v1.1). A financing TOKEN inside one of
+# these constructions is NOT a corporate financing EVENT of the subject company
+# — it is the firm's revenue model or a third-party funding description. Two
+# families:
+#   1. the subject PROVIDES/lends/deploys capital to others (litigation finance,
+#      BDCs, asset managers) — inverts the 'capital' anchor, so a co-located
+#      Tier-2 'proceeds'/'raise' must not fire (post-deploy over-fire: ticker BUR
+#      "provides capital to plaintiffs ... a portion of judgment proceeds").
+#   2. '<noun> proceeds' where the noun is a recovery/sale, not an offering
+#      (judgment / settlement / litigation / sale / asset / disposal / insurance).
+# A genuine raise ("raise capital via a secondary offering") matches NEITHER.
+_BUSINESS_CONTEXT_RES: tuple[re.Pattern, ...] = (
+    re.compile(
+        r"\b(?:provid(?:e|es|ed|ing)|lend(?:s|ing)?|lent|deploy(?:s|ed|ing)?"
+        r"|advanc(?:e|es|ed|ing)|commit(?:s|ted|ting)?|inject(?:s|ed|ing)?)\s+capital\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:judg(?:e)?ment|settlement|litigation|sale|asset|disposal"
+        r"|divestiture|insurance|liquidation|foreclosure)\s+proceeds\b",
+        re.IGNORECASE,
+    ),
+)
+
 
 @dataclass(frozen=True)
 class FinancingFlag:
@@ -260,6 +284,13 @@ def _is_hypothetical(clause: str) -> bool:
     return any(cue_re.search(clause) for cue_re in _HYPOTHETICAL_CUE_RES)
 
 
+def _is_business_context(clause: str) -> bool:
+    """True if the token's clause is a revenue/business-model construction (the
+    subject provides capital to others, or names recovery/sale proceeds) rather
+    than a corporate financing EVENT of the subject company."""
+    return any(cue_re.search(clause) for cue_re in _BUSINESS_CONTEXT_RES)
+
+
 def _suppressor(
     text: str,
     norm_low: str,
@@ -271,10 +302,12 @@ def _suppressor(
 ) -> str | None:
     """The first applicable suppressor for a matched phrase, or None if it fires.
 
-    Precedence: financing_fact (grounded) -> negation -> hypothetical -> quoted
-    -> title_escape. Grounding by a real fact and an explicit negation come first
-    (the assertion is not fabricated at all); the title escape is last (it only
-    excuses an otherwise-ungrounded assertion that the catalyst backs).
+    Precedence: financing_fact (grounded) -> negation -> hypothetical ->
+    business_context -> quoted -> title_escape. Grounding by a real fact and an
+    explicit negation come first (the assertion is not fabricated at all);
+    business_context means the token is not a financing EVENT at all (so it
+    precedes the title escape, which only excuses an otherwise-ungrounded
+    assertion the catalyst backs).
     """
     # Arm 1: a real financing fact grounds the assertion (empty today).
     if any(key in facts for key in _FINANCING_FACT_KEYS):
@@ -286,6 +319,9 @@ def _suppressor(
     clause = _clause_before(norm_low, start + phrase_len)
     if _is_hypothetical(clause):
         return "hypothetical"
+    # v1.1 revenue/business-model context (capital provider, recovery proceeds).
+    if _is_business_context(clause):
+        return "business_context"
     # Reused quotation guard (a cite of the guidance).
     if _is_quoted(text, start, phrase_len):
         return "quoted"
