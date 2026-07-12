@@ -76,7 +76,7 @@ from alphalens_research.eval.measurement import (
 # FAITHFULNESS_SCORER_VERSION: the report is DUAL-stamped so a reader partitions
 # on both (the detector reuses score_row's row->fact-index adapter, so the
 # scorer version is a co-poolability key).
-FINANCING_DETECTOR_VERSION = "t6.5-financing-v1-2026-07-11"
+FINANCING_DETECTOR_VERSION = "t6.5-financing-v1.1-2026-07-12"
 
 # --- Subtypes ----------------------------------------------------------------
 SUBTYPE_DILUTIVE = "DILUTIVE"
@@ -200,6 +200,26 @@ _HYPOTHETICAL_CUE_RES: tuple[re.Pattern, ...] = tuple(
     )
 )
 
+# Business-model / revenue-context cues (v1.1). A financing TOKEN that is PART OF
+# one of these '<recovery> proceeds' constructions is not a corporate financing
+# EVENT — it is a recovery / sale / litigation-finance revenue term (post-deploy
+# over-fire: ticker BUR "...in exchange for a portion of judgment proceeds"). The
+# suppression is TOKEN-bound (see `_in_business_context`): only the 'proceeds'
+# token that sits inside the phrase is suppressed, so a genuine raise sharing the
+# clause ("...judgment proceeds and will raise capital via an offering") still
+# fires. Each phrase therefore ENDS in a financing token (the recovery noun +
+# 'proceeds'). NOTE: the sibling over-fire where a Tier-2 token anchors on a
+# provider 'capital' word ("provides capital to clients, raising leverage") is a
+# residual — that is an ANCHOR-level issue (a false-positive, worksheet-caught),
+# tracked for a v1.2 anchor refinement rather than a token-bound suppressor.
+_BUSINESS_CONTEXT_RES: tuple[re.Pattern, ...] = (
+    re.compile(
+        r"\b(?:judg(?:e)?ment|settlement|litigation|sale|asset|disposal"
+        r"|divestiture|insurance|liquidation|foreclosure)\s+proceeds\b",
+        re.IGNORECASE,
+    ),
+)
+
 
 @dataclass(frozen=True)
 class FinancingFlag:
@@ -260,6 +280,21 @@ def _is_hypothetical(clause: str) -> bool:
     return any(cue_re.search(clause) for cue_re in _HYPOTHETICAL_CUE_RES)
 
 
+def _in_business_context(norm_low: str, start: int, end: int) -> bool:
+    """True if the matched token span ``[start, end)`` sits INSIDE a business-model
+    / recovery construction (e.g. the ``proceeds`` of ``judgment proceeds``).
+
+    Bound to the TOKEN, not the whole clause: a genuine fabrication elsewhere in
+    the same clause ("...judgment proceeds and will raise capital via an
+    offering") must still fire, so only a token that is literally part of the
+    business-model phrase is suppressed."""
+    for cue_re in _BUSINESS_CONTEXT_RES:
+        for m in cue_re.finditer(norm_low):
+            if m.start() <= start and end <= m.end():
+                return True
+    return False
+
+
 def _suppressor(
     text: str,
     norm_low: str,
@@ -271,10 +306,12 @@ def _suppressor(
 ) -> str | None:
     """The first applicable suppressor for a matched phrase, or None if it fires.
 
-    Precedence: financing_fact (grounded) -> negation -> hypothetical -> quoted
-    -> title_escape. Grounding by a real fact and an explicit negation come first
-    (the assertion is not fabricated at all); the title escape is last (it only
-    excuses an otherwise-ungrounded assertion that the catalyst backs).
+    Precedence: financing_fact (grounded) -> negation -> hypothetical ->
+    business_context -> quoted -> title_escape. Grounding by a real fact and an
+    explicit negation come first (the assertion is not fabricated at all);
+    business_context means the token is not a financing EVENT at all (so it
+    precedes the title escape, which only excuses an otherwise-ungrounded
+    assertion the catalyst backs).
     """
     # Arm 1: a real financing fact grounds the assertion (empty today).
     if any(key in facts for key in _FINANCING_FACT_KEYS):
@@ -286,6 +323,10 @@ def _suppressor(
     clause = _clause_before(norm_low, start + phrase_len)
     if _is_hypothetical(clause):
         return "hypothetical"
+    # v1.1 revenue/business-model context (capital provider, recovery proceeds).
+    # Token-bound (span inside the phrase) so a co-clause genuine raise still fires.
+    if _in_business_context(norm_low, start, start + phrase_len):
+        return "business_context"
     # Reused quotation guard (a cite of the guidance).
     if _is_quoted(text, start, phrase_len):
         return "quoted"

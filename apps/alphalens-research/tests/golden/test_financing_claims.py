@@ -89,6 +89,58 @@ class TestFinancingGuards(unittest.TestCase):
         for row in rows:
             self.assertEqual(_fired(row), [], row["ticker"])
 
+    def test_litigation_finance_business_model_not_flagged(self) -> None:
+        # v1.1 business-context guard (post-deploy over-fire, ticker BUR): a
+        # litigation-finance / capital-provider firm describing its MODEL —
+        # "provides capital to ... in exchange for a portion of judgment
+        # proceeds" — is revenue context, not a corporate financing EVENT. The
+        # Tier-2 'proceeds' token anchored on 'capital' and false-fired in v1.
+        row = {
+            "ticker": "BUR",
+            "brief_supply_chain_md": (
+                "Burford Capital provides capital to plaintiffs and law firms in "
+                "exchange for a portion of judgment proceeds. The catalyst drives "
+                "demand for external funding."
+            ),
+        }
+        self.assertEqual(_fired(row), [])
+        flags = detect_financing_claims(row)
+        self.assertTrue(
+            any(f.suppressed_by == "business_context" for f in flags),
+            [(f.matched_phrase, f.suppressed_by) for f in flags],
+        )
+
+    def test_mixed_clause_business_context_plus_real_raise_still_fires(self) -> None:
+        # zen HIGH: the business-context guard must bind to the SPECIFIC token, not
+        # the whole clause — a genuine fabrication sharing a clause with a
+        # business-model phrase must still fire (else a real raise is silenced).
+        row = {
+            "ticker": "MIX",
+            "brief_supply_chain_md": (
+                "Burford provides capital in exchange for judgment proceeds and "
+                "will raise capital via a dilutive secondary offering"
+            ),
+        }
+        fired = _fired(row)
+        # The genuine raise fires despite the business-model 'judgment proceeds'
+        # phrase in the same clause (the recovery 'proceeds' token is the same
+        # DILUTIVE subtype, so it collapses behind the fired raise — the point is
+        # that a real fabrication is NOT silenced).
+        self.assertTrue(
+            any("raise" in f.matched_phrase or "offering" in f.matched_phrase for f in fired),
+            [f.matched_phrase for f in fired],
+        )
+
+    def test_real_raise_with_nearby_capital_word_still_fires(self) -> None:
+        # The business-context guard must NOT swallow a genuine raise just because
+        # the word 'capital' is present — "raise capital via a secondary offering"
+        # is a real financing assertion and MUST fire.
+        row = {
+            "ticker": "REAL",
+            "brief_bear_summary_md": "the company will raise capital via a $500M dilutive secondary offering",
+        }
+        self.assertTrue(_fired(row), "a genuine raise must still fire")
+
     def test_adpt_real_raise_title_escape_suppresses(self) -> None:
         # A dilutive-raise assertion WITH a DILUTIVE offering in the title →
         # subtype-matched title escape suppresses; suppressed_by == 'title_escape'.
