@@ -54,7 +54,7 @@ STRICTLY SEPARATE metric; never sum the two.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -363,6 +363,32 @@ def _tier2_hits(token: str, norm_low: str, start: int) -> bool:
     return _tier2_anchored(clause) or _tier2_anchored(window)
 
 
+def _scan_tier(
+    patterns: tuple[tuple[str, str], ...],
+    norm_low: str,
+    claimed: list[tuple[int, int]],
+    emit: Callable[[int, str, str], None],
+    *,
+    require_anchor: bool,
+) -> None:
+    """Emit a flag for each non-overlapping match of every ``(phrase, subtype)``.
+
+    ``require_anchor`` (Tier-2 only) additionally requires a same-clause hard
+    anchor (``_tier2_hits``); Tier-1 phrases claim their ranges unconditionally.
+    ``claimed`` is read live and grown by ``emit`` so a later phrase can never
+    re-claim a range an earlier one already took. The ``\\b`` word boundaries are
+    zero-width, so ``m.end()`` equals ``start + len(phrase)`` for both tiers.
+    """
+    for phrase, subtype in patterns:
+        for m in re.finditer(r"\b" + re.escape(phrase) + r"\b", norm_low):
+            start = m.start()
+            if _overlaps_claimed(claimed, start, m.end()):
+                continue
+            if require_anchor and not _tier2_hits(phrase, norm_low, start):
+                continue
+            emit(start, phrase, subtype)
+
+
 def _scan_field(
     field: str, text: str, facts: Mapping[str, Any], title_subtypes: set[str]
 ) -> list[FinancingFlag]:
@@ -393,22 +419,9 @@ def _scan_field(
 
     # Tier-1: affirmative phrases (claim their ranges first so Tier-2 sub-tokens
     # of a Tier-1 phrase are absorbed, not double-counted).
-    for phrase, subtype in _TIER1:
-        for m in re.finditer(r"\b" + re.escape(phrase) + r"\b", norm_low):
-            if _overlaps_claimed(claimed, m.start(), m.end()):
-                continue
-            _emit(m.start(), phrase, subtype)
-
+    _scan_tier(_TIER1, norm_low, claimed, _emit, require_anchor=False)
     # Tier-2: polysemous tokens with a same-clause hard anchor.
-    for token, subtype in _TIER2:
-        for m in re.finditer(r"\b" + re.escape(token) + r"\b", norm_low):
-            start = m.start()
-            if _overlaps_claimed(claimed, start, start + len(token)):
-                continue
-            if not _tier2_hits(token, norm_low, start):
-                continue
-            _emit(start, token, subtype)
-
+    _scan_tier(_TIER2, norm_low, claimed, _emit, require_anchor=True)
     return _collapse_per_subtype(flags)
 
 

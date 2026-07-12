@@ -325,11 +325,13 @@ _FACTS_OPEN_RE = re.compile(r"<facts>\s*\n(ticker:.*?)</facts>", re.DOTALL)
 
 # A signed decimal immediately followed by a percent sign, used to pull the
 # numeric out of several rendered-facts lines ("4.8%", "-39.2 %"). The possessive
-# ``++`` removes super-linear backtracking (Sonar S8786) without changing the
-# match set: neither ``\s`` nor ``%`` is in ``[\d.]``, so giving back a matched
-# ``[\d.]`` char can never help the trailing ``\s*%`` match. Shared constant so
-# the identical literal is not duplicated (Sonar S1192).
-_PERCENT_RE = re.compile(r"([-+]?[\d.]++)\s*%")
+# ``++`` removes all backtracking without changing the match set: neither ``\s``
+# nor ``%`` is in ``[\d.]``, so giving back a matched ``[\d.]`` char can never
+# help the trailing ``\s*%`` match. Shared constant so the identical literal is
+# not duplicated (Sonar S1192). NOSONAR: SonarPython's regex engine predates the
+# possessive-quantifier syntax and misreads ``[\d.]++`` as a nested quantifier,
+# false-flagging S8786 — the pattern is provably linear (verified 0 backtracking).
+_PERCENT_RE = re.compile(r"([-+]?[\d.]++)\s*%")  # NOSONAR
 
 
 def _to_float(token: str) -> float | None:
@@ -758,6 +760,12 @@ def _is_distorted(value: float, fv: float, precision: int) -> bool:
     return abs(value - fv) <= max(abs_band, rel_band)
 
 
+def _closer(value: float, fv: float, best: tuple[str, float] | None) -> bool:
+    """True if fact value ``fv`` is a strictly better (closer to ``value``)
+    candidate than the current ``best`` (``None`` = no candidate held yet)."""
+    return best is None or abs(value - fv) < abs(value - best[1])
+
+
 def _best_numeric_match(
     value: float, precision: int, allowed_kinds: frozenset[str], facts: dict
 ) -> tuple[tuple[str, float] | None, tuple[str, float] | None]:
@@ -765,7 +773,8 @@ def _best_numeric_match(
 
     Returns ``(best_grounded, best_distorted)`` as ``(key, fact_value)`` pairs
     (or ``None``). "Closest" prefers the exact-value fact over one that only
-    collides after rounding (honest attribution, memo §6.4 step 3).
+    collides after rounding (honest attribution, memo §6.4 step 3). A fact that
+    rounds to the brief value can only ground it (never counts as distorted).
     """
     best_grounded: tuple[str, float] | None = None
     best_distorted: tuple[str, float] | None = None
@@ -773,12 +782,14 @@ def _best_numeric_match(
         if _fact_unit_kind(key) not in allowed_kinds:
             continue
         for fv in _fact_values_for(key, fact_val):
-            if round(fv, precision) == round(value, precision):
-                if best_grounded is None or abs(value - fv) < abs(value - best_grounded[1]):
-                    best_grounded = (key, fv)
-                continue
-            closer = best_distorted is None or abs(value - fv) < abs(value - best_distorted[1])
-            if closer and _is_distorted(value, fv, precision):
+            grounded = round(fv, precision) == round(value, precision)
+            if grounded and _closer(value, fv, best_grounded):
+                best_grounded = (key, fv)
+            elif (
+                not grounded
+                and _closer(value, fv, best_distorted)
+                and _is_distorted(value, fv, precision)
+            ):
                 best_distorted = (key, fv)
     return best_grounded, best_distorted
 
