@@ -318,6 +318,49 @@ def _stratum_rates(results: list[FaithfulnessResult]) -> dict:
     }
 
 
+def _diagnostic_means(scored: list[tuple[FaithfulnessResult, Mapping[str, Any]]]) -> dict:
+    """Paired diagnostic means (memo §6.6): groundedness paired with coverage."""
+    n = len(scored)
+    grounded = [r.groundedness_rate for r, _ in scored if r.groundedness_rate is not None]
+    coverage = [r.checkable_coverage for r, _ in scored if r.checkable_coverage is not None]
+    return {
+        "groundedness_rate": (sum(grounded) / len(grounded)) if grounded else None,
+        "checkable_coverage": (sum(coverage) / len(coverage)) if coverage else None,
+        "checkable_atoms_per_brief": (sum(r.checkable_atoms for r, _ in scored) / n) if n else 0.0,
+        "out_of_scope_atoms_per_brief": (sum(r.out_of_scope_atoms for r, _ in scored) / n)
+        if n
+        else 0.0,
+    }
+
+
+def _per_field_fabrication(
+    scored: list[tuple[FaithfulnessResult, Mapping[str, Any]]],
+) -> dict[str, dict[str, int]]:
+    """Per-field fabricated / distorted atom breakdown (expect supply_chain highest)."""
+    per_field: dict[str, dict[str, int]] = {
+        field: {"fabricated_atoms": 0, "distorted_atoms": 0} for field in _SCHEMA_FIELDS
+    }
+    for result, _ in scored:
+        for atom in result.atoms:
+            if atom.field not in per_field:
+                continue
+            if atom.kind in ("numeric", "date") and atom.verdict == "FABRICATED":
+                per_field[atom.field]["fabricated_atoms"] += 1
+            elif atom.kind == "numeric" and atom.verdict == "DISTORTED":
+                per_field[atom.field]["distorted_atoms"] += 1
+    return per_field
+
+
+def _bucketed_stratum_rates(
+    scored: list[tuple[FaithfulnessResult, Mapping[str, Any]]], label_of
+) -> dict:
+    """Per-label ``_stratum_rates`` blocks, bucketing results by ``label_of(row)``."""
+    buckets: dict[str, list[FaithfulnessResult]] = {}
+    for result, row in scored:
+        buckets.setdefault(label_of(row), []).append(result)
+    return {label: _stratum_rates(results) for label, results in buckets.items()}
+
+
 def measure_corpus(
     rows: Iterable[Mapping[str, Any]] | Iterable[str],
     *,
@@ -395,47 +438,19 @@ def measure_corpus(
     }
 
     # --- diagnostic means (groundedness paired with coverage, memo §6.6) ---
-    grounded = [r.groundedness_rate for r, _ in scored if r.groundedness_rate is not None]
-    coverage = [r.checkable_coverage for r, _ in scored if r.checkable_coverage is not None]
-    diagnostic_means = {
-        "groundedness_rate": (sum(grounded) / len(grounded)) if grounded else None,
-        "checkable_coverage": (sum(coverage) / len(coverage)) if coverage else None,
-        "checkable_atoms_per_brief": (sum(r.checkable_atoms for r, _ in scored) / n) if n else 0.0,
-        "out_of_scope_atoms_per_brief": (sum(r.out_of_scope_atoms for r, _ in scored) / n)
-        if n
-        else 0.0,
-    }
+    diagnostic_means = _diagnostic_means(scored)
 
     # --- per-field fabrication + distortion breakdown ---
-    per_field_fabrication: dict[str, dict[str, int]] = {
-        field: {"fabricated_atoms": 0, "distorted_atoms": 0} for field in _SCHEMA_FIELDS
-    }
-    for result, _ in scored:
-        for atom in result.atoms:
-            if atom.field not in per_field_fabrication:
-                continue
-            if atom.kind in ("numeric", "date") and atom.verdict == "FABRICATED":
-                per_field_fabrication[atom.field]["fabricated_atoms"] += 1
-            elif atom.kind == "numeric" and atom.verdict == "DISTORTED":
-                per_field_fabrication[atom.field]["distorted_atoms"] += 1
+    per_field_fabrication = _per_field_fabrication(scored)
 
     # --- per-stratum rates (by requested keys + always year-month) ---
     per_stratum: dict[str, dict] = {}
     for key in strata_keys:
-        buckets: dict[str, list[FaithfulnessResult]] = {}
-        for result, row in scored:
-            raw = row.get(key)
-            label = "unknown" if _is_missing(raw) else str(raw)
-            buckets.setdefault(label, []).append(result)
-        per_stratum[key] = {label: _stratum_rates(results) for label, results in buckets.items()}
-
-    ym_buckets: dict[str, list[FaithfulnessResult]] = {}
-    for result, row in scored:
-        label = _year_month_of_row(row)
-        ym_buckets.setdefault(label, []).append(result)
-    per_stratum["year_month"] = {
-        label: _stratum_rates(results) for label, results in ym_buckets.items()
-    }
+        per_stratum[key] = _bucketed_stratum_rates(
+            scored,
+            lambda row, key=key: "unknown" if _is_missing(row.get(key)) else str(row.get(key)),
+        )
+    per_stratum["year_month"] = _bucketed_stratum_rates(scored, _year_month_of_row)
 
     return {
         "scorer_version": FAITHFULNESS_SCORER_VERSION,

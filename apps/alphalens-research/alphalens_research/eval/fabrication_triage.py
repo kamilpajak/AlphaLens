@@ -391,6 +391,37 @@ def _sentence_window(text: str, span: str) -> str:
     return text[lo:hi].strip()
 
 
+def _stage_ambiguous_atoms(row: Mapping[str, Any], staged: dict[str, list[dict]]) -> None:
+    """Append every AMBIGUOUS-bucket fabricated atom of ``row`` to ``staged``."""
+    fabricated = _fabricated_atoms_of_row(row)
+    if not fabricated:
+        return
+    facts = fact_index_from_brief_row(row)
+    ticker = str(row.get("ticker") or "")
+    brief_date = _brief_date_of_row(row)
+    title = str(row.get(_TITLE_KEY) or facts.get(_TITLE_KEY) or "")
+    url = str(row.get("source_event_url") or "")
+    for atom in fabricated:
+        bucket = triage_atom(atom, row, facts)
+        if bucket not in _AMBIGUOUS_BUCKETS:
+            continue
+        text_column = _SCHEMA_FIELD_TO_TEXT_COLUMN.get(atom.field)
+        field_text = str(row.get(text_column) or "") if text_column else ""
+        staged[bucket].append(
+            {
+                "ticker": ticker,
+                "brief_date": brief_date,
+                "field": atom.field,
+                "span": atom.span,
+                "sentence_window": _sentence_window(field_text, atom.span),
+                "source_event_title": title,
+                "source_event_url": url,
+                "bucket": bucket,
+                "human_label": "",
+            }
+        )
+
+
 def build_audit_worksheet(
     rows: Iterable[Mapping[str, Any]] | Iterable[str],
     *,
@@ -414,33 +445,7 @@ def build_audit_worksheet(
 
     staged: dict[str, list[dict]] = {name: [] for name in _AMBIGUOUS_BUCKETS}
     for row in row_maps:
-        fabricated = _fabricated_atoms_of_row(row)
-        if not fabricated:
-            continue
-        facts = fact_index_from_brief_row(row)
-        ticker = str(row.get("ticker") or "")
-        brief_date = _brief_date_of_row(row)
-        title = str(row.get(_TITLE_KEY) or facts.get(_TITLE_KEY) or "")
-        url = str(row.get("source_event_url") or "")
-        for atom in fabricated:
-            bucket = triage_atom(atom, row, facts)
-            if bucket not in _AMBIGUOUS_BUCKETS:
-                continue
-            text_column = _SCHEMA_FIELD_TO_TEXT_COLUMN.get(atom.field)
-            field_text = str(row.get(text_column) or "") if text_column else ""
-            staged[bucket].append(
-                {
-                    "ticker": ticker,
-                    "brief_date": brief_date,
-                    "field": atom.field,
-                    "span": atom.span,
-                    "sentence_window": _sentence_window(field_text, atom.span),
-                    "source_event_title": title,
-                    "source_event_url": url,
-                    "bucket": bucket,
-                    "human_label": "",
-                }
-            )
+        _stage_ambiguous_atoms(row, staged)
 
     records: list[dict] = []
     for bucket in _AMBIGUOUS_BUCKETS:
