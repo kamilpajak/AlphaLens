@@ -328,9 +328,10 @@ _FACTS_OPEN_RE = re.compile(r"<facts>\s*\n(ticker:.*?)</facts>", re.DOTALL)
 # ``++`` removes all backtracking without changing the match set: neither ``\s``
 # nor ``%`` is in ``[\d.]``, so giving back a matched ``[\d.]`` char can never
 # help the trailing ``\s*%`` match. Shared constant so the identical literal is
-# not duplicated (Sonar S1192). NOSONAR: SonarPython's regex engine predates the
-# possessive-quantifier syntax and misreads ``[\d.]++`` as a nested quantifier,
-# false-flagging S8786 — the pattern is provably linear (verified 0 backtracking).
+# not duplicated (Sonar S1192). The end-of-line suppression below is needed
+# because SonarPython's regex engine predates the possessive-quantifier syntax
+# and misreads ``[\d.]++`` as a nested quantifier, false-flagging S8786 — the
+# pattern is provably linear (verified 0 backtracking).
 _PERCENT_RE = re.compile(r"([-+]?[\d.]++)\s*%")  # NOSONAR
 
 
