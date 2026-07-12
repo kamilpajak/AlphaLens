@@ -34,7 +34,10 @@ from alphalens_research.eval.faithfulness import (
     parse_facts_index,
     score_brief,
 )
-from alphalens_research.eval.financing_claims import financing_gate_violations
+from alphalens_research.eval.financing_claims import (
+    detect_financing_claims,
+    financing_gate_violations,
+)
 
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "brief_day"
 _CASSETTES = _FIXTURES / "cassettes"
@@ -177,11 +180,12 @@ class TestGoldenGate(unittest.TestCase):
         self.assertEqual(set(cassettes), set(_KNOWN_FACTS))
         for ticker, data in cassettes.items():
             row = _cassette_financing_row(data)
-            self.assertEqual(
-                financing_gate_violations(row),
-                0,
-                f"{ticker}: unexpected financing fabrication",
-            )
+            violations = financing_gate_violations(row)
+            if violations:
+                # Surface the offending spans on failure (recovers the diagnostic
+                # granularity of the consolidated per-cassette test).
+                fired = [f.span for f in detect_financing_claims(row) if f.suppressed_by is None]
+                self.fail(f"{ticker}: {violations} financing fabrication(s): {fired}")
 
     def test_positive_control_financing_fires(self):
         # Anti-rot: a seeded fabricated raise (no financing fact, no matching-
