@@ -341,6 +341,26 @@ def _ticker_values(
         return _null_values()
 
 
+def _stamp_output_columns(
+    out: pd.DataFrame, per_ticker: dict[str, dict[str, object]], tickers: list[str]
+) -> None:
+    """Append the 16 ``options_*`` columns to ``out`` from the per-ticker value
+    dicts (float columns as float64, string columns as object; a blank ticker
+    stamps None)."""
+    for col in _FLOAT_COLUMNS:
+        out[col] = pd.Series(
+            [cast("float | None", per_ticker[t][col]) if t else None for t in tickers],
+            index=out.index,
+            dtype="float64",
+        )
+    for col in _STR_COLUMNS:
+        out[col] = pd.Series(
+            [cast("str | None", per_ticker[t][col]) if t else None for t in tickers],
+            index=out.index,
+            dtype="object",
+        )
+
+
 def enrich(
     frame: pd.DataFrame,
     *,
@@ -386,16 +406,5 @@ def enrich(
                 ticker, fetch, asof=asof, now=now, rv20=rv_by_ticker.get(ticker)
             )
 
-    for col in _FLOAT_COLUMNS:
-        out[col] = pd.Series(
-            [cast("float | None", per_ticker[t][col]) if t else None for t in tickers],
-            index=out.index,
-            dtype="float64",
-        )
-    for col in _STR_COLUMNS:
-        out[col] = pd.Series(
-            [cast("str | None", per_ticker[t][col]) if t else None for t in tickers],
-            index=out.index,
-            dtype="object",
-        )
+    _stamp_output_columns(out, per_ticker, tickers)
     return out

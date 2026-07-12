@@ -68,7 +68,7 @@ def _iter_list(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value]
     try:
-        return [str(v) for v in list(value)]
+        return [str(v) for v in value]
     except TypeError:
         return []
 

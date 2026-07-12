@@ -323,12 +323,165 @@ class FaithfulnessResult:
 # the SAME index shape.
 _FACTS_OPEN_RE = re.compile(r"<facts>\s*\n(ticker:.*?)</facts>", re.DOTALL)
 
+# A signed decimal immediately followed by a percent sign, used to pull the
+# numeric out of several rendered-facts lines ("4.8%", "-39.2 %"). The possessive
+# ``++`` removes super-linear backtracking (Sonar S8786) without changing the
+# match set: neither ``\s`` nor ``%`` is in ``[\d.]``, so giving back a matched
+# ``[\d.]`` char can never help the trailing ``\s*%`` match. Shared constant so
+# the identical literal is not duplicated (Sonar S1192).
+_PERCENT_RE = re.compile(r"([-+]?[\d.]++)\s*%")
+
 
 def _to_float(token: str) -> float | None:
     try:
         return float(token.replace(",", ""))
     except ValueError:
         return None
+
+
+def _make_line_after(body: str):
+    """Return a ``line_after(prefix)`` reader over the ``<facts>`` body: the text
+    after the first stripped line starting with ``prefix``, or ``None``."""
+
+    def _line_after(prefix: str) -> str | None:
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(prefix):
+                return stripped[len(prefix) :].strip()
+        return None
+
+    return _line_after
+
+
+def _parse_text_facts(line_after, index: dict) -> None:
+    """ticker / company / theme text fields."""
+    ticker = line_after("ticker:")
+    if ticker:
+        index["ticker"] = ticker
+    company = line_after("company:")
+    if company is not None:
+        index["company"] = company
+    theme = line_after("theme:")
+    if theme is not None:
+        index["theme"] = theme
+
+
+def _parse_market_cap(line_after, index: dict) -> None:
+    """market_cap line: "$8.20B" → 8.2e9."""
+    mcap = line_after("market_cap:")
+    if mcap is None:
+        return
+    m = re.search(r"\$?([\d.]+)\s*([BMK])?", mcap)
+    if m and m.group(1):
+        val = float(m.group(1))
+        mult = {"B": 1e9, "M": 1e6, "K": 1e3, None: 1.0}[m.group(2)]
+        index["market_cap"] = val * mult
+
+
+def _parse_labeled_numbers(line: str, index: dict, mapping: tuple[tuple[str, str], ...]) -> None:
+    """For each (label, key), pull the signed number after the label on ``line``."""
+    for label, key in mapping:
+        m = re.search(re.escape(label) + r"\s+([-+]?[\d.]+)", line)
+        if m:
+            index[key] = float(m.group(1))
+
+
+def _parse_valuation(line_after, index: dict) -> None:
+    """valuation line: P/S 7.5, EV/Rev 7.2, FCF margin 0.34, composite pctile."""
+    val_line = line_after("- valuation:")
+    if val_line:
+        _parse_labeled_numbers(
+            val_line,
+            index,
+            (
+                ("P/S", "valuation_ps"),
+                ("EV/Rev", "valuation_ev_rev"),
+                ("FCF margin", "valuation_fcf_margin"),
+            ),
+        )
+
+
+def _parse_fcff(line_after, index: dict) -> None:
+    """FCFF yield: "- FCFF yield: 4.8%, sector percentile 39"."""
+    fcff = line_after("- FCFF yield:")
+    if fcff:
+        m = _PERCENT_RE.search(fcff)
+        if m:
+            index["fcff_yield_pct"] = float(m.group(1))
+
+
+def _parse_insider(line_after, index: dict) -> None:
+    """insider dollars: - insider opportunistic buys (...): $0k, sector pctile."""
+    ins = line_after("- insider opportunistic buys")
+    if ins:
+        m = re.search(r"\$([-+]?[\d.]+)k", ins)
+        if m:
+            index["insider_score_usd"] = float(m.group(1)) * 1000
+
+
+def _parse_directional_distances(line_after, index: dict) -> None:
+    """52w-high/low distance + MA200 distance/slope directional lines."""
+    hi = line_after("- 52w high distance:")
+    if hi:
+        m = _PERCENT_RE.search(hi)
+        if m:
+            index["technical_pct_off_52w_high"] = float(m.group(1))
+        m2 = re.search(r"52w low distance:\s*([-+]?[\d.]+)\s*%", hi)
+        if m2:
+            index["technical_pct_off_52w_low"] = float(m2.group(1))
+    ma = line_after("- MA200 distance:")
+    if ma:
+        m = _PERCENT_RE.search(ma)
+        if m:
+            index["technical_ma200_distance_pct"] = float(m.group(1))
+        m2 = re.search(r"MA200 slope:\s*([-+]?[\d.]+)\s*%", ma)
+        if m2:
+            index["technical_ma200_slope_pct_per_day"] = float(m2.group(1))
+
+
+def _parse_technicals(line_after, index: dict) -> None:
+    """technicals line: "RSI 53 / MA50 +2.4% / ... / ATR 4.6% / volZ -1.3"."""
+    tech = line_after("- technicals:")
+    if tech:
+        _parse_labeled_numbers(
+            tech,
+            index,
+            (
+                ("RSI", "technical_rsi"),
+                ("MA50", "technical_ma50_distance_pct"),
+                ("ATR", "technical_atr_pct"),
+                ("volZ", "technical_volz"),
+            ),
+        )
+
+
+def _parse_durability(line_after, index: dict) -> None:
+    """durability (Buffett quant): "ROIC 12.3% (3y avg 11.0%), owner-earnings
+    yield 4.5%, DCF margin of safety -8.0%" (prompts.py _format_durability_line).
+    Keys carry the ``_pct`` suffix so ``_fact_unit_kind`` classifies them as %
+    facts. Absent sub-fields render as "n/a" and simply do not match."""
+    dur = line_after("- durability (Buffett quant):")
+    if not dur:
+        return
+    for pattern, key in (
+        (r"ROIC\s+([-+]?[\d.]+)\s*%", "buffett_roic_pct"),
+        (r"3y avg\s+([-+]?[\d.]+)\s*%", "buffett_roic_3y_avg_pct"),
+        (r"owner-earnings yield\s+([-+]?[\d.]+)\s*%", "buffett_owner_earnings_yield_pct"),
+        (r"DCF margin of safety\s+([-+]?[\d.]+)\s*%", "buffett_margin_of_safety_pct"),
+    ):
+        m = re.search(pattern, dur)
+        if m:
+            index[key] = float(m.group(1))
+
+
+def _parse_catalyst_lines(body: str, index: dict) -> None:
+    """catalyst title + published date (for entity / date grounding)."""
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("title:"):
+            index["source_event_title"] = stripped[len("title:") :].strip()
+        elif stripped.startswith("published:"):
+            index["source_event_published_at"] = stripped[len("published:") :].strip()
 
 
 def _parse_rendered_facts(contents: str) -> dict:
@@ -342,119 +495,20 @@ def _parse_rendered_facts(contents: str) -> dict:
         raise ValueError("no <facts> block starting with 'ticker:' found in contents")
     body = match.group(1)
     index: dict = {}
+    line_after = _make_line_after(body)
 
-    def _line_after(prefix: str) -> str | None:
-        for line in body.splitlines():
-            stripped = line.strip()
-            if stripped.startswith(prefix):
-                return stripped[len(prefix) :].strip()
-        return None
-
-    ticker = _line_after("ticker:")
-    if ticker:
-        index["ticker"] = ticker
-    company = _line_after("company:")
-    if company is not None:
-        index["company"] = company
-    theme = _line_after("theme:")
-    if theme is not None:
-        index["theme"] = theme
-
-    mcap = _line_after("market_cap:")
-    if mcap is not None:
-        # "$8.20B" → 8.2e9
-        m = re.search(r"\$?([\d.]+)\s*([BMK])?", mcap)
-        if m and m.group(1):
-            val = float(m.group(1))
-            mult = {"B": 1e9, "M": 1e6, "K": 1e3, None: 1.0}[m.group(2)]
-            index["market_cap"] = val * mult
-
-    # valuation line: "P/S 7.5, EV/Rev 7.2, FCF margin 0.34, composite sector pctile 45"
-    val_line = _line_after("- valuation:")
-    if val_line:
-        for label, key in (
-            ("P/S", "valuation_ps"),
-            ("EV/Rev", "valuation_ev_rev"),
-            ("FCF margin", "valuation_fcf_margin"),
-        ):
-            m = re.search(re.escape(label) + r"\s+([-+]?[\d.]+)", val_line)
-            if m:
-                index[key] = float(m.group(1))
-
-    # FCFF yield: "- FCFF yield: 4.8%, sector percentile 39"
-    fcff = _line_after("- FCFF yield:")
-    if fcff:
-        m = re.search(r"([-+]?[\d.]+)\s*%", fcff)
-        if m:
-            index["fcff_yield_pct"] = float(m.group(1))
-
-    # insider dollars: "- insider opportunistic buys (180d, buy-only): $0k, sector percentile 96"
-    ins = _line_after("- insider opportunistic buys")
-    if ins:
-        m = re.search(r"\$([-+]?[\d.]+)k", ins)
-        if m:
-            index["insider_score_usd"] = float(m.group(1)) * 1000
-
-    # directional distances
-    hi = _line_after("- 52w high distance:")
-    if hi:
-        m = re.search(r"([-+]?[\d.]+)\s*%", hi)
-        if m:
-            index["technical_pct_off_52w_high"] = float(m.group(1))
-        m2 = re.search(r"52w low distance:\s*([-+]?[\d.]+)\s*%", hi)
-        if m2:
-            index["technical_pct_off_52w_low"] = float(m2.group(1))
-    ma = _line_after("- MA200 distance:")
-    if ma:
-        m = re.search(r"([-+]?[\d.]+)\s*%", ma)
-        if m:
-            index["technical_ma200_distance_pct"] = float(m.group(1))
-        m2 = re.search(r"MA200 slope:\s*([-+]?[\d.]+)\s*%", ma)
-        if m2:
-            index["technical_ma200_slope_pct_per_day"] = float(m2.group(1))
-
-    # technicals line: "RSI 53 / MA50 +2.4% / MA200 -18.3% (...) / 52w high
-    # -39.2% / 52w low +14.7% / ATR 4.6% / volZ -1.3"
-    tech = _line_after("- technicals:")
-    if tech:
-        for label, key in (
-            ("RSI", "technical_rsi"),
-            ("MA50", "technical_ma50_distance_pct"),
-            ("ATR", "technical_atr_pct"),
-            ("volZ", "technical_volz"),
-        ):
-            m = re.search(re.escape(label) + r"\s+([-+]?[\d.]+)", tech)
-            if m:
-                index[key] = float(m.group(1))
-
-    # durability (Buffett quant): "ROIC 12.3% (3y avg 11.0%), owner-earnings
-    # yield 4.5%, DCF margin of safety -8.0%" (prompts.py _format_durability_line).
-    # Standard <facts> line when Buffett data resolved — omitted here, a brief
-    # faithfully citing ROIC would false-fire FABRICATED. Keys carry the _pct
-    # suffix so _fact_unit_kind classifies them as % facts. Absent sub-fields
-    # render as "n/a" and simply do not match.
-    dur = _line_after("- durability (Buffett quant):")
-    if dur:
-        for pattern, key in (
-            (r"ROIC\s+([-+]?[\d.]+)\s*%", "buffett_roic_pct"),
-            (r"3y avg\s+([-+]?[\d.]+)\s*%", "buffett_roic_3y_avg_pct"),
-            (r"owner-earnings yield\s+([-+]?[\d.]+)\s*%", "buffett_owner_earnings_yield_pct"),
-            (r"DCF margin of safety\s+([-+]?[\d.]+)\s*%", "buffett_margin_of_safety_pct"),
-        ):
-            m = re.search(pattern, dur)
-            if m:
-                index[key] = float(m.group(1))
-
-    # catalyst title + published date (for entity / date grounding)
-    for line in body.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("title:"):
-            index["source_event_title"] = stripped[len("title:") :].strip()
-        elif stripped.startswith("published:"):
-            index["source_event_published_at"] = stripped[len("published:") :].strip()
+    _parse_text_facts(line_after, index)
+    _parse_market_cap(line_after, index)
+    _parse_valuation(line_after, index)
+    _parse_fcff(line_after, index)
+    _parse_insider(line_after, index)
+    _parse_directional_distances(line_after, index)
+    _parse_technicals(line_after, index)
+    _parse_durability(line_after, index)
+    _parse_catalyst_lines(body, index)
 
     # next_earnings_date if present
-    ned = _line_after("next_earnings_date:")
+    ned = line_after("next_earnings_date:")
     if ned:
         index["next_earnings_date"] = ned
 
@@ -537,7 +591,7 @@ _LABEL_MASK_RES: tuple[re.Pattern, ...] = (
     # SEC exhibit label "EX-99.1" / "EX-10.1" — the "-99.1" is NOT a number.
     # No leading \b (a preceding CJK char is a word char, so \b would miss the
     # Chinese-brief case); a lookbehind blocks matching inside a word (REX-99).
-    re.compile(r"(?<![A-Za-z])EX-\d+(?:\.\d+)?", re.IGNORECASE),  # EX-99.1, EX-10.1
+    re.compile(r"(?<![A-Z])EX-\d+(?:\.\d+)?", re.IGNORECASE),  # EX-99.1, EX-10.1
     re.compile(r"\b\d+(?:st|nd|rd|th)\b", re.IGNORECASE),  # 1st percentile, 200th
     re.compile(r"(?<!\d)\d\)"),  # "1)" "2)" list markers
 )
@@ -561,6 +615,37 @@ def _is_checkable_span(match: re.Match, unit: str) -> bool:
     return "." in match.group("num")
 
 
+# Magnitude-word / abbreviation suffixes → scale multiplier. A suffix present
+# here scales the number and yields a "$"/"count" unit (dollar-aware); "%" and
+# "x" are unit-only suffixes handled separately.
+_MAGNITUDE_MULTIPLIERS: dict[str, float] = {
+    "b": 1e9,
+    "bn": 1e9,
+    "billion": 1e9,
+    "trillion": 1e12,
+    "m": 1e6,
+    "million": 1e6,
+    "k": 1e3,
+}
+
+
+def _resolve_numeric_suffix(suffix: str, dollar: bool) -> tuple[float, str]:
+    """Map a numeric suffix to a (value scale, unit) pair.
+
+    ``%``/``x`` are unit-only (scale 1.0); magnitude words scale the value and
+    yield ``$`` when a leading dollar sign is present, else ``count``. An empty
+    or unknown suffix keeps the base value and the dollar-aware default unit.
+    """
+    if suffix == "%":
+        return 1.0, "%"
+    if suffix == "x":
+        return 1.0, "x"
+    mult = _MAGNITUDE_MULTIPLIERS.get(suffix)
+    if mult is not None:
+        return mult, "$" if dollar else "count"
+    return 1.0, "$" if dollar else ""
+
+
 def _canonical_numeric(match: re.Match) -> tuple[float, str, str] | None:
     """Return (value, unit, span) for a numeric atom, or None to skip.
 
@@ -572,32 +657,13 @@ def _canonical_numeric(match: re.Match) -> tuple[float, str, str] | None:
     if num is None:
         return None
     sign = match.group("sign") or ""
-    dollar = match.group("dollar") or ""
+    dollar = bool(match.group("dollar"))
     suffix = (match.group("glued") or match.group("word") or "").lower()
-    value = num
-    unit = ""
-    if dollar:
-        unit = "$"
-    if suffix in ("%",):
-        unit = "%"
-    elif suffix == "x":
-        unit = "x"
-    elif suffix in ("b", "bn", "billion"):
-        value = num * 1e9
-        unit = "$" if dollar else "count"
-    elif suffix == "trillion":
-        value = num * 1e12
-        unit = "$" if dollar else "count"
-    elif suffix in ("m", "million"):
-        value = num * 1e6
-        unit = "$" if dollar else "count"
-    elif suffix == "k":
-        value = num * 1e3
-        unit = "$" if dollar else "count"
+    scale, unit = _resolve_numeric_suffix(suffix, dollar)
+    value = num * scale
     if sign == "-":
         value = -value
-    span = match.group(0)
-    return value, unit, span
+    return value, unit, match.group(0)
 
 
 def extract_atoms(field: str, text: str) -> list[Atom]:
@@ -670,6 +736,53 @@ def _numeric_fact_candidates(facts: dict) -> list[tuple[str, float]]:
     return out
 
 
+def _fact_values_for(key: str, fact_val: float) -> list[float]:
+    """The comparable value(s) for a fact.
+
+    Directional facts also expose ``abs(fact_val)`` so a brief that supplies its
+    own direction word (memo §6.4 step 1) compares magnitude-to-magnitude.
+    """
+    if key in _DIRECTIONAL_FACT_KEYS:
+        return [fact_val, abs(fact_val)]
+    return [fact_val]
+
+
+def _is_distorted(value: float, fv: float, precision: int) -> bool:
+    """DISTORTED band test: brief ``value`` within an absolute (2 ULP) or a
+    relative (``_DISTORTED_REL_BAND`` of the fact magnitude) tolerance of a
+    same-kind fact (memo §6.4 correctness fix — the band is scaled to the FACT
+    only, so a brief overstating by >40% of the fact is FABRICATED)."""
+    step = 10.0 ** (-precision) if precision > 0 else 1.0
+    abs_band = 2.0 * step
+    rel_band = _DISTORTED_REL_BAND * max(abs(fv), 1e-9)
+    return abs(value - fv) <= max(abs_band, rel_band)
+
+
+def _best_numeric_match(
+    value: float, precision: int, allowed_kinds: frozenset[str], facts: dict
+) -> tuple[tuple[str, float] | None, tuple[str, float] | None]:
+    """Scan the fact index for the closest GROUNDED and closest DISTORTED fact.
+
+    Returns ``(best_grounded, best_distorted)`` as ``(key, fact_value)`` pairs
+    (or ``None``). "Closest" prefers the exact-value fact over one that only
+    collides after rounding (honest attribution, memo §6.4 step 3).
+    """
+    best_grounded: tuple[str, float] | None = None
+    best_distorted: tuple[str, float] | None = None
+    for key, fact_val in _numeric_fact_candidates(facts):
+        if _fact_unit_kind(key) not in allowed_kinds:
+            continue
+        for fv in _fact_values_for(key, fact_val):
+            if round(fv, precision) == round(value, precision):
+                if best_grounded is None or abs(value - fv) < abs(value - best_grounded[1]):
+                    best_grounded = (key, fv)
+                continue
+            closer = best_distorted is None or abs(value - fv) < abs(value - best_distorted[1])
+            if closer and _is_distorted(value, fv, precision):
+                best_distorted = (key, fv)
+    return best_grounded, best_distorted
+
+
 def _match_numeric(atom: Atom, value: float, facts: dict) -> Atom:
     """Classify a numeric atom against the fact index (memo §6.4 step 3).
 
@@ -680,40 +793,7 @@ def _match_numeric(atom: Atom, value: float, facts: dict) -> Atom:
     span = atom.span
     precision = _brief_precision(span)
     allowed_kinds = _ATOM_UNIT_TO_FACT_KINDS.get(_atom_unit(atom), frozenset({"ratio"}))
-    best_grounded: tuple[str, float] | None = None
-    best_distorted: tuple[str, float] | None = None
-
-    for key, fact_val in _numeric_fact_candidates(facts):
-        if _fact_unit_kind(key) not in allowed_kinds:
-            continue
-        candidates = [fact_val]
-        # Sign-strip for directional facts when the brief supplies its own
-        # direction word (memo §6.4 step 1): compare |brief| to |fact|.
-        if key in _DIRECTIONAL_FACT_KEYS:
-            candidates.append(abs(fact_val))
-        for fv in candidates:
-            # Rounding tolerance: round the FACT to the brief's stated precision.
-            # Keep the CLOSEST grounded fact (honest attribution: prefer the
-            # exact-value fact over one that only collides after rounding, e.g.
-            # insider $0k over fcf_margin 0.34 → 0).
-            if round(fv, precision) == round(value, precision):
-                if best_grounded is None or abs(value - fv) < abs(value - best_grounded[1]):
-                    best_grounded = (key, fv)
-                continue
-            # DISTORTED band: within one-unit-of-last-place OR a relative
-            # tolerance of a same-kind fact (memo pin "50%" vs -39.2%). The
-            # relative band is scaled to the FACT magnitude ONLY (not
-            # max(fact, brief)) so tolerance stays symmetric around the true
-            # value: a brief that overstates by >40% of the fact is FABRICATED,
-            # not DISTORTED (memo §6.4 correctness fix — an asymmetric band
-            # widened as the brief overstated).
-            step = 10.0 ** (-precision) if precision > 0 else 1.0
-            abs_band = 2.0 * step
-            rel_band = _DISTORTED_REL_BAND * max(abs(fv), 1e-9)
-            within_band = abs(value - fv) <= max(abs_band, rel_band)
-            closer = best_distorted is None or abs(value - fv) < abs(value - best_distorted[1])
-            if within_band and closer:
-                best_distorted = (key, fv)
+    best_grounded, best_distorted = _best_numeric_match(value, precision, allowed_kinds, facts)
 
     if best_grounded is not None:
         return Atom(
@@ -821,19 +901,22 @@ def _is_quoted(text: str, phrase_start: int, phrase_len: int) -> bool:
     return text.count('"', 0, phrase_start) % 2 == 1
 
 
-def _characterization_atoms(field_name: str, text: str, facts: dict) -> list[Atom]:
-    """Detect forbidden-lexicon characterization violations in one field.
+def _char_violation_atom(field_name: str, text: str, start: int, phrase: str) -> Atom:
+    """Build one characterization VIOLATION atom for a matched forbidden phrase."""
+    return Atom(
+        field=field_name,
+        span=text[max(0, start - 15) : start + len(phrase) + 15].strip(),
+        kind="characterization",
+        extracted_value=phrase,
+        verdict="VIOLATION",
+        gating=True,
+    )
 
-    Fires VIOLATION only on the affirmative, un-negated, un-quoted match
-    (memo §6.4). ``next_earnings_date`` forecast verbs fire only when a forecast
-    phrase is adjacent to the earnings date reference.
-    """
+
+def _framing_violations(field_name: str, text: str, low: str) -> list[Atom]:
+    """Drawdown/valuation framing-lexicon violations (affirmative, un-negated,
+    un-quoted, not an academic refusal — memo §6.4)."""
     atoms: list[Atom] = []
-    if not text:
-        return atoms
-    low = text.lower()
-
-    # Drawdown/valuation framing lexicon.
     for phrase in _FORBIDDEN_CHAR_PHRASES:
         for m in re.finditer(r"\b" + re.escape(phrase) + r"\b", low):
             start = m.start()
@@ -843,45 +926,54 @@ def _characterization_atoms(field_name: str, text: str, facts: dict) -> list[Ato
                 continue
             if _is_quoted(text, start, len(phrase)):
                 continue
-            atoms.append(
-                Atom(
-                    field=field_name,
-                    span=text[max(0, start - 15) : start + len(phrase) + 15].strip(),
-                    kind="characterization",
-                    extracted_value=phrase,
-                    verdict="VIOLATION",
-                    gating=True,
-                )
-            )
+            atoms.append(_char_violation_atom(field_name, text, start, phrase))
+    return atoms
 
-    # Forecast-verb-near-earnings check: fires if the field references the
-    # earnings event by the WORD 'earnings' OR by the next_earnings_date value
-    # itself (a date-only reference like "a strong print on 2026-06-15" still
-    # anchors — the ban is on forecasting the outcome, not on the literal word,
-    # memo §6.4 correctness fix).
-    earnings_date = str(facts.get("next_earnings_date") or "").strip()
+
+def _earnings_anchors(low: str, earnings_date: str) -> list[int]:
+    """Start offsets that anchor the earnings event: the WORD 'earnings' plus
+    the ``next_earnings_date`` value itself (a date-only reference still anchors,
+    memo §6.4 correctness fix)."""
     anchors = [m.start() for m in re.finditer(r"earnings", low)]
     if earnings_date:
         anchors += [m.start() for m in re.finditer(re.escape(earnings_date.lower()), low)]
-    if earnings_date and anchors:
-        for phrase in _FORECAST_PHRASES:
-            for m in re.finditer(r"\b" + re.escape(phrase) + r"\b", low):
-                start = m.start()
-                if _is_quoted(text, start, len(phrase)):
-                    continue
-                near = any(abs(start - a) <= _EARNINGS_WINDOW for a in anchors)
-                if not near:
-                    continue
-                atoms.append(
-                    Atom(
-                        field=field_name,
-                        span=text[max(0, start - 15) : start + len(phrase) + 15].strip(),
-                        kind="characterization",
-                        extracted_value=phrase,
-                        verdict="VIOLATION",
-                        gating=True,
-                    )
-                )
+    return anchors
+
+
+def _forecast_violations(field_name: str, text: str, low: str, facts: dict) -> list[Atom]:
+    """Forecast-verb-near-earnings violations: a forecast phrase fires only when
+    it sits within ``_EARNINGS_WINDOW`` chars of an earnings anchor and is not
+    quoted."""
+    earnings_date = str(facts.get("next_earnings_date") or "").strip()
+    if not earnings_date:
+        return []
+    anchors = _earnings_anchors(low, earnings_date)
+    if not anchors:
+        return []
+    atoms: list[Atom] = []
+    for phrase in _FORECAST_PHRASES:
+        for m in re.finditer(r"\b" + re.escape(phrase) + r"\b", low):
+            start = m.start()
+            if _is_quoted(text, start, len(phrase)):
+                continue
+            if not any(abs(start - a) <= _EARNINGS_WINDOW for a in anchors):
+                continue
+            atoms.append(_char_violation_atom(field_name, text, start, phrase))
+    return atoms
+
+
+def _characterization_atoms(field_name: str, text: str, facts: dict) -> list[Atom]:
+    """Detect forbidden-lexicon characterization violations in one field.
+
+    Fires VIOLATION only on the affirmative, un-negated, un-quoted match
+    (memo §6.4). ``next_earnings_date`` forecast verbs fire only when a forecast
+    phrase is adjacent to the earnings date reference.
+    """
+    if not text:
+        return []
+    low = text.lower()
+    atoms = _framing_violations(field_name, text, low)
+    atoms.extend(_forecast_violations(field_name, text, low, facts))
     return atoms
 
 

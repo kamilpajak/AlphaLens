@@ -344,6 +344,25 @@ def _suppressor(
     return None
 
 
+def _overlaps_claimed(claimed: list[tuple[int, int]], start: int, end: int) -> bool:
+    """True if ``[start, end)`` overlaps any already-claimed character range. A
+    Tier-2 token whose span overlaps a claimed range is a DUPLICATE of a broader
+    phrase already counted ("raise" inside "capital raise", "offering" inside
+    "secondary offering") and is dropped so one assertion counts once."""
+    return any(start < c_end and end > c_start for c_start, c_end in claimed)
+
+
+def _tier2_hits(token: str, norm_low: str, start: int) -> bool:
+    """True if the Tier-2 ``token`` at ``start`` has a same-clause hard anchor."""
+    end = start + len(token)
+    clause = _clause_before(norm_low, end)
+    # clause_before ends AT the token; include a small window AFTER the token too
+    # so "$500M offering" (anchor before) and "offering of $500M" (anchor after)
+    # both anchor. Scan the sentence window.
+    window = norm_low[max(0, start - 120) : end + 120]
+    return _tier2_anchored(clause) or _tier2_anchored(window)
+
+
 def _scan_field(
     field: str, text: str, facts: Mapping[str, Any], title_subtypes: set[str]
 ) -> list[FinancingFlag]:
@@ -353,14 +372,8 @@ def _scan_field(
     norm = _normalize(text)
     norm_low = norm.lower()
     flags: list[FinancingFlag] = []
-    # Character ranges already claimed by an emitted match. A Tier-2 token whose
-    # span overlaps a claimed range is a DUPLICATE of a broader phrase already
-    # counted ("raise" inside "capital raise", "offering" inside "secondary
-    # offering") and is dropped so one assertion counts once.
+    # Character ranges already claimed by an emitted match (see _overlaps_claimed).
     claimed: list[tuple[int, int]] = []
-
-    def _overlaps(start: int, end: int) -> bool:
-        return any(start < c_end and end > c_start for c_start, c_end in claimed)
 
     def _emit(start: int, phrase: str, subtype: str) -> None:
         end = start + len(phrase)
@@ -382,7 +395,7 @@ def _scan_field(
     # of a Tier-1 phrase are absorbed, not double-counted).
     for phrase, subtype in _TIER1:
         for m in re.finditer(r"\b" + re.escape(phrase) + r"\b", norm_low):
-            if _overlaps(m.start(), m.end()):
+            if _overlaps_claimed(claimed, m.start(), m.end()):
                 continue
             _emit(m.start(), phrase, subtype)
 
@@ -390,15 +403,9 @@ def _scan_field(
     for token, subtype in _TIER2:
         for m in re.finditer(r"\b" + re.escape(token) + r"\b", norm_low):
             start = m.start()
-            end = start + len(token)
-            if _overlaps(start, end):
+            if _overlaps_claimed(claimed, start, start + len(token)):
                 continue
-            clause = _clause_before(norm_low, end)
-            # clause_before ends AT the token; include a small window AFTER the
-            # token too so "$500M offering" (anchor before) and "offering of
-            # $500M" (anchor after) both anchor. Scan the sentence window.
-            window = norm_low[max(0, start - 120) : end + 120]
-            if not (_tier2_anchored(clause) or _tier2_anchored(window)):
+            if not _tier2_hits(token, norm_low, start):
                 continue
             _emit(start, token, subtype)
 
@@ -414,10 +421,9 @@ def _collapse_per_subtype(flags: list[FinancingFlag]) -> list[FinancingFlag]:
     chosen: dict[str, FinancingFlag] = {}
     for flag in flags:
         existing = chosen.get(flag.subtype)
-        if existing is None:
-            chosen[flag.subtype] = flag
-        elif existing.suppressed_by is not None and flag.suppressed_by is None:
-            # Upgrade: a fired flag replaces a suppressed representative.
+        # Insert the first-seen representative, OR upgrade a suppressed
+        # representative to a fired one (same assignment, one shared body).
+        if existing is None or (existing.suppressed_by is not None and flag.suppressed_by is None):
             chosen[flag.subtype] = flag
     # Preserve first-appearance order for stable output.
     seen: set[str] = set()
@@ -509,6 +515,38 @@ def _load_rows_with_brief_date(paths: Iterable[str]) -> list[dict]:
     return rows
 
 
+def _fired_flags(flags: list[FinancingFlag]) -> list[FinancingFlag]:
+    """The FIRED (non-suppressed) subset of a field's flags."""
+    return [f for f in flags if f.suppressed_by is None]
+
+
+def _suppressed_by_tally(
+    detections: list[tuple[list[FinancingFlag], Mapping[str, Any]]],
+) -> dict[str, int]:
+    """Count suppressed flags by their suppressor across the corpus."""
+    suppressed_by: dict[str, int] = {}
+    for flags, _ in detections:
+        for f in flags:
+            if f.suppressed_by is not None:
+                suppressed_by[f.suppressed_by] = suppressed_by.get(f.suppressed_by, 0) + 1
+    return suppressed_by
+
+
+def _bucketed_fired_rates(
+    detections: list[tuple[list[FinancingFlag], Mapping[str, Any]]], label_of
+) -> dict:
+    """Per-label fired-brief rate blocks, bucketing detections by ``label_of(row)``."""
+    buckets: dict[str, list[list[FinancingFlag]]] = {}
+    for flags, row in detections:
+        buckets.setdefault(label_of(row), []).append(flags)
+    out: dict[str, dict] = {}
+    for label, flag_lists in buckets.items():
+        bn = len(flag_lists)
+        bk = sum(1 for fl in flag_lists if _fired_flags(fl))
+        out[label] = _rate_block(bk, bn)
+    return out
+
+
 def measure_financing_fabrication(
     rows: Iterable[Mapping[str, Any]] | Iterable[str],
     *,
@@ -537,50 +575,34 @@ def measure_financing_fabrication(
         (detect_financing_claims(row), row) for row in row_maps
     ]
 
-    def _fired(flags: list[FinancingFlag]) -> list[FinancingFlag]:
-        return [f for f in flags if f.suppressed_by is None]
-
-    k_briefs = sum(1 for flags, _ in detections if _fired(flags))
-    total_fired = sum(len(_fired(flags)) for flags, _ in detections)
+    k_briefs = sum(1 for flags, _ in detections if _fired_flags(flags))
+    total_fired = sum(len(_fired_flags(flags)) for flags, _ in detections)
     total_suppressed = sum(
         1 for flags, _ in detections for f in flags if f.suppressed_by is not None
     )
-    suppressed_by: dict[str, int] = {}
-    for flags, _ in detections:
-        for f in flags:
-            if f.suppressed_by is not None:
-                suppressed_by[f.suppressed_by] = suppressed_by.get(f.suppressed_by, 0) + 1
+    suppressed_by = _suppressed_by_tally(detections)
 
     # --- per-field fired-brief rates ---
     per_field: dict[str, dict] = {}
     for field in _SCHEMA_FIELDS:
-        k = sum(1 for flags, _ in detections if any(f.field == field for f in _fired(flags)))
+        k = sum(1 for flags, _ in detections if any(f.field == field for f in _fired_flags(flags)))
         per_field[field] = _rate_block(k, n)
 
     # --- per-stratum fired-brief rates (requested keys + brief_date + year_month) ---
-    def _bucketed(label_of) -> dict:  # local helper
-        buckets: dict[str, list[list[FinancingFlag]]] = {}
-        for flags, row in detections:
-            label = label_of(row)
-            buckets.setdefault(label, []).append(flags)
-        out: dict[str, dict] = {}
-        for label, flag_lists in buckets.items():
-            bn = len(flag_lists)
-            bk = sum(1 for fl in flag_lists if _fired(fl))
-            out[label] = _rate_block(bk, bn)
-        return out
-
     per_stratum: dict[str, dict] = {}
     for key in strata_keys:
-        per_stratum[key] = _bucketed(
+        per_stratum[key] = _bucketed_fired_rates(
+            detections,
             lambda row, key=key: (
                 "unknown" if _is_missing_scalar(row.get(key)) else str(row.get(key))
-            )
+            ),
         )
     # brief_date stratum: only rows carrying a date (filename stem stamp or a
     # real column) fall into a dated bucket; undated rows go to "unknown".
-    per_stratum["brief_date"] = _bucketed(lambda row: _brief_date_of_path_or_row(row) or "unknown")
-    per_stratum["year_month"] = _bucketed(_year_month_of_row)
+    per_stratum["brief_date"] = _bucketed_fired_rates(
+        detections, lambda row: _brief_date_of_path_or_row(row) or "unknown"
+    )
+    per_stratum["year_month"] = _bucketed_fired_rates(detections, _year_month_of_row)
 
     return {
         "scorer_version": FAITHFULNESS_SCORER_VERSION,
@@ -623,6 +645,44 @@ _BUCKET_SUPPRESSED = "suppressed_sample"
 _TEXT_COLUMN_BY_FIELD: dict[str, str] = {v: k for k, v in _TEXT_COLUMN_TO_SCHEMA_FIELD.items()}
 
 
+def _worksheet_record(
+    flag: FinancingFlag, row: Mapping[str, Any], ticker: str, brief_date: str, title: str, url: str
+) -> dict:
+    """One human-labeling worksheet record for a single financing flag."""
+    text_column = _TEXT_COLUMN_BY_FIELD.get(flag.field)
+    field_text = str(row.get(text_column) or "") if text_column else ""
+    bucket = _BUCKET_ASSERTED if flag.suppressed_by is None else _BUCKET_SUPPRESSED
+    return {
+        "ticker": ticker,
+        "brief_date": brief_date,
+        "field": flag.field,
+        "span": flag.span,
+        "sentence_window": _sentence_window(field_text, flag.span) if field_text else flag.span,
+        "source_event_title": title,
+        "source_event_url": url,
+        "matched_phrase": flag.matched_phrase,
+        "subtype": flag.subtype,
+        "suppressed_by": flag.suppressed_by,
+        "bucket": bucket,
+        "human_label": "",
+    }
+
+
+def _stage_worksheet_rows(row: Mapping[str, Any], staged: dict[str, list[dict]]) -> None:
+    """Append every financing flag of ``row`` to its bucket in ``staged``."""
+    flags = detect_financing_claims(row)
+    if not flags:
+        return
+    facts = fact_index_from_brief_row(row)
+    ticker = str(row.get("ticker") or "")
+    brief_date = _brief_date_of_path_or_row(row)
+    title = str(row.get(_TITLE_KEY) or facts.get(_TITLE_KEY) or "")
+    url = str(row.get("source_event_url") or "")
+    for flag in flags:
+        record = _worksheet_record(flag, row, ticker, brief_date, title, url)
+        staged[record["bucket"]].append(record)
+
+
 def build_financing_audit_worksheet(
     rows: Iterable[Mapping[str, Any]] | Iterable[str],
     *,
@@ -653,36 +713,7 @@ def build_financing_audit_worksheet(
 
     staged: dict[str, list[dict]] = {_BUCKET_ASSERTED: [], _BUCKET_SUPPRESSED: []}
     for row in row_maps:
-        flags = detect_financing_claims(row)
-        if not flags:
-            continue
-        facts = fact_index_from_brief_row(row)
-        ticker = str(row.get("ticker") or "")
-        brief_date = _brief_date_of_path_or_row(row)
-        title = str(row.get(_TITLE_KEY) or facts.get(_TITLE_KEY) or "")
-        url = str(row.get("source_event_url") or "")
-        for flag in flags:
-            bucket = _BUCKET_ASSERTED if flag.suppressed_by is None else _BUCKET_SUPPRESSED
-            text_column = _TEXT_COLUMN_BY_FIELD.get(flag.field)
-            field_text = str(row.get(text_column) or "") if text_column else ""
-            staged[bucket].append(
-                {
-                    "ticker": ticker,
-                    "brief_date": brief_date,
-                    "field": flag.field,
-                    "span": flag.span,
-                    "sentence_window": _sentence_window(field_text, flag.span)
-                    if field_text
-                    else flag.span,
-                    "source_event_title": title,
-                    "source_event_url": url,
-                    "matched_phrase": flag.matched_phrase,
-                    "subtype": flag.subtype,
-                    "suppressed_by": flag.suppressed_by,
-                    "bucket": bucket,
-                    "human_label": "",
-                }
-            )
+        _stage_worksheet_rows(row, staged)
 
     records: list[dict] = []
     for bucket in (_BUCKET_ASSERTED, _BUCKET_SUPPRESSED):
