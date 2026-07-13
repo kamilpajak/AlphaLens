@@ -117,7 +117,7 @@
 					grid={{ class: 'stroke-grid/60' }}
 					rule={{ class: 'stroke-grid' }}
 					format={pctTick}
-					tickLabelProps={tickText}
+					tickLabelProps={{ ...tickText, dx: -6 }}
 				/>
 				<Axis
 					placement="bottom"
