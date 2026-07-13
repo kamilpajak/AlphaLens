@@ -22,7 +22,7 @@ members = ["apps/alphalens-feedback", "apps/alphalens-pipeline", "apps/alphalens
 # single `uv sync --group dev` boots the full CI test matrix.
 dev = [
     "ruff>=0.15.20",
-    "coverage>=7.14.3",
+    "coverage>=7.15.1",
     "pre-commit>=4.6.0",
     "bandit>=1.9.4",
     "httpx>=0.28.1",
