@@ -10,7 +10,7 @@
 const MS_PER_DAY = 86_400_000;
 
 /** Parse a `YYYY-MM-DD` string to a UTC-midnight Date (matches the M/D formatter). */
-const toUtcDate = (iso: string) => new Date(iso + 'T00:00:00Z');
+export const toUtcDate = (iso: string) => new Date(iso + 'T00:00:00Z');
 
 /**
  * Evenly-spaced x-axis ticks across the range of `isoDates`.
@@ -18,8 +18,11 @@ const toUtcDate = (iso: string) => new Date(iso + 'T00:00:00Z');
  * Ticks are anchored on the max date (so the right edge — the most recent
  * observation — is always labelled) and stepped backward by a constant whole
  * number of days chosen to land near `targetCount` ticks. All ticks are
- * UTC-midnight aligned and within `[min, max]`.
+ * UTC-midnight aligned and within `[min, max]`. Because ticks are anchored on
+ * the right, the leftmost tick may sit a fraction of a step inside the domain
+ * min — normal axis margin, not the tick unevenness this replaces.
  *
+ * Duplicate input dates are dropped silently (they carry no tick information).
  * Degenerate spans (0, 1, or 2 distinct dates) return those dates verbatim —
  * there is nothing to subdivide.
  */

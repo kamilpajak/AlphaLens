@@ -8,19 +8,18 @@
 	// this component only maps them to marks — no client-side recompute.
 	import 'layerchart/core.css';
 	import { Area, Axis, Chart, Highlight, Layer, Points, Rule, Spline, Tooltip } from 'layerchart';
-	import { evenTimeTicks } from '$lib/chartTicks';
+	import { evenTimeTicks, toUtcDate } from '$lib/chartTicks';
 	import type { EdgeExcessTelemetry } from '$lib/types';
 
 	let { telemetry }: { telemetry: EdgeExcessTelemetry } = $props();
 
-	const toDate = (iso: string) => new Date(iso + 'T00:00:00Z');
 	const pctTick = (v: number) => `${(v * 100).toFixed(0)}%`;
 	const pctFull = (v: number) => `${(v * 100).toFixed(2)}%`;
 	const dayShort = (d: Date) => `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
 	const dayFull = (d: Date) => d.toISOString().slice(0, 10);
 
-	const points = $derived(telemetry.points.map((p) => ({ ...p, date: toDate(p.date) })));
-	const trend = $derived(telemetry.trend.map((t) => ({ ...t, date: toDate(t.date) })));
+	const points = $derived(telemetry.points.map((p) => ({ ...p, date: toUtcDate(p.date) })));
+	const trend = $derived(telemetry.trend.map((t) => ({ ...t, date: toUtcDate(t.date) })));
 	const showTrend = $derived(telemetry.status === 'ok' && trend.length > 0);
 
 	// y-domain spans the points, the CI band, and always the 0 parity line.
