@@ -27,11 +27,14 @@ export const toUtcDate = (iso: string) => new Date(iso + 'T00:00:00Z');
  * there is nothing to subdivide.
  */
 export function evenTimeTicks(isoDates: string[], targetCount = 8): Date[] {
-	const days = [...new Set(isoDates)].sort();
+	// localeCompare gives an explicit comparator (Sonar S2871); for `YYYY-MM-DD`
+	// strings its ordering is chronological, same as the default lexical sort.
+	const days = [...new Set(isoDates)].sort((a, b) => a.localeCompare(b));
 	if (days.length <= 2) return days.map(toUtcDate);
 
+	// length >= 3 here, so first/last are defined.
 	const first = toUtcDate(days[0]).getTime();
-	const last = toUtcDate(days[days.length - 1]).getTime();
+	const last = toUtcDate(days.at(-1)!).getTime();
 	const spanDays = Math.round((last - first) / MS_PER_DAY);
 
 	// Whole-day step >= 1 so ticks never share an M/D label; ~targetCount ticks.
