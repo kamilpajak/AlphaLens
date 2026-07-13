@@ -916,6 +916,8 @@ def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, di
 
 
 def _as_date(value: Any) -> dt.date | None:
+    # Twin of population_ladder_monitor._as_store_date (kept local: the modules
+    # only import each other lazily). Change BOTH if the coercion rules move.
     if value is None:
         return None
     if isinstance(value, dt.datetime):

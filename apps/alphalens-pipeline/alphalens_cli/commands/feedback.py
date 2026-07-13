@@ -97,6 +97,9 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
             replay_population_ladders,
         )
 
+        # total must be positive for any pass to run; setting the env override to
+        # 0 disables ALL budgeted fetching including the chart pass (operator's
+        # explicit choice, same as before the reserve split).
         total_s = float(
             os.environ.get("ALPHALENS_FEEDBACK_FETCH_DEADLINE_S", _FETCH_DEADLINE_S_DEFAULT)
         )

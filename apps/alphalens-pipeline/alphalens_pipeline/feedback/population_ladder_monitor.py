@@ -2465,7 +2465,11 @@ def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, di
 
 
 def _as_store_date(value: Any) -> dt.date | None:
-    """Coerce a stored ``brief_date`` cell to a ``datetime.date`` (or ``None``)."""
+    """Coerce a stored ``brief_date`` cell to a ``datetime.date`` (or ``None``).
+
+    Twin of ``ladder_chart._as_date`` (kept local: the modules only import each
+    other lazily). Change BOTH if the coercion rules move.
+    """
     if value is None:
         return None
     if isinstance(value, dt.datetime):
