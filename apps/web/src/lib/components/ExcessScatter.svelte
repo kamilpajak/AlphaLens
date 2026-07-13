@@ -8,18 +8,18 @@
 	// this component only maps them to marks — no client-side recompute.
 	import 'layerchart/core.css';
 	import { Area, Axis, Chart, Highlight, Layer, Points, Rule, Spline, Tooltip } from 'layerchart';
+	import { evenTimeTicks, toUtcDate } from '$lib/chartTicks';
 	import type { EdgeExcessTelemetry } from '$lib/types';
 
 	let { telemetry }: { telemetry: EdgeExcessTelemetry } = $props();
 
-	const toDate = (iso: string) => new Date(iso + 'T00:00:00Z');
 	const pctTick = (v: number) => `${(v * 100).toFixed(0)}%`;
 	const pctFull = (v: number) => `${(v * 100).toFixed(2)}%`;
 	const dayShort = (d: Date) => `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
 	const dayFull = (d: Date) => d.toISOString().slice(0, 10);
 
-	const points = $derived(telemetry.points.map((p) => ({ ...p, date: toDate(p.date) })));
-	const trend = $derived(telemetry.trend.map((t) => ({ ...t, date: toDate(t.date) })));
+	const points = $derived(telemetry.points.map((p) => ({ ...p, date: toUtcDate(p.date) })));
+	const trend = $derived(telemetry.trend.map((t) => ({ ...t, date: toUtcDate(t.date) })));
 	const showTrend = $derived(telemetry.status === 'ok' && trend.length > 0);
 
 	// y-domain spans the points, the CI band, and always the 0 parity line.
@@ -29,16 +29,13 @@
 		return [Math.min(...ys), Math.max(...ys)];
 	});
 
-	// Explicit x-axis ticks = the real distinct exit dates (subsampled when many).
-	// Data is daily, so letting d3 auto-pick ticks over a short span produces
-	// sub-day ticks that format to duplicate M/D labels — one tick per real date
-	// avoids that in both the dense (ok) and sparse (accumulating) states.
-	const xTicks = $derived.by<Date[]>(() => {
-		const uniq = [...new Set(telemetry.points.map((p) => p.date))].sort().map(toDate);
-		if (uniq.length <= 10) return uniq;
-		const step = Math.ceil(uniq.length / 8);
-		return uniq.filter((_, i) => i % step === 0);
-	});
+	// Explicit x-axis ticks at even whole-day intervals across the date domain.
+	// The x-scale is a time scale, so a tick lands at its true calendar pixel
+	// position — subsampling the distinct exit-dates by index would place ticks
+	// at uneven gaps (weekends / days with no exits). Even time-steps keep the
+	// gaps uniform, and the whole-day granularity avoids duplicate M/D labels
+	// that d3 auto-ticks produce on a short span.
+	const xTicks = $derived(evenTimeTicks(telemetry.points.map((p) => p.date)));
 
 	// LayerChart's axis default is font-weight 300 (thin) — force the app's normal
 	// mono weight so ticks match the rest of the terminal UI.
