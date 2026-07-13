@@ -610,15 +610,21 @@ def _memoized_daily_fetch(daily_fetch: DailyBarFetch) -> DailyBarFetch:
 def _is_frozen_terminal_ok(row: Any) -> bool:
     """Whether a store row is a resolved position whose chart is already final.
 
-    A terminal row whose ``chart_payload_json`` is already OK never changes — its
-    price path is frozen and its ladder is fully resolved — so the nightly enrich
-    pass can preserve it verbatim and skip the Polygon re-fetch. It is NOT frozen
-    (must be re-priced) when:
+    A terminal row whose ``chart_payload_json`` is OK **and reaches the row's
+    close** never changes — its price path is frozen and its ladder is fully
+    resolved — so the nightly enrich pass can preserve it verbatim and skip the
+    Polygon re-fetch. It is NOT frozen (must be re-priced) when:
 
     * ``terminal`` is falsy / NaN / absent — an ongoing position whose path can
       still extend the next session; or
     * the existing chart is missing / not OK (a NO_DATA payload from a prior
-      transient Polygon gap) — so a later run can self-heal it to OK.
+      transient Polygon gap) — so a later run can self-heal it to OK; or
+    * the payload's last bar predates ``matured_at`` — a row that terminalized
+      AFTER its last successful chart build carries a STALE chart (the
+      2026-07-13 incident: charts frozen several sessions before their close
+      after a multi-night enrich blackout); it stays eligible for rebuild until
+      the chart reaches the close, then freezes. A row with no ``matured_at``
+      (old-format tail) keeps the legacy freeze.
     """
     terminal = row.get("terminal")
     # pd.isna guards a NaN terminal (bool(nan) is True) and a missing column
@@ -629,9 +635,19 @@ def _is_frozen_terminal_ok(row: Any) -> bool:
     if not isinstance(existing, str) or not existing:
         return False
     try:
-        return json.loads(existing).get("status") == "OK"
+        payload = json.loads(existing)
     except (ValueError, TypeError):
         return False
+    if payload.get("status") != "OK":
+        return False
+    matured = _as_date(row.get("matured_at"))
+    if matured is None:
+        return True
+    bars = payload.get("bars") or []
+    if not bars:
+        return False
+    last_bar = _as_date(bars[-1].get("time"))
+    return last_bar is not None and last_bar >= matured
 
 
 def _chart_frame_payloads(
@@ -900,6 +916,8 @@ def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, di
 
 
 def _as_date(value: Any) -> dt.date | None:
+    # Twin of population_ladder_monitor._as_store_date (kept local: the modules
+    # only import each other lazily). Change BOTH if the coercion rules move.
     if value is None:
         return None
     if isinstance(value, dt.datetime):

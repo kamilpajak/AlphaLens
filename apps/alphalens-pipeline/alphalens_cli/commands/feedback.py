@@ -71,26 +71,43 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     UTC timer (no new systemd unit / alert rule). Intentionally swallow-all: a
     replay / Polygon failure must NOT change the command's exit behaviour.
 
-    One ``_RunDeadline`` is constructed here and shared across the replay and all
-    three enrichment passes so they draw from the SAME wall-clock budget.
+    Two ``_RunDeadline`` instances are constructed here from one wall-clock pool:
+    the replay and the benchmark/sector/size passes share ``total - reserve``;
+    the chart pass gets its own deadline at the full ``total`` so it can never be
+    starved to zero by a grown upstream backlog.
     """
     import os
 
-    # Construct one deadline for the whole run (replay + all three enrichments).
-    # If the import itself fails, fall back to deadline=None so the enrichments
-    # still run without a deadline rather than crashing the nightly timer.
+    # Two deadlines, one pool: the upstream passes (replay + benchmark/sector/size)
+    # share ``total - reserve`` while the chart pass gets its own deadline carrying
+    # the full ``total``. Both anchor at the same wall-clock start, so the chart
+    # pass — last in the chain, starved to "enriched 0 rows" for five nights in
+    # the 2026-07 incident — always inherits at least the reserve, and the whole
+    # run still fits under the systemd TimeoutStartSec. If the import itself
+    # fails, fall back to deadline=None so the enrichments still run without a
+    # deadline rather than crashing the nightly timer.
     deadline: Any = None
+    chart_deadline: Any = None
     try:
         from alphalens_pipeline.feedback.population_ladder_monitor import (
+            _CHART_RESERVE_S_DEFAULT,
             _FETCH_DEADLINE_S_DEFAULT,
             MONITOR_LOOKBACK_DAYS,
             _RunDeadline,
             replay_population_ladders,
         )
 
-        deadline = _RunDeadline(
-            float(os.environ.get("ALPHALENS_FEEDBACK_FETCH_DEADLINE_S", _FETCH_DEADLINE_S_DEFAULT))
+        # total must be positive for any pass to run; setting the env override to
+        # 0 disables ALL budgeted fetching including the chart pass (operator's
+        # explicit choice, same as before the reserve split).
+        total_s = float(
+            os.environ.get("ALPHALENS_FEEDBACK_FETCH_DEADLINE_S", _FETCH_DEADLINE_S_DEFAULT)
         )
+        reserve_s = float(
+            os.environ.get("ALPHALENS_FEEDBACK_CHART_RESERVE_S", _CHART_RESERVE_S_DEFAULT)
+        )
+        deadline = _RunDeadline(max(total_s - reserve_s, 0.0))
+        chart_deadline = _RunDeadline(total_s)
         reports = replay_population_ladders(
             briefs_dir, lookback_days=MONITOR_LOOKBACK_DAYS, deadline=deadline
         )
@@ -110,12 +127,13 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
         )
 
     # All enrichments operate on the EXISTING store parquets (independent of the
-    # fresh replay above), so they run even when the live replay failed. The same
-    # deadline instance is passed through so they respect the shared budget.
+    # fresh replay above), so they run even when the live replay failed. The
+    # upstream trio shares the reduced deadline; the chart pass runs on its own
+    # full-total deadline so the reserve withheld above is guaranteed to it.
     _enrich_population_benchmark_excess(deadline=deadline)
     _enrich_population_sector_excess(deadline=deadline)
     _enrich_population_size_fields(briefs_dir, deadline=deadline)
-    _enrich_population_chart_payloads(briefs_dir, deadline=deadline)
+    _enrich_population_chart_payloads(briefs_dir, deadline=chart_deadline)
 
 
 def _enrich_population_size_fields(briefs_dir: Path, *, deadline: Any = None) -> None:

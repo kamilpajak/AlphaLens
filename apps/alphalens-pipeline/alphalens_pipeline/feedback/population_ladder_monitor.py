@@ -107,6 +107,11 @@ _MAX_FETCHES_PER_RUN = 150
 _FORCED_RESOLVE_BUDGET = 50
 
 _FETCH_DEADLINE_S_DEFAULT = 75 * 60  # wall-clock budget, under TimeoutStartSec=90min
+# Slice of the total budget the CLI withholds from the upstream passes (replay +
+# benchmark/sector/size enrich) so the chart pass — last in the chain — can never
+# be starved to zero by a grown upstream backlog (the 07-07..11 five-night
+# "chart-payload: enriched 0 rows" blackout). Env: ALPHALENS_FEEDBACK_CHART_RESERVE_S.
+_CHART_RESERVE_S_DEFAULT = 15 * 60
 _BREAKER_CONSECUTIVE_FAILS = 6  # consecutive real Polygon errors before fast-bail
 
 
@@ -2460,7 +2465,11 @@ def _load_setups_for_date(brief_date: dt.date, briefs_dir: Path) -> dict[str, di
 
 
 def _as_store_date(value: Any) -> dt.date | None:
-    """Coerce a stored ``brief_date`` cell to a ``datetime.date`` (or ``None``)."""
+    """Coerce a stored ``brief_date`` cell to a ``datetime.date`` (or ``None``).
+
+    Twin of ``ladder_chart._as_date`` (kept local: the modules only import each
+    other lazily). Change BOTH if the coercion rules move.
+    """
     if value is None:
         return None
     if isinstance(value, dt.datetime):

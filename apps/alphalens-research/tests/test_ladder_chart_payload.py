@@ -735,13 +735,18 @@ def _write_terminal_store_row(
     *,
     terminal: bool,
     chart_payload: dict | None,
+    matured_at: dt.date | None = None,
 ) -> None:
     """Write a one-row store parquet carrying a ``terminal`` flag and (optionally)
     a pre-existing ``chart_payload_json`` — the shape the monitor's ``_terminal_row``
-    / ``_ongoing_row`` produce, so the enricher's skip predicate has real inputs."""
+    / ``_ongoing_row`` produce, so the enricher's skip predicate has real inputs.
+    ``matured_at`` (the close session the monitor stamps on terminal rows) is
+    omitted from the frame when None, matching old-format rows."""
     store_dir.mkdir(parents=True, exist_ok=True)
     row: dict = {"brief_date": brief_date, "ticker": ticker, "forward_return": 0.05}
     row["terminal"] = terminal
+    if matured_at is not None:
+        row["matured_at"] = matured_at
     if chart_payload is not None:
         row["chart_payload_json"] = json.dumps(chart_payload)
     pd.DataFrame([row]).to_parquet(store_dir / f"{brief_date.isoformat()}.parquet")
@@ -912,6 +917,112 @@ class TestEnrichSkipsFrozenTerminalRows(unittest.TestCase):
             finally:
                 lc._write_atomic = orig_write
             self.assertEqual(writes, [])  # fully-resolved file untouched
+
+
+class TestFrozenChartStalenessAgainstMaturedAt(unittest.TestCase):
+    """A terminal-OK chart is final ONLY when its last bar reaches the row's close
+    (``matured_at``). The 2026-07-13 incident: a row that terminalized AFTER the
+    last successful chart pass froze a chart ending 6 sessions before its close
+    (BAH 2026-06-30: chart ends 07-02, CLOSED 07-10) — permanently, because the
+    freeze predicate never compared the payload against ``matured_at``."""
+
+    def _run_enrich(self, store_dir: Path, briefs_dir: Path) -> list[str]:
+        calls: list[str] = []
+
+        def bar_fetch(ticker: str, arrival_session: dt.date) -> list[dict]:
+            calls.append(ticker)
+            return [
+                _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+                _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+            ]
+
+        enrich_store_with_chart_payloads(
+            store_dir,
+            briefs_dir,
+            bar_fetch=bar_fetch,
+            daily_bar_fetch=lambda *_a, **_k: [],
+            exchange=_EXCHANGE,
+        )
+        return calls
+
+    def test_chart_ending_before_matured_at_is_repriced(self) -> None:
+        """Terminal + OK but the last bar predates the close: the chart is STALE,
+        not final — it must be rebuilt (the BAH regression)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            stale = {"status": "OK", "bars": [{"time": _ARRIVAL.isoformat()}], "markers": []}
+            _write_terminal_store_row(
+                store_dir,
+                _ARRIVAL,
+                "BAH",
+                terminal=True,
+                chart_payload=stale,
+                matured_at=_NEXT_SESSION,
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "BAH", _OK_SETUP)
+            calls = self._run_enrich(store_dir, briefs_dir)
+            self.assertEqual(calls, ["BAH"])  # stale terminal chart -> rebuilt
+            df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+            payload = json.loads(df.loc[0, "chart_payload_json"])
+            self.assertEqual(payload["status"], "OK")
+            self.assertEqual(payload["bars"][-1]["time"], _NEXT_SESSION.isoformat())
+
+    def test_chart_reaching_matured_at_stays_frozen(self) -> None:
+        """Terminal + OK with the last bar AT the close: genuinely final, frozen."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            final = {
+                "status": "OK",
+                "bars": [{"time": _ARRIVAL.isoformat()}, {"time": _NEXT_SESSION.isoformat()}],
+                "markers": [],
+            }
+            _write_terminal_store_row(
+                store_dir,
+                _ARRIVAL,
+                "DONE",
+                terminal=True,
+                chart_payload=final,
+                matured_at=_NEXT_SESSION,
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "DONE", _OK_SETUP)
+            calls = self._run_enrich(store_dir, briefs_dir)
+            self.assertEqual(calls, [])  # final -> no fetch
+            df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+            self.assertEqual(json.loads(df.loc[0, "chart_payload_json"]), final)
+
+    def test_terminal_ok_without_matured_at_stays_frozen(self) -> None:
+        """An old-format terminal row with no ``matured_at`` column keeps the
+        legacy behavior: frozen (no mass unfreeze of the pre-column tail)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            frozen = {"status": "OK", "bars": [{"time": _ARRIVAL.isoformat()}], "markers": []}
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "OLD", terminal=True, chart_payload=frozen
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "OLD", _OK_SETUP)
+            calls = self._run_enrich(store_dir, briefs_dir)
+            self.assertEqual(calls, [])
+
+    def test_terminal_ok_with_empty_bars_is_repriced(self) -> None:
+        """status OK with an empty bars list is inconsistent — re-price it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            broken = {"status": "OK", "bars": [], "markers": []}
+            _write_terminal_store_row(
+                store_dir,
+                _ARRIVAL,
+                "FIXME",
+                terminal=True,
+                chart_payload=broken,
+                matured_at=_NEXT_SESSION,
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "FIXME", _OK_SETUP)
+            calls = self._run_enrich(store_dir, briefs_dir)
+            self.assertEqual(calls, ["FIXME"])
 
 
 def _entry_expiry_ms(arrival: dt.date, order_ttl_days: int) -> int:
