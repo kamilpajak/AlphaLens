@@ -107,6 +107,11 @@ _MAX_FETCHES_PER_RUN = 150
 _FORCED_RESOLVE_BUDGET = 50
 
 _FETCH_DEADLINE_S_DEFAULT = 75 * 60  # wall-clock budget, under TimeoutStartSec=90min
+# Slice of the total budget the CLI withholds from the upstream passes (replay +
+# benchmark/sector/size enrich) so the chart pass — last in the chain — can never
+# be starved to zero by a grown upstream backlog (the 07-07..11 five-night
+# "chart-payload: enriched 0 rows" blackout). Env: ALPHALENS_FEEDBACK_CHART_RESERVE_S.
+_CHART_RESERVE_S_DEFAULT = 15 * 60
 _BREAKER_CONSECUTIVE_FAILS = 6  # consecutive real Polygon errors before fast-bail
 
 
