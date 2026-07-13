@@ -234,6 +234,40 @@
 		</p>
 	</div>
 
+	<!-- SPY-RELATIVE SIGNAL TELEMETRY panel — open by default, fetched eagerly on
+	     mount (independent of the edge summary endpoint); still collapsible. Not
+	     investable performance — telemetry only. Rendered in BOTH branches: above
+	     the outcomes table when a summary exists, and standalone in the no-summary
+	     fallback so the independent telemetry is never lost. -->
+	{#snippet telemetryPanel()}
+		<section class="mb-6 border border-grid fade-up">
+			<button
+				type="button"
+				class="flex w-full items-center justify-between px-3 py-2 text-left"
+				onclick={toggleTelemetry}
+				aria-expanded={telemetryOpen}
+			>
+				<span class="text-[11px] uppercase tracking-widest text-cyan">
+					SPY-relative signal telemetry (not investable performance)
+				</span>
+				<span class="text-[10px] text-fg-muted">{telemetryOpen ? '−' : '+'}</span>
+			</button>
+			{#if telemetryOpen}
+				<div class="px-3 pb-4">
+					{#if telemetryLoading}
+						<p class="text-[11px] text-fg-muted">loading telemetry…</p>
+					{:else if telemetry}
+						<ExcessScatter {telemetry} />
+					{:else}
+						<div class="border border-dashed border-grid-strong px-3 py-4 text-[11px] text-fg-dim">
+							Telemetry unavailable right now.
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</section>
+	{/snippet}
+
 	{#if !hasSummary || !summary}
 		<!-- Whole-page fallback: API offline / empty. -->
 		<div class="border border-dashed border-grid-strong px-4 py-10 text-center fade-up">
@@ -243,6 +277,7 @@
 				as candidate windows mature.
 			</p>
 		</div>
+		{@render telemetryPanel()}
 	{:else}
 		<!-- Three top panels: EDGE · PORTFOLIO · DEPLOYMENT -->
 		<div class="grid grid-cols-1 lg:grid-cols-12 gap-4 mb-6">
@@ -515,36 +550,8 @@
 			</div>
 		</section>
 
-		<!-- SPY-RELATIVE SIGNAL TELEMETRY — open by default, fetched eagerly on
-		     mount; still collapsible. Sits above the per-candidate outcomes table.
-		     Renders whenever the summary block is shown (including the locked-stats
-		     state); not investable performance — telemetry only. -->
-		<section class="mb-6 border border-grid fade-up">
-			<button
-				type="button"
-				class="flex w-full items-center justify-between px-3 py-2 text-left"
-				onclick={toggleTelemetry}
-				aria-expanded={telemetryOpen}
-			>
-				<span class="text-[11px] uppercase tracking-widest text-cyan">
-					SPY-relative signal telemetry (not investable performance)
-				</span>
-				<span class="text-[10px] text-fg-muted">{telemetryOpen ? '−' : '+'}</span>
-			</button>
-			{#if telemetryOpen}
-				<div class="px-3 pb-4">
-					{#if telemetryLoading}
-						<p class="text-[11px] text-fg-muted">loading telemetry…</p>
-					{:else if telemetry}
-						<ExcessScatter {telemetry} />
-					{:else}
-						<div class="border border-dashed border-grid-strong px-3 py-4 text-[11px] text-fg-dim">
-							Telemetry unavailable right now.
-						</div>
-					{/if}
-				</div>
-			{/if}
-		</section>
+		<!-- SPY-relative signal telemetry, above the outcomes table (see snippet). -->
+		{@render telemetryPanel()}
 
 		<!-- PER-CANDIDATE OUTCOMES table -->
 		<section class="fade-up" data-testid="outcomes-table">

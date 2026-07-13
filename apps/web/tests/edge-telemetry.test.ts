@@ -84,3 +84,34 @@ test('telemetry panel can be collapsed via its toggle', async ({ page }) => {
 	await page.getByRole('button', { name: /spy-relative signal telemetry/i }).click();
 	await expect(page.getByTestId('excess-scatter')).toBeHidden();
 });
+
+test('telemetry still renders in the no-summary fallback (independent of the summary endpoint)', async ({
+	page
+}) => {
+	// Telemetry is a separate API from the edge summary; it must stay visible even
+	// when the summary endpoint is empty and the whole-page fallback is shown.
+	await page.route('**/api/v1/market/status**', (r) =>
+		r.fulfill({
+			json: {
+				is_trading_day: false,
+				is_half_day: false,
+				is_open_now: false,
+				next_open_iso: '2099-01-01T13:30:00+00:00',
+				next_close_iso: '2099-01-01T20:00:00+00:00',
+				exchange: 'XNYS'
+			}
+		})
+	);
+	await page.route('**/api/v1/days**', (r) =>
+		r.fulfill({ json: { data: [], meta: { total: 0, limit: 200, offset: 0 } } })
+	);
+	await page.route('**/v1/edge/summary**', (r) => r.fulfill({ status: 404, json: { detail: 'nf' } }));
+	await page.route('**/v1/edge/outcomes**', (r) =>
+		r.fulfill({ status: 404, json: { detail: 'nf' } })
+	);
+	await page.route('**/v1/edge/excess-telemetry**', (r) => r.fulfill({ json: OK_TELEMETRY }));
+
+	await page.goto('/edge');
+	await expect(page.getByText(/no edge data/i)).toBeVisible();
+	await expect(page.getByTestId('excess-scatter')).toBeVisible();
+});
