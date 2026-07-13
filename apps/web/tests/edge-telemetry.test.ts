@@ -1,6 +1,14 @@
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const OK_PAYLOAD = {
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const FIXTURES = resolve(__dirname, 'fixtures/api-mock');
+const SUMMARY = JSON.parse(readFileSync(resolve(FIXTURES, 'edge-summary.json'), 'utf-8'));
+const OUTCOMES = JSON.parse(readFileSync(resolve(FIXTURES, 'edge-outcomes.json'), 'utf-8'));
+
+const OK_TELEMETRY = {
 	benchmark: 'SPY',
 	status: 'ok',
 	gate_threshold: 30,
@@ -20,11 +28,9 @@ const OK_PAYLOAD = {
 	]
 };
 
-test('excess-telemetry panel expands and renders the trend', async ({ page }) => {
-	// Stub the layout-level endpoints (market status + days index) so the SPA
-	// shell hydrates without network errors on the footer chip / session tiles.
-	await page.route('**/api/v1/market/status**', (route) =>
-		route.fulfill({
+async function stub(page: import('@playwright/test').Page) {
+	await page.route('**/api/v1/market/status**', (r) =>
+		r.fulfill({
 			json: {
 				is_trading_day: false,
 				is_half_day: false,
@@ -35,37 +41,77 @@ test('excess-telemetry panel expands and renders the trend', async ({ page }) =>
 			}
 		})
 	);
-	await page.route('**/api/v1/days**', (route) =>
-		route.fulfill({ json: { data: [], meta: { total: 0, limit: 200, offset: 0 } } })
+	await page.route('**/api/v1/days**', (r) =>
+		r.fulfill({ json: { data: [], meta: { total: 0, limit: 200, offset: 0 } } })
 	);
-	// Let the page's own loader endpoints degrade to their empty states; only the
-	// telemetry endpoint needs a body for this smoke.
-	await page.route('**/v1/edge/excess-telemetry**', (route) =>
-		route.fulfill({ json: OK_PAYLOAD })
-	);
-	// Stub the loader endpoints so the page degrades cleanly to the "no edge
-	// data" state without crashing (a partial {} EdgeSummary would throw when
-	// the template accesses summary.edge.status).
-	await page.route('**/v1/edge/summary**', (route) =>
-		route.fulfill({ status: 404, json: { detail: 'not found' } })
-	);
-	await page.route('**/v1/edge/outcomes**', (route) =>
-		route.fulfill({ status: 404, json: { detail: 'not found' } })
-	);
+	await page.route('**/v1/edge/summary**', (r) => r.fulfill({ json: SUMMARY }));
+	await page.route('**/v1/edge/outcomes**', (r) => r.fulfill({ json: OUTCOMES }));
+	await page.route('**/v1/edge/excess-telemetry**', (r) => r.fulfill({ json: OK_TELEMETRY }));
+}
 
+test('excess-telemetry renders expanded by default and above the outcomes table', async ({
+	page
+}) => {
+	await stub(page);
 	await page.goto('/edge');
-	// Wait for the SPA to hydrate: the header nav is the first element painted by
-	// the layout shell; once it is visible the Svelte router has run and the /edge
-	// route component is mounted.
 	await expect(page.locator('header a[href="/"]').first()).toBeVisible();
-	await page.getByRole('button', { name: /spy-relative|trend vs spy|effectiveness/i }).click();
-	await expect(page.getByTestId('excess-scatter')).toBeVisible();
+
+	// Expanded by default — the scatter + trend are visible WITHOUT any click.
+	const scatter = page.getByTestId('excess-scatter');
+	await expect(scatter).toBeVisible();
 	await expect(page.getByTestId('excess-scatter-trend')).toBeVisible();
-	// The legend explains every mark; with a trend present it shows all four
-	// entries (dot, trailing mean, CI band, SPY parity).
+	// The legend explains every mark; with a trend present it shows all four entries.
 	await expect(page.getByTestId('excess-scatter-legend')).toBeVisible();
 	await expect(page.getByText(/one closed trade/)).toBeVisible();
 	await expect(page.getByText(/trailing mean/)).toBeVisible();
 	await expect(page.getByText(/95% confidence band/)).toBeVisible();
 	await expect(page.getByText(/SPY parity/)).toBeVisible();
+
+	// The telemetry panel sits ABOVE the per-candidate outcomes table.
+	const outcomes = page.getByTestId('outcomes-table');
+	await expect(outcomes).toBeVisible();
+	const scatterBox = await scatter.boundingBox();
+	const outcomesBox = await outcomes.boundingBox();
+	expect(scatterBox).not.toBeNull();
+	expect(outcomesBox).not.toBeNull();
+	expect(scatterBox!.y).toBeLessThan(outcomesBox!.y);
+});
+
+test('telemetry panel can be collapsed via its toggle', async ({ page }) => {
+	await stub(page);
+	await page.goto('/edge');
+	await expect(page.getByTestId('excess-scatter')).toBeVisible();
+	await page.getByRole('button', { name: /spy-relative signal telemetry/i }).click();
+	await expect(page.getByTestId('excess-scatter')).toBeHidden();
+});
+
+test('telemetry still renders in the no-summary fallback (independent of the summary endpoint)', async ({
+	page
+}) => {
+	// Telemetry is a separate API from the edge summary; it must stay visible even
+	// when the summary endpoint is empty and the whole-page fallback is shown.
+	await page.route('**/api/v1/market/status**', (r) =>
+		r.fulfill({
+			json: {
+				is_trading_day: false,
+				is_half_day: false,
+				is_open_now: false,
+				next_open_iso: '2099-01-01T13:30:00+00:00',
+				next_close_iso: '2099-01-01T20:00:00+00:00',
+				exchange: 'XNYS'
+			}
+		})
+	);
+	await page.route('**/api/v1/days**', (r) =>
+		r.fulfill({ json: { data: [], meta: { total: 0, limit: 200, offset: 0 } } })
+	);
+	await page.route('**/v1/edge/summary**', (r) => r.fulfill({ status: 404, json: { detail: 'nf' } }));
+	await page.route('**/v1/edge/outcomes**', (r) =>
+		r.fulfill({ status: 404, json: { detail: 'nf' } })
+	);
+	await page.route('**/v1/edge/excess-telemetry**', (r) => r.fulfill({ json: OK_TELEMETRY }));
+
+	await page.goto('/edge');
+	await expect(page.getByText(/no edge data/i)).toBeVisible();
+	await expect(page.getByTestId('excess-scatter')).toBeVisible();
 });
