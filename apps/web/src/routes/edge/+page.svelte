@@ -167,22 +167,34 @@
 		win.resetScroll();
 	});
 
-	// SPY-relative signal telemetry panel — collapsed by default, lazy-fetched
-	// on first expand and cached so re-collapsing does not refetch.
-	let telemetryOpen = $state(false);
+	// SPY-relative signal telemetry panel — open by default and fetched eagerly
+	// on mount (via the $effect below), cached so re-collapsing/re-opening does
+	// not refetch. Still collapsible via its toggle.
+	let telemetryOpen = $state(true);
 	let telemetry = $state<EdgeExcessTelemetry | null>(null);
 	let telemetryLoading = $state(false);
 	let telemetryLoaded = $state(false);
 
-	async function toggleTelemetry() {
-		telemetryOpen = !telemetryOpen;
-		if (telemetryOpen && !telemetryLoaded && !telemetryLoading) {
-			telemetryLoading = true;
+	async function loadTelemetry() {
+		if (telemetryLoaded || telemetryLoading) return;
+		telemetryLoading = true;
+		try {
 			telemetry = await getEdgeExcessTelemetry(90);
 			telemetryLoaded = true;
+		} finally {
 			telemetryLoading = false;
 		}
 	}
+
+	function toggleTelemetry() {
+		telemetryOpen = !telemetryOpen;
+	}
+
+	// Fetch the first time the panel is open (mount, since it defaults open); the
+	// guard in loadTelemetry makes re-opens a no-op.
+	$effect(() => {
+		if (telemetryOpen) loadTelemetry();
+	});
 
 </script>
 
@@ -503,6 +515,37 @@
 			</div>
 		</section>
 
+		<!-- SPY-RELATIVE SIGNAL TELEMETRY — open by default, fetched eagerly on
+		     mount; still collapsible. Sits above the per-candidate outcomes table.
+		     Renders whenever the summary block is shown (including the locked-stats
+		     state); not investable performance — telemetry only. -->
+		<section class="mb-6 border border-grid fade-up">
+			<button
+				type="button"
+				class="flex w-full items-center justify-between px-3 py-2 text-left"
+				onclick={toggleTelemetry}
+				aria-expanded={telemetryOpen}
+			>
+				<span class="text-[11px] uppercase tracking-widest text-cyan">
+					SPY-relative signal telemetry (not investable performance)
+				</span>
+				<span class="text-[10px] text-fg-muted">{telemetryOpen ? '−' : '+'}</span>
+			</button>
+			{#if telemetryOpen}
+				<div class="px-3 pb-4">
+					{#if telemetryLoading}
+						<p class="text-[11px] text-fg-muted">loading telemetry…</p>
+					{:else if telemetry}
+						<ExcessScatter {telemetry} />
+					{:else}
+						<div class="border border-dashed border-grid-strong px-3 py-4 text-[11px] text-fg-dim">
+							Telemetry unavailable right now.
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</section>
+
 		<!-- PER-CANDIDATE OUTCOMES table -->
 		<section class="fade-up" data-testid="outcomes-table">
 			<LadderStatusLegend />
@@ -787,34 +830,4 @@
 			{/if}
 		</section>
 	{/if}
-
-	<!-- SPY-RELATIVE SIGNAL TELEMETRY — collapsed by default; lazy-fetched on
-	     first expand. Independent of the N-gate: shows even when the main
-	     edge panels are locked. Not investable performance — telemetry only. -->
-	<section class="mt-6 border border-grid fade-up">
-		<button
-			type="button"
-			class="flex w-full items-center justify-between px-3 py-2 text-left"
-			onclick={toggleTelemetry}
-			aria-expanded={telemetryOpen}
-		>
-			<span class="text-[11px] uppercase tracking-widest text-cyan">
-				SPY-relative signal telemetry (not investable performance)
-			</span>
-			<span class="text-[10px] text-fg-muted">{telemetryOpen ? '−' : '+'}</span>
-		</button>
-		{#if telemetryOpen}
-			<div class="px-3 pb-4">
-				{#if telemetryLoading}
-					<p class="text-[11px] text-fg-muted">loading telemetry…</p>
-				{:else if telemetry}
-					<ExcessScatter {telemetry} />
-				{:else}
-					<div class="border border-dashed border-grid-strong px-3 py-4 text-[11px] text-fg-dim">
-						Telemetry unavailable right now.
-					</div>
-				{/if}
-			</div>
-		{/if}
-	</section>
 </div>
