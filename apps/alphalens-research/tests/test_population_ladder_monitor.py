@@ -996,6 +996,38 @@ class TestChartPayloadCarryForward(_MonitorTestBase):
         self.assertIn(_CHART_PAYLOAD_COLUMN, row)
         self.assertIsNone(row[_CHART_PAYLOAD_COLUMN])
 
+    def test_terminal_row_mirrors_setup_builder_config_version(self):
+        # ADR 0013 R3: the T5 geometry stamp travels from the setup JSON onto
+        # every outcome row so retro analyses can GROUP BY it.
+        brief_date, cutoffs, outcome = self._build_ongoing_outcome()
+        setup = dict(_OK_SETUP)
+        setup["builder_config_version"] = '{"schema":1}'
+        row = _terminal_row(
+            brief_date,
+            "NVDA",
+            setup,
+            outcome,
+            cutoffs,
+            dt.date(2026, 5, 15),
+            prior_chart_payload=None,
+        )
+        self.assertEqual(row["setup_builder_config_version"], '{"schema":1}')
+
+    def test_terminal_row_without_builder_key_stamps_none(self):
+        # Pre-ADR setups carry no key; the mirror must be explicit-None, not KeyError.
+        brief_date, cutoffs, outcome = self._build_ongoing_outcome()
+        row = _terminal_row(
+            brief_date,
+            "NVDA",
+            _OK_SETUP,
+            outcome,
+            cutoffs,
+            dt.date(2026, 5, 15),
+            prior_chart_payload=None,
+        )
+        self.assertIn("setup_builder_config_version", row)
+        self.assertIsNone(row["setup_builder_config_version"])
+
     def test_resolve_ongoing_row_preserves_prior_chart_payload(self):
         # Integration (the live CNS 2026-06-25 failure mode): a PARTIAL_TP_OPEN row
         # gets a chart populated by the separate enrich pass; a later night

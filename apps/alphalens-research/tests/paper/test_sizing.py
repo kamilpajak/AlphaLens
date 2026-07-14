@@ -226,6 +226,16 @@ class TestUnplannable(unittest.TestCase):
         with self.assertRaises(TradeSetupNotPlannableError):
             self._compute(_make_setup(schema_version="2.0.0"))
 
+    def test_schema_1_1_0_accepted(self):
+        # 1.1.0 adds only the builder_config_version key (ADR 0013) — every field
+        # the planner reads is unchanged, so it must stay plannable.
+        plan = self._compute(_make_setup(schema_version="1.1.0"))
+        self.assertIsNotNone(plan)
+
+    def test_schema_1_2_0_rejected_until_reviewed(self):
+        with self.assertRaises(TradeSetupNotPlannableError):
+            self._compute(_make_setup(schema_version="1.2.0"))
+
     def test_missing_suggested_size_rejected(self):
         setup = _make_setup()
         setup["suggested_size_pct"] = None

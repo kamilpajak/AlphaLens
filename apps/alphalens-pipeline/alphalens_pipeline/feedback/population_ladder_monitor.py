@@ -237,10 +237,12 @@ _SCREEN_COLUMNS = (
 # deadline-starved enrich pass cannot blank an ongoing position's chart.
 _CHART_PAYLOAD_COLUMN = "chart_payload_json"
 
-# The load-bearing replay-config stamp (PR-1). Like the size/screen columns, a
-# carried OLD-format row predating it is back-filled to None so the schema stays
-# stable; the next successful replay repopulates it.
-_CONFIG_COLUMNS = ("ladder_config_version",)
+# The load-bearing replay-config stamps. Like the size/screen columns, a
+# carried OLD-format row predating them is back-filled to None so the schema
+# stays stable; the next successful replay repopulates them.
+# ``setup_builder_config_version`` mirrors the T5 geometry token from the setup
+# JSON (ADR 0013 R3) so retro analyses can GROUP BY it on outcome rows.
+_CONFIG_COLUMNS = ("ladder_config_version", "setup_builder_config_version")
 
 # Brief-provenance columns: stamped from the CandidateBrief, not computed by the
 # replay engine. Like ``theme``, they travel WITH the outcome record so they stay
@@ -861,6 +863,9 @@ def _terminal_row(
         "position_ttl_days": position_ttl,
         # The replay-config stamp uses the TTL ACTUALLY applied to this row.
         "ladder_config_version": ladder_config_version(order_ttl_days=entry_ttl),
+        # T5 geometry token mirrored from the frozen setup JSON (ADR 0013);
+        # pre-ADR setups carry no key -> explicit None.
+        "setup_builder_config_version": setup.get("builder_config_version"),
         # Alternate-exit-ladder grid (None until a minute resolve computes it).
         "grid_realized_r_json": json.dumps(grid_realized_r) if grid_realized_r else None,
         # Break-even exit-stop WHAT-IF grid (display-only, None until a minute resolve).
@@ -951,8 +956,9 @@ def _nonplannable_row(brief_date: dt.date, ticker: str, reason: str) -> dict[str
         "entry_ttl_days": None,
         "position_ttl_days": None,
         # Non-plannable candidates are never replayed, so no geometry produced
-        # this row -- leave the stamp empty rather than invent a config.
+        # this row -- leave the stamps empty rather than invent a config.
         "ladder_config_version": None,
+        "setup_builder_config_version": None,
         "grid_realized_r_json": None,
         "breakeven_realized_r_json": None,
         "realized_r_full_fill": None,

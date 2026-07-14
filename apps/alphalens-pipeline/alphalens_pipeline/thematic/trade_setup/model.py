@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"  # 1.1.0: adds builder_config_version (ADR 0013)
 
 STATUS_OK = "OK"
 STATUS_NO_STRUCTURE = "NO_STRUCTURE"
@@ -67,10 +67,18 @@ class TradeSetup:
     order_ttl_days: int
     entry_tiers: tuple[EntryTier, ...]
     tp_tranches: tuple[TpTranche, ...]
+    # Geometry poolability key (ADR 0013): canonical JSON of the builder/ladder/
+    # levels/sizing constants that produced this setup. Defaulted for old-format
+    # dicts; both construction paths stamp the live token.
+    builder_config_version: str = ""
 
     @classmethod
     def no_structure(cls, *, asof_close: float, atr: float, order_ttl_days: int) -> TradeSetup:
         """Emit when there is no usable structure (illiquid / no supports below)."""
+        from alphalens_pipeline.thematic.trade_setup.config_version import (
+            setup_builder_config_version,
+        )
+
         return cls(
             schema_version=SCHEMA_VERSION,
             status=STATUS_NO_STRUCTURE,
@@ -81,6 +89,7 @@ class TradeSetup:
             order_ttl_days=order_ttl_days,
             entry_tiers=(),
             tp_tranches=(),
+            builder_config_version=setup_builder_config_version(),
         )
 
     def to_dict(self) -> dict:
@@ -94,6 +103,7 @@ class TradeSetup:
             "order_ttl_days": self.order_ttl_days,
             "entry_tiers": [t.to_dict() for t in self.entry_tiers],
             "tp_tranches": [t.to_dict() for t in self.tp_tranches],
+            "builder_config_version": self.builder_config_version,
         }
 
 

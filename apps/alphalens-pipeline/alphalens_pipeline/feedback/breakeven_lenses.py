@@ -64,6 +64,11 @@ class BreakevenLens:
     stop_atr_mult: float | None = None  # fill_anchored-kind replay param
 
 
+# ADR 0013 R4: the registry is bounded — at most this many concurrently
+# registered lenses (one-in-one-out beyond it); every registered lens, retired
+# ones included, counts toward the walk-forward multiplicity budget.
+MAX_REGISTERED_LENSES = 5
+
 # Adding another lens is a single entry here — the JSON-map column and the
 # registry-driven selector absorb it with no schema or UI change. Both current
 # lenses are exit-stop counterfactuals, display-only, in_sample.
