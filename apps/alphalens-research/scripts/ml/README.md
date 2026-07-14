@@ -66,4 +66,5 @@ module docstring so re-runs can diff against it.
 | Script | Question | Last result |
 |---|---|---|
 | `2026_07_signal_below_spy_tiny.py` | Does a ≤7-feature model predict below-SPY (car_10<0) better than ATR alone? | NO — CV AUC 0.609 vs ATR 0.632; L1 keeps only ma50_distance + ATR (3rd independent confirmation). Re-run ~mid-Aug. |
+| `2026_07_signal_car10_continuous.py` | Rules-6-9 upgrade: does continuous-target modeling (elastic net + cluster-OLS/WCB inference + block folds + cluster-bootstrap comparison) beat ATR? | NO — primary significantly worse (mis-scaled alpha, lesson recorded), best secondary ≈ baseline. Inference recovered log10_mcap (p_wcb .033, invisible to the binary model) — below the 7-test family bar, exploratory note. |
 | `2026_07_tail_filter_features_gkfold.py` | Do 30 pre-trade features separate below-SPY terminal trades under grouped CV? | L1 keeps ATR+ma50 only; depth-2 boosting: train AUC 1.000 vs CV 0.758 vs ATR-alone 0.730 (memorization). *Deliberately breaks rules 3-4 (fill-dependent target, EPV ignored) as the overfitting demo; its coverage pre-filter runs on the full panel, so treat numbers as mildly optimistic.* |
