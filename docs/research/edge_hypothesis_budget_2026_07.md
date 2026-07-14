@@ -14,14 +14,14 @@ This ledger makes the family **program-wide, fixed, and auditable**.
 
 ## 2. The rules (binding on every future EDGE signal test)
 
-1. **Fixed family = the 16 clusters in §3.** These are the promotable hypothesis slots. A new stampable signal (e.g. `options_*`, `market_state_*`, `grounded_in_*_news`) is NOT a free extra test — before its first look it is added to §3 as a new cluster row, which raises the program denominator for everyone. No look happens off-ledger.
+1. **Fixed family = the clusters in §3 (16 at opening).** These are the promotable hypothesis slots. A new stampable signal (e.g. `options_*`, `market_state_*`, `grounded_in_*_news`) is NOT a free extra test — before its first look it is added to §3 as a new cluster row, which raises the program denominator for everyone. No look happens off-ledger.
 2. **α-spending across sweeps, not per-sweep.** Each cluster carries a lifetime α-slice; the program family counts cluster-looks across **all** sweeps. A cluster looked at in June + July has already spent looks; its August look draws on remaining budget (α/(planned looks), O'Brien-Fleming-style), never a fresh 0.05/N. Report cumulative-tests-across-sweeps + the implied family-wise bound at every sweep. Use Benjamini-Hochberg/BY FDR at the program level for the exploratory scan; keep Bonferroni **only** for the final promote gate (rule 3).
 3. **Discovery ≠ confirmation.** The panel up to **2026-07-05 is DISCOVERY** (frozen here). Promotion of any cluster into brief SELECTION or ORDERING requires clearing a **pre-registered** threshold on ticker-episodes accumulated **after** the cluster's first-look date, tested **exactly once**. This is what makes "first-look, not verdict" statistically real rather than rhetorical.
 4. **Retirement + re-look cap.** A cluster that clears a first-look but fails its held-out confirmation is **retired** — it does NOT get re-tested in later sweeps (extends the existing "clean nulls, don't re-test" discipline from within-sweep to across-sweep). Max **2** re-looks per cluster; each row carries a **sunset date** ("kill by <date> if N<30 or first-look still null").
 5. **Unit = ticker-episode.** All first-look p-values are computed with errors clustered by ticker-episode (or one row per episode) from the start (§6 doctrine of the July memo, made default). Effective N = distinct ticker-episodes, reported on every finding; row-level / day-level p-values never appear in a promotion decision.
 6. **One primary horizon per cluster.** Pre-register a single decision horizon (default **car_10**); car_5 / car_20 are descriptive only and are NOT counted as separate tests (closes the "clears on *some* horizon" fork).
 
-## 3. The 16 clusters — fixed α slots (verdicts from the July re-run)
+## 3. The clusters — fixed α slots (16 at the July re-run; #17-#18 admitted 2026-07-14)
 
 α slice = 1.76e-4 program Bonferroni charge per cluster (one charge, not per member). `B-clear` = raw p < 1.76e-4 on the primary horizon AND verification-robust.
 
@@ -43,14 +43,16 @@ This ledger makes the family **program-wide, fixed, and auditable**.
 | 14 | Insider flow | `insider_score_usd` | SUGGESTIVE (N≈5 events, ticker-dedup null) | ✗ | car_10 | 2 | monitor (needs episodes) | 2026-12 |
 | 15 | Experts (panel) | `expert_spread`, `oneil_*`, buffett qual | SPURIOUS or NULL across the board | ✗ | car_10 | 2 | **1 re-look left** (ticker-episode unit ~2026-09); retire if null | 2026-10 |
 | 16 | Joint loser flag | ATR-hi × `pct_off_52w_low`-hi (ROIC leg dropped) | SUGGESTIVE (mostly ATR curvature) | ✗ | car_10 | 1 | **forward-log without ROIC leg** (telemetry-only, pre-register before ordering use) | 2026-11 |
+| 17 | Size | `log10_mcap` | not in the July family — admitted 2026-07-14 (ML corner): continuous WCB p .024 on car_10, below the .05/7 family bar; invisible to the binary model | ✗ | car_10 | 1 | monitor (exploratory candidate) | 2026-12 |
+| 18 | LLM conviction | `llm_confidence` | not in the July family — admitted 2026-07-14 (ML corner): null (L1-zeroed, WCB p .842); missingness is structural (early brief_dates lack the column) | ✗ | car_10 | 1 | monitor | 2026-12 |
 
 **Bonferroni-clear on verified evidence (July): #1 ATR, #2 MA50-extension, #9 press-gate.** These three are the only clusters eligible to skip a first-look confirmation; even they must clear the held-out window (rule 3) before entering SELECTION.
 
 ### 3.1 New clusters pending admission (raise the denominator when first looked at)
-These are stamped-forward telemetry not yet in the 284-test family. Each gets a §3 row (and re-derives the budget) at its first look — none exists yet:
-- **17 (reserved):** `options_*` term-slope / VRP / skew (parquet-only; first-look ~2026-09 at `chain_quality=OK`, N≥30).
-- **18 (reserved):** `market_state_*` regime cols (display/telemetry today).
-- **19 (reserved):** `grounded_in_{theme,any}_news` / mechanical-vs-LLM proposal (`proposal_shadow`) — see §5.
+These are stamped-forward telemetry not yet in the 284-test family. Each gets a §3 row (and re-derives the budget) at its first look — none exists yet (renumbered 2026-07-14 after #17-#18 were admitted from the ML-corner look):
+- **19 (reserved):** `options_*` term-slope / VRP / skew (parquet-only; first-look ~2026-09 at `chain_quality=OK`, N≥30).
+- **20 (reserved):** `market_state_*` regime cols (display/telemetry today).
+- **21 (reserved):** `grounded_in_{theme,any}_news` / mechanical-vs-LLM proposal (`proposal_shadow`) — see §5.
 
 ## 4. Looks-log (append-only)
 
@@ -60,13 +62,14 @@ Every test that draws on a cluster. `looks` = cumulative program looks spent on 
 |------|--------------|-----------|---------------|---------|--------|---------------------|-------|
 | 2026-06-25 | June attribution sweep | 1–16 (partial) | ≤2026-06-23 | car_5/10 | 1 verdict-grade separator (ATR) | 1 each tested | `edge_signal_attribution_2026_06_25.md` |
 | 2026-07-06 | July re-run (284 tests, α=1.76e-4) | 1–16 | ≤2026-07-05 (DISCOVERY freeze) | car_5/10/20 | 3 B-clear (#1,#2,#9); ROIC/experts died | 2 each | `edge_signal_attribution_2026_07_06.md` |
+| 2026-07-14 | ML-corner exploratory scripts (`scripts/ml/`): 7-feature binary L1; 7-feature continuous elastic net incl. 7 WCB coefficient tests; 23-feature exploratory demo | 1, 2 (incl. rsi), 3 (52w extension), 9, 17, 18 (7-feature set); the demo grazes most stamped numerics | matured ≤2026-06-26 (binary/continuous); demo ≤2026-07-05 freeze — **2 post-freeze episodes burned** by the pre-cap first run (recorded burn) | car_10 | nothing beats ATR alone; log10_mcap WCB p .024 below the .05/7 bar (exploratory); GB memorization demo | 3 (#1,#2,#3,#9); 1 (#17,#18) | README ml rule 11 added with this row; #17/#18 admitted to §3 |
 | ~2026-08 | Aug re-run (pre-registered) | 5 (FCF-margin, primary) + re-tests 11, 8 | held-out ≥2026-07-06 | car_10 | PENDING | 3 (cluster 5) | 1 budgeted look for #5; re-tests count against #11/#8 budget |
 | ~2026-09 | Experts ticker-episode re-look | 15 | held-out | car_10 | PENDING | 3 (cluster 15) — **last re-look** | retire if null |
 | — | (future rows appended here) | | | | | | |
 
 ## 5. Cross-reference: the mechanical-vs-LLM selection test (own track)
 
-The strongest in-hand lead — a mechanical news-reading rule beating the LLM free-association selection (`proposal_shadow`, design `theme_mapper_mechanical_rule_headtohead_design_2026_07_12.md`) — points at the SELECTION layer, not a display cluster. It is pre-registered as its **own** forward test (reserved cluster 19), NOT folded into the general telemetry sweep: primary horizon car_10, ticker-episode clustering, a numeric kill line committed **before** looking (the H=10-flips-positive ⇒ regime-not-mechanism kill holds even against a live H=21 positive), plus a size-bracket gate requiring the edge to hold within the tool's own $500M–$10B universe (a mega-cap attention artifact is out of scope). First powered look ~2026-09+.
+The strongest in-hand lead — a mechanical news-reading rule beating the LLM free-association selection (`proposal_shadow`, design `theme_mapper_mechanical_rule_headtohead_design_2026_07_12.md`) — points at the SELECTION layer, not a display cluster. It is pre-registered as its **own** forward test (reserved cluster 21), NOT folded into the general telemetry sweep: primary horizon car_10, ticker-episode clustering, a numeric kill line committed **before** looking (the H=10-flips-positive ⇒ regime-not-mechanism kill holds even against a live H=21 positive), plus a size-bracket gate requiring the edge to hold within the tool's own $500M–$10B universe (a mega-cap attention artifact is out of scope). First powered look ~2026-09+.
 
 ## 6. What this ledger does NOT change
 
