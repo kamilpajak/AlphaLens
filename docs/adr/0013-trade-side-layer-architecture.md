@@ -1,6 +1,6 @@
 # ADR 0013 — Trade-side layer architecture (live tool)
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-07-14
 - **Supersedes:** —
 - **Sibling:** ADR 0007 (research-lab layer architecture). This ADR is the
