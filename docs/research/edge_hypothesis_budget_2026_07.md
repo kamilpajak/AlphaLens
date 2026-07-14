@@ -67,6 +67,22 @@ Every test that draws on a cluster. `looks` = cumulative program looks spent on 
 | ~2026-09 | Experts ticker-episode re-look | 15 | held-out | car_10 | PENDING | 3 (cluster 15) — **last re-look** | retire if null |
 | — | (future rows appended here) | | | | | | |
 
+### 4.1 Policy- and ladder-side looks annex (charges the T5/T7 walk-forward budget, not the §3 covariate family)
+
+Rule-11 of `scripts/ml/README.md` covers covariate-vs-EDGE-outcome looks; POLICY counterfactuals evaluated
+against `realized_r` and LADDER-outcome (fill) models sit outside the §3 selection family but still spend
+looks — they charge the multiplicity budget of the planned ~2026-09 exit/entry walk-forward
+(`exit_geometry_reward_risk_2026_06_30.md` §7; ADR 0013 R4: every evaluated policy, registered lens or not,
+counts). Append-only:
+
+| Date | Look | Outcome touched | Result | Charges | Notes |
+|------|------|-----------------|--------|---------|-------|
+| 2026-07-14 | In-flight edit policies replay (4 policies + shipped be_0p5r re-audit) | realized_r, 77 filled paths | be_0p5r stays flagship (1 winner episode harmed — copy stale); P4 tier-cancel +0.06 honest; trailing/time-stop/BE-on-T1 dead | 5 policy looks → Sep walk-forward | in-flight what-ifs workflow report (memory-recorded) |
+| 2026-07-14 | Tier-allocation tilt (ML-weighted vs static front-load vs all-in-T1) | realized_r, 43 filled terminal episodes | ML tilt OOF CI straddles 0; 88% of effect is the static tilt; all-in-T1 = ladder deletion | 3 policy looks → Sep walk-forward | analytic reweighting, parity 43/43 |
+| 2026-07-14 | ML-gated market entry (3 arms, engine replay, parity 129/129) | realized_r, 68 common-support episodes | B−C (gating value) −0.009 [−0.024,+0.003] — no detectable gating value at this N; static leg realized-only +0.026 [+0.001,+0.056] | 3 policy looks → Sep walk-forward | pooled-OOF tercile threshold defect recorded (bias favors gating; conclusion conservative); pre-reg sketch: STATIC arm only, realized-only primary, wild/BCa bootstrap, ~120-150 fresh decided episodes |
+| 2026-07-14 | Ladder-outcome models (`2026_07_ladder_fill_tiny.py`, `2026_07_ladder_fill_depth_cr.py`) | fill/time-to-fill/depth (NOT an EDGE excess outcome) | extension → faster+deeper fills; spacing mechanics confirmed | T5 model looks (outside §3; logged for completeness) | any future SELECTION use of these features re-enters via §3 rules |
+
+
 ## 5. Cross-reference: the mechanical-vs-LLM selection test (own track)
 
 The strongest in-hand lead — a mechanical news-reading rule beating the LLM free-association selection (`proposal_shadow`, design `theme_mapper_mechanical_rule_headtohead_design_2026_07_12.md`) — points at the SELECTION layer, not a display cluster. It is pre-registered as its **own** forward test (reserved cluster 21), NOT folded into the general telemetry sweep: primary horizon car_10, ticker-episode clustering, a numeric kill line committed **before** looking (the H=10-flips-positive ⇒ regime-not-mechanism kill holds even against a live H=21 positive), plus a size-bracket gate requiring the edge to hold within the tool's own $500M–$10B universe (a mega-cap attention artifact is out of scope). First powered look ~2026-09+.
