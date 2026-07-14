@@ -25,7 +25,27 @@ the hypothesis-budget ledger + fresh-data pre-registration).
    `max(auc, 1-auc)` per fold — sign-agnostic, i.e. deliberately strong, so
    beating it means something. A model that loses to one feature is a null
    result — report it as such.
-6. Data readiness per layer (measured 2026-07-14): SIGNAL marginal (tiny models
+6. **Prefer CONTINUOUS targets over binary.** Dichotomizing a continuous
+   outcome (below/above SPY) discards ~1/3 to 1/2 of the sample's power
+   (Altman & Royston 2006; Cohen 1983: a median split cuts explained variance
+   to ~0.65 r^2). Model `car_k` directly (cluster-robust linear / rank-based
+   with day-cluster bootstrap) — which is what the attribution pipeline's
+   `cluster_ols` + wild cluster bootstrap already do; a binary classifier is
+   the exception (needs a stated reason), not the default.
+7. **Correlated features → elastic net, not pure L1** (lasso picks one of a
+   correlated pair ~arbitrarily; e.g. ATR vs ma50-distance).
+8. **Comparing two models/metrics at ~30 clusters:** naive tests (incl.
+   DeLong for AUC) are INVALID under day clustering — use a permutation test
+   shuffling outcomes by WHOLE day-cluster, or a day-cluster bootstrap.
+   Differences like AUC 0.609 vs 0.632 are not distinguishable at this N.
+9. **Known validation caveat — overlapping label windows.** k=10 outcome
+   windows of adjacent brief days share ~9/10 sessions, so even GroupKFold
+   leaks through the LABELS (López de Prado purged/embargoed CV is the clean
+   fix). At ~30 days of history full purging (±10 sessions) would destroy the
+   training set, so for now: use day groups, treat CV numbers as mildly
+   optimistic, and prefer folds built from contiguous 10-session BLOCKS when
+   feasible. Revisit purged CV once history exceeds ~6 months.
+10. Data readiness per layer (measured 2026-07-14): SIGNAL marginal (tiny models
    only), LADDER marginal (P(fill) lean models ~Aug), IN-FLIGHT not enough
    (no policy learning; parametric replay grids only). Counterfactual replay
    variants and within-day market-state values are NOT independent
