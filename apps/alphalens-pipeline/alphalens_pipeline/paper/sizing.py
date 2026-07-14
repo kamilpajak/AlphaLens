@@ -115,10 +115,13 @@ def validate_trade_setup(brief_trade_setup: dict) -> float:
     if status != "OK":
         raise TradeSetupNotPlannableError(f"status={status!r} (only 'OK' is plannable)")
 
+    # 1.1.0 only ADDS builder_config_version (ADR 0013); every field the planner
+    # reads is unchanged, so both versions are plannable. Any other version means
+    # a shape change nobody reviewed against this planner — reject loudly.
     schema = brief_trade_setup.get("schema_version")
-    if schema != "1.0.0":
+    if schema not in ("1.0.0", "1.1.0"):
         raise TradeSetupNotPlannableError(
-            f"unsupported schema_version={schema!r}; planner pinned to 1.0.0"
+            f"unsupported schema_version={schema!r}; planner pinned to 1.0.0/1.1.0"
         )
 
     suggested_size_pct = brief_trade_setup.get("suggested_size_pct")

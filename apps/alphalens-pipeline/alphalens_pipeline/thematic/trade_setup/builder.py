@@ -22,6 +22,9 @@ import pandas as pd
 from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
 from alphalens_pipeline.thematic.screening.technicals_signal import _compute_atr_pct
 from alphalens_pipeline.thematic.trade_setup import ladder, levels, sizing
+from alphalens_pipeline.thematic.trade_setup.config_version import (
+    setup_builder_config_version,
+)
 from alphalens_pipeline.thematic.trade_setup.model import (
     SCHEMA_VERSION,
     STATUS_OK,
@@ -191,6 +194,7 @@ def build_trade_setup_from_frame(
         order_ttl_days=order_ttl_days,
         entry_tiers=tuple(tiers),
         tp_tranches=tp_tranches,
+        builder_config_version=setup_builder_config_version(),
     )
 
 
