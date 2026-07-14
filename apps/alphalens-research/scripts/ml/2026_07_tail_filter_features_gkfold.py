@@ -28,7 +28,8 @@ from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-warnings.filterwarnings("ignore")
+# Only silence sklearn's noisy FutureWarnings; convergence warnings stay visible.
+warnings.filterwarnings("ignore", category=FutureWarning)
 RNG = 0
 
 _out = edge_stores.load_store(edge_stores.HOME / "population_ladders")
@@ -45,6 +46,8 @@ drop_always = {"brief_date", "ticker", "asof", "generated_at"}
 candidates = [c for c in frame.columns if c in brief_cols and c not in drop_always]
 num = frame[candidates].select_dtypes(include=[np.number]).columns.tolist()
 # drop all-null / near-empty columns (options_* pre-07-07, mstate_* pre-07-05 etc.)
+# NOTE: this coverage filter peeks at the FULL panel's X (not y) before CV —
+# a common exploratory shortcut; results are mildly optimistic vs per-fold filtering.
 keep = [c for c in num if frame[c].notna().mean() >= 0.6 and frame[c].nunique(dropna=True) > 1]
 print(f"features: {len(keep)} numeric pre-trade columns (of {len(candidates)} brief cols)")
 
