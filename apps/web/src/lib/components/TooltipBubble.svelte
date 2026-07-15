@@ -65,7 +65,7 @@
 	{id}
 	data-tt-placement={placement}
 	data-tt-flip={placement}
-	class="group/tt pointer-events-none absolute left-1/2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 data-[tt-flip=above]:bottom-full data-[tt-flip=above]:mb-2 data-[tt-flip=below]:top-full data-[tt-flip=below]:mt-2 {VISIBILITY[
+	class="group/tt pointer-events-none absolute left-1/2 w-[min(20rem,calc(100vw-2rem),var(--tt-maxw,100vw))] z-50 opacity-0 transition-opacity duration-150 data-[tt-flip=above]:bottom-full data-[tt-flip=above]:mb-2 data-[tt-flip=below]:top-full data-[tt-flip=below]:mt-2 {VISIBILITY[
 		group
 	]}"
 	style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"

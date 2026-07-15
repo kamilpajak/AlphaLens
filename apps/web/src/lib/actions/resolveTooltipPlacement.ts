@@ -46,3 +46,40 @@ export function resolveVerticalPlacement(
 	const roomBelow = clip.bottom - trigger.bottom;
 	return roomBelow > roomAbove ? 'below' : 'above';
 }
+
+// --- Horizontal placement -------------------------------------------------
+
+interface HSpan {
+	left: number;
+	right: number;
+}
+
+/**
+ * Horizontal shift + arrow counter-shift that keeps a centered bubble inside
+ * BOTH the viewport and its nearest clip box. The bubble is centered on the
+ * trigger by default; this returns the correction (in px) to keep its edges off
+ * the tighter of the two boundaries. When the space is narrower than the bubble
+ * (`hi < lo`) it prefers the left edge — width-capping (done by the caller) keeps
+ * that from happening for a fitting box.
+ */
+export function resolveHorizontalShift(
+	triggerCenterX: number,
+	bubbleWidth: number,
+	viewportWidth: number,
+	clip: HSpan,
+	margin: number,
+	arrowCornerPad: number
+): { shiftX: number; arrowX: number } {
+	const idealLeft = triggerCenterX - bubbleWidth / 2;
+	const lo = Math.max(margin, clip.left + margin);
+	const hi = Math.min(viewportWidth - margin - bubbleWidth, clip.right - margin - bubbleWidth);
+	const clampedLeft = hi < lo ? lo : Math.min(Math.max(idealLeft, lo), hi);
+	const shiftX = clampedLeft - idealLeft;
+
+	// The bubble carries shiftX, so the arrow (a child) moves with it; counter-
+	// shift by -shiftX to keep it on the trigger, clamped inside the bubble corners.
+	const arrowLimit = Math.max(0, bubbleWidth / 2 - arrowCornerPad);
+	const arrowX = Math.min(Math.max(-shiftX, -arrowLimit), arrowLimit);
+	// `+ 0` normalizes a `-0` (from rounding negative-zero) to `0`.
+	return { shiftX: Math.round(shiftX) + 0, arrowX: Math.round(arrowX) + 0 };
+}
