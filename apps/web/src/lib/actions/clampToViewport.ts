@@ -53,6 +53,10 @@ interface ClampOptions {
 function nearestClipSpan(node: HTMLElement): { top: number; bottom: number } {
 	let el: HTMLElement | null = node.parentElement;
 	while (el && el !== document.body) {
+		// A horizontally-scrolling container (`overflow-x: auto`) also computes
+		// `overflow-y: auto`, so it is treated as a vertical clip box here. That is
+		// harmless: flipping still keeps the bubble within the container's vertical
+		// bounds, and horizontal clamping is handled separately above.
 		const oy = getComputedStyle(el).overflowY;
 		if (oy === 'auto' || oy === 'scroll' || oy === 'hidden' || oy === 'clip' || oy === 'overlay') {
 			const r = el.getBoundingClientRect();
