@@ -27,22 +27,16 @@
 	} as const;
 
 	// Vertical placement of the bubble relative to its trigger. `above` (default)
-	// is the historical behaviour (opens upward). `below` is for triggers near the
-	// TOP of the page whose tall content would otherwise clip off the viewport top
-	// (e.g. the market-context banner). Both variants are full literal class
-	// strings so Tailwind v4 generates them; clampToViewport still handles the
-	// horizontal edge-clamp independently of this.
-	const PLACEMENT = {
-		above: 'bottom-full mb-2',
-		below: 'top-full mt-2'
-	} as const;
-	// The diamond that points back at the trigger. `above` → on the bubble's
-	// bottom edge pointing down (border-r+border-b); `below` → on the bubble's top
-	// edge pointing up (border-l+border-t).
-	const ARROW = {
-		above: 'top-full -mt-1 border-r border-b',
-		below: 'bottom-full -mb-1 border-l border-t'
-	} as const;
+	// opens upward; `below` opens downward. The `placement` prop is only the
+	// INITIAL / no-JS side — at runtime clampToViewport writes the EFFECTIVE side
+	// onto the bubble's `data-tt-flip` so a tooltip that would clip against its
+	// nearest scroll/overflow box (e.g. the /edge outcomes table's `overflow-auto`
+	// container) flips to the side with room. Position is therefore driven by
+	// `data-[tt-flip=…]` (bubble) + `group-data-[tt-flip=…]/tt` (arrow) variants,
+	// kept as full literal class strings so Tailwind v4 generates both.
+	// `above` diamond → bubble's bottom edge pointing down (border-r+b); `below`
+	// diamond → top edge pointing up (border-l+t).
+	type Placement = 'above' | 'below';
 </script>
 
 <script lang="ts">
@@ -54,9 +48,9 @@
 		id?: string;
 		/** Which wrapper group name reveals this bubble. */
 		group?: keyof typeof VISIBILITY;
-		/** Open above (default) or below the trigger. `below` keeps tall tooltips on
-		 *  high-placed triggers from clipping off the viewport top. */
-		placement?: keyof typeof PLACEMENT;
+		/** Initial / no-JS open side. At runtime clampToViewport may flip it to keep
+		 *  the bubble inside its nearest scroll/overflow box. */
+		placement?: Placement;
 		/** Amber uppercase header line (term / label / "name // full"). */
 		header: Snippet;
 		/** Body content below the header. Plain callers pass a single
@@ -69,9 +63,9 @@
 
 <span
 	{id}
-	class="pointer-events-none absolute {PLACEMENT[
-		placement
-	]} left-1/2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 {VISIBILITY[
+	data-tt-placement={placement}
+	data-tt-flip={placement}
+	class="group/tt pointer-events-none absolute left-1/2 w-[min(20rem,calc(100vw-2rem))] z-50 opacity-0 transition-opacity duration-150 data-[tt-flip=above]:bottom-full data-[tt-flip=above]:mb-2 data-[tt-flip=below]:top-full data-[tt-flip=below]:mt-2 {VISIBILITY[
 		group
 	]}"
 	style="transform: translateX(calc(-50% + var(--tt-shift, 0px)))"
@@ -86,7 +80,7 @@
 		{@render children()}
 	</span>
 	<span
-		class="absolute left-1/2 w-2 h-2 border-amber bg-surface-pop {ARROW[placement]}"
+		class="absolute left-1/2 w-2 h-2 border-amber bg-surface-pop group-data-[tt-flip=above]/tt:top-full group-data-[tt-flip=above]/tt:-mt-1 group-data-[tt-flip=above]/tt:border-r group-data-[tt-flip=above]/tt:border-b group-data-[tt-flip=below]/tt:bottom-full group-data-[tt-flip=below]/tt:-mb-1 group-data-[tt-flip=below]/tt:border-l group-data-[tt-flip=below]/tt:border-t"
 		style="transform: translateX(calc(-50% + var(--tt-arrow, 0px))) rotate(45deg)"
 	></span>
 </span>
