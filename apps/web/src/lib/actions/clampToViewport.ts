@@ -137,7 +137,7 @@ export function clampToViewport(node: HTMLElement, options: ClampOptions = {}) {
 		// Measure AFTER the cap so width + any re-wrapped height are current.
 		const bubbleRect = tooltip.getBoundingClientRect();
 		const bubbleWidth = bubbleRect.width;
-		if (bubbleWidth === 0) return; // not laid out yet
+		if (bubbleWidth <= 0) return; // not laid out yet
 
 		const triggerRect = node.getBoundingClientRect();
 		// Use the layout-viewport width so it shares the coordinate space of
