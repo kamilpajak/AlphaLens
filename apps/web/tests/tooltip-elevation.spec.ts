@@ -76,3 +76,19 @@ test('tooltip popover is an opaque, elevated surface distinct from the card', as
 	//     popover reads as a real layer rather than transparent
 	expect(bubbleBg).not.toBe(cardBg);
 });
+
+test('candidate card does not trap tooltips in an isolated stacking context', async ({ page }) => {
+	// Regression for "tooltips are covered by the sticky THEME filter bar":
+	// tooltips elevate to z-50 on hover to clear page chrome, but the card used
+	// `isolation: isolate`, creating a stacking context that confined that z-50
+	// inside the card. The card itself sits below the sticky filter bar (z-20) at
+	// the root, so the bar painted over any tooltip opening upward into its band.
+	// The card must NOT establish an isolating stacking context, so the hovered
+	// tooltip's z-50 wins against the z-20 bar at the page root.
+	await installApiMock(page);
+	await page.goto(`/brief/${DAYS_INDEX[0].date}`);
+	const card = page.locator('article[id]').first();
+	await expect(card).toBeVisible();
+	const isolation = await card.evaluate((el) => getComputedStyle(el).isolation);
+	expect(isolation).toBe('auto');
+});

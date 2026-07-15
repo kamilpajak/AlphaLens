@@ -150,9 +150,13 @@
 	]);
 </script>
 
+<!-- No `isolate` here: it creates a stacking context that traps a hovered
+     tooltip's z-50 inside the card, so the sticky filter bar (z-20) would paint
+     over tooltips opening upward into its band. Without it the tooltip z-50 wins
+     at the page root. See tests/tooltip-elevation.spec.ts. -->
 <article
 	id={c.ticker}
-	class="border border-grid bg-bg-1 fade-up isolate"
+	class="border border-grid bg-bg-1 fade-up"
 	style="animation-delay: {index * 0.04}s"
 >
 	<!-- Header: rank + ticker + company + theme on the left, verification gates
