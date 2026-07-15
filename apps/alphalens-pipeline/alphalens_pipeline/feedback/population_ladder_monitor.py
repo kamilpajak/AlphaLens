@@ -98,7 +98,13 @@ MONITOR_LOOKBACK_DAYS = 75
 # forward) and retried next night — never a silent truncation that would drop
 # rows from the population. The cheap Tier-1 daily screen runs for EVERYONE and
 # is NOT budget-bounded (one grouped-daily call prices the whole market per day).
-_MAX_FETCHES_PER_RUN = 150
+# Default raised 150->250 on 2026-07-15: the ongoing population (~400 rows)
+# outgrew the old cap, leaving ~40% of rows with a stale resolution frontier
+# (terminalizations lagged days behind). Operator override:
+# ALPHALENS_FEEDBACK_MAX_FETCHES (e.g. a one-off catch-up run at 600).
+# Wall-clock headroom exists (replay ~31min of its 60min slice); Polygon's
+# per-minute throttle bounds the actual request rate regardless.
+_MAX_FETCHES_PER_RUN = 250
 
 # Reserved sub-budget for the periodic forced resolve (R7) + brand-new
 # establishment. Drawn SEPARATELY from the main touch budget so a brief-inflow /
@@ -1149,7 +1155,9 @@ def replay_population_ladders(
     # One shared MINUTE budget across the whole run (the cheap daily screen is NOT
     # budget-bounded). The reserved forced sub-budget protects R7 periodic +
     # brand-new establishment from a brief-inflow / crash-night flood.
-    budget = _FetchBudget(_MAX_FETCHES_PER_RUN)
+    budget = _FetchBudget(
+        int(os.environ.get("ALPHALENS_FEEDBACK_MAX_FETCHES", _MAX_FETCHES_PER_RUN))
+    )
     forced_budget = _FetchBudget(_FORCED_RESOLVE_BUDGET)
     reports: list[PopulationMonitorReport] = []
     for offset in range(lookback_days + 1):  # inclusive both ends; newest -> oldest
