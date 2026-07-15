@@ -27,7 +27,11 @@
  * `typeof window` defensively.
  */
 
-import { resolveVerticalPlacement, type VerticalPlacement } from './resolveTooltipPlacement';
+import {
+	resolveHorizontalShift,
+	resolveVerticalPlacement,
+	type VerticalPlacement
+} from './resolveTooltipPlacement';
 
 // Gap kept between the bubble edge and the viewport edge. Must stay strictly
 // below the per-side inset of the CSS width clamp `w-[min(20rem,calc(100vw-2rem))]`
@@ -46,25 +50,32 @@ interface ClampOptions {
 	tooltipSelector?: string;
 }
 
-// The vertical span of the nearest ancestor that clips overflow (a scroll box
-// like the /edge outcomes table's `overflow-auto` container), or the viewport
-// when there is none. Used to flip the bubble to the side with room so the
-// scroll box edge never cuts it off.
-function nearestClipSpan(node: HTMLElement): { top: number; bottom: number } {
+// The rect of the nearest ancestor that clips overflow (a scroll box like the
+// /edge outcomes table's `overflow-auto` container), or the viewport when there
+// is none. Drives BOTH the vertical flip (top/bottom) and the horizontal clamp +
+// width-cap (left/right) so the scroll box edge never cuts the bubble off.
+function nearestClipBox(node: HTMLElement): {
+	top: number;
+	bottom: number;
+	left: number;
+	right: number;
+} {
 	let el: HTMLElement | null = node.parentElement;
 	while (el && el !== document.body) {
-		// A horizontally-scrolling container (`overflow-x: auto`) also computes
-		// `overflow-y: auto`, so it is treated as a vertical clip box here. That is
-		// harmless: flipping still keeps the bubble within the container's vertical
-		// bounds, and horizontal clamping is handled separately above.
-		const oy = getComputedStyle(el).overflowY;
-		if (oy === 'auto' || oy === 'scroll' || oy === 'hidden' || oy === 'clip' || oy === 'overlay') {
+		const s = getComputedStyle(el);
+		// A container that scrolls/clips on EITHER axis clips both (CSS coerces the
+		// `visible` axis to `auto` when the other is a scroll value), so it is the
+		// clip box for both the vertical flip and the horizontal clamp.
+		const clips = (v: string) =>
+			v === 'auto' || v === 'scroll' || v === 'hidden' || v === 'clip' || v === 'overlay';
+		if (clips(s.overflowY) || clips(s.overflowX)) {
 			const r = el.getBoundingClientRect();
-			return { top: r.top, bottom: r.bottom };
+			return { top: r.top, bottom: r.bottom, left: r.left, right: r.right };
 		}
 		el = el.parentElement;
 	}
-	return { top: 0, bottom: document.documentElement.clientHeight };
+	const d = document.documentElement;
+	return { top: 0, bottom: d.clientHeight, left: 0, right: d.clientWidth };
 }
 
 // ---------------------------------------------------------------------------
@@ -97,15 +108,6 @@ function ensureListeners() {
 	window.visualViewport?.addEventListener('resize', schedule);
 }
 
-function clamp(v: number, lo: number, hi: number): number {
-	// When the bubble is wider than the available space (hi < lo) prefer the
-	// left margin rather than producing NaN.
-	if (hi < lo) return lo;
-	if (v < lo) return lo;
-	if (v > hi) return hi;
-	return v;
-}
-
 export function clampToViewport(node: HTMLElement, options: ClampOptions = {}) {
 	const tooltipSelector = options.tooltipSelector ?? TOOLTIP_SELECTOR;
 
@@ -122,9 +124,20 @@ export function clampToViewport(node: HTMLElement, options: ClampOptions = {}) {
 		const tooltip = node.querySelector<HTMLElement>(`:scope > ${tooltipSelector}`);
 		if (!tooltip) return;
 
+		// The nearest scroll/overflow box (or the viewport) — it clips the bubble on
+		// every edge, so it bounds both the width-cap and the horizontal clamp.
+		const clip = nearestClipBox(node);
+
+		// Cap the bubble's width to the clip box so a box narrower than the default
+		// 20rem never cuts it off sideways. `--tt-maxw` folds into the width `min()`
+		// in TooltipBubble; unset (viewport fallback) leaves the CSS width unchanged.
+		const maxW = Math.max(0, clip.right - clip.left - 2 * VIEWPORT_MARGIN_PX);
+		tooltip.style.setProperty('--tt-maxw', `${maxW}px`);
+
+		// Measure AFTER the cap so width + any re-wrapped height are current.
 		const bubbleRect = tooltip.getBoundingClientRect();
 		const bubbleWidth = bubbleRect.width;
-		if (bubbleWidth === 0) return; // not laid out yet
+		if (bubbleWidth <= 0) return; // not laid out yet
 
 		const triggerRect = node.getBoundingClientRect();
 		// Use the layout-viewport width so it shares the coordinate space of
@@ -134,35 +147,29 @@ export function clampToViewport(node: HTMLElement, options: ClampOptions = {}) {
 		const vw = document.documentElement.clientWidth;
 		const triggerCenterX = triggerRect.left + triggerRect.width / 2;
 
-		// Where the centered bubble's left edge lands with no shift.
-		const idealLeft = triggerCenterX - bubbleWidth / 2;
-		const clampedLeft = clamp(
-			idealLeft,
+		// Horizontal clamp: keep the bubble inside BOTH the viewport and the clip
+		// box, and counter-shift the arrow to keep it pointing at the trigger.
+		const { shiftX, arrowX } = resolveHorizontalShift(
+			triggerCenterX,
+			bubbleWidth,
+			vw,
+			clip,
 			VIEWPORT_MARGIN_PX,
-			vw - VIEWPORT_MARGIN_PX - bubbleWidth
+			ARROW_CORNER_PAD_PX
 		);
-		const shiftX = clampedLeft - idealLeft;
+		// Set both on the popover; the arrow inherits --tt-arrow via inheritance.
+		tooltip.style.setProperty('--tt-shift', `${shiftX}px`);
+		tooltip.style.setProperty('--tt-arrow', `${arrowX}px`);
 
-		// The popover container carries shiftX, so the arrow (a child) moves with
-		// it; counter-shift the arrow by -shiftX to keep it on the trigger, then
-		// clamp so it never slides past the bubble corners.
-		const arrowLimit = Math.max(0, bubbleWidth / 2 - ARROW_CORNER_PAD_PX);
-		const arrowX = clamp(-shiftX, -arrowLimit, arrowLimit);
-
-		// Round to avoid sub-pixel churn on scroll. Set both on the popover; the
-		// arrow inherits --tt-arrow via CSS custom-property inheritance.
-		tooltip.style.setProperty('--tt-shift', `${Math.round(shiftX)}px`);
-		tooltip.style.setProperty('--tt-arrow', `${Math.round(arrowX)}px`);
-
-		// Vertical auto-flip: open toward the side with room inside the nearest
-		// scroll/overflow box so the bubble is never clipped by it. `data-tt-flip`
-		// drives the bubble+arrow position classes (see TooltipBubble).
+		// Vertical auto-flip: open toward the side with room inside the clip box so
+		// the bubble is never clipped by it. `data-tt-flip` drives the bubble+arrow
+		// position classes (see TooltipBubble).
 		const authored = (tooltip.dataset.ttPlacement as VerticalPlacement) ?? 'above';
 		const flip = resolveVerticalPlacement(
 			authored,
 			triggerRect,
 			bubbleRect.height,
-			nearestClipSpan(node),
+			clip,
 			VIEWPORT_MARGIN_PX
 		);
 		if (tooltip.dataset.ttFlip !== flip) tooltip.dataset.ttFlip = flip;

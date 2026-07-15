@@ -75,3 +75,41 @@ test('a classification tooltip at the top of the scroll box flips below and stay
 	expect(geom.flipTop).toBe(true);
 	expect(geom.flipBottom).toBe(true);
 });
+
+test('a tooltip in a scroll box narrower than the bubble is width-capped and stays inside horizontally', async ({
+	page
+}) => {
+	await stub(page);
+	await page.goto('/edge');
+	await expect(page.getByTestId('outcomes-table')).toBeVisible();
+
+	// Force the scroll box narrower than the default 20rem bubble so the width-cap
+	// + horizontal clamp must engage (mimics the width-capped / centered page where
+	// the box's right edge sits inside the viewport).
+	await page.addStyleTag({ content: '[data-testid="outcomes-scroll"]{max-width:300px !important;}' });
+	await page.evaluate(() => {
+		const box = document.querySelector('[data-testid="outcomes-scroll"]')! as HTMLElement;
+		const chip = box.querySelector('[data-testid="chip-tip"]')!;
+		chip.setAttribute('data-probe', '1');
+		(chip as HTMLElement).focus();
+	});
+	await page.waitForFunction(() => {
+		const bub = document.querySelector('[data-probe="1"] [role="tooltip"] > span');
+		return bub ? bub.getBoundingClientRect().width < 320 : false;
+	});
+
+	const geom = await page.evaluate(() => {
+		const box = document.querySelector('[data-testid="outcomes-scroll"]')!.getBoundingClientRect();
+		const bub = document
+			.querySelector('[data-probe="1"] [role="tooltip"] > span')!
+			.getBoundingClientRect();
+		return {
+			capped: bub.width < 320,
+			insideLeft: bub.left >= box.left - 1,
+			insideRight: bub.right <= box.right + 1
+		};
+	});
+	expect(geom.capped).toBe(true);
+	expect(geom.insideLeft).toBe(true);
+	expect(geom.insideRight).toBe(true);
+});
