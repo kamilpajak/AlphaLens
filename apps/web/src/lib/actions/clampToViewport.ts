@@ -27,6 +27,8 @@
  * `typeof window` defensively.
  */
 
+import { resolveVerticalPlacement, type VerticalPlacement } from './resolveTooltipPlacement';
+
 // Gap kept between the bubble edge and the viewport edge. Must stay strictly
 // below the per-side inset of the CSS width clamp `w-[min(20rem,calc(100vw-2rem))]`
 // (2rem total = 16px/side) so the clamp range stays positive even when the
@@ -42,6 +44,23 @@ const TOOLTIP_SELECTOR = '[role="tooltip"]';
 interface ClampOptions {
 	/** CSS selector for the popover, relative to the trigger node. */
 	tooltipSelector?: string;
+}
+
+// The vertical span of the nearest ancestor that clips overflow (a scroll box
+// like the /edge outcomes table's `overflow-auto` container), or the viewport
+// when there is none. Used to flip the bubble to the side with room so the
+// scroll box edge never cuts it off.
+function nearestClipSpan(node: HTMLElement): { top: number; bottom: number } {
+	let el: HTMLElement | null = node.parentElement;
+	while (el && el !== document.body) {
+		const oy = getComputedStyle(el).overflowY;
+		if (oy === 'auto' || oy === 'scroll' || oy === 'hidden' || oy === 'clip' || oy === 'overlay') {
+			const r = el.getBoundingClientRect();
+			return { top: r.top, bottom: r.bottom };
+		}
+		el = el.parentElement;
+	}
+	return { top: 0, bottom: document.documentElement.clientHeight };
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +149,19 @@ export function clampToViewport(node: HTMLElement, options: ClampOptions = {}) {
 		// arrow inherits --tt-arrow via CSS custom-property inheritance.
 		tooltip.style.setProperty('--tt-shift', `${Math.round(shiftX)}px`);
 		tooltip.style.setProperty('--tt-arrow', `${Math.round(arrowX)}px`);
+
+		// Vertical auto-flip: open toward the side with room inside the nearest
+		// scroll/overflow box so the bubble is never clipped by it. `data-tt-flip`
+		// drives the bubble+arrow position classes (see TooltipBubble).
+		const authored = (tooltip.dataset.ttPlacement as VerticalPlacement) ?? 'above';
+		const flip = resolveVerticalPlacement(
+			authored,
+			triggerRect,
+			bubbleRect.height,
+			nearestClipSpan(node),
+			VIEWPORT_MARGIN_PX
+		);
+		if (tooltip.dataset.ttFlip !== flip) tooltip.dataset.ttFlip = flip;
 	}
 
 	function open() {
