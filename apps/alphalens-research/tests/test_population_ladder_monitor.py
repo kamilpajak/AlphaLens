@@ -118,6 +118,46 @@ class _MonitorTestBase(unittest.TestCase):
         return pd.read_parquet(self.store_dir / f"{brief_date.isoformat()}.parquet")
 
 
+class TestFetchBudgetCap(_MonitorTestBase):
+    """The nightly minute-fetch cap must scale with the population: raised default
+    + operator env override (2026-07-15: 397 ongoing rows vs the old 150 cap left
+    ~40% of the population with a stale resolution frontier and froze /edge
+    terminal counts)."""
+
+    def _captured_budget(self, env: dict[str, str]) -> float:
+        from unittest import mock
+
+        import alphalens_pipeline.feedback.population_ladder_monitor as plm
+
+        captured: list[float] = []
+        real = plm._FetchBudget
+
+        def spy(n):
+            captured.append(n)
+            return real(n)
+
+        with (
+            mock.patch.dict("os.environ", env, clear=False),
+            mock.patch.object(plm, "_FetchBudget", side_effect=spy),
+        ):
+            plm.replay_population_ladders(
+                self.briefs_dir,
+                end_date=dt.date(2026, 5, 1),
+                store_dir=self.store_dir,
+                bar_fetch=lambda *a, **k: [],
+                grouped_fetch=lambda _d: {},
+                now=dt.datetime(2026, 5, 1, 21, tzinfo=dt.UTC),
+                lookback_days=0,
+            )
+        return captured[0]  # main budget is constructed first
+
+    def test_default_cap_is_250(self):
+        self.assertEqual(self._captured_budget({}), 250)
+
+    def test_env_override_respected(self):
+        self.assertEqual(self._captured_budget({"ALPHALENS_FEEDBACK_MAX_FETCHES": "600"}), 600)
+
+
 class TestPlannableSelection(_MonitorTestBase):
     def test_plannable_selection_mirrors_planner(self):
         # GIVEN one verified+plannable candidate and one non-plannable (status not
