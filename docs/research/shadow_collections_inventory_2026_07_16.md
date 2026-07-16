@@ -21,7 +21,7 @@ never pool (ADR 0013 R3).
 
 | Track | What | Used today | Gate |
 |---|---|---|---|
-| `breakeven_realized_r_json` | 3 registered lenses (be_0p5r, fill-anchored, be_0p5r_trail0p6 fwd-only from 2026-07-16), cap 5 | /edge what-if panel (in-sample label, helped/harmed counts) | Every registered lens charges the ~2026-09 stop-rule walk-forward multiplicity (§4.1 annex) |
+| `breakeven_realized_r_json` | 4 registered lenses (be_0p5r, fill-anchored, be_0p5r_trail0p6 fwd-only from 2026-07-16, atr_bracket_1p5 fwd-only from its deploy date — `bezpazery_lens_design_2026_07_16.md`), cap 5 | /edge what-if panel (in-sample label, helped/harmed counts) | Every registered lens charges the ~2026-09 stop-rule walk-forward multiplicity (§4.1 annex) |
 | `ratchet_realized_r` | Stop→BE on TP1-hit replay | Stamped, unsurfaced (barely binds) | Same §4.1 budget |
 | `grid_realized_r_json` | Alternate-exit-ladder grid per row | Nothing | Exit-policy analysis, Sep walk-forward |
 | `realized_r_full_fill` | Entry-side counterfactual (full-fill blended entry) | Nothing | Entry-drag analysis |

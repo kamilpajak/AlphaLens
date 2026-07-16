@@ -2080,6 +2080,7 @@ def _resolve_queue(
             exchange,
             reference_close_override=item.reference_close,
             deadline=deadline,
+            pct_off_52w_high=item.candidate.technical_pct_off_52w_high,
         )
         if result is None:
             # Budget exhausted / fetch fail / implausible — carry prior (or a
@@ -2139,8 +2140,13 @@ def _replay_candidate(
     *,
     reference_close_override: float | None = None,
     deadline: _RunDeadline | None = None,
+    pct_off_52w_high: float | None = None,
 ) -> _ResolveResult | None:
     """RTH-only minute fetch + replay one ticker. ``None`` on fetch fail / defer / skip.
+
+    ``pct_off_52w_high`` is the brief row's ``technical_pct_off_52w_high``
+    (CandidateBrief provenance — NOT in the trade setup), threaded into the
+    what-if grid so the ATR-bracket lens can cap its TP at the 52w high.
 
     Window: arrival open → ``min(position_expiry_session, last_closed_session)``
     session RTH close (open + :func:`_session_rth_span_min`). The fetched bars are
@@ -2228,7 +2234,7 @@ def _replay_candidate(
     # Break-even exit-stop WHAT-IF grid (Stage A): re-replay the SAME bars under each
     # registered break-even lens. Display-only; the entry-TTL / time-stop are not
     # honoured in the what-if (matching replay_ladder_breakeven's contract).
-    breakeven_grid_r = breakeven_grid(setup, bars)
+    breakeven_grid_r = breakeven_grid(setup, bars, pct_off_52w_high=pct_off_52w_high)
     # Entry-side counterfactual (PR-3): realized R at the full-fill blended entry,
     # same exit ladder + bars. Also zero extra Polygon cost.
     realized_r_full = realized_r_full_fill(

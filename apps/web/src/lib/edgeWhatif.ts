@@ -29,6 +29,11 @@ export const WHATIF_LENS_REGISTRY: Record<string, WhatIfLensMeta> = {
 		label: 'break-even +0.5R · trail 0.6',
 		status: 'in_sample',
 		category: 'exit-stop'
+	},
+	atr_bracket_1p5: {
+		label: 'ATR bracket 1.5 (bezpazery)',
+		status: 'in_sample',
+		category: 'exit-stop'
 	}
 };
 

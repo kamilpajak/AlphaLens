@@ -43,6 +43,11 @@ class CandidateBrief:
     n_gates_failed: int
     layer4_weighted_score: float | None
     scorer_config_version: str
+    # Brief-row 52w-high distance (100*(last-peak)/peak, <= 0; NOT part of the
+    # trade_setup JSON). Threaded into the ATR-bracket what-if lens as its TP
+    # ceiling. ``None`` when the column is absent (old parquets) or the name has
+    # <252 sessions of history.
+    technical_pct_off_52w_high: float | None = None
 
 
 def _int_or_zero(row: pd.Series, key: str) -> int:
@@ -118,6 +123,7 @@ def _row_to_candidate(row: pd.Series, brief_date: dt.date) -> CandidateBrief:
         n_gates_failed=_int_or_zero(row, "n_gates_failed"),
         layer4_weighted_score=_float_or_none(row, "layer4_weighted_score"),
         scorer_config_version=_str_or_empty(row, "scorer_config_version"),
+        technical_pct_off_52w_high=_float_or_none(row, "technical_pct_off_52w_high"),
     )
 
 
