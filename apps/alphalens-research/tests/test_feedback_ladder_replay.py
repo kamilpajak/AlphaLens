@@ -691,6 +691,14 @@ class TestAtrBracketWhatIf(unittest.TestCase):
         assert r is not None
         self.assertAlmostEqual(r, -1.0, places=6)
 
+    def test_stop_at_or_below_zero_not_constructible(self):
+        # ATR=80 -> bracket stop = 100 - 120 = -20: a stop at a non-positive
+        # price cannot be placed in reality, so the bracket is degenerate ->
+        # None (not a never-hit stop silently diluting R).
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(120.0, 100.0)], stop=90.0, atr=80.0)
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 96.0, 98.0, 96.5)]
+        self.assertIsNone(replay_ladder_atr_bracket(setup, bars))
+
     def test_tp_hit_at_atr_target_ignores_production_tp(self):
         # Rally through the bracket TP 103 (production TP 101 must NOT cap the
         # exit): (103-100)/3 = +1.0R, not (101-100)/3.

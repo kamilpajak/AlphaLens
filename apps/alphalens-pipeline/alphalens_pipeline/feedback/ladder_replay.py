@@ -614,8 +614,9 @@ def replay_ladder_atr_bracket(
 
     Returns ``None`` for an unparseable setup, no bars, a missing / non-finite /
     non-positive ATR, a non-positive risk (``stop_atr_mult <= 0``), a
-    non-constructible bracket (ceiling at/below the cost floor), or when nothing
-    fills in walk-1. Display-only; never the headline ``realized_r``.
+    non-constructible bracket (ceiling at/below the cost floor, or a bracket
+    stop at/below zero), or when nothing fills in walk-1. Display-only; never
+    the headline ``realized_r``.
     """
     ladder = parse_ladder(trade_setup)
     if trade_setup is None or not bars or not ladder.ok:
@@ -637,6 +638,12 @@ def replay_ladder_atr_bracket(
         return None
     blended = _blended_entry(walk.filled)
     bracket_stop = blended - stop_atr_mult * atr
+    if bracket_stop <= 0:
+        # A stop at a non-positive price cannot be placed in reality (ATR wider
+        # than ~1/stop_atr_mult of the entry) — degenerate bracket, same class
+        # as the ceiling-below-floor case: None, not a never-hit stop that
+        # would silently dilute R.
+        return None
     tp_floor = blended * (1.0 + tp_floor_frac)
     tp = max(tp_floor, blended + tp_atr_mult * atr)
     if ceiling_price is not None and math.isfinite(ceiling_price):
