@@ -42,6 +42,13 @@ describe('resolveLensMeta', () => {
 		expect(m.status).toBe('in_sample');
 	});
 
+	it('resolves the ATR-bracket lens to its label + status', () => {
+		const m = resolveLensMeta('atr_bracket_1p5');
+		expect(m.label).toBe('ATR bracket 1.5 (bezpazery)');
+		expect(m.status).toBe('in_sample');
+		expect(m.category).toBe('exit-stop');
+	});
+
 	it('falls back for an unknown lens_id to the raw id + a cautious in_sample default', () => {
 		const m = resolveLensMeta('be_9p9r_future');
 		expect(m.label).toBe('be_9p9r_future');
@@ -173,6 +180,13 @@ describe('WHATIF_LENS_REGISTRY', () => {
 		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr).toBeDefined();
 		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.status).toBe('in_sample');
 		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.category).toBe('exit-stop');
+	});
+
+	it('declares the pre-registered ATR-bracket lens (bezpazery v1 memo s2)', () => {
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5).toBeDefined();
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.label).toBe('ATR bracket 1.5 (bezpazery)');
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.status).toBe('in_sample');
+		expect(WHATIF_LENS_REGISTRY.atr_bracket_1p5.category).toBe('exit-stop');
 	});
 
 	it('declares the pre-registered trailing lens (exit-geometry memo s7)', () => {

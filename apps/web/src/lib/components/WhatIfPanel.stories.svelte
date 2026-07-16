@@ -10,8 +10,8 @@
 	// Base fixture — values taken verbatim from
 	// tests/fixtures/api-mock/edge-summary.json.
 	// whatifEarnsDisplay requires >= 2 lenses with n > 0, so we add the other
-	// registry lenses (fill_anchored_0p5atr + the pre-registered be_0p5r_trail0p6)
-	// alongside the canonical be_0p5r entry. All be_0p5r numeric values (n=112,
+	// registry lenses (fill_anchored_0p5atr + the pre-registered be_0p5r_trail0p6
+	// and atr_bracket_1p5) alongside the canonical be_0p5r entry. All be_0p5r numeric values (n=112,
 	// mean_r=0.069, median_r=0.044, realized_r_baseline=-0.22,
 	// realized_r_baseline_n=110, n_helped=74, n_harmed=9) come directly from
 	// the fixture file.
@@ -84,6 +84,17 @@
 					n_helped: 28,
 					n_harmed: 6,
 					preregistered_ref: 'exit_geometry_2026_06_30 s7 be0.5/trail0.6'
+				},
+				atr_bracket_1p5: {
+					n: 17,
+					mean_r: -0.02,
+					median_r: 0.01,
+					realized_r_baseline: -0.22,
+					realized_r_baseline_n: 16,
+					n_helped: 9,
+					n_harmed: 5,
+					preregistered_ref:
+						'betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)'
 				}
 			}
 		},
