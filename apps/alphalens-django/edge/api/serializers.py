@@ -195,6 +195,16 @@ class WhatIfLensSerializer(serializers.Serializer):
     # a counterfactual value but no realized outcome).
     realized_r_baseline = serializers.FloatField(allow_null=True)
     realized_r_baseline_n = serializers.IntegerField()
+    # Paired per-row direction counts over the baseline cohort — lens R strictly
+    # above the row's realized R is "helped", strictly below is "harmed", ties feed
+    # neither (so n_helped + n_harmed <= realized_r_baseline_n). Nulled below the
+    # N-gate like the means (they reveal the effect's direction).
+    n_helped = serializers.IntegerField(allow_null=True)
+    n_harmed = serializers.IntegerField(allow_null=True)
+    # Provenance ref (design-memo section) for a lens whose parameters were fixed
+    # BEFORE registration; null for in-sample-tuned lenses. Mirrored from the
+    # pipeline registry in ``summary._LENS_PREREGISTERED_REF``.
+    preregistered_ref = serializers.CharField(allow_null=True)
 
 
 class WhatIfPanelSerializer(serializers.Serializer):

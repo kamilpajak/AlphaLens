@@ -38,6 +38,15 @@ N_EARLY_THRESHOLD = 100
 # deploy capital). Used for the deployment fill-rate.
 _FILLED_TERMINAL = frozenset({"TP_FULL", "SL_HIT", "PARTIAL_TP_THEN_SL", "TIME_STOP"})
 
+# Provenance mirror of ``BreakevenLens.preregistered_ref`` for lenses whose
+# parameters were written down BEFORE registration. The slim Django image cannot
+# import the pipeline registry (workspace doctrine), so the non-None refs are
+# mirrored here; drift is pinned by a research-side parity test
+# (tests/feedback/test_breakeven_lenses.py::test_django_summary_mirrors_preregistered_refs).
+_LENS_PREREGISTERED_REF: dict[str, str] = {
+    "be_0p5r_trail0p6": "exit_geometry_2026_06_30 s7 be0.5/trail0.6",
+}
+
 
 def _finite(value: Any) -> float | None:
     """Return ``float(value)`` when finite, else ``None`` (drops NaN / inf / None)."""
@@ -142,6 +151,12 @@ class _Accumulator:
     # lens n but has no realized outcome here, so this list can be SHORTER than
     # ``breakeven_r[lens_id]``.
     breakeven_realized_baseline: dict[str, list[float]] = field(default_factory=dict)
+    # Paired helped/harmed tallies over EXACTLY the baseline cohort above (finite
+    # lens R AND finite realized_r): lens R strictly above the row's realized R is
+    # "helped", strictly below is "harmed", an exact tie counts to neither — so
+    # helped + harmed <= len(breakeven_realized_baseline[lens_id]).
+    breakeven_helped: dict[str, int] = field(default_factory=dict)
+    breakeven_harmed: dict[str, int] = field(default_factory=dict)
     # Deployment (N-independent) — over the whole plannable population.
     n_filled: int = 0
     n_no_fill: int = 0
@@ -187,6 +202,13 @@ def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
             # but rv is None → it drops out of the baseline only (still counts in n).
             if rv is not None:
                 acc.breakeven_realized_baseline.setdefault(lens_id, []).append(rv)
+                # Paired direction tally (strict inequality; a tie feeds neither).
+                acc.breakeven_helped.setdefault(lens_id, 0)
+                acc.breakeven_harmed.setdefault(lens_id, 0)
+                if rb > rv:
+                    acc.breakeven_helped[lens_id] += 1
+                elif rb < rv:
+                    acc.breakeven_harmed[lens_id] += 1
 
 
 def _accumulate_open(acc: _Accumulator, row: dict[str, Any]) -> None:
@@ -305,6 +327,14 @@ def _build_whatif(acc: _Accumulator, *, gated: bool, status: str) -> dict[str, A
             if gated
             else _mean(acc.breakeven_realized_baseline.get(lens_id, [])),
             "realized_r_baseline_n": len(acc.breakeven_realized_baseline.get(lens_id, [])),
+            # Paired per-row direction counts over the baseline cohort (strict
+            # inequality; ties feed neither side). Like the means they reveal the
+            # effect's direction, so they are nulled below the N-gate.
+            "n_helped": None if gated else acc.breakeven_helped.get(lens_id, 0),
+            "n_harmed": None if gated else acc.breakeven_harmed.get(lens_id, 0),
+            # Provenance ref for a lens whose parameters were pre-registered in a
+            # design memo (null for in-sample-tuned lenses).
+            "preregistered_ref": _LENS_PREREGISTERED_REF.get(lens_id),
         }
         for lens_id, values in sorted(acc.breakeven_r.items())
     }

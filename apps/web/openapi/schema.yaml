@@ -183,6 +183,30 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChartResponse'
           description: ''
+  /v1/edge/excess-telemetry:
+    get:
+      operationId: v1_edge_excess_telemetry_retrieve
+      description: '``/v1/edge/excess-telemetry`` — per-trade SPY-excess scatter +
+        gated trend.'
+      parameters:
+      - in: query
+        name: window
+        schema:
+          type: integer
+        description: 'Calendar days back from the latest brief date (default: all).'
+      tags:
+      - v1
+      security:
+      - CloudflareAccessJWT: []
+      - cookieAuth: []
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EdgeExcessTelemetry'
+          description: ''
   /v1/edge/outcomes:
     get:
       operationId: v1_edge_outcomes_list
@@ -1257,6 +1281,101 @@ components:
       - n_no_fill
       - n_terminal
       - no_fill_rate
+    EdgeExcessPoint:
+      type: object
+      description: One per-trade point in the SPY-excess scatter.
+      properties:
+        date:
+          type: string
+        excess:
+          type: number
+          format: double
+        ticker:
+          type: string
+        holding_days:
+          type: integer
+          nullable: true
+        episode_repeat:
+          type: boolean
+      required:
+      - date
+      - episode_repeat
+      - excess
+      - holding_days
+      - ticker
+    EdgeExcessTelemetry:
+      type: object
+      description: '``/v1/edge/excess-telemetry`` — per-trade SPY-excess scatter +
+        gated trend.'
+      properties:
+        benchmark:
+          type: string
+        status:
+          $ref: '#/components/schemas/EdgeExcessTelemetryStatusEnum'
+        gate_threshold:
+          type: integer
+        n_total:
+          type: integer
+        n_effective:
+          type: integer
+        median_holding_days:
+          type: number
+          format: double
+          nullable: true
+        smoother_window:
+          type: integer
+        metric_note:
+          type: string
+        benchmark_note:
+          type: string
+        points:
+          type: array
+          items:
+            $ref: '#/components/schemas/EdgeExcessPoint'
+        trend:
+          type: array
+          items:
+            $ref: '#/components/schemas/EdgeExcessTrend'
+      required:
+      - benchmark
+      - benchmark_note
+      - gate_threshold
+      - median_holding_days
+      - metric_note
+      - n_effective
+      - n_total
+      - points
+      - smoother_window
+      - status
+      - trend
+    EdgeExcessTelemetryStatusEnum:
+      enum:
+      - accumulating
+      - ok
+      type: string
+      description: |-
+        * `accumulating` - accumulating
+        * `ok` - ok
+    EdgeExcessTrend:
+      type: object
+      description: One trailing-window smoothed value in the SPY-excess trend line.
+      properties:
+        date:
+          type: string
+        mean:
+          type: number
+          format: double
+        lo:
+          type: number
+          format: double
+        hi:
+          type: number
+          format: double
+      required:
+      - date
+      - hi
+      - lo
+      - mean
     EdgeOutcomeRow:
       type: object
       description: The lean per-candidate shape for ``/v1/edge/outcomes`` (memo §5
@@ -1684,10 +1803,22 @@ components:
           nullable: true
         realized_r_baseline_n:
           type: integer
+        n_helped:
+          type: integer
+          nullable: true
+        n_harmed:
+          type: integer
+          nullable: true
+        preregistered_ref:
+          type: string
+          nullable: true
       required:
       - mean_r
       - median_r
       - n
+      - n_harmed
+      - n_helped
+      - preregistered_ref
       - realized_r_baseline
       - realized_r_baseline_n
     WhatIfPanel:
