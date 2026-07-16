@@ -46,6 +46,21 @@ class TestCatalystConfigVersion(unittest.TestCase):
         with mock.patch.object(catalyst_signals, "_W_EVENT_TYPE", 0.50):
             self.assertNotEqual(catalyst_config_version(), base)
 
+    def test_token_changes_on_every_covered_constant(self):
+        # Closes the drift-coverage gap: every scalar inside the token, not
+        # just the three exemplars above. unittest subTest (NOT pytest
+        # parametrize — CI's unittest discover would silently skip it).
+        base = catalyst_config_version()
+        for attr, new_value in [
+            ("_W_CONFIDENCE", 0.99),
+            ("_W_SOI_COUNT", 0.99),
+            ("_SOI_SATURATION", 6),
+            ("_FLOOR_STRONG_THRESHOLD", 0.85),
+        ]:
+            with self.subTest(constant=attr):
+                with mock.patch.object(catalyst_signals, attr, new_value):
+                    self.assertNotEqual(catalyst_config_version(), base)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -143,6 +143,11 @@ def catalyst_config_version() -> str:
 
     Constants are read at call time from the live module namespace so tests
     can ``mock.patch`` a constant and pin token drift.
+
+    The deep-drawdown-reversal thresholds (``_DEEP_DRAWDOWN_PCT_OFF_HIGH``,
+    ``_VOLUME_SURGE_ZSCORE``) deliberately lie OUTSIDE this poolability
+    boundary — they drive the separate :func:`is_deep_drawdown_reversal`
+    detector, not the catalyst-strength formula.
     """
     config = {
         "schema": _STAMP_SCHEMA,
