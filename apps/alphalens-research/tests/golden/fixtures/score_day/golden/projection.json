@@ -2,6 +2,7 @@
   "columns": [
     "atr_penalty",
     "catalyst_confidence",
+    "catalyst_config_version",
     "catalyst_event_type",
     "catalyst_strength",
     "catalyst_template_facts_json",

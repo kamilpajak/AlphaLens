@@ -28,6 +28,8 @@ gave all 4 quantum names conf 1/5 despite QUBT/QBTS/RGTI returning
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 
 from alphalens_pipeline.thematic.extraction.schema import NOISE_EVENT_TYPES
@@ -99,6 +101,11 @@ _FLOOR_STRONG_THRESHOLD = 0.70  # ≥ this → +2 (NVDA Ising-class)
 # from any mildly confident extraction.
 _FLOOR_MODERATE_THRESHOLD = 0.45
 
+# Bumped ONLY when the SHAPE of the config-version stamp changes (a key added /
+# removed / renamed), NEVER when a constant's value changes — a value change
+# must surface as a different token, not a schema bump.
+_STAMP_SCHEMA = 1
+
 # Deep-drawdown-reversal thresholds. Drawdown threshold matches the
 # renderer's setup classifier so the brief's "Pattern: deep drawdown"
 # label and the scoring signal stay in lock-step.
@@ -116,6 +123,45 @@ def _safe_float(v) -> float | None:
     if math.isnan(f):
         return None
     return f
+
+
+def catalyst_config_version() -> str:
+    """Poolability key for the catalyst-strength formula (ADR 0013 rule R3).
+
+    Returns ``catalyst-v{schema}-{sha256(canonical_json)[:12]}`` where the
+    canonical JSON covers every live constant that shapes
+    :func:`compute_catalyst_strength` / :func:`catalyst_floor`: the three
+    dimension weights, the SOI saturation anchor, both floor thresholds, and
+    the full ``EVENT_TYPE_TIER`` map (sorted key/value pairs).
+
+    Bump semantics: the token drifts AUTOMATICALLY on any change to a weight,
+    threshold, tier value, or the strength definition's constant inputs —
+    never edit the token by hand. ``_STAMP_SCHEMA`` bumps only when the stamp
+    SHAPE changes (key added / removed / renamed). Rows carrying different
+    tokens were scored under different formulas and must NEVER pool in EDGE
+    calibration; a missing column marks the pre-versioning pool.
+
+    Constants are read at call time from the live module namespace so tests
+    can ``mock.patch`` a constant and pin token drift.
+
+    The deep-drawdown-reversal thresholds (``_DEEP_DRAWDOWN_PCT_OFF_HIGH``,
+    ``_VOLUME_SURGE_ZSCORE``) deliberately lie OUTSIDE this poolability
+    boundary — they drive the separate :func:`is_deep_drawdown_reversal`
+    detector, not the catalyst-strength formula.
+    """
+    config = {
+        "schema": _STAMP_SCHEMA,
+        "w_event_type": _W_EVENT_TYPE,
+        "w_confidence": _W_CONFIDENCE,
+        "w_soi_count": _W_SOI_COUNT,
+        "soi_saturation": _SOI_SATURATION,
+        "floor_strong": _FLOOR_STRONG_THRESHOLD,
+        "floor_moderate": _FLOOR_MODERATE_THRESHOLD,
+        "event_type_tier": sorted(EVENT_TYPE_TIER.items()),
+    }
+    canon = json.dumps(config, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
+    return f"catalyst-v{_STAMP_SCHEMA}-{digest}"
 
 
 def compute_catalyst_strength(event: CatalystPayload | None) -> float:
@@ -195,6 +241,7 @@ def is_deep_drawdown_reversal(row: dict) -> bool:
 
 __all__ = [
     "EVENT_TYPE_TIER",
+    "catalyst_config_version",
     "catalyst_floor",
     "compute_catalyst_strength",
     "is_deep_drawdown_reversal",

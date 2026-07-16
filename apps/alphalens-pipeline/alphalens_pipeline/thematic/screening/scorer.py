@@ -396,6 +396,11 @@ def _build_candidate_row(
         "technical_ma200_slope_pct_per_day": tech.get("ma200_slope_pct_per_day"),
         "technicals_summary_str": tech["summary"],
         "catalyst_strength": cs_val,
+        # Poolability key for the catalyst-strength formula (weights, floor
+        # thresholds, tier map). Stamped on EVERY row — also no-catalyst rows —
+        # so EDGE calibration never pools across formula versions. Mirrors
+        # insider_signal_version / scorer_config_version above.
+        "catalyst_config_version": catalyst_signals.catalyst_config_version(),
         "catalyst_event_type": catalyst_event.event_type if catalyst_event else None,
         "catalyst_confidence": catalyst_event.confidence if catalyst_event else None,
         # PR-3: typed-fact provenance from the template engine. The
