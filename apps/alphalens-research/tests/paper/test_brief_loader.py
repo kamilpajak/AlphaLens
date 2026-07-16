@@ -74,6 +74,58 @@ class TestLoadBrief(unittest.TestCase):
         self.assertEqual(c.trade_setup["status"], "OK")
         self.assertEqual(c.n_gates_passed, 4)
 
+    def test_technical_pct_off_52w_high_decoded_when_present(self):
+        # The 52w-high distance rides the brief row (NOT the trade_setup JSON);
+        # the loader lifts it so the population monitor can thread the ceiling
+        # into the ATR-bracket what-if lens.
+        d = dt.date(2026, 5, 28)
+        _write_brief(
+            self.tmpdir,
+            d,
+            [
+                {
+                    "ticker": "NVDA",
+                    "theme": "ai-infra",
+                    "verified": True,
+                    "brief_trade_setup": json.dumps(_sample_setup()),
+                    "technical_pct_off_52w_high": -7.5,
+                }
+            ],
+        )
+        candidates = load_brief(d, self.tmpdir)
+        self.assertEqual(candidates[0].technical_pct_off_52w_high, -7.5)
+
+    def test_technical_pct_off_52w_high_none_when_column_absent(self):
+        # Old parquets predate the column — the loader must not require it.
+        d = dt.date(2026, 5, 28)
+        _write_brief(
+            self.tmpdir,
+            d,
+            [{"ticker": "OLD", "theme": "x", "verified": False}],
+        )
+        candidates = load_brief(d, self.tmpdir)
+        self.assertIsNone(candidates[0].technical_pct_off_52w_high)
+
+    def test_technical_pct_off_52w_high_nan_cell_coerces_to_none(self):
+        # A <252-session-history name has a NaN cell in an otherwise-present
+        # column: decode to None, not NaN.
+        d = dt.date(2026, 5, 28)
+        _write_brief(
+            self.tmpdir,
+            d,
+            [
+                {
+                    "ticker": "IPO",
+                    "theme": "x",
+                    "verified": True,
+                    "brief_trade_setup": json.dumps(_sample_setup()),
+                    "technical_pct_off_52w_high": float("nan"),
+                }
+            ],
+        )
+        candidates = load_brief(d, self.tmpdir)
+        self.assertIsNone(candidates[0].technical_pct_off_52w_high)
+
     def test_missing_brief_trade_setup_yields_none(self):
         d = dt.date(2026, 5, 28)
         _write_brief(

@@ -91,14 +91,15 @@ _THREE_TIER_SETUP = {
 def _write_brief(briefs_dir: Path, brief_date: dt.date, rows: list[dict]) -> None:
     frame_rows = []
     for r in rows:
-        frame_rows.append(
-            {
-                "ticker": r["ticker"],
-                "theme": r.get("theme", "ai"),
-                "verified": r.get("verified", True),
-                "brief_trade_setup": json.dumps(r["setup"]) if r["setup"] is not None else None,
-            }
-        )
+        frame_row = {
+            "ticker": r["ticker"],
+            "theme": r.get("theme", "ai"),
+            "verified": r.get("verified", True),
+            "brief_trade_setup": json.dumps(r["setup"]) if r["setup"] is not None else None,
+        }
+        if "technical_pct_off_52w_high" in r:
+            frame_row["technical_pct_off_52w_high"] = r["technical_pct_off_52w_high"]
+        frame_rows.append(frame_row)
     df = pd.DataFrame(frame_rows)
     df.to_parquet(briefs_dir / f"{brief_date.isoformat()}.parquet")
 
@@ -304,6 +305,51 @@ class TestGridRealizedRStamp(_MonitorTestBase):
         self.assertEqual(set(grid), {lens.lens_id for lens in BREAKEVEN_LENSES})
         xyz = df.loc["XYZ", "breakeven_realized_r_json"]
         self.assertTrue(pd.isna(xyz) or xyz in (None, ""))
+
+    def test_breakeven_whatif_threads_52w_ceiling_into_atr_bracket_lens(self):
+        # GIVEN a brief row carrying technical_pct_off_52w_high, WHEN the monitor
+        # resolves it, THEN the stamped atr_bracket_1p5 what-if equals the
+        # ceiling-CAPPED bracket replay: asof_close=100, pct=-2 -> ceiling
+        # 100/0.98 ~ 102.041, below the uncapped 1.5xATR target 103. The path
+        # rallies through the capped TP but NOT the uncapped one, so the value
+        # proves the brief column reached breakeven_grid.
+        brief_date = dt.date(2026, 5, 1)
+        now = dt.datetime(2026, 7, 8, 7, 0, tzinfo=UTC)
+        setup = {**_OK_SETUP, "asof_close": 100.0, "disaster_stop": 90.0}
+        _write_brief(
+            self.briefs_dir,
+            brief_date,
+            [{"ticker": "NVDA", "setup": setup, "technical_pct_off_52w_high": -2.0}],
+        )
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [
+                {"t": base, "o": 100.0, "h": 100.5, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {
+                    "t": base + 60_000,
+                    "o": 100.5,
+                    "h": 102.5,
+                    "l": 100.0,
+                    "c": 102.4,
+                    "v": 1000.0,
+                },
+            ]
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=now.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_fetch,
+            now=now,
+        )
+        df = self._read_store(brief_date).set_index("ticker")
+        grid = json.loads(str(df.loc["NVDA", "breakeven_realized_r_json"]))
+        # Capped: exit at ceiling 100/0.98 with risk 1.5*ATR=3 -> ~0.6803R.
+        # (Uncapped would be a horizon-open mark to 102.4 -> 0.8R.)
+        self.assertIsNotNone(grid["atr_bracket_1p5"])
+        self.assertAlmostEqual(grid["atr_bracket_1p5"], (100.0 / 0.98 - 100.0) / 3.0, places=6)
+        self.assertNotAlmostEqual(grid["atr_bracket_1p5"], 0.8, places=6)
 
     def test_resolved_plannable_row_carries_entry_counterfactual(self):
         # The entry-side counterfactual (realized_r_full_fill) is stamped on a

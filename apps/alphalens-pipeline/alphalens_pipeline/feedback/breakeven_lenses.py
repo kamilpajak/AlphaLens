@@ -6,13 +6,21 @@ difference in realized R is the exit-stop effect, not the selection. The result 
 a display-only counterfactual map ``{lens_id: realized_r}`` stamped exactly like
 ``grid_realized_r_json``; it NEVER overrides the headline ``realized_r``.
 
-Two lens KINDS today (dispatched by ``BreakevenLens.kind``):
+Three lens KINDS today (dispatched by ``BreakevenLens.kind``):
 
 * ``"breakeven"`` — an MFE-triggered break-even / trailing stop
   (:func:`replay_ladder_breakeven`, PR #722). ``mfe_trigger_r`` / ``trail_frac``.
 * ``"fill_anchored"`` — a stop sized to the ACTUAL fill rather than the planned
   deep ladder (:func:`realized_r_fill_anchored`, exit-geometry path b). The tight
   fill-anchored stop collapses the ladder to a single-tier E1 entry. ``stop_atr_mult``.
+* ``"atr_bracket"`` — a fixed symmetric ATR bracket around the blended entry
+  (:func:`replay_ladder_atr_bracket`, bezpazery v1): static stop
+  ``stop_atr_mult`` ATRs below, single 100% TP at
+  ``min(52w ceiling, max(cost floor, tp_atr_mult ATRs above))``. The 52w ceiling
+  is NOT in the trade setup — the caller threads the brief's
+  ``technical_pct_off_52w_high`` into :func:`breakeven_grid`, which reconstructs
+  the ceiling from ``asof_close``. ``stop_atr_mult`` / ``tp_atr_mult`` /
+  ``tp_floor_frac``.
 
 The registry is data-driven: adding a lens is one entry here, no schema or UI
 change (the stamped column is a JSON map and the ``/edge`` selector reads the
@@ -29,16 +37,22 @@ kept to avoid a data migration on the live stamped column. Read them as the gene
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
 from alphalens_pipeline.feedback.ladder_replay import (
     realized_r_fill_anchored,
+    replay_ladder_atr_bracket,
     replay_ladder_breakeven,
 )
 
 _DEFAULT_STOP_ATR_MULT = 0.5
+# atr_bracket-kind defaults (bezpazery v1 pinned values — memo §2).
+_DEFAULT_BRACKET_STOP_ATR_MULT = 1.5
+_DEFAULT_BRACKET_TP_ATR_MULT = 1.5
+_DEFAULT_BRACKET_TP_FLOOR_FRAC = 0.006
 
 
 @dataclass(frozen=True)
@@ -50,7 +64,8 @@ class BreakevenLens:
     to ``validated`` only once a clean forward sample crosses the N-gate.
 
     ``kind`` selects the replay: ``"breakeven"`` uses ``mfe_trigger_r`` /
-    ``trail_frac``; ``"fill_anchored"`` uses ``stop_atr_mult``. Kind-irrelevant
+    ``trail_frac``; ``"fill_anchored"`` uses ``stop_atr_mult``; ``"atr_bracket"``
+    uses ``stop_atr_mult`` / ``tp_atr_mult`` / ``tp_floor_frac``. Kind-irrelevant
     params stay ``None``.
 
     ``preregistered_ref`` is the provenance pointer for a lens whose parameters
@@ -68,7 +83,9 @@ class BreakevenLens:
     kind: str = "breakeven"
     mfe_trigger_r: float | None = None  # breakeven-kind replay param
     trail_frac: float | None = None  # breakeven-kind replay param
-    stop_atr_mult: float | None = None  # fill_anchored-kind replay param
+    stop_atr_mult: float | None = None  # fill_anchored- + atr_bracket-kind replay param
+    tp_atr_mult: float | None = None  # atr_bracket-kind replay param
+    tp_floor_frac: float | None = None  # atr_bracket-kind replay param
     preregistered_ref: str | None = None  # provenance (design-memo section), display-only
 
 
@@ -115,15 +132,68 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
         trail_frac=0.6,
         preregistered_ref="exit_geometry_2026_06_30 s7 be0.5/trail0.6",
     ),
+    # Pre-registered fixed ATR bracket (bezpazery v1, memo
+    # docs/research/bezpazery_lens_design_2026_07_16.md §2 — source: the
+    # betlejem5 EMM executor bracket, inspiration NOT replication): static stop
+    # 1.5xATR below the blended entry, single 100% TP at min(52w-high ceiling,
+    # max(cost floor +0.6%, +1.5xATR)). No day-flatten (deliberate deviation —
+    # every lens shares the same bar window). Parameters were fixed in the memo
+    # BEFORE registration, so its forward sample is a clean read — but it is
+    # still in_sample until that forward N crosses the gate. Populates
+    # FORWARD-ONLY (frozen terminal rows keep their stamped grid; PR #747).
+    BreakevenLens(
+        lens_id="atr_bracket_1p5",
+        label="ATR bracket 1.5 (bezpazery)",
+        category="exit-stop",
+        status="in_sample",
+        kind="atr_bracket",
+        stop_atr_mult=1.5,
+        tp_atr_mult=1.5,
+        tp_floor_frac=0.006,
+        preregistered_ref=(
+            "betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)"
+        ),
+    ),
 )
+
+
+def _ceiling_from_52w_high(
+    trade_setup: Mapping[str, Any] | None, pct_off_52w_high: float | None
+) -> float | None:
+    """Reconstruct the trailing 52w-high price from the brief's distance column.
+
+    ``technical_pct_off_52w_high`` is ``100 * (last - peak) / peak`` (<= 0 by
+    construction; 0 = at the high), so ``peak = asof_close / (1 + pct/100)``.
+    Returns ``None`` (-> UNCAPPED TP, memo §4.2) when the pct or the setup's
+    ``asof_close`` is missing / non-finite / degenerate — a missing 52w history
+    is coverage, not a null.
+    """
+    if trade_setup is None or pct_off_52w_high is None:
+        return None
+    try:
+        pct = float(pct_off_52w_high)
+        asof_close = float(trade_setup.get("asof_close"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(pct) or not math.isfinite(asof_close) or asof_close <= 0:
+        return None
+    denom = 1.0 + pct / 100.0
+    if denom <= 0:
+        return None
+    return asof_close / denom
 
 
 def _lens_realized_r(
     lens: BreakevenLens,
     trade_setup: Mapping[str, Any] | None,
     bars: Sequence[Mapping[str, Any]],
+    *,
+    pct_off_52w_high: float | None = None,
 ) -> float | None:
     """Dispatch one lens to its replay, returning realized R (or ``None``).
+
+    ``pct_off_52w_high`` is the brief-row 52w-high distance (only the
+    ``atr_bracket`` kind consumes it — as the reconstructed TP ceiling).
 
     Raises ``ValueError`` on an unregistered ``kind`` — a new lens kind must be a
     conscious two-step change (register + add a branch here), never a silent
@@ -132,6 +202,25 @@ def _lens_realized_r(
     if lens.kind == "fill_anchored":
         mult = lens.stop_atr_mult if lens.stop_atr_mult is not None else _DEFAULT_STOP_ATR_MULT
         return realized_r_fill_anchored(trade_setup, bars, stop_atr_mult=mult)
+    if lens.kind == "atr_bracket":
+        return replay_ladder_atr_bracket(
+            trade_setup,
+            bars,
+            stop_atr_mult=(
+                lens.stop_atr_mult
+                if lens.stop_atr_mult is not None
+                else _DEFAULT_BRACKET_STOP_ATR_MULT
+            ),
+            tp_atr_mult=(
+                lens.tp_atr_mult if lens.tp_atr_mult is not None else _DEFAULT_BRACKET_TP_ATR_MULT
+            ),
+            tp_floor_frac=(
+                lens.tp_floor_frac
+                if lens.tp_floor_frac is not None
+                else _DEFAULT_BRACKET_TP_FLOOR_FRAC
+            ),
+            ceiling_price=_ceiling_from_52w_high(trade_setup, pct_off_52w_high),
+        )
     if lens.kind == "breakeven":
         # MFE-triggered break-even / trailing. A missing trigger reduces to a static
         # disaster-stop walk (mfe_trigger_r=inf never arms it -> baseline parity).
@@ -145,13 +234,21 @@ def _lens_realized_r(
 def breakeven_grid(
     trade_setup: Mapping[str, Any] | None,
     bars: Sequence[Mapping[str, Any]],
+    *,
+    pct_off_52w_high: float | None = None,
 ) -> dict[str, float | None]:
     """Realized R under each registered exit-stop lens, keyed by ``lens_id``.
 
-    Re-replays the SAME bars under each lens's exit-stop policy (break-even or
-    fill-anchored), reusing the pure replay engine. A lens that cannot resolve
-    (unparseable setup / no bars / no fill / risk <= 0 / missing ATR for a
-    fill-anchored lens) maps to ``None``. Display-only; never feeds the headline
-    ``realized_r``.
+    Re-replays the SAME bars under each lens's exit-stop policy (break-even,
+    fill-anchored, or ATR bracket), reusing the pure replay engine. A lens that
+    cannot resolve (unparseable setup / no bars / no fill / risk <= 0 / missing
+    ATR for an ATR-parametrized lens / non-constructible bracket) maps to
+    ``None``. ``pct_off_52w_high`` is the brief row's
+    ``technical_pct_off_52w_high`` (the trade setup does not carry it) — the
+    ``atr_bracket`` kind reconstructs its TP ceiling from it; ``None`` leaves
+    that TP uncapped. Display-only; never feeds the headline ``realized_r``.
     """
-    return {lens.lens_id: _lens_realized_r(lens, trade_setup, bars) for lens in BREAKEVEN_LENSES}
+    return {
+        lens.lens_id: _lens_realized_r(lens, trade_setup, bars, pct_off_52w_high=pct_off_52w_high)
+        for lens in BREAKEVEN_LENSES
+    }

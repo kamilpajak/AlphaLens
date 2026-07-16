@@ -20,7 +20,12 @@ from alphalens_pipeline.feedback.breakeven_lenses import (
 )
 from alphalens_pipeline.feedback.ladder_replay import (
     realized_r_fill_anchored,
+    replay_ladder_atr_bracket,
     replay_ladder_breakeven,
+)
+
+_BEZPAZERY_REF = (
+    "betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)"
 )
 
 
@@ -94,6 +99,15 @@ class TestBreakevenRegistry(unittest.TestCase):
                 expected = realized_r_fill_anchored(
                     _SETUP, _BARS, stop_atr_mult=lens.stop_atr_mult or 0.5
                 )
+            elif lens.kind == "atr_bracket":
+                # Grid called without pct_off_52w_high -> uncapped TP.
+                expected = replay_ladder_atr_bracket(
+                    _SETUP,
+                    _BARS,
+                    stop_atr_mult=lens.stop_atr_mult,
+                    tp_atr_mult=lens.tp_atr_mult,
+                    tp_floor_frac=lens.tp_floor_frac,
+                )
             else:
                 expected = replay_ladder_breakeven(
                     _SETUP, _BARS, mfe_trigger_r=lens.mfe_trigger_r, trail_frac=lens.trail_frac
@@ -148,6 +162,64 @@ class TestBreakevenRegistry(unittest.TestCase):
         for lens in refs:
             entry = f'"{lens.lens_id}": "{lens.preregistered_ref}"'
             self.assertIn(entry, src, f"{lens.lens_id} missing/drifted in _LENS_PREREGISTERED_REF")
+
+    def test_atr_bracket_lens_registered_with_exact_params_and_preregistered_ref(self):
+        # The pre-registered ATR-bracket lens (bezpazery v1, memo
+        # docs/research/bezpazery_lens_design_2026_07_16.md §2): stop/TP at
+        # 1.5xATR around the blended entry, cost floor 0.6%, 52w-high ceiling.
+        by_id = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}
+        self.assertIn("atr_bracket_1p5", by_id)
+        lens = by_id["atr_bracket_1p5"]
+        self.assertEqual(lens.kind, "atr_bracket")
+        self.assertEqual(lens.stop_atr_mult, 1.5)
+        self.assertEqual(lens.tp_atr_mult, 1.5)
+        self.assertEqual(lens.tp_floor_frac, 0.006)
+        self.assertEqual(lens.status, "in_sample")
+        self.assertEqual(lens.category, "exit-stop")
+        self.assertEqual(lens.label, "ATR bracket 1.5 (bezpazery)")
+        self.assertEqual(lens.preregistered_ref, _BEZPAZERY_REF)
+
+    def test_atr_bracket_grid_threads_52w_ceiling(self):
+        # Ceiling reconstructed from asof_close + pct_off_52w_high must cap the
+        # bracket TP: asof_close=100, pct=-2 -> ceiling 100/0.98 ~ 102.041, below
+        # the uncapped ATR target 103. The rally through 103 exits at the capped
+        # TP -> the grid value equals the direct capped replay and differs from
+        # the uncapped one.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(120.0, 100.0)], stop=90.0, atr=2.0)
+        setup["asof_close"] = 100.0
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
+        capped = breakeven_grid(setup, bars, pct_off_52w_high=-2.0)["atr_bracket_1p5"]
+        uncapped = breakeven_grid(setup, bars)["atr_bracket_1p5"]
+        expected = replay_ladder_atr_bracket(setup, bars, ceiling_price=100.0 / 0.98)
+        self.assertIsNotNone(capped)
+        self.assertEqual(capped, expected)
+        self.assertAlmostEqual(capped, (100.0 / 0.98 - 100.0) / 3.0, places=6)
+        self.assertNotEqual(capped, uncapped)
+
+    def test_atr_bracket_grid_uncapped_when_pct_or_asof_close_missing(self):
+        # Missing 52w-high distance (or a setup without asof_close) leaves the TP
+        # UNCAPPED — coverage heterogeneity, not a null (memo §4.2).
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(120.0, 100.0)], stop=90.0, atr=2.0)
+        setup["asof_close"] = 100.0
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
+        expected_uncapped = replay_ladder_atr_bracket(setup, bars)
+        self.assertEqual(
+            breakeven_grid(setup, bars, pct_off_52w_high=None)["atr_bracket_1p5"],
+            expected_uncapped,
+        )
+        no_asof = {k: v for k, v in setup.items() if k != "asof_close"}
+        self.assertEqual(
+            breakeven_grid(no_asof, bars, pct_off_52w_high=-2.0)["atr_bracket_1p5"],
+            expected_uncapped,
+        )
+
+    def test_atr_bracket_grid_pct_zero_means_ceiling_at_asof_close(self):
+        # pct = 0 (at the 52w high) -> ceiling = asof_close = 100 <= the cost
+        # floor 100.6 -> bracket not constructible -> None (memo §4.1).
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(120.0, 100.0)], stop=90.0, atr=2.0)
+        setup["asof_close"] = 100.0
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
+        self.assertIsNone(breakeven_grid(setup, bars, pct_off_52w_high=0.0)["atr_bracket_1p5"])
 
     def test_fill_anchored_lens_registered_and_dispatched(self):
         by_id = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}
