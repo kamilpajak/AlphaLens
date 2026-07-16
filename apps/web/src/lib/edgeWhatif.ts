@@ -24,6 +24,11 @@ export const WHATIF_LENS_REGISTRY: Record<string, WhatIfLensMeta> = {
 		label: 'fill-anchored stop (0.5·ATR)',
 		status: 'in_sample',
 		category: 'exit-stop'
+	},
+	be_0p5r_trail0p6: {
+		label: 'break-even +0.5R · trail 0.6',
+		status: 'in_sample',
+		category: 'exit-stop'
 	}
 };
 
@@ -43,6 +48,13 @@ export interface WhatIfLensView extends WhatIfLensMeta {
 	 *  "vs realized" figure compares against — NOT the panel-wide gross mean. */
 	realizedRBaseline: number | null;
 	realizedRBaselineN: number;
+	/** Paired per-row direction counts over the baseline cohort (strict inequality;
+	 *  ties feed neither side). Null below the N-gate, like the means. */
+	nHelped: number | null;
+	nHarmed: number | null;
+	/** Provenance ref (design-memo section) when the lens's parameters were fixed
+	 *  BEFORE registration; null for in-sample-tuned lenses. */
+	preregisteredRef: string | null;
 }
 
 /** Flatten the served lens map into sorted, metadata-resolved view rows. */
@@ -55,7 +67,13 @@ export function whatifLenses(panel: WhatIfPanel): WhatIfLensView[] {
 			meanR: agg.mean_r,
 			medianR: agg.median_r,
 			realizedRBaseline: agg.realized_r_baseline,
-			realizedRBaselineN: agg.realized_r_baseline_n
+			realizedRBaselineN: agg.realized_r_baseline_n,
+			// `?? null` is a deploy-transition shim: an API image predating these
+			// fields serves lens objects without them (undefined), which must render
+			// exactly like the gated null, never as "undefined" text.
+			nHelped: agg.n_helped ?? null,
+			nHarmed: agg.n_harmed ?? null,
+			preregisteredRef: agg.preregistered_ref ?? null
 		}))
 		.sort((a, b) => a.lensId.localeCompare(b.lensId));
 }

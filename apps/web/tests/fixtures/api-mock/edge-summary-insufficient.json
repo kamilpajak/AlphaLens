@@ -44,7 +44,10 @@
       "be_0p5r": {
         "n": 3,
         "mean_r": null,
-        "median_r": null
+        "median_r": null,
+        "n_helped": null,
+        "n_harmed": null,
+        "preregistered_ref": null
       }
     }
   },

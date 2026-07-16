@@ -517,7 +517,7 @@ export const toolExperiments: ToolExperiment[] = [
 		date: '2026-06-30',
 		hypothesis: 'Our exit stop is set for a deep entry ladder, but trades often fill shallow — so a smarter stop might turn small losers into small wins.',
 		mechanism: 'Two display-only lenses replay past trades with different stops (move to break-even after +0.5R; or stop 0.5×ATR below the tier that actually filled) and record the result without touching the real ledger.',
-		outcome: 'On replay the break-even stop flips the average from −0.371R to positive with zero real winners hurt (+0.075R vs −0.258R on the live sample). The fill-anchored lens has no matured data yet.',
+		outcome: 'On replay the break-even stop flips the average from −0.371R to positive (+0.075R vs −0.258R on the live sample). Per-trade helped / harmed counts are computed live on the /edge what-if panel instead of being quoted here — at least one real winner is known to get capped. The fill-anchored lens has no matured data yet.',
 		lesson: 'This is in-sample and not validated. Moving a live price level links which tiers fill to when the trade stops, so it must pass a fresh forward test before any real stop change.',
 		prs: ['#722', '#723', '#724', '#727'],
 		evidence: 'exit_geometry_reward_risk_2026_06_30.md'

@@ -340,6 +340,15 @@ export interface WhatIfLens {
 	 *  counterfactual value but no realized outcome). */
 	realized_r_baseline: number | null;
 	realized_r_baseline_n: number;
+	/** Paired per-row direction counts over the baseline cohort — lens R strictly
+	 *  above the row's realized R is "helped", strictly below is "harmed", ties feed
+	 *  neither (so `n_helped + n_harmed <= realized_r_baseline_n`). Null below the
+	 *  N-gate, like the means. */
+	n_helped: number | null;
+	n_harmed: number | null;
+	/** Provenance ref (design-memo section) for a lens whose parameters were fixed
+	 *  BEFORE registration; null for in-sample-tuned lenses. */
+	preregistered_ref: string | null;
 }
 
 /** The WHAT-IF panel — DISPLAY-ONLY, in-sample counterfactual exit-stop lenses.
