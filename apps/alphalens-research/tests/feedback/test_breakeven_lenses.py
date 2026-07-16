@@ -100,6 +100,55 @@ class TestBreakevenRegistry(unittest.TestCase):
                 )
             self.assertEqual(grid[lens.lens_id], expected)
 
+    def test_trail_lens_registered_with_exact_params_and_preregistered_ref(self):
+        # The pre-registered trailing variant (exit-geometry memo §7 row
+        # "be@0.5R + trail0.6") — same trigger as be_0p5r plus a 0.6-fraction
+        # trailing lock-in, carrying its provenance ref on the lens record.
+        by_id = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}
+        self.assertIn("be_0p5r_trail0p6", by_id)
+        lens = by_id["be_0p5r_trail0p6"]
+        self.assertEqual(lens.kind, "breakeven")
+        self.assertEqual(lens.mfe_trigger_r, 0.5)
+        self.assertEqual(lens.trail_frac, 0.6)
+        self.assertEqual(lens.status, "in_sample")
+        self.assertEqual(lens.category, "exit-stop")
+        self.assertEqual(lens.preregistered_ref, "exit_geometry_2026_06_30 s7 be0.5/trail0.6")
+
+    def test_existing_lenses_carry_no_preregistered_ref(self):
+        # Only the trailing variant was pre-registered; the two original lenses
+        # were tuned in-sample and must not claim a pre-registration.
+        by_id = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}
+        self.assertIsNone(by_id["be_0p5r"].preregistered_ref)
+        self.assertIsNone(by_id["fill_anchored_0p5atr"].preregistered_ref)
+
+    def test_trail_lens_exits_at_trailed_stop_while_plain_be_exits_flat(self):
+        # Shared path (fill 100, peak +0.6R at 106, pullback, crash): the plain
+        # break-even lens exits the remainder at the blended entry (0.00R) while
+        # the trailing lens locks in 0.6 of the peak gain — eff stop
+        # 100 + 0.6*(106-100) = 103.6, pierced by the pullback low 99 -> +0.36R.
+        grid = breakeven_grid(_SETUP, _BARS)
+        self.assertAlmostEqual(grid["be_0p5r"], 0.0, places=6)
+        self.assertAlmostEqual(grid["be_0p5r_trail0p6"], 0.36, places=6)
+
+    def test_trail_lens_grid_matches_direct_replay(self):
+        grid = breakeven_grid(_SETUP, _BARS)
+        expected = replay_ladder_breakeven(_SETUP, _BARS, mfe_trigger_r=0.5, trail_frac=0.6)
+        self.assertEqual(grid["be_0p5r_trail0p6"], expected)
+
+    def test_django_summary_mirrors_preregistered_refs(self):
+        """Cross-app parity guard: the slim Django image cannot import this
+        registry, so ``edge/api/summary.py`` carries a mirror map
+        ``_LENS_PREREGISTERED_REF``. Every pipeline lens with a non-None
+        ``preregistered_ref`` must appear there verbatim, so the served payload
+        cannot silently drift from the lens record."""
+        repo_root = Path(__file__).resolve().parents[4]
+        src = (repo_root / "apps/alphalens-django/edge/api/summary.py").read_text(encoding="utf-8")
+        refs = [lens for lens in BREAKEVEN_LENSES if lens.preregistered_ref is not None]
+        self.assertTrue(refs, "positive control: at least one lens carries a preregistered_ref")
+        for lens in refs:
+            entry = f'"{lens.lens_id}": "{lens.preregistered_ref}"'
+            self.assertIn(entry, src, f"{lens.lens_id} missing/drifted in _LENS_PREREGISTERED_REF")
+
     def test_fill_anchored_lens_registered_and_dispatched(self):
         by_id = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}
         self.assertIn("fill_anchored_0p5atr", by_id)
