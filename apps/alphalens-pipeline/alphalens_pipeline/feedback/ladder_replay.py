@@ -571,6 +571,85 @@ def realized_r_fill_anchored(
     return replay_ladder(setup_single, bars).realized_r
 
 
+def replay_ladder_atr_bracket(
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    stop_atr_mult: float = 1.5,
+    tp_atr_mult: float = 1.5,
+    tp_floor_frac: float = 0.006,
+    ceiling_price: float | None = None,
+) -> float | None:
+    """What-if realized R under a fixed ATR BRACKET exit (bezpazery v1).
+
+    Source: the betlejem5 EMM executor bracket doctrine — INSPIRATION, not a
+    replication (``docs/research/bezpazery_lens_design_2026_07_16.md``). The
+    production entry tiers are KEPT (unlike :func:`realized_r_fill_anchored`'s
+    single-E1 collapse); the exit is replaced with a symmetric bracket anchored to
+    the walk-1 blended entry:
+
+    * stop  = ``blended - stop_atr_mult * ATR`` (static — no ratchet, no trail);
+    * TP    = ``min(ceiling_price, max(blended * (1 + tp_floor_frac),
+      blended + tp_atr_mult * ATR))`` — a single 100% tranche. A ``None`` /
+      non-finite ``ceiling_price`` leaves the TP uncapped (missing 52w-high data
+      is coverage, not a null — memo §4.2); a ceiling at/below the cost floor
+      makes the bracket degenerate and returns ``None`` (memo §4.1).
+
+    ATR is ``trade_setup["atr"]`` (absolute, asof_close-anchored — the
+    fill-anchored precedent) with the identical null-guard. Like the other
+    what-if lenses this pass honours NO entry-TTL / position TIME_STOP: walk-1
+    derives the fills with no expiries (:func:`replay_ladder_breakeven`
+    contract) and walk-2 replays the modified setup the same way, so a position
+    neither stopped nor TP'd by the last bar is marked to the last close
+    (horizon-open remainder). DELIBERATE deviation from the betlejem5 source's
+    same-day flatten — every registered lens must see the identical bar window
+    (memo §3.1).
+
+    Note on the R denominator: walk-2 re-derives fills under the bracket stop,
+    so on multi-tier paths its realized blend (and hence risk) can drift
+    slightly from the walk-1 anchor blend used to place the bracket — accepted
+    for the ``replay_ladder`` reuse (SL-first ambiguity, filled-frac re-basing,
+    NO_FILL->None inherited for free; memo §4.3). The bracket itself stays
+    frozen at the walk-1 blend: later tier fills never move the stop/TP.
+
+    Returns ``None`` for an unparseable setup, no bars, a missing / non-finite /
+    non-positive ATR, a non-positive risk (``stop_atr_mult <= 0``), a
+    non-constructible bracket (ceiling at/below the cost floor), or when nothing
+    fills in walk-1. Display-only; never the headline ``realized_r``.
+    """
+    ladder = parse_ladder(trade_setup)
+    if trade_setup is None or not bars or not ladder.ok:
+        return None
+    atr = ladder.atr
+    if atr is None or not math.isfinite(atr) or atr <= 0:
+        return None
+    if stop_atr_mult <= 0:  # risk = stop_atr_mult * atr would be <= 0
+        return None
+    ordered = sorted(bars, key=lambda b: int(b["t"]))
+    stop = ladder.disaster_stop
+    assert stop is not None  # ok=True guarantees it
+    # Walk-1: derive the fill set under the family contract (no expiries) to
+    # anchor the bracket at the alloc-weighted blended entry.
+    walk = _LadderWalk(ladder, stop, entry_expiry_ms=None, position_expiry_ms=None)
+    for bar in ordered:
+        walk.step(bar)
+    if not walk.filled:
+        return None
+    blended = _blended_entry(walk.filled)
+    bracket_stop = blended - stop_atr_mult * atr
+    tp_floor = blended * (1.0 + tp_floor_frac)
+    tp = max(tp_floor, blended + tp_atr_mult * atr)
+    if ceiling_price is not None and math.isfinite(ceiling_price):
+        if ceiling_price <= tp_floor:
+            return None  # bracket not constructible (memo section 4.1)
+        tp = min(tp, ceiling_price)
+    # Walk-2: same entries, single 100% TP tranche + the bracket stop, replayed
+    # with no expiries (the modified-setup reuse pattern of the exit grid).
+    setup_bracket = _with_tp_tranches(trade_setup, [{"target": tp, "tranche_pct": 100.0}])
+    setup_bracket = _with_disaster_stop(setup_bracket, bracket_stop)
+    return replay_ladder(setup_bracket, bars).realized_r
+
+
 class _LadderWalk:
     """Single full-horizon pass state for the as-specified ladder replay.
 

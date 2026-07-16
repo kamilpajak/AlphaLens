@@ -18,6 +18,7 @@ from alphalens_pipeline.feedback.ladder_replay import (
     realized_r_fill_anchored,
     realized_r_full_fill,
     replay_ladder,
+    replay_ladder_atr_bracket,
     replay_ladder_breakeven,
     replay_ladder_grid,
 )
@@ -670,6 +671,110 @@ class TestFillAnchoredWhatIf(unittest.TestCase):
         assert headline is not None
         assert anchored is not None
         self.assertAlmostEqual(anchored, headline, places=6)
+
+
+class TestAtrBracketWhatIf(unittest.TestCase):
+    """Fixed ATR-bracket exit what-if (bezpazery v1, memo
+    ``docs/research/bezpazery_lens_design_2026_07_16.md``): stop = blended - 1.5*ATR,
+    single 100% TP = min(52w ceiling, max(blended*1.006, blended + 1.5*ATR)),
+    production entry tiers kept, no day-flatten. Display-only counterfactual."""
+
+    # Single tier E1=100, far production stop 90 (replaced by the bracket), a
+    # production TP at 101 that the bracket must IGNORE (replaced by its own TP),
+    # ATR=2 -> bracket stop 97, risk 3, uncapped TP max(100.6, 103) = 103.
+    _BRACKET_SETUP = _setup(entries=[(100.0, 100.0)], tps=[(101.0, 100.0)], stop=90.0, atr=2.0)
+
+    def test_stop_hit_is_minus_one_r(self):
+        # Fill at 100 (low 99 > bracket stop 97), then pierce 97 -> exactly -1R.
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 96.0, 98.0, 96.5)]
+        r = replay_ladder_atr_bracket(self._BRACKET_SETUP, bars)
+        assert r is not None
+        self.assertAlmostEqual(r, -1.0, places=6)
+
+    def test_tp_hit_at_atr_target_ignores_production_tp(self):
+        # Rally through the bracket TP 103 (production TP 101 must NOT cap the
+        # exit): (103-100)/3 = +1.0R, not (101-100)/3.
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
+        r = replay_ladder_atr_bracket(self._BRACKET_SETUP, bars)
+        assert r is not None
+        self.assertAlmostEqual(r, 1.0, places=6)
+
+    def test_cost_floor_binds_when_atr_target_below_it(self):
+        # ATR=0.2 -> stop 99.7, risk 0.3; ATR target 100.2 < floor 100.6 -> TP at
+        # the floor. Exit at 100.6 -> (100.6-100)/0.3 = +2.0R.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(120.0, 100.0)], stop=90.0, atr=0.2)
+        bars = [_bar(1, 99.9, 100.1, 100.0), _bar(2, 100.0, 101.0, 100.9)]
+        r = replay_ladder_atr_bracket(setup, bars)
+        assert r is not None
+        self.assertAlmostEqual(r, 2.0, places=6)
+
+    def test_ceiling_caps_tp(self):
+        # 52w ceiling 102 sits below the ATR target 103 -> TP at 102:
+        # (102-100)/3 = +0.6667R.
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
+        r = replay_ladder_atr_bracket(self._BRACKET_SETUP, bars, ceiling_price=102.0)
+        assert r is not None
+        self.assertAlmostEqual(r, 2.0 / 3.0, places=6)
+
+    def test_ceiling_at_or_below_cost_floor_not_constructible(self):
+        # Ceiling <= blended*1.006 = 100.6 -> degenerate bracket -> None (memo §4.1).
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
+        self.assertIsNone(replay_ladder_atr_bracket(self._BRACKET_SETUP, bars, ceiling_price=100.5))
+        self.assertIsNone(replay_ladder_atr_bracket(self._BRACKET_SETUP, bars, ceiling_price=100.6))
+
+    def test_non_finite_ceiling_treated_as_uncapped(self):
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
+        r = replay_ladder_atr_bracket(self._BRACKET_SETUP, bars, ceiling_price=float("nan"))
+        assert r is not None
+        self.assertAlmostEqual(r, 1.0, places=6)
+
+    def test_none_when_atr_missing_zero_or_nan(self):
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
+        no_atr = _setup(entries=[(100.0, 100.0)], tps=[(101.0, 100.0)], stop=90.0)
+        self.assertIsNone(replay_ladder_atr_bracket(no_atr, bars))
+        zero_atr = _setup(entries=[(100.0, 100.0)], tps=[(101.0, 100.0)], stop=90.0, atr=0.0)
+        self.assertIsNone(replay_ladder_atr_bracket(zero_atr, bars))
+        nan_atr = _setup(
+            entries=[(100.0, 100.0)], tps=[(101.0, 100.0)], stop=90.0, atr=float("nan")
+        )
+        self.assertIsNone(replay_ladder_atr_bracket(nan_atr, bars))
+
+    def test_none_when_nothing_fills(self):
+        bars = [_bar(1, 101.0, 105.0, 103.0)]  # low never touches 100
+        self.assertIsNone(replay_ladder_atr_bracket(self._BRACKET_SETUP, bars))
+
+    def test_none_on_unparseable_setup_and_no_bars(self):
+        bars = [_bar(1, 99.0, 100.5, 100.0)]
+        self.assertIsNone(replay_ladder_atr_bracket(None, bars))
+        self.assertIsNone(replay_ladder_atr_bracket(self._BRACKET_SETUP, []))
+        no_structure = _setup(
+            entries=[(100.0, 100.0)],
+            tps=[(101.0, 100.0)],
+            stop=90.0,
+            status="NO_STRUCTURE",
+            atr=2.0,
+        )
+        self.assertIsNone(replay_ladder_atr_bracket(no_structure, bars))
+
+    def test_horizon_open_marks_remainder_to_last_close(self):
+        # Neither the bracket stop 97 nor the TP 103 is touched by the last bar:
+        # the remainder is marked to the last close 101 -> (101-100)/3 = +1/3 R.
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.0, 102.0, 101.0)]
+        r = replay_ladder_atr_bracket(self._BRACKET_SETUP, bars)
+        assert r is not None
+        self.assertAlmostEqual(r, 1.0 / 3.0, places=6)
+
+    def test_multi_tier_fills_anchor_bracket_at_blended_entry(self):
+        # Two tiers 100/98 both fill on bar 1 (low 97.5) -> blended 99, bracket
+        # stop 96, risk 3, TP max(99*1.006, 99+3)=102. Rally to 102.5 exits at
+        # 102 -> (102-99)/3 = +1.0R.
+        setup = _setup(
+            entries=[(100.0, 50.0), (98.0, 50.0)], tps=[(120.0, 100.0)], stop=90.0, atr=2.0
+        )
+        bars = [_bar(1, 97.5, 100.0, 98.0), _bar(2, 98.0, 102.5, 102.0)]
+        r = replay_ladder_atr_bracket(setup, bars)
+        assert r is not None
+        self.assertAlmostEqual(r, 1.0, places=6)
 
 
 if __name__ == "__main__":
