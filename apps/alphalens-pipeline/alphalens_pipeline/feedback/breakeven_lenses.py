@@ -52,6 +52,13 @@ class BreakevenLens:
     ``kind`` selects the replay: ``"breakeven"`` uses ``mfe_trigger_r`` /
     ``trail_frac``; ``"fill_anchored"`` uses ``stop_atr_mult``. Kind-irrelevant
     params stay ``None``.
+
+    ``preregistered_ref`` is the provenance pointer for a lens whose parameters
+    were written down BEFORE it was added here (design memo section), so its
+    forward read is not an in-sample pick. ``None`` for lenses tuned on the same
+    sample they are read from. The slim Django image cannot import this registry,
+    so ``edge/api/summary.py`` mirrors the non-None refs in
+    ``_LENS_PREREGISTERED_REF`` (drift pinned by a research-side parity test).
     """
 
     lens_id: str
@@ -62,6 +69,7 @@ class BreakevenLens:
     mfe_trigger_r: float | None = None  # breakeven-kind replay param
     trail_frac: float | None = None  # breakeven-kind replay param
     stop_atr_mult: float | None = None  # fill_anchored-kind replay param
+    preregistered_ref: str | None = None  # provenance (design-memo section), display-only
 
 
 # ADR 0013 R4: the registry is bounded — at most this many concurrently
@@ -70,7 +78,7 @@ class BreakevenLens:
 MAX_REGISTERED_LENSES = 5
 
 # Adding another lens is a single entry here — the JSON-map column and the
-# registry-driven selector absorb it with no schema or UI change. Both current
+# registry-driven selector absorb it with no schema or UI change. All current
 # lenses are exit-stop counterfactuals, display-only, in_sample.
 BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     BreakevenLens(
@@ -89,6 +97,23 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
         status="in_sample",
         kind="fill_anchored",
         stop_atr_mult=0.5,
+    ),
+    # Pre-registered trailing variant of be_0p5r (exit-geometry memo §7 row
+    # "be@0.5R + trail0.6"): once the +0.5R trigger arms, the effective stop
+    # trails at 0.6 of the peak gain instead of sitting flat at break-even.
+    # Parameters were fixed in the memo BEFORE registration, so its forward
+    # sample is a clean read — but it is still in_sample until that forward
+    # N crosses the gate. Populates FORWARD-ONLY (frozen terminal rows keep
+    # their stamped grid; PR #747).
+    BreakevenLens(
+        lens_id="be_0p5r_trail0p6",
+        label="break-even +0.5R · trail 0.6",
+        category="exit-stop",
+        status="in_sample",
+        kind="breakeven",
+        mfe_trigger_r=0.5,
+        trail_frac=0.6,
+        preregistered_ref="exit_geometry_2026_06_30 s7 be0.5/trail0.6",
     ),
 )
 

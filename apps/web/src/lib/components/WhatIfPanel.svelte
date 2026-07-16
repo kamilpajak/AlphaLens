@@ -91,6 +91,15 @@
 				{/each}
 			</div>
 
+			{#if selected?.preregisteredRef}
+				<!-- Provenance footnote: this lens's parameters were written down in a
+				     design memo BEFORE registration, so its forward read is a clean
+				     sample (still in-sample until the forward N crosses the gate). -->
+				<p class="mb-3 -mt-2 text-[10px] text-fg-muted" data-testid="whatif-prereg">
+					pre-registered: <span class="whitespace-nowrap">{selected.preregisteredRef}</span>
+				</p>
+			{/if}
+
 			{#if selected}
 				{#if !unlocked}
 					<div class="text-fg-muted text-[11px] uppercase tracking-widest" data-testid="whatif-gated">
@@ -107,6 +116,14 @@
 							median <span class="text-fg-dim font-bold normal-case">{fmtR(selected.medianR)}</span>
 						</span>
 						<span class="text-fg-muted whitespace-nowrap">n {selected.n}</span>
+						{#if selected.nHelped !== null && selected.nHarmed !== null}
+							<!-- Paired per-trade direction counts (strict inequality; ties feed
+							     neither). Tone-neutral by design: no colour semantics, same muted
+							     treatment as the n span — data, not a verdict. -->
+							<span class="text-fg-muted whitespace-nowrap" data-testid="whatif-helped-harmed">
+								helped {selected.nHelped} · harmed {selected.nHarmed}
+							</span>
+						{/if}
 						<span class="text-fg-muted">
 							vs realized
 							<span class="text-fg-dim font-bold normal-case">{fmtR(realizedR)}</span>

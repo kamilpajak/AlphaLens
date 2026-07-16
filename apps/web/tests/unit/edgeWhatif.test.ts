@@ -20,6 +20,9 @@ const lens = (p: Partial<WhatIfLens> = {}): WhatIfLens => ({
 	median_r: null,
 	realized_r_baseline: null,
 	realized_r_baseline_n: 0,
+	n_helped: null,
+	n_harmed: null,
+	preregistered_ref: null,
 	...p
 });
 
@@ -50,7 +53,13 @@ describe('whatifLenses', () => {
 	it('maps + sorts lenses by id with their aggregates + resolved meta', () => {
 		const views = whatifLenses(
 			panel({
-				be_0p5r: { n: 100, mean_r: 0.069, median_r: 0.044, realized_r_baseline: -0.22, realized_r_baseline_n: 98 },
+				be_0p5r: lens({
+					n: 100,
+					mean_r: 0.069,
+					median_r: 0.044,
+					realized_r_baseline: -0.22,
+					realized_r_baseline_n: 98
+				}),
 				aa_unknown: lens({ n: 5 })
 			})
 		);
@@ -65,11 +74,45 @@ describe('whatifLenses', () => {
 	it('surfaces the same-cohort realized baseline + its own n (not the panel-wide mean)', () => {
 		const [be] = whatifLenses(
 			panel({
-				be_0p5r: { n: 60, mean_r: 0.09, median_r: 0.06, realized_r_baseline: -0.22, realized_r_baseline_n: 58 }
+				be_0p5r: lens({
+					n: 60,
+					mean_r: 0.09,
+					median_r: 0.06,
+					realized_r_baseline: -0.22,
+					realized_r_baseline_n: 58
+				})
 			})
 		);
 		expect(be.realizedRBaseline).toBe(-0.22);
 		expect(be.realizedRBaselineN).toBe(58);
+	});
+
+	it('maps the paired helped/harmed counts onto the view', () => {
+		const [be] = whatifLenses(panel({ be_0p5r: lens({ n: 60, n_helped: 41, n_harmed: 3 }) }));
+		expect(be.nHelped).toBe(41);
+		expect(be.nHarmed).toBe(3);
+	});
+
+	it('keeps helped/harmed null when the API gates them (below N-gate)', () => {
+		const [be] = whatifLenses(panel({ be_0p5r: lens({ n: 5 }) }));
+		expect(be.nHelped).toBeNull();
+		expect(be.nHarmed).toBeNull();
+	});
+
+	it('maps the preregistered_ref provenance string (null when absent)', () => {
+		const views = whatifLenses(
+			panel({
+				be_0p5r: lens({ n: 60 }),
+				be_0p5r_trail0p6: lens({
+					n: 0,
+					preregistered_ref: 'exit_geometry_2026_06_30 s7 be0.5/trail0.6'
+				})
+			})
+		);
+		expect(views.find((v) => v.lensId === 'be_0p5r')?.preregisteredRef).toBeNull();
+		expect(views.find((v) => v.lensId === 'be_0p5r_trail0p6')?.preregisteredRef).toBe(
+			'exit_geometry_2026_06_30 s7 be0.5/trail0.6'
+		);
 	});
 });
 
@@ -130,5 +173,12 @@ describe('WHATIF_LENS_REGISTRY', () => {
 		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr).toBeDefined();
 		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.status).toBe('in_sample');
 		expect(WHATIF_LENS_REGISTRY.fill_anchored_0p5atr.category).toBe('exit-stop');
+	});
+
+	it('declares the pre-registered trailing lens (exit-geometry memo s7)', () => {
+		expect(WHATIF_LENS_REGISTRY.be_0p5r_trail0p6).toBeDefined();
+		expect(WHATIF_LENS_REGISTRY.be_0p5r_trail0p6.label).toBe('break-even +0.5R · trail 0.6');
+		expect(WHATIF_LENS_REGISTRY.be_0p5r_trail0p6.status).toBe('in_sample');
+		expect(WHATIF_LENS_REGISTRY.be_0p5r_trail0p6.category).toBe('exit-stop');
 	});
 });

@@ -94,6 +94,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/edge/excess-telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description ``/v1/edge/excess-telemetry`` — per-trade SPY-excess scatter + gated trend. */
+        get: operations["v1_edge_excess_telemetry_retrieve"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/edge/outcomes": {
         parameters: {
             query?: never;
@@ -603,6 +620,46 @@ export interface components {
             /** Format: double */
             mean_tiers_filled_count: number | null;
         };
+        /** @description One per-trade point in the SPY-excess scatter. */
+        EdgeExcessPoint: {
+            date: string;
+            /** Format: double */
+            excess: number;
+            ticker: string;
+            holding_days: number | null;
+            episode_repeat: boolean;
+        };
+        /** @description ``/v1/edge/excess-telemetry`` — per-trade SPY-excess scatter + gated trend. */
+        EdgeExcessTelemetry: {
+            benchmark: string;
+            status: components["schemas"]["EdgeExcessTelemetryStatusEnum"];
+            gate_threshold: number;
+            n_total: number;
+            n_effective: number;
+            /** Format: double */
+            median_holding_days: number | null;
+            smoother_window: number;
+            metric_note: string;
+            benchmark_note: string;
+            points: components["schemas"]["EdgeExcessPoint"][];
+            trend: components["schemas"]["EdgeExcessTrend"][];
+        };
+        /**
+         * @description * `accumulating` - accumulating
+         *     * `ok` - ok
+         * @enum {string}
+         */
+        EdgeExcessTelemetryStatusEnum: "accumulating" | "ok";
+        /** @description One trailing-window smoothed value in the SPY-excess trend line. */
+        EdgeExcessTrend: {
+            date: string;
+            /** Format: double */
+            mean: number;
+            /** Format: double */
+            lo: number;
+            /** Format: double */
+            hi: number;
+        };
         /** @description The lean per-candidate shape for ``/v1/edge/outcomes`` (memo §5 table). */
         EdgeOutcomeRow: {
             ticker: string;
@@ -790,6 +847,9 @@ export interface components {
             /** Format: double */
             realized_r_baseline: number | null;
             realized_r_baseline_n: number;
+            n_helped: number | null;
+            n_harmed: number | null;
+            preregistered_ref: string | null;
         };
         /**
          * @description The WHAT-IF panel — display-only, IN-SAMPLE counterfactual exit-stop lenses.
@@ -948,6 +1008,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChartResponse"];
+                };
+            };
+        };
+    };
+    v1_edge_excess_telemetry_retrieve: {
+        parameters: {
+            query?: {
+                /** @description Calendar days back from the latest brief date (default: all). */
+                window?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EdgeExcessTelemetry"];
                 };
             };
         };

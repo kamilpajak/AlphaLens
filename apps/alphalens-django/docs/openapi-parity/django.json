@@ -2423,12 +2423,27 @@
                     },
                     "realized_r_baseline_n": {
                         "type": "integer"
+                    },
+                    "n_helped": {
+                        "type": "integer",
+                        "nullable": true
+                    },
+                    "n_harmed": {
+                        "type": "integer",
+                        "nullable": true
+                    },
+                    "preregistered_ref": {
+                        "type": "string",
+                        "nullable": true
                     }
                 },
                 "required": [
                     "mean_r",
                     "median_r",
                     "n",
+                    "n_harmed",
+                    "n_helped",
+                    "preregistered_ref",
                     "realized_r_baseline",
                     "realized_r_baseline_n"
                 ]

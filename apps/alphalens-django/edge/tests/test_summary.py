@@ -430,3 +430,67 @@ class TestWhatIfBlock:
         lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r"]
         assert lens["realized_r_baseline"] is None
         assert lens["realized_r_baseline_n"] == N_GATE_THRESHOLD - 1
+
+    def test_whatif_counts_helped_and_harmed_with_strict_inequality(self):
+        # Paired per-row comparison over the same cohort as the realized baseline:
+        # lens R > realized R -> helped, < -> harmed, an exact tie counts to
+        # NEITHER (so n_helped + n_harmed <= realized_r_baseline_n).
+        rows = [
+            _terminal_be(f"H{i}", excess=0.02, realized_r=-1.0, be_r=0.0)  # helped
+            for i in range(N_EARLY_THRESHOLD)
+        ]
+        rows += [
+            _terminal_be(f"D{i}", excess=0.02, realized_r=2.0, be_r=1.2)  # harmed (capped winner)
+            for i in range(7)
+        ]
+        rows += [_terminal_be(f"E{i}", excess=0.02, realized_r=0.5, be_r=0.5) for i in range(3)]
+        lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r"]
+        assert lens["n_helped"] == N_EARLY_THRESHOLD
+        assert lens["n_harmed"] == 7
+        # Ties excluded from both sides but still in the paired cohort.
+        assert lens["realized_r_baseline_n"] == N_EARLY_THRESHOLD + 7 + 3
+        assert lens["n_helped"] + lens["n_harmed"] < lens["realized_r_baseline_n"]
+
+    def test_whatif_helped_harmed_exclude_no_fill_counterfactuals(self):
+        # A NO_FILL counterfactual has a lens R but no realized_r — there is no
+        # pair to compare, so it feeds neither count (same cohort as the baseline).
+        rows = [
+            _terminal_be(f"T{i}", excess=0.02, realized_r=-1.0, be_r=0.0)
+            for i in range(N_EARLY_THRESHOLD)
+        ]
+        rows += [_no_fill_be(f"NF{i}", be_r=5.0) for i in range(4)]
+        lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r"]
+        assert lens["n"] == N_EARLY_THRESHOLD + 4
+        assert lens["n_helped"] == N_EARLY_THRESHOLD
+        assert lens["n_harmed"] == 0
+
+    def test_whatif_helped_harmed_nulled_below_gate(self):
+        # Like mean_r, the counts reveal the effect's direction, so they are
+        # hidden below the N-gate (coverage n / baseline n survive).
+        rows = [
+            _terminal_be(f"T{i}", excess=0.02, realized_r=-1.0, be_r=0.0)
+            for i in range(N_GATE_THRESHOLD - 1)
+        ]
+        lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r"]
+        assert lens["n_helped"] is None
+        assert lens["n_harmed"] is None
+        assert lens["n"] == N_GATE_THRESHOLD - 1
+
+    def test_whatif_preregistered_ref_null_for_in_sample_lens(self):
+        rows = [
+            _terminal_be(f"T{i}", excess=0.02, realized_r=-0.5, be_r=0.1)
+            for i in range(N_EARLY_THRESHOLD)
+        ]
+        lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r"]
+        assert lens["preregistered_ref"] is None
+
+    def test_whatif_preregistered_ref_carried_for_trail_lens(self):
+        # The trailing lens's parameters were fixed in the exit-geometry memo
+        # BEFORE registration; the payload carries that provenance ref verbatim
+        # (mirrored in _LENS_PREREGISTERED_REF — the slim image cannot import the
+        # pipeline registry; drift is pinned by a research-side parity test).
+        rows = [_terminal(f"T{i}", excess=0.02, realized_r=-0.5) for i in range(N_EARLY_THRESHOLD)]
+        for row in rows:
+            row["breakeven_realized_r_json"] = json.dumps({"be_0p5r_trail0p6": 0.2})
+        lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r_trail0p6"]
+        assert lens["preregistered_ref"] == "exit_geometry_2026_06_30 s7 be0.5/trail0.6"

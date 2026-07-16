@@ -447,6 +447,23 @@ class TestBreakevenPass(unittest.TestCase):
         be = replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5, trail_frac=0.6)
         self.assertAlmostEqual(be, 1.2, places=4)
 
+    def test_trail_stop_hit_on_pullback_beats_plain_breakeven(self):
+        # Shallow winner: fills 100, peaks +0.6R (high=106), then pulls back
+        # through both stops. trail_frac=0.6 trails to 100 + 0.6*(106-100) =
+        # 103.6, so the pullback (low 99) exits at +0.36R; the plain break-even
+        # stop on the same path exits at the blended entry, 0.00R.
+        setup = _setup(entries=[(100.0, 100.0)], tps=[(200.0, 100.0)], stop=90.0)
+        bars = [
+            _bar(1, low=99.0, high=101.0, close=100.0),  # fill E1(100)
+            _bar(2, low=103.0, high=106.0, close=105.0),  # MFE +0.6R -> trail -> 103.6
+            _bar(3, low=99.0, high=102.0, close=100.0),  # pullback pierces 103.6
+        ]
+        trailed = replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5, trail_frac=0.6)
+        plain = replay_ladder_breakeven(setup, bars, mfe_trigger_r=0.5)
+        self.assertAlmostEqual(trailed, 0.36, places=4)
+        self.assertAlmostEqual(plain, 0.0, places=4)
+        self.assertGreater(trailed, plain)
+
     def test_no_fill_returns_none(self):
         setup = _setup(entries=[(100.0, 100.0)], tps=[(200.0, 100.0)], stop=90.0)
         bars = [_bar(1, low=101.0, high=105.0, close=103.0)]  # never touches 100

@@ -46,7 +46,10 @@
 				"mean_r": 0.069,
 				"median_r": 0.044,
 				"realized_r_baseline": -0.22,
-				"realized_r_baseline_n": 110
+				"realized_r_baseline_n": 110,
+				"n_helped": 74,
+				"n_harmed": 9,
+				"preregistered_ref": null
 			}
 		}
 	},
