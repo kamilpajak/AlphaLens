@@ -311,6 +311,7 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
             "catalyst_strength",
             "catalyst_event_type",
             "catalyst_confidence",
+            "catalyst_config_version",
             "technical_rsi",
             "technical_ma50_distance_pct",
             "technical_atr_pct",
@@ -330,6 +331,16 @@ class TestScoreCandidatesEndToEnd(unittest.TestCase):
         out = scorer.score_candidates(candidates, asof=dt.date(2026, 4, 14))
         for _, row in out.iterrows():
             self.assertEqual(row["scorer_config_version"], ss_mod.SCORER_CONFIG_VERSION)
+
+    def test_catalyst_config_version_is_stamped(self):
+        # Fixture patches find_trigger_event to None, so this also proves the
+        # stamp lands on NO-catalyst rows (poolability key must be universal).
+        from alphalens_pipeline.thematic.screening import catalyst_signals as cs_mod
+
+        candidates = _candidates_df(["QUBT", "IONQ"])
+        out = scorer.score_candidates(candidates, asof=dt.date(2026, 4, 14))
+        for _, row in out.iterrows():
+            self.assertEqual(row["catalyst_config_version"], cs_mod.catalyst_config_version())
 
     def test_selection_score_equals_layer4_minus_atr_penalty(self):
         candidates = _candidates_df(["QUBT", "IONQ"])
