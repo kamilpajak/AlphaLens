@@ -221,7 +221,10 @@ class SaxoClient:
             self._last_call_ts = time.monotonic()
 
     def _join_url(self, path: str) -> str:
-        if path.startswith(("http://", "https://")):
+        # The scheme literals only DETECT an absolute URL so it can be checked
+        # against the HTTPS-only SIM gateway below — nothing is ever requested
+        # over plain HTTP (an http:// URL fails the base-url check and raises).
+        if path.startswith(("http://", "https://")):  # NOSONAR
             if not path.startswith(self._base_url):
                 raise SaxoError(
                     f"absolute URL {path!r} does not point at the SIM gateway "
