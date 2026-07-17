@@ -51,8 +51,10 @@ from alphalens_pipeline.brokers.saxo.errors import (
 )
 from alphalens_pipeline.brokers.saxo.tokens import (
     TOKEN_ENV,
+    OAuthTokenProvider,
     StaticTokenProvider,
     TokenProvider,
+    resolve_token_store_path,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,7 +117,16 @@ class SaxoClient:
 
     @classmethod
     def from_env(cls, **kw: Any) -> SaxoClient:
-        """Construct with a :class:`StaticTokenProvider` from ``SAXO_SIM_TOKEN``.
+        """Construct with the OAuth provider when a token store exists, else
+        the :class:`StaticTokenProvider` from ``SAXO_SIM_TOKEN``.
+
+        Selection order (P4): (1) the ``SAXO_ENV`` sim-only guard stays FIRST;
+        (2) an existing OAuth token store selects
+        :class:`~.tokens.OAuthTokenProvider` — missing ``SAXO_APP_KEY`` /
+        ``SAXO_APP_SECRET`` at that point is a hard ``SaxoAuthError``, never a
+        silent static fallback (a store without refresh credentials is a
+        misconfiguration); (3) no store keeps the static path byte-identical.
+        OAuth state present beats a set ``SAXO_SIM_TOKEN``.
 
         Defensive guard: a stray ``SAXO_ENV`` set to anything but ``"sim"``
         fails loudly — the variable is NOT an environment switch (there is
@@ -129,6 +140,8 @@ class SaxoClient:
                 "unset it or set it to 'sim'. Reaching LIVE requires a code "
                 "change gated on a future ADR (see ADR 0014)."
             )
+        if resolve_token_store_path().is_file():
+            return cls(OAuthTokenProvider.from_env(), **kw)
         return cls(StaticTokenProvider.from_env(), **kw)
 
     # ----- public endpoint wrappers (reads only in P1; thin dict-returning) -----
@@ -449,8 +462,9 @@ class SaxoClient:
         assert resp is not None  # loop guarantees resp is assigned
         if resp.status_code == 401:
             raise SaxoAuthError(
-                "Saxo 401 persisted after one token refresh — the 24h SIM token "
-                "has likely expired; regenerate it at developer.saxo"
+                "Saxo 401 persisted after one token refresh — re-authenticate "
+                "with `alphalens broker auth` (OAuth) or regenerate "
+                "SAXO_SIM_TOKEN at developer.saxo (static)"
             )
         if resp.status_code == 429:
             raise SaxoRateLimitError(
@@ -629,8 +643,9 @@ class SaxoClient:
         assert resp is not None  # loop either assigned resp or raised
         if resp.status_code == 401:
             raise SaxoAuthError(
-                "Saxo 401 persisted after one token refresh — the 24h SIM token "
-                "has likely expired; regenerate it at developer.saxo"
+                "Saxo 401 persisted after one token refresh — re-authenticate "
+                "with `alphalens broker auth` (OAuth) or regenerate "
+                "SAXO_SIM_TOKEN at developer.saxo (static)"
             )
         if resp.status_code == 429:
             raise SaxoRateLimitError(

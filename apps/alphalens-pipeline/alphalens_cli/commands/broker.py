@@ -1,7 +1,10 @@
 """CLI: ``alphalens broker`` — broker execution layer (SIM-only, ADR 0014).
 
-Subcommands (P1 reads + P2 orders; OAuth bootstrap ``auth`` lands with P4):
+Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
 
+    alphalens broker auth                    — attended OAuth login (browser +
+        localhost listener); --status = offline chain inspection (exit 0 iff
+        alive); --refresh = one silent refresh cycle (keep-alive primitive)
     alphalens broker account                 — account snapshot (cash / value / margin)
     alphalens broker positions               — open positions
     alphalens broker resolve KO [--exchange XNYS]  — instrument resolution (symbol -> Uic)
@@ -39,6 +42,233 @@ _DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
 def _fail(message: str) -> typer.Exit:
     typer.secho(message, fg=typer.colors.RED, err=True)
     return typer.Exit(code=1)
+
+
+def _wait_for_oauth_callback(port: int, path: str, timeout_s: int) -> tuple[str, str]:
+    """One-shot localhost listener for the OAuth redirect; returns (code, state).
+
+    Binds ``127.0.0.1`` (the bind ADDRESS is local plumbing — only the URL
+    STRING registered at the portal must say ``localhost``). Any request off
+    the redirect path gets a 404; the first request carrying ``code`` gets a
+    tiny "you can close this tab" page. Raises ``TimeoutError`` when nothing
+    lands within ``timeout_s``.
+    """
+    import http.server
+    import time
+    import urllib.parse
+
+    result: dict[str, str] = {}
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            parsed = urllib.parse.urlsplit(self.path)
+            params = urllib.parse.parse_qs(parsed.query)
+            code = (params.get("code") or [""])[0]
+            if parsed.path != path or not code:
+                self.send_error(404)
+                return
+            result["code"] = code
+            result["state"] = (params.get("state") or [""])[0]
+            body = b"<html><body>Authorized &mdash; you can close this tab.</body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args: object) -> None:
+            """Silence the default stderr access log (it would echo the query)."""
+
+    server = http.server.HTTPServer(("127.0.0.1", port), _Handler)
+    server.timeout = 1.0
+    deadline = time.monotonic() + timeout_s
+    try:
+        while "code" not in result and time.monotonic() < deadline:
+            server.handle_request()
+    finally:
+        server.server_close()
+    if "code" not in result:
+        raise TimeoutError(f"no OAuth redirect within {timeout_s}s")
+    return result["code"], result["state"]
+
+
+def _auth_status() -> None:
+    """Offline store inspection — zero network. Exit 0 iff the chain is alive."""
+    import datetime as _dt
+
+    from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError
+    from alphalens_pipeline.brokers.saxo.tokens import TokenStore, resolve_token_store_path
+
+    store = TokenStore(resolve_token_store_path())
+    try:
+        state = store.load()
+    except SaxoAuthError as exc:
+        raise _fail(str(exc)) from exc
+    typer.echo(f"store        {store.path}")
+    if state is None:
+        typer.echo("refresh      ABSENT — no OAuth session yet")
+        raise _fail("no token store — run `alphalens broker auth` to bootstrap OAuth")
+    now = _dt.datetime.now(_dt.UTC)
+    access_left = (state.access_token_expires_at - now).total_seconds() / 60
+    refresh_left = (state.refresh_token_expires_at - now).total_seconds() / 60
+    typer.echo(f"environment  {state.environment}")
+    typer.echo(f"app          {state.app_key_fingerprint} (sha256 fingerprint prefix)")
+    typer.echo(f"obtained     {state.obtained_at.isoformat(timespec='seconds')}")
+    if access_left > 0:
+        typer.echo(f"access       valid, ~{access_left:.0f} min remaining")
+    else:
+        typer.echo("access       expired")
+    if refresh_left > 0:
+        typer.echo(f"refresh      ALIVE, ~{refresh_left:.0f} min remaining")
+        return
+    typer.echo("refresh      DEAD")
+    raise _fail("refresh chain is dead — re-run `alphalens broker auth`")
+
+
+def _auth_refresh() -> None:
+    """One silent refresh cycle — the future keep-alive timer's primitive."""
+    from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError
+    from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
+
+    try:
+        OAuthTokenProvider.from_env().refresh_now()
+    except SaxoAuthError as exc:
+        raise _fail(f"refresh failed: {exc}") from exc
+    typer.echo("refreshed — the rotated pair was persisted to the token store")
+
+
+def _parse_redirect_url(redirect_url: str) -> tuple[int, str]:
+    """Validate the registered redirect URL; return (port, path)."""
+    import urllib.parse
+
+    parts = urllib.parse.urlsplit(redirect_url)
+    if parts.scheme != "http" or parts.hostname != "localhost":
+        raise _fail(
+            f"SAXO_AUTH_REDIRECT_URL={redirect_url!r} must use hostname "
+            "'localhost' over plain http (Saxo rejects 127.0.0.1 "
+            "registrations), e.g. a value registered as localhost with an "
+            "explicit port and path"
+        )
+    port = parts.port or 80
+    return port, parts.path or "/"
+
+
+@broker_app.command(name="auth")
+def auth_command(
+    status: bool = typer.Option(
+        False,
+        "--status",
+        help="Offline: print token-store state (zero network); exit 0 iff the "
+        "refresh chain is alive.",
+    ),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="One silent refresh cycle via the OAuth provider (keep-alive "
+        "primitive for a future systemd timer). No browser.",
+    ),
+    timeout: int = typer.Option(
+        300, "--timeout", help="Seconds to wait for the browser redirect (attended flow)."
+    ),
+    no_browser: bool = typer.Option(
+        False, "--no-browser", help="Print the authorize URL only (headless / SSH)."
+    ),
+) -> None:
+    """Bootstrap or inspect the Saxo OAuth session (SIM-only, Code grant).
+
+    Attended flow: opens the SIM login in a browser, catches the redirect on
+    a one-shot localhost listener, exchanges the code, and persists the token
+    pair (0600) to the store. The refresh chain dies after ~40 min without a
+    refresh — re-run this command whenever ``--status`` reports it dead.
+    Tokens are never printed or logged.
+    """
+    import contextlib
+    import hmac
+    import webbrowser
+
+    from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError
+    from alphalens_pipeline.brokers.saxo.oauth import SaxoAuthClient, generate_state
+    from alphalens_pipeline.brokers.saxo.tokens import (
+        APP_KEY_ENV,
+        APP_SECRET_ENV,
+        REDIRECT_URL_ENV,
+        TokenStore,
+        _require_env,
+        resolve_token_store_path,
+    )
+
+    if status:
+        _auth_status()
+        return
+    if refresh:
+        _auth_refresh()
+        return
+
+    try:
+        app_key = _require_env(APP_KEY_ENV)
+        app_secret = _require_env(APP_SECRET_ENV)
+        redirect_url = _require_env(REDIRECT_URL_ENV)
+    except SaxoAuthError as exc:
+        raise _fail(str(exc)) from exc
+    port, callback_path = _parse_redirect_url(redirect_url)
+    typer.echo(
+        "note: the redirect URL must byte-match the portal registration "
+        "(Code-grant matching is port- AND path-exact)"
+    )
+
+    auth_client = SaxoAuthClient(app_key, app_secret)
+    state = generate_state()
+    authorize_url = auth_client.build_authorize_url(redirect_url, state)
+    typer.echo("open this URL to authorize (SIM credentials):")
+    typer.echo(authorize_url)
+    if not no_browser:
+        with contextlib.suppress(Exception):
+            webbrowser.open(authorize_url)
+
+    typer.echo(f"waiting up to {timeout}s for the redirect on {redirect_url} ...")
+    try:
+        code, received_state = _wait_for_oauth_callback(port, callback_path, timeout)
+    except TimeoutError as exc:  # BEFORE OSError — TimeoutError is its subclass
+        raise _fail(
+            f"{exc} — check that the registered redirect URL matches "
+            f"{redirect_url!r} exactly, then retry"
+        ) from exc
+    except OSError as exc:
+        raise _fail(
+            f"could not listen on localhost:{port} ({exc}) — free the port or "
+            "change the registered redirect URL (and the env var) to another one"
+        ) from exc
+
+    if not hmac.compare_digest(state.encode("utf-8"), received_state.encode("utf-8")):
+        raise _fail(
+            "state parameter mismatch on the OAuth redirect (possible CSRF or "
+            "a stale browser tab) — nothing was exchanged; retry "
+            "`alphalens broker auth`"
+        )
+
+    try:
+        bundle = auth_client.exchange_code(code, redirect_url)
+    except SaxoAuthError as exc:
+        raise _fail(
+            f"token exchange failed: {exc} — check SAXO_APP_KEY / "
+            "SAXO_APP_SECRET / the registered redirect URL"
+        ) from exc
+
+    store = TokenStore(resolve_token_store_path())
+    stored = store.save_bundle(bundle, app_key=app_key)
+    typer.echo("authorized — OAuth session established (tokens are never displayed)")
+    typer.echo(f"store           {store.path}")
+    typer.echo(
+        f"access expires  ~{bundle.expires_in // 60} min ({stored.access_token_expires_at.isoformat(timespec='seconds')})"
+    )
+    typer.echo(
+        f"refresh expires ~{bundle.refresh_token_expires_in // 60} min "
+        f"({stored.refresh_token_expires_at.isoformat(timespec='seconds')})"
+    )
+    typer.echo(
+        "warning: the refresh chain dies after ~40 min without a refresh; "
+        "re-run this command if `alphalens broker auth --status` reports it dead"
+    )
 
 
 @broker_app.command(name="account")

@@ -433,6 +433,173 @@ class TestReconcileCommand(unittest.TestCase):
         self.assertEqual(offenders, [], "reconcile must never touch a write surface")
 
 
+class _StubAuthClient:
+    """SaxoAuthClient stand-in for CLI tests — no network, records exchanges."""
+
+    exchange_calls: list[tuple[str, str]] = []
+    refresh_calls: list[tuple[str, str]] = []
+
+    def __init__(self, app_key: str, app_secret: str, **_kw: object):
+        self.app_key = app_key
+
+    def build_authorize_url(self, redirect_uri: str, state: str) -> str:
+        return f"https://sim.logonvalidation.net/authorize?state={state}"
+
+    def exchange_code(self, code: str, redirect_uri: str):
+        from alphalens_pipeline.brokers.saxo.oauth import TokenBundle
+
+        _StubAuthClient.exchange_calls.append((code, redirect_uri))
+        return TokenBundle("acc-secret-token", 1200, "ref-secret-token", 2400)
+
+    def refresh(self, refresh_token: str, redirect_uri: str):
+        from alphalens_pipeline.brokers.saxo.oauth import TokenBundle
+
+        _StubAuthClient.refresh_calls.append((refresh_token, redirect_uri))
+        return TokenBundle("acc-refreshed", 1200, "ref-refreshed", 2400)
+
+
+class _BombAuthClient:
+    """Fails the test if the offline --status path touches any transport."""
+
+    def __init__(self, *args: object, **kwargs: object):
+        raise AssertionError("--status must be offline — no SaxoAuthClient construction")
+
+
+class TestAuthCommand(unittest.TestCase):
+    _REDIRECT = "http://localhost:8765/callback"  # NOSONAR — OAuth loopback, never fetched
+
+    def setUp(self):
+        import tempfile
+
+        self.runner = CliRunner()
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.store_path = Path(self._tmp.name) / "token_store.json"
+        _StubAuthClient.exchange_calls = []
+        _StubAuthClient.refresh_calls = []
+        self.env = {
+            "SAXO_TOKEN_STORE_PATH": str(self.store_path),
+            "SAXO_APP_KEY": "app-key-x",
+            "SAXO_APP_SECRET": "app-secret-x",
+            "SAXO_AUTH_REDIRECT_URL": self._REDIRECT,
+        }
+
+    def _invoke(self, *args: str):
+        from alphalens_cli.commands.broker import broker_app
+
+        return self.runner.invoke(broker_app, ["auth", *args])
+
+    def _seed_store(self, *, obtained_at_offset_s: int = 0) -> None:
+        import datetime as _dt
+
+        from alphalens_pipeline.brokers.saxo.oauth import TokenBundle
+        from alphalens_pipeline.brokers.saxo.tokens import TokenStore
+
+        wall = _dt.datetime.now(_dt.UTC) + _dt.timedelta(seconds=obtained_at_offset_s)
+        TokenStore(self.store_path).save_bundle(
+            TokenBundle("acc-seed", 1200, "ref-seed", 2400),
+            app_key="app-key-x",
+            wall_now=lambda: wall,
+        )
+
+    def test_attended_flow_exchanges_persists_and_never_prints_tokens(self):
+        with (
+            mock.patch.dict("os.environ", self.env, clear=True),
+            mock.patch("alphalens_pipeline.brokers.saxo.oauth.SaxoAuthClient", _StubAuthClient),
+            mock.patch(
+                "alphalens_pipeline.brokers.saxo.oauth.generate_state", return_value="state-1"
+            ),
+            mock.patch(
+                "alphalens_cli.commands.broker._wait_for_oauth_callback",
+                return_value=("the-code", "state-1"),
+            ) as listener,
+            mock.patch("webbrowser.open") as browser,
+        ):
+            result = self._invoke()
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(_StubAuthClient.exchange_calls, [("the-code", self._REDIRECT)])
+        self.assertEqual(listener.call_args.args[0], 8765)
+        self.assertTrue(browser.called)
+        self.assertTrue(self.store_path.is_file())
+        stored = json.loads(self.store_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored["refresh_token"], "ref-secret-token")
+        self.assertNotIn("acc-secret-token", result.output, "tokens must never be printed")
+        self.assertNotIn("ref-secret-token", result.output, "tokens must never be printed")
+        self.assertNotIn("app-secret-x", result.output, "the AppSecret must never be printed")
+        self.assertIn(str(self.store_path), result.output)
+
+    def test_state_mismatch_aborts_before_exchange(self):
+        with (
+            mock.patch.dict("os.environ", self.env, clear=True),
+            mock.patch("alphalens_pipeline.brokers.saxo.oauth.SaxoAuthClient", _StubAuthClient),
+            mock.patch(
+                "alphalens_cli.commands.broker._wait_for_oauth_callback",
+                return_value=("the-code", "evil-state"),
+            ),
+            mock.patch("webbrowser.open"),
+        ):
+            result = self._invoke()
+
+        self.assertEqual(result.exit_code, 1)
+        self.assertEqual(_StubAuthClient.exchange_calls, [], "mismatched state must not exchange")
+
+    def test_missing_app_key_fails_red_naming_the_var(self):
+        env = dict(self.env)
+        env.pop("SAXO_APP_KEY")
+        with mock.patch.dict("os.environ", env, clear=True):
+            result = self._invoke()
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("SAXO_APP_KEY", result.output)
+
+    def test_non_localhost_redirect_is_refused(self):
+        env = dict(self.env, SAXO_AUTH_REDIRECT_URL="http://127.0.0.1:8765/callback")  # NOSONAR
+        with mock.patch.dict("os.environ", env, clear=True):
+            result = self._invoke()
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("localhost", result.output)
+
+    def test_status_alive_is_offline_and_exits_zero(self):
+        self._seed_store()
+        with (
+            mock.patch.dict("os.environ", self.env, clear=True),
+            mock.patch("alphalens_pipeline.brokers.saxo.oauth.SaxoAuthClient", _BombAuthClient),
+        ):
+            result = self._invoke("--status")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("ALIVE", result.output)
+        self.assertNotIn("acc-seed", result.output)
+        self.assertNotIn("ref-seed", result.output)
+
+    def test_status_dead_chain_exits_one_with_reauth_hint(self):
+        self._seed_store(obtained_at_offset_s=-4000)  # refresh chain (2400s) long gone
+        with mock.patch.dict("os.environ", self.env, clear=True):
+            result = self._invoke("--status")
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("DEAD", result.output)
+        self.assertIn("alphalens broker auth", result.output)
+
+    def test_status_absent_store_exits_one(self):
+        with mock.patch.dict("os.environ", self.env, clear=True):
+            result = self._invoke("--status")
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("ABSENT", result.output)
+
+    def test_refresh_flag_rotates_the_stored_pair_silently(self):
+        self._seed_store()
+        with (
+            mock.patch.dict("os.environ", self.env, clear=True),
+            mock.patch("alphalens_pipeline.brokers.saxo.oauth.SaxoAuthClient", _StubAuthClient),
+        ):
+            result = self._invoke("--refresh")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(_StubAuthClient.refresh_calls, [("ref-seed", self._REDIRECT)])
+        stored = json.loads(self.store_path.read_text(encoding="utf-8"))
+        self.assertEqual(stored["refresh_token"], "ref-refreshed")
+        self.assertNotIn("acc-refreshed", result.output)
+        self.assertNotIn("ref-refreshed", result.output)
+
+
 class TestCliImportsStayLazy(unittest.TestCase):
     def test_no_top_level_brokers_import_in_command_module(self):
         """The +913ms lazy-CLI doctrine: brokers imports live in command bodies."""
