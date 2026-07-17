@@ -300,6 +300,39 @@ def load_broker_fills(fills_dir: Path | None = None) -> pd.DataFrame:
     return validate_broker_fills(df, source=path.name)
 
 
+def ingest_jsonl_snapshot(jsonl_path: Path, *, fills_dir: Path | None = None) -> Path:
+    """Land a delivered exporter JSONL as the parquet ``load_broker_fills`` reads.
+
+    The betlejem exporter is stdlib-only, so the wire artifact is
+    ``broker-fills-<runts>.jsonl`` (same schema field-for-field — memo
+    transport note); this is the AL-side converter that validates it and
+    writes ``broker-fills-<runts>.parquet`` next to the other snapshots
+    (tmp-then-``os.replace``). Validation happens BEFORE any write, so a
+    contract-violating delivery leaves the snapshot dir untouched.
+    """
+    import json
+
+    jsonl_path = Path(jsonl_path)
+    records = []
+    with jsonl_path.open() as fh:
+        for raw_line in fh:
+            stripped = raw_line.strip()
+            if stripped:
+                records.append(json.loads(stripped))
+    df = pd.DataFrame.from_records(records)
+    for ts_col in ("export_run_ts_utc", "fill_ts_utc", "close_ts_utc"):
+        if ts_col in df.columns:
+            df[ts_col] = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+    validated = validate_broker_fills(df, source=jsonl_path.name)
+    directory = Path(fills_dir) if fills_dir is not None else DEFAULT_BROKER_FILLS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    out_path = directory / (jsonl_path.stem + ".parquet")
+    tmp_path = out_path.with_suffix(".parquet.tmp")
+    validated.to_parquet(tmp_path, index=False)
+    os.replace(tmp_path, out_path)
+    return out_path
+
+
 def calibration_join_keys(df: pd.DataFrame, *, exchange: str = DEFAULT_EXCHANGE) -> pd.DataFrame:
     """Per-row ``(arrival_session, ticker)`` join keys for outcome-side joins.
 

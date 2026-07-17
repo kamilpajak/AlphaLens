@@ -284,3 +284,56 @@ class TestNoAnalysisSurface(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIngestJsonlSnapshot(_SnapshotDirCase):
+    """The delivered artifact is the exporter's JSONL — the memo's transport
+    note pins this module as the converter that lands it as the parquet
+    ``load_broker_fills`` reads (same stem, ``.parquet`` extension)."""
+
+    def _write_jsonl(
+        self, rows: list[dict], name: str = "broker-fills-20260717T060000Z.jsonl"
+    ) -> Path:
+        import json
+
+        def _cell(value):
+            if isinstance(value, pd.Timestamp):
+                return value.isoformat()
+            return value
+
+        path = self.fills_dir / name
+        with path.open("w") as fh:
+            for row in rows:
+                fh.write(json.dumps({k: _cell(v) for k, v in row.items()}) + "\n")
+        return path
+
+    def test_valid_jsonl_lands_as_loadable_parquet(self):
+        jsonl = self._write_jsonl(
+            [
+                _make_row(),
+                _make_row(
+                    trade_id_hash="b" * 64,
+                    ticker="INTC",
+                    scanner_sources=None,
+                    source_claims=None,
+                    provenance_cohort=bf.PROVENANCE_PRE_C1612,
+                ),
+            ]
+        )
+
+        out = bf.ingest_jsonl_snapshot(jsonl, fills_dir=self.fills_dir)
+
+        self.assertEqual(out.name, "broker-fills-20260717T060000Z.parquet")
+        df = bf.load_broker_fills(self.fills_dir)
+        self.assertEqual(len(df), 2)
+        self.assertEqual(set(df["ticker"]), {"NVDA", "INTC"})
+        # null provenance survives the jsonl->parquet hop (cohort split intact)
+        intc = df[df["ticker"] == "INTC"].iloc[0]
+        self.assertEqual(intc["provenance_cohort"], bf.PROVENANCE_PRE_C1612)
+
+    def test_forbidden_column_in_jsonl_rejected_and_nothing_written(self):
+        jsonl = self._write_jsonl([{**_make_row(), "quantity": 100}])
+
+        with self.assertRaises(bf.BrokerFillsContractError):
+            bf.ingest_jsonl_snapshot(jsonl, fills_dir=self.fills_dir)
+        self.assertIsNone(bf.latest_snapshot_path(self.fills_dir))
