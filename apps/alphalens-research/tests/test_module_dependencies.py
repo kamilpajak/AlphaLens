@@ -112,6 +112,26 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # ADR 0013 R2 via ADR 0014: no broker/execution output (fills,
+        # rejections, balances) may ever feed T2 SELECTION. The thematic
+        # pipeline (selection side) importing the brokers package — even
+        # lazily — would open exactly that channel.
+        "name": "thematic must not import brokers (R2: execution never feeds selection)",
+        "from_pkg": "alphalens_pipeline.thematic",
+        "forbidden_prefix": "alphalens_pipeline.brokers",
+        "exemptions": set(),
+    },
+    {
+        # ADR 0012: the feedback replay engines are broker-FREE by design
+        # (price-path over Polygon bars). Live fills are a NEW T8 measurement
+        # source (ADR 0014), keyed separately — the replay reaching into the
+        # brokers package would blur that separation.
+        "name": "feedback must not import brokers (replay stays broker-free per ADR 0012)",
+        "from_pkg": "alphalens_pipeline.feedback",
+        "forbidden_prefix": "alphalens_pipeline.brokers",
+        "exemptions": set(),
+    },
+    {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,
