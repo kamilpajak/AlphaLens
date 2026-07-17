@@ -415,6 +415,11 @@ class SaxoClient:
             )
         return False
 
+    def _send_once(self, method_lower: str, url: str, kwargs: dict[str, Any]) -> requests.Response:
+        """One raw verb dispatch on the injected session (typed seam)."""
+        send: Callable[..., requests.Response] = getattr(self._session, method_lower)
+        return send(url, **kwargs)
+
     def _send_write(
         self,
         method: str,
@@ -458,7 +463,6 @@ class SaxoClient:
                 "User-Agent": "AlphaLens/0.1",
                 "x-request-id": request_id,
             }
-            send = getattr(self._session, method_lower)
             kwargs: dict[str, Any] = {
                 "headers": headers,
                 "params": params,
@@ -467,7 +471,7 @@ class SaxoClient:
             if method_lower == "post":
                 kwargs["json"] = json_body
             try:
-                resp = send(url, **kwargs)
+                resp = self._send_once(method_lower, url, kwargs)
             except self._TRANSIENT_NET_EXCEPTIONS as exc:
                 retriable = idempotent or self._is_provably_unsent(exc)
                 if retriable and net_attempt < len(self._NETWORK_ERROR_BACKOFFS):
