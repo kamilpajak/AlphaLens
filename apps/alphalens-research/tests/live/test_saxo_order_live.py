@@ -16,7 +16,7 @@ attended, Mac-only act. Requirements:
     SAXO_SIM_TOKEN=<fresh 24h token> \
     ALPHALENS_BROKER_ALLOW_ORDERS=1 \
     SAXO_LIVE_ORDER_TEST=1 \
-        .venv/bin/python -m unittest tests.live.test_saxo_live_order -v
+        .venv/bin/python -m unittest tests.live.test_saxo_order_live -v
 
 The entry limit defaults to $30 (KO trades far above; ~50% below recent
 closes) and can be overridden via ``SAXO_LIVE_ORDER_ENTRY`` if KO ever
