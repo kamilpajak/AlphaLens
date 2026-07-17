@@ -29,6 +29,7 @@ from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from briefs.api.day_validation import build_validation_block
 from briefs.api.filters import get_paging, parse_iso_date
 from briefs.api.pagination import (
     DEFAULT_LIMIT,
@@ -151,6 +152,9 @@ class DayViewSet(viewsets.ViewSet):
             "top_theme": meta.top_theme or None,
             "theme_counts": meta.theme_counts,
             "candidates": CandidateSerializer(candidates, many=True).data,
+            # ADDITIVE honesty context — computed, never hand-written (see
+            # briefs.api.day_validation). New top-level key; nothing moves.
+            "meta": {"validation": build_validation_block(asof)},
         }
         return Response(DayBriefSerializer(payload).data)
 
