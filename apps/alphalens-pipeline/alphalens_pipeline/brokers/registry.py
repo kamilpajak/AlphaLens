@@ -18,7 +18,7 @@ import os
 import threading
 from collections.abc import Callable
 
-from alphalens_pipeline.brokers.contract import Broker
+from alphalens_pipeline.brokers.contract import Broker, BrokerError
 
 # Env var selecting the default broker name when ``get_default_broker`` is
 # called without an explicit name.
@@ -45,8 +45,13 @@ def _resolve_factory(name: str) -> Callable[[], Broker]:
             f"unknown broker {name!r}; registered brokers: {sorted(_BROKER_FACTORIES)}"
         )
     module_path, _, attr = spec.partition(":")
-    module = importlib.import_module(module_path)
-    factory: Callable[[], Broker] = getattr(module, attr)
+    try:
+        module = importlib.import_module(module_path)
+        factory: Callable[[], Broker] = getattr(module, attr)
+    except (ImportError, AttributeError) as exc:
+        # A mis-registered factory path must surface as a broker error the CLI
+        # renders cleanly, not a raw importlib traceback.
+        raise BrokerError(f"broker factory for {name!r} ({spec!r}) failed to load: {exc}") from exc
     return factory
 
 

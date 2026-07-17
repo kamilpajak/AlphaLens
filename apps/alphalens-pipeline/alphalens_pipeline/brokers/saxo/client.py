@@ -109,6 +109,7 @@ class SaxoClient:
         self._session = session or requests.Session()
         self._sleep = sleep
         self._last_call_ts: float = 0.0
+        self._throttle_lock = threading.Lock()
         self._client_info: dict[str, Any] | None = None
 
     @classmethod
@@ -210,10 +211,14 @@ class SaxoClient:
     # ----- internals (mirror polygon_client) -----
 
     def _throttle(self) -> None:
-        elapsed = time.monotonic() - self._last_call_ts
-        if elapsed < self._MIN_REQUEST_INTERVAL_S:
-            self._sleep(self._MIN_REQUEST_INTERVAL_S - elapsed)
-        self._last_call_ts = time.monotonic()
+        # Lock: the default-client singleton is shared, so the throttle budget
+        # must hold under concurrent callers (a future scheduler), not only the
+        # attended CLI — an unlocked check/update would race into burst calls.
+        with self._throttle_lock:
+            elapsed = time.monotonic() - self._last_call_ts
+            if elapsed < self._MIN_REQUEST_INTERVAL_S:
+                self._sleep(self._MIN_REQUEST_INTERVAL_S - elapsed)
+            self._last_call_ts = time.monotonic()
 
     def _join_url(self, path: str) -> str:
         if path.startswith(("http://", "https://")):

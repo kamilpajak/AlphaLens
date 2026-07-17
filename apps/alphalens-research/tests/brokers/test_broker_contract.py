@@ -253,6 +253,16 @@ class TestRegistry(unittest.TestCase):
         self.assertIn("nonexistent", str(ctx.exception))
         self.assertIn("saxo", str(ctx.exception))
 
+    def test_misregistered_factory_path_raises_broker_error_not_importlib(self):
+        # A typo'd module path or attribute must surface as BrokerError (the
+        # CLI renders it cleanly), never a raw ImportError/AttributeError.
+        for spec in ("no.such.module:factory", f"{__name__}:no_such_attr"):
+            with mock.patch.dict(registry._BROKER_FACTORIES, {"broken": spec}):
+                with self.assertRaises(BrokerError) as ctx:
+                    registry.get_default_broker("broken")
+                self.assertIn("broken", str(ctx.exception))
+                registry._reset_default_broker_for_tests()
+
     def test_factory_resolution_and_singleton(self):
         with mock.patch.dict(
             registry._BROKER_FACTORIES,
