@@ -21,8 +21,10 @@ carrying the request id. DELETE is idempotent and keeps the normal ladder.
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 import uuid
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -274,10 +276,92 @@ class TestAuthRefreshSeam(unittest.TestCase):
         session = _RecordingSession([_FakeResponse(401)])
         client, provider, _ = _make_client(session)
 
-        with self.assertRaises(SaxoAuthError):
+        with self.assertRaises(SaxoAuthError) as ctx:
             client.get_user()
         self.assertEqual(provider.invalidations, 1, "invalidate exactly once, then give up")
         self.assertEqual(len(session.calls), 2, "one refresh retry only")
+        # Provider-agnostic operator guidance (P4: OAuth + static co-exist).
+        self.assertIn("alphalens broker auth", str(ctx.exception))
+        self.assertIn("SAXO_SIM_TOKEN", str(ctx.exception))
+
+    def test_second_401_on_write_carries_provider_agnostic_guidance(self):
+        session = _RecordingSession([_FakeResponse(401)])
+        client, _, _ = _make_client(session)
+
+        with self.assertRaises(SaxoAuthError) as ctx:
+            client.precheck_order({"Uic": 1})
+        self.assertIn("alphalens broker auth", str(ctx.exception))
+        self.assertIn("SAXO_SIM_TOKEN", str(ctx.exception))
+
+
+class TestFromEnvProviderSelection(unittest.TestCase):
+    """P4: an existing OAuth token store beats SAXO_SIM_TOKEN; no store keeps
+    the static path byte-identical; missing OAuth creds with a store present
+    is a hard error, never a silent static fallback."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.store_path = Path(self._tmp.name) / "token_store.json"
+
+    def _oauth_env(self, **extra: str) -> dict[str, str]:
+        return {
+            "SAXO_TOKEN_STORE_PATH": str(self.store_path),
+            "SAXO_APP_KEY": "app-key-x",
+            "SAXO_APP_SECRET": "app-secret-x",
+            "SAXO_AUTH_REDIRECT_URL": "http://localhost:8765/callback",  # NOSONAR — loopback
+            **extra,
+        }
+
+    def _write_store(self) -> None:
+        from alphalens_pipeline.brokers.saxo.oauth import TokenBundle
+        from alphalens_pipeline.brokers.saxo.tokens import TokenStore
+
+        TokenStore(self.store_path).save_bundle(
+            TokenBundle("acc", 1200, "ref", 2400), app_key="app-key-x"
+        )
+
+    def test_store_present_selects_oauth_provider(self):
+        from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
+
+        self._write_store()
+        with mock.patch.dict("os.environ", self._oauth_env(), clear=True):
+            client = SaxoClient.from_env()
+        self.assertIsInstance(client._token_provider, OAuthTokenProvider)
+
+    def test_store_present_beats_a_set_static_token(self):
+        from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
+
+        self._write_store()
+        with mock.patch.dict("os.environ", self._oauth_env(SAXO_SIM_TOKEN="tok"), clear=True):
+            client = SaxoClient.from_env()
+        self.assertIsInstance(client._token_provider, OAuthTokenProvider)
+
+    def test_store_present_but_missing_app_key_is_a_hard_error(self):
+        self._write_store()
+        env = self._oauth_env(SAXO_SIM_TOKEN="tok")
+        env.pop("SAXO_APP_KEY")
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(SaxoAuthError) as ctx:
+                SaxoClient.from_env()
+        self.assertIn("SAXO_APP_KEY", str(ctx.exception))
+
+    def test_no_store_keeps_static_provider_from_sim_token(self):
+        with mock.patch.dict(
+            "os.environ",
+            {"SAXO_TOKEN_STORE_PATH": str(self.store_path), TOKEN_ENV: "tok"},
+            clear=True,
+        ):
+            client = SaxoClient.from_env()
+        self.assertIsInstance(client._token_provider, StaticTokenProvider)
+
+    def test_saxo_env_guard_still_fires_first_even_with_store(self):
+        from alphalens_pipeline.brokers.saxo.client import SaxoLiveEnvironmentBlockedError
+
+        self._write_store()
+        with mock.patch.dict("os.environ", self._oauth_env(SAXO_ENV="live"), clear=True):
+            with self.assertRaises(SaxoLiveEnvironmentBlockedError):
+                SaxoClient.from_env()
 
 
 class TestStaticTokenProviderFromEnv(unittest.TestCase):

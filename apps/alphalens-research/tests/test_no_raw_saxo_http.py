@@ -1,11 +1,14 @@
 """Enforcement: no raw Saxo HTTP outside the canonical client.
 
 The broker-agnostic execution layer (ADR 0014) routes every Saxo OpenAPI call
-through :class:`alphalens_pipeline.brokers.saxo.client.SaxoClient` — the single
+through :class:`alphalens_pipeline.brokers.saxo.client.SaxoClient` — the
 surface that carries the SIM-only structural rail, the Bearer-token discipline,
 the 0.5s throttle, and the ``x-request-id`` idempotency header P2's order
-dedup depends on. A shadow client would bypass the LIVE-URL refusal, which is
-a safety rail, not just a quota concern.
+dedup depends on — and every OAuth token-endpoint call through
+:class:`alphalens_pipeline.brokers.saxo.oauth.SaxoAuthClient` (P4), which
+carries the same SIM-only rail for the authentication host plus the
+secrets-hygiene discipline. A shadow client would bypass the LIVE-URL refusal,
+which is a safety rail, not just a quota concern.
 
 This test fails red if anyone reintroduces a raw Saxo HTTP call (defined as
 ``urllib.request.urlopen`` / ``urllib.request.Request`` / ``requests.get(`` /
@@ -31,8 +34,13 @@ SCAN_DIRS = (
     WORKSPACE_ROOT / "apps" / "alphalens-research" / "scripts",
 )
 
-# The canonical client itself — only file allowed to make raw Saxo HTTP.
-CANONICAL_CLIENT_REL = "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/client.py"
+# The canonical Saxo HTTP surfaces — the ONLY files allowed to make raw Saxo
+# HTTP: the gateway client (reads/writes) and the P4 OAuth token-endpoint
+# transport (authorize/exchange/refresh).
+CANONICAL_CLIENT_RELS = (
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/client.py",
+    "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/oauth.py",
+)
 
 # Path-prefix exemption (empty — no legacy Saxo code survives ADR 0012).
 EXEMPT_PATH_PREFIXES: tuple[str, ...] = ()
@@ -63,7 +71,7 @@ def _file_uses_saxo_url(text: str) -> bool:
 
 
 def _is_exempt(rel_path: str) -> bool:
-    if rel_path == CANONICAL_CLIENT_REL:
+    if rel_path in CANONICAL_CLIENT_RELS:
         return True
     return any(rel_path.startswith(prefix) for prefix in EXEMPT_PATH_PREFIXES)
 
@@ -119,11 +127,13 @@ class TestNoRawSaxoHttp(unittest.TestCase):
         self.assertTrue(_file_uses_saxo_url(SIM_BASE_URL))
         self.assertTrue(_file_uses_saxo_url(SIM_AUTH_BASE_URL))
 
-    def test_canonical_client_exists(self):
-        """The exemption must point at a real file — otherwise the scan below
-        would 'pass' while the canonical client had been moved without updating
+    def test_canonical_clients_exist(self):
+        """Every exemption must point at a real file — otherwise the scan below
+        would 'pass' while a canonical surface had been moved without updating
         this enforcement."""
-        self.assertTrue((WORKSPACE_ROOT / CANONICAL_CLIENT_REL).is_file())
+        for rel in CANONICAL_CLIENT_RELS:
+            with self.subTest(rel=rel):
+                self.assertTrue((WORKSPACE_ROOT / rel).is_file())
 
     def test_no_shadow_saxo_http_outside_canonical_client(self):
         offenders: list[tuple[str, int, str]] = []
