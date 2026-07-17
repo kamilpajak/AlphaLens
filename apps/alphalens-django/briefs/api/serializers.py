@@ -73,6 +73,44 @@ class DayMetaSerializer(serializers.ModelSerializer):
         return obj.top_theme or None
 
 
+class EdgeBaseRateSerializer(serializers.Serializer):
+    """Live edge base rate for ``meta.validation`` (see ``edge.api.base_rate``).
+
+    Pool = plannable AND terminal AND finite realized_r over all dates. N-gated
+    like /edge (stats null below 30 matured); degenerate math is null, never inf.
+    """
+
+    n_matured = serializers.IntegerField(
+        help_text=(
+            "Size of the realized-R pool (plannable, terminal, finite realized_r) "
+            "— /edge's gross_realized_r_n, NOT its excess-keyed n_matured."
+        )
+    )
+    mean_realized_r = serializers.FloatField(allow_null=True)
+    payoff_ratio = serializers.FloatField(allow_null=True)
+    breakeven_win_rate = serializers.FloatField(allow_null=True)
+    as_of = serializers.DateField(
+        allow_null=True,
+        help_text="Max matured_at among contributing rows; null for an empty pool.",
+    )
+
+
+class DayValidationSerializer(serializers.Serializer):
+    """Machine-generated honesty context (see ``briefs.api.day_validation``)."""
+
+    selection_status = serializers.CharField()
+    layer4_weighted_score_note = serializers.CharField()
+    edge_base_rate = EdgeBaseRateSerializer()
+    brief_dating = serializers.CharField()
+    scorer_config_version = serializers.CharField(allow_null=True)
+
+
+class DayMetaBlockSerializer(serializers.Serializer):
+    """The additive top-level ``meta`` block on ``/v1/days/{date}``."""
+
+    validation = DayValidationSerializer()
+
+
 class DayBriefSerializer(serializers.Serializer):
     """Full payload for one day: meta + every ranked candidate."""
 
@@ -82,6 +120,7 @@ class DayBriefSerializer(serializers.Serializer):
     top_theme = serializers.CharField(allow_null=True)
     theme_counts = serializers.DictField(child=serializers.IntegerField())
     candidates = CandidateSerializer(many=True)
+    meta = DayMetaBlockSerializer()
 
 
 class ThemeSummarySerializer(serializers.Serializer):

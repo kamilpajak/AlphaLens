@@ -66,6 +66,81 @@ def _mean(values: Sequence[float]) -> float | None:
     return (sum(values) / len(values)) if values else None
 
 
+def _payoff_ratio(values: Sequence[float]) -> float | None:
+    """``|avg_win / avg_loss|`` over wins (``> 0``) / losses (``<= 0``).
+
+    Ported from the exit-geometry diagnostic's ``_expectancy`` (same win/loss
+    convention). Degenerate math → ``None``, never ``inf`` (JSON-unsafe): no
+    losses, or losses averaging exactly 0, leave the ratio undefined.
+    """
+    wins = [v for v in values if v > 0]
+    losses = [v for v in values if v <= 0]
+    if not losses:
+        return None
+    avg_loss = sum(losses) / len(losses)
+    if avg_loss == 0:
+        return None
+    avg_win = (sum(wins) / len(wins)) if wins else 0.0
+    return abs(avg_win / avg_loss)
+
+
+def _breakeven_win_rate(values: Sequence[float]) -> float | None:
+    """``|avg_loss| / (avg_win + |avg_loss|)`` — the win rate that breaks even.
+
+    Ported from the exit-geometry diagnostic's ``_expectancy``. ``0.0`` when
+    there are wins but no losses; ``None`` when the denominator is not
+    positive (empty pool, or wins and losses both averaging 0).
+    """
+    wins = [v for v in values if v > 0]
+    losses = [v for v in values if v <= 0]
+    if not wins and not losses:
+        return None
+    avg_win = (sum(wins) / len(wins)) if wins else 0.0
+    avg_loss = (sum(losses) / len(losses)) if losses else 0.0
+    denominator = avg_win + abs(avg_loss)
+    if denominator <= 0:
+        return None
+    return abs(avg_loss) / denominator
+
+
+def build_validation_base_rate(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    """The ``/v1/days`` ``meta.validation.edge_base_rate`` block (honesty context).
+
+    Pool = ``plannable AND terminal AND realized_r finite`` — the SAME pool as
+    the edge panel's ``gross_realized_r_n`` (NO_FILL terminals carry a NULL
+    ``realized_r`` and drop out), over ALL dates (no window param) so the two
+    surfaces agree. N-gated like /edge (memo §3.2): below ``N_GATE_THRESHOLD``
+    the statistics are ``None`` — otherwise /v1/days would leak sub-gate means
+    /edge refuses to show. ``n_matured`` + ``as_of`` always survive the gate.
+
+    ``as_of`` = max ``matured_at`` among the CONTRIBUTING rows (describes the
+    data itself, stable across identical mirror rebuilds); ``None`` for an
+    empty pool.
+    """
+    realized: list[float] = []
+    matured_dates: list[Any] = []
+    for row in rows:
+        if not _is_truthy(row.get("plannable")) or not _is_truthy(row.get("terminal")):
+            continue
+        value = _finite(row.get("realized_r"))
+        if value is None:
+            continue
+        realized.append(value)
+        matured_at = row.get("matured_at")
+        if matured_at is not None:
+            matured_dates.append(matured_at)
+
+    n_matured = len(realized)
+    gated = n_matured < N_GATE_THRESHOLD
+    return {
+        "n_matured": n_matured,
+        "mean_realized_r": None if gated else _mean(realized),
+        "payoff_ratio": None if gated else _payoff_ratio(realized),
+        "breakeven_win_rate": None if gated else _breakeven_win_rate(realized),
+        "as_of": max(matured_dates) if matured_dates else None,
+    }
+
+
 def _hit_rate(values: Sequence[float]) -> float | None:
     """Share of matured names with a STRICTLY positive market-excess return.
 

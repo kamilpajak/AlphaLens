@@ -519,5 +519,181 @@ class TestAtrTiltFieldsOnAPI:
         assert "scorer_config_version" in CandidateDetailSerializer().fields
 
 
+def _seed_ladder_outcomes(
+    realized: list[float],
+    matured_at: dt.date = dt.date(2026, 7, 10),
+) -> None:
+    """Seed plannable terminal LadderOutcome rows carrying the given realized R."""
+    from edge.models import LadderOutcome
+
+    LadderOutcome.objects.bulk_create(
+        LadderOutcome(
+            brief_date=dt.date(2026, 6, 1),
+            ticker=f"T{i}",
+            plannable=True,
+            terminal=True,
+            matured_at=matured_at,
+            ladder_classification="SL_HIT" if r <= 0 else "TP_FULL",
+            realized_r=r,
+        )
+        for i, r in enumerate(realized)
+    )
+
+
+_EXPECTED_LAYER4_NOTE = (
+    "layer4_weighted_score is a display-only composite; "
+    "selection shows no edge past multiplicity to date."
+)
+
+
+@pytest.mark.django_db
+class TestDayValidationMeta:
+    """`/v1/days/{date}` meta.validation — machine-generated honesty context.
+
+    ADDITIVE block: nothing existing moves. The pinned constants + the exact
+    top-level key set act as a contract test — non-additive drift reddens CI.
+    """
+
+    def test_retrieve_includes_validation_constants(self, client, tmp_path):
+        _two_day_fixture(tmp_path)
+        body = client.get("/v1/days/2026-05-22").json()
+        validation = body["meta"]["validation"]
+        assert validation["selection_status"] == "UNVALIDATED"
+        assert validation["brief_dating"] == "T-1"
+        assert validation["layer4_weighted_score_note"] == _EXPECTED_LAYER4_NOTE
+
+    def test_retrieve_top_level_keys_pinned(self, client, tmp_path):
+        # ADDITIVITY PIN: the exact retrieve key set. A future change that
+        # renames / removes a key (instead of adding one) must redden this.
+        _two_day_fixture(tmp_path)
+        body = client.get("/v1/days/2026-05-22").json()
+        assert set(body) == {
+            "date",
+            "n_candidates",
+            "n_themes",
+            "top_theme",
+            "theme_counts",
+            "candidates",
+            "meta",
+        }
+
+    def test_external_consumer_candidate_contract(self, client, tmp_path):
+        """External consumers read candidate-level fields: betlejem5 reads
+        `ticker` + `layer4_weighted_score`; its MCP client reads `verified`,
+        `n_gates_passed`/`n_gates_failed`/`n_gates_unknown` and `theme`. All
+        must stay present on `/v1/days/{date}` candidates."""
+        _two_day_fixture(tmp_path)
+        cand = client.get("/v1/days/2026-05-22").json()["candidates"][0]
+        for key in (
+            "ticker",
+            "layer4_weighted_score",
+            "verified",
+            "n_gates_passed",
+            "n_gates_failed",
+            "n_gates_unknown",
+            "theme",
+        ):
+            assert key in cand, key
+
+    def test_days_list_envelope_unchanged(self, client, tmp_path):
+        # The list envelope meta stays OWNED by EnvelopePagination — the
+        # validation block is retrieve-only (also pinned by
+        # test_list_returns_envelope; kept here to name the reason).
+        _two_day_fixture(tmp_path)
+        body = client.get("/v1/days").json()
+        assert set(body) == {"data", "meta"}
+        assert set(body["meta"]) == {"total", "limit", "offset"}
+
+    def test_edge_base_rate_empty_mirror_all_null(self, client, tmp_path):
+        # Empty LadderOutcome table → block present, stats null, no 500.
+        _two_day_fixture(tmp_path)
+        body = client.get("/v1/days/2026-05-22").json()
+        assert body["meta"]["validation"]["edge_base_rate"] == {
+            "n_matured": 0,
+            "mean_realized_r": None,
+            "payoff_ratio": None,
+            "breakeven_win_rate": None,
+            "as_of": None,
+        }
+
+    def test_edge_base_rate_reflects_seeded_outcomes(self, client, tmp_path):
+        # 20 wins +2.0 / 10 losses -1.0 → n=30 clears the N-gate:
+        # mean 1.0, payoff 2.0, breakeven 1/3.
+        _two_day_fixture(tmp_path)
+        _seed_ladder_outcomes([2.0] * 20 + [-1.0] * 10, matured_at=dt.date(2026, 7, 10))
+        rate = client.get("/v1/days/2026-05-22").json()["meta"]["validation"]["edge_base_rate"]
+        assert rate["n_matured"] == 30
+        assert rate["mean_realized_r"] == pytest.approx(1.0)
+        assert rate["payoff_ratio"] == pytest.approx(2.0)
+        assert rate["breakeven_win_rate"] == pytest.approx(1.0 / 3.0)
+        assert rate["as_of"] == "2026-07-10"
+
+    def test_edge_base_rate_below_gate_stats_null(self, client, tmp_path):
+        # Below N_GATE_THRESHOLD the means are hidden (same rule as /edge §3.2);
+        # n_matured + as_of survive.
+        _two_day_fixture(tmp_path)
+        _seed_ladder_outcomes([2.0, -1.0], matured_at=dt.date(2026, 7, 10))
+        rate = client.get("/v1/days/2026-05-22").json()["meta"]["validation"]["edge_base_rate"]
+        assert rate["n_matured"] == 2
+        assert rate["mean_realized_r"] is None
+        assert rate["payoff_ratio"] is None
+        assert rate["breakeven_win_rate"] is None
+        assert rate["as_of"] == "2026-07-10"
+
+    def test_scorer_config_version_uniform_value(self, client, tmp_path):
+        _write_parquet(
+            tmp_path,
+            "2026-05-22",
+            [
+                {
+                    "ticker": "NVDA",
+                    "theme": "ai-infra",
+                    "layer4_weighted_score": 15,
+                    "scorer_config_version": "atr-tilt-v1",
+                },
+                {
+                    "ticker": "AVGO",
+                    "theme": "ai-infra",
+                    "layer4_weighted_score": 8,
+                    "scorer_config_version": "atr-tilt-v1",
+                },
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        body = client.get("/v1/days/2026-05-22").json()
+        assert body["meta"]["validation"]["scorer_config_version"] == "atr-tilt-v1"
+
+    def test_scorer_config_version_blank_day_null(self, client, tmp_path):
+        # Pre-atr-tilt days carry the "" default → null on the wire.
+        _two_day_fixture(tmp_path)
+        body = client.get("/v1/days/2026-05-22").json()
+        assert body["meta"]["validation"]["scorer_config_version"] is None
+
+    def test_scorer_config_version_mixed_day_null(self, client, tmp_path):
+        # Mixed versions in one day should not occur (one score-stage run/day);
+        # serving either would misattribute half the rows, so → null.
+        _write_parquet(
+            tmp_path,
+            "2026-05-22",
+            [
+                {
+                    "ticker": "NVDA",
+                    "theme": "ai-infra",
+                    "layer4_weighted_score": 15,
+                    "scorer_config_version": "atr-tilt-v1",
+                },
+                {
+                    "ticker": "AVGO",
+                    "theme": "ai-infra",
+                    "layer4_weighted_score": 8,
+                    "scorer_config_version": "atr-tilt-v2",
+                },
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        body = client.get("/v1/days/2026-05-22").json()
+        assert body["meta"]["validation"]["scorer_config_version"] is None
+
+
 # silence linter when datetime isn't used in this file path-wise
 _ = dt

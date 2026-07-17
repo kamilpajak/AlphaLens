@@ -1667,11 +1667,15 @@
                         "items": {
                             "$ref": "#/components/schemas/Candidate"
                         }
+                    },
+                    "meta": {
+                        "$ref": "#/components/schemas/DayMetaBlock"
                     }
                 },
                 "required": [
                     "candidates",
                     "date",
+                    "meta",
                     "n_candidates",
                     "n_themes",
                     "theme_counts",
@@ -1712,6 +1716,47 @@
                     "top_theme"
                 ]
             },
+            "DayMetaBlock": {
+                "type": "object",
+                "description": "The additive top-level ``meta`` block on ``/v1/days/{date}``.",
+                "properties": {
+                    "validation": {
+                        "$ref": "#/components/schemas/DayValidation"
+                    }
+                },
+                "required": [
+                    "validation"
+                ]
+            },
+            "DayValidation": {
+                "type": "object",
+                "description": "Machine-generated honesty context (see ``briefs.api.day_validation``).",
+                "properties": {
+                    "selection_status": {
+                        "type": "string"
+                    },
+                    "layer4_weighted_score_note": {
+                        "type": "string"
+                    },
+                    "edge_base_rate": {
+                        "$ref": "#/components/schemas/EdgeBaseRate"
+                    },
+                    "brief_dating": {
+                        "type": "string"
+                    },
+                    "scorer_config_version": {
+                        "type": "string",
+                        "nullable": true
+                    }
+                },
+                "required": [
+                    "brief_dating",
+                    "edge_base_rate",
+                    "layer4_weighted_score_note",
+                    "scorer_config_version",
+                    "selection_status"
+                ]
+            },
             "DeploymentPanel": {
                 "type": "object",
                 "description": "The DEPLOYMENT panel — N-INDEPENDENT, always populated.",
@@ -1748,6 +1793,44 @@
                     "n_no_fill",
                     "n_terminal",
                     "no_fill_rate"
+                ]
+            },
+            "EdgeBaseRate": {
+                "type": "object",
+                "description": "Live edge base rate for ``meta.validation`` (see ``edge.api.base_rate``).\n\nPool = plannable AND terminal AND finite realized_r over all dates. N-gated\nlike /edge (stats null below 30 matured); degenerate math is null, never inf.",
+                "properties": {
+                    "n_matured": {
+                        "type": "integer",
+                        "description": "Size of the realized-R pool (plannable, terminal, finite realized_r) — /edge's gross_realized_r_n, NOT its excess-keyed n_matured."
+                    },
+                    "mean_realized_r": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "payoff_ratio": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "breakeven_win_rate": {
+                        "type": "number",
+                        "format": "double",
+                        "nullable": true
+                    },
+                    "as_of": {
+                        "type": "string",
+                        "format": "date",
+                        "nullable": true,
+                        "description": "Max matured_at among contributing rows; null for an empty pool."
+                    }
+                },
+                "required": [
+                    "as_of",
+                    "breakeven_win_rate",
+                    "mean_realized_r",
+                    "n_matured",
+                    "payoff_ratio"
                 ]
             },
             "EdgeExcessPoint": {
