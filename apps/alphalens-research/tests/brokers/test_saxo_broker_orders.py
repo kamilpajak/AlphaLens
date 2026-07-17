@@ -141,6 +141,8 @@ class _StubOrderClient:
         return {"Data": list(self.order_rows.values())}
 
     def get_order_status(self, client_key: str, order_id: str) -> dict[str, Any] | None:
+        if getattr(self, "order_status_response", None) is not None:
+            return self.order_status_response
         return self.order_rows.get(order_id)
 
 
@@ -463,6 +465,36 @@ class TestOrderReads(unittest.TestCase):
         by_id = {s.order_id: s for s in states}
         self.assertEqual(by_id["E-100"].status, OrderStatus.WORKING)
         self.assertEqual(by_id["E-200"].status, OrderStatus.PARTIALLY_FILLED)
+
+
+class TestGetOrderEnvelope(unittest.TestCase):
+    """LIVE-CALIBRATED 2026-07-17: /port/v1/orders/{ClientKey}/{OrderId}
+    returns a COLLECTION envelope ({"__count": N, "Data": [entry + related
+    children]}), not a flat order dict — and the entry is not necessarily
+    first. get_order must select the row whose OrderId matches."""
+
+    def test_selects_matching_row_from_envelope(self):
+        broker, stub = _make_broker()
+        stub.order_status_response = {
+            "__count": 3,
+            "Data": [
+                {"OrderId": "222", "Status": "Working", "BuySell": "Sell", "Amount": 1.0},
+                {"OrderId": "111", "Status": "Working", "BuySell": "Buy", "Amount": 1.0},
+                {"OrderId": "333", "Status": "Working", "BuySell": "Sell", "Amount": 1.0},
+            ],
+        }
+        state = broker.get_order("111")
+        self.assertEqual(state.order_id, "111")
+        self.assertEqual(state.status, OrderStatus.WORKING)
+
+    def test_envelope_without_matching_row_is_unknown(self):
+        broker, stub = _make_broker()
+        stub.order_status_response = {
+            "__count": 1,
+            "Data": [{"OrderId": "999", "Status": "Working"}],
+        }
+        state = broker.get_order("111")
+        self.assertEqual(state.status, OrderStatus.UNKNOWN)
 
 
 class TestCancel(unittest.TestCase):
