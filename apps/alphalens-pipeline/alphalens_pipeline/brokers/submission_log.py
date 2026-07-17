@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -76,8 +77,43 @@ def append_submission_record(record: dict[str, Any], *, path: Path | None = None
     return target
 
 
+def iter_submission_records(
+    path: Path | None = None,
+    *,
+    malformed: list[str] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield parsed journal records in append order (the P3 reconciler input).
+
+    Read-side counterpart of :func:`append_submission_record` — the journal
+    itself is never rewritten (append-only SoT; verdicts are computed at
+    read time). Malformed lines (broken JSON, non-object rows) are SKIPPED,
+    never fatal: one corrupt line must not hide every other bracket from
+    reconciliation. Pass a ``malformed`` list to collect the skipped raw
+    lines so the caller can report the count. A missing journal yields
+    nothing (no submissions is a valid, honest state).
+    """
+    target = path or DEFAULT_SUBMISSIONS_PATH
+    if not target.exists():
+        return
+    with target.open("r", encoding="utf-8") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                record = None
+            if not isinstance(record, dict):
+                if malformed is not None:
+                    malformed.append(line)
+                continue
+            yield record
+
+
 __all__ = [
     "DEFAULT_SUBMISSIONS_PATH",
     "append_submission_record",
     "build_submission_record",
+    "iter_submission_records",
 ]
