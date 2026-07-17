@@ -10,6 +10,9 @@ Subcommands (P1 reads + P2 orders; OAuth bootstrap ``auth`` lands with P4):
         (--yes skips the prompt) AND ALPHALENS_BROKER_ALLOW_ORDERS=1 in the env
     alphalens broker orders                  — open orders
     alphalens broker cancel <order_id>       — cancel (entry cancel cascades the bracket)
+    alphalens broker reconcile [--json]      — READ-ONLY journal vs broker verdicts (P3):
+        WORKING / PAST-TTL divergence / FILLED (+closed r) / CANCELLED / REJECTED /
+        EXPIRED / UNRESOLVED(reason); exit 1 on any unresolved or divergent row
 
 All ``brokers`` imports are lazy inside command bodies — the ``alphalens``
 binary's startup time is paid by the 15-min Layer-1 edgar-detect cron
@@ -19,6 +22,7 @@ binary's startup time is paid by the 15-min Layer-1 edgar-detect cron
 from __future__ import annotations
 
 import datetime as dt
+import json
 from pathlib import Path
 
 import typer
@@ -318,6 +322,86 @@ def orders_command() -> None:
             f"{state.order_id:12s} {state.status.value:16s} "
             f"filled {state.filled_quantity:10.2f}  {symbol:16s} raw={state.raw_status}"
         )
+
+
+@broker_app.command(name="reconcile")
+def reconcile_command(
+    journal: Path | None = typer.Option(
+        None,
+        "--journal",
+        help="Submission journal path (default: ~/.alphalens/broker_orders/submissions.jsonl).",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the verdict dicts as JSON (incl. raw Status/SubStatus diagnostics, "
+        "reason codes, realized r) for scripting.",
+    ),
+) -> None:
+    """Reconcile journaled brackets against the broker — STRICTLY READ-ONLY.
+
+    No order placement, no cancels; the journal is never rewritten (verdicts
+    are recomputed at read time from the append-only SoT + the broker's
+    open-orders view + the vendor's audit-log resolution capability).
+    Exit code 0 when clean, 1 when any UNRESOLVED or divergent row exists
+    (scriptable; a still-working entry PAST its TTL is a divergence).
+    """
+    from alphalens_pipeline.brokers.contract import BrokerError
+    from alphalens_pipeline.brokers.reconcile import (
+        has_failures,
+        reconcile_brackets,
+        summarize,
+    )
+    from alphalens_pipeline.brokers.registry import get_default_broker
+    from alphalens_pipeline.brokers.submission_log import (
+        DEFAULT_SUBMISSIONS_PATH,
+        iter_submission_records,
+    )
+
+    path = journal or DEFAULT_SUBMISSIONS_PATH
+    malformed: list[str] = []
+    records = list(iter_submission_records(path, malformed=malformed))
+    if malformed:
+        typer.secho(
+            f"journal: skipped {len(malformed)} malformed line(s) in {path}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    if not records:
+        typer.echo(f"no submission records in {path} — nothing to reconcile")
+        return
+
+    try:
+        verdicts = reconcile_brackets(records, get_default_broker())
+    except BrokerError as exc:
+        raise _fail(f"broker reconcile failed: {exc}") from exc
+
+    if as_json:
+        typer.echo(json.dumps([v.as_dict() for v in verdicts], indent=2, default=str))
+        if has_failures(verdicts):
+            # Silent nonzero exit keeps stdout pure JSON for scripting.
+            raise typer.Exit(code=1)
+        return
+
+    typer.echo(
+        f"{'brief_date':10s}  {'ticker':6s}  {'qty':>8s}  {'entry_order_id':14s}  "
+        f"{'verdict':30s}  {'activity_time':28s}  note"
+    )
+    for verdict in verdicts:
+        note_parts = [part for part in (verdict.note, verdict.reason) if part]
+        typer.echo(
+            f"{verdict.brief_date:10s}  {verdict.ticker:6s}  {verdict.qty:>8.0f}  "
+            f"{verdict.entry_order_id:14s}  {verdict.verdict:30s}  "
+            f"{(verdict.activity_time or '-'):28s}  {'; '.join(note_parts) or '-'}"
+        )
+    summary = summarize(verdicts)
+    typer.echo(
+        f"{summary['total']} bracket(s): {summary['working']} working, "
+        f"{summary['terminal']} terminal, {summary['unresolved']} unresolved, "
+        f"{summary['divergent']} divergent"
+    )
+    if has_failures(verdicts):
+        raise _fail("reconciliation found unresolved or divergent bracket(s) — see rows above")
 
 
 @broker_app.command(name="cancel")

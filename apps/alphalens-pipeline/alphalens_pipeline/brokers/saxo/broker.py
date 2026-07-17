@@ -271,8 +271,9 @@ class SaxoBroker:
             payload = next((row for row in rows if str(row.get("OrderId")) == str(order_id)), None)
         if not payload or not payload.get("OrderId"):
             # The open-orders endpoint drops filled/cancelled/expired orders:
-            # absent is honestly UNKNOWN (FILLED vs CANCELLED needs the audit/
-            # ENS activity log — P3 scope, see design memo §P2).
+            # absent is honestly UNKNOWN. Terminal resolution (FILLED vs
+            # CANCELLED vs REJECTED vs EXPIRED) is the P3 audit-log
+            # capability — see :meth:`resolve_order_outcome`.
             return OrderState(
                 order_id=order_id,
                 status=OrderStatus.UNKNOWN,
@@ -303,6 +304,161 @@ class SaxoBroker:
                 f"cancel of order {order_id} failed with HTTP {status}: {payload} "
                 "(the order may be locked pre-execution — retry)"
             )
+
+    # ----- P3 terminal resolution + fill cross-check (vendor CAPABILITY) -----
+    #
+    # Deliberately NOT part of the frozen ``contract.Broker`` Protocol: only
+    # Saxo can honor audit-log resolution today. The vendor-agnostic
+    # reconciler reaches these through the ``SupportsOrderResolution`` /
+    # ``SupportsFillCrossCheck`` extension Protocols in
+    # ``brokers/reconcile.py`` (typed variant of the existing
+    # ``getattr(broker, "precheck_bracket_order", None)`` CLI precedent);
+    # brokers lacking them degrade to UNRESOLVED(capability_absent) — never
+    # a guessed terminal state.
+
+    def resolve_order_outcome(self, order_id: str) -> OrderState:
+        """Classify a DISAPPEARED order's terminal outcome from the audit log.
+
+        One GET ``/cs/v1/audit/orderactivities?OrderId=...&EntryType=Last``
+        (audit store, 2+yr documented retention; ENS is NOT used — hard
+        14-day cap). Classification is on the (Status, SubStatus) PAIR —
+        live findings prove Status alone is insufficient (rejected
+        placements surface as ``Placed``/``Rejected`` in a single row).
+
+        Unresolvable cases return ``OrderStatus.UNKNOWN`` with a reason code
+        in ``raw_status`` (``not_in_retention`` / ``fill_fields_unverified``
+        / ``inconsistent_state`` / ``unrecognized``) — the mapping never
+        guesses; the reconciler surfaces these as UNRESOLVED verdicts.
+        """
+        with _translate_saxo_errors():
+            client_key = str(self._client.get_client_info()["ClientKey"])
+            payload = self._client.get_order_activities(
+                client_key, order_id=order_id, entry_type="Last"
+            )
+        rows = [
+            row
+            for row in payload.get("Data") or []
+            if str(row.get("OrderId", "")) in ("", str(order_id))
+        ]
+        if not rows:
+            # Retention exceeded, or an id Saxo never knew.
+            return self._unresolved_state(order_id, "not_in_retention")
+        row = max(rows, key=lambda r: int(r.get("LogId") or 0))
+        return self._classify_activity_row(order_id, row)
+
+    _NON_TERMINAL_PAIRS = frozenset(
+        {
+            ("Placed", "Confirmed"),
+            ("Placed", "Requested"),
+            ("Fill", "Confirmed"),
+            ("Fill", "Requested"),
+            ("Cancelled", "Requested"),
+        }
+    )
+
+    @staticmethod
+    def _unresolved_state(order_id: str, raw_status: str) -> OrderState:
+        return OrderState(
+            order_id=order_id,
+            status=OrderStatus.UNKNOWN,
+            instrument=None,
+            filled_quantity=0.0,
+            raw_status=raw_status,
+        )
+
+    def _classify_activity_row(self, order_id: str, row: dict[str, Any]) -> OrderState:
+        """(Status, SubStatus) PAIR -> terminal OrderStatus; UNKNOWN+reason otherwise."""
+        status = str(row.get("Status", ""))
+        sub_status = str(row.get("SubStatus", ""))
+        pair = f"{status}/{sub_status}"
+        diagnostics = self._activity_diagnostics(pair, row)
+
+        # (1) SubStatus="Rejected" wins regardless of Status — live-verified:
+        # rejected placements are a single Placed/Rejected audit row.
+        if sub_status == "Rejected":
+            return self._terminal_state(order_id, OrderStatus.REJECTED, diagnostics)
+        # (2) FinalFill -> FILLED; fill fields are DOC-SOURCED ONLY (zero
+        # fills existed on the live account), so assert presence rather than
+        # fabricating 0 or full qty.
+        if status == "FinalFill":
+            filled = row.get("FilledAmount", row.get("FillAmount"))
+            try:
+                filled_quantity = float(filled)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                return self._unresolved_state(
+                    order_id, f"fill_fields_unverified ({pair} row={row!r})"
+                )
+            return self._terminal_state(order_id, OrderStatus.FILLED, diagnostics, filled_quantity)
+        # (3) Cancelled/Confirmed — live-verified terminal cancel row.
+        if status == "Cancelled" and sub_status == "Confirmed":
+            return self._terminal_state(order_id, OrderStatus.CANCELLED, diagnostics)
+        # (4) Expired — doc-sourced (not live-producible on the SIM account).
+        if status == "Expired":
+            return self._terminal_state(order_id, OrderStatus.EXPIRED, diagnostics)
+        # (5) A recognized NON-terminal last row for an order absent from the
+        # open-orders view is an inconsistent state — surface, never guess.
+        if (status, sub_status) in self._NON_TERMINAL_PAIRS:
+            return self._unresolved_state(order_id, f"inconsistent_state ({diagnostics})")
+        return self._unresolved_state(order_id, f"unrecognized ({diagnostics})")
+
+    @staticmethod
+    def _activity_diagnostics(pair: str, row: dict[str, Any]) -> str:
+        """Raw ``Status/SubStatus`` pair plus LogId/ActivityTime for diagnostics."""
+        parts = [pair]
+        if row.get("LogId") is not None:
+            parts.append(f"LogId={row['LogId']}")
+        if row.get("ActivityTime"):
+            parts.append(f"ActivityTime={row['ActivityTime']}")
+        return " ".join(parts)
+
+    def _terminal_state(
+        self,
+        order_id: str,
+        status: OrderStatus,
+        diagnostics: str,
+        filled_quantity: float = 0.0,
+    ) -> OrderState:
+        return OrderState(
+            order_id=order_id,
+            status=status,
+            instrument=None,
+            filled_quantity=filled_quantity,
+            raw_status=diagnostics,
+        )
+
+    def get_open_position_references(self) -> list[str]:
+        """``ExternalReference`` values of OPEN positions (fill cross-check).
+
+        The journal's ``client_request_id`` round-trips verbatim as
+        ``ExternalReference`` on every audit row and position — a FILLED
+        entry whose exit is still working shows up here.
+        """
+        with _translate_saxo_errors():
+            client_key = str(self._client.get_client_info()["ClientKey"])
+            rows: list[dict[str, Any]] = self._client.get_positions(client_key).get("Data") or []
+        references: list[str] = []
+        for row in rows:
+            base: dict[str, Any] = row.get("PositionBase") or {}
+            reference = base.get("ExternalReference") or row.get("ExternalReference")
+            if reference:
+                references.append(str(reference))
+        return references
+
+    def get_closed_position_rows(self) -> list[dict[str, Any]]:
+        """Flattened ``/port/v1/closedpositions`` rows (round-trip cross-check).
+
+        Accepts BOTH live body shapes via the client wrapper; each returned
+        row is the inner ``ClosedPosition`` dict when the envelope form is
+        present, the raw row otherwise.
+        """
+        with _translate_saxo_errors():
+            client_key = str(self._client.get_client_info()["ClientKey"])
+            payload = self._client.get_closed_positions(client_key)
+        rows: list[dict[str, Any]] = []
+        for row in payload.get("Data") or []:
+            inner = row.get("ClosedPosition") if isinstance(row, dict) else None
+            rows.append(inner if isinstance(inner, dict) else row)
+        return rows
 
     # ----- internals -----
 

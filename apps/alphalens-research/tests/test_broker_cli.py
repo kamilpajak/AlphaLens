@@ -1,4 +1,4 @@
-"""CLI tests for ``alphalens broker`` P2 order commands (submit / orders / cancel).
+"""CLI tests for ``alphalens broker`` P2 order commands + the P3 reconciler.
 
 The submit command is DRY-RUN BY DEFAULT (bracket table + precheck, nothing
 sent); ``--execute`` additionally requires an interactive confirmation
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import ast
 import datetime as dt
+import json
 import unittest
 import uuid
 from pathlib import Path
@@ -252,6 +253,184 @@ class TestOrdersAndCancel(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertEqual(harness.broker.cancel_calls, ["E-1"])
         self.assertIn("cascade", result.output)
+
+
+def _verdict(**overrides):
+    from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
+
+    fields = {
+        "brief_date": "2026-07-16",
+        "ticker": "KO",
+        "qty": 10.0,
+        "entry_order_id": "E-1",
+        "status": "WORKING",
+        "verdict": "WORKING",
+    }
+    fields.update(overrides)
+    return ReconcileVerdict(**fields)
+
+
+_ALL_KINDS = [
+    _verdict(),
+    _verdict(
+        entry_order_id="E-2",
+        verdict="WORKING(PAST-TTL!)",
+        reason="entry still working after 9 trading days vs ttl 5",
+        divergence=True,
+    ),
+    _verdict(
+        entry_order_id="E-3",
+        status="FILLED",
+        verdict="FILLED(closed r=+1.00)",
+        activity_time="2026-07-17T14:30:00Z",
+        note="round trip closed (FIFO pair)",
+    ),
+    _verdict(
+        entry_order_id="E-4",
+        status="CANCELLED",
+        verdict="CANCELLED",
+        note="children cancelled via cascade",
+    ),
+    _verdict(
+        entry_order_id="E-5",
+        status="UNRESOLVED",
+        verdict="UNRESOLVED(not_in_retention)",
+        reason="not_in_retention",
+    ),
+]
+
+_CLEAN_KINDS = [
+    _verdict(),
+    _verdict(entry_order_id="E-3", status="FILLED", verdict="FILLED(closed r=+1.00)"),
+]
+
+
+class _ReconcileHarness:
+    """Patches registry/journal-reader/reconcile-core at their source modules."""
+
+    def __init__(
+        self,
+        case: unittest.TestCase,
+        *,
+        verdicts: list | None = None,
+        records: list | None = None,
+    ):
+        self.broker = _CliFakeBroker()
+        rows = records if records is not None else [{"brackets": [{"entry_order_id": "E-1"}]}]
+
+        def _iter_records(path=None, *, malformed=None):
+            return iter(rows)
+
+        patches = [
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=self.broker,
+            ),
+            mock.patch(
+                "alphalens_pipeline.brokers.submission_log.iter_submission_records",
+                side_effect=_iter_records,
+            ),
+            mock.patch(
+                "alphalens_pipeline.brokers.reconcile.reconcile_brackets",
+                return_value=verdicts if verdicts is not None else list(_ALL_KINDS),
+            ),
+        ]
+        for patch in patches:
+            patch.start()
+            case.addCleanup(patch.stop)
+
+
+class TestReconcileCommand(unittest.TestCase):
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def test_table_renders_all_verdict_kinds_and_exits_1_on_failures(self):
+        _ReconcileHarness(self)
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["reconcile"])
+
+        self.assertNotEqual(result.exit_code, 0, "unresolved + divergence must exit 1")
+        for label in (
+            "WORKING(PAST-TTL!)",
+            "FILLED(closed r=+1.00)",
+            "CANCELLED",
+            "UNRESOLVED(not_in_retention)",
+        ):
+            self.assertIn(label, result.output)
+        self.assertIn("children cancelled via cascade", result.output)
+        # Summary line: N brackets, working/terminal/unresolved/divergent.
+        self.assertIn("5 bracket(s)", result.output)
+        self.assertIn("2 working", result.output)
+        self.assertIn("2 terminal", result.output)
+        self.assertIn("1 unresolved", result.output)
+        self.assertIn("1 divergent", result.output)
+
+    def test_clean_run_exits_zero(self):
+        _ReconcileHarness(self, verdicts=list(_CLEAN_KINDS))
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["reconcile"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+
+    def test_json_output_is_parseable_and_carries_details(self):
+        _ReconcileHarness(self, verdicts=list(_CLEAN_KINDS))
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["reconcile", "--json"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        payload = json.loads(result.output)
+        self.assertEqual(len(payload), 2)
+        self.assertEqual(payload[0]["entry_order_id"], "E-1")
+        self.assertEqual(payload[1]["verdict"], "FILLED(closed r=+1.00)")
+        for key in ("status", "reason", "divergence", "details"):
+            self.assertIn(key, payload[0])
+
+    def test_json_divergence_still_emits_parseable_output_and_exit_1(self):
+        _ReconcileHarness(self)
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["reconcile", "--json"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        payload = json.loads(result.output)
+        self.assertEqual(len(payload), 5)
+
+    def test_empty_journal_reports_and_exits_zero(self):
+        _ReconcileHarness(self, records=[])
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["reconcile"])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn("nothing to reconcile", result.output)
+
+    def test_reconcile_command_is_read_only_by_construction(self):
+        """Pin: the command body references no placement/cancel/journal-write
+        surface — reconcile is STRICTLY READ-ONLY (design memo §P3)."""
+        import alphalens_cli.commands.broker as broker_cmd
+
+        tree = ast.parse(Path(broker_cmd.__file__).read_text())
+        reconcile_fn = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "reconcile_command"
+        )
+        forbidden = {
+            "place_bracket_order",
+            "place_order",
+            "precheck_bracket_order",
+            "cancel_order",
+            "cancel_order_ids",
+            "append_submission_record",
+            "build_submission_record",
+        }
+        attr_names = {n.attr for n in ast.walk(reconcile_fn) if isinstance(n, ast.Attribute)}
+        name_ids = {n.id for n in ast.walk(reconcile_fn) if isinstance(n, ast.Name)}
+        offenders = sorted((attr_names | name_ids) & forbidden)
+        self.assertEqual(offenders, [], "reconcile must never touch a write surface")
 
 
 class TestCliImportsStayLazy(unittest.TestCase):

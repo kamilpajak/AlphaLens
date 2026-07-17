@@ -13,6 +13,7 @@ from alphalens_pipeline.brokers.routing import US_MIC_PROBE_ORDER, resolve_us_in
 from alphalens_pipeline.brokers.submission_log import (
     append_submission_record,
     build_submission_record,
+    iter_submission_records,
 )
 
 
@@ -130,6 +131,51 @@ class TestSubmissionLog(unittest.TestCase):
         self.assertNotIn("note", first)
         self.assertEqual(second["note"], "second run")
         self.assertEqual(second["brackets"][0]["exit_order_ids"], ["T-1", "S-1"])
+
+
+class TestIterSubmissionRecords(unittest.TestCase):
+    """P3 journal reader: yield parsed records, skip-and-collect malformed lines."""
+
+    def _sample_record(self) -> dict:
+        return build_submission_record(
+            brief_date="2026-07-16",
+            ticker="KO",
+            mic="XNYS",
+            uic="307",
+            brackets=[{"client_request_id": "rid-1", "entry_order_id": "E-1", "ttl": 5}],
+        )
+
+    def test_round_trips_appended_records_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "submissions.jsonl"
+            append_submission_record(self._sample_record(), path=target)
+            append_submission_record(self._sample_record() | {"ticker": "NVDA"}, path=target)
+
+            records = list(iter_submission_records(target))
+
+        self.assertEqual([record["ticker"] for record in records], ["KO", "NVDA"])
+        self.assertEqual(records[0]["brackets"][0]["entry_order_id"], "E-1")
+
+    def test_malformed_lines_are_skipped_and_collected_not_fatal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "submissions.jsonl"
+            append_submission_record(self._sample_record(), path=target)
+            with target.open("a", encoding="utf-8") as fh:
+                fh.write("{not json at all\n")
+                fh.write('"a bare string is not a record"\n')
+                fh.write("\n")  # blank line: ignored, NOT malformed
+            append_submission_record(self._sample_record(), path=target)
+
+            malformed: list[str] = []
+            records = list(iter_submission_records(target, malformed=malformed))
+
+        self.assertEqual(len(records), 2, "good records around the bad lines must survive")
+        self.assertEqual(len(malformed), 2, "both malformed lines collected, blank line ignored")
+
+    def test_missing_journal_yields_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            missing = Path(tmp) / "nope" / "submissions.jsonl"
+            self.assertEqual(list(iter_submission_records(missing)), [])
 
 
 if __name__ == "__main__":

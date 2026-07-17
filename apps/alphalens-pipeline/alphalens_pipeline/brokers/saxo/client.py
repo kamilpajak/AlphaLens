@@ -254,6 +254,87 @@ class SaxoClient:
         except SaxoNotFoundError:
             return None
 
+    # ----- audit + closed-positions reads (P3 reconciliation) -----
+
+    def get_order_activities(
+        self,
+        client_key: str,
+        *,
+        order_id: str | None = None,
+        entry_type: str = "Last",
+        from_datetime: str | None = None,
+        top: int | None = None,
+    ) -> dict[str, Any]:
+        """GET ``/cs/v1/audit/orderactivities`` — the P3 terminal-resolution read.
+
+        The audit store retains order activities for 2+ documented years
+        (ENS is NOT used — hard 14-day cap). ``EntryType=Last`` returns the
+        latest activity row per order; the (Status, SubStatus) PAIR on that
+        row is what the broker's ``resolve_order_outcome`` classifies.
+        Pagination (``__next``/``__nextPoll``) is followed transparently and
+        the ``Data`` arrays merged.
+        """
+        params: dict[str, Any] = {"ClientKey": client_key, "EntryType": entry_type}
+        if order_id is not None:
+            params["OrderId"] = order_id
+        if from_datetime is not None:
+            params["FromDateTime"] = from_datetime
+        if top is not None:
+            params["$top"] = top
+        return self._get_paged_json("/cs/v1/audit/orderactivities", params=params)
+
+    def get_closed_positions(self, client_key: str) -> dict[str, Any]:
+        """GET ``/port/v1/closedpositions`` — the P3 round-trip cross-check.
+
+        Accepts BOTH live body shapes: the ``{__count, Data}`` envelope and
+        the bare ``[]`` array (live-verified empty-account shape), always
+        returning the envelope form. Pagination is followed transparently.
+        """
+        return self._get_paged_json("/port/v1/closedpositions", params={"ClientKey": client_key})
+
+    @staticmethod
+    def _normalize_next_url(url: str) -> str:
+        """Strip an absolute ``__next``/``__nextPoll`` URL to a relative path.
+
+        Saxo pagination URLs come back absolute WITH an explicit ``:443``
+        port (``https://gateway.saxobank.com:443/sim/openapi/...``), which
+        fails :meth:`_join_url`'s SIM-prefix rail (the configured base URL
+        carries no port). Stripping to the path after ``/sim/openapi`` keeps
+        the rail intact — the follow-up request re-joins onto the one
+        allowed base URL. A URL without the marker passes through unchanged
+        (a relative path already satisfies the rail; a foreign absolute URL
+        still fails it loudly).
+        """
+        marker = "/sim/openapi"
+        index = url.find(marker)
+        if index >= 0:
+            return url[index + len(marker) :]
+        return url
+
+    def _get_paged_json(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """GET ``path`` and follow ``__next``/``__nextPoll`` pages, merging ``Data``.
+
+        Normalizes the bare-array body shape into the ``{__count, Data}``
+        envelope so callers see ONE shape regardless of endpoint mood.
+        """
+        payload = self._get_json(path, params=params)
+        if isinstance(payload, list):
+            return {"__count": len(payload), "Data": list(payload)}
+        merged: dict[str, Any] = dict(payload)
+        data: list[Any] = list(merged.get("Data") or [])
+        next_url = merged.pop("__next", None) or merged.pop("__nextPoll", None)
+        while next_url:
+            page = self._get_json(self._normalize_next_url(str(next_url)))
+            if isinstance(page, list):
+                data.extend(page)
+                break
+            data.extend(page.get("Data") or [])
+            next_url = page.get("__next") or page.get("__nextPoll")
+        merged.pop("__next", None)
+        merged.pop("__nextPoll", None)
+        merged["Data"] = data
+        return merged
+
     # ----- escape hatch (house pattern) -----
 
     def get_json(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:

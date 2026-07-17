@@ -33,6 +33,7 @@ from alphalens_pipeline.brokers.contract import (
     BrokerRateLimitError,
     InstrumentNotFoundError,
     InstrumentRef,
+    OrderStatus,
     Position,
 )
 from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
@@ -139,7 +140,7 @@ class _StubSaxoClient:
 
     def get_positions(self, client_key: str) -> dict[str, Any]:
         self._maybe_fail()
-        return _POSITIONS
+        return getattr(self, "positions_payload", _POSITIONS)
 
     def search_instruments(
         self,
@@ -196,6 +197,25 @@ class _StubSaxoClient:
     def get_order_status(self, client_key: str, order_id: str) -> dict[str, Any] | None:
         self._maybe_fail()
         return getattr(self, "_orders", {}).get(order_id)
+
+    # ----- P3 audit / cross-check surface -----
+
+    def get_order_activities(
+        self,
+        client_key: str,
+        *,
+        order_id: str | None = None,
+        entry_type: str = "Last",
+        from_datetime: str | None = None,
+        top: int | None = None,
+    ) -> dict[str, Any]:
+        self._maybe_fail()
+        rows = getattr(self, "activities", {}).get(order_id or "", [])
+        return {"__count": len(rows), "Data": list(rows)}
+
+    def get_closed_positions(self, client_key: str) -> dict[str, Any]:
+        self._maybe_fail()
+        return getattr(self, "closed_positions_payload", {"__count": 0, "Data": []})
 
 
 def _make_broker(**kw: Any) -> SaxoBroker:
@@ -329,6 +349,239 @@ class TestErrorTranslationBoundary(unittest.TestCase):
             broker.get_positions()
         with self.assertRaises(BrokerAuthError):
             broker.resolve_instrument("KO", "XNYS")
+
+
+# ---------------------------------------------------------------------------
+# P3 terminal resolution — audit /cs/v1/audit/orderactivities classifier.
+# Fixture rows mirror the VERBATIM shapes captured on the live SIM account
+# 2026-07-17 (cancelled brackets 5039272886/..., rejected placements
+# 5039272858/5039272868); FinalFill and Expired rows are DOC-SOURCED (both
+# sweeps returned __count:0 live — zero fills/expiries existed), so the
+# parser must stay guarded (UNRESOLVED on missing fill fields, never a
+# fabricated quantity).
+# ---------------------------------------------------------------------------
+
+_AUDIT_ROW_COMMON = {
+    "AccountId": "16371XYZ",
+    "AccountKey": "AK-1",
+    "AssetType": "Stock",
+    "BuySell": "Buy",
+    "ClientKey": "CK-1",
+    "CorrelationKey": "corr-1",
+    "Duration": {"DurationType": "GoodTillDate"},
+    "HandledBy": "1000001",
+    "OrderRelation": "StandAlone",
+    "OrderType": "Limit",
+    "Uic": 211,
+}
+
+
+def _audit_row(**overrides: Any) -> dict[str, Any]:
+    row = dict(_AUDIT_ROW_COMMON)
+    row.update(overrides)
+    return row
+
+
+# Live-verified: LogId 249474866 — Cancelled/Confirmed terminal row of entry
+# 5039272886 (after Placed/Requested -> Placed/Confirmed lifecycle rows).
+_ROW_CANCELLED_CONFIRMED = _audit_row(
+    OrderId="5039272886",
+    LogId=249474866,
+    ActivityTime="2026-07-17T11:42:10.360000Z",
+    Amount=10.0,
+    ExternalReference="rid-cancelled",
+    Status="Cancelled",
+    SubStatus="Confirmed",
+)
+
+# Live-verified: rejected placement 5039272858 is a SINGLE audit row with
+# Status="Placed" and SubStatus="Rejected" — Status alone is insufficient.
+_ROW_PLACED_REJECTED = _audit_row(
+    OrderId="5039272858",
+    LogId=249474801,
+    ActivityTime="2026-07-17T11:38:02.120000Z",
+    Amount=10.0,
+    ExternalReference="rid-rejected",
+    Status="Placed",
+    SubStatus="Rejected",
+)
+
+# Doc-sourced terminal fill row (FilledAmount cumulative, FillAmount per-event).
+_ROW_FINAL_FILL = _audit_row(
+    OrderId="5039272900",
+    LogId=249474900,
+    ActivityTime="2026-07-17T14:30:00.000000Z",
+    Amount=10.0,
+    FilledAmount=10.0,
+    FillAmount=4.0,
+    AveragePrice=50.25,
+    ExternalReference="rid-filled",
+    Status="FinalFill",
+    SubStatus="Confirmed",
+)
+
+# Doc-sourced expiry row (GTD lapsed) — not live-producible on 2026-07-17.
+_ROW_EXPIRED = _audit_row(
+    OrderId="5039272910",
+    LogId=249474910,
+    ActivityTime="2026-07-20T20:00:00.000000Z",
+    Amount=10.0,
+    ExternalReference="rid-expired",
+    Status="Expired",
+    SubStatus="Confirmed",
+)
+
+# Non-terminal last row for an order ABSENT from /port/v1/orders/me — an
+# inconsistent state the resolver must surface honestly, never guess.
+_ROW_PLACED_CONFIRMED = _audit_row(
+    OrderId="5039272920",
+    LogId=249474920,
+    ActivityTime="2026-07-17T11:40:00.000000Z",
+    Amount=10.0,
+    ExternalReference="rid-working",
+    Status="Placed",
+    SubStatus="Confirmed",
+)
+
+
+class TestResolveOrderOutcome(unittest.TestCase):
+    """(Status, SubStatus) PAIR classifier over EntryType=Last audit rows."""
+
+    def _broker_with(self, activities: dict[str, list[dict[str, Any]]]) -> SaxoBroker:
+        client = _StubSaxoClient()
+        client.activities = activities  # type: ignore[attr-defined]
+        return SaxoBroker(client)  # type: ignore[arg-type]
+
+    def _resolve(self, row: dict[str, Any]) -> Any:
+        order_id = str(row["OrderId"])
+        return self._broker_with({order_id: [row]}).resolve_order_outcome(order_id)
+
+    def test_cancelled_confirmed_maps_cancelled(self):
+        state = self._resolve(_ROW_CANCELLED_CONFIRMED)
+        self.assertEqual(state.status, OrderStatus.CANCELLED)
+        self.assertEqual(state.order_id, "5039272886")
+        self.assertIn("Cancelled/Confirmed", state.raw_status)
+
+    def test_placed_rejected_maps_rejected_never_status_alone(self):
+        # Pins that the classifier branches on the PAIR: Status is "Placed"
+        # here, yet the row is terminal-rejected.
+        state = self._resolve(_ROW_PLACED_REJECTED)
+        self.assertEqual(state.status, OrderStatus.REJECTED)
+        self.assertIn("Placed/Rejected", state.raw_status)
+
+    def test_final_fill_maps_filled_with_cumulative_filled_amount(self):
+        state = self._resolve(_ROW_FINAL_FILL)
+        self.assertEqual(state.status, OrderStatus.FILLED)
+        self.assertEqual(state.filled_quantity, 10.0, "FilledAmount (cumulative) wins")
+        self.assertIn("FinalFill/Confirmed", state.raw_status)
+
+    def test_final_fill_falls_back_to_per_event_fill_amount(self):
+        row = dict(_ROW_FINAL_FILL)
+        del row["FilledAmount"]
+        state = self._resolve(row)
+        self.assertEqual(state.status, OrderStatus.FILLED)
+        self.assertEqual(state.filled_quantity, 4.0)
+
+    def test_final_fill_missing_fill_fields_is_unresolved_not_fabricated(self):
+        row = dict(_ROW_FINAL_FILL)
+        del row["FilledAmount"]
+        del row["FillAmount"]
+        state = self._resolve(row)
+        self.assertEqual(state.status, OrderStatus.UNKNOWN)
+        self.assertIn("fill_fields_unverified", state.raw_status)
+        self.assertEqual(state.filled_quantity, 0.0)
+
+    def test_expired_maps_expired(self):
+        state = self._resolve(_ROW_EXPIRED)
+        self.assertEqual(state.status, OrderStatus.EXPIRED)
+        self.assertIn("Expired", state.raw_status)
+
+    def test_non_terminal_last_row_is_unresolved_inconsistent_state(self):
+        state = self._resolve(_ROW_PLACED_CONFIRMED)
+        self.assertEqual(state.status, OrderStatus.UNKNOWN)
+        self.assertIn("inconsistent_state", state.raw_status)
+        self.assertIn("Placed/Confirmed", state.raw_status)
+
+    def test_zero_count_is_unresolved_not_in_retention(self):
+        state = self._broker_with({}).resolve_order_outcome("5039279999")
+        self.assertEqual(state.status, OrderStatus.UNKNOWN)
+        self.assertIn("not_in_retention", state.raw_status)
+
+    def test_unrecognized_pair_is_unresolved_unrecognized(self):
+        row = _audit_row(
+            OrderId="5039272930",
+            LogId=249474930,
+            Status="Triggered",
+            SubStatus="Weird",
+        )
+        state = self._resolve(row)
+        self.assertEqual(state.status, OrderStatus.UNKNOWN)
+        self.assertIn("unrecognized", state.raw_status)
+        self.assertIn("Triggered/Weird", state.raw_status)
+
+    def test_multiple_rows_classifies_the_highest_log_id(self):
+        rows = [
+            _audit_row(
+                OrderId="5039272886",
+                LogId=249474860,
+                Status="Placed",
+                SubStatus="Confirmed",
+            ),
+            _ROW_CANCELLED_CONFIRMED,
+        ]
+        state = self._broker_with({"5039272886": rows}).resolve_order_outcome("5039272886")
+        self.assertEqual(state.status, OrderStatus.CANCELLED)
+
+    def test_vendor_errors_translate_at_the_boundary(self):
+        client = _StubSaxoClient(fail_with=SaxoError("audit 500"))
+        broker = SaxoBroker(client)  # type: ignore[arg-type]
+        with self.assertRaises(BrokerError):
+            broker.resolve_order_outcome("5039272886")
+
+
+class TestFillCrossCheckCapability(unittest.TestCase):
+    """Raw-row capabilities feeding the reconcile FILLED cross-check."""
+
+    def test_open_position_references_collects_external_references(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                {
+                    "PositionId": "5001",
+                    "PositionBase": {
+                        "Amount": 10.0,
+                        "OpenPrice": 50.0,
+                        "Uic": 211,
+                        "AssetType": "Stock",
+                        "ExternalReference": "rid-open-1",
+                    },
+                    "DisplayAndFormat": {"Symbol": "KO:xnys"},
+                },
+                {
+                    "PositionId": "5002",
+                    "PositionBase": {"Amount": 1.0, "OpenPrice": 1.0, "Uic": 212},
+                    "DisplayAndFormat": {"Symbol": "AAPL:xnas"},
+                },
+            ]
+        }
+        broker = SaxoBroker(client)  # type: ignore[arg-type]
+        self.assertEqual(broker.get_open_position_references(), ["rid-open-1"])
+
+    def test_closed_position_rows_flatten_the_envelope(self):
+        client = _StubSaxoClient()
+        client.closed_positions_payload = {  # type: ignore[attr-defined]
+            "__count": 2,
+            "Data": [
+                {
+                    "ClosedPositionUniqueId": "cp-1",
+                    "ClosedPosition": {"ExternalReference": "rid-1", "ClosePrice": 55.0},
+                },
+                {"ExternalReference": "rid-2", "ClosePrice": 44.0},
+            ],
+        }
+        broker = SaxoBroker(client)  # type: ignore[arg-type]
+        rows = broker.get_closed_position_rows()
+        self.assertEqual([row["ExternalReference"] for row in rows], ["rid-1", "rid-2"])
 
 
 class TestSaxoBrokerConformance(BrokerConformanceMixin, unittest.TestCase):

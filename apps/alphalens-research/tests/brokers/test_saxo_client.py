@@ -525,6 +525,125 @@ class TestOrderReadWrappers(unittest.TestCase):
         self.assertEqual(payload, {"OrderId": "O-1", "Status": "Working"})
 
 
+class TestAuditActivitiesWrapper(unittest.TestCase):
+    """P3 wrapper for GET /cs/v1/audit/orderactivities (terminal resolution)."""
+
+    def test_param_passthrough_order_id_entry_type_client_key(self):
+        session = _RecordingSession([_FakeResponse(200, payload={"Data": [], "__count": 0})])
+        client, _, _ = _make_client(session)
+
+        payload = client.get_order_activities("CK-1", order_id="5039272886")
+
+        (call,) = session.calls
+        self.assertEqual(call["url"], f"{SIM_BASE_URL}/cs/v1/audit/orderactivities")
+        self.assertEqual(
+            call["params"],
+            {"ClientKey": "CK-1", "EntryType": "Last", "OrderId": "5039272886"},
+        )
+        self.assertEqual(payload, {"Data": [], "__count": 0})
+
+    def test_optional_from_datetime_and_top_params(self):
+        session = _RecordingSession([_FakeResponse(200, payload={"Data": []})])
+        client, _, _ = _make_client(session)
+
+        client.get_order_activities(
+            "CK-1",
+            entry_type="All",
+            from_datetime="2026-07-01T00:00:00Z",
+            top=500,
+        )
+
+        (call,) = session.calls
+        self.assertEqual(
+            call["params"],
+            {
+                "ClientKey": "CK-1",
+                "EntryType": "All",
+                "FromDateTime": "2026-07-01T00:00:00Z",
+                "$top": 500,
+            },
+        )
+
+    def test_next_url_with_port_443_is_normalized_and_followed(self):
+        # Saxo pagination URLs embed ":443" in the absolute form, which would
+        # fail _join_url's SIM-prefix rail — the wrapper must strip to the
+        # path after /sim/openapi before re-requesting.
+        next_absolute = (
+            "https://gateway.saxobank.com:443/sim/openapi"
+            "/cs/v1/audit/orderactivities?ClientKey=CK-1&$skiptoken=abc"
+        )
+        session = _RecordingSession(
+            [
+                _FakeResponse(
+                    200,
+                    payload={"Data": [{"LogId": 1}], "__next": next_absolute},
+                ),
+                _FakeResponse(200, payload={"Data": [{"LogId": 2}]}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        payload = client.get_order_activities("CK-1", order_id="1")
+
+        self.assertEqual(len(session.calls), 2)
+        follow_up = session.calls[1]["url"]
+        self.assertTrue(
+            follow_up.startswith(f"{SIM_BASE_URL}/cs/v1/audit/orderactivities"),
+            f"follow-up must pass the SIM rail as a joined path, got {follow_up!r}",
+        )
+        self.assertNotIn(":443", follow_up)
+        self.assertEqual([row["LogId"] for row in payload["Data"]], [1, 2])
+        self.assertNotIn("__next", payload, "merged payload must not re-expose pagination")
+
+
+class TestClosedPositionsWrapper(unittest.TestCase):
+    """P3 wrapper for GET /port/v1/closedpositions (fill cross-check)."""
+
+    def test_envelope_shape_passes_through_with_client_key_param(self):
+        session = _RecordingSession(
+            [_FakeResponse(200, payload={"__count": 1, "Data": [{"ClosedPosition": {}}]})]
+        )
+        client, _, _ = _make_client(session)
+
+        payload = client.get_closed_positions("CK-1")
+
+        (call,) = session.calls
+        self.assertEqual(call["url"], f"{SIM_BASE_URL}/port/v1/closedpositions")
+        self.assertEqual(call["params"], {"ClientKey": "CK-1"})
+        self.assertEqual(payload["__count"], 1)
+        self.assertEqual(len(payload["Data"]), 1)
+
+    def test_bare_array_shape_is_normalized_to_envelope(self):
+        # Live-verified empty-account shape: the endpoint answers with a bare
+        # JSON array, not the {__count, Data} envelope.
+        session = _RecordingSession([_FakeResponse(200, payload=[])])  # type: ignore[arg-type]
+        client, _, _ = _make_client(session)
+
+        payload = client.get_closed_positions("CK-1")
+
+        self.assertEqual(payload, {"__count": 0, "Data": []})
+
+    def test_next_poll_url_is_normalized_and_followed(self):
+        next_poll = (
+            "https://gateway.saxobank.com:443/sim/openapi"
+            "/port/v1/closedpositions?ClientKey=CK-1&$skiptoken=xyz"
+        )
+        session = _RecordingSession(
+            [
+                _FakeResponse(200, payload={"Data": [{"A": 1}], "__nextPoll": next_poll}),
+                _FakeResponse(200, payload={"Data": [{"A": 2}]}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        payload = client.get_closed_positions("CK-1")
+
+        self.assertEqual(len(session.calls), 2)
+        self.assertNotIn(":443", session.calls[1]["url"])
+        self.assertEqual(len(payload["Data"]), 2)
+        self.assertNotIn("__nextPoll", payload)
+
+
 class TestProvablyUnsentClassifier(unittest.TestCase):
     """Pins the repr-marker classification of _is_provably_unsent: only
     provably-unsent network failures may allow a POST retry. A requests/
