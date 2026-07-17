@@ -6,6 +6,7 @@ Top-level commands:
     preaudit            — fail-fast env check before a long audit
 
 Groups:
+    broker/             — broker execution layer reads (SIM-only, ADR 0014)
     buffett/            — Buffett Mode-A observational lens over the brief (ad hoc)
     edgar/              — Layer 1 SEC EDGAR event detection (LIVE)
     literature/         — Perplexity scan via VPS systemd (LIVE)
@@ -21,6 +22,7 @@ import typer
 from dotenv import load_dotenv
 
 from alphalens_cli.commands.audit import audit_command
+from alphalens_cli.commands.broker import broker_app
 from alphalens_cli.commands.buffett import buffett_app
 from alphalens_cli.commands.cache import cache_app
 from alphalens_cli.commands.doctrine import audit_verdict_command
@@ -57,6 +59,7 @@ def _root_callback() -> None:
     )
 
 
+app.add_typer(broker_app, name="broker")
 app.add_typer(buffett_app, name="buffett")
 app.add_typer(cache_app, name="cache")
 app.add_typer(edgar_app, name="edgar")
