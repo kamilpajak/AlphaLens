@@ -46,6 +46,7 @@ from alphalens_pipeline.brokers.saxo.errors import (
     SaxoAuthError,
     SaxoError,
     SaxoLiveEnvironmentBlockedError,
+    SaxoNotFoundError,
     SaxoRateLimitError,
 )
 from alphalens_pipeline.brokers.saxo.tokens import (
@@ -196,6 +197,63 @@ class SaxoClient:
         """GET ``/ref/v1/exchanges`` — one-time confirmation of ExchangeId codes."""
         return self._get_json("/ref/v1/exchanges")
 
+    # ----- order endpoints (P2 writes + order reads; thin dict-returning) -----
+
+    def precheck_order(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        """POST ``/trade/v2/orders/precheck`` — validates, places NOTHING.
+
+        Returns ``(status_code, parsed_body)``; the broker owns the
+        interpretation (``PreCheckResult``/``ErrorInfo``). Precheck reserves
+        nothing server-side, so it gets a fresh ``x-request-id`` per call.
+        """
+        resp = self._send_write(
+            "POST", "/trade/v2/orders/precheck", json_body=body, request_id=str(uuid.uuid4())
+        )
+        return resp.status_code, self._safe_json(resp)
+
+    def place_order(self, body: dict[str, Any], *, request_id: str) -> tuple[int, dict[str, Any]]:
+        """POST ``/trade/v2/orders`` — the ONE placement call per bracket.
+
+        ``request_id`` MUST be the bracket's ``client_request_id``: Saxo's
+        ``x-request-id`` 15-second duplicate window is the real idempotency
+        mechanism, so a retry of the same logical bracket must reuse it.
+        Returns ``(status_code, parsed_body)`` — including 4xx/202 bodies,
+        which the broker translates (ModelState / ErrorInfo / OrderId-repair).
+        """
+        resp = self._send_write("POST", "/trade/v2/orders", json_body=body, request_id=request_id)
+        return resp.status_code, self._safe_json(resp)
+
+    def cancel_order_ids(self, order_ids: str, *, account_key: str) -> tuple[int, dict[str, Any]]:
+        """DELETE ``/trade/v2/orders/{OrderIds}`` — idempotent, normal retry.
+
+        Cancelling an unfilled entry silently cascades to its related-order
+        children — one DELETE cleans a whole bracket (do NOT delete children
+        first).
+        """
+        resp = self._send_write(
+            "DELETE",
+            f"/trade/v2/orders/{order_ids}",
+            params={"AccountKey": account_key},
+            request_id=str(uuid.uuid4()),
+        )
+        return resp.status_code, self._safe_json(resp)
+
+    def get_open_orders(self) -> dict[str, Any]:
+        """GET ``/port/v1/orders/me`` — open orders (Saxo Status default Working)."""
+        return self._get_json("/port/v1/orders/me")
+
+    def get_order_status(self, client_key: str, order_id: str) -> dict[str, Any] | None:
+        """GET ``/port/v1/orders/{ClientKey}/{OrderId}``; ``None`` when absent.
+
+        The open-orders endpoint drops filled/cancelled/expired orders, so a
+        404 here is an EXPECTED outcome (mapped to ``OrderStatus.UNKNOWN`` by
+        the adapter), not an error.
+        """
+        try:
+            return self._get_json(f"/port/v1/orders/{client_key}/{order_id}")
+        except SaxoNotFoundError:
+            return None
+
     # ----- escape hatch (house pattern) -----
 
     def get_json(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -317,8 +375,195 @@ class SaxoClient:
             raise SaxoRateLimitError(
                 f"Saxo 429 persisted after {self._MAX_REQUEST_ATTEMPTS} attempts"
             )
+        if resp.status_code == 404:
+            raise SaxoNotFoundError(f"Saxo 404: {resp.text[:200]}")
         if resp.status_code >= 400:
             raise SaxoError(f"Saxo {resp.status_code}: {resp.text[:200]}")
+        return resp
+
+    # ----- write transport (P2) -----
+
+    @staticmethod
+    def _safe_json(resp: requests.Response) -> dict[str, Any]:
+        """Parse a response body defensively — error bodies may be non-JSON."""
+        try:
+            payload = resp.json()
+        except ValueError:
+            return {}
+        return payload if isinstance(payload, dict) else {"data": payload}
+
+    @staticmethod
+    def _is_provably_unsent(exc: requests.RequestException) -> bool:
+        """True only when the request provably never reached Saxo.
+
+        ``ConnectTimeout`` and connection-phase failures (DNS miss, refused —
+        surfaced by requests as a ``ConnectionError`` wrapping urllib3's
+        ``NewConnectionError`` / name-resolution errors) mean the TCP
+        connection never opened, so nothing was sent and a retry is safe.
+        Everything else (aborted mid-request, reset/read-timeout after send)
+        is ambiguous: the order may exist server-side.
+        """
+        if isinstance(exc, requests.exceptions.ConnectTimeout):
+            return True
+        if isinstance(exc, requests.exceptions.ConnectionError):
+            # Marker list validated against requests 2.x / urllib3 2.x message
+            # shapes and PINNED by TestProvablyUnsentClassifier — a library
+            # bump that changes the repr narrows the retry set (fail-safe:
+            # fewer retries, never a double-submit), and the test catches it.
+            marker = repr(exc)
+            return (
+                "NewConnectionError" in marker
+                or "Name or service not known" in marker
+                or "nodename nor servname" in marker
+                or "Failed to resolve" in marker
+            )
+        return False
+
+    def _send_once(self, method_lower: str, url: str, kwargs: dict[str, Any]) -> requests.Response:
+        """One raw verb dispatch on the injected session (typed seam)."""
+        send: Callable[..., requests.Response] = getattr(self._session, method_lower)
+        return send(url, **kwargs)
+
+    def _send_write(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        request_id: str,
+    ) -> requests.Response:
+        """POST/DELETE through the shared throttle with a WRITE-safe retry policy.
+
+        Shares the 401-refresh-once and 429 Retry-After machinery with the
+        read path, but the retry policy differs by verb:
+
+        - **POST is NEVER blind-retried.** Retries happen only when the
+          request provably never reached Saxo (:meth:`_is_provably_unsent`)
+          or was provably not accepted (429) — always reusing the SAME
+          ``x-request-id`` so Saxo's 15s duplicate window dedups. A 5xx or an
+          ambiguous network error after send raises immediately, carrying
+          ``request_id`` so the operator can reconcile (``broker orders``)
+          before any re-run.
+        - **DELETE is idempotent** — normal transient/5xx retry ladder.
+
+        Returns the final response for every other status INCLUDING 4xx/202:
+        rejection translation (ModelState / ErrorInfo / OrderId-repair) is
+        the adapter's job, not the transport's.
+        """
+        url = self._join_url(path)
+        method_lower = method.lower()
+        if method_lower not in ("post", "delete"):
+            raise ValueError(f"_send_write supports POST/DELETE only, got {method!r}")
+        idempotent = method_lower == "delete"
+        auth_retried = False
+        net_attempt = 0
+        resp: requests.Response | None = None
+        for attempt in range(self._MAX_REQUEST_ATTEMPTS):
+            self._throttle()
+            headers = {
+                "Authorization": f"Bearer {self._token_provider.get_access_token()}",
+                "Accept": "application/json",
+                "User-Agent": "AlphaLens/0.1",
+                "x-request-id": request_id,
+            }
+            kwargs: dict[str, Any] = {
+                "headers": headers,
+                "params": params,
+                "timeout": self._timeout,
+            }
+            if method_lower == "post":
+                kwargs["json"] = json_body
+            try:
+                resp = self._send_once(method_lower, url, kwargs)
+            except self._TRANSIENT_NET_EXCEPTIONS as exc:
+                retriable = idempotent or self._is_provably_unsent(exc)
+                if retriable and net_attempt < len(self._NETWORK_ERROR_BACKOFFS):
+                    backoff = self._NETWORK_ERROR_BACKOFFS[net_attempt]
+                    net_attempt += 1
+                    logger.warning(
+                        "saxo %s transient net error (provably unsent, attempt %d): %s; "
+                        "sleeping %ds",
+                        method_lower,
+                        attempt + 1,
+                        exc,
+                        backoff,
+                    )
+                    self._sleep(backoff)
+                    continue
+                detail = (
+                    "network retries exhausted"
+                    if retriable
+                    else "request may have been sent — NOT retried (never blind-retry a POST)"
+                )
+                raise SaxoError(
+                    f"saxo {method.upper()} {path} network failure "
+                    f"(x-request-id={request_id}; {detail}): {exc}"
+                ) from exc
+            if resp.status_code == 401 and not auth_retried:
+                logger.warning("saxo 401 on %s — invalidating token and retrying once", method)
+                self._token_provider.invalidate()
+                auth_retried = True
+                continue
+            if attempt == self._MAX_REQUEST_ATTEMPTS - 1:
+                break
+            if resp.status_code == 429:
+                # 429 = provably not accepted; safe for POST too, SAME id.
+                backoff = self._parse_retry_after(
+                    resp, floor=self._RATE_LIMIT_FLOOR_S, ceiling=self._RATE_LIMIT_CEILING_S
+                )
+                logger.warning(
+                    "saxo 429 on %s (attempt %d/%d); sleeping %ds",
+                    method,
+                    attempt + 1,
+                    self._MAX_REQUEST_ATTEMPTS,
+                    backoff,
+                )
+                self._sleep(backoff)
+                continue
+            if 500 <= resp.status_code < 600:
+                if not idempotent:
+                    # The server may or may not have processed the POST —
+                    # ambiguous, so surface immediately with the dedup id.
+                    raise SaxoError(
+                        f"Saxo {resp.status_code} on {method.upper()} {path} "
+                        f"(x-request-id={request_id}; write outcome ambiguous — "
+                        f"reconcile via 'broker orders' before re-running): "
+                        f"{resp.text[:200]}"
+                    )
+                backoff = self._SERVER_ERROR_BACKOFFS[
+                    min(attempt, len(self._SERVER_ERROR_BACKOFFS) - 1)
+                ]
+                logger.warning(
+                    "saxo %d on %s (attempt %d/%d); sleeping %ds",
+                    resp.status_code,
+                    method,
+                    attempt + 1,
+                    self._MAX_REQUEST_ATTEMPTS,
+                    backoff,
+                )
+                self._sleep(backoff)
+                continue
+            break
+        assert resp is not None  # loop either assigned resp or raised
+        if resp.status_code == 401:
+            raise SaxoAuthError(
+                "Saxo 401 persisted after one token refresh — the 24h SIM token "
+                "has likely expired; regenerate it at developer.saxo"
+            )
+        if resp.status_code == 429:
+            raise SaxoRateLimitError(
+                f"Saxo 429 persisted after {self._MAX_REQUEST_ATTEMPTS} attempts "
+                f"on {method.upper()} {path}"
+            )
+        if not idempotent and 500 <= resp.status_code < 600:
+            raise SaxoError(
+                f"Saxo {resp.status_code} on {method.upper()} {path} "
+                f"(x-request-id={request_id}; write outcome ambiguous — reconcile "
+                f"via 'broker orders' before re-running): {resp.text[:200]}"
+            )
+        if idempotent and 500 <= resp.status_code < 600:
+            raise SaxoError(f"Saxo {resp.status_code} on {method.upper()} {path} persisted")
         return resp
 
     def _request_with_retry(
@@ -397,6 +642,7 @@ __all__ = [
     "SaxoClient",
     "SaxoError",
     "SaxoLiveEnvironmentBlockedError",
+    "SaxoNotFoundError",
     "SaxoRateLimitError",
     "_reset_default_client_for_tests",
     "get_default_saxo_client",

@@ -3,7 +3,8 @@
 **Status:** LOCKED (for P1 scope; P2+ each get their own design memo + adversarial review)
 **Date:** 2026-07-17
 **ADR:** [ADR 0014](../adr/0014-broker-agnostic-execution-layer.md)
-**Increment shipped by this memo:** P1 (reads + contract + SIM-only rail)
+**Increment shipped by this memo:** P1 (reads + contract + SIM-only rail);
+§P2 decision record added with the P2 order-placement increment
 
 ## 1. What this is
 
@@ -68,8 +69,8 @@ reads harmless; P2's 15s duplicate-order 409 dedup and the
 never-blind-retry-a-POST rule inherit it for free.
 
 Instrument resolution (`saxo/broker.py`): MIC → Saxo ExchangeId map
-(`XNYS→NYSE`, `XNAS→NASDAQ`, `XWAR→WSE` — codes to be confirmed against
-`/ref/v1/exchanges` by the first `SAXO_LIVE_TEST=1` run), exact-symbol match
+(`XNYS→NYSE`, `XNAS→NASDAQ`, `XWAR→WSE` — codes confirmed against the live
+SIM gateway 2026-07-17, see §6), exact-symbol match
 on Saxo's lowercase-MIC-suffixed display symbol (`KO:xnys`), miss/ambiguity
 → `InstrumentNotFoundError`, FIFO-bounded in-process cache (no disk cache
 in P1).
@@ -110,8 +111,18 @@ deliberately freezes only `BracketOrderRequest` as the decomposition unit.
 Research flags WSE coverage on the SIM environment as the most likely gap.
 The live probe (`tests/live/test_saxo_live.py`, `SAXO_LIVE_TEST=1`)
 resolves `CDR @ XWAR` and classifies a miss as PERMANENT so the gap is
-recorded before the P2 scope locks. **Result: PENDING** — requires a fresh
-24h SIM token; record the first run's outcome here.
+recorded before the P2 scope locks. **Result: LIVE-VERIFIED 2026-07-17** —
+all three venues resolve on the SIM gateway, exact-symbol match:
+
+| Ticker | MIC | Saxo Uic |
+|---|---|---|
+| NVDA | XNAS | 1249 |
+| KO | XNYS | 307 |
+| CDR | XWAR | 53932 |
+
+WSE-on-SIM coverage is CONFIRMED (no gap); XWAR nonetheless stays
+explicit-only for order routing until the PLN/FX-leg sizing question (§8
+Q3) is designed — see §P2.
 
 ## 7. Phase plan
 
@@ -161,6 +172,101 @@ recorded before the P2 scope locks. **Result: PENDING** — requires a fresh
   separate LIVE app registration/keys, market-data entitlements audit, and —
   independently — the research-side capital_deploy_clause; ADR 0014
   explicitly does not pre-authorize this.
+
+## P2 decision record (order placement — shipped 2026-07-17)
+
+### Live netting read (the fact that decides the decomposition)
+
+`GET /port/v1/clients/me` on the SIM account, 2026-07-17, verbatim:
+`PositionNettingMode="Intraday"`, `PositionNettingProfile="FifoRealTime"`
+(`AllowedNettingProfiles` includes `FifoEndOfDay`). Saxo docs: position-
+attached related orders (the PositionId form) "only work for clients on
+End-of-Day netting mode" — so the fill-then-attach-exits pattern (§8 Q1
+option b) is DEAD on this account, not an assumption. Exits MUST be
+order-attached at entry time. Intraday/FifoRealTime also means an exit fill
+nets against the entry position immediately (FIFO) and the pair moves to
+`/port/v1/closedpositions` — P3 reconciliation reads positions AND
+closedpositions; never set `IsForceOpen` on exits (it would suppress the
+netting that closes the trade).
+
+### Decomposition decision: one bracket per non-zero entry tier
+
+`decompose_setup_plan(setup_plan, instrument)` in `brokers/execution.py`
+maps a sized `SetupPlan` onto up to 3 `BracketOrderRequest`s — each placed
+as ONE single-shot `POST /trade/v2/orders` (entry Limit parent + Sell Limit
+TP child + Sell StopIfTraded child). Saxo related-order limits: max 2
+children per entry, exactly one Limit + one stop-type, Amount identical
+across all three.
+
+Per-bracket mapping: quantity = `tier.qty`; entry = `tier.limit_price`;
+stop = `disaster_stop` (same PRICE on every bracket, tier-sized Amount —
+children activate only when their tier fills, so aggregate stop coverage
+always equals filled quantity exactly; economically equivalent to the
+replay's single shared stop); TP = `tp_tranches[min(tier_index, len-1)]`
+(clamped to the last tranche; `None` → stop-only bracket); TTL =
+`order_ttl_days` (0 sentinel → planner default 7) as trading-day date-only
+GTD on the venue calendar; exits GoodTillCancel; `client_request_id` =
+fresh uuid4 per bracket. Zero-qty tiers are skip-logged, never POSTed.
+
+### Fidelity kept / lost
+
+| Kept | Lost |
+|---|---|
+| Exact tier entry limits + per-tier quantities | `tranche_pct` scale-out WITHIN a tier — each tier's whole qty exits at one target (Saxo allows one limit child; per-tranche sub-brackets would multiply stop orders past filled qty) |
+| Disaster-stop price exact; stop coverage == filled qty at all times | Tranches > tiers: intermediate targets unused; tiers > tranches: deep tiers reuse the last target (clamp) |
+| Trading-day TTL on the entry (calendar GTD); exits outlive it (GTC) | No ratchet / TP1→BE stop moves in v1 (PATCH exists for P3+; the in-flight-lens memo shows the ratchet barely binds) |
+| Server-side OCO from the moment any fill exists | Partial fill of one tier: Saxo child-amount behaviour undocumented — OPEN, observe via the SIM order probe before P3 relies on it |
+
+Alternatives rejected: (a) position-attached exits — blocked by the live
+Intraday netting mode; switching the account to FifoEndOfDay rejected
+(mutates account config to fit code, changes netting timing vs the replay
+economics, still capped at 2 related orders, hidden account state);
+(b) one aggregate bracket — destroys the ladder geometry; (c) two-step
+attach (`{OrderId, Orders:[...]}`) — races the entry fill, spends extra
+throttle quota; (d) full tranche replication via a monitoring loop — needs
+a resident reconciler (P3/P4) and loses server-side OCO → naked-risk
+windows.
+
+### Retry / idempotency policy
+
+`x-request-id` = the bracket's `client_request_id` is Saxo's REAL
+idempotency (15s duplicate window); `ExternalReference` is correlation
+only. POST is NEVER blind-retried: only provably-unsent network failures
+(connect-phase) and 429 (provably not accepted) retry, always with the SAME
+id; 5xx / ambiguous post-send errors raise immediately carrying the id so
+the operator reconciles (`broker orders`) before re-running. DELETE is
+idempotent → normal ladder. Precheck (`/trade/v2/orders/precheck`,
+`FieldGroups=["Costs"]`) runs before EVERY real POST; non-Ok blocks
+placement (precheck validates but reserves nothing — the real POST can
+still fail: 400-with-OrderId → auto-cancel the entry (cascade) then
+`OrderRejectedError`; 202 TradeNotCompleted → `BrokerError` with the
+OrderId + reconcile instructions, no automatic action).
+
+### MIC routing (hard req 4)
+
+`brokers/routing.py::resolve_us_instrument`: explicit MIC wins; otherwise
+probe XNYS→XNAS via the cached exact-symbol resolve and require EXACTLY ONE
+match (none/both → `InstrumentNotFoundError`; never guess). XWAR stays
+explicit-only until PLN/FX-leg sizing (§8 Q3) is designed. An upstream
+parquet/Polygon exchange stamp was rejected for P2: forward-only schema
+churn, and MIC is an execution concern (ADR 0013 R2 — no execution data
+upstream); the RESOLVED MIC is stamped on the submission record instead.
+
+### Poolability + safety rails
+
+`execution_config_version()` (`execution-v1-<12hex>` over every policy
+constant, ADR 0013 R3) is stamped on every line of
+`~/.alphalens/broker_orders/submissions.jsonl` and echoed by the CLI; a
+bump is a forward-only cohort boundary, and live fills stay a NEW T8
+measurement source never pooled with broker-free replays (this discharges
+the ADR 0014 "lands with P2" line as written — no ADR amendment needed).
+Rails: `ALPHALENS_BROKER_ALLOW_ORDERS=1` gate inside
+`SaxoBroker.place_bracket_order` (cancel deliberately ungated —
+remediation always works); CLI `broker submit` dry-run by default with
+`--execute` + interactive confirm (`--yes` for scripted use); SIM-only rail
+untouched; import rails extended (paper must not import brokers);
+attended-only order probe `SAXO_LIVE_ORDER_TEST=1` excluded from
+`just probe-live` and CI by meta-assertion.
 
 ## 8. Open questions (for the user)
 

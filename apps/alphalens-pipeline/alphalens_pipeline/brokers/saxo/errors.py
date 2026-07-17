@@ -28,6 +28,12 @@ class SaxoRateLimitError(SaxoError):
     """429 persisted after all retries. Distinct so callers can soft-fail."""
 
 
+class SaxoNotFoundError(SaxoError):
+    """404 on a read. Distinct because for order-status reads an absent order
+    is an EXPECTED outcome (the open-orders endpoint drops filled/cancelled/
+    expired orders) that the adapter maps to ``OrderStatus.UNKNOWN``."""
+
+
 class SaxoLiveEnvironmentBlockedError(SaxoError):
     """The SIM-only structural rail refused a LIVE base URL / environment.
 
@@ -40,5 +46,6 @@ __all__ = [
     "SaxoAuthError",
     "SaxoError",
     "SaxoLiveEnvironmentBlockedError",
+    "SaxoNotFoundError",
     "SaxoRateLimitError",
 ]
