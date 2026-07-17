@@ -24,6 +24,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import unittest
+import uuid
 from unittest import mock
 
 from alphalens_pipeline.brokers import registry
@@ -58,12 +59,19 @@ def _instrument(ticker: str = "KO", mic: str = "XNYS") -> InstrumentRef:
 class FakeBroker:
     """Minimal in-memory :class:`Broker` used by the conformance mixin.
 
-    Doubles as the registry's test factory target (see ``_make_fake_broker``).
+    Doubles as the registry's test factory target (see ``_make_fake_broker``)
+    and carries an in-memory order book so the order-lifecycle conformance
+    pins (place -> get -> list -> cancel; unknown id -> UNKNOWN) run against
+    it exactly like against a real adapter.
     """
 
     name = "fake"
 
     UNKNOWN_TICKER = "ZZZZZZ"
+
+    def __init__(self) -> None:
+        self._orders: dict[str, BracketOrderRequest] = {}
+        self._sequence = 0
 
     def get_account(self) -> AccountSnapshot:
         return AccountSnapshot(
@@ -93,16 +101,41 @@ class FakeBroker:
         return _instrument(ticker, exchange_mic)
 
     def place_bracket_order(self, request: BracketOrderRequest) -> PlacedOrder:
-        raise BrokerCapabilityError("FakeBroker does not place orders")
+        self._sequence += 1
+        entry_id = f"fake-entry-{self._sequence}"
+        exit_ids = tuple(
+            f"fake-exit-{self._sequence}-{tag}"
+            for tag, price in (("tp", request.take_profit), ("sl", request.stop_loss))
+            if price is not None
+        )
+        self._orders[entry_id] = request
+        return PlacedOrder(entry_order_id=entry_id, exit_order_ids=exit_ids)
 
     def get_order(self, order_id: str) -> OrderState:
-        raise BrokerCapabilityError("FakeBroker has no orders")
+        request = self._orders.get(order_id)
+        if request is None:
+            return OrderState(
+                order_id=order_id,
+                status=OrderStatus.UNKNOWN,
+                instrument=None,
+                filled_quantity=0.0,
+                raw_status="",
+            )
+        return OrderState(
+            order_id=order_id,
+            status=OrderStatus.WORKING,
+            instrument=request.instrument,
+            filled_quantity=0.0,
+            raw_status="Working",
+        )
 
     def list_open_orders(self) -> list[OrderState]:
-        raise BrokerCapabilityError("FakeBroker has no orders")
+        return [self.get_order(order_id) for order_id in self._orders]
 
     def cancel_order(self, order_id: str) -> None:
-        raise BrokerCapabilityError("FakeBroker has no orders")
+        if order_id not in self._orders:
+            raise BrokerError(f"FakeBroker knows no open order {order_id!r}")
+        del self._orders[order_id]
 
 
 def _make_fake_broker() -> FakeBroker:
@@ -235,6 +268,47 @@ class BrokerConformanceMixin:
     def test_resolve_unknown_instrument_raises_contract_error(self):
         with self.assertRaises(InstrumentNotFoundError):
             self.make_broker().resolve_instrument(self.unknown_ticker, self.known_mic)
+
+    # ----- order-lifecycle conformance (P2) -----
+
+    def _sample_bracket_request(self, broker: Broker) -> BracketOrderRequest:
+        instrument = broker.resolve_instrument(self.known_ticker, self.known_mic)
+        return BracketOrderRequest(
+            instrument=instrument,
+            side="BUY",
+            quantity=2,
+            entry_limit=50.0,
+            stop_loss=45.0,
+            take_profit=60.0,
+            entry_ttl_days=5,
+            client_request_id=str(uuid.uuid4()),
+        )
+
+    def test_place_get_list_cancel_lifecycle(self):
+        broker = self.make_broker()
+        request = self._sample_bracket_request(broker)
+
+        # The env gate is a Saxo-specific safety rail; setting it here keeps
+        # the lifecycle pin identical for every adapter.
+        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}):
+            placed = broker.place_bracket_order(request)
+
+        self.assertIsInstance(placed, PlacedOrder)
+        self.assertTrue(placed.entry_order_id)
+
+        state = broker.get_order(placed.entry_order_id)
+        self.assertIsInstance(state, OrderState)
+        self.assertIn(state.status, (OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED))
+
+        open_ids = {s.order_id for s in broker.list_open_orders()}
+        self.assertIn(placed.entry_order_id, open_ids)
+
+        broker.cancel_order(placed.entry_order_id)  # must not raise
+
+    def test_get_order_unknown_id_maps_unknown_not_exception(self):
+        state = self.make_broker().get_order("no-such-order-id")
+        self.assertIsInstance(state, OrderState)
+        self.assertEqual(state.status, OrderStatus.UNKNOWN)
 
 
 class TestFakeBrokerConformance(BrokerConformanceMixin, unittest.TestCase):

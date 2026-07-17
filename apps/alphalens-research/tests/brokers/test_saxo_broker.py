@@ -10,8 +10,11 @@ shapes). Pins:
 - FIFO instrument cache: a second resolve makes no HTTP call
 - ``Saxo*Error`` -> ``Broker*Error`` translation at the adapter boundary
   (vendor exceptions never escape ``brokers/saxo/``)
-- placement/status/cancel raise ``BrokerCapabilityError`` until P2
 - multi-account without ``SAXO_ACCOUNT_KEY`` fails loudly
+
+The P2 order surface has its own suite (``test_saxo_broker_orders.py``); the
+stub here carries just enough stateful order book for the shared
+conformance-mixin lifecycle pin.
 
 Also runs the shared :class:`BrokerConformanceMixin` against SaxoBroker so the
 real adapter proves the same behavioral contract as any future broker.
@@ -24,10 +27,8 @@ from typing import Any
 
 from alphalens_pipeline.brokers.contract import (
     AccountSnapshot,
-    BracketOrderRequest,
     Broker,
     BrokerAuthError,
-    BrokerCapabilityError,
     BrokerError,
     BrokerRateLimitError,
     InstrumentNotFoundError,
@@ -150,6 +151,51 @@ class _StubSaxoClient:
         self._maybe_fail()
         self.search_calls.append((keywords, exchange_id))
         return _SEARCH_RESULTS.get(keywords.upper(), {"Data": []})
+
+    # ----- minimal stateful order surface (conformance-mixin lifecycle) -----
+
+    _DETAILS = {
+        "Format": {"Decimals": 2, "OrderDecimals": 2},
+        "TickSizeScheme": {"DefaultTickSize": 0.01, "Elements": []},
+        "SupportedOrderTypes": ["Limit", "Market", "StopIfTraded"],
+    }
+
+    def get_instrument_details(self, uic: int | str, asset_type: str = "Stock") -> dict[str, Any]:
+        self._maybe_fail()
+        return dict(self._DETAILS)
+
+    def precheck_order(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        self._maybe_fail()
+        return 200, {"PreCheckResult": "Ok"}
+
+    def place_order(self, body: dict[str, Any], *, request_id: str) -> tuple[int, dict[str, Any]]:
+        self._maybe_fail()
+        self._order_seq = getattr(self, "_order_seq", 0) + 1
+        entry_id = f"E-{self._order_seq}"
+        children = [{"OrderId": f"{entry_id}-x{i}"} for i in range(len(body.get("Orders") or []))]
+        self._orders = getattr(self, "_orders", {})
+        self._orders[entry_id] = {
+            "OrderId": entry_id,
+            "Status": "Working",
+            "Amount": body["Amount"],
+            "FillAmount": 0.0,
+            "Uic": body["Uic"],
+        }
+        return 201, {"OrderId": entry_id, "Orders": children}
+
+    def cancel_order_ids(self, order_ids: str, *, account_key: str) -> tuple[int, dict[str, Any]]:
+        self._maybe_fail()
+        self._orders = getattr(self, "_orders", {})
+        self._orders.pop(order_ids, None)
+        return 200, {}
+
+    def get_open_orders(self) -> dict[str, Any]:
+        self._maybe_fail()
+        return {"Data": list(getattr(self, "_orders", {}).values())}
+
+    def get_order_status(self, client_key: str, order_id: str) -> dict[str, Any] | None:
+        self._maybe_fail()
+        return getattr(self, "_orders", {}).get(order_id)
 
 
 def _make_broker(**kw: Any) -> SaxoBroker:
@@ -283,40 +329,6 @@ class TestErrorTranslationBoundary(unittest.TestCase):
             broker.get_positions()
         with self.assertRaises(BrokerAuthError):
             broker.resolve_instrument("KO", "XNYS")
-
-
-class TestPlacementIsCapabilityGatedUntilP2(unittest.TestCase):
-    def setUp(self):
-        self.broker = _make_broker()
-        self.request = BracketOrderRequest(
-            instrument=InstrumentRef(
-                ticker="KO",
-                exchange_mic="XNYS",
-                asset_type="Stock",
-                broker_instrument_id="211",
-                broker_symbol="KO:xnys",
-            ),
-            side="BUY",
-            quantity=10,
-            entry_limit=50.0,
-            stop_loss=45.0,
-            take_profit=60.0,
-            entry_ttl_days=5,
-            client_request_id="req-1",
-        )
-
-    def test_all_order_methods_raise_capability_error_citing_p2(self):
-        calls = [
-            lambda: self.broker.place_bracket_order(self.request),
-            lambda: self.broker.get_order("o-1"),
-            self.broker.list_open_orders,
-            lambda: self.broker.cancel_order("o-1"),
-        ]
-        for call in calls:
-            with self.assertRaises(BrokerCapabilityError) as ctx:
-                call()
-            self.assertIn("P2", str(ctx.exception))
-            self.assertIn("ADR 0014", str(ctx.exception))
 
 
 class TestSaxoBrokerConformance(BrokerConformanceMixin, unittest.TestCase):
