@@ -274,16 +274,15 @@ class TestNoAnalysisSurface(unittest.TestCase):
     def test_module_exposes_no_ab_statistics(self):
         # The Cluster #22 look is pre-registered with a HARD N>=30-per-arm
         # floor; the loader module must not grow a way to compute it early.
+        # LIMITATION: a name heuristic over __all__ — it cannot catch a private
+        # helper or an innocuously-named function; the rest of the guarantee is
+        # review discipline (the module docstring states the intent).
         public = set(bf.__all__)
         for banned in ("mannwhitney", "median", "ab_test", "compare_arms", "first_look"):
             self.assertFalse(
                 any(banned in name.lower() for name in public),
                 f"analysis-shaped symbol matching {banned!r} in __all__",
             )
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestIngestJsonlSnapshot(_SnapshotDirCase):
@@ -337,3 +336,24 @@ class TestIngestJsonlSnapshot(_SnapshotDirCase):
         with self.assertRaises(bf.BrokerFillsContractError):
             bf.ingest_jsonl_snapshot(jsonl, fills_dir=self.fills_dir)
         self.assertIsNone(bf.latest_snapshot_path(self.fills_dir))
+
+    def test_malformed_timestamp_is_a_contract_error_not_a_silent_null(self):
+        row = _make_row()
+        row["fill_ts_utc"] = "not-a-timestamp"
+        jsonl = self._write_jsonl([row])
+
+        with self.assertRaises(bf.BrokerFillsContractError):
+            bf.ingest_jsonl_snapshot(jsonl, fills_dir=self.fills_dir)
+        self.assertIsNone(bf.latest_snapshot_path(self.fills_dir))
+
+    def test_empty_jsonl_gets_a_named_error(self):
+        path = self.fills_dir / "broker-fills-20260717T060000Z.jsonl"
+        path.write_text("\n\n")
+
+        with self.assertRaises(bf.BrokerFillsContractError) as ctx:
+            bf.ingest_jsonl_snapshot(path, fills_dir=self.fills_dir)
+        self.assertIn("empty", str(ctx.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

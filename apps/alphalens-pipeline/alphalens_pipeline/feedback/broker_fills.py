@@ -319,10 +319,22 @@ def ingest_jsonl_snapshot(jsonl_path: Path, *, fills_dir: Path | None = None) ->
             stripped = raw_line.strip()
             if stripped:
                 records.append(json.loads(stripped))
+    if not records:
+        raise BrokerFillsContractError(f"{jsonl_path.name}: empty file — no valid JSON lines")
     df = pd.DataFrame.from_records(records)
     for ts_col in ("export_run_ts_utc", "fill_ts_utc", "close_ts_utc"):
         if ts_col in df.columns:
-            df[ts_col] = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+            was_present = df[ts_col].notna()
+            parsed = pd.to_datetime(df[ts_col], utc=True, errors="coerce")
+            # A null in the SOURCE is legitimate (nullable columns); a value
+            # that fails to parse is a contract breach, never a silent NaT.
+            corrupted = was_present & parsed.isna()
+            if bool(corrupted.any()):
+                raise BrokerFillsContractError(
+                    f"{jsonl_path.name}: unparseable {ts_col} value(s), e.g. "
+                    f"{df.loc[corrupted, ts_col].iloc[0]!r}"
+                )
+            df[ts_col] = parsed
     validated = validate_broker_fills(df, source=jsonl_path.name)
     directory = Path(fills_dir) if fills_dir is not None else DEFAULT_BROKER_FILLS_DIR
     directory.mkdir(parents=True, exist_ok=True)
