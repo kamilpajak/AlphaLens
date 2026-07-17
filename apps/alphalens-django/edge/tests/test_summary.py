@@ -11,11 +11,17 @@ Pins the binding guardrails (memo §3):
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 
 import pytest
 
-from edge.api.summary import N_EARLY_THRESHOLD, N_GATE_THRESHOLD, build_edge_summary
+from edge.api.summary import (
+    N_EARLY_THRESHOLD,
+    N_GATE_THRESHOLD,
+    build_edge_summary,
+    build_validation_base_rate,
+)
 
 
 def _terminal(ticker: str, *, excess: float, realized_r: float, classification="TP_FULL") -> dict:
@@ -494,3 +500,125 @@ class TestWhatIfBlock:
             row["breakeven_realized_r_json"] = json.dumps({"be_0p5r_trail0p6": 0.2})
         lens = build_edge_summary(rows)["whatif"]["lenses"]["be_0p5r_trail0p6"]
         assert lens["preregistered_ref"] == "exit_geometry_2026_06_30 s7 be0.5/trail0.6"
+
+
+def _base_rate_row(
+    *,
+    plannable: bool = True,
+    terminal: bool = True,
+    realized_r: float | None = None,
+    matured_at: "dt.date | None" = None,
+) -> dict:
+    return {
+        "plannable": plannable,
+        "terminal": terminal,
+        "realized_r": realized_r,
+        "matured_at": matured_at,
+    }
+
+
+class TestValidationBaseRate:
+    """`build_validation_base_rate` — the /v1/days meta.validation edge pool.
+
+    Pool = plannable AND terminal AND finite realized_r (== /edge's
+    `gross_realized_r_n` semantics; NO_FILL terminals carry NULL realized_r and
+    drop out). N-gated like the edge panel: below N_GATE_THRESHOLD the stats are
+    null, `n_matured` + `as_of` always survive. Degenerate math → null, never inf.
+    """
+
+    def test_known_values_below_gate_stats_nulled(self):
+        # 3 rows → below the gate: n + as_of survive, stats are null.
+        rows = [
+            _base_rate_row(realized_r=2.0, matured_at=dt.date(2026, 7, 1)),
+            _base_rate_row(realized_r=2.0, matured_at=dt.date(2026, 7, 2)),
+            _base_rate_row(realized_r=-1.0, matured_at=dt.date(2026, 7, 3)),
+        ]
+        block = build_validation_base_rate(rows)
+        assert block["n_matured"] == 3
+        assert block["mean_realized_r"] is None
+        assert block["payoff_ratio"] is None
+        assert block["breakeven_win_rate"] is None
+        assert block["as_of"] == dt.date(2026, 7, 3)
+
+    def test_known_values_above_gate(self):
+        # 20 wins of +2.0 + 10 losses of -1.0 → n=30 clears the gate.
+        # mean = (40 - 10) / 30 = 1.0; payoff = |2.0 / -1.0| = 2.0;
+        # breakeven = |-1.0| / (2.0 + |-1.0|) = 1/3.
+        rows = [
+            _base_rate_row(realized_r=2.0, matured_at=dt.date(2026, 7, 1)) for _ in range(20)
+        ] + [_base_rate_row(realized_r=-1.0, matured_at=dt.date(2026, 7, 2)) for _ in range(10)]
+        block = build_validation_base_rate(rows)
+        assert block["n_matured"] == 30
+        assert block["mean_realized_r"] == pytest.approx(1.0)
+        assert block["payoff_ratio"] == pytest.approx(2.0)
+        assert block["breakeven_win_rate"] == pytest.approx(1.0 / 3.0)
+        assert block["as_of"] == dt.date(2026, 7, 2)
+
+    def test_pool_excludes_nonplannable_nonterminal_and_null_realized(self):
+        rows = [
+            _base_rate_row(realized_r=1.0, matured_at=dt.date(2026, 7, 1)),
+            _base_rate_row(plannable=False, realized_r=1.0),  # non-plannable
+            _base_rate_row(terminal=False, realized_r=1.0),  # ongoing
+            _base_rate_row(realized_r=None),  # NO_FILL terminal — NULL realized_r
+            _base_rate_row(realized_r=float("nan")),  # NaN guard
+        ]
+        assert build_validation_base_rate(rows)["n_matured"] == 1
+
+    def test_all_wins_payoff_null_breakeven_zero(self):
+        # No losses → payoff undefined (null, never inf); breakeven 0.0 (avg_win > 0).
+        rows = [
+            _base_rate_row(realized_r=1.0, matured_at=dt.date(2026, 7, 1))
+            for _ in range(N_GATE_THRESHOLD)
+        ]
+        block = build_validation_base_rate(rows)
+        assert block["payoff_ratio"] is None
+        assert block["breakeven_win_rate"] == pytest.approx(0.0)
+
+    def test_all_losses_payoff_zero_breakeven_one(self):
+        rows = [
+            _base_rate_row(realized_r=-1.0, matured_at=dt.date(2026, 7, 1))
+            for _ in range(N_GATE_THRESHOLD)
+        ]
+        block = build_validation_base_rate(rows)
+        assert block["payoff_ratio"] == pytest.approx(0.0)
+        assert block["breakeven_win_rate"] == pytest.approx(1.0)
+
+    def test_zero_only_losses_payoff_null(self):
+        # Losses of exactly 0.0 (the <= 0 convention) → avg_loss == 0 → payoff
+        # would divide by zero; null, never inf.
+        rows = [
+            _base_rate_row(realized_r=0.0, matured_at=dt.date(2026, 7, 1))
+            for _ in range(N_GATE_THRESHOLD)
+        ]
+        block = build_validation_base_rate(rows)
+        assert block["payoff_ratio"] is None
+        assert block["breakeven_win_rate"] is None
+
+    def test_empty_pool_all_null(self):
+        block = build_validation_base_rate([])
+        assert block == {
+            "n_matured": 0,
+            "mean_realized_r": None,
+            "payoff_ratio": None,
+            "breakeven_win_rate": None,
+            "as_of": None,
+        }
+
+    def test_as_of_from_contributing_rows_only(self):
+        # A NO_FILL terminal (NULL realized_r) with a LATER matured_at must not
+        # move as_of — it describes the realized-R pool, not the whole mirror.
+        rows = [
+            _base_rate_row(realized_r=1.0, matured_at=dt.date(2026, 7, 1)),
+            _base_rate_row(realized_r=None, matured_at=dt.date(2026, 7, 9)),
+        ]
+        assert build_validation_base_rate(rows)["as_of"] == dt.date(2026, 7, 1)
+
+    def test_n_matured_matches_edge_summary_gross_realized_r_n(self):
+        # Cross-surface agreement: the block's n_matured is the SAME pool as
+        # /edge's gross_realized_r_n (realized-R-keyed, not excess-keyed).
+        rows = [_terminal(f"T{i}", excess=0.02, realized_r=0.5) for i in range(35)]
+        rows += [_no_fill(f"NF{i}") for i in range(5)]
+        rows += [_ongoing(f"O{i}", open_r=0.1) for i in range(3)]
+        summary = build_edge_summary(rows)
+        block = build_validation_base_rate(rows)
+        assert block["n_matured"] == summary["edge"]["gross_realized_r_n"]
