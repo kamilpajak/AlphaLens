@@ -21,7 +21,7 @@ This ledger makes the family **program-wide, fixed, and auditable**.
 5. **Unit = ticker-episode.** All first-look p-values are computed with errors clustered by ticker-episode (or one row per episode) from the start (§6 doctrine of the July memo, made default). Effective N = distinct ticker-episodes, reported on every finding; row-level / day-level p-values never appear in a promotion decision.
 6. **One primary horizon per cluster.** Pre-register a single decision horizon (default **car_10**); car_5 / car_20 are descriptive only and are NOT counted as separate tests (closes the "clears on *some* horizon" fork).
 
-## 3. The clusters — fixed α slots (16 at the July re-run; #17-#18 admitted 2026-07-14)
+## 3. The clusters — fixed α slots (16 at the July re-run; #17-#18 admitted 2026-07-14; #22 registered 2026-07-17)
 
 α slice = 1.76e-4 program Bonferroni charge per cluster (one charge, not per member). `B-clear` = raw p < 1.76e-4 on the primary horizon AND verification-robust.
 
@@ -45,6 +45,7 @@ This ledger makes the family **program-wide, fixed, and auditable**.
 | 16 | Joint loser flag | ATR-hi × `pct_off_52w_low`-hi (ROIC leg dropped) | SUGGESTIVE (mostly ATR curvature) | ✗ | car_10 | 1 | **forward-log without ROIC leg** (telemetry-only, pre-register before ordering use) | 2026-11 |
 | 17 | Size | `log10_mcap` | not in the July family — admitted 2026-07-14 (ML corner): continuous WCB p .024 on car_10, below the .05/7 family bar; invisible to the binary model | ✗ | car_10 | 1 | monitor (exploratory candidate) | 2026-12 |
 | 18 | LLM conviction | `llm_confidence` | not in the July family — admitted 2026-07-14 (ML corner): null (L1-zeroed, WCB p .842); missingness is structural (early brief_dates lack the column) | ✗ | car_10 | 1 | monitor | 2026-12 |
+| 22 | Broker-truth selection A/B (betlejem) | Arm A = `source_claims` contains `ALPHALENS_FILTERED`, Arm B = all other `POST_C1612` closed trades; frozen metric = median per-trade `pnl_pct_of_notional` (FILL_NOTIONAL basis), same execution engine both arms | not in the July family — admitted 2026-07-17 (external paper ledger, discovery tier) | ✗ | trade close — `pnl_pct_of_notional` | 0 | pending first look — HARD floor: N ≥ 30 closed POST_C1612 trades PER ARM; zero computation, zero dashboards, zero partial medians before the floor | 2027-03 |
 
 **Bonferroni-clear on verified evidence (July): #1 ATR, #2 MA50-extension, #9 press-gate.** These three are the only clusters eligible to skip a first-look confirmation; even they must clear the held-out window (rule 3) before entering SELECTION.
 
@@ -53,6 +54,22 @@ These are stamped-forward telemetry not yet in the 284-test family. Each gets a 
 - **19 (reserved — method pre-registered 2026-07-16):** `options_*` term-slope / VRP / skew (parquet-only). **First-look runs on the FULL stamped panel with `options_spread_pct_atm` as a stratifier/covariate — NOT gated to `chain_quality=OK`.** Diagnosis (10 days of options-v2, 129 stamped rows): `chain_quality=OK` is only 3.1% (~0.40/day), so an OK-gated first-look would not reach a powered N until well into 2027 and would over-sample a few liquid names. The binding constraint is the 30% ATM-spread cap (`ATM_MAX_SPREAD_PCT`, `options_telemetry/features.py:classify_chain_quality`): **60% of THIN rows fail on spread, 53% of otherwise-complete chains fail it at a median ATM spread ~36%**, while OI is healthy (median call 809 / put 550, >> the `ATM_MIN_OI=50` floor), ATM volume is never zero, and yfinance depth is fine — the mid-cap ($500M–10B) universe structurally has *real-depth-but-wide-spread* options. Decision: do NOT loosen the cap to farm N (the ATM spread IS the mid-quote noise the study would inherit); keep `chain_quality` **descriptive**, run the first-look across the full panel, and report the effect **stratified by spread bucket** (tight ≤30% / wide 30–50% / very-wide >50%) so the spread↔signal-noise trade-off is visible rather than hidden by a binary gate. Ticker-episode unit, primary horizon car_10, one look, ledger charge taken at first look. Powered look deferred until matured-outcome N≥30 on the full (not OK-only) panel.
 - **20 (reserved):** `market_state_*` regime cols (display/telemetry today).
 - **21 (reserved):** `grounded_in_{theme,any}_news` / mechanical-vs-LLM proposal (`proposal_shadow`) — see §5.
+- **22 — ADMITTED to §3 on 2026-07-17** (broker-truth selection A/B; registered at admission with 0 looks used — see §3.2). Next free id = 23.
+
+### 3.2 Cluster 22 registration detail (frozen 2026-07-17, before any data landed)
+
+Data source: the betlejem paper-ledger export (`broker-fills-v1`), contract + privacy rules in
+`broker_fills_export_design_2026_07_17.md`; collection registered in
+`shadow_collections_inventory_2026_07_16.md` §A.
+
+- **Metric (frozen):** median per-trade `pnl_pct_of_notional` (FILL_NOTIONAL basis; TARGET_NOTIONAL-basis rows excluded from the test set), Arm A vs Arm B. `realized_r` medians are reported descriptively alongside, NOT tested.
+- **Arm definition (frozen):** membership from the export's `source_claims` column only (wire name `ALPHALENS_FILTERED`). Rows with `provenance_cohort` in {`PRE_C1612`, `NO_ENTRY_RECORD`} are EXCLUDED — arm membership is not expressible for them. Both arms run through the identical betlejem execution engine (same lifecycle brackets, same per-symbol stop/TP calibration, same modeled commission), so the comparison isolates selection source within that engine.
+- **Test (frozen):** exactly ONE two-sided Mann-Whitney U on per-trade `pnl_pct_of_notional` at the first look; charges 1 look to this cluster in §4. No secondary horizons, no subgroup slices at the first look.
+- **Floor (frozen):** the first look is computed once, when BOTH arms hold ≥ 30 closed POST_C1612 trades. Rule 1 applies: this row raises the program denominator now; no look happens off-ledger.
+- **Tier:** discovery (rule 3). Any signal requires a fresh pre-registered threshold confirmed exactly once on trades closed AFTER the first look.
+- **Confound (acknowledged up front):** this measures AlphaLens-composed-with-betlejem's-own-sieve — registry claims, entry gating, and per-symbol bracket calibration sit between every AlphaLens emission and every fill. A null does NOT refute AlphaLens selection; a positive does NOT establish standalone AlphaLens edge. The readable quantity is the marginal contribution of the AlphaLens source within his pipeline.
+- **Data caveats (accepted):** IBKR paper fills are simulated; SL/TP `close_price` is the computed trigger, not a fill; commission is modeled. The metric is engine-consistent paper P&L, not broker-true P&L. Prerequisite: the `alphalens-integration/provenance-at-source` branch (C1612–C1614) must be merged on the betlejem side before Arm-A rows can accrue.
+- **Budget split:** this A/B deliberately charges a §3 cluster (it is a selection-source comparison), not the §4.1 policy/ladder annex; if the SAME data is later used for an execution-cost-calibration look (commission/entry-drag vs modeled haircut), THAT look charges §4.1 separately per ADR 0013 R4 — one dataset, two independently-budgeted looks.
 
 ## 4. Looks-log (append-only)
 

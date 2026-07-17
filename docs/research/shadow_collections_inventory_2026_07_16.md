@@ -16,6 +16,7 @@ never pool (ADR 0013 R3).
 | `proposal_shadow` | Per (theme, date): LLM pre-gate set vs mechanical salience-membership set → `~/.alphalens/thematic_candidates/proposal_shadow/` | 2026-07-12 | Nothing | Cluster **#21**, ~2026-09+: forward head-to-head, kill lines pre-committed (incl. $500M–10B size gate) |
 | `novelty_rank/score` | Theme-novelty stamp on candidate parquet | 2026-06-20 | Display | EDGE attribution join at N≥30 (rides the general sweep) |
 | `mstate_*` (market state) | SPY regime label + drivers (ATR%, dist200, VIX), broadcast per asof | 2026-06 | Display context label (UNVALIDATED heuristic) | Regime × outcome study, undated; any use = pre-registered look |
+| `broker_fills` | Betlejem paper-ledger closed-trade export (`broker-fills-v1`, scale-free ratios only) → `~/.alphalens/broker_fills/broker-fills-<runts>.parquet`, per-run snapshot, rsync/manual-delivered, lexically-latest wins (`broker_fills_export_design_2026_07_17.md`) | 2026-07-17 (contract; Arm-A rows accrue only after betlejem C1612 merges) | Nothing | Cluster **#22**: one Mann-Whitney U on `pnl_pct_of_notional`, HARD floor N≥30 closed POST_C1612 trades PER ARM; exec-cost calibration look charges §4.1 separately |
 
 ## B. Counterfactual replays on outcome rows (/edge what-ifs)
 
@@ -32,7 +33,10 @@ never pool (ADR 0013 R3).
 `ladder_config_version` · `scorer_config_version` · `mapper_config_version`
 (doubles as the frozen-candidates idempotency gate) · `insider_signal_version` ·
 `options_config_version` · `panel_config_version` · `novelty_config_version` ·
-`market_state_config_version`.
+`market_state_config_version` · `fills_source_version` (2026-07-17, stamped
+EXPORTER-side per row — canonical sorted-keys JSON
+`{"broker":"ibkr-paper","schema":1,"source":"thesis-jsonl+llm-outcomes-jsonl"}`;
+the one externally-stamped key in this list).
 
 ## D. Intentionally NOT collected
 
