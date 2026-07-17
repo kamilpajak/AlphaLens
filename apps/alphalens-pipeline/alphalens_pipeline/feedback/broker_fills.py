@@ -28,6 +28,7 @@ import datetime as dt
 import logging
 import os
 from pathlib import Path
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -169,7 +170,9 @@ def _has_value(val: object) -> bool:
         # only null means "key absent from the source record".
         return True
     try:
-        return not pd.isna(val)
+        # cast: pd.isna's overloads want a Scalar, but this helper's whole job
+        # is classifying arbitrary cells — the except arm handles the rest.
+        return not bool(pd.isna(cast("Any", val)))
     except (TypeError, ValueError):
         return True
 
