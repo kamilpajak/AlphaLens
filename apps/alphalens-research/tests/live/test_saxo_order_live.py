@@ -27,6 +27,7 @@ bracket ordering.
 from __future__ import annotations
 
 import os
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -37,8 +38,14 @@ _LIVE_ORDER_FLAG = "SAXO_LIVE_ORDER_TEST"
 _LIVE = os.environ.get(_LIVE_ORDER_FLAG) == "1"
 
 _ENTRY = float(os.environ.get("SAXO_LIVE_ORDER_ENTRY", "30.0"))
-_STOP = _ENTRY * 0.85
-_TAKE_PROFIT = _ENTRY * 1.5
+# Child distances LIVE-CALIBRATED 2026-07-17: Saxo SIM rejects related orders
+# "TooFarFromEntryOrder" (the first probe run used 0.85x/1.5x and was refused;
+# the limit is measured from the ENTRY, not the market). +-5% keeps both
+# children inside the allowance while preserving stop < entry < tp — this
+# probe verifies lifecycle mechanics, not economics. Env-overridable for
+# future recalibration without a code change.
+_STOP = _ENTRY * float(os.environ.get("SAXO_LIVE_ORDER_STOP_MULT", "0.95"))
+_TAKE_PROFIT = _ENTRY * float(os.environ.get("SAXO_LIVE_ORDER_TP_MULT", "1.05"))
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 
@@ -115,7 +122,17 @@ class TestSaxoSimLiveOrder(unittest.TestCase):
                     raise PermanentProbeError(
                         f"expected 2 exit OrderIds (TP + SL), got {placed.exit_order_ids!r}"
                     )
+                # LIVE-CALIBRATED 2026-07-17: /port/v1 order views LAG the
+                # placement by seconds (a fresh order reads UNKNOWN first) —
+                # poll briefly before asserting instead of failing on the race.
                 state = broker.get_order(placed.entry_order_id)
+                deadline = time.monotonic() + 15.0
+                while (
+                    state.status not in (OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED)
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(1.5)
+                    state = broker.get_order(placed.entry_order_id)
                 if state.status not in (OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED):
                     raise PermanentProbeError(
                         f"entry {placed.entry_order_id} not WORKING after placement: "

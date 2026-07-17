@@ -262,6 +262,13 @@ class SaxoBroker:
         with _translate_saxo_errors():
             client_key = str(self._client.get_client_info()["ClientKey"])
             payload = self._client.get_order_status(client_key, order_id)
+        # LIVE-CALIBRATED 2026-07-17: the single-order endpoint answers with a
+        # COLLECTION envelope ({"__count": N, "Data": [entry + its related
+        # children]}), the entry not necessarily first — select the row whose
+        # OrderId matches. A flat dict (older shape) still passes through.
+        if payload and "Data" in payload:
+            rows = payload.get("Data") or []
+            payload = next((row for row in rows if str(row.get("OrderId")) == str(order_id)), None)
         if not payload or not payload.get("OrderId"):
             # The open-orders endpoint drops filled/cancelled/expired orders:
             # absent is honestly UNKNOWN (FILLED vs CANCELLED needs the audit/
