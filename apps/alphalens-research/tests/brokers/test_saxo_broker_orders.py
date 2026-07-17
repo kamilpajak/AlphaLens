@@ -258,7 +258,8 @@ class TestPlacementBody(unittest.TestCase):
         self.assertEqual(sl["OrderType"], "StopIfTraded")
 
     def test_sell_entry_mirrors_child_side(self):
-        body, _ = self._place(_request(side="SELL"))
+        # SELL geometry: stop above entry, tp below (relation validator enforces it)
+        body, _ = self._place(_request(side="SELL", stop_loss=55.0, take_profit=45.0))
         self.assertEqual(body["BuySell"], "Sell")
         for child in body["Orders"]:
             self.assertEqual(child["BuySell"], "Buy")
@@ -308,6 +309,31 @@ class TestTickQuantization(unittest.TestCase):
                 broker.place_bracket_order(_request())
         self.assertIn("StopIfTraded", str(ctx.exception))
         self.assertEqual(stub.place_calls, [])
+
+
+class TestPriceRelationValidation(unittest.TestCase):
+    """Degenerate geometry must fail LOCALLY on the quantized prices — a
+    stop at/above a BUY entry (or tp at/below it) never reaches the broker,
+    not even its precheck (review finding, PR #840)."""
+
+    def test_buy_stop_at_or_above_entry_rejected_before_any_call(self):
+        for bad_stop in (50.0, 55.0):
+            broker, stub = _make_broker()
+            with mock.patch.dict("os.environ", _ALLOW):
+                with self.assertRaises(OrderRejectedError) as ctx:
+                    broker.place_bracket_order(_request(stop_loss=bad_stop))
+            self.assertIn("stop_loss", str(ctx.exception))
+            self.assertEqual(stub.place_calls, [])
+            self.assertEqual(stub.precheck_calls, [])
+
+    def test_buy_tp_at_or_below_entry_rejected_before_any_call(self):
+        broker, stub = _make_broker()
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_bracket_order(_request(take_profit=50.0))
+        self.assertIn("take_profit", str(ctx.exception))
+        self.assertEqual(stub.place_calls, [])
+        self.assertEqual(stub.precheck_calls, [])
 
 
 class TestPlacementResponseHandling(unittest.TestCase):

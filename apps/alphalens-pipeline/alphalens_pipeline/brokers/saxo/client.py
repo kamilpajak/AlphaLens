@@ -406,6 +406,10 @@ class SaxoClient:
         if isinstance(exc, requests.exceptions.ConnectTimeout):
             return True
         if isinstance(exc, requests.exceptions.ConnectionError):
+            # Marker list validated against requests 2.x / urllib3 2.x message
+            # shapes and PINNED by TestProvablyUnsentClassifier — a library
+            # bump that changes the repr narrows the retry set (fail-safe:
+            # fewer retries, never a double-submit), and the test catches it.
             marker = repr(exc)
             return (
                 "NewConnectionError" in marker

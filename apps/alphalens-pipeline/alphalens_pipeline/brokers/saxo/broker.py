@@ -101,6 +101,34 @@ def _opt_float(value: Any) -> float | None:
     return None if value is None else float(value)
 
 
+def _validate_price_relations(
+    side: str,
+    entry_q: float,
+    stop_q: float | None,
+    tp_q: float | None,
+    *,
+    symbol: str,
+) -> None:
+    """Reject degenerate bracket geometry LOCALLY, on the QUANTIZED prices.
+
+    A BUY bracket requires ``stop < entry < tp`` (a SELL bracket the reverse).
+    Saxo's precheck would reject these too, but locally the failure is
+    deterministic, immediate, and names the offending leg — and no network
+    call is spent on an order that can never be valid (review finding, PR #840).
+    """
+    buy = side == "BUY"
+    if stop_q is not None and ((stop_q >= entry_q) if buy else (stop_q <= entry_q)):
+        raise OrderRejectedError(
+            f"{symbol}: degenerate bracket — stop_loss {stop_q} must be "
+            f"{'below' if buy else 'above'} the entry {entry_q} for a {side}"
+        )
+    if tp_q is not None and ((tp_q <= entry_q) if buy else (tp_q >= entry_q)):
+        raise OrderRejectedError(
+            f"{symbol}: degenerate bracket — take_profit {tp_q} must be "
+            f"{'above' if buy else 'below'} the entry {entry_q} for a {side}"
+        )
+
+
 class SaxoBroker:
     """Saxo implementation of the broker-agnostic ``contract.Broker`` Protocol."""
 
@@ -393,6 +421,21 @@ class SaxoBroker:
         exit_duration = {"DurationType": execution_policy._EXIT_DURATION}
         side = "Buy" if request.side == "BUY" else "Sell"
         opposite = "Sell" if request.side == "BUY" else "Buy"
+
+        entry_q = self._quantize_price(request.entry_limit, details, label="entry_limit")
+        tp_q = (
+            self._quantize_price(request.take_profit, details, label="take_profit")
+            if request.take_profit is not None
+            else None
+        )
+        stop_q = (
+            self._quantize_price(request.stop_loss, details, label="stop_loss")
+            if request.stop_loss is not None
+            else None
+        )
+        _validate_price_relations(
+            request.side, entry_q, stop_q, tp_q, symbol=instrument.broker_symbol
+        )
         expiry = advance_trading_sessions(
             _today(), request.entry_ttl_days, exchange=instrument.exchange_mic
         )
@@ -404,9 +447,7 @@ class SaxoBroker:
                     "Amount": request.quantity,
                     "BuySell": opposite,
                     "OrderType": "Limit",
-                    "OrderPrice": self._quantize_price(
-                        request.take_profit, details, label="take_profit"
-                    ),
+                    "OrderPrice": tp_q,
                     "OrderDuration": dict(exit_duration),
                     "ManualOrder": manual_order,
                     "AccountKey": account_key,
@@ -418,9 +459,7 @@ class SaxoBroker:
                     "Amount": request.quantity,
                     "BuySell": opposite,
                     "OrderType": stop_type,
-                    "OrderPrice": self._quantize_price(
-                        request.stop_loss, details, label="stop_loss"
-                    ),
+                    "OrderPrice": stop_q,
                     "OrderDuration": dict(exit_duration),
                     "ManualOrder": manual_order,
                     "AccountKey": account_key,
@@ -434,7 +473,7 @@ class SaxoBroker:
             "Amount": request.quantity,
             "BuySell": side,
             "OrderType": "Limit",
-            "OrderPrice": self._quantize_price(request.entry_limit, details, label="entry_limit"),
+            "OrderPrice": entry_q,
             "OrderDuration": {
                 "DurationType": "GoodTillDate",
                 "ExpirationDateTime": expiry.isoformat(),

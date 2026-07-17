@@ -525,5 +525,34 @@ class TestOrderReadWrappers(unittest.TestCase):
         self.assertEqual(payload, {"OrderId": "O-1", "Status": "Working"})
 
 
+class TestProvablyUnsentClassifier(unittest.TestCase):
+    """Pins the repr-marker classification of _is_provably_unsent: only
+    provably-unsent network failures may allow a POST retry. A requests/
+    urllib3 bump that changes exception reprs must trip this test, not
+    silently change retry behavior."""
+
+    def _classify(self, exc):
+        from alphalens_pipeline.brokers.saxo.client import SaxoClient
+
+        return SaxoClient._is_provably_unsent(exc)
+
+    def test_connect_timeout_is_unsent(self):
+        self.assertTrue(self._classify(requests.exceptions.ConnectTimeout("t")))
+
+    def test_connection_phase_failures_are_unsent(self):
+        for msg in (
+            "HTTPSConnectionPool: Max retries exceeded (Caused by NewConnectionError('fail'))",
+            "Name or service not known",
+            "Failed to resolve 'gateway.saxobank.com'",
+        ):
+            self.assertTrue(self._classify(requests.exceptions.ConnectionError(msg)), msg)
+
+    def test_ambiguous_failures_are_not_retried(self):
+        self.assertFalse(self._classify(requests.exceptions.ReadTimeout("t")))
+        self.assertFalse(
+            self._classify(requests.exceptions.ConnectionError("Connection aborted mid-body"))
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
