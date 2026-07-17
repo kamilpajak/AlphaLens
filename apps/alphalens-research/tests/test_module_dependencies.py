@@ -132,6 +132,16 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # ADR 0014 P2: the broker layer CONSUMES paper/{sizing,calendar,
+        # constants} (SetupPlan, GTD calendar math). The reverse direction
+        # would cycle the broker-free planner primitives into the execution
+        # vendor stack.
+        "name": "paper must not import brokers (brokers consumes paper, never the reverse)",
+        "from_pkg": "alphalens_pipeline.paper",
+        "forbidden_prefix": "alphalens_pipeline.brokers",
+        "exemptions": set(),
+    },
+    {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,
@@ -228,6 +238,41 @@ class TestModuleDependencies(unittest.TestCase):
             "module dependency violations:\n  "
             + "\n  ".join(f"[{r}] {f}: {m}" for r, f, m in violations),
         )
+
+    def test_brokers_rules_positive_control(self):
+        """The brokers-direction rules cannot rot silently.
+
+        Feeds the SAME walker a synthetic module that hides a brokers import
+        inside a function body (the sneakiest allowed-elsewhere shape) and
+        asserts (1) the walker surfaces it and (2) every brokers rule's
+        ``forbidden_prefix`` actually matches it — so neither the AST walk
+        nor the prefix strings can drift to a never-firing state.
+        """
+        import tempfile
+
+        synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_pipeline.brokers.registry import get_default_broker\n"
+            "    return get_default_broker()\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn("alphalens_pipeline.brokers.registry", modules)
+        brokers_rules = [
+            rule for rule in RULES if rule["forbidden_prefix"] == "alphalens_pipeline.brokers"
+        ]
+        self.assertGreaterEqual(
+            len(brokers_rules), 3, "thematic + feedback + paper brokers rules must all exist"
+        )
+        for rule in brokers_rules:
+            with self.subTest(rule=rule["name"]):
+                self.assertTrue(
+                    any(m.startswith(rule["forbidden_prefix"]) for m in modules),
+                    f"rule {rule['name']!r} would not catch the synthetic violation",
+                )
 
     def test_exemptions_still_exist(self):
         """A documented exemption must stay tied to a real violation.
