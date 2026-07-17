@@ -4,7 +4,8 @@
 **Date:** 2026-07-17
 **ADR:** [ADR 0014](../adr/0014-broker-agnostic-execution-layer.md)
 **Increment shipped by this memo:** P1 (reads + contract + SIM-only rail);
-§P2 decision record added with the P2 order-placement increment
+§P2 decision record added with the P2 order-placement increment;
+§P3 decision record added with the P3 reconciliation increment
 
 ## 1. What this is
 
@@ -267,6 +268,123 @@ remediation always works); CLI `broker submit` dry-run by default with
 untouched; import rails extended (paper must not import brokers);
 attended-only order probe `SAXO_LIVE_ORDER_TEST=1` excluded from
 `just probe-live` and CI by meta-assertion.
+
+## P3 decision record (reconciliation — shipped 2026-07-17)
+
+### Capability, not Protocol (the shape decision)
+
+The 7-method `Broker` Protocol stays frozen; `get_order` keeps its cheap
+open-orders-view semantics (present -> WORKING/PARTIALLY_FILLED; absent ->
+honest UNKNOWN). Terminal resolution is a VENDOR CAPABILITY:
+`SaxoBroker.resolve_order_outcome(order_id) -> OrderState` plus the raw
+fill cross-check reads (`get_open_position_references` /
+`get_closed_position_rows`), reached by the vendor-agnostic
+`brokers/reconcile.py` through `@runtime_checkable` extension Protocols
+(`SupportsOrderResolution`, `SupportsFillCrossCheck`) — the typed variant of
+the CLI's `getattr(broker, "precheck_bracket_order", None)` precedent.
+Why not a Protocol method: widening would churn contract.py + FakeBroker +
+the conformance mixin + every future adapter for a capability only Saxo can
+honor today, and it would blur the
+`test_get_order_unknown_id_maps_unknown_not_exception` pin — UNKNOWN from
+`get_order` remains the contract's honest answer. Brokers lacking the
+capability degrade to `UNRESOLVED(capability_absent)` — never a guessed
+terminal state — so FakeBroker and the conformance mixin needed ZERO
+changes. **Graduation path:** if a second adapter implements resolution,
+promote `SupportsOrderResolution` from reconcile.py into contract.py as an
+optional companion Protocol in its own PR. After P3, terminal OrderStatus
+values are emitted ONLY by the reconcile path.
+
+### Resolution semantics (the (Status, SubStatus) PAIR classifier)
+
+One GET `/cs/v1/audit/orderactivities?OrderId={id}&EntryType=Last&ClientKey=
+{ck}` per disappeared order — the audit store (2+yr documented retention);
+ENS is NOT used (hard 14-day cap, verbatim 400 verified). Live findings
+prove Status alone is insufficient. Precedence order:
+
+1. `SubStatus="Rejected"` -> REJECTED regardless of Status — live-verified:
+   rejected placements 5039272858/5039272868 are a single
+   `Placed`/`Rejected` audit row.
+2. `Status="FinalFill"` -> FILLED; `filled_quantity` from cumulative
+   `FilledAmount` (per-event `FillAmount` fallback). These field names are
+   DOC-SOURCED ONLY (FinalFill and Fill sweeps both returned `__count:0` on
+   the live account) — the parser asserts presence and returns
+   `UNRESOLVED(fill_fields_unverified)` with the raw row attached rather
+   than fabricating 0 or full qty.
+3. `Status="Cancelled"` AND `SubStatus="Confirmed"` -> CANCELLED —
+   live-verified on the 2026-07-17 brackets (5039272886/5039272896/
+   5039272878; e.g. LogId 249474866). Child legs cascade to their OWN
+   Cancelled rows but their terminal rows flip OrderRelation to StandAlone
+   with empty RelatedOrders — bracket membership joins via the ENTRY row's
+   RelatedOrders or the shared CorrelationKey/ExternalReference, NEVER via
+   a child's terminal row.
+4. `Status="Expired"` -> EXPIRED — doc-sourced (GTD orders were cancelled
+   before expiry on the calibration day); first natural occurrence gets its
+   raw row logged for shape confirmation.
+5. Recognized non-terminal last row (`Placed`/`Fill` with
+   `Confirmed`/`Requested`, `Cancelled`/`Requested`) for an order ABSENT
+   from `/port/v1/orders/me` -> `UNRESOLVED(inconsistent_state)`;
+   unrecognized pairs -> `UNRESOLVED(unrecognized)`. `Requested` rows are
+   transient by doctrine (EntryType=Last usually skips them; LogId is the
+   dedupe/cursor key if an EntryType=All sweep is ever added).
+
+UNRESOLVED is RESERVED for genuinely unresolvable cases, each with a reason
+code: audit HTTP failure (`audit_error`, transient — retry next run),
+`__count==0` (`not_in_retention`), `capability_absent` (non-Saxo broker),
+`unrecognized`, `fill_fields_unverified`. No mapping ever guesses. FILLED
+cross-checks: `/port/v1/positions` (entry filled, exit still working) and
+`/port/v1/closedpositions` (round trip; BOTH the live-verified bare `[]`
+empty-account shape and the `{__count, Data}` envelope are accepted), joined
+on journal `client_request_id == ExternalReference` (round-trips verbatim on
+every audit row). Client-layer fix bundled in: `__next`/`__nextPoll`
+pagination URLs embed `:443`, which fails `_join_url`'s SIM-prefix rail —
+normalized by stripping to the path after `/sim/openapi` inside the paged
+wrapper (`_normalize_next_url`; promoting it into a general `_join_url`
+normalization waits for a second pagination consumer).
+
+### Reconcile surface + YAGNI cuts
+
+`alphalens broker reconcile [--journal PATH] [--json]` — STRICTLY READ-ONLY
+(no placement, no cancels, journal never rewritten; pinned by an AST test
+that the command body references no write surface). Per run: journal via
+`iter_submission_records` (skip-and-count malformed lines), ONE
+`/port/v1/orders/me`, expiry sweep via `paper/calendar.trading_days_elapsed`
+on the record's stamped MIC vs the bracket ttl (past-TTL-but-still-working
+is a DIVERGENCE), then per-disappeared-order audit resolution at the
+client's 0.5s throttle. Exit 0 clean, 1 on any UNRESOLVED/divergence
+(scriptable; in `--json` mode the nonzero exit is silent so stdout stays
+pure JSON).
+
+- **No reconciliations.jsonl persistence (YAGNI-CUT):** verdicts are pure
+  functions of (journal, audit store) and the audit store retains 2+ years,
+  so re-derivation is free; a second journal adds a sync/staleness surface
+  with zero current consumer. The "fill records under a NEW measurement key"
+  memo line (T8 no-pooling) lands when there are actual fills to measure
+  (first real SIM fill / P4 automation), together with its planned
+  reconcile-side poolability key (own `_UPPER_CASE` constants + hash token
+  mirroring execution.py, with its own sweep test) — DEFERRED.
+- **No Telegram divergence alerts (deferred to P4):** P3 runs are attended
+  by construction (24h SAXO_SIM_TOKEN, no systemd unit per §7); the
+  operator is looking at the table and the nonzero exit code is the P3
+  divergence signal.
+- **No ENS, no systemd unit** (as planned in §7).
+- **Q7 answer:** P3 stays attended-only on the 24h token; OAuth (P4) was
+  NOT pulled forward.
+
+### Still open after P3
+
+- Fill-side field names (`FilledAmount`/`FillAmount`, `FinalFill` shape)
+  remain doc-sourced — verify on the first real SIM fill before trusting
+  `filled_quantity` (parser ships guarded).
+- Partial-tier child-amount behaviour (P2 fidelity-table OPEN item) —
+  unobserved; the reconciler does not rely on child Amount semantics.
+- Expired terminal row shape — doc-sourced; confirm on first natural expiry.
+- User-vs-system cancel attribution is not observable in SIM audit rows
+  (no cancelled-by field; HandledBy/UserId always own id) — CANCELLED
+  verdicts cannot distinguish operator cancels from dealer/system cancels.
+  Accepted for P3.
+- Audit retention depth: docs say 2+ years; the fresh SIM account cannot
+  verify it. If real retention is shorter, `UNRESOLVED(not_in_retention)`
+  frequency rises — revisit the persistence YAGNI-cut then.
 
 ## 8. Open questions (for the user)
 
