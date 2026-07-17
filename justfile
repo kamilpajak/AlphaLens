@@ -70,15 +70,18 @@ test: test-python test-django test-web
 # Live probes (L4) + deploy shape (test-strategy Phase 5)
 # -------------------------------------------------------------------------
 
-# Opt-in live vendor probes (SEC, OpenRouter, Polygon, yfinance). Shape-only,
-# NEVER in the blocking PR path — OpenRouter costs real money (no free tier on
-# v4-pro) + SEC/Polygon rate-limit budget. Sets all four per-vendor flags and
-# runs only the tests/live/ suite; drop a flag to skip that vendor. Needs
-# POLYGON_API_KEY + OPENROUTER_API_KEY (and SEC_EDGAR_USER_AGENT) in the env.
-# The hermetic helper test runs here too; the four probes skip without flags.
+# Opt-in live vendor probes (SEC, OpenRouter, Polygon, yfinance, Saxo SIM).
+# Shape-only, NEVER in the blocking PR path — OpenRouter costs real money (no
+# free tier on v4-pro) + SEC/Polygon rate-limit budget. Sets all per-vendor
+# flags and runs only the tests/live/ suite; drop a flag to skip that vendor.
+# Needs POLYGON_API_KEY + OPENROUTER_API_KEY (and SEC_EDGAR_USER_AGENT) in the
+# env. The Saxo probe additionally needs a FRESH 24h SAXO_SIM_TOKEN (local
+# runs only; excluded from the weekly CI live-probes job until P4 lands
+# non-expiring OAuth). The hermetic helper test runs here too; the probes
+# skip without flags.
 probe-live:
     SEC_LIVE_TEST=1 OPENROUTER_LIVE_TEST=1 POLYGON_LIVE_TEST=1 YFINANCE_LIVE_TEST=1 \
-    NVDA_QUBT_LIVE_TEST=1 \
+    NVDA_QUBT_LIVE_TEST=1 SAXO_LIVE_TEST=1 \
         uv run python -m unittest discover \
             -s apps/alphalens-research/tests/live \
             -t apps/alphalens-research -v
