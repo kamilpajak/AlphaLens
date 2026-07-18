@@ -38,6 +38,8 @@ def _terminal(
         "terminal": True,
         "matured_at": dt.date(2026, 6, 2),
         "ladder_classification": classification,
+        "captured_tp_count": 1,
+        "touched_tp_count": 3,
         "realized_r": realized_r,
         "open_r": None,
         "forward_return": excess + 0.02,
@@ -134,6 +136,19 @@ def test_outcomes_shape_and_theme_from_record(tmp_path: Path):
     assert rows["BLBD"]["theme"] == "ev"
     assert rows["BLBD"]["open_r"] == pytest.approx(0.16)
     assert rows["MRCY"]["theme"] is None
+
+
+@pytest.mark.django_db
+def test_outcomes_expose_tp_capture_counts(tmp_path: Path):
+    # A partial-entry TP_FULL row: all three TP levels TOUCHED but only one SOLD.
+    # The outcomes row must carry both counts so the SPA can flag that TP_FULL /
+    # the three green arrows overstate what was captured.
+    _write_parquet(tmp_path, "2026-05-27", [_terminal("AMPL", excess=0.04, realized_r=0.2)])
+    rebuild_from_parquet(tmp_path)
+
+    row = APIClient().get("/v1/edge/outcomes").json()["data"][0]
+    assert row["captured_tp_count"] == 1
+    assert row["touched_tp_count"] == 3
 
 
 @pytest.mark.django_db

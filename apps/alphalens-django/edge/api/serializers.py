@@ -31,6 +31,11 @@ class EdgeOutcomeRowSerializer(serializers.Serializer):
     theme = serializers.CharField(allow_null=True, required=False)
     scorer_config_version = serializers.CharField(allow_null=True, required=False)
     ladder_classification = serializers.CharField(allow_blank=True)
+    # TP levels touched vs tranches actually sold: captured < touched flags that
+    # TP_FULL / the chart's green arrows overstate capture (partial entry fill).
+    # Nullable for rows that predate the columns.
+    captured_tp_count = serializers.IntegerField(allow_null=True, required=False)
+    touched_tp_count = serializers.IntegerField(allow_null=True, required=False)
     terminal = serializers.BooleanField()
     realized_r = serializers.FloatField(allow_null=True)
     open_r = serializers.FloatField(allow_null=True)

@@ -1985,6 +1985,14 @@
                     "ladder_classification": {
                         "type": "string"
                     },
+                    "captured_tp_count": {
+                        "type": "integer",
+                        "nullable": true
+                    },
+                    "touched_tp_count": {
+                        "type": "integer",
+                        "nullable": true
+                    },
                     "terminal": {
                         "type": "boolean"
                     },

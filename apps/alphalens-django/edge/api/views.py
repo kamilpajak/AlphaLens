@@ -148,6 +148,11 @@ class EdgeOutcomesView(APIView):
                 "theme": o.theme or None,
                 "scorer_config_version": o.scorer_config_version or None,
                 "ladder_classification": o.ladder_classification,
+                # TP levels touched vs tranches actually sold: captured < touched
+                # flags that TP_FULL / the chart's green arrows overstate capture
+                # (partial entry fill). Null for rows predating the columns.
+                "captured_tp_count": o.captured_tp_count,
+                "touched_tp_count": o.touched_tp_count,
                 "terminal": o.terminal,
                 "realized_r": o.realized_r,
                 "open_r": o.open_r,
