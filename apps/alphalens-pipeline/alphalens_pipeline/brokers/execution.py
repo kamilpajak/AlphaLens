@@ -286,6 +286,9 @@ def build_fx_conversion(
             f"FX quote {quote.base_currency}->{quote.quote_currency} carries no usable "
             f"Mid ({quote.mid!r}) — refusing to size (policy {_MISSING_FX_RATE_POLICY!r})"
         )
+    # ~1s wall-clock skew vs quote.asof is possible (two independent now()
+    # reads) — negligible against the 300s bound; callers may pass an
+    # explicit now for a single-clock submission.
     age_s = ((now or dt.datetime.now(dt.UTC)) - quote.asof).total_seconds()
     if age_s > _FX_RATE_MAX_AGE_S:
         raise TradeSetupNotPlannableError(

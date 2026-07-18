@@ -29,6 +29,7 @@ from alphalens_pipeline.brokers.reconcile import (
     ReconcileVerdict,
     SupportsFillCrossCheck,
     SupportsOrderResolution,
+    _effective_settlement_rate,
     compute_realized_r,
     has_failures,
     reconcile_brackets,
@@ -483,6 +484,28 @@ class TestCapabilityAbsentDegradesUnresolved(unittest.TestCase):
         self.assertEqual(verdict.verdict, "FILLED")
         self.assertFalse(verdict.divergence, "no cross-check capability -> no divergence claim")
         self.assertIn("cross-check unavailable", verdict.note or "")
+
+
+class TestEffectiveSettlementRateCoercion(unittest.TestCase):
+    def test_float_coercible_scalars_are_accepted(self):
+        # numpy/pandas scalars are not int/float subclasses; a __float__-bearing
+        # scalar must still produce the diagnostic (review finding, PR #849).
+        class _Scalar:
+            def __init__(self, v):
+                self._v = v
+
+            def __float__(self):
+                return self._v
+
+        row = {
+            "ProfitLossOnTrade": _Scalar(43.4),
+            "ProfitLossOnTradeInBaseCurrency": _Scalar(10.0),
+        }
+        self.assertAlmostEqual(_effective_settlement_rate(row), 4.34)
+
+    def test_booleans_still_rejected(self):
+        row = {"ProfitLossOnTrade": True, "ProfitLossOnTradeInBaseCurrency": 10.0}
+        self.assertIsNone(_effective_settlement_rate(row))
 
 
 if __name__ == "__main__":

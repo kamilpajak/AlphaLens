@@ -399,7 +399,13 @@ def _assert_fx_precheck_cross_checks(
             "independent FX cross-check cannot run; refusing placement"
         )
     sizing_rate: float = fx.rate  # type: ignore[attr-defined]
-    divergence = divergence_fn(sizing_rate, conversion_rate)  # type: ignore[operator]
+    try:
+        divergence = divergence_fn(sizing_rate, conversion_rate)  # type: ignore[operator]
+    except ValueError as exc:
+        # Belt: both rates are validated positive above/at FxConversion build,
+        # but a helper-level ValueError must surface as a clean refusal, never
+        # a traceback (review finding, PR #849).
+        raise _fail(f"{ticker}: precheck {index} FX divergence check failed: {exc}") from exc
     if divergence > divergence_max_pct:
         raise _fail(
             f"{ticker}: precheck {index} FX divergence {divergence:.2f}% exceeds the "

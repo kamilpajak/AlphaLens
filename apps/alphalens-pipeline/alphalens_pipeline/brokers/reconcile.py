@@ -228,12 +228,19 @@ def _effective_settlement_rate(closed_row: Mapping[str, Any]) -> float | None:
     """
     pnl_trade = closed_row.get("ProfitLossOnTrade")
     pnl_base = closed_row.get("ProfitLossOnTradeInBaseCurrency")
-    for value in (pnl_trade, pnl_base):
-        if isinstance(value, bool) or not isinstance(value, int | float):
-            return None
-    if pnl_base == 0:
+    if isinstance(pnl_trade, bool) or isinstance(pnl_base, bool):
         return None
-    return float(pnl_trade) / float(pnl_base)  # type: ignore[arg-type]
+    try:
+        # float() coercion, not isinstance: numpy/pandas scalars are not
+        # subclasses of int/float and would silently disable the diagnostic
+        # (review finding, PR #849).
+        pnl_trade_f = float(pnl_trade)  # type: ignore[arg-type]
+        pnl_base_f = float(pnl_base)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if pnl_base_f == 0:
+        return None
+    return pnl_trade_f / pnl_base_f
 
 
 def _submission_date(record: Mapping[str, Any]) -> dt.date | None:
