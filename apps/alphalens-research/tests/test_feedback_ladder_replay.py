@@ -292,6 +292,27 @@ class TestRealizedTpCapture(unittest.TestCase):
         # realized_r reflects only the tp1 exit: (102-99)/7.
         self.assertAlmostEqual(outcome.realized_r, 3.0 / 7.0, places=3)
 
+    def test_bad_geometry_never_produces_a_false_partial_capture(self):
+        # Adversarial-review guard: a BAD_GEOMETRY row (stop >= entry, realized_r
+        # undefined) must NOT surface a misleading "0/N sold" capture. Because the
+        # fill bar's low (<= entry <= stop) trips the SL first and exit_reached
+        # short-circuits _take_tps, no TP is ever recorded — even when price gaps
+        # straight over every target. So captured == touched == 0 and the /edge
+        # chip (which needs captured < touched) stays hidden. This pins that the
+        # SL-first short-circuit keeps the capture counts honest for degenerate
+        # geometry; if it ever regresses, tps_hit would fill and this fails.
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(110.0, 100.0)], stop=100.0)
+        bars = [
+            _bar(1, low=98.0, high=99.0, close=98.5),  # fills E1, SL (100) trips same bar
+            _bar(2, low=109.0, high=112.0, close=111.0),  # gap straight over TP (post-exit)
+        ]
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.classification, "BAD_GEOMETRY")
+        self.assertIsNone(outcome.realized_r)
+        self.assertEqual(outcome.tps_hit, ())
+        self.assertEqual(outcome.captured_tp_count, 0)
+        self.assertEqual(outcome.touched_tp_count, 0)
+
     def test_full_fill_captures_every_touched_tp(self):
         # Example A: all three tiers fill (filled_frac=1) so every touched TP also
         # sells its tranche -> captured == touched, TP_FULL is honest.

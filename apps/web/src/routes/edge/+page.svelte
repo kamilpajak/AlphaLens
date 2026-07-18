@@ -762,9 +762,15 @@
 													<span
 														class="cursor-help border-b border-dotted border-fg-muted/50"
 														title="Excess vs SPY not available for this window yet — the SPY benchmark leg is missing and recomputes nightly. Not a result of zero edge."
-													>—</span>
+													>
+														<span aria-hidden="true">—</span>
+														<!-- The dotted underline is invisible to assistive tech, so give the
+														     pending state an accessible name distinct from a genuine n/a dash. -->
+														<span class="sr-only">benchmark pending — recomputes nightly</span>
+													</span>
 												{:else}
-													—
+													<span aria-hidden="true">—</span>
+													<span class="sr-only">not available</span>
 												{/if}
 											{:else}
 												{fmtR(o.open_r)}

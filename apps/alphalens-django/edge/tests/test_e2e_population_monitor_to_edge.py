@@ -114,6 +114,40 @@ def _spy_bars(ticker, start, end):
     return bars or [{"t": base, "o": 400.0, "h": 405.0, "l": 399.0, "c": 404.0, "v": 10_000.0}]
 
 
+# Three-tier setup whose entry fills only E1 (so an early tranche takes the whole
+# held position and the deeper TPs are touched-not-sold): the partial-capture case
+# the honesty feature exists for.
+_PARTIAL_SETUP = {
+    "status": "OK",
+    "schema_version": "1.0.0",
+    "suggested_size_pct": 2.0,
+    "disaster_stop": 92.0,
+    "atr": 2.0,
+    "order_ttl_days": 7,
+    "entry_tiers": [
+        {"limit": 99.0, "alloc_pct": 33.3},
+        {"limit": 97.0, "alloc_pct": 33.3},
+        {"limit": 95.0, "alloc_pct": 33.3},
+    ],
+    "tp_tranches": [
+        {"target": 102.0, "tranche_pct": 33.3},
+        {"target": 107.0, "tranche_pct": 33.3},
+        {"target": 112.0, "tranche_pct": 33.3},
+    ],
+}
+
+
+def _partial_capture_bars(ticker, start, end):
+    """Fill E1 (99) only — never dip to E2 (97) / E3 (95) — then sweep all three
+    TPs. TP1 sells the whole held position; TP2/TP3 are touched-not-sold."""
+    base = int(start.timestamp() * 1000)
+    hour = 3_600_000
+    return [
+        {"t": base, "o": 99.0, "h": 100.0, "l": 98.0, "c": 99.0, "v": 1000.0},
+        {"t": base + hour, "o": 100.0, "h": 113.0, "l": 100.0, "c": 112.0, "v": 1000.0},
+    ]
+
+
 def _build_real_store(root: Path) -> Path:
     """Run the REAL monitor + REAL enrichments (vendor bars mocked) -> store dir.
 
@@ -272,6 +306,33 @@ class TestPopulationMonitorToEdgeE2E:
         assert meta.n_rows == 1
         assert meta.n_terminal == 1
         assert meta.n_plannable == 1
+
+    @pytest.mark.django_db
+    def test_partial_capture_counts_round_trip_to_orm(self, tmp_path: Path):
+        """The load-bearing partial-capture case (captured < touched) survives the
+        REAL monitor -> parquet -> ingest -> ORM path. The NVDA fixture is a
+        TIME_STOP (0/0), so without this the divergent case is never round-tripped.
+        """
+        briefs_dir = tmp_path / "briefs"
+        briefs_dir.mkdir()
+        store_dir = tmp_path / "population_ladders"
+        _write_brief(
+            briefs_dir, _BRIEF_DATE, [{"ticker": "PART", "setup": _PARTIAL_SETUP, "theme": "ai"}]
+        )
+
+        replay_population_ladders(
+            briefs_dir,
+            end_date=_NOW.date(),
+            store_dir=store_dir,
+            bar_fetch=_partial_capture_bars,
+            now=_NOW,
+        )
+        rebuild_from_parquet(store_dir)
+
+        row = LadderOutcome.objects.get(ticker="PART")
+        assert row.ladder_classification == "TP_FULL"  # all TP levels touched
+        assert row.captured_tp_count == 1  # but only TP1 sold
+        assert row.touched_tp_count == 3
 
     @pytest.mark.django_db
     def test_edge_summary_api_serves_the_ingested_population(self, tmp_path: Path):

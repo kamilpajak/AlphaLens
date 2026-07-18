@@ -284,8 +284,53 @@ class TestEnrichSelfHeal(unittest.TestCase):
             )
             # The newest date's arrival window must be fetched before the old one's,
             # so a deadline-truncated sweep heals the dashboard-visible dates first.
-            new_arrival = session_open_utc(session_on_or_after(new))
-            self.assertEqual(fetched_starts[0], new_arrival)
+            new_arrival = session_on_or_after(new)
+            self.assertEqual(fetched_starts[0], session_open_utc(new_arrival))
+
+    def test_newest_first_under_deadline_heals_recent_and_leaves_old(self) -> None:
+        # The interaction that justifies newest-first: a deadline that trips after
+        # the FIRST (newest) file must leave the newest date HEALED and the oldest
+        # UNPROCESSED for the next run — not the other way round.
+        from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            old, old_exit = dt.date(2026, 5, 18), dt.date(2026, 5, 27)
+            new, new_exit = dt.date(2026, 6, 1), dt.date(2026, 6, 8)
+            for d, exit_d in ((old, old_exit), (new, new_exit)):
+                pd.DataFrame(
+                    [
+                        {
+                            "brief_date": d,
+                            "ticker": "AA",
+                            "terminal": True,
+                            "matured_at": exit_d,
+                            "forward_return": 0.05,
+                        }
+                    ]
+                ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            # monotonic: start(0) -> newest-row check(0, under budget) -> oldest-row
+            # check(100, over budget 10 -> stop). Deadline trips only after the
+            # newest file is written.
+            seq = iter([0.0, 0.0, 100.0])
+            dead = _RunDeadline(10.0, monotonic=lambda: next(seq, 100.0))
+
+            def _fetch(_t, start, _e):
+                return _spy_bars(start, reference=100.0, last_close=102.0)
+
+            enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=_fetch,
+                now=dt.datetime(2026, 6, 10, tzinfo=UTC),
+                deadline=dead,
+            )
+            new_df = pd.read_parquet(store / f"{new.isoformat()}.parquet")
+            old_df = pd.read_parquet(store / f"{old.isoformat()}.parquet")
+            # Newest date healed...
+            self.assertFalse(pd.isna(new_df.iloc[0]["benchmark_window_return"]))
+            # ...oldest left untouched for the next run (never rewritten -> no column).
+            self.assertNotIn("benchmark_window_return", old_df.columns)
 
     def test_transient_none_does_not_overwrite_existing_benchmark(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -313,6 +358,39 @@ class TestEnrichSelfHeal(unittest.TestCase):
             row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
             self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.02, places=6)
             self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+    def test_transient_none_drops_a_stale_pair_inconsistent_with_forward(self) -> None:
+        # Maturation-transition hazard: the monitor advances forward_return AND sets
+        # matured_at in one rewrite while carrying the OLD (benchmark, excess) pair
+        # verbatim. The frozen-window gate alone would keep that stale pair on a
+        # fetch miss, violating excess == forward - benchmark. The keep must verify
+        # the stored pair is still CONSISTENT with the current forward_return.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        # forward advanced to 0.09 on maturation; the carried pair
+                        # (bench 0.02, excess 0.03) was computed against the OLD
+                        # forward 0.05 -> 0.03 != 0.09 - 0.02, i.e. STALE.
+                        "forward_return": 0.09,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=lambda *_: [], now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertTrue(pd.isna(row["benchmark_window_return"]))
+            self.assertTrue(pd.isna(row["market_excess_return"]))
 
     def test_transient_none_nulls_an_ongoing_rows_stale_benchmark(self) -> None:
         # An ONGOING row's exit window GROWS every session, so a preserved older

@@ -239,21 +239,29 @@ def _enrich_frame_rows(
         )
         # Non-destructive: a transient fetch miss (bench=None) must NOT overwrite an
         # already-good value with NULL on this whole-store rewrite — the enrich only
-        # ever FILLS a gap. Restricted to FROZEN-window rows (terminal, matured_at
-        # set): their [arrival, exit] window can't change, so the last-good pair
-        # stays valid. An ONGOING row's window GROWS every session, so keeping an
-        # older benchmark would be stale against a freshly-advanced forward_return
-        # (and could leak into excess-telemetry) — let it go NULL and recompute.
+        # ever FILLS a gap. Two guards keep it honest. (1) matured_at set — an
+        # ONGOING window GROWS every session so an older benchmark would be stale.
+        # (2) the stored pair is still CONSISTENT with the current forward_return
+        # (excess == forward - benchmark): on the ongoing->terminal maturation the
+        # monitor advances forward_return but carries the OLD benchmark/excess pair
+        # verbatim, so matured_at alone is insufficient — a pair that no longer
+        # matches forward_return is stale and must recompute, not be preserved.
         if bench is None and _as_date(row.get("matured_at")) is not None:
             prev_bench = (
                 row["benchmark_window_return"] if "benchmark_window_return" in row.index else None
             )
-            if _is_real(prev_bench):
+            prev_excess = (
+                row["market_excess_return"] if "market_excess_return" in row.index else None
+            )
+            forward = row["forward_return"] if "forward_return" in row.index else None
+            if (
+                _is_real(prev_bench)
+                and _is_real(prev_excess)
+                and _is_real(forward)
+                and abs(float(prev_excess) - (float(forward) - float(prev_bench))) < 1e-9
+            ):
                 bench = float(prev_bench)
-                prev_excess = (
-                    row["market_excess_return"] if "market_excess_return" in row.index else None
-                )
-                excess = float(prev_excess) if _is_real(prev_excess) else None
+                excess = float(prev_excess)
         bench_col.append(bench)
         excess_col.append(excess)
         if excess is not None:
