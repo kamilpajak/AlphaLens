@@ -76,6 +76,11 @@ CHART_PAYLOAD_COLUMN = "chart_payload_json"
 # never as a price line (a time-stop is an exit event, not a resting level).
 _MARKER_ENTRY = "ENTRY"
 _MARKER_TP = "TP"
+# A TP price level the path TOUCHED but that sold NO tranche (its re-based share
+# was 0 because a shallow entry fill let an earlier tranche take the whole held
+# position). Drawn distinctly (hollow) so three green arrows never overstate what
+# was actually captured. See LadderOutcome.realized_tp_ids.
+_MARKER_TP_TOUCHED = "TP_TOUCHED"
 _MARKER_SL = "SL"
 _MARKER_TIME_STOP = "TIME_STOP"
 
@@ -257,16 +262,18 @@ def _finite_or_zero(value: Any) -> float:
     return v if math.isfinite(v) else 0.0
 
 
-def _marker_kind_and_label(level_id: str, kind: str) -> tuple[str, str]:
+def _marker_kind_and_label(level_id: str, kind: str, *, sold: bool = True) -> tuple[str, str]:
     """Map a replay crossing ``(level_id, kind)`` to the chart marker kind + label.
 
     Labels are the compact level ids the UI draws (``E1``, ``TP1``, ``SL``); the
-    time-stop carries the ``TIME_STOP`` label so the tooltip reads honestly.
+    time-stop carries the ``TIME_STOP`` label so the tooltip reads honestly. A TP
+    crossing that sold no tranche (``sold=False``) maps to ``TP_TOUCHED`` — the
+    price touched the level but the held position was already flat.
     """
     if kind == "ENTRY":
         return _MARKER_ENTRY, level_id
     if kind == "TP":
-        return _MARKER_TP, level_id
+        return (_MARKER_TP if sold else _MARKER_TP_TOUCHED), level_id
     if kind == "SL":
         return _MARKER_SL, level_id
     return _MARKER_TIME_STOP, _MARKER_TIME_STOP
@@ -283,12 +290,16 @@ def _markers_from_sequence(
     would silently fail to render in Lightweight Charts (memo §6). ``ambiguous`` is
     carried straight from ``same_bar_ambiguous`` (the SL-first intrabar flag).
     """
+    realized_tps = set(outcome.realized_tp_ids)
     markers: list[dict[str, Any]] = []
     for crossing in outcome.sequence:
         session = _session_date_for_ts(crossing.bar_ts_ms, session_windows)
         if session is None:
             continue  # dangling time -> would not render; drop honestly
-        marker_kind, label = _marker_kind_and_label(crossing.level_id, crossing.kind)
+        # A TP crossing counts as SOLD only if it appears in realized_tp_ids
+        # (positive re-based share). Non-TP crossings pass sold=True unchanged.
+        sold = crossing.kind != "TP" or crossing.level_id in realized_tps
+        marker_kind, label = _marker_kind_and_label(crossing.level_id, crossing.kind, sold=sold)
         markers.append(
             {
                 "time": session.isoformat(),

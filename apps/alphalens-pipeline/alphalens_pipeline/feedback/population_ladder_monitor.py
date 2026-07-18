@@ -853,6 +853,13 @@ def _terminal_row(
         "terminal": bool(terminal),
         "matured_at": last_closed_session if terminal else None,
         "ladder_classification": classification,
+        # TP levels TOUCHED (price crossed) vs actually SOLD a tranche. They
+        # diverge when the entry filled only partially: an early tranche consumes
+        # the whole held position, so deeper touched TPs sell nothing. The /edge
+        # card reads captured < touched to flag that TP_FULL / three green arrows
+        # overstate capture. See LadderOutcome.realized_tp_ids.
+        "captured_tp_count": outcome.captured_tp_count,
+        "touched_tp_count": outcome.touched_tp_count,
         "blended_entry": outcome.blended_entry,
         "realized_r": realized_r,
         "open_r": open_r,

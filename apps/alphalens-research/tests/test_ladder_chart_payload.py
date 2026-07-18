@@ -179,6 +179,43 @@ class TestBuildChartPayload(unittest.TestCase):
         self.assertIn("ENTRY", kinds)
         self.assertIn("TP", kinds)
 
+    def test_touched_but_unsold_tp_markers_are_distinct_kind(self) -> None:
+        """Partial entry fill: TP1 sells the whole held position; TP2/TP3 are
+        TOUCHED but sell nothing. Their markers must render as ``TP_TOUCHED`` (a
+        distinct kind the SPA draws hollow) so three green arrows do not overstate
+        capture. The SOLD TP stays kind ``TP``."""
+        setup = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            "disaster_stop": 70.0,
+            "atr": 2.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [
+                {"limit": 100.0, "alloc_pct": 33.3},
+                {"limit": 90.0, "alloc_pct": 33.3},
+                {"limit": 80.0, "alloc_pct": 33.3},
+            ],
+            "tp_tranches": [
+                {"target": 110.0, "tranche_pct": 33.3},
+                {"target": 120.0, "tranche_pct": 33.3},
+                {"target": 130.0, "tranche_pct": 33.3},
+            ],
+        }
+        bars = [
+            _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),  # E1 only
+            _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=131.0, low=104.0, c=130.5),  # all TPs
+        ]
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.realized_tp_ids, ("TP1",))  # only TP1 sold
+        payload = _payload(bars, outcome, setup=setup)
+        by_level = {
+            m["level_id"]: m["kind"] for m in payload["markers"] if m["kind"].startswith("TP")
+        }
+        self.assertEqual(by_level.get("TP1"), "TP")  # sold -> solid
+        self.assertEqual(by_level.get("TP2"), "TP_TOUCHED")  # touched, unsold
+        self.assertEqual(by_level.get("TP3"), "TP_TOUCHED")
+
     def test_sl_first_ambiguity_flag_plumbed(self) -> None:
         """A bar crossing both a TP high and the SL low -> SL marker
         ambiguous=true, payload ambiguous_bars>=1, intrabar_rule=='sl_first', SL
