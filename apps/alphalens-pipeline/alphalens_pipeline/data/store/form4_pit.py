@@ -19,6 +19,7 @@ must produce parquet files matching exactly these columns.
 
 from __future__ import annotations
 
+import logging
 from collections import OrderedDict
 from collections.abc import Iterable
 from datetime import date, timedelta
@@ -29,6 +30,8 @@ import pandas as pd
 import pyarrow.dataset as ds
 
 from alphalens_pipeline.data.store.delisting import DelistingEvent
+
+logger = logging.getLogger(__name__)
 
 # Default LRU capacity. 32 covers the largest realistic working set:
 # a 6yr lookback × 5 audit phases × concurrent OOS+final-lock ≈ 18 unique
@@ -117,12 +120,29 @@ class Form4PITStore:
         """
         ticker_up = ticker.upper()
         if self._is_delisting_within_window(ticker_up, asof):
+            # Expected PIT rule (fire-sale exclusion), not an anomaly — DEBUG.
+            logger.debug(
+                "records_as_of empty: %s excluded by fire-sale rule at %s", ticker_up, asof
+            )
             return self._empty_frame()
 
+        # Distinguish the empty paths so 'no data' and a resolver failure are
+        # not silently indistinguishable at the call site. A resolver failure
+        # means a universe member's insider signal is silently absent — worth a
+        # WARNING; a genuine no-records-in-window is expected — DEBUG below.
         if self._resolver is None:
+            logger.warning(
+                "records_as_of empty: no ticker_cik_resolver configured; cannot resolve %s",
+                ticker_up,
+            )
             return self._empty_frame()
         issuer_cik = self._resolver.lookup(ticker_up)
         if issuer_cik is None:
+            logger.warning(
+                "records_as_of empty: ticker %s not resolvable to a CIK (asof %s)",
+                ticker_up,
+                asof,
+            )
             return self._empty_frame()
 
         lookback_start = asof - timedelta(days=int(lookback_days))
@@ -133,7 +153,7 @@ class Form4PITStore:
         # full concat (~232k rows × 1800 calls/phase = ~417M row-allocs of
         # churn). `.loc[mask]` returns a fresh frame, so cache integrity
         # is preserved without `copy=True` on the concat.
-        per_year_filtered = []
+        per_year_filtered: list[pd.DataFrame] = []
         for y in years:
             df = self._load_one_year(int(y))
             if df is None or df.empty:
@@ -148,8 +168,33 @@ class Form4PITStore:
                 per_year_filtered.append(sub)
 
         if not per_year_filtered:
+            # Resolver worked but no records fall in the window — expected and
+            # common across a broad universe, so DEBUG (not WARNING) to avoid
+            # audit-log spam.
+            logger.debug(
+                "records_as_of empty: no records for %s (cik %s) in window [%s, %s]",
+                ticker_up,
+                issuer_cik,
+                lookback_start,
+                asof,
+            )
             return self._empty_frame()
-        return pd.concat(per_year_filtered, ignore_index=True).reset_index(drop=True)
+        result = pd.concat(per_year_filtered, ignore_index=True).reset_index(drop=True)
+        # Cross-check the resolved records against the requested ticker. A stale
+        # ticker->CIK map returns another issuer's records with zero error; the
+        # filter above keys only on issuer_cik, so the parquet ``ticker`` column
+        # is the independent witness. Warn WITHOUT altering the returned data —
+        # this is a pinned-audit path; observability, never a silent drop.
+        result_tickers = set(result["ticker"].dropna().astype(str).str.upper())
+        if result_tickers and ticker_up not in result_tickers:
+            logger.warning(
+                "records_as_of possible CIK misresolution (or ticker change): "
+                "requested %s (cik %s) but records carry %s",
+                ticker_up,
+                issuer_cik,
+                sorted(result_tickers),
+            )
+        return result
 
     def records_for_person(
         self,
@@ -168,7 +213,7 @@ class Form4PITStore:
         # Filter-before-concat: see records_as_of for rationale. Applying
         # the per-year mask first keeps allocations proportional to the
         # subject-person's activity, not the cross-section's.
-        per_year_filtered = []
+        per_year_filtered: list[pd.DataFrame] = []
         for y in years:
             df = self._load_one_year(int(y))
             if df is None or df.empty:

@@ -230,6 +230,115 @@ class TestForm4PITStoreRecordsAsOf(unittest.TestCase):
         self.assertEqual(set(result["accession_number"]), {"A1", "A2"})
 
 
+class TestForm4PITStoreEmptyReasonLogging(unittest.TestCase):
+    """records_as_of must distinguish WHY it returns empty.
+
+    The three empty paths (no resolver / ticker not resolvable / no records in
+    window) previously all returned an identical empty frame with no log, so
+    'no data' and 'misresolution' were indistinguishable at the call site
+    (silent research-integrity hazard — the insider line is the only near-PASS
+    signal). Each path now logs a distinct reason; a resolved-but-mismatched
+    ticker raises a warning WITHOUT altering the returned data.
+    """
+
+    LOGGER = "alphalens_pipeline.data.store.form4_pit"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.resolver = _StaticCikResolver({"AAPL": "0000320193", "MSFT": "0000789019"})
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _apple_partition(self):
+        _write_partition(
+            self.root,
+            2022,
+            [
+                _record(
+                    issuer_cik="0000320193",
+                    ticker="AAPL",
+                    accession_number="A1",
+                    filed_date=date(2022, 6, 1),
+                    transaction_date=date(2022, 5, 15),
+                ),
+            ],
+        )
+
+    def test_missing_resolver_logs_distinct_warning(self):
+        self._apple_partition()
+        store = Form4PITStore(parquet_root=self.root)  # no resolver
+        with self.assertLogs(self.LOGGER, level="WARNING") as cm:
+            result = store.records_as_of("AAPL", asof=date(2022, 7, 1))
+        self.assertEqual(len(result), 0)
+        joined = "\n".join(cm.output)
+        self.assertIn("no ticker_cik_resolver", joined)
+        self.assertIn("AAPL", joined)
+
+    def test_unresolvable_ticker_logs_distinct_warning(self):
+        self._apple_partition()
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        with self.assertLogs(self.LOGGER, level="WARNING") as cm:
+            result = store.records_as_of("NOPE", asof=date(2022, 7, 1))
+        self.assertEqual(len(result), 0)
+        joined = "\n".join(cm.output)
+        self.assertIn("not resolvable to a CIK", joined)
+        self.assertIn("NOPE", joined)
+
+    def test_no_records_in_window_logs_debug_not_warning(self):
+        # Resolver works, but no records fall in the window → expected/common,
+        # must stay DEBUG so a 1500-ticker audit is not warning-spammed.
+        self._apple_partition()
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        with self.assertLogs(self.LOGGER, level="DEBUG") as cm:
+            result = store.records_as_of("AAPL", asof=date(2019, 7, 1), lookback_days=30)
+        self.assertEqual(len(result), 0)
+        joined = "\n".join(cm.output)
+        self.assertIn("no records", joined)
+        self.assertFalse(
+            any(rec.levelname == "WARNING" for rec in cm.records),
+            "no-records-in-window is expected and must not warn",
+        )
+
+    def test_resolved_ticker_mismatch_warns_but_returns_data_unchanged(self):
+        # Simulate a stale ticker->CIK map: AAPL resolves to MSFT's CIK.
+        # The store filters by that CIK and returns MSFT's records; it must
+        # WARN about the mismatch but return the data UNCHANGED (no silent
+        # data loss on a pinned-audit path).
+        _write_partition(
+            self.root,
+            2022,
+            [
+                _record(
+                    issuer_cik="0000789019",
+                    ticker="MSFT",
+                    accession_number="M1",
+                    filed_date=date(2022, 6, 1),
+                    transaction_date=date(2022, 5, 15),
+                ),
+            ],
+        )
+        stale = _StaticCikResolver({"AAPL": "0000789019"})
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=stale)
+        with self.assertLogs(self.LOGGER, level="WARNING") as cm:
+            result = store.records_as_of("AAPL", asof=date(2022, 7, 1), lookback_days=180)
+        # Data returned unchanged — observability, not a filter.
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result.iloc[0]["accession_number"], "M1")
+        joined = "\n".join(cm.output)
+        self.assertIn("misresolution", joined.lower())
+        self.assertIn("AAPL", joined)
+        self.assertIn("MSFT", joined)
+
+    def test_correct_resolution_does_not_warn_about_mismatch(self):
+        self._apple_partition()
+        store = Form4PITStore(parquet_root=self.root, ticker_cik_resolver=self.resolver)
+        with self.assertNoLogs(self.LOGGER, level="WARNING"):
+            result = store.records_as_of("AAPL", asof=date(2022, 7, 1), lookback_days=180)
+        self.assertEqual(len(result), 1)
+
+
 class TestForm4PITStoreRecordsForPerson(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
