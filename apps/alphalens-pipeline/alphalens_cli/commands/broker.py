@@ -341,6 +341,7 @@ def resolve_command(
     typer.echo(f"asset_type    {ref.asset_type}")
     typer.echo(f"broker_id     {ref.broker_instrument_id}")
     typer.echo(f"symbol        {ref.broker_symbol}")
+    typer.echo(f"currency      {ref.currency or 'n/a'}")
 
 
 def _echo_bracket_table(brackets: list) -> None:
@@ -356,6 +357,61 @@ def _echo_bracket_table(brackets: list) -> None:
             f"{stop:>10s}  {tp:>10s}  {bracket.entry_ttl_days:>4d}  "
             f"{bracket.client_request_id}"
         )
+
+
+def _assert_fx_precheck_cross_checks(
+    *,
+    index: int,
+    ticker: str,
+    payload: dict,
+    fx: object,
+    account_currency: str,
+    divergence_max_pct: float,
+    divergence_fn: object,
+) -> float:
+    """FX-path precheck cross-checks (FX-leg memo §4.3 item 5); refuse on any miss.
+
+    (a) ``EstimatedCashRequiredCurrency`` must equal the account currency —
+    anything else (including absent) means the account model is not what we
+    think. (b) Saxo's ``InstrumentToAccountConversionRate`` (instrument->
+    account direction) inverted must agree with the sizing rate within the
+    policy bound. Returns the verbatim precheck rate for the journal.
+    ``fx`` / ``divergence_fn`` stay duck-typed so this helper adds no
+    top-level pipeline import (lazy-CLI doctrine).
+    """
+    est_cash_currency = payload.get("EstimatedCashRequiredCurrency")
+    if est_cash_currency != account_currency:
+        raise _fail(
+            f"{ticker}: precheck {index} EstimatedCashRequiredCurrency="
+            f"{est_cash_currency!r} does not match the account currency "
+            f"{account_currency!r} — the account model is not what we think; "
+            "refusing placement"
+        )
+    conversion_rate_raw = payload.get("InstrumentToAccountConversionRate")
+    try:
+        conversion_rate = float(conversion_rate_raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        conversion_rate = 0.0
+    if conversion_rate <= 0:
+        raise _fail(
+            f"{ticker}: precheck {index} carries no usable "
+            f"InstrumentToAccountConversionRate ({conversion_rate_raw!r}) — the "
+            "independent FX cross-check cannot run; refusing placement"
+        )
+    sizing_rate: float = fx.rate  # type: ignore[attr-defined]
+    divergence = divergence_fn(sizing_rate, conversion_rate)  # type: ignore[operator]
+    if divergence > divergence_max_pct:
+        raise _fail(
+            f"{ticker}: precheck {index} FX divergence {divergence:.2f}% exceeds the "
+            f"{divergence_max_pct}% bound — sizing rate {sizing_rate:.6f} "
+            f"(account->instrument) vs Saxo {conversion_rate:.6f} "
+            "(instrument->account, inverted before comparing); refusing placement"
+        )
+    typer.echo(
+        f"precheck {index}: fx cross-check ok — saxo rate {conversion_rate:.6f} "
+        f"(instrument->account), divergence {divergence:.2f}% <= {divergence_max_pct}%"
+    )
+    return conversion_rate
 
 
 @broker_app.command(name="submit")
@@ -394,10 +450,13 @@ def submit_command(
     --execute AND an interactive confirmation (--yes skips it) AND the
     ALPHALENS_BROKER_ALLOW_ORDERS=1 env gate enforced inside the broker.
     """
+    from alphalens_pipeline.brokers import execution as execution_policy
     from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.execution import (
+        build_fx_conversion,
         decompose_setup_plan,
         execution_config_version,
+        fx_precheck_divergence_pct,
     )
     from alphalens_pipeline.brokers.registry import get_default_broker
     from alphalens_pipeline.brokers.routing import resolve_us_instrument
@@ -406,7 +465,12 @@ def submit_command(
         build_submission_record,
     )
     from alphalens_pipeline.paper.brief_loader import load_brief
-    from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, compute_setup_plan
+    from alphalens_pipeline.paper.sizing import (
+        TradeSetupNotPlannableError,
+        compute_setup_plan,
+        setup_plan_gross_guard_limit,
+        setup_plan_gross_notional,
+    )
 
     try:
         brief_date = dt.date.fromisoformat(date)
@@ -427,17 +491,49 @@ def submit_command(
 
     try:
         broker = get_default_broker()
-        sizing_equity = equity if equity is not None else broker.get_account().total_value
+        # The account read is unconditional now: the BUDGET is the account
+        # currency (FX-leg memo §7 Q1 operator decision), so the currency
+        # compare needs AccountSnapshot.currency even with --equity given.
+        account = broker.get_account()
+        sizing_equity = equity if equity is not None else account.total_value
+        instrument = resolve_us_instrument(broker, wanted, exchange_mic=exchange)
+        if not instrument.currency:
+            raise _fail(
+                f"{wanted}: broker {broker.name!r} resolve stamped no instrument "
+                "currency — cannot verify the account-vs-instrument currency; "
+                "refusing to size (never MIC-inferred, never guessed)"
+            )
+        fx = None
+        if instrument.currency != account.currency:
+            get_fx_rate = getattr(broker, "get_fx_rate", None)
+            if get_fx_rate is None:
+                raise _fail(
+                    f"{wanted} trades in {instrument.currency} but the account is "
+                    f"{account.currency}, and broker {broker.name!r} exposes no "
+                    "get_fx_rate capability — refusing to size cross-currency "
+                    f"(policy {execution_policy._MISSING_FX_RATE_POLICY!r})"
+                )
+            fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
         plan = compute_setup_plan(
             brief_trade_setup=candidate.trade_setup,
             paper_equity=sizing_equity,
             scale_factor=scale_factor,
+            fx=fx,
         )
-        instrument = resolve_us_instrument(broker, wanted, exchange_mic=exchange)
     except TradeSetupNotPlannableError as exc:
         raise _fail(f"{wanted} is not plannable: {exc}") from exc
     except BrokerError as exc:
         raise _fail(f"broker submit failed: {exc}") from exc
+
+    gross = setup_plan_gross_notional(plan)
+    gross_limit = setup_plan_gross_guard_limit(plan)
+    if gross > gross_limit:
+        raise _fail(
+            f"{wanted}: planned gross {gross:,.2f} {instrument.currency} exceeds the "
+            f"gross safety guard {gross_limit:,.2f} {instrument.currency} "
+            "(GROSS_SAFETY_FRAC x equity, one currency through the sizing rate) — "
+            "nothing submitted"
+        )
 
     brackets = decompose_setup_plan(plan, instrument)
     if not brackets:
@@ -445,12 +541,24 @@ def submit_command(
 
     typer.echo(
         f"{wanted} @ {instrument.exchange_mic} (Uic {instrument.broker_instrument_id})  "
-        f"equity={sizing_equity:,.2f}  scale_factor={scale_factor}"
+        f"equity={sizing_equity:,.2f} {account.currency}  scale_factor={scale_factor}"
     )
+    if fx is not None:
+        typer.echo(
+            f"fx: {fx.account_currency} {plan.total_notional:,.2f} -> "
+            f"{fx.instrument_currency} {plan.sizing_notional:,.2f} @ {fx.rate:.4f} mid "
+            f"({fx.price_type}, buffer {fx.sizing_buffer_pct:.1f}%, {fx.source})"
+        )
     _echo_bracket_table(brackets)
 
-    # Precheck every bracket (validates server-side, places nothing).
+    # Precheck every bracket (validates server-side, places nothing). On the
+    # FX path the precheck is also the SECOND, independent rate source: its
+    # EstimatedCashRequiredCurrency must match the account currency, and its
+    # InstrumentToAccountConversionRate (instrument->account direction — the
+    # INVERSE of the sizing rate) must agree with the sizing rate within the
+    # policy divergence bound; any failure refuses placement.
     precheck_summaries: list[dict] = []
+    precheck_conversion_rate: float | None = None
     precheck_fn = getattr(broker, "precheck_bracket_order", None)
     if precheck_fn is None:
         typer.echo("precheck: not supported by this broker — skipping")
@@ -460,17 +568,37 @@ def submit_command(
                 payload = precheck_fn(bracket)
             except BrokerError as exc:
                 raise _fail(f"precheck failed for bracket {index}: {exc}") from exc
+            est_cash_currency = payload.get("EstimatedCashRequiredCurrency")
             summary = {
                 "client_request_id": bracket.client_request_id,
                 "PreCheckResult": payload.get("PreCheckResult"),
                 "EstimatedCashRequired": payload.get("EstimatedCashRequired"),
+                "EstimatedCashRequiredCurrency": est_cash_currency,
+                "InstrumentToAccountConversionRate": payload.get(
+                    "InstrumentToAccountConversionRate"
+                ),
                 "Costs": payload.get("Cost", payload.get("Costs")),
             }
             precheck_summaries.append(summary)
+            est_cash_label = (
+                f"{summary['EstimatedCashRequired']!r}"
+                if est_cash_currency is None
+                else f"{summary['EstimatedCashRequired']!r} {est_cash_currency}"
+            )
             typer.echo(
                 f"precheck {index}: result={summary['PreCheckResult']!r} "
-                f"est_cash={summary['EstimatedCashRequired']!r} costs={summary['Costs']!r}"
+                f"est_cash={est_cash_label} costs={summary['Costs']!r}"
             )
+            if fx is not None:
+                precheck_conversion_rate = _assert_fx_precheck_cross_checks(
+                    index=index,
+                    ticker=wanted,
+                    payload=payload,
+                    fx=fx,
+                    account_currency=account.currency,
+                    divergence_max_pct=(execution_policy._FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT),
+                    divergence_fn=fx_precheck_divergence_pct,
+                )
 
     if not execute:
         typer.echo("DRY-RUN: nothing was sent. Re-run with --execute to place these brackets.")
@@ -518,6 +646,11 @@ def submit_command(
                 brackets=placed_records,
                 precheck=precheck_summaries,
                 note=failure_note,
+                sizing_currency=account.currency,
+                instrument_currency=instrument.currency,
+                sizing_equity=sizing_equity,
+                fx=fx,
+                precheck_conversion_rate=precheck_conversion_rate,
             )
             path = append_submission_record(record)
             typer.echo(f"submission recorded: {path}")
