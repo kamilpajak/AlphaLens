@@ -338,6 +338,71 @@ class TestPriceRelationValidation(unittest.TestCase):
         self.assertEqual(stub.precheck_calls, [])
 
 
+class TestNakedNoneNoneBracketBody(unittest.TestCase):
+    """G1 (first-fill experiment): the childless ``stop=None``/``tp=None`` body.
+
+    The path is structurally supported by the ``is not None`` guards in
+    ``_build_bracket_body`` but ``decompose_setup_plan`` never produces it —
+    the experiment's manual opposite close (a naked SELL limit) is the first
+    consumer, so the body shape is pinned here BEFORE any live placement.
+    """
+
+    def _place(
+        self, request: BracketOrderRequest, client: _StubOrderClient | None = None
+    ) -> tuple[dict[str, Any], _StubOrderClient]:
+        broker, stub = _make_broker(client)
+        with mock.patch.dict("os.environ", _ALLOW):
+            broker.place_bracket_order(request)
+        body, _ = stub.place_calls[0]
+        return body, stub
+
+    def test_body_has_no_orders_key_and_plain_limit_entry(self):
+        request = _request(stop_loss=None, take_profit=None)
+        body, _ = self._place(request)
+        self.assertNotIn("Orders", body, "a childless bracket must carry NO Orders key")
+        self.assertEqual(body["OrderType"], "Limit")
+        self.assertEqual(body["OrderPrice"], 50.0)
+        self.assertEqual(body["BuySell"], "Buy")
+        self.assertEqual(body["ExternalReference"], request.client_request_id)
+        self.assertEqual(body["OrderDuration"]["DurationType"], "GoodTillDate")
+
+    def test_stop_order_type_capability_check_skipped_without_stop(self):
+        # StopIfTraded absent from SupportedOrderTypes rejects a stop-bearing
+        # bracket (covered elsewhere) but must NOT block a childless one.
+        no_stop = dict(_DETAILS_KO)
+        no_stop["SupportedOrderTypes"] = ["Limit", "Market"]
+        body, stub = self._place(
+            _request(stop_loss=None, take_profit=None),
+            _StubOrderClient(details=no_stop),
+        )
+        self.assertNotIn("Orders", body)
+        self.assertEqual(len(stub.place_calls), 1)
+
+    def test_price_relation_validation_no_ops_on_none_none(self):
+        # The relation validator still runs but receives (stop_q=None,
+        # tp_q=None) — no geometry to reject, placement proceeds either side.
+        with mock.patch.object(
+            broker_module,
+            "_validate_price_relations",
+            wraps=broker_module._validate_price_relations,
+        ) as spy:
+            self._place(_request(side="SELL", stop_loss=None, take_profit=None))
+        args, _ = spy.call_args
+        self.assertEqual(args[0], "SELL")
+        self.assertIsNone(args[2], "stop_q must be None on the naked path")
+        self.assertIsNone(args[3], "tp_q must be None on the naked path")
+
+    def test_naked_close_maps_to_placed_order_with_empty_exits(self):
+        stub = _StubOrderClient(place_response=(201, {"OrderId": "E-500"}))
+        broker, _ = _make_broker(stub)
+        with mock.patch.dict("os.environ", _ALLOW):
+            placed = broker.place_bracket_order(
+                _request(side="SELL", stop_loss=None, take_profit=None)
+            )
+        self.assertEqual(placed.entry_order_id, "E-500")
+        self.assertEqual(placed.exit_order_ids, ())
+
+
 class TestPlacementResponseHandling(unittest.TestCase):
     def test_place_maps_200_to_placed_order_tp_then_sl(self):
         broker, _ = _make_broker()
