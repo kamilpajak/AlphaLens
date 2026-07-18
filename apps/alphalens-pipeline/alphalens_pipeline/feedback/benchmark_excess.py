@@ -53,7 +53,7 @@ import logging
 import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 import pandas as pd
 
@@ -237,11 +237,30 @@ def _enrich_frame_rows(
             exchange=exchange,
             window_cache=window_cache,
         )
+        # Non-destructive: a transient fetch miss (bench=None) must NOT overwrite an
+        # already-good value with NULL on this whole-store rewrite — the enrich only
+        # ever FILLS a gap. Fall back to the row's existing benchmark/excess.
+        if bench is None:
+            prev_bench = (
+                row["benchmark_window_return"] if "benchmark_window_return" in row.index else None
+            )
+            if _is_real(prev_bench):
+                bench = float(prev_bench)
+                prev_excess = (
+                    row["market_excess_return"] if "market_excess_return" in row.index else None
+                )
+                excess = float(prev_excess) if _is_real(prev_excess) else None
         bench_col.append(bench)
         excess_col.append(excess)
         if excess is not None:
             n_enriched += 1
     return bench_col, excess_col, n_enriched, False
+
+
+def _is_real(value: Any) -> TypeGuard[float]:
+    """True for a concrete number — not None and not NaN. Guards a transient None
+    from clobbering an already-computed benchmark on the whole-store rewrite."""
+    return value is not None and not (isinstance(value, float) and pd.isna(value))
 
 
 def enrich_store_with_benchmark_excess(
@@ -285,7 +304,10 @@ def enrich_store_with_benchmark_excess(
     window_cache: dict[tuple[dt.date, dt.date], float | None] = {}
     n_enriched = 0
 
-    for path in sorted(store.glob("*.parquet")):
+    # Newest first: under the shared run deadline a truncated sweep must heal the
+    # recent, dashboard-visible dates before the deep history. ISO-named files sort
+    # lexicographically by date, so reverse=True is newest-first.
+    for path in sorted(store.glob("*.parquet"), reverse=True):
         try:
             df = pd.read_parquet(path)
         except (OSError, ValueError) as exc:

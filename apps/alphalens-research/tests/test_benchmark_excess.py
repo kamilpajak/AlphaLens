@@ -243,6 +243,78 @@ class TestEnrichDeadline(unittest.TestCase):
         self.assertEqual(n, 0)
 
 
+class TestEnrichSelfHeal(unittest.TestCase):
+    """Root-cause fixes for the persistent NULL benchmark on recent /edge dates.
+
+    Two failure modes the nightly sweep had: (1) it processed parquets OLDEST
+    first, so under the shared run deadline the recent (dashboard-visible) dates
+    could be starved; (2) it rewrote the whole column, so a transient benchmark
+    fetch miss DESTROYED an already-good value. The enrich now visits newest
+    first and never overwrites an existing benchmark with a fresh None.
+    """
+
+    def test_processes_newest_parquet_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            # (brief_date, matured session) — both matured dates are real XNYS
+            # sessions (avoid Memorial Day 2026-05-25).
+            old, old_exit = dt.date(2026, 5, 18), dt.date(2026, 5, 27)
+            new, new_exit = dt.date(2026, 6, 1), dt.date(2026, 6, 8)
+            for d, exit_d in ((old, old_exit), (new, new_exit)):
+                pd.DataFrame(
+                    [
+                        {
+                            "brief_date": d,
+                            "ticker": "AA",
+                            "terminal": True,
+                            "matured_at": exit_d,
+                            "forward_return": 0.05,
+                        }
+                    ]
+                ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            fetched_starts: list[dt.datetime] = []
+
+            def _fetch(_t, start, _e):
+                fetched_starts.append(start)
+                return _spy_bars(start, reference=100.0, last_close=102.0)
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 10, tzinfo=UTC)
+            )
+            # The newest date's arrival window must be fetched before the old one's,
+            # so a deadline-truncated sweep heals the dashboard-visible dates first.
+            new_arrival = session_open_utc(session_on_or_after(new))
+            self.assertEqual(fetched_starts[0], new_arrival)
+
+    def test_transient_none_does_not_overwrite_existing_benchmark(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            # A transient outage: the fetch returns no bars, so the benchmark
+            # recomputes to None. The previously-good value must be KEPT.
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=lambda *_: [], now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.02, places=6)
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+
 class TestBenchmarkAnchorInvariants(unittest.TestCase):
     """Pins the verified market_excess anchor invariants (NO anchor bug exists).
 
