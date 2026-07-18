@@ -1,0 +1,38 @@
+# Cosmic Ray mutation-testing config — target: backtest/metrics.py
+#
+# Mutation testing measures TEST QUALITY: it makes small edits ("mutants") to
+# the source and checks the suite catches ("kills") each one. A surviving mutant
+# is a gap — the tests pass even though the code changed. cosmic-ray 8.4.6 is
+# verified on Python 3.13; it is a dev dependency in the root `dev` group
+# (`uv sync --group dev`).
+#
+# ── HOW TO RUN (always from the REPO ROOT so the relative paths resolve) ──
+#   uv run cosmic-ray init     apps/alphalens-research/cosmic-ray.toml /tmp/cr-metrics.sqlite
+#   uv run cosmic-ray baseline apps/alphalens-research/cosmic-ray.toml
+#   uv run cosmic-ray exec     apps/alphalens-research/cosmic-ray.toml /tmp/cr-metrics.sqlite
+#   uv run cr-rate   /tmp/cr-metrics.sqlite   # survival %
+#   uv run cr-report /tmp/cr-metrics.sqlite   # per-mutant killed/survived + diff
+#
+# ── GOTCHA: never wrap `exec` in an external `timeout`/kill ──
+#   cosmic-ray mutates the file IN PLACE and reverts after each mutant. A hard
+#   SIGTERM mid-mutant leaves the source mutated. If you interrupt a run, restore
+#   with: git checkout -- apps/alphalens-research/alphalens_research/backtest/metrics.py
+#   To bound a run, narrow `module-path`/`test-command` instead of killing it.
+#
+# ── SCOPE CAVEAT: survival is only meaningful vs the chosen `test-command` ──
+#   The command below runs ONLY test_metrics.py (32 tests, ~1.2s) — fast, but it
+#   does NOT exercise every function in metrics.py, so mutants in e.g.
+#   `sharpe_autocorr_adjusted` / `per_rebalance_turnover` survive trivially
+#   (those are covered by tests/test_backtest_engine_stride.py). For a TRUE score
+#   of metrics.py, widen the runner to every test that imports it, e.g. add
+#   `-p '*metrics*'` is NOT enough — run the full research suite by dropping the
+#   `-p test_metrics.py` filter (slower per mutant, correct coverage).
+
+[cosmic-ray]
+module-path = "apps/alphalens-research/alphalens_research/backtest/metrics.py"
+test-command = ".venv/bin/python -m unittest discover -s apps/alphalens-research/tests -t apps/alphalens-research -p test_metrics.py"
+timeout = 30.0
+excluded-modules = []
+
+[cosmic-ray.distributor]
+name = "local"
