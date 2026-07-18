@@ -219,6 +219,23 @@ def _flatten_closed_row(row: Mapping[str, Any]) -> dict[str, Any]:
     return dict(inner) if isinstance(inner, Mapping) else dict(row)
 
 
+def _effective_settlement_rate(closed_row: Mapping[str, Any]) -> float | None:
+    """``ProfitLossOnTrade / ProfitLossOnTradeInBaseCurrency`` or ``None``.
+
+    ``None`` (never a fabricated number) when either PnL field is missing,
+    non-numeric (booleans are EXCLUDED — the ``ConversionRateInstrumentTo-
+    BaseSettled*`` gotcha class), or the base-currency PnL is zero.
+    """
+    pnl_trade = closed_row.get("ProfitLossOnTrade")
+    pnl_base = closed_row.get("ProfitLossOnTradeInBaseCurrency")
+    for value in (pnl_trade, pnl_base):
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            return None
+    if pnl_base == 0:
+        return None
+    return float(pnl_trade) / float(pnl_base)  # type: ignore[arg-type]
+
+
 def _submission_date(record: Mapping[str, Any]) -> dt.date | None:
     ts = record.get("ts")
     if not ts:
@@ -266,6 +283,14 @@ def _reconcile_one(
         "mic": record.get("mic"),
         "execution_config_version": record.get("execution_config_version"),
     }
+    # Journal schema-2 FX provenance (absent on schema-1 lines = the
+    # same-currency no-op era; forward-compat, never back-migrated). The
+    # instrument currency labels PnL amounts; the sizing rate sits next to
+    # the reconstructed effective settlement rate for the FX cross-check.
+    if record.get("instrument_currency") is not None:
+        details["instrument_currency"] = record.get("instrument_currency")
+    if record.get("fx_rate") is not None:
+        details["sizing_fx_rate"] = record.get("fx_rate")
 
     open_state = open_states.get(entry_order_id) if entry_order_id else None
     if open_state is not None:
@@ -472,6 +497,15 @@ def _reconcile_filled(
         details["realized_r"] = realized_r
         if closed_match.get("ProfitLossOnTrade") is not None:
             details["profit_loss_on_trade"] = closed_match.get("ProfitLossOnTrade")
+        effective_rate = _effective_settlement_rate(closed_match)
+        if effective_rate is not None:
+            # The ONLY empirical FX-slippage signal: ClosedPosition does NOT
+            # expose the settlement rate (the ConversionRateInstrumentToBase-
+            # Settled* fields are BOOLEANS — never read them as numbers), so
+            # the effective conversion is reconstructed as
+            # ProfitLossOnTrade / ProfitLossOnTradeInBaseCurrency and recorded
+            # next to the journaled sizing_fx_rate for the cross-check.
+            details["effective_settlement_rate"] = effective_rate
         label = (
             f"FILLED(closed r={realized_r:+.2f})" if realized_r is not None else "FILLED(closed)"
         )

@@ -94,17 +94,29 @@ _POSITIONS = {
 _SEARCH_RESULTS: dict[str, dict[str, Any]] = {
     "KO": {
         "Data": [
-            {"Symbol": "KO:xnys", "Identifier": 211, "AssetType": "Stock"},
-            {"Symbol": "KOF:xnys", "Identifier": 999, "AssetType": "Stock"},
+            {"Symbol": "KO:xnys", "Identifier": 211, "AssetType": "Stock", "CurrencyCode": "USD"},
+            {"Symbol": "KOF:xnys", "Identifier": 999, "AssetType": "Stock", "CurrencyCode": "USD"},
         ]
     },
-    "AAPL": {"Data": [{"Symbol": "AAPL:xnas", "Identifier": 212, "AssetType": "Stock"}]},
+    "AAPL": {
+        "Data": [
+            {"Symbol": "AAPL:xnas", "Identifier": 212, "AssetType": "Stock", "CurrencyCode": "USD"}
+        ]
+    },
     "AMBIG": {
         "Data": [
-            {"Symbol": "AMBIG:xnys", "Identifier": 1, "AssetType": "Stock"},
-            {"Symbol": "AMBIG:xnys", "Identifier": 2, "AssetType": "Stock"},
+            {"Symbol": "AMBIG:xnys", "Identifier": 1, "AssetType": "Stock", "CurrencyCode": "USD"},
+            {"Symbol": "AMBIG:xnys", "Identifier": 2, "AssetType": "Stock", "CurrencyCode": "USD"},
         ]
     },
+    # Live-verified shape: CDR@XWAR carries CurrencyCode PLN (P1 memo).
+    "CDR": {
+        "Data": [
+            {"Symbol": "CDR:xwar", "Identifier": 53932, "AssetType": "Stock", "CurrencyCode": "PLN"}
+        ]
+    },
+    # Defect fixture: a search row WITHOUT CurrencyCode must be refused.
+    "NOCCY": {"Data": [{"Symbol": "NOCCY:xnys", "Identifier": 777, "AssetType": "Stock"}]},
 }
 
 
@@ -287,6 +299,18 @@ class TestInstrumentResolution(unittest.TestCase):
         self.assertEqual(ref.broker_instrument_id, "211")
         self.assertEqual(ref.broker_symbol, "KO:xnys")
         self.assertEqual(ref.asset_type, "Stock")
+        self.assertEqual(ref.currency, "USD", "CurrencyCode stamped at resolve time")
+
+    def test_resolve_stamps_pln_currency_for_wse_listing(self):
+        ref = _make_broker().resolve_instrument("CDR", "XWAR")
+        self.assertEqual(ref.currency, "PLN")
+
+    def test_missing_currency_code_is_a_refusal_not_a_guess(self):
+        # Authoritative instrument currency comes ONLY from Saxo's own row —
+        # never MIC-inferred (FX-leg memo §4.3 item 4).
+        with self.assertRaises(InstrumentNotFoundError) as ctx:
+            _make_broker().resolve_instrument("NOCCY", "XNYS")
+        self.assertIn("CurrencyCode", str(ctx.exception))
 
     def test_search_passes_saxo_exchange_id_for_mic(self):
         client = _StubSaxoClient()

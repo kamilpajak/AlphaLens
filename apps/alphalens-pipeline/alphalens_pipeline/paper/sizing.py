@@ -42,8 +42,10 @@ from dataclasses import dataclass
 
 from alphalens_pipeline.paper.constants import (
     EXPECTED_AVG_HOLD_DAYS,
+    GROSS_SAFETY_FRAC,
     STEADY_STATE_GROSS_FRAC,
 )
+from alphalens_pipeline.paper.fx import FxConversion
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,14 @@ class SetupPlan:
     decision: ``final_size_pct = suggested_size_pct × scale_factor``. The
     raw ``suggested_size_pct`` is preserved so the analysis report can
     attribute outcomes back to the brief's calibrated risk budget.
+
+    Currencies (FX-leg design memo §4.2): ``paper_equity`` and
+    ``total_notional`` are ACCOUNT currency; ``entry_tiers`` limits,
+    ``tp_tranches`` targets and ``disaster_stop`` are INSTRUMENT currency
+    (prices are never converted). ``fx`` is ``None`` on the same-currency
+    path (a strict no-op — the plan is byte-identical to the pre-FX-leg
+    output); when set, :attr:`sizing_notional` is the buffered
+    instrument-currency notional the qty division used.
     """
 
     suggested_size_pct: float
@@ -87,6 +97,18 @@ class SetupPlan:
     order_ttl_days: int
     entry_tiers: tuple[TierPlan, ...]
     tp_tranches: tuple[TpTranchePlan, ...]
+    fx: FxConversion | None = None
+
+    @property
+    def sizing_notional(self) -> float:
+        """The notional the qty division used, in INSTRUMENT currency.
+
+        Identity (``total_notional``) when ``fx`` is None; otherwise the one
+        FX line of math: ``total_notional × rate × (1 − buffer_pct/100)``.
+        """
+        if self.fx is None:
+            return self.total_notional
+        return self.total_notional * self.fx.rate * (1.0 - self.fx.sizing_buffer_pct / 100.0)
 
 
 class TradeSetupNotPlannableError(ValueError):
@@ -166,7 +188,9 @@ def compute_daily_scale_factor(
         plannable_suggested_pcts: ``suggested_size_pct`` values from every
             candidate that passed :func:`validate_trade_setup` today
             (i.e. verified + has a plannable setup). Order does not matter.
-        paper_equity: live paper-account equity in USD.
+        paper_equity: live account equity in the ACCOUNT currency (whatever
+            ``AccountSnapshot.currency`` says — the budget IS the account
+            currency by operator decision, FX-leg memo §7 Q1).
 
     Returns:
         ``min(1.0, daily_target / aggregate)``. When the candidate set is
@@ -194,29 +218,58 @@ def compute_setup_plan(
     brief_trade_setup: dict,
     paper_equity: float,
     scale_factor: float,
+    fx: FxConversion | None = None,
 ) -> SetupPlan:
     """Turn a parsed ``brief_trade_setup`` dict into a :class:`SetupPlan`.
 
     Args:
         brief_trade_setup: parsed JSON dict from the brief parquet row.
-        paper_equity: live paper-account equity in USD.
+        paper_equity: live account equity in the ACCOUNT currency.
         scale_factor: pre-computed daily scale factor from
             :func:`compute_daily_scale_factor`. Pass ``1.0`` for unit tests
             that want to inspect un-scaled sizing (rare; almost every prod
             day will scale < 1.0 given typical ``suggested_size_pct`` values).
+        fx: ``None`` on the same-currency path (strict no-op — the plan is
+            byte-identical to the pre-FX-leg output). When the instrument
+            currency differs from the account currency the caller passes a
+            policy-validated :class:`FxConversion`; the conversion is applied
+            ONCE between the account-currency notional and the per-tier qty
+            division. Prices (tier limits, targets, stop) are NEVER
+            converted.
 
     Raises :class:`TradeSetupNotPlannableError` for the documented
     unplannable cases (status != OK, no entry tiers, missing
-    ``suggested_size_pct``, …). Shares its validation with
-    :func:`validate_trade_setup` so the two cannot drift.
+    ``suggested_size_pct``, …) plus the FX refusals (non-positive rate,
+    same-currency ``FxConversion`` — same-currency must pass ``fx=None``).
+    Shares its validation with :func:`validate_trade_setup` so the two
+    cannot drift.
     """
     suggested_size_pct = validate_trade_setup(brief_trade_setup)
+    if fx is not None:
+        if fx.account_currency == fx.instrument_currency:
+            raise TradeSetupNotPlannableError(
+                f"FxConversion for identical currencies ({fx.account_currency}) — "
+                "the same-currency path must pass fx=None (strict no-op), never a rate"
+            )
+        if fx.rate <= 0:
+            raise TradeSetupNotPlannableError(
+                f"FxConversion rate {fx.rate!r} not usable "
+                f"({fx.account_currency}->{fx.instrument_currency})"
+            )
     disaster_stop = float(brief_trade_setup["disaster_stop"])
     entry_tiers_raw = brief_trade_setup["entry_tiers"]
     tp_tranches_raw = brief_trade_setup.get("tp_tranches") or ()
 
     final_size_pct = suggested_size_pct * float(scale_factor)
     total_notional = final_size_pct / 100.0 * float(paper_equity)
+    if fx is None:
+        # Same-currency: the account-ccy notional IS the sizing notional —
+        # no float op applied, so the plan stays byte-exact vs pre-FX-leg.
+        sizing_notional = total_notional
+    else:
+        # THE conversion (memo §4.2 step 5): account-ccy notional × rate ×
+        # (1 − buffer). Applied to the NOTIONAL only, before the qty floor.
+        sizing_notional = total_notional * fx.rate * (1.0 - fx.sizing_buffer_pct / 100.0)
 
     entries: list[TierPlan] = []
     for idx, raw in enumerate(entry_tiers_raw):
@@ -226,7 +279,7 @@ def compute_setup_plan(
             # this. Skip the offending tier rather than the whole plan.
             continue
         alloc_pct = float(raw.get("alloc_pct", 0.0))
-        tier_notional = total_notional * (alloc_pct / 100.0)
+        tier_notional = sizing_notional * (alloc_pct / 100.0)
         qty = max(0, math.floor(tier_notional / limit))
         entries.append(
             TierPlan(
@@ -270,25 +323,45 @@ def compute_setup_plan(
         order_ttl_days=order_ttl_days,
         entry_tiers=tuple(entries),
         tp_tranches=tuple(tranches),
+        fx=fx,
     )
 
 
 def setup_plan_gross_notional(plan: SetupPlan) -> float:
-    """The dollar gross a planner would commit if every tier filled.
+    """The INSTRUMENT-currency gross a planner would commit if every tier filled.
 
     Used by the gross safety guard in the planner (block if cumulative would
-    push past ``GROSS_SAFETY_FRAC × equity``).
+    push past :func:`setup_plan_gross_guard_limit`).
     """
     return sum(t.qty * t.limit_price for t in plan.entry_tiers)
 
 
+def setup_plan_gross_guard_limit(
+    plan: SetupPlan,
+    *,
+    gross_safety_frac: float = GROSS_SAFETY_FRAC,
+) -> float:
+    """The gross-guard ceiling in INSTRUMENT currency (memo §4.3 item 7).
+
+    The gross guard must compare in ONE currency: the equity side is
+    converted through the plan's OWN :class:`FxConversion` rate (no second
+    fetch — two fetches could straddle a tick and disagree with the
+    journal), WITHOUT the sizing buffer (the buffer shrinks the deployed
+    notional, not the safety ceiling). Same-currency plans compare raw.
+    """
+    rate = plan.fx.rate if plan.fx is not None else 1.0
+    return gross_safety_frac * plan.paper_equity * rate
+
+
 __all__ = [
+    "FxConversion",
     "SetupPlan",
     "TierPlan",
     "TpTranchePlan",
     "TradeSetupNotPlannableError",
     "compute_daily_scale_factor",
     "compute_setup_plan",
+    "setup_plan_gross_guard_limit",
     "setup_plan_gross_notional",
     "validate_trade_setup",
 ]

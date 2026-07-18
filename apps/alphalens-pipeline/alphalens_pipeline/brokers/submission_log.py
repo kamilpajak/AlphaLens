@@ -8,10 +8,12 @@ output, and the P3 reconciler's input. Every record is stamped with
 restamped, and analyses never pool across tokens (T8 — live fills are a new
 measurement source, never merged with broker-free replays).
 
-Record shape (frozen with the P2 token; changing it costs a schema bump)::
+Record shape (frozen with the token's ``_STAMP_SCHEMA``; changing it costs a
+schema bump — schema "2" ADDED the FX provenance keys, FX-leg design memo
+§4.3 item 8)::
 
     {
-        "execution_config_version": "execution-v1-...",
+        "execution_config_version": "execution-v2-...",
         "ts": "<UTC ISO-8601>",
         "brief_date": "YYYY-MM-DD",
         "ticker": "KO",
@@ -24,8 +26,24 @@ Record shape (frozen with the P2 token; changing it costs a schema bump)::
             ...
         ],
         "precheck": {...},       # per-bracket precheck summary
+        "sizing_currency": "EUR" | null,     # account ccy the budget was in
+        "instrument_currency": "PLN" | null, # resolved instrument ccy
+        "sizing_equity": 1000000.0 | null,   # equity the sizing used (acct ccy)
+        "fx_rate": 4.34 | null,   # REAL null on same-currency (a fake 1.0
+                                  # would masquerade as a quote); acct->instr
+        "fx_rate_bid": ... | null,
+        "fx_rate_ask": ... | null,
+        "fx_rate_price_type": "Tradable" | null,
+        "fx_rate_source": "saxo-fxspot-uic-1343-mid" | null,
+        "fx_rate_asof": "<UTC ISO-8601>" | null,
+        "precheck_conversion_rate": 0.2304 | null,  # Saxo's independent
+                                  # InstrumentToAccountConversionRate
         "note": "...",           # optional (e.g. partial-run failure note)
     }
+
+Forward compat: readers (``iter_submission_records`` + the reconciler) treat
+schema-1 lines — which simply LACK the fx keys — as the same-currency no-op
+era. The journal is never back-migrated (append-only cohort boundary).
 """
 
 from __future__ import annotations
@@ -37,6 +55,7 @@ from pathlib import Path
 from typing import Any
 
 from alphalens_pipeline.brokers.execution import execution_config_version
+from alphalens_pipeline.paper.fx import FxConversion
 
 DEFAULT_SUBMISSIONS_PATH = Path.home() / ".alphalens" / "broker_orders" / "submissions.jsonl"
 
@@ -50,8 +69,21 @@ def build_submission_record(
     brackets: list[dict[str, Any]],
     precheck: list[dict[str, Any]] | None = None,
     note: str | None = None,
+    sizing_currency: str | None = None,
+    instrument_currency: str | None = None,
+    sizing_equity: float | None = None,
+    fx: FxConversion | None = None,
+    precheck_conversion_rate: float | None = None,
 ) -> dict[str, Any]:
-    """Assemble one journal record, stamping the token + a UTC timestamp."""
+    """Assemble one journal record, stamping the token + a UTC timestamp.
+
+    Schema-2 shape: the fx keys are ALWAYS present. ``fx=None`` (the
+    same-currency no-op, and explicit-qty callers that never sized) writes
+    REAL nulls — never a fake 1.0 rate. Cross-currency callers pass the ONE
+    :class:`FxConversion` their sizing used; the journal is the only place
+    the sizing rate survives (ClosedPosition does not expose the settlement
+    rate), so the fields are stamped verbatim.
+    """
     record: dict[str, Any] = {
         "execution_config_version": execution_config_version(),
         "ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
@@ -61,6 +93,16 @@ def build_submission_record(
         "uic": uic,
         "brackets": brackets,
         "precheck": precheck or [],
+        "sizing_currency": sizing_currency,
+        "instrument_currency": instrument_currency,
+        "sizing_equity": sizing_equity,
+        "fx_rate": fx.rate if fx is not None else None,
+        "fx_rate_bid": fx.bid if fx is not None else None,
+        "fx_rate_ask": fx.ask if fx is not None else None,
+        "fx_rate_price_type": fx.price_type if fx is not None else None,
+        "fx_rate_source": fx.source if fx is not None else None,
+        "fx_rate_asof": fx.asof.isoformat(timespec="seconds") if fx is not None else None,
+        "precheck_conversion_rate": precheck_conversion_rate,
     }
     if note:
         record["note"] = note

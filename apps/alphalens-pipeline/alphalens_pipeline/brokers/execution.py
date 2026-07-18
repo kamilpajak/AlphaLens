@@ -32,6 +32,7 @@ observed via the SIM order probe.
 
 from __future__ import annotations
 
+import datetime as dt
 import hashlib
 import json
 import logging
@@ -40,7 +41,8 @@ from typing import Literal
 
 from alphalens_pipeline.brokers.contract import BracketOrderRequest, InstrumentRef
 from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
-from alphalens_pipeline.paper.sizing import SetupPlan
+from alphalens_pipeline.paper.fx import FxConversion, FxRateQuote
+from alphalens_pipeline.paper.sizing import SetupPlan, TradeSetupNotPlannableError
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +55,10 @@ logger = logging.getLogger(__name__)
 
 # Bumped ONLY when the SHAPE of the stamp changes (key added/removed/renamed),
 # NEVER when a constant's value changes — a value change must surface as a
-# different digest, not a schema bump.
-_STAMP_SCHEMA = "1"
+# different digest, not a schema bump. "1"->"2": the submission record gained
+# the FX provenance keys (sizing_currency / instrument_currency / fx_rate* /
+# sizing_equity / precheck_conversion_rate — FX-leg design memo §4.3 item 8).
+_STAMP_SCHEMA = "2"
 
 # One 3-way bracket (entry Limit + TP Limit child + StopIfTraded child) per
 # NON-ZERO entry tier, placed as a single POST each.
@@ -103,6 +107,50 @@ _TICK_QUANTIZE_POLICY = "nearest"
 # a larger drift means the tick scheme disagrees with the setup's price scale.
 _MAX_TICK_ADJUSTMENT_BPS = 25.0
 
+# ---------------------------------------------------------------------------
+# FX-leg policy (design memo docs/research/saxo_fx_leg_gpw_design_2026_07_18.md
+# §4.3). Constants live HERE, not in paper/sizing.py, so the namespace sweep
+# in tests/brokers/test_execution_config_version.py forces every one of them
+# into the poolability token automatically (R3 for free).
+# ---------------------------------------------------------------------------
+
+# Missing / unresolvable / unacceptable FX rate on a cross-currency submit ->
+# refuse to size (TradeSetupNotPlannableError). NEVER a silent 1.0 fallback,
+# never a static hardcoded rate. The same-currency path is a strict no-op.
+_MISSING_FX_RATE_POLICY = "reject"
+
+# Belt constant: a quote older than this (local fetch clock, NOT Saxo's
+# LastUpdated — live-probed to echo the request second even on a CLOSED
+# market) is rejected. The rate is fetched synchronously per submission, so
+# this only fires on in-process reuse.
+_FX_RATE_MAX_AGE_S = 300
+
+# Freshness is judged from PriceType (both sides must be in this set).
+# OldIndicative (the documented weekend/no-market state), NoAccess, or an
+# absent PriceType -> refuse.
+_FX_ACCEPTED_PRICE_TYPES = ("Tradable", "Indicative")
+
+# Mid-only sizing (weekend EURPLN spread observed ~0.32%; Ask would
+# systematically undersize). Bid/Ask are still journaled for diagnostics.
+_FX_RATE_SOURCE = "saxo-fxspot-infoprice-mid"
+
+# The ONE place the conversion happens: account-ccy notional -> instrument-ccy
+# notional, BEFORE the per-tier qty floor. Prices are never converted.
+_FX_CONVERSION_POINT = "notional-before-qty"
+
+# Precheck cross-check: |InstrumentToAccountConversionRate^-1 vs sizing rate|
+# beyond this % means the infoprice snapshot and Saxo's own conversion rate
+# disagree materially (or a wrong-pair/inverted-rate bug) -> refuse placement.
+# Mind the direction: precheck's rate is instrument->account.
+_FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT = 2.0
+
+# Settlement-drift honesty haircut on the converted instrument-ccy notional
+# (IsCurrencyConversionAtSettlementTime=true fixes the debit at the T+2 rate;
+# covers the <=0.25% conversion markup + ~2 days of drift). Operator-locked
+# at 1.0 (memo §7 Q3). Applied ONLY when an FxConversion is active — the
+# same-currency path takes no buffer.
+_FX_SIZING_BUFFER_PCT = 1.0
+
 
 def execution_config_version() -> str:
     """Poolability key for the execution/decomposition policy (ADR 0013 R3).
@@ -127,6 +175,13 @@ def execution_config_version() -> str:
         "manual_order": _MANUAL_ORDER,
         "tick_quantize_policy": _TICK_QUANTIZE_POLICY,
         "max_tick_adjustment_bps": _MAX_TICK_ADJUSTMENT_BPS,
+        "missing_fx_rate_policy": _MISSING_FX_RATE_POLICY,
+        "fx_rate_max_age_s": _FX_RATE_MAX_AGE_S,
+        "fx_accepted_price_types": list(_FX_ACCEPTED_PRICE_TYPES),
+        "fx_rate_source": _FX_RATE_SOURCE,
+        "fx_conversion_point": _FX_CONVERSION_POINT,
+        "fx_precheck_rate_divergence_max_pct": _FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT,
+        "fx_sizing_buffer_pct": _FX_SIZING_BUFFER_PCT,
     }
     canon = json.dumps(config, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
@@ -192,7 +247,86 @@ def decompose_setup_plan(
     return brackets
 
 
+def build_fx_conversion(
+    quote: FxRateQuote,
+    *,
+    now: dt.datetime | None = None,
+) -> FxConversion:
+    """Validate a broker FX quote against the FX policy; freeze the conversion.
+
+    The adapter (``SaxoBroker.get_fx_rate``) reports the quote verbatim; THIS
+    is where policy acceptance happens, so the refusal rules live next to the
+    constants the poolability token covers. Raises
+    :class:`TradeSetupNotPlannableError` (``_MISSING_FX_RATE_POLICY =
+    "reject"`` — no order, no fallback) on:
+
+    - a same-currency pair (same-currency sizing must pass ``fx=None``);
+    - missing or non-positive Mid (never fabricated from Bid/Ask);
+    - a PriceType outside :data:`_FX_ACCEPTED_PRICE_TYPES` on EITHER side,
+      or an absent PriceType (OldIndicative = the documented weekend state);
+    - a quote older than :data:`_FX_RATE_MAX_AGE_S` seconds (``now`` is an
+      injectable clock seam; wall-clock age is seconds by construction since
+      the rate is fetched synchronously per submission).
+    """
+    if quote.base_currency == quote.quote_currency:
+        raise TradeSetupNotPlannableError(
+            f"FX quote for identical currencies ({quote.base_currency}) — the "
+            "same-currency path is a strict no-op and must not fetch a rate"
+        )
+    for side, price_type in (("bid", quote.price_type_bid), ("ask", quote.price_type_ask)):
+        if price_type not in _FX_ACCEPTED_PRICE_TYPES:
+            raise TradeSetupNotPlannableError(
+                f"FX PriceType{side.capitalize()}={price_type!r} not in the accepted set "
+                f"{_FX_ACCEPTED_PRICE_TYPES} for {quote.base_currency}->"
+                f"{quote.quote_currency} — refusing to size (policy "
+                f"{_MISSING_FX_RATE_POLICY!r})"
+            )
+    if quote.mid is None or quote.mid <= 0:
+        raise TradeSetupNotPlannableError(
+            f"FX quote {quote.base_currency}->{quote.quote_currency} carries no usable "
+            f"Mid ({quote.mid!r}) — refusing to size (policy {_MISSING_FX_RATE_POLICY!r})"
+        )
+    age_s = ((now or dt.datetime.now(dt.UTC)) - quote.asof).total_seconds()
+    if age_s > _FX_RATE_MAX_AGE_S:
+        raise TradeSetupNotPlannableError(
+            f"FX quote {quote.base_currency}->{quote.quote_currency} is {age_s:.0f}s old "
+            f"(max {_FX_RATE_MAX_AGE_S}s) — refusing to size on a stale rate"
+        )
+    return FxConversion(
+        account_currency=quote.base_currency,
+        instrument_currency=quote.quote_currency,
+        rate=quote.mid,
+        sizing_buffer_pct=_FX_SIZING_BUFFER_PCT,
+        source=quote.source,
+        price_type=quote.price_type,
+        bid=quote.bid,
+        ask=quote.ask,
+        asof=quote.asof,
+    )
+
+
+def fx_precheck_divergence_pct(sizing_rate: float, instrument_to_account_rate: float) -> float:
+    """% divergence between the sizing rate and the precheck's independent rate.
+
+    MIND THE DIRECTION: precheck's ``InstrumentToAccountConversionRate`` is
+    instrument->account (e.g. PLN->EUR), the sizing rate is
+    account->instrument — so the precheck rate is INVERTED before comparing.
+    Callers compare the result against
+    :data:`_FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT`; non-positive inputs raise
+    ``ValueError`` (the caller refuses before dividing by a broken rate).
+    """
+    if sizing_rate <= 0 or instrument_to_account_rate <= 0:
+        raise ValueError(
+            f"non-positive rate in FX precheck cross-check (sizing={sizing_rate!r}, "
+            f"instrument_to_account={instrument_to_account_rate!r})"
+        )
+    implied_account_to_instrument = 1.0 / instrument_to_account_rate
+    return abs(implied_account_to_instrument - sizing_rate) / sizing_rate * 100.0
+
+
 __all__ = [
+    "build_fx_conversion",
     "decompose_setup_plan",
     "execution_config_version",
+    "fx_precheck_divergence_pct",
 ]

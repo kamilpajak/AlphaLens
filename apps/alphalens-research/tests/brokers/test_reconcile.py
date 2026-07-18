@@ -365,6 +365,94 @@ class TestDivergenceClassification(unittest.TestCase):
         self.assertIsNone(compute_realized_r(55.0, 50.0, None), "no stop -> None")
 
 
+class TestFxDiagnostics(unittest.TestCase):
+    """Schema-2 FX provenance surfacing + the effective-settlement-rate
+    reconstruction (the ONLY empirical FX-slippage signal — ClosedPosition
+    does not expose the settlement rate)."""
+
+    _FILLED = _order_state("E-1", OrderStatus.FILLED, filled=10.0, raw_status="FinalFill/Confirmed")
+
+    def _fx_record(self) -> dict[str, Any]:
+        return _record(
+            mic="XWAR",
+            instrument_currency="PLN",
+            sizing_currency="EUR",
+            fx_rate=4.34,
+        )
+
+    def test_journal_fx_provenance_lands_in_verdict_details(self):
+        broker = _FullBroker(open_orders=[_order_state("E-1", OrderStatus.WORKING)])
+
+        verdict = _single(reconcile_brackets([self._fx_record()], broker, today=_TODAY_FRESH))
+
+        self.assertEqual(verdict.details.get("instrument_currency"), "PLN")
+        self.assertEqual(verdict.details.get("sizing_fx_rate"), 4.34)
+
+    def test_v1_record_without_fx_keys_adds_no_fx_details(self):
+        broker = _FullBroker(open_orders=[_order_state("E-1", OrderStatus.WORKING)])
+
+        verdict = _single(reconcile_brackets([_record()], broker, today=_TODAY_FRESH))
+
+        self.assertNotIn("instrument_currency", verdict.details)
+        self.assertNotIn("sizing_fx_rate", verdict.details)
+
+    def test_effective_settlement_rate_reconstructed_from_pnl_ratio(self):
+        # PLN 100 on-trade vs EUR 23 in base -> effective PLN/EUR ~4.3478,
+        # recorded next to the journaled sizing rate for the cross-check.
+        broker = _FullBroker(
+            outcomes={"E-1": self._FILLED},
+            closed_rows=[
+                {
+                    "ExternalReference": "rid-1",
+                    "ClosePrice": 55.0,
+                    "ProfitLossOnTrade": 100.0,
+                    "ProfitLossOnTradeInBaseCurrency": 23.0,
+                }
+            ],
+        )
+
+        verdict = _single(reconcile_brackets([self._fx_record()], broker, today=_TODAY_FRESH))
+
+        self.assertAlmostEqual(verdict.details["effective_settlement_rate"], 100.0 / 23.0, places=9)
+        self.assertEqual(verdict.details.get("sizing_fx_rate"), 4.34)
+
+    def test_effective_rate_absent_when_base_pnl_missing_or_zero(self):
+        for closed_row in (
+            {"ExternalReference": "rid-1", "ClosePrice": 55.0, "ProfitLossOnTrade": 100.0},
+            {
+                "ExternalReference": "rid-1",
+                "ClosePrice": 55.0,
+                "ProfitLossOnTrade": 100.0,
+                "ProfitLossOnTradeInBaseCurrency": 0.0,
+            },
+        ):
+            with self.subTest(row=closed_row):
+                broker = _FullBroker(outcomes={"E-1": self._FILLED}, closed_rows=[closed_row])
+                verdict = _single(
+                    reconcile_brackets([self._fx_record()], broker, today=_TODAY_FRESH)
+                )
+                self.assertNotIn("effective_settlement_rate", verdict.details)
+
+    def test_boolean_settled_fields_are_never_read_as_rates(self):
+        # The ConversionRateInstrumentToBaseSettled* gotcha class: a BOOLEAN
+        # in either PnL field must never produce a fabricated rate.
+        broker = _FullBroker(
+            outcomes={"E-1": self._FILLED},
+            closed_rows=[
+                {
+                    "ExternalReference": "rid-1",
+                    "ClosePrice": 55.0,
+                    "ProfitLossOnTrade": True,
+                    "ProfitLossOnTradeInBaseCurrency": True,
+                }
+            ],
+        )
+
+        verdict = _single(reconcile_brackets([self._fx_record()], broker, today=_TODAY_FRESH))
+
+        self.assertNotIn("effective_settlement_rate", verdict.details)
+
+
 class TestCapabilityAbsentDegradesUnresolved(unittest.TestCase):
     def test_fake_broker_without_resolution_degrades_not_raises(self):
         # FakeBroker implements the frozen Protocol ONLY — by design it needs
