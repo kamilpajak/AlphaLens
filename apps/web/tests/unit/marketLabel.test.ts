@@ -24,4 +24,11 @@ describe('marketLabel', () => {
 	it('normalises casing / whitespace before matching', () => {
 		expect(marketLabel(' xnys ')).toBe('US MARKET');
 	});
+
+	it('returns empty string for a nullish MIC (defensive; typed callers never hit this)', () => {
+		// The param is typed `string`, but the helper is exported for reuse and
+		// runtime API data can violate types — guard instead of throwing.
+		expect(marketLabel(undefined as unknown as string)).toBe('');
+		expect(marketLabel(null as unknown as string)).toBe('');
+	});
 });

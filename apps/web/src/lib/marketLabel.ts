@@ -23,6 +23,10 @@ const MARKET_LABELS: Record<string, string> = {
 };
 
 export function marketLabel(mic: string): string {
+	// Defensive: typed callers pass a non-null string, but the helper is exported
+	// for reuse and runtime API data can violate types — never throw on a nullish
+	// MIC, render nothing instead.
+	if (mic == null) return '';
 	const key = mic.trim().toUpperCase();
 	return MARKET_LABELS[key] ?? key;
 }
