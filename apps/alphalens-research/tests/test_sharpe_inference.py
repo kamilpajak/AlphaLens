@@ -347,6 +347,9 @@ class SharpeGuardHardeningTests(unittest.TestCase):
         pinned by test_sharpe_of_constant_series_is_nan above.
         """
         returns = np.array([0.01, 0.02, 0.03])
+        # The patch targets the module-level `np` reference inside
+        # sharpe_inference (`import numpy as np`); a refactor to
+        # `from numpy import std` would bypass it silently.
         with mock.patch.object(sharpe_inference.np, "std", return_value=-1.0):
             result = _sharpe(returns, 252)
         self.assertTrue(math.isnan(result))
@@ -436,6 +439,9 @@ class BootstrapIndexMatrixTests(unittest.TestCase):
         expected = expected.reshape(n_bootstrap, n_blocks * block_size)[:, :n_obs]
         self.assertEqual(idx.shape, (n_bootstrap, n_obs))
         np.testing.assert_array_equal(idx, expected)
+        # Structural invariant independent of the reconstruction above:
+        # circular wrap must keep every index inside [0, n_obs).
+        self.assertTrue(((idx >= 0) & (idx < n_obs)).all())
 
 
 class SignatureContractTests(unittest.TestCase):
