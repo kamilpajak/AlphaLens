@@ -397,6 +397,11 @@
 					return { ...base, size: 2, position: 'belowBar', color: COLOR.cyan, shape: 'arrowUp' };
 				case 'TP':
 					return { ...base, position: 'aboveBar', color: COLOR.green, shape: 'arrowDown' };
+				case 'TP_TOUCHED':
+					// Price reached the TP but sold no tranche (partial entry fill left the
+					// position already flat). A dimmed circle (no arrow) so it reads as
+					// "reached, not captured" — three green arrows must not overstate capture.
+					return { ...base, position: 'aboveBar', color: `${COLOR.green}66`, shape: 'circle' };
 				case 'SL':
 					return { ...base, position: 'belowBar', color: COLOR.red, shape: 'arrowDown' };
 				case 'TIME_STOP':

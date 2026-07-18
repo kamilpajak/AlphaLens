@@ -25,6 +25,8 @@ function o(p: Partial<EdgeOutcome>): EdgeOutcome {
 		theme: null,
 		scorer_config_version: null,
 		ladder_classification: 'TP_FULL',
+		captured_tp_count: null,
+		touched_tp_count: null,
 		terminal: true,
 		realized_r: null,
 		open_r: null,

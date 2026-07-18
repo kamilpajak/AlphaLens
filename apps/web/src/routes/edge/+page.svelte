@@ -20,7 +20,8 @@
 		fmtR,
 		SIZING_MODEL_RISK_LABEL,
 		statsUnlocked,
-		toneClasses
+		toneClasses,
+		tpCaptureLabel
 	} from '$lib/edge';
 	import {
 		defaultDir,
@@ -676,6 +677,7 @@
 						{/if}
 						{#each windowRows as o, i (rowKey(o))}
 							{@const tone = classificationTone(o.ladder_classification)}
+							{@const capture = tpCaptureLabel(o)}
 							{@const rValue = o.terminal ? o.market_excess_return : o.open_r}
 							<!-- Terminal value is an excess RETURN (fraction → % units); ongoing is an
 							     R-multiple. The bar domain differs accordingly. -->
@@ -728,6 +730,16 @@
 											/>
 										{/snippet}
 									</ChipTip>
+									{#if capture}
+										<!-- Partial capture: fewer TP tranches sold than TP levels touched.
+										     Flags that the class label / green chart arrows overstate capture. -->
+										<div
+											class="text-[9px] text-fg-muted whitespace-nowrap mt-0.5"
+											title="Only {o.captured_tp_count} of {o.touched_tp_count} take-profit levels sold a tranche; the deeper ones were touched after the position was already flat (partial entry fill)."
+										>
+											{capture}
+										</div>
+									{/if}
 								</td>
 								<td class="py-2.5 pr-3 min-w-[8rem]">
 									<div class="flex items-center gap-2">

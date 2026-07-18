@@ -38,6 +38,24 @@ export function toneClasses(tone: EdgeTone): string {
 }
 
 /**
+ * A short "N/M sold" annotation for the /edge CLASS chip. Rendered only when a
+ * partial entry fill meant fewer TP tranches SOLD (`captured_tp_count`) than TP
+ * price levels TOUCHED (`touched_tp_count`) — the case where `TP_FULL` and the
+ * chart's green arrows overstate what the ladder actually captured. Returns null
+ * when every touched TP also sold (honest), nothing was touched, or the counts
+ * are unknown (older rows that predate the columns).
+ */
+export function tpCaptureLabel(o: {
+	captured_tp_count: number | null | undefined;
+	touched_tp_count: number | null | undefined;
+}): string | null {
+	const { captured_tp_count: captured, touched_tp_count: touched } = o;
+	if (captured == null || touched == null) return null;
+	if (captured >= touched) return null;
+	return `${captured}/${touched} sold`;
+}
+
+/**
  * Geometry for a CENTERED excess-R bar — zero sits in the middle, a positive
  * excess fills rightward and a negative excess fills leftward. Returns the
  * left edge and width of the coloured segment as percentages of the track

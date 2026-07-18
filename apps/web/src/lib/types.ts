@@ -391,6 +391,12 @@ export interface EdgeOutcome {
 	theme: string | null;
 	scorer_config_version: string | null;
 	ladder_classification: string;
+	/** TP price levels the path TOUCHED (`touched_tp_count`) vs TP tranches that
+	 *  actually SOLD (`captured_tp_count`). captured < touched means a partial entry
+	 *  fill let an early tranche take the whole held position, so `TP_FULL` / the
+	 *  chart's green arrows overstate capture. Null for rows predating the columns. */
+	captured_tp_count: number | null;
+	touched_tp_count: number | null;
 	terminal: boolean;
 	realized_r: number | null;
 	open_r: number | null;
@@ -424,10 +430,13 @@ export interface ChartPriceLines {
 
 /** A modeled fill/exit marker. `kind` is the closed event set the replay
  *  emits; `level_id` ties a marker back to its tier/tranche (e.g. "tp1").
- *  `ambiguous` flags a bar that touched both TP and SL (resolved SL-first). */
+ *  `ambiguous` flags a bar that touched both TP and SL (resolved SL-first).
+ *  `TP_TOUCHED` is a TP level the price reached but that sold NO tranche (a
+ *  partial entry fill left the position already flat) — drawn dimmed so three
+ *  green arrows never overstate capture. */
 export interface ChartMarker {
 	time: string;
-	kind: 'ENTRY' | 'TP' | 'SL' | 'TIME_STOP';
+	kind: 'ENTRY' | 'TP' | 'TP_TOUCHED' | 'SL' | 'TIME_STOP';
 	level_id: string | null;
 	price: number;
 	label: string;

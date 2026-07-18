@@ -19,6 +19,8 @@
 			theme,
 			scorer_config_version: null,
 			ladder_classification: cls,
+			captured_tp_count: null,
+			touched_tp_count: null,
 			terminal: true,
 			realized_r: 1,
 			open_r: null,

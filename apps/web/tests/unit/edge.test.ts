@@ -8,7 +8,8 @@ import {
 	SIZING_MODEL_RISK_LABEL,
 	statsUnlocked,
 	statusLabel,
-	toneClasses
+	toneClasses,
+	tpCaptureLabel
 } from '../../src/lib/edge';
 
 // Pins the pure derivation/formatting the /edge dashboard relies on: the
@@ -218,5 +219,25 @@ describe('scorer_config_version chip visibility (/edge outcomes row)', () => {
 
 	it('does NOT show when scorer_config_version is an empty string', () => {
 		expect(showsScorerVersionChip('')).toBe(false);
+	});
+});
+
+describe('tpCaptureLabel (/edge outcomes CLASS chip honesty)', () => {
+	it('labels a partial capture when fewer TPs sold than touched', () => {
+		// DFIN case: all three TP levels touched, only one sold.
+		expect(tpCaptureLabel({ captured_tp_count: 1, touched_tp_count: 3 })).toBe('1/3 sold');
+	});
+
+	it('returns null when every touched TP was also sold (honest TP_FULL)', () => {
+		expect(tpCaptureLabel({ captured_tp_count: 3, touched_tp_count: 3 })).toBeNull();
+	});
+
+	it('returns null when no TP was touched', () => {
+		expect(tpCaptureLabel({ captured_tp_count: 0, touched_tp_count: 0 })).toBeNull();
+	});
+
+	it('returns null when the counts are unknown (older rows)', () => {
+		expect(tpCaptureLabel({ captured_tp_count: null, touched_tp_count: null })).toBeNull();
+		expect(tpCaptureLabel({ captured_tp_count: null, touched_tp_count: 3 })).toBeNull();
 	});
 });
