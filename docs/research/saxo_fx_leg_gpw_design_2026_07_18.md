@@ -1,6 +1,6 @@
 # Saxo FX leg for GPW (XWAR/PLN) sizing — design memo
 
-**Status:** DRAFT (awaiting operator review)
+**Status:** LOCKED (operator decisions recorded below, 2026-07-18)
 **Date:** 2026-07-18
 **Related:** [`saxo_broker_layer_design_2026_07_17.md`](saxo_broker_layer_design_2026_07_17.md) (P1/P2/P3 decision records),
 [`saxo_first_fill_experiment_2026_07_18.md`](saxo_first_fill_experiment_2026_07_18.md) (KO@XNYS runbook),
@@ -491,9 +491,30 @@ stop-and-write-up, not a patch-and-retry.
 
 ## 7. Open questions FOR THE OPERATOR — these BLOCK implementation
 
-> Each question below needs an explicit operator answer before the
-> implementation PR starts. The design assumes the stated proposals but
-> none of them is locked.
+### Operator decisions (2026-07-18 — unblocks implementation)
+
+1. **Budget currency = ACCOUNT currency** (Q1, the proposed convention):
+   the budget IS whatever ``AccountSnapshot.currency`` says; the story is
+   "same-currency = no-op" (byte-exact preservation of today's sizing when
+   currencies match), and on THIS EUR SIM account USD instruments take the
+   FX path too. The USD-program alternative is rejected.
+2. **GPW implementation approved** (Q2): the FX+venue plumbing is worth the
+   attended-session cost; the CDR@XWAR validation session stays a SEPARATE
+   slot after KO@XNYS.
+3. **``_FX_SIZING_BUFFER_PCT`` = 1.0** (Q3, as proposed); the buffer applies
+   ONLY when an FxConversion is active — the same-currency path takes 0%.
+4. Q4 (entity fee schedule): unanswered; does not block — the buffer covers
+   the worst documented markup tier.
+5. Q5 (divergence bound): 2.0% adopted as proposed; divergence is a HARD
+   refuse (not a journal-warning) on SIM.
+6. Q6 (reconcile surface): permanent-but-nullable adopted as proposed
+   (``effective_settlement_rate`` verdict detail, null for same-ccy rows).
+7. Q7 (pre-trade disclaimers): NOT built into the submit flow; a blocking
+   DisclaimerToken during the experiment is a FINDING handled manually in
+   the Saxo UI.
+
+> The questions below are retained verbatim for the record; the design
+> assumed the stated proposals and the decisions above lock them.
 
 1. **BUDGET CURRENCY CONVENTION (the big one):** the program's mental model
    is USD (DEFAULT_PAPER_EQUITY_USD, all research in USD terms) but the SIM

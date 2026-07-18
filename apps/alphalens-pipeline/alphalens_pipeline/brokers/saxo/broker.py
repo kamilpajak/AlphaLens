@@ -51,6 +51,7 @@ from alphalens_pipeline.brokers.saxo.client import (
     get_default_saxo_client,
 )
 from alphalens_pipeline.paper.calendar import advance_trading_sessions
+from alphalens_pipeline.paper.fx import FxRateQuote
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,10 @@ def _translate_saxo_errors() -> Iterator[None]:
 
 def _opt_float(value: Any) -> float | None:
     return None if value is None else float(value)
+
+
+def _opt_str(value: Any) -> str | None:
+    return None if value is None else str(value)
 
 
 def _validate_price_relations(
@@ -206,15 +211,91 @@ class SaxoBroker:
                 f"{len(matches)} rows share symbol {expected_symbol!r}"
             )
         row = matches[0]
+        currency = str(row.get("CurrencyCode") or "").upper()
+        if not currency:
+            # Authoritative instrument currency comes ONLY from Saxo's own
+            # instrument data — never MIC-inferred, never guessed (FX-leg
+            # memo §4.3 item 4). A row without CurrencyCode is a refusal.
+            raise InstrumentNotFoundError(
+                f"Saxo search row for {expected_symbol!r} carries no CurrencyCode — "
+                "refusing to resolve without an authoritative instrument currency "
+                "(currency is never inferred from the MIC)"
+            )
         ref = InstrumentRef(
             ticker=ticker,
             exchange_mic=exchange_mic,
             asset_type=str(row.get("AssetType", "Stock")),
             broker_instrument_id=str(row["Identifier"]),
             broker_symbol=str(row["Symbol"]),
+            currency=currency,
         )
         self._cache_instrument(cache_key, ref)
         return ref
+
+    def get_fx_rate(self, base: str, quote: str) -> FxRateQuote:
+        """One FX spot snapshot for sizing (vendor CAPABILITY, not Protocol).
+
+        Deliberately NOT a ``contract.Broker`` member — the frozen Protocol
+        stays currency-naive; the CLI reaches this through the established
+        ``getattr`` capability pattern and refuses cross-currency sizing for
+        brokers without it. Resolution: ``/ref/v1/currencypairs`` from the
+        BASE side (one-directional listing), FxSpot Keywords search fallback;
+        then ONE ``/trade/v1/infoprices`` FxSpot read. The quote is reported
+        VERBATIM (Mid + Bid/Ask + PriceTypes + MarketState + a local UTC
+        fetch timestamp) — policy acceptance lives in
+        ``execution.build_fx_conversion``, not in the adapter.
+        """
+        base = base.upper()
+        quote = quote.upper()
+        with _translate_saxo_errors():
+            uic = self._resolve_fx_pair_uic(base, quote)
+            payload = self._client.get_fx_infoprice(uic)
+        quote_block: dict[str, Any] = payload.get("Quote") or {}
+        market_state = quote_block.get("MarketState") or payload.get("MarketState")
+        return FxRateQuote(
+            base_currency=base,
+            quote_currency=quote,
+            mid=_opt_float(quote_block.get("Mid")),
+            bid=_opt_float(quote_block.get("Bid")),
+            ask=_opt_float(quote_block.get("Ask")),
+            price_type_bid=_opt_str(quote_block.get("PriceTypeBid")),
+            price_type_ask=_opt_str(quote_block.get("PriceTypeAsk")),
+            market_state=_opt_str(market_state),
+            source=f"saxo-fxspot-uic-{uic}-mid",
+            asof=dt.datetime.now(dt.UTC),
+        )
+
+    def _resolve_fx_pair_uic(self, base: str, quote: str) -> str:
+        """FX pair symbol (e.g. ``EURPLN``) -> Uic; refusal on any ambiguity.
+
+        The currencypairs listing is one-directional — always looked up from
+        the base side. A pair absent there falls back to an exact-symbol
+        FxSpot Keywords search; anything else raises
+        :class:`InstrumentNotFoundError` (never a guessed pair, never an
+        inverted rate).
+        """
+        pair_symbol = f"{base}{quote}"
+        listing = self._client.get_currency_pairs()
+        for row in listing.get("Data") or []:
+            symbol = str(row.get("CurrencyPair") or row.get("Symbol") or "").upper()
+            row_uic = row.get("Uic", row.get("Identifier"))
+            if symbol == pair_symbol and row_uic is not None:
+                return str(row_uic)
+        search = self._client.search_instruments(pair_symbol, asset_types="FxSpot")
+        matches = [
+            row
+            for row in search.get("Data") or []
+            if str(row.get("Symbol", "")).upper() == pair_symbol
+            and row.get("Identifier") is not None
+        ]
+        if len(matches) == 1:
+            return str(matches[0]["Identifier"])
+        raise InstrumentNotFoundError(
+            f"FX pair {base}->{quote} unresolvable: not listed under the base side in "
+            f"/ref/v1/currencypairs and the FxSpot keyword search returned "
+            f"{len(matches)} exact matches for {pair_symbol!r} — refusing to size "
+            "(no fallback rate, no inverted lookup)"
+        )
 
     # ----- orders (P2) -----
 
@@ -494,6 +575,11 @@ class SaxoBroker:
                 asset_type=str(base.get("AssetType", "Stock")),
                 broker_instrument_id=str(base.get("Uic", "")),
                 broker_symbol=symbol,
+                # Best-effort display stamp from DisplayAndFormat; "" (not a
+                # guess) when the position row carries no Currency. Sizing
+                # NEVER consumes this path — it goes through resolve_instrument,
+                # which refuses instead of stamping "".
+                currency=str(display.get("Currency") or "").upper(),
             ),
             quantity=float(base["Amount"]),
             avg_price=float(base["OpenPrice"]),

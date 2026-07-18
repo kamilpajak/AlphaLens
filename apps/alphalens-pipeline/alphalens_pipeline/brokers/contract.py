@@ -63,6 +63,15 @@ class InstrumentRef:
     ``exchange_mic`` follows the ISO 10383 convention already used by
     ``alphalens_pipeline.paper.calendar`` (e.g. ``"XNYS"``), keeping the
     multi-venue extension seam (ticker->exchange routing) consistent.
+
+    ``currency`` is the AUTHORITATIVE instrument trading currency stamped by
+    the adapter from the broker's own instrument data at resolve time (Saxo:
+    the search row's ``CurrencyCode`` — zero extra API calls), NEVER inferred
+    from the MIC. ``""`` means not-stamped (e.g. a best-effort reverse lookup
+    from a position row); ``resolve_instrument`` implementations must either
+    stamp a real ISO code or refuse — sizing consumers treat ``""`` as a
+    refusal, not a guess. (FX-leg design memo, additive field — the Broker
+    Protocol itself stays frozen.)
     """
 
     ticker: str  # plain ticker, e.g. "KO"
@@ -70,6 +79,7 @@ class InstrumentRef:
     asset_type: str  # "Stock" for now
     broker_instrument_id: str  # opaque broker handle; Saxo: str(Uic)
     broker_symbol: str  # broker display symbol, e.g. "KO:xnys"
+    currency: str = ""  # ISO currency code, e.g. "PLN"; "" = not stamped
 
 
 @dataclass(frozen=True)

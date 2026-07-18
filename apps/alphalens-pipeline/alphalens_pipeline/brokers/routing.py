@@ -9,9 +9,12 @@ require EXACTLY ONE match — zero matches and both-venue matches both raise
 :class:`InstrumentNotFoundError` (never guess; house doctrine). The RESOLVED
 MIC is stamped on the submission record for P3 reconciliation.
 
-XWAR stays EXPLICIT-ONLY (``exchange_mic="XWAR"``) until the PLN/FX-leg
-sizing question is designed (memo §8 Q3) — it is deliberately absent from
-the probe order.
+XWAR stays EXPLICIT-ONLY (``exchange_mic="XWAR"``) — deliberately absent
+from the probe order. The PLN/FX-leg sizing question that used to block it
+is designed and implemented per
+``docs/research/saxo_fx_leg_gpw_design_2026_07_18.md``; adding XWAR to any
+probe order remains a follow-up decision AFTER the GPW first-fill
+experiment passes (memo §6).
 """
 
 from __future__ import annotations

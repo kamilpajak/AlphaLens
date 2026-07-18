@@ -2,7 +2,8 @@
 
 Mirrors ``test_catalyst_config_version``-style pins:
 
-- deterministic + non-empty; shape ``execution-v1-<12 hex>``;
+- deterministic + non-empty; shape ``execution-v2-<12 hex>`` (v2 = the
+  FX-leg journal-shape bump);
 - the token DRIFTS when any covered policy constant changes
   (``mock.patch.object`` + ``subTest`` over the full covered list);
 - a module-level policy constant cannot be added without joining the token
@@ -33,6 +34,13 @@ _COVERED_CONSTANTS = (
     "_MANUAL_ORDER",
     "_TICK_QUANTIZE_POLICY",
     "_MAX_TICK_ADJUSTMENT_BPS",
+    "_MISSING_FX_RATE_POLICY",
+    "_FX_RATE_MAX_AGE_S",
+    "_FX_ACCEPTED_PRICE_TYPES",
+    "_FX_RATE_SOURCE",
+    "_FX_CONVERSION_POINT",
+    "_FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT",
+    "_FX_SIZING_BUFFER_PCT",
 )
 
 
@@ -42,6 +50,8 @@ def _drifted_value(current: object) -> object:
         return not current
     if isinstance(current, int | float):
         return current + 1
+    if isinstance(current, tuple):
+        return (*current, "drifted")
     return f"{current}-drifted"
 
 
@@ -53,8 +63,9 @@ class TestExecutionConfigVersion(unittest.TestCase):
         self.assertEqual(first, second)
 
     def test_token_shape_prefix_and_12_hex_digest(self):
+        # v2 = the FX-leg journal-shape bump (fx provenance keys ADDED).
         token = execution.execution_config_version()
-        self.assertRegex(token, r"^execution-v1-[0-9a-f]{12}$")
+        self.assertRegex(token, r"^execution-v2-[0-9a-f]{12}$")
 
     def test_token_changes_on_every_covered_constant(self):
         baseline = execution.execution_config_version()
@@ -74,9 +85,9 @@ class TestExecutionConfigVersion(unittest.TestCase):
         )
 
     def test_stamp_schema_bumps_only_shape_never_values(self):
-        with mock.patch.object(execution, "_STAMP_SCHEMA", "2"):
+        with mock.patch.object(execution, "_STAMP_SCHEMA", "3"):
             token = execution.execution_config_version()
-        self.assertTrue(token.startswith("execution-v2-"))
+        self.assertTrue(token.startswith("execution-v3-"))
 
     def test_no_uncovered_policy_constant_in_module_namespace(self):
         """A new ``_UPPER_CASE`` module constant must join the token.
@@ -89,7 +100,7 @@ class TestExecutionConfigVersion(unittest.TestCase):
         policy_names = {
             name
             for name, value in vars(execution).items()
-            if pattern.match(name) and isinstance(value, str | int | float | bool)
+            if pattern.match(name) and isinstance(value, str | int | float | bool | tuple)
         }
         uncovered = policy_names - set(_COVERED_CONSTANTS) - {"_STAMP_SCHEMA"}
         self.assertEqual(

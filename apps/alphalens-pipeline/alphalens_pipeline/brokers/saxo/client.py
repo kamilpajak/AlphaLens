@@ -210,6 +210,28 @@ class SaxoClient:
         """GET ``/ref/v1/exchanges`` — one-time confirmation of ExchangeId codes."""
         return self._get_json("/ref/v1/exchanges")
 
+    # ----- FX-leg reads (sizing FX rate; design memo saxo_fx_leg_gpw_design) -----
+
+    def get_currency_pairs(self) -> dict[str, Any]:
+        """GET ``/ref/v1/currencypairs`` — FX pair Uic reference data.
+
+        The lookup is one-directional (a pair is listed under its base side
+        only); the broker falls back to an FxSpot Keywords search when the
+        pair is not listed. Live-verified EUR->PLN = Uic 1343.
+        """
+        return self._get_json("/ref/v1/currencypairs")
+
+    def get_fx_infoprice(self, uic: int | str) -> dict[str, Any]:
+        """GET ``/trade/v1/infoprices`` for ONE FxSpot Uic.
+
+        FX infoprices work on this SIM even on weekends (SBFX source, no
+        exchange entitlement — unlike stock infoprices, NoAccess on the
+        unlinked SIM). Returns Quote Bid/Ask/Mid + PriceTypeBid/Ask +
+        MarketState; ``LastUpdated`` is NOT a data-age signal (live-probed
+        to echo the request second on a CLOSED market).
+        """
+        return self._get_json("/trade/v1/infoprices", params={"Uic": uic, "AssetType": "FxSpot"})
+
     # ----- order endpoints (P2 writes + order reads; thin dict-returning) -----
 
     def precheck_order(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:

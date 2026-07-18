@@ -69,6 +69,7 @@ def _instrument() -> InstrumentRef:
         asset_type="Stock",
         broker_instrument_id="307",
         broker_symbol="ko:xnys",
+        currency="USD",
     )
 
 
@@ -80,11 +81,13 @@ class _CliFakeBroker:
         self.precheck_calls: list[BracketOrderRequest] = []
         self.cancel_calls: list[str] = []
         self.place_error: BrokerError | None = None
+        self.account_currency = "USD"
+        self.precheck_payload: dict = {"PreCheckResult": "Ok", "EstimatedCashRequired": 3_000.0}
 
     def get_account(self) -> AccountSnapshot:
         return AccountSnapshot(
             account_id="AK-1",
-            currency="USD",
+            currency=self.account_currency,
             cash=90_000.0,
             total_value=100_000.0,
             margin_available=None,
@@ -101,7 +104,7 @@ class _CliFakeBroker:
 
     def precheck_bracket_order(self, request: BracketOrderRequest) -> dict:
         self.precheck_calls.append(request)
-        return {"PreCheckResult": "Ok", "EstimatedCashRequired": 3_000.0}
+        return dict(self.precheck_payload)
 
     def place_bracket_order(self, request: BracketOrderRequest) -> PlacedOrder:
         if self.place_error is not None:
@@ -123,8 +126,14 @@ class _CliFakeBroker:
 class _SubmitHarness:
     """Patches registry/brief-loader/submission-log at their source modules."""
 
-    def __init__(self, case: unittest.TestCase, *, candidates: list[CandidateBrief] | None = None):
-        self.broker = _CliFakeBroker()
+    def __init__(
+        self,
+        case: unittest.TestCase,
+        *,
+        candidates: list[CandidateBrief] | None = None,
+        broker: _CliFakeBroker | None = None,
+    ):
+        self.broker = broker if broker is not None else _CliFakeBroker()
         self.appended: list[dict] = []
 
         def _fake_append(record: dict, *, path: Path | None = None) -> Path:
@@ -203,13 +212,18 @@ class TestSubmitExecute(unittest.TestCase):
         self.assertEqual(len(harness.broker.place_calls), 1)
         self.assertIn("placed entry=E-1", result.output)
         self.assertIn("T-1", result.output)
-        self.assertIn("execution_config_version execution-v1-", result.output)
+        self.assertIn("execution_config_version execution-v2-", result.output)
 
         (record,) = harness.appended
         self.assertEqual(record["ticker"], "KO")
         self.assertEqual(record["mic"], "XNYS")
         self.assertEqual(record["uic"], "307")
-        self.assertTrue(record["execution_config_version"].startswith("execution-v1-"))
+        self.assertTrue(record["execution_config_version"].startswith("execution-v2-"))
+        # Same-currency journal: REAL nulls on the fx keys, currencies stamped.
+        self.assertEqual(record["sizing_currency"], "USD")
+        self.assertEqual(record["instrument_currency"], "USD")
+        self.assertIsNone(record["fx_rate"], "same-currency must journal null, never 1.0")
+        self.assertIsNone(record["fx_rate_source"])
         (bracket,) = record["brackets"]
         self.assertEqual(bracket["entry_order_id"], "E-1")
         self.assertEqual(bracket["qty"], 60)
@@ -227,6 +241,172 @@ class TestSubmitExecute(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         (record,) = harness.appended
         self.assertIn("placement stopped after 0/1", record["note"])
+
+
+def _fx_quote(**overrides):
+    from alphalens_pipeline.paper.fx import FxRateQuote
+
+    fields: dict = {
+        "base_currency": "EUR",
+        "quote_currency": "USD",
+        "mid": 1.08,
+        "bid": 1.079,
+        "ask": 1.081,
+        "price_type_bid": "Tradable",
+        "price_type_ask": "Tradable",
+        "market_state": "Open",
+        "source": "saxo-fxspot-uic-21-mid",
+        "asof": dt.datetime.now(dt.UTC),
+    }
+    fields.update(overrides)
+    return FxRateQuote(**fields)
+
+
+class _FxFakeBroker(_CliFakeBroker):
+    """EUR account + USD instrument: the FX path activates (memo §7 Q1 —
+    on the EUR SIM account even US names are cross-currency)."""
+
+    def __init__(self):
+        super().__init__()
+        self.account_currency = "EUR"
+        self.fx_calls: list[tuple[str, str]] = []
+        self.fx_quote = _fx_quote()
+        self.precheck_payload = {
+            "PreCheckResult": "Ok",
+            "EstimatedCashRequired": 3_207.6,
+            "EstimatedCashRequiredCurrency": "EUR",
+            "InstrumentToAccountConversionRate": 1.0 / 1.08,
+        }
+
+    def get_fx_rate(self, base: str, quote: str):
+        self.fx_calls.append((base, quote))
+        return self.fx_quote
+
+
+class TestSubmitFxLeg(unittest.TestCase):
+    """Cross-currency submit orchestration (FX-leg memo §4.2)."""
+
+    def setUp(self):
+        self.runner = CliRunner()
+
+    def _invoke(self, harness: _SubmitHarness, *extra: str):
+        from alphalens_cli.commands.broker import broker_app
+
+        return self.runner.invoke(broker_app, [*_SUBMIT_ARGS, *extra])
+
+    def test_fx_path_sizes_through_the_rate_and_buffer(self):
+        harness = _SubmitHarness(self, broker=_FxFakeBroker())
+
+        result = self._invoke(harness)
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(harness.broker.fx_calls, [("EUR", "USD")], "account->instrument")
+        # EUR 3,000 (3% of 100k) x 1.08 x 0.99 = USD 3,207.60 -> 64 shares
+        # at the 50.00 tier (same-currency path would size 60).
+        self.assertIn("64", result.output)
+        self.assertIn("EUR", result.output)
+        self.assertIn("USD", result.output)
+        self.assertIn("@ 1.0800 mid", result.output)
+        self.assertIn("fx cross-check ok", result.output)
+
+    def test_fx_path_journals_the_conversion_verbatim(self):
+        harness = _SubmitHarness(self, broker=_FxFakeBroker())
+
+        result = self._invoke(harness, "--execute", "--yes")
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        (record,) = harness.appended
+        self.assertEqual(record["sizing_currency"], "EUR")
+        self.assertEqual(record["instrument_currency"], "USD")
+        self.assertEqual(record["sizing_equity"], 100_000.0)
+        self.assertEqual(record["fx_rate"], 1.08)
+        self.assertEqual(record["fx_rate_bid"], 1.079)
+        self.assertEqual(record["fx_rate_ask"], 1.081)
+        self.assertEqual(record["fx_rate_price_type"], "Tradable")
+        self.assertEqual(record["fx_rate_source"], "saxo-fxspot-uic-21-mid")
+        self.assertAlmostEqual(record["precheck_conversion_rate"], 1.0 / 1.08)
+        (bracket,) = record["brackets"]
+        self.assertEqual(bracket["qty"], 64)
+        self.assertEqual(bracket["entry"], 50.0, "prices stay instrument-native")
+
+    def test_missing_capability_refuses_cross_currency(self):
+        broker = _CliFakeBroker()
+        broker.account_currency = "EUR"  # USD instrument, no get_fx_rate
+        harness = _SubmitHarness(self, broker=broker)
+
+        result = self._invoke(harness)
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("get_fx_rate", result.output)
+        self.assertEqual(harness.broker.precheck_calls, [], "refused before any precheck")
+
+    def test_unacceptable_price_type_refuses_before_any_order(self):
+        broker = _FxFakeBroker()
+        broker.fx_quote = _fx_quote(price_type_bid="OldIndicative", price_type_ask="OldIndicative")
+        harness = _SubmitHarness(self, broker=broker)
+
+        result = self._invoke(harness, "--execute", "--yes")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("not plannable", result.output)
+        self.assertEqual(harness.broker.place_calls, [])
+        self.assertEqual(harness.appended, [])
+
+    def test_precheck_currency_mismatch_refuses(self):
+        broker = _FxFakeBroker()
+        broker.precheck_payload = dict(broker.precheck_payload, EstimatedCashRequiredCurrency="USD")
+        harness = _SubmitHarness(self, broker=broker)
+
+        result = self._invoke(harness, "--execute", "--yes")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("EstimatedCashRequiredCurrency", result.output)
+        self.assertEqual(harness.broker.place_calls, [])
+
+    def test_precheck_divergence_refuses_in_both_directions(self):
+        for factor in (1.03, 0.97):  # Saxo's implied rate 3% above / below
+            with self.subTest(factor=factor):
+                broker = _FxFakeBroker()
+                broker.precheck_payload = dict(
+                    broker.precheck_payload,
+                    InstrumentToAccountConversionRate=1.0 / (1.08 * factor),
+                )
+                harness = _SubmitHarness(self, broker=broker)
+
+                result = self._invoke(harness, "--execute", "--yes")
+
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertIn("divergence", result.output)
+                self.assertEqual(harness.broker.place_calls, [])
+
+    def test_precheck_missing_conversion_rate_refuses(self):
+        broker = _FxFakeBroker()
+        broker.precheck_payload = dict(
+            broker.precheck_payload, InstrumentToAccountConversionRate=None
+        )
+        harness = _SubmitHarness(self, broker=broker)
+
+        result = self._invoke(harness)
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("InstrumentToAccountConversionRate", result.output)
+
+    def test_gross_guard_refuses_an_oversized_plan(self):
+        # 150% suggested at scale 1.0 grosses past GROSS_SAFETY_FRAC x equity.
+        import dataclasses
+
+        oversized = dataclasses.replace(
+            _candidate(),
+            suggested_size_pct=150.0,
+            trade_setup=dict(_TRADE_SETUP, suggested_size_pct=150.0),
+        )
+        harness = _SubmitHarness(self, candidates=[oversized])
+
+        result = self._invoke(harness)
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("gross safety guard", result.output)
+        self.assertEqual(harness.broker.precheck_calls, [])
 
 
 class TestOrdersAndCancel(unittest.TestCase):

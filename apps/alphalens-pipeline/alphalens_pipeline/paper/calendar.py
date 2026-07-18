@@ -37,8 +37,11 @@ this module:
   ``planner.py``; today every position implicitly trades on XNYS),
 * per-exchange broker clients (Alpaca is US-equities-only; XWAR
   routes through e.g. IBKR or a Polish brokerage),
-* per-exchange currency / FX (XNYS in USD; XWAR in PLN — sizing math
-  in ``planner.py`` would need an FX leg).
+* per-exchange currency / FX — IMPLEMENTED: sizing carries an FX leg
+  (``paper/fx.py`` + ``compute_setup_plan(fx=...)``; design memo
+  ``docs/research/saxo_fx_leg_gpw_design_2026_07_18.md``). The budget
+  is the ACCOUNT currency; cross-currency venues (XWAR in PLN) size
+  through a live broker rate or refuse.
 
 The calendar wrapper here is intentionally the smallest of those
 three layers; tests pin XNYS as the default but exercise at least

@@ -1,7 +1,10 @@
-"""Tests for US venue routing + the append-only submission journal (P2)."""
+"""Tests for US venue routing + the append-only submission journal (P2 + the
+FX-leg schema-2 shape: fx provenance keys, REAL nulls on same-currency, v1
+line tolerance)."""
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import tempfile
 import unittest
@@ -14,6 +17,32 @@ from alphalens_pipeline.brokers.submission_log import (
     append_submission_record,
     build_submission_record,
     iter_submission_records,
+)
+from alphalens_pipeline.paper.fx import FxConversion
+
+_FX_KEYS = (
+    "sizing_currency",
+    "instrument_currency",
+    "sizing_equity",
+    "fx_rate",
+    "fx_rate_bid",
+    "fx_rate_ask",
+    "fx_rate_price_type",
+    "fx_rate_source",
+    "fx_rate_asof",
+    "precheck_conversion_rate",
+)
+
+_EURPLN_FX = FxConversion(
+    account_currency="EUR",
+    instrument_currency="PLN",
+    rate=4.34,
+    sizing_buffer_pct=1.0,
+    source="saxo-fxspot-uic-1343-mid",
+    price_type="Tradable",
+    bid=4.3331,
+    ask=4.3469,
+    asof=dt.datetime(2026, 7, 18, 10, 0, 0, tzinfo=dt.UTC),
 )
 
 
@@ -80,7 +109,9 @@ class TestResolveUsInstrument(unittest.TestCase):
 
     def test_xwar_never_probed_implicitly(self):
         # A WSE-only listing must NOT resolve without an explicit MIC — the
-        # PLN/FX-leg sizing question is undesigned (memo §8 Q3).
+        # FX leg made XWAR SIZABLE, but adding it to a probe order stays a
+        # follow-up decision after the GPW first-fill experiment (FX-leg
+        # memo §6).
         broker = _RoutingStubBroker({("CDR", "XWAR"): _ref("CDR", "XWAR")})
         with self.assertRaises(InstrumentNotFoundError):
             resolve_us_instrument(broker, "CDR")  # type: ignore[arg-type]
@@ -113,9 +144,88 @@ class TestSubmissionLog(unittest.TestCase):
     def test_record_stamps_execution_config_version_and_utc_ts(self):
         record = self._record()
         self.assertEqual(record["execution_config_version"], execution_config_version())
+        self.assertTrue(record["execution_config_version"].startswith("execution-v2-"))
         self.assertIn("+00:00", record["ts"])
         self.assertEqual(record["mic"], "XNYS")
         self.assertEqual(record["uic"], "307")
+
+    def test_schema_2_same_currency_writes_real_nulls_never_a_fake_rate(self):
+        # The fx keys are ALWAYS present in a v2 record; same-currency (and
+        # explicit-qty callers that never sized) carry REAL nulls — a fake
+        # 1.0 would masquerade as a quote.
+        record = self._record(sizing_currency="USD", instrument_currency="USD")
+        for key in _FX_KEYS:
+            self.assertIn(key, record, f"schema-2 record must carry {key}")
+        self.assertEqual(record["sizing_currency"], "USD")
+        self.assertEqual(record["instrument_currency"], "USD")
+        self.assertIsNone(record["fx_rate"])
+        self.assertIsNone(record["fx_rate_bid"])
+        self.assertIsNone(record["fx_rate_price_type"])
+        self.assertIsNone(record["fx_rate_source"])
+        self.assertIsNone(record["fx_rate_asof"])
+        self.assertIsNone(record["precheck_conversion_rate"])
+
+    def test_schema_2_cross_currency_stamps_the_conversion_verbatim(self):
+        record = self._record(
+            sizing_currency="EUR",
+            instrument_currency="PLN",
+            sizing_equity=1_000_000.0,
+            fx=_EURPLN_FX,
+            precheck_conversion_rate=0.2304,
+        )
+        self.assertEqual(record["sizing_currency"], "EUR")
+        self.assertEqual(record["instrument_currency"], "PLN")
+        self.assertEqual(record["sizing_equity"], 1_000_000.0)
+        self.assertEqual(record["fx_rate"], 4.34)
+        self.assertEqual(record["fx_rate_bid"], 4.3331)
+        self.assertEqual(record["fx_rate_ask"], 4.3469)
+        self.assertEqual(record["fx_rate_price_type"], "Tradable")
+        self.assertEqual(record["fx_rate_source"], "saxo-fxspot-uic-1343-mid")
+        self.assertEqual(record["fx_rate_asof"], "2026-07-18T10:00:00+00:00")
+        self.assertEqual(record["precheck_conversion_rate"], 0.2304)
+
+    def test_schema_2_round_trips_through_the_jsonl_reader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "submissions.jsonl"
+            append_submission_record(
+                self._record(
+                    sizing_currency="EUR",
+                    instrument_currency="PLN",
+                    sizing_equity=1_000_000.0,
+                    fx=_EURPLN_FX,
+                    precheck_conversion_rate=0.2304,
+                ),
+                path=target,
+            )
+            (record,) = list(iter_submission_records(target))
+        self.assertEqual(record["fx_rate"], 4.34)
+        self.assertEqual(record["fx_rate_asof"], "2026-07-18T10:00:00+00:00")
+
+    def test_v1_lines_without_fx_keys_still_read_cleanly(self):
+        # Forward compat: schema-1 journal lines (the same-currency no-op
+        # era) simply LACK the fx keys — the reader yields them untouched,
+        # never fails, never back-fills.
+        v1_line = {
+            "execution_config_version": "execution-v1-abcdef012345",
+            "ts": "2026-07-17T18:00:00+00:00",
+            "brief_date": "2026-07-16",
+            "ticker": "KO",
+            "mic": "XNYS",
+            "uic": "307",
+            "brackets": [{"client_request_id": "rid-1", "entry_order_id": "E-1", "ttl": 5}],
+            "precheck": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "submissions.jsonl"
+            with target.open("w", encoding="utf-8") as fh:
+                fh.write(json.dumps(v1_line) + "\n")
+            append_submission_record(self._record(), path=target)
+
+            records = list(iter_submission_records(target))
+
+        self.assertEqual(len(records), 2)
+        self.assertNotIn("fx_rate", records[0], "v1 line passes through untouched")
+        self.assertIn("fx_rate", records[1])
 
     def test_append_is_jsonl_append_only_and_creates_parents(self):
         with tempfile.TemporaryDirectory() as tmp:
