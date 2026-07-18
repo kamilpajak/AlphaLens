@@ -53,7 +53,7 @@ import logging
 import os
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 import pandas as pd
 
@@ -237,11 +237,42 @@ def _enrich_frame_rows(
             exchange=exchange,
             window_cache=window_cache,
         )
+        # Non-destructive: a transient fetch miss (bench=None) must NOT overwrite an
+        # already-good value with NULL on this whole-store rewrite — the enrich only
+        # ever FILLS a gap. Two guards keep it honest. (1) matured_at set — an
+        # ONGOING window GROWS every session so an older benchmark would be stale.
+        # (2) the stored pair is still CONSISTENT with the current forward_return
+        # (excess == forward - benchmark): on the ongoing->terminal maturation the
+        # monitor advances forward_return but carries the OLD benchmark/excess pair
+        # verbatim, so matured_at alone is insufficient — a pair that no longer
+        # matches forward_return is stale and must recompute, not be preserved.
+        if bench is None and _as_date(row.get("matured_at")) is not None:
+            prev_bench = (
+                row["benchmark_window_return"] if "benchmark_window_return" in row.index else None
+            )
+            prev_excess = (
+                row["market_excess_return"] if "market_excess_return" in row.index else None
+            )
+            forward = row["forward_return"] if "forward_return" in row.index else None
+            if (
+                _is_real(prev_bench)
+                and _is_real(prev_excess)
+                and _is_real(forward)
+                and abs(float(prev_excess) - (float(forward) - float(prev_bench))) < 1e-9
+            ):
+                bench = float(prev_bench)
+                excess = float(prev_excess)
         bench_col.append(bench)
         excess_col.append(excess)
         if excess is not None:
             n_enriched += 1
     return bench_col, excess_col, n_enriched, False
+
+
+def _is_real(value: Any) -> TypeGuard[float]:
+    """True for a concrete number — not None and not NaN. Guards a transient None
+    from clobbering an already-computed benchmark on the whole-store rewrite."""
+    return value is not None and not (isinstance(value, float) and pd.isna(value))
 
 
 def enrich_store_with_benchmark_excess(
@@ -285,7 +316,10 @@ def enrich_store_with_benchmark_excess(
     window_cache: dict[tuple[dt.date, dt.date], float | None] = {}
     n_enriched = 0
 
-    for path in sorted(store.glob("*.parquet")):
+    # Newest first: under the shared run deadline a truncated sweep must heal the
+    # recent, dashboard-visible dates before the deep history. ISO-named files sort
+    # lexicographically by date, so reverse=True is newest-first.
+    for path in sorted(store.glob("*.parquet"), reverse=True):
         try:
             df = pd.read_parquet(path)
         except (OSError, ValueError) as exc:

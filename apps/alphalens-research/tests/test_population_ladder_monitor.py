@@ -1051,6 +1051,42 @@ class TestChartPayloadCarryForward(_MonitorTestBase):
         )
         return brief_date, cutoffs, outcome
 
+    def test_terminal_row_stamps_tp_capture_counts(self):
+        # HIGH (adversarial review): pin that the production write path copies the
+        # outcome's capture counts onto the parquet row. Coverage otherwise only
+        # existed at the dataclass-property end and a hand-fabricated-parquet API
+        # test, both bypassing _terminal_row. A partial fill (only E1) that touches
+        # all three TPs -> captured=1, touched=3.
+        brief_date = dt.date(2026, 5, 1)
+        setup = {
+            "status": "OK",
+            "disaster_stop": 92.0,
+            "entry_tiers": [
+                {"limit": 99.0, "alloc_pct": 33.3},
+                {"limit": 97.0, "alloc_pct": 33.3},
+                {"limit": 95.0, "alloc_pct": 33.3},
+            ],
+            "tp_tranches": [
+                {"target": 102.0, "tranche_pct": 33.3},
+                {"target": 107.0, "tranche_pct": 33.3},
+                {"target": 112.0, "tranche_pct": 33.3},
+            ],
+        }
+        cutoffs = _engine_cutoffs(brief_date, setup, "XNYS")
+        base = int(session_open_utc(cutoffs[0], "XNYS").timestamp() * 1000)
+        bars = [
+            {"t": base, "o": 99.0, "h": 100.0, "l": 98.0, "c": 99.0, "v": 1000.0},  # E1 only
+            {"t": base + 86_400_000, "o": 100.0, "h": 113.0, "l": 100.0, "c": 112.0, "v": 1000.0},
+        ]
+        outcome = replay_ladder(
+            setup, bars, entry_expiry_ms=cutoffs[5], position_expiry_ms=cutoffs[6]
+        )
+        self.assertEqual(outcome.captured_tp_count, 1, "precondition: partial capture")
+        self.assertEqual(outcome.touched_tp_count, 3)
+        row = _terminal_row(brief_date, "NVDA", setup, outcome, cutoffs, dt.date(2026, 5, 15))
+        self.assertEqual(row["captured_tp_count"], 1)
+        self.assertEqual(row["touched_tp_count"], 3)
+
     def test_terminal_row_carries_prior_chart_payload_string(self):
         # Unit: the resolve seam stamps the carried chart on the rebuilt ongoing row.
         brief_date, cutoffs, outcome = self._build_ongoing_outcome()

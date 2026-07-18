@@ -59,6 +59,20 @@ describe('finalExitMarkerTime', () => {
 		];
 		expect(finalExitMarkerTime(markers)).toBe('2026-06-15');
 	});
+
+	it('ends the band at the last TOUCHED TP even when it sold nothing', () => {
+		// DFIN case: E1 fills, TP1 sells the whole held position, TP2/TP3 are
+		// TOUCHED but sell nothing. The replay marks exit_reached at the all-TPs
+		// bar, so the band must still run to the last (touched) TP — a TP_TOUCHED
+		// crossing closes the band exactly as a sold TP does.
+		const markers = [
+			marker('ENTRY', '2026-06-13', 'E1'),
+			marker('TP', '2026-06-15', 'TP1'),
+			marker('TP_TOUCHED', '2026-06-19', 'TP2'),
+			marker('TP_TOUCHED', '2026-06-23', 'TP3')
+		];
+		expect(finalExitMarkerTime(markers)).toBe('2026-06-23');
+	});
 });
 
 // Pins the "brief" vertical-line anchor: the session the candidate appeared in

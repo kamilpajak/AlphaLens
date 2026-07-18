@@ -20,7 +20,9 @@
 		fmtR,
 		SIZING_MODEL_RISK_LABEL,
 		statsUnlocked,
-		toneClasses
+		toneClasses,
+		tpCaptureLabel,
+		excessCellState
 	} from '$lib/edge';
 	import {
 		defaultDir,
@@ -676,6 +678,8 @@
 						{/if}
 						{#each windowRows as o, i (rowKey(o))}
 							{@const tone = classificationTone(o.ladder_classification)}
+							{@const capture = tpCaptureLabel(o)}
+							{@const excState = excessCellState(o)}
 							{@const rValue = o.terminal ? o.market_excess_return : o.open_r}
 							<!-- Terminal value is an excess RETURN (fraction → % units); ongoing is an
 							     R-multiple. The bar domain differs accordingly. -->
@@ -728,6 +732,16 @@
 											/>
 										{/snippet}
 									</ChipTip>
+									{#if capture}
+										<!-- Partial capture: fewer TP tranches sold than TP levels touched.
+										     Flags that the class label / green chart arrows overstate capture. -->
+										<div
+											class="text-[9px] text-fg-muted whitespace-nowrap mt-0.5"
+											title="Only {o.captured_tp_count} of {o.touched_tp_count} take-profit levels sold a tranche; the deeper ones were touched after the position was already flat (partial entry fill)."
+										>
+											{capture}
+										</div>
+									{/if}
 								</td>
 								<td class="py-2.5 pr-3 min-w-[8rem]">
 									<div class="flex items-center gap-2">
@@ -739,7 +753,25 @@
 											class:text-fg-muted={rValue == null}
 										>
 											{#if o.terminal}
-												{fmtFracPct(o.market_excess_return, 1)}
+												{#if excState === 'value'}
+													{fmtFracPct(o.market_excess_return, 1)}
+												{:else if excState === 'pending'}
+													<!-- Excess vs SPY not computed yet (benchmark leg missing) — a
+													     retriable data gap that recomputes nightly, NOT "no edge".
+													     Dotted underline distinguishes it from a genuine n/a dash. -->
+													<span
+														class="cursor-help border-b border-dotted border-fg-muted/50"
+														title="Excess vs SPY not available for this window yet — the SPY benchmark leg is missing and recomputes nightly. Not a result of zero edge."
+													>
+														<span aria-hidden="true">—</span>
+														<!-- The dotted underline is invisible to assistive tech, so give the
+														     pending state an accessible name distinct from a genuine n/a dash. -->
+														<span class="sr-only">benchmark pending — recomputes nightly</span>
+													</span>
+												{:else}
+													<span aria-hidden="true">—</span>
+													<span class="sr-only">not available</span>
+												{/if}
 											{:else}
 												{fmtR(o.open_r)}
 											{/if}

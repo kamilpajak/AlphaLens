@@ -118,6 +118,38 @@
 		markers: []
 	};
 
+	// PARTIAL CAPTURE (DFIN case): only E1 filled, so TP1 sold the whole held
+	// position and TP2/TP3 were TOUCHED but sold nothing (TP_TOUCHED, drawn dimmed).
+	// TP_FULL by class, but capture is really only tp1 — the case the marker split
+	// exists for.
+	const PARTIAL_CAPTURE_PAYLOAD: ChartPayload = {
+		status: 'OK',
+		ticker: 'DFIN',
+		brief_date: '2026-07-12',
+		ladder_classification: 'TP_FULL',
+		terminal: true,
+		holding_days_elapsed: 4,
+		realized_r: 0.19,
+		open_r: null,
+		ambiguous_bars: 0,
+		intrabar_rule: 'SL-first',
+		rth_only: true,
+		bars: [
+			bar('2026-07-10', 44),
+			bar('2026-07-13', 46),
+			bar('2026-07-14', 48),
+			bar('2026-07-15', 49.6),
+			bar('2026-07-16', 51)
+		],
+		price_lines: { entry: 44.13, tp: [46.0, 49.55, 50.91], stop: 34.32 },
+		markers: [
+			marker('ENTRY', '2026-07-13', 'E1', 'e1'),
+			marker('TP', '2026-07-14', 'TP1', 'tp1'),
+			marker('TP_TOUCHED', '2026-07-15', 'TP2', 'tp2'),
+			marker('TP_TOUCHED', '2026-07-16', 'TP3', 'tp3')
+		]
+	};
+
 	const { Story } = defineMeta({
 		title: 'Data-viz/LadderChart',
 		component: LadderChart,
@@ -139,6 +171,17 @@
 	{#snippet template()}
 		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
 			<LadderChart payload={CLOSED_PAYLOAD} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- PARTIAL CAPTURE: TP_FULL by class, but only TP1 sold; TP2/TP3 are touched-not-
+     sold (dimmed circles, not solid arrows) — the honest signal that three green
+     arrows overstate what the ladder captured. -->
+<Story name="Partial Capture (touched not sold)">
+	{#snippet template()}
+		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
+			<LadderChart payload={PARTIAL_CAPTURE_PAYLOAD} />
 		</div>
 	{/snippet}
 </Story>

@@ -8,7 +8,9 @@ import {
 	SIZING_MODEL_RISK_LABEL,
 	statsUnlocked,
 	statusLabel,
-	toneClasses
+	toneClasses,
+	tpCaptureLabel,
+	excessCellState
 } from '../../src/lib/edge';
 
 // Pins the pure derivation/formatting the /edge dashboard relies on: the
@@ -218,5 +220,69 @@ describe('scorer_config_version chip visibility (/edge outcomes row)', () => {
 
 	it('does NOT show when scorer_config_version is an empty string', () => {
 		expect(showsScorerVersionChip('')).toBe(false);
+	});
+});
+
+describe('tpCaptureLabel (/edge outcomes CLASS chip honesty)', () => {
+	it('labels a partial capture when fewer TPs sold than touched', () => {
+		// DFIN case: all three TP levels touched, only one sold.
+		expect(tpCaptureLabel({ captured_tp_count: 1, touched_tp_count: 3 })).toBe('1/3 sold');
+	});
+
+	it('returns null when every touched TP was also sold (honest TP_FULL)', () => {
+		expect(tpCaptureLabel({ captured_tp_count: 3, touched_tp_count: 3 })).toBeNull();
+	});
+
+	it('returns null when no TP was touched', () => {
+		expect(tpCaptureLabel({ captured_tp_count: 0, touched_tp_count: 0 })).toBeNull();
+	});
+
+	it('returns null when the counts are unknown (older rows)', () => {
+		expect(tpCaptureLabel({ captured_tp_count: null, touched_tp_count: null })).toBeNull();
+		expect(tpCaptureLabel({ captured_tp_count: null, touched_tp_count: 3 })).toBeNull();
+	});
+});
+
+describe('excessCellState (/edge EXCESS RETURN cell)', () => {
+	it('is "value" when the excess is present', () => {
+		expect(
+			excessCellState({
+				market_excess_return: 0.04,
+				forward_return: 0.06,
+				benchmark_window_return: 0.02
+			})
+		).toBe('value');
+	});
+
+	it('is "value" for a real zero excess (not treated as missing)', () => {
+		expect(
+			excessCellState({
+				market_excess_return: 0,
+				forward_return: 0.02,
+				benchmark_window_return: 0.02
+			})
+		).toBe('value');
+	});
+
+	it('is "pending" when the stock return is known but the SPY benchmark leg is missing', () => {
+		// DFIN case: forward_return present, benchmark NULL → a retriable data gap
+		// that recomputes nightly, NOT a genuine n/a.
+		expect(
+			excessCellState({
+				market_excess_return: null,
+				forward_return: 0.107,
+				benchmark_window_return: null
+			})
+		).toBe('pending');
+	});
+
+	it('is "na" when neither the excess nor the stock return is available', () => {
+		expect(
+			excessCellState({
+				market_excess_return: null,
+				forward_return: null,
+				benchmark_window_return: null
+			})
+		).toBe('na');
 	});
 });

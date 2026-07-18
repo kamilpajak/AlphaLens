@@ -1,8 +1,16 @@
 import type { ChartBar, ChartMarker } from '$lib/types';
 
 /** Marker kinds that close (part of) a position. ENTRY is intentionally absent —
- *  it opens the position, never ends the in-trade window. */
-const EXIT_KINDS: ReadonlySet<ChartMarker['kind']> = new Set(['TP', 'SL', 'TIME_STOP']);
+ *  it opens the position, never ends the in-trade window. TP_TOUCHED IS included:
+ *  the replay marks exit_reached once every TP price level is touched, so a
+ *  touched-but-unsold deeper TP still closes the in-trade window (matches the
+ *  pipeline's holding period), even though it sold no tranche. */
+const EXIT_KINDS: ReadonlySet<ChartMarker['kind']> = new Set([
+	'TP',
+	'TP_TOUCHED',
+	'SL',
+	'TIME_STOP'
+]);
 
 /** The time of the position's FINAL exit crossing, or null if it never exited.
  *

@@ -670,6 +670,8 @@ export interface components {
             theme?: string | null;
             scorer_config_version?: string | null;
             ladder_classification: string;
+            captured_tp_count?: number | null;
+            touched_tp_count?: number | null;
             terminal: boolean;
             /** Format: double */
             realized_r: number | null;

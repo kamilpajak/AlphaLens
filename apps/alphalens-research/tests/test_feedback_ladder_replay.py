@@ -263,6 +263,72 @@ class TestRealizedRPartialFill(unittest.TestCase):
         self.assertAlmostEqual(outcome.realized_r, -1.0 / 3.0, places=3)
 
 
+class TestRealizedTpCapture(unittest.TestCase):
+    """Separate TP levels TOUCHED (price crossed -> ``tps_hit`` / chart markers /
+    ``TP_FULL`` classification) from TP tranches actually SOLD (a positive re-based
+    share -> economic ``realized_r`` contribution). They diverge whenever
+    ``filled_frac < 1``: a shallow entry fill makes an early tranche consume the
+    whole held position, so deeper TPs are touched but sell nothing. ``TP_FULL``
+    over the chart's three green arrows then overstates what was captured.
+    """
+
+    def test_partial_fill_captures_only_tp1_though_all_tps_touched(self):
+        # DFIN case (Example B): E1=99/E2=97/E3=95 equal alloc, only E1 fills
+        # (filled_frac=1/3, blended=99, risk=7). The high then sweeps all three
+        # TPs (102/107/112). TP1's re-based share = (1/3)/(1/3) = 1.0 -> it
+        # consumes the whole held position; TP2/TP3 sell nothing.
+        setup = _setup(**_EQUAL_3)
+        bars = [
+            _bar(1, low=98.0, high=100.0, close=99.0),  # fills E1 (99) only, NOT E2 (97)
+            _bar(2, low=100.0, high=113.0, close=112.0),  # high sweeps TP1/TP2/TP3
+        ]
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.entries_filled, ("E1",))
+        self.assertEqual(outcome.classification, "TP_FULL")  # taxonomy unchanged
+        self.assertEqual(outcome.tps_hit, ("TP1", "TP2", "TP3"))  # all touched
+        self.assertEqual(outcome.realized_tp_ids, ("TP1",))  # only tp1 SOLD
+        self.assertEqual(outcome.captured_tp_count, 1)
+        self.assertEqual(outcome.touched_tp_count, 3)
+        # realized_r reflects only the tp1 exit: (102-99)/7.
+        self.assertAlmostEqual(outcome.realized_r, 3.0 / 7.0, places=3)
+
+    def test_bad_geometry_never_produces_a_false_partial_capture(self):
+        # Adversarial-review guard: a BAD_GEOMETRY row (stop >= entry, realized_r
+        # undefined) must NOT surface a misleading "0/N sold" capture. Because the
+        # fill bar's low (<= entry <= stop) trips the SL first and exit_reached
+        # short-circuits _take_tps, no TP is ever recorded — even when price gaps
+        # straight over every target. So captured == touched == 0 and the /edge
+        # chip (which needs captured < touched) stays hidden. This pins that the
+        # SL-first short-circuit keeps the capture counts honest for degenerate
+        # geometry; if it ever regresses, tps_hit would fill and this fails.
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(110.0, 100.0)], stop=100.0)
+        bars = [
+            _bar(1, low=98.0, high=99.0, close=98.5),  # fills E1, SL (100) trips same bar
+            _bar(2, low=109.0, high=112.0, close=111.0),  # gap straight over TP (post-exit)
+        ]
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.classification, "BAD_GEOMETRY")
+        self.assertIsNone(outcome.realized_r)
+        self.assertEqual(outcome.tps_hit, ())
+        self.assertEqual(outcome.captured_tp_count, 0)
+        self.assertEqual(outcome.touched_tp_count, 0)
+
+    def test_full_fill_captures_every_touched_tp(self):
+        # Example A: all three tiers fill (filled_frac=1) so every touched TP also
+        # sells its tranche -> captured == touched, TP_FULL is honest.
+        setup = _setup(**_EQUAL_3)
+        bars = [
+            _bar(1, low=94.0, high=100.0, close=96.0),  # fills E1+E2+E3
+            _bar(2, low=96.0, high=113.0, close=112.0),  # high sweeps all TPs
+        ]
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.entries_filled, ("E1", "E2", "E3"))
+        self.assertEqual(outcome.classification, "TP_FULL")
+        self.assertEqual(outcome.realized_tp_ids, ("TP1", "TP2", "TP3"))
+        self.assertEqual(outcome.captured_tp_count, 3)
+        self.assertEqual(outcome.touched_tp_count, 3)
+
+
 class TestBugFixes(unittest.TestCase):
     """Steps 4: BAD_GEOMETRY, entry+SL same bar, monotonic bars."""
 

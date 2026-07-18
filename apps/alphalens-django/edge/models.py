@@ -57,6 +57,16 @@ class LadderOutcome(models.Model):
     matured_at = models.DateField(null=True, blank=True)
     ladder_classification = models.CharField(max_length=32, blank=True, default="")
 
+    # TP levels the price TOUCHED (``touched_tp_count``) vs the TP tranches that
+    # actually SOLD (``captured_tp_count``, a positive re-based share). They diverge
+    # when the entry filled only partially: an early tranche consumes the whole held
+    # position, so deeper touched TPs sell nothing. ``captured_tp_count <
+    # touched_tp_count`` is the signal that ``TP_FULL`` / the chart's three green
+    # arrows overstate what was captured. Written by the population monitor from
+    # ``LadderOutcome.realized_tp_ids``; NULL for rows that predate the columns.
+    captured_tp_count = models.IntegerField(null=True, blank=True)
+    touched_tp_count = models.IntegerField(null=True, blank=True)
+
     # Ladder output (risk-normalised R-space, size-free).
     blended_entry = models.FloatField(null=True, blank=True)
     realized_r = models.FloatField(null=True, blank=True)
