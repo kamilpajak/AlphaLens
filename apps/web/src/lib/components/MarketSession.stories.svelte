@@ -28,7 +28,7 @@
 
 <!-- Market open: green dot + "live" label + "closes in …" countdown. -->
 <Story
-	name="Open - XNYS live"
+	name="Open - US market live"
 	play={async ({ canvas }) => {
 		// Seed the store: open session, far-future close so countdown is non-zero.
 		marketStatus.value = {
@@ -44,7 +44,8 @@
 
 		await waitFor(() => expect(canvas.getByTestId('market-session')).toBeInTheDocument());
 		await waitFor(() => expect(canvas.getByText('live')).toBeVisible());
-		await waitFor(() => expect(canvas.getByText('XNYS')).toBeVisible());
+		// The XNYS MIC surfaces as the human label "US MARKET" (via marketLabel).
+		await waitFor(() => expect(canvas.getByText('US MARKET')).toBeVisible());
 	}}
 >
 	{#snippet template()}
@@ -71,7 +72,7 @@
 
 		await waitFor(() => expect(canvas.getByTestId('market-session')).toBeInTheDocument());
 		await waitFor(() => expect(canvas.getByText('closed')).toBeVisible());
-		await waitFor(() => expect(canvas.getByText('XNYS')).toBeVisible());
+		await waitFor(() => expect(canvas.getByText('US MARKET')).toBeVisible());
 	}}
 >
 	{#snippet template()}

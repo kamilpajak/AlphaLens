@@ -2,10 +2,11 @@
  * Hermetic smoke for the per-exchange market-session chip.
  *
  * The chip reads ``/v1/market/status`` and renders ambient footer
- * telemetry: "XNYS ● open · closes in 2h" while the venue trades,
- * "XNYS ○ closed · opens mon 09:30 · in 2d" otherwise. Tests mock the
- * endpoint deterministically so the chip state is independent of when CI
- * runs.
+ * telemetry: "US MARKET ● open · closes in 2h" while the venue trades,
+ * "US MARKET ○ closed · opens mon 09:30 · in 2d" otherwise. The displayed
+ * label is the human market name (``marketLabel``), not the raw MIC, so an
+ * ``XNYS`` fixture renders "US MARKET". Tests mock the endpoint
+ * deterministically so the chip state is independent of when CI runs.
  *
  * It replaces the old full-width closed-market banner (and its dead
  * "submission deferred" copy — the paper-trade/broker chain was
@@ -93,7 +94,9 @@ test.describe('MarketSession chip — open', () => {
 
 		const chip = page.getByTestId('market-session');
 		await expect(chip).toBeVisible();
-		await expect(chip).toContainText('XNYS');
+		// The XNYS fixture surfaces as the human market label, not the raw MIC.
+		await expect(chip).toContainText('US MARKET');
+		await expect(chip).not.toContainText('XNYS');
 		// "live" is the per-exchange open indicator (it replaced the chip's old
 		// "open" label when the always-on standalone footer "live" dot was
 		// merged in here).
@@ -124,7 +127,8 @@ test.describe('MarketSession chip — closed', () => {
 
 		const chip = page.getByTestId('market-session');
 		await expect(chip).toBeVisible();
-		await expect(chip).toContainText('XNYS');
+		await expect(chip).toContainText('US MARKET');
+		await expect(chip).not.toContainText('XNYS');
 		await expect(chip).toContainText(/closed/i);
 		// Next-open label + relative countdown (~1d 12h out).
 		await expect(chip).toContainText(/opens/i);
