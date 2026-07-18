@@ -191,6 +191,12 @@ class TestStepAEntry(_ScratchCase):
 
         (record,) = self._journal_records()
         self.assertEqual((record["brief_date"], record["ticker"]), ("2026-07-18", "KO"))
+        # Poolability: the experiment's journal rows must carry the SAME
+        # config-version stamp as production submits, or reconcile-era
+        # analyses would silently pool rows across decomposer generations.
+        from alphalens_pipeline.brokers.execution import execution_config_version
+
+        self.assertEqual(record["execution_config_version"], execution_config_version())
         self.assertEqual((record["mic"], record["uic"]), ("XNYS", "307"))
         (bracket,) = record["brackets"]
         self.assertEqual(bracket["entry_order_id"], "E-1")
