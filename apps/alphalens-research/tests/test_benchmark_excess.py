@@ -314,6 +314,36 @@ class TestEnrichSelfHeal(unittest.TestCase):
             self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.02, places=6)
             self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
 
+    def test_transient_none_nulls_an_ongoing_rows_stale_benchmark(self) -> None:
+        # An ONGOING row's exit window GROWS every session, so a preserved older
+        # benchmark would be stale against a freshly-advanced forward_return (and
+        # could leak into excess-telemetry). Only a frozen (terminal, matured_at)
+        # window may keep its last-good value; an ongoing miss must go NULL and
+        # recompute next run.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": False,
+                        "matured_at": None,
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=lambda *_: [], now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertTrue(pd.isna(row["benchmark_window_return"]))
+            self.assertTrue(pd.isna(row["market_excess_return"]))
+
 
 class TestBenchmarkAnchorInvariants(unittest.TestCase):
     """Pins the verified market_excess anchor invariants (NO anchor bug exists).

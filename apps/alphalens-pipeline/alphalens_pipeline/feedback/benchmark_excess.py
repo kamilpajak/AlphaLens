@@ -239,8 +239,12 @@ def _enrich_frame_rows(
         )
         # Non-destructive: a transient fetch miss (bench=None) must NOT overwrite an
         # already-good value with NULL on this whole-store rewrite — the enrich only
-        # ever FILLS a gap. Fall back to the row's existing benchmark/excess.
-        if bench is None:
+        # ever FILLS a gap. Restricted to FROZEN-window rows (terminal, matured_at
+        # set): their [arrival, exit] window can't change, so the last-good pair
+        # stays valid. An ONGOING row's window GROWS every session, so keeping an
+        # older benchmark would be stale against a freshly-advanced forward_return
+        # (and could leak into excess-telemetry) — let it go NULL and recompute.
+        if bench is None and _as_date(row.get("matured_at")) is not None:
             prev_bench = (
                 row["benchmark_window_return"] if "benchmark_window_return" in row.index else None
             )
