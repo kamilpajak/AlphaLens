@@ -21,7 +21,8 @@
 		SIZING_MODEL_RISK_LABEL,
 		statsUnlocked,
 		toneClasses,
-		tpCaptureLabel
+		tpCaptureLabel,
+		excessCellState
 	} from '$lib/edge';
 	import {
 		defaultDir,
@@ -678,6 +679,7 @@
 						{#each windowRows as o, i (rowKey(o))}
 							{@const tone = classificationTone(o.ladder_classification)}
 							{@const capture = tpCaptureLabel(o)}
+							{@const excState = excessCellState(o)}
 							{@const rValue = o.terminal ? o.market_excess_return : o.open_r}
 							<!-- Terminal value is an excess RETURN (fraction → % units); ongoing is an
 							     R-multiple. The bar domain differs accordingly. -->
@@ -751,7 +753,19 @@
 											class:text-fg-muted={rValue == null}
 										>
 											{#if o.terminal}
-												{fmtFracPct(o.market_excess_return, 1)}
+												{#if excState === 'value'}
+													{fmtFracPct(o.market_excess_return, 1)}
+												{:else if excState === 'pending'}
+													<!-- Excess vs SPY not computed yet (benchmark leg missing) — a
+													     retriable data gap that recomputes nightly, NOT "no edge".
+													     Dotted underline distinguishes it from a genuine n/a dash. -->
+													<span
+														class="cursor-help border-b border-dotted border-fg-muted/50"
+														title="Excess vs SPY not available for this window yet — the SPY benchmark leg is missing and recomputes nightly. Not a result of zero edge."
+													>—</span>
+												{:else}
+													—
+												{/if}
 											{:else}
 												{fmtR(o.open_r)}
 											{/if}

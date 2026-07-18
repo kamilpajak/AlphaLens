@@ -55,6 +55,26 @@ export function tpCaptureLabel(o: {
 	return `${captured}/${touched} sold`;
 }
 
+/** Render state for the /edge EXCESS RETURN cell of a TERMINAL row. A bare em dash
+ *  used to hide three different situations. This splits them so a benchmark data
+ *  gap never reads as "no edge":
+ *  - `value`   — `market_excess_return` is a real number (including 0); show it.
+ *  - `pending` — the stock's own return is known but the SPY benchmark leg is
+ *                missing, so the excess could not be computed yet. It recomputes
+ *                nightly — a retriable data gap, NOT a genuine n/a.
+ *  - `na`      — neither the excess nor the stock return is available (an older row
+ *                or an unrecoverable window). */
+export type ExcessCellState = 'value' | 'pending' | 'na';
+export function excessCellState(o: {
+	market_excess_return: number | null | undefined;
+	forward_return: number | null | undefined;
+	benchmark_window_return: number | null | undefined;
+}): ExcessCellState {
+	if (o.market_excess_return != null) return 'value';
+	if (o.forward_return != null && o.benchmark_window_return == null) return 'pending';
+	return 'na';
+}
+
 /**
  * Geometry for a CENTERED excess-R bar — zero sits in the middle, a positive
  * excess fills rightward and a negative excess fills leftward. Returns the
