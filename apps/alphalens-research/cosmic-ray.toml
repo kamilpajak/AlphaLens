@@ -30,6 +30,10 @@
 
 [cosmic-ray]
 module-path = "apps/alphalens-research/alphalens_research/backtest/metrics.py"
+# Direct venv interpreter — NOT `uv run python`: cosmic-ray shells out per mutant,
+# and `uv run` re-resolves the env each call (and triggers a full `uv sync` from a
+# worktree with no .venv, blowing the timeout). `.venv/bin/python` is also the
+# project idiom (see the `.venv/bin/...` commands in CLAUDE.md). Run from repo root.
 test-command = ".venv/bin/python -m unittest discover -s apps/alphalens-research/tests -t apps/alphalens-research -p test_metrics.py"
 timeout = 30.0
 excluded-modules = []
