@@ -1,8 +1,9 @@
 """Hypothesis settings profiles for the property suite.
 
-Registered on import; LOADED explicitly by ``PropertyTestCase.setUpClass`` (no
-hidden import-time ``load`` — the review flag on global side effects). Three
-profiles, selected via ``HYPOTHESIS_PROFILE`` (default ``ci``):
+Both registration AND load are EXPLICIT (no import-time side effect): call
+:func:`register_profiles` then ``settings.load_profile(...)`` — done once by
+``PropertyTestCase.setUpClass``. Profiles selected via ``HYPOTHESIS_PROFILE``
+(default ``ci``):
 
 * ``ci`` — explores (``derandomize=False``) and persists found counterexamples to
   the default on-disk database, so a failing example replays first on the next
@@ -17,12 +18,15 @@ from __future__ import annotations
 
 from hypothesis import HealthCheck, settings
 
-settings.register_profile(
-    "ci",
-    max_examples=300,
-    deadline=None,
-    derandomize=False,
-    suppress_health_check=[HealthCheck.too_slow],
-)
-settings.register_profile("dev", max_examples=2000, deadline=None)
-settings.register_profile("mutation", max_examples=30, deadline=None, database=None)
+
+def register_profiles() -> None:
+    """Register the ci/dev/mutation profiles (idempotent)."""
+    settings.register_profile(
+        "ci",
+        max_examples=300,
+        deadline=None,
+        derandomize=False,
+        suppress_health_check=[HealthCheck.too_slow],
+    )
+    settings.register_profile("dev", max_examples=2000, deadline=None)
+    settings.register_profile("mutation", max_examples=30, deadline=None, database=None)

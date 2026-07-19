@@ -55,7 +55,10 @@ def _naive_walk(
                 filled.append(lid)
         if not filled:
             continue
-        if low <= stop:  # SL-first
+        # SL-first: a full stop-out. ``exit_reached = True; break`` here mirrors the
+        # engine's exit latch (``_LadderWalk.step`` early-returns once exited) — no
+        # later bar can fill, touch, or re-open the position.
+        if low <= stop:
             sl = True
             exit_reached = True
             break

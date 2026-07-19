@@ -15,15 +15,16 @@ import unittest
 
 from hypothesis import settings
 
-from . import profile  # noqa: F401  # registers ci/dev/mutation profiles on import
+from .profile import register_profiles
 
 
 class PropertyTestCase(unittest.TestCase):
-    """Base that loads the selected hypothesis profile once per class."""
+    """Base that registers + loads the selected hypothesis profile once per class."""
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
+        register_profiles()  # explicit — no import-time side effect
         settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
 
     def assert_close(

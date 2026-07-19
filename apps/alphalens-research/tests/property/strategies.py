@@ -98,6 +98,13 @@ def bar_paths(
     return bars
 
 
+# Bar-path window margins around the ladder: dip a little below the stop (so SL
+# can trigger) and reach a little above the top TP (so a full scale-out is
+# reachable) without wandering so far the interesting region is rarely sampled.
+_MARGIN_BELOW_STOP = 0.85
+_MARGIN_ABOVE_TOP_TP = 1.15
+
+
 @st.composite
 def ladder_and_bars(draw: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """A ladder plus a bar path spanning its [stop, top-TP] region.
@@ -109,5 +116,7 @@ def ladder_and_bars(draw: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     setup = draw(ladders())
     stop = setup["disaster_stop"]
     top_tp = max(t["target"] for t in setup["tp_tranches"])
-    bars = draw(bar_paths(price_lo=stop * 0.85, price_hi=top_tp * 1.15))
+    bars = draw(
+        bar_paths(price_lo=stop * _MARGIN_BELOW_STOP, price_hi=top_tp * _MARGIN_ABOVE_TOP_TP)
+    )
     return setup, bars
