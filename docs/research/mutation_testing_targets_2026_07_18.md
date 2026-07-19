@@ -33,7 +33,8 @@ Each candidate is scored `criticality × suitability` (both 1–5):
 | `backtest/multi_phase` doctrine-verdict + gate logic | #851 | boundary + gate pins |
 | `backtest/sharpe_inference.py` | #852 | 353/389 = **90.7%**; 36 documented equivalents |
 | `feedback/ladder_replay.py` (batch 1) | #853 | +62 mutants killed; ~710 survivors deferred (batch 2+) |
-| `backtest/weighting.py` | *this PR* | 211/231 = **91.3%** (was 78.4%); 20 documented equivalents |
+| `backtest/weighting.py` | #854 | 211/231 = **91.3%** (was 78.4%); 20 documented equivalents |
+| `paper/sizing.py` | *this PR* | 425/440 = **96.6%** (was 86.1%); 15 documented equivalents |
 
 ### `feedback/ladder_replay.py` — batch 1 (#853)
 
@@ -53,7 +54,7 @@ equivalents are almost all `X | Y` swaps inside type annotations (dead under
 triaged — a `batch 2+` effort on the same module. The module's size means it
 warrants several focused PRs rather than one mega-diff.
 
-### `backtest/weighting.py` — complete (this PR)
+### `backtest/weighting.py` — complete (#854)
 
 Position-weighting schemes (`compute_position_weights` + `weighted_return`, 87
 LOC) — scale every portfolio return the engine emits, so a silent bug shifts
@@ -66,6 +67,28 @@ its 4 guard mutants + 13 body mutants inert; `len(...) <= 0 ≡ == 0` (lengths a
 non-negative); and `max(1, (n+2)//3) ≡ max(0, (n+2)//3)` since `(n+2)//3 ≥ 1`
 for every reachable `n ≥ 1`.
 
+### `paper/sizing.py` — complete (this PR)
+
+Pure position-sizing math (`validate_trade_setup`, `compute_daily_scale_factor`,
+`compute_setup_plan`, 367 LOC) — turns a `brief_trade_setup` into concrete share
+quantities and the account-currency notional (incl. the FX leg, PR #849). Full
+run: **440 mutants, 379 killed by the prior suite, 61 survived (86.1 %
+baseline)**. 33 new pinning tests
+(`tests/paper/test_sizing_mutation_hardening.py`) kill all 46 killable survivors
+(verified by a targeted re-run, 46/46), lifting the score to **96.6 %**. Coverage:
+plannability guards (status/size/stop/tier boundaries, value-not-identity `status
+== "OK"`), the scale-factor short-circuits (non-positive equity, zero/negative
+aggregate), the per-tier and per-tranche skip/continue loops + default values, the
+FX guards (same-currency rejection, rate boundaries, the one-line notional
+conversion driving qty), and both keyword-only signature markers.
+
+The 15 documented equivalents: 11 are `X | Y` swaps inside the `fx: FxConversion
+| None` annotation (dead under `from __future__ import annotations`);
+`math.floor(a // b)` ≡ `a // b` ≡ `math.floor(a / b)` for the qty floor; the two
+`.get("limit", 0)`/`or 0` → `-1` mutants leave a missing/zero limit non-positive
+so the tier is still dropped; and `paper_equity < 0` ≡ `<= 0` because equity `== 0`
+yields a zero aggregate that returns 1.0 via the next guard anyway.
+
 ## Backlog (ranked)
 
 Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphalens_pipeline/`,
@@ -74,7 +97,6 @@ Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphale
 | crit·suit | Module | Why it is critical |
 |-----------|--------|--------------------|
 | 25 | `pipe:data/store/form4_pit.py` | PIT integrity SoT for insider data — `filed_date<=asof` window + transaction lookback; a leak biases every insider signal. |
-| 25 | `pipe:paper/sizing.py` | Translates a trade-setup into share quantities + account-currency notionals (FX leg, PR #849). |
 | 25 | `pipe:scorers/cohen_malloy_classifier.py` | ROUTINE/OPPORTUNISTIC/UNCLASSIFIED label gates which insider trades count — the only project positive line. |
 | 25 | `pipe:thematic/screening/selection_score.py` | THE primary brief sort key (`layer4 − ATR ramp penalty`); a silent bug reorders every card. |
 | 25 | `pipe:thematic/trade_setup/ladder.py` | Sole producer of the entry-tier + TP-tranche ladders the group trades. |
