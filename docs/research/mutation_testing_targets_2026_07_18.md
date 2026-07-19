@@ -32,9 +32,10 @@ Each candidate is scored `criticality × suitability` (both 1–5):
 | `backtest/metrics.py` (config seeded) | #845 | cosmic-ray dev-dep + working config |
 | `backtest/multi_phase` doctrine-verdict + gate logic | #851 | boundary + gate pins |
 | `backtest/sharpe_inference.py` | #852 | 353/389 = **90.7%**; 36 documented equivalents |
-| `feedback/ladder_replay.py` (batch 1) | *this PR* | +62 mutants killed (see below) |
+| `feedback/ladder_replay.py` (batch 1) | #853 | +62 mutants killed; ~710 survivors deferred (batch 2+) |
+| `backtest/weighting.py` | *this PR* | 211/231 = **91.3%** (was 78.4%); 20 documented equivalents |
 
-### `feedback/ladder_replay.py` — batch 1 (this PR)
+### `feedback/ladder_replay.py` — batch 1 (#853)
 
 The `/edge` ledger replay engine (1666 LOC): computes `realized_r`,
 `filled_fraction`, MFE/MAE and the terminal classification that is the **sole
@@ -51,6 +52,19 @@ equivalents are almost all `X | Y` swaps inside type annotations (dead under
 **Follow-up (backlog):** ~710 survivors from the remaining chunks are not yet
 triaged — a `batch 2+` effort on the same module. The module's size means it
 warrants several focused PRs rather than one mega-diff.
+
+### `backtest/weighting.py` — complete (this PR)
+
+Position-weighting schemes (`compute_position_weights` + `weighted_return`, 87
+LOC) — scale every portfolio return the engine emits, so a silent bug shifts
+every backtested Sharpe/alpha. Full run: **231 mutants, 181 killed by the prior
+suite, 50 survived (78.4 % baseline)**. 14 new pinning tests kill all 30 killable
+survivors (verified by a targeted re-run), lifting the score to **91.3 %**. The
+20 documented equivalents: the `if raw.sum() == 0` conviction safety branch is
+unreachable (the top tier always contributes 2.0, so `raw.sum() ≥ 2.0`), making
+its 4 guard mutants + 13 body mutants inert; `len(...) <= 0 ≡ == 0` (lengths are
+non-negative); and `max(1, (n+2)//3) ≡ max(0, (n+2)//3)` since `(n+2)//3 ≥ 1`
+for every reachable `n ≥ 1`.
 
 ## Backlog (ranked)
 
@@ -69,7 +83,6 @@ Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphale
 | 25 | `res:attribution/factor_analysis.py` | Produces the Carhart-4F alpha t-stat every ledger verdict compares to the bar. |
 | 25 | `res:attribution/signal_vol_regime.py` | Its `proceed` verdict IS the mandatory Layer-4 overlay pre-screen gate. |
 | 25 | `res:backtest/engine.py` | Produces `BacktestReport.portfolio_returns` — input to every Sharpe/Carhart/Bonferroni call. |
-| 25 | `res:backtest/weighting.py` | `compute_position_weights` + `weighted_return` scale every portfolio return. |
 | 20 | `pipe:data/factors.py` | Sole loader of FF5/UMD/Industry12/Q4 factor returns feeding attribution. |
 | 20 | `pipe:feedback/benchmark_excess.py` | `market_excess = forward − benchmark_window` — the `/edge` headline metric. |
 | 20 | `pipe:feedback/population_ladder_monitor.py` | The `/edge` ledger SoT writer: plannability gating + touch-trigger screen. |
