@@ -35,7 +35,8 @@ Each candidate is scored `criticality × suitability` (both 1–5):
 | `feedback/ladder_replay.py` (batch 1) | #853 | +62 mutants killed; ~710 survivors deferred (batch 2+) |
 | `backtest/weighting.py` | #854 | 211/231 = **91.3%** (was 78.4%); 20 documented equivalents |
 | `paper/sizing.py` | #855 | 425/440 = **96.6%** (was 86.1%); 15 documented equivalents |
-| `thematic/screening/selection_score.py` | *this PR* | 84/110 = **76.4%** (was 73.6%); 26 documented equivalents |
+| `thematic/screening/selection_score.py` | #856 | 84/110 = **76.4%** (was 73.6%); 26 documented equivalents |
+| `scorers/cohen_malloy_classifier.py` | *this PR* | 45/46 = **97.8%** (was 76.1%); 1 documented equivalent |
 
 ### `feedback/ladder_replay.py` — batch 1 (#853)
 
@@ -109,6 +110,24 @@ for the frozen constants (`HI < 2·LO`, and the reachable range is `LO < x < HI`
 `a % LO == a − LO`) — a constant recalibration that bumps `SCORER_CONFIG_VERSION`
 would need this run redone.
 
+### `scorers/cohen_malloy_classifier.py` — complete (this PR)
+
+The Cohen-Malloy routine/opportunistic classifier (82 LOC) — the label gates which
+insider trades count in the only project-positive line (Cohen-Malloy
+PASS_MARGINAL). Full run: **46 mutants, 35 killed by the prior suite, 11 survived
+(76.1 % baseline)**. New pinning tests kill all 10 killable survivors (verified by a
+targeted re-run), lifting the score to **97.8 %**. Coverage: the window-boundary
+`KeyError`-on-out-of-window guard, the XOR-vs-subtract year math, the keyword-only
+marker in the signature, the lookback-window constant, and the month-set
+intersection subset flips.
+
+The 1 documented equivalent: `month_sets[1:]` → `month_sets[0:]`
+(`job_id 0ca78a5fd7a345098d1d6073550b59e6`, line 79, `NumberReplacer`) makes the
+call `month_sets[0].intersection(*month_sets[0:])` = `s0.intersection(s0, s1, s2)` =
+`s0 ∩ s0 ∩ s1 ∩ s2` = `s0 ∩ s1 ∩ s2`, exactly the original full 3-way intersection
+(idempotent re-inclusion of `s0`). No input can distinguish it — verified identical
+output (OPPORTUNISTIC) on the discriminating history.
+
 ## Backlog (ranked)
 
 Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphalens_pipeline/`,
@@ -117,7 +136,6 @@ Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphale
 | crit·suit | Module | Why it is critical |
 |-----------|--------|--------------------|
 | 25 | `pipe:data/store/form4_pit.py` | PIT integrity SoT for insider data — `filed_date<=asof` window + transaction lookback; a leak biases every insider signal. |
-| 25 | `pipe:scorers/cohen_malloy_classifier.py` | ROUTINE/OPPORTUNISTIC/UNCLASSIFIED label gates which insider trades count — the only project positive line. |
 | 25 | `pipe:thematic/trade_setup/ladder.py` | Sole producer of the entry-tier + TP-tranche ladders the group trades. |
 | 25 | `pipe:thematic/trade_setup/sizing.py` | Equal-risk allocation math + 25 % exposure cap. |
 | 25 | `res:attribution/cost_model.py` | Cost drag turns gross into the net returns the Carhart regression + ledger verdict see. |
