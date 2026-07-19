@@ -120,5 +120,79 @@ class TestCohenMalloyClassifier(unittest.TestCase):
         self.assertEqual(label, CohenMalloyLabel.ROUTINE)
 
 
+class TestCohenMalloyMutationSurvivors(unittest.TestCase):
+    """Pins cosmic-ray mutation survivors on ``cohen_malloy_classifier``.
+
+    Each test targets a specific operator/number swap the base suite left
+    alive; the killed mutation is named in a comment above the assertion.
+    """
+
+    def test_kill_lookback_years_must_be_three(self):
+        # Kills NumberReplacer on LOOKBACK_YEARS (3 -> other): trades only in
+        # the 2 most recent preceding years (missing Y-3 = 2020). A 3-year
+        # window -> UNCLASSIFIED; a 2-year window would classify it.
+        history = [date(2021, 3, 1), date(2022, 7, 1)]
+        self.assertEqual(
+            classify_from_transaction_dates(history, classification_year=2023),
+            CohenMalloyLabel.UNCLASSIFIED,
+        )
+
+    def test_kill_classification_year_is_keyword_only(self):
+        # Kills ReplaceBinaryOperator_Mul_Div on the keyword-only ``*`` marker:
+        # classification_year is keyword-only, so a positional call must raise.
+        with self.assertRaises(TypeError):
+            classify_from_transaction_dates([date(2020, 1, 1)], 2020)
+
+    def test_kill_window_start_uses_subtraction_not_xor(self):
+        # Kills ReplaceBinaryOperator_Sub_BitXor on window_start_year:
+        # classification_year 2020 (2020 % 4 == 0): XOR 3 -> 2023 collapses the
+        # window and crashes; subtraction gives [2017, 2020) -> ROUTINE.
+        history = [date(2017, 1, 1), date(2018, 1, 1), date(2019, 1, 1)]
+        self.assertEqual(
+            classify_from_transaction_dates(history, classification_year=2020),
+            CohenMalloyLabel.ROUTINE,
+        )
+
+    def test_kill_window_bounds_exclude_out_of_window_years(self):
+        # Kills the four in-window comparison mutations (Lt_NotEq, Lt_IsNot,
+        # Lt_LtE, LtE_IsNot) on ``window_start_year <= d.year < window_end_year``:
+        # pre-window (2018), current-year (2023) and post-window (2025) trades
+        # must all be excluded. Any bound mutation admits one of them, and the
+        # months_per_year lookup for that year raises KeyError. In-window trades
+        # are all January -> ROUTINE.
+        history = [
+            date(2018, 3, 1),
+            date(2020, 1, 1),
+            date(2021, 1, 1),
+            date(2022, 1, 1),
+            date(2023, 5, 1),
+            date(2025, 6, 1),
+        ]
+        self.assertEqual(
+            classify_from_transaction_dates(history, classification_year=2023),
+            CohenMalloyLabel.ROUTINE,
+        )
+
+    def test_kill_routine_requires_common_month_across_all_three_years(self):
+        # Kills the three NumberReplacer mutations on the intersection indices
+        # ``month_sets[0].intersection(*month_sets[1:])``. Months form the
+        # classic pairwise-but-not-triple pattern: Y-3={Jan,Feb}, Y-2={Jan,Mar},
+        # Y-1={Feb,Mar}. Every 2-of-3 subset intersection is non-empty (would
+        # flip to ROUTINE) while the full 3-way intersection is empty
+        # (OPPORTUNISTIC). Pins that all three years must share a month.
+        history = [
+            date(2020, 1, 1),
+            date(2020, 2, 1),
+            date(2021, 1, 1),
+            date(2021, 3, 1),
+            date(2022, 2, 1),
+            date(2022, 3, 1),
+        ]
+        self.assertEqual(
+            classify_from_transaction_dates(history, classification_year=2023),
+            CohenMalloyLabel.OPPORTUNISTIC,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
