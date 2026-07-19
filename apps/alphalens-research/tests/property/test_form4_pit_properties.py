@@ -177,7 +177,12 @@ def _panel_and_query(draw: Any) -> tuple[list[dict[str, Any]], str, dt.date, int
     lookback = draw(st.sampled_from(_LOOKBACKS))
     if records:
         anchor = draw(st.sampled_from(records))
-        offset = draw(st.integers(0, 60))
+        # Weight offset 0 heavily: asof == anchor.filed_date is the exact
+        # boundary that separates the `filed_date <= asof` filter from a `<`
+        # mutant. A uniform 0..60 draw hits it only ~1/61 of the time, so with
+        # derandomize=False some CI runs would never exercise the flagship
+        # boundary; one_of gives 0 a ~50% share.
+        offset = draw(st.one_of(st.just(0), st.integers(0, 60)))
         asof = anchor["filed_date"] + dt.timedelta(days=offset)
         ticker = anchor["ticker"]
     else:
