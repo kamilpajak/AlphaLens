@@ -89,7 +89,9 @@ def _causality_case(draw: st.DrawFn) -> tuple[pd.Series, pd.Series, int, VolTarg
     tg = draw(_targeter())
     n = draw(st.integers(1, 40))
     base = draw(st.lists(_RETURN, min_size=n, max_size=n))
-    k = draw(st.integers(0, n))
+    # k in [0, n-1] so the tail is always at least one replaced value; k==n
+    # would make r2 == r (a tautological example with no discriminating power).
+    k = draw(st.integers(0, n - 1))
     tail = draw(st.lists(_RETURN, min_size=n - k, max_size=n - k))
     idx = _index(n)
     r = pd.Series(base, index=idx, dtype=float, name="portfolio")
@@ -182,6 +184,18 @@ class TestBoundsAndNeutrality(PropertyTestCase):
         scales = tg.scale_series(_series([c] * n))
         for v in scales:
             self.assertEqual(v, 1.0)
+
+    def test_small_but_nonzero_vol_is_not_collapsed_to_one(self) -> None:
+        # A realised vol comfortably above _ZERO_VOL_TOL (1e-12) but still tiny
+        # must produce a CAPPED scale (target/rv >> cap), never the zero-vol 1.0
+        # fallback. This pins the tolerance: widening it (e.g. 1e-12 -> 1e-6)
+        # would wrongly collapse this window to 1.0. Single-path + rv ~1e-8 sits
+        # far from the rolling-vs-slice knife-edge, so it is not FP-flaky.
+        tg = VolTargeter(target_vol=0.1, lookback=2, periods_per_year=252, max_leverage=1.5)
+        s = _series([0.01, 0.01 + 1e-9, 0.02])  # window [0.01, 0.01+1e-9] -> rv ~1.1e-8
+        # scale[2] uses that window: target/rv ~ 9e6 -> clips to max_leverage.
+        self.assertEqual(tg.scale_factor(s, s.index[2]), tg.max_leverage)
+        self.assertEqual(tg.scale_series(s).iloc[2], tg.max_leverage)
 
     def test_nan_in_window_falls_back_to_one(self) -> None:
         # A NaN anywhere in the lookback window taints the estimate -> 1.0.
