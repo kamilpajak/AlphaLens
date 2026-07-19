@@ -99,7 +99,7 @@ class TestEqualRiskAllocations(PropertyTestCase):
         for x, y in zip(a1, a2, strict=True):
             self.assert_close(x, y, rel_tol=1e-6, abs_tol=1e-6)
         self.assert_close(
-            blended_entry(scaled, a2), blended_entry(entries, a1) * k, rel_tol=1e-6, abs_tol=1e-4
+            blended_entry(scaled, a2), blended_entry(entries, a1) * k, rel_tol=1e-6, abs_tol=1e-6
         )
 
 
@@ -132,7 +132,21 @@ class TestBlendedEntry(PropertyTestCase):
         self.assertGreaterEqual(b, min(entries) - 1e-6)
         self.assertLessEqual(b, max(entries) + 1e-6)
 
+    @given(
+        a=finite_prices(1.0, 1e4),
+        b=finite_prices(1.0, 1e4),
+        p=st.floats(0.0, 1.0, allow_nan=False, allow_infinity=False),
+    )
+    def test_is_exact_allocation_weighted_average(self, a: float, b: float, p: float) -> None:
+        """Exact identity (stronger than the min/max bound): blended == the
+        allocation-weighted mean for explicit allocations."""
+        self.assert_close(
+            blended_entry([a, b], [p, 1.0 - p]), p * a + (1.0 - p) * b, rel_tol=1e-9, abs_tol=1e-6
+        )
+
     @given(st.lists(finite_prices(1.0, 1e4), min_size=1, max_size=5))
     def test_degenerate_allocations_fall_back_to_simple_mean(self, entries: list[float]) -> None:
+        # All-zero allocations are degenerate (no tier filled / unweighted): the
+        # documented safe default is the UNWEIGHTED average, not a divide-by-zero.
         b = blended_entry(entries, [0.0] * len(entries))
         self.assert_close(b, sum(entries) / len(entries))
