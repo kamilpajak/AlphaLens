@@ -34,7 +34,8 @@ Each candidate is scored `criticality × suitability` (both 1–5):
 | `backtest/sharpe_inference.py` | #852 | 353/389 = **90.7%**; 36 documented equivalents |
 | `feedback/ladder_replay.py` (batch 1) | #853 | +62 mutants killed; ~710 survivors deferred (batch 2+) |
 | `backtest/weighting.py` | #854 | 211/231 = **91.3%** (was 78.4%); 20 documented equivalents |
-| `paper/sizing.py` | *this PR* | 425/440 = **96.6%** (was 86.1%); 15 documented equivalents |
+| `paper/sizing.py` | #855 | 425/440 = **96.6%** (was 86.1%); 15 documented equivalents |
+| `thematic/screening/selection_score.py` | *this PR* | 84/110 = **76.4%** (was 73.6%); 26 documented equivalents |
 
 ### `feedback/ladder_replay.py` — batch 1 (#853)
 
@@ -67,7 +68,7 @@ its 4 guard mutants + 13 body mutants inert; `len(...) <= 0 ≡ == 0` (lengths a
 non-negative); and `max(1, (n+2)//3) ≡ max(0, (n+2)//3)` since `(n+2)//3 ≥ 1`
 for every reachable `n ≥ 1`.
 
-### `paper/sizing.py` — complete (this PR)
+### `paper/sizing.py` — complete (#855)
 
 Pure position-sizing math (`validate_trade_setup`, `compute_daily_scale_factor`,
 `compute_setup_plan`, 367 LOC) — turns a `brief_trade_setup` into concrete share
@@ -89,6 +90,25 @@ The 15 documented equivalents: 11 are `X | Y` swaps inside the `fx: FxConversion
 so the tier is still dropped; and `paper_equity < 0` ≡ `<= 0` because equity `== 0`
 yields a zero aggregate that returns 1.0 via the next guard anyway.
 
+### `thematic/screening/selection_score.py` — complete (this PR)
+
+The ATR-soft-tilt score (`atr_penalty` + `selection_score`, 59 LOC) — THE primary
+brief sort key, so a silent bug reorders every card. Full run: **110 mutants, 81
+killed by the prior suite, 29 survived (73.6 % baseline)**. Only **3 were
+killable** (the frozen breakpoint constants `ATR_RAMP_LO=5.77` / `ATR_RAMP_HI=8.37`):
+the existing midpoint test computed its test point *from* those constants, so a
+mutated constant moved the point with it and stayed invisible. 3 new tests pin the
+ramp at ABSOLUTE x with hardcoded expecteds, killing all 3 (verified 3/3),
+lifting the score to **76.4 %**.
+
+The 26 documented equivalents: 22 are `X | Y` swaps inside the `float | None`
+annotations (dead under `from __future__ import annotations`); `x <= LO` ≡ `x < LO`
+because at `x == LO` the ramp formula also yields 0; `x >= HI` ≡ `x > HI` because
+at `x == HI` the ramp also yields `LAMBDA`; and the two `-`→`%` mutants are inert
+for the frozen constants (`HI < 2·LO`, and the reachable range is `LO < x < HI`, so
+`a % LO == a − LO`) — a constant recalibration that bumps `SCORER_CONFIG_VERSION`
+would need this run redone.
+
 ## Backlog (ranked)
 
 Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphalens_pipeline/`,
@@ -98,7 +118,6 @@ Not yet run. `crit·suit` descending; `pipe:` = `apps/alphalens-pipeline/alphale
 |-----------|--------|--------------------|
 | 25 | `pipe:data/store/form4_pit.py` | PIT integrity SoT for insider data — `filed_date<=asof` window + transaction lookback; a leak biases every insider signal. |
 | 25 | `pipe:scorers/cohen_malloy_classifier.py` | ROUTINE/OPPORTUNISTIC/UNCLASSIFIED label gates which insider trades count — the only project positive line. |
-| 25 | `pipe:thematic/screening/selection_score.py` | THE primary brief sort key (`layer4 − ATR ramp penalty`); a silent bug reorders every card. |
 | 25 | `pipe:thematic/trade_setup/ladder.py` | Sole producer of the entry-tier + TP-tranche ladders the group trades. |
 | 25 | `pipe:thematic/trade_setup/sizing.py` | Equal-risk allocation math + 25 % exposure cap. |
 | 25 | `res:attribution/cost_model.py` | Cost drag turns gross into the net returns the Carhart regression + ledger verdict see. |
