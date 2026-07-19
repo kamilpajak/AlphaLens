@@ -160,20 +160,39 @@ def _accessions(frame: pd.DataFrame) -> set[str]:
     return set(frame["accession_number"].astype(str))
 
 
-_query = st.tuples(
-    st.sampled_from([t for t, _ in _ISSUERS]),
-    st.dates(_MIN_DATE, _MAX_DATE),
-    st.sampled_from(_LOOKBACKS),
-)
+@st.composite
+def _panel_and_query(draw: Any) -> tuple[list[dict[str, Any]], str, dt.date, int]:
+    """A panel plus a query ``(ticker, asof, lookback)`` anchored to the panel.
+
+    Sampling ``asof`` independently of the record dates makes the query window
+    miss the data ~98% of the time — the differential oracle then passes on
+    ``empty == empty`` and kills no mutants. So when the panel is non-empty,
+    ``asof`` is anchored just at/after one record's ``filed_date`` (offset 0
+    hits the ``filed_date <= asof`` boundary — the exact ``<=`` vs ``<`` mutant),
+    and ``ticker`` is that record's issuer so its rows are live candidates.
+    Other issuers' rows in the panel still exercise the issuer filter, and
+    later-filed rows still exercise the look-ahead exclusion.
+    """
+    records = draw(_panels())
+    lookback = draw(st.sampled_from(_LOOKBACKS))
+    if records:
+        anchor = draw(st.sampled_from(records))
+        offset = draw(st.integers(0, 60))
+        asof = anchor["filed_date"] + dt.timedelta(days=offset)
+        ticker = anchor["ticker"]
+    else:
+        asof = draw(st.dates(_MIN_DATE, _MAX_DATE))
+        ticker = draw(st.sampled_from([t for t, _ in _ISSUERS]))
+    return records, ticker, asof, lookback
 
 
 class TestRecordsAsOfPIT(PropertyTestCase):
     @settings(max_examples=80)
-    @given(records=_panels(), query=_query)
+    @given(data=_panel_and_query())
     def test_no_look_ahead_and_lookback_bound(
-        self, records: list[dict[str, Any]], query: tuple[str, dt.date, int]
+        self, data: tuple[list[dict[str, Any]], str, dt.date, int]
     ) -> None:
-        ticker, asof, lookback = query
+        records, ticker, asof, lookback = data
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write_panel(root, records)
@@ -186,11 +205,11 @@ class TestRecordsAsOfPIT(PropertyTestCase):
             self.assertGreaterEqual(row["transaction_date"], lo)
 
     @settings(max_examples=80)
-    @given(records=_panels(), query=_query)
+    @given(data=_panel_and_query())
     def test_equals_naive_filter_oracle(
-        self, records: list[dict[str, Any]], query: tuple[str, dt.date, int]
+        self, data: tuple[list[dict[str, Any]], str, dt.date, int]
     ) -> None:
-        ticker, asof, lookback = query
+        records, ticker, asof, lookback = data
         cik = _RESOLVER.lookup(ticker)
         assert cik is not None
         with tempfile.TemporaryDirectory() as tmp:
@@ -201,12 +220,12 @@ class TestRecordsAsOfPIT(PropertyTestCase):
         self.assertEqual(_accessions(result), _oracle_as_of(records, cik, asof, lookback))
 
     @settings(max_examples=60)
-    @given(records=_panels(), query=_query)
+    @given(data=_panel_and_query())
     def test_result_invariant_to_partition_cache_size(
-        self, records: list[dict[str, Any]], query: tuple[str, dt.date, int]
+        self, data: tuple[list[dict[str, Any]], str, dt.date, int]
     ) -> None:
         """The per-year LRU cache is a pure optimization: 0/1/2/32 -> same rows."""
-        ticker, asof, lookback = query
+        records, ticker, asof, lookback = data
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write_panel(root, records)
@@ -226,12 +245,12 @@ class TestRecordsAsOfPIT(PropertyTestCase):
             self.assertEqual(got[0], other)
 
     @settings(max_examples=60)
-    @given(records=_panels(), query=_query, extra=st.integers(1, 400))
+    @given(data=_panel_and_query(), extra=st.integers(1, 400))
     def test_monotonic_in_lookback(
-        self, records: list[dict[str, Any]], query: tuple[str, dt.date, int], extra: int
+        self, data: tuple[list[dict[str, Any]], str, dt.date, int], extra: int
     ) -> None:
         """Same asof, wider lookback -> a superset of accessions (no fire-sale here)."""
-        ticker, asof, lookback = query
+        records, ticker, asof, lookback = data
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write_panel(root, records)
@@ -243,11 +262,11 @@ class TestRecordsAsOfPIT(PropertyTestCase):
         self.assertTrue(narrow.issubset(wide))
 
     @settings(max_examples=40)
-    @given(records=_panels(), query=_query)
+    @given(data=_panel_and_query())
     def test_unresolvable_ticker_is_empty(
-        self, records: list[dict[str, Any]], query: tuple[str, dt.date, int]
+        self, data: tuple[list[dict[str, Any]], str, dt.date, int]
     ) -> None:
-        _ticker, asof, lookback = query
+        records, _ticker, asof, lookback = data
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write_panel(root, records)
@@ -259,15 +278,14 @@ class TestRecordsAsOfPIT(PropertyTestCase):
 
 class TestRecordsAsOfFireSale(PropertyTestCase):
     @settings(max_examples=60)
-    @given(records=_panels(), query=_query, delist_offset=st.integers(1, 179))
+    @given(data=_panel_and_query(), delist_offset=st.integers(1, 179))
     def test_delisting_within_window_forces_empty(
         self,
-        records: list[dict[str, Any]],
-        query: tuple[str, dt.date, int],
+        data: tuple[list[dict[str, Any]], str, dt.date, int],
         delist_offset: int,
     ) -> None:
         """A delisting <= 180d AFTER asof empties the frame regardless of contents."""
-        ticker, asof, lookback = query
+        records, ticker, asof, lookback = data
         delisted = asof + dt.timedelta(days=delist_offset)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -283,15 +301,14 @@ class TestRecordsAsOfFireSale(PropertyTestCase):
         self.assertEqual(len(result), 0)
 
     @settings(max_examples=60)
-    @given(records=_panels(), query=_query, delist_offset=st.integers(181, 2000))
+    @given(data=_panel_and_query(), delist_offset=st.integers(181, 2000))
     def test_delisting_far_future_matches_oracle(
         self,
-        records: list[dict[str, Any]],
-        query: tuple[str, dt.date, int],
+        data: tuple[list[dict[str, Any]], str, dt.date, int],
         delist_offset: int,
     ) -> None:
         """A delisting well beyond 180d must NOT change the result vs the oracle."""
-        ticker, asof, lookback = query
+        records, ticker, asof, lookback = data
         cik = _RESOLVER.lookup(ticker)
         assert cik is not None
         delisted = asof + dt.timedelta(days=delist_offset)
