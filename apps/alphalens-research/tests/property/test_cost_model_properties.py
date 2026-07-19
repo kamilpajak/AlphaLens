@@ -367,6 +367,28 @@ class TestCalibrateK(PropertyTestCase):
             )
 
 
+class TestRealisticApplyAnnualDrag(PropertyTestCase):
+    @settings(max_examples=200)
+    @given(rets=st.lists(_RET, min_size=0, max_size=30), bps=_BPS, ppy=_PPY)
+    def test_subtracts_uniform_daily_drag_and_matches_costmodel(
+        self, rets: list[float], bps: float, ppy: int
+    ) -> None:
+        gross = pd.Series(rets, index=_idx(len(rets)), dtype=float, name="portfolio")
+        net = RealisticCostModel().apply_annual_drag_bps(
+            gross, annual_drag_bps=bps, periods_per_year=ppy
+        )
+        daily = (bps / 10_000.0) / max(1, ppy)  # independent recompute, not per_period_drag
+        # Deducted amount is exactly the uniform daily drag on every bar.
+        for i in range(len(gross)):
+            self.assert_close(gross.iloc[i] - net.iloc[i], daily, rel_tol=1e-9, abs_tol=1e-15)
+        # ... which is the same net as CostModel.apply with turnover=None.
+        cm_net = CostModel(annual_drag_bps=bps).apply(
+            gross, daily_turnover=None, periods_per_year=ppy
+        )
+        for i in range(len(gross)):
+            self.assert_close(net.iloc[i], cm_net.iloc[i], rel_tol=1e-9, abs_tol=1e-15)
+
+
 class TestSensitivityTable(PropertyTestCase):
     # deadline=None: cost_sensitivity_table lazily imports backtest.metrics.sharpe
     # on first call (~350ms one-off), which trips the frozen 200ms default before
