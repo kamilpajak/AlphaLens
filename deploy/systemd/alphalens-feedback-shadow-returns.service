@@ -29,12 +29,19 @@ Description=AlphaLens nightly broker-free ladder + population-monitor backfill
 After=network-online.target docker.service
 Wants=network-online.target
 # The edge mirror (rebuild-ladder-outcomes) has been decoupled into its own
-# unit (alphalens-edge-mirror.service) fired on every terminal outcome (success
-# OR failure/timeout) to prevent timeout-kills from skipping the mirror. See
-# deploy/systemd/README.md "Edge mirror (decoupled)" for deployment atomic
-# requirements.
+# unit (alphalens-edge-mirror.service). OnSuccess= fires it immediately after a
+# successful nightly recompute so /edge refreshes right away. On a failure or
+# 90-min timeout-kill, the mirror's own hourly timer (the "self-heal backstop"
+# in alphalens-edge-mirror.service) re-syncs whatever parquets exist (including
+# any partial output from the killed run) within <=1h — a latency-only trade-off
+# — so we deliberately do NOT also set OnFailure= here. Pointing BOTH OnSuccess=
+# and OnFailure= at the
+# same target made systemd register two identical trigger sources on edge-mirror
+# and log a per-run "multiple trigger source candidates for exit status
+# propagation (X, X), skipping" warning; dropping OnFailure= removes the warning
+# without losing failure-path coverage. See deploy/systemd/README.md
+# "Edge mirror (decoupled)" for deployment atomic requirements.
 OnSuccess=alphalens-edge-mirror.service
-OnFailure=alphalens-edge-mirror.service
 
 [Service]
 Type=oneshot
@@ -69,9 +76,10 @@ StandardError=journal
 # replay makes the first post-downtime run the largest. As the ongoing-position
 # backlog grew (~100+ ongoing across ~30 brief dates), the steady-state run
 # started crossing the old 45min ceiling. 90min gives the nightly sweep headroom
-# to complete. The edge Postgres mirror (alphalens-edge-mirror.service) is now
-# a separate unit fired on every terminal outcome via OnSuccess=/OnFailure=, so
-# a timeout-kill no longer skips it. Memory-light (minute-bar dicts), 1G is
+# to complete. The edge Postgres mirror (alphalens-edge-mirror.service) is a
+# separate unit fired via OnSuccess= after a clean run; a timeout-kill is caught
+# by the mirror's own hourly self-heal timer within <=1h (see the OnSuccess=
+# note in [Unit] above). Memory-light (minute-bar dicts), 1G is
 # comfortable.
 TimeoutStartSec=90min
 MemoryMax=1G

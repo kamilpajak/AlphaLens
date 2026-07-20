@@ -153,9 +153,9 @@ groups:
           summary: "thematic-build success metric missing"
           description: "No success metric for thematic-build. The job has not run since metrics were enabled (e.g. a freshly migrated unit before its first run), or the textfile collector / node_exporter scrape is broken. Clears after the first successful run."
 
-      # edge-mirror fires on every terminal outcome of the compute job
-      # (OnSuccess= + OnFailure=) PLUS an hourly self-heal timer. It is the
-      # Postgres mirror for the /edge dashboard. 36h = 1.5× the 24h daily
+      # edge-mirror fires on a successful compute run (OnSuccess=) PLUS an
+      # hourly self-heal timer that also covers the failure/timeout path. It is
+      # the Postgres mirror for the /edge dashboard. 36h = 1.5× the 24h daily
       # cadence — deliberately looser than the 48h compute-job threshold so the
       # two alerts do not fire simultaneously on a routine delay. The ``max()``
       # aggregation is used (not a direct series reference) because the edge-mirror
