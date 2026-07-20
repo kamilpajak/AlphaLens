@@ -32,9 +32,10 @@ Verdict semantics per journal bracket:
   resolver's reason code (``not_in_retention`` / ``fill_fields_unverified``
   / ``inconsistent_state`` / ``unrecognized``);
 - ``FILLED`` cross-checks against open-position ``ExternalReference``s and
-  closed-position rows joined on the journal's ``client_request_id``; a
-  closed FIFO pair yields the realized r from ``ClosePrice`` vs the
-  journal's entry/stop distance.
+  closed-position rows joined on the journal's ``client_request_id`` (matched
+  against the opening leg's ``OpeningExternalReferenceId``); a closed FIFO
+  pair yields the realized r from ``ClosingPrice`` vs the journal's
+  entry/stop distance.
 """
 
 from __future__ import annotations
@@ -128,7 +129,7 @@ def compute_realized_r(
     entry: float | None,
     stop: float | None,
 ) -> float | None:
-    """Realized r from a closed pair's ClosePrice vs the journal entry/stop.
+    """Realized r from a closed pair's ClosingPrice vs the journal entry/stop.
 
     ``r = (close - entry) / (entry - stop)``; ``None`` (never a fabricated
     number) when any input is missing or the risk distance is degenerate.
@@ -489,17 +490,21 @@ def _reconcile_filled(
         )
 
     request_id = str(bracket.get("client_request_id") or "")
+    # The opening leg of a closed FIFO pair carries the journaled ENTRY order's
+    # client_request_id as ``OpeningExternalReferenceId`` (the closing leg is
+    # ``ClosingExternalReferenceId``). There is NO ``ExternalReference`` on a
+    # closedposition row (that field lives on OPEN positions / audit rows).
     closed_match = next(
         (
             row
             for row in cross_check.closed_rows
-            if request_id and str(row.get("ExternalReference") or "") == request_id
+            if request_id and str(row.get("OpeningExternalReferenceId") or "") == request_id
         ),
         None,
     )
     if closed_match is not None:
         realized_r = compute_realized_r(
-            closed_match.get("ClosePrice"), bracket.get("entry"), bracket.get("stop")
+            closed_match.get("ClosingPrice"), bracket.get("entry"), bracket.get("stop")
         )
         details["realized_r"] = realized_r
         if closed_match.get("ProfitLossOnTrade") is not None:
