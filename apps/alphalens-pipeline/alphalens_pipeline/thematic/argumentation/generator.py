@@ -11,10 +11,12 @@ it with the Perplexity-recommended retry policy (2026-05-17): on
 translated to ``"MAX_TOKENS"`` by the OpenRouter client wrapper) retry
 once with double ``max_output_tokens`` and ``temperature=0``; on
 ``BriefErrorKind.EMPTY`` (finish_reason STOP/absent but the response body
-was empty/whitespace-only — a transient no-content response) retry once
-with the same token cap and ``temperature=0``. Other failure kinds
-(``MALFORMED_JSON`` / ``SAFETY`` / ``TRANSPORT``) do not retry — they
-will not be helped by more tokens or different temperature.
+was empty/whitespace-only — a transient no-content response) or
+``BriefErrorKind.EMPTY_CONTENT`` (valid JSON parsed but every required field
+is blank — the MC/Moelis empty-card incident) retry once with the same token
+cap and ``temperature=0``. Other failure kinds (``MALFORMED_JSON`` /
+``SAFETY`` / ``TRANSPORT``) do not retry — they will not be helped by more
+tokens or different temperature.
 """
 
 from __future__ import annotations
@@ -71,10 +73,24 @@ class BriefErrorKind(enum.Enum):
     NONE = "none"
     TRUNCATED = "truncated"  # finish_reason == MAX_TOKENS
     EMPTY = "empty"  # finish_reason STOP/absent but response text empty/whitespace-only
+    EMPTY_CONTENT = "empty_content"  # valid JSON parsed, but every required field is blank
     MALFORMED_JSON = "malformed_json"  # finish_reason == STOP, non-empty body, parse failed
     SAFETY = "safety"  # finish_reason == SAFETY
     TRANSPORT = "transport"  # SDK raised before producing a response
     LANGUAGE_DRIFT = "language_drift"  # parsed cleanly but the prose is CJK, not English
+
+
+def _has_substantive_field(parsed: dict) -> bool:
+    """True when at least one schema-required field carries non-whitespace text.
+
+    The bar for "a brief has content". Used both to gate the primary parse path
+    (an all-blank body is not a usable brief) and to validate a json-repair
+    recovery. ``.strip()`` means a whitespace-only field does NOT count.
+    """
+    return any(
+        isinstance(parsed.get(key), str) and parsed[key].strip() != ""
+        for key in BRIEF_RESPONSE_SCHEMA["required"]
+    )
 
 
 def _contains_cjk(parsed: dict) -> bool:
@@ -250,9 +266,23 @@ def generate_brief(
             logger.warning("brief response unparseable for %s: %r", facts.get("ticker"), raw[:200])
             return None, BriefErrorKind.MALFORMED_JSON
 
-    # Defensive: ensure all 5 expected keys present; missing key → string "".
+    # Defensive: ensure all 4 expected keys present; missing key → string "".
     for key in BRIEF_RESPONSE_SCHEMA["required"]:
         parsed.setdefault(key, "")
+
+    # Empty-content guard: a valid JSON body whose required fields are ALL blank
+    # (empty or whitespace-only) parses cleanly but is not a usable brief — the
+    # card would render blank SUPPLY.CHAIN / BEAR.CASE / CATALYST.FAILURE.EXIT
+    # sections (MC/Moelis incident, 2026-07-19 run: DeepSeek v4 Pro returned
+    # `{"tldr":"", ...}`). This is distinct from EMPTY ("raw body empty") and
+    # MALFORMED_JSON ("unparseable") — the body parsed, it just has no content.
+    # Surface EMPTY_CONTENT so the retry wrapper drives a fresh call rather than
+    # accepting a blank brief as success. The bar is "at least one substantive
+    # field" (matching the json-repair recovery bar), NOT "all four non-empty",
+    # so a terse-but-real brief is not needlessly retried.
+    if not _has_substantive_field(parsed):
+        logger.warning("brief parsed but every required field is blank for %s", facts.get("ticker"))
+        return None, BriefErrorKind.EMPTY_CONTENT
 
     # Language guard: DeepSeek v4 (Chinese-developed) nondeterministically writes
     # the whole brief in Chinese. Such a brief parses cleanly but is unreadable
@@ -290,11 +320,7 @@ def _try_json_repair(raw: str, *, ticker: str | None = None) -> dict | None:
     if not isinstance(repaired, dict):
         logger.debug("json_repair for %s returned non-dict: %r", ticker, type(repaired))
         return None
-    has_substantive_field = any(
-        isinstance(repaired.get(k), str) and repaired[k].strip()
-        for k in BRIEF_RESPONSE_SCHEMA["required"]
-    )
-    if not has_substantive_field:
+    if not _has_substantive_field(repaired):
         logger.debug("json_repair for %s returned empty/contentless dict", ticker)
         return None
     logger.info("json_repair recovered brief for %s (%d keys)", ticker, len(repaired))
@@ -321,6 +347,10 @@ def generate_brief_with_retry(
       a fresh call at ``temperature=0``; the token cap is left unchanged —
       doubling it does nothing for an empty response (it was never a
       truncation), so we keep the base cap.
+    * ``BriefErrorKind.EMPTY_CONTENT`` — a valid JSON body that parsed cleanly
+      but whose required fields are all blank (MC/Moelis incident 2026-07-19).
+      Like ``EMPTY`` this is a transient no-content outcome, so the recovery is
+      the same fresh ``temperature=0`` call at the base cap.
     * ``BriefErrorKind.LANGUAGE_DRIFT`` — the brief parsed cleanly but the
       prose came back in Chinese (DeepSeek v4 is Chinese-developed and drifts
       when the language is not pinned). The recovery is a fresh greedy
@@ -356,6 +386,7 @@ def generate_brief_with_retry(
     if kind not in (
         BriefErrorKind.TRUNCATED,
         BriefErrorKind.EMPTY,
+        BriefErrorKind.EMPTY_CONTENT,
         BriefErrorKind.LANGUAGE_DRIFT,
     ):
         return None

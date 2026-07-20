@@ -138,6 +138,64 @@ class TestGenerateBrief(unittest.TestCase):
         self.assertIsNone(brief)
         self.assertEqual(kind, generator.BriefErrorKind.TRUNCATED)
 
+    def test_all_blank_required_fields_classified_as_empty_content(self):
+        # MC (Moelis) empty-card regression (2026-07-19 run): DeepSeek v4 Pro
+        # returned a VALID JSON body whose required narrative fields were all
+        # empty strings. That is not a whitespace-only raw body (so not EMPTY)
+        # and not unparseable (so not MALFORMED_JSON) — it parses cleanly to
+        # blank content. It must classify EMPTY_CONTENT so the retry wrapper
+        # drives a fresh call, instead of being accepted as success and shipping
+        # an empty card (SUPPLY.CHAIN / BEAR.CASE / CATALYST.FAILURE.EXIT blank).
+        blank = {
+            "tldr": "",
+            "supply_chain_reasoning": "",
+            "bear_summary": "",
+            "catalyst_failure_exit": "",
+        }
+        resp = SimpleNamespace(
+            text=json.dumps(blank),
+            candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
+        )
+        with patch.object(generator, "_call_llm", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.EMPTY_CONTENT)
+
+    def test_whitespace_only_required_fields_classified_as_empty_content(self):
+        # Whitespace-only field values strip to "" — still "no content". The
+        # guard uses .strip(), so a body of all-whitespace fields is
+        # EMPTY_CONTENT, not a success.
+        blank = {
+            "tldr": "   ",
+            "supply_chain_reasoning": "\n",
+            "bear_summary": "\t ",
+            "catalyst_failure_exit": " \n ",
+        }
+        resp = SimpleNamespace(text=json.dumps(blank))
+        with patch.object(generator, "_call_llm", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.EMPTY_CONTENT)
+
+    def test_partial_content_still_succeeds(self):
+        # The bar is "at least one substantive required field", matching the
+        # json-repair recovery bar — NOT "all four non-empty". A brief with one
+        # real field (the rest blank) is a success (setdefault fills the blanks),
+        # so a terse-but-real LLM response is not needlessly retried.
+        partial = {
+            "tldr": "",
+            "supply_chain_reasoning": "",
+            "bear_summary": "Pre-revenue; dilution risk; valuation at 1st percentile.",
+            "catalyst_failure_exit": "",
+        }
+        resp = SimpleNamespace(text=json.dumps(partial))
+        with patch.object(generator, "_call_llm", return_value=resp):
+            brief, kind = generator.generate_brief(_facts(weighted_score=4), api_key="testkey")
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
+        self.assertIsNotNone(brief)
+        self.assertEqual(brief["bear_summary"], partial["bear_summary"])
+        self.assertEqual(brief["model_used"], generator.PRO_MODEL)
+
     def test_max_output_tokens_param_propagated(self):
         captured: dict[str, int | float | None] = {"max_tokens": None, "temperature": None}
 
@@ -277,6 +335,69 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         self.assertEqual(brief["tldr"], _SAMPLE_BRIEF["tldr"])
         self.assertEqual(brief["bear_summary"], _SAMPLE_BRIEF["bear_summary"])
         self.assertEqual(mock_call.call_count, 2)
+
+    def test_retry_recovers_empty_content_first_response(self):
+        # MC/Moelis regression (2026-07-19): the first call returns a VALID
+        # JSON body with all required fields blank (EMPTY_CONTENT), the second
+        # returns a populated brief. The wrapper must retry on EMPTY_CONTENT and
+        # recover the brief. Pre-fix the blank body was accepted as success and
+        # shipped an empty card.
+        blank = {
+            "tldr": "",
+            "supply_chain_reasoning": "",
+            "bear_summary": "",
+            "catalyst_failure_exit": "",
+        }
+        blank_resp = SimpleNamespace(text=json.dumps(blank))
+        good_resp = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
+        with patch.object(generator, "_call_llm", side_effect=[blank_resp, good_resp]) as mock_call:
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+        self.assertIsNotNone(brief)
+        self.assertEqual(brief["supply_chain_reasoning"], _SAMPLE_BRIEF["supply_chain_reasoning"])
+        self.assertEqual(mock_call.call_count, 2)
+
+    def test_two_empty_content_responses_give_up(self):
+        # Exactly ONE retry — a persistently blank-content body degrades to None
+        # (the orchestrator then renders the deterministic facts only).
+        blank = {
+            "tldr": "",
+            "supply_chain_reasoning": "",
+            "bear_summary": "",
+            "catalyst_failure_exit": "",
+        }
+        blank_resp = SimpleNamespace(text=json.dumps(blank))
+        with patch.object(
+            generator, "_call_llm", side_effect=[blank_resp, blank_resp]
+        ) as mock_call:
+            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+        self.assertIsNone(brief)
+        self.assertEqual(mock_call.call_count, 2)
+
+    def test_empty_content_retry_keeps_base_token_cap(self):
+        # EMPTY_CONTENT is not a truncation, so the retry keeps the BASE cap
+        # (only TRUNCATED doubles it) and uses greedy temperature=0.
+        blank = {
+            "tldr": "",
+            "supply_chain_reasoning": "",
+            "bear_summary": "",
+            "catalyst_failure_exit": "",
+        }
+        captured: list[dict] = []
+
+        def fake_call(client, prompt, *, model, max_output_tokens, temperature):
+            captured.append({"max": max_output_tokens, "temp": temperature})
+            if len(captured) == 1:
+                return SimpleNamespace(text=json.dumps(blank))
+            return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
+
+        with patch.object(generator, "_call_llm", side_effect=fake_call):
+            brief = generator.generate_brief_with_retry(
+                _facts(weighted_score=4), api_key="k", base_max_output_tokens=2000
+            )
+        self.assertIsNotNone(brief)
+        self.assertEqual(len(captured), 2)
+        self.assertEqual(captured[1]["temp"], 0.0)
+        self.assertEqual(captured[1]["max"], 2000)
 
     def test_empty_retry_uses_temperature_zero(self):
         # The EMPTY retry recovers with a greedy/deterministic decode.

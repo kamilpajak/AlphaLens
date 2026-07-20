@@ -259,6 +259,18 @@
 		market_state_config_version: null
 	};
 
+	// Story 3 — empty narrative: FOUR with the three bottom sections blanked to
+	// "". Reproduces the MC/Moelis empty-card state (a brief whose LLM narrative
+	// came back empty). The card must render "—" placeholders, NOT empty section
+	// bodies — the `|| '—'` fallback (empty string is falsy) does this, whereas
+	// the old `?? '—'` (nullish) let "" through as a blank body.
+	const candidateEmptyNarrative: Candidate = {
+		...candidateFOUR,
+		brief_supply_chain_md: '',
+		brief_bear_summary_md: '',
+		brief_catalyst_failure_exit: ''
+	};
+
 	const { Story } = defineMeta({
 		title: 'Composites/CandidateCard',
 		component: CandidateCard,
@@ -293,6 +305,22 @@
 	{#snippet template()}
 		<div style="width: 56rem; padding: 2rem;">
 			<CandidateCard candidate={candidatePIPR} index={2} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Story 3: empty narrative — the three bottom sections must show "—", not blank bodies -->
+<Story
+	name="Empty Narrative Placeholders"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByText('supply.chain')).toBeVisible());
+		// All three narrative bodies fall back to the em-dash placeholder.
+		await waitFor(() => expect(canvas.getAllByText('—').length).toBeGreaterThanOrEqual(3));
+	}}
+>
+	{#snippet template()}
+		<div style="width: 56rem; padding: 2rem;">
+			<CandidateCard candidate={candidateEmptyNarrative} index={0} />
 		</div>
 	{/snippet}
 </Story>

@@ -643,15 +643,15 @@
 	<div class="grid grid-cols-12 gap-0 border-t border-grid">
 		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r border-grid">
 			<div class="text-[10px] uppercase tracking-widest text-cyan mb-2">supply.chain</div>
-			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_supply_chain_md ?? '—'}</p>
+			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_supply_chain_md || '—'}</p>
 		</div>
 		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 lg:border-r border-grid border-t lg:border-t-0">
 			<div class="text-[10px] uppercase tracking-widest text-red mb-2">bear.case</div>
-			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_bear_summary_md ?? '—'}</p>
+			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_bear_summary_md || '—'}</p>
 		</div>
 		<div class="col-span-12 lg:col-span-4 px-4 sm:px-5 py-4 border-grid border-t lg:border-t-0">
 			<div class="text-[10px] uppercase tracking-widest text-amber mb-2">catalyst.failure.exit</div>
-			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_catalyst_failure_exit ?? '—'}</p>
+			<p class="text-fg-dim text-xs leading-relaxed">{c.brief_catalyst_failure_exit || '—'}</p>
 		</div>
 	</div>
 </article>
