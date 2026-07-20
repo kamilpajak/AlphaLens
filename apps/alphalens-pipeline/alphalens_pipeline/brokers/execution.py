@@ -79,6 +79,23 @@ _EXCESS_TRANCHE_POLICY = "clamp"
 # Saxo stop-child order type for the disaster stop.
 _STOP_ORDER_TYPE = "StopIfTraded"
 
+# Client-side fail-fast band for a bracket CHILD's distance from its entry,
+# as a FRACTION of the entry price (applied to BOTH the stop and the take-
+# profit child). A wide whole-ladder disaster stop (ADR 0013 T7) sits 20-30%
+# below each tier entry, far beyond Saxo's bracket child-distance band, so
+# Saxo 400s it with TooFarFromEntryOrder and the single-order precheck is
+# false-green. This guard converts that known-bad wide child into a clean,
+# deterministic LOCAL reject before any network call, on both the precheck and
+# place paths — directing the wide stop to a STANDALONE position-level order
+# (Option B), never a bracket child. It is an EARLY ARCHITECTURAL guard, NOT a
+# model of Saxo's real engine bound: Saxo's own child-distance cap is
+# instrument-specific and undocumented (tighter than this, ~5%), so this is
+# deliberately NOT set to mirror it — it is chosen conservatively INSIDE the
+# safe gap between hand-tight legitimate children (~3%) and the 20-30% disaster
+# stop, so it never false-rejects a normal near child and always catches the
+# architectural mistake. Design: saxo_wide_stop_bracket_design_2026_07_20.
+_MAX_CHILD_DISTANCE_FRAC = 0.15
+
 # Exits outlive the entry's TTL — GoodTillCancel on both children.
 _EXIT_DURATION = "GoodTillCancel"
 
@@ -168,6 +185,7 @@ def execution_config_version() -> str:
         "zero_qty_tier_policy": _ZERO_QTY_TIER_POLICY,
         "excess_tranche_policy": _EXCESS_TRANCHE_POLICY,
         "stop_order_type": _STOP_ORDER_TYPE,
+        "max_child_distance_frac": _MAX_CHILD_DISTANCE_FRAC,
         "exit_duration": _EXIT_DURATION,
         "entry_duration": _ENTRY_DURATION,
         "ttl_zero_sentinel_days": _TTL_ZERO_SENTINEL_DAYS,

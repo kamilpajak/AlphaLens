@@ -114,12 +114,28 @@ def _validate_price_relations(
     *,
     symbol: str,
 ) -> None:
-    """Reject degenerate bracket geometry LOCALLY, on the QUANTIZED prices.
+    """Reject degenerate + too-far bracket geometry LOCALLY, on the QUANTIZED
+    prices.
 
     A BUY bracket requires ``stop < entry < tp`` (a SELL bracket the reverse).
-    Saxo's precheck would reject these too, but locally the failure is
-    deterministic, immediate, and names the offending leg — and no network
-    call is spent on an order that can never be valid (review finding, PR #840).
+    Saxo's precheck would reject the ORDERING violations too, but locally the
+    failure is deterministic, immediate, and names the offending leg — and no
+    network call is spent on an order that can never be valid (review finding,
+    PR #840).
+
+    The second guard is a child-DISTANCE fail-fast: a wide whole-ladder
+    disaster stop (ADR 0013 T7) sits 20-30% below each tier entry, far beyond
+    Saxo's bracket child-distance band, so Saxo 400s it per-leg with
+    ``TooFarFromEntryOrder`` while the single-order precheck stays FALSE-GREEN.
+    Any child (stop OR take-profit) more than
+    :data:`execution._MAX_CHILD_DISTANCE_FRAC` from the entry is rejected here
+    — before any network call, on BOTH the precheck and place paths — with
+    guidance that a wide disaster stop belongs on a STANDALONE position-level
+    order (Option B), not an OCO bracket child. This is an EARLY ARCHITECTURAL
+    guard, not Saxo's authority: Saxo's real child-distance cap is
+    instrument-specific and undocumented (tighter than this band), so an
+    in-band child may still be rejected server-side. Design:
+    ``docs/research/saxo_wide_stop_bracket_design_2026_07_20.md``.
     """
     buy = side == "BUY"
     if stop_q is not None and ((stop_q >= entry_q) if buy else (stop_q <= entry_q)):
@@ -132,6 +148,23 @@ def _validate_price_relations(
             f"{symbol}: degenerate bracket — take_profit {tp_q} must be "
             f"{'above' if buy else 'below'} the entry {entry_q} for a {side}"
         )
+    limit_frac = execution_policy._MAX_CHILD_DISTANCE_FRAC
+    for child_label, child_q in (("stop_loss", stop_q), ("take_profit", tp_q)):
+        if child_q is None:
+            continue
+        dist_frac = abs(entry_q - child_q) / entry_q
+        if dist_frac > limit_frac:
+            raise OrderRejectedError(
+                f"{symbol}: {child_label} child {child_q} is {dist_frac * 100:.1f}% "
+                f"from the entry {entry_q}, beyond the {limit_frac * 100:.0f}% bracket "
+                "child-distance fail-fast band — a wide disaster stop must be placed "
+                "as a STANDALONE position-level order (Option B), not an OCO bracket "
+                "child. This is an early architectural guard, not Saxo's authority: "
+                "Saxo's own child-distance limit is instrument-specific and "
+                "undocumented (tighter than this band), so it can 400 an in-band child "
+                "with TooFarFromEntryOrder "
+                "(saxo_wide_stop_bracket_design_2026_07_20)."
+            )
 
 
 class SaxoBroker:
