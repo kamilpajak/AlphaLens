@@ -224,7 +224,8 @@ class TestSystemdUnits(unittest.TestCase):
     def test_thematic_build_no_longer_rebuilds_ladder_outcomes(self):
         # rebuild-ladder-outcomes was MOVED out of thematic-build — it now lives
         # in the decoupled alphalens-edge-mirror.service, triggered via
-        # OnSuccess=/OnFailure= on the shadow-returns compute unit. Leaving it
+        # OnSuccess= on the shadow-returns compute unit (plus the hourly
+        # self-heal timer for the failure/timeout path). Leaving it
         # here re-synced unchanged data 5× per day AND caused up-to-one-slot
         # (~2h) dashboard lag (the recompute lands after the morning
         # thematic-build slot; the mirror had to wait for the next slot).
@@ -878,7 +879,7 @@ class TestShadowReturnsUnit(unittest.TestCase):
 
     def test_service_orders_after_docker_for_compose_post(self) -> None:
         # The decoupled edge-mirror (alphalens-edge-mirror.service) runs
-        # `docker compose` and is triggered via OnSuccess=/OnFailure=. The
+        # `docker compose` and is triggered via OnSuccess=. The
         # compute unit itself must still order After=docker.service so that
         # systemd can activate the mirror target on a freshly booted VPS
         # before dockerd is ready; without this the handoff target fails and
@@ -887,7 +888,7 @@ class TestShadowReturnsUnit(unittest.TestCase):
         self.assertRegex(
             SHADOW_SERVICE.read_text(),
             re.compile(r"^After=.*\bdocker\.service\b.*$", re.MULTILINE),
-            "Unit must order After=docker.service — the OnSuccess=/OnFailure= "
+            "Unit must order After=docker.service — the OnSuccess= "
             "mirror target needs dockerd ready on a freshly booted VPS.",
         )
 
@@ -896,8 +897,9 @@ class TestShadowReturnsUnit(unittest.TestCase):
         # recompute. The edge Postgres mirror (`rebuild-ladder-outcomes` from
         # the django-prod compose stack) has been DECOUPLED into a separate
         # unit (alphalens-edge-mirror.service) so that a timeout-kill on the
-        # compute unit no longer skips the mirror. The compute unit fires the
-        # mirror on every terminal outcome via OnSuccess= and OnFailure=.
+        # compute unit no longer skips the mirror. A successful recompute hands
+        # off to the mirror via OnSuccess=; the failure/timeout path is covered
+        # by the mirror's own hourly self-heal timer (NOT OnFailure=).
 
         # 1. Compute unit must NO LONGER carry an ExecStartPost for the mirror.
         self.assertNotRegex(
@@ -910,7 +912,12 @@ class TestShadowReturnsUnit(unittest.TestCase):
             "compute unit — it now lives in the decoupled edge-mirror unit.",
         )
 
-        # 2. Compute unit must hand off to the mirror on BOTH success and failure.
+        # 2. Compute unit hands off to the mirror on success (OnSuccess=) only.
+        #    It must NOT also set OnFailure= to the same target: pointing both
+        #    OnSuccess= and OnFailure= at one unit registers two identical
+        #    trigger sources and makes systemd log a per-run "multiple trigger
+        #    source candidates for exit status propagation (X, X), skipping"
+        #    warning. The failure/timeout path is covered by the hourly timer.
         compute_text = SHADOW_SERVICE.read_text()
         self.assertRegex(
             compute_text,
@@ -918,11 +925,13 @@ class TestShadowReturnsUnit(unittest.TestCase):
             "Missing OnSuccess=alphalens-edge-mirror.service on the compute "
             "unit — a successful recompute would not trigger the edge mirror.",
         )
-        self.assertRegex(
+        self.assertNotRegex(
             compute_text,
             re.compile(r"^OnFailure=alphalens-edge-mirror\.service\s*$", re.MULTILINE),
-            "Missing OnFailure=alphalens-edge-mirror.service on the compute "
-            "unit — a timeout-kill/failure would not trigger the edge mirror.",
+            "Compute unit must NOT set OnFailure=alphalens-edge-mirror.service — "
+            "duplicating the OnSuccess= target triggers a systemd 'multiple "
+            "trigger source candidates' warning on every mirror fire. The hourly "
+            "edge-mirror timer covers the failure/timeout path.",
         )
 
         # 3. The mirror unit must exist and its ExecStart must run the

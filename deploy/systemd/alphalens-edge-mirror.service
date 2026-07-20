@@ -2,10 +2,12 @@
 Description=AlphaLens edge mirror — rebuild ladder-outcome Postgres cache from population-ladder parquets
 After=network-online.target docker.service
 Wants=network-online.target
-# Triggered by alphalens-feedback-shadow-returns.service (OnSuccess=/OnFailure=)
-# AND by alphalens-edge-mirror.timer (mandatory hourly self-heal — the backstop
-# that keeps /edge fresh even if the OnSuccess= handoff is unavailable on this
-# systemd version, or a split deploy leaves the handoff target missing).
+# Triggered by alphalens-feedback-shadow-returns.service (OnSuccess= only —
+# NOT OnFailure=, which would duplicate the trigger source and make systemd log
+# a per-run warning) AND by alphalens-edge-mirror.timer (mandatory hourly
+# self-heal — the backstop that keeps /edge fresh on the failure/timeout path,
+# on systemd versions too old for OnSuccess=, or when a split deploy leaves the
+# handoff target missing).
 # Tame any re-trigger storm (handoff + timer firing close together).
 StartLimitIntervalSec=300
 StartLimitBurst=3
