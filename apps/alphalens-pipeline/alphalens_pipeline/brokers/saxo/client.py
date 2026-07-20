@@ -306,7 +306,7 @@ class SaxoClient:
         (ENS is NOT used — hard 14-day cap). ``EntryType=Last`` returns the
         latest activity row per order; the (Status, SubStatus) PAIR on that
         row is what the broker's ``resolve_order_outcome`` classifies.
-        Pagination (``__next``/``__nextPoll``) is followed transparently and
+        Pagination (``__next``) is followed transparently and
         the ``Data`` arrays merged.
         """
         params: dict[str, Any] = {"ClientKey": client_key, "EntryType": entry_type}
@@ -329,7 +329,7 @@ class SaxoClient:
 
     @staticmethod
     def _normalize_next_url(url: str) -> str:
-        """Strip an absolute ``__next``/``__nextPoll`` URL to a relative path.
+        """Strip an absolute ``__next`` URL to a relative path.
 
         Saxo pagination URLs come back absolute WITH an explicit ``:443``
         port (``https://gateway.saxobank.com:443/sim/openapi/...``), which
