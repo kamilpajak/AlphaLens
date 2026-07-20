@@ -213,6 +213,31 @@ def compute_daily_scale_factor(
     return min(1.0, daily_target / aggregate_uncapped)
 
 
+def _build_tp_tranches(tp_tranches_raw: Iterable[dict]) -> list[TpTranchePlan]:
+    """Render the take-profit tranches, dropping any with a non-positive target.
+
+    Extracted verbatim from :func:`compute_setup_plan` to keep the exit-reference
+    build a single self-contained pass. Prices are never converted — targets stay
+    in INSTRUMENT currency. A tranche with ``target <= 0`` is skipped as
+    defense-in-depth against a malformed brief row.
+    """
+    tranches: list[TpTranchePlan] = []
+    for idx, raw in enumerate(tp_tranches_raw):
+        target = float(raw["target"])
+        if target <= 0:
+            continue
+        tranches.append(
+            TpTranchePlan(
+                tranche_index=idx,
+                target_price=target,
+                tranche_pct=float(raw.get("tranche_pct", 0.0)),
+                r_multiple=float(raw.get("r_multiple", 0.0)),
+                tag=str(raw.get("tag", "")),
+            )
+        )
+    return tranches
+
+
 def compute_setup_plan(
     *,
     brief_trade_setup: dict,
@@ -294,20 +319,7 @@ def compute_setup_plan(
     if not entries:
         raise TradeSetupNotPlannableError("no usable entry tiers after sanitisation")
 
-    tranches: list[TpTranchePlan] = []
-    for idx, raw in enumerate(tp_tranches_raw):
-        target = float(raw["target"])
-        if target <= 0:
-            continue
-        tranches.append(
-            TpTranchePlan(
-                tranche_index=idx,
-                target_price=target,
-                tranche_pct=float(raw.get("tranche_pct", 0.0)),
-                r_multiple=float(raw.get("r_multiple", 0.0)),
-                tag=str(raw.get("tag", "")),
-            )
-        )
+    tranches = _build_tp_tranches(tp_tranches_raw)
 
     order_ttl_days = int(
         brief_trade_setup.get("order_ttl_days") or 0

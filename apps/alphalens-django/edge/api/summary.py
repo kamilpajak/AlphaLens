@@ -245,6 +245,30 @@ class _Accumulator:
     open_near_sl: int = 0
 
 
+def _accumulate_breakeven(acc: _Accumulator, row: dict[str, Any], rv: float | None) -> None:
+    """Fold the row's per-lens break-even counterfactuals into the what-if layers.
+
+    ``rv`` is the row's OWN realized R — the same value for every lens this row
+    feeds, so it is the shared baseline for each lens_id below.
+    """
+    for lens_id, value in _breakeven_map(row).items():
+        rb = _finite(value)
+        if rb is not None:
+            acc.breakeven_r.setdefault(lens_id, []).append(rb)
+            # Same-cohort realized baseline: pair this lens's counterfactual with
+            # the row's realized_r. A never-filled NO_FILL has a break-even value
+            # but rv is None → it drops out of the baseline only (still counts in n).
+            if rv is not None:
+                acc.breakeven_realized_baseline.setdefault(lens_id, []).append(rv)
+                # Paired direction tally (strict inequality; a tie feeds neither).
+                acc.breakeven_helped.setdefault(lens_id, 0)
+                acc.breakeven_harmed.setdefault(lens_id, 0)
+                if rb > rv:
+                    acc.breakeven_helped[lens_id] += 1
+                elif rb < rv:
+                    acc.breakeven_harmed[lens_id] += 1
+
+
 def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
     """Fold one terminal (matured) row into the edge / portfolio / deployment layers."""
     acc.n_terminal += 1
@@ -269,24 +293,7 @@ def _accumulate_terminal(acc: _Accumulator, row: dict[str, Any]) -> None:
     tfc = _finite(row.get("tiers_filled_count"))
     if tfc is not None:
         acc.tiers_filled.append(tfc)
-    # ``rv`` is the row's OWN realized R — the same value for every lens this row
-    # feeds, so it is the shared baseline for each lens_id below.
-    for lens_id, value in _breakeven_map(row).items():
-        rb = _finite(value)
-        if rb is not None:
-            acc.breakeven_r.setdefault(lens_id, []).append(rb)
-            # Same-cohort realized baseline: pair this lens's counterfactual with
-            # the row's realized_r. A never-filled NO_FILL has a break-even value
-            # but rv is None → it drops out of the baseline only (still counts in n).
-            if rv is not None:
-                acc.breakeven_realized_baseline.setdefault(lens_id, []).append(rv)
-                # Paired direction tally (strict inequality; a tie feeds neither).
-                acc.breakeven_helped.setdefault(lens_id, 0)
-                acc.breakeven_harmed.setdefault(lens_id, 0)
-                if rb > rv:
-                    acc.breakeven_helped[lens_id] += 1
-                elif rb < rv:
-                    acc.breakeven_harmed[lens_id] += 1
+    _accumulate_breakeven(acc, row, rv)
 
 
 def _accumulate_open(acc: _Accumulator, row: dict[str, Any]) -> None:

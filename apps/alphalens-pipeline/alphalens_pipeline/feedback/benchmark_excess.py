@@ -237,31 +237,7 @@ def _enrich_frame_rows(
             exchange=exchange,
             window_cache=window_cache,
         )
-        # Non-destructive: a transient fetch miss (bench=None) must NOT overwrite an
-        # already-good value with NULL on this whole-store rewrite — the enrich only
-        # ever FILLS a gap. Two guards keep it honest. (1) matured_at set — an
-        # ONGOING window GROWS every session so an older benchmark would be stale.
-        # (2) the stored pair is still CONSISTENT with the current forward_return
-        # (excess == forward - benchmark): on the ongoing->terminal maturation the
-        # monitor advances forward_return but carries the OLD benchmark/excess pair
-        # verbatim, so matured_at alone is insufficient — a pair that no longer
-        # matches forward_return is stale and must recompute, not be preserved.
-        if bench is None and _as_date(row.get("matured_at")) is not None:
-            prev_bench = (
-                row["benchmark_window_return"] if "benchmark_window_return" in row.index else None
-            )
-            prev_excess = (
-                row["market_excess_return"] if "market_excess_return" in row.index else None
-            )
-            forward = row["forward_return"] if "forward_return" in row.index else None
-            if (
-                _is_real(prev_bench)
-                and _is_real(prev_excess)
-                and _is_real(forward)
-                and abs(float(prev_excess) - (float(forward) - float(prev_bench))) < 1e-9
-            ):
-                bench = float(prev_bench)
-                excess = float(prev_excess)
+        bench, excess = _carry_forward_prev_pair(row, bench=bench, excess=excess)
         bench_col.append(bench)
         excess_col.append(excess)
         if excess is not None:
@@ -273,6 +249,42 @@ def _is_real(value: Any) -> TypeGuard[float]:
     """True for a concrete number — not None and not NaN. Guards a transient None
     from clobbering an already-computed benchmark on the whole-store rewrite."""
     return value is not None and not (isinstance(value, float) and pd.isna(value))
+
+
+def _carry_forward_prev_pair(
+    row: pd.Series,
+    *,
+    bench: float | None,
+    excess: float | None,
+) -> tuple[float | None, float | None]:
+    """Preserve a previously-stored ``(benchmark, excess)`` pair on a transient miss.
+
+    Non-destructive: a transient fetch miss (``bench is None``) must NOT overwrite an
+    already-good value with NULL on this whole-store rewrite — the enrich only ever
+    FILLS a gap. Two guards keep it honest. (1) matured_at set — an ONGOING window
+    GROWS every session so an older benchmark would be stale. (2) the stored pair is
+    still CONSISTENT with the current forward_return (excess == forward - benchmark):
+    on the ongoing->terminal maturation the monitor advances forward_return but
+    carries the OLD benchmark/excess pair verbatim, so matured_at alone is
+    insufficient — a pair that no longer matches forward_return is stale and must
+    recompute, not be preserved.
+
+    Returns the incoming ``(bench, excess)`` unchanged unless the stored pair is
+    both present and consistent, in which case that pair is returned instead.
+    """
+    if bench is not None or _as_date(row.get("matured_at")) is None:
+        return bench, excess
+    prev_bench = row["benchmark_window_return"] if "benchmark_window_return" in row.index else None
+    prev_excess = row["market_excess_return"] if "market_excess_return" in row.index else None
+    forward = row["forward_return"] if "forward_return" in row.index else None
+    if (
+        _is_real(prev_bench)
+        and _is_real(prev_excess)
+        and _is_real(forward)
+        and abs(float(prev_excess) - (float(forward) - float(prev_bench))) < 1e-9
+    ):
+        return float(prev_bench), float(prev_excess)
+    return bench, excess
 
 
 def enrich_store_with_benchmark_excess(
