@@ -271,6 +271,22 @@
 		brief_catalyst_failure_exit: ''
 	};
 
+	// Story 4 — empty DISPLAY fields (the follow-up to #869, which fixed only the
+	// three brief_* narrative sections). Same falsy-guard class on the sibling
+	// render sites: rationale blockquote fallback (brief_tldr empty -> rationale
+	// empty -> '—'), the source-event link (null url/title -> no dead hrefless
+	// link), and the sector/industry meta line ('' -> '—'). Django serves these
+	// text fields as "" (blank=True), so a nullish `??` would leak the blank.
+	const candidateEmptyDisplayFields: Candidate = {
+		...candidateFOUR,
+		brief_tldr: '',
+		rationale: '',
+		source_event_title: '',
+		source_event_url: '',
+		sector_name: '',
+		industry_name: ''
+	};
+
 	const { Story } = defineMeta({
 		title: 'Composites/CandidateCard',
 		component: CandidateCard,
@@ -321,6 +337,25 @@
 	{#snippet template()}
 		<div style="width: 56rem; padding: 2rem;">
 			<CandidateCard candidate={candidateEmptyNarrative} index={0} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Story 4: empty display fields — rationale/source-event/sector fallbacks (follow-up to #869) -->
+<Story
+	name="Empty Display Field Fallbacks"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByText('FOUR')).toBeVisible());
+		// rationale + sector/industry both fall back to the em-dash.
+		await waitFor(() => expect(canvas.getAllByText('—').length).toBeGreaterThanOrEqual(2));
+		// With null source_event_url the catalyst link is gated out entirely —
+		// no dead hrefless "source event" link renders.
+		expect(canvas.queryByRole('link', { name: /source event/i })).toBeNull();
+	}}
+>
+	{#snippet template()}
+		<div style="width: 56rem; padding: 2rem;">
+			<CandidateCard candidate={candidateEmptyDisplayFields} index={0} />
 		</div>
 	{/snippet}
 </Story>

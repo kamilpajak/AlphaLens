@@ -243,7 +243,7 @@
 				{#if c.sector_name && c.industry_name}
 					{c.sector_name}<span class="text-grid-strong mx-1">/</span>{c.industry_name}
 				{:else}
-					{c.sector_name ?? c.industry_name ?? '—'}
+					{c.sector_name || c.industry_name || '—'}
 				{/if}
 			</span>
 			<span class="inline-flex shrink-0 items-baseline gap-1.5 whitespace-nowrap">
@@ -358,22 +358,24 @@
 					{#if c.brief_tldr}
 						<p class="text-fg text-sm leading-relaxed">{c.brief_tldr}</p>
 					{:else}
-						<p class="text-fg-dim text-sm leading-relaxed italic">{c.rationale}</p>
+						<p class="text-fg-dim text-sm leading-relaxed italic">{c.rationale || '—'}</p>
 					{/if}
 				</blockquote>
 				<div class="mt-3 flex items-start gap-3 text-[11px]">
 					<span class="text-fg-muted whitespace-nowrap">{fmtDate(c.source_event_published_at)}</span>
-					<span class="w-px self-stretch bg-grid-strong" aria-hidden="true"></span>
-					<a
-						href={c.source_event_url}
-						target="_blank"
-						rel="noreferrer"
-						aria-label={`${c.source_event_title ?? 'source event'} (opens in a new tab)`}
-						class="inline-flex items-start gap-1 text-cyan hover:text-amber transition-colors underline underline-offset-2 min-w-0"
-					>
-						<span>{c.source_event_title}</span>
-						<ExternalLink class="size-3 flex-shrink-0 mt-0.5" />
-					</a>
+					{#if c.source_event_url}
+						<span class="w-px self-stretch bg-grid-strong" aria-hidden="true"></span>
+						<a
+							href={c.source_event_url}
+							target="_blank"
+							rel="noreferrer"
+							aria-label={`${c.source_event_title || 'source event'} (opens in a new tab)`}
+							class="inline-flex items-start gap-1 text-cyan hover:text-amber transition-colors underline underline-offset-2 min-w-0"
+						>
+							<span>{c.source_event_title || 'source event'}</span>
+							<ExternalLink class="size-3 flex-shrink-0 mt-0.5" />
+						</a>
+					{/if}
 				</div>
 				{#if c.brief_template_id}
 					<div class="mt-4 border-t border-grid pt-4">
