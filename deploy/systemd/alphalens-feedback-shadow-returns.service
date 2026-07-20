@@ -32,8 +32,10 @@ Wants=network-online.target
 # unit (alphalens-edge-mirror.service). OnSuccess= fires it immediately after a
 # successful nightly recompute so /edge refreshes right away. On a failure or
 # 90-min timeout-kill, the mirror's own hourly timer (the "self-heal backstop"
-# in alphalens-edge-mirror.service) picks it up within <=1h — so we deliberately
-# do NOT also set OnFailure= here. Pointing BOTH OnSuccess= and OnFailure= at the
+# in alphalens-edge-mirror.service) re-syncs whatever parquets exist (including
+# any partial output from the killed run) within <=1h — a latency-only trade-off
+# — so we deliberately do NOT also set OnFailure= here. Pointing BOTH OnSuccess=
+# and OnFailure= at the
 # same target made systemd register two identical trigger sources on edge-mirror
 # and log a per-run "multiple trigger source candidates for exit status
 # propagation (X, X), skipping" warning; dropping OnFailure= removes the warning

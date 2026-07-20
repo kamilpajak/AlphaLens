@@ -577,9 +577,10 @@ warning — `multiple trigger source candidates for exit status propagation
 (alphalens-feedback-shadow-returns.service, alphalens-feedback-shadow-returns.service),
 skipping` — on every hourly mirror fire (cosmetic; the mirror still ran and
 exited 0). Dropping `OnFailure=` removes the duplicate trigger source and the
-warning. The failure path loses only the *instant* handoff: on a failed/timed-out
-compute run there are no freshly written parquets to mirror anyway, and the
-hourly timer re-syncs within ≤1h regardless.
+warning. The failure path loses only the *instant* handoff: the hourly timer
+re-syncs whatever parquets exist — including any partial output a timed-out run
+wrote before the kill — within ≤1h, so this is a latency-only trade-off that
+stays well inside the 36h `AlphalensEdgeStale` budget.
 
 ### Install (ATOMIC DEPLOY REQUIREMENT)
 

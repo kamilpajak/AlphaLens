@@ -970,9 +970,9 @@ class TestShadowReturnsUnit(unittest.TestCase):
     def test_service_sets_generous_timeout_for_rate_limited_sweep(self) -> None:
         # The 14-day sweep × Polygon ~5 req/min throttle can run long after a
         # VPS-downtime backlog (Persistent replay = the largest run). The edge
-        # mirror (alphalens-edge-mirror.service) now fires on OnSuccess= AND
-        # OnFailure=, so a timeout-kill is self-healing (the mirror still runs
-        # via OnFailure=). 90min still gives the nightly sweep enough headroom
+        # mirror (alphalens-edge-mirror.service) fires on OnSuccess=; a
+        # timeout-kill is self-healing via the mirror's own hourly timer (≤1h),
+        # NOT an OnFailure= handoff. 90min gives the nightly sweep enough headroom
         # that the common case (sweep completes) reaches OnSuccess= promptly,
         # keeping the edge dashboard fresh right after the recompute.
         self.assertRegex(
@@ -996,8 +996,9 @@ class TestEdgeMirrorUnit(unittest.TestCase):
 
     The edge mirror was extracted from the shadow-returns ExecStartPost into its
     own unit so that a timeout-kill on the nightly compute job no longer skips
-    the Postgres cache refresh. It is triggered by OnSuccess=/OnFailure= on the
-    compute unit AND by an hourly self-heal timer.
+    the Postgres cache refresh. It is triggered by OnSuccess= on the compute
+    unit AND by an hourly self-heal timer (the failure/timeout path is covered
+    by the timer, not by an explicit OnFailure= directive).
     """
 
     def test_mirror_service_exists(self) -> None:
