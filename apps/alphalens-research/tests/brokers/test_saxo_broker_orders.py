@@ -87,7 +87,7 @@ def _request(**overrides: Any) -> BracketOrderRequest:
         "quantity": 10,
         "entry_limit": 50.0,
         "stop_loss": 45.0,
-        "take_profit": 60.0,
+        "take_profit": 55.0,
         "entry_ttl_days": 5,
         "client_request_id": str(uuid.uuid4()),
     }
@@ -233,7 +233,7 @@ class TestPlacementBody(unittest.TestCase):
 
         tp, sl = body["Orders"]
         self.assertEqual(
-            (tp["OrderType"], tp["OrderPrice"], tp["BuySell"]), ("Limit", 60.0, "Sell")
+            (tp["OrderType"], tp["OrderPrice"], tp["BuySell"]), ("Limit", 55.0, "Sell")
         )
         self.assertEqual(
             (sl["OrderType"], sl["OrderPrice"], sl["BuySell"]), ("StopIfTraded", 45.0, "Sell")
@@ -272,12 +272,12 @@ class TestTickQuantization(unittest.TestCase):
         broker, stub = _make_broker()
         with mock.patch.dict("os.environ", _ALLOW):
             broker.place_bracket_order(
-                _request(entry_limit=50.0009, stop_loss=44.9991, take_profit=60.0004)
+                _request(entry_limit=50.0009, stop_loss=44.9991, take_profit=55.0004)
             )
         body, _ = stub.place_calls[0]
         self.assertEqual(body["OrderPrice"], 50.0)
         tp, sl = body["Orders"]
-        self.assertEqual(tp["OrderPrice"], 60.0)
+        self.assertEqual(tp["OrderPrice"], 55.0)
         self.assertEqual(sl["OrderPrice"], 45.0)
 
     def test_sub_dollar_band_uses_finer_tick(self):
@@ -336,6 +336,100 @@ class TestPriceRelationValidation(unittest.TestCase):
         self.assertIn("take_profit", str(ctx.exception))
         self.assertEqual(stub.place_calls, [])
         self.assertEqual(stub.precheck_calls, [])
+
+
+class TestChildDistanceFailFast(unittest.TestCase):
+    """A wide disaster stop attached as a bracket CHILD (20-30% from entry)
+    must fail fast LOCALLY, before any network call, on BOTH the precheck and
+    place paths.
+
+    Saxo 400s such a child per-leg with ``TooFarFromEntryOrder`` while the
+    single-order precheck stays false-green (real incident S-2026-07-13, T4:
+    entries 18.08/16.68/15.81, shared disaster stop 12.57). The guard converts
+    that known-bad geometry into a clean local reject that names the leg, the
+    measured distance, and directs the wide stop to a STANDALONE order
+    (Option B). Design: ``saxo_wide_stop_bracket_design_2026_07_20``.
+    """
+
+    def test_wide_stop_child_rejected_before_any_call(self):
+        # Real T4 tier-0 geometry: entry 18.08, disaster stop 12.57 (~30.5%).
+        broker, stub = _make_broker()
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_bracket_order(
+                    _request(entry_limit=18.08, stop_loss=12.57, take_profit=18.81)
+                )
+        message = str(ctx.exception)
+        self.assertIn("stop_loss", message)
+        self.assertIn("30.5%", message, "the measured child distance is surfaced")
+        self.assertIn("standalone", message.lower())
+        self.assertEqual(stub.place_calls, [], "no real POST on a known-bad child")
+        self.assertEqual(stub.precheck_calls, [], "no network call spent at all")
+
+    def test_wide_stop_child_rejected_sell_symmetric(self):
+        # SELL: the disaster stop sits far ABOVE the entry (mirror geometry).
+        broker, stub = _make_broker()
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_bracket_order(
+                    _request(side="SELL", entry_limit=18.08, stop_loss=23.60, take_profit=17.35)
+                )
+        message = str(ctx.exception)
+        self.assertIn("stop_loss", message)
+        self.assertIn("standalone", message.lower())
+        self.assertEqual(stub.place_calls, [])
+        self.assertEqual(stub.precheck_calls, [])
+
+    def test_wide_take_profit_child_rejected(self):
+        # Symmetry: a far take-profit child also fails fast.
+        broker, stub = _make_broker()
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_bracket_order(
+                    _request(entry_limit=18.08, stop_loss=17.55, take_profit=25.00)
+                )
+        message = str(ctx.exception)
+        self.assertIn("take_profit", message)
+        self.assertIn("standalone", message.lower())
+        self.assertEqual(stub.place_calls, [])
+
+    def test_near_stop_and_tp_children_pass_unchanged(self):
+        # Positive control: hand-tight ~3% stop + ~3% TP (the first-fill
+        # experiment geometry) must NOT be false-rejected.
+        broker, stub = _make_broker()
+        with mock.patch.dict("os.environ", _ALLOW):
+            broker.place_bracket_order(
+                _request(entry_limit=18.08, stop_loss=17.55, take_profit=18.60)
+            )
+        self.assertEqual(len(stub.place_calls), 1, "in-band children place normally")
+
+    def test_precheck_path_also_fails_fast(self):
+        # The false-green closure: precheck_bracket_order (the dry-run path)
+        # ALSO rejects a wide child locally — both paths route through
+        # _build_bracket_body, so the precheck no longer returns Ok while the
+        # real POST would 400.
+        broker, stub = _make_broker()
+        with self.assertRaises(OrderRejectedError) as ctx:
+            broker.precheck_bracket_order(
+                _request(entry_limit=18.08, stop_loss=12.57, take_profit=18.81)
+            )
+        self.assertIn("standalone", str(ctx.exception).lower())
+        self.assertEqual(stub.precheck_calls, [], "precheck never reaches the network")
+
+    def test_regression_all_three_tiers_reject_locally(self):
+        # Anchors S-2026-07-13: every tier of the shared-disaster-stop ladder
+        # (30.5% / 24.6% / 20.5% below its entry) rejects locally.
+        tiers = ((18.08, 18.81), (16.68, 19.30), (15.81, 21.40))
+        for entry, tp in tiers:
+            with self.subTest(entry=entry):
+                broker, stub = _make_broker()
+                with mock.patch.dict("os.environ", _ALLOW):
+                    with self.assertRaises(OrderRejectedError) as ctx:
+                        broker.place_bracket_order(
+                            _request(entry_limit=entry, stop_loss=12.57, take_profit=tp)
+                        )
+                self.assertIn("standalone", str(ctx.exception).lower())
+                self.assertEqual(stub.place_calls, [])
 
 
 class TestNakedNoneNoneBracketBody(unittest.TestCase):

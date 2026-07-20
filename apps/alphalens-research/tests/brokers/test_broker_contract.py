@@ -279,7 +279,7 @@ class BrokerConformanceMixin:
             quantity=2,
             entry_limit=50.0,
             stop_loss=45.0,
-            take_profit=60.0,
+            take_profit=55.0,
             entry_ttl_days=5,
             client_request_id=str(uuid.uuid4()),
         )
