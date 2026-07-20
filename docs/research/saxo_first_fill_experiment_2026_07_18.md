@@ -1,7 +1,10 @@
 # Saxo SIM first-fill experiment — attended runbook + log
 
-**Status:** READY (becomes the experiment log after execution)
-**Date:** 2026-07-18
+**Status:** COMPLETE — executed 2026-07-20 (attended). All objectives met
+except O4 (partial fill) which is deferred as not provokable on OpenAPI SIM.
+Findings below are quoted from raw JSON in
+`~/.alphalens/broker_orders/experiments/first_fill_2026-07-20/`.
+**Date:** 2026-07-18 (runbook) / 2026-07-20 (execution)
 **Related:** [`saxo_broker_layer_design_2026_07_17.md`](saxo_broker_layer_design_2026_07_17.md), [ADR 0014](../adr/0014-broker-agnostic-execution-layer.md)
 **Drivers:** `apps/alphalens-research/scripts/first_fill/` (copy to `/tmp/first_fill/` per Phase 0)
 
@@ -218,51 +221,64 @@ unset ALPHALENS_BROKER_ALLOW_ORDERS
 
 | Item | File | Finding |
 |---|---|---|
-| `PositionNettingProfile` (verbatim) | `01_client_profile.json` | _(fill)_ |
-| infoprices Quote non-null during RTH? (timestamp + FieldGroups) | `00_infoprice.json` | _(fill)_ |
+| `PositionNettingProfile` (verbatim) | `01_client_profile.json` | `FifoRealTime` (with `PositionNettingMethod=FIFO`, `PositionNettingMode=Intraday`; `AllowedNettingProfiles=[FifoRealTime, FifoEndOfDay]`) ⇒ netting is FIFO + real-time, so closedpositions pairs form immediately (no EOD wait). Account default currency EUR. |
+| infoprices Quote non-null during RTH? (timestamp + FieldGroups) | `00_infoprice.json` | NULL. `/trade/v1/infoprices` returned HTTP 200 but `Quote.PriceTypeBid=NoAccess`, `Quote.PriceTypeAsk=NoAccess`, `Quote.Amount=0`, `LastUpdated=0001-01-01T…` — no exchange entitlement for stock L1 on this SIM account. **yfinance is the permanent stock ref-price fallback** (`00_computed_legs.json` records `ref=82.035, source="yfinance"`). Answers Q5. |
 
 ### 4.2 O1 — entry FinalFill row (EntryType=All, UNTRUNCATED)
 
+Entry order `5039287596`, from `11_entry_activities_all.json` (`__count=3`,
+three rows in LogId order):
+
+| LogId | Status / SubStatus | Fill fields |
+|---|---|---|
+| 249519475 | Placed / Requested | — |
+| 249519478 | Placed / Confirmed | — |
+| 249519481 | **FinalFill / Confirmed** | `FillAmount=2.0`, `FilledAmount=2.0`, `ExecutionPrice=82.09`, `AveragePrice=82.09`, `PositionId=5026930126` |
+
 | Field | Present? | Type | Value | Notes |
 |---|---|---|---|---|
-| `FilledAmount` | | | | expect ==2 |
-| `FillAmount` | | | | |
-| `ExecutionPrice` | | | | |
-| `AveragePrice` | | | | |
-| `ExternalReference` | | | | == client_request_id? |
-| `Status=Fill` row BEFORE FinalFill? | | — | | one-shot fills typically emit FinalFill directly |
-| LogId ordering / ActivityTime | | — | | |
+| `FilledAmount` | yes | number | `2.0` | == order qty (cumulative) |
+| `FillAmount` | yes | number | `2.0` | per-event increment == full qty (one-shot) |
+| `ExecutionPrice` | yes | number | `82.09` | |
+| `AveragePrice` | yes | number | `82.09` | == ExecutionPrice (single fill) |
+| `ExternalReference` | yes | string | `87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d` | == entry `client_request_id` (`10_entry_place.json`) |
+| `Status=Fill` row BEFORE FinalFill? | **no** | — | — | one-shot fill emits `FinalFill` DIRECTLY (no intermediate `Fill`) — answers O1b |
+| LogId ordering / ActivityTime | yes | — | monotone | 14:09:05.439 → .442 → .447 Z, LogId strictly increasing |
 
-Same table for the SELL close fill (`31_close_activities.json`): _(fill)_
+SELL close fill (`31_close_activities.json`, close order `5039287641`,
+`__count=3`): identical shape — `Placed/Requested` → `Placed/Confirmed` →
+`FinalFill/Confirmed` (LogId 249520999) with `FillAmount=2.0`,
+`FilledAmount=2.0`, `ExecutionPrice=82.15`, `AveragePrice=82.15`,
+`ExternalReference=8e0fbe45-6952-4647-a58e-67a5884768dc` (== close
+`client_request_id`), `PositionId=5026930436`. No intermediate `Fill` row.
 
 ### 4.3 O2 — children + child-cancel probe
 
 | Item | File | Finding |
 |---|---|---|
-| Children post-entry-fill: Status/BuySell/Amount/Duration/OCO linkage fields | `12_open_orders_post_fill.json` | _(fill)_ |
-| Children emit Placed/Confirmed rows at placement or on entry-fill activation? | `13_child_*_activities.json` | _(fill)_ |
-| Sibling STOP after TP DELETE: Working / Cancelled / weird | `20_*`, `21_*` | _(fill)_ |
-| Terminal Cancelled/Confirmed rows for every cancelled id | `21_*`, `22_*` | _(fill)_ |
+| Children post-entry-fill: Status/BuySell/Amount/OCO linkage | `12_open_orders_post_fill.json` | Two working SELL children, both `Amount=2.0`, `Duration=GoodTillCancel`, `OrderRelation=Oco`: id `5039287597` = `Limit` @ `85.35` (take-profit); id `5039287598` = `StopIfTraded` @ `80.37` (stop-loss). Each carries the other in `RelatedOpenOrders`. Both `Status=Working`, `ExternalReference` == entry `client_request_id`. |
+| Sibling STOP after TP DELETE: Working / Cancelled / weird | `20_orders_post_child_cancel.json` | **STILL Working** — after DELETE of the TP child `5039287597`, the STOP `5039287598` remains `Status=Working` (now `OrderRelation=StandAlone`, `RelatedOpenOrders=[]`). **No OCO cascade**: OCO cancels a sibling only on EXECUTION, not on manual cancel of the other leg. Confirms the "assume no cascade" expectation. |
+| Both children terminally cancelled | `22_orders_post_stop_cancel.json` | After also cancelling the stop, open orders = `{"Data": [], "__count": 0}` — account has zero working orders. |
 
 ### 4.4 O3 — netting + reconcile
 
 | Item | File | Finding |
 |---|---|---|
-| SELL netted the long vs offsetting short (positions at +0/+1/+5 min) | `32_*` | _(fill)_ |
-| closedpositions row: ClosePrice / OpenPrice / ProfitLossOnTrade | `32_closedpositions.json` | _(fill)_ |
-| WHICH ExternalReference on the pair row (entry's vs close's) | `32_closedpositions.json` | _(fill)_ |
-| Timing vs netting-profile prediction (immediate vs next-day) | `32_*`, `40_*` | _(fill)_ |
-| reconcile post-A: entry verdict + raw_status | `15_reconcile_post_A.json` | _(fill)_ |
-| reconcile post-C: `FILLED(closed r=…)` entry / `FILLED` close `r=None` | `33_reconcile_post_C.json` | _(fill)_ |
+| SELL netted the long (FIFO, real-time) | `32_closedpositions.json` | Under `FifoRealTime` the naked SELL netted the long immediately (positions emptied; a closedpositions pair row appeared same-session, no EOD wait). |
+| closedpositions row: OpenPrice / ClosingPrice / Amount / P&L | `32_closedpositions.json` | `OpenPrice=82.09`, `ClosingPrice=82.15`, `Amount=2.0`, `ProfitLossOnTrade=+0.12` USD (`ProfitLossOnTradeInBaseCurrency=+0.1051377` EUR), `ClosingMethod=Fifo`. |
+| WHICH ExternalReference on the pair row | `32_closedpositions.json` | **BOTH.** `OpeningExternalReferenceId=87e0ab88…` (entry) AND `ClosingExternalReferenceId=8e0fbe45…` (close). The reconciler can attribute either leg from a single closedpositions row. Answers Q4. |
+| Timing vs netting-profile prediction | `01_*`, `32_*` | Immediate pairing, exactly as `FifoRealTime` predicts (no `40_*` next-day file needed). |
+| reconcile post-C: entry + close verdicts | `33_reconcile_post_C.json` | BOTH orders returned `UNRESOLVED(audit_error)` — `"audit_error: Saxo 429 persisted after 4 attempts"`. This is the `__nextPoll` bug (§9): reconcile followed the always-present live-poll cursor and 429'd. Raw reads this session (`11_*`, `31_*`, `32_*`) prove the true outcomes are FILLED/closed. After this PR's client fix, reconcile is expected to resolve `FILLED(closed)` with `realized_r` for the entry (it has a stop) and `FILLED` `r=None` for the naked close (stop=None, honest None). |
 
 ### 4.5 O4/O5 — probe + latencies
 
 | Item | Finding |
 |---|---|
-| Phase D probe outcome (full/partial/none); FillAmount vs FilledAmount arithmetic vs ENS example | _(fill)_ |
-| Latency: place → Working visible in port/v1 | _(fill)_ |
-| Latency: place → FinalFill in audit | _(fill)_ |
-| Latency: fill → position row; close-fill → closedpositions row | _(fill)_ |
+| O4 Phase D partial-fill probe | **NOT attempted this session — deferred.** OpenAPI SIM has no documented deterministic partial-fill trigger (no L2/depth engine; SAFT quantity tables are FIX-only), so it is expected "not provokable". Re-runnable another day under the opportunistic-capture doctrine (§3 D.4). |
+| O5 infoprices | Null quotes (see §4.1) → yfinance ref-price fallback confirmed permanent for SIM stock. |
+| O5 commission (SIM) | `60_final_account.json`: EUR total `999,973.82` vs `1,000,000.00` start = `-26.18` EUR for the round trip ≈ ~13 EUR/side (`32_closedpositions.json` `CostOpening=-15.00` / `CostClosing=-15.01` USD ≈ 13 EUR at the 0.876 rate). Gross P&L was `+0.12` USD — commission dominates a 2-lot round trip by ~200×. |
+| Latency: place → FinalFill in audit | entry place `ts_utc=14:09:03Z` → FinalFill `ActivityTime=14:09:05.447Z` ≈ **2.4 s**; close place `14:23:35Z` → FinalFill `14:23:38.156Z` ≈ **3.2 s**. |
+| Latency: fill → position / close-fill → closedpositions | position `ExecutionTimeOpen=14:09:05.447144Z` == FinalFill instant; `32_*` `ExecutionTimeClose=14:23:38.156164Z` == close FinalFill instant — position + closedpositions rows stamp at the fill instant (no measurable lag). |
 
 ## 5. Cleanup decision tree
 
@@ -408,5 +424,75 @@ Same table for the SELL close fill (`31_close_activities.json`): _(fill)_
 
 ## 9. Findings (post-session)
 
-_(empty until the session runs — fill §4 tables + this narrative from
-`$SCRATCH` files only)_
+Executed 2026-07-20, KO @ XNYS, qty 2. All values quoted from the raw JSON in
+`~/.alphalens/broker_orders/experiments/first_fill_2026-07-20/`.
+
+### Headline — the `__nextPoll` live-poll-cursor bug (BLOCKING, fixed by this PR)
+
+`broker reconcile` returned `UNRESOLVED(audit_error)` for BOTH orders with
+`"Saxo 429 persisted after 4 attempts"` (`33_reconcile_post_C.json`), even
+though every order actually FILLED and the audit rows were complete on page 1.
+
+Root cause: the audit endpoint `/cs/v1/audit/orderactivities` ALWAYS returns a
+`__nextPoll` field. `__nextPoll` is NOT pagination — it is a subscription-style
+LIVE-POLL continuation cursor for FUTURE activities. It is present even when the
+current page already holds every current row (`__count == len(Data)`;
+`11_entry_activities_all.json` has `__count=3` with all 3 rows on page 1 AND a
+`__nextPoll`). Requesting it immediately returns HTTP 429 ("poll too soon"). The
+old `SaxoClient._get_paged_json` followed `__next` OR `__nextPoll` unconditionally,
+so a point-in-time audit read always 429'd; the client's retry loop then
+surfaced it as a rate-limit and reconcile mapped it to `UNRESOLVED(audit_error)`.
+
+Fix: `_get_paged_json` now follows ONLY `__next` (genuine pagination of the
+current snapshot) and ignores `__nextPoll` (still stripping it so it never leaks
+into the returned envelope). Additional current-snapshot rows always arrive via
+`__next`, never `__nextPoll`, so this is safe for both callers
+(`get_order_activities` audit + `get_closed_positions`). With the fix, reconcile
+is expected to resolve `FILLED(closed)` (with `realized_r`) for the stop-bearing
+entry and `FILLED` `r=None` for the naked close — the true outcomes proven by
+the raw reads this session.
+
+### O1 — real FinalFill shape (parser now evidence-backed)
+
+A one-shot SIM fill emits `Placed/Requested` → `Placed/Confirmed` →
+`FinalFill/Confirmed` with NO intermediate `Status=Fill` row (§4.2). The
+FinalFill row carries `FillAmount=FilledAmount=2.0`,
+`ExecutionPrice=AveragePrice=82.09` (entry) / `82.15` (close), and
+`ExternalReference == client_request_id`. The `_classify_activity_row` FinalFill
+branch — previously flagged "doc-sourced only" — is now pinned by a fixture test
+byte-shaped from this real row (`test_saxo_broker.py::TestFinalFillRealFixture`).
+
+### O2 — bracket children + no OCO cascade on manual cancel
+
+Post-fill, both SELL children go `Working` (TP `Limit@85.35` id 5039287597; SL
+`StopIfTraded@80.37` id 5039287598), each linked as `OrderRelation=Oco`. DELETE
+of the TP child left the STOP sibling STILL `Working` (`OrderRelation` flipped to
+`StandAlone`) — **OCO cancels a sibling only on EXECUTION, not on manual cancel
+of the other leg** (§4.3). Doctrine line for `broker.py`/`client.py`: after any
+manual child cancel, the sibling remains live and must be cancelled explicitly.
+
+### O3 — FIFO real-time netting + dual ExternalReference
+
+Under `FifoRealTime` (§4.1) the naked SELL netted the long immediately and a
+closedpositions pair row appeared same-session: `OpenPrice=82.09`,
+`ClosingPrice=82.15`, `ProfitLossOnTrade=+0.12` USD (`+0.1051377` EUR base). The
+row carries BOTH `OpeningExternalReferenceId` (entry) and
+`ClosingExternalReferenceId` (close), so the reconciler can attribute either leg
+from one row (answers Q4).
+
+### O5 / open questions
+
+- **Q1 — does SIM accept the childless None/None SELL body?** YES. The naked
+  close placed and filled (`30_close_place.json` shows `stop_loss=null`,
+  `take_profit=null`, `exit_order_ids=[]`; `31_close_activities.json` shows the
+  fill). The G1 unit path is confirmed against live behavior.
+- **Q4 — which ExternalReference on the closedpositions row?** BOTH (above).
+- **Q5 — infoprices during RTH?** NULL on this SIM account (`NoAccess`) →
+  yfinance is the permanent stock ref-price fallback.
+- SIM commission ≈ 13 EUR/side dominates a 2-lot round trip (§4.5).
+
+### O4 — deferred
+
+Partial fill NOT attempted; OpenAPI SIM has no documented deterministic partial
+trigger (expected "not provokable"). Re-runnable under the opportunistic-capture
+doctrine (§3 D.4). This is the only objective not met.
