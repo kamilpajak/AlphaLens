@@ -28,8 +28,16 @@ import datetime as dt
 import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import typer
+
+if TYPE_CHECKING:
+    # Type-only imports for the extracted submit helpers. Guarded by
+    # TYPE_CHECKING so they never run at import time (lazy-CLI startup budget) —
+    # `from __future__ import annotations` keeps the annotations as strings.
+    from alphalens_pipeline.brokers.contract import Broker, InstrumentRef
+    from alphalens_pipeline.paper.fx import FxConversion
 
 broker_app = typer.Typer(
     name="broker",
@@ -427,7 +435,7 @@ def _resolve_instrument_and_plan(
     exchange: str | None,
     equity: float | None,
     scale_factor: float,
-    trade_setup: object,
+    trade_setup: dict,
 ) -> tuple:
     """Resolve the instrument, read the account, and size the setup plan.
 
@@ -548,15 +556,15 @@ def _run_prechecks(
 
 def _place_and_record(
     *,
-    broker: object,
+    broker: Broker,
     brackets: list,
     brief_date: dt.date,
     wanted: str,
-    instrument: object,
+    instrument: InstrumentRef,
     precheck_summaries: list[dict],
     account_currency: str,
     sizing_equity: float,
-    fx: object,
+    fx: FxConversion | None,
     precheck_conversion_rate: float | None,
 ) -> None:
     """Place each bracket, journal the outcome, then raise on any failure.
