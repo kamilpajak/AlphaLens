@@ -496,3 +496,35 @@ from one row (answers Q4).
 Partial fill NOT attempted; OpenAPI SIM has no documented deterministic partial
 trigger (expected "not provokable"). Re-runnable under the opportunistic-capture
 doctrine (§3 D.4). This is the only objective not met.
+
+### T1 (2026-07-20) — reconcile live re-validation
+
+A follow-up attended SIM re-run against the same account re-validated the
+reconcile path end to end. All values below come only from
+`~/.alphalens/broker_orders/experiments/first_fill_2026-07-20/`.
+
+- **`__nextPoll` fix (#872) is LIVE-VALIDATED.** `broker reconcile` and the
+  `dump_activities` CLI now return `FILLED` with the `FinalFill` rows present,
+  with NO 429 — the exact regression the fix targeted. A fresh entry order
+  `5039290021` reconciled to `FILLED` with `divergence: false` while the
+  position was still open (exit children working). The audit read completes on
+  page 1 and no longer chases the live-poll cursor.
+
+- **Second bug found by T1 (fixed in this PR).** With the 429 gone, reconcile
+  then marked every closed round-trip as `divergence: true` with
+  `realized_r = None`. Cause: the FILLED closed-pair join read Saxo field names
+  that do NOT exist on a real `closedposition` row. It matched on
+  `ExternalReference` (the real opening-leg reference is
+  `OpeningExternalReferenceId`; the closing leg is `ClosingExternalReferenceId`)
+  and read the close price from `ClosePrice` (the real field is `ClosingPrice`;
+  the open is `OpenPrice`). Both were doc-sourced guesses refuted by the T1
+  captured pair in `32_closedpositions.json`
+  (`OpeningExternalReferenceId=87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d`,
+  `ClosingExternalReferenceId=8e0fbe45-6952-4647-a58e-67a5884768dc`,
+  `OpenPrice=82.09`, `ClosingPrice=82.15`, `ProfitLossOnTrade=+0.12`,
+  `Amount=2.0`). The fix matches on `OpeningExternalReferenceId` and reads
+  `ClosingPrice`, so an entry round-trip now resolves to `FILLED(closed r=...)`
+  with `divergence: false` and a populated `realized_r`. The green fixtures that
+  previously encoded the fictional field names were the reason the divergence
+  went unnoticed until a live closed pair was reconciled — they are now
+  corrected to the real Saxo shape.

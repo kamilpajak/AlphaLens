@@ -662,14 +662,14 @@ class TestFillCrossCheckCapability(unittest.TestCase):
             "Data": [
                 {
                     "ClosedPositionUniqueId": "cp-1",
-                    "ClosedPosition": {"ExternalReference": "rid-1", "ClosePrice": 55.0},
+                    "ClosedPosition": {"OpeningExternalReferenceId": "rid-1", "ClosingPrice": 55.0},
                 },
-                {"ExternalReference": "rid-2", "ClosePrice": 44.0},
+                {"OpeningExternalReferenceId": "rid-2", "ClosingPrice": 44.0},
             ],
         }
         broker = SaxoBroker(client)  # type: ignore[arg-type]
         rows = broker.get_closed_position_rows()
-        self.assertEqual([row["ExternalReference"] for row in rows], ["rid-1", "rid-2"])
+        self.assertEqual([row["OpeningExternalReferenceId"] for row in rows], ["rid-1", "rid-2"])
 
 
 class TestSaxoBrokerConformance(BrokerConformanceMixin, unittest.TestCase):

@@ -311,8 +311,8 @@ class TestDivergenceClassification(unittest.TestCase):
             outcomes={"E-1": self._FILLED},
             closed_rows=[
                 {
-                    "ExternalReference": "rid-1",
-                    "ClosePrice": 55.0,
+                    "OpeningExternalReferenceId": "rid-1",
+                    "ClosingPrice": 55.0,
                     "ProfitLossOnTrade": 50.0,
                 }
             ],
@@ -331,7 +331,7 @@ class TestDivergenceClassification(unittest.TestCase):
         broker = _FullBroker(
             outcomes={"E-1": self._FILLED},
             closed_rows=[
-                {"ClosedPosition": {"ExternalReference": "rid-1", "ClosePrice": 47.5}},
+                {"ClosedPosition": {"OpeningExternalReferenceId": "rid-1", "ClosingPrice": 47.5}},
             ],
         )
 
@@ -340,6 +340,49 @@ class TestDivergenceClassification(unittest.TestCase):
         # close 47.5 vs entry 50, risk 5 -> r = -0.50 (partial adverse exit)
         self.assertEqual(verdict.verdict, "FILLED(closed r=-0.50)")
         self.assertEqual(verdict.details.get("realized_r"), -0.5)
+
+    def test_filled_with_real_captured_closed_row_matches_and_computes_r(self):
+        # Byte-shaped from the T1 first-fill closed pair
+        # (~/.alphalens/broker_orders/experiments/first_fill_2026-07-20/
+        #  32_closedpositions.json). The real closedposition row carries the
+        # opening leg's reference as ``OpeningExternalReferenceId`` and the
+        # close price as ``ClosingPrice`` — NOT the doc-guessed
+        # ``ExternalReference`` / ``ClosePrice`` (which do not exist), the
+        # second Saxo reconcile bug surfaced by the live T1 run.
+        record = _record(
+            brackets=[
+                _bracket(
+                    client_request_id="87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d",
+                    entry=82.09,
+                    stop=81.09,
+                )
+            ]
+        )
+        broker = _FullBroker(
+            outcomes={"E-1": self._FILLED},
+            closed_rows=[
+                {
+                    "Amount": 2.0,
+                    "BuyOrSell": "Buy",
+                    "ClosingExternalReferenceId": "8e0fbe45-6952-4647-a58e-67a5884768dc",
+                    "ClosingPrice": 82.15,
+                    "OpenPrice": 82.09,
+                    "OpeningExternalReferenceId": "87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d",
+                    "ProfitLossOnTrade": 0.12,
+                    "Uic": 307,
+                }
+            ],
+        )
+
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        # entry 82.09, stop 81.09 -> risk 1.00; close 82.15 -> r = +0.06
+        self.assertEqual(verdict.status, "FILLED")
+        self.assertFalse(verdict.divergence)
+        self.assertEqual(verdict.verdict, "FILLED(closed r=+0.06)")
+        self.assertAlmostEqual(verdict.details["realized_r"], 0.06, places=9)
+        self.assertEqual(verdict.details.get("profit_loss_on_trade"), 0.12)
+        self.assertIn("round trip closed", verdict.note or "")
 
     def test_filled_with_open_position_is_clean(self):
         broker = _FullBroker(outcomes={"E-1": self._FILLED}, open_refs=["rid-1"])
@@ -404,8 +447,8 @@ class TestFxDiagnostics(unittest.TestCase):
             outcomes={"E-1": self._FILLED},
             closed_rows=[
                 {
-                    "ExternalReference": "rid-1",
-                    "ClosePrice": 55.0,
+                    "OpeningExternalReferenceId": "rid-1",
+                    "ClosingPrice": 55.0,
                     "ProfitLossOnTrade": 100.0,
                     "ProfitLossOnTradeInBaseCurrency": 23.0,
                 }
@@ -419,10 +462,14 @@ class TestFxDiagnostics(unittest.TestCase):
 
     def test_effective_rate_absent_when_base_pnl_missing_or_zero(self):
         for closed_row in (
-            {"ExternalReference": "rid-1", "ClosePrice": 55.0, "ProfitLossOnTrade": 100.0},
             {
-                "ExternalReference": "rid-1",
-                "ClosePrice": 55.0,
+                "OpeningExternalReferenceId": "rid-1",
+                "ClosingPrice": 55.0,
+                "ProfitLossOnTrade": 100.0,
+            },
+            {
+                "OpeningExternalReferenceId": "rid-1",
+                "ClosingPrice": 55.0,
                 "ProfitLossOnTrade": 100.0,
                 "ProfitLossOnTradeInBaseCurrency": 0.0,
             },
@@ -441,8 +488,8 @@ class TestFxDiagnostics(unittest.TestCase):
             outcomes={"E-1": self._FILLED},
             closed_rows=[
                 {
-                    "ExternalReference": "rid-1",
-                    "ClosePrice": 55.0,
+                    "OpeningExternalReferenceId": "rid-1",
+                    "ClosingPrice": 55.0,
                     "ProfitLossOnTrade": True,
                     "ProfitLossOnTradeInBaseCurrency": True,
                 }
