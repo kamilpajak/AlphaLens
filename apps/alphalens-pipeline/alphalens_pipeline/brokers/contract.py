@@ -95,7 +95,7 @@ class AccountSnapshot:
 @dataclass(frozen=True)
 class Position:
     instrument: InstrumentRef
-    quantity: float  # signed; long > 0
+    quantity: float  # signed quantity; positive is long
     avg_price: float
     market_value: float | None  # None when broker quote unavailable (SIM NoAccess)
     unrealized_pnl: float | None

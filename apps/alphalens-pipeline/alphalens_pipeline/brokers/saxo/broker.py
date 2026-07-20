@@ -834,7 +834,7 @@ class SaxoBroker:
         try:
             status, payload = self._client.cancel_order_ids(order_id, account_key=account_key)
         except SaxoError as exc:
-            logger.error("partial-acceptance cleanup DELETE failed for %s: %s", order_id, exc)
+            logger.exception("partial-acceptance cleanup DELETE failed for %s: %s", order_id, exc)
             return f"cancel of {order_id} FAILED ({exc}) — reconcile via 'alphalens broker orders'"
         if status >= 400:
             logger.error(

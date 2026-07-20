@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -367,7 +368,7 @@ def _assert_fx_precheck_cross_checks(
     fx: object,
     account_currency: str,
     divergence_max_pct: float,
-    divergence_fn: object,
+    divergence_fn: Callable[[float, float], float],
 ) -> float:
     """FX-path precheck cross-checks (FX-leg memo §4.3 item 5); refuse on any miss.
 
@@ -400,7 +401,7 @@ def _assert_fx_precheck_cross_checks(
         )
     sizing_rate: float = fx.rate  # type: ignore[attr-defined]
     try:
-        divergence = divergence_fn(sizing_rate, conversion_rate)  # type: ignore[operator]
+        divergence = divergence_fn(sizing_rate, conversion_rate)
     except ValueError as exc:
         # Belt: both rates are validated positive above/at FxConversion build,
         # but a helper-level ValueError must surface as a clean refusal, never
@@ -418,6 +419,212 @@ def _assert_fx_precheck_cross_checks(
         f"(instrument->account), divergence {divergence:.2f}% <= {divergence_max_pct}%"
     )
     return conversion_rate
+
+
+def _resolve_instrument_and_plan(
+    *,
+    wanted: str,
+    exchange: str | None,
+    equity: float | None,
+    scale_factor: float,
+    trade_setup: object,
+) -> tuple:
+    """Resolve the instrument, read the account, and size the setup plan.
+
+    Extracted from ``submit_command`` to keep it a short orchestration: the
+    broker read, the cross-currency FX-rate resolution, and the sizing call
+    live here. Lazy imports keep the ``alphalens`` binary's startup cost off
+    this path (lazy-CLI doctrine). Returns
+    ``(broker, account, sizing_equity, instrument, fx, plan)``.
+    """
+    from alphalens_pipeline.brokers import execution as execution_policy
+    from alphalens_pipeline.brokers.contract import BrokerError
+    from alphalens_pipeline.brokers.execution import build_fx_conversion
+    from alphalens_pipeline.brokers.registry import get_default_broker
+    from alphalens_pipeline.brokers.routing import resolve_us_instrument
+    from alphalens_pipeline.paper.sizing import (
+        TradeSetupNotPlannableError,
+        compute_setup_plan,
+    )
+
+    try:
+        broker = get_default_broker()
+        # The account read is unconditional now: the BUDGET is the account
+        # currency (FX-leg memo §7 Q1 operator decision), so the currency
+        # compare needs AccountSnapshot.currency even with --equity given.
+        account = broker.get_account()
+        sizing_equity = equity if equity is not None else account.total_value
+        instrument = resolve_us_instrument(broker, wanted, exchange_mic=exchange)
+        if not instrument.currency:
+            raise _fail(
+                f"{wanted}: broker {broker.name!r} resolve stamped no instrument "
+                "currency — cannot verify the account-vs-instrument currency; "
+                "refusing to size (never MIC-inferred, never guessed)"
+            )
+        fx = None
+        if instrument.currency != account.currency:
+            get_fx_rate = getattr(broker, "get_fx_rate", None)
+            if get_fx_rate is None:
+                raise _fail(
+                    f"{wanted} trades in {instrument.currency} but the account is "
+                    f"{account.currency}, and broker {broker.name!r} exposes no "
+                    "get_fx_rate capability — refusing to size cross-currency "
+                    f"(policy {execution_policy._MISSING_FX_RATE_POLICY!r})"
+                )
+            fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
+        plan = compute_setup_plan(
+            brief_trade_setup=trade_setup,
+            paper_equity=sizing_equity,
+            scale_factor=scale_factor,
+            fx=fx,
+        )
+    except TradeSetupNotPlannableError as exc:
+        raise _fail(f"{wanted} is not plannable: {exc}") from exc
+    except BrokerError as exc:
+        raise _fail(f"broker submit failed: {exc}") from exc
+    return broker, account, sizing_equity, instrument, fx, plan
+
+
+def _run_prechecks(
+    *,
+    broker: object,
+    brackets: list,
+    fx: object,
+    wanted: str,
+    account_currency: str,
+) -> tuple[list[dict], float | None]:
+    """Precheck every bracket server-side (places nothing); FX-path cross-checks.
+
+    Extracted from ``submit_command``. On the FX path the precheck is also the
+    SECOND, independent rate source (see the caller's comment). Returns
+    ``(precheck_summaries, precheck_conversion_rate)``.
+    """
+    from alphalens_pipeline.brokers import execution as execution_policy
+    from alphalens_pipeline.brokers.contract import BrokerError
+    from alphalens_pipeline.brokers.execution import fx_precheck_divergence_pct
+
+    precheck_summaries: list[dict] = []
+    precheck_conversion_rate: float | None = None
+    precheck_fn = getattr(broker, "precheck_bracket_order", None)
+    if precheck_fn is None:
+        typer.echo("precheck: not supported by this broker — skipping")
+        return precheck_summaries, precheck_conversion_rate
+    for index, bracket in enumerate(brackets):
+        try:
+            payload = precheck_fn(bracket)
+        except BrokerError as exc:
+            raise _fail(f"precheck failed for bracket {index}: {exc}") from exc
+        est_cash_currency = payload.get("EstimatedCashRequiredCurrency")
+        summary = {
+            "client_request_id": bracket.client_request_id,
+            "PreCheckResult": payload.get("PreCheckResult"),
+            "EstimatedCashRequired": payload.get("EstimatedCashRequired"),
+            "EstimatedCashRequiredCurrency": est_cash_currency,
+            "InstrumentToAccountConversionRate": payload.get("InstrumentToAccountConversionRate"),
+            "Costs": payload.get("Cost", payload.get("Costs")),
+        }
+        precheck_summaries.append(summary)
+        est_cash_label = (
+            f"{summary['EstimatedCashRequired']!r}"
+            if est_cash_currency is None
+            else f"{summary['EstimatedCashRequired']!r} {est_cash_currency}"
+        )
+        typer.echo(
+            f"precheck {index}: result={summary['PreCheckResult']!r} "
+            f"est_cash={est_cash_label} costs={summary['Costs']!r}"
+        )
+        if fx is not None:
+            precheck_conversion_rate = _assert_fx_precheck_cross_checks(
+                index=index,
+                ticker=wanted,
+                payload=payload,
+                fx=fx,
+                account_currency=account_currency,
+                divergence_max_pct=(execution_policy._FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT),
+                divergence_fn=fx_precheck_divergence_pct,
+            )
+    return precheck_summaries, precheck_conversion_rate
+
+
+def _place_and_record(
+    *,
+    broker: object,
+    brackets: list,
+    brief_date: dt.date,
+    wanted: str,
+    instrument: object,
+    precheck_summaries: list[dict],
+    account_currency: str,
+    sizing_equity: float,
+    fx: object,
+    precheck_conversion_rate: float | None,
+) -> None:
+    """Place each bracket, journal the outcome, then raise on any failure.
+
+    Extracted from ``submit_command``. The submission record is written in a
+    ``finally`` so a mid-run BrokerError still journals the already-placed
+    entries; the command then exits non-zero with the reconcile hint.
+    """
+    from alphalens_pipeline.brokers.contract import BrokerError
+    from alphalens_pipeline.brokers.execution import execution_config_version
+    from alphalens_pipeline.brokers.submission_log import (
+        append_submission_record,
+        build_submission_record,
+    )
+
+    placed_records: list[dict] = []
+    failure_note: str | None = None
+    try:
+        for bracket in brackets:
+            placed = broker.place_bracket_order(bracket)
+            placed_records.append(
+                {
+                    "client_request_id": bracket.client_request_id,
+                    "entry_order_id": placed.entry_order_id,
+                    "exit_order_ids": list(placed.exit_order_ids),
+                    "qty": bracket.quantity,
+                    "entry": bracket.entry_limit,
+                    "stop": bracket.stop_loss,
+                    "tp": bracket.take_profit,
+                    "ttl": bracket.entry_ttl_days,
+                }
+            )
+            typer.echo(
+                f"placed entry={placed.entry_order_id} "
+                f"exits={','.join(placed.exit_order_ids) or '-'} "
+                f"(request {bracket.client_request_id})"
+            )
+    except BrokerError as exc:
+        failure_note = (
+            f"placement stopped after {len(placed_records)}/{len(brackets)} bracket(s): {exc}"
+        )
+    finally:
+        if placed_records or failure_note:
+            record = build_submission_record(
+                brief_date=brief_date.isoformat(),
+                ticker=wanted,
+                mic=instrument.exchange_mic,
+                uic=instrument.broker_instrument_id,
+                brackets=placed_records,
+                precheck=precheck_summaries,
+                note=failure_note,
+                sizing_currency=account_currency,
+                instrument_currency=instrument.currency,
+                sizing_equity=sizing_equity,
+                fx=fx,
+                precheck_conversion_rate=precheck_conversion_rate,
+            )
+            path = append_submission_record(record)
+            typer.echo(f"submission recorded: {path}")
+
+    token = execution_config_version()
+    typer.echo(f"execution_config_version {token}")
+    if failure_note:
+        placed_ids = [r["entry_order_id"] for r in placed_records]
+        raise _fail(
+            f"{failure_note}\nalready-placed entry orders: {placed_ids or 'none'} — "
+            "reconcile via 'alphalens broker orders' / 'alphalens broker cancel <id>'"
+        )
 
 
 @broker_app.command(name="submit")
@@ -456,24 +663,9 @@ def submit_command(
     --execute AND an interactive confirmation (--yes skips it) AND the
     ALPHALENS_BROKER_ALLOW_ORDERS=1 env gate enforced inside the broker.
     """
-    from alphalens_pipeline.brokers import execution as execution_policy
-    from alphalens_pipeline.brokers.contract import BrokerError
-    from alphalens_pipeline.brokers.execution import (
-        build_fx_conversion,
-        decompose_setup_plan,
-        execution_config_version,
-        fx_precheck_divergence_pct,
-    )
-    from alphalens_pipeline.brokers.registry import get_default_broker
-    from alphalens_pipeline.brokers.routing import resolve_us_instrument
-    from alphalens_pipeline.brokers.submission_log import (
-        append_submission_record,
-        build_submission_record,
-    )
+    from alphalens_pipeline.brokers.execution import decompose_setup_plan
     from alphalens_pipeline.paper.brief_loader import load_brief
     from alphalens_pipeline.paper.sizing import (
-        TradeSetupNotPlannableError,
-        compute_setup_plan,
         setup_plan_gross_guard_limit,
         setup_plan_gross_notional,
     )
@@ -495,41 +687,13 @@ def submit_command(
     if candidate.trade_setup is None:
         raise _fail(f"{wanted} has no parseable brief_trade_setup on {brief_date}")
 
-    try:
-        broker = get_default_broker()
-        # The account read is unconditional now: the BUDGET is the account
-        # currency (FX-leg memo §7 Q1 operator decision), so the currency
-        # compare needs AccountSnapshot.currency even with --equity given.
-        account = broker.get_account()
-        sizing_equity = equity if equity is not None else account.total_value
-        instrument = resolve_us_instrument(broker, wanted, exchange_mic=exchange)
-        if not instrument.currency:
-            raise _fail(
-                f"{wanted}: broker {broker.name!r} resolve stamped no instrument "
-                "currency — cannot verify the account-vs-instrument currency; "
-                "refusing to size (never MIC-inferred, never guessed)"
-            )
-        fx = None
-        if instrument.currency != account.currency:
-            get_fx_rate = getattr(broker, "get_fx_rate", None)
-            if get_fx_rate is None:
-                raise _fail(
-                    f"{wanted} trades in {instrument.currency} but the account is "
-                    f"{account.currency}, and broker {broker.name!r} exposes no "
-                    "get_fx_rate capability — refusing to size cross-currency "
-                    f"(policy {execution_policy._MISSING_FX_RATE_POLICY!r})"
-                )
-            fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
-        plan = compute_setup_plan(
-            brief_trade_setup=candidate.trade_setup,
-            paper_equity=sizing_equity,
-            scale_factor=scale_factor,
-            fx=fx,
-        )
-    except TradeSetupNotPlannableError as exc:
-        raise _fail(f"{wanted} is not plannable: {exc}") from exc
-    except BrokerError as exc:
-        raise _fail(f"broker submit failed: {exc}") from exc
+    broker, account, sizing_equity, instrument, fx, plan = _resolve_instrument_and_plan(
+        wanted=wanted,
+        exchange=exchange,
+        equity=equity,
+        scale_factor=scale_factor,
+        trade_setup=candidate.trade_setup,
+    )
 
     gross = setup_plan_gross_notional(plan)
     gross_limit = setup_plan_gross_guard_limit(plan)
@@ -563,48 +727,13 @@ def submit_command(
     # InstrumentToAccountConversionRate (instrument->account direction — the
     # INVERSE of the sizing rate) must agree with the sizing rate within the
     # policy divergence bound; any failure refuses placement.
-    precheck_summaries: list[dict] = []
-    precheck_conversion_rate: float | None = None
-    precheck_fn = getattr(broker, "precheck_bracket_order", None)
-    if precheck_fn is None:
-        typer.echo("precheck: not supported by this broker — skipping")
-    else:
-        for index, bracket in enumerate(brackets):
-            try:
-                payload = precheck_fn(bracket)
-            except BrokerError as exc:
-                raise _fail(f"precheck failed for bracket {index}: {exc}") from exc
-            est_cash_currency = payload.get("EstimatedCashRequiredCurrency")
-            summary = {
-                "client_request_id": bracket.client_request_id,
-                "PreCheckResult": payload.get("PreCheckResult"),
-                "EstimatedCashRequired": payload.get("EstimatedCashRequired"),
-                "EstimatedCashRequiredCurrency": est_cash_currency,
-                "InstrumentToAccountConversionRate": payload.get(
-                    "InstrumentToAccountConversionRate"
-                ),
-                "Costs": payload.get("Cost", payload.get("Costs")),
-            }
-            precheck_summaries.append(summary)
-            est_cash_label = (
-                f"{summary['EstimatedCashRequired']!r}"
-                if est_cash_currency is None
-                else f"{summary['EstimatedCashRequired']!r} {est_cash_currency}"
-            )
-            typer.echo(
-                f"precheck {index}: result={summary['PreCheckResult']!r} "
-                f"est_cash={est_cash_label} costs={summary['Costs']!r}"
-            )
-            if fx is not None:
-                precheck_conversion_rate = _assert_fx_precheck_cross_checks(
-                    index=index,
-                    ticker=wanted,
-                    payload=payload,
-                    fx=fx,
-                    account_currency=account.currency,
-                    divergence_max_pct=(execution_policy._FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT),
-                    divergence_fn=fx_precheck_divergence_pct,
-                )
+    precheck_summaries, precheck_conversion_rate = _run_prechecks(
+        broker=broker,
+        brackets=brackets,
+        fx=fx,
+        wanted=wanted,
+        account_currency=account.currency,
+    )
 
     if not execute:
         typer.echo("DRY-RUN: nothing was sent. Re-run with --execute to place these brackets.")
@@ -616,59 +745,18 @@ def submit_command(
             abort=True,
         )
 
-    placed_records: list[dict] = []
-    failure_note: str | None = None
-    try:
-        for bracket in brackets:
-            placed = broker.place_bracket_order(bracket)
-            placed_records.append(
-                {
-                    "client_request_id": bracket.client_request_id,
-                    "entry_order_id": placed.entry_order_id,
-                    "exit_order_ids": list(placed.exit_order_ids),
-                    "qty": bracket.quantity,
-                    "entry": bracket.entry_limit,
-                    "stop": bracket.stop_loss,
-                    "tp": bracket.take_profit,
-                    "ttl": bracket.entry_ttl_days,
-                }
-            )
-            typer.echo(
-                f"placed entry={placed.entry_order_id} "
-                f"exits={','.join(placed.exit_order_ids) or '-'} "
-                f"(request {bracket.client_request_id})"
-            )
-    except BrokerError as exc:
-        failure_note = (
-            f"placement stopped after {len(placed_records)}/{len(brackets)} bracket(s): {exc}"
-        )
-    finally:
-        if placed_records or failure_note:
-            record = build_submission_record(
-                brief_date=brief_date.isoformat(),
-                ticker=wanted,
-                mic=instrument.exchange_mic,
-                uic=instrument.broker_instrument_id,
-                brackets=placed_records,
-                precheck=precheck_summaries,
-                note=failure_note,
-                sizing_currency=account.currency,
-                instrument_currency=instrument.currency,
-                sizing_equity=sizing_equity,
-                fx=fx,
-                precheck_conversion_rate=precheck_conversion_rate,
-            )
-            path = append_submission_record(record)
-            typer.echo(f"submission recorded: {path}")
-
-    token = execution_config_version()
-    typer.echo(f"execution_config_version {token}")
-    if failure_note:
-        placed_ids = [r["entry_order_id"] for r in placed_records]
-        raise _fail(
-            f"{failure_note}\nalready-placed entry orders: {placed_ids or 'none'} — "
-            "reconcile via 'alphalens broker orders' / 'alphalens broker cancel <id>'"
-        )
+    _place_and_record(
+        broker=broker,
+        brackets=brackets,
+        brief_date=brief_date,
+        wanted=wanted,
+        instrument=instrument,
+        precheck_summaries=precheck_summaries,
+        account_currency=account.currency,
+        sizing_equity=sizing_equity,
+        fx=fx,
+        precheck_conversion_rate=precheck_conversion_rate,
+    )
 
 
 @broker_app.command(name="orders")

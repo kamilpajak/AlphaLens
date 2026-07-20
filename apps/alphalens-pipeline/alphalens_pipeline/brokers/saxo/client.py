@@ -541,6 +541,138 @@ class SaxoClient:
         send: Callable[..., requests.Response] = getattr(self._session, method_lower)
         return send(url, **kwargs)
 
+    def _build_write_kwargs(
+        self,
+        method_lower: str,
+        *,
+        json_body: dict[str, Any] | None,
+        params: dict[str, Any] | None,
+        request_id: str,
+    ) -> dict[str, Any]:
+        """Assemble per-attempt request kwargs: fresh-token headers, params, POST body."""
+        headers = {
+            "Authorization": f"Bearer {self._token_provider.get_access_token()}",
+            "Accept": "application/json",
+            "User-Agent": "AlphaLens/0.1",
+            "x-request-id": request_id,
+        }
+        kwargs: dict[str, Any] = {
+            "headers": headers,
+            "params": params,
+            "timeout": self._timeout,
+        }
+        if method_lower == "post":
+            kwargs["json"] = json_body
+        return kwargs
+
+    def _write_net_backoff_or_raise(
+        self,
+        exc: requests.RequestException,
+        *,
+        method: str,
+        path: str,
+        request_id: str,
+        idempotent: bool,
+        net_attempt: int,
+        attempt: int,
+    ) -> int:
+        """Return the transient-net retry backoff for a write, or raise ``SaxoError``.
+
+        Retries only when the verb is idempotent or the request provably never
+        reached Saxo (:meth:`_is_provably_unsent`) AND the network-backoff ladder
+        is not yet exhausted; the caller then advances ``net_attempt``, sleeps,
+        and retries with the SAME ``x-request-id``. Otherwise raises immediately,
+        carrying ``request_id`` so the operator can reconcile before any re-run.
+        """
+        retriable = idempotent or self._is_provably_unsent(exc)
+        if retriable and net_attempt < len(self._NETWORK_ERROR_BACKOFFS):
+            backoff = self._NETWORK_ERROR_BACKOFFS[net_attempt]
+            logger.warning(
+                "saxo %s transient net error (provably unsent, attempt %d): %s; sleeping %ds",
+                method.lower(),
+                attempt + 1,
+                exc,
+                backoff,
+            )
+            return backoff
+        detail = (
+            "network retries exhausted"
+            if retriable
+            else "request may have been sent — NOT retried (never blind-retry a POST)"
+        )
+        raise SaxoError(
+            f"saxo {method.upper()} {path} network failure "
+            f"(x-request-id={request_id}; {detail}): {exc}"
+        ) from exc
+
+    def _server_error_backoff_or_raise(
+        self,
+        resp: requests.Response,
+        *,
+        method: str,
+        path: str,
+        request_id: str,
+        idempotent: bool,
+        attempt: int,
+    ) -> int:
+        """Return the 5xx retry backoff for an idempotent write, or raise for a POST.
+
+        A 5xx after a POST is ambiguous (the order may already be processed), so
+        it raises immediately with the dedup ``x-request-id``; DELETE follows the
+        normal server-error backoff ladder.
+        """
+        if not idempotent:
+            raise SaxoError(
+                f"Saxo {resp.status_code} on {method.upper()} {path} "
+                f"(x-request-id={request_id}; write outcome ambiguous — "
+                f"reconcile via 'broker orders' before re-running): "
+                f"{resp.text[:200]}"
+            )
+        backoff = self._SERVER_ERROR_BACKOFFS[min(attempt, len(self._SERVER_ERROR_BACKOFFS) - 1)]
+        logger.warning(
+            "saxo %d on %s (attempt %d/%d); sleeping %ds",
+            resp.status_code,
+            method,
+            attempt + 1,
+            self._MAX_REQUEST_ATTEMPTS,
+            backoff,
+        )
+        return backoff
+
+    def _raise_for_terminal_write_status(
+        self,
+        resp: requests.Response,
+        *,
+        method: str,
+        path: str,
+        request_id: str,
+        idempotent: bool,
+    ) -> None:
+        """Translate a persisted terminal status into the matching Saxo exception.
+
+        Runs after the retry loop exhausts; returns silently for any status the
+        adapter is expected to translate (4xx/202/success).
+        """
+        if resp.status_code == 401:
+            raise SaxoAuthError(
+                "Saxo 401 persisted after one token refresh — re-authenticate "
+                "with `alphalens broker auth` (OAuth) or regenerate "
+                "SAXO_SIM_TOKEN at developer.saxo (static)"
+            )
+        if resp.status_code == 429:
+            raise SaxoRateLimitError(
+                f"Saxo 429 persisted after {self._MAX_REQUEST_ATTEMPTS} attempts "
+                f"on {method.upper()} {path}"
+            )
+        if not idempotent and 500 <= resp.status_code < 600:
+            raise SaxoError(
+                f"Saxo {resp.status_code} on {method.upper()} {path} "
+                f"(x-request-id={request_id}; write outcome ambiguous — reconcile "
+                f"via 'broker orders' before re-running): {resp.text[:200]}"
+            )
+        if idempotent and 500 <= resp.status_code < 600:
+            raise SaxoError(f"Saxo {resp.status_code} on {method.upper()} {path} persisted")
+
     def _send_write(
         self,
         method: str,
@@ -578,45 +710,24 @@ class SaxoClient:
         resp: requests.Response | None = None
         for attempt in range(self._MAX_REQUEST_ATTEMPTS):
             self._throttle()
-            headers = {
-                "Authorization": f"Bearer {self._token_provider.get_access_token()}",
-                "Accept": "application/json",
-                "User-Agent": "AlphaLens/0.1",
-                "x-request-id": request_id,
-            }
-            kwargs: dict[str, Any] = {
-                "headers": headers,
-                "params": params,
-                "timeout": self._timeout,
-            }
-            if method_lower == "post":
-                kwargs["json"] = json_body
+            kwargs = self._build_write_kwargs(
+                method_lower, json_body=json_body, params=params, request_id=request_id
+            )
             try:
                 resp = self._send_once(method_lower, url, kwargs)
             except self._TRANSIENT_NET_EXCEPTIONS as exc:
-                retriable = idempotent or self._is_provably_unsent(exc)
-                if retriable and net_attempt < len(self._NETWORK_ERROR_BACKOFFS):
-                    backoff = self._NETWORK_ERROR_BACKOFFS[net_attempt]
-                    net_attempt += 1
-                    logger.warning(
-                        "saxo %s transient net error (provably unsent, attempt %d): %s; "
-                        "sleeping %ds",
-                        method_lower,
-                        attempt + 1,
-                        exc,
-                        backoff,
-                    )
-                    self._sleep(backoff)
-                    continue
-                detail = (
-                    "network retries exhausted"
-                    if retriable
-                    else "request may have been sent — NOT retried (never blind-retry a POST)"
+                backoff = self._write_net_backoff_or_raise(
+                    exc,
+                    method=method,
+                    path=path,
+                    request_id=request_id,
+                    idempotent=idempotent,
+                    net_attempt=net_attempt,
+                    attempt=attempt,
                 )
-                raise SaxoError(
-                    f"saxo {method.upper()} {path} network failure "
-                    f"(x-request-id={request_id}; {detail}): {exc}"
-                ) from exc
+                net_attempt += 1
+                self._sleep(backoff)
+                continue
             if resp.status_code == 401 and not auth_retried:
                 logger.warning("saxo 401 on %s — invalidating token and retrying once", method)
                 self._token_provider.invalidate()
@@ -639,49 +750,25 @@ class SaxoClient:
                 self._sleep(backoff)
                 continue
             if 500 <= resp.status_code < 600:
-                if not idempotent:
-                    # The server may or may not have processed the POST —
-                    # ambiguous, so surface immediately with the dedup id.
-                    raise SaxoError(
-                        f"Saxo {resp.status_code} on {method.upper()} {path} "
-                        f"(x-request-id={request_id}; write outcome ambiguous — "
-                        f"reconcile via 'broker orders' before re-running): "
-                        f"{resp.text[:200]}"
-                    )
-                backoff = self._SERVER_ERROR_BACKOFFS[
-                    min(attempt, len(self._SERVER_ERROR_BACKOFFS) - 1)
-                ]
-                logger.warning(
-                    "saxo %d on %s (attempt %d/%d); sleeping %ds",
-                    resp.status_code,
-                    method,
-                    attempt + 1,
-                    self._MAX_REQUEST_ATTEMPTS,
-                    backoff,
+                backoff = self._server_error_backoff_or_raise(
+                    resp,
+                    method=method,
+                    path=path,
+                    request_id=request_id,
+                    idempotent=idempotent,
+                    attempt=attempt,
                 )
                 self._sleep(backoff)
                 continue
             break
         assert resp is not None  # loop either assigned resp or raised
-        if resp.status_code == 401:
-            raise SaxoAuthError(
-                "Saxo 401 persisted after one token refresh — re-authenticate "
-                "with `alphalens broker auth` (OAuth) or regenerate "
-                "SAXO_SIM_TOKEN at developer.saxo (static)"
-            )
-        if resp.status_code == 429:
-            raise SaxoRateLimitError(
-                f"Saxo 429 persisted after {self._MAX_REQUEST_ATTEMPTS} attempts "
-                f"on {method.upper()} {path}"
-            )
-        if not idempotent and 500 <= resp.status_code < 600:
-            raise SaxoError(
-                f"Saxo {resp.status_code} on {method.upper()} {path} "
-                f"(x-request-id={request_id}; write outcome ambiguous — reconcile "
-                f"via 'broker orders' before re-running): {resp.text[:200]}"
-            )
-        if idempotent and 500 <= resp.status_code < 600:
-            raise SaxoError(f"Saxo {resp.status_code} on {method.upper()} {path} persisted")
+        self._raise_for_terminal_write_status(
+            resp,
+            method=method,
+            path=path,
+            request_id=request_id,
+            idempotent=idempotent,
+        )
         return resp
 
     def _request_with_retry(
