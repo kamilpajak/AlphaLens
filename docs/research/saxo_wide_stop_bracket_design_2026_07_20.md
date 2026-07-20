@@ -98,24 +98,33 @@ This matches all three research inputs: the code audit's "honest near-term move 
 ### Phase 1 — Option A (ship)
 
 1. **`brokers/execution.py`** — add policy constant so it flows into `execution_config_version()` automatically (namespace sweep → ADR 0013 R3 forward-only cohort boundary; pre-fix and post-fix rows never pool):
+   > **SHIPPED (PR #874):** the constant is a FRACTION `0.15` (15%) applied to BOTH
+   > children, not the `4.0`% stop-only sketch below. 15% sits in the GAP between
+   > legitimate hand-tight children (~3%, first-fill) and the disaster-stop-as-child
+   > case (20-30%, T4) — it never false-rejects a normal near child and always catches
+   > the architectural mistake, without pretending to mirror Saxo's exact undocumented
+   > ~5% limit (borderline 5-15% children still rely on Saxo's own server-side check).
    ```python
    # Client-side guardrail ONLY — NOT Saxo's real engine bound (which is
    # instrument-specific and undocumented; never hardcode "5%"). Its job is to
    # convert a KNOWN-bad wide disaster stop into a clean local reject, chosen
-   # conservatively INSIDE the empirical safe band. A wide whole-ladder backstop
-   # must be placed standalone (Option B), not as a bracket child.
-   _MAX_STOP_CHILD_DISTANCE_PCT = 4.0
+   # conservatively in the GAP between legitimate ~3% children and 20-30% disaster
+   # stops. A wide whole-ladder backstop must be placed standalone (Option B),
+   # not as a bracket child.
+   _MAX_CHILD_DISTANCE_FRAC = 0.15
    ```
-   Add `"max_stop_child_distance_pct": _MAX_STOP_CHILD_DISTANCE_PCT` to the `config` dict in `execution_config_version()`.
-2. **`brokers/saxo/broker.py::_validate_price_relations` (109-134)** — after the ordering checks, add a child-distance check on the QUANTIZED prices (fires for BUY and SELL symmetrically):
+   Add `"max_child_distance_frac": _MAX_CHILD_DISTANCE_FRAC` to the `config` dict in `execution_config_version()`.
+2. **`brokers/saxo/broker.py::_validate_price_relations` (109-134)** — after the ordering checks, add a child-distance check on the QUANTIZED prices, applied symmetrically to BOTH the stop and take-profit child (fires for BUY and SELL):
    ```python
-   if stop_q is not None:
-       dist_pct = abs(entry_q - stop_q) / entry_q * 100.0
-       if dist_pct > execution_policy._MAX_STOP_CHILD_DISTANCE_PCT:
+   for label, child_q in (("stop", stop_q), ("take-profit", tp_q)):
+       if child_q is None:
+           continue
+       dist_frac = abs(entry_q - child_q) / entry_q
+       if dist_frac > execution_policy._MAX_CHILD_DISTANCE_FRAC:
            raise OrderRejectedError(
-               f"{symbol}: disaster stop {stop_q} is {dist_pct:.1f}% from entry "
-               f"{entry_q}, beyond the {execution_policy._MAX_STOP_CHILD_DISTANCE_PCT}% "
-               "bracket child-distance band — a wide disaster stop must be placed as a "
+               f"{symbol}: {label} child {child_q} is {dist_frac * 100:.1f}% from entry "
+               f"{entry_q}, beyond the {execution_policy._MAX_CHILD_DISTANCE_FRAC * 100:.0f}% "
+               "bracket child-distance guardrail — a wide disaster stop must be placed as a "
                "standalone position-level order, not an OCO child "
                "(saxo_wide_stop_bracket_design_2026_07_20; Saxo TooFarFromEntryOrder)"
            )
@@ -134,7 +143,7 @@ This matches all three research inputs: the code audit's "honest near-term move 
 ## Fail-fast plan (never send a plan that will 400 mid-batch)
 
 - **Where:** `_validate_price_relations` (`broker.py:109-134`), reached from `_build_bracket_body` (690-692) on the quantized `entry_q`/`stop_q`. This is the single choke point both precheck and place traverse, so the guard closes the precheck false-green deterministically and spends no network call.
-- **What it catches:** any bracket whose stop child is beyond `_MAX_STOP_CHILD_DISTANCE_PCT` from its entry — i.e. exactly the S-2026-07-13 case (30.5% / 24.6% / 20.5% all rejected locally).
+- **What it catches:** any bracket whose stop OR take-profit child is beyond `_MAX_CHILD_DISTANCE_FRAC` from its entry — i.e. exactly the S-2026-07-13 case (30.5% / 24.6% / 20.5% all rejected locally).
 - **Message:** names the leg, the measured distance, the band, and directs to the standalone-stop design + the Saxo `TooFarFromEntryOrder` cause (see snippet above). Raised as `OrderRejectedError`, so `_place_and_record`'s `except BrokerError` journals the clean reject with the reconcile hint and the CLI exits non-zero — no partial placement.
 - **Why not hardcode 5%:** the real cap is instrument-specific and undocumented. The constant is an intentionally conservative guardrail INSIDE the safe band whose only job is to turn a known-bad wide stop into a clean reject; it is not a model of Saxo's engine. If a precise number is ever needed, derive minimal distances from `InstrumentDetails.OrderDistances` and discover the max empirically per instrument or via Saxo support.
 - **Optional hardening:** mirror the same check pre-decompose (over `setup_plan.disaster_stop` vs each `tier.limit_price`) so the CLI reports the whole plan unplaceable in one shot rather than tier-by-tier — nice-to-have, not required (the choke-point guard already prevents any 400).
@@ -150,7 +159,7 @@ Phase 1 (Option A):
 4. `test_build_bracket_body_wide_stop_raises_before_any_client_call` — mock `SaxoClient`; assert `place_order`/`precheck_order` are NEVER called when the stop is too far (no network spent).
 5. `test_precheck_wide_stop_also_rejects_locally` — the precheck path raises too → the false-green is closed on both paths.
 6. `test_S_20260713_regression` — reconstruct the exact 3-tier plan (entries 18.08/16.68/15.81, stop 12.57), decompose, and assert all 3 brackets reject locally with the guard message. Anchors the incident.
-7. `test_execution_config_version_bumps_with_new_constant` — adding `_MAX_STOP_CHILD_DISTANCE_PCT` changes the poolability token (forward-only cohort boundary; existing rows never restamped).
+7. `test_execution_config_version_bumps_with_new_constant` — adding `_MAX_CHILD_DISTANCE_FRAC` changes the poolability token (forward-only cohort boundary; existing rows never restamped).
 
 Phase 2 (Option B — only if built):
 8. `test_standalone_stop_body_has_no_orders_array_and_no_entry` — the standalone `StopIfTraded` body carries no `Orders` and no entry, so `TooFarFromEntryOrder` cannot fire.
