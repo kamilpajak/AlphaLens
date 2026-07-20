@@ -458,9 +458,14 @@ class SaxoBroker:
         # rejected placements are a single Placed/Rejected audit row.
         if sub_status == "Rejected":
             return self._terminal_state(order_id, OrderStatus.REJECTED, diagnostics)
-        # (2) FinalFill -> FILLED; fill fields are DOC-SOURCED ONLY (zero
-        # fills existed on the live account), so assert presence rather than
-        # fabricating 0 or full qty.
+        # (2) FinalFill -> FILLED. The fill-field handling here was originally
+        # DOC-SOURCED (zero fills existed on the live account at design time).
+        # It is now verified against a REAL SIM FinalFill row captured
+        # 2026-07-20 (first-fill experiment: FillAmount/FilledAmount==2.0,
+        # ExecutionPrice/AveragePrice==82.09, ExternalReference==client_request_id) —
+        # see tests/brokers/test_saxo_broker.py::TestFinalFillRealFixture, whose
+        # fixture is byte-shaped from that row. Still assert presence rather
+        # than fabricating 0 or full qty so a malformed row surfaces honestly.
         if status == "FinalFill":
             filled = row.get("FilledAmount", row.get("FillAmount"))
             try:

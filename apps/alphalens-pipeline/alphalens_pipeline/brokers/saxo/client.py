@@ -306,7 +306,7 @@ class SaxoClient:
         (ENS is NOT used — hard 14-day cap). ``EntryType=Last`` returns the
         latest activity row per order; the (Status, SubStatus) PAIR on that
         row is what the broker's ``resolve_order_outcome`` classifies.
-        Pagination (``__next``/``__nextPoll``) is followed transparently and
+        Pagination (``__next``) is followed transparently and
         the ``Data`` arrays merged.
         """
         params: dict[str, Any] = {"ClientKey": client_key, "EntryType": entry_type}
@@ -329,7 +329,7 @@ class SaxoClient:
 
     @staticmethod
     def _normalize_next_url(url: str) -> str:
-        """Strip an absolute ``__next``/``__nextPoll`` URL to a relative path.
+        """Strip an absolute ``__next`` URL to a relative path.
 
         Saxo pagination URLs come back absolute WITH an explicit ``:443``
         port (``https://gateway.saxobank.com:443/sim/openapi/...``), which
@@ -347,24 +347,46 @@ class SaxoClient:
         return url
 
     def _get_paged_json(self, path: str, *, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """GET ``path`` and follow ``__next``/``__nextPoll`` pages, merging ``Data``.
+        """GET ``path`` and follow ``__next`` pagination, merging ``Data``.
 
         Normalizes the bare-array body shape into the ``{__count, Data}``
         envelope so callers see ONE shape regardless of endpoint mood.
+
+        Two Saxo cursors look alike but mean different things — only ``__next``
+        is pagination:
+
+        - ``__next`` — pagination of the CURRENT point-in-time snapshot.
+          Followed unconditionally; every additional current-snapshot row
+          arrives this way.
+        - ``__nextPoll`` — a subscription-style LIVE-POLL continuation cursor
+          for FUTURE activities. The audit endpoint
+          (``/cs/v1/audit/orderactivities``) returns it on EVERY response, even
+          when the current page already holds every current row
+          (``__count == len(Data)``). Requesting it immediately returns HTTP
+          429 ("poll too soon"). For a point-in-time read it must NOT be
+          followed — doing so masks as a rate-limit and propagates to
+          ``broker reconcile`` as ``UNRESOLVED(audit_error)`` (LIVE 2026-07-20
+          first-fill experiment). It is still popped below so it never leaks
+          into the returned envelope.
+
+        This is safe for both callers: ``get_order_activities`` (audit) and
+        ``get_closed_positions`` (``/port/v1/closedpositions``) — the latter
+        paginates via ``__next`` if at all, so ignoring ``__nextPoll`` cannot
+        regress it.
         """
         payload = self._get_json(path, params=params)
         if isinstance(payload, list):
             return {"__count": len(payload), "Data": list(payload)}
         merged: dict[str, Any] = dict(payload)
         data: list[Any] = list(merged.get("Data") or [])
-        next_url = merged.pop("__next", None) or merged.pop("__nextPoll", None)
+        next_url = merged.pop("__next", None)
         while next_url:
             page = self._get_json(self._normalize_next_url(str(next_url)))
             if isinstance(page, list):
                 data.extend(page)
                 break
             data.extend(page.get("Data") or [])
-            next_url = page.get("__next") or page.get("__nextPoll")
+            next_url = page.get("__next")
         merged.pop("__next", None)
         merged.pop("__nextPoll", None)
         merged["Data"] = data
