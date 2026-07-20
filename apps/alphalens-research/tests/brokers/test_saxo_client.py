@@ -679,6 +679,69 @@ class TestAuditActivitiesWrapper(unittest.TestCase):
         self.assertEqual([row["LogId"] for row in payload["Data"]], [1, 2])
         self.assertNotIn("__next", payload, "merged payload must not re-expose pagination")
 
+    def test_next_poll_cursor_is_not_followed_single_snapshot(self):
+        # LIVE 2026-07-20 (first-fill experiment): the audit endpoint ALWAYS
+        # returns a __nextPoll cursor — a subscription-style live-poll
+        # continuation for FUTURE activities, NOT pagination of the current
+        # snapshot. It is present even when __count == len(Data) (page 1 is
+        # already complete). Following it immediately returns HTTP 429
+        # ("poll too soon"). The wrapper must take page 1's Data and ignore
+        # __nextPoll entirely — additional current-snapshot rows only ever
+        # arrive via __next. The second queued page proves a wrong follow-up
+        # (it would leak in and blow the single-GET count).
+        session = _RecordingSession(
+            [
+                _FakeResponse(
+                    200,
+                    payload={
+                        "__count": 3,
+                        "Data": [{"LogId": 1}, {"LogId": 2}, {"LogId": 3}],
+                        "__nextPoll": (
+                            "https://gateway.saxobank.com:443/sim/openapi"
+                            "/cs/v1/audit/orderactivities?ClientKey=CK-1&$skiptoken=poll"
+                        ),
+                    },
+                ),
+                _FakeResponse(200, payload={"Data": [{"LogId": 999}]}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        payload = client.get_order_activities("CK-1", order_id="1")
+
+        self.assertEqual(len(session.calls), 1, "__nextPoll must NOT be fetched")
+        self.assertEqual([row["LogId"] for row in payload["Data"]], [1, 2, 3])
+        self.assertNotIn("__nextPoll", payload, "poll cursor must not leak into the envelope")
+
+    def test_next_pagination_still_followed_when_present(self):
+        # Positive control: a genuine __next cursor (pagination of the CURRENT
+        # snapshot) is still followed unconditionally — the fix narrows ONLY
+        # __nextPoll, never __next.
+        next_url = (
+            "https://gateway.saxobank.com:443/sim/openapi"
+            "/cs/v1/audit/orderactivities?ClientKey=CK-1&$skiptoken=page2"
+        )
+        session = _RecordingSession(
+            [
+                _FakeResponse(
+                    200,
+                    payload={
+                        "__count": 4,
+                        "Data": [{"LogId": 1}, {"LogId": 2}],
+                        "__next": next_url,
+                    },
+                ),
+                _FakeResponse(200, payload={"Data": [{"LogId": 3}, {"LogId": 4}]}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        payload = client.get_order_activities("CK-1", order_id="1")
+
+        self.assertEqual(len(session.calls), 2, "__next pagination must be followed")
+        self.assertEqual([row["LogId"] for row in payload["Data"]], [1, 2, 3, 4])
+        self.assertNotIn("__next", payload)
+
 
 class TestClosedPositionsWrapper(unittest.TestCase):
     """P3 wrapper for GET /port/v1/closedpositions (fill cross-check)."""
@@ -707,14 +770,20 @@ class TestClosedPositionsWrapper(unittest.TestCase):
 
         self.assertEqual(payload, {"__count": 0, "Data": []})
 
-    def test_next_poll_url_is_normalized_and_followed(self):
-        next_poll = (
+    def test_next_url_is_normalized_and_followed(self):
+        # closedpositions paginates the CURRENT snapshot via __next (like the
+        # audit endpoint), so a genuine __next cursor is followed. This test
+        # previously mocked __nextPoll here and asserted it was followed — that
+        # encoded the bug (see client._get_paged_json: __nextPoll is a
+        # live-poll continuation cursor, NOT pagination, and following it 429s).
+        # Rewritten to __next to keep pagination coverage without the bug.
+        next_url = (
             "https://gateway.saxobank.com:443/sim/openapi"
             "/port/v1/closedpositions?ClientKey=CK-1&$skiptoken=xyz"
         )
         session = _RecordingSession(
             [
-                _FakeResponse(200, payload={"Data": [{"A": 1}], "__nextPoll": next_poll}),
+                _FakeResponse(200, payload={"Data": [{"A": 1}], "__next": next_url}),
                 _FakeResponse(200, payload={"Data": [{"A": 2}]}),
             ]
         )
@@ -725,6 +794,29 @@ class TestClosedPositionsWrapper(unittest.TestCase):
         self.assertEqual(len(session.calls), 2)
         self.assertNotIn(":443", session.calls[1]["url"])
         self.assertEqual(len(payload["Data"]), 2)
+        self.assertNotIn("__next", payload)
+
+    def test_next_poll_cursor_is_not_followed(self):
+        # A __nextPoll on closedpositions is likewise a live-poll cursor: take
+        # the current page, do not fetch it, strip it from the envelope.
+        next_poll = (
+            "https://gateway.saxobank.com:443/sim/openapi"
+            "/port/v1/closedpositions?ClientKey=CK-1&$skiptoken=poll"
+        )
+        session = _RecordingSession(
+            [
+                _FakeResponse(
+                    200, payload={"__count": 1, "Data": [{"A": 1}], "__nextPoll": next_poll}
+                ),
+                _FakeResponse(200, payload={"Data": [{"A": 2}]}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        payload = client.get_closed_positions("CK-1")
+
+        self.assertEqual(len(session.calls), 1, "__nextPoll must NOT be fetched")
+        self.assertEqual(len(payload["Data"]), 1)
         self.assertNotIn("__nextPoll", payload)
 
 

@@ -563,6 +563,70 @@ class TestResolveOrderOutcome(unittest.TestCase):
             broker.resolve_order_outcome("5039272886")
 
 
+# Byte-shaped from the REAL SIM FinalFill audit row captured 2026-07-20
+# (first-fill experiment, entry order 5039287596 —
+# ~/.alphalens/broker_orders/experiments/first_fill_2026-07-20/11_entry_activities_all.json,
+# LogId 249519481). Retires the "doc-sourced only" caveat: this is the exact
+# on-the-wire shape (FillAmount/FilledAmount==2.0, ExecutionPrice/AveragePrice
+# ==82.09, ExternalReference==client_request_id, SubStatus="Confirmed").
+_ROW_FINAL_FILL_REAL = {
+    "AccountId": "22494807",
+    "ActivityTime": "2026-07-20T14:09:05.447000Z",
+    "Amount": 2.0,
+    "AssetType": "Stock",
+    "AveragePrice": 82.09,
+    "BuySell": "Buy",
+    "ClientId": "22494807",
+    "CorrelationKey": "1c3ce5d3-db0d-4d16-8cdd-51df8fb79254",
+    "Duration": {"DurationType": "GoodTillDate", "ExpirationDate": "2026-07-21T00:00:00.000000Z"},
+    "ExecutionPrice": 82.09,
+    "ExternalReference": "87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d",
+    "FillAmount": 2.0,
+    "FilledAmount": 2.0,
+    "HandledBy": "22494807",
+    "LogId": "249519481",
+    "OrderId": "5039287596",
+    "OrderRelation": "IfDoneMaster",
+    "OrderType": "Limit",
+    "PositionId": "5026930126",
+    "Price": 82.86,
+    "RelatedOrders": ["5039287597", "5039287598"],
+    "Status": "FinalFill",
+    "SubStatus": "Confirmed",
+    "Uic": 307,
+    "UserId": "22494807",
+}
+
+
+class TestFinalFillRealFixture(unittest.TestCase):
+    """G5: the FinalFill classifier against a REAL SIM fill row (not doc-sourced)."""
+
+    def _resolve(self, row: dict[str, Any]) -> Any:
+        client = _StubSaxoClient()
+        order_id = str(row["OrderId"])
+        client.activities = {order_id: [row]}  # type: ignore[attr-defined]
+        return SaxoBroker(client).resolve_order_outcome(order_id)  # type: ignore[arg-type]
+
+    def test_real_final_fill_row_classifies_filled_with_parsed_quantity(self):
+        state = self._resolve(_ROW_FINAL_FILL_REAL)
+        self.assertEqual(state.status, OrderStatus.FILLED)
+        self.assertEqual(state.order_id, "5039287596")
+        # FilledAmount (cumulative) is the parsed fill quantity on the real row.
+        self.assertEqual(state.filled_quantity, 2.0)
+        self.assertIn("FinalFill/Confirmed", state.raw_status)
+        # LogId of the real row is surfaced in the diagnostics string.
+        self.assertIn("249519481", state.raw_status)
+
+    def test_real_final_fill_string_typed_fill_fields_still_parse(self):
+        # Defensive: if Saxo ever serializes FilledAmount as a string, float()
+        # in _classify_activity_row still yields the quantity (not UNRESOLVED).
+        row = dict(_ROW_FINAL_FILL_REAL)
+        row["FilledAmount"] = "2.0"
+        state = self._resolve(row)
+        self.assertEqual(state.status, OrderStatus.FILLED)
+        self.assertEqual(state.filled_quantity, 2.0)
+
+
 class TestFillCrossCheckCapability(unittest.TestCase):
     """Raw-row capabilities feeding the reconcile FILLED cross-check."""
 
