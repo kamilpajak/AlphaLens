@@ -90,10 +90,17 @@ def classify_with_llm(row: dict, client) -> dict:
         if text.startswith("json"):
             text = text[4:].strip()
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError as e:
         print(f"    WARN json parse failed: {e}\n    raw: {text[:200]}")
         return {"primary_reason": "parse_error", "raw": text[:500]}
+    # Empty-content guard: a valid JSON body with no classification (e.g. `{}` or
+    # a blank primary_reason) would otherwise fold silently into the "unknown"
+    # tally via r.get("primary_reason", "unknown"). Bucket it visibly instead so
+    # a degenerate LLM reply is distinguishable from a genuine "unknown" verdict.
+    if not (isinstance(parsed, dict) and str(parsed.get("primary_reason", "")).strip()):
+        return {"primary_reason": "empty_content", "raw": text[:500]}
+    return parsed
 
 
 def main() -> None:
