@@ -528,60 +528,78 @@ def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
             logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
             return False
 
-        placed_records: list[dict[str, Any]] = []
-        planned_stop_lines: list[dict[str, Any]] = []
+        def _journal_tier(bracket: Any, placed: Any) -> None:
+            # Journal each tier IMMEDIATELY after its place_bracket_order — NOT
+            # batched after the whole loop (HIGH-2). A crash mid-loop then leaves
+            # the pick already joined to submissions.jsonl (at most a partial
+            # ladder), so the pick-drain does not re-place the full set on restart.
+            append_submission_record(
+                build_submission_record(
+                    brief_date=pick.date.isoformat(),
+                    ticker=ticker,
+                    mic=instrument.exchange_mic,
+                    uic=instrument.broker_instrument_id,
+                    brackets=[
+                        {
+                            "client_request_id": bracket.client_request_id,
+                            "entry_order_id": placed.entry_order_id,
+                            "exit_order_ids": list(placed.exit_order_ids),
+                            "qty": bracket.quantity,
+                            "entry": bracket.entry_limit,
+                            "stop": bracket.stop_loss,
+                            "tp": bracket.take_profit,
+                            "ttl": bracket.entry_ttl_days,
+                        }
+                    ],
+                    note=None,
+                    sizing_currency=account.currency,
+                    instrument_currency=instrument.currency,
+                    sizing_equity=account.total_value,
+                    fx=fx,
+                )
+            )
+            _append_standalone_stop_journal(
+                {
+                    "kind": "planned",
+                    "client_request_id": bracket.client_request_id,
+                    "uic": int(instrument.broker_instrument_id),
+                    "side": _DISASTER_STOP_SIDE,
+                    "stop_price": placement.disaster_stop_price,
+                }
+            )
+
+        placed_count = 0
         failure_note: str | None = None
         try:
             for tier in placement.tiers:
                 bracket = tier.bracket
                 placed = broker.place_bracket_order(bracket)
-                placed_records.append(
-                    {
-                        "client_request_id": bracket.client_request_id,
-                        "entry_order_id": placed.entry_order_id,
-                        "exit_order_ids": list(placed.exit_order_ids),
-                        "qty": bracket.quantity,
-                        "entry": bracket.entry_limit,
-                        "stop": bracket.stop_loss,
-                        "tp": bracket.take_profit,
-                        "ttl": bracket.entry_ttl_days,
-                    }
-                )
-                planned_stop_lines.append(
-                    {
-                        "kind": "planned",
-                        "client_request_id": bracket.client_request_id,
-                        "uic": int(instrument.broker_instrument_id),
-                        "side": _DISASTER_STOP_SIDE,
-                        "stop_price": placement.disaster_stop_price,
-                    }
-                )
+                _journal_tier(bracket, placed)
+                placed_count += 1
         except BrokerError as exc:
             failure_note = (
-                f"placement stopped after {len(placed_records)}/{len(placement.tiers)} "
-                f"bracket(s): {exc}"
+                f"placement stopped after {placed_count}/{len(placement.tiers)} bracket(s): {exc}"
             )
-        finally:
-            if placed_records or failure_note:
-                record = build_submission_record(
+            # Journal a note-only record so the failure is traced (and, when
+            # nothing placed, the pick is not silently retried forever).
+            append_submission_record(
+                build_submission_record(
                     brief_date=pick.date.isoformat(),
                     ticker=ticker,
                     mic=instrument.exchange_mic,
                     uic=instrument.broker_instrument_id,
-                    brackets=placed_records,
+                    brackets=[],
                     note=failure_note,
                     sizing_currency=account.currency,
                     instrument_currency=instrument.currency,
                     sizing_equity=account.total_value,
                     fx=fx,
                 )
-                append_submission_record(record)
-                for line in planned_stop_lines:
-                    _append_standalone_stop_journal(line)
+            )
 
         if failure_note:
             logger.warning("place_pick %s: %s", ticker, failure_note)
-        return bool(placed_records)
+        return placed_count > 0
 
     return _place
 

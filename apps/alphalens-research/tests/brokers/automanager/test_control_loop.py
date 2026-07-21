@@ -416,6 +416,120 @@ class TestStandaloneStopPlacerRecovery(unittest.TestCase):
             self.assertEqual(broker.calls, [(307, "SELL", 2.0, 79.0, stop_rid)])
 
 
+class _CrashError(Exception):
+    """A hard, non-BrokerError crash (models a process death / uncaught bug)."""
+
+
+class TestPlacePickPerTierJournaling(unittest.TestCase):
+    """HIGH-2: each tier's submission record is journaled IMMEDIATELY after its
+    place_bracket_order, not batched after the whole loop. A crash mid-loop then
+    leaves the pick already joined to submissions.jsonl (at most a partial
+    ladder), so the pick-drain does NOT re-place the full set on restart."""
+
+    def _run(self) -> Any:
+        import contextlib
+
+        submitted: list[dict[str, Any]] = []
+
+        class _Placed:
+            def __init__(self, oid: str) -> None:
+                self.entry_order_id = oid
+                self.exit_order_ids: tuple[str, ...] = ()
+
+        def _bracket(rid: str) -> Any:
+            return type(
+                "B",
+                (),
+                {
+                    "client_request_id": rid,
+                    "quantity": 1,
+                    "entry_limit": 10.0,
+                    "stop_loss": 9.0,
+                    "take_profit": 12.0,
+                    "entry_ttl_days": 1,
+                },
+            )()
+
+        placement = type(
+            "P",
+            (),
+            {
+                "tiers": [
+                    type("T", (), {"bracket": _bracket("rid-1")})(),
+                    type("T", (), {"bracket": _bracket("rid-2")})(),
+                ],
+                "disaster_stop_price": 9.0,
+            },
+        )()
+        account = type("A", (), {"total_value": 100000.0, "currency": "USD"})()
+        instrument = type(
+            "I", (), {"currency": "USD", "broker_instrument_id": 307, "exchange_mic": "XNYS"}
+        )()
+        candidate = type("C", (), {"ticker": "KO", "trade_setup": object()})()
+
+        class _Broker:
+            def __init__(self) -> None:
+                self.calls = 0
+                self.journal_at_second_tier: list[dict[str, Any]] | None = None
+
+            def get_account(self) -> Any:
+                return account
+
+            def get_positions(self) -> list:
+                return []
+
+            def place_bracket_order(self, _bracket: Any) -> Any:
+                self.calls += 1
+                if self.calls == 1:
+                    return _Placed("E-1")
+                # tier 2: capture the journal state as it stood the instant BEFORE
+                # this tier is attempted, then die hard (uncaught).
+                self.journal_at_second_tier = list(submitted)
+                raise _CrashError("process dies mid-ladder")
+
+        broker = _Broker()
+        pkg = "alphalens_pipeline.brokers"
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.submission_log.append_submission_record", submitted.append))
+            p(mock.patch(f"{pkg}.submission_log.iter_submission_records", lambda _p: []))
+            p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b: []))
+            p(mock.patch(f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()))
+            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: instrument))
+            p(
+                mock.patch(
+                    f"{pkg}.automanager.placement_planner.classify", lambda *_a, **_k: placement
+                )
+            )
+            p(
+                mock.patch(
+                    "alphalens_pipeline.paper.brief_loader.load_brief",
+                    lambda *_a, **_k: [candidate],
+                )
+            )
+            p(
+                mock.patch(
+                    "alphalens_pipeline.paper.sizing.compute_setup_plan", lambda **_k: object()
+                )
+            )
+            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            placer = cl._make_place_pick(broker)  # type: ignore[arg-type]
+            with self.assertRaises(_CrashError):
+                placer(_pick("KO", "2026-07-20"))
+        return broker
+
+    def test_first_tier_journaled_before_second_tier_attempted(self) -> None:
+        broker = self._run()
+        snapshot = broker.journal_at_second_tier
+        self.assertTrue(snapshot, "tier 1 must be journaled BEFORE the second tier is attempted")
+        keys = cl._submitted_pick_keys(snapshot or [])
+        self.assertIn(
+            ("KO", "2026-07-20"),
+            keys,
+            "the pick-drain join must see the pick as submitted after tier 1",
+        )
+
+
 def _raise_broker_error(*_a: Any, **_k: Any) -> Any:
     raise BrokerError("boom")
 
