@@ -4,12 +4,12 @@ Pure decision function: one reconcile verdict + a per-tick BrokerView (the
 control loop assembles it from the broker + the standalone-stop journal) -> the
 single Action to take. No I/O — the control loop executes the returned Action.
 
-MVP action set (design memo Components §9):
-  entry FILLED, position open, no protective stop yet
-      -> PlaceStandaloneStop(realized filled qty, journaled disaster stop)
+MVP action set (design memo Components §9). Stop PLACEMENT is owned by the
+broker-state protection pass (``reconcile_protection``); ``advance`` only routes
+the verdict-level terminal/alert cases:
   round-trip closed / CANCELLED / REJECTED / EXPIRED -> CancelRemaining
   PAST-TTL / divergence / UNRESOLVED -> AlertOnly(reason) (never auto-cancel)
-  else (still WORKING, or already protected) -> NoOp
+  else (still WORKING) -> NoOp
 
 Realized-qty rule (Risk 2): the stop MUST size to the REALIZED entry fill
 (verdict.details['filled_quantity']), NEVER planned verdict.qty — a planned-qty
@@ -50,13 +50,6 @@ _TERMINAL_NON_FILLED = frozenset(
 
 # Exit side for a long position's protective legs.
 _SIDE = "SELL"
-
-
-@dataclass(frozen=True)
-class DisasterStop:
-    uic: int
-    side: str  # "SELL" for a long position's protective stop
-    stop_price: float
 
 
 def _default_next_gen(_qty: float) -> int:
@@ -105,17 +98,12 @@ class PlannedExit:
 
 @dataclass(frozen=True)
 class BrokerView:
-    protected_request_ids: frozenset[str]  # entries already carrying a live standalone stop
-    disaster_stops: Mapping[
-        str, DisasterStop
-    ]  # journaled disaster stop per entry client_request_id
+    """The verdict-level view ``advance`` routes over. Protection is NO LONGER
+    journal-derived (saxo-oco memo §10 kills Bug A), so the ``protected_request_ids``
+    / ``disaster_stops`` fields are gone; only ``working_children`` remains, for the
+    terminal / round-trip ``CancelRemaining`` sweep of leftover exit legs."""
+
     working_children: Mapping[str, tuple[str, ...]]  # request_id -> still-working exit order ids
-
-
-@dataclass(frozen=True)
-class PlaceStandaloneStop:
-    qty: float
-    stop_price: float
 
 
 @dataclass(frozen=True)
@@ -179,15 +167,7 @@ class CancelSellLegs:
     reason: str
 
 
-Action = (
-    PlaceStop
-    | UpgradeToOco
-    | CancelSellLegs
-    | PlaceStandaloneStop
-    | CancelRemaining
-    | AlertOnly
-    | NoOp
-)
+Action = PlaceStop | UpgradeToOco | CancelSellLegs | CancelRemaining | AlertOnly | NoOp
 
 # A SELL leg that PROTECTS the downside vs one that is UPSIDE only (memo §6).
 STOP_TYPES = frozenset({"StopIfTraded", "Stop", "TrailingStopIfTraded"})
@@ -417,9 +397,7 @@ __all__ = [
     "BrokerView",
     "CancelRemaining",
     "CancelSellLegs",
-    "DisasterStop",
     "NoOp",
-    "PlaceStandaloneStop",
     "PlaceStop",
     "PlannedExit",
     "ProtectionView",

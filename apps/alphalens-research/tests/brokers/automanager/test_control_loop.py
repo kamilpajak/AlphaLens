@@ -76,11 +76,7 @@ def _verdict(**over: Any) -> ReconcileVerdict:
 
 
 def _view() -> BrokerView:
-    return BrokerView(
-        protected_request_ids=frozenset(),
-        disaster_stops={},
-        working_children={_RID: ("T-1",)},
-    )
+    return BrokerView(working_children={_RID: ("T-1",)})
 
 
 def _empty_pview() -> ProtectionView:

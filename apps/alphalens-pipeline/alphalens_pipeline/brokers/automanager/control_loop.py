@@ -758,9 +758,9 @@ def _make_position_view_builder(
     by the terminal / round-trip ``CancelRemaining`` sweep.
 
     No journal line confers protection any more (saxo-oco memo §7): the
-    disaster-stop / protected halves are gone (Bug A), so those BrokerView fields
-    are supplied empty. Protection is derived purely from live broker state by
-    the protection pass (``build_protection_view`` + ``reconcile_protection``)."""
+    disaster-stop / protected BrokerView halves are gone (Bug A). Protection is
+    derived purely from live broker state by the protection pass
+    (``build_protection_view`` + ``reconcile_protection``)."""
 
     def _build(_broker: Broker, records: list[Mapping[str, Any]]) -> BrokerView:
         from alphalens_pipeline.brokers.contract import OrderStatus
@@ -784,11 +784,7 @@ def _make_position_view_builder(
                 if exits:
                     working_children[str(request_id)] = exits
 
-        return BrokerView(
-            protected_request_ids=frozenset(),  # protection is broker-state truth, not journal
-            disaster_stops={},
-            working_children=working_children,
-        )
+        return BrokerView(working_children=working_children)
 
     return _build
 

@@ -11,12 +11,12 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
+from alphalens_pipeline.brokers.automanager import position_manager as pm
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AlertOnly,
     BrokerView,
     CancelRemaining,
     CancelSellLegs,
-    DisasterStop,
     NoOp,
     PlaceStop,
     PlannedExit,
@@ -41,11 +41,7 @@ _ENTRY = "5039287596"
 
 
 def _view(**over: Any) -> BrokerView:
-    base: dict[str, Any] = {
-        "protected_request_ids": frozenset(),
-        "disaster_stops": {_RID: DisasterStop(uic=307, side="SELL", stop_price=79.0)},
-        "working_children": {},
-    }
+    base: dict[str, Any] = {"working_children": {}}
     base.update(over)
     return BrokerView(**base)
 
@@ -117,7 +113,7 @@ class TestAdvanceDecisionTable(unittest.TestCase):
     def test_filled_open_is_noop_protection_pass_owns_it(self) -> None:
         # A FILLED-open entry is handled entirely by the broker-state protection
         # pass (reconcile_protection); advance no longer places a journal-derived
-        # stop here, so it returns NoOp regardless of the folded disaster stop.
+        # stop here, so it returns NoOp.
         v = self._verdict(
             status="FILLED",
             verdict="FILLED",
@@ -125,7 +121,16 @@ class TestAdvanceDecisionTable(unittest.TestCase):
             details={"client_request_id": _RID, "filled_quantity": 2.0},
         )
         self.assertIsInstance(advance(v, _view()), NoOp)
-        self.assertIsInstance(advance(v, _view(disaster_stops={})), NoOp)
+
+    def test_legacy_journal_protection_symbols_removed(self) -> None:
+        # Straggler cleanup (saxo-oco memo §10): protection is broker-state truth,
+        # so the journal-derived DisasterStop / PlaceStandaloneStop are gone and
+        # BrokerView carries only working_children (no protected_request_ids /
+        # disaster_stops).
+        self.assertFalse(hasattr(pm, "DisasterStop"))
+        self.assertFalse(hasattr(pm, "PlaceStandaloneStop"))
+        field_names = {f.name for f in __import__("dataclasses").fields(BrokerView)}
+        self.assertEqual(field_names, {"working_children"})
 
 
 # --------------------------------------------------------------------------
