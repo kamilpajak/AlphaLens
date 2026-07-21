@@ -33,6 +33,7 @@ from alphalens_pipeline.brokers.contract import (
     BrokerRateLimitError,
     InstrumentNotFoundError,
     InstrumentRef,
+    OrderRejectedError,
     OrderStatus,
     Position,
 )
@@ -179,7 +180,7 @@ class _StubSaxoClient:
 
     def precheck_order(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         self._maybe_fail()
-        return 200, {"PreCheckResult": "Ok"}
+        return getattr(self, "precheck_response", (200, {"PreCheckResult": "Ok"}))
 
     def place_order(self, body: dict[str, Any], *, request_id: str) -> tuple[int, dict[str, Any]]:
         self._maybe_fail()
@@ -670,6 +671,147 @@ class TestFillCrossCheckCapability(unittest.TestCase):
         broker = SaxoBroker(client)  # type: ignore[arg-type]
         rows = broker.get_closed_position_rows()
         self.assertEqual([row["OpeningExternalReferenceId"] for row in rows], ["rid-1", "rid-2"])
+
+
+# ---------------------------------------------------------------------------
+# Stage-1 adapter enrichment: OrderState +5 fields, error_code, read filters.
+# (saxo-oco design memo §4.1 / §4.2)
+# ---------------------------------------------------------------------------
+
+
+def _position_row(*, uic: int, amount: float, position_id: str, symbol: str) -> dict[str, Any]:
+    return {
+        "PositionId": position_id,
+        "PositionBase": {
+            "Amount": amount,
+            "OpenPrice": 50.0,
+            "Uic": uic,
+            "AssetType": "Stock",
+        },
+        "DisplayAndFormat": {"Symbol": symbol},
+    }
+
+
+class TestToOrderStateSurfacesFields(unittest.TestCase):
+    """`_to_order_state` maps the 5 new per-uic accounting fields (memo §4.1)."""
+
+    def test_open_order_row_surfaces_uic_side_type_amount_reference(self):
+        row = {
+            "OrderId": "1",
+            "Uic": 43070,
+            "BuySell": "Sell",
+            "OpenOrderType": "StopIfTraded",
+            "Amount": 46.0,
+            "ExternalReference": "crid-stop-0",
+            "Status": "Working",
+            "FilledAmount": 0.0,
+        }
+        state = _make_broker()._to_order_state(row)
+        self.assertEqual(state.uic, 43070)
+        self.assertEqual(state.side, "SELL")
+        self.assertEqual(state.order_type, "StopIfTraded")
+        self.assertEqual(state.amount, 46.0)
+        self.assertEqual(state.external_reference, "crid-stop-0")
+
+
+class TestPrecheckSetsErrorCode(unittest.TestCase):
+    """Rejection carries the verbatim Saxo ErrorCode (structured, not parsed)."""
+
+    def test_precheck_rejection_sets_error_code_verbatim(self):
+        client = _StubSaxoClient()
+        client.precheck_response = (  # type: ignore[attr-defined]
+            200,
+            {
+                "PreCheckResult": "Rejected",
+                "ErrorInfo": {
+                    "ErrorCode": "SellOrdersAlreadyExistForOwnedContracts",
+                    "Message": "already exist",
+                },
+            },
+        )
+        broker = SaxoBroker(client)  # type: ignore[arg-type]
+        with self.assertRaises(OrderRejectedError) as ctx:
+            broker._precheck_or_raise({"Uic": 1}, label="test")
+        self.assertEqual(ctx.exception.error_code, "SellOrdersAlreadyExistForOwnedContracts")
+
+
+class TestGetLongPositionsFiltersFlatAndShort(unittest.TestCase):
+    """Only strictly-long (qty > _QTY_EPS) positions survive (memo §4.1)."""
+
+    def test_flat_and_short_positions_dropped(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(uic=43070, amount=46.0, position_id="p-long", symbol="BIO:xnys"),
+                _position_row(uic=200, amount=0.0, position_id="p-flat", symbol="FLAT:xnys"),
+                _position_row(uic=212, amount=-5.0, position_id="p-short", symbol="AAPL:xnas"),
+            ]
+        }
+        longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
+        self.assertEqual([p.position_id for p in longs], ["p-long"])
+        self.assertEqual(longs[0].quantity, 46.0)
+
+
+class TestListWorkingSellOrders(unittest.TestCase):
+    """Only SELL orders in WORKING / PARTIALLY_FILLED survive (memo §4.1)."""
+
+    def test_only_working_sell_legs_returned(self):
+        client = _StubSaxoClient()
+        client._orders = {  # type: ignore[attr-defined]
+            "s1": {
+                "OrderId": "s1",
+                "BuySell": "Sell",
+                "OpenOrderType": "StopIfTraded",
+                "Amount": 46.0,
+                "Uic": 43070,
+                "Status": "Working",
+                "FillAmount": 0.0,
+            },
+            "s2": {
+                "OrderId": "s2",
+                "BuySell": "Sell",
+                "OpenOrderType": "Limit",
+                "Amount": 20.0,
+                "Uic": 43070,
+                "Status": "Working",
+                "FillAmount": 5.0,
+            },
+            "b1": {
+                "OrderId": "b1",
+                "BuySell": "Buy",
+                "OpenOrderType": "Limit",
+                "Amount": 10.0,
+                "Uic": 211,
+                "Status": "Working",
+                "FillAmount": 0.0,
+            },
+        }
+        legs = SaxoBroker(client).list_working_sell_orders()  # type: ignore[arg-type]
+        self.assertEqual({o.order_id for o in legs}, {"s1", "s2"})
+        self.assertEqual(
+            {o.status for o in legs},
+            {OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED},
+        )
+
+
+class TestGetPositionsByUicNetted(unittest.TestCase):
+    """Execute-time re-check reads the NETTED owned qty per uic (memo §4.1)."""
+
+    def test_nets_multiple_lots_on_one_uic(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(uic=43070, amount=30.0, position_id="lot-1", symbol="BIO:xnys"),
+                _position_row(uic=43070, amount=16.0, position_id="lot-2", symbol="BIO:xnys"),
+                _position_row(uic=212, amount=-5.0, position_id="other", symbol="AAPL:xnas"),
+            ]
+        }
+        netted = SaxoBroker(client).get_positions_by_uic(43070)  # type: ignore[arg-type]
+        self.assertEqual(netted.quantity, 46.0)
+
+    def test_absent_uic_returns_zero_qty_sentinel(self):
+        netted = _make_broker().get_positions_by_uic(999999)
+        self.assertEqual(netted.quantity, 0.0)
 
 
 class TestSaxoBrokerConformance(BrokerConformanceMixin, unittest.TestCase):

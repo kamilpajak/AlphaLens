@@ -43,6 +43,8 @@ from alphalens_pipeline.brokers.contract import (
     OrderStatus,
     PlacedOrder,
     Position,
+    _is_sell_orders_already_exist,
+    _is_too_far_from_entry,
 )
 
 
@@ -223,6 +225,27 @@ class TestErrorTaxonomy(unittest.TestCase):
         """Catching one leaf must not swallow a sibling leaf."""
         self.assertNotIsInstance(BrokerAuthError("x"), BrokerRateLimitError)
         self.assertNotIsInstance(InstrumentNotFoundError("x"), BrokerAuthError)
+
+
+class TestErrorClassifiersPositiveControl(unittest.TestCase):
+    """Structured error-code classifiers (memo §4.2) — positive control so the
+    classifier cannot rot to always-False."""
+
+    def test_sell_orders_already_exist_matches_only_its_code(self):
+        matching = OrderRejectedError(
+            "rejected", error_code="SellOrdersAlreadyExistForOwnedContracts"
+        )
+        self.assertTrue(_is_sell_orders_already_exist(matching))
+        self.assertFalse(_is_sell_orders_already_exist(BrokerError("boom")))
+        self.assertFalse(
+            _is_sell_orders_already_exist(OrderRejectedError("x", error_code="OtherCode"))
+        )
+
+    def test_too_far_from_entry_matches_only_its_code(self):
+        matching = OrderRejectedError("rejected", error_code="TooFarFromEntryOrder")
+        self.assertTrue(_is_too_far_from_entry(matching))
+        self.assertFalse(_is_too_far_from_entry(BrokerError("boom")))
+        self.assertFalse(_is_too_far_from_entry(OrderRejectedError("x", error_code="OtherCode")))
 
 
 class BrokerConformanceMixin:
