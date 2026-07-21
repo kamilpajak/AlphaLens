@@ -85,7 +85,17 @@ def advance(verdict: ReconcileVerdict, broker_view: BrokerView) -> Action:
         return _advance_filled(verdict, broker_view, request_id)
     if verdict.status in _TERMINAL_NON_FILLED:
         return CancelRemaining()
-    return NoOp()  # WORKING / PARTIALLY_FILLED, not past TTL
+    if verdict.status == OrderStatus.PARTIALLY_FILLED.value:
+        # Risk 2: the entry took a partial fill, so the position is open with NO
+        # standalone stop yet (the MVP places the stop only on a FULL fill;
+        # resize-on-partial is phase B). Alert rather than sit silent — this is
+        # an unprotected live position.
+        filled = verdict.details.get("filled_quantity")
+        return AlertOnly(
+            f"{verdict.ticker}: entry PARTIALLY_FILLED (order {verdict.entry_order_id}, "
+            f"filled {filled!r}) — position open with no standalone stop yet"
+        )
+    return NoOp()  # still WORKING, not past TTL
 
 
 def _advance_filled(verdict: ReconcileVerdict, broker_view: BrokerView, request_id: str) -> Action:

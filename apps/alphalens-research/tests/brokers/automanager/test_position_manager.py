@@ -115,6 +115,20 @@ class TestAdvanceDecisionTable(unittest.TestCase):
     def test_working_is_noop(self) -> None:
         self.assertIsInstance(advance(self._verdict(), _view()), NoOp)
 
+    def test_partially_filled_alerts_never_silent(self) -> None:
+        # Risk 2: a partial entry fill leaves the position with NO standalone
+        # stop yet. Surface it as an alert rather than a silent NoOp.
+        v = self._verdict(
+            status="PARTIALLY_FILLED",
+            verdict="PARTIALLY_FILLED",
+            details={"client_request_id": _RID, "filled_quantity": 1.0},
+        )
+        action = advance(v, _view())
+        self.assertIsInstance(action, AlertOnly)
+        assert isinstance(action, AlertOnly)
+        self.assertIn("KO", action.reason)
+        self.assertIn("partial", action.reason.lower())
+
     def test_divergence_alerts_never_cancels(self) -> None:
         v = self._verdict(
             status="WORKING",
