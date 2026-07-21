@@ -418,16 +418,6 @@ def _fold_standalone_stop_journal(
     return disaster_stops, frozenset(protected)
 
 
-def _exit_stop_ref(entry_crid: str, gen: int) -> str:
-    """Deterministic gen-stamped x-request-id for a protective STOP leg (memo §4.5)."""
-    return f"{entry_crid}-stop-{gen}"
-
-
-def _exit_tp_ref(entry_crid: str, gen: int) -> str:
-    """Deterministic gen-stamped x-request-id for a take-profit leg (rung 2, memo §4.5)."""
-    return f"{entry_crid}-tp-{gen}"
-
-
 def _read_persisted_gen(uic: int) -> tuple[int, float | None]:
     """Latest ``(gen, qty)`` recorded for a uic in the append-only gen journal;
     ``(_INITIAL_GEN, None)`` when the uic has never been sized (append-only, so

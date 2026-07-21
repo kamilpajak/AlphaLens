@@ -20,6 +20,8 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     BrokerView,
     DisasterStop,
     PlannedExit,
+    _exit_stop_ref,
+    _exit_tp_ref,
 )
 from alphalens_pipeline.brokers.contract import BrokerError
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
@@ -849,10 +851,10 @@ class TestGenStampedRefChangesOnResize(unittest.TestCase):
     per uic so it survives a daemon restart."""
 
     def test_ref_helpers_are_gen_stamped(self) -> None:
-        self.assertEqual(cl._exit_stop_ref("crid-0", 0), "crid-0-stop-0")
-        self.assertEqual(cl._exit_tp_ref("crid-0", 0), "crid-0-tp-0")
-        self.assertEqual(cl._exit_stop_ref("crid-0", 2), "crid-0-stop-2")
-        self.assertEqual(cl._exit_tp_ref("crid-0", 3), "crid-0-tp-3")
+        self.assertEqual(_exit_stop_ref("crid-0", 0), "crid-0-stop-0")
+        self.assertEqual(_exit_tp_ref("crid-0", 0), "crid-0-tp-0")
+        self.assertEqual(_exit_stop_ref("crid-0", 2), "crid-0-stop-2")
+        self.assertEqual(_exit_tp_ref("crid-0", 3), "crid-0-tp-3")
 
     def test_resize_increments_gen_same_size_retry_keeps_it(self) -> None:
         with TemporaryDirectory() as tmp:
