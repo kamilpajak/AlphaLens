@@ -16,6 +16,7 @@ from typing import Any
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager.picks import Pick
 from alphalens_pipeline.brokers.automanager.position_manager import BrokerView, DisasterStop
+from alphalens_pipeline.brokers.contract import BrokerError
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
 _RID = "rid-KO"
@@ -234,6 +235,28 @@ class TestPickSubmissionJoin(unittest.TestCase):
             self.assertEqual(place_calls, [pick])
             self.assertEqual(report.picks_placed, 1)
 
+    def test_duplicate_armed_pick_in_one_tick_is_placed_once(self) -> None:
+        # MEDIUM: already_submitted starts empty (no prior journal record) but the
+        # first placement of a (ticker, brief_date) must suppress a second identical
+        # armed line later in the SAME tick.
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            p1 = _pick("KO", "2026-07-20")
+            p2 = _pick("KO", "2026-07-20")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=place_calls,
+                stop_calls=[],
+                alerts=[],
+                picks=[p1, p2],
+            )
+            deps = cl.LoopDeps(**{**deps.__dict__, "read_records": list})
+            report = cl.run_once(deps)
+            self.assertEqual(place_calls, [p1], "the duplicate armed line must be skipped")
+            self.assertEqual(report.picks_placed, 1)
+
 
 class TestStandaloneStopJournalFold(unittest.TestCase):
     """I2: standalone-stop protection is correlated by the entry's
@@ -286,6 +309,91 @@ class TestStandaloneStopJournalFold(unittest.TestCase):
         disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
         self.assertEqual(set(disaster_stops), {"rid-A"})
         self.assertEqual(protected, frozenset())
+
+
+def _raise_broker_error(*_a: Any, **_k: Any) -> Any:
+    raise BrokerError("boom")
+
+
+class TestBrokerErrorBoundary(unittest.TestCase):
+    """CRITICAL: a persistent BrokerError outside entry-placement must never
+    crash the tick. One bad position/action is alerted and skipped so the daemon
+    keeps reconciling and protecting every OTHER position."""
+
+    def test_verdicts_fn_broker_error_does_not_crash_tick(self) -> None:
+        with TemporaryDirectory() as d:
+            alerts: list = []
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                stop_calls=[],
+                alerts=alerts,
+            )
+            deps = cl.LoopDeps(**{**deps.__dict__, "verdicts_fn": _raise_broker_error})
+            report = cl.run_once(deps)  # must NOT propagate
+            self.assertIsInstance(report, cl.TickReport)
+            self.assertTrue(alerts, "reconcile failure must alert")
+
+    def test_build_position_view_broker_error_does_not_crash_tick(self) -> None:
+        with TemporaryDirectory() as d:
+            alerts: list = []
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[_verdict(status="CANCELLED", verdict="CANCELLED")],
+                place_calls=[],
+                stop_calls=[],
+                alerts=alerts,
+            )
+            deps = cl.LoopDeps(**{**deps.__dict__, "build_position_view": _raise_broker_error})
+            report = cl.run_once(deps)
+            self.assertIsInstance(report, cl.TickReport)
+            self.assertTrue(alerts)
+
+    def test_one_action_broker_error_still_processes_other_verdicts(self) -> None:
+        with TemporaryDirectory() as d:
+            broker = _StubBroker()
+            alerts: list = []
+            # verdict A: FILLED -> PlaceStandaloneStop, whose placer raises.
+            # verdict B: CANCELLED -> CancelRemaining, must still cancel T-1.
+            a = _verdict(
+                status="FILLED",
+                verdict="FILLED",
+                note="position open, exit orders working",
+                details={"client_request_id": _RID, "filled_quantity": 2.0},
+            )
+            b = _verdict(status="CANCELLED", verdict="CANCELLED")
+            deps = _deps(
+                broker,
+                kill_file=Path(d) / "KILL",
+                verdicts=[a, b],
+                place_calls=[],
+                stop_calls=[],
+                alerts=alerts,
+            )
+            deps = cl.LoopDeps(**{**deps.__dict__, "place_standalone_stop": _raise_broker_error})
+            report = cl.run_once(deps)  # must NOT propagate
+            self.assertEqual(broker.cancelled, ["T-1"], "the other verdict is still processed")
+            self.assertTrue(alerts, "the failed action must alert")
+            self.assertEqual(report.stops_placed, 0)
+
+    def test_orphan_sweep_broker_error_does_not_crash_tick(self) -> None:
+        with TemporaryDirectory() as d:
+            alerts: list = []
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                stop_calls=[],
+                alerts=alerts,
+            )
+            deps = cl.LoopDeps(**{**deps.__dict__, "sweep_orphans_fn": _raise_broker_error})
+            report = cl.run_once(deps, sweep_orphans=True)
+            self.assertIsInstance(report, cl.TickReport)
+            self.assertTrue(alerts)
 
 
 class TestKillFileGate(unittest.TestCase):

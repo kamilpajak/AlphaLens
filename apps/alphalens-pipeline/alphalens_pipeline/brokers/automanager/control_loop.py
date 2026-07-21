@@ -27,6 +27,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlaceStandaloneStop,
     advance,
 )
+from alphalens_pipeline.brokers.contract import BrokerError
 
 if TYPE_CHECKING:
     from alphalens_pipeline.brokers.contract import Broker
@@ -118,30 +119,63 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
         )
 
     if sweep_orphans:
-        for orphan in deps.sweep_orphans_fn(deps.broker):
+        # A BrokerError here (list_open_orders etc.) must not crash the tick — the
+        # sweep is a diagnostic read; alert and carry on to reconcile.
+        try:
+            orphans = deps.sweep_orphans_fn(deps.broker)
+        except BrokerError as exc:
+            deps.alert(f"orphan-sweep failed (broker error) — skipped this tick: {exc}")
+            report.alerts += 1
+            orphans = []
+        for orphan in orphans:
             deps.alert(f"orphan (placed but never journaled): {orphan}")
             report.orphans += 1
 
     if not kill and getattr(chain, "alive", False):
         # Drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
-        # step 4). Read the journal ONCE before the drain; place_pick appends new
-        # lines during the loop, but a pick placed this tick is caught next tick
-        # (the read below re-reads fresh state).
+        # step 4). Read the journal ONCE before the drain; a pick placed earlier in
+        # THIS tick is added to already_submitted below so a duplicate armed line
+        # later in the same tick is skipped (an out-of-tick placement is caught by
+        # the next tick's fresh read).
         already_submitted = _submitted_pick_keys(deps.read_records())
         for pick in deps.iter_picks():
-            if _pick_key(pick) in already_submitted:
+            key = _pick_key(pick)
+            if key in already_submitted:
                 continue
             if deps.place_pick(pick):
                 report.picks_placed += 1
+                already_submitted.add(key)
 
     records = deps.read_records()
-    verdicts = deps.verdicts_fn(records, deps.broker)
+    # reconcile up-front calls list_open_orders / get_open_position_references /
+    # get_closed_position_rows; a persistent BrokerError here must not crash the
+    # daemon (systemd Restart=on-failure would then permanently give up, leaving
+    # every position unreconciled). Alert and skip verdict processing this tick.
+    try:
+        verdicts = deps.verdicts_fn(records, deps.broker)
+    except BrokerError as exc:
+        deps.alert(f"reconcile failed (broker error) — verdicts skipped this tick: {exc}")
+        report.alerts += 1
+        return report
     report.verdict_count = len(verdicts)
-    position_view = deps.build_position_view(deps.broker, records)
+    try:
+        position_view = deps.build_position_view(deps.broker, records)
+    except BrokerError as exc:
+        deps.alert(f"position-view build failed (broker error) — actions skipped this tick: {exc}")
+        report.alerts += 1
+        return report
     for verdict in verdicts:
         action = advance(verdict, position_view)
         report.actions.append((verdict.ticker, type(action).__name__))
-        _execute_action(deps, verdict, action, position_view, kill=kill, report=report)
+        # One position's broker call (cancel / standalone-stop) failing must not
+        # take down the tick — alert and skip only that verdict.
+        try:
+            _execute_action(deps, verdict, action, position_view, kill=kill, report=report)
+        except BrokerError as exc:
+            deps.alert(
+                f"{verdict.ticker}: {type(action).__name__} failed (broker error) — skipped: {exc}"
+            )
+            report.alerts += 1
     return report
 
 
