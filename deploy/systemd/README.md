@@ -782,3 +782,168 @@ docker compose -f deploy/docker/django-prod/docker-compose.yaml exec postgres \
 
 **Done.** The edge mirror is now running decoupled, resilient to compute
 timeouts, and monitored for staleness via the Prometheus alert.
+
+## Saxo auto-manager (SIM) — VPS deploy runbook
+
+This section complements the inline install comments already in
+`alphalens-broker-manager.service`.
+
+**Target:** the always-on SIM auto-manager (`alphalens broker manage`) + the OAuth keep-alive timer, on the VPS (`jacoren@vault`, host-venv systemd-user — same pattern as `alphalens-edgar-detect`).
+**Scope:** SIM only. The `$100` live escape is **out of scope** (needs a separate ADR + `ALPHALENS_BROKER_LIVE=1` + `$100` caps; the structural SIM rail stays untouched).
+**Merged:** PR #876 (`9005b5eb`). Design: [`docs/research/saxo_automanager_mvp_design_2026_07_21.md`](../../docs/research/saxo_automanager_mvp_design_2026_07_21.md).
+**Golden rule:** deploy INERT first (no `ALLOW_ORDERS`) → smoke → arm ONE SIM test pick → only then go live.
+
+### 0. Prereqs (on the VPS)
+
+```bash
+ssh jacoren@vault
+cd ~/AlphaLens
+git pull --ff-only origin main          # must include 9005b5eb (#876)
+uv sync                                  # host venv picks up brokers/automanager + the CLI
+.venv/bin/alphalens broker manage --help # sanity: the subcommand exists
+loginctl enable-linger "$USER"           # units survive logout (idempotent)
+```
+
+Confirm the runtime dirs exist (created on first use, but the metrics dir needs write):
+```bash
+mkdir -p ~/.alphalens/broker_orders
+sudo install -d -o "$USER" -g "$USER" /var/lib/node_exporter/textfile   # heartbeat gauge target
+```
+
+### 1. Env file — `/etc/alphalens/env`
+
+Both units read `EnvironmentFile=/etc/alphalens/env` (fail loud if missing). Add the Saxo OAuth + Telegram keys. **Leave `ALPHALENS_BROKER_ALLOW_ORDERS` OUT for now** — the daemon then runs inert (reconcile + read only, places nothing).
+
+```bash
+sudo tee -a /etc/alphalens/env >/dev/null <<'EOF'
+# --- Saxo SIM auto-manager ---
+SAXO_ENV=sim
+SAXO_APP_KEY=<sim app key>
+SAXO_APP_SECRET=<sim app secret>
+SAXO_AUTH_REDIRECT_URL=http://localhost:8765/callback   # MUST byte-match the SIM portal registration
+# TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID likely already present (literature scans) — verify
+# ALPHALENS_BROKER_ALLOW_ORDERS=1   <-- add ONLY at go-live (§6)
+EOF
+sudo chmod 600 /etc/alphalens/env
+```
+
+### 2. One-time attended OAuth **on the VPS** (headless → SSH port-forward)
+
+The token store must live **on the VPS** (`~/.alphalens/saxo_auth/token_store.json`), and the redirect goes to `localhost:8765` — so run `broker auth` ON the VPS while forwarding that port from your laptop.
+
+**Laptop terminal A** — open the tunnel (leave it running):
+```bash
+ssh -L 8765:localhost:8765 jacoren@vault
+```
+**In that same SSH session (on the VPS)** — start the auth listener, no browser:
+```bash
+cd ~/AlphaLens && set -a && source /etc/alphalens/env && set +a
+.venv/bin/alphalens broker auth --no-browser
+# prints: "open this URL to authorize (SIM credentials): https://sim.logonvalidation.net/authorize?..."
+# and waits up to 300s on http://localhost:8765/callback
+```
+**Laptop browser** — open the printed authorize URL, log in with SIM credentials. Saxo redirects to `http://localhost:8765/callback` → the SSH tunnel forwards it to the VPS listener → `broker auth` catches it and writes the token store **on the VPS**. You should see `authorized — OAuth session established`.
+
+Verify (on the VPS):
+```bash
+.venv/bin/alphalens broker auth --status   # access valid, refresh ALIVE
+.venv/bin/alphalens broker account         # SIM EUR account snapshot
+.venv/bin/alphalens broker positions       # should be flat before first run
+```
+
+> The refresh chain dies after ~40 min without a refresh. Do §3 (install the keep-alive timer) **right after** this so the chain stays alive; otherwise re-run §2.
+
+### 3. Install the systemd units
+
+```bash
+cd ~/AlphaLens
+cp deploy/systemd/alphalens-broker-manager.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-saxo-refresh.service   ~/.config/systemd/user/
+cp deploy/systemd/alphalens-saxo-refresh.timer     ~/.config/systemd/user/
+systemctl --user daemon-reload
+
+# Keep-alive FIRST (holds the OAuth chain during idle stretches, ~20min < 40min window):
+systemctl --user enable --now alphalens-saxo-refresh.timer
+systemctl --user list-timers | grep saxo-refresh      # next fire scheduled
+journalctl --user -u alphalens-saxo-refresh.service -n 20   # first --refresh ran clean
+```
+
+**Do NOT enable `alphalens-broker-manager.service` yet** — smoke it manually first (§5).
+
+**Single-refresher invariant:** only THIS VPS may refresh the token. Do not run a concurrent `alphalens broker` CLI that refreshes on another host sharing the token store — they burn each other's rotation chains.
+
+### 4. Prometheus + metrics wiring
+
+- The per-tick **heartbeat gauge** writes to `/var/lib/node_exporter/textfile` (via `ALPHALENS_TEXTFILE_DIR`, set in the unit) — node_exporter's textfile collector scrapes it.
+- The alert rules (`AlphalensJobStale{job="broker-manager"}` / `{job="saxo-refresh"}` + the heartbeat rule) are in `deploy/monitoring/prometheus/rules/alphalens.yaml` in the repo, **but the live Prometheus rules are NOT repo-mounted** — hand-sync the new rule blocks into the live rules file and reload:
+```bash
+# copy the new broker-manager + saxo-refresh rule blocks into the live rules file, then:
+sudo promtool check rules /path/to/live/alphalens.rules.yml
+sudo kill -HUP "$(pgrep -x prometheus)"     # or systemctl reload prometheus
+```
+- Verify after go-live: the heartbeat metric appears in node_exporter's `/metrics`, and `AlphalensJobStale` is not firing.
+
+### 5. Smoke — INERT (no placement), then a single tick
+
+With `ALLOW_ORDERS` still unset, a manual tick reconciles + reads only (places nothing):
+```bash
+cd ~/AlphaLens && set -a && source /etc/alphalens/env && set +a
+.venv/bin/alphalens broker manage --once
+# expect: kill-gate ok, session alive, orphan-sweep (start), 0 armed picks, reconcile runs, no crash, exits 0
+touch ~/.alphalens/broker_orders/KILL && .venv/bin/alphalens broker manage --once   # confirm kill path skips placement
+rm ~/.alphalens/broker_orders/KILL
+```
+
+### 6. Arm ONE SIM test pick + go live
+
+Pick a ticker from a recent local brief (needs `~/.alphalens/thematic_briefs/<date>.parquet` on the VPS; a cheap ticker like `S` sizes to whole shares). US market should be open for a marketable tier to fill.
+
+```bash
+# 6.1 arm it (attended CLI — this is the human "pick"):
+.venv/bin/alphalens broker arm S --date <YYYY-MM-DD>
+cat ~/.alphalens/broker_orders/picks.jsonl        # one armed line
+
+# 6.2 turn on placement (the arm) + restart-scoped go-live:
+sudo sed -i 's/^# ALPHALENS_BROKER_ALLOW_ORDERS=1/ALPHALENS_BROKER_ALLOW_ORDERS=1/' /etc/alphalens/env
+#   (or add the line if not present)
+
+# 6.3 one supervised tick to place the in-band subset + standalone stop:
+set -a && source /etc/alphalens/env && set +a
+.venv/bin/alphalens broker manage --once
+.venv/bin/alphalens broker orders      # entry bracket + (after fill) standalone StopIfTraded
+.venv/bin/alphalens broker reconcile --json   # FILLED once filled; realized_r when closed
+```
+
+Watch it on **saxotrader.com/sim** (same SIM login). Confirm the entry + standalone disaster stop appear and match the brief geometry.
+
+**Go live (daemon):**
+```bash
+systemctl --user enable --now alphalens-broker-manager.service
+journalctl --user -u alphalens-broker-manager.service -f      # per-tick loop
+```
+
+### 7. Day-2 operations
+
+| Action | Command |
+|---|---|
+| **Emergency stop (instant)** | `touch ~/.alphalens/broker_orders/KILL` — the loop stops placing, still reconciles + cancels |
+| Resume after kill | `rm ~/.alphalens/broker_orders/KILL` |
+| **Disarm placement** (softer than kill) | comment `ALPHALENS_BROKER_ALLOW_ORDERS` in `/etc/alphalens/env` → `systemctl --user restart alphalens-broker-manager.service` (runs inert) |
+| Arm a new pick | `.venv/bin/alphalens broker arm TICKER --date YYYY-MM-DD` (daemon picks it up next tick, joined to `submissions.jsonl` so it places once) |
+| Inspect | `journalctl --user -u alphalens-broker-manager.service -f` |
+| State files | picks: `~/.alphalens/broker_orders/picks.jsonl`; placements: `~/.alphalens/broker_orders/submissions.jsonl` (both append-only) |
+| Stop the daemon | `systemctl --user disable --now alphalens-broker-manager.service` |
+| Full flat check | `.venv/bin/alphalens broker positions` + `... orders` |
+
+**OAuth outage caveat:** if the VPS is down (or the keep-alive stops) for **>40 min**, the refresh chain dies → a `_chain_lost` Telegram alert fires and the daemon stops placing. Recovery = re-do §2 (attended browser login via SSH-forward). This is the one un-automatable step.
+
+### 8. Safety recap
+
+- **SIM-only is structural** — `SaxoClient` refuses any non-SIM base URL; live is unreachable in code.
+- Layers before any real POST each tick: kill-file → chain alive → `ALLOW_ORDERS=1` → `MAX_OPEN` / portfolio-gross / daily-loss caps.
+- The disaster stop is ALWAYS a standalone `StopIfTraded` placed after the entry fills, sized to realized qty (a ~30–60 s unprotected window per tick — acceptable on SIM).
+- **Deferred (known issues, see the PR):** far-TP tranches are reported operator-managed (NOT placed); no ratchet / resize-on-partial / 42-session time-stop / streaming; alert debounce absent (persistent alerts repeat each tick).
+
+### 9. `$100` live escape — NOT in this runbook
+
+Requires: a new ADR lifting the structural rail, a separate `ALPHALENS_BROKER_LIVE=1` env (never a runtime flag), sizing equity `$1000` with `~$100` max per-pick loss, `MAX_OPEN=1`, and shrinking the unprotected window (wire the `StreamingFillSource` first). Do NOT reuse the SIM env/units for live.
