@@ -207,5 +207,37 @@ class TestManageCommandRegistered(unittest.TestCase):
         self.assertIn("manage", names)
 
 
+class TestHeartbeatEmitter(unittest.TestCase):
+    def test_default_emit_heartbeat_writes_gauge_to_textfile_dir(self) -> None:
+        import os
+        from tempfile import TemporaryDirectory
+
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        with TemporaryDirectory() as d:
+            old = os.environ.get("ALPHALENS_TEXTFILE_DIR")
+            os.environ["ALPHALENS_TEXTFILE_DIR"] = d
+            try:
+                cl._default_emit_heartbeat()
+            finally:
+                if old is None:
+                    os.environ.pop("ALPHALENS_TEXTFILE_DIR", None)
+                else:
+                    os.environ["ALPHALENS_TEXTFILE_DIR"] = old
+            written = Path(d) / "alphalens_domain_broker-manager.prom"
+            self.assertTrue(written.is_file())
+            body = written.read_text()
+            self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", body)
+            self.assertIn('job="broker-manager"', body)
+
+    def test_run_daemon_uses_default_heartbeat_signature(self) -> None:
+        import inspect
+
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        sig = inspect.signature(cl.run_daemon)
+        self.assertIs(sig.parameters["heartbeat_fn"].default, cl._default_emit_heartbeat)
+
+
 if __name__ == "__main__":
     unittest.main()

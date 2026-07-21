@@ -52,6 +52,13 @@ ACTIVE_JOBS = (
     "feedback-shadow-returns",
     "form4-incremental",
     "grouped-daily-topup",
+    # Saxo auto-manager idle OAuth keep-alive oneshot (ADR 0013 T6/T7); wires
+    # the standard ExecStopPost emit-job-metrics hook like the other timers.
+    # The broker-manager daemon itself stays OUT of this enum — it is a
+    # Type=simple daemon with its own distinct heartbeat alert family
+    # (AlphalensBrokerManagerHeartbeatStale/Missing), not the shared
+    # alphalens_job_* last_success pattern.
+    "saxo-refresh",
 )
 
 

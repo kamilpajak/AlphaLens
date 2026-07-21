@@ -655,3 +655,52 @@ groups:
         annotations:
           summary: "Form-4 daily-incremental hit SEC fetch errors on consecutive runs"
           description: "alphalens_form4_transient_errors stayed > 0 across the last two nightly form4-incremental runs (a clean run emits 0 and clears this). A persistent SEC daily-index / submissions / XML 403 or transient failure is dropping some dates' filings while rows_written may remain non-zero from other dates — so AlphalensForm4IncrementalDark and AlphalensJobStale will NOT surface it. Check `journalctl --user -u alphalens-form4-incremental.service` and the SEC rate coordinator / per-IP 403 load."
+
+      # broker-manager is a Type=simple daemon: ExecStopPost fires only on
+      # crash/restart, so health = the per-tick heartbeat gauge the control loop
+      # writes each ~45s tick. 300s = 5min ~ 6-7 missed ticks.
+      - alert: AlphalensBrokerManagerHeartbeatStale
+        expr: time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"} > 300
+        for: 2m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "broker-manager heartbeat stale > 5m (expected ~45s ticks)"
+          description: "Last control-loop tick was {{ $value | humanizeDuration }} ago — the SIM auto-manager may be wedged or stopped."
+
+      - alert: AlphalensBrokerManagerHeartbeatMissing
+        expr: absent(alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "broker-manager heartbeat metric missing"
+          description: "No heartbeat gauge for broker-manager. The daemon has not ticked since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Clears after the first tick."
+
+      # saxo-refresh is a timer-driven oneshot (~20min keep-alive), so the
+      # standard last_success clock applies. 3600s = 1h = 3x the 20min cadence.
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="saxo-refresh"} > 3600
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: saxo-refresh
+        annotations:
+          summary: "saxo-refresh stale > 1h (expected 20min cadence)"
+          description: "Last successful OAuth keep-alive was {{ $value | humanizeDuration }} ago — the refresh chain will die at the 40min window; re-run `alphalens broker auth`."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="saxo-refresh"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: saxo-refresh
+        annotations:
+          summary: "saxo-refresh success metric missing"
+          description: "No success metric for saxo-refresh. The keep-alive timer has not fired since metrics were enabled, or the scrape is broken. Clears after the first refresh."

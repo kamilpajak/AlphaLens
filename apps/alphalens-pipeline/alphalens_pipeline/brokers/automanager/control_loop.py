@@ -72,7 +72,18 @@ def _always() -> bool:
 
 
 def _default_emit_heartbeat() -> None:
-    """Placeholder — Task 13 replaces this with the real textfile emitter."""
+    """Write the per-tick Prometheus heartbeat gauge. A Type=simple daemon rarely
+    triggers ExecStopPost, so the emit-job-metrics last_success clock is the
+    wrong health signal — this gauge (watched by AlphalensBrokerManagerHeartbeatStale)
+    is. Best-effort: a textfile-dir hiccup must never crash the loop."""
+    import time as _time
+
+    from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+    try:
+        emit_domain_metrics("broker-manager", {HEARTBEAT_METRIC: int(_time.time())})
+    except OSError:
+        logger.warning("broker-manager heartbeat emit failed", exc_info=True)
 
 
 def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:

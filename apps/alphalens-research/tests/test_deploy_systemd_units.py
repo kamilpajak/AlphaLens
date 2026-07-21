@@ -1160,5 +1160,45 @@ class TestSaxoRefreshUnit(unittest.TestCase):
         self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
 
 
+class TestBrokerManagerHealthRules(unittest.TestCase):
+    RULES = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
+
+    def setUp(self) -> None:
+        self.text = self.RULES.read_text()
+
+    def test_broker_manager_heartbeat_stale_rule(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"time\(\)\s*-\s*alphalens_broker_manager_last_tick_timestamp_seconds"
+                r"\{job=\"broker-manager\"\}\s*>\s*300\b"
+            ),
+            "Missing AlphalensBrokerManagerHeartbeatStale (>300s).",
+        )
+
+    def test_broker_manager_heartbeat_missing_rule(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"absent\(alphalens_broker_manager_last_tick_timestamp_seconds\{job=\"broker-manager\"\}\)"
+            ),
+        )
+
+    def test_saxo_refresh_job_stale_and_missing_rules(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"time\(\)\s*-\s*alphalens_job_last_success_timestamp_seconds"
+                r"\{job=\"saxo-refresh\"\}\s*>\s*3600\b"
+            ),
+        )
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"absent\(alphalens_job_last_success_timestamp_seconds\{job=\"saxo-refresh\"\}\)"
+            ),
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
