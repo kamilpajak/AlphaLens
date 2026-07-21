@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager.picks import Pick
@@ -309,6 +310,110 @@ class TestStandaloneStopJournalFold(unittest.TestCase):
         disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
         self.assertEqual(set(disaster_stops), {"rid-A"})
         self.assertEqual(protected, frozenset())
+
+    def test_intent_line_marks_position_protected_in_flight(self) -> None:
+        # HIGH-1: a crash between the standalone-stop POST and its "placed" journal
+        # write leaves ONLY the "intent" line. It must confer protection so the
+        # fold sees the position as protected/in-flight and advance does NOT
+        # re-issue a second PlaceStandaloneStop.
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "rid-A",
+                "uic": 307,
+                "side": "SELL",
+                "stop_price": 79.0,
+            },
+            {
+                "kind": "intent",
+                "client_request_id": "rid-A",
+                "stop_request_id": "rid-A-stop",
+                "uic": 307,
+                "side": "SELL",
+                "qty": 2.0,
+                "stop_price": 79.0,
+            },
+        ]
+        disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
+        self.assertEqual(set(disaster_stops), {"rid-A"})
+        self.assertEqual(protected, frozenset({"rid-A"}))
+
+    def test_advance_returns_noop_when_only_intent_line_present(self) -> None:
+        # End-to-end of the crash window: with only planned + intent lines, a FILLED
+        # verdict for that entry must yield NoOp, never a duplicate PlaceStandaloneStop.
+        from alphalens_pipeline.brokers.automanager.position_manager import (
+            BrokerView as PmBrokerView,
+        )
+        from alphalens_pipeline.brokers.automanager.position_manager import (
+            NoOp,
+            advance,
+        )
+
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": _RID,
+                "uic": 307,
+                "side": "SELL",
+                "stop_price": 79.0,
+            },
+            {
+                "kind": "intent",
+                "client_request_id": _RID,
+                "stop_request_id": f"{_RID}-stop",
+                "uic": 307,
+                "side": "SELL",
+                "qty": 2.0,
+                "stop_price": 79.0,
+            },
+        ]
+        disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
+        view = PmBrokerView(
+            protected_request_ids=protected,
+            disaster_stops=disaster_stops,
+            working_children={},
+        )
+        v = _verdict(
+            status="FILLED",
+            verdict="FILLED",
+            note="position open, exit orders working",
+            details={"client_request_id": _RID, "filled_quantity": 2.0},
+        )
+        self.assertIsInstance(advance(v, view), NoOp)
+
+
+class TestStandaloneStopPlacerRecovery(unittest.TestCase):
+    """HIGH-1: the placer journals an 'intent' line (with a DETERMINISTIC stop
+    request_id derived from the entry request_id) BEFORE the POST, so a crash in
+    the place-then-journal window is recoverable and cannot double-place."""
+
+    def test_intent_journaled_before_post_with_deterministic_stop_request_id(self) -> None:
+        import json
+
+        class _StubStopBroker:
+            def __init__(self) -> None:
+                self.calls: list = []
+
+            def place_standalone_stop(self, uic, side, qty, stop_price, request_id=None):
+                self.calls.append((uic, side, qty, stop_price, request_id))
+                return type("P", (), {"entry_order_id": "S-9", "exit_order_ids": ()})()
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _StubStopBroker()
+            placer = cl._make_standalone_stop_placer(broker)  # type: ignore[arg-type]
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                placer(307, "SELL", 2.0, 79.0, _RID)
+            written = [
+                json.loads(line) for line in journal.read_text().splitlines() if line.strip()
+            ]
+            kinds = [rec["kind"] for rec in written]
+            self.assertEqual(kinds, ["intent", "placed"], "intent must be journaled BEFORE placed")
+            stop_rid = f"{_RID}-stop"
+            self.assertEqual(written[0]["client_request_id"], _RID)
+            self.assertEqual(written[0]["stop_request_id"], stop_rid)
+            # the deterministic stop request_id is passed into the broker (dedup)
+            self.assertEqual(broker.calls, [(307, "SELL", 2.0, 79.0, stop_rid)])
 
 
 def _raise_broker_error(*_a: Any, **_k: Any) -> Any:

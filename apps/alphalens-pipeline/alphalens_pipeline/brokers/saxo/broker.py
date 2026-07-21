@@ -382,7 +382,7 @@ class SaxoBroker:
             )
 
     def place_standalone_stop(
-        self, uic: int, side: str, qty: float, stop_price: float
+        self, uic: int, side: str, qty: float, stop_price: float, request_id: str | None = None
     ) -> PlacedOrder:
         """Place ONE Option-B standalone StopIfTraded (no bracket parent).
 
@@ -392,13 +392,18 @@ class SaxoBroker:
         precheck, then ONE POST with x-request-id = client_request_id. No Orders
         array + no parent => relation=StandAlone, no TooFarFromEntryOrder
         (SIM-validated 2026-07-20, OrderId 5039296412). exit_order_ids is empty.
+
+        ``request_id`` is the x-request-id / ExternalReference. Pass a DETERMINISTIC
+        value (the auto-manager derives it from the entry client_request_id) so a
+        crash-window re-POST hits Saxo's 15 s x-request-id dedup instead of placing
+        a second live stop; omit it (None) to mint a fresh uuid4 per call.
         """
         if os.environ.get(ALLOW_ORDERS_ENV) != "1":
             raise BrokerCapabilityError(
                 f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
                 "SIM order submission (design memo §P2 safety rail). No order was sent."
             )
-        client_request_id = str(uuid.uuid4())
+        client_request_id = request_id or str(uuid.uuid4())
         with _translate_saxo_errors():
             account_key = self._resolve_account_key()
             body = self._build_standalone_stop_body(

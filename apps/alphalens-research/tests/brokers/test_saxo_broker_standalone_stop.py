@@ -112,6 +112,19 @@ class TestStandaloneStopBody(unittest.TestCase):
         uuid.UUID(request_id)
         self.assertEqual(body["ExternalReference"], request_id)
 
+    def test_explicit_request_id_is_used_as_x_request_id_and_external_reference(self):
+        # HIGH-1: a deterministic caller-supplied request_id lets a crash-window
+        # re-POST hit Saxo's 15 s x-request-id dedup instead of minting a fresh
+        # uuid and placing a SECOND live stop.
+        broker, stub = _make(_StubStopClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            broker.place_standalone_stop(
+                uic=307, side="SELL", qty=2, stop_price=61.36, request_id="rid-KO-stop"
+            )
+        body, request_id = stub.place_calls[0]
+        self.assertEqual(request_id, "rid-KO-stop")
+        self.assertEqual(body["ExternalReference"], "rid-KO-stop")
+
 
 class TestStandaloneStopSafety(unittest.TestCase):
     def test_allow_orders_gate_blocks_before_any_client_call(self):

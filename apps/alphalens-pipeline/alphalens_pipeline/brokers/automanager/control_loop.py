@@ -349,9 +349,15 @@ def _fold_standalone_stop_journal(
     Protection is correlated by the entry's client_request_id — NOT its Uic. Two
     entries sharing one Uic each require their OWN placed stop; a Uic-keyed
     correlation would mark both protected the moment the first one's stop posts,
-    leaving the second entry silently unprotected. A "placed" line without a
-    client_request_id (a legacy Uic-only line) therefore confers no protection.
-    Pure — no I/O; malformed lines are skipped."""
+    leaving the second entry silently unprotected. A "placed" / "intent" line
+    without a client_request_id (a legacy Uic-only line) therefore confers no
+    protection.
+
+    An "intent" line (written BEFORE the POST) confers protection just like
+    "placed": a crash between the POST and the "placed" write leaves only the
+    "intent" line, and treating it as protected/in-flight stops advance from
+    re-issuing a SECOND standalone stop on restart. Pure — no I/O; malformed
+    lines are skipped."""
     disaster_stops: dict[str, DisasterStop] = {}
     protected: set[str] = set()
     for line in lines:
@@ -363,7 +369,7 @@ def _fold_standalone_stop_journal(
                     side=str(line["side"]),
                     stop_price=float(line["stop_price"]),
                 )
-            elif kind == "placed" and line.get("client_request_id"):
+            elif kind in {"intent", "placed"} and line.get("client_request_id"):
                 protected.add(str(line["client_request_id"]))
         except (KeyError, TypeError, ValueError):
             continue
@@ -625,22 +631,46 @@ def _make_position_view_builder(
     return _build
 
 
+def _standalone_stop_request_id(entry_request_id: str) -> str:
+    """Deterministic stop x-request-id derived from the entry client_request_id.
+
+    Deterministic (not uuid4) so a crash-window re-POST reuses the SAME
+    x-request-id and hits Saxo's 15 s dedup instead of placing a second stop."""
+    return f"{entry_request_id}-stop"
+
+
 def _make_standalone_stop_placer(broker: Broker) -> Callable[[int, str, float, float, str], None]:
-    """Adapt SaxoBroker.place_standalone_stop, then write the "placed" half of
-    the out-of-band standalone-stop journal — read back by
-    _make_position_view_builder on the NEXT tick to mark THIS entry's
+    """Adapt SaxoBroker.place_standalone_stop with a recoverable place-then-journal.
+
+    Journals an "intent" line (carrying the entry client_request_id + the
+    DETERMINISTIC stop request_id) BEFORE the POST, then the "placed" line after.
+    Both are read back by _make_position_view_builder to mark THIS entry's
     client_request_id protected (correlated by client_request_id, not Uic, so an
-    entry sharing the Uic is not falsely marked protected). The placement and its
-    journal record are NOT transactional (a crash between the two is exactly the
-    orphan window orphan_sweeper flags), matching _make_place_pick's
-    placement->journal order."""
+    entry sharing the Uic is not falsely marked protected). If the daemon crashes
+    between the POST and the "placed" write, the "intent" line already marks the
+    position protected/in-flight, so advance will not re-issue; and the
+    deterministic request_id makes a within-window re-POST idempotent under Saxo's
+    x-request-id dedup rather than a duplicate live stop."""
 
     def _place(uic: int, side: str, qty: float, stop_price: float, request_id: str) -> None:
-        placed = broker.place_standalone_stop(uic, side, qty, stop_price)
+        stop_request_id = _standalone_stop_request_id(request_id)
+        _append_standalone_stop_journal(
+            {
+                "kind": "intent",
+                "client_request_id": request_id,
+                "stop_request_id": stop_request_id,
+                "uic": uic,
+                "side": side,
+                "qty": qty,
+                "stop_price": stop_price,
+            }
+        )
+        placed = broker.place_standalone_stop(uic, side, qty, stop_price, stop_request_id)
         _append_standalone_stop_journal(
             {
                 "kind": "placed",
                 "client_request_id": request_id,
+                "stop_request_id": stop_request_id,
                 "uic": uic,
                 "side": side,
                 "qty": qty,
