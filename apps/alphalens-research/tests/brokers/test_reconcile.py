@@ -20,8 +20,10 @@ from typing import Any
 
 from alphalens_pipeline.brokers.contract import (
     BrokerError,
+    InstrumentRef,
     OrderState,
     OrderStatus,
+    Position,
 )
 from alphalens_pipeline.brokers.reconcile import (
     REASON_AUDIT_ERROR,
@@ -31,6 +33,7 @@ from alphalens_pipeline.brokers.reconcile import (
     SupportsOrderResolution,
     _effective_settlement_rate,
     compute_realized_r,
+    filled_sum_matches_owned,
     has_failures,
     reconcile_brackets,
     summarize,
@@ -131,11 +134,13 @@ class _FullBroker(_ResolvingBroker):
         *,
         open_refs: list[str] | None = None,
         closed_rows: list[dict[str, Any]] | None = None,
+        positions: list[Position] | None = None,
         **kw: Any,
     ):
         super().__init__(**kw)
         self._open_refs = open_refs or []
         self._closed_rows = closed_rows or []
+        self._positions = positions or []
 
     def get_open_position_references(self) -> list[str]:
         return list(self._open_refs)
@@ -143,10 +148,31 @@ class _FullBroker(_ResolvingBroker):
     def get_closed_position_rows(self) -> list[dict[str, Any]]:
         return list(self._closed_rows)
 
+    def get_positions(self) -> list[Position]:
+        return list(self._positions)
+
 
 def _single(verdicts: list[ReconcileVerdict]) -> ReconcileVerdict:
     assert len(verdicts) == 1, verdicts
     return verdicts[0]
+
+
+def _position(*, uic: int, quantity: float, avg_price: float = 50.0) -> Position:
+    """A netted broker position keyed to a uic (broker_instrument_id == str(Uic))."""
+    return Position(
+        instrument=InstrumentRef(
+            ticker="KO",
+            exchange_mic="XNYS",
+            asset_type="Stock",
+            broker_instrument_id=str(uic),
+            broker_symbol="KO:xnys",
+        ),
+        quantity=quantity,
+        avg_price=avg_price,
+        market_value=None,
+        unrealized_pnl=None,
+        position_id=f"P-{uic}",
+    )
 
 
 class TestJournalJoin(unittest.TestCase):
@@ -553,6 +579,90 @@ class TestEffectiveSettlementRateCoercion(unittest.TestCase):
     def test_booleans_still_rejected(self):
         row = {"ProfitLossOnTrade": True, "ProfitLossOnTradeInBaseCurrency": 10.0}
         self.assertIsNone(_effective_settlement_rate(row))
+
+
+class TestSecondFilledTierNotDivergent(unittest.TestCase):
+    """Multi-tier ladder → one netted position (saxo-oco §8, fixes C-S6).
+
+    ``get_open_position_references()`` returns ONE ``ExternalReference`` per
+    netted row (the source/oldest tier crid), so every OTHER filled tier on the
+    same uic is absent from that set and would fall through ``_reconcile_filled``
+    to ``divergence=True`` → a per-tick ``AlertOnly`` storm (and a later FIFO
+    mapping flip could un-protect). The fix matches a filled tier to the netted
+    position BY UIC: a tier is "position open" iff its uic has ``owned > 0`` and
+    its own audit ``FilledAmount > 0``.
+    """
+
+    _FINAL = "FinalFill/Confirmed"
+
+    def _two_tier_record(self) -> dict[str, Any]:
+        # Two tiers on ONE uic (307): tier-0 filled 20, tier-1 filled 26.
+        return _record(
+            uic="307",
+            brackets=[
+                _bracket(client_request_id="rid-0", entry_order_id="E-0", qty=20),
+                _bracket(client_request_id="rid-1", entry_order_id="E-1", qty=26),
+            ],
+        )
+
+    def _broker(self) -> _FullBroker:
+        return _FullBroker(
+            outcomes={
+                "E-0": _order_state("E-0", OrderStatus.FILLED, filled=20.0, raw_status=self._FINAL),
+                "E-1": _order_state("E-1", OrderStatus.FILLED, filled=26.0, raw_status=self._FINAL),
+            },
+            # Only the source/oldest tier crid surfaces as the netted row's ref.
+            open_refs=["rid-0"],
+            # One netted position: owned == 20 + 26 == 46.
+            positions=[_position(uic=307, quantity=46.0)],
+        )
+
+    def test_non_source_filled_tier_matches_by_uic_not_divergent(self):
+        verdicts = reconcile_brackets([self._two_tier_record()], self._broker(), today=_TODAY_FRESH)
+        by_id = {v.entry_order_id: v for v in verdicts}
+
+        # Source tier — matched via open_references (existing clean path).
+        self.assertEqual(by_id["E-0"].status, "FILLED")
+        self.assertFalse(by_id["E-0"].divergence)
+
+        # Second tier — absent from open_references; matched by uic to the
+        # netted position. Must be FILLED, NOT a false divergence.
+        self.assertEqual(by_id["E-1"].status, "FILLED")
+        self.assertFalse(
+            by_id["E-1"].divergence, "non-source filled tier must not be flagged divergence"
+        )
+        self.assertEqual(by_id["E-1"].details.get("netted_owned"), 46.0)
+        self.assertFalse(has_failures(verdicts))
+
+    def test_sum_filled_equals_owned_crosscheck_passes(self):
+        # The Σ FilledAmount == owned correlation validator for the netted
+        # position: 20 + 26 == 46 within the qty tolerance.
+        self.assertTrue(filled_sum_matches_owned([20.0, 26.0], 46.0))
+        # Sub-share float noise still reconciles (tolerance, not bare ==).
+        self.assertTrue(filled_sum_matches_owned([20.0, 25.9999999], 46.0))
+        # A genuinely unaccounted fill does NOT reconcile.
+        self.assertFalse(filled_sum_matches_owned([20.0], 46.0))
+
+    def test_filled_tier_on_flat_uic_still_diverges(self):
+        # No netted position on the uic (owned == 0) and no open ref / closed
+        # pair → the per-uic match must NOT rescue it; genuine divergence stands.
+        broker = _FullBroker(
+            outcomes={
+                "E-1": _order_state("E-1", OrderStatus.FILLED, filled=26.0, raw_status=self._FINAL)
+            },
+            open_refs=[],
+            positions=[],
+        )
+        record = _record(
+            uic="307",
+            brackets=[_bracket(client_request_id="rid-1", entry_order_id="E-1", qty=26)],
+        )
+
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        self.assertEqual(verdict.status, "FILLED")
+        self.assertTrue(verdict.divergence)
+        self.assertIn("no open position or closed pair", verdict.reason or "")
 
 
 if __name__ == "__main__":
