@@ -16,22 +16,31 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from alphalens_pipeline.brokers.automanager.position_manager import (
+    Action,
     AlertOnly,
     BrokerView,
     CancelRemaining,
-    DisasterStop,
+    CancelSellLegs,
     NoOp,
-    PlaceStandaloneStop,
+    PlaceStop,
     PlannedExit,
+    ProtectionView,
+    UpgradeToOco,
+    _oco_enabled,
     advance,
+    reconcile_protection,
 )
 from alphalens_pipeline.brokers.contract import (
+    _QTY_EPS,
     BrokerCapabilityError,
     BrokerError,
+    OrderRejectedError,
+    Position,
     SupportsStandaloneStop,
+    _is_sell_orders_already_exist,
 )
 
 if TYPE_CHECKING:
@@ -57,7 +66,12 @@ class LoopDeps:
     read_records: Callable[[], list[Mapping[str, Any]]]
     verdicts_fn: Callable[[list[Mapping[str, Any]], Broker], list[ReconcileVerdict]]
     build_position_view: Callable[[Broker, list[Mapping[str, Any]]], BrokerView]
-    place_standalone_stop: Callable[[int, str, float, float, str], None]
+    # Broker-state-truth protection (saxo-oco memo §6): ONE snapshot per tick,
+    # then a pure reconcile_protection diff executed action-by-action. The
+    # executor closes over the broker + the alert throttle; run_once wires the
+    # per-action BrokerError boundary around each call.
+    build_protection_view: Callable[[Broker, list[Mapping[str, Any]]], ProtectionView]
+    execute_protection: Callable[[Action, bool, TickReport], None]
     sweep_orphans_fn: Callable[[Broker], list[Any]]
     alert: Callable[[str], None]
 
@@ -65,7 +79,7 @@ class LoopDeps:
 @dataclass
 class TickReport:
     picks_placed: int = 0
-    stops_placed: int = 0
+    exits_placed: int = 0  # protective stops placed this tick (rung 0 -> 1)
     cancels: int = 0
     alerts: int = 0
     orphans: int = 0
@@ -152,34 +166,59 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
                 already_submitted.add(key)
 
     records = deps.read_records()
-    # reconcile up-front calls list_open_orders / get_open_position_references /
-    # get_closed_position_rows; a persistent BrokerError here must not crash the
-    # daemon (systemd Restart=on-failure would then permanently give up, leaving
-    # every position unreconciled). Alert and skip verdict processing this tick.
+    # The verdict-level advance loop (terminal / round-trip CancelRemaining +
+    # divergence alerts) and the broker-state protection pass are INDEPENDENT: a
+    # reconcile-bridge or position-view BrokerError must not skip protection (the
+    # safety-critical path). Each is isolated so one failing never starves the
+    # other; the protection pass has its OWN build boundary below.
     try:
         verdicts = deps.verdicts_fn(records, deps.broker)
     except BrokerError as exc:
         deps.alert(f"reconcile failed (broker error) — verdicts skipped this tick: {exc}")
         report.alerts += 1
-        return report
+        verdicts = []
     report.verdict_count = len(verdicts)
-    try:
-        position_view = deps.build_position_view(deps.broker, records)
-    except BrokerError as exc:
-        deps.alert(f"position-view build failed (broker error) — actions skipped this tick: {exc}")
-        report.alerts += 1
-        return report
-    for verdict in verdicts:
-        action = advance(verdict, position_view)
-        report.actions.append((verdict.ticker, type(action).__name__))
-        # One position's broker call (cancel / standalone-stop) failing must not
-        # take down the tick — alert and skip only that verdict.
+    if verdicts:
         try:
-            _execute_action(deps, verdict, action, position_view, kill=kill, report=report)
+            position_view = deps.build_position_view(deps.broker, records)
         except BrokerError as exc:
             deps.alert(
-                f"{verdict.ticker}: {type(action).__name__} failed (broker error) — skipped: {exc}"
+                f"position-view build failed (broker error) — actions skipped this tick: {exc}"
             )
+            report.alerts += 1
+            position_view = None
+        if position_view is not None:
+            for verdict in verdicts:
+                action = advance(verdict, position_view)
+                report.actions.append((verdict.ticker, type(action).__name__))
+                # One position's broker call (a cancel of leftover exits) failing
+                # must not take down the tick — alert and skip only that verdict.
+                try:
+                    _execute_action(deps, verdict, action, position_view, report=report)
+                except BrokerError as exc:
+                    deps.alert(
+                        f"{verdict.ticker}: {type(action).__name__} failed "
+                        f"(broker error) — skipped: {exc}"
+                    )
+                    report.alerts += 1
+
+    # Broker-state-truth protection pass (saxo-oco memo §6): ONE snapshot, then a
+    # pure desired-vs-actual diff over live positions + live SELL legs, each
+    # action executed inside its OWN per-action BrokerError boundary so one uic's
+    # failure never aborts the tick or the other uics. This is the ONLY path that
+    # places / resizes protective stops now (advance no longer does).
+    try:
+        protection_view = deps.build_protection_view(deps.broker, records)
+    except BrokerError as exc:
+        deps.alert(f"protection-view build failed (broker error) — protection skipped: {exc}")
+        report.alerts += 1
+        return report
+    for action in reconcile_protection(protection_view):
+        report.actions.append(("protection", type(action).__name__))
+        try:
+            deps.execute_protection(action, kill, report)
+        except BrokerError as exc:
+            deps.alert(f"protection {type(action).__name__} failed (broker error) — skipped: {exc}")
             report.alerts += 1
     return report
 
@@ -190,9 +229,11 @@ def _execute_action(
     action: Any,
     position_view: BrokerView,
     *,
-    kill: bool,
     report: TickReport,
 ) -> None:
+    """Execute one verdict-level ``advance`` Action. Stop placement is NOT here —
+    the protection pass owns it; ``advance`` only ever yields NoOp / AlertOnly /
+    CancelRemaining now."""
     request_id = str(verdict.details.get("client_request_id") or "")
     if isinstance(action, NoOp):
         return
@@ -205,20 +246,6 @@ def _execute_action(
             deps.broker.cancel_order(order_id)
             report.cancels += 1
         return
-    if isinstance(action, PlaceStandaloneStop):
-        if kill:
-            deps.alert(f"KILL active — NOT placing standalone stop for {verdict.ticker}")
-            return
-        disaster = position_view.disaster_stops.get(request_id)
-        if disaster is None:  # defence: advance already alerted, but never place blind
-            deps.alert(
-                f"{verdict.ticker}: standalone-stop placement skipped — no journaled disaster stop"
-            )
-            return
-        deps.place_standalone_stop(
-            disaster.uic, disaster.side, action.qty, action.stop_price, request_id
-        )
-        report.stops_placed += 1
 
 
 def run_daemon(
@@ -244,13 +271,14 @@ def run_daemon(
 def build_default_deps(*, poll_seconds: float) -> LoopDeps:
     """Wire the real Task 1-10 seams. Imported lazily so the alphalens binary's
     startup budget stays off this path (lazy-CLI doctrine); covered by the
-    SAXO_LIVE_TEST=1 SIM probe, not the hermetic unit tests. The four factory
-    helpers (_default_oauth_provider, _make_place_pick, _make_position_view_builder,
-    _make_standalone_stop_placer) compose the Task 1-10 seams; they are validated
-    only by the SIM probe. The pluggable fill-source (fill_source.PollingFillSource)
-    stays a tested seam for the phase-B streaming drop-in; the MVP loop detects
-    fills through reconcile_bridge.verdicts (reconcile classifies FILLED), so no
-    PollingFillSource instance is wired into LoopDeps here."""
+    SAXO_LIVE_TEST=1 SIM probe, not the hermetic unit tests. The factory helpers
+    (_default_oauth_provider, _make_place_pick, _make_position_view_builder,
+    build_protection_view + _make_protection_executor) compose the seams; they
+    are validated only by the SIM probe. The pluggable fill-source
+    (fill_source.PollingFillSource) stays a tested seam for the phase-B streaming
+    drop-in; the MVP loop detects fills through reconcile_bridge.verdicts
+    (reconcile classifies FILLED), so no PollingFillSource instance is wired
+    into LoopDeps here."""
     from alphalens_pipeline.brokers.automanager import (  # noqa: F401 (planner/safety used by _make_place_pick)
         orphan_sweeper,
         picks,
@@ -277,6 +305,12 @@ def build_default_deps(*, poll_seconds: float) -> LoopDeps:
     def _read_records() -> list[Mapping[str, Any]]:
         return list(iter_submission_records(DEFAULT_SUBMISSIONS_PATH))
 
+    # One throttle instance lives for the daemon's lifetime so the re-alert
+    # interval + per-uic failure escalation persist across ticks; it wraps the
+    # same base sink the generic (un-throttled) tick alerts use.
+    base_alert = _default_alert()
+    throttle = _AlertThrottle(base_alert)
+
     return LoopDeps(
         broker=broker,
         kill_file=KILL_FILE_PATH,
@@ -286,9 +320,10 @@ def build_default_deps(*, poll_seconds: float) -> LoopDeps:
         read_records=_read_records,
         verdicts_fn=reconcile_bridge.verdicts,
         build_position_view=_make_position_view_builder(broker),
-        place_standalone_stop=_make_standalone_stop_placer(broker),
+        build_protection_view=build_protection_view,
+        execute_protection=_make_protection_executor(broker, throttle),
         sweep_orphans_fn=lambda b: orphan_sweeper.sweep(b, _read_records()),
-        alert=_default_alert(),
+        alert=base_alert,
     )
 
 
@@ -296,13 +331,12 @@ def build_default_deps(*, poll_seconds: float) -> LoopDeps:
 # Thin composers over the Task 1-10 seams. They carry NO hermetic unit-test
 # cycle (test_control_loop.py injects LoopDeps as stubs; build_default_deps and
 # everything it wires is exercised end-to-end only by the deferred
-# SAXO_LIVE_TEST=1 SIM live probe). _make_place_pick and _make_standalone_stop_placer
-# both read/write STANDALONE_STOP_JOURNAL_PATH — a tiny out-of-band append-only
-# journal (mirrors the picks.jsonl / submissions.jsonl append-only pattern) that
-# correlates one entry bracket's client_request_id with its plan-level disaster
-# stop ("planned", written at placement time) and marks a Uic protected once its
-# standalone stop actually posts ("placed", written at stop-placement time).
-# _make_position_view_builder folds both halves back into position_manager.BrokerView.
+# SAXO_LIVE_TEST=1 SIM live probe). _make_place_pick writes the append-only
+# STANDALONE_STOP_JOURNAL_PATH `planned` lines — the plan PRICES the broker
+# cannot know (disaster stop + in-band TP), keyed to the entry client_request_id
+# and tier_index. NO journal line confers protection (saxo-oco memo §7): the
+# protection pass (build_protection_view + reconcile_protection) derives it from
+# live broker state. `_fold_planned_exits` folds the `planned` lines per-uic.
 
 STANDALONE_STOP_JOURNAL_PATH = (
     Path.home() / ".alphalens" / "broker_orders" / "standalone_stops.jsonl"
@@ -333,7 +367,6 @@ def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
 
 
 _INITIAL_GEN = 0  # entry-placement plan is generation 0; resizes bump it via next_gen() (Task 4)
-_QTY_EPS = 0.5  # half a share — resize tolerance; NEVER a bare >= on floats (A-S6/B-S2)
 
 
 def _build_planned_line(
@@ -380,42 +413,6 @@ def _iter_standalone_stop_journal() -> Iterator[dict[str, Any]]:
                 continue
             if isinstance(record, dict):
                 yield record
-
-
-def _fold_standalone_stop_journal(
-    lines: Iterable[Mapping[str, Any]],
-) -> tuple[dict[str, DisasterStop], frozenset[str]]:
-    """Fold the out-of-band standalone-stop journal into (disaster_stops keyed by
-    the entry's client_request_id, the set of protected client_request_ids).
-
-    Protection is correlated by the entry's client_request_id — NOT its Uic. Two
-    entries sharing one Uic each require their OWN placed stop; a Uic-keyed
-    correlation would mark both protected the moment the first one's stop posts,
-    leaving the second entry silently unprotected. A "placed" / "intent" line
-    without a client_request_id (a legacy Uic-only line) therefore confers no
-    protection.
-
-    An "intent" line (written BEFORE the POST) confers protection just like
-    "placed": a crash between the POST and the "placed" write leaves only the
-    "intent" line, and treating it as protected/in-flight stops advance from
-    re-issuing a SECOND standalone stop on restart. Pure — no I/O; malformed
-    lines are skipped."""
-    disaster_stops: dict[str, DisasterStop] = {}
-    protected: set[str] = set()
-    for line in lines:
-        kind = line.get("kind")
-        try:
-            if kind == "planned" and line.get("client_request_id"):
-                disaster_stops[str(line["client_request_id"])] = DisasterStop(
-                    uic=int(line["uic"]),
-                    side=str(line["side"]),
-                    stop_price=float(line["stop_price"]),
-                )
-            elif kind in {"intent", "placed"} and line.get("client_request_id"):
-                protected.add(str(line["client_request_id"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-    return disaster_stops, frozenset(protected)
 
 
 def _read_persisted_gen(uic: int) -> tuple[int, float | None]:
@@ -756,13 +753,14 @@ def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
 def _make_position_view_builder(
     broker: Broker,
 ) -> Callable[[Broker, list[Mapping[str, Any]]], BrokerView]:
-    """Fold the submissions journal + the out-of-band standalone-stop journal into
-    a position_manager.BrokerView: working_children reads exit order ids straight
-    from the submission records, filtered to broker orders still WORKING;
-    disaster_stops comes from the "planned" journal lines (written by
-    _make_place_pick); protected_request_ids is every entry whose OWN
-    client_request_id has a matching "placed" line (written by
-    _make_standalone_stop_placer) — correlated by client_request_id, not Uic."""
+    """Fold the submissions journal into a position_manager.BrokerView carrying
+    ONLY ``working_children`` — the still-WORKING exit order ids per entry, used
+    by the terminal / round-trip ``CancelRemaining`` sweep.
+
+    No journal line confers protection any more (saxo-oco memo §7): the
+    disaster-stop / protected halves are gone (Bug A), so those BrokerView fields
+    are supplied empty. Protection is derived purely from live broker state by
+    the protection pass (``build_protection_view`` + ``reconcile_protection``)."""
 
     def _build(_broker: Broker, records: list[Mapping[str, Any]]) -> BrokerView:
         from alphalens_pipeline.brokers.contract import OrderStatus
@@ -786,69 +784,264 @@ def _make_position_view_builder(
                 if exits:
                     working_children[str(request_id)] = exits
 
-        disaster_stops, protected_request_ids = _fold_standalone_stop_journal(
-            _iter_standalone_stop_journal()
-        )
         return BrokerView(
-            protected_request_ids=protected_request_ids,
-            disaster_stops=disaster_stops,
+            protected_request_ids=frozenset(),  # protection is broker-state truth, not journal
+            disaster_stops={},
             working_children=working_children,
         )
 
     return _build
 
 
-def _standalone_stop_request_id(entry_request_id: str) -> str:
-    """Deterministic stop x-request-id derived from the entry client_request_id.
-
-    Deterministic (not uuid4) so a crash-window re-POST reuses the SAME
-    x-request-id and hits Saxo's 15 s dedup instead of placing a second stop."""
-    return f"{entry_request_id}-stop"
+# --- Broker-state-truth protection (saxo-oco memo §5/§6) ---------------------
 
 
-def _make_standalone_stop_placer(
-    broker: SupportsStandaloneStop,
-) -> Callable[[int, str, float, float, str], None]:
-    """Adapt SaxoBroker.place_standalone_stop with a recoverable place-then-journal.
+def _position_uic(pos: Position) -> int | None:
+    """The uic a Position belongs to (``broker_instrument_id`` is ``str(Uic)``)."""
+    try:
+        return int(pos.instrument.broker_instrument_id)
+    except (TypeError, ValueError, AttributeError):
+        return None
 
-    Journals an "intent" line (carrying the entry client_request_id + the
-    DETERMINISTIC stop request_id) BEFORE the POST, then the "placed" line after.
-    Both are read back by _make_position_view_builder to mark THIS entry's
-    client_request_id protected (correlated by client_request_id, not Uic, so an
-    entry sharing the Uic is not falsely marked protected). If the daemon crashes
-    between the POST and the "placed" write, the "intent" line already marks the
-    position protected/in-flight, so advance will not re-issue; and the
-    deterministic request_id makes a within-window re-POST idempotent under Saxo's
-    x-request-id dedup rather than a duplicate live stop."""
 
-    def _place(uic: int, side: str, qty: float, stop_price: float, request_id: str) -> None:
-        stop_request_id = _standalone_stop_request_id(request_id)
-        _append_standalone_stop_journal(
-            {
-                "kind": "intent",
-                "client_request_id": request_id,
-                "stop_request_id": stop_request_id,
-                "uic": uic,
-                "side": side,
-                "qty": qty,
-                "stop_price": stop_price,
-            }
+def build_protection_view(broker: Broker, _records: list[Mapping[str, Any]]) -> ProtectionView:
+    """Assemble the ONE per-tick protection snapshot (saxo-oco memo §6): live
+    netted positions + live working SELL legs (correlated by uic) + the plan
+    PRICES folded from the append-only ``planned`` journal. Protection status is
+    then a pure function of this view — no journal line asserts it (kills Bug A).
+
+    ``oco_unsupported`` is empty in Stage 1 (STOP-ONLY: the OCO rung stays dark);
+    Stage 2 folds the persisted per-instrument capability flag here."""
+    all_positions: dict[int, Position] = {}
+    for pos in broker.get_positions():
+        uic = _position_uic(pos)
+        if uic is not None:
+            all_positions[uic] = pos
+
+    long_positions: dict[int, Position] = {}
+    get_long = getattr(broker, "get_long_positions", None)
+    longs = get_long() if get_long is not None else list(all_positions.values())
+    for pos in longs:
+        uic = _position_uic(pos)
+        if uic is not None and pos.quantity > _QTY_EPS:
+            long_positions[uic] = pos
+
+    sell_legs: dict[int, list[Any]] = {}
+    list_sells = getattr(broker, "list_working_sell_orders", None)
+    orders = list_sells() if list_sells is not None else []
+    for order in orders:
+        if order.uic is not None:
+            sell_legs.setdefault(int(order.uic), []).append(order)
+
+    return ProtectionView(
+        long_positions=long_positions,
+        all_positions=all_positions,
+        sell_legs_by_uic={uic: tuple(legs) for uic, legs in sell_legs.items()},
+        planned_by_uic=_fold_planned_exits(_iter_standalone_stop_journal()),
+        oco_unsupported=frozenset(),  # Stage 1 STOP-ONLY — OCO rung dark
+    )
+
+
+# Alert-throttle tuning: a re-alert interval so a stuck position does not page
+# every tick, and a per-uic consecutive-failure escalation so N repeated
+# stop-place failures raise ONE CRITICAL then back off (never a Telegram 429
+# storm that drowns the next genuine naked alert). saxo-oco memo §5.
+_ALERT_REPEAT_INTERVAL_S = 1800.0  # 30 min
+_MAX_CONSECUTIVE_PLACE_FAILURES = 3
+
+
+class _AlertThrottle:
+    """Dedup protection alerts by ``(uic, reason)`` within a re-alert interval and
+    escalate then back off a uic whose stop keeps failing to place (saxo-oco memo §5)."""
+
+    def __init__(
+        self,
+        base_alert: Callable[[str], None],
+        *,
+        clock: Callable[[], float] = time.time,
+        interval_s: float = _ALERT_REPEAT_INTERVAL_S,
+    ) -> None:
+        self._base = base_alert
+        self._clock = clock
+        self._interval = interval_s
+        self._last_sent: dict[tuple[int | None, str], float] = {}
+        self._fail_counts: dict[int, int] = {}
+        self._escalated: set[int] = set()
+
+    def emit(self, message: str, *, uic: int | None = None, reason: str | None = None) -> bool:
+        """Send ``message`` unless an identical ``(uic, reason)`` alert fired
+        within the interval. ``reason`` defaults to the message text. Returns
+        True iff it was actually sent."""
+        key = (uic, reason if reason is not None else message)
+        now = self._clock()
+        last = self._last_sent.get(key)
+        if last is not None and (now - last) < self._interval:
+            return False
+        self._last_sent[key] = now
+        self._base(message)
+        return True
+
+    def record_place_failure(self, uic: int, message: str) -> bool:
+        """Count one consecutive stop-place failure on ``uic``; below the
+        threshold emit a throttled routine alert, AT the threshold emit ONE
+        CRITICAL escalation, above it back off silently. Returns True iff an
+        alert was sent."""
+        count = self._fail_counts.get(uic, 0) + 1
+        self._fail_counts[uic] = count
+        if count >= _MAX_CONSECUTIVE_PLACE_FAILURES:
+            if uic in self._escalated:
+                return False  # already escalated -> back off
+            self._escalated.add(uic)
+            self._base(
+                f"CRITICAL uic {uic}: NAKED — {count} consecutive stop-place "
+                "failures, manual action required"
+            )
+            return True
+        return self.emit(message, uic=uic, reason="place-failure")
+
+    def record_place_success(self, uic: int) -> None:
+        """Clear the consecutive-failure state once a stop places on ``uic``."""
+        self._fail_counts.pop(uic, None)
+        self._escalated.discard(uic)
+
+
+# Message tokens that mean "the order is already gone" — an idempotent cancel of
+# an already-cancelled / cascade-removed sibling must be a success, not a raise
+# (saxo-oco memo §5). Cancel carries no structured code, so classify on the
+# message (the one place string-matching is accepted, per the memo).
+_ALREADY_GONE_TOKENS = (
+    "404",
+    "not found",
+    "ordernotfound",
+    "unknownorder",
+    "already cancelled",
+    "already canceled",
+    "does not exist",
+    "no open order",
+    "no such order",
+)
+
+
+def _is_already_gone(exc: BrokerError) -> bool:
+    text = str(exc).lower()
+    return any(token in text for token in _ALREADY_GONE_TOKENS)
+
+
+def _idempotent_cancel(broker: Broker, order_id: str) -> None:
+    """Cancel ``order_id``, treating an already-gone order as success so a
+    cascade-cancelled OCO sibling (or a manual pre-cancel) never thrashes."""
+    try:
+        broker.cancel_order(order_id)
+    except BrokerError as exc:
+        if _is_already_gone(exc):
+            return
+        raise
+
+
+def _make_protection_executor(
+    broker: Broker, throttle: _AlertThrottle
+) -> Callable[[Action, bool, TickReport], None]:
+    """The protection-pass executor (saxo-oco memo §6). Per Action:
+
+    - ``NoOp`` — nothing.
+    - ``AlertOnly`` — a throttled alert.
+    - ``CancelSellLegs`` — idempotent cancels (orphan sweep / over-hedge repair).
+    - ``PlaceStop`` — cancel any ``cancel_conflicting`` lone TP FIRST, re-read
+      owned at execute time (never oversell, never plant on a flat uic), place
+      the guaranteed standalone stop (ALLOWED under KILL — it only reduces
+      exposure), then cancel ``supersede_ids`` AFTER the place confirms. A
+      ``SellOrdersAlreadyExist`` rejection defers to next tick; any other place
+      failure is counted for escalation and retried next tick (protection is
+      broker-state truth, so nothing is recorded on failure -> Bug A cannot recur).
+    - ``UpgradeToOco`` — Stage 2 only; skipped whenever ``_oco_enabled()`` is
+      False (it is, in Stage 1) so the rung-2 arm stays dark."""
+
+    def _execute(action: Action, kill: bool, report: TickReport) -> None:
+        if isinstance(action, NoOp):
+            return
+        if isinstance(action, AlertOnly):
+            if throttle.emit(action.reason):
+                report.alerts += 1
+            return
+        if isinstance(action, CancelSellLegs):
+            for order_id in action.order_ids:
+                _idempotent_cancel(broker, order_id)
+                report.cancels += 1
+            if throttle.emit(action.reason, uic=action.uic, reason=f"cancel:{action.uic}"):
+                report.alerts += 1
+            return
+        if isinstance(action, PlaceStop):
+            _execute_place_stop(broker, throttle, action, report)
+            return
+        if isinstance(action, UpgradeToOco):
+            # Stage 2 rung only; never emitted while _oco_enabled() is False.
+            if not _oco_enabled():
+                return
+            return  # pragma: no cover — Stage 2 wiring lands with place_oco_exit
+
+    return _execute
+
+
+def _execute_place_stop(
+    broker: Broker, throttle: _AlertThrottle, action: PlaceStop, report: TickReport
+) -> None:
+    # A lone TP holds the conflicting sell commitment (Bug B) -> clear it BEFORE
+    # the place so the standalone stop is the only sell on the uic.
+    for order_id in action.cancel_conflicting:
+        _idempotent_cancel(broker, order_id)
+        report.cancels += 1
+
+    # Execute-time owned re-check: never oversell, never plant a stop on a uic
+    # that closed between the snapshot and now (it could later fire into a short).
+    qty = action.qty
+    get_by_uic = getattr(broker, "get_positions_by_uic", None)
+    if get_by_uic is not None:
+        live = get_by_uic(action.uic)
+        if live.quantity + _QTY_EPS < qty:
+            qty = max(live.quantity, 0.0)
+    if qty <= _QTY_EPS:
+        if throttle.emit(
+            f"uic {action.uic}: position gone before stop place — skipped",
+            uic=action.uic,
+            reason="flat-skip",
+        ):
+            report.alerts += 1
+        return
+
+    # KILL allows a protective stop (it only REDUCES exposure) — no kill gate here.
+    # build_default_deps gates isinstance(broker, SupportsStandaloneStop), so the
+    # standalone-stop capability is guaranteed present at runtime.
+    stop_broker = cast(SupportsStandaloneStop, broker)
+    try:
+        stop_broker.place_standalone_stop(
+            action.uic, action.side, qty, action.stop_price, action.request_id
         )
-        placed = broker.place_standalone_stop(uic, side, qty, stop_price, stop_request_id)
-        _append_standalone_stop_journal(
-            {
-                "kind": "placed",
-                "client_request_id": request_id,
-                "stop_request_id": stop_request_id,
-                "uic": uic,
-                "side": side,
-                "qty": qty,
-                "stop_price": stop_price,
-                "order_id": placed.entry_order_id,
-            }
+    except OrderRejectedError as exc:
+        if _is_sell_orders_already_exist(exc):
+            if throttle.emit(
+                f"uic {action.uic}: stop deferred — sell-commit not yet released",
+                uic=action.uic,
+                reason="defer",
+            ):
+                report.alerts += 1
+            return  # retry next tick; broker-state truth means no false "protected"
+        throttle.record_place_failure(
+            action.uic, f"uic {action.uic}: stop placement rejected — {exc}"
         )
+        return
+    except BrokerError as exc:
+        throttle.record_place_failure(
+            action.uic, f"uic {action.uic}: stop placement failed — {exc}"
+        )
+        return
 
-    return _place
+    report.exits_placed += 1
+    throttle.record_place_success(action.uic)
+    # Cancel the OLD / stale / smaller stop only AFTER the new one is confirmed —
+    # never a naked window on the shares that were already covered.
+    for order_id in action.supersede_ids:
+        _idempotent_cancel(broker, order_id)
+        report.cancels += 1
 
 
 __all__ = [

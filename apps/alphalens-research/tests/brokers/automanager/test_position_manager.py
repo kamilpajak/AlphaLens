@@ -18,7 +18,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     CancelSellLegs,
     DisasterStop,
     NoOp,
-    PlaceStandaloneStop,
     PlaceStop,
     PlannedExit,
     ProtectionView,
@@ -35,56 +34,10 @@ from alphalens_pipeline.brokers.contract import (
     OrderStatus,
     Position,
 )
-from alphalens_pipeline.brokers.reconcile import ReconcileVerdict, reconcile_brackets
+from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
 _RID = "87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d"
 _ENTRY = "5039287596"
-
-
-def _record() -> dict[str, Any]:
-    return {
-        "execution_config_version": "execution-v2-test",
-        "ts": "2026-07-20T14:00:00+00:00",
-        "brief_date": "2026-07-20",
-        "ticker": "KO",
-        "mic": "XNYS",
-        "uic": "307",
-        "brackets": [
-            {
-                "client_request_id": _RID,
-                "entry_order_id": _ENTRY,
-                "exit_order_ids": [],
-                "qty": 3,
-                "entry": 82.86,
-                "stop": 79.0,
-                "tp": 90.0,
-                "ttl": 7,
-            }
-        ],
-        "precheck": [],
-    }
-
-
-class _FilledOpenBroker:
-    name = "stub-filled-open"
-
-    def list_open_orders(self) -> list[OrderState]:
-        return []
-
-    def resolve_order_outcome(self, order_id: str) -> OrderState:
-        return OrderState(
-            order_id=order_id,
-            status=OrderStatus.FILLED,
-            instrument=None,
-            filled_quantity=2.0,
-            raw_status="FinalFill/Confirmed LogId=249519481",
-        )
-
-    def get_open_position_references(self) -> list[str]:
-        return [_RID]
-
-    def get_closed_position_rows(self) -> list[dict[str, Any]]:
-        return []
 
 
 def _view(**over: Any) -> BrokerView:
@@ -95,21 +48,6 @@ def _view(**over: Any) -> BrokerView:
     }
     base.update(over)
     return BrokerView(**base)
-
-
-class TestAdvanceFilledSizesRealizedQty(unittest.TestCase):
-    def test_filled_open_places_stop_at_realized_fill_not_planned(self) -> None:
-        verdicts = reconcile_brackets([_record()], _FilledOpenBroker())
-        self.assertEqual(len(verdicts), 1)
-        verdict = verdicts[0]
-        self.assertEqual(verdict.status, "FILLED")
-        self.assertEqual(verdict.details["filled_quantity"], 2.0)
-        action = advance(verdict, _view())
-        self.assertIsInstance(action, PlaceStandaloneStop)
-        assert isinstance(action, PlaceStandaloneStop)
-        self.assertEqual(action.qty, 2.0)
-        self.assertNotEqual(action.qty, verdict.qty)
-        self.assertEqual(action.stop_price, 79.0)
 
 
 class TestAdvanceDecisionTable(unittest.TestCase):
@@ -176,32 +114,18 @@ class TestAdvanceDecisionTable(unittest.TestCase):
         )
         self.assertIsInstance(advance(v, _view()), CancelRemaining)
 
-    def test_filled_open_already_protected_is_noop(self) -> None:
+    def test_filled_open_is_noop_protection_pass_owns_it(self) -> None:
+        # A FILLED-open entry is handled entirely by the broker-state protection
+        # pass (reconcile_protection); advance no longer places a journal-derived
+        # stop here, so it returns NoOp regardless of the folded disaster stop.
         v = self._verdict(
             status="FILLED",
             verdict="FILLED",
             note="position open, exit orders working",
             details={"client_request_id": _RID, "filled_quantity": 2.0},
         )
-        self.assertIsInstance(advance(v, _view(protected_request_ids=frozenset({_RID}))), NoOp)
-
-    def test_filled_open_missing_disaster_stop_alerts(self) -> None:
-        v = self._verdict(
-            status="FILLED",
-            verdict="FILLED",
-            note="position open, exit orders working",
-            details={"client_request_id": _RID, "filled_quantity": 2.0},
-        )
-        self.assertIsInstance(advance(v, _view(disaster_stops={})), AlertOnly)
-
-    def test_filled_open_unknown_fill_qty_alerts_never_sizes(self) -> None:
-        v = self._verdict(
-            status="FILLED",
-            verdict="FILLED",
-            note="position open, exit orders working",
-            details={"client_request_id": _RID},
-        )
-        self.assertIsInstance(advance(v, _view()), AlertOnly)
+        self.assertIsInstance(advance(v, _view()), NoOp)
+        self.assertIsInstance(advance(v, _view(disaster_stops={})), NoOp)
 
 
 # --------------------------------------------------------------------------
