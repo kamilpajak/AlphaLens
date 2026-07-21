@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import unittest
 from typing import Any
+from unittest.mock import patch
 
 from alphalens_pipeline.brokers.automanager import position_manager as pm
 from alphalens_pipeline.brokers.automanager.position_manager import (
@@ -338,7 +339,11 @@ class TestReconcileDecisionTable(unittest.TestCase):
         )
         self.assertIsInstance(actions[0], NoOp)
 
-    def test_grow_under_covers_resizes_place_first(self) -> None:
+    def test_grow_additive_places_delta_no_supersede(self) -> None:
+        # Q5 confirmed live (2026-07-21): a covering stop of 20 already rests and
+        # owned grew to 46 -> place a stop for the DELTA (26) ONLY, keeping the
+        # existing stop (no supersede, no naked window). 20 + 26 == 46 == owned,
+        # so the sell side commits exactly owned (Saxo sums same-uic stops).
         pos = _pos(46.0)
         old_stop = _leg("stop-old", "StopIfTraded", 20.0)  # covers only the first fill
         actions = reconcile_long(
@@ -354,8 +359,75 @@ class TestReconcileDecisionTable(unittest.TestCase):
         action = actions[0]
         self.assertIsInstance(action, PlaceStop)
         assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 26.0)  # DELTA only (owned 46 - already-covered 20)
+        self.assertEqual(action.supersede_ids, ())  # existing stop KEPT, never cancelled
+        self.assertEqual(action.cancel_conflicting, ())  # no lone TP to clear
+
+    def test_grow_additive_cancels_lone_tp_before_delta(self) -> None:
+        # A covering stop (20) + a lone TP (Bug-B shape) and owned grew to 46:
+        # the additive delta (26) still cancels the conflicting TP BEFORE the place
+        # (the TP holds a sell commitment that would push the sum past owned).
+        pos = _pos(46.0)
+        old_stop = _leg("stop-old", "StopIfTraded", 20.0)
+        lone_tp = _leg("tp-1", "Limit", 20.0)
+        actions = reconcile_long(
+            _UIC,
+            pos,
+            _pview(
+                long_positions={_UIC: pos},
+                sell_legs_by_uic={_UIC: (old_stop, lone_tp)},
+                planned_by_uic={_UIC: _plan(tp_price=306.72)},
+            ),
+        )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 26.0)
+        self.assertEqual(action.supersede_ids, ())  # keep the covering stop
+        self.assertEqual(action.cancel_conflicting, ("tp-1",))  # lone TP cleared BEFORE
+
+    def test_grow_additive_disabled_falls_back_place_first(self) -> None:
+        # Kill-switch off (Q5 unconfirmed for a future build/instrument class): the
+        # grow arm reverts to cancel-replace, place-full-owned-first, small stop
+        # superseded AFTER (the shipped Stage-1 behavior, still available).
+        pos = _pos(46.0)
+        old_stop = _leg("stop-old", "StopIfTraded", 20.0)
+        with patch.object(pm, "ADDITIVE_STOPS_CONFIRMED", False):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (old_stop,)},
+                    planned_by_uic={_UIC: _plan()},
+                ),
+            )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        assert isinstance(action, PlaceStop)
         self.assertEqual(action.qty, 46.0)  # full netted owned, place-first
         self.assertEqual(action.supersede_ids, ("stop-old",))  # old stop cancelled AFTER
+
+    def test_grow_additive_skipped_when_oco_unsupported(self) -> None:
+        # A uic flagged oco_unsupported opts out of additive too (same broker
+        # multi-order capability gate) -> cancel-replace full-owned, never a delta.
+        pos = _pos(46.0)
+        old_stop = _leg("stop-old", "StopIfTraded", 20.0)
+        actions = reconcile_long(
+            _UIC,
+            pos,
+            _pview(
+                long_positions={_UIC: pos},
+                sell_legs_by_uic={_UIC: (old_stop,)},
+                planned_by_uic={_UIC: _plan()},
+                oco_unsupported=frozenset({_UIC}),
+            ),
+        )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 46.0)  # full netted owned, place-first
+        self.assertEqual(action.supersede_ids, ("stop-old",))
 
     def test_over_hedge_places_residual_before_cancel(self) -> None:
         # TP leg partially filled (26 of 46), owned dropped to 20, the stop still

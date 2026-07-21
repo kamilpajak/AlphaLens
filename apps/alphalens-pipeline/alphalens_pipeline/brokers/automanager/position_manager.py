@@ -173,10 +173,13 @@ Action = PlaceStop | UpgradeToOco | CancelSellLegs | CancelRemaining | AlertOnly
 STOP_TYPES = frozenset({"StopIfTraded", "Stop", "TrailingStopIfTraded"})
 TP_TYPES = frozenset({"Limit"})
 
-# Q5 (same-uic stops sum cleanly) is UNCONFIRMED, so Stage 1 never places an
-# additive delta stop — the deficit arm always cancel-replaces with the
-# place-full-owned-stop-first ordering. Flipped on only after a green SIM probe.
-ADDITIVE_STOPS_CONFIRMED = False
+# Q5 (same-uic stops sum cleanly against owned) CONFIRMED live on SIM 2026-07-21:
+# a 2nd standalone StopIfTraded for the delta on an already-stopped uic was
+# ACCEPTED (200) when stop_qty + delta == owned. So the grow arm places an
+# ADDITIVE delta stop (no cancel, no naked window) instead of cancel-replacing.
+# Kept as a module kill-switch: flip False to revert every uic to the shipped
+# Stage-1 cancel-replace path (or per-uic via oco_unsupported).
+ADDITIVE_STOPS_CONFIRMED = True
 
 
 def _oco_enabled() -> bool:
@@ -326,19 +329,42 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
         ]
 
     # (B) DOWNSIDE DEFICIT: naked, grew past the covering stop, a lone-TP Bug-B
-    #     shape, or a stale/partial stop. Cancel-replace, place-full-owned-first
-    #     (Stage 1: additive-on-growth stays dark until Q5 is green). A lone TP is
-    #     cancelled BEFORE the place (it holds the conflicting sell commitment); a
-    #     stale stop is superseded AFTER (no naked window on the covered shares).
+    #     shape, or a stale/partial stop. A lone TP is always cancelled BEFORE the
+    #     place (it holds the conflicting sell commitment — Bug B).
     if stop_qty + _QTY_EPS < owned:
-        gen = plan.next_gen(owned)
+        # (B1) ADDITIVE-ON-GROWTH (Q5 confirmed live): a covering stop already
+        #      holds stop_qty and the position simply GREW (another tier filled).
+        #      Place a stop for the DELTA only, KEEPING the existing stop — no
+        #      supersede, no naked window, and the sell side sums to exactly owned.
+        #      Skipped when Q5 is off or the uic opted out of broker multi-order
+        #      features (oco_unsupported), which fall through to cancel-replace.
+        #      Edge: ``next_gen`` keys the ref on qty, so two grow steps of the SAME
+        #      delta within Saxo's 15 s request-id dedup window share a ref and the
+        #      2nd is deduped away — that slice is under-covered for < 15 s and
+        #      self-heals on the next tick once the window passes (the disaster stop
+        #      is deep OTM, so the transient gap is immaterial).
+        if ADDITIVE_STOPS_CONFIRMED and stop_qty > _QTY_EPS and uic not in view.oco_unsupported:
+            deficit = owned - stop_qty
+            return [
+                PlaceStop(
+                    uic,
+                    _SIDE,
+                    deficit,
+                    plan.stop_price,
+                    _exit_stop_ref(plan.entry_crid, plan.next_gen(deficit)),
+                    cancel_conflicting=_tp_only_leg_ids(legs),  # lone TP -> cancel BEFORE (Bug B)
+                )
+            ]
+        # (B2) CANCEL-REPLACE (naked, Q5 off, or oco_unsupported): place the full
+        #      owned stop FIRST, supersede any stale stop AFTER (no naked window on
+        #      the already-covered shares).
         return [
             PlaceStop(
                 uic,
                 _SIDE,
                 owned,
                 plan.stop_price,
-                _exit_stop_ref(plan.entry_crid, gen),
+                _exit_stop_ref(plan.entry_crid, plan.next_gen(owned)),
                 supersede_ids=_stop_leg_ids(legs),  # stale stop -> cancel AFTER
                 cancel_conflicting=_tp_only_leg_ids(legs),  # lone TP -> cancel BEFORE (Bug B)
             )
