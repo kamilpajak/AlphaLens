@@ -455,8 +455,8 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
             (),
             {
                 "tiers": [
-                    type("T", (), {"bracket": _bracket("rid-1")})(),
-                    type("T", (), {"bracket": _bracket("rid-2")})(),
+                    type("T", (), {"bracket": _bracket("rid-1"), "tier_index": 0, "tp": 12.0})(),
+                    type("T", (), {"bracket": _bracket("rid-2"), "tier_index": 1, "tp": 12.0})(),
                 ],
                 "disaster_stop_price": 9.0,
             },

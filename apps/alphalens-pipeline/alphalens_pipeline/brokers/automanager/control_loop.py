@@ -331,6 +331,36 @@ def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
         fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
 
 
+_INITIAL_GEN = 0  # entry-placement plan is generation 0; resizes bump it via next_gen() (Task 4)
+
+
+def _build_planned_line(
+    *,
+    entry_crid: str,
+    uic: int,
+    side: str,
+    stop_price: float,
+    take_profit: float | None,
+    tier_index: int,
+    gen: int = _INITIAL_GEN,
+) -> dict[str, Any]:
+    """One append-only `planned` journal line — the plan PRICES the broker cannot
+    know (disaster stop + in-band TP), keyed to the entry client_request_id and
+    its ORIGINAL tier_index, plus the resize `gen`. `_fold_planned_exits` (Task 4)
+    reads these back per-uic into PlannedExit; NO line here confers protection —
+    protection is derived from live broker state only (design memo §7)."""
+    return {
+        "kind": "planned",
+        "client_request_id": entry_crid,
+        "uic": int(uic),
+        "side": side,
+        "stop_price": float(stop_price),
+        "take_profit": None if take_profit is None else float(take_profit),
+        "tier_index": int(tier_index),
+        "gen": int(gen),
+    }
+
+
 def _iter_standalone_stop_journal() -> Iterator[dict[str, Any]]:
     """Yield parsed lines from the standalone-stop journal; malformed lines skipped."""
     import json
@@ -538,11 +568,12 @@ def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
             logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
             return False
 
-        def _journal_tier(bracket: Any, placed: Any) -> None:
+        def _journal_tier(tier: Any, placed: Any) -> None:
             # Journal each tier IMMEDIATELY after its place_bracket_order — NOT
             # batched after the whole loop (HIGH-2). A crash mid-loop then leaves
             # the pick already joined to submissions.jsonl (at most a partial
             # ladder), so the pick-drain does not re-place the full set on restart.
+            bracket = tier.bracket
             append_submission_record(
                 build_submission_record(
                     brief_date=pick.date.isoformat(),
@@ -569,13 +600,14 @@ def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
                 )
             )
             _append_standalone_stop_journal(
-                {
-                    "kind": "planned",
-                    "client_request_id": bracket.client_request_id,
-                    "uic": int(instrument.broker_instrument_id),
-                    "side": _DISASTER_STOP_SIDE,
-                    "stop_price": placement.disaster_stop_price,
-                }
+                _build_planned_line(
+                    entry_crid=bracket.client_request_id,
+                    uic=int(instrument.broker_instrument_id),
+                    side=_DISASTER_STOP_SIDE,
+                    stop_price=placement.disaster_stop_price,
+                    take_profit=tier.tp,
+                    tier_index=tier.tier_index,
+                )
             )
 
         placed_count = 0
@@ -584,7 +616,7 @@ def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
             for tier in placement.tiers:
                 bracket = tier.bracket
                 placed = broker.place_bracket_order(bracket)
-                _journal_tier(bracket, placed)
+                _journal_tier(tier, placed)
                 placed_count += 1
         except BrokerError as exc:
             failure_note = (
