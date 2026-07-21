@@ -23,6 +23,7 @@ import contextlib
 import datetime as dt
 import logging
 import os
+import uuid
 from collections import OrderedDict
 from collections.abc import Iterator
 from typing import Any
@@ -353,9 +354,14 @@ class SaxoBroker:
         with _translate_saxo_errors():
             account_key = self._resolve_account_key()
             body = self._build_bracket_body(request, account_key)
-            self._precheck_or_raise(body, request)
+            self._precheck_or_raise(
+                body,
+                label=f"bracket {request.client_request_id} ({request.instrument.broker_symbol})",
+            )
             status, payload = self._client.place_order(body, request_id=request.client_request_id)
-            return self._handle_placement_response(status, payload, request, account_key)
+            return self._handle_placement_response(
+                status, payload, request.client_request_id, account_key
+            )
 
     def precheck_bracket_order(self, request: BracketOrderRequest) -> dict[str, Any]:
         """Validate + precheck WITHOUT placing (the CLI dry-run path).
@@ -370,7 +376,75 @@ class SaxoBroker:
         with _translate_saxo_errors():
             account_key = self._resolve_account_key()
             body = self._build_bracket_body(request, account_key)
-            return self._precheck_or_raise(body, request)
+            return self._precheck_or_raise(
+                body,
+                label=f"bracket {request.client_request_id} ({request.instrument.broker_symbol})",
+            )
+
+    def place_standalone_stop(
+        self, uic: int, side: str, qty: float, stop_price: float, request_id: str | None = None
+    ) -> PlacedOrder:
+        """Place ONE Option-B standalone StopIfTraded (no bracket parent).
+
+        The disaster stop is NEVER a bracket child (MVP memo §Place): placed
+        here AFTER the entry fills, sized to REALIZED filled qty (Risk 2). Same
+        safety order as place_bracket_order: ALLOW_ORDERS gate first, then
+        precheck, then ONE POST with x-request-id = client_request_id. No Orders
+        array + no parent => relation=StandAlone, no TooFarFromEntryOrder
+        (SIM-validated 2026-07-20, OrderId 5039296412). exit_order_ids is empty.
+
+        ``request_id`` is the x-request-id / ExternalReference. Pass a DETERMINISTIC
+        value (the auto-manager derives it from the entry client_request_id) so a
+        crash-window re-POST hits Saxo's 15 s x-request-id dedup instead of placing
+        a second live stop; omit it (None) to mint a fresh uuid4 per call.
+        """
+        if os.environ.get(ALLOW_ORDERS_ENV) != "1":
+            raise BrokerCapabilityError(
+                f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
+                "SIM order submission (design memo §P2 safety rail). No order was sent."
+            )
+        client_request_id = request_id or str(uuid.uuid4())
+        with _translate_saxo_errors():
+            account_key = self._resolve_account_key()
+            body = self._build_standalone_stop_body(
+                uic, side, qty, stop_price, client_request_id, account_key
+            )
+            self._precheck_or_raise(body, label=f"standalone-stop Uic {uic} {client_request_id}")
+            status, payload = self._client.place_order(body, request_id=client_request_id)
+            return self._handle_placement_response(status, payload, client_request_id, account_key)
+
+    def _build_standalone_stop_body(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        stop_price: float,
+        client_request_id: str,
+        account_key: str,
+    ) -> dict[str, Any]:
+        """Option-B standalone StopIfTraded body — no Orders array, no entry."""
+        asset_type = "Stock"  # MVP scope: single-name equities only
+        details = self._client.get_instrument_details(uic, asset_type)
+        supported = details.get("SupportedOrderTypes") or []
+        stop_type = execution_policy._STOP_ORDER_TYPE
+        if supported and stop_type not in supported:
+            raise OrderRejectedError(
+                f"instrument Uic {uic} does not support {stop_type} orders "
+                f"(SupportedOrderTypes={supported})"
+            )
+        stop_q = self._quantize_price(stop_price, details, label="stop_price")
+        return {
+            "Uic": int(uic),
+            "AssetType": asset_type,
+            "AccountKey": account_key,
+            "Amount": qty,
+            "BuySell": "Sell" if side == "SELL" else "Buy",
+            "OrderType": stop_type,
+            "OrderPrice": stop_q,
+            "OrderDuration": {"DurationType": execution_policy._EXIT_DURATION},
+            "ManualOrder": execution_policy._MANUAL_ORDER,
+            "ExternalReference": client_request_id,
+        }
 
     def get_order(self, order_id: str) -> OrderState:
         with _translate_saxo_errors():
@@ -775,9 +849,7 @@ class SaxoBroker:
             body["Orders"] = children
         return body
 
-    def _precheck_or_raise(
-        self, body: dict[str, Any], request: BracketOrderRequest
-    ) -> dict[str, Any]:
+    def _precheck_or_raise(self, body: dict[str, Any], *, label: str) -> dict[str, Any]:
         """POST /trade/v2/orders/precheck; non-Ok blocks the real POST."""
         precheck_body = dict(body)
         precheck_body["FieldGroups"] = ["Costs"]
@@ -786,8 +858,7 @@ class SaxoBroker:
         result = payload.get("PreCheckResult")
         if status >= 400 or error_info or (result is not None and result != "Ok"):
             raise OrderRejectedError(
-                f"precheck rejected bracket {request.client_request_id} "
-                f"({request.instrument.broker_symbol}): status={status} "
+                f"precheck rejected {label}: status={status} "
                 f"PreCheckResult={result!r} ErrorInfo={error_info!r} — nothing was placed"
             )
         return payload
@@ -825,7 +896,7 @@ class SaxoBroker:
         self,
         status: int,
         payload: dict[str, Any],
-        request: BracketOrderRequest,
+        request_id: str,
         account_key: str,
     ) -> PlacedOrder:
         if status in (200, 201):
@@ -833,7 +904,7 @@ class SaxoBroker:
             if not order_id:
                 raise BrokerError(
                     f"Saxo placement returned HTTP {status} without an OrderId "
-                    f"for bracket {request.client_request_id}: {payload!r}"
+                    f"for {request_id}: {payload!r}"
                 )
             exit_ids = tuple(
                 str(child["OrderId"])
@@ -841,32 +912,25 @@ class SaxoBroker:
                 if isinstance(child, dict) and child.get("OrderId")
             )
             return PlacedOrder(entry_order_id=str(order_id), exit_order_ids=exit_ids)
-
         if status == 202:
             order_id = self._find_order_id(payload)
             raise BrokerError(
-                f"Saxo 202 TradeNotCompleted for bracket {request.client_request_id}: "
+                f"Saxo 202 TradeNotCompleted for {request_id}: "
                 f"entry order {order_id} is likely LIVE while its related exits were "
                 "CANCELLED by Saxo (naked-entry hazard). No automatic action taken — "
                 "order state is genuinely unknown for ~seconds. Reconcile: poll "
                 "'alphalens broker orders', then 'alphalens broker cancel "
                 f"{order_id}' if the entry is unwanted."
             )
-
-        # 4xx rejection path. Sequential acceptance (master -> TP -> SL) means
-        # an OrderId in the error body = live orders exist -> auto-repair by
-        # cancelling the entry (cascade removes any placed child), then raise.
         detail = self._rejection_detail(payload)
         live_order_id = self._find_order_id(payload)
         if live_order_id:
             cleanup = self._repair_partial_acceptance(live_order_id, account_key)
             raise OrderRejectedError(
-                f"Saxo rejected bracket {request.client_request_id} with HTTP {status} "
+                f"Saxo rejected {request_id} with HTTP {status} "
                 f"AFTER accepting order {live_order_id} ({detail}); cleanup: {cleanup}"
             )
-        raise OrderRejectedError(
-            f"Saxo rejected bracket {request.client_request_id} with HTTP {status}: {detail}"
-        )
+        raise OrderRejectedError(f"Saxo rejected {request_id} with HTTP {status}: {detail}")
 
     def _repair_partial_acceptance(self, order_id: str, account_key: str) -> str:
         try:

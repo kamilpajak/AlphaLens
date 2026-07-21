@@ -172,6 +172,30 @@ class Broker(Protocol):
     def cancel_order(self, order_id: str) -> None: ...
 
 
+@runtime_checkable
+class SupportsStandaloneStop(Protocol):
+    """Extension capability: post-fill disaster-stop placement outside any bracket.
+
+    NOT on the base :class:`Broker` Protocol (which stays frozen — see the
+    class docstring) — only adapters implementing the MVP's Option-B
+    standalone-stop flow (Saxo: a StandAlone StopIfTraded, no bracket parent,
+    placed AFTER the entry fills) support it. The typed variant of the
+    capability-protocol pattern in ``brokers/reconcile.py``
+    (``SupportsOrderResolution`` / ``SupportsFillCrossCheck``): callers
+    ``isinstance``-narrow a ``Broker`` to this Protocol rather than widening
+    the base contract for one vendor's capability.
+    """
+
+    def place_standalone_stop(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        stop_price: float,
+        request_id: str | None = None,
+    ) -> PlacedOrder: ...
+
+
 __all__ = [
     "AccountSnapshot",
     "BracketOrderRequest",
@@ -187,4 +211,5 @@ __all__ = [
     "OrderStatus",
     "PlacedOrder",
     "Position",
+    "SupportsStandaloneStop",
 ]

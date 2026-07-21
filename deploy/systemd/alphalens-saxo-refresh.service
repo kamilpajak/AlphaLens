@@ -1,0 +1,39 @@
+[Unit]
+# Idle OAuth keep-alive. During active monitoring the 45s poll refreshes the
+# token as a side effect; this oneshot covers idle stretches (no open bracket).
+# Fires every ~20min, well inside the ~40min refresh-token window. Re-creates
+# the alphalens-saxo-refresh unit ADR 0012 removed. Design memo "Session lifecycle".
+#
+#   cp deploy/systemd/alphalens-saxo-refresh.{service,timer} ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-saxo-refresh.timer
+#
+# Single-refresher invariant: run this ONLY on the VPS that also runs the
+# broker-manager daemon (two hosts sharing the token store burn each other's
+# rotation chains — the TokenStore flock is per-host).
+Description=AlphaLens Saxo OAuth idle keep-alive (refresh_now)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# Needs the OAuth env + TELEGRAM_* for the _chain_lost alert. Fail loud on a
+# missing env file.
+EnvironmentFile=/etc/alphalens/env
+
+ExecStart=%h/AlphaLens/.venv/bin/alphalens broker auth --refresh
+
+# Cron-health metrics (last_success refreshes each ~20min fire -> the
+# AlphalensJobStale{job=saxo-refresh} rule catches "keep-alive stopped").
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics saxo-refresh
+
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=512M
+TasksMax=16
+
+[Install]
+WantedBy=default.target
