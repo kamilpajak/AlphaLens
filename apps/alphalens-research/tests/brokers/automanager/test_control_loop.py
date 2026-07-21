@@ -1,0 +1,211 @@
+"""Hermetic tests for control_loop.run_once / run_daemon.
+
+Every Task 1-10 dependency is injected as a stub (build_default_deps is covered
+by the SIM probe). Under test: kill-gate placement, always reconcile, execute
+the position-manager Action, re-derive identical classification on restart.
+"""
+
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from typing import Any
+
+from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager.position_manager import BrokerView, DisasterStop
+from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
+
+_RID = "rid-KO"
+
+
+class _StubBroker:
+    name = "stub"
+
+    def __init__(self) -> None:
+        self.cancelled: list[str] = []
+
+    def cancel_order(self, order_id: str) -> None:
+        self.cancelled.append(order_id)
+
+
+def _verdict(**over: Any) -> ReconcileVerdict:
+    base: dict[str, Any] = {
+        "brief_date": "2026-07-20",
+        "ticker": "KO",
+        "qty": 3,
+        "entry_order_id": "E-1",
+        "status": "WORKING",
+        "verdict": "WORKING",
+        "details": {"client_request_id": _RID},
+    }
+    base.update(over)
+    return ReconcileVerdict(**base)
+
+
+def _view() -> BrokerView:
+    return BrokerView(
+        protected_request_ids=frozenset(),
+        disaster_stops={_RID: DisasterStop(uic=307, side="SELL", stop_price=79.0)},
+        working_children={_RID: ("T-1",)},
+    )
+
+
+def _deps(
+    broker: _StubBroker,
+    *,
+    kill_file: Path,
+    verdicts: list[ReconcileVerdict],
+    place_calls: list,
+    stop_calls: list,
+    alerts: list,
+    picks: list | None = None,
+    chain_alive: bool = True,
+) -> cl.LoopDeps:
+    return cl.LoopDeps(
+        broker=broker,
+        kill_file=kill_file,
+        ensure_alive=lambda: type("C", (), {"alive": chain_alive, "reason": None})(),  # noqa: PLW0108
+        iter_picks=lambda: iter(picks or []),
+        place_pick=lambda pick: place_calls.append(pick) or True,
+        read_records=lambda: [{"brackets": [{"client_request_id": _RID}]}],
+        verdicts_fn=lambda records, broker: list(verdicts),
+        build_position_view=lambda broker, records: _view(),
+        place_standalone_stop=lambda uic, side, qty, price: stop_calls.append(
+            (uic, side, qty, price)
+        ),
+        sweep_orphans_fn=lambda broker: [],
+        alert=lambda msg: alerts.append(msg),  # noqa: PLW0108
+    )
+
+
+class TestRunOncePlacement(unittest.TestCase):
+    def test_filled_open_places_standalone_stop_at_realized_qty(self) -> None:
+        with TemporaryDirectory() as d:
+            broker = _StubBroker()
+            stop_calls: list = []
+            v = _verdict(
+                status="FILLED",
+                verdict="FILLED",
+                note="position open, exit orders working",
+                details={"client_request_id": _RID, "filled_quantity": 2.0},
+            )
+            deps = _deps(
+                broker,
+                kill_file=Path(d) / "KILL",
+                verdicts=[v],
+                place_calls=[],
+                stop_calls=stop_calls,
+                alerts=[],
+            )
+            report = cl.run_once(deps)
+            self.assertEqual(stop_calls, [(307, "SELL", 2.0, 79.0)])
+            self.assertEqual(report.stops_placed, 1)
+
+    def test_drains_armed_pick_when_chain_alive_and_no_kill(self) -> None:
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=place_calls,
+                stop_calls=[],
+                alerts=[],
+                picks=["pick-KO"],
+            )
+            cl.run_once(deps)
+            self.assertEqual(place_calls, ["pick-KO"])
+
+
+class TestKillFileGate(unittest.TestCase):
+    def test_kill_present_suppresses_placement_but_still_cancels(self) -> None:
+        with TemporaryDirectory() as d:
+            kill = Path(d) / "KILL"
+            kill.write_text("halt")
+            broker = _StubBroker()
+            place_calls: list = []
+            stop_calls: list = []
+            alerts: list = []
+            terminal = _verdict(status="CANCELLED", verdict="CANCELLED")
+            filled = _verdict(
+                status="FILLED",
+                verdict="FILLED",
+                note="position open, exit orders working",
+                details={"client_request_id": _RID, "filled_quantity": 2.0},
+            )
+            deps = _deps(
+                broker,
+                kill_file=kill,
+                verdicts=[terminal, filled],
+                place_calls=place_calls,
+                stop_calls=stop_calls,
+                alerts=alerts,
+                picks=["pick-KO"],
+            )
+            cl.run_once(deps)
+            self.assertEqual(place_calls, [])
+            self.assertEqual(stop_calls, [])
+            self.assertEqual(broker.cancelled, ["T-1"])
+            self.assertTrue(any("KILL" in a for a in alerts))
+
+
+class TestCrashRecovery(unittest.TestCase):
+    def test_restart_re_derives_identical_classification(self) -> None:
+        with TemporaryDirectory() as d:
+            broker = _StubBroker()
+            v = _verdict(status="CANCELLED", verdict="CANCELLED")
+            deps = _deps(
+                broker,
+                kill_file=Path(d) / "KILL",
+                verdicts=[v],
+                place_calls=[],
+                stop_calls=[],
+                alerts=[],
+            )
+            r1 = cl.run_once(deps)
+            r2 = cl.run_once(deps)
+            self.assertEqual(r1.actions, r2.actions)
+            self.assertEqual(r1.verdict_count, r2.verdict_count)
+
+
+class TestRunDaemonOnce(unittest.TestCase):
+    def test_once_runs_single_tick_sweeps_orphans_and_never_sleeps(self) -> None:
+        with TemporaryDirectory() as d:
+            broker = _StubBroker()
+            sweeps: list = []
+            deps = _deps(
+                broker,
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                stop_calls=[],
+                alerts=[],
+            )
+            deps = cl.LoopDeps(
+                **{**deps.__dict__, "sweep_orphans_fn": lambda b: sweeps.append(1) or []}
+            )
+            slept: list = []
+            beats: list = []
+            cl.run_daemon(
+                deps,
+                once=True,
+                poll_seconds=45,
+                sleep_fn=lambda s: slept.append(s),  # noqa: PLW0108
+                heartbeat_fn=lambda: beats.append(1),
+            )
+            self.assertEqual(len(sweeps), 1)
+            self.assertEqual(slept, [])
+            self.assertEqual(len(beats), 1)
+
+
+class TestManageCommandRegistered(unittest.TestCase):
+    def test_broker_app_has_manage_command(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        names = {c.name for c in broker_app.registered_commands}
+        self.assertIn("manage", names)
+
+
+if __name__ == "__main__":
+    unittest.main()

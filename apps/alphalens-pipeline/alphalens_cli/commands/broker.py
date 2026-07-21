@@ -921,3 +921,27 @@ def cancel_command(
     except BrokerError as exc:
         raise _fail(f"broker cancel failed: {exc}") from exc
     typer.echo(f"cancelled {order_id} (an entry cancel cascades to its bracket children)")
+
+
+@broker_app.command(name="manage")
+def manage_command(
+    once: bool = typer.Option(False, "--once", help="Run a single control-loop tick and exit."),
+    poll_seconds: float = typer.Option(
+        45.0, "--poll-seconds", help="Seconds to sleep between ticks in daemon mode (30-60s)."
+    ),
+) -> None:
+    """Run the SIM auto-manager loop: drain armed picks, place the in-band
+    subset + standalone disaster stop, reconcile, and manage each base position
+    to terminal. Kill instantly with `touch ~/.alphalens/broker_orders/KILL`.
+    SIM-only; placement still needs ALPHALENS_BROKER_ALLOW_ORDERS=1 (enforced
+    inside the broker)."""
+    from alphalens_pipeline.brokers.automanager.control_loop import build_default_deps, run_daemon
+    from alphalens_pipeline.brokers.contract import BrokerError
+
+    try:
+        deps = build_default_deps(poll_seconds=poll_seconds)
+        run_daemon(deps, once=once, poll_seconds=poll_seconds)
+    except BrokerError as exc:
+        raise _fail(f"broker manage failed: {exc}") from exc
+    if once:
+        typer.echo("manage: single tick complete")
