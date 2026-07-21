@@ -47,8 +47,9 @@ EMIT_JOB_METRICS_HOOK = SYSTEMD_DIR / "bin" / "alphalens-emit-job-metrics"
 # The active timer-driven services the metrics hook must be wired into.
 # Form-4 backfill is excluded — it is a long-running daemon (DONE
 # 2026-05-08, per CLAUDE.md) and would emit a single point at end-of-run.
-# The Alpaca/Saxo paper-trading + Saxo-refresh units were decommissioned
-# with the broker chain (ADR 0012).
+# The Alpaca paper-trading units were decommissioned with the broker chain
+# (ADR 0012). The Saxo auto-manager re-creates a saxo-refresh oneshot below
+# (SAXO_REFRESH_SERVICE) for the new SIM auto-manager.
 
 # Nightly broker-free ladder + population backfill (Track A v2 PR-T). The unit
 # name is retained for the existing systemd timer (a rename is a deferred
@@ -60,6 +61,15 @@ SHADOW_TIMER = SYSTEMD_DIR / "alphalens-feedback-shadow-returns.timer"
 EDGE_MIRROR_SERVICE = SYSTEMD_DIR / "alphalens-edge-mirror.service"
 EDGE_MIRROR_TIMER = SYSTEMD_DIR / "alphalens-edge-mirror.timer"
 
+# Saxo auto-manager units (ADR 0013 T6/T7 live consumer). The broker-manager
+# daemon is excluded from ACTIVE_SERVICES / the emit-hook glob like
+# form4-backfill (long-running, would emit a single point at end-of-run).
+# The saxo-refresh oneshot re-creates the idle OAuth keep-alive that ADR
+# 0012 previously decommissioned along with the rest of the broker chain.
+BROKER_MANAGER_SERVICE = SYSTEMD_DIR / "alphalens-broker-manager.service"
+SAXO_REFRESH_SERVICE = SYSTEMD_DIR / "alphalens-saxo-refresh.service"
+SAXO_REFRESH_TIMER = SYSTEMD_DIR / "alphalens-saxo-refresh.timer"
+
 ACTIVE_SERVICES = (
     EDGAR_SERVICE,
     LIT_WEEKLY_SERVICE,
@@ -68,6 +78,7 @@ ACTIVE_SERVICES = (
     SHADOW_SERVICE,
     SYSTEMD_DIR / "alphalens-form4-incremental.service",
     EDGE_MIRROR_SERVICE,
+    SAXO_REFRESH_SERVICE,
 )
 
 
@@ -1075,6 +1086,78 @@ class TestStartLimitInUnitSection(unittest.TestCase):
         # test cannot pass vacuously if the directives are renamed/removed.
         self.assertGreater(checked, 0, "no StartLimit* directives found to check")
         self.assertEqual(offenders, [], f"StartLimit* must live in [Unit]: {offenders}")
+
+
+class TestBrokerManagerUnit(unittest.TestCase):
+    def test_service_exists(self) -> None:
+        self.assertTrue(BROKER_MANAGER_SERVICE.is_file(), f"missing at {BROKER_MANAGER_SERVICE}")
+
+    def test_service_is_simple_daemon_with_restart(self) -> None:
+        text = BROKER_MANAGER_SERVICE.read_text()
+        self.assertIn("Type=simple", text)
+        self.assertRegex(text, re.compile(r"^Restart=on-failure\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^RestartSec=\d+\s*$", re.MULTILINE))
+
+    def test_execstart_runs_host_venv_manage(self) -> None:
+        self.assertRegex(
+            BROKER_MANAGER_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens\s+broker\s+manage\b"
+                r"[^\n]*--poll-seconds\s+\d+",
+                re.MULTILINE,
+            ),
+            "ExecStart must run host-venv `broker manage --poll-seconds N` (no --once).",
+        )
+
+    def test_execstart_is_not_once(self) -> None:
+        self.assertNotIn("--once", BROKER_MANAGER_SERVICE.read_text())
+
+    def test_env_file_fail_loud_and_documents_allow_orders_arm(self) -> None:
+        text = BROKER_MANAGER_SERVICE.read_text()
+        self.assertRegex(text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE))
+        self.assertIn("ALPHALENS_BROKER_ALLOW_ORDERS", text)
+
+    def test_resource_caps_present(self) -> None:
+        text = BROKER_MANAGER_SERVICE.read_text()
+        self.assertRegex(text, re.compile(r"^MemoryMax=\S+\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^TasksMax=\d+\s*$", re.MULTILINE))
+
+    def test_working_dir_and_install(self) -> None:
+        text = BROKER_MANAGER_SERVICE.read_text()
+        self.assertIn("WorkingDirectory=%h/AlphaLens", text)
+        self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+
+    def test_daemon_excluded_from_emit_hook_glob(self) -> None:
+        self.assertNotIn(BROKER_MANAGER_SERVICE, ACTIVE_SERVICES)
+
+
+class TestSaxoRefreshUnit(unittest.TestCase):
+    def test_service_is_oneshot_refresh(self) -> None:
+        text = SAXO_REFRESH_SERVICE.read_text()
+        self.assertIn("Type=oneshot", text)
+        self.assertRegex(
+            text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens\s+broker\s+auth\s+--refresh\s*$",
+                re.MULTILINE,
+            ),
+            "ExecStart must run `broker auth --refresh`.",
+        )
+
+    def test_service_env_fail_loud_and_working_dir(self) -> None:
+        text = SAXO_REFRESH_SERVICE.read_text()
+        self.assertRegex(text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE))
+        self.assertIn("WorkingDirectory=%h/AlphaLens", text)
+
+    def test_timer_fires_inside_40min_window_persistent(self) -> None:
+        text = SAXO_REFRESH_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^OnUnitActiveSec=20min\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+
+    def test_timer_carries_install_section(self) -> None:
+        text = SAXO_REFRESH_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
 
 
 if __name__ == "__main__":

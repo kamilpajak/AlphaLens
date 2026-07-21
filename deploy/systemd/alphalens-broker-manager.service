@@ -1,0 +1,54 @@
+[Unit]
+# SIM auto-manager daemon (ADR 0013 T6 IN-FLIGHT / T7 EXIT live consumer).
+# Always-on polling loop: kill-gate -> session-keeper -> orphan sweep (start)
+# -> drain armed picks -> place in-band subset + standalone disaster stop ->
+# reconcile -> manage each base position to terminal. SIM-only (SaxoClient
+# refuses non-SIM base URL). Design:
+# docs/research/saxo_automanager_mvp_design_2026_07_21.md.
+#
+# Install as a user unit:
+#   cp deploy/systemd/alphalens-broker-manager.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-broker-manager.service
+# Emergency stop (instant): touch ~/.alphalens/broker_orders/KILL
+# Disarm placement (needs restart): unset ALPHALENS_BROKER_ALLOW_ORDERS in
+#   /etc/alphalens/env, then `systemctl --user restart ...`.
+# Inspect: journalctl --user -u alphalens-broker-manager.service -f
+# Persistence: sudo loginctl enable-linger "$USER"
+Description=AlphaLens SIM auto-manager (poll + reconcile + exit management)
+After=network-online.target
+Wants=network-online.target
+
+# Cap crash loops. [Unit]-section keys — under [Service] modern systemd
+# silently ignores them (TestStartLimitInUnitSection).
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/AlphaLens
+
+# Shared secrets. Needs the OAuth chain (SAXO_APP_KEY/SAXO_APP_SECRET/
+# SAXO_AUTH_REDIRECT_URL), the Telegram alert pair, and — to place orders —
+# ALPHALENS_BROKER_ALLOW_ORDERS=1. No leading `-`: fail loud on a missing env
+# file. UNSET the arm + restart to run inert (reconcile + read only).
+EnvironmentFile=/etc/alphalens/env
+
+# Node_exporter textfile dir for the per-tick heartbeat gauge (Task 13).
+Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
+
+# Daemon: no single-shot flag here (a clean exit would not be relaunched by
+# Restart=on-failure).
+ExecStart=%h/AlphaLens/.venv/bin/alphalens broker manage --poll-seconds 45
+
+Restart=on-failure
+RestartSec=30
+
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=1G
+TasksMax=32
+
+[Install]
+WantedBy=default.target

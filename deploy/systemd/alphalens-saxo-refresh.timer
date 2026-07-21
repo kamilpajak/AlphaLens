@@ -1,0 +1,13 @@
+[Unit]
+Description=AlphaLens Saxo OAuth keep-alive timer (~20min, inside the 40min window)
+
+[Timer]
+# 20min << 40min refresh-token life -> two consecutive misses still leave a
+# margin. OnBootSec re-arms promptly after reboot; Persistent=true self-heals a
+# single missed window on the next boot.
+OnBootSec=3min
+OnUnitActiveSec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
