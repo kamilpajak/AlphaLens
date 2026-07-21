@@ -7,16 +7,27 @@ the position-manager Action, re-derive identical classification on restart.
 
 from __future__ import annotations
 
+import datetime as dt
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager.picks import Pick
 from alphalens_pipeline.brokers.automanager.position_manager import BrokerView, DisasterStop
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
 _RID = "rid-KO"
+
+
+def _pick(ticker: str = "KO", date: str = "2026-07-20") -> Pick:
+    return Pick(
+        ticker=ticker,
+        date=dt.date.fromisoformat(date),
+        armed_ts="2026-07-20T14:00:00+00:00",
+        status="armed",
+    )
 
 
 class _StubBroker:
@@ -71,7 +82,7 @@ def _deps(
         read_records=lambda: [{"brackets": [{"client_request_id": _RID}]}],
         verdicts_fn=lambda records, broker: list(verdicts),
         build_position_view=lambda broker, records: _view(),
-        place_standalone_stop=lambda uic, side, qty, price: stop_calls.append(
+        place_standalone_stop=lambda uic, side, qty, price, request_id: stop_calls.append(
             (uic, side, qty, price)
         ),
         sweep_orphans_fn=lambda broker: [],
@@ -102,7 +113,58 @@ class TestRunOncePlacement(unittest.TestCase):
             self.assertEqual(stop_calls, [(307, "SELL", 2.0, 79.0)])
             self.assertEqual(report.stops_placed, 1)
 
+    def test_standalone_stop_placer_receives_entry_request_id(self) -> None:
+        # I2: the placer is handed the entry's client_request_id so the "placed"
+        # journal line can correlate protection by request_id, not Uic.
+        with TemporaryDirectory() as d:
+            calls: list = []
+            v = _verdict(
+                status="FILLED",
+                verdict="FILLED",
+                note="position open, exit orders working",
+                details={"client_request_id": _RID, "filled_quantity": 2.0},
+            )
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[v],
+                place_calls=[],
+                stop_calls=[],
+                alerts=[],
+            )
+            deps = cl.LoopDeps(
+                **{
+                    **deps.__dict__,
+                    "place_standalone_stop": lambda uic, side, qty, price, request_id: calls.append(
+                        (uic, side, qty, price, request_id)
+                    ),
+                }
+            )
+            cl.run_once(deps)
+            self.assertEqual(calls, [(307, "SELL", 2.0, 79.0, _RID)])
+
     def test_drains_armed_pick_when_chain_alive_and_no_kill(self) -> None:
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            pick = _pick("KO", "2026-07-20")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=place_calls,
+                stop_calls=[],
+                alerts=[],
+                picks=[pick],
+            )
+            cl.run_once(deps)
+            self.assertEqual(place_calls, [pick])
+
+
+class TestPickSubmissionJoin(unittest.TestCase):
+    """C1: drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
+    step 4). Without the join the daemon re-places every armed pick every tick."""
+
+    def test_pick_already_in_submissions_is_not_re_placed(self) -> None:
         with TemporaryDirectory() as d:
             place_calls: list = []
             deps = _deps(
@@ -112,10 +174,118 @@ class TestRunOncePlacement(unittest.TestCase):
                 place_calls=place_calls,
                 stop_calls=[],
                 alerts=[],
-                picks=["pick-KO"],
+                picks=[_pick("KO", "2026-07-20")],
             )
-            cl.run_once(deps)
-            self.assertEqual(place_calls, ["pick-KO"])
+            # A submissions record already carries this (ticker, brief_date).
+            deps = cl.LoopDeps(
+                **{
+                    **deps.__dict__,
+                    "read_records": lambda: [{"ticker": "KO", "brief_date": "2026-07-20"}],
+                }
+            )
+            report = cl.run_once(deps)
+            self.assertEqual(place_calls, [])
+            self.assertEqual(report.picks_placed, 0)
+
+    def test_genuinely_new_pick_is_placed_once(self) -> None:
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            pick = _pick("MSFT", "2026-07-20")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=place_calls,
+                stop_calls=[],
+                alerts=[],
+                picks=[pick],
+            )
+            # Journal holds a DIFFERENT (ticker, brief_date) — no join match.
+            deps = cl.LoopDeps(
+                **{
+                    **deps.__dict__,
+                    "read_records": lambda: [{"ticker": "KO", "brief_date": "2026-07-20"}],
+                }
+            )
+            report = cl.run_once(deps)
+            self.assertEqual(place_calls, [pick])
+            self.assertEqual(report.picks_placed, 1)
+
+    def test_same_ticker_different_brief_date_is_placed(self) -> None:
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            pick = _pick("KO", "2026-07-21")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=place_calls,
+                stop_calls=[],
+                alerts=[],
+                picks=[pick],
+            )
+            deps = cl.LoopDeps(
+                **{
+                    **deps.__dict__,
+                    "read_records": lambda: [{"ticker": "KO", "brief_date": "2026-07-20"}],
+                }
+            )
+            report = cl.run_once(deps)
+            self.assertEqual(place_calls, [pick])
+            self.assertEqual(report.picks_placed, 1)
+
+
+class TestStandaloneStopJournalFold(unittest.TestCase):
+    """I2: standalone-stop protection is correlated by the entry's
+    client_request_id, NOT its Uic. Two entries sharing one Uic each need their
+    OWN placed stop — a Uic-keyed correlation would mark both protected the
+    moment the first one's stop posts, leaving the second silently unprotected."""
+
+    def test_two_entries_one_uic_only_the_placed_one_is_protected(self) -> None:
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "rid-A",
+                "uic": 307,
+                "side": "SELL",
+                "stop_price": 79.0,
+            },
+            {
+                "kind": "planned",
+                "client_request_id": "rid-B",
+                "uic": 307,
+                "side": "SELL",
+                "stop_price": 78.0,
+            },
+            {
+                "kind": "placed",
+                "client_request_id": "rid-A",
+                "uic": 307,
+                "side": "SELL",
+                "qty": 2.0,
+                "stop_price": 79.0,
+                "order_id": "S-1",
+            },
+        ]
+        disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
+        self.assertEqual(set(disaster_stops), {"rid-A", "rid-B"})
+        self.assertEqual(protected, frozenset({"rid-A"}))
+
+    def test_placed_line_without_request_id_protects_nothing(self) -> None:
+        # A legacy Uic-only placed line must no longer confer protection.
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "rid-A",
+                "uic": 307,
+                "side": "SELL",
+                "stop_price": 79.0,
+            },
+            {"kind": "placed", "uic": 307, "side": "SELL", "qty": 2.0, "stop_price": 79.0},
+        ]
+        disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
+        self.assertEqual(set(disaster_stops), {"rid-A"})
+        self.assertEqual(protected, frozenset())
 
 
 class TestKillFileGate(unittest.TestCase):

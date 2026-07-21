@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -51,7 +51,7 @@ class LoopDeps:
     read_records: Callable[[], list[Mapping[str, Any]]]
     verdicts_fn: Callable[[list[Mapping[str, Any]], Broker], list[ReconcileVerdict]]
     build_position_view: Callable[[Broker, list[Mapping[str, Any]]], BrokerView]
-    place_standalone_stop: Callable[[int, str, float, float], None]
+    place_standalone_stop: Callable[[int, str, float, float, str], None]
     sweep_orphans_fn: Callable[[Broker], list[Any]]
     alert: Callable[[str], None]
 
@@ -71,17 +71,36 @@ def _always() -> bool:
     return True
 
 
+def _submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str, str]]:
+    """The (ticker, brief_date) pairs already present in the submissions journal.
+
+    Design §Data-flow step 4: the drain places only picks NOT yet joined to
+    submissions.jsonl. Without this join every armed pick is re-submitted on
+    every tick with a fresh client_request_id (execution.py mints uuid4 per
+    bracket), which Saxo's 15 s x-request-id dedup cannot catch."""
+    keys: set[tuple[str, str]] = set()
+    for record in records:
+        ticker = record.get("ticker")
+        brief_date = record.get("brief_date")
+        if ticker and brief_date:
+            keys.add((str(ticker).upper(), str(brief_date)))
+    return keys
+
+
+def _pick_key(pick: Any) -> tuple[str, str]:
+    """The (ticker, brief_date) join key for one armed pick."""
+    return (str(pick.ticker).upper(), pick.date.isoformat())
+
+
 def _default_emit_heartbeat() -> None:
     """Write the per-tick Prometheus heartbeat gauge. A Type=simple daemon rarely
     triggers ExecStopPost, so the emit-job-metrics last_success clock is the
     wrong health signal — this gauge (watched by AlphalensBrokerManagerHeartbeatStale)
     is. Best-effort: a textfile-dir hiccup must never crash the loop."""
-    import time as _time
-
     from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
     try:
-        emit_domain_metrics("broker-manager", {HEARTBEAT_METRIC: int(_time.time())})
+        emit_domain_metrics("broker-manager", {HEARTBEAT_METRIC: int(time.time())})
     except OSError:
         logger.warning("broker-manager heartbeat emit failed", exc_info=True)
 
@@ -104,7 +123,14 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
             report.orphans += 1
 
     if not kill and getattr(chain, "alive", False):
+        # Drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
+        # step 4). Read the journal ONCE before the drain; place_pick appends new
+        # lines during the loop, but a pick placed this tick is caught next tick
+        # (the read below re-reads fresh state).
+        already_submitted = _submitted_pick_keys(deps.read_records())
         for pick in deps.iter_picks():
+            if _pick_key(pick) in already_submitted:
+                continue
             if deps.place_pick(pick):
                 report.picks_placed += 1
 
@@ -150,7 +176,9 @@ def _execute_action(
                 f"{verdict.ticker}: standalone-stop placement skipped — no journaled disaster stop"
             )
             return
-        deps.place_standalone_stop(disaster.uic, disaster.side, action.qty, action.stop_price)
+        deps.place_standalone_stop(
+            disaster.uic, disaster.side, action.qty, action.stop_price, request_id
+        )
         report.stops_placed += 1
 
 
@@ -278,6 +306,36 @@ def _iter_standalone_stop_journal() -> Iterator[dict[str, Any]]:
                 yield record
 
 
+def _fold_standalone_stop_journal(
+    lines: Iterable[Mapping[str, Any]],
+) -> tuple[dict[str, DisasterStop], frozenset[str]]:
+    """Fold the out-of-band standalone-stop journal into (disaster_stops keyed by
+    the entry's client_request_id, the set of protected client_request_ids).
+
+    Protection is correlated by the entry's client_request_id — NOT its Uic. Two
+    entries sharing one Uic each require their OWN placed stop; a Uic-keyed
+    correlation would mark both protected the moment the first one's stop posts,
+    leaving the second entry silently unprotected. A "placed" line without a
+    client_request_id (a legacy Uic-only line) therefore confers no protection.
+    Pure — no I/O; malformed lines are skipped."""
+    disaster_stops: dict[str, DisasterStop] = {}
+    protected: set[str] = set()
+    for line in lines:
+        kind = line.get("kind")
+        try:
+            if kind == "planned" and line.get("client_request_id"):
+                disaster_stops[str(line["client_request_id"])] = DisasterStop(
+                    uic=int(line["uic"]),
+                    side=str(line["side"]),
+                    stop_price=float(line["stop_price"]),
+                )
+            elif kind == "placed" and line.get("client_request_id"):
+                protected.add(str(line["client_request_id"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return disaster_stops, frozenset(protected)
+
+
 def _default_oauth_provider() -> Any:
     """Return the shipped OAuthTokenProvider wired from the Saxo env vars."""
     from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
@@ -288,7 +346,13 @@ def _default_oauth_provider() -> Any:
 def _default_alert() -> Callable[[str], None]:
     """Env-driven Telegram alert sink over the canonical TelegramClient
     (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID). send_message never raises, so a
-    delivery blip cannot crash a tick. SIM-probe-only."""
+    delivery blip cannot crash a tick. SIM-probe-only.
+
+    Operational alert bodies carry raw request-id reprs / reasons with `_`, `*`,
+    `[` — under the client's default parse_mode="Markdown" those trip a Telegram
+    400 and the alert is SILENTLY dropped (defeating the safety-alert path). Send
+    plain: parse_mode="" disables entity parsing so the body goes through
+    verbatim."""
     import os
 
     from alphalens_pipeline.data.alt_data.telegram_client import TelegramClient
@@ -297,7 +361,7 @@ def _default_alert() -> Callable[[str], None]:
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
     def _alert(message: str) -> None:
-        client.send_message(chat_id, message)
+        client.send_message(chat_id, message, parse_mode="")
 
     return _alert
 
@@ -489,8 +553,9 @@ def _make_position_view_builder(
     a position_manager.BrokerView: working_children reads exit order ids straight
     from the submission records, filtered to broker orders still WORKING;
     disaster_stops comes from the "planned" journal lines (written by
-    _make_place_pick); protected_request_ids is every entry whose Uic has a
-    matching "placed" line (written by _make_standalone_stop_placer)."""
+    _make_place_pick); protected_request_ids is every entry whose OWN
+    client_request_id has a matching "placed" line (written by
+    _make_standalone_stop_placer) — correlated by client_request_id, not Uic."""
 
     def _build(_broker: Broker, records: list[Mapping[str, Any]]) -> BrokerView:
         from alphalens_pipeline.brokers.contract import OrderStatus
@@ -514,26 +579,8 @@ def _make_position_view_builder(
                 if exits:
                     working_children[str(request_id)] = exits
 
-        disaster_stops: dict[str, DisasterStop] = {}
-        protected_uics: set[int] = set()
-        for line in _iter_standalone_stop_journal():
-            kind = line.get("kind")
-            try:
-                if kind == "planned" and line.get("client_request_id"):
-                    disaster_stops[str(line["client_request_id"])] = DisasterStop(
-                        uic=int(line["uic"]),
-                        side=str(line["side"]),
-                        stop_price=float(line["stop_price"]),
-                    )
-                elif kind == "placed" and line.get("uic") is not None:
-                    protected_uics.add(int(line["uic"]))
-            except (KeyError, TypeError, ValueError):
-                continue
-
-        protected_request_ids = frozenset(
-            request_id
-            for request_id, disaster in disaster_stops.items()
-            if disaster.uic in protected_uics
+        disaster_stops, protected_request_ids = _fold_standalone_stop_journal(
+            _iter_standalone_stop_journal()
         )
         return BrokerView(
             protected_request_ids=protected_request_ids,
@@ -544,19 +591,22 @@ def _make_position_view_builder(
     return _build
 
 
-def _make_standalone_stop_placer(broker: Broker) -> Callable[[int, str, float, float], None]:
+def _make_standalone_stop_placer(broker: Broker) -> Callable[[int, str, float, float, str], None]:
     """Adapt SaxoBroker.place_standalone_stop, then write the "placed" half of
     the out-of-band standalone-stop journal — read back by
-    _make_position_view_builder on the NEXT tick to mark every entry sharing
-    this Uic protected. The placement and its journal record are NOT
-    transactional (a crash between the two is exactly the orphan window
-    orphan_sweeper flags), matching _make_place_pick's placement->journal order."""
+    _make_position_view_builder on the NEXT tick to mark THIS entry's
+    client_request_id protected (correlated by client_request_id, not Uic, so an
+    entry sharing the Uic is not falsely marked protected). The placement and its
+    journal record are NOT transactional (a crash between the two is exactly the
+    orphan window orphan_sweeper flags), matching _make_place_pick's
+    placement->journal order."""
 
-    def _place(uic: int, side: str, qty: float, stop_price: float) -> None:
+    def _place(uic: int, side: str, qty: float, stop_price: float, request_id: str) -> None:
         placed = broker.place_standalone_stop(uic, side, qty, stop_price)
         _append_standalone_stop_journal(
             {
                 "kind": "placed",
+                "client_request_id": request_id,
                 "uic": uic,
                 "side": side,
                 "qty": qty,
