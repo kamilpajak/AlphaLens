@@ -42,7 +42,14 @@ Decision = Allow | Refuse
 
 
 class SessionState(Protocol):
-    alive: bool
+    """Read-only view of chain aliveness — check() only ever reads .alive, so
+    the protocol declares it as a read-only property. Declaring it as a plain
+    mutable attribute would reject frozen-dataclass implementers (their
+    attribute is read-only by construction) under pyright's protocol variance
+    check."""
+
+    @property
+    def alive(self) -> bool: ...
 
 
 @dataclass(frozen=True)

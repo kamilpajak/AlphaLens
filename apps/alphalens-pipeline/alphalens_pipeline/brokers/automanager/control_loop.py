@@ -27,7 +27,11 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlaceStandaloneStop,
     advance,
 )
-from alphalens_pipeline.brokers.contract import BrokerError
+from alphalens_pipeline.brokers.contract import (
+    BrokerCapabilityError,
+    BrokerError,
+    SupportsStandaloneStop,
+)
 
 if TYPE_CHECKING:
     from alphalens_pipeline.brokers.contract import Broker
@@ -261,6 +265,12 @@ def build_default_deps(*, poll_seconds: float) -> LoopDeps:
     )
 
     broker = get_default_broker()
+    if not isinstance(broker, SupportsStandaloneStop):
+        raise BrokerCapabilityError(
+            f"broker {broker.name!r} does not implement place_standalone_stop "
+            "(SupportsStandaloneStop) — the auto-manager's disaster-stop flow "
+            "requires it; wire a different broker or add the capability."
+        )
     keeper = session_keeper.SessionKeeper(_default_oauth_provider())
 
     def _read_records() -> list[Mapping[str, Any]]:
@@ -657,7 +667,9 @@ def _standalone_stop_request_id(entry_request_id: str) -> str:
     return f"{entry_request_id}-stop"
 
 
-def _make_standalone_stop_placer(broker: Broker) -> Callable[[int, str, float, float, str], None]:
+def _make_standalone_stop_placer(
+    broker: SupportsStandaloneStop,
+) -> Callable[[int, str, float, float, str], None]:
     """Adapt SaxoBroker.place_standalone_stop with a recoverable place-then-journal.
 
     Journals an "intent" line (carrying the entry client_request_id + the

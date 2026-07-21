@@ -87,6 +87,11 @@ def _operator_report(
         entry = tier.bracket.entry_limit
         if tier.tp_placed_as_child:
             tp = tier.bracket.take_profit
+            # classify() only ever sets tp_placed_as_child=True on a tier whose
+            # bracket was built with take_profit=tp (dataclasses.replace above),
+            # so tp is not None here for every tier this private helper actually
+            # receives (its sole caller, classify() itself).
+            assert tp is not None, "tp_placed_as_child=True implies a non-None take_profit"
             pct = abs(tp - entry) / entry * 100.0
             lines.append(f"  tier {idx}: entry {entry:.2f} + TP {tp:.2f} child (+{pct:.1f}%)")
         elif tier.tp_operator_managed is not None:
