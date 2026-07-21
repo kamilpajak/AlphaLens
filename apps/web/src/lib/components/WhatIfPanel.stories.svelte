@@ -185,6 +185,13 @@
 		await waitFor(() =>
 			expect(canvas.getByText(/n 112/)).toBeVisible()
 		);
+
+		// vs-realized baseline covers fewer rows (realized_r_baseline_n = 110 <
+		// n = 112), so the subset is surfaced as "(110 of 112)" — not a second
+		// bare "n 110" that reads like the stat-line format changed between lenses.
+		await waitFor(() =>
+			expect(canvas.getByText(/\(110 of 112\)/)).toBeVisible()
+		);
 	}}
 >
 	{#snippet template()}
