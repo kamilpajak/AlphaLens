@@ -16,7 +16,11 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager.picks import Pick
-from alphalens_pipeline.brokers.automanager.position_manager import BrokerView, DisasterStop
+from alphalens_pipeline.brokers.automanager.position_manager import (
+    BrokerView,
+    DisasterStop,
+    PlannedExit,
+)
 from alphalens_pipeline.brokers.contract import BrokerError
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
@@ -694,6 +698,196 @@ class TestRunDaemonOnce(unittest.TestCase):
             self.assertEqual(len(sweeps), 1)
             self.assertEqual(slept, [])
             self.assertEqual(len(beats), 1)
+
+
+class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
+    """Task 4 (memo §7): the planned-exits fold keys by UIC and returns PLAN
+    PRICES only. It NEVER returns a ``frozenset`` protected set — protection is
+    derived from live broker state (Tasks 5/6), never from a journal line. An
+    ``intent`` / ``placed`` line contributes nothing to a protection decision."""
+
+    def test_two_tiers_one_uic_fold_to_one_planned_exit(self) -> None:
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 306.72,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {
+                "kind": "planned",
+                "client_request_id": "crid-1",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 297.5,
+                "tier_index": 1,
+                "gen": 0,
+            },
+        ]
+        result = cl._fold_planned_exits(lines)
+        self.assertEqual(set(result), {43070})
+        planned = result[43070]
+        self.assertIsInstance(planned, PlannedExit)
+        self.assertEqual(planned.uic, 43070)
+        self.assertEqual(planned.side, "SELL")
+        self.assertAlmostEqual(planned.stop_price, 216.48)
+        # Governing TP = the SHALLOWEST filled tier's target (min tier_index).
+        self.assertIsNotNone(planned.tp_price)
+        self.assertAlmostEqual(planned.tp_price or 0.0, 306.72)
+        # Governing crid = the shallowest tier, for the deterministic ref.
+        self.assertEqual(planned.entry_crid, "crid-0")
+        self.assertFalse(planned.conflicting)
+        self.assertEqual(planned.n_plans, 1)
+
+    def test_fold_returns_a_plain_dict_no_protected_frozenset(self) -> None:
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 306.72,
+                "tier_index": 0,
+                "gen": 0,
+            }
+        ]
+        result = cl._fold_planned_exits(lines)
+        # The legacy fold returned (mapping, frozenset); this one is a plain dict.
+        self.assertIsInstance(result, dict)
+        self.assertNotIsInstance(result, tuple)
+
+    def test_intent_and_placed_lines_contribute_nothing(self) -> None:
+        lines = [
+            {
+                "kind": "intent",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "qty": 46.0,
+                "stop_price": 216.48,
+            },
+            {
+                "kind": "placed",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "qty": 46.0,
+                "stop_price": 216.48,
+                "order_id": "S-1",
+            },
+        ]
+        self.assertEqual(cl._fold_planned_exits(lines), {})
+
+    def test_grows_conflicting_when_two_plans_hit_one_uic(self) -> None:
+        # Two DISTINCT plans on one netted uic each start at tier_index 0 -> the
+        # fold flags conflicting so Task 5 refuses to merge them.
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-A0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 306.72,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {
+                "kind": "planned",
+                "client_request_id": "crid-B0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 210.00,
+                "take_profit": 300.00,
+                "tier_index": 0,
+                "gen": 0,
+            },
+        ]
+        planned = cl._fold_planned_exits(lines)[43070]
+        self.assertTrue(planned.conflicting)
+        self.assertEqual(planned.n_plans, 2)
+
+    def test_tiers_disagree_takes_max_stop_for_a_long(self) -> None:
+        # If journaled tiers disagree on the disaster stop, take the MAX (tightest
+        # for a long) — a defensive, documented risk judgment (memo §8).
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 306.72,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {
+                "kind": "planned",
+                "client_request_id": "crid-1",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 220.00,
+                "take_profit": 297.5,
+                "tier_index": 1,
+                "gen": 0,
+            },
+        ]
+        planned = cl._fold_planned_exits(lines)[43070]
+        self.assertAlmostEqual(planned.stop_price, 220.00)
+
+
+class TestGenStampedRefChangesOnResize(unittest.TestCase):
+    """Task 4 (memo §4.5): deterministic gen-stamped request-ids — stable for a
+    same-size crash-retry (Saxo dedup catches it), distinct on a resize (never
+    falsely deduped to the stale, smaller order). ``gen`` is persisted append-only
+    per uic so it survives a daemon restart."""
+
+    def test_ref_helpers_are_gen_stamped(self) -> None:
+        self.assertEqual(cl._exit_stop_ref("crid-0", 0), "crid-0-stop-0")
+        self.assertEqual(cl._exit_tp_ref("crid-0", 0), "crid-0-tp-0")
+        self.assertEqual(cl._exit_stop_ref("crid-0", 2), "crid-0-stop-2")
+        self.assertEqual(cl._exit_tp_ref("crid-0", 3), "crid-0-tp-3")
+
+    def test_resize_increments_gen_same_size_retry_keeps_it(self) -> None:
+        with TemporaryDirectory() as tmp:
+            journal = Path(tmp) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                next_gen = cl._make_next_gen(43070)
+                # First placement -> gen 0.
+                self.assertEqual(next_gen(46.0), 0)
+                # Same-size retry -> same gen (dedup-safe ref).
+                self.assertEqual(next_gen(46.0), 0)
+                # Resize -> distinct gen (never deduped to the stale order).
+                self.assertEqual(next_gen(30.0), 1)
+                self.assertEqual(next_gen(30.0), 1)
+                self.assertEqual(next_gen(45.0), 2)
+
+    def test_float_tolerance_no_gen_flicker(self) -> None:
+        with TemporaryDirectory() as tmp:
+            journal = Path(tmp) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                next_gen = cl._make_next_gen(43070)
+                self.assertEqual(next_gen(46.0), 0)
+                # A sub-share wobble is NOT a resize (never bare >= on floats).
+                self.assertEqual(next_gen(45.9999999), 0)
+
+    def test_gen_persists_append_only_across_fresh_callables(self) -> None:
+        with TemporaryDirectory() as tmp:
+            journal = Path(tmp) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._make_next_gen(43070)(46.0)  # persist gen 0
+                cl._make_next_gen(43070)(30.0)  # persist gen 1 (resize)
+                # A fresh callable re-derives from the journal (restart-safe).
+                self.assertEqual(cl._make_next_gen(43070)(30.0), 1)
+                self.assertEqual(cl._make_next_gen(43070)(20.0), 2)
+                # A different uic keeps its own counter.
+                self.assertEqual(cl._make_next_gen(99999)(10.0), 0)
 
 
 class TestManageCommandRegistered(unittest.TestCase):

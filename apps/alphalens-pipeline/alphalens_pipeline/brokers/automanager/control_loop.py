@@ -25,6 +25,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     DisasterStop,
     NoOp,
     PlaceStandaloneStop,
+    PlannedExit,
     advance,
 )
 from alphalens_pipeline.brokers.contract import (
@@ -332,6 +333,7 @@ def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
 
 
 _INITIAL_GEN = 0  # entry-placement plan is generation 0; resizes bump it via next_gen() (Task 4)
+_QTY_EPS = 0.5  # half a share — resize tolerance; NEVER a bare >= on floats (A-S6/B-S2)
 
 
 def _build_planned_line(
@@ -414,6 +416,121 @@ def _fold_standalone_stop_journal(
         except (KeyError, TypeError, ValueError):
             continue
     return disaster_stops, frozenset(protected)
+
+
+def _exit_stop_ref(entry_crid: str, gen: int) -> str:
+    """Deterministic gen-stamped x-request-id for a protective STOP leg (memo §4.5)."""
+    return f"{entry_crid}-stop-{gen}"
+
+
+def _exit_tp_ref(entry_crid: str, gen: int) -> str:
+    """Deterministic gen-stamped x-request-id for a take-profit leg (rung 2, memo §4.5)."""
+    return f"{entry_crid}-tp-{gen}"
+
+
+def _read_persisted_gen(uic: int) -> tuple[int, float | None]:
+    """Latest ``(gen, qty)`` recorded for a uic in the append-only gen journal;
+    ``(_INITIAL_GEN, None)`` when the uic has never been sized (append-only, so
+    the last matching line wins)."""
+    gen = _INITIAL_GEN
+    last_qty: float | None = None
+    for line in _iter_standalone_stop_journal():
+        if line.get("kind") != "gen":
+            continue
+        try:
+            if int(line["uic"]) != uic:
+                continue
+            gen = int(line["gen"])
+            last_qty = float(line["qty"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return gen, last_qty
+
+
+def _make_next_gen(uic: int) -> Callable[[float], int]:
+    """A per-uic resize counter bound to the persisted gen journal (memo §4.5).
+
+    Returns the SAME generation for a same-size retry — Saxo's 15 s request-id
+    dedup then catches the re-POST — and a DISTINCT, incremented generation when
+    the intended sell qty changes by more than ``_QTY_EPS`` (a resize is a
+    distinct order, never falsely deduped to the stale, smaller one). The bump is
+    appended, never rewritten, so the counter survives a systemd restart. The
+    size compare uses ``_QTY_EPS`` — never a bare float ``>=`` (A-S6/B-S2)."""
+
+    def _next_gen(qty: float) -> int:
+        gen, last_qty = _read_persisted_gen(uic)
+        if last_qty is not None and abs(qty - last_qty) <= _QTY_EPS:
+            return gen  # same-size retry -> stable ref (dedup-safe)
+        if last_qty is not None:
+            gen += 1  # resize -> distinct ref (never deduped to the stale order)
+        _append_standalone_stop_journal(
+            {"kind": "gen", "uic": int(uic), "gen": int(gen), "qty": float(qty)}
+        )
+        return gen
+
+    return _next_gen
+
+
+def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, PlannedExit]:
+    """Fold the append-only ``planned`` journal lines into ONE PlannedExit per
+    NETTED uic (saxo-oco memo §7) — PLAN PRICES only, NEVER a protected set.
+
+    Protection is derived from live broker state every tick (Tasks 5/6); no
+    journal line confers it, so ``intent`` / ``placed`` lines contribute nothing
+    here. Keying is per-uic (the unit Saxo nets to), never per-client_request_id.
+
+    Governing rules (memo §8):
+      - disaster stop = the MAX stop for a long (tightest) — defensive if
+        journaled tiers disagree;
+      - TP + entry_crid = the SHALLOWEST tier (min ``tier_index``), so the
+        deterministic ref is fill-order-independent;
+      - a repeated ``tier_index`` on one uic reveals >1 distinct plan (each plan
+        owns exactly one tier per index) -> ``conflicting`` so Task 5 refuses to
+        merge. Malformed lines are skipped."""
+    # Latest planned line per entry tier (append-only: highest gen wins per crid).
+    latest_by_crid: dict[str, tuple[int, Mapping[str, Any]]] = {}
+    for line in lines:
+        if line.get("kind") != "planned":
+            continue
+        crid = line.get("client_request_id")
+        raw_uic = line.get("uic")
+        if not crid or raw_uic is None:
+            continue
+        try:
+            gen = int(line.get("gen", _INITIAL_GEN))
+            int(raw_uic)
+            float(line["stop_price"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        prev = latest_by_crid.get(str(crid))
+        if prev is None or gen >= prev[0]:
+            latest_by_crid[str(crid)] = (gen, line)
+
+    tiers_by_uic: dict[int, list[Mapping[str, Any]]] = {}
+    for _gen, line in latest_by_crid.values():
+        tiers_by_uic.setdefault(int(line["uic"]), []).append(line)
+
+    result: dict[int, PlannedExit] = {}
+    for uic, tiers in tiers_by_uic.items():
+        index_counts: dict[int, int] = {}
+        for line in tiers:
+            idx = int(line.get("tier_index", 0))
+            index_counts[idx] = index_counts.get(idx, 0) + 1
+        n_plans = max(index_counts.values())
+        stop_price = max(float(line["stop_price"]) for line in tiers)
+        governing = min(tiers, key=lambda line: int(line.get("tier_index", 0)))
+        tp_raw = governing.get("take_profit")
+        result[uic] = PlannedExit(
+            uic=uic,
+            entry_crid=str(governing["client_request_id"]),
+            side=str(governing.get("side", _DISASTER_STOP_SIDE)),
+            stop_price=stop_price,
+            tp_price=None if tp_raw is None else float(tp_raw),
+            conflicting=n_plans > 1,
+            n_plans=n_plans,
+            next_gen=_make_next_gen(uic),
+        )
+    return result
 
 
 def _default_oauth_provider() -> Any:

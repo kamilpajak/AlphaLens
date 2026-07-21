@@ -18,8 +18,8 @@ stop over-hedges and can flip short after a partial fill.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 
 from alphalens_pipeline.brokers.contract import OrderStatus
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
@@ -39,6 +39,35 @@ class DisasterStop:
     uic: int
     side: str  # "SELL" for a long position's protective stop
     stop_price: float
+
+
+def _default_next_gen(_qty: float) -> int:
+    """Fallback resize counter for a hand-built ``PlannedExit`` (pure tests): no
+    persistence, always generation 0. The control loop injects the real
+    journal-backed callable via ``_fold_planned_exits`` (saxo-oco memo §4.5)."""
+    return 0
+
+
+@dataclass(frozen=True)
+class PlannedExit:
+    """The plan PRICES the broker cannot know, folded per NETTED uic from the
+    append-only ``planned`` journal lines (saxo-oco memo §7). Carries NO
+    protection flag — protection is derived from live broker state every tick.
+
+    ``next_gen(qty)`` reads/increments the persisted per-uic resize counter: it
+    returns the SAME generation for a same-size crash-retry (so Saxo's request-id
+    dedup catches it) and a DISTINCT generation when the intended sell qty changes
+    (a resize is a distinct order, never falsely deduped to the stale smaller
+    one). Excluded from equality/repr so two folds compare on data alone."""
+
+    uic: int
+    entry_crid: str  # governing (shallowest-filled) tier crid, for the deterministic ref
+    side: str  # "SELL"
+    stop_price: float
+    tp_price: float | None
+    conflicting: bool  # True if >1 distinct active plan folded to this uic (refuse-to-merge)
+    n_plans: int
+    next_gen: Callable[[float], int] = field(default=_default_next_gen, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -130,5 +159,6 @@ __all__ = [
     "DisasterStop",
     "NoOp",
     "PlaceStandaloneStop",
+    "PlannedExit",
     "advance",
 ]
