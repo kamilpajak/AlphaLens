@@ -72,6 +72,15 @@ EXEMPT_JOBS: dict[str, str] = {
         "separately if ever needed. Mirrors the exclusion already "
         "documented in test_deploy_systemd_units.py + test_monitoring_alerts.py."
     ),
+    "broker-manager": (
+        "Long-running SIM auto-manager daemon (Type=simple + Restart=on-failure). "
+        "It emits a per-tick heartbeat gauge monitored by its own AlphalensJobStale "
+        "rule (added in this branch), NOT a per-run ExecStopPost metric — a single "
+        "point at process exit does not match the per-tick cadence the textfile "
+        "metrics + staleness alerts are built around. Same rationale as "
+        "form4-backfill above; mirrors the ACTIVE_SERVICES exclusion in "
+        "test_deploy_systemd_units.py."
+    ),
 }
 
 
