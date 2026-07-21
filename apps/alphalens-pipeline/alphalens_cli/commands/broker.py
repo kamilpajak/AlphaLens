@@ -11,6 +11,8 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker submit KO --date 2026-07-16   — DRY-RUN by default: bracket
         table + precheck; sending needs --execute AND an interactive confirm
         (--yes skips the prompt) AND ALPHALENS_BROKER_ALLOW_ORDERS=1 in the env
+    alphalens broker arm KO --date 2026-07-20   — validate against the brief,
+        append an "armed" pick to picks.jsonl (the auto-manager hand-off seam)
     alphalens broker orders                  — open orders
     alphalens broker cancel <order_id>       — cancel (entry cancel cascades the bracket)
     alphalens broker reconcile [--json]      — READ-ONLY journal vs broker verdicts (P3):
@@ -765,6 +767,43 @@ def submit_command(
         fx=fx,
         precheck_conversion_rate=precheck_conversion_rate,
     )
+
+
+@broker_app.command(name="arm")
+def arm_command(
+    ticker: str = typer.Argument(..., help="Plain ticker from the brief, e.g. KO."),
+    date: str = typer.Option(..., "--date", help="Brief date (YYYY-MM-DD)."),
+    briefs_dir: Path = typer.Option(
+        _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
+    ),
+) -> None:
+    """Arm a picked candidate — append human intent to the picks queue.
+
+    Validates the row against the brief at arm time (fail fast if the parquet
+    is missing or the ticker is absent), then appends ONE 'armed' line to
+    picks.jsonl. The VPS control loop drains the queue; this command places
+    nothing.
+    """
+    from alphalens_pipeline.brokers.automanager.picks import DEFAULT_PICKS_PATH, arm_pick
+    from alphalens_pipeline.paper.brief_loader import load_brief
+
+    try:
+        brief_date = dt.date.fromisoformat(date)
+    except ValueError as exc:
+        raise _fail(f"invalid --date {date!r}: {exc}") from exc
+
+    try:
+        candidates = load_brief(brief_date, briefs_dir)
+    except (FileNotFoundError, ValueError) as exc:
+        raise _fail(str(exc)) from exc
+
+    wanted = ticker.upper()
+    candidate = next((c for c in candidates if c.ticker.upper() == wanted), None)
+    if candidate is None:
+        raise _fail(f"{wanted} not in the {brief_date} brief ({len(candidates)} candidates)")
+
+    arm_pick(wanted, brief_date)
+    typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {DEFAULT_PICKS_PATH}")
 
 
 @broker_app.command(name="orders")
