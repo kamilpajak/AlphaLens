@@ -20,16 +20,18 @@ Translation duties (and nothing else — transport lives in ``client.py``):
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime as dt
 import logging
 import os
 import uuid
 from collections import OrderedDict
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Literal
 
 from alphalens_pipeline.brokers import execution as execution_policy
 from alphalens_pipeline.brokers.contract import (
+    _QTY_EPS,
     AccountSnapshot,
     BracketOrderRequest,
     BrokerAuthError,
@@ -105,6 +107,23 @@ def _opt_float(value: Any) -> float | None:
 
 def _opt_str(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+def _order_side(value: Any) -> Literal["BUY", "SELL"] | None:
+    """Saxo ``BuySell`` -> the contract's canonical order side, ``None`` otherwise."""
+    if value == "Buy":
+        return "BUY"
+    if value == "Sell":
+        return "SELL"
+    return None
+
+
+def _position_uic(position: Position) -> int | None:
+    """The uic a Position belongs to (``broker_instrument_id`` is ``str(Uic)``)."""
+    try:
+        return int(position.instrument.broker_instrument_id)
+    except (TypeError, ValueError):
+        return None
 
 
 def _validate_price_relations(
@@ -475,6 +494,52 @@ class SaxoBroker:
         with _translate_saxo_errors():
             rows: list[dict[str, Any]] = self._client.get_open_orders().get("Data") or []
         return [self._to_order_state(row) for row in rows]
+
+    # ----- broker-state-truth protection reads (saxo-oco memo §4.1) -----
+    #
+    # Thin, mapping-only filters over the already-fetched read payloads (no new
+    # HTTP surface). The per-tick protection pass derives status purely from
+    # these — never from a journal line.
+
+    def get_long_positions(self) -> list[Position]:
+        """Strictly-long positions (netted qty > _QTY_EPS); flat and short dropped."""
+        return [p for p in self.get_positions() if p.quantity > _QTY_EPS]
+
+    def list_working_sell_orders(self) -> list[OrderState]:
+        """Live SELL legs still committing owned qty (WORKING / PARTIALLY_FILLED)."""
+        return [
+            o
+            for o in self.list_open_orders()
+            if o.side == "SELL" and o.status in (OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED)
+        ]
+
+    def get_positions_by_uic(self, uic: int) -> Position:
+        """Netted Position for one uic (summed signed qty across lots).
+
+        The execute-time owned re-check reads this immediately before placing a
+        protective stop so it never oversells or plants a stop on a uic that
+        has already gone flat. When the uic carries no live lot it returns a
+        zero-qty sentinel Position (never ``None``) so callers branch on the
+        quantity, not on presence.
+        """
+        matching = [p for p in self.get_positions() if _position_uic(p) == uic]
+        if not matching:
+            return Position(
+                instrument=InstrumentRef(
+                    ticker="",
+                    exchange_mic="",
+                    asset_type="Stock",
+                    broker_instrument_id=str(uic),
+                    broker_symbol="",
+                ),
+                quantity=0.0,
+                avg_price=0.0,
+                market_value=None,
+                unrealized_pnl=None,
+                position_id="",
+            )
+        netted_qty = sum(p.quantity for p in matching)
+        return dataclasses.replace(matching[0], quantity=netted_qty)
 
     def cancel_order(self, order_id: str) -> None:
         """Cancel an order. Deliberately NOT behind the placement env gate.
@@ -857,9 +922,13 @@ class SaxoBroker:
         error_info = payload.get("ErrorInfo")
         result = payload.get("PreCheckResult")
         if status >= 400 or error_info or (result is not None and result != "Ok"):
+            # Attach the verbatim Saxo ErrorCode so safety branches classify on
+            # a STRUCTURED code (memo §4.2), never by parsing the message.
+            error_code = error_info.get("ErrorCode") if isinstance(error_info, dict) else None
             raise OrderRejectedError(
                 f"precheck rejected {label}: status={status} "
-                f"PreCheckResult={result!r} ErrorInfo={error_info!r} — nothing was placed"
+                f"PreCheckResult={result!r} ErrorInfo={error_info!r} — nothing was placed",
+                error_code=error_code,
             )
         return payload
 
@@ -960,12 +1029,19 @@ class SaxoBroker:
 
     def _to_order_state(self, row: dict[str, Any]) -> OrderState:
         filled = float(row.get("FillAmount") or 0.0)
+        uic_raw = row.get("Uic")
         return OrderState(
             order_id=str(row.get("OrderId", "")),
             status=OrderStatus.PARTIALLY_FILLED if filled > 0 else OrderStatus.WORKING,
-            instrument=self._instrument_from_uic(row.get("Uic")),
+            instrument=self._instrument_from_uic(uic_raw),
             filled_quantity=filled,
             raw_status=str(row.get("Status", "")),
+            # Per-uic accounting fields (memo §4.1) — mapping-only, no new HTTP.
+            uic=int(uic_raw) if uic_raw is not None else None,
+            side=_order_side(row.get("BuySell")),
+            order_type=_opt_str(row.get("OpenOrderType")),
+            amount=_opt_float(row.get("Amount")),
+            external_reference=_opt_str(row.get("ExternalReference")),
         )
 
     def _cache_instrument(self, key: tuple[str, str], ref: InstrumentRef) -> None:

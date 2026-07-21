@@ -43,6 +43,8 @@ from alphalens_pipeline.brokers.contract import (
     OrderStatus,
     PlacedOrder,
     Position,
+    _is_sell_orders_already_exist,
+    _is_too_far_from_entry,
 )
 
 
@@ -137,6 +139,56 @@ class FakeBroker:
             raise BrokerError(f"FakeBroker knows no open order {order_id!r}")
         del self._orders[order_id]
 
+    # ----- broker-state-truth protection reads (saxo-oco memo §6/§12) -----
+
+    def get_long_positions(self) -> list[Position]:
+        """The netted long positions — the protection pass iterates these."""
+        return [p for p in self.get_positions() if p.quantity > 0.0]
+
+    def get_positions_by_uic(self, uic: int) -> Position:
+        """The netted position for ``uic`` at execute time, or a flat (quantity
+        0) position when nothing is held — never a ``KeyError``."""
+        for pos in self.get_positions():
+            if int(pos.instrument.broker_instrument_id) == uic:
+                return pos
+        return Position(
+            instrument=_instrument(),
+            quantity=0.0,
+            avg_price=0.0,
+            market_value=None,
+            unrealized_pnl=None,
+            position_id=f"flat-{uic}",
+        )
+
+    def list_working_sell_orders(self) -> list[OrderState]:
+        """The live working SELL legs (a long's protective exits): each open
+        bracket's stop/take-profit surfaces as a SELL ``OrderState`` carrying the
+        per-uic fields the protection pass keys on."""
+        legs: list[OrderState] = []
+        for entry_id, request in self._orders.items():
+            uic = int(request.instrument.broker_instrument_id)
+            for tag, price, order_type in (
+                ("sl", request.stop_loss, "StopIfTraded"),
+                ("tp", request.take_profit, "Limit"),
+            ):
+                if price is None:
+                    continue
+                legs.append(
+                    OrderState(
+                        order_id=f"{entry_id}-{tag}",
+                        status=OrderStatus.WORKING,
+                        instrument=request.instrument,
+                        filled_quantity=0.0,
+                        raw_status="Working",
+                        uic=uic,
+                        side="SELL",
+                        order_type=order_type,
+                        amount=float(request.quantity),
+                        external_reference=f"{entry_id}-{tag}",
+                    )
+                )
+        return legs
+
 
 def _make_fake_broker() -> FakeBroker:
     """Registry factory target for the tests below (import-path resolved)."""
@@ -223,6 +275,27 @@ class TestErrorTaxonomy(unittest.TestCase):
         """Catching one leaf must not swallow a sibling leaf."""
         self.assertNotIsInstance(BrokerAuthError("x"), BrokerRateLimitError)
         self.assertNotIsInstance(InstrumentNotFoundError("x"), BrokerAuthError)
+
+
+class TestErrorClassifiersPositiveControl(unittest.TestCase):
+    """Structured error-code classifiers (memo §4.2) — positive control so the
+    classifier cannot rot to always-False."""
+
+    def test_sell_orders_already_exist_matches_only_its_code(self):
+        matching = OrderRejectedError(
+            "rejected", error_code="SellOrdersAlreadyExistForOwnedContracts"
+        )
+        self.assertTrue(_is_sell_orders_already_exist(matching))
+        self.assertFalse(_is_sell_orders_already_exist(BrokerError("boom")))
+        self.assertFalse(
+            _is_sell_orders_already_exist(OrderRejectedError("x", error_code="OtherCode"))
+        )
+
+    def test_too_far_from_entry_matches_only_its_code(self):
+        matching = OrderRejectedError("rejected", error_code="TooFarFromEntryOrder")
+        self.assertTrue(_is_too_far_from_entry(matching))
+        self.assertFalse(_is_too_far_from_entry(BrokerError("boom")))
+        self.assertFalse(_is_too_far_from_entry(OrderRejectedError("x", error_code="OtherCode")))
 
 
 class BrokerConformanceMixin:
@@ -314,6 +387,54 @@ class BrokerConformanceMixin:
 class TestFakeBrokerConformance(BrokerConformanceMixin, unittest.TestCase):
     def make_broker(self) -> Broker:
         return FakeBroker()
+
+
+class TestFakeBrokerProtectionReads(unittest.TestCase):
+    """The broker-state-truth protection pass (saxo-oco memo §6/§12) reads live
+    state through ``get_long_positions`` / ``list_working_sell_orders`` /
+    ``get_positions_by_uic``. ``FakeBroker`` implements them so it is a complete
+    protection-capable fake, exactly like a real adapter."""
+
+    def test_get_long_positions_returns_only_longs(self):
+        longs = FakeBroker().get_long_positions()
+        self.assertIsInstance(longs, list)
+        self.assertTrue(longs, "the seeded KO position is long")
+        for pos in longs:
+            self.assertIsInstance(pos, Position)
+            self.assertGreater(pos.quantity, 0.0)
+
+    def test_get_positions_by_uic_returns_matching_then_flat(self):
+        broker = FakeBroker()
+        ko_uic = int(broker.resolve_instrument("KO").broker_instrument_id)
+        held = broker.get_positions_by_uic(ko_uic)
+        self.assertIsInstance(held, Position)
+        self.assertEqual(held.quantity, 10.0)
+        # An unheld uic reads flat (quantity 0) — never a KeyError.
+        flat = broker.get_positions_by_uic(99999)
+        self.assertIsInstance(flat, Position)
+        self.assertEqual(flat.quantity, 0.0)
+
+    def test_list_working_sell_orders_surfaces_placed_exit_legs(self):
+        broker = FakeBroker()
+        self.assertEqual(broker.list_working_sell_orders(), [], "no legs before any placement")
+        request = BracketOrderRequest(
+            instrument=broker.resolve_instrument("KO"),
+            side="BUY",
+            quantity=2,
+            entry_limit=50.0,
+            stop_loss=45.0,
+            take_profit=55.0,
+            entry_ttl_days=5,
+            client_request_id=str(uuid.uuid4()),
+        )
+        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}):
+            broker.place_bracket_order(request)
+        sells = broker.list_working_sell_orders()
+        self.assertTrue(sells, "the placed bracket's SELL exit legs must surface")
+        for leg in sells:
+            self.assertIsInstance(leg, OrderState)
+            self.assertEqual(leg.side, "SELL")
+            self.assertIsNotNone(leg.uic)
 
 
 class TestRegistry(unittest.TestCase):

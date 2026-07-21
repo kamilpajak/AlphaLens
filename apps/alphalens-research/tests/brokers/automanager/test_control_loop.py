@@ -1,8 +1,10 @@
 """Hermetic tests for control_loop.run_once / run_daemon.
 
 Every Task 1-10 dependency is injected as a stub (build_default_deps is covered
-by the SIM probe). Under test: kill-gate placement, always reconcile, execute
-the position-manager Action, re-derive identical classification on restart.
+by the SIM probe). Under test: kill-gate placement, always reconcile, the
+verdict-level advance Action, the broker-state-truth protection pass (single
+snapshot -> reconcile_protection -> ordered cancel/place executor), the alert
+throttle, and re-derive-on-restart.
 """
 
 from __future__ import annotations
@@ -16,11 +18,28 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager.picks import Pick
-from alphalens_pipeline.brokers.automanager.position_manager import BrokerView, DisasterStop
-from alphalens_pipeline.brokers.contract import BrokerError
+from alphalens_pipeline.brokers.automanager.position_manager import (
+    BrokerView,
+    CancelSellLegs,
+    PlaceStop,
+    PlannedExit,
+    ProtectionView,
+    _exit_stop_ref,
+    _exit_tp_ref,
+)
+from alphalens_pipeline.brokers.contract import (
+    BrokerError,
+    InstrumentRef,
+    OrderRejectedError,
+    OrderState,
+    OrderStatus,
+    PlacedOrder,
+    Position,
+)
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
 _RID = "rid-KO"
+_UIC = 43070
 
 
 def _pick(ticker: str = "KO", date: str = "2026-07-20") -> Pick:
@@ -57,23 +76,30 @@ def _verdict(**over: Any) -> ReconcileVerdict:
 
 
 def _view() -> BrokerView:
-    return BrokerView(
-        protected_request_ids=frozenset(),
-        disaster_stops={_RID: DisasterStop(uic=307, side="SELL", stop_price=79.0)},
-        working_children={_RID: ("T-1",)},
+    return BrokerView(working_children={_RID: ("T-1",)})
+
+
+def _empty_pview() -> ProtectionView:
+    return ProtectionView(
+        long_positions={},
+        all_positions={},
+        sell_legs_by_uic={},
+        planned_by_uic={},
+        oco_unsupported=frozenset(),
     )
 
 
 def _deps(
-    broker: _StubBroker,
+    broker: Any,
     *,
     kill_file: Path,
     verdicts: list[ReconcileVerdict],
     place_calls: list,
-    stop_calls: list,
     alerts: list,
     picks: list | None = None,
     chain_alive: bool = True,
+    build_protection_view: Any = None,
+    execute_protection: Any = None,
 ) -> cl.LoopDeps:
     return cl.LoopDeps(
         broker=broker,
@@ -84,67 +110,131 @@ def _deps(
         read_records=lambda: [{"brackets": [{"client_request_id": _RID}]}],
         verdicts_fn=lambda records, broker: list(verdicts),
         build_position_view=lambda broker, records: _view(),
-        place_standalone_stop=lambda uic, side, qty, price, request_id: stop_calls.append(
-            (uic, side, qty, price)
-        ),
+        build_protection_view=build_protection_view or (lambda broker, records: _empty_pview()),
+        execute_protection=execute_protection or (lambda action, kill, report: None),
         sweep_orphans_fn=lambda broker: [],
         alert=lambda msg: alerts.append(msg),  # noqa: PLW0108
     )
 
 
+# --------------------------------------------------------------------------
+# Fixtures for the broker-state protection pass (positions + SELL legs).
+# --------------------------------------------------------------------------
+
+
+def _instrument(uic: int = _UIC) -> InstrumentRef:
+    return InstrumentRef(
+        ticker="BIO",
+        exchange_mic="XNYS",
+        asset_type="Stock",
+        broker_instrument_id=str(uic),
+        broker_symbol="BIO:xnys",
+    )
+
+
+def _pos(qty: float, uic: int = _UIC) -> Position:
+    return Position(
+        instrument=_instrument(uic),
+        quantity=qty,
+        avg_price=296.0,
+        market_value=None,
+        unrealized_pnl=None,
+        position_id="pos-1",
+    )
+
+
+def _leg(order_id: str, order_type: str, amount: float, *, uic: int = _UIC) -> OrderState:
+    return OrderState(
+        order_id=order_id,
+        status=OrderStatus.WORKING,
+        instrument=None,
+        filled_quantity=0.0,
+        raw_status="Working",
+        uic=uic,
+        side="SELL",
+        order_type=order_type,
+        amount=amount,
+        external_reference=order_id,
+    )
+
+
+class _ProtBroker:
+    """A fake broker exposing the broker-state protection reads + place/cancel.
+
+    ``place_error`` (an exception, or a list of per-call outcomes) drives the
+    ``place_standalone_stop`` failure paths; ``cancel_errors`` maps an order_id
+    to an exception ``cancel_order`` raises."""
+
+    name = "prot"
+
+    def __init__(
+        self,
+        *,
+        positions: list[Position] | None = None,
+        sells: list[OrderState] | None = None,
+        by_uic: dict[int, Position] | None = None,
+        place_error: Any = None,
+        cancel_errors: dict[str, BrokerError] | None = None,
+    ) -> None:
+        self._positions = positions or []
+        self._sells = sells or []
+        self._by_uic = by_uic or {}
+        self._place_error = place_error
+        self._place_calls = 0
+        self._cancel_errors = cancel_errors or {}
+        self.placed: list[tuple[int, str, float, float, str | None]] = []
+        self.cancelled: list[str] = []
+
+    def get_positions(self) -> list[Position]:
+        return list(self._positions)
+
+    def get_long_positions(self) -> list[Position]:
+        return [p for p in self._positions if p.quantity > 0.5]
+
+    def list_working_sell_orders(self) -> list[OrderState]:
+        return list(self._sells)
+
+    def get_positions_by_uic(self, uic: int) -> Position:
+        return self._by_uic.get(uic, _pos(0.0, uic))
+
+    def place_standalone_stop(
+        self, uic: int, side: str, qty: float, stop_price: float, request_id: str | None = None
+    ) -> PlacedOrder:
+        self._place_calls += 1
+        err = self._place_error
+        if isinstance(err, list):
+            err = err[self._place_calls - 1] if self._place_calls - 1 < len(err) else None
+        if err is not None:
+            raise err
+        self.placed.append((uic, side, qty, stop_price, request_id))
+        return PlacedOrder(entry_order_id="S-1", exit_order_ids=())
+
+    def cancel_order(self, order_id: str) -> None:
+        err = self._cancel_errors.get(order_id)
+        if err is not None:
+            raise err
+        self.cancelled.append(order_id)
+
+
+def _seed_planned(journal: Path, uic: int = _UIC, crid: str = "crid-0") -> None:
+    with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+        cl._append_standalone_stop_journal(
+            cl._build_planned_line(
+                entry_crid=crid,
+                uic=uic,
+                side="SELL",
+                stop_price=216.48,
+                take_profit=306.72,
+                tier_index=0,
+            )
+        )
+
+
+def _throttle_to(alerts: list[str]) -> cl._AlertThrottle:
+    return cl._AlertThrottle(alerts.append)
+
+
 class TestRunOncePlacement(unittest.TestCase):
-    def test_filled_open_places_standalone_stop_at_realized_qty(self) -> None:
-        with TemporaryDirectory() as d:
-            broker = _StubBroker()
-            stop_calls: list = []
-            v = _verdict(
-                status="FILLED",
-                verdict="FILLED",
-                note="position open, exit orders working",
-                details={"client_request_id": _RID, "filled_quantity": 2.0},
-            )
-            deps = _deps(
-                broker,
-                kill_file=Path(d) / "KILL",
-                verdicts=[v],
-                place_calls=[],
-                stop_calls=stop_calls,
-                alerts=[],
-            )
-            report = cl.run_once(deps)
-            self.assertEqual(stop_calls, [(307, "SELL", 2.0, 79.0)])
-            self.assertEqual(report.stops_placed, 1)
-
-    def test_standalone_stop_placer_receives_entry_request_id(self) -> None:
-        # I2: the placer is handed the entry's client_request_id so the "placed"
-        # journal line can correlate protection by request_id, not Uic.
-        with TemporaryDirectory() as d:
-            calls: list = []
-            v = _verdict(
-                status="FILLED",
-                verdict="FILLED",
-                note="position open, exit orders working",
-                details={"client_request_id": _RID, "filled_quantity": 2.0},
-            )
-            deps = _deps(
-                _StubBroker(),
-                kill_file=Path(d) / "KILL",
-                verdicts=[v],
-                place_calls=[],
-                stop_calls=[],
-                alerts=[],
-            )
-            deps = cl.LoopDeps(
-                **{
-                    **deps.__dict__,
-                    "place_standalone_stop": lambda uic, side, qty, price, request_id: calls.append(
-                        (uic, side, qty, price, request_id)
-                    ),
-                }
-            )
-            cl.run_once(deps)
-            self.assertEqual(calls, [(307, "SELL", 2.0, 79.0, _RID)])
-
     def test_drains_armed_pick_when_chain_alive_and_no_kill(self) -> None:
         with TemporaryDirectory() as d:
             place_calls: list = []
@@ -154,7 +244,6 @@ class TestRunOncePlacement(unittest.TestCase):
                 kill_file=Path(d) / "KILL",
                 verdicts=[],
                 place_calls=place_calls,
-                stop_calls=[],
                 alerts=[],
                 picks=[pick],
             )
@@ -174,11 +263,9 @@ class TestPickSubmissionJoin(unittest.TestCase):
                 kill_file=Path(d) / "KILL",
                 verdicts=[],
                 place_calls=place_calls,
-                stop_calls=[],
                 alerts=[],
                 picks=[_pick("KO", "2026-07-20")],
             )
-            # A submissions record already carries this (ticker, brief_date).
             deps = cl.LoopDeps(
                 **{
                     **deps.__dict__,
@@ -198,31 +285,6 @@ class TestPickSubmissionJoin(unittest.TestCase):
                 kill_file=Path(d) / "KILL",
                 verdicts=[],
                 place_calls=place_calls,
-                stop_calls=[],
-                alerts=[],
-                picks=[pick],
-            )
-            # Journal holds a DIFFERENT (ticker, brief_date) — no join match.
-            deps = cl.LoopDeps(
-                **{
-                    **deps.__dict__,
-                    "read_records": lambda: [{"ticker": "KO", "brief_date": "2026-07-20"}],
-                }
-            )
-            report = cl.run_once(deps)
-            self.assertEqual(place_calls, [pick])
-            self.assertEqual(report.picks_placed, 1)
-
-    def test_same_ticker_different_brief_date_is_placed(self) -> None:
-        with TemporaryDirectory() as d:
-            place_calls: list = []
-            pick = _pick("KO", "2026-07-21")
-            deps = _deps(
-                _StubBroker(),
-                kill_file=Path(d) / "KILL",
-                verdicts=[],
-                place_calls=place_calls,
-                stop_calls=[],
                 alerts=[],
                 picks=[pick],
             )
@@ -237,9 +299,6 @@ class TestPickSubmissionJoin(unittest.TestCase):
             self.assertEqual(report.picks_placed, 1)
 
     def test_duplicate_armed_pick_in_one_tick_is_placed_once(self) -> None:
-        # MEDIUM: already_submitted starts empty (no prior journal record) but the
-        # first placement of a (ticker, brief_date) must suppress a second identical
-        # armed line later in the SAME tick.
         with TemporaryDirectory() as d:
             place_calls: list = []
             p1 = _pick("KO", "2026-07-20")
@@ -249,7 +308,6 @@ class TestPickSubmissionJoin(unittest.TestCase):
                 kill_file=Path(d) / "KILL",
                 verdicts=[],
                 place_calls=place_calls,
-                stop_calls=[],
                 alerts=[],
                 picks=[p1, p2],
             )
@@ -257,163 +315,6 @@ class TestPickSubmissionJoin(unittest.TestCase):
             report = cl.run_once(deps)
             self.assertEqual(place_calls, [p1], "the duplicate armed line must be skipped")
             self.assertEqual(report.picks_placed, 1)
-
-
-class TestStandaloneStopJournalFold(unittest.TestCase):
-    """I2: standalone-stop protection is correlated by the entry's
-    client_request_id, NOT its Uic. Two entries sharing one Uic each need their
-    OWN placed stop — a Uic-keyed correlation would mark both protected the
-    moment the first one's stop posts, leaving the second silently unprotected."""
-
-    def test_two_entries_one_uic_only_the_placed_one_is_protected(self) -> None:
-        lines = [
-            {
-                "kind": "planned",
-                "client_request_id": "rid-A",
-                "uic": 307,
-                "side": "SELL",
-                "stop_price": 79.0,
-            },
-            {
-                "kind": "planned",
-                "client_request_id": "rid-B",
-                "uic": 307,
-                "side": "SELL",
-                "stop_price": 78.0,
-            },
-            {
-                "kind": "placed",
-                "client_request_id": "rid-A",
-                "uic": 307,
-                "side": "SELL",
-                "qty": 2.0,
-                "stop_price": 79.0,
-                "order_id": "S-1",
-            },
-        ]
-        disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
-        self.assertEqual(set(disaster_stops), {"rid-A", "rid-B"})
-        self.assertEqual(protected, frozenset({"rid-A"}))
-
-    def test_placed_line_without_request_id_protects_nothing(self) -> None:
-        # A legacy Uic-only placed line must no longer confer protection.
-        lines = [
-            {
-                "kind": "planned",
-                "client_request_id": "rid-A",
-                "uic": 307,
-                "side": "SELL",
-                "stop_price": 79.0,
-            },
-            {"kind": "placed", "uic": 307, "side": "SELL", "qty": 2.0, "stop_price": 79.0},
-        ]
-        disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
-        self.assertEqual(set(disaster_stops), {"rid-A"})
-        self.assertEqual(protected, frozenset())
-
-    def test_intent_line_marks_position_protected_in_flight(self) -> None:
-        # HIGH-1: a crash between the standalone-stop POST and its "placed" journal
-        # write leaves ONLY the "intent" line. It must confer protection so the
-        # fold sees the position as protected/in-flight and advance does NOT
-        # re-issue a second PlaceStandaloneStop.
-        lines = [
-            {
-                "kind": "planned",
-                "client_request_id": "rid-A",
-                "uic": 307,
-                "side": "SELL",
-                "stop_price": 79.0,
-            },
-            {
-                "kind": "intent",
-                "client_request_id": "rid-A",
-                "stop_request_id": "rid-A-stop",
-                "uic": 307,
-                "side": "SELL",
-                "qty": 2.0,
-                "stop_price": 79.0,
-            },
-        ]
-        disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
-        self.assertEqual(set(disaster_stops), {"rid-A"})
-        self.assertEqual(protected, frozenset({"rid-A"}))
-
-    def test_advance_returns_noop_when_only_intent_line_present(self) -> None:
-        # End-to-end of the crash window: with only planned + intent lines, a FILLED
-        # verdict for that entry must yield NoOp, never a duplicate PlaceStandaloneStop.
-        from alphalens_pipeline.brokers.automanager.position_manager import (
-            BrokerView as PmBrokerView,
-        )
-        from alphalens_pipeline.brokers.automanager.position_manager import (
-            NoOp,
-            advance,
-        )
-
-        lines = [
-            {
-                "kind": "planned",
-                "client_request_id": _RID,
-                "uic": 307,
-                "side": "SELL",
-                "stop_price": 79.0,
-            },
-            {
-                "kind": "intent",
-                "client_request_id": _RID,
-                "stop_request_id": f"{_RID}-stop",
-                "uic": 307,
-                "side": "SELL",
-                "qty": 2.0,
-                "stop_price": 79.0,
-            },
-        ]
-        disaster_stops, protected = cl._fold_standalone_stop_journal(lines)
-        view = PmBrokerView(
-            protected_request_ids=protected,
-            disaster_stops=disaster_stops,
-            working_children={},
-        )
-        v = _verdict(
-            status="FILLED",
-            verdict="FILLED",
-            note="position open, exit orders working",
-            details={"client_request_id": _RID, "filled_quantity": 2.0},
-        )
-        self.assertIsInstance(advance(v, view), NoOp)
-
-
-class TestStandaloneStopPlacerRecovery(unittest.TestCase):
-    """HIGH-1: the placer journals an 'intent' line (with a DETERMINISTIC stop
-    request_id derived from the entry request_id) BEFORE the POST, so a crash in
-    the place-then-journal window is recoverable and cannot double-place."""
-
-    def test_intent_journaled_before_post_with_deterministic_stop_request_id(self) -> None:
-        import json
-
-        class _StubStopBroker:
-            def __init__(self) -> None:
-                self.calls: list = []
-
-            def place_standalone_stop(self, uic, side, qty, stop_price, request_id=None):
-                self.calls.append((uic, side, qty, stop_price, request_id))
-                return type("P", (), {"entry_order_id": "S-9", "exit_order_ids": ()})()
-
-        with TemporaryDirectory() as d:
-            journal = Path(d) / "standalone_stops.jsonl"
-            broker = _StubStopBroker()
-            placer = cl._make_standalone_stop_placer(broker)  # type: ignore[arg-type]
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
-                placer(307, "SELL", 2.0, 79.0, _RID)
-            written = [
-                json.loads(line) for line in journal.read_text().splitlines() if line.strip()
-            ]
-            kinds = [rec["kind"] for rec in written]
-            self.assertEqual(kinds, ["intent", "placed"], "intent must be journaled BEFORE placed")
-            stop_rid = f"{_RID}-stop"
-            self.assertEqual(written[0]["client_request_id"], _RID)
-            self.assertEqual(written[0]["stop_request_id"], stop_rid)
-            # the deterministic stop request_id is passed into the broker (dedup)
-            self.assertEqual(broker.calls, [(307, "SELL", 2.0, 79.0, stop_rid)])
 
 
 class _CrashError(Exception):
@@ -455,8 +356,8 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
             (),
             {
                 "tiers": [
-                    type("T", (), {"bracket": _bracket("rid-1")})(),
-                    type("T", (), {"bracket": _bracket("rid-2")})(),
+                    type("T", (), {"bracket": _bracket("rid-1"), "tier_index": 0, "tp": 12.0})(),
+                    type("T", (), {"bracket": _bracket("rid-2"), "tier_index": 1, "tp": 12.0})(),
                 ],
                 "disaster_stop_price": 9.0,
             },
@@ -482,8 +383,6 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
                 self.calls += 1
                 if self.calls == 1:
                     return _Placed("E-1")
-                # tier 2: capture the journal state as it stood the instant BEFORE
-                # this tier is attempted, then die hard (uncaught).
                 self.journal_at_second_tier = list(submitted)
                 raise _CrashError("process dies mid-ladder")
 
@@ -536,7 +435,7 @@ def _raise_broker_error(*_a: Any, **_k: Any) -> Any:
 
 class TestBrokerErrorBoundary(unittest.TestCase):
     """CRITICAL: a persistent BrokerError outside entry-placement must never
-    crash the tick. One bad position/action is alerted and skipped so the daemon
+    crash the tick. One bad read/action is alerted and skipped so the daemon
     keeps reconciling and protecting every OTHER position."""
 
     def test_verdicts_fn_broker_error_does_not_crash_tick(self) -> None:
@@ -547,7 +446,6 @@ class TestBrokerErrorBoundary(unittest.TestCase):
                 kill_file=Path(d) / "KILL",
                 verdicts=[],
                 place_calls=[],
-                stop_calls=[],
                 alerts=alerts,
             )
             deps = cl.LoopDeps(**{**deps.__dict__, "verdicts_fn": _raise_broker_error})
@@ -563,7 +461,6 @@ class TestBrokerErrorBoundary(unittest.TestCase):
                 kill_file=Path(d) / "KILL",
                 verdicts=[_verdict(status="CANCELLED", verdict="CANCELLED")],
                 place_calls=[],
-                stop_calls=[],
                 alerts=alerts,
             )
             deps = cl.LoopDeps(**{**deps.__dict__, "build_position_view": _raise_broker_error})
@@ -571,32 +468,66 @@ class TestBrokerErrorBoundary(unittest.TestCase):
             self.assertIsInstance(report, cl.TickReport)
             self.assertTrue(alerts)
 
-    def test_one_action_broker_error_still_processes_other_verdicts(self) -> None:
+    def test_build_protection_view_broker_error_does_not_crash_tick(self) -> None:
         with TemporaryDirectory() as d:
-            broker = _StubBroker()
             alerts: list = []
-            # verdict A: FILLED -> PlaceStandaloneStop, whose placer raises.
-            # verdict B: CANCELLED -> CancelRemaining, must still cancel T-1.
-            a = _verdict(
-                status="FILLED",
-                verdict="FILLED",
-                note="position open, exit orders working",
-                details={"client_request_id": _RID, "filled_quantity": 2.0},
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=alerts,
+                build_protection_view=_raise_broker_error,
             )
-            b = _verdict(status="CANCELLED", verdict="CANCELLED")
+            report = cl.run_once(deps)  # must NOT propagate
+            self.assertIsInstance(report, cl.TickReport)
+            self.assertTrue(alerts, "protection-view build failure must alert")
+
+    def test_protection_runs_even_when_verdicts_fail(self) -> None:
+        # Reconcile (verdicts) failing must NOT starve the safety-critical
+        # protection pass — a naked long is still protected this tick.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
+            throttle = _throttle_to(alerts)
             deps = _deps(
                 broker,
                 kill_file=Path(d) / "KILL",
-                verdicts=[a, b],
+                verdicts=[],
                 place_calls=[],
-                stop_calls=[],
+                alerts=alerts,
+                build_protection_view=cl.build_protection_view,
+                execute_protection=cl._make_protection_executor(broker, throttle),
+            )
+            deps = cl.LoopDeps(**{**deps.__dict__, "verdicts_fn": _raise_broker_error})
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                report = cl.run_once(deps)  # must NOT propagate
+            self.assertEqual(len(broker.placed), 1, "protection runs despite the reconcile failure")
+            self.assertEqual(report.exits_placed, 1)
+            self.assertTrue(any("reconcile failed" in a for a in alerts))
+
+    def test_advance_action_broker_error_does_not_crash_tick(self) -> None:
+        # A CANCELLED verdict -> CancelRemaining; the cancel of leftover exits
+        # raises. The tick must survive (per-action boundary) and alert.
+        with TemporaryDirectory() as d:
+            alerts: list = []
+
+            class _CancelRaises(_StubBroker):
+                def cancel_order(self, order_id: str) -> None:
+                    raise BrokerError("locked pre-execution")
+
+            deps = _deps(
+                _CancelRaises(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[_verdict(status="CANCELLED", verdict="CANCELLED")],
+                place_calls=[],
                 alerts=alerts,
             )
-            deps = cl.LoopDeps(**{**deps.__dict__, "place_standalone_stop": _raise_broker_error})
             report = cl.run_once(deps)  # must NOT propagate
-            self.assertEqual(broker.cancelled, ["T-1"], "the other verdict is still processed")
-            self.assertTrue(alerts, "the failed action must alert")
-            self.assertEqual(report.stops_placed, 0)
+            self.assertIsInstance(report, cl.TickReport)
+            self.assertTrue(alerts, "the failed cancel must alert")
 
     def test_orphan_sweep_broker_error_does_not_crash_tick(self) -> None:
         with TemporaryDirectory() as d:
@@ -606,7 +537,6 @@ class TestBrokerErrorBoundary(unittest.TestCase):
                 kill_file=Path(d) / "KILL",
                 verdicts=[],
                 place_calls=[],
-                stop_calls=[],
                 alerts=alerts,
             )
             deps = cl.LoopDeps(**{**deps.__dict__, "sweep_orphans_fn": _raise_broker_error})
@@ -622,29 +552,22 @@ class TestKillFileGate(unittest.TestCase):
             kill.write_text("halt")
             broker = _StubBroker()
             place_calls: list = []
-            stop_calls: list = []
             alerts: list = []
             terminal = _verdict(status="CANCELLED", verdict="CANCELLED")
-            filled = _verdict(
-                status="FILLED",
-                verdict="FILLED",
-                note="position open, exit orders working",
-                details={"client_request_id": _RID, "filled_quantity": 2.0},
-            )
             deps = _deps(
                 broker,
                 kill_file=kill,
-                verdicts=[terminal, filled],
+                verdicts=[terminal],
                 place_calls=place_calls,
-                stop_calls=stop_calls,
                 alerts=alerts,
                 picks=["pick-KO"],
             )
             cl.run_once(deps)
-            self.assertEqual(place_calls, [])
-            self.assertEqual(stop_calls, [])
+            self.assertEqual(place_calls, [], "entry placement is suppressed under KILL")
+            # Cancels still run under KILL (cleanup is always safe); a protective
+            # stop would also be allowed (it only reduces exposure), but this
+            # tick's empty protection view yields none.
             self.assertEqual(broker.cancelled, ["T-1"])
-            self.assertTrue(any("KILL" in a for a in alerts))
 
 
 class TestCrashRecovery(unittest.TestCase):
@@ -657,7 +580,6 @@ class TestCrashRecovery(unittest.TestCase):
                 kill_file=Path(d) / "KILL",
                 verdicts=[v],
                 place_calls=[],
-                stop_calls=[],
                 alerts=[],
             )
             r1 = cl.run_once(deps)
@@ -676,7 +598,6 @@ class TestRunDaemonOnce(unittest.TestCase):
                 kill_file=Path(d) / "KILL",
                 verdicts=[],
                 place_calls=[],
-                stop_calls=[],
                 alerts=[],
             )
             deps = cl.LoopDeps(
@@ -694,6 +615,499 @@ class TestRunDaemonOnce(unittest.TestCase):
             self.assertEqual(len(sweeps), 1)
             self.assertEqual(slept, [])
             self.assertEqual(len(beats), 1)
+
+
+# --------------------------------------------------------------------------
+# Broker-state-truth protection pass (Task 6): build_protection_view +
+# _make_protection_executor wired through run_once.
+# --------------------------------------------------------------------------
+
+
+class TestFailedPostLeavesNoProtectionAndRetries(unittest.TestCase):
+    """Bug A end-to-end: a failed stop POST records NO protection (protection is
+    broker-state truth, not a journal line), the tick survives, and the NEXT tick
+    re-derives the same deficit and re-issues the place."""
+
+    def test_failed_place_tick1_then_retry_places_tick2(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            # Tick 1 place raises BrokerError; tick 2 succeeds.
+            broker = _ProtBroker(
+                positions=[_pos(46.0)],
+                sells=[],
+                by_uic={_UIC: _pos(46.0)},
+                place_error=[BrokerError("network blip"), None],
+            )
+            throttle = _throttle_to(alerts)
+            deps = _deps(
+                broker,
+                kill_file=Path(d) / "KILL",
+                verdicts=[],  # no journal verdict — the loop iterates POSITIONS
+                place_calls=[],
+                alerts=alerts,
+                build_protection_view=cl.build_protection_view,
+                execute_protection=cl._make_protection_executor(broker, throttle),
+            )
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                r1 = cl.run_once(deps)
+                self.assertEqual(broker.placed, [], "tick 1 POST failed — nothing placed")
+                self.assertEqual(r1.exits_placed, 0)
+                r2 = cl.run_once(deps)
+            self.assertEqual(
+                len(broker.placed), 1, "tick 2 must re-issue the place (no journal lie)"
+            )
+            self.assertEqual(broker.placed[0][:4], (_UIC, "SELL", 46.0, 216.48))
+            self.assertEqual(r2.exits_placed, 1)
+
+
+class TestLoopIteratesPositionsNotVerdicts(unittest.TestCase):
+    """C-S5: a position on the broker with owned>0 and NO journal verdict is still
+    protected — the protection pass iterates live positions, not verdicts."""
+
+    def test_position_without_verdict_is_protected(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
+            throttle = _throttle_to(alerts)
+            deps = _deps(
+                broker,
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=alerts,
+                build_protection_view=cl.build_protection_view,
+                execute_protection=cl._make_protection_executor(broker, throttle),
+            )
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                report = cl.run_once(deps)
+            self.assertEqual(len(broker.placed), 1)
+            self.assertEqual(report.exits_placed, 1)
+
+
+class TestExecuteTimeRecheckSkipsFlatUic(unittest.TestCase):
+    """B-F3/A-S4: the snapshot showed owned=46 but the position is flat at execute
+    time -> the place is skipped, no stop planted (it could later fire into a short)."""
+
+    def test_flat_at_execute_skips_place(self) -> None:
+        alerts: list[str] = []
+        broker = _ProtBroker(by_uic={_UIC: _pos(0.0)})  # flat now
+        executor = cl._make_protection_executor(broker, _throttle_to(alerts))
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
+        report = cl.TickReport()
+        executor(action, False, report)
+        self.assertEqual(broker.placed, [], "no stop planted on a flat uic")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertTrue(any("gone" in a for a in alerts))
+
+    def test_shrunk_position_clips_qty_never_oversells(self) -> None:
+        alerts: list[str] = []
+        broker = _ProtBroker(by_uic={_UIC: _pos(20.0)})  # only 20 left
+        executor = cl._make_protection_executor(broker, _throttle_to(alerts))
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
+        report = cl.TickReport()
+        executor(action, False, report)
+        self.assertEqual(len(broker.placed), 1)
+        self.assertEqual(broker.placed[0][2], 20.0, "qty clipped to live owned")
+
+
+class TestKillAllowsProtectiveStop(unittest.TestCase):
+    """B-S1: a protective stop only REDUCES exposure, so it is allowed under KILL."""
+
+    def test_place_stop_executes_under_kill(self) -> None:
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, _throttle_to([]))
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
+        report = cl.TickReport()
+        executor(action, True, report)  # kill = True
+        self.assertEqual(len(broker.placed), 1)
+        self.assertEqual(report.exits_placed, 1)
+
+
+class TestSellOrdersAlreadyExistDefersNotCrashes(unittest.TestCase):
+    """A SellOrdersAlreadyExist rejection defers to next tick — alert + return,
+    never a crash, nothing recorded as protected."""
+
+    def test_sell_exist_defers(self) -> None:
+        alerts: list[str] = []
+        broker = _ProtBroker(
+            by_uic={_UIC: _pos(46.0)},
+            place_error=OrderRejectedError(
+                "blocked", error_code="SellOrdersAlreadyExistForOwnedContracts"
+            ),
+        )
+        executor = cl._make_protection_executor(broker, _throttle_to(alerts))
+        action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
+        report = cl.TickReport()
+        executor(action, False, report)  # must NOT raise
+        self.assertEqual(broker.placed, [])
+        self.assertEqual(report.exits_placed, 0)
+        self.assertTrue(any("deferred" in a for a in alerts))
+
+    def test_cancel_conflicting_tp_cancelled_before_place(self) -> None:
+        # Bug B: a lone TP holds the conflicting sell commitment; the executor
+        # cancels it BEFORE placing the stop.
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, _throttle_to([]))
+        action = PlaceStop(
+            _UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0), cancel_conflicting=("tp-1",)
+        )
+        report = cl.TickReport()
+        executor(action, False, report)
+        self.assertEqual(broker.cancelled, ["tp-1"], "the lone TP is cancelled BEFORE the place")
+        self.assertEqual(len(broker.placed), 1)
+
+    def test_supersede_ids_cancelled_after_place(self) -> None:
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, _throttle_to([]))
+        action = PlaceStop(
+            _UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 1), supersede_ids=("old-stop",)
+        )
+        report = cl.TickReport()
+        executor(action, False, report)
+        self.assertEqual(len(broker.placed), 1)
+        self.assertEqual(broker.cancelled, ["old-stop"], "old stop cancelled AFTER the place")
+
+    def test_supersede_not_cancelled_when_place_fails(self) -> None:
+        # A failed place must leave the OLD stop live (no naked window).
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)}, place_error=BrokerError("rejected"))
+        executor = cl._make_protection_executor(broker, _throttle_to([]))
+        action = PlaceStop(
+            _UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 1), supersede_ids=("old-stop",)
+        )
+        report = cl.TickReport()
+        executor(action, False, report)
+        self.assertEqual(broker.placed, [])
+        self.assertEqual(broker.cancelled, [], "old stop NOT cancelled when the new place fails")
+
+
+class TestIdempotentCancelNoThrash(unittest.TestCase):
+    """A-S5: cancelling an already-gone order is a success, not a raise."""
+
+    def test_already_gone_is_success(self) -> None:
+        broker = _ProtBroker(cancel_errors={"gone": BrokerError("cancel HTTP 404: not found")})
+        cl._idempotent_cancel(broker, "gone")  # must NOT raise
+
+    def test_real_error_propagates(self) -> None:
+        broker = _ProtBroker(cancel_errors={"locked": BrokerError("locked pre-execution")})
+        with self.assertRaises(BrokerError):
+            cl._idempotent_cancel(broker, "locked")
+
+    def test_cancel_sell_legs_swallows_gone_sibling(self) -> None:
+        broker = _ProtBroker(cancel_errors={"gone": BrokerError("OrderNotFound")})
+        executor = cl._make_protection_executor(broker, _throttle_to([]))
+        action = CancelSellLegs(_UIC, ("live-1", "gone"), reason="orphan sweep")
+        report = cl.TickReport()
+        executor(action, False, report)  # must NOT raise
+        self.assertEqual(broker.cancelled, ["live-1"])
+        self.assertEqual(report.cancels, 2)
+
+
+class _AttemptRecordingBroker(_ProtBroker):
+    """Records EVERY cancel attempt (even ones that raise) so a test can assert
+    the CancelSellLegs loop does not abort after the first failure."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.attempted: list[str] = []
+
+    def cancel_order(self, order_id: str) -> None:
+        self.attempted.append(order_id)
+        super().cancel_order(order_id)
+
+
+class TestCancelSellLegsResilientToPerLegFailure(unittest.TestCase):
+    """A genuine transient BrokerError on ONE leg must not strand the remaining
+    legs uncancelled — each cancel is isolated, the tick does not raise, and the
+    failure is throttle-alerted."""
+
+    def test_first_leg_failure_does_not_abort_remaining_cancels(self) -> None:
+        # "locked" is NOT an already-gone token -> _idempotent_cancel re-raises
+        # a real BrokerError; the executor must catch it per-leg and continue.
+        broker = _AttemptRecordingBroker(
+            cancel_errors={"leg-1": BrokerError("locked pre-execution")}
+        )
+        alerts: list[str] = []
+        executor = cl._make_protection_executor(broker, _throttle_to(alerts))
+        action = CancelSellLegs(_UIC, ("leg-1", "leg-2", "leg-3"), reason="orphan sweep")
+        report = cl.TickReport()
+
+        executor(action, False, report)  # must NOT raise
+
+        self.assertEqual(
+            broker.attempted,
+            ["leg-1", "leg-2", "leg-3"],
+            "all legs attempted despite the first raising",
+        )
+        self.assertEqual(broker.cancelled, ["leg-2", "leg-3"], "the two good legs cancelled")
+        self.assertEqual(report.cancels, 2, "only the successful cancels are counted")
+        self.assertTrue(
+            any("leg-1" in a for a in alerts),
+            "the per-leg cancel failure is surfaced as an alert",
+        )
+
+
+class TestAlertThrottleByUicReason(unittest.TestCase):
+    """A-S2/B-S3/C-S10: the same (uic, reason) within the interval alerts once; N
+    consecutive place failures escalate once then back off."""
+
+    def test_same_uic_reason_alerts_once_within_interval(self) -> None:
+        sent: list[str] = []
+        clock = {"t": 0.0}
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: clock["t"], interval_s=1800.0)
+        self.assertTrue(throttle.emit("naked", uic=1, reason="deficit"))
+        self.assertFalse(throttle.emit("naked", uic=1, reason="deficit"))
+        self.assertEqual(len(sent), 1)
+        # A different reason on the same uic is a distinct alert.
+        self.assertTrue(throttle.emit("other", uic=1, reason="orphan"))
+        self.assertEqual(len(sent), 2)
+        # After the interval elapses, the first key alerts again.
+        clock["t"] = 1801.0
+        self.assertTrue(throttle.emit("naked", uic=1, reason="deficit"))
+        self.assertEqual(len(sent), 3)
+
+    def test_consecutive_failures_escalate_once_then_backoff(self) -> None:
+        sent: list[str] = []
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
+        throttle.record_place_failure(7, "fail-1")
+        throttle.record_place_failure(7, "fail-2")
+        before = len(sent)
+        throttle.record_place_failure(7, "fail-3")  # threshold -> CRITICAL once
+        self.assertEqual(len(sent), before + 1)
+        self.assertTrue(any("CRITICAL" in s and "NAKED" in s for s in sent))
+        after_escalation = len(sent)
+        throttle.record_place_failure(7, "fail-4")  # backoff -> silent
+        throttle.record_place_failure(7, "fail-5")
+        self.assertEqual(len(sent), after_escalation, "escalated uic backs off silently")
+
+    def test_place_success_resets_failure_counter(self) -> None:
+        sent: list[str] = []
+        throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
+        throttle.record_place_failure(7, "fail")
+        throttle.record_place_success(7)
+        # A fresh streak starts from zero (no escalation on the very next failure).
+        throttle.record_place_failure(7, "fail-again")
+        self.assertFalse(any("CRITICAL" in s for s in sent))
+
+
+class TestPerCallBrokerErrorBoundary(unittest.TestCase):
+    """One uic's broker error inside the protection pass does not prevent other
+    uics being processed (per-action boundary in run_once)."""
+
+    def test_one_uic_cancel_error_still_sweeps_the_other(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            uic_a, uic_b = 111, 222
+            # Two flat uics, each with an orphan SELL leg -> two CancelSellLegs.
+            broker = _ProtBroker(
+                positions=[],  # both flat -> orphan sweep for both
+                sells=[
+                    _leg("A-1", "StopIfTraded", 5.0, uic=uic_a),
+                    _leg("B-1", "StopIfTraded", 5.0, uic=uic_b),
+                ],
+                cancel_errors={"A-1": BrokerError("locked pre-execution")},
+            )
+            throttle = _throttle_to(alerts)
+            deps = _deps(
+                broker,
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=alerts,
+                build_protection_view=cl.build_protection_view,
+                execute_protection=cl._make_protection_executor(broker, throttle),
+            )
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                report = cl.run_once(deps)
+            self.assertIn("B-1", broker.cancelled, "the second orphan uic is still swept")
+            self.assertTrue(alerts, "the failed cancel alerts")
+            self.assertIsInstance(report, cl.TickReport)
+
+
+# --------------------------------------------------------------------------
+# Journal fold (Task 4) — planned-exit prices only, keyed by uic.
+# --------------------------------------------------------------------------
+
+
+class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
+    """Task 4 (memo §7): the planned-exits fold keys by UIC and returns PLAN
+    PRICES only. It NEVER returns a ``frozenset`` protected set — protection is
+    derived from live broker state (Tasks 5/6), never from a journal line. An
+    ``intent`` / ``placed`` line contributes nothing to a protection decision."""
+
+    def test_two_tiers_one_uic_fold_to_one_planned_exit(self) -> None:
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 306.72,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {
+                "kind": "planned",
+                "client_request_id": "crid-1",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 297.5,
+                "tier_index": 1,
+                "gen": 0,
+            },
+        ]
+        result = cl._fold_planned_exits(lines)
+        self.assertEqual(set(result), {43070})
+        planned = result[43070]
+        self.assertIsInstance(planned, PlannedExit)
+        self.assertEqual(planned.uic, 43070)
+        self.assertEqual(planned.side, "SELL")
+        self.assertAlmostEqual(planned.stop_price, 216.48)
+        self.assertIsNotNone(planned.tp_price)
+        self.assertAlmostEqual(planned.tp_price or 0.0, 306.72)
+        self.assertEqual(planned.entry_crid, "crid-0")
+        self.assertFalse(planned.conflicting)
+        self.assertEqual(planned.n_plans, 1)
+
+    def test_fold_returns_a_plain_dict_no_protected_frozenset(self) -> None:
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 306.72,
+                "tier_index": 0,
+                "gen": 0,
+            }
+        ]
+        result = cl._fold_planned_exits(lines)
+        self.assertIsInstance(result, dict)
+        self.assertNotIsInstance(result, tuple)
+
+    def test_intent_and_placed_lines_contribute_nothing(self) -> None:
+        lines = [
+            {
+                "kind": "intent",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "qty": 46.0,
+                "stop_price": 216.48,
+            },
+            {
+                "kind": "placed",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "qty": 46.0,
+                "stop_price": 216.48,
+                "order_id": "S-1",
+            },
+        ]
+        self.assertEqual(cl._fold_planned_exits(lines), {})
+
+    def test_grows_conflicting_when_two_plans_hit_one_uic(self) -> None:
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-A0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 306.72,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {
+                "kind": "planned",
+                "client_request_id": "crid-B0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 210.00,
+                "take_profit": 300.00,
+                "tier_index": 0,
+                "gen": 0,
+            },
+        ]
+        planned = cl._fold_planned_exits(lines)[43070]
+        self.assertTrue(planned.conflicting)
+        self.assertEqual(planned.n_plans, 2)
+
+    def test_tiers_disagree_takes_max_stop_for_a_long(self) -> None:
+        lines = [
+            {
+                "kind": "planned",
+                "client_request_id": "crid-0",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 216.48,
+                "take_profit": 306.72,
+                "tier_index": 0,
+                "gen": 0,
+            },
+            {
+                "kind": "planned",
+                "client_request_id": "crid-1",
+                "uic": 43070,
+                "side": "SELL",
+                "stop_price": 220.00,
+                "take_profit": 297.5,
+                "tier_index": 1,
+                "gen": 0,
+            },
+        ]
+        planned = cl._fold_planned_exits(lines)[43070]
+        self.assertAlmostEqual(planned.stop_price, 220.00)
+
+
+class TestGenStampedRefChangesOnResize(unittest.TestCase):
+    """Task 4 (memo §4.5): deterministic gen-stamped request-ids — stable for a
+    same-size crash-retry (Saxo dedup catches it), distinct on a resize (never
+    falsely deduped to the stale, smaller order). ``gen`` is persisted append-only
+    per uic so it survives a daemon restart."""
+
+    def test_ref_helpers_are_gen_stamped(self) -> None:
+        self.assertEqual(_exit_stop_ref("crid-0", 0), "crid-0-stop-0")
+        self.assertEqual(_exit_tp_ref("crid-0", 0), "crid-0-tp-0")
+        self.assertEqual(_exit_stop_ref("crid-0", 2), "crid-0-stop-2")
+        self.assertEqual(_exit_tp_ref("crid-0", 3), "crid-0-tp-3")
+
+    def test_resize_increments_gen_same_size_retry_keeps_it(self) -> None:
+        with TemporaryDirectory() as tmp:
+            journal = Path(tmp) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                next_gen = cl._make_next_gen(43070)
+                self.assertEqual(next_gen(46.0), 0)
+                self.assertEqual(next_gen(46.0), 0)
+                self.assertEqual(next_gen(30.0), 1)
+                self.assertEqual(next_gen(30.0), 1)
+                self.assertEqual(next_gen(45.0), 2)
+
+    def test_float_tolerance_no_gen_flicker(self) -> None:
+        with TemporaryDirectory() as tmp:
+            journal = Path(tmp) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                next_gen = cl._make_next_gen(43070)
+                self.assertEqual(next_gen(46.0), 0)
+                self.assertEqual(next_gen(45.9999999), 0)
+
+    def test_gen_persists_append_only_across_fresh_callables(self) -> None:
+        with TemporaryDirectory() as tmp:
+            journal = Path(tmp) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._make_next_gen(43070)(46.0)
+                cl._make_next_gen(43070)(30.0)
+                self.assertEqual(cl._make_next_gen(43070)(30.0), 1)
+                self.assertEqual(cl._make_next_gen(43070)(20.0), 2)
+                self.assertEqual(cl._make_next_gen(99999)(10.0), 0)
 
 
 class TestManageCommandRegistered(unittest.TestCase):

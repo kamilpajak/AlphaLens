@@ -47,10 +47,12 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from alphalens_pipeline.brokers.contract import (
+    _QTY_EPS,
     Broker,
     BrokerError,
     OrderState,
     OrderStatus,
+    Position,
 )
 from alphalens_pipeline.paper.calendar import trading_days_elapsed
 
@@ -83,6 +85,21 @@ class SupportsFillCrossCheck(Protocol):
     def get_open_position_references(self) -> list[str]: ...
 
     def get_closed_position_rows(self) -> list[dict[str, Any]]: ...
+
+
+@runtime_checkable
+class SupportsPositionNetting(Protocol):
+    """Extension capability: netted position reads for the per-uic multi-tier match.
+
+    ``get_positions`` is on the base :class:`~contract.Broker` Protocol, but
+    reconcile intentionally requires only ``list_open_orders`` + the optional
+    capabilities (see the module docstring), so a broker that cannot net
+    positions degrades honestly: no ``owned_by_uic`` map, so a second filled
+    tier falls back to the source-tier / closed-pair join and no per-uic match
+    is attempted (never a fabricated ``owned``).
+    """
+
+    def get_positions(self) -> list[Position]: ...
 
 
 @dataclass(frozen=True)
@@ -142,6 +159,23 @@ def compute_realized_r(
     return (float(close_price) - float(entry)) / risk
 
 
+def filled_sum_matches_owned(
+    filled_amounts: Iterable[float],
+    owned: float,
+    *,
+    eps: float = _QTY_EPS,
+) -> bool:
+    """Σ FilledAmount == netted owned, within the qty tolerance (saxo-oco §8).
+
+    The correlation validator behind the per-uic multi-tier match: a netted
+    long collapses N filled tiers into one ``owned``; the audit ``FilledAmount``
+    of those tiers must sum back to it. Uses :data:`_QTY_EPS` (never a bare
+    ``==`` on floats) so sub-share wire noise (``45.9999999`` vs ``46.0``) still
+    reconciles.
+    """
+    return abs(sum(filled_amounts) - owned) <= eps
+
+
 def summarize(verdicts: Iterable[ReconcileVerdict]) -> dict[str, int]:
     """Counts for the CLI summary line."""
     summary = {"total": 0, "working": 0, "terminal": 0, "unresolved": 0, "divergent": 0}
@@ -182,9 +216,18 @@ def reconcile_brackets(
     resolver = broker if isinstance(broker, SupportsOrderResolution) else None
     cross_check: _CrossCheckData | None = None
     if isinstance(broker, SupportsFillCrossCheck):
+        # Netted owned qty per uic — the per-uic multi-tier match source (§8),
+        # gated on its own capability so a broker that cannot net positions
+        # degrades to the source-tier / closed-pair join (empty map).
+        owned_by_uic = (
+            _owned_by_uic(broker.get_positions())
+            if isinstance(broker, SupportsPositionNetting)
+            else {}
+        )
         cross_check = _CrossCheckData(
             open_references=set(broker.get_open_position_references()),
             closed_rows=[_flatten_closed_row(row) for row in broker.get_closed_position_rows()],
+            owned_by_uic=owned_by_uic,
         )
 
     verdicts: list[ReconcileVerdict] = []
@@ -212,6 +255,21 @@ def reconcile_brackets(
 class _CrossCheckData:
     open_references: set[str]
     closed_rows: list[dict[str, Any]]
+    owned_by_uic: dict[str, float] = field(default_factory=dict)
+
+
+def _uic_key(uic: Any) -> str:
+    """Normalise a uic (int on the wire, str in the journal) to a stable key."""
+    return "" if uic is None else str(uic)
+
+
+def _owned_by_uic(positions: Iterable[Position]) -> dict[str, float]:
+    """Net signed position quantities per uic (``broker_instrument_id == str(Uic)``)."""
+    owned: dict[str, float] = {}
+    for pos in positions:
+        key = _uic_key(pos.instrument.broker_instrument_id)
+        owned[key] = owned.get(key, 0.0) + pos.quantity
+    return owned
 
 
 def _flatten_closed_row(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -291,6 +349,10 @@ def _reconcile_one(
         "mic": record.get("mic"),
         "execution_config_version": record.get("execution_config_version"),
     }
+    # Per-uic netting key (§8) — the unit Saxo nets to and the multi-tier match
+    # correlates on. Additive; absent-on-record leaves it out of the verdict.
+    if record.get("uic") is not None:
+        details["uic"] = record.get("uic")
     # Journal schema-2 FX provenance (absent on schema-1 lines = the
     # same-currency no-op era; forward-compat, never back-migrated). The
     # instrument currency labels PnL amounts; the sizing rate sits next to
@@ -544,6 +606,30 @@ def _reconcile_filled(
             note="position open, exit orders working",
             details=details,
         )
+    # Per-uic multi-tier match (§8, fixes C-S6): ``get_open_position_references``
+    # returns ONE reference per netted row (the source/oldest tier crid), so a
+    # SECOND filled tier on the same uic is absent from ``open_references`` and
+    # from any closed pair. It is NOT a divergence — it is the same netted long,
+    # reached through a different tier. Match it by uic: "position open" iff the
+    # uic has ``owned > 0`` (a live netted position) AND this tier's own audit
+    # ``FilledAmount > 0``. Sizing to netted owned is thus structural, and the
+    # per-tick AlertOnly storm (and the FIFO-flip un-protect) are gone.
+    uic_key = _uic_key(details.get("uic"))
+    owned = cross_check.owned_by_uic.get(uic_key, 0.0) if uic_key else 0.0
+    filled_amount = state.filled_quantity or 0.0
+    if owned > _QTY_EPS and filled_amount > _QTY_EPS:
+        details["netted_owned"] = owned
+        return ReconcileVerdict(
+            brief_date=brief_date,
+            ticker=ticker,
+            qty=qty,
+            entry_order_id=entry_order_id,
+            status=OrderStatus.FILLED.value,
+            verdict=OrderStatus.FILLED.value,
+            activity_time=activity_time,
+            note="position open (netted tier), matched by uic",
+            details=details,
+        )
     return ReconcileVerdict(
         brief_date=brief_date,
         ticker=ticker,
@@ -567,7 +653,9 @@ __all__ = [
     "ReconcileVerdict",
     "SupportsFillCrossCheck",
     "SupportsOrderResolution",
+    "SupportsPositionNetting",
     "compute_realized_r",
+    "filled_sum_matches_owned",
     "has_failures",
     "reconcile_brackets",
     "summarize",

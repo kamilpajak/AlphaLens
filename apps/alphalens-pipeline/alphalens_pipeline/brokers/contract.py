@@ -44,11 +44,56 @@ class InstrumentNotFoundError(BrokerError):
 
 
 class OrderRejectedError(BrokerError):
-    """Broker rejected an order (carries the broker reason string)."""
+    """Broker rejected an order (carries the broker reason string).
+
+    ``error_code`` is the verbatim vendor error code (Saxo
+    ``ErrorInfo.ErrorCode``) when the adapter could attach it at the boundary
+    (set in ``SaxoBroker._precheck_or_raise``); ``None`` when the rejection
+    carried no structured code. Safety branches classify on this STRUCTURED
+    code (see :func:`_is_sell_orders_already_exist` /
+    :func:`_is_too_far_from_entry`), never by parsing the message string —
+    string parsing is brittle and rots silently.
+    """
+
+    def __init__(self, *args: object, error_code: str | None = None) -> None:
+        super().__init__(*args)
+        self.error_code = error_code
 
 
 class BrokerCapabilityError(BrokerError):
     """Method not supported by this broker or in this increment (e.g. P1 placement)."""
+
+
+# Float-quantity comparison tolerance (saxo-oco memo). Owned share quantities
+# are whole numbers on the wire but arrive as floats; a bare ``>=`` on two
+# floats can flicker (e.g. ``45.9999999`` vs ``46.0``). Every protection
+# comparison on a quantity uses this epsilon instead of a bare operator so the
+# reconciler never places/cancels on a phantom sub-share difference.
+_QTY_EPS = 0.5
+
+
+def _is_sell_orders_already_exist(e: BrokerError) -> bool:
+    """True iff ``e`` is Saxo's ``SellOrdersAlreadyExistForOwnedContracts``.
+
+    The structured discriminator for Bug B (double-sell): a lone TP / an
+    existing sell commitment on the uic means the executor must defer and
+    retry next tick, not crash. Classified on the attached ``error_code``,
+    never on the message string.
+    """
+    return (
+        isinstance(e, OrderRejectedError)
+        and e.error_code == "SellOrdersAlreadyExistForOwnedContracts"
+    )
+
+
+def _is_too_far_from_entry(e: BrokerError) -> bool:
+    """True iff ``e`` is Saxo's ``TooFarFromEntryOrder`` rejection.
+
+    A wide disaster stop rejected as a bracket child (ADR 0013 T7) — the
+    signal that the exit belongs on a standalone position-level order, not an
+    OCO bracket child.
+    """
+    return isinstance(e, OrderRejectedError) and e.error_code == "TooFarFromEntryOrder"
 
 
 # --------------------------------------------------------------------------
@@ -119,6 +164,15 @@ class OrderState:
     instrument: InstrumentRef | None
     filled_quantity: float
     raw_status: str  # broker-native string, for diagnostics; never branched on by consumers
+    # Per-uic protection accounting (saxo-oco memo §4.1) — additive, defaulted
+    # so existing constructions and a second broker stay source-compatible; the
+    # frozen base ``Broker`` Protocol is untouched. Mapped in ``_to_order_state``
+    # from fields Saxo already returns (no new HTTP surface).
+    uic: int | None = None  # row["Uic"]
+    side: Literal["BUY", "SELL"] | None = None  # from row["BuySell"]
+    order_type: str | None = None  # Saxo OpenOrderType ("StopIfTraded" | "Limit" | ...)
+    amount: float | None = None  # row["Amount"] — RESTING qty, NOT filled
+    external_reference: str | None = None  # row["ExternalReference"]
 
 
 @dataclass(frozen=True)
