@@ -22,6 +22,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     AlertOnly,
     BrokerView,
     CancelRemaining,
+    DisasterStop,
     NoOp,
     PlaceStandaloneStop,
     advance,
@@ -209,12 +210,61 @@ def build_default_deps(*, poll_seconds: float) -> LoopDeps:
 
 # --- SIM-probe-only factory helpers (Component 6 "placer" home) --------------
 # Thin composers over the Task 1-10 seams. They carry NO hermetic unit-test
-# cycle (build_default_deps and everything it wires is exercised end-to-end only
-# by the SAXO_LIVE_TEST=1 SIM live probe — a deferred follow-up). Where a seam is
-# not yet shipped (the pick -> SetupPlan resolution + append-only journal write,
-# and the out-of-band standalone-stop journal that feeds position_manager.BrokerView),
-# the composer raises NotImplementedError at exactly that boundary rather than
-# guessing an unshipped API; the SIM live probe closes those seams.
+# cycle (test_control_loop.py injects LoopDeps as stubs; build_default_deps and
+# everything it wires is exercised end-to-end only by the deferred
+# SAXO_LIVE_TEST=1 SIM live probe). _make_place_pick and _make_standalone_stop_placer
+# both read/write STANDALONE_STOP_JOURNAL_PATH — a tiny out-of-band append-only
+# journal (mirrors the picks.jsonl / submissions.jsonl append-only pattern) that
+# correlates one entry bracket's client_request_id with its plan-level disaster
+# stop ("planned", written at placement time) and marks a Uic protected once its
+# standalone stop actually posts ("placed", written at stop-placement time).
+# _make_position_view_builder folds both halves back into position_manager.BrokerView.
+
+STANDALONE_STOP_JOURNAL_PATH = (
+    Path.home() / ".alphalens" / "broker_orders" / "standalone_stops.jsonl"
+)
+
+_DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
+_ENTRY_SIDE = "BUY"  # MVP scope: long entries only (design memo, single-name equities)
+_DISASTER_STOP_SIDE = "SELL"  # protective exit of a long entry
+
+
+@dataclass(frozen=True)
+class _AlreadyGatedSessionState:
+    """safety.check's SessionState — place_pick only ever runs after run_once's
+    own (no KILL) AND (chain alive) placement gate, so alive=True here restates
+    a fact already established by the caller; the rails that actually gate this
+    call are safety.check's own KILL-file / ALLOW_ORDERS / cap checks."""
+
+    alive: bool = True
+
+
+def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
+    """Append one line to the out-of-band standalone-stop journal (never rewrites)."""
+    import json
+
+    STANDALONE_STOP_JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with STANDALONE_STOP_JOURNAL_PATH.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+
+
+def _iter_standalone_stop_journal() -> Iterator[dict[str, Any]]:
+    """Yield parsed lines from the standalone-stop journal; malformed lines skipped."""
+    import json
+
+    if not STANDALONE_STOP_JOURNAL_PATH.exists():
+        return
+    with STANDALONE_STOP_JOURNAL_PATH.open("r", encoding="utf-8") as fh:
+        for raw_line in fh:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                yield record
 
 
 def _default_oauth_provider() -> Any:
@@ -243,16 +293,180 @@ def _default_alert() -> Callable[[str], None]:
 
 def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
-    place_bracket_order + append-only journal for one armed pick (reusing the
-    client_request_id on retry). The pick -> SetupPlan/InstrumentRef resolution
-    and the submissions-journal write land with the SIM live probe."""
+    place_bracket_order + the submissions journal for one armed pick, plus the
+    "planned" half of the out-of-band standalone-stop journal (the entry's
+    plan-level disaster stop, correlated by client_request_id for
+    _make_position_view_builder to fold back later). A safety refusal or a
+    resolve/size/placement failure logs and returns False rather than raising —
+    one bad pick must never crash a tick."""
 
     def _place(pick: Any) -> bool:
-        raise NotImplementedError(
-            "place-pick wiring (safety.check -> placement_planner.classify -> "
-            "place_bracket_order + submissions journal) is closed by the "
-            "SAXO_LIVE_TEST=1 SIM live probe — a deferred follow-up"
+        import datetime as _dt
+
+        from alphalens_pipeline.brokers.automanager import safety
+        from alphalens_pipeline.brokers.automanager.placement_planner import classify
+        from alphalens_pipeline.brokers.automanager.reconcile_bridge import (
+            verdicts as reconcile_verdicts,
         )
+        from alphalens_pipeline.brokers.contract import BrokerError
+        from alphalens_pipeline.brokers.execution import build_fx_conversion
+        from alphalens_pipeline.brokers.routing import resolve_us_instrument
+        from alphalens_pipeline.brokers.submission_log import (
+            DEFAULT_SUBMISSIONS_PATH,
+            append_submission_record,
+            build_submission_record,
+            iter_submission_records,
+        )
+        from alphalens_pipeline.paper.brief_loader import load_brief
+        from alphalens_pipeline.paper.sizing import (
+            TradeSetupNotPlannableError,
+            compute_setup_plan,
+        )
+
+        ticker = pick.ticker.upper()
+        try:
+            candidates = load_brief(pick.date, _DEFAULT_BRIEFS_DIR)
+        except (FileNotFoundError, ValueError) as exc:
+            logger.warning("place_pick %s: brief unavailable for %s: %s", ticker, pick.date, exc)
+            return False
+        candidate = next((c for c in candidates if c.ticker.upper() == ticker), None)
+        if candidate is None or candidate.trade_setup is None:
+            logger.warning(
+                "place_pick %s: no plannable trade_setup in the %s brief", ticker, pick.date
+            )
+            return False
+
+        try:
+            account = broker.get_account()
+            positions = broker.get_positions()
+            records = list(iter_submission_records(DEFAULT_SUBMISSIONS_PATH))
+            open_verdicts = reconcile_verdicts(records, broker)
+        except BrokerError as exc:
+            logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
+            return False
+
+        entry_by_request_id = {
+            str(bracket.get("client_request_id")): bracket
+            for record in records
+            for bracket in record.get("brackets") or []
+        }
+        today_iso = _dt.date.today().isoformat()
+        open_bracket_count = 0
+        gross_committed = 0.0
+        realized_r_today = 0.0
+        for verdict in open_verdicts:
+            realized_r = verdict.details.get("realized_r")
+            realized_date = (verdict.activity_time or "")[:10] or verdict.brief_date
+            if realized_r is not None and realized_date == today_iso:
+                realized_r_today += float(realized_r)
+            if verdict.status in {"WORKING", "PARTIALLY_FILLED"}:
+                open_bracket_count += 1
+                bracket = entry_by_request_id.get(
+                    str(verdict.details.get("client_request_id") or "")
+                )
+                if bracket and bracket.get("entry") is not None and bracket.get("qty") is not None:
+                    gross_committed += float(bracket["entry"]) * float(bracket["qty"])
+
+        decision = safety.check(
+            pick,
+            safety.JournalView(
+                open_bracket_count=open_bracket_count,
+                gross_committed=gross_committed,
+                realized_r_today=realized_r_today,
+            ),
+            safety.BrokerView(open_position_count=len(positions), equity=account.total_value),
+            _AlreadyGatedSessionState(),
+        )
+        if isinstance(decision, safety.Refuse):
+            logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
+            return False
+
+        try:
+            instrument = resolve_us_instrument(broker, ticker)
+            if not instrument.currency:
+                logger.warning("place_pick %s: resolved with no instrument currency", ticker)
+                return False
+            fx = None
+            if instrument.currency != account.currency:
+                get_fx_rate = getattr(broker, "get_fx_rate", None)
+                if get_fx_rate is None:
+                    logger.warning(
+                        "place_pick %s: %s vs account %s but broker has no get_fx_rate",
+                        ticker,
+                        instrument.currency,
+                        account.currency,
+                    )
+                    return False
+                fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
+            plan = compute_setup_plan(
+                brief_trade_setup=candidate.trade_setup,
+                paper_equity=account.total_value,
+                scale_factor=1.0,
+                fx=fx,
+            )
+        except (BrokerError, TradeSetupNotPlannableError) as exc:
+            logger.warning("place_pick %s: resolve/size failed: %s", ticker, exc)
+            return False
+
+        placement = classify(plan, instrument, side=_ENTRY_SIDE)
+        if not placement.tiers:
+            logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
+            return False
+
+        placed_records: list[dict[str, Any]] = []
+        planned_stop_lines: list[dict[str, Any]] = []
+        failure_note: str | None = None
+        try:
+            for tier in placement.tiers:
+                bracket = tier.bracket
+                placed = broker.place_bracket_order(bracket)
+                placed_records.append(
+                    {
+                        "client_request_id": bracket.client_request_id,
+                        "entry_order_id": placed.entry_order_id,
+                        "exit_order_ids": list(placed.exit_order_ids),
+                        "qty": bracket.quantity,
+                        "entry": bracket.entry_limit,
+                        "stop": bracket.stop_loss,
+                        "tp": bracket.take_profit,
+                        "ttl": bracket.entry_ttl_days,
+                    }
+                )
+                planned_stop_lines.append(
+                    {
+                        "kind": "planned",
+                        "client_request_id": bracket.client_request_id,
+                        "uic": int(instrument.broker_instrument_id),
+                        "side": _DISASTER_STOP_SIDE,
+                        "stop_price": placement.disaster_stop_price,
+                    }
+                )
+        except BrokerError as exc:
+            failure_note = (
+                f"placement stopped after {len(placed_records)}/{len(placement.tiers)} "
+                f"bracket(s): {exc}"
+            )
+        finally:
+            if placed_records or failure_note:
+                record = build_submission_record(
+                    brief_date=pick.date.isoformat(),
+                    ticker=ticker,
+                    mic=instrument.exchange_mic,
+                    uic=instrument.broker_instrument_id,
+                    brackets=placed_records,
+                    note=failure_note,
+                    sizing_currency=account.currency,
+                    instrument_currency=instrument.currency,
+                    sizing_equity=account.total_value,
+                    fx=fx,
+                )
+                append_submission_record(record)
+                for line in planned_stop_lines:
+                    _append_standalone_stop_journal(line)
+
+        if failure_note:
+            logger.warning("place_pick %s: %s", ticker, failure_note)
+        return bool(placed_records)
 
     return _place
 
@@ -260,31 +474,84 @@ def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
 def _make_position_view_builder(
     broker: Broker,
 ) -> Callable[[Broker, list[Mapping[str, Any]]], BrokerView]:
-    """Fold a broker snapshot + the out-of-band standalone-stop journal into a
-    position_manager.BrokerView. The standalone-stop journal read lands with the
-    SIM live probe (it is written by _make_standalone_stop_placer)."""
+    """Fold the submissions journal + the out-of-band standalone-stop journal into
+    a position_manager.BrokerView: working_children reads exit order ids straight
+    from the submission records, filtered to broker orders still WORKING;
+    disaster_stops comes from the "planned" journal lines (written by
+    _make_place_pick); protected_request_ids is every entry whose Uic has a
+    matching "placed" line (written by _make_standalone_stop_placer)."""
 
-    def _build(_broker: Broker, _records: list[Mapping[str, Any]]) -> BrokerView:
-        raise NotImplementedError(
-            "position-view wiring (broker snapshot + standalone-stop journal -> "
-            "BrokerView) is closed by the SAXO_LIVE_TEST=1 SIM live probe — a "
-            "deferred follow-up"
+    def _build(_broker: Broker, records: list[Mapping[str, Any]]) -> BrokerView:
+        from alphalens_pipeline.brokers.contract import OrderStatus
+
+        working_ids = {
+            str(state.order_id)
+            for state in _broker.list_open_orders()
+            if state.status == OrderStatus.WORKING
+        }
+        working_children: dict[str, tuple[str, ...]] = {}
+        for record in records:
+            for bracket in record.get("brackets") or []:
+                request_id = bracket.get("client_request_id")
+                if not request_id:
+                    continue
+                exits = tuple(
+                    str(order_id)
+                    for order_id in (bracket.get("exit_order_ids") or [])
+                    if str(order_id) in working_ids
+                )
+                if exits:
+                    working_children[str(request_id)] = exits
+
+        disaster_stops: dict[str, DisasterStop] = {}
+        protected_uics: set[int] = set()
+        for line in _iter_standalone_stop_journal():
+            kind = line.get("kind")
+            try:
+                if kind == "planned" and line.get("client_request_id"):
+                    disaster_stops[str(line["client_request_id"])] = DisasterStop(
+                        uic=int(line["uic"]),
+                        side=str(line["side"]),
+                        stop_price=float(line["stop_price"]),
+                    )
+                elif kind == "placed" and line.get("uic") is not None:
+                    protected_uics.add(int(line["uic"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+
+        protected_request_ids = frozenset(
+            request_id
+            for request_id, disaster in disaster_stops.items()
+            if disaster.uic in protected_uics
+        )
+        return BrokerView(
+            protected_request_ids=protected_request_ids,
+            disaster_stops=disaster_stops,
+            working_children=working_children,
         )
 
     return _build
 
 
 def _make_standalone_stop_placer(broker: Broker) -> Callable[[int, str, float, float], None]:
-    """Adapt SaxoBroker.place_standalone_stop + the out-of-band standalone-stop
-    journal write (feeding the position-view builder) into the LoopDeps placer
-    seam. Both land together with the SIM live probe so the placement and its
-    journal record are never split (a placed-but-unjournaled stop is an orphan)."""
+    """Adapt SaxoBroker.place_standalone_stop, then write the "placed" half of
+    the out-of-band standalone-stop journal — read back by
+    _make_position_view_builder on the NEXT tick to mark every entry sharing
+    this Uic protected. The placement and its journal record are NOT
+    transactional (a crash between the two is exactly the orphan window
+    orphan_sweeper flags), matching _make_place_pick's placement->journal order."""
 
     def _place(uic: int, side: str, qty: float, stop_price: float) -> None:
-        raise NotImplementedError(
-            "standalone-stop placer wiring (SaxoBroker.place_standalone_stop + "
-            "out-of-band journal write) is closed by the SAXO_LIVE_TEST=1 SIM "
-            "live probe — a deferred follow-up"
+        placed = broker.place_standalone_stop(uic, side, qty, stop_price)
+        _append_standalone_stop_journal(
+            {
+                "kind": "placed",
+                "uic": uic,
+                "side": side,
+                "qty": qty,
+                "stop_price": stop_price,
+                "order_id": placed.entry_order_id,
+            }
         )
 
     return _place
