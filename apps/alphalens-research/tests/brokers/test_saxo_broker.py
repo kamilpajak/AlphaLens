@@ -37,7 +37,7 @@ from alphalens_pipeline.brokers.contract import (
     OrderStatus,
     Position,
 )
-from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
+from alphalens_pipeline.brokers.saxo.broker import SaxoBroker, _validate_price_relations
 from alphalens_pipeline.brokers.saxo.client import (
     SaxoAuthError,
     SaxoError,
@@ -812,6 +812,42 @@ class TestGetPositionsByUicNetted(unittest.TestCase):
     def test_absent_uic_returns_zero_qty_sentinel(self):
         netted = _make_broker().get_positions_by_uic(999999)
         self.assertEqual(netted.quantity, 0.0)
+
+
+class TestValidatePriceRelationsOneSided(unittest.TestCase):
+    """A one-sided bracket (only a stop, or only a take-profit) passes a ``None``
+    child into ``_validate_price_relations``. The child-distance loop must SKIP
+    the missing leg — without the ``child_q is None`` guard the ``entry_q -
+    child_q`` arithmetic raises ``TypeError`` (latent today: the planner always
+    sets both to ``None``, but a future one-sided request must not crash)."""
+
+    def test_stop_only_bracket_does_not_raise(self):
+        # take_profit is None (stop-only). No exception, no spurious reject.
+        try:
+            _validate_price_relations("BUY", 50.0, 45.0, None, symbol="ko:xnys")
+        except TypeError as exc:  # pragma: no cover - the failure we guard against
+            self.fail(f"None take_profit must be skipped, not arithmeticked: {exc}")
+
+    def test_take_profit_only_bracket_does_not_raise(self):
+        # stop_loss is None (tp-only). No exception, no spurious reject.
+        try:
+            _validate_price_relations("BUY", 50.0, None, 55.0, symbol="ko:xnys")
+        except TypeError as exc:  # pragma: no cover - the failure we guard against
+            self.fail(f"None stop_loss must be skipped, not arithmeticked: {exc}")
+
+    def test_both_none_bracket_does_not_raise(self):
+        # Entry-only bracket (planner's Stage-1 default): both children None.
+        try:
+            _validate_price_relations("BUY", 50.0, None, None, symbol="ko:xnys")
+        except TypeError as exc:  # pragma: no cover - the failure we guard against
+            self.fail(f"both-None bracket must not arithmetic on a None child: {exc}")
+
+    def test_one_sided_wide_stop_still_rejected(self):
+        # The None-child skip must NOT disable the distance check on the PRESENT
+        # leg: a stop 30% below entry is still rejected even with tp=None.
+        with self.assertRaises(OrderRejectedError) as ctx:
+            _validate_price_relations("BUY", 50.0, 35.0, None, symbol="ko:xnys")
+        self.assertIn("stop_loss", str(ctx.exception))
 
 
 class TestSaxoBrokerConformance(BrokerConformanceMixin, unittest.TestCase):

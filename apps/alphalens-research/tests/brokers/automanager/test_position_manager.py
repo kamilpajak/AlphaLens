@@ -272,6 +272,32 @@ class TestBugBLoneTpForcesCancelBeforeStop(unittest.TestCase):
         self.assertNotIsInstance(action, NoOp)
 
 
+class TestZeroAmountStopLegCoversNothing(unittest.TestCase):
+    """A stop leg whose RESTING ``amount`` is a genuine ``0.0`` must contribute
+    exactly 0.0 to ``stop_qty`` (explicit-None guard) — it covers no shares, so a
+    long with only a zero-amount stop is read as a deficit, not protected. The
+    explicit ``leg.amount if leg.amount is not None else 0.0`` form makes the
+    intent unambiguous vs the falsy ``or 0.0`` (identical output today, but a
+    zero amount is a real quantity, not an absent one)."""
+
+    def test_zero_amount_stop_leg_is_a_deficit(self) -> None:
+        pos = _pos(46.0)
+        zero_stop = _leg("stop-0", "Stop", 0.0)  # resting amount 0.0 -> covers nothing
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (zero_stop,)},
+            planned_by_uic={_UIC: _plan()},
+        )
+        actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 46.0, "0.0-amount stop covers nothing -> full-owned deficit")
+        self.assertEqual(action.supersede_ids, ("stop-0",), "the empty stale stop is superseded")
+        self.assertNotIsInstance(action, NoOp)
+
+
 class TestReconcileDecisionTable(unittest.TestCase):
     def test_naked_places_stop_sized_to_netted_owned(self) -> None:
         pos = _pos(46.0)

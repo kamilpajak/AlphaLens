@@ -292,8 +292,19 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
             )
         ]
 
-    stop_qty = sum(leg.amount or 0.0 for leg in legs if leg.order_type in STOP_TYPES)
-    tp_qty = sum(leg.amount or 0.0 for leg in legs if leg.order_type in TP_TYPES)
+    # Explicit-None guard: ``amount`` is ``float | None`` (the RESTING qty). A
+    # genuine ``0.0`` must contribute 0.0 to the sum, not be misread as an absent
+    # amount — ``or 0.0`` conflates the two (harmless today, latent misread).
+    stop_qty = sum(
+        (leg.amount if leg.amount is not None else 0.0)
+        for leg in legs
+        if leg.order_type in STOP_TYPES
+    )
+    tp_qty = sum(
+        (leg.amount if leg.amount is not None else 0.0)
+        for leg in legs
+        if leg.order_type in TP_TYPES
+    )
     total = stop_qty + tp_qty
 
     # (A) OVER-HEDGE: an exit leg partially filled (netted owned shrank) or the

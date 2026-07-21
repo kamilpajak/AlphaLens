@@ -806,6 +806,50 @@ class TestIdempotentCancelNoThrash(unittest.TestCase):
         self.assertEqual(report.cancels, 2)
 
 
+class _AttemptRecordingBroker(_ProtBroker):
+    """Records EVERY cancel attempt (even ones that raise) so a test can assert
+    the CancelSellLegs loop does not abort after the first failure."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.attempted: list[str] = []
+
+    def cancel_order(self, order_id: str) -> None:
+        self.attempted.append(order_id)
+        super().cancel_order(order_id)
+
+
+class TestCancelSellLegsResilientToPerLegFailure(unittest.TestCase):
+    """A genuine transient BrokerError on ONE leg must not strand the remaining
+    legs uncancelled — each cancel is isolated, the tick does not raise, and the
+    failure is throttle-alerted."""
+
+    def test_first_leg_failure_does_not_abort_remaining_cancels(self) -> None:
+        # "locked" is NOT an already-gone token -> _idempotent_cancel re-raises
+        # a real BrokerError; the executor must catch it per-leg and continue.
+        broker = _AttemptRecordingBroker(
+            cancel_errors={"leg-1": BrokerError("locked pre-execution")}
+        )
+        alerts: list[str] = []
+        executor = cl._make_protection_executor(broker, _throttle_to(alerts))
+        action = CancelSellLegs(_UIC, ("leg-1", "leg-2", "leg-3"), reason="orphan sweep")
+        report = cl.TickReport()
+
+        executor(action, False, report)  # must NOT raise
+
+        self.assertEqual(
+            broker.attempted,
+            ["leg-1", "leg-2", "leg-3"],
+            "all legs attempted despite the first raising",
+        )
+        self.assertEqual(broker.cancelled, ["leg-2", "leg-3"], "the two good legs cancelled")
+        self.assertEqual(report.cancels, 2, "only the successful cancels are counted")
+        self.assertTrue(
+            any("leg-1" in a for a in alerts),
+            "the per-leg cancel failure is surfaced as an alert",
+        )
+
+
 class TestAlertThrottleByUicReason(unittest.TestCase):
     """A-S2/B-S3/C-S10: the same (uic, reason) within the interval alerts once; N
     consecutive place failures escalate once then back off."""

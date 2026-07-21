@@ -961,8 +961,18 @@ def _make_protection_executor(
             return
         if isinstance(action, CancelSellLegs):
             for order_id in action.order_ids:
-                _idempotent_cancel(broker, order_id)
-                report.cancels += 1
+                try:
+                    _idempotent_cancel(broker, order_id)
+                    report.cancels += 1
+                except BrokerError as exc:
+                    # A genuine transient failure on ONE leg must not strand the
+                    # rest uncancelled — isolate it, alert, and continue the loop.
+                    if throttle.emit(
+                        f"uic {action.uic}: failed to cancel {order_id}: {exc}",
+                        uic=action.uic,
+                        reason=f"cancel-fail:{action.uic}",
+                    ):
+                        report.alerts += 1
             if throttle.emit(action.reason, uic=action.uic, reason=f"cancel:{action.uic}"):
                 report.alerts += 1
             return
