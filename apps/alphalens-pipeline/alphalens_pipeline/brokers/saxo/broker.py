@@ -1284,6 +1284,7 @@ class SaxoBroker:
             order_type=_opt_str(row.get("OpenOrderType")),
             amount=_opt_float(row.get("Amount")),
             external_reference=_opt_str(row.get("ExternalReference")),
+            order_relation=_opt_str(row.get("OrderRelation")),
         )
 
     def _cache_instrument(self, key: tuple[str, str], ref: InstrumentRef) -> None:

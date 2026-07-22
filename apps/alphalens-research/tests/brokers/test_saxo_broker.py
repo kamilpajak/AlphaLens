@@ -706,7 +706,8 @@ class TestToOrderStateSurfacesFields(unittest.TestCase):
             "BuySell": "Sell",
             "OpenOrderType": "StopIfTraded",
             "Amount": 46.0,
-            "ExternalReference": "crid-stop-0",
+            "ExternalReference": "crid-oco-0-stop",
+            "OrderRelation": "Oco",
             "Status": "Working",
             "FilledAmount": 0.0,
         }
@@ -715,7 +716,10 @@ class TestToOrderStateSurfacesFields(unittest.TestCase):
         self.assertEqual(state.side, "SELL")
         self.assertEqual(state.order_type, "StopIfTraded")
         self.assertEqual(state.amount, 46.0)
-        self.assertEqual(state.external_reference, "crid-stop-0")
+        self.assertEqual(state.external_reference, "crid-oco-0-stop")
+        # OrderRelation is the OCO-group discriminator the reconciler counts a
+        # resting OCO pair by (single sell commitment, not 2*owned).
+        self.assertEqual(state.order_relation, "Oco")
 
 
 class TestPrecheckSetsErrorCode(unittest.TestCase):

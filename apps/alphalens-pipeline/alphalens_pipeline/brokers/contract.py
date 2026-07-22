@@ -173,6 +173,13 @@ class OrderState:
     order_type: str | None = None  # Saxo OpenOrderType ("StopIfTraded" | "Limit" | ...)
     amount: float | None = None  # row["Amount"] — RESTING qty, NOT filled
     external_reference: str | None = None  # row["ExternalReference"]
+    # OCO-group discriminator (saxo-oco memo, Stage 2). Saxo's ``OrderRelation``
+    # ("Oco" on a mutually-exclusive OCO leg, "StandAlone" otherwise). The
+    # reconciler counts a resting OCO pair as a SINGLE sell commitment (only one
+    # leg can fill), so a healthy exit OCO {StopIfTraded=owned, Limit=owned} is not
+    # mis-read as 2*owned over-hedge. Mapped in ``_to_order_state`` from a field
+    # Saxo already returns (no new HTTP surface); ``None`` when unmapped.
+    order_relation: str | None = None  # row["OrderRelation"]
 
 
 @dataclass(frozen=True)
