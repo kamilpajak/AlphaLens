@@ -9,6 +9,7 @@ throttle, and re-derive-on-restart.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import unittest
 from pathlib import Path
@@ -427,6 +428,261 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
             keys,
             "the pick-drain join must see the pick as submitted after tier 1",
         )
+
+
+# --- place-pick failure + edge branches (the SIM-only placer must never raise) --
+
+
+def _acct(currency: str = "USD") -> Any:
+    return type("A", (), {"total_value": 100000.0, "currency": currency})()
+
+
+def _instr(currency: str = "USD") -> Any:
+    return type(
+        "I", (), {"currency": currency, "broker_instrument_id": 307, "exchange_mic": "XNYS"}
+    )()
+
+
+def _placement(n_tiers: int = 1) -> Any:
+    def _bracket(rid: str) -> Any:
+        return type(
+            "B",
+            (),
+            {
+                "client_request_id": rid,
+                "quantity": 1,
+                "entry_limit": 10.0,
+                "stop_loss": 9.0,
+                "take_profit": 12.0,
+                "entry_ttl_days": 1,
+            },
+        )()
+
+    tiers = [
+        type("T", (), {"bracket": _bracket(f"rid-{i}"), "tier_index": i, "tp": 12.0})()
+        for i in range(n_tiers)
+    ]
+    return type("P", (), {"tiers": tiers, "disaster_stop_price": 9.0})()
+
+
+class _PlaceBroker:
+    """Stub broker for _make_place_pick: happy account/place unless overridden."""
+
+    def __init__(self, *, on_account: Any = None, on_place: Any = None, get_fx_rate: Any = None):
+        self._on_account = on_account
+        self._on_place = on_place
+        if get_fx_rate is not None:
+            self.get_fx_rate = get_fx_rate  # optional capability probed via getattr
+
+    def get_account(self) -> Any:
+        return self._on_account() if self._on_account is not None else _acct()
+
+    def get_positions(self) -> list:
+        return []
+
+    def place_bracket_order(self, bracket: Any) -> Any:
+        if self._on_place is not None:
+            return self._on_place(bracket)
+        return type("Placed", (), {"entry_order_id": "E-1", "exit_order_ids": ()})()
+
+
+class TestPlacePickBranches(unittest.TestCase):
+    """The SIM-only placer's failure + edge paths: each returns False (or journals
+    a note) rather than raising, so one bad pick never crashes a tick."""
+
+    def _placer(self, broker: Any, **over: Any) -> Any:
+        pkg = "alphalens_pipeline.brokers"
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        m: dict[str, Any] = {
+            "load_brief": lambda *_a, **_k: [
+                type("C", (), {"ticker": "KO", "trade_setup": object()})()
+            ],
+            "verdicts": lambda _r, _b: [],
+            "safety_check": lambda *_a, **_k: object(),
+            "resolve": lambda _b, _t: _instr(),
+            "classify": lambda *_a, **_k: _placement(),
+            "compute_plan": lambda **_k: object(),
+            "iter_records": lambda _p: [],
+            "append": lambda _r: None,
+            "build_record": lambda **kw: dict(kw),
+            **over,
+        }
+        p = stack.enter_context
+        p(mock.patch(f"{pkg}.submission_log.build_submission_record", m["build_record"]))
+        p(mock.patch(f"{pkg}.submission_log.append_submission_record", m["append"]))
+        p(mock.patch(f"{pkg}.submission_log.iter_submission_records", m["iter_records"]))
+        p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", m["verdicts"]))
+        p(mock.patch(f"{pkg}.automanager.safety.check", m["safety_check"]))
+        p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
+        p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
+        p(mock.patch("alphalens_pipeline.paper.brief_loader.load_brief", m["load_brief"]))
+        p(mock.patch("alphalens_pipeline.paper.sizing.compute_setup_plan", m["compute_plan"]))
+        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        return cl._make_place_pick(broker)
+
+    def test_brief_unavailable_returns_false(self) -> None:
+        def _raise(*_a: Any, **_k: Any) -> Any:
+            raise FileNotFoundError("no brief")
+
+        self.assertFalse(self._placer(_PlaceBroker(), load_brief=_raise)(_pick()))
+
+    def test_no_plannable_trade_setup_returns_false(self) -> None:
+        no_setup = [type("C", (), {"ticker": "KO", "trade_setup": None})()]
+        self.assertFalse(
+            self._placer(_PlaceBroker(), load_brief=lambda *_a, **_k: no_setup)(_pick())
+        )
+
+    def test_broker_read_error_returns_false(self) -> None:
+        def _boom() -> Any:
+            raise BrokerError("account read down")
+
+        self.assertFalse(self._placer(_PlaceBroker(on_account=_boom))(_pick()))
+
+    def test_safety_refuse_returns_false(self) -> None:
+        from alphalens_pipeline.brokers.automanager.safety import Refuse
+
+        placer = self._placer(
+            _PlaceBroker(), safety_check=lambda *_a, **_k: Refuse(reason="cap hit")
+        )
+        self.assertFalse(placer(_pick()))
+
+    def test_no_instrument_currency_returns_false(self) -> None:
+        placer = self._placer(_PlaceBroker(), resolve=lambda _b, _t: _instr(currency=""))
+        self.assertFalse(placer(_pick()))
+
+    def test_fx_needed_but_broker_cannot_convert_returns_false(self) -> None:
+        # instrument EUR vs account USD, broker without get_fx_rate -> cannot size.
+        placer = self._placer(_PlaceBroker(), resolve=lambda _b, _t: _instr(currency="EUR"))
+        self.assertFalse(placer(_pick()))
+
+    def test_fx_conversion_built_when_broker_supports_it(self) -> None:
+        broker = _PlaceBroker(get_fx_rate=lambda _base, _quote: 1.1)
+        fx_obj = type("FX", (), {"rate": 1.1})()
+        with mock.patch(
+            "alphalens_pipeline.brokers.execution.build_fx_conversion", lambda _r: fx_obj
+        ):
+            placer = self._placer(broker, resolve=lambda _b, _t: _instr(currency="EUR"))
+            self.assertTrue(placer(_pick()))
+
+    def test_resolve_or_size_error_returns_false(self) -> None:
+        def _boom(_b: Any, _t: Any) -> Any:
+            raise BrokerError("instrument lookup down")
+
+        self.assertFalse(self._placer(_PlaceBroker(), resolve=_boom)(_pick()))
+
+    def test_zero_sized_tiers_returns_false(self) -> None:
+        placer = self._placer(_PlaceBroker(), classify=lambda *_a, **_k: _placement(n_tiers=0))
+        self.assertFalse(placer(_pick()))
+
+    def test_place_bracket_error_journals_note_and_returns_false(self) -> None:
+        notes: list[Any] = []
+
+        def _boom(_bracket: Any) -> Any:
+            raise BrokerError("exchange rejected")
+
+        placer = self._placer(_PlaceBroker(on_place=_boom), append=notes.append)
+        self.assertFalse(placer(_pick()))
+        self.assertTrue(notes, "a note-only failure record must be journaled")
+
+    def test_summarize_counts_working_verdict_committed_capital(self) -> None:
+        today = dt.date.today().isoformat()
+        working = _verdict(
+            status="WORKING",
+            activity_time=f"{today}T00:00:00",
+            details={"client_request_id": "rid-x", "realized_r": 1.5},
+        )
+        captured: dict[str, Any] = {}
+
+        def _capture(_pick_arg: Any, journal_view: Any, _bview: Any, _session: Any) -> Any:
+            captured["jv"] = journal_view
+            return object()
+
+        placer = self._placer(
+            _PlaceBroker(),
+            verdicts=lambda _r, _b: [working],
+            iter_records=lambda _p: [
+                {"brackets": [{"client_request_id": "rid-x", "entry": 10.0, "qty": 5}]}
+            ],
+            safety_check=_capture,
+        )
+        self.assertTrue(placer(_pick()))
+        self.assertEqual(captured["jv"].open_bracket_count, 1)
+        self.assertEqual(captured["jv"].gross_committed, 50.0)
+        self.assertEqual(captured["jv"].realized_r_today, 1.5)
+
+
+class TestRunOnceAlertsEachOrphan(unittest.TestCase):
+    def test_each_swept_orphan_is_alerted(self) -> None:
+        with TemporaryDirectory() as d:
+            alerts: list[str] = []
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=alerts,
+            )
+            deps = cl.LoopDeps(
+                **{**deps.__dict__, "sweep_orphans_fn": lambda _b: ["orphan-A", "orphan-B"]}
+            )
+            report = cl.run_once(deps, sweep_orphans=True)
+        self.assertEqual(report.orphans, 2)
+        self.assertTrue(any("orphan-A" in a for a in alerts))
+
+
+class TestLatestPlannedSkipsMalformedLines(unittest.TestCase):
+    def test_missing_keys_or_unparsable_price_are_skipped(self) -> None:
+        lines = [
+            {"kind": "planned", "uic": 7},  # missing client_request_id
+            {"kind": "planned", "client_request_id": "c1"},  # missing uic
+            {
+                "kind": "planned",
+                "client_request_id": "c2",
+                "uic": 7,
+                "stop_price": "abc",
+            },  # bad float
+        ]
+        self.assertEqual(cl._fold_planned_exits(lines), {})
+
+
+class TestProtectionExecutorUpgradeToOcoNoop(unittest.TestCase):
+    def test_upgrade_to_oco_is_noop_while_oco_disabled(self) -> None:
+        # Stage 1 keeps _oco_enabled() False, so an UpgradeToOco action is a pure
+        # no-op (the rung-2 arm stays dark) — no place, no cancel, no alert.
+        from alphalens_pipeline.brokers.automanager.position_manager import UpgradeToOco
+
+        broker = _StubBroker()
+        alerts: list[str] = []
+        throttle = cl._AlertThrottle(alerts.append)
+        execute = cl._make_protection_executor(broker, throttle)  # type: ignore[arg-type]
+        report = cl.TickReport()
+        action = UpgradeToOco(
+            uic=_UIC,
+            side="SELL",
+            qty=5.0,
+            stop_price=9.0,
+            tp_price=12.0,
+            entry_crid="c0",
+            gen=0,
+            supersede_ids=(),
+        )
+        execute(action, False, report)
+        self.assertEqual((report.exits_placed, report.cancels, report.alerts), (0, 0, 0))
+        self.assertEqual(broker.cancelled, [])
+        self.assertEqual(alerts, [])
+
+    def test_noop_is_silent_and_alertonly_alerts(self) -> None:
+        from alphalens_pipeline.brokers.automanager.position_manager import AlertOnly, NoOp
+
+        alerts: list[str] = []
+        throttle = cl._AlertThrottle(alerts.append)
+        execute = cl._make_protection_executor(_StubBroker(), throttle)  # type: ignore[arg-type]
+        report = cl.TickReport()
+        execute(NoOp(), False, report)  # NoOp branch: no side effect
+        execute(AlertOnly("naked uic 7 — no protective stop"), False, report)  # AlertOnly branch
+        self.assertEqual(report.alerts, 1)
+        self.assertIn("naked uic 7 — no protective stop", alerts)
 
 
 def _raise_broker_error(*_a: Any, **_k: Any) -> Any:
