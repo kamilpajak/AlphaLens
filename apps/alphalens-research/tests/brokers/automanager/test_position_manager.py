@@ -8,6 +8,7 @@ REALIZED fill (2.0), never the planned qty (3). Realized-qty = design memo Risk 
 
 from __future__ import annotations
 
+import os
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -22,6 +23,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlaceStop,
     PlannedExit,
     ProtectionView,
+    UpgradeToOco,
     _exit_stop_ref,
     advance,
     reconcile_protection,
@@ -561,6 +563,70 @@ class TestReconcileDecisionTable(unittest.TestCase):
         self.assertIsInstance(actions[0], AlertOnly)
         assert isinstance(actions[0], AlertOnly)
         self.assertIn("refusing to merge", actions[0].reason)
+
+
+class TestOcoEnablementGate(unittest.TestCase):
+    """Stage 2 arm-C emission (saxo-oco memo §6/§11): a covered long WITH a
+    journaled TP price upgrades to OCO ONLY when the env flag is on AND the uic is
+    not oco_unsupported. Default OFF (ship dark): the arm degrades to NoOp."""
+
+    def _covered_view(
+        self, *, oco_unsupported: frozenset[int] = frozenset()
+    ) -> tuple[Position, ProtectionView]:
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+            oco_unsupported=oco_unsupported,
+        )
+        return pos, view
+
+    def test_covered_with_tp_stays_noop_when_flag_unset(self) -> None:
+        pos, view = self._covered_view()
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_OCO_ENABLED"}
+        with patch.dict(os.environ, env, clear=True):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+    def test_covered_with_tp_emits_upgrade_when_flag_on(self) -> None:
+        pos, view = self._covered_view()
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, UpgradeToOco)
+        assert isinstance(action, UpgradeToOco)
+        self.assertEqual(action.uic, _UIC)
+        self.assertEqual(action.side, "SELL")
+        self.assertEqual(action.qty, 46.0)
+        self.assertEqual(action.stop_price, 216.48)
+        self.assertEqual(action.tp_price, 306.72)
+        self.assertEqual(action.entry_crid, "crid")
+        self.assertEqual(action.supersede_ids, ("stop-1",))
+
+    def test_covered_with_tp_stays_noop_when_oco_unsupported_even_if_flag_on(self) -> None:
+        pos, view = self._covered_view(oco_unsupported=frozenset({_UIC}))
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+    def test_covered_without_tp_stays_noop_even_when_flag_on(self) -> None:
+        # No journaled TP price -> nothing to capture -> stop-only NoOp regardless.
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: _plan(tp_price=None)},
+        )
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
 
 
 class TestReconcileProtectionArms(unittest.TestCase):

@@ -20,14 +20,16 @@ Broker-state-truth protection (saxo-oco memo §6): ``reconcile_protection`` /
 from a live-broker snapshot (``ProtectionView``) instead of any journal line —
 this kills Bug A (a failed stop POST leaving a permanently-naked position) and
 Bug B (a lone-TP double-sell). Keyed per-uic (the unit Saxo nets to), sized to
-netted owned qty. STAGE 1 IS STOP-ONLY: ``_oco_enabled()`` returns ``False`` so
-the rung 1 -> 2 OCO upgrade (``UpgradeToOco``) is defined but never emitted.
-The control loop (Task 6) assembles the ``ProtectionView`` and executes the
-returned Actions; this module performs no I/O.
+netted owned qty. The rung 1 -> 2 OCO upgrade (``UpgradeToOco``) is emitted from
+the covered branch ONLY when ``_oco_enabled()`` is true (the
+``ALPHALENS_BROKER_OCO_ENABLED`` env flag, DEFAULT OFF so the path ships dark)
+and the uic is not persisted ``oco_unsupported``. The control loop assembles the
+``ProtectionView`` and executes the returned Actions; this module performs no I/O.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
@@ -72,6 +74,18 @@ def _exit_stop_ref(entry_crid: str, gen: int) -> str:
 def _exit_tp_ref(entry_crid: str, gen: int) -> str:
     """Deterministic gen-stamped x-request-id for a take-profit leg (rung 2, memo §4.5)."""
     return f"{entry_crid}-tp-{gen}"
+
+
+def _exit_oco_ref(entry_crid: str, gen: int) -> str:
+    """Deterministic gen-stamped BASE x-request-id for an OCO exit pair (rung 2).
+
+    The executor passes this to ``SupportsOcoExit.place_oco_exit`` as the POST
+    x-request-id (a same-size crash-retry hits Saxo's 15 s dedup instead of
+    resting a second OCO); the adapter derives the two per-leg
+    ``ExternalReference`` values from it (``<ref>-stop`` / ``<ref>-tp``). The
+    ``-oco-`` infix keeps it distinct from the standalone-stop ref
+    (``<crid>-stop-<gen>``) so the two rails never collide on one uic."""
+    return f"{entry_crid}-oco-{gen}"
 
 
 @dataclass(frozen=True)
@@ -142,10 +156,11 @@ class PlaceStop:
 
 @dataclass(frozen=True)
 class UpgradeToOco:
-    """Rung 1 -> 2 TP-capture upgrade. DEFINED for Stage 2; NEVER emitted in
-    Stage 1 (``_oco_enabled()`` returns ``False`` so ``_reconcile_long`` degrades
-    the covered branch to ``NoOp``). Kept here so Task 6's executor can type-guard
-    it out without a forward reference."""
+    """Rung 1 -> 2 TP-capture upgrade emitted from the covered branch when
+    ``_oco_enabled()`` is true and the uic is not ``oco_unsupported`` (else the
+    branch degrades to ``NoOp``). ``entry_crid`` + ``gen`` derive the deterministic
+    OCO base ref (``_exit_oco_ref``); ``supersede_ids`` is the rung-1 stop the
+    executor cancels ONLY AFTER ``place_oco_exit`` succeeds (never a naked window)."""
 
     uic: int
     side: str
@@ -184,10 +199,20 @@ TP_TYPES = frozenset({"Limit"})
 ADDITIVE_STOPS_CONFIRMED = True
 
 
+# Env flag gating the rung 1 -> 2 OCO upgrade. DEFAULTS OFF (ship dark): the
+# machinery lands unenabled and is turned on only after the SIM upgrade-ordering
+# probe closes the open enablement questions (saxo-oco memo §11 / §2).
+_OCO_ENABLED_ENV = "ALPHALENS_BROKER_OCO_ENABLED"
+
+
 def _oco_enabled() -> bool:
-    """Stage 1 is STOP-ONLY: the rung 1 -> 2 OCO upgrade stays dark. Always
-    ``False`` here so ``_reconcile_long`` never emits ``UpgradeToOco``."""
-    return False
+    """Whether the rung 1 -> 2 OCO upgrade is enabled (read at call time).
+
+    The SINGLE source gating both the pure emission (``_reconcile_long`` arm C)
+    and the control-loop executor. Reads the env flag every call so it is
+    restart-consistent and hermetically testable (no import-time snapshot).
+    Defaults OFF — this PR ships the OCO path DARK."""
+    return os.environ.get(_OCO_ENABLED_ENV) == "1"
 
 
 @dataclass(frozen=True)
@@ -253,10 +278,10 @@ def _newest_group(legs: tuple[OrderState, ...]) -> _LegGroup:
 def reconcile_protection(view: ProtectionView) -> list[Action]:
     """Pure per-tick desired-vs-actual diff over live broker state (memo §6).
 
-    Emits, in order: (1) per netted LONG, the downside-cover arm; (2) an orphan
-    sweep for SELL legs on a uic with no long (else they can fire into a naked
-    short); (3) a negative-position alert. STOP-ONLY: no ``UpgradeToOco`` is ever
-    returned in Stage 1."""
+    Emits, in order: (1) per netted LONG, the downside-cover arm (a covered long
+    may upgrade to ``UpgradeToOco`` when ``_oco_enabled()`` — else stop-only NoOp);
+    (2) an orphan sweep for SELL legs on a uic with no long (else they can fire
+    into a naked short); (3) a negative-position alert."""
     actions: list[Action] = []
     for uic, pos in view.long_positions.items():
         actions.extend(_reconcile_long(uic, pos, view))
@@ -389,7 +414,7 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
         return [NoOp()]  # trips arm (A) over-hedge first; reachable only at rung 2
     if plan.tp_price is None or uic in view.oco_unsupported or not _oco_enabled():
         return [NoOp()]  # STOP-ONLY: stop-only is the accepted terminal rung
-    return [  # pragma: no cover — Stage 1 keeps _oco_enabled() False; guarded for Stage 2
+    return [
         UpgradeToOco(
             uic,
             _SIDE,

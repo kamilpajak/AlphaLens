@@ -29,6 +29,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlannedExit,
     ProtectionView,
     UpgradeToOco,
+    _exit_oco_ref,
     _oco_enabled,
     advance,
     reconcile_protection,
@@ -38,7 +39,9 @@ from alphalens_pipeline.brokers.contract import (
     BrokerCapabilityError,
     BrokerError,
     OrderRejectedError,
+    PlacedOrder,
     Position,
+    SupportsOcoExit,
     SupportsStandaloneStop,
     _is_sell_orders_already_exist,
 )
@@ -48,6 +51,10 @@ if TYPE_CHECKING:
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
 logger = logging.getLogger(__name__)
+
+# The rung 1 -> 2 OCO exit placer signature (SupportsOcoExit.place_oco_exit):
+# (uic, side, qty, stop_price, take_profit, request_id, position_id) -> PlacedOrder.
+OcoPlacer = Callable[[int, str, float, float, float, str, "str | None"], PlacedOrder]
 
 # The runtime data root ($HOME/.alphalens) and its broker-orders subtree have ONE
 # home here so the literal is not duplicated across the kill-file + journal +
@@ -80,12 +87,18 @@ class LoopDeps:
     execute_protection: Callable[[Action, bool, TickReport], None]
     sweep_orphans_fn: Callable[[Broker], list[Any]]
     alert: Callable[[str], None]
+    # Rung 1 -> 2 OCO exit placer (saxo-oco memo §10), or None when the wired
+    # broker lacks SupportsOcoExit -> the loop runs stop-only. Detected once in
+    # build_default_deps and injected into the protection executor closure (a
+    # bare LoopDeps field would be unreachable by the pre-built executor); kept
+    # here for symmetry / introspection.
+    place_oco_exit: OcoPlacer | None = None
 
 
 @dataclass
 class TickReport:
     picks_placed: int = 0
-    exits_placed: int = 0  # protective stops placed this tick (rung 0 -> 1)
+    exits_placed: int = 0  # protective exits placed this tick (rung 0 -> 1 stop, or 1 -> 2 OCO)
     cancels: int = 0
     alerts: int = 0
     orphans: int = 0
@@ -332,6 +345,12 @@ def build_default_deps() -> LoopDeps:
             "(SupportsStandaloneStop) — the auto-manager's disaster-stop flow "
             "requires it; wire a different broker or add the capability."
         )
+    # OCO (rung 1 -> 2) is OPTIONAL, unlike the hard standalone-stop gate above: a
+    # broker lacking SupportsOcoExit (or with the env flag off) runs stop-only,
+    # unchanged. Detect it once here and inject into the executor closure.
+    oco_placer: OcoPlacer | None = (
+        broker.place_oco_exit if isinstance(broker, SupportsOcoExit) else None
+    )
     keeper = session_keeper.SessionKeeper(_default_oauth_provider())
 
     def _read_records() -> list[Mapping[str, Any]]:
@@ -353,9 +372,10 @@ def build_default_deps() -> LoopDeps:
         verdicts_fn=reconcile_bridge.verdicts,
         build_position_view=_make_position_view_builder(broker),
         build_protection_view=build_protection_view,
-        execute_protection=_make_protection_executor(broker, throttle),
+        execute_protection=_make_protection_executor(broker, throttle, place_oco_exit=oco_placer),
         sweep_orphans_fn=lambda b: orphan_sweeper.sweep(b, _read_records()),
         alert=base_alert,
+        place_oco_exit=oco_placer,
     )
 
 
@@ -1081,7 +1101,7 @@ def _execute_cancel_sell_legs(
 
 
 def _make_protection_executor(
-    broker: Broker, throttle: _AlertThrottle
+    broker: Broker, throttle: _AlertThrottle, *, place_oco_exit: OcoPlacer | None = None
 ) -> Callable[[Action, bool, TickReport], None]:
     """The protection-pass executor (saxo-oco memo §6). Per Action:
 
@@ -1095,8 +1115,16 @@ def _make_protection_executor(
       ``SellOrdersAlreadyExist`` rejection defers to next tick; any other place
       failure is counted for escalation and retried next tick (protection is
       broker-state truth, so nothing is recorded on failure -> Bug A cannot recur).
-    - ``UpgradeToOco`` — Stage 2 only; skipped whenever ``_oco_enabled()`` is
-      False (it is, in Stage 1) so the rung-2 arm stays dark."""
+    - ``UpgradeToOco`` — rung 1 -> 2 (saxo-oco memo §6). Dark unless
+      ``_oco_enabled()``; SKIPPED under KILL (a new OCO + a rung-1 cancel are order
+      churn, not exposure reduction). Places the OCO exit pair FIRST, then cancels
+      the rung-1 stop (``supersede_ids``) ONLY on success — never a naked window.
+      ANY BrokerError degrades to stop-only: persist ``oco_unsupported``, alert,
+      leave the rung-1 stop live (no re-attempt after a restart).
+
+    ``place_oco_exit`` is the SupportsOcoExit capability (or None when the broker
+    lacks it -> the upgrade stays stop-only), injected here so the pre-built
+    executor closure can reach it."""
 
     def _execute(action: Action, kill: bool, report: TickReport) -> None:
         if isinstance(action, NoOp):
@@ -1111,13 +1139,80 @@ def _make_protection_executor(
         if isinstance(action, PlaceStop):
             _execute_place_stop(broker, throttle, action, report)
             return
-        if isinstance(action, UpgradeToOco) and not _oco_enabled():
-            # Stage 2 rung only; skipped whenever _oco_enabled() is False (it is,
-            # in Stage 1) so the rung-2 arm stays dark. The Stage 2 place_oco_exit
-            # wiring replaces this guard.
+        if isinstance(action, UpgradeToOco):
+            _execute_upgrade_to_oco(broker, throttle, place_oco_exit, action, kill, report)
             return
 
     return _execute
+
+
+def _execute_upgrade_to_oco(
+    broker: Broker,
+    throttle: _AlertThrottle,
+    place_oco_exit: OcoPlacer | None,
+    action: UpgradeToOco,
+    kill: bool,
+    report: TickReport,
+) -> None:
+    """Execute a rung 1 -> 2 OCO upgrade (saxo-oco memo §6). No-naked-window
+    discipline: place the OCO exit pair FIRST, cancel the rung-1 stop
+    (``supersede_ids``) ONLY after the place returns success. ANY BrokerError
+    degrades conservatively to the proven stop-only rung — persist
+    ``oco_unsupported`` (no re-attempt, even after a restart), alert, leave the
+    rung-1 stop LIVE."""
+    if not _oco_enabled():
+        return  # ship dark: the single env gate keeps the rung-2 arm off
+    if kill:
+        return  # KILL: no new order churn; the rung-1 stop already covers downside
+    if place_oco_exit is None:
+        return  # flag on but this broker has no OCO capability -> stay stop-only
+
+    # Execute-time owned re-check (mirror _execute_place_stop): never upgrade a
+    # uic that shrank / closed between the snapshot and now.
+    qty = action.qty
+    get_by_uic = getattr(broker, "get_positions_by_uic", None)
+    if get_by_uic is not None:
+        live = get_by_uic(action.uic)
+        if live.quantity + _QTY_EPS < qty:
+            qty = max(live.quantity, 0.0)
+    if qty <= _QTY_EPS:
+        if throttle.emit(
+            f"uic {action.uic}: position gone before OCO upgrade — skipped",
+            uic=action.uic,
+            reason="flat-skip",
+        ):
+            report.alerts += 1
+        return
+
+    request_id = _exit_oco_ref(action.entry_crid, action.gen)
+    try:
+        place_oco_exit(
+            action.uic,
+            action.side,
+            qty,
+            action.stop_price,
+            action.tp_price,
+            request_id,
+            None,  # position_id: Stage 3 (reduce-only linkage); unused here
+        )
+    except BrokerError as exc:
+        # Conservative degrade to stop-only: mark the uic so the upgrade is never
+        # re-attempted (even after a systemd restart), keep the rung-1 stop LIVE.
+        _mark_oco_unsupported(action.uic)
+        if throttle.emit(
+            f"uic {action.uic}: OCO upgrade failed ({exc}); staying rung-1 stop-only",
+            uic=action.uic,
+            reason="oco-degrade",
+        ):
+            report.alerts += 1
+        return
+
+    # SUCCESS: the OCO now covers the downside. Cancel the rung-1 stop ONLY now
+    # (the OCO stop leg is already live -> never a naked window on the shares).
+    report.exits_placed += 1
+    for order_id in action.supersede_ids:
+        _idempotent_cancel(broker, order_id)
+        report.cancels += 1
 
 
 def _execute_place_stop(
