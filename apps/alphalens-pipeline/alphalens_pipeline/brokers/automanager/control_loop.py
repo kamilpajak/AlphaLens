@@ -900,6 +900,10 @@ def build_protection_view(broker: Broker, _records: list[Mapping[str, Any]]) -> 
     long_positions: dict[int, Position] = {}
     get_long = getattr(broker, "get_long_positions", None)
     longs = get_long() if get_long is not None else list(all_positions.values())
+    # get_long_positions returns ONE netted Position per uic (it sums same-uic
+    # lots); this assignment therefore never overwrites a live uic. If a source
+    # ever returned multiple lots per uic here, the stop would size to one lot
+    # and leave the rest naked — that summing is the broker's responsibility.
     for pos in longs:
         uic = _position_uic(pos)
         if uic is not None and pos.quantity > _QTY_EPS:
