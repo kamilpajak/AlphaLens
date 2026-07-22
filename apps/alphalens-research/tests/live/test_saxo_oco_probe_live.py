@@ -23,13 +23,20 @@ instrument gate before OCO is enabled (not done here — precheck is the screen)
 
 Deliberately behind its OWN attended flag ``SAXO_LIVE_OCO_PROBE=1`` (it opens a
 real position, like the order probe) and EXCLUDED from ``just probe-live`` + the
-weekly CI live-probes job (the always-run meta-assertion below pins that). It
-also needs ``ALPHALENS_BROKER_ALLOW_ORDERS=1``. Requirements:
+weekly CI live-probes job (the always-run meta-assertion below pins that).
 
-    SAXO_SIM_TOKEN=<fresh 24h token> \
-    ALPHALENS_BROKER_ALLOW_ORDERS=1 \
-    SAXO_LIVE_OCO_PROBE=1 \
-        .venv/bin/python -m unittest tests.live.test_saxo_oco_probe_live -v
+``create_saxo_broker_from_env()`` builds an ``OAuthTokenProvider`` from the FULL
+Saxo OAuth env — ``SAXO_APP_KEY`` / ``SAXO_APP_SECRET`` /
+``SAXO_AUTH_REDIRECT_URL`` (+ the on-disk token store), NOT a bare bearer token —
+so run this where that env + a valid refreshable token store already live: the
+VPS with ``/etc/alphalens/env`` sourced (the ``alphalens-saxo-refresh`` timer
+keeps the token fresh). It also needs ``ALPHALENS_BROKER_ALLOW_ORDERS=1`` (both
+already in ``/etc/alphalens/env``). Pause ``alphalens-broker-manager`` first so
+the daemon does not react to the probe's un-journaled 1-share long. Recipe:
+
+    cd apps/alphalens-research && set -a && . /etc/alphalens/env && set +a && \
+    SAXO_LIVE_OCO_PROBE=1 ALPHALENS_BROKER_ALLOW_ORDERS=1 \
+        ../../.venv/bin/python -m unittest tests.live.test_saxo_oco_probe_live -v
 
 The probe instrument defaults to KO @ XNYS (liquid, ~1 share of market risk for
 seconds); override with ``SAXO_LIVE_OCO_TICKER`` / ``SAXO_LIVE_OCO_EXCHANGE``.
@@ -61,7 +68,16 @@ _STOP_MULT = 0.73
 # Oversell margin for Q3a: precheck a SELL this many shares ABOVE owned.
 _OVERSELL_MARGIN = 5
 
+# Saxo rejects an ExternalReference longer than 50 chars (InvalidModelState) —
+# so the probe's correlation refs use a compact hex uuid, not the dashed form.
+_SAXO_EXTERNAL_REF_MAX = 50
+
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
+
+
+def _probe_ref(tag: str) -> str:
+    """A Saxo-safe ExternalReference (<= 50 chars) for a probe order."""
+    return f"oco-probe-{tag}-{uuid.uuid4().hex}"
 
 
 class TestOcoProbeStaysOutOfAutomation(unittest.TestCase):
@@ -82,6 +98,22 @@ class TestOcoProbeStaysOutOfAutomation(unittest.TestCase):
                     target.read_text(encoding="utf-8", errors="replace"),
                     f"{target.name} must never set {_LIVE_FLAG} — the OCO probe "
                     "opens a real position and is attended-only by design",
+                )
+
+
+class TestProbeRefWithinSaxoLimit(unittest.TestCase):
+    """Hermetic (always runs): probe ExternalReferences must stay <= 50 chars,
+    or Saxo rejects the order with InvalidModelState (found live 2026-07-22)."""
+
+    def test_open_and_close_refs_within_limit(self):
+        for tag in ("open", "close"):
+            with self.subTest(tag=tag):
+                ref = _probe_ref(tag)
+                self.assertLessEqual(
+                    len(ref),
+                    _SAXO_EXTERNAL_REF_MAX,
+                    f"probe ref {ref!r} ({len(ref)} chars) exceeds Saxo's "
+                    f"{_SAXO_EXTERNAL_REF_MAX}-char ExternalReference limit",
                 )
 
 
@@ -133,9 +165,11 @@ class TestSaxoOcoExitProbe(unittest.TestCase):
         uic = int(instrument.broker_instrument_id)
         account_key = broker._resolve_account_key()
         details = broker._client.get_instrument_details(uic, "Stock")
-        owned, anchor = _open_one_share_long(broker, uic, account_key)
 
+        # The open is INSIDE the try so a fill-lag failure AFTER a placed buy
+        # still triggers _flatten (never leave a lingering SIM long).
         try:
+            owned, anchor = _open_one_share_long(broker, uic, account_key)
             self.assertGreater(owned, 0.0, "setup did not open a long position")
             self.assertGreater(
                 anchor, 0.0, "position avg price is non-positive — cannot anchor exits"
@@ -189,7 +223,10 @@ class TestSaxoOcoExitProbe(unittest.TestCase):
                 for shape_name, body in (("siblings-array", shape_a), ("top-level+child", shape_b)):
                     reject = _precheck_result(body, label=f"OCO {shape_name} Uic {uic}")
                     if reject is None:
-                        return  # Q1 + Q2 GREEN under this shape → Stage-2 unblocked
+                        # Q1 + Q2 GREEN under this shape → Stage-2 unblocked. Surface
+                        # WHICH body shape Saxo accepted (feeds _build_oco_exit_body).
+                        print(f"[Q1+Q2] OCO precheck Ok under body shape: {shape_name}")
+                        return
                     if reject.error_code == "SellOrdersAlreadyExistForOwnedContracts":
                         raise PermanentProbeError(
                             "Q1 FALSE: a 2-leg SELL OCO double-commits owned "
@@ -252,7 +289,7 @@ class TestSaxoOcoExitProbe(unittest.TestCase):
                 label="saxo-oco",
             )
         finally:
-            _flatten(broker, uic, account_key, owned)
+            _flatten(broker, uic, account_key)
 
 
 def _open_one_share_long(broker: Any, uic: int, account_key: str) -> tuple[float, float]:
@@ -266,7 +303,7 @@ def _open_one_share_long(broker: Any, uic: int, account_key: str) -> tuple[float
         "OrderType": "Market",
         "OrderDuration": {"DurationType": "DayOrder"},
         "ManualOrder": False,
-        "ExternalReference": f"oco-probe-open-{uuid.uuid4()}",
+        "ExternalReference": _probe_ref("open"),
     }
     try:
         status, payload = broker._client.place_order(body, request_id=str(uuid.uuid4()))
@@ -289,11 +326,13 @@ def _open_one_share_long(broker: Any, uic: int, account_key: str) -> tuple[float
     )
 
 
-def _flatten(broker: Any, uic: int, account_key: str, owned: float) -> None:
+def _flatten(broker: Any, uic: int, account_key: str) -> None:
     """Best-effort cleanup: cancel working orders on the uic, then Market-close.
 
-    Never masks the probe result — a cleanup failure prints a LOUD manual-action
-    line (SIM position may linger) instead of raising over the probe outcome.
+    Reads the live netted qty itself (so it also cleans up a partially-open
+    position). Never masks the probe result — a cleanup failure prints a LOUD
+    manual-action line (SIM position may linger) instead of raising over the
+    probe outcome.
     """
     try:
         for order in broker.list_open_orders():
@@ -311,7 +350,7 @@ def _flatten(broker: Any, uic: int, account_key: str, owned: float) -> None:
                 "OrderType": "Market",
                 "OrderDuration": {"DurationType": "DayOrder"},
                 "ManualOrder": False,
-                "ExternalReference": f"oco-probe-close-{uuid.uuid4()}",
+                "ExternalReference": _probe_ref("close"),
             }
             status, payload = broker._client.place_order(close, request_id=str(uuid.uuid4()))
             # place_order does NOT raise on 4xx — a rejected close must trip the
@@ -320,7 +359,7 @@ def _flatten(broker: Any, uic: int, account_key: str, owned: float) -> None:
                 raise RuntimeError(f"Market-close rejected (HTTP {status}): {payload}")
     except Exception as exc:  # surface, do not mask the probe result
         print(
-            f"\n*** OCO PROBE CLEANUP FAILED for Uic {uic} (owned~={owned}): {exc}\n"
+            f"\n*** OCO PROBE CLEANUP FAILED for Uic {uic}: {exc}\n"
             f"*** MANUAL ACTION: Market-close Uic {uic} on the SIM account.\n"
         )
 
