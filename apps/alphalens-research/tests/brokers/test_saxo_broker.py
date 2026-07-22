@@ -790,6 +790,29 @@ class TestGetLongPositionsAggregatesLots(unittest.TestCase):
         longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
         self.assertEqual(longs, [], "lots netting to flat contribute no long")
 
+    def test_lots_netting_to_short_are_dropped(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(uic=999, amount=-2.0, position_id="s1", symbol="S:xnas"),
+                _position_row(uic=999, amount=-3.0, position_id="s2", symbol="S:xnas"),
+            ]
+        }
+        longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
+        self.assertEqual(longs, [], "lots netting to a short (-5) are not long")
+
+    def test_mixed_sign_lots_netting_positive_kept(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(uic=100, amount=5.0, position_id="long", symbol="M:xnas"),
+                _position_row(uic=100, amount=-3.0, position_id="short", symbol="M:xnas"),
+            ]
+        }
+        longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
+        self.assertEqual(len(longs), 1, "mixed lots netting positive stay one long")
+        self.assertEqual(longs[0].quantity, 2.0, "5 + (-3) = 2 netted owned")
+
     def test_distinct_uics_each_aggregated_independently(self):
         client = _StubSaxoClient()
         client.positions_payload = {  # type: ignore[attr-defined]

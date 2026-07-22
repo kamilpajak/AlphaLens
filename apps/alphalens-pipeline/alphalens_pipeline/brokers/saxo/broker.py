@@ -510,9 +510,11 @@ class SaxoBroker:
         view keys by uic, so the lots MUST be summed here — otherwise they
         overwrite each other and the stop is sized to one lot, leaving the rest
         of the position naked. Mirrors the per-uic summing in
-        ``get_positions_by_uic``. Positions whose uic cannot be parsed are passed
-        through individually (they cannot be keyed, and the protection view skips
-        them anyway).
+        ``get_positions_by_uic``. The netted Position keeps the first lot's
+        non-quantity fields (``avg_price`` is NOT a weighted average) — only
+        ``quantity`` drives protection sizing, same as ``get_positions_by_uic``.
+        Positions whose uic cannot be parsed are passed through individually
+        (they cannot be keyed, and the protection view skips them anyway).
         """
         by_uic: dict[int, Position] = {}
         no_uic: list[Position] = []
