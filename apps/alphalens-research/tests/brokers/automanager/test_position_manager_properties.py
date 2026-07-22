@@ -267,9 +267,9 @@ def _build_over_hedge_deficit(draw, uic: int) -> _LongComp:
     stop = _mk_leg(f"{uic}-stop", "StopIfTraded", s, uic)
     tp = _mk_leg(f"{uic}-tp", "Limit", owned, uic, filled=f)  # total = s + owned > owned + eps
     plan = _mk_plan(uic, tp_price=306.72)
-    event("arm:arm_A_over_hedge_partial_fill")
+    event("arm:arm_A_over_hedge_deficit_fill")
     return _LongComp(
-        uic, _mk_pos(owned, uic), (stop, tp), plan, False, "arm_A_over_hedge_partial_fill"
+        uic, _mk_pos(owned, uic), (stop, tp), plan, False, "arm_A_over_hedge_deficit_fill"
     )
 
 
@@ -502,8 +502,23 @@ def _build_short_pos(draw, uic: int) -> tuple[int, Position]:
 
 
 @st.composite
-def _mixed_view(draw, *, require_multi=False, require_orphan=False, require_short=False) -> _Mixed:
-    n_long = draw(st.integers(2 if require_multi else 1, 3))
+def _mixed_view(
+    draw,
+    *,
+    require_multi=False,
+    require_orphan=False,
+    require_short=False,
+    require_all_longs=False,
+) -> _Mixed:
+    # require_all_longs makes the non-vacuousness gate DETERMINISTIC: instead of
+    # sampling n_long random builders (coverage of every arm would then be only
+    # probabilistic), include exactly one long from EACH builder, so a single
+    # example already emits every long-arm label.
+    n_long = (
+        len(_ALL_LONG_BUILDERS)
+        if require_all_longs
+        else draw(st.integers(2 if require_multi else 1, 3))
+    )
     n_orphan = draw(st.integers(1 if require_orphan else 0, 2))
     n_short = draw(st.integers(1 if require_short else 0, 2))
     total = n_long + n_orphan + n_short
@@ -512,7 +527,12 @@ def _mixed_view(draw, *, require_multi=False, require_orphan=False, require_shor
     orphan_uics = uics[n_long : n_long + n_orphan]
     short_uics = uics[n_long + n_orphan :]
 
-    longs = tuple(draw(_one_of(_ALL_LONG_BUILDERS, u)) for u in long_uics)
+    if require_all_longs:
+        longs = tuple(
+            draw(builder(u)) for builder, u in zip(_ALL_LONG_BUILDERS, long_uics, strict=True)
+        )
+    else:
+        longs = tuple(draw(_one_of(_ALL_LONG_BUILDERS, u)) for u in long_uics)
     orphans = tuple(draw(_build_orphan(u)) for u in orphan_uics)
     shorts = tuple(draw(_build_short_pos(u)) for u in short_uics)
 
@@ -934,6 +954,7 @@ _ARM_COVERAGE_TARGETS = frozenset(
         "plan_none_alert",
         "plan_conflicting_alert",
         "arm_A_over_hedge_partial_fill",
+        "arm_A_over_hedge_deficit_fill",
         "arm_A_over_hedge_newest_group",
         "arm_B1_additive_grow_plain",
         "arm_B1_additive_grow_with_lone_tp",
@@ -960,9 +981,12 @@ class TestArmCoverageNonVacuousness(unittest.TestCase):
 
     seen: set[str] = set()
 
-    @given(_mixed_view(require_multi=True, require_orphan=True, require_short=True))
-    @settings(deadline=None, max_examples=500, suppress_health_check=[HealthCheck.too_slow])
+    @given(_mixed_view(require_all_longs=True, require_orphan=True, require_short=True))
+    @settings(deadline=None, max_examples=25, suppress_health_check=[HealthCheck.too_slow])
     def test_generate_all_arms(self, m: _Mixed) -> None:
+        # require_all_longs guarantees every long-arm label in EVERY example
+        # (one long per builder) + orphan/short/multi, so coverage is deterministic
+        # rather than dependent on random sampling reaching a rare builder.
         type(self).seen |= m.labels()
 
     @patch.object(pm, "ADDITIVE_STOPS_CONFIRMED", False)
