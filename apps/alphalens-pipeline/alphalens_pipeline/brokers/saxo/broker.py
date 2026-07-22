@@ -502,8 +502,35 @@ class SaxoBroker:
     # these — never from a journal line.
 
     def get_long_positions(self) -> list[Position]:
-        """Strictly-long positions (netted qty > _QTY_EPS); flat and short dropped."""
-        return [p for p in self.get_positions() if p.quantity > _QTY_EPS]
+        """Strictly-long positions, ONE per uic (netted qty > _QTY_EPS); flat and
+        short dropped.
+
+        Saxo can return a single position as several same-uic lots (seen live on
+        SIM: two separate Market buys stayed as distinct lots). The protection
+        view keys by uic, so the lots MUST be summed here — otherwise they
+        overwrite each other and the stop is sized to one lot, leaving the rest
+        of the position naked. Mirrors the per-uic summing in
+        ``get_positions_by_uic``. Positions whose uic cannot be parsed are passed
+        through individually (they cannot be keyed, and the protection view skips
+        them anyway).
+        """
+        by_uic: dict[int, Position] = {}
+        no_uic: list[Position] = []
+        for pos in self.get_positions():
+            uic = _position_uic(pos)
+            if uic is None:
+                no_uic.append(pos)
+                continue
+            existing = by_uic.get(uic)
+            by_uic[uic] = (
+                pos
+                if existing is None
+                else cast(
+                    Position,
+                    dataclasses.replace(existing, quantity=existing.quantity + pos.quantity),
+                )
+            )
+        return [p for p in (*by_uic.values(), *no_uic) if p.quantity > _QTY_EPS]
 
     def list_working_sell_orders(self) -> list[OrderState]:
         """Live SELL legs still committing owned qty (WORKING / PARTIALLY_FILLED)."""

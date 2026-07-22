@@ -37,7 +37,11 @@ from alphalens_pipeline.brokers.contract import (
     OrderStatus,
     Position,
 )
-from alphalens_pipeline.brokers.saxo.broker import SaxoBroker, _validate_price_relations
+from alphalens_pipeline.brokers.saxo.broker import (
+    SaxoBroker,
+    _position_uic,
+    _validate_price_relations,
+)
 from alphalens_pipeline.brokers.saxo.client import (
     SaxoAuthError,
     SaxoError,
@@ -750,6 +754,54 @@ class TestGetLongPositionsFiltersFlatAndShort(unittest.TestCase):
         longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
         self.assertEqual([p.position_id for p in longs], ["p-long"])
         self.assertEqual(longs[0].quantity, 46.0)
+
+
+class TestGetLongPositionsAggregatesLots(unittest.TestCase):
+    """Multiple lots on ONE uic net to a SINGLE long Position (summed qty).
+
+    Saxo can hold a position as several same-uic lots (found live on SIM
+    2026-07-22: two Market buys of MARA stayed as +4 and +3 lots). The protection
+    view keys by uic, so un-aggregated lots would overwrite each other and the
+    stop would be sized to one lot — leaving the rest of the position naked. This
+    mirrors the summing already done by ``get_positions_by_uic``.
+    """
+
+    def test_same_uic_lots_summed_to_one_position(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(uic=573264, amount=4.0, position_id="lot-a", symbol="MARA:xnas"),
+                _position_row(uic=573264, amount=3.0, position_id="lot-b", symbol="MARA:xnas"),
+            ]
+        }
+        longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
+        self.assertEqual(len(longs), 1, "two lots on one uic must net to one Position")
+        self.assertEqual(_position_uic(longs[0]), 573264)
+        self.assertEqual(longs[0].quantity, 7.0, "netted owned = 4 + 3")
+
+    def test_lots_netting_to_flat_are_dropped(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(uic=100, amount=5.0, position_id="l1", symbol="X:xnas"),
+                _position_row(uic=100, amount=-5.0, position_id="l2", symbol="X:xnas"),
+            ]
+        }
+        longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
+        self.assertEqual(longs, [], "lots netting to flat contribute no long")
+
+    def test_distinct_uics_each_aggregated_independently(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(uic=1, amount=2.0, position_id="a", symbol="A:xnas"),
+                _position_row(uic=2, amount=3.0, position_id="b", symbol="B:xnas"),
+                _position_row(uic=1, amount=1.0, position_id="c", symbol="A:xnas"),
+            ]
+        }
+        longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
+        by_uic = {_position_uic(p): p.quantity for p in longs}
+        self.assertEqual(by_uic, {1: 3.0, 2: 3.0})
 
 
 class TestListWorkingSellOrders(unittest.TestCase):
