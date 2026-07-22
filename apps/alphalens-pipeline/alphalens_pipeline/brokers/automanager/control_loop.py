@@ -606,7 +606,7 @@ def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
 
 
 def _index_entries_by_request_id(
-    records: list[Mapping[str, Any]],
+    records: Iterable[Mapping[str, Any]],
 ) -> dict[str, Mapping[str, Any]]:
     """Map each journaled bracket's client_request_id -> the bracket dict."""
     return {
@@ -617,7 +617,7 @@ def _index_entries_by_request_id(
 
 
 def _summarize_open_verdicts(
-    open_verdicts: Iterable[Any], records: list[Mapping[str, Any]], today_iso: str
+    open_verdicts: Iterable[Any], records: Iterable[Mapping[str, Any]], today_iso: str
 ) -> tuple[int, float, float]:
     """Fold open verdicts into the safety.JournalView inputs
     ``(open_bracket_count, gross_committed, realized_r_today)``. ``gross_committed``
