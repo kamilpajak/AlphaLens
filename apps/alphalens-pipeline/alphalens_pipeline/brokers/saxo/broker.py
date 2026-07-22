@@ -654,12 +654,14 @@ class SaxoBroker:
         """Order the two accepted leg ids as ``(stop_id, tp_id)``.
 
         Prefers the per-leg ``ExternalReference`` echo (Q7 best-effort); falls
-        back to response array order (stop slot first) when Saxo does not honor
-        per-leg references. Either way both ids are returned.
+        back to the leg ``OrderType`` (``Limit`` -> tp, otherwise -> stop) when
+        Saxo does not honor per-leg references — NOT response array order, which
+        would mislabel the pair (the request body is ``[limit_leg, stop_leg]``).
+        Either way both ids are returned.
         """
         stop_id: str | None = None
         tp_id: str | None = None
-        unmatched: list[str] = []
+        unmatched: list[dict[str, Any]] = []
         for leg in legs:
             order_id = str(leg["OrderId"])
             reference = leg.get("ExternalReference")
@@ -668,9 +670,15 @@ class SaxoBroker:
             elif reference == tp_ref and tp_id is None:
                 tp_id = order_id
             else:
-                unmatched.append(order_id)
-        for order_id in unmatched:
-            if stop_id is None:
+                unmatched.append(leg)
+        for leg in unmatched:
+            order_id = str(leg["OrderId"])
+            if leg.get("OrderType") == "Limit":
+                if tp_id is None:
+                    tp_id = order_id
+                elif stop_id is None:
+                    stop_id = order_id
+            elif stop_id is None:  # StopIfTraded/Stop, or OrderType absent -> stop slot
                 stop_id = order_id
             elif tp_id is None:
                 tp_id = order_id

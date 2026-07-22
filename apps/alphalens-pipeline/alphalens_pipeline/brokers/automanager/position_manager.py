@@ -483,6 +483,16 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
         return [NoOp()]
     if plan.tp_price is None or uic in view.oco_unsupported or not _oco_enabled():
         return [NoOp()]  # STOP-ONLY: stop-only is the accepted terminal rung
+    # Grow-after-OCO guard: a resting OCO pair already covers the downside (its stop
+    # leg counts in stop_qty). If owned then grew past the OCO's TP, re-upgrading would
+    # place a SECOND OCO on top of the existing commitment -> SellOrdersAlreadyExist ->
+    # a wasted one-shot degrade to oco_unsupported (the OCO would be lost on that uic).
+    # Keep the existing OCO (+ any additive delta stop): downside stays covered, the
+    # grown delta is stop-covered without a TP (upside-only). NoOp until Stage-3 atomic
+    # resize (Q8) can extend an OCO in place. The FIRST upgrade (only a rung-1 standalone
+    # stop rests, no OCO leg) is unaffected.
+    if any(_is_oco_leg(leg) for leg in legs):
+        return [NoOp()]
     return [
         UpgradeToOco(
             uic,

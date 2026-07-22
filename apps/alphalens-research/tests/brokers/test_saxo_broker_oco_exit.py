@@ -186,6 +186,26 @@ class TestOcoPlacementResponse(unittest.TestCase):
         placed = _place(broker, request_id="crid-A-0")
         self.assertEqual(placed.exit_order_ids, ("S-2", "L-1"), "(stop_id, tp_id)")
 
+    def test_leg_ids_ordered_by_ordertype_when_no_external_reference(self):
+        # Q7 fallback: Saxo omits the per-leg ExternalReference echo. The
+        # (stop_id, tp_id) tuple MUST be resolved by OrderType (Limit -> tp,
+        # StopIfTraded -> stop), NOT by response array order — the request body is
+        # [limit_leg, stop_leg], so array order would swap the pair.
+        no_echo = (
+            201,
+            {
+                "Orders": [
+                    {"OrderId": "L-1", "OrderType": "Limit"},  # tp leg, listed FIRST
+                    {"OrderId": "S-2", "OrderType": "StopIfTraded"},  # stop leg
+                ]
+            },
+        )
+        broker, _ = _make(_StubOcoClient(place_response=no_echo))
+        placed = _place(broker, request_id="crid-A-0")
+        self.assertEqual(
+            placed.exit_order_ids, ("S-2", "L-1"), "(stop_id, tp_id) resolved by OrderType"
+        )
+
     def test_response_with_no_legs_raises_brokererror(self):
         # A 2xx with an empty Orders array is a failure, not a silent no-op.
         from alphalens_pipeline.brokers.contract import BrokerError

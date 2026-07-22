@@ -719,6 +719,41 @@ class TestOcoSteadyStateNotOverHedge(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertIsInstance(actions[0], NoOp)
 
+    def test_grow_after_oco_stays_noop_not_reupgrade(self) -> None:
+        # Grow-after-OCO: owned grew (56) past the resting OCO's TP (46); the
+        # additive delta stop (10) covers the deficit so stop_qty == owned. Arm C
+        # sees tp_qty(46) < owned(56) but MUST NOT re-emit UpgradeToOco — a 2nd OCO
+        # on top of the resting pair would be rejected SellOrdersAlreadyExist and
+        # waste-degrade the uic to oco_unsupported. Keep what rests -> NoOp.
+        pos = _pos(56.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0)
+        tp = _oco_leg("oco-tp", "Limit", 46.0)
+        delta = _leg("delta-stop", "StopIfTraded", 10.0)  # additive, order_relation=None
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp, delta)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+    def test_first_upgrade_still_fires_with_only_rung1_stop(self) -> None:
+        # Control for the grow-after-OCO guard: with ONLY a rung-1 standalone stop
+        # (no OCO leg) the FIRST upgrade must still fire when the flag is on.
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)  # plain, order_relation=None
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], UpgradeToOco)
+
     def test_shrunk_oco_over_hedge_never_cancels_oco_leg(self) -> None:
         # A genuine over-hedge WITH an OCO pair: the OCO limit leg partially filled
         # (owned dropped 46 -> 20) so the OCO group (counted once = 46) over-covers
