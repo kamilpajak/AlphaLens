@@ -23,9 +23,12 @@ coverage of the SPEC invariants, following the PBT-series (#858-863) lessons:
 FINAL-sell removal set (spec disagreement resolved in favour of derivation 1):
 removal = union(PlaceStop.supersede_ids) ∪ union(PlaceStop.cancel_conflicting) ∪
 union(CancelSellLegs.order_ids). CancelSellLegs.order_ids MUST be included — in
-arm A the trailing CancelSellLegs drops the whole over-committed group (incl. the
-TP), while the PlaceStop only supersedes the stop legs; omitting it would count
-the TP amount as surviving and yield a false over-commit.
+arm A the trailing CancelSellLegs drops only the NON-stop legs (TP / Market
+noise), while the STOP legs leave EXCLUSIVELY via PlaceStop.supersede_ids after a
+successful place (never a naked window). The removal union is unchanged: non-stop
+ids via CancelSellLegs.order_ids, stop ids via supersede — only the partition
+between the two moves. Omitting the cancel would count the TP amount as surviving
+and yield a false over-commit.
 """
 
 from __future__ import annotations
@@ -664,32 +667,56 @@ class TestOverHedgeShape(unittest.TestCase):
     @given(_one_of(_ARM_A_BUILDERS))
     @_LONG_SETTINGS
     def test_over_hedge_shape_and_ordering(self, c: _LongComp) -> None:
-        # INV6 — arm A: exactly [PlaceStop, CancelSellLegs], qty ~= owned, every
-        # input STOP leg superseded. Asserts action ORDER only, no transient total.
+        # INV6 — arm A places a residual stop FIRST, superseding EXACTLY the input
+        # STOP legs (they leave only via supersede-after-success, never a naked
+        # window). A trailing CancelSellLegs names the NON-stop legs ONLY, and is
+        # emitted ONLY when such legs exist:
+        #   * with non-stop legs (TP / Market noise) -> [PlaceStop, CancelSellLegs]
+        #   * stop-only over-committed group          -> [PlaceStop] (no cancel)
+        # The teeth of the fix: NO stop id ever appears in an unconditional cancel.
         owned = c.position.quantity
         # confirm the builder is genuinely over-hedged (independent predicate)
         self.assertGreater(_stop_qty(c.legs) + _tp_qty(c.legs), owned + _QTY_EPS)
         actions = reconcile_long(c.uic, c.position, _view_from_long(c))
-        self.assertEqual(len(actions), 2, f"arm A must be a 2-action list (label={c.label})")
+
+        # First action is always the residual place, sized to netted owned.
         self.assertIsInstance(actions[0], PlaceStop)
-        self.assertIsInstance(actions[1], CancelSellLegs)
         place = actions[0]
         assert isinstance(place, PlaceStop)
         self.assertTrue(_close(place.qty, owned), f"residual {place.qty} != owned {owned}")
-        cancel = actions[1]
-        assert isinstance(cancel, CancelSellLegs)
-        cancelled_stop_ids = {
-            leg.order_id
-            for leg in c.legs
-            if leg.order_type in STOP_TYPES and leg.order_id in set(cancel.order_ids)
-        }
-        # EQUALITY (not subset): supersede_ids is EXACTLY the stop-leg subset of
-        # the cancelled over-committed group — never a partial or padded set.
+
+        # EQUALITY (not subset): supersede_ids is EXACTLY the input STOP-leg subset,
+        # sourced from the legs (NOT from any cancel list) — the stop legs leave
+        # only via supersede-after-a-successful-place.
+        stop_ids = _stop_leg_ids(c.legs)
         self.assertEqual(
             set(place.supersede_ids),
-            cancelled_stop_ids,
-            "supersede_ids != stop-leg subset of the cancelled group",
+            stop_ids,
+            "supersede_ids != the input stop-leg subset",
         )
+
+        non_stop_ids = {leg.order_id for leg in c.legs if leg.order_type not in STOP_TYPES}
+        cancels = _cancels(actions, c.uic)
+        if non_stop_ids:
+            # Non-stop legs present -> exactly [PlaceStop, CancelSellLegs(non-stop)].
+            self.assertEqual(len(actions), 2, f"expected 2 actions (label={c.label})")
+            self.assertIsInstance(actions[1], CancelSellLegs)
+            cancel = actions[1]
+            assert isinstance(cancel, CancelSellLegs)
+            self.assertEqual(
+                set(cancel.order_ids),
+                non_stop_ids,
+                "CancelSellLegs must name exactly the NON-stop legs",
+            )
+            self.assertEqual(
+                set(cancel.order_ids) & stop_ids,
+                set(),
+                "no STOP leg may sit in an unconditional cancel (naked-window guard)",
+            )
+        else:
+            # Stop-only over-committed group -> [PlaceStop] alone, no cancel at all.
+            self.assertEqual(len(actions), 1, f"stop-only arm A must be 1 action (label={c.label})")
+            self.assertEqual(cancels, [], "stop-only arm A must emit NO CancelSellLegs")
 
 
 class TestCancelFields(unittest.TestCase):
