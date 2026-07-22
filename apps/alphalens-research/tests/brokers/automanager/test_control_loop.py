@@ -1323,6 +1323,77 @@ class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
         planned = cl._fold_planned_exits(lines)[43070]
         self.assertAlmostEqual(planned.stop_price, 220.00)
 
+    def test_planned_line_round_trips_tp_price_through_journal(self) -> None:
+        # The Stage-2 upgrade needs a TP price to place; the planned line carries
+        # it (memo §7) and the fold reads it back into PlannedExit.tp_price.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._append_standalone_stop_journal(
+                    cl._build_planned_line(
+                        entry_crid="crid-0",
+                        uic=_UIC,
+                        side="SELL",
+                        stop_price=216.48,
+                        take_profit=306.72,
+                        tier_index=0,
+                    )
+                )
+                folded = cl._fold_planned_exits(list(cl._iter_standalone_stop_journal()))
+        self.assertIn(_UIC, folded)
+        self.assertAlmostEqual(folded[_UIC].tp_price or 0.0, 306.72)
+
+
+class TestFoldOcoUnsupported(unittest.TestCase):
+    """Stage 2 (memo §7): the persisted per-instrument OCO-unsupported capability
+    flag folds by uic into a ``frozenset[int]``. A uic marked once stays marked
+    (append-only, survives a systemd restart) so the rung-2 upgrade is never
+    re-attempted on a structurally OCO-incapable instrument."""
+
+    def test_fold_reads_marked_uics_and_skips_other_kinds(self) -> None:
+        lines = [
+            {"kind": "oco_unsupported", "uic": 43070},
+            {"kind": "oco_unsupported", "uic": 111},
+            {"kind": "planned", "uic": 999, "client_request_id": "c1", "stop_price": 1.0},
+            {"kind": "gen", "uic": 888, "gen": 2, "qty": 5.0},
+            {"kind": "oco_unsupported"},  # missing uic — skipped
+            {"kind": "oco_unsupported", "uic": "abc"},  # unparsable uic — skipped
+        ]
+        self.assertEqual(cl._fold_oco_unsupported(lines), frozenset({43070, 111}))
+
+    def test_fold_empty_when_no_lines(self) -> None:
+        self.assertEqual(cl._fold_oco_unsupported([]), frozenset())
+
+    def test_mark_round_trips_and_survives_a_fresh_fold(self) -> None:
+        # mark -> a FRESH read of the journal (a restart) still carries the flag.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._mark_oco_unsupported(_UIC)
+                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+        self.assertIn(_UIC, folded)
+
+    def test_build_protection_view_populates_oco_unsupported_from_journal(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                cl._mark_oco_unsupported(_UIC)
+                view = cl.build_protection_view(broker, [])  # type: ignore[arg-type]
+        self.assertIn(_UIC, view.oco_unsupported)
+        # The planned prices still fold alongside the capability flag (one journal read).
+        self.assertIn(_UIC, view.planned_by_uic)
+
+    def test_build_protection_view_oco_unsupported_empty_without_mark(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                view = cl.build_protection_view(broker, [])  # type: ignore[arg-type]
+        self.assertEqual(view.oco_unsupported, frozenset())
+
 
 class TestGenStampedRefChangesOnResize(unittest.TestCase):
     """Task 4 (memo §4.5): deterministic gen-stamped request-ids — stable for a

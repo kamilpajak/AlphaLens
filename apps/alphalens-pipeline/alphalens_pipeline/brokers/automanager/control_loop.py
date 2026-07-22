@@ -560,6 +560,38 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
     return result
 
 
+def _mark_oco_unsupported(uic: int) -> None:
+    """Persist the per-instrument OCO-unsupported capability flag (saxo-oco memo §7).
+
+    Append one out-of-band ``oco_unsupported`` line keyed by int uic. Written by
+    the Stage-2 executor when ``place_oco_exit`` fails (any BrokerError — a
+    structural ``SellOrdersAlreadyExist`` / ``TooFarFromEntry`` reject, a rate
+    limit, or a 202) so the rung 1 -> 2 upgrade is never re-attempted on that uic,
+    even after a systemd restart — the rung-1 stop stays the proven terminal rung.
+    ``_fold_oco_unsupported`` reads these lines back into
+    ``build_protection_view``'s ``ProtectionView.oco_unsupported``."""
+    _append_standalone_stop_journal({"kind": "oco_unsupported", "uic": int(uic)})
+
+
+def _fold_oco_unsupported(lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
+    """Fold the append-only ``oco_unsupported`` journal lines into the set of uics
+    whose OCO rung-2 upgrade is permanently disabled (saxo-oco memo §7).
+
+    A uic marked once stays marked (append-only, so a rebuilt view after a restart
+    still carries the flag and ``_reconcile_long`` degrades the covered branch to
+    ``NoOp`` -> no re-attempt churn). Non-``oco_unsupported`` and malformed lines
+    (missing / unparsable uic) are skipped."""
+    disabled: set[int] = set()
+    for line in lines:
+        if line.get("kind") != "oco_unsupported":
+            continue
+        try:
+            disabled.add(int(line["uic"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return frozenset(disabled)
+
+
 def _default_oauth_provider() -> Any:
     """Return the shipped OAuthTokenProvider wired from the Saxo env vars."""
     from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
@@ -889,8 +921,10 @@ def build_protection_view(broker: Broker, _records: list[Mapping[str, Any]]) -> 
     PRICES folded from the append-only ``planned`` journal. Protection status is
     then a pure function of this view — no journal line asserts it (kills Bug A).
 
-    ``oco_unsupported`` is empty in Stage 1 (STOP-ONLY: the OCO rung stays dark);
-    Stage 2 folds the persisted per-instrument capability flag here."""
+    ``oco_unsupported`` (Stage 2) folds the persisted per-instrument capability
+    flag from the SAME append-only journal that carries the plan prices — read
+    ONCE here so both folds see the same lines (a second pass over the generator
+    would be empty)."""
     all_positions: dict[int, Position] = {}
     for pos in broker.get_positions():
         uic = _position_uic(pos)
@@ -916,12 +950,15 @@ def build_protection_view(broker: Broker, _records: list[Mapping[str, Any]]) -> 
         if order.uic is not None:
             sell_legs.setdefault(int(order.uic), []).append(order)
 
+    # Materialize the append-only journal ONCE so both folds read the same lines
+    # (a second pass over the generator would be empty).
+    journal_lines = list(_iter_standalone_stop_journal())
     return ProtectionView(
         long_positions=long_positions,
         all_positions=all_positions,
         sell_legs_by_uic={uic: tuple(legs) for uic, legs in sell_legs.items()},
-        planned_by_uic=_fold_planned_exits(_iter_standalone_stop_journal()),
-        oco_unsupported=frozenset(),  # Stage 1 STOP-ONLY — OCO rung dark
+        planned_by_uic=_fold_planned_exits(journal_lines),
+        oco_unsupported=_fold_oco_unsupported(journal_lines),
     )
 
 
