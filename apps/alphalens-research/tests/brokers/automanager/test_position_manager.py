@@ -8,6 +8,7 @@ REALIZED fill (2.0), never the planned qty (3). Realized-qty = design memo Risk 
 
 from __future__ import annotations
 
+import os
 import unittest
 from typing import Any
 from unittest.mock import patch
@@ -22,6 +23,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlaceStop,
     PlannedExit,
     ProtectionView,
+    UpgradeToOco,
     _exit_stop_ref,
     advance,
     reconcile_protection,
@@ -561,6 +563,242 @@ class TestReconcileDecisionTable(unittest.TestCase):
         self.assertIsInstance(actions[0], AlertOnly)
         assert isinstance(actions[0], AlertOnly)
         self.assertIn("refusing to merge", actions[0].reason)
+
+
+class TestOcoEnablementGate(unittest.TestCase):
+    """Stage 2 arm-C emission (saxo-oco memo §6/§11): a covered long WITH a
+    journaled TP price upgrades to OCO ONLY when the env flag is on AND the uic is
+    not oco_unsupported. Default OFF (ship dark): the arm degrades to NoOp."""
+
+    def _covered_view(
+        self, *, oco_unsupported: frozenset[int] = frozenset()
+    ) -> tuple[Position, ProtectionView]:
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+            oco_unsupported=oco_unsupported,
+        )
+        return pos, view
+
+    def test_covered_with_tp_stays_noop_when_flag_unset(self) -> None:
+        pos, view = self._covered_view()
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_OCO_ENABLED"}
+        with patch.dict(os.environ, env, clear=True):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+    def test_covered_with_tp_emits_upgrade_when_flag_on(self) -> None:
+        pos, view = self._covered_view()
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, UpgradeToOco)
+        assert isinstance(action, UpgradeToOco)
+        self.assertEqual(action.uic, _UIC)
+        self.assertEqual(action.side, "SELL")
+        self.assertEqual(action.qty, 46.0)
+        self.assertEqual(action.stop_price, 216.48)
+        self.assertEqual(action.tp_price, 306.72)
+        self.assertEqual(action.entry_crid, "crid")
+        self.assertEqual(action.supersede_ids, ("stop-1",))
+
+    def test_covered_with_tp_stays_noop_when_oco_unsupported_even_if_flag_on(self) -> None:
+        pos, view = self._covered_view(oco_unsupported=frozenset({_UIC}))
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+    def test_covered_without_tp_stays_noop_even_when_flag_on(self) -> None:
+        # No journaled TP price -> nothing to capture -> stop-only NoOp regardless.
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: _plan(tp_price=None)},
+        )
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+
+def _oco_leg(
+    order_id: str,
+    order_type: str,
+    amount: float,
+    *,
+    uic: int = _UIC,
+    base: str = "crid-oco-0",
+    external_reference: str | None = "",
+    order_relation: str | None = "Oco",
+    filled: float = 0.0,
+) -> OrderState:
+    """A resting OCO exit leg: ``OrderRelation="Oco"`` + a shared base ref with a
+    ``-stop`` / ``-tp`` suffix (what ``_build_oco_exit_body`` stamps). Pass
+    ``external_reference=None`` to model the Q7 case where Saxo does NOT echo the
+    per-leg ref (detection then falls back to ``OrderRelation``)."""
+    if external_reference == "":
+        suffix = "-stop" if order_type in ("StopIfTraded", "Stop") else "-tp"
+        external_reference = f"{base}{suffix}"
+    return OrderState(
+        order_id=order_id,
+        status=OrderStatus.WORKING,
+        instrument=None,
+        filled_quantity=filled,
+        raw_status="Working",
+        uic=uic,
+        side="SELL",
+        order_type=order_type,
+        amount=amount,
+        external_reference=external_reference,
+        order_relation=order_relation,
+    )
+
+
+class TestOcoSteadyStateNotOverHedge(unittest.TestCase):
+    """After a successful rung 1 -> 2 upgrade the resting pair is
+    {StopIfTraded=owned, Limit=owned}. Saxo counts a mutually-exclusive OCO pair
+    as a SINGLE sell commitment, so summing every leg (2*owned) would falsely trip
+    the over-hedge arm and tear the pair down — cancelling one OCO leg cascades its
+    sibling while the replacement standalone stop can be rejected
+    (SellOrdersAlreadyExist), opening a naked window and recurring churn. A healthy
+    pair must be the terminal NoOp instead."""
+
+    def test_healthy_oco_pair_is_noop_not_over_hedge(self) -> None:
+        pos = _pos(46.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0)
+        tp = _oco_leg("oco-tp", "Limit", 46.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        # Flag ON: still terminal NoOp (the OCO already covers both rungs) —
+        # never an over-hedge tear-down, never a re-upgrade.
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+    def test_healthy_oco_pair_noop_via_order_relation_only(self) -> None:
+        # Q7 unverified: Saxo may echo only a top-level ref, so per-leg refs are
+        # absent. Detection then relies on OrderRelation alone — still one group.
+        pos = _pos(46.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0, external_reference=None)
+        tp = _oco_leg("oco-tp", "Limit", 46.0, external_reference=None)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+    def test_healthy_oco_pair_noop_via_ref_infix_only(self) -> None:
+        # Belt: if Saxo does NOT echo OrderRelation but DOES echo the per-leg ref,
+        # the "-oco-" infix still identifies the pair as one commitment.
+        pos = _pos(46.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0, order_relation=None)
+        tp = _oco_leg("oco-tp", "Limit", 46.0, order_relation=None)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+    def test_grow_after_oco_stays_noop_not_reupgrade(self) -> None:
+        # Grow-after-OCO: owned grew (56) past the resting OCO's TP (46); the
+        # additive delta stop (10) covers the deficit so stop_qty == owned. Arm C
+        # sees tp_qty(46) < owned(56) but MUST NOT re-emit UpgradeToOco — a 2nd OCO
+        # on top of the resting pair would be rejected SellOrdersAlreadyExist and
+        # waste-degrade the uic to oco_unsupported. Keep what rests -> NoOp.
+        pos = _pos(56.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0)
+        tp = _oco_leg("oco-tp", "Limit", 46.0)
+        delta = _leg("delta-stop", "StopIfTraded", 10.0)  # additive, order_relation=None
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp, delta)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], NoOp)
+
+    def test_first_upgrade_still_fires_with_only_rung1_stop(self) -> None:
+        # Control for the grow-after-OCO guard: with ONLY a rung-1 standalone stop
+        # (no OCO leg) the FIRST upgrade must still fire when the flag is on.
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)  # plain, order_relation=None
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], UpgradeToOco)
+
+    def test_shrunk_oco_over_hedge_never_cancels_oco_leg(self) -> None:
+        # A genuine over-hedge WITH an OCO pair: the OCO limit leg partially filled
+        # (owned dropped 46 -> 20) so the OCO group (counted once = 46) over-covers
+        # owned 20. The arm must place a residual stop and supersede the OCO stop
+        # AFTER a successful place, but must NEVER name the OCO tp leg in an
+        # unconditional CancelSellLegs — that would cascade-cancel the OCO stop
+        # while the replacement stop is still rejected (SellOrdersAlreadyExist).
+        pos = _pos(20.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0)
+        tp = _oco_leg("oco-tp", "Limit", 46.0, filled=26.0)
+        actions = reconcile_long(
+            _UIC,
+            pos,
+            _pview(
+                long_positions={_UIC: pos},
+                sell_legs_by_uic={_UIC: (stop, tp)},
+                planned_by_uic={_UIC: _plan(tp_price=306.72)},
+            ),
+        )
+        # PlaceStop only — no CancelSellLegs naming an OCO leg.
+        self.assertEqual([type(a).__name__ for a in actions], ["PlaceStop"])
+        action = actions[0]
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 20.0)  # residual == netted owned
+        self.assertEqual(action.supersede_ids, ("oco-stop",))  # OCO stop only via supersede
+
+    def test_non_oco_stop_plus_tp_still_over_hedges(self) -> None:
+        # Regression guard: the OCO single-commitment accounting must NOT leak into
+        # two INDEPENDENT (non-OCO) sell legs — a plain stop + a plain resting TP
+        # still sum in full and trip the over-hedge arm.
+        pos = _pos(20.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)  # order_relation=None (plain)
+        tp = _leg("tp-1", "Limit", 20.0, filled=26.0)
+        actions = reconcile_long(
+            _UIC,
+            pos,
+            _pview(
+                long_positions={_UIC: pos},
+                sell_legs_by_uic={_UIC: (stop, tp)},
+                planned_by_uic={_UIC: _plan(tp_price=306.72)},
+            ),
+        )
+        self.assertEqual([type(a).__name__ for a in actions], ["PlaceStop", "CancelSellLegs"])
+        assert isinstance(actions[1], CancelSellLegs)
+        self.assertEqual(set(actions[1].order_ids), {"tp-1"})
 
 
 class TestReconcileProtectionArms(unittest.TestCase):

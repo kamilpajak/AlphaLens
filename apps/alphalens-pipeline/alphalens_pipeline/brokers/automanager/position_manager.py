@@ -20,14 +20,16 @@ Broker-state-truth protection (saxo-oco memo §6): ``reconcile_protection`` /
 from a live-broker snapshot (``ProtectionView``) instead of any journal line —
 this kills Bug A (a failed stop POST leaving a permanently-naked position) and
 Bug B (a lone-TP double-sell). Keyed per-uic (the unit Saxo nets to), sized to
-netted owned qty. STAGE 1 IS STOP-ONLY: ``_oco_enabled()`` returns ``False`` so
-the rung 1 -> 2 OCO upgrade (``UpgradeToOco``) is defined but never emitted.
-The control loop (Task 6) assembles the ``ProtectionView`` and executes the
-returned Actions; this module performs no I/O.
+netted owned qty. The rung 1 -> 2 OCO upgrade (``UpgradeToOco``) is emitted from
+the covered branch ONLY when ``_oco_enabled()`` is true (the
+``ALPHALENS_BROKER_OCO_ENABLED`` env flag, DEFAULT OFF so the path ships dark)
+and the uic is not persisted ``oco_unsupported``. The control loop assembles the
+``ProtectionView`` and executes the returned Actions; this module performs no I/O.
 """
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
@@ -72,6 +74,18 @@ def _exit_stop_ref(entry_crid: str, gen: int) -> str:
 def _exit_tp_ref(entry_crid: str, gen: int) -> str:
     """Deterministic gen-stamped x-request-id for a take-profit leg (rung 2, memo §4.5)."""
     return f"{entry_crid}-tp-{gen}"
+
+
+def _exit_oco_ref(entry_crid: str, gen: int) -> str:
+    """Deterministic gen-stamped BASE x-request-id for an OCO exit pair (rung 2).
+
+    The executor passes this to ``SupportsOcoExit.place_oco_exit`` as the POST
+    x-request-id (a same-size crash-retry hits Saxo's 15 s dedup instead of
+    resting a second OCO); the adapter derives the two per-leg
+    ``ExternalReference`` values from it (``<ref>-stop`` / ``<ref>-tp``). The
+    ``-oco-`` infix keeps it distinct from the standalone-stop ref
+    (``<crid>-stop-<gen>``) so the two rails never collide on one uic."""
+    return f"{entry_crid}-oco-{gen}"
 
 
 @dataclass(frozen=True)
@@ -142,10 +156,11 @@ class PlaceStop:
 
 @dataclass(frozen=True)
 class UpgradeToOco:
-    """Rung 1 -> 2 TP-capture upgrade. DEFINED for Stage 2; NEVER emitted in
-    Stage 1 (``_oco_enabled()`` returns ``False`` so ``_reconcile_long`` degrades
-    the covered branch to ``NoOp``). Kept here so Task 6's executor can type-guard
-    it out without a forward reference."""
+    """Rung 1 -> 2 TP-capture upgrade emitted from the covered branch when
+    ``_oco_enabled()`` is true and the uic is not ``oco_unsupported`` (else the
+    branch degrades to ``NoOp``). ``entry_crid`` + ``gen`` derive the deterministic
+    OCO base ref (``_exit_oco_ref``); ``supersede_ids`` is the rung-1 stop the
+    executor cancels ONLY AFTER ``place_oco_exit`` succeeds (never a naked window)."""
 
     uic: int
     side: str
@@ -175,6 +190,68 @@ Action = PlaceStop | UpgradeToOco | CancelSellLegs | CancelRemaining | AlertOnly
 STOP_TYPES = frozenset({"StopIfTraded", "Stop", "TrailingStopIfTraded"})
 TP_TYPES = frozenset({"Limit"})
 
+# OCO-group discrimination (saxo-oco memo, Stage 2). A resting OCO exit pair
+# {near Limit take-profit, far StopIfTraded disaster} is MUTUALLY EXCLUSIVE — only
+# one leg can ever fill — so Saxo commits the sell side ONCE for the whole pair, not
+# once per leg. Two independent signals identify an OCO leg (either suffices, so
+# detection survives the unverified Q7 per-leg ExternalReference echo): Saxo's
+# ``OrderRelation == "Oco"`` and the ``-oco-`` infix in the gen-stamped base ref
+# (``<crid>-oco-<gen>-stop`` / ``-tp``, stamped by ``_build_oco_exit_body`` — the
+# standalone-stop ref ``<crid>-stop-<gen>`` has no such infix).
+_OCO_RELATION = "Oco"
+_OCO_REF_INFIX = "-oco-"
+_OCO_REF_SUFFIXES = ("-stop", "-tp")
+
+
+def _leg_amount(leg: OrderState) -> float:
+    """The RESTING sell quantity a leg commits. A genuine ``0.0`` contributes 0.0;
+    an absent (``None``) amount is treated as 0.0 (never misread as a live qty)."""
+    return leg.amount if leg.amount is not None else 0.0
+
+
+def _is_oco_leg(leg: OrderState) -> bool:
+    """Whether a SELL leg belongs to a resting OCO exit pair (Stage 2). True on
+    EITHER signal — the echoed ``OrderRelation`` OR the ``-oco-`` infix in the
+    per-leg ref — so a healthy pair is still recognised if Saxo honours only one."""
+    if leg.order_relation == _OCO_RELATION:
+        return True
+    ref = leg.external_reference
+    return ref is not None and _OCO_REF_INFIX in ref
+
+
+def _oco_group_key(leg: OrderState) -> str:
+    """The base ref shared by the two legs of one OCO pair (``-stop`` / ``-tp``
+    stripped). Falls back to the empty string when the per-leg ref is absent /
+    unsuffixed (Q7): only one OCO pair can rest per uic (a second is rejected
+    ``SellOrdersAlreadyExist``), so collapsing to one group per uic is correct."""
+    ref = leg.external_reference
+    if not ref:
+        return ""
+    for suffix in _OCO_REF_SUFFIXES:
+        if ref.endswith(suffix):
+            return ref[: -len(suffix)]
+    return ref
+
+
+def _sell_commitment(legs: tuple[OrderState, ...]) -> float:
+    """Total sell-side quantity committed on a uic for the over-hedge test,
+    counting each OCO group's commitment ONCE (saxo-oco memo, Stage 2).
+
+    Saxo counts a mutually-exclusive OCO pair as a SINGLE commitment (only one leg
+    fills), so a healthy resting exit OCO {StopIfTraded=owned, Limit=owned} commits
+    ``owned``, NOT ``2*owned``. Summing every leg would double-count the pair and
+    trip the over-hedge arm on the terminal rung-2 steady state (which would then
+    cascade-cancel a leg and open a naked window — recurring churn). Non-OCO legs
+    each count in full."""
+    total = sum(_leg_amount(leg) for leg in legs if not _is_oco_leg(leg))
+    oco_groups: dict[str, float] = {}
+    for leg in legs:
+        if _is_oco_leg(leg):
+            key = _oco_group_key(leg)
+            oco_groups[key] = max(oco_groups.get(key, 0.0), _leg_amount(leg))
+    return total + sum(oco_groups.values())
+
+
 # Q5 (same-uic stops sum cleanly against owned) CONFIRMED live on SIM 2026-07-21:
 # a 2nd standalone StopIfTraded for the delta on an already-stopped uic was
 # ACCEPTED (200) when stop_qty + delta == owned. So the grow arm places an
@@ -184,10 +261,20 @@ TP_TYPES = frozenset({"Limit"})
 ADDITIVE_STOPS_CONFIRMED = True
 
 
+# Env flag gating the rung 1 -> 2 OCO upgrade. DEFAULTS OFF (ship dark): the
+# machinery lands unenabled and is turned on only after the SIM upgrade-ordering
+# probe closes the open enablement questions (saxo-oco memo §11 / §2).
+_OCO_ENABLED_ENV = "ALPHALENS_BROKER_OCO_ENABLED"
+
+
 def _oco_enabled() -> bool:
-    """Stage 1 is STOP-ONLY: the rung 1 -> 2 OCO upgrade stays dark. Always
-    ``False`` here so ``_reconcile_long`` never emits ``UpgradeToOco``."""
-    return False
+    """Whether the rung 1 -> 2 OCO upgrade is enabled (read at call time).
+
+    The SINGLE source gating both the pure emission (``_reconcile_long`` arm C)
+    and the control-loop executor. Reads the env flag every call so it is
+    restart-consistent and hermetically testable (no import-time snapshot).
+    Defaults OFF — this PR ships the OCO path DARK."""
+    return os.environ.get(_OCO_ENABLED_ENV) == "1"
 
 
 @dataclass(frozen=True)
@@ -253,10 +340,10 @@ def _newest_group(legs: tuple[OrderState, ...]) -> _LegGroup:
 def reconcile_protection(view: ProtectionView) -> list[Action]:
     """Pure per-tick desired-vs-actual diff over live broker state (memo §6).
 
-    Emits, in order: (1) per netted LONG, the downside-cover arm; (2) an orphan
-    sweep for SELL legs on a uic with no long (else they can fire into a naked
-    short); (3) a negative-position alert. STOP-ONLY: no ``UpgradeToOco`` is ever
-    returned in Stage 1."""
+    Emits, in order: (1) per netted LONG, the downside-cover arm (a covered long
+    may upgrade to ``UpgradeToOco`` when ``_oco_enabled()`` — else stop-only NoOp);
+    (2) an orphan sweep for SELL legs on a uic with no long (else they can fire
+    into a naked short); (3) a negative-position alert."""
     actions: list[Action] = []
     for uic, pos in view.long_positions.items():
         actions.extend(_reconcile_long(uic, pos, view))
@@ -300,17 +387,12 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     # Explicit-None guard: ``amount`` is ``float | None`` (the RESTING qty). A
     # genuine ``0.0`` must contribute 0.0 to the sum, not be misread as an absent
     # amount — ``or 0.0`` conflates the two (harmless today, latent misread).
-    stop_qty = sum(
-        (leg.amount if leg.amount is not None else 0.0)
-        for leg in legs
-        if leg.order_type in STOP_TYPES
-    )
-    tp_qty = sum(
-        (leg.amount if leg.amount is not None else 0.0)
-        for leg in legs
-        if leg.order_type in TP_TYPES
-    )
-    total = stop_qty + tp_qty
+    stop_qty = sum(_leg_amount(leg) for leg in legs if leg.order_type in STOP_TYPES)
+    tp_qty = sum(_leg_amount(leg) for leg in legs if leg.order_type in TP_TYPES)
+    # Over-hedge is measured on the COMMITMENT, not the raw leg sum: a resting OCO
+    # pair {stop=owned, tp=owned} commits owned ONCE (mutually exclusive), so it is
+    # the terminal rung-2 state, never a 2*owned over-hedge (saxo-oco memo, Stage 2).
+    total = _sell_commitment(legs)
 
     # (A) OVER-HEDGE: an exit leg partially filled (netted owned shrank) or the
     #     position shrank -> total sell > owned. Place a residual-sized stop FIRST
@@ -325,7 +407,16 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
         bad = _group_with_partial_fill(legs) or _newest_group(legs)
         gen = plan.next_gen(owned)
         stop_ids = set(bad.stop_leg_ids)
-        non_stop_ids = tuple(oid for oid in bad.order_ids if oid not in stop_ids)
+        # NEVER name a live OCO leg in an unconditional cancel: cancelling one OCO
+        # leg cascade-cancels its sibling, and the replacement PlaceStop can be
+        # rejected (SellOrdersAlreadyExist) while the OCO still commits owned -> a
+        # naked window. An OCO leg leaves only via supersede-after-a-successful
+        # place (its stop leg is in supersede_ids); its TP leg is simply left in
+        # place (Q3a caps oversell, the OCO stop keeps covering the downside).
+        oco_ids = {leg.order_id for leg in legs if _is_oco_leg(leg)}
+        non_stop_ids = tuple(
+            oid for oid in bad.order_ids if oid not in stop_ids and oid not in oco_ids
+        )
         actions: list[Action] = [
             PlaceStop(
                 uic,
@@ -385,11 +476,24 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
         ]
 
     # (C) DOWNSIDE COVERED. The rung 1 -> 2 TP-capture upgrade is Stage 2 only.
-    if tp_qty + _QTY_EPS >= owned:  # pragma: no cover — Stage 1: a full TP + a covering stop
-        return [NoOp()]  # trips arm (A) over-hedge first; reachable only at rung 2
+    if tp_qty + _QTY_EPS >= owned:
+        # A full TP + a covering stop == a healthy resting OCO pair: the terminal
+        # rung-2 steady state. Arm (A) no longer trips first (the OCO pair commits
+        # owned ONCE), so this is the state a successful upgrade settles into.
+        return [NoOp()]
     if plan.tp_price is None or uic in view.oco_unsupported or not _oco_enabled():
         return [NoOp()]  # STOP-ONLY: stop-only is the accepted terminal rung
-    return [  # pragma: no cover — Stage 1 keeps _oco_enabled() False; guarded for Stage 2
+    # Grow-after-OCO guard: a resting OCO pair already covers the downside (its stop
+    # leg counts in stop_qty). If owned then grew past the OCO's TP, re-upgrading would
+    # place a SECOND OCO on top of the existing commitment -> SellOrdersAlreadyExist ->
+    # a wasted one-shot degrade to oco_unsupported (the OCO would be lost on that uic).
+    # Keep the existing OCO (+ any additive delta stop): downside stays covered, the
+    # grown delta is stop-covered without a TP (upside-only). NoOp until Stage-3 atomic
+    # resize (Q8) can extend an OCO in place. The FIRST upgrade (only a rung-1 standalone
+    # stop rests, no OCO leg) is unaffected.
+    if any(_is_oco_leg(leg) for leg in legs):
+        return [NoOp()]
+    return [
         UpgradeToOco(
             uic,
             _SIDE,

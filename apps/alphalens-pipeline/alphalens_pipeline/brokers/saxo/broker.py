@@ -118,6 +118,19 @@ def _order_side(value: Any) -> Literal["BUY", "SELL"] | None:
     return None
 
 
+def _oco_leg_ref(request_id: str, leg: str) -> str:
+    """Per-leg ``ExternalReference`` derived from the OCO base ``request_id``.
+
+    ``<request_id>-stop`` / ``<request_id>-tp``. Kept local to the adapter (the
+    automanager's ``_exit_stop_ref`` / ``_exit_tp_ref`` are NOT imported here —
+    that would create a broker -> automanager -> broker import cycle). The
+    executor passes a base ``request_id`` (derived from the entry crid + resize
+    generation); the same-suffix scheme keeps the leg refs deterministic for
+    x-request-id dedup and broker-state correlation.
+    """
+    return f"{request_id}-{leg}"
+
+
 def _position_uic(position: Position) -> int | None:
     """The uic a Position belongs to (``broker_instrument_id`` is ``str(Uic)``)."""
     try:
@@ -464,6 +477,212 @@ class SaxoBroker:
             "ManualOrder": execution_policy._MANUAL_ORDER,
             "ExternalReference": client_request_id,
         }
+
+    def place_oco_exit(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        stop_price: float,
+        take_profit: float,
+        request_id: str,
+        position_id: str | None = None,
+    ) -> PlacedOrder:
+        """Place ONE standalone OCO exit pair (rung-2 upgrade, saxo-oco memo §4.4).
+
+        Two sibling SELL legs — a near ``Limit`` take-profit + a far
+        ``StopIfTraded`` disaster stop, both ``Amount == qty``,
+        ``OrderRelation:"Oco"`` — under ONE POST in the SIBLINGS-ARRAY body
+        ``{"AccountKey": key, "Orders": [limit_leg, stop_leg]}`` (no top-level
+        order fields). LIVE-PROVEN accepted shape (Q1/Q2, PR #885): the sell
+        side commits ``qty`` ONCE (no ``SellOrdersAlreadyExistForOwnedContracts``)
+        and the far stop escapes ``TooFarFromEntryOrder`` while OCO-linked.
+
+        Same safety order as :meth:`place_standalone_stop`: the ALLOW_ORDERS gate
+        FIRST (before any client call), then precheck, then ONE POST with
+        x-request-id = ``request_id``. Deliberately does NOT run
+        :func:`_validate_price_relations` — the 15% child-distance guard is an
+        entry-child fail-fast, and the OCO exit is precisely the wide-stop escape
+        (fact #3/#4); only a degenerate-ordering check remains
+        (``_build_oco_exit_body`` rejects a stop that is not below the tp).
+
+        ``request_id`` is a DETERMINISTIC base ref: it is the POST x-request-id
+        (a same-size crash-retry hits Saxo's 15 s dedup) and the two per-leg
+        ``ExternalReference`` values are ``<request_id>-stop`` / ``<request_id>-tp``.
+        ``position_id`` is accepted but unused in Stage 2 (reduce-only is Stage 3).
+        Returns ``PlacedOrder(entry_order_id="", exit_order_ids=(stop_id, tp_id))``.
+        """
+        _ = position_id  # Stage 3 (reduce-only linkage); accepted, unused here.
+        if os.environ.get(ALLOW_ORDERS_ENV) != "1":
+            raise BrokerCapabilityError(
+                f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
+                "SIM order submission (design memo §P2 safety rail). No order was sent."
+            )
+        stop_ref = _oco_leg_ref(request_id, "stop")
+        tp_ref = _oco_leg_ref(request_id, "tp")
+        with _translate_saxo_errors():
+            account_key = self._resolve_account_key()
+            body = self._build_oco_exit_body(
+                uic, side, qty, stop_price, take_profit, account_key, stop_ref, tp_ref
+            )
+            self._precheck_or_raise(body, label=f"oco-exit Uic {uic} {request_id}")
+            status, payload = self._client.place_order(body, request_id=request_id)
+            return self._handle_oco_placement_response(
+                status, payload, request_id, account_key, stop_ref, tp_ref
+            )
+
+    def _build_oco_exit_body(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        stop_price: float,
+        take_profit: float,
+        account_key: str,
+        stop_ref: str,
+        tp_ref: str,
+    ) -> dict[str, Any]:
+        """Siblings-array OCO exit body: two SELL legs, no top-level order.
+
+        Both legs ``Amount == qty`` (Q3a makes owned-sized safe: a cash account
+        cannot oversell), ``OrderRelation:"Oco"``, GoodTillCancel, ``ManualOrder``
+        pinned from the execution policy. One ``Limit`` @ quantized take-profit,
+        one ``StopIfTraded`` @ quantized stop. NO ``_validate_price_relations``
+        (the wide-stop escape) — only a degenerate-ordering guard.
+        """
+        asset_type = "Stock"  # MVP scope: single-name equities only
+        details = self._client.get_instrument_details(uic, asset_type)
+        supported = details.get("SupportedOrderTypes") or []
+        stop_type = execution_policy._STOP_ORDER_TYPE
+        for required in ("Limit", stop_type):
+            if supported and required not in supported:
+                raise OrderRejectedError(
+                    f"instrument Uic {uic} does not support {required} orders "
+                    f"(SupportedOrderTypes={supported})"
+                )
+        stop_q = self._quantize_price(stop_price, details, label="stop_price")
+        tp_q = self._quantize_price(take_profit, details, label="take_profit")
+        # Degenerate-ordering guard ONLY (a long SELL OCO needs stop < tp). The
+        # wide child-distance guard is deliberately skipped — the OCO exit is the
+        # escape for a disaster stop 15-30% away (saxo-oco memo §4.4).
+        if not stop_q < tp_q:
+            raise OrderRejectedError(
+                f"degenerate OCO exit Uic {uic}: stop {stop_q} must be strictly below "
+                f"take_profit {tp_q} for a long SELL OCO pair"
+            )
+        buy_sell = "Sell" if side == "SELL" else "Buy"
+        exit_duration = {"DurationType": execution_policy._EXIT_DURATION}
+        manual_order = execution_policy._MANUAL_ORDER
+
+        def _leg(order_type: str, price: float, ref: str) -> dict[str, Any]:
+            return {
+                "Uic": int(uic),
+                "AssetType": asset_type,
+                "AccountKey": account_key,
+                "Amount": qty,
+                "BuySell": buy_sell,
+                "OrderType": order_type,
+                "OrderPrice": price,
+                "OrderDuration": dict(exit_duration),
+                "ManualOrder": manual_order,
+                "OrderRelation": "Oco",
+                "ExternalReference": ref,
+            }
+
+        limit_leg = _leg("Limit", tp_q, tp_ref)
+        stop_leg = _leg(stop_type, stop_q, stop_ref)
+        return {"AccountKey": account_key, "Orders": [limit_leg, stop_leg]}
+
+    def _handle_oco_placement_response(
+        self,
+        status: int,
+        payload: dict[str, Any],
+        request_id: str,
+        account_key: str,
+        stop_ref: str,
+        tp_ref: str,
+    ) -> PlacedOrder:
+        """Parse the siblings-array place response (no top-level OrderId).
+
+        A healthy OCO returns two per-leg OrderIds and no parent order, so the
+        bracket handler (which requires a top-level OrderId) cannot be reused.
+        200/201 with two legs -> ``PlacedOrder(entry_order_id="",
+        exit_order_ids=(stop_id, tp_id))``. Fewer than two legs on a 2xx is a
+        half-accepted OCO — cancel any stranded leg (sibling cascade cleans the
+        rest) and raise, never return a lone leg. 202 and any reject raise, so
+        the executor keeps the rung-1 stop live on the degrade path.
+        """
+        if status in (200, 201):
+            legs = [
+                child
+                for child in payload.get("Orders") or []
+                if isinstance(child, dict) and child.get("OrderId")
+            ]
+            if len(legs) < 2:
+                live_order_id = self._find_order_id(payload)
+                cleanup = (
+                    self._repair_partial_acceptance(live_order_id, account_key)
+                    if live_order_id
+                    else "no accepted leg to clean up"
+                )
+                raise BrokerError(
+                    f"Saxo OCO placement for {request_id} returned HTTP {status} with "
+                    f"fewer than two legs ({payload!r}); cleanup: {cleanup}"
+                )
+            stop_id, tp_id = self._pair_oco_legs(legs, stop_ref, tp_ref)
+            return PlacedOrder(entry_order_id="", exit_order_ids=(stop_id, tp_id))
+        if status == 202:
+            live_order_id = self._find_order_id(payload)
+            raise BrokerError(
+                f"Saxo 202 TradeNotCompleted for OCO {request_id}: leg {live_order_id} "
+                "may be LIVE while its OCO sibling was CANCELLED by Saxo (naked-exit "
+                "hazard). No automatic action taken — order state is genuinely unknown "
+                "for ~seconds. Reconcile via 'alphalens broker orders'."
+            )
+        detail = self._rejection_detail(payload)
+        live_order_id = self._find_order_id(payload)
+        if live_order_id:
+            cleanup = self._repair_partial_acceptance(live_order_id, account_key)
+            raise OrderRejectedError(
+                f"Saxo rejected OCO {request_id} with HTTP {status} "
+                f"AFTER accepting leg {live_order_id} ({detail}); cleanup: {cleanup}"
+            )
+        raise OrderRejectedError(f"Saxo rejected OCO {request_id} with HTTP {status}: {detail}")
+
+    @staticmethod
+    def _pair_oco_legs(legs: list[dict[str, Any]], stop_ref: str, tp_ref: str) -> tuple[str, str]:
+        """Order the two accepted leg ids as ``(stop_id, tp_id)``.
+
+        Prefers the per-leg ``ExternalReference`` echo (Q7 best-effort); falls
+        back to the leg ``OrderType`` (``Limit`` -> tp, otherwise -> stop) when
+        Saxo does not honor per-leg references — NOT response array order, which
+        would mislabel the pair (the request body is ``[limit_leg, stop_leg]``).
+        Either way both ids are returned.
+        """
+        stop_id: str | None = None
+        tp_id: str | None = None
+        unmatched: list[dict[str, Any]] = []
+        for leg in legs:
+            order_id = str(leg["OrderId"])
+            reference = leg.get("ExternalReference")
+            if reference == stop_ref and stop_id is None:
+                stop_id = order_id
+            elif reference == tp_ref and tp_id is None:
+                tp_id = order_id
+            else:
+                unmatched.append(leg)
+        for leg in unmatched:
+            order_id = str(leg["OrderId"])
+            if leg.get("OrderType") == "Limit":
+                if tp_id is None:
+                    tp_id = order_id
+                elif stop_id is None:
+                    stop_id = order_id
+            elif stop_id is None:  # StopIfTraded/Stop, or OrderType absent -> stop slot
+                stop_id = order_id
+            elif tp_id is None:
+                tp_id = order_id
+        return str(stop_id), str(tp_id)
 
     def get_order(self, order_id: str) -> OrderState:
         with _translate_saxo_errors():
@@ -1073,6 +1292,7 @@ class SaxoBroker:
             order_type=_opt_str(row.get("OpenOrderType")),
             amount=_opt_float(row.get("Amount")),
             external_reference=_opt_str(row.get("ExternalReference")),
+            order_relation=_opt_str(row.get("OrderRelation")),
         )
 
     def _cache_instrument(self, key: tuple[str, str], ref: InstrumentRef) -> None:
