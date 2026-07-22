@@ -141,6 +141,14 @@ class TestSaxoOcoExitProbe(unittest.TestCase):
                 anchor, 0.0, "position avg price is non-positive — cannot anchor exits"
             )
 
+            # Clear any stale working SELL on the uic from a prior aborted run —
+            # otherwise the OCO / control precheck would reject with
+            # SellOrdersAlreadyExist for the stale leg and falsely read as 'Q1 FALSE'.
+            for leg in broker.list_working_sell_orders():
+                if getattr(leg, "uic", None) == uic and leg.order_id:
+                    with contextlib.suppress(Exception):
+                        broker.cancel_order(leg.order_id)
+
             tp_price = broker._quantize_price(anchor * _TP_MULT, details, label="oco_tp")
             stop_price = broker._quantize_price(anchor * _STOP_MULT, details, label="oco_stop")
 
@@ -227,7 +235,13 @@ class TestSaxoOcoExitProbe(unittest.TestCase):
                         f"{owned} — raw uic+Amount stops are NOT reduce-only; Stage-3 "
                         "PositionId-linked reduce-only exits are REQUIRED"
                     )
-                # rejected as expected → account cannot oversell into a short
+                # rejected as expected → account cannot oversell into a short.
+                # Surface the reject code so the operator can confirm it is a
+                # quantity/short rejection, not an unrelated transient refusal.
+                print(
+                    f"[Q3a] oversell blocked — reject code={oversell_reject.error_code} "
+                    f"({oversell_reject})"
+                )
 
             run_probes(
                 self,
@@ -255,9 +269,13 @@ def _open_one_share_long(broker: Any, uic: int, account_key: str) -> tuple[float
         "ExternalReference": f"oco-probe-open-{uuid.uuid4()}",
     }
     try:
-        broker._client.place_order(body, request_id=str(uuid.uuid4()))
+        status, payload = broker._client.place_order(body, request_id=str(uuid.uuid4()))
     except Exception as exc:
         raise _classify(exc) from exc
+    # place_order returns (status, payload) and does NOT raise on 4xx — a rejected
+    # buy must surface its reason here, not be mistaken for a 20s fill-lag timeout.
+    if status >= 400:
+        raise PermanentProbeError(f"Market buy of Uic {uic} rejected (HTTP {status}): {payload}")
 
     deadline = time.monotonic() + 20.0
     while time.monotonic() < deadline:
@@ -295,7 +313,11 @@ def _flatten(broker: Any, uic: int, account_key: str, owned: float) -> None:
                 "ManualOrder": False,
                 "ExternalReference": f"oco-probe-close-{uuid.uuid4()}",
             }
-            broker._client.place_order(close, request_id=str(uuid.uuid4()))
+            status, payload = broker._client.place_order(close, request_id=str(uuid.uuid4()))
+            # place_order does NOT raise on 4xx — a rejected close must trip the
+            # manual-action path below, not silently leave a naked SIM long.
+            if status >= 400:
+                raise RuntimeError(f"Market-close rejected (HTTP {status}): {payload}")
     except Exception as exc:  # surface, do not mask the probe result
         print(
             f"\n*** OCO PROBE CLEANUP FAILED for Uic {uic} (owned~={owned}): {exc}\n"
