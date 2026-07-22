@@ -41,12 +41,6 @@ _RID = "87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d"
 _ENTRY = "5039287596"
 
 
-def _view(**over: Any) -> BrokerView:
-    base: dict[str, Any] = {"working_children": {}}
-    base.update(over)
-    return BrokerView(**base)
-
-
 class TestAdvanceDecisionTable(unittest.TestCase):
     def _verdict(self, **over: Any) -> ReconcileVerdict:
         base: dict[str, Any] = {
@@ -62,7 +56,7 @@ class TestAdvanceDecisionTable(unittest.TestCase):
         return ReconcileVerdict(**base)
 
     def test_working_is_noop(self) -> None:
-        self.assertIsInstance(advance(self._verdict(), _view()), NoOp)
+        self.assertIsInstance(advance(self._verdict()), NoOp)
 
     def test_partially_filled_alerts_never_silent(self) -> None:
         # Risk 2: a partial entry fill leaves the position with NO standalone
@@ -72,7 +66,7 @@ class TestAdvanceDecisionTable(unittest.TestCase):
             verdict="PARTIALLY_FILLED",
             details={"client_request_id": _RID, "filled_quantity": 1.0},
         )
-        action = advance(v, _view())
+        action = advance(v)
         self.assertIsInstance(action, AlertOnly)
         assert isinstance(action, AlertOnly)
         self.assertIn("KO", action.reason)
@@ -85,7 +79,7 @@ class TestAdvanceDecisionTable(unittest.TestCase):
             divergence=True,
             reason="entry still working past ttl",
         )
-        action = advance(v, _view())
+        action = advance(v)
         self.assertIsInstance(action, AlertOnly)
         assert isinstance(action, AlertOnly)
         self.assertIn("past ttl", action.reason)
@@ -94,11 +88,11 @@ class TestAdvanceDecisionTable(unittest.TestCase):
         v = self._verdict(
             status="UNRESOLVED", verdict="UNRESOLVED(audit_error)", reason="audit_error: boom"
         )
-        self.assertIsInstance(advance(v, _view()), AlertOnly)
+        self.assertIsInstance(advance(v), AlertOnly)
 
     def test_terminal_cancelled_cancels_remaining(self) -> None:
         self.assertIsInstance(
-            advance(self._verdict(status="CANCELLED", verdict="CANCELLED"), _view()),
+            advance(self._verdict(status="CANCELLED", verdict="CANCELLED")),
             CancelRemaining,
         )
 
@@ -109,7 +103,7 @@ class TestAdvanceDecisionTable(unittest.TestCase):
             note="round trip closed (FIFO pair)",
             details={"client_request_id": _RID, "filled_quantity": 2.0},
         )
-        self.assertIsInstance(advance(v, _view()), CancelRemaining)
+        self.assertIsInstance(advance(v), CancelRemaining)
 
     def test_filled_open_is_noop_protection_pass_owns_it(self) -> None:
         # A FILLED-open entry is handled entirely by the broker-state protection
@@ -121,7 +115,7 @@ class TestAdvanceDecisionTable(unittest.TestCase):
             note="position open, exit orders working",
             details={"client_request_id": _RID, "filled_quantity": 2.0},
         )
-        self.assertIsInstance(advance(v, _view()), NoOp)
+        self.assertIsInstance(advance(v), NoOp)
 
     def test_legacy_journal_protection_symbols_removed(self) -> None:
         # Straggler cleanup (saxo-oco memo §10): protection is broker-state truth,

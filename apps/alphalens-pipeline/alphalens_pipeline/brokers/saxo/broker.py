@@ -27,7 +27,7 @@ import os
 import uuid
 from collections import OrderedDict
 from collections.abc import Iterator
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from alphalens_pipeline.brokers import execution as execution_policy
 from alphalens_pipeline.brokers.contract import (
@@ -539,7 +539,9 @@ class SaxoBroker:
                 position_id="",
             )
         netted_qty = sum(p.quantity for p in matching)
-        return dataclasses.replace(matching[0], quantity=netted_qty)
+        # dataclasses.replace is typed to return the generic DataclassInstance, so
+        # narrow it back to Position for the annotated return (S5886).
+        return cast(Position, dataclasses.replace(matching[0], quantity=netted_qty))
 
     def cancel_order(self, order_id: str) -> None:
         """Cancel an order. Deliberately NOT behind the placement env gate.

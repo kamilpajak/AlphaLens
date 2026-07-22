@@ -49,7 +49,13 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-KILL_FILE_PATH = Path.home() / ".alphalens" / "broker_orders" / "KILL"
+# The runtime data root ($HOME/.alphalens) and its broker-orders subtree have ONE
+# home here so the literal is not duplicated across the kill-file + journal +
+# briefs paths below.
+_ALPHALENS_HOME = Path.home() / ".alphalens"
+_BROKER_ORDERS_DIR = _ALPHALENS_HOME / "broker_orders"
+
+KILL_FILE_PATH = _BROKER_ORDERS_DIR / "KILL"
 
 # Prometheus heartbeat gauge (Task 13 wires _default_emit_heartbeat as the
 # run_daemon default; the metric name has one home here).
@@ -128,49 +134,70 @@ def _default_emit_heartbeat() -> None:
 def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     """One control-loop tick. Placement is gated on (no KILL) AND (chain alive);
     reconcile + Action execution ALWAYS run so a KILL still cancels and a dead
-    chain still surfaces terminal state."""
+    chain still surfaces terminal state. The tick is a sequence of independent
+    phases (each with its OWN BrokerError boundary in its helper) so one phase
+    failing never starves the safety-critical protection pass."""
     report = TickReport()
     kill = deps.kill_file.exists()
     chain = deps.ensure_alive()
-    if not getattr(chain, "alive", False):
+    alive = bool(getattr(chain, "alive", False))
+    if not alive:
         deps.alert(
             f"session-keeper: chain dead — {getattr(chain, 'reason', None)}; placement halted"
         )
 
     if sweep_orphans:
-        # A BrokerError here (list_open_orders etc.) must not crash the tick — the
-        # sweep is a diagnostic read; alert and carry on to reconcile.
-        try:
-            orphans = deps.sweep_orphans_fn(deps.broker)
-        except BrokerError as exc:
-            deps.alert(f"orphan-sweep failed (broker error) — skipped this tick: {exc}")
-            report.alerts += 1
-            orphans = []
-        for orphan in orphans:
-            deps.alert(f"orphan (placed but never journaled): {orphan}")
-            report.orphans += 1
+        _run_orphan_sweep(deps, report)
 
-    if not kill and getattr(chain, "alive", False):
-        # Drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
-        # step 4). Read the journal ONCE before the drain; a pick placed earlier in
-        # THIS tick is added to already_submitted below so a duplicate armed line
-        # later in the same tick is skipped (an out-of-tick placement is caught by
-        # the next tick's fresh read).
-        already_submitted = _submitted_pick_keys(deps.read_records())
-        for pick in deps.iter_picks():
-            key = _pick_key(pick)
-            if key in already_submitted:
-                continue
-            if deps.place_pick(pick):
-                report.picks_placed += 1
-                already_submitted.add(key)
+    if not kill and alive:
+        _run_placement_drain(deps, report)
 
-    records = deps.read_records()
     # The verdict-level advance loop (terminal / round-trip CancelRemaining +
     # divergence alerts) and the broker-state protection pass are INDEPENDENT: a
     # reconcile-bridge or position-view BrokerError must not skip protection (the
-    # safety-critical path). Each is isolated so one failing never starves the
-    # other; the protection pass has its OWN build boundary below.
+    # safety-critical path). Each reads the journal fresh and owns its boundary.
+    records = deps.read_records()
+    _run_verdict_advance(deps, records, report)
+    _run_protection_pass(deps, records, kill, report)
+    return report
+
+
+def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
+    # A BrokerError here (list_open_orders etc.) must not crash the tick — the
+    # sweep is a diagnostic read; alert and carry on to reconcile.
+    try:
+        orphans = deps.sweep_orphans_fn(deps.broker)
+    except BrokerError as exc:
+        deps.alert(f"orphan-sweep failed (broker error) — skipped this tick: {exc}")
+        report.alerts += 1
+        orphans = []
+    for orphan in orphans:
+        deps.alert(f"orphan (placed but never journaled): {orphan}")
+        report.orphans += 1
+
+
+def _run_placement_drain(deps: LoopDeps, report: TickReport) -> None:
+    # Drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
+    # step 4). Read the journal ONCE before the drain; a pick placed earlier in
+    # THIS tick is added to already_submitted below so a duplicate armed line
+    # later in the same tick is skipped (an out-of-tick placement is caught by
+    # the next tick's fresh read).
+    already_submitted = _submitted_pick_keys(deps.read_records())
+    for pick in deps.iter_picks():
+        key = _pick_key(pick)
+        if key in already_submitted:
+            continue
+        if deps.place_pick(pick):
+            report.picks_placed += 1
+            already_submitted.add(key)
+
+
+def _run_verdict_advance(
+    deps: LoopDeps, records: list[Mapping[str, Any]], report: TickReport
+) -> None:
+    """The verdict-level advance loop (terminal / round-trip CancelRemaining +
+    divergence alerts). A reconcile-bridge or position-view BrokerError skips only
+    this phase; the protection pass runs regardless."""
     try:
         verdicts = deps.verdicts_fn(records, deps.broker)
     except BrokerError as exc:
@@ -178,41 +205,48 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
         report.alerts += 1
         verdicts = []
     report.verdict_count = len(verdicts)
-    if verdicts:
-        try:
-            position_view = deps.build_position_view(deps.broker, records)
-        except BrokerError as exc:
-            deps.alert(
-                f"position-view build failed (broker error) — actions skipped this tick: {exc}"
-            )
-            report.alerts += 1
-            position_view = None
-        if position_view is not None:
-            for verdict in verdicts:
-                action = advance(verdict, position_view)
-                report.actions.append((verdict.ticker, type(action).__name__))
-                # One position's broker call (a cancel of leftover exits) failing
-                # must not take down the tick — alert and skip only that verdict.
-                try:
-                    _execute_action(deps, verdict, action, position_view, report=report)
-                except BrokerError as exc:
-                    deps.alert(
-                        f"{verdict.ticker}: {type(action).__name__} failed "
-                        f"(broker error) — skipped: {exc}"
-                    )
-                    report.alerts += 1
+    if not verdicts:
+        return
+    try:
+        position_view = deps.build_position_view(deps.broker, records)
+    except BrokerError as exc:
+        deps.alert(f"position-view build failed (broker error) — actions skipped this tick: {exc}")
+        report.alerts += 1
+        return
+    for verdict in verdicts:
+        _advance_and_execute(deps, verdict, position_view, report)
 
-    # Broker-state-truth protection pass (saxo-oco memo §6): ONE snapshot, then a
-    # pure desired-vs-actual diff over live positions + live SELL legs, each
-    # action executed inside its OWN per-action BrokerError boundary so one uic's
-    # failure never aborts the tick or the other uics. This is the ONLY path that
-    # places / resizes protective stops now (advance no longer does).
+
+def _advance_and_execute(
+    deps: LoopDeps, verdict: ReconcileVerdict, position_view: BrokerView, report: TickReport
+) -> None:
+    action = advance(verdict)
+    report.actions.append((verdict.ticker, type(action).__name__))
+    # One position's broker call (a cancel of leftover exits) failing must not take
+    # down the tick — alert and skip only that verdict.
+    try:
+        _execute_action(deps, verdict, action, position_view, report=report)
+    except BrokerError as exc:
+        deps.alert(
+            f"{verdict.ticker}: {type(action).__name__} failed (broker error) — skipped: {exc}"
+        )
+        report.alerts += 1
+
+
+def _run_protection_pass(
+    deps: LoopDeps, records: list[Mapping[str, Any]], kill: bool, report: TickReport
+) -> None:
+    """Broker-state-truth protection pass (saxo-oco memo §6): ONE snapshot, then a
+    pure desired-vs-actual diff over live positions + live SELL legs, each action
+    executed inside its OWN per-action BrokerError boundary so one uic's failure
+    never aborts the tick or the other uics. This is the ONLY path that places /
+    resizes protective stops now (advance no longer does)."""
     try:
         protection_view = deps.build_protection_view(deps.broker, records)
     except BrokerError as exc:
         deps.alert(f"protection-view build failed (broker error) — protection skipped: {exc}")
         report.alerts += 1
-        return report
+        return
     for action in reconcile_protection(protection_view):
         report.actions.append(("protection", type(action).__name__))
         try:
@@ -220,7 +254,6 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
         except BrokerError as exc:
             deps.alert(f"protection {type(action).__name__} failed (broker error) — skipped: {exc}")
             report.alerts += 1
-    return report
 
 
 def _execute_action(
@@ -245,7 +278,6 @@ def _execute_action(
         for order_id in position_view.working_children.get(request_id, ()):  # ungated safe op
             deps.broker.cancel_order(order_id)
             report.cancels += 1
-        return
 
 
 def run_daemon(
@@ -268,7 +300,7 @@ def run_daemon(
         sleep_fn(poll_seconds)
 
 
-def build_default_deps(*, poll_seconds: float) -> LoopDeps:
+def build_default_deps() -> LoopDeps:
     """Wire the real Task 1-10 seams. Imported lazily so the alphalens binary's
     startup budget stays off this path (lazy-CLI doctrine); covered by the
     SAXO_LIVE_TEST=1 SIM probe, not the hermetic unit tests. The factory helpers
@@ -338,11 +370,9 @@ def build_default_deps(*, poll_seconds: float) -> LoopDeps:
 # protection pass (build_protection_view + reconcile_protection) derives it from
 # live broker state. `_fold_planned_exits` folds the `planned` lines per-uic.
 
-STANDALONE_STOP_JOURNAL_PATH = (
-    Path.home() / ".alphalens" / "broker_orders" / "standalone_stops.jsonl"
-)
+STANDALONE_STOP_JOURNAL_PATH = _BROKER_ORDERS_DIR / "standalone_stops.jsonl"
 
-_DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
+_DEFAULT_BRIEFS_DIR = _ALPHALENS_HOME / "thematic_briefs"
 _ENTRY_SIDE = "BUY"  # MVP scope: long entries only (design memo, single-name equities)
 _DISASTER_STOP_SIDE = "SELL"  # protective exit of a long entry
 
@@ -458,6 +488,32 @@ def _make_next_gen(uic: int) -> Callable[[float], int]:
     return _next_gen
 
 
+def _latest_planned_by_crid(
+    lines: Iterable[Mapping[str, Any]],
+) -> dict[str, tuple[int, Mapping[str, Any]]]:
+    """The newest well-formed ``planned`` line per entry client_request_id
+    (append-only: highest ``gen`` wins). Non-``planned``, keyless, or malformed
+    (bad uic / stop_price) lines are skipped."""
+    latest: dict[str, tuple[int, Mapping[str, Any]]] = {}
+    for line in lines:
+        if line.get("kind") != "planned":
+            continue
+        crid = line.get("client_request_id")
+        raw_uic = line.get("uic")
+        if not crid or raw_uic is None:
+            continue
+        try:
+            gen = int(line.get("gen", _INITIAL_GEN))
+            int(raw_uic)
+            float(line["stop_price"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        prev = latest.get(str(crid))
+        if prev is None or gen >= prev[0]:
+            latest[str(crid)] = (gen, line)
+    return latest
+
+
 def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, PlannedExit]:
     """Fold the append-only ``planned`` journal lines into ONE PlannedExit per
     NETTED uic (saxo-oco memo §7) — PLAN PRICES only, NEVER a protected set.
@@ -475,23 +531,7 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
         owns exactly one tier per index) -> ``conflicting`` so Task 5 refuses to
         merge. Malformed lines are skipped."""
     # Latest planned line per entry tier (append-only: highest gen wins per crid).
-    latest_by_crid: dict[str, tuple[int, Mapping[str, Any]]] = {}
-    for line in lines:
-        if line.get("kind") != "planned":
-            continue
-        crid = line.get("client_request_id")
-        raw_uic = line.get("uic")
-        if not crid or raw_uic is None:
-            continue
-        try:
-            gen = int(line.get("gen", _INITIAL_GEN))
-            int(raw_uic)
-            float(line["stop_price"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        prev = latest_by_crid.get(str(crid))
-        if prev is None or gen >= prev[0]:
-            latest_by_crid[str(crid)] = (gen, line)
+    latest_by_crid = _latest_planned_by_crid(lines)
 
     tiers_by_uic: dict[int, list[Mapping[str, Any]]] = {}
     for _gen, line in latest_by_crid.values():
@@ -560,194 +600,237 @@ def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
     one bad pick must never crash a tick."""
 
     def _place(pick: Any) -> bool:
-        import datetime as _dt
-
-        from alphalens_pipeline.brokers.automanager import safety
-        from alphalens_pipeline.brokers.automanager.placement_planner import classify
-        from alphalens_pipeline.brokers.automanager.reconcile_bridge import (
-            verdicts as reconcile_verdicts,
-        )
-        from alphalens_pipeline.brokers.contract import BrokerError
-        from alphalens_pipeline.brokers.execution import build_fx_conversion
-        from alphalens_pipeline.brokers.routing import resolve_us_instrument
-        from alphalens_pipeline.brokers.submission_log import (
-            DEFAULT_SUBMISSIONS_PATH,
-            append_submission_record,
-            build_submission_record,
-            iter_submission_records,
-        )
-        from alphalens_pipeline.paper.brief_loader import load_brief
-        from alphalens_pipeline.paper.sizing import (
-            TradeSetupNotPlannableError,
-            compute_setup_plan,
-        )
-
-        ticker = pick.ticker.upper()
-        try:
-            candidates = load_brief(pick.date, _DEFAULT_BRIEFS_DIR)
-        except (FileNotFoundError, ValueError) as exc:
-            logger.warning("place_pick %s: brief unavailable for %s: %s", ticker, pick.date, exc)
-            return False
-        candidate = next((c for c in candidates if c.ticker.upper() == ticker), None)
-        if candidate is None or candidate.trade_setup is None:
-            logger.warning(
-                "place_pick %s: no plannable trade_setup in the %s brief", ticker, pick.date
-            )
-            return False
-
-        try:
-            account = broker.get_account()
-            positions = broker.get_positions()
-            records = list(iter_submission_records(DEFAULT_SUBMISSIONS_PATH))
-            open_verdicts = reconcile_verdicts(records, broker)
-        except BrokerError as exc:
-            logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
-            return False
-
-        entry_by_request_id = {
-            str(bracket.get("client_request_id")): bracket
-            for record in records
-            for bracket in record.get("brackets") or []
-        }
-        today_iso = _dt.date.today().isoformat()
-        open_bracket_count = 0
-        gross_committed = 0.0
-        realized_r_today = 0.0
-        for verdict in open_verdicts:
-            realized_r = verdict.details.get("realized_r")
-            realized_date = (verdict.activity_time or "")[:10] or verdict.brief_date
-            if realized_r is not None and realized_date == today_iso:
-                realized_r_today += float(realized_r)
-            if verdict.status in {"WORKING", "PARTIALLY_FILLED"}:
-                open_bracket_count += 1
-                bracket = entry_by_request_id.get(
-                    str(verdict.details.get("client_request_id") or "")
-                )
-                if bracket and bracket.get("entry") is not None and bracket.get("qty") is not None:
-                    gross_committed += float(bracket["entry"]) * float(bracket["qty"])
-
-        decision = safety.check(
-            pick,
-            safety.JournalView(
-                open_bracket_count=open_bracket_count,
-                gross_committed=gross_committed,
-                realized_r_today=realized_r_today,
-            ),
-            safety.BrokerView(open_position_count=len(positions), equity=account.total_value),
-            _AlreadyGatedSessionState(),
-        )
-        if isinstance(decision, safety.Refuse):
-            logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
-            return False
-
-        try:
-            instrument = resolve_us_instrument(broker, ticker)
-            if not instrument.currency:
-                logger.warning("place_pick %s: resolved with no instrument currency", ticker)
-                return False
-            fx = None
-            if instrument.currency != account.currency:
-                get_fx_rate = getattr(broker, "get_fx_rate", None)
-                if get_fx_rate is None:
-                    logger.warning(
-                        "place_pick %s: %s vs account %s but broker has no get_fx_rate",
-                        ticker,
-                        instrument.currency,
-                        account.currency,
-                    )
-                    return False
-                fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
-            plan = compute_setup_plan(
-                brief_trade_setup=candidate.trade_setup,
-                paper_equity=account.total_value,
-                scale_factor=1.0,
-                fx=fx,
-            )
-        except (BrokerError, TradeSetupNotPlannableError) as exc:
-            logger.warning("place_pick %s: resolve/size failed: %s", ticker, exc)
-            return False
-
-        placement = classify(plan, instrument, side=_ENTRY_SIDE)
-        if not placement.tiers:
-            logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
-            return False
-
-        def _journal_tier(tier: Any, placed: Any) -> None:
-            # Journal each tier IMMEDIATELY after its place_bracket_order — NOT
-            # batched after the whole loop (HIGH-2). A crash mid-loop then leaves
-            # the pick already joined to submissions.jsonl (at most a partial
-            # ladder), so the pick-drain does not re-place the full set on restart.
-            bracket = tier.bracket
-            append_submission_record(
-                build_submission_record(
-                    brief_date=pick.date.isoformat(),
-                    ticker=ticker,
-                    mic=instrument.exchange_mic,
-                    uic=instrument.broker_instrument_id,
-                    brackets=[
-                        {
-                            "client_request_id": bracket.client_request_id,
-                            "entry_order_id": placed.entry_order_id,
-                            "exit_order_ids": list(placed.exit_order_ids),
-                            "qty": bracket.quantity,
-                            "entry": bracket.entry_limit,
-                            "stop": bracket.stop_loss,
-                            "tp": bracket.take_profit,
-                            "ttl": bracket.entry_ttl_days,
-                        }
-                    ],
-                    note=None,
-                    sizing_currency=account.currency,
-                    instrument_currency=instrument.currency,
-                    sizing_equity=account.total_value,
-                    fx=fx,
-                )
-            )
-            _append_standalone_stop_journal(
-                _build_planned_line(
-                    entry_crid=bracket.client_request_id,
-                    uic=int(instrument.broker_instrument_id),
-                    side=_DISASTER_STOP_SIDE,
-                    stop_price=placement.disaster_stop_price,
-                    take_profit=tier.tp,
-                    tier_index=tier.tier_index,
-                )
-            )
-
-        placed_count = 0
-        failure_note: str | None = None
-        try:
-            for tier in placement.tiers:
-                bracket = tier.bracket
-                placed = broker.place_bracket_order(bracket)
-                _journal_tier(tier, placed)
-                placed_count += 1
-        except BrokerError as exc:
-            failure_note = (
-                f"placement stopped after {placed_count}/{len(placement.tiers)} bracket(s): {exc}"
-            )
-            # Journal a note-only record so the failure is traced (and, when
-            # nothing placed, the pick is not silently retried forever).
-            append_submission_record(
-                build_submission_record(
-                    brief_date=pick.date.isoformat(),
-                    ticker=ticker,
-                    mic=instrument.exchange_mic,
-                    uic=instrument.broker_instrument_id,
-                    brackets=[],
-                    note=failure_note,
-                    sizing_currency=account.currency,
-                    instrument_currency=instrument.currency,
-                    sizing_equity=account.total_value,
-                    fx=fx,
-                )
-            )
-
-        if failure_note:
-            logger.warning("place_pick %s: %s", ticker, failure_note)
-        return placed_count > 0
+        return _place_pick(broker, pick)
 
     return _place
+
+
+def _index_entries_by_request_id(
+    records: Iterable[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    """Map each journaled bracket's client_request_id -> the bracket dict."""
+    return {
+        str(bracket.get("client_request_id")): bracket
+        for record in records
+        for bracket in record.get("brackets") or []
+    }
+
+
+def _summarize_open_verdicts(
+    open_verdicts: Iterable[Any], records: Iterable[Mapping[str, Any]], today_iso: str
+) -> tuple[int, float, float]:
+    """Fold open verdicts into the safety.JournalView inputs
+    ``(open_bracket_count, gross_committed, realized_r_today)``. ``gross_committed``
+    joins each still-working verdict back to its journaled entry bracket for the
+    committed-capital figure; ``realized_r_today`` sums today's closed R."""
+    entry_by_request_id = _index_entries_by_request_id(records)
+    open_bracket_count = 0
+    gross_committed = 0.0
+    realized_r_today = 0.0
+    for verdict in open_verdicts:
+        realized_r = verdict.details.get("realized_r")
+        realized_date = (verdict.activity_time or "")[:10] or verdict.brief_date
+        if realized_r is not None and realized_date == today_iso:
+            realized_r_today += float(realized_r)
+        if verdict.status in {"WORKING", "PARTIALLY_FILLED"}:
+            open_bracket_count += 1
+            bracket = entry_by_request_id.get(str(verdict.details.get("client_request_id") or ""))
+            if bracket and bracket.get("entry") is not None and bracket.get("qty") is not None:
+                gross_committed += float(bracket["entry"]) * float(bracket["qty"])
+    return open_bracket_count, gross_committed, realized_r_today
+
+
+def _resolve_and_size(
+    broker: Broker, ticker: str, account: Any, trade_setup: Any
+) -> tuple[Any, Any, Any] | None:
+    """Resolve the US instrument, build any needed FX conversion, and size the
+    setup plan. Returns ``(instrument, fx, plan)`` or ``None`` on any resolve/size
+    failure (logged) — one bad pick must never crash a tick."""
+    from alphalens_pipeline.brokers.contract import BrokerError
+    from alphalens_pipeline.brokers.execution import build_fx_conversion
+    from alphalens_pipeline.brokers.routing import resolve_us_instrument
+    from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, compute_setup_plan
+
+    try:
+        instrument = resolve_us_instrument(broker, ticker)
+        if not instrument.currency:
+            logger.warning("place_pick %s: resolved with no instrument currency", ticker)
+            return None
+        fx = None
+        if instrument.currency != account.currency:
+            get_fx_rate = getattr(broker, "get_fx_rate", None)
+            if get_fx_rate is None:
+                logger.warning(
+                    "place_pick %s: %s vs account %s but broker has no get_fx_rate",
+                    ticker,
+                    instrument.currency,
+                    account.currency,
+                )
+                return None
+            fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
+        plan = compute_setup_plan(
+            brief_trade_setup=trade_setup,
+            paper_equity=account.total_value,
+            scale_factor=1.0,
+            fx=fx,
+        )
+    except (BrokerError, TradeSetupNotPlannableError) as exc:
+        logger.warning("place_pick %s: resolve/size failed: %s", ticker, exc)
+        return None
+    return instrument, fx, plan
+
+
+def _place_tiers(
+    broker: Broker, pick: Any, ticker: str, instrument: Any, account: Any, fx: Any, placement: Any
+) -> int:
+    """Place each entry tier's bracket, journaling IMMEDIATELY after each fill so a
+    mid-loop crash leaves at most a partial ladder joined to submissions.jsonl (the
+    drain then never re-places the full set on restart). Returns the count actually
+    placed; a BrokerError stops the loop and writes a note-only trace record so the
+    failure is auditable and an all-fail pick is not retried forever."""
+    from alphalens_pipeline.brokers.contract import BrokerError
+    from alphalens_pipeline.brokers.submission_log import (
+        append_submission_record,
+        build_submission_record,
+    )
+
+    def _journal_tier(tier: Any, placed: Any) -> None:
+        bracket = tier.bracket
+        append_submission_record(
+            build_submission_record(
+                brief_date=pick.date.isoformat(),
+                ticker=ticker,
+                mic=instrument.exchange_mic,
+                uic=instrument.broker_instrument_id,
+                brackets=[
+                    {
+                        "client_request_id": bracket.client_request_id,
+                        "entry_order_id": placed.entry_order_id,
+                        "exit_order_ids": list(placed.exit_order_ids),
+                        "qty": bracket.quantity,
+                        "entry": bracket.entry_limit,
+                        "stop": bracket.stop_loss,
+                        "tp": bracket.take_profit,
+                        "ttl": bracket.entry_ttl_days,
+                    }
+                ],
+                note=None,
+                sizing_currency=account.currency,
+                instrument_currency=instrument.currency,
+                sizing_equity=account.total_value,
+                fx=fx,
+            )
+        )
+        _append_standalone_stop_journal(
+            _build_planned_line(
+                entry_crid=bracket.client_request_id,
+                uic=int(instrument.broker_instrument_id),
+                side=_DISASTER_STOP_SIDE,
+                stop_price=placement.disaster_stop_price,
+                take_profit=tier.tp,
+                tier_index=tier.tier_index,
+            )
+        )
+
+    placed_count = 0
+    failure_note: str | None = None
+    try:
+        for tier in placement.tiers:
+            placed = broker.place_bracket_order(tier.bracket)
+            _journal_tier(tier, placed)
+            placed_count += 1
+    except BrokerError as exc:
+        failure_note = (
+            f"placement stopped after {placed_count}/{len(placement.tiers)} bracket(s): {exc}"
+        )
+        # Journal a note-only record so the failure is traced (and, when nothing
+        # placed, the pick is not silently retried forever).
+        append_submission_record(
+            build_submission_record(
+                brief_date=pick.date.isoformat(),
+                ticker=ticker,
+                mic=instrument.exchange_mic,
+                uic=instrument.broker_instrument_id,
+                brackets=[],
+                note=failure_note,
+                sizing_currency=account.currency,
+                instrument_currency=instrument.currency,
+                sizing_equity=account.total_value,
+                fx=fx,
+            )
+        )
+
+    if failure_note:
+        logger.warning("place_pick %s: %s", ticker, failure_note)
+    return placed_count
+
+
+def _place_pick(broker: Broker, pick: Any) -> bool:
+    """Place one armed pick end-to-end (see _make_place_pick). Module-level so the
+    per-phase helpers keep the tick logic flat; every failure path logs and returns
+    False rather than raising."""
+    import datetime as _dt
+
+    from alphalens_pipeline.brokers.automanager import safety
+    from alphalens_pipeline.brokers.automanager.placement_planner import classify
+    from alphalens_pipeline.brokers.automanager.reconcile_bridge import (
+        verdicts as reconcile_verdicts,
+    )
+    from alphalens_pipeline.brokers.contract import BrokerError
+    from alphalens_pipeline.brokers.submission_log import (
+        DEFAULT_SUBMISSIONS_PATH,
+        iter_submission_records,
+    )
+    from alphalens_pipeline.paper.brief_loader import load_brief
+
+    ticker = pick.ticker.upper()
+    try:
+        candidates = load_brief(pick.date, _DEFAULT_BRIEFS_DIR)
+    except (FileNotFoundError, ValueError) as exc:
+        logger.warning("place_pick %s: brief unavailable for %s: %s", ticker, pick.date, exc)
+        return False
+    candidate = next((c for c in candidates if c.ticker.upper() == ticker), None)
+    if candidate is None or candidate.trade_setup is None:
+        logger.warning("place_pick %s: no plannable trade_setup in the %s brief", ticker, pick.date)
+        return False
+
+    try:
+        account = broker.get_account()
+        positions = broker.get_positions()
+        records = list(iter_submission_records(DEFAULT_SUBMISSIONS_PATH))
+        open_verdicts = reconcile_verdicts(records, broker)
+    except BrokerError as exc:
+        logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
+        return False
+
+    open_bracket_count, gross_committed, realized_r_today = _summarize_open_verdicts(
+        open_verdicts, records, _dt.date.today().isoformat()
+    )
+    decision = safety.check(
+        pick,
+        safety.JournalView(
+            open_bracket_count=open_bracket_count,
+            gross_committed=gross_committed,
+            realized_r_today=realized_r_today,
+        ),
+        safety.BrokerView(open_position_count=len(positions), equity=account.total_value),
+        _AlreadyGatedSessionState(),
+    )
+    if isinstance(decision, safety.Refuse):
+        logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
+        return False
+
+    resolved = _resolve_and_size(broker, ticker, account, candidate.trade_setup)
+    if resolved is None:
+        return False
+    instrument, fx, plan = resolved
+
+    placement = classify(plan, instrument, side=_ENTRY_SIDE)
+    if not placement.tiers:
+        logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
+        return False
+
+    return _place_tiers(broker, pick, ticker, instrument, account, fx, placement) > 0
 
 
 def _make_position_view_builder(
@@ -934,6 +1017,28 @@ def _idempotent_cancel(broker: Broker, order_id: str) -> None:
         raise
 
 
+def _execute_cancel_sell_legs(
+    broker: Broker, throttle: _AlertThrottle, action: CancelSellLegs, report: TickReport
+) -> None:
+    """Idempotently cancel a ``CancelSellLegs`` action's order ids (orphan sweep /
+    over-hedge repair). A genuine transient failure on ONE leg must not strand the
+    rest uncancelled — isolate it, alert, and continue the loop; a summary alert
+    fires at the end."""
+    for order_id in action.order_ids:
+        try:
+            _idempotent_cancel(broker, order_id)
+            report.cancels += 1
+        except BrokerError as exc:
+            if throttle.emit(
+                f"uic {action.uic}: failed to cancel {order_id}: {exc}",
+                uic=action.uic,
+                reason=f"cancel-fail:{action.uic}",
+            ):
+                report.alerts += 1
+    if throttle.emit(action.reason, uic=action.uic, reason=f"cancel:{action.uic}"):
+        report.alerts += 1
+
+
 def _make_protection_executor(
     broker: Broker, throttle: _AlertThrottle
 ) -> Callable[[Action, bool, TickReport], None]:
@@ -960,30 +1065,16 @@ def _make_protection_executor(
                 report.alerts += 1
             return
         if isinstance(action, CancelSellLegs):
-            for order_id in action.order_ids:
-                try:
-                    _idempotent_cancel(broker, order_id)
-                    report.cancels += 1
-                except BrokerError as exc:
-                    # A genuine transient failure on ONE leg must not strand the
-                    # rest uncancelled — isolate it, alert, and continue the loop.
-                    if throttle.emit(
-                        f"uic {action.uic}: failed to cancel {order_id}: {exc}",
-                        uic=action.uic,
-                        reason=f"cancel-fail:{action.uic}",
-                    ):
-                        report.alerts += 1
-            if throttle.emit(action.reason, uic=action.uic, reason=f"cancel:{action.uic}"):
-                report.alerts += 1
+            _execute_cancel_sell_legs(broker, throttle, action, report)
             return
         if isinstance(action, PlaceStop):
             _execute_place_stop(broker, throttle, action, report)
             return
-        if isinstance(action, UpgradeToOco):
-            # Stage 2 rung only; never emitted while _oco_enabled() is False.
-            if not _oco_enabled():
-                return
-            return  # pragma: no cover — Stage 2 wiring lands with place_oco_exit
+        if isinstance(action, UpgradeToOco) and not _oco_enabled():
+            # Stage 2 rung only; skipped whenever _oco_enabled() is False (it is,
+            # in Stage 1) so the rung-2 arm stays dark. The Stage 2 place_oco_exit
+            # wiring replaces this guard.
+            return
 
     return _execute
 

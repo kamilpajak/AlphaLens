@@ -526,6 +526,45 @@ def _reconcile_resolved(
     )
 
 
+def _reconcile_closed_pair(
+    closed_match: Mapping[str, Any],
+    bracket: Mapping[str, Any],
+    *,
+    brief: tuple[str, str, float, str],
+    details: dict[str, Any],
+    activity_time: str | None,
+) -> ReconcileVerdict:
+    """The FILLED verdict for a closed FIFO round-trip pair — realized R plus the
+    optional P/L and effective settlement rate folded into ``details``."""
+    brief_date, ticker, qty, entry_order_id = brief
+    realized_r = compute_realized_r(
+        closed_match.get("ClosingPrice"), bracket.get("entry"), bracket.get("stop")
+    )
+    details["realized_r"] = realized_r
+    if closed_match.get("ProfitLossOnTrade") is not None:
+        details["profit_loss_on_trade"] = closed_match.get("ProfitLossOnTrade")
+    effective_rate = _effective_settlement_rate(closed_match)
+    if effective_rate is not None:
+        # The ONLY empirical FX-slippage signal: ClosedPosition does NOT expose the
+        # settlement rate (the ConversionRateInstrumentToBaseSettled* fields are
+        # BOOLEANS — never read them as numbers), so the effective conversion is
+        # reconstructed as ProfitLossOnTrade / ProfitLossOnTradeInBaseCurrency and
+        # recorded next to the journaled sizing_fx_rate for the cross-check.
+        details["effective_settlement_rate"] = effective_rate
+    label = f"FILLED(closed r={realized_r:+.2f})" if realized_r is not None else "FILLED(closed)"
+    return ReconcileVerdict(
+        brief_date=brief_date,
+        ticker=ticker,
+        qty=qty,
+        entry_order_id=entry_order_id,
+        status=OrderStatus.FILLED.value,
+        verdict=label,
+        activity_time=activity_time,
+        note="round trip closed (FIFO pair)",
+        details=details,
+    )
+
+
 def _reconcile_filled(
     bracket: Mapping[str, Any],
     state: OrderState,
@@ -565,34 +604,12 @@ def _reconcile_filled(
         None,
     )
     if closed_match is not None:
-        realized_r = compute_realized_r(
-            closed_match.get("ClosingPrice"), bracket.get("entry"), bracket.get("stop")
-        )
-        details["realized_r"] = realized_r
-        if closed_match.get("ProfitLossOnTrade") is not None:
-            details["profit_loss_on_trade"] = closed_match.get("ProfitLossOnTrade")
-        effective_rate = _effective_settlement_rate(closed_match)
-        if effective_rate is not None:
-            # The ONLY empirical FX-slippage signal: ClosedPosition does NOT
-            # expose the settlement rate (the ConversionRateInstrumentToBase-
-            # Settled* fields are BOOLEANS — never read them as numbers), so
-            # the effective conversion is reconstructed as
-            # ProfitLossOnTrade / ProfitLossOnTradeInBaseCurrency and recorded
-            # next to the journaled sizing_fx_rate for the cross-check.
-            details["effective_settlement_rate"] = effective_rate
-        label = (
-            f"FILLED(closed r={realized_r:+.2f})" if realized_r is not None else "FILLED(closed)"
-        )
-        return ReconcileVerdict(
-            brief_date=brief_date,
-            ticker=ticker,
-            qty=qty,
-            entry_order_id=entry_order_id,
-            status=OrderStatus.FILLED.value,
-            verdict=label,
-            activity_time=activity_time,
-            note="round trip closed (FIFO pair)",
+        return _reconcile_closed_pair(
+            closed_match,
+            bracket,
+            brief=brief,
             details=details,
+            activity_time=activity_time,
         )
     if request_id and request_id in cross_check.open_references:
         return ReconcileVerdict(
