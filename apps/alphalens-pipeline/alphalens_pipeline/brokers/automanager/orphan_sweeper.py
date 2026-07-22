@@ -30,20 +30,28 @@ class Orphan:
     kind: OrphanKind
 
 
+def _index_bracket(
+    bracket: Mapping[str, Any], known_order_ids: set[str], known_refs: set[str]
+) -> None:
+    """Fold one bracket's entry + exit order ids and its client_request_id into the
+    running known-id sets (mutates them in place)."""
+    entry_id = bracket.get("entry_order_id")
+    if entry_id:
+        known_order_ids.add(str(entry_id))
+    for exit_id in bracket.get("exit_order_ids") or []:
+        if exit_id:
+            known_order_ids.add(str(exit_id))
+    request_id = bracket.get("client_request_id")
+    if request_id:
+        known_refs.add(str(request_id))
+
+
 def _journal_index(journal: Iterable[Mapping[str, Any]]) -> tuple[set[str], set[str]]:
     known_order_ids: set[str] = set()
     known_refs: set[str] = set()
     for record in journal:
         for bracket in record.get("brackets") or []:
-            entry_id = bracket.get("entry_order_id")
-            if entry_id:
-                known_order_ids.add(str(entry_id))
-            for exit_id in bracket.get("exit_order_ids") or []:
-                if exit_id:
-                    known_order_ids.add(str(exit_id))
-            request_id = bracket.get("client_request_id")
-            if request_id:
-                known_refs.add(str(request_id))
+            _index_bracket(bracket, known_order_ids, known_refs)
     return known_order_ids, known_refs
 
 

@@ -939,7 +939,7 @@ def manage_command(
     from alphalens_pipeline.brokers.contract import BrokerError
 
     try:
-        deps = build_default_deps(poll_seconds=poll_seconds)
+        deps = build_default_deps()
         run_daemon(deps, once=once, poll_seconds=poll_seconds)
     except BrokerError as exc:
         raise _fail(f"broker manage failed: {exc}") from exc

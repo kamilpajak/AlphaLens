@@ -389,7 +389,7 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     ]
 
 
-def advance(verdict: ReconcileVerdict, broker_view: BrokerView) -> Action:
+def advance(verdict: ReconcileVerdict) -> Action:
     """One verdict -> the single terminal/alert Action (pure; no side effects).
 
     Stop PLACEMENT is no longer decided here: the broker-state protection pass
