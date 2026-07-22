@@ -159,8 +159,10 @@ class UpgradeToOco:
 
 @dataclass(frozen=True)
 class CancelSellLegs:
-    """Cancel the named SELL legs on a uic (orphan sweep, or the over-committed
-    group in an over-hedge repair). Idempotent + cascade-safe at the executor."""
+    """Cancel the named SELL legs on a uic (orphan sweep, or the NON-stop legs of
+    an over-committed group in an over-hedge repair — the stop legs of that group
+    leave only via ``PlaceStop.supersede_ids`` after a successful place, never an
+    unconditional cancel). Idempotent + cascade-safe at the executor."""
 
     uic: int
     order_ids: tuple[str, ...]
@@ -312,11 +314,19 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
 
     # (A) OVER-HEDGE: an exit leg partially filled (netted owned shrank) or the
     #     position shrank -> total sell > owned. Place a residual-sized stop FIRST
-    #     (never a naked repair window), then cancel the over-committed group.
+    #     (never a naked repair window). The old STOP legs leave EXCLUSIVELY via
+    #     PlaceStop.supersede_ids — i.e. ONLY after the residual place succeeds — so
+    #     a deferred place (Saxo SellOrdersAlreadyExist) leaves the old over-sized
+    #     stop resting = over-covered, NEVER naked (the Bug-A cardinal sin). The
+    #     separate, unconditional CancelSellLegs names ONLY the NON-stop legs
+    #     (TP / Market noise); when there are none (Stage-1 stop-only) it is not
+    #     emitted at all. Stops must never sit in an unconditional cancel.
     if total > owned + _QTY_EPS:
         bad = _group_with_partial_fill(legs) or _newest_group(legs)
         gen = plan.next_gen(owned)
-        return [
+        stop_ids = set(bad.stop_leg_ids)
+        non_stop_ids = tuple(oid for oid in bad.order_ids if oid not in stop_ids)
+        actions: list[Action] = [
             PlaceStop(
                 uic,
                 _SIDE,
@@ -324,9 +334,13 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
                 plan.stop_price,
                 _exit_stop_ref(plan.entry_crid, gen),
                 supersede_ids=bad.stop_leg_ids,  # keep old stop until the residual is confirmed
-            ),
-            CancelSellLegs(uic, bad.order_ids, reason="over-hedge repair (post-place)"),
+            )
         ]
+        if non_stop_ids:
+            actions.append(
+                CancelSellLegs(uic, non_stop_ids, reason="over-hedge repair — non-stop legs")
+            )
+        return actions
 
     # (B) DOWNSIDE DEFICIT: naked, grew past the covering stop, a lone-TP Bug-B
     #     shape, or a stale/partial stop. A lone TP is always cancelled BEFORE the

@@ -440,12 +440,63 @@ class TestReconcileDecisionTable(unittest.TestCase):
         )
         self.assertEqual(len(actions), 2)
         self.assertIsInstance(actions[0], PlaceStop)  # residual FIRST
-        self.assertIsInstance(actions[1], CancelSellLegs)  # cancel the over-committed group AFTER
+        self.assertIsInstance(actions[1], CancelSellLegs)  # cancel only the non-stop legs
         assert isinstance(actions[0], PlaceStop)
         assert isinstance(actions[1], CancelSellLegs)
         self.assertEqual(actions[0].qty, 20.0)  # residual == netted owned
-        self.assertIn("stop-1", actions[0].supersede_ids)
-        self.assertEqual(set(actions[1].order_ids), {"stop-1", "tp-1"})
+        # The STOP leg leaves ONLY via supersede-after-a-successful-place (never a
+        # naked window). The unconditional CancelSellLegs names the NON-stop leg only.
+        self.assertEqual(actions[0].supersede_ids, ("stop-1",))
+        self.assertEqual(set(actions[1].order_ids), {"tp-1"})
+
+    def test_over_hedge_stop_only_places_residual_no_cancel(self) -> None:
+        # Stage-1 STOP-ONLY over-hedge (no TP, no noise): the position shrank so a
+        # lone resting stop over-covers (stop 46 > owned 20). The arm must place a
+        # residual-sized stop and supersede the old stop ONLY — emitting NO
+        # unconditional CancelSellLegs. If the place DEFERS (SellOrdersAlreadyExist)
+        # the executor skips supersede, the old over-sized stop keeps resting, and
+        # the position stays OVER-covered, never naked (the Bug-A cardinal sin).
+        pos = _pos(20.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)
+        actions = reconcile_long(
+            _UIC,
+            pos,
+            _pview(
+                long_positions={_UIC: pos},
+                sell_legs_by_uic={_UIC: (stop,)},
+                planned_by_uic={_UIC: _plan()},
+            ),
+        )
+        self.assertEqual(len(actions), 1)  # PlaceStop only — NO CancelSellLegs
+        action = actions[0]
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 20.0)  # residual == netted owned
+        self.assertEqual(action.supersede_ids, ("stop-1",))  # old stop cancelled AFTER place
+
+    def test_over_hedge_multi_stop_supersedes_every_stop(self) -> None:
+        # Two resting stops (additive-on-growth placed a 2nd delta stop) then the
+        # position shrank -> arm A over-hedge with TWO stop legs (4 + 3 = 7 > owned
+        # 5). EVERY stop must be in supersede_ids — a partial supersede would leave
+        # an old over-covering stop resting (intended final sell > owned). Fences
+        # the `supersede_ids=bad.stop_leg_ids[:1]` regression.
+        pos = _pos(5.0)
+        stop_a = _leg("stop-a", "StopIfTraded", 4.0)
+        stop_b = _leg("stop-b", "StopIfTraded", 3.0)
+        actions = reconcile_long(
+            _UIC,
+            pos,
+            _pview(
+                long_positions={_UIC: pos},
+                sell_legs_by_uic={_UIC: (stop_a, stop_b)},
+                planned_by_uic={_UIC: _plan()},
+            ),
+        )
+        self.assertEqual(len(actions), 1)  # PlaceStop only — both legs are stops, nothing to cancel
+        action = actions[0]
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 5.0)  # residual == netted owned
+        self.assertEqual(set(action.supersede_ids), {"stop-a", "stop-b"})  # ALL stops superseded
+        self.assertEqual([a for a in actions if isinstance(a, CancelSellLegs)], [])
 
     def test_sizes_to_netted_owned_not_planned(self) -> None:
         # PlannedExit carries NO qty; the stop is sized to pos.quantity (netted),
