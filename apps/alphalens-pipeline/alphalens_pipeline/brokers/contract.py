@@ -250,6 +250,47 @@ class SupportsStandaloneStop(Protocol):
     ) -> PlacedOrder: ...
 
 
+@runtime_checkable
+class SupportsOcoExit(Protocol):
+    """Extension capability: a standalone OCO EXIT pair on an existing position.
+
+    The rung-2 upgrade (saxo-oco memo §4.4, Stage 2). Both legs SELL (for a
+    long), same uic, ``Amount == qty``, so the mutually-exclusive OCO group
+    commits ``qty`` to the sell side ONCE — Saxo counts an OCO pair as a single
+    commitment (SIM-probed Q1, PR #885), the same reason a bare
+    ``uic + Amount`` double-sell is rejected. No entry parent: the pair is a
+    standalone {near ``Limit`` take-profit, far ``StopIfTraded`` disaster}
+    posted AFTER the entry fills, so the wide stop escapes the bracket
+    ``TooFarFromEntryOrder`` guard while staying OCO-linked.
+
+    Off the frozen base :class:`Broker` Protocol (capability-protocol pattern,
+    like :class:`SupportsStandaloneStop`): a caller ``isinstance``-narrows a
+    ``Broker`` to this Protocol rather than widening the base contract. A broker
+    without it (or with the OCO env flag off) runs stop-only, unchanged.
+
+    ``request_id`` is a DETERMINISTIC generation-stamped base ref (the
+    auto-manager derives it from the entry client_request_id + resize
+    generation): it is the POST x-request-id (so a crash-window re-POST of the
+    same size hits Saxo's 15 s dedup instead of resting a second OCO) and the
+    two per-leg ``ExternalReference`` values are derived from it
+    (``<request_id>-stop`` / ``<request_id>-tp``) for broker-state correlation.
+    ``PlacedOrder.exit_order_ids`` is ``(stop_id, tp_id)``; ``entry_order_id``
+    is ``""`` (an OCO exit pair has no entry). ``position_id`` is plumbed but
+    unused in Stage 2 (reduce-only linkage is Stage 3, Q3).
+    """
+
+    def place_oco_exit(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        stop_price: float,
+        take_profit: float,
+        request_id: str,
+        position_id: str | None = None,
+    ) -> PlacedOrder: ...
+
+
 __all__ = [
     "AccountSnapshot",
     "BracketOrderRequest",
@@ -265,5 +306,6 @@ __all__ = [
     "OrderStatus",
     "PlacedOrder",
     "Position",
+    "SupportsOcoExit",
     "SupportsStandaloneStop",
 ]
