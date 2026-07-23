@@ -127,6 +127,25 @@ class _RecordingSession:
             }
         )
 
+    def patch(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        timeout: float | None = None,
+    ) -> _FakeResponse:
+        return self._next(
+            {
+                "method": "patch",
+                "url": url,
+                "headers": dict(headers or {}),
+                "params": params,
+                "json": json,
+                "timeout": timeout,
+            }
+        )
+
 
 class _StubTokenProvider:
     """Static token by default; a queue of tokens simulates a refresh."""
@@ -575,6 +594,58 @@ class TestWriteTransportDelete(unittest.TestCase):
 
         throttle_sleeps = [s for s in sleeps if 0 < s <= 0.5]
         self.assertEqual(len(throttle_sleeps), 1, "second immediate DELETE must throttle")
+
+
+class TestWriteTransportPatch(unittest.TestCase):
+    """PATCH shares the POST-safe never-blind-retry lane (idempotent=False):
+    a body is attached like POST, but an ambiguous 5xx raises immediately
+    carrying the x-request-id rather than blind-hammering the resize."""
+
+    _PATCH_BODY = {"OrderId": "O-1", "Uic": 307, "AssetType": "Stock", "Amount": 7}
+
+    def test_send_write_allows_patch_verb(self):
+        # The allow-list guard must accept PATCH and dispatch session.patch.
+        session = _RecordingSession([_FakeResponse(200, payload={"OrderId": "O-1"})])
+        client, _, _ = _make_client(session)
+
+        status, body = client.amend_order(self._PATCH_BODY, request_id="rid-patch")
+
+        (call,) = session.calls
+        self.assertEqual(call["method"], "patch")
+        self.assertEqual(call["url"], f"{SIM_BASE_URL}/trade/v2/orders")
+        self.assertEqual((status, body), (200, {"OrderId": "O-1"}))
+
+    def test_patch_attaches_json_body(self):
+        # A bodiless PATCH 400s at Saxo — the body MUST be attached (like POST).
+        session = _RecordingSession([_FakeResponse(200, payload={"OrderId": "O-1"})])
+        client, _, _ = _make_client(session)
+
+        client.amend_order(self._PATCH_BODY, request_id="rid-patch-body")
+
+        (call,) = session.calls
+        self.assertEqual(call["json"], self._PATCH_BODY)
+        self.assertEqual(call["headers"]["x-request-id"], "rid-patch-body")
+
+    def test_patch_not_idempotent_never_blind_retries_5xx(self):
+        # A 5xx after a PATCH is ambiguous (the resize may have landed), so it
+        # raises immediately carrying the x-request-id — NOT the DELETE ladder.
+        session = _RecordingSession([_FakeResponse(500, text="server error")])
+        client, _, _ = _make_client(session)
+
+        with self.assertRaises(SaxoError) as ctx:
+            client.amend_order(self._PATCH_BODY, request_id="rid-patch-5xx")
+
+        self.assertEqual(len(session.calls), 1, "an ambiguous PATCH 5xx must NOT be retried")
+        self.assertIn("rid-patch-5xx", str(ctx.exception))
+        self.assertNotIsInstance(ctx.exception, SaxoRateLimitError)
+
+    def test_amend_order_returns_status_and_json(self):
+        session = _RecordingSession([_FakeResponse(200, payload={"OrderId": "O-1"})])
+        client, _, _ = _make_client(session)
+
+        status, body = client.amend_order(self._PATCH_BODY, request_id="rid-amend")
+
+        self.assertEqual((status, body), (200, {"OrderId": "O-1"}))
 
 
 class TestOrderReadWrappers(unittest.TestCase):
