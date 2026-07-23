@@ -14,14 +14,21 @@ hosts where launchd is unavailable.
 | `alphalens-feedback-shadow-returns.{service,timer}` | daily 06:30 UTC | host-venv `alphalens feedback backfill-shadow-returns` — runs the broker-free population monitor over its own ~42-session window (price-path replay over Polygon minute bars) and the benchmark-excess + size-field enrichment tail. `Persistent=true` catch-up; idempotent re-stamp. Needs `POLYGON_API_KEY`. NOT trading-day-gated (the per-date maturity guard handles non-trading dates). The unit + command name are retained for the existing timer; the per-decision ladder replay (Track A click ledger) was removed (#465), so the command now drives only the population monitor — a rename is a deferred follow-up. |
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) — the one-time historical seed (DONE 2026-05-08) |
 | `alphalens-form4-incremental.{service,timer}` | daily 02:30 UTC | Form-4 daily incremental ingest — keeps `~/.alphalens/form4_parquet/` fresh after the seed froze. Self-sizing lookback (min 3 days, auto-extends to the store's newest filing, capped at `--max-catchup-days`) via the SEC daily form index; overlap dedups on `accession_number`. Needs `SEC_EDGAR_USER_AGENT`. **First run auto-catches-up the seed→today gap — no manual step** (see section below). |
+| `alphalens-grouped-daily-topup.{service,timer}` | daily 01:30 UTC | Appends the latest missing session(s) to the split-adjusted (`adjusted=true`) whole-market grouped-daily store that feeds the O'Neil **R** (relative-strength) term at the thematic `score` stage. Self-sizing catch-up; the free-tier entitlement cliff (`NOT_AUTHORIZED` past ~21–24 mo) stops cleanly. Distinct from the population-monitor's `adjusted=false` cache. Needs `POLYGON_API_KEY`. |
+| `alphalens-broker-manager.service` | long-running daemon (poll 45 s) | SIM Saxo auto-manager (ADR 0014) — drains armed picks → places brackets + standalone disaster stops → reconciles live broker state → manages ladder exits / protective stops to terminal. `Type=simple` + `Restart=on-failure`. **SIM-only**; placement still needs `ALPHALENS_BROKER_ALLOW_ORDERS=1`. See the "Saxo auto-manager (SIM)" runbook below. |
+| `alphalens-saxo-refresh.{service,timer}` | ~every 20 min | Saxo OAuth idle keep-alive (`broker auth --refresh`) — refreshes the SIM token inside its 40 min window so the broker-manager daemon never loses auth. **Re-added 2026-07 under ADR 0014** (the identically-named paper-chain unit was decommissioned 2026-06-03 — see the note below). |
+| `alphalens-edge-mirror.{service,timer}` | hourly at `:05` UTC | Self-heal for the `/edge` dashboard — rebuilds the ladder-outcome Postgres cache from the population-ladder parquets, independent of the nightly `feedback-shadow-returns` compute (so `/edge` never lags a failed/late compute run). See "Edge mirror (decoupled)" below. |
 
 > **Decommissioned 2026-06-03 (ADR 0012):** the Alpaca paper-trading units
 > (`alphalens-paper-plan`, `alphalens-paper-submit`, `alphalens-paper-reconcile`,
-> `alphalens-paper-trade-stream`) and the Saxo token keep-alive
-> (`alphalens-saxo-refresh`) were removed with the broker chain. Feedback
-> measurement is now fully broker-free price-path replay. On the VPS, stop +
-> disable these units and drop the broker keys from `/etc/alphalens/env` (a
-> separate operator runbook step).
+> `alphalens-paper-trade-stream`) were removed with the broker chain, and
+> feedback measurement is now fully broker-free price-path replay. The Saxo
+> token keep-alive (`alphalens-saxo-refresh`) was removed at the same time but
+> was **re-added 2026-07 under ADR 0014** for the SIM auto-manager — it now
+> runs `broker auth --refresh` (not the old paper-chain refresh) and is listed
+> in the Active units table above. On the VPS, stop + disable the paper-trading
+> units and drop the *paper-broker* keys from `/etc/alphalens/env` (a separate
+> operator runbook step).
 
 > **Decommissioned 2026-07-05:** `alphalens-av-earnings-backfill.{service,timer}`
 > were removed. The only consumer was paradigm #14 (PEAD v2), killed
@@ -469,6 +476,49 @@ overlapping window + the immutable `.idx` are the recovery. See the design memo
 `~/.alphalens/form4_parquet/transaction_year=YYYY/compacted.parquet` — the same
 store the seed wrote, consumed in-place by the Cohen-Malloy / opportunistic-Form4
 scorers. The incremental adds tens of KB/day.
+
+## alphalens-grouped-daily-topup.service + .timer
+
+Appends the latest missing session(s) to the persistent split-adjusted
+(`adjusted=true`) whole-market grouped-daily store that feeds the O'Neil **R**
+(relative-strength) term — read disk-only at the thematic `score` stage via
+`rs_history.rs_percentile`. Daily oneshot at 01:30 UTC (`Persistent=true` so a
+missed day self-catches-up), one whole-market Polygon grouped-daily call per
+missing session, self-sizing from the newest snapshot on disk (capped
+`--max-catchup-days` 400). The free-tier entitlement cliff (`NOT_AUTHORIZED`
+past the ~21–24 mo window) stops cleanly. **Distinct from** the
+population-monitor's `adjusted=false` grouped cache — the two must NOT be merged
+(RS needs split-adjusted closes; the monitor needs raw closes for
+minute-bar/ladder matching). Needs `POLYGON_API_KEY`.
+
+Design memo: [`docs/research/oneil_r_reactivation_design_2026_06_14.md`](../../docs/research/oneil_r_reactivation_design_2026_06_14.md).
+
+### Install
+
+```bash
+cp deploy/systemd/alphalens-grouped-daily-topup.service ~/.config/systemd/user/
+cp deploy/systemd/alphalens-grouped-daily-topup.timer   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-grouped-daily-topup.timer
+```
+
+One-time seed (before the first top-up) via the same script WITHOUT `--topup`
+— `~88 min` for ~440 sessions at the Polygon free 5 req/min:
+
+```bash
+.venv/bin/python apps/alphalens-research/scripts/backfill_grouped_daily_history.py --sessions 440
+```
+
+### Inspect
+
+```bash
+systemctl --user list-timers alphalens-grouped-daily-topup.timer
+journalctl --user -u alphalens-grouped-daily-topup.service --since today
+```
+
+Output: `~/.alphalens/grouped_daily_history/<YYYY-MM-DD>.parquet` (one
+whole-market snapshot per session). Monitoring: `AlphalensJobStale`@48h +
+`MetricMissing`.
 
 ## alphalens-thematic-build.service / .timer
 
