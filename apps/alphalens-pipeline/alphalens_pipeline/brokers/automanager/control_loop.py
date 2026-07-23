@@ -306,7 +306,11 @@ def _execute_action(
         # are THROTTLED per client_request_id — a persistent divergence pages once
         # per re-alert interval, not every tick (overnight-spam incident
         # 2026-07-23). A different crid is a distinct key -> alerts immediately.
-        if deps.alert_throttled(action.reason, f"divergence:{request_id}"):
+        # Fall back to the ticker when the crid is absent so two unattributable
+        # divergences on different tickers are not deduped into one (the key only;
+        # request_id stays the crid for the CancelRemaining lookup below).
+        divergence_key = f"divergence:{request_id or verdict.ticker}"
+        if deps.alert_throttled(action.reason, divergence_key):
             report.alerts += 1
         return
     if isinstance(action, CancelRemaining):
