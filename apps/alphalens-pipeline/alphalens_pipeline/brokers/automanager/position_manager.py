@@ -222,14 +222,18 @@ class CancelSellLegs:
 
 @dataclass(frozen=True)
 class AmendStop:
-    """Stage 3 in-place PATCH resize of a SINGLE clean resting standalone stop
-    (saxo Stage-3 memo). ``target_qty`` is the ABSOLUTE live-owned amount to set
-    (NOT a delta): re-applying it is idempotent-in-effect (two sets = owned, never
-    2x), so a cross-tick re-emit is safe and the ref is MONOTONIC. Used to grow a
-    stop UP (owned grew) and to converge an over-hedge stop DOWN to owned (#884
-    gap) — the order never leaves the book, so neither direction opens a naked
-    window. ``request_id`` is the ``-amend-`` PATCH x-request-id (dedup key in the
-    header, NOT the body — the amend preserves the resting order's own ref)."""
+    """In-place PATCH resize of a resting protective stop. Two callers, one shape:
+    a SINGLE clean resting standalone stop (Stage 3, saxo Stage-3 memo) OR the
+    child stop leg of a CLEAN unfilled resting OCO pair (Stage 3.5, saxo Stage-3.5
+    memo — amending the OCO stop's Amount resizes BOTH legs symmetrically Saxo-side
+    per Q9, so the mutually-exclusive pair still commits owned ONCE). ``target_qty``
+    is the ABSOLUTE live-owned amount to set (NOT a delta): re-applying it is
+    idempotent-in-effect (two sets = owned, never 2x), so a cross-tick re-emit is
+    safe and the ref is MONOTONIC. Used to grow a stop UP (owned grew) and to
+    converge an over-hedge stop DOWN to owned (#884 gap) — the order never leaves
+    the book, so neither direction opens a naked window. ``request_id`` is the
+    ``-amend-`` PATCH x-request-id (dedup key in the header, NOT the body — the
+    amend preserves the resting order's own ref)."""
 
     uic: int
     side: str  # "SELL" for a long
@@ -423,6 +427,35 @@ def _sole_standalone_stop(legs: tuple[OrderState, ...]) -> OrderState | None:
     return stop
 
 
+def _oco_stop_leg(legs: tuple[OrderState, ...]) -> OrderState | None:
+    """The child ``StopIfTraded`` leg of a CLEAN unfilled resting OCO pair, or
+    ``None`` (saxo Stage-3.5 memo). The OCO-REQUIRING inverse of
+    ``_sole_standalone_stop``: returns the OCO stop leg IFF ALL hold: (1) EXACTLY
+    TWO legs, both OCO (``_is_oco_leg`` true — recognises a Q7-asymmetric pair via
+    ``OrderRelation`` OR the ``-oco-`` ref infix; ``len == 2`` auto-rejects any
+    stray leg alongside the pair, since ``SellOrdersAlreadyExist`` guarantees at
+    most one pair per uic); (2) the pair is well-formed {exactly one StopIfTraded,
+    exactly one Limit}; (3) NEITHER leg has partially triggered
+    (``filled_quantity <= _QTY_EPS``) — a partially-filled pair defers to the
+    partial-fill-aware place-residual-first arm because Q9 propagation onto a
+    partially-filled leg is UNPROVEN (mitigation for the mid-fill TOCTOU).
+
+    Amending the returned stop leg's Amount resizes BOTH legs symmetrically
+    Saxo-side (Q9), so the pair still commits owned ONCE. Any other shape returns
+    ``None`` and the caller falls to the always-correct place-residual-first / B1
+    additive path (over-covered, never naked). Uses only existing primitives
+    (STOP_TYPES, TP_TYPES, ``_is_oco_leg``, ``_QTY_EPS``)."""
+    if len(legs) != 2 or not all(_is_oco_leg(leg) for leg in legs):
+        return None
+    stops = [leg for leg in legs if leg.order_type in STOP_TYPES]
+    tps = [leg for leg in legs if leg.order_type in TP_TYPES]
+    if len(stops) != 1 or len(tps) != 1:
+        return None
+    if (stops[0].filled_quantity or 0.0) > _QTY_EPS or (tps[0].filled_quantity or 0.0) > _QTY_EPS:
+        return None
+    return stops[0]
+
+
 def _all_legs_group(legs: tuple[OrderState, ...]) -> _LegGroup:
     return _LegGroup(
         order_ids=tuple(leg.order_id for leg in legs),
@@ -541,6 +574,45 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
                     reason="over-hedge downsize — PATCH amend in place",
                 )
             ]
+        # (OCO DOWNSIZE amend, Stage 3.5): a CLEAN unfilled resting OCO pair
+        # over-covers (owned shrank) -> PATCH the OCO stop leg DOWN to live owned in
+        # place; Q9 propagates symmetrically to the Limit sibling so the pair still
+        # commits owned ONCE — no cancel, no naked window. Absolute-target so a
+        # cross-tick re-emit is idempotent. Same guards as the standalone downsize;
+        # gated on _amend_enabled() ONLY (a resting OCO exists because OCO was
+        # enabled at B0-placement, and resizing it in place is strictly safer than
+        # a fallback teardown even if OCO was since disabled).
+        oco_stop = _oco_stop_leg(legs)
+        if (
+            _amend_enabled()
+            and oco_stop is not None
+            and uic not in view.oco_unsupported
+            and uic not in view.amend_recently_failed
+            and _leg_amount(oco_stop) > owned + _QTY_EPS
+        ):
+            return [
+                AmendStop(
+                    uic,
+                    _SIDE,
+                    oco_stop.order_id,
+                    oco_stop.order_type or "StopIfTraded",
+                    owned,
+                    plan.stop_price,
+                    _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+                    reason="OCO downsize — PATCH OCO stop leg down in place",
+                )
+            ]
+        # (M1) OCO propagation-lag NoOp guard: reaching here with a clean unfilled
+        # OCO pair (oco_stop is not None) means its stop leg is already <= owned
+        # (else the downsize amend fired) yet the commitment > owned — i.e. the TP
+        # leg still shows the OLD larger Amount because list-orders lags Q9's
+        # symmetric propagation. Tearing the pair down via place-residual-first
+        # would cancel the pair the previous tick just resized on a transient read
+        # lag; the downside is fully covered (stop <= owned), so NoOp one tick until
+        # the TP read catches up (then total == owned -> arm C NoOp). Gated on
+        # _amend_enabled() so arm A stays byte-identical when the flag is off.
+        if _amend_enabled() and oco_stop is not None:
+            return [NoOp()]
         bad = _group_with_partial_fill(legs) or _newest_group(legs)
         gen = plan.next_gen(owned)
         stop_ids = set(bad.stop_leg_ids)
@@ -634,6 +706,35 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
                     plan.stop_price,
                     _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
                     reason="grow — PATCH amend stop up in place",
+                )
+            ]
+        # (GROW-after-OCO amend, Stage 3.5): a CLEAN unfilled resting OCO pair
+        #      under-covers (owned grew) -> PATCH the OCO stop leg UP to live owned
+        #      in place; Q9 propagates symmetrically to the Limit sibling so both
+        #      legs resize and the pair commits owned ONCE, no naked window.
+        #      Absolute-target. B0 is skipped for a resting OCO (`not legs` False)
+        #      and the standalone grow amend returns None (a TP leg is present), so
+        #      this is the first arm that can fire. Falls through to B1 additive
+        #      below when amend is off / the uic is degraded (oco_unsupported /
+        #      amend_recently_failed) — the always-correct fallback covers the delta.
+        oco_stop = _oco_stop_leg(legs)
+        if (
+            _amend_enabled()
+            and oco_stop is not None
+            and uic not in view.oco_unsupported
+            and uic not in view.amend_recently_failed
+            and _leg_amount(oco_stop) + _QTY_EPS < owned
+        ):
+            return [
+                AmendStop(
+                    uic,
+                    _SIDE,
+                    oco_stop.order_id,
+                    oco_stop.order_type or "StopIfTraded",
+                    owned,
+                    plan.stop_price,
+                    _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+                    reason="grow-after-OCO — PATCH OCO stop leg up in place",
                 )
             ]
         # (B1) ADDITIVE-ON-GROWTH (Q5 confirmed live): a covering stop already
