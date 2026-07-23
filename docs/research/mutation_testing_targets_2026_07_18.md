@@ -36,7 +36,8 @@ Each candidate is scored `criticality × suitability` (both 1–5):
 | `backtest/weighting.py` | #854 | 211/231 = **91.3%** (was 78.4%); 20 documented equivalents |
 | `paper/sizing.py` | #855 | 425/440 = **96.6%** (was 86.1%); 15 documented equivalents |
 | `thematic/screening/selection_score.py` | #856 | 84/110 = **76.4%** (was 73.6%); 26 documented equivalents |
-| `scorers/cohen_malloy_classifier.py` | *this PR* | 45/46 = **97.8%** (was 76.1%); 1 documented equivalent |
+| `scorers/cohen_malloy_classifier.py` | #857 | 45/46 = **97.8%** (was 76.1%); 1 documented equivalent |
+| `brokers/contract.py` | *this PR* | 33/66 = **50.0%** (was 40.9%); all 6 killable killed, 33 documented equivalents |
 
 ### `feedback/ladder_replay.py` — batch 1 (#853)
 
@@ -127,6 +128,34 @@ call `month_sets[0].intersection(*month_sets[0:])` = `s0.intersection(s0, s1, s2
 `s0 ∩ s0 ∩ s1 ∩ s2` = `s0 ∩ s1 ∩ s2`, exactly the original full 3-way intersection
 (idempotent re-inclusion of `s0`). No input can distinguish it — verified identical
 output (OPPORTUNISTIC) on the discriminating history.
+
+### `brokers/contract.py` — complete (this PR)
+
+First module of a broker-package baseline census (a separate cosmic-ray sweep of
+the Saxo auto-manager over the full broker test suite, run 2026-07-23; the
+higher-survival modules — `reconcile.py` 40%, `saxo/broker.py` + `control_loop.py`
+deferred as behemoths — become their own follow-up PRs). `contract.py` (318 LOC) is
+the broker-agnostic surface: error taxonomy, two structured error classifiers, the
+frozen dataclasses, and the capability Protocols. Full run: **66 mutants, 27 killed
+by the prior suite, 39 survived (59.1 % survival baseline)**.
+
+Of the 39 survivors, **6 KILLABLE / 33 EQUIVALENT**. 14 new pinning tests
+(`tests/brokers/test_contract_mutation_hardening.py`, hand anchors + a hypothesis
+property) kill all 6, verified by a targeted cosmic-ray re-run (6/6 flipped to
+KILLED, the remaining 33 survivors all on the annotation lines, source clean):
+  - `_is_sell_orders_already_exist` / `_is_too_far_from_entry`: the `==` -> `is`
+    (identity) and `==` -> `>=` (ordering) comparison swaps. A value-equal but
+    non-interned error_code kills `is`; a lexicographically-greater non-match kills
+    `>=`; the hypothesis property (classifier True iff the exact code) sweeps the
+    whole string space so `>=` cannot hide behind a hand-picked negative.
+  - the `@runtime_checkable` decorators on `SupportsStandaloneStop` /
+    `SupportsOcoExit`: a runtime `isinstance` narrow raises `TypeError` once the
+    decorator is removed, so an `isinstance` assertion pins each.
+
+The 33 documented equivalents are all `X | Y` swaps inside type annotations
+(`error_code: str | None`, the two Protocol-method signatures) — dead under
+`from __future__ import annotations`, the same dominant equivalent class seen in
+every prior run.
 
 ## Backlog (ranked)
 
