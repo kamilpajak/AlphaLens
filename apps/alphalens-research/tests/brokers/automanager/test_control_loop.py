@@ -264,6 +264,69 @@ class TestRunOncePlacement(unittest.TestCase):
             self.assertEqual(place_calls, [pick])
 
 
+class TestChainDeadHaltsPlacementAndAlerts(unittest.TestCase):
+    """Safety + never-silent: when the session-keeper reports the auth chain dead,
+    run_once alerts ("chain dead — <reason>; placement halted") AND suppresses the
+    placement drain, while reconcile/protection still run. Closes the coverage gap
+    where the test harness always defaulted chain_alive=True, so the loop-level
+    behaviour (halt + alert) was never exercised — only safety.py's pure predicate."""
+
+    def _dead_chain_deps(self, d: str, place_calls: list, alerts: list, pick: Any) -> cl.LoopDeps:
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path(d) / "KILL",
+            verdicts=[],
+            place_calls=place_calls,
+            alerts=alerts,
+            picks=[pick],
+        )
+        dead = type("C", (), {"alive": False, "reason": "session token expired"})()
+        return cl.LoopDeps(**{**deps.__dict__, "ensure_alive": lambda: dead})
+
+    def test_chain_dead_alerts_and_halts_placement(self) -> None:
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            alerts: list = []
+            pick = _pick("KO", "2026-07-20")
+            deps = self._dead_chain_deps(d, place_calls, alerts, pick)
+            report = cl.run_once(deps)
+            # placement halted — the armed pick is NOT sent to the broker.
+            self.assertEqual(place_calls, [])
+            self.assertEqual(report.picks_placed, 0)
+            # never-silent — the dead chain surfaces with its reason AND the halt.
+            self.assertTrue(
+                any(
+                    "chain dead — session token expired" in a and "placement halted" in a
+                    for a in alerts
+                ),
+                f"expected a chain-dead placement-halted alert, got {alerts}",
+            )
+
+    def test_chain_alive_places_pick_and_emits_no_chain_dead_alert(self) -> None:
+        # Positive control: with the chain ALIVE the SAME pick IS placed and no
+        # chain-dead alert fires — proving the halt + alert above are gated on the
+        # dead chain, not vacuously always-true.
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            alerts: list = []
+            pick = _pick("KO", "2026-07-20")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=place_calls,
+                alerts=alerts,
+                picks=[pick],
+            )  # chain_alive defaults True
+            report = cl.run_once(deps)
+            self.assertEqual(place_calls, [pick])
+            self.assertEqual(report.picks_placed, 1)
+            self.assertFalse(
+                any("chain dead" in a for a in alerts),
+                f"no chain-dead alert expected when the chain is alive, got {alerts}",
+            )
+
+
 class TestPickSubmissionJoin(unittest.TestCase):
     """C1: drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
     step 4). Without the join the daemon re-places every armed pick every tick."""
