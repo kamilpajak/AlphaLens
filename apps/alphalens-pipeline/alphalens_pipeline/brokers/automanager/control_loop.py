@@ -1168,7 +1168,6 @@ def _make_protection_executor(
             return
         if isinstance(action, UpgradeToOco):
             _execute_upgrade_to_oco(broker, throttle, place_oco_exit, action, kill, report)
-            return
 
     return _execute
 

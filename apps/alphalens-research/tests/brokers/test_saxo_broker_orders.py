@@ -280,6 +280,19 @@ class TestTickQuantization(unittest.TestCase):
         self.assertEqual(tp["OrderPrice"], 55.0)
         self.assertEqual(sl["OrderPrice"], 45.0)
 
+    def test_non_finite_price_rejected(self):
+        # Money-safety: a NaN/inf price must fail LOUD locally (never quantize to
+        # a non-finite OrderPrice and POST). _quantize_price guards non-finite
+        # alongside its `<= 0` check, so downstream `stop < tp` relation checks
+        # only ever compare finite numbers.
+        broker, stub = _make_broker()
+        with mock.patch.dict("os.environ", _ALLOW):
+            for bad in (float("nan"), float("inf")):
+                with self.assertRaises(OrderRejectedError) as ctx:
+                    broker.place_bracket_order(_request(entry_limit=bad))
+                self.assertIn("finite", str(ctx.exception).lower())
+        self.assertEqual(stub.place_calls, [], "a non-finite price must never POST")
+
     def test_sub_dollar_band_uses_finer_tick(self):
         broker, stub = _make_broker()
         with mock.patch.dict("os.environ", _ALLOW):
