@@ -490,13 +490,15 @@ class SaxoBroker:
     ) -> PlacedOrder:
         """Place ONE standalone OCO exit pair (rung-2 upgrade, saxo-oco memo §4.4).
 
-        Two sibling SELL legs — a near ``Limit`` take-profit + a far
-        ``StopIfTraded`` disaster stop, both ``Amount == qty``,
-        ``OrderRelation:"Oco"`` — under ONE POST in the SIBLINGS-ARRAY body
-        ``{"AccountKey": key, "Orders": [limit_leg, stop_leg]}`` (no top-level
-        order fields). LIVE-PROVEN accepted shape (Q1/Q2, PR #885): the sell
+        Two SELL legs — a near ``Limit`` take-profit MASTER + a far
+        ``StopIfTraded`` disaster stop nested in the master's ``Orders`` array,
+        both ``Amount == qty``, ``OrderRelation:"Oco"``, ``ManualOrder`` on both —
+        under ONE POST. LIVE-VALIDATED real-POST shape (SIM 2026-07-22): the sell
         side commits ``qty`` ONCE (no ``SellOrdersAlreadyExistForOwnedContracts``)
-        and the far stop escapes ``TooFarFromEntryOrder`` while OCO-linked.
+        and the far stop escapes ``TooFarFromEntryOrder`` while OCO-linked. The
+        pure siblings-array ``{AccountKey, Orders:[a,b]}`` body prechecks clean
+        (Q1/Q2, PR #885) but the REAL POST rejects it — precheck is lenient on
+        the ``ManualOrder``/master requirement, the live POST is strict.
 
         Same safety order as :meth:`place_standalone_stop`: the ALLOW_ORDERS gate
         FIRST (before any client call), then precheck, then ONE POST with
@@ -589,9 +591,18 @@ class SaxoBroker:
                 "ExternalReference": ref,
             }
 
-        limit_leg = _leg("Limit", tp_q, tp_ref)
-        stop_leg = _leg(stop_type, stop_q, stop_ref)
-        return {"AccountKey": account_key, "Orders": [limit_leg, stop_leg]}
+        # Real-POST OCO shape (SIM-validated 2026-07-22): a TOP-LEVEL order (the
+        # Limit take-profit master) with the StopIfTraded sibling nested in its
+        # ``Orders`` array, ``ManualOrder`` + ``OrderRelation:"Oco"`` on BOTH. The
+        # pure siblings-array ``{AccountKey, Orders:[a,b]}`` envelope PRECHECKS clean
+        # but the REAL POST rejects it (HTTP 400 IllegalRequest — ManualOrder must be
+        # on all orders / no master); precheck is lenient, the live POST is strict.
+        # Both legs still ``Amount == qty`` -> the mutually-exclusive pair commits
+        # owned ONCE (Q1). ``_leg`` stamps AccountKey + ManualOrder + OrderRelation.
+        limit_leg = _leg("Limit", tp_q, tp_ref)  # master / take-profit
+        stop_leg = _leg(stop_type, stop_q, stop_ref)  # OCO sibling / disaster stop
+        limit_leg["Orders"] = [stop_leg]
+        return limit_leg
 
     def _handle_oco_placement_response(
         self,
@@ -602,23 +613,28 @@ class SaxoBroker:
         stop_ref: str,
         tp_ref: str,
     ) -> PlacedOrder:
-        """Parse the siblings-array place response (no top-level OrderId).
+        """Parse the top-level-master + nested-child OCO place response.
 
-        A healthy OCO returns two per-leg OrderIds and no parent order, so the
-        bracket handler (which requires a top-level OrderId) cannot be reused.
-        200/201 with two legs -> ``PlacedOrder(entry_order_id="",
-        exit_order_ids=(stop_id, tp_id))``. Fewer than two legs on a 2xx is a
-        half-accepted OCO — cancel any stranded leg (sibling cascade cleans the
-        rest) and raise, never return a lone leg. 202 and any reject raise, so
-        the executor keeps the rung-1 stop live on the degrade path.
+        The real-POST OCO body is a Limit take-profit MASTER (top-level OrderId)
+        with the StopIfTraded sibling nested in ``Orders`` (SIM-validated), so the
+        two ids are deterministic by structure: ``tp_id`` = the top-level OrderId,
+        ``stop_id`` = the child OrderId. 200/201 with BOTH present ->
+        ``PlacedOrder(entry_order_id="", exit_order_ids=(stop_id, tp_id))``. A 2xx
+        missing either leg is a half-accepted OCO — cancel the stranded leg (sibling
+        cascade cleans the rest) and raise, never return a lone leg. 202 and any
+        reject raise, so the executor keeps the rung-1 stop live on the degrade path.
+        ``stop_ref`` / ``tp_ref`` are unused for parsing now (structure is fixed) but
+        kept on the signature for the caller's symmetry.
         """
+        del stop_ref, tp_ref  # parsing is structural now, not ref-matched
         if status in (200, 201):
-            legs = [
+            master_id = payload.get("OrderId")  # the Limit / take-profit master
+            children = [
                 child
                 for child in payload.get("Orders") or []
                 if isinstance(child, dict) and child.get("OrderId")
             ]
-            if len(legs) < 2:
+            if not master_id or not children:
                 live_order_id = self._find_order_id(payload)
                 cleanup = (
                     self._repair_partial_acceptance(live_order_id, account_key)
@@ -626,10 +642,11 @@ class SaxoBroker:
                     else "no accepted leg to clean up"
                 )
                 raise BrokerError(
-                    f"Saxo OCO placement for {request_id} returned HTTP {status} with "
-                    f"fewer than two legs ({payload!r}); cleanup: {cleanup}"
+                    f"Saxo OCO placement for {request_id} returned HTTP {status} without "
+                    f"both master + child legs ({payload!r}); cleanup: {cleanup}"
                 )
-            stop_id, tp_id = self._pair_oco_legs(legs, stop_ref, tp_ref)
+            tp_id = str(master_id)  # top-level master = the Limit take-profit leg
+            stop_id = str(children[0]["OrderId"])  # nested child = the StopIfTraded leg
             return PlacedOrder(entry_order_id="", exit_order_ids=(stop_id, tp_id))
         if status == 202:
             live_order_id = self._find_order_id(payload)
@@ -648,41 +665,6 @@ class SaxoBroker:
                 f"AFTER accepting leg {live_order_id} ({detail}); cleanup: {cleanup}"
             )
         raise OrderRejectedError(f"Saxo rejected OCO {request_id} with HTTP {status}: {detail}")
-
-    @staticmethod
-    def _pair_oco_legs(legs: list[dict[str, Any]], stop_ref: str, tp_ref: str) -> tuple[str, str]:
-        """Order the two accepted leg ids as ``(stop_id, tp_id)``.
-
-        Prefers the per-leg ``ExternalReference`` echo (Q7 best-effort); falls
-        back to the leg ``OrderType`` (``Limit`` -> tp, otherwise -> stop) when
-        Saxo does not honor per-leg references — NOT response array order, which
-        would mislabel the pair (the request body is ``[limit_leg, stop_leg]``).
-        Either way both ids are returned.
-        """
-        stop_id: str | None = None
-        tp_id: str | None = None
-        unmatched: list[dict[str, Any]] = []
-        for leg in legs:
-            order_id = str(leg["OrderId"])
-            reference = leg.get("ExternalReference")
-            if reference == stop_ref and stop_id is None:
-                stop_id = order_id
-            elif reference == tp_ref and tp_id is None:
-                tp_id = order_id
-            else:
-                unmatched.append(leg)
-        for leg in unmatched:
-            order_id = str(leg["OrderId"])
-            if leg.get("OrderType") == "Limit":
-                if tp_id is None:
-                    tp_id = order_id
-                elif stop_id is None:
-                    stop_id = order_id
-            elif stop_id is None:  # StopIfTraded/Stop, or OrderType absent -> stop slot
-                stop_id = order_id
-            elif tp_id is None:
-                tp_id = order_id
-        return str(stop_id), str(tp_id)
 
     def get_order(self, order_id: str) -> OrderState:
         with _translate_saxo_errors():
