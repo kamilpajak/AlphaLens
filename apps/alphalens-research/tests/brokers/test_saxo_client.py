@@ -639,6 +639,44 @@ class TestWriteTransportPatch(unittest.TestCase):
         self.assertIn("rid-patch-5xx", str(ctx.exception))
         self.assertNotIsInstance(ctx.exception, SaxoRateLimitError)
 
+    def test_patch_provably_unsent_retries_same_request_id(self):
+        # ConnectTimeout = the TCP connection never opened, so the PATCH was
+        # provably not sent — the one network shape safe to retry, and it must
+        # reuse the SAME x-request-id (verb-agnostic provably-unsent lane).
+        session = _RecordingSession(
+            [
+                requests.exceptions.ConnectTimeout("connect timed out"),
+                _FakeResponse(200, payload={"OrderId": "O-1"}),
+            ]
+        )
+        client, _, _ = _make_client(session)
+
+        status, _ = client.amend_order(self._PATCH_BODY, request_id="rid-patch-unsent")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(session.calls), 2)
+        ids = {call["headers"]["x-request-id"] for call in session.calls}
+        self.assertEqual(ids, {"rid-patch-unsent"})
+
+    def test_patch_429_reuses_same_request_id(self):
+        # A 429 means the PATCH was provably not accepted, so it retries after
+        # Retry-After — with the SAME x-request-id (verb-agnostic 429 lane).
+        session = _RecordingSession(
+            [
+                _FakeResponse(429, headers={"Retry-After": "2"}),
+                _FakeResponse(200, payload={"OrderId": "O-1"}),
+            ]
+        )
+        client, _, sleeps = _make_client(session)
+
+        status, _ = client.amend_order(self._PATCH_BODY, request_id="rid-patch-429")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(session.calls), 2)
+        ids = {call["headers"]["x-request-id"] for call in session.calls}
+        self.assertEqual(ids, {"rid-patch-429"}, "429 retry must reuse the SAME x-request-id")
+        self.assertIn(2.0, [float(s) for s in sleeps])
+
     def test_amend_order_returns_status_and_json(self):
         session = _RecordingSession([_FakeResponse(200, payload={"OrderId": "O-1"})])
         client, _, _ = _make_client(session)
