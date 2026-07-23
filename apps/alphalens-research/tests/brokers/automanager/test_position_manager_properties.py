@@ -33,6 +33,7 @@ and yield a false over-commit.
 
 from __future__ import annotations
 
+import os
 import unittest
 from dataclasses import dataclass
 from unittest.mock import patch
@@ -42,6 +43,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     STOP_TYPES,
     TP_TYPES,
     AlertOnly,
+    AmendStop,
     CancelSellLegs,
     NoOp,
     PlaceStop,
@@ -1029,6 +1031,129 @@ class TestArmCoverageNonVacuousness(unittest.TestCase):
     def tearDownClass(cls) -> None:
         missing = _ARM_COVERAGE_TARGETS - cls.seen
         assert not missing, f"arms never generated (vacuous coverage): {sorted(missing)}"
+
+
+# --------------------------------------------------------------------------
+# Stage 3 properties (B0 OCO-direct-on-fill + AmendStop resize). These run with
+# the dark flags forced ON (the default-off arms above never emit them). Each
+# sanitizes BOTH env flags first so an ambient flag cannot leak into the arm.
+# --------------------------------------------------------------------------
+
+
+def _stage3_env(**flags: str) -> dict[str, str]:
+    base = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("ALPHALENS_BROKER_OCO_ENABLED", "ALPHALENS_BROKER_AMEND_ENABLED")
+    }
+    base.update(flags)
+    return base
+
+
+def _one_uic_view(
+    owned: float,
+    legs: tuple[OrderState, ...],
+    *,
+    tp_price: float | None = 306.72,
+) -> tuple[Position, ProtectionView]:
+    pos = _mk_pos(owned, _UIC)
+    view = ProtectionView(
+        long_positions={_UIC: pos},
+        all_positions={_UIC: pos},
+        sell_legs_by_uic={_UIC: legs} if legs else {},
+        planned_by_uic={_UIC: _mk_plan(_UIC, tp_price=tp_price)},
+        oco_unsupported=frozenset(),
+    )
+    return pos, view
+
+
+def _final_sell_including_amend(
+    actions: list, legs: tuple[OrderState, ...], uic: int, owned: float
+) -> float:
+    """FINAL intended sell commitment on a uic, extended for Stage 3 arms.
+
+    An ``AmendStop`` RESIZES its target resting stop in place, so that leg's final
+    resting amount is ``target_qty`` (grow/downsize emit exactly one AmendStop and
+    no other order action — the sole clean stop is the only leg). A B0
+    ``UpgradeToOco`` fires only on a naked uic and rests a mutually-exclusive OCO
+    pair committing ``qty`` ONCE. Otherwise fall back to the PlaceStop accounting
+    (removal ∪ surviving + placed) used by the Stage-1/2 invariants."""
+    amends = [a for a in actions if isinstance(a, AmendStop)]
+    if amends:
+        return sum(a.target_qty for a in amends)
+    upgrades = [a for a in actions if isinstance(a, UpgradeToOco)]
+    if upgrades:
+        return sum(a.qty for a in upgrades)
+    removal = _removal_ids(actions, uic)
+    surviving = sum(_leg_amt(leg) for leg in legs if leg.order_id not in removal)
+    placed = sum(a.qty for a in _placestops(actions, uic))
+    return surviving + placed
+
+
+class TestStage3AmendAndB0Properties(unittest.TestCase):
+    @given(owned=st.integers(4, 5000).map(float))
+    @_LONG_SETTINGS
+    def test_property_amendstop_target_never_exceeds_owned(self, owned: float) -> None:
+        # INV — every AmendStop resizes to the ABSOLUTE live-owned target, never a
+        # sum, so target_qty <= owned in BOTH grow (stop under owned) and downsize
+        # (stop over owned). Non-vacuous: both cases DO emit an AmendStop.
+        with patch.dict(os.environ, _stage3_env(ALPHALENS_BROKER_AMEND_ENABLED="1"), clear=True):
+            for stop_amt, direction in ((owned / 2.0, "grow"), (owned * 2.0, "downsize")):
+                stop = _mk_leg(f"{_UIC}-s", "StopIfTraded", stop_amt, _UIC)
+                pos, view = _one_uic_view(owned, (stop,))
+                actions = reconcile_long(_UIC, pos, view)
+                amends = [a for a in actions if isinstance(a, AmendStop)]
+                self.assertEqual(len(amends), 1, f"{direction} must emit one AmendStop")
+                self.assertTrue(
+                    _le(amends[0].target_qty, owned),
+                    f"{direction} target {amends[0].target_qty} exceeds owned {owned}",
+                )
+                self.assertTrue(_close(amends[0].target_qty, owned), "target must equal live owned")
+
+    @given(owned=st.integers(3, 5000).map(float), has_leg=st.booleans())
+    @_LONG_SETTINGS
+    def test_property_b0_emitted_only_on_truly_naked_uic(self, owned: float, has_leg: bool) -> None:
+        # INV — B0 (UpgradeToOco with empty supersede) fires IFF the uic is truly
+        # naked (no resting legs). A deficit WITH a resting leg never takes B0.
+        legs = (_mk_leg(f"{_UIC}-s", "StopIfTraded", 1.0, _UIC),) if has_leg else ()
+        with patch.dict(os.environ, _stage3_env(ALPHALENS_BROKER_OCO_ENABLED="1"), clear=True):
+            pos, view = _one_uic_view(owned, legs)
+            actions = reconcile_long(_UIC, pos, view)
+        emitted_b0 = any(isinstance(a, UpgradeToOco) for a in actions)
+        self.assertEqual(emitted_b0, not has_leg, f"B0 must fire iff naked (has_leg={has_leg})")
+        if emitted_b0:
+            up = next(a for a in actions if isinstance(a, UpgradeToOco))
+            self.assertEqual(up.supersede_ids, ())
+
+    @given(
+        owned=st.integers(4, 5000).map(float),
+        case=st.sampled_from(["grow", "downsize", "b0", "naked_stop_only"]),
+    )
+    @_LONG_SETTINGS
+    def test_property_no_double_commit_after_reconcile_including_b0_and_amend(
+        self, owned: float, case: str
+    ) -> None:
+        # INV — the FINAL intended sell commitment on the uic never exceeds owned,
+        # across the Stage-3 arms (AmendStop absolute-target, B0 OCO count-once) as
+        # well as the plain stop-only fallback.
+        flags: dict[str, str] = {}
+        legs: tuple[OrderState, ...]
+        if case == "grow":
+            flags = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
+            legs = (_mk_leg(f"{_UIC}-s", "StopIfTraded", owned / 2.0, _UIC),)
+        elif case == "downsize":
+            flags = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
+            legs = (_mk_leg(f"{_UIC}-s", "StopIfTraded", owned * 2.0, _UIC),)
+        elif case == "b0":
+            flags = {"ALPHALENS_BROKER_OCO_ENABLED": "1"}
+            legs = ()
+        else:  # naked_stop_only — both flags OFF
+            legs = ()
+        with patch.dict(os.environ, _stage3_env(**flags), clear=True):
+            pos, view = _one_uic_view(owned, legs)
+            actions = reconcile_long(_UIC, pos, view)
+        final = _final_sell_including_amend(actions, legs, _UIC, owned)
+        self.assertTrue(_le(final, owned), f"double-commit: final {final} > owned {owned} ({case})")
 
 
 if __name__ == "__main__":

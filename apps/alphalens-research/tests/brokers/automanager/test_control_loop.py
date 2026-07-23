@@ -870,24 +870,21 @@ class TestUpgradeOcoSuccessSupersedesRung1(unittest.TestCase):
         self.assertEqual(report.exits_placed, 1)
 
 
-class TestUpgradeOcoFailKeepsRung1AndMarksUnsupported(unittest.TestCase):
-    """A structural OCO reject (SellOrdersAlreadyExist) is caught: the rung-1 stop
-    stays LIVE (never naked), the uic is persisted oco_unsupported, and a rebuilt
-    view on the next tick degrades arm-C to NoOp — no re-attempt churn."""
+class TestRung1RefuseViaLoopStaysStopOnly(unittest.TestCase):
+    """Stage 3 rung-1 REFUSE end-to-end (saxo Stage-3 memo): a resting rung-1
+    standalone stop with OCO enabled is NEVER upgraded through the loop — the pure
+    reconciler returns NoOp, no OCO is attempted, the rung-1 stop stays LIVE, and
+    the uic is NOT degraded to oco_unsupported. OCO is reached only via B0 on a
+    fresh naked fill; the stop-only residue drains purely by turnover."""
 
-    def test_fail_marks_unsupported_no_reattempt_rung1_kept(self) -> None:
+    def test_resting_rung1_stop_not_upgraded_no_oco_no_degrade(self) -> None:
         with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
             journal = Path(d) / "standalone_stops.jsonl"
             alerts: list[str] = []
             rung1 = _leg("rung1-stop", "StopIfTraded", 46.0)
             broker = _ProtBroker(positions=[_pos(46.0)], sells=[rung1], by_uic={_UIC: _pos(46.0)})
             calls: list = []
-            placer = _oco_placer(
-                calls,
-                error=OrderRejectedError(
-                    "blocked", error_code="SellOrdersAlreadyExistForOwnedContracts"
-                ),
-            )
+            placer = _oco_placer(calls)
             throttle = _throttle_to(alerts)
             deps = _deps(
                 broker,
@@ -905,11 +902,10 @@ class TestUpgradeOcoFailKeepsRung1AndMarksUnsupported(unittest.TestCase):
                 r1 = cl.run_once(deps)
                 r2 = cl.run_once(deps)
                 folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
-        self.assertEqual(len(calls), 1, "OCO attempted once, never re-attempted after the mark")
-        self.assertEqual(broker.cancelled, [], "rung-1 stop kept LIVE on the degrade path")
+        self.assertEqual(len(calls), 0, "rung-1 REFUSE: OCO never attempted from a resting stop")
+        self.assertEqual(broker.cancelled, [], "rung-1 stop kept LIVE (never touched)")
         self.assertEqual((r1.exits_placed, r2.exits_placed), (0, 0))
-        self.assertIn(_UIC, folded, "the failed uic is persisted oco_unsupported")
-        self.assertTrue(any("oco" in a.lower() for a in alerts), "degrade alert fires")
+        self.assertNotIn(_UIC, folded, "no degrade: a refused rung-1 is not marked oco_unsupported")
 
 
 class TestUpgradeOcoBroadCatch(unittest.TestCase):

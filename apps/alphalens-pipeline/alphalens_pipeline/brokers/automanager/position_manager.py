@@ -20,11 +20,18 @@ Broker-state-truth protection (saxo-oco memo §6): ``reconcile_protection`` /
 from a live-broker snapshot (``ProtectionView``) instead of any journal line —
 this kills Bug A (a failed stop POST leaving a permanently-naked position) and
 Bug B (a lone-TP double-sell). Keyed per-uic (the unit Saxo nets to), sized to
-netted owned qty. The rung 1 -> 2 OCO upgrade (``UpgradeToOco``) is emitted from
-the covered branch ONLY when ``_oco_enabled()`` is true (the
-``ALPHALENS_BROKER_OCO_ENABLED`` env flag, DEFAULT OFF so the path ships dark)
-and the uic is not persisted ``oco_unsupported``. The control loop assembles the
-``ProtectionView`` and executes the returned Actions; this module performs no I/O.
+netted owned qty.
+
+Stage 3 (saxo Stage-3 memo) adds three write paths behind two dark env flags,
+all default OFF: (B0) a TRULY NAKED fresh fill goes straight to a resting OCO
+pair via ``UpgradeToOco(supersede_ids=())`` when ``_oco_enabled()``; (AmendStop)
+an in-place PATCH resize of a SINGLE clean standalone stop grows it UP (composes
+with the B1 additive fallback) or converges an over-hedge DOWN to owned when
+``_amend_enabled()``; (rung-1 REFUSE) a position that already has a resting
+rung-1 stop stays stop-only for its whole life — arm C never upgrades a resting
+stop to OCO (PATCH cannot add a TP leg, cancel-then-OCO is naked, OCO-then-cancel
+is 2x-owned rejected live). The control loop assembles the ``ProtectionView`` and
+executes the returned Actions; this module performs no I/O.
 """
 
 from __future__ import annotations
@@ -61,6 +68,14 @@ def _default_next_gen(_qty: float) -> int:
     return 0
 
 
+def _default_next_amend_seq() -> int:
+    """Fallback monotonic amend-sequence for a hand-built ``PlannedExit`` (pure
+    tests): no persistence, always 0. The control loop injects the real
+    journal-backed callable (``_make_next_amend_seq``, ALWAYS max+1) so a
+    cross-tick re-resize never dedup-collides (saxo Stage-3 memo, mitigation A3)."""
+    return 0
+
+
 def _exit_stop_ref(entry_crid: str, gen: int) -> str:
     """Deterministic gen-stamped x-request-id for a protective STOP leg (memo §4.5).
 
@@ -88,6 +103,18 @@ def _exit_oco_ref(entry_crid: str, gen: int) -> str:
     return f"{entry_crid}-oco-{gen}"
 
 
+def _exit_amend_ref(entry_crid: str, seq: int) -> str:
+    """Deterministic MONOTONIC-seq PATCH x-request-id for an ``AmendStop`` resize.
+
+    The distinct ``-amend-`` namespace NEVER shares with ``-stop-``/``-oco-``
+    (mitigation H5): the amend PATCH and a standalone-stop POST for the same uic
+    must never collide on Saxo's 15 s request-id dedup. ``seq`` is per-uic and
+    ALWAYS max+1 (never qty-keyed), so a genuine re-resize to a previously-seen
+    target qty is never dedup-swallowed while a single write stays never-blind-
+    retry (mitigation A3/H3)."""
+    return f"{entry_crid}-amend-{seq}"
+
+
 @dataclass(frozen=True)
 class PlannedExit:
     """The plan PRICES the broker cannot know, folded per NETTED uic from the
@@ -108,6 +135,13 @@ class PlannedExit:
     conflicting: bool  # True if >1 distinct active plan folded to this uic (refuse-to-merge)
     n_plans: int
     next_gen: Callable[[float], int] = field(default=_default_next_gen, compare=False, repr=False)
+    # Per-uic MONOTONIC amend sequence (saxo Stage-3 memo): returns max+1 ALWAYS
+    # (never qty-keyed) so an AmendStop resize to a previously-seen target qty is
+    # never dedup-swallowed. Journal-backed callable injected by the control loop;
+    # excluded from equality/repr so two folds compare on data alone.
+    next_amend_seq: Callable[[], int] = field(
+        default=_default_next_amend_seq, compare=False, repr=False
+    )
 
 
 @dataclass(frozen=True)
@@ -156,11 +190,13 @@ class PlaceStop:
 
 @dataclass(frozen=True)
 class UpgradeToOco:
-    """Rung 1 -> 2 TP-capture upgrade emitted from the covered branch when
-    ``_oco_enabled()`` is true and the uic is not ``oco_unsupported`` (else the
-    branch degrades to ``NoOp``). ``entry_crid`` + ``gen`` derive the deterministic
-    OCO base ref (``_exit_oco_ref``); ``supersede_ids`` is the rung-1 stop the
-    executor cancels ONLY AFTER ``place_oco_exit`` succeeds (never a naked window)."""
+    """OCO-direct-on-fill (Stage 3 arm B0): emitted for a TRULY NAKED fresh fill
+    (``not legs``) when ``_oco_enabled()`` is true, the plan carries a TP price,
+    and the uic is not ``oco_unsupported`` / ``oco_recently_placed`` — the position
+    goes straight to a resting OCO pair instead of a stop-only rung 1. ``entry_crid``
+    + ``gen`` derive the deterministic OCO base ref (``_exit_oco_ref``).
+    ``supersede_ids`` is ALWAYS empty ``()`` in Stage 3 (a naked fill has no stop to
+    supersede — the old rung 1 -> 2 upgrade emission was deleted, see arm C)."""
 
     uic: int
     side: str
@@ -184,7 +220,28 @@ class CancelSellLegs:
     reason: str
 
 
-Action = PlaceStop | UpgradeToOco | CancelSellLegs | CancelRemaining | AlertOnly | NoOp
+@dataclass(frozen=True)
+class AmendStop:
+    """Stage 3 in-place PATCH resize of a SINGLE clean resting standalone stop
+    (saxo Stage-3 memo). ``target_qty`` is the ABSOLUTE live-owned amount to set
+    (NOT a delta): re-applying it is idempotent-in-effect (two sets = owned, never
+    2x), so a cross-tick re-emit is safe and the ref is MONOTONIC. Used to grow a
+    stop UP (owned grew) and to converge an over-hedge stop DOWN to owned (#884
+    gap) — the order never leaves the book, so neither direction opens a naked
+    window. ``request_id`` is the ``-amend-`` PATCH x-request-id (dedup key in the
+    header, NOT the body — the amend preserves the resting order's own ref)."""
+
+    uic: int
+    side: str  # "SELL" for a long
+    order_id: str  # the resting stop being resized in place
+    order_type: str  # preserved from the resting stop (Saxo Q8 body requires it)
+    target_qty: float  # ABSOLUTE new Amount == live netted owned, never a delta
+    stop_price: float
+    request_id: str  # gen-stamped deterministic -amend- ref (_exit_amend_ref)
+    reason: str
+
+
+Action = PlaceStop | UpgradeToOco | AmendStop | CancelSellLegs | CancelRemaining | AlertOnly | NoOp
 
 # A SELL leg that PROTECTS the downside vs one that is UPSIDE only (memo §6).
 STOP_TYPES = frozenset({"StopIfTraded", "Stop", "TrailingStopIfTraded"})
@@ -268,13 +325,28 @@ _OCO_ENABLED_ENV = "ALPHALENS_BROKER_OCO_ENABLED"
 
 
 def _oco_enabled() -> bool:
-    """Whether the rung 1 -> 2 OCO upgrade is enabled (read at call time).
+    """Whether the OCO path is enabled (read at call time).
 
-    The SINGLE source gating both the pure emission (``_reconcile_long`` arm C)
-    and the control-loop executor. Reads the env flag every call so it is
-    restart-consistent and hermetically testable (no import-time snapshot).
-    Defaults OFF — this PR ships the OCO path DARK."""
+    The SINGLE source gating both the pure B0 emission (``_reconcile_long``
+    OCO-direct-on-fill arm) and the control-loop executor. Reads the env flag
+    every call so it is restart-consistent and hermetically testable (no
+    import-time snapshot). Defaults OFF — this PR ships the OCO path DARK."""
     return os.environ.get(_OCO_ENABLED_ENV) == "1"
+
+
+# Env flag gating the Stage-3 PATCH-amend resize (both AmendStop arms + executor).
+# DEFAULTS OFF (ship dark): the machinery lands unenabled and is turned on only
+# after the SIM amend live probe passes (saxo Stage-3 memo §"Env gates").
+_AMEND_ENABLED_ENV = "ALPHALENS_BROKER_AMEND_ENABLED"
+
+
+def _amend_enabled() -> bool:
+    """Whether the Stage-3 in-place PATCH-amend resize is enabled (read at call
+    time). The SINGLE source gating both pure AmendStop emissions (grow + over-
+    hedge downsize) and the control-loop executor. Reads the env flag every call
+    so it is restart-consistent and hermetically testable (no import-time
+    snapshot). Defaults OFF — this PR ships the amend path DARK."""
+    return os.environ.get(_AMEND_ENABLED_ENV) == "1"
 
 
 @dataclass(frozen=True)
@@ -292,6 +364,14 @@ class ProtectionView:
     sell_legs_by_uic: Mapping[int, tuple[OrderState, ...]]
     planned_by_uic: Mapping[int, PlannedExit]
     oco_unsupported: frozenset[int]
+    # Stage-3 TTL folds (saxo Stage-3 memo), populated by the control-loop view
+    # builder from journal markers; default empty so pure tests + a second broker
+    # stay source-compatible. ``oco_recently_placed`` suppresses a B0 re-fire while
+    # a just-placed OCO rests but list-orders lags (H1b/A1). ``amend_recently_
+    # failed`` skips the amend arms for one TTL after a PATCH reject so B1 additive
+    # / place-first covers the delta by a proven primitive (verdict-2-finding-2).
+    oco_recently_placed: frozenset[int] = frozenset()
+    amend_recently_failed: frozenset[int] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -311,6 +391,30 @@ def _stop_leg_ids(legs: tuple[OrderState, ...]) -> tuple[str, ...]:
 
 def _tp_only_leg_ids(legs: tuple[OrderState, ...]) -> tuple[str, ...]:
     return tuple(leg.order_id for leg in legs if leg.order_type in TP_TYPES)
+
+
+def _sole_standalone_stop(legs: tuple[OrderState, ...]) -> OrderState | None:
+    """The lone amendable standalone stop on a uic, or ``None`` (saxo Stage-3
+    memo). Returns the leg IFF ALL hold: (1) EXACTLY ONE leg is in STOP_TYPES;
+    (2) it is NOT an OCO leg (``_is_oco_leg`` false — an OCO stop cannot be resized
+    without cascading its sibling, Q9); (3) NO Limit/TP leg is present anywhere in
+    ``legs`` (belt for a Q7 hidden-OCO whose relation echo failed — a real OCO
+    always carries a TP sibling); (4) the stop has NOT partially triggered
+    (``filled_quantity <= _QTY_EPS`` — never amend a stop mid-fill, mitigation H2).
+    Any other shape (>1 stop, an OCO leg, a TP present, a partial fill) returns
+    ``None`` and the caller falls to the always-correct B1 additive / place-first
+    path."""
+    stops = [leg for leg in legs if leg.order_type in STOP_TYPES]
+    if len(stops) != 1:
+        return None
+    stop = stops[0]
+    if _is_oco_leg(stop):
+        return None
+    if any(leg.order_type in TP_TYPES for leg in legs):
+        return None
+    if (stop.filled_quantity or 0.0) > _QTY_EPS:
+        return None
+    return stop
 
 
 def _all_legs_group(legs: tuple[OrderState, ...]) -> _LegGroup:
@@ -404,6 +508,33 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     #     (TP / Market noise); when there are none (Stage-1 stop-only) it is not
     #     emitted at all. Stops must never sit in an unconditional cancel.
     if total > owned + _QTY_EPS:
+        # (DOWNSIZE amend, Stage 3): a SINGLE clean standalone stop over-covers
+        # (owned shrank) -> PATCH amend it DOWN to live owned in place (the #884
+        # gap), no cancel, no naked window. Absolute-target (Amount = owned) so a
+        # cross-tick re-emit is idempotent. Only when amend is enabled and the uic
+        # is not degraded (oco_unsupported / amend_recently_failed); a multi-stop
+        # or OCO-leg over-hedge keeps the unchanged place-residual-first arm below
+        # (over-covered, never naked — Q9 residual).
+        sole = _sole_standalone_stop(legs)
+        if (
+            _amend_enabled()
+            and sole is not None
+            and uic not in view.oco_unsupported
+            and uic not in view.amend_recently_failed
+            and _leg_amount(sole) > owned + _QTY_EPS
+        ):
+            return [
+                AmendStop(
+                    uic,
+                    _SIDE,
+                    sole.order_id,
+                    sole.order_type or "",
+                    owned,
+                    plan.stop_price,
+                    _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+                    reason="over-hedge downsize — PATCH amend in place",
+                )
+            ]
         bad = _group_with_partial_fill(legs) or _newest_group(legs)
         gen = plan.next_gen(owned)
         stop_ids = set(bad.stop_leg_ids)
@@ -437,6 +568,60 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     #     shape, or a stale/partial stop. A lone TP is always cancelled BEFORE the
     #     place (it holds the conflicting sell commitment — Bug B).
     if stop_qty + _QTY_EPS < owned:
+        # (B0) OCO-DIRECT-ON-FILL (Stage 3): a TRULY NAKED fresh fill (no resting
+        #      legs) with OCO wanted goes STRAIGHT to a resting OCO pair via
+        #      UpgradeToOco(supersede_ids=()) — never a stop-only rung 1 first (the
+        #      system reaches OCO only at the fresh-fill moment; rung-1 stops are
+        #      never upgraded, see arm C). Suppressed while a just-placed OCO rests
+        #      but list-orders lags (oco_recently_placed) so a 2nd B0 can never
+        #      double-commit (H1b/A1). Fires ONLY on `not legs`, so total after
+        #      placement == owned once, never 2x.
+        if (
+            _oco_enabled()
+            and plan.tp_price is not None
+            and uic not in view.oco_unsupported
+            and uic not in view.oco_recently_placed
+            and not legs
+        ):
+            return [
+                UpgradeToOco(
+                    uic,
+                    _SIDE,
+                    owned,
+                    plan.stop_price,
+                    plan.tp_price,
+                    plan.entry_crid,
+                    plan.next_gen(owned),
+                    supersede_ids=(),
+                )
+            ]
+        # (GROW amend, Stage 3): a SINGLE clean standalone stop under-covers (owned
+        #      grew) -> PATCH amend it UP to live owned in place (absolute-target,
+        #      no naked window). Falls through to the B1 additive-delta stop below
+        #      when amend is off, >1 stop rests (B1-grown multi-tier), a TP leg is
+        #      present, the stop partially filled, or the uic recently failed an
+        #      amend — B1 is the always-correct fallback that covers the delta with
+        #      a second stop.
+        sole = _sole_standalone_stop(legs)
+        if (
+            _amend_enabled()
+            and sole is not None
+            and uic not in view.oco_unsupported
+            and uic not in view.amend_recently_failed
+            and _leg_amount(sole) + _QTY_EPS < owned
+        ):
+            return [
+                AmendStop(
+                    uic,
+                    _SIDE,
+                    sole.order_id,
+                    sole.order_type or "",
+                    owned,
+                    plan.stop_price,
+                    _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+                    reason="grow — PATCH amend stop up in place",
+                )
+            ]
         # (B1) ADDITIVE-ON-GROWTH (Q5 confirmed live): a covering stop already
         #      holds stop_qty and the position simply GREW (another tier filled).
         #      Place a stop for the DELTA only, KEEPING the existing stop — no
@@ -475,36 +660,19 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
             )
         ]
 
-    # (C) DOWNSIDE COVERED. The rung 1 -> 2 TP-capture upgrade is Stage 2 only.
+    # (C) DOWNSIDE COVERED. A resting exit already covers the position.
     if tp_qty + _QTY_EPS >= owned:
-        # A full TP + a covering stop == a healthy resting OCO pair: the terminal
-        # rung-2 steady state. Arm (A) no longer trips first (the OCO pair commits
-        # owned ONCE), so this is the state a successful upgrade settles into.
+        # A full TP + a covering stop == a healthy resting OCO pair (from B0): the
+        # terminal rung-2 steady state. Arm (A) no longer trips first (the OCO pair
+        # commits owned ONCE), so this is the state a successful B0 settles into.
         return [NoOp()]
-    if plan.tp_price is None or uic in view.oco_unsupported or not _oco_enabled():
-        return [NoOp()]  # STOP-ONLY: stop-only is the accepted terminal rung
-    # Grow-after-OCO guard: a resting OCO pair already covers the downside (its stop
-    # leg counts in stop_qty). If owned then grew past the OCO's TP, re-upgrading would
-    # place a SECOND OCO on top of the existing commitment -> SellOrdersAlreadyExist ->
-    # a wasted one-shot degrade to oco_unsupported (the OCO would be lost on that uic).
-    # Keep the existing OCO (+ any additive delta stop): downside stays covered, the
-    # grown delta is stop-covered without a TP (upside-only). NoOp until Stage-3 atomic
-    # resize (Q8) can extend an OCO in place. The FIRST upgrade (only a rung-1 standalone
-    # stop rests, no OCO leg) is unaffected.
-    if any(_is_oco_leg(leg) for leg in legs):
-        return [NoOp()]
-    return [
-        UpgradeToOco(
-            uic,
-            _SIDE,
-            owned,
-            plan.stop_price,
-            plan.tp_price,
-            plan.entry_crid,
-            plan.next_gen(owned),
-            supersede_ids=_stop_leg_ids(legs),
-        )
-    ]
+    # rung1->2 conversion of a resting standalone stop is unsafe by construction
+    # (Stage 3): PATCH cannot add a TP leg, cancel-then-OCO is naked, OCO-then-cancel
+    # is 2x-owned rejected live — refuse, stay stop-only; OCO is reached only via B0
+    # on a fresh naked fill. A position that already has a resting rung-1 stop (or a
+    # covering OCO stop leg without a full TP) therefore stays stop-only for its whole
+    # life; the system converges to full OCO coverage purely by turnover.
+    return [NoOp()]
 
 
 def advance(verdict: ReconcileVerdict) -> Action:
@@ -549,6 +717,7 @@ def _advance_filled(verdict: ReconcileVerdict) -> Action:
 __all__ = [
     "Action",
     "AlertOnly",
+    "AmendStop",
     "BrokerView",
     "CancelRemaining",
     "CancelSellLegs",
