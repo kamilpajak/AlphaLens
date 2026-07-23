@@ -1,18 +1,22 @@
 """Hermetic tests for SaxoBroker.place_oco_exit (Stage 2 rung-2 OCO exit, DARK).
 
 The rung-2 upgrade posts a standalone OCO EXIT pair (no entry parent) on a
-filled long: one ``Limit`` take-profit leg + one far ``StopIfTraded`` disaster
-leg, both SELL, both ``Amount == owned``, ``OrderRelation:"Oco"``. Live SIM
-probe (PR #885, Q1/Q2 TRUE) proved the ACCEPTED body is the SIBLINGS-ARRAY form
-``{"AccountKey": key, "Orders": [limit_leg, stop_leg]}`` — the sell side commits
-owned ONCE (no ``SellOrdersAlreadyExistForOwnedContracts``) and the far stop
-escapes ``TooFarFromEntryOrder`` while OCO-linked.
+filled long: a ``Limit`` take-profit MASTER (top-level order) + a far
+``StopIfTraded`` disaster leg nested in the master's ``Orders`` array, both SELL,
+both ``Amount == owned``, ``OrderRelation:"Oco"``, ``ManualOrder`` on both. The
+siblings-array ``{AccountKey, Orders:[a,b]}`` form prechecked clean (PR #885,
+Q1/Q2) but the REAL POST rejected it (HTTP 400, ManualOrder/master required);
+the top-level-master + nested-child shape is the LIVE-VALIDATED real-POST body
+(SIM 2026-07-22). The sell side still commits owned ONCE (no
+``SellOrdersAlreadyExistForOwnedContracts``) and the far stop escapes
+``TooFarFromEntryOrder`` while OCO-linked.
 
-Pins: siblings-array body shape (no top-level order fields), both legs
-``Amount == owned``, per-leg ``ExternalReference`` derived from ``request_id``,
-the degenerate-ordering guard (stop must sit below tp), the ALLOW_ORDERS gate,
-and the ``PlacedOrder(entry_order_id="", exit_order_ids=(stop_id, tp_id))``
-response shape. The wide-stop 15% child-distance guard
+Pins: top-level-master + nested-child body shape, both legs ``Amount == owned``,
+per-leg ``ExternalReference`` derived from ``request_id`` (tp on the master, stop
+on the child), the degenerate-ordering guard (stop must sit below tp), the
+ALLOW_ORDERS gate, and the ``PlacedOrder(entry_order_id="",
+exit_order_ids=(stop_id, tp_id))`` response shape (tp_id = master OrderId, stop_id
+= child OrderId). The wide-stop 15% child-distance guard
 (``_validate_price_relations``) MUST NOT run — the OCO exit is precisely that
 escape.
 """
@@ -43,11 +47,12 @@ _DETAILS_KO = {
     "SupportedOrderTypes": ["Limit", "Market", "Stop", "StopIfTraded", "StopLimit"],
 }
 
-# A live-shaped siblings-array place response: two accepted legs, no top-level
-# OrderId (the OCO group has no parent order).
-_OCO_201_TWO_LEGS = (
+# A live-shaped place response: the Limit take-profit MASTER as the top-level
+# OrderId (L-1) with the StopIfTraded sibling nested in Orders (S-2). tp_id is the
+# master, stop_id the child -> deterministic by structure.
+_OCO_201_MASTER_CHILD = (
     201,
-    {"Orders": [{"OrderId": "L-1"}, {"OrderId": "S-2"}]},
+    {"OrderId": "L-1", "Orders": [{"OrderId": "S-2"}]},
 )
 
 
@@ -59,7 +64,7 @@ class _StubOcoClient:
         *,
         details: dict[str, Any] | None = None,
         precheck_response: tuple[int, dict[str, Any]] = (200, {"PreCheckResult": "Ok"}),
-        place_response: tuple[int, dict[str, Any]] = _OCO_201_TWO_LEGS,
+        place_response: tuple[int, dict[str, Any]] = _OCO_201_MASTER_CHILD,
     ):
         self.details = details or _DETAILS_KO
         self.precheck_response = precheck_response
@@ -107,35 +112,35 @@ def _place(broker: SaxoBroker, **kwargs: Any) -> PlacedOrder:
 
 
 class TestOcoBodyCommitsOwnedOnce(unittest.TestCase):
-    def test_siblings_array_two_sell_legs_amount_owned_once(self):
+    def test_top_level_master_plus_child_amount_owned_once(self):
         broker, stub = _make(_StubOcoClient())
         _place(broker, qty=46, stop_price=45.0, take_profit=64.0)
         body, _ = stub.place_calls[0]
 
-        # Top-level is the siblings envelope ONLY: AccountKey + Orders, and NO
-        # top-level order fields (no parent order commits owned a second time).
+        # Top-level IS the Limit take-profit master (a real order, not a bare
+        # envelope): ManualOrder here satisfies "ManualOrder on all orders" for the
+        # OCO group. The far StopIfTraded is its single nested child.
         self.assertEqual(body["AccountKey"], "AK-1")
-        self.assertIn("Orders", body)
-        self.assertNotIn("Uic", body)
-        self.assertNotIn("OrderType", body)
-        self.assertNotIn("Amount", body)
-        self.assertNotIn("BuySell", body)
+        self.assertEqual(body["Uic"], 307)
+        self.assertEqual(body["AssetType"], "Stock")
+        self.assertEqual(body["OrderType"], "Limit", "master is the take-profit leg")
+        self.assertEqual(body["OrderPrice"], 64.0, "master @ take_profit")
+        self.assertEqual(body["BuySell"], "Sell")
+        self.assertEqual(body["Amount"], 46, "master commits owned ONCE")
+        self.assertEqual(body["OrderRelation"], "Oco")
+        self.assertIs(body["ManualOrder"], False, "ManualOrder MUST be on the master")
+        self.assertEqual(body["OrderDuration"], {"DurationType": "GoodTillCancel"})
 
-        legs = body["Orders"]
-        self.assertEqual(len(legs), 2, "exactly two OCO legs")
-        for leg in legs:
-            self.assertEqual(leg["BuySell"], "Sell")
-            self.assertEqual(leg["Amount"], 46, "each leg commits owned ONCE")
-            self.assertEqual(leg["OrderRelation"], "Oco")
-            self.assertEqual(leg["Uic"], 307)
-            self.assertEqual(leg["AssetType"], "Stock")
-            self.assertEqual(leg["OrderDuration"], {"DurationType": "GoodTillCancel"})
-            self.assertIs(leg["ManualOrder"], False)
-
-        by_type = {leg["OrderType"]: leg for leg in legs}
-        self.assertEqual(set(by_type), {"Limit", "StopIfTraded"}, "one Limit + one StopIfTraded")
-        self.assertEqual(by_type["Limit"]["OrderPrice"], 64.0, "Limit @ take_profit")
-        self.assertEqual(by_type["StopIfTraded"]["OrderPrice"], 45.0, "StopIfTraded @ stop_price")
+        children = body["Orders"]
+        self.assertEqual(len(children), 1, "exactly one nested OCO sibling")
+        stop = children[0]
+        self.assertEqual(stop["OrderType"], "StopIfTraded", "child is the disaster stop")
+        self.assertEqual(stop["OrderPrice"], 45.0, "StopIfTraded @ stop_price")
+        self.assertEqual(stop["BuySell"], "Sell")
+        self.assertEqual(stop["Amount"], 46, "child commits owned ONCE (mutually exclusive)")
+        self.assertEqual(stop["OrderRelation"], "Oco")
+        self.assertIs(stop["ManualOrder"], False, "ManualOrder MUST be on the child too")
+        self.assertEqual(stop["Uic"], 307)
 
     def test_per_leg_external_reference_derived_from_request_id(self):
         broker, stub = _make(_StubOcoClient())
@@ -144,9 +149,9 @@ class TestOcoBodyCommitsOwnedOnce(unittest.TestCase):
         # The place POST x-request-id header is the base request_id (deterministic
         # → Saxo 15 s dedup catches a same-size crash-retry).
         self.assertEqual(header_request_id, "crid-A-3")
-        by_type = {leg["OrderType"]: leg for leg in body["Orders"]}
-        self.assertEqual(by_type["StopIfTraded"]["ExternalReference"], "crid-A-3-stop")
-        self.assertEqual(by_type["Limit"]["ExternalReference"], "crid-A-3-tp")
+        # tp ref on the master (Limit), stop ref on the nested child (StopIfTraded).
+        self.assertEqual(body["ExternalReference"], "crid-A-3-tp")
+        self.assertEqual(body["Orders"][0]["ExternalReference"], "crid-A-3-stop")
 
     def test_wide_stop_escapes_child_distance_guard(self):
         # A ~30% wide disaster stop (the whole reason the OCO exit exists) must
@@ -168,46 +173,39 @@ class TestOcoPlacementResponse(unittest.TestCase):
         placed = _place(broker)
         self.assertIsInstance(placed, PlacedOrder)
         self.assertEqual(placed.entry_order_id, "", "an OCO exit pair has no entry order")
-        self.assertCountEqual(placed.exit_order_ids, ("L-1", "S-2"))
-        self.assertEqual(len(placed.exit_order_ids), 2)
-
-    def test_leg_ids_ordered_stop_then_tp_via_external_reference(self):
-        # When Saxo echoes per-leg ExternalReference, the tuple is (stop_id, tp_id).
-        echoed = (
-            201,
-            {
-                "Orders": [
-                    {"OrderId": "L-1", "ExternalReference": "crid-A-0-tp"},
-                    {"OrderId": "S-2", "ExternalReference": "crid-A-0-stop"},
-                ]
-            },
-        )
-        broker, _ = _make(_StubOcoClient(place_response=echoed))
-        placed = _place(broker, request_id="crid-A-0")
+        # Deterministic by structure: tp_id = master OrderId (L-1), stop_id = child (S-2).
         self.assertEqual(placed.exit_order_ids, ("S-2", "L-1"), "(stop_id, tp_id)")
 
-    def test_leg_ids_ordered_by_ordertype_when_no_external_reference(self):
-        # Q7 fallback: Saxo omits the per-leg ExternalReference echo. The
-        # (stop_id, tp_id) tuple MUST be resolved by OrderType (Limit -> tp,
-        # StopIfTraded -> stop), NOT by response array order — the request body is
-        # [limit_leg, stop_leg], so array order would swap the pair.
-        no_echo = (
-            201,
-            {
-                "Orders": [
-                    {"OrderId": "L-1", "OrderType": "Limit"},  # tp leg, listed FIRST
-                    {"OrderId": "S-2", "OrderType": "StopIfTraded"},  # stop leg
-                ]
-            },
-        )
-        broker, _ = _make(_StubOcoClient(place_response=no_echo))
-        placed = _place(broker, request_id="crid-A-0")
-        self.assertEqual(
-            placed.exit_order_ids, ("S-2", "L-1"), "(stop_id, tp_id) resolved by OrderType"
-        )
+    def test_ids_are_master_tp_and_child_stop(self):
+        # The Limit master's OrderId is the tp id; the nested StopIfTraded child's
+        # is the stop id — no ref-matching / array-order guessing needed.
+        resp = (201, {"OrderId": "MASTER-TP", "Orders": [{"OrderId": "CHILD-STOP"}]})
+        broker, _ = _make(_StubOcoClient(place_response=resp))
+        placed = _place(broker)
+        self.assertEqual(placed.exit_order_ids, ("CHILD-STOP", "MASTER-TP"), "(stop_id, tp_id)")
+
+    def test_master_without_child_2xx_cleans_up_and_raises(self):
+        # A half-accepted OCO (master only, no child) must cancel the stranded
+        # master (its cascade cleans the rest) and raise — never a lone leg.
+        from alphalens_pipeline.brokers.contract import BrokerError
+
+        broker, stub = _make(_StubOcoClient(place_response=(201, {"OrderId": "L-1", "Orders": []})))
+        with self.assertRaises(BrokerError) as ctx:
+            _place(broker)
+        self.assertNotIsInstance(ctx.exception, PlacedOrder)
+        self.assertEqual(stub.cancel_calls, ["L-1"], "the stranded master must be cancelled")
+
+    def test_child_without_master_2xx_cleans_up_and_raises(self):
+        # The inverse half-accept: a child leg but no top-level master.
+        from alphalens_pipeline.brokers.contract import BrokerError
+
+        broker, stub = _make(_StubOcoClient(place_response=(201, {"Orders": [{"OrderId": "S-2"}]})))
+        with self.assertRaises(BrokerError):
+            _place(broker)
+        self.assertEqual(stub.cancel_calls, ["S-2"], "the stranded child must be cancelled")
 
     def test_response_with_no_legs_raises_brokererror(self):
-        # A 2xx with an empty Orders array is a failure, not a silent no-op.
+        # A 2xx with neither a master nor a child is a failure, not a silent no-op.
         from alphalens_pipeline.brokers.contract import BrokerError
 
         broker, stub = _make(_StubOcoClient(place_response=(201, {"Orders": []})))
@@ -215,21 +213,10 @@ class TestOcoPlacementResponse(unittest.TestCase):
             _place(broker)
         self.assertEqual(stub.cancel_calls, [], "no accepted leg → nothing to clean up")
 
-    def test_single_leg_2xx_cleans_up_the_stranded_leg_and_raises(self):
-        # A half-accepted OCO (one leg only) must cancel the stranded leg (the
-        # sibling cascade cleans the rest) and raise — never return a lone leg.
-        from alphalens_pipeline.brokers.contract import BrokerError
-
-        broker, stub = _make(_StubOcoClient(place_response=(201, {"Orders": [{"OrderId": "L-1"}]})))
-        with self.assertRaises(BrokerError) as ctx:
-            _place(broker)
-        self.assertNotIsInstance(ctx.exception, PlacedOrder)
-        self.assertEqual(stub.cancel_calls, ["L-1"], "the stranded leg must be cancelled")
-
     def test_202_raises_brokererror_no_silent_placement(self):
         from alphalens_pipeline.brokers.contract import BrokerError
 
-        broker, _ = _make(_StubOcoClient(place_response=(202, {"Orders": [{"OrderId": "X-1"}]})))
+        broker, _ = _make(_StubOcoClient(place_response=(202, {"OrderId": "X-1"})))
         with self.assertRaises(BrokerError) as ctx:
             _place(broker)
         self.assertIn("202", str(ctx.exception))
