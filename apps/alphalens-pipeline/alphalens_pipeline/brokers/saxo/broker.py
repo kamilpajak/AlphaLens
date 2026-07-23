@@ -646,6 +646,9 @@ class SaxoBroker:
                     f"both master + child legs ({payload!r}); cleanup: {cleanup}"
                 )
             tp_id = str(master_id)  # top-level master = the Limit take-profit leg
+            # The OCO exit body nests exactly ONE child (the StopIfTraded leg), so
+            # children[0] is deterministic; the `not children` guard above rejects a
+            # 2xx that dropped it (half-accept -> cleanup + raise, never a lone leg).
             stop_id = str(children[0]["OrderId"])  # nested child = the StopIfTraded leg
             return PlacedOrder(entry_order_id="", exit_order_ids=(stop_id, tp_id))
         if status == 202:
