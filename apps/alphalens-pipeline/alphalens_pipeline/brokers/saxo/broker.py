@@ -731,6 +731,12 @@ class SaxoBroker:
         preserved by the amend — it is NEVER restamped here — and no
         ``PositionId`` is attached (reduce-only refuted). ``stop_price`` is
         quantized to the instrument tick like every other exit price.
+
+        Single choke point for BOTH the standalone-stop and the Stage-3.5 OCO-leg
+        callers: a resting OCO child stop can echo ``OrderType: None`` from a naive
+        ``/orders/me`` read, so a falsy ``order_type`` defaults to ``StopIfTraded``
+        (the amend only ever resizes a resting stop) rather than PATCHing an invalid
+        empty OrderType.
         """
         asset_type = "Stock"  # MVP scope: single-name equities only
         details = self._client.get_instrument_details(uic, asset_type)
@@ -740,7 +746,7 @@ class SaxoBroker:
             "Uic": int(uic),
             "AssetType": asset_type,
             "AccountKey": account_key,
-            "OrderType": order_type,
+            "OrderType": order_type or "StopIfTraded",
             "OrderPrice": stop_q,
             "OrderDuration": {"DurationType": execution_policy._EXIT_DURATION},
             "Amount": new_qty,

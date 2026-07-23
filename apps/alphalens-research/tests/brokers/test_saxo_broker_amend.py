@@ -129,6 +129,29 @@ class TestAmendBody(unittest.TestCase):
         body, _ = stub.amend_calls[0]
         self.assertEqual(body["BuySell"], "Buy")
 
+    def test_falsy_order_type_defaults_to_stopiftraded(self):
+        # Belt: a resting OCO child stop can echo ``OrderType: None`` from a naive
+        # ``/orders/me`` read (Stage-3.5 write-side gotcha), and the mapped OrderState
+        # can then carry a falsy order_type. Both "" and None must default to
+        # "StopIfTraded" so the single amend-body choke point always PATCHes a valid
+        # stop order (covers both the standalone and the OCO-leg callers).
+        for falsy in ("", None):
+            with self.subTest(order_type=falsy):
+                broker, stub = _make(_StubAmendClient())
+                _amend(broker, order_type=falsy)
+                body, _ = stub.amend_calls[0]
+                self.assertEqual(
+                    body["OrderType"], "StopIfTraded", "falsy order_type defaults to StopIfTraded"
+                )
+
+    def test_present_order_type_is_preserved(self):
+        broker, stub = _make(_StubAmendClient())
+        _amend(broker, order_type="Stop")
+        body, _ = stub.amend_calls[0]
+        self.assertEqual(
+            body["OrderType"], "Stop", "a present order_type is passed through unchanged"
+        )
+
     def test_never_prechecks(self):
         # The stub has no precheck_order; reaching it would AttributeError. The
         # amend path has no PATCH precheck endpoint (spec) — assert only amend
