@@ -891,13 +891,15 @@ class TestB0OcoDirectOnFill(unittest.TestCase):
 
     def test_b0_suppressed_when_uic_in_oco_recently_placed(self) -> None:
         # A just-placed OCO rests but list-orders lags (empty legs). The marker
-        # suppresses a 2nd B0 -> no double-commit; falls through to B2 stop-only.
+        # suppresses B0 AND must NoOp — a PlaceStop(owned) here would commit a
+        # second owned SELL on top of the invisible resting OCO pair (2x owned,
+        # the exact double-commit the marker exists to prevent). The OCO stop
+        # leg already covers the downside; NoOp until the pair becomes visible
+        # or the TTL expires and B0 re-evaluates against live broker state.
         pos, view = self._naked_view(oco_recently_placed=frozenset({_UIC}))
         with patch.dict(os.environ, _OCO_ON):
             actions = reconcile_long(_UIC, pos, view)
-        self.assertEqual(len(actions), 1)
-        self.assertNotIsInstance(actions[0], UpgradeToOco)
-        self.assertIsInstance(actions[0], PlaceStop)
+        self.assertEqual(actions, [NoOp()])
 
     def test_b0_not_emitted_when_oco_disabled_falls_to_b2_stop_only(self) -> None:
         pos, view = self._naked_view()
@@ -1125,6 +1127,35 @@ class TestDownsizeAmendStop(unittest.TestCase):
         assert isinstance(action, PlaceStop)
         self.assertEqual(action.qty, 20.0)
         self.assertEqual(action.supersede_ids, ("oco-stop",))
+
+    def test_downsize_falls_to_place_first_when_stray_non_stop_sell_leg(self) -> None:
+        # A lone clean stop over-covers, but a stray resting SELL leg of a type
+        # OUTSIDE STOP_TYPES/TP_TYPES (e.g. a Market sell) also rests. Amending
+        # only the stop and returning would leave that stray leg resting -> a
+        # residual over-commit (stop=owned + stray > owned). _sole_standalone_stop
+        # must reject any shape that is not the SOLE resting sell leg, so this
+        # falls to the always-correct place-residual-first arm (over-covered,
+        # never naked) which supersedes the stop and cancels the stray leg.
+        pos = _pos(4.0)
+        stop = _leg("stop-1", "StopIfTraded", 7.0)  # over-covers owned 4
+        stray = _leg("mkt-1", "Market", 2.0)  # not a stop, not a TP
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop, stray)},
+                    planned_by_uic={_UIC: _plan()},
+                ),
+            )
+        self.assertFalse(
+            any(isinstance(a, AmendStop) for a in actions),
+            "a stray non-stop sell leg must block the sole-standalone-stop amend",
+        )
+        place = next(a for a in actions if isinstance(a, PlaceStop))
+        self.assertEqual(place.qty, 4.0)  # residual == netted owned
+        self.assertIn("stop-1", place.supersede_ids)  # old stop superseded AFTER the place
 
     def test_downsize_no_amend_when_amend_disabled_falls_to_place_first(self) -> None:
         pos = _pos(4.0)

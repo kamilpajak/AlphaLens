@@ -1055,6 +1055,7 @@ def _one_uic_view(
     legs: tuple[OrderState, ...],
     *,
     tp_price: float | None = 306.72,
+    oco_recently_placed: frozenset[int] = frozenset(),
 ) -> tuple[Position, ProtectionView]:
     pos = _mk_pos(owned, _UIC)
     view = ProtectionView(
@@ -1063,6 +1064,7 @@ def _one_uic_view(
         sell_legs_by_uic={_UIC: legs} if legs else {},
         planned_by_uic={_UIC: _mk_plan(_UIC, tp_price=tp_price)},
         oco_unsupported=frozenset(),
+        oco_recently_placed=oco_recently_placed,
     )
     return pos, view
 
@@ -1124,6 +1126,23 @@ class TestStage3AmendAndB0Properties(unittest.TestCase):
         if emitted_b0:
             up = next(a for a in actions if isinstance(a, UpgradeToOco))
             self.assertEqual(up.supersede_ids, ())
+
+    @given(owned=st.integers(4, 5000).map(float))
+    @_LONG_SETTINGS
+    def test_property_b0_suppressed_by_recent_marker_noops_never_places_stop(
+        self, owned: float
+    ) -> None:
+        # INV — a naked-looking uic (empty legs) that is in oco_recently_placed
+        # emits [NoOp()], NEVER a PlaceStop. This is the list-lag window: a just-
+        # placed OCO pair rests at the broker but is invisible in the view, so any
+        # stop placed here would be a SECOND owned SELL on top of it (2x owned).
+        # The no-double-commit property above is structurally BLIND to this case —
+        # _final_sell_including_amend only counts legs present in the view, and the
+        # offending OCO is hidden — so this targeted anchor pins the NoOp directly.
+        with patch.dict(os.environ, _stage3_env(ALPHALENS_BROKER_OCO_ENABLED="1"), clear=True):
+            pos, view = _one_uic_view(owned, (), oco_recently_placed=frozenset({_UIC}))
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()], "recent-marker suppression must NoOp, never PlaceStop")
 
     @given(
         owned=st.integers(4, 5000).map(float),

@@ -400,10 +400,14 @@ def _sole_standalone_stop(legs: tuple[OrderState, ...]) -> OrderState | None:
     without cascading its sibling, Q9); (3) NO Limit/TP leg is present anywhere in
     ``legs`` (belt for a Q7 hidden-OCO whose relation echo failed — a real OCO
     always carries a TP sibling); (4) the stop has NOT partially triggered
-    (``filled_quantity <= _QTY_EPS`` — never amend a stop mid-fill, mitigation H2).
-    Any other shape (>1 stop, an OCO leg, a TP present, a partial fill) returns
-    ``None`` and the caller falls to the always-correct B1 additive / place-first
-    path."""
+    (``filled_quantity <= _QTY_EPS`` — never amend a stop mid-fill, mitigation H2);
+    (5) the stop is the SOLE resting sell leg on the uic — NO other leg of any type
+    rests alongside it (a stray non-stop / non-TP SELL leg, e.g. a Market or a
+    TrailingStop outside ``STOP_TYPES``, would keep resting after an in-place amend
+    and leave a residual over-commit; the amend arm resizes only the stop and
+    returns). Any other shape (>1 stop, an OCO leg, a TP present, a partial fill, a
+    stray extra leg) returns ``None`` and the caller falls to the always-correct B1
+    additive / place-residual-first path (over-covered, never naked)."""
     stops = [leg for leg in legs if leg.order_type in STOP_TYPES]
     if len(stops) != 1:
         return None
@@ -413,6 +417,8 @@ def _sole_standalone_stop(legs: tuple[OrderState, ...]) -> OrderState | None:
     if any(leg.order_type in TP_TYPES for leg in legs):
         return None
     if (stop.filled_quantity or 0.0) > _QTY_EPS:
+        return None
+    if any(leg.order_id != stop.order_id for leg in legs):
         return None
     return stop
 
@@ -580,9 +586,17 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
             _oco_enabled()
             and plan.tp_price is not None
             and uic not in view.oco_unsupported
-            and uic not in view.oco_recently_placed
             and not legs
         ):
+            if uic in view.oco_recently_placed:
+                # A just-placed OCO pair rests but list-orders lags (the view
+                # shows no legs). Placing ANY stop now would commit a second
+                # owned SELL atop the invisible resting OCO pair -> 2x owned,
+                # the exact double-commit the marker exists to prevent (H1b/A1).
+                # NoOp — the OCO stop leg already covers the downside; next tick
+                # the pair becomes visible (arm C -> NoOp) or the TTL expires and
+                # B0 re-evaluates against live broker state.
+                return [NoOp()]
             return [
                 UpgradeToOco(
                     uic,
