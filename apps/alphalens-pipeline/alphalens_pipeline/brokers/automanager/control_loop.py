@@ -1396,6 +1396,20 @@ def _execute_upgrade_to_oco(
             request_id,
             None,  # position_id: reduce-only linkage refuted (Stage 3, Q3); unused
         )
+    except BrokerCapabilityError as exc:
+        # PROVABLY UNSENT: placement is structurally disabled (ALLOW_ORDERS off or a
+        # missing capability) — nothing reached Saxo. This is NEITHER an ambiguous
+        # write (no CRITICAL, and a fallback stop is equally gated so it would fail
+        # too) NOR a clean structural reject (do NOT mark oco_unsupported — a
+        # transient env gate is not an instrument incapability). Throttled alert;
+        # reconcile against live broker state next tick (the gate self-clears).
+        if throttle.emit(
+            f"uic {action.uic}: order placement disabled — OCO not sent ({exc})",
+            uic=action.uic,
+            reason="orders-disabled",
+        ):
+            report.alerts += 1
+        return
     except OrderRejectedError as exc:
         if _is_sell_orders_already_exist(exc):
             # BENIGN: an OCO already rests from a prior tick's landed write that
@@ -1488,11 +1502,23 @@ def _execute_amend_stop(
             action.stop_price,
             action.request_id,
         )
+    except BrokerCapabilityError as exc:
+        # PROVABLY UNSENT (orders disabled / no capability): NOT an amend rejection.
+        # Do NOT journal amend_failed (it would needlessly skip amend next tick) and
+        # do NOT escalate as a place-failure — a throttled alert; the env gate
+        # self-clears and the amend retries next tick.
+        if throttle.emit(
+            f"uic {action.uic}: order placement disabled — amend not sent ({exc})",
+            uic=action.uic,
+            reason="orders-disabled",
+        ):
+            report.alerts += 1
+        return
     except BrokerError as exc:
-        # ANY failure (clean reject, ambiguous, capability): journal amend_failed
-        # (TTL fold -> next tick skips amend, B1 additive / place-first covers the
-        # delta) and escalate. record_place_failure gives the naked-position
-        # escalation without a permanent latch.
+        # ANY OTHER failure (clean reject, ambiguous 5xx/network): journal
+        # amend_failed (TTL fold -> next tick skips amend, B1 additive / place-first
+        # covers the delta) and escalate. record_place_failure gives the naked-
+        # position escalation without a permanent latch.
         _journal_amend_failed(action.uic)
         throttle.record_place_failure(action.uic, f"uic {action.uic}: stop amend failed — {exc}")
         return

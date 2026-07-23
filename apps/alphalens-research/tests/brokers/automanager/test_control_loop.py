@@ -1013,6 +1013,42 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
         self.assertEqual(report.exits_placed, 0)
         self.assertTrue(alerts, "the benign already-rests case is surfaced as a deferring alert")
 
+    def test_execute_b0_capability_error_provably_unsent_no_fallback_no_degrade(self) -> None:
+        # A BrokerCapabilityError (ALLOW_ORDERS off / no placement capability) is a
+        # BrokerError subclass but is PROVABLY UNSENT — it must NOT read as an
+        # ambiguous write (no CRITICAL; a fallback stop is equally gated so it would
+        # fail too) NOR as a clean structural reject (no oco_unsupported degrade — a
+        # transient env gate is not an instrument incapability).
+        with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+            calls: list = []
+            placer = _oco_placer(calls, error=BrokerCapabilityError("order placement disabled"))
+            executor = cl._make_protection_executor(
+                broker, _throttle_to(alerts), place_oco_exit=placer
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_b0_action(), False, report)  # must NOT raise
+                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "oco_placed"
+                ]
+        self.assertEqual(
+            broker.placed, [], "no fallback — placement is globally gated (would fail too)"
+        )
+        self.assertNotIn(_UIC, folded, "an env gate never degrades the uic to oco_unsupported")
+        self.assertEqual(markers, [], "no oco_placed marker on a provably-unsent write")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertFalse(
+            any("CRITICAL" in a for a in alerts),
+            f"a provably-unsent capability error is NOT a CRITICAL ambiguous write: {alerts}",
+        )
+        self.assertTrue(alerts, "the orders-disabled state is surfaced (throttled)")
+
 
 class TestExecuteB0UnderKill(unittest.TestCase):
     """Under KILL a B0 naked fill still needs covering — no OCO churn (a new OCO is
@@ -1887,6 +1923,41 @@ class TestExecuteAmendStop(unittest.TestCase):
         self.assertEqual(broker.amended, [], "no amend on a flat uic")
         self.assertEqual(report.exits_placed, 0)
         self.assertTrue(any("gone" in a or "skip" in a for a in alerts))
+
+    def test_execute_amend_capability_error_no_journal_no_escalation(self) -> None:
+        # A BrokerCapabilityError (orders disabled) is PROVABLY UNSENT, not an amend
+        # rejection: it must NOT journal amend_failed (which would needlessly skip
+        # amend next tick) nor escalate via record_place_failure — just a throttled
+        # alert; the env gate self-clears and amend retries next tick.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            sent: list[str] = []
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                amend_error=BrokerCapabilityError("order placement disabled"),
+            )
+            throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
+            executor = cl._make_protection_executor(
+                broker, throttle, amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)  # must NOT raise
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual(
+            markers, [], "a provably-unsent capability error never journals amend_failed"
+        )
+        self.assertEqual(broker.amended, [], "nothing was amended")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertTrue(sent, "the orders-disabled state is surfaced (throttled)")
+        self.assertFalse(
+            any("amend failed" in a for a in sent),
+            f"a provably-unsent error does not escalate as a place-failure: {sent}",
+        )
 
     def test_execute_amend_reject_journals_amend_failed_and_records_failure(self) -> None:
         with TemporaryDirectory() as d:
