@@ -394,7 +394,23 @@ def _stop_leg_ids(legs: tuple[OrderState, ...]) -> tuple[str, ...]:
 
 
 def _tp_only_leg_ids(legs: tuple[OrderState, ...]) -> tuple[str, ...]:
-    return tuple(leg.order_id for leg in legs if leg.order_type in TP_TYPES)
+    """Order ids of STANDALONE (non-OCO) TP legs — the Bug-B lone-TP shape that
+    holds an INDEPENDENT sell commitment and must be cancelled BEFORE a stop place.
+
+    OCO Limit legs are EXCLUDED: an OCO TP is mutually exclusive with its sibling
+    stop (the pair commits owned ONCE), and cancelling one OCO leg cascade-cancels
+    the covering stop (control_loop ``_idempotent_cancel`` / the arm-A note). Since
+    ``cancel_conflicting`` is cancelled BEFORE the place (``_execute_place_stop``),
+    naming an OCO leg here would tear the pair down and open a fully-naked window
+    before the replacement/delta stop lands. When a grown OCO pair falls to the B1
+    additive / B2 place-first fallback (OCO-amend skipped: amend off, uic degraded,
+    or a recent amend-fail), the OCO stop leaves ONLY via ``supersede_ids`` (cancel
+    AFTER a successful place); its TP sibling is left in place (Q3a caps oversell).
+    Mirrors the arm-A ``oco_ids`` exclusion so no OCO leg ever sits in an
+    unconditional pre-cancel (never-naked invariant)."""
+    return tuple(
+        leg.order_id for leg in legs if leg.order_type in TP_TYPES and not _is_oco_leg(leg)
+    )
 
 
 def _sole_standalone_stop(legs: tuple[OrderState, ...]) -> OrderState | None:
@@ -602,15 +618,23 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
                     reason="OCO downsize — PATCH OCO stop leg down in place",
                 )
             ]
-        # (M1) OCO propagation-lag NoOp guard: reaching here with a clean unfilled
-        # OCO pair (oco_stop is not None) means its stop leg is already <= owned
-        # (else the downsize amend fired) yet the commitment > owned — i.e. the TP
-        # leg still shows the OLD larger Amount because list-orders lags Q9's
-        # symmetric propagation. Tearing the pair down via place-residual-first
-        # would cancel the pair the previous tick just resized on a transient read
-        # lag; the downside is fully covered (stop <= owned), so NoOp one tick until
-        # the TP read catches up (then total == owned -> arm C NoOp). Gated on
-        # _amend_enabled() so arm A stays byte-identical when the flag is off.
+        # (M1) OCO NoOp guard: reaching here with a clean unfilled OCO pair
+        # (oco_stop is not None) yet commitment > owned is one of two SAFE states,
+        # both NoOp'd one tick rather than torn down:
+        #   (a) PROPAGATION LAG — the downsize amend already resized the stop to
+        #       <= owned last tick, but list-orders lags Q9's symmetric propagation
+        #       so the TP leg still shows the OLD larger Amount. NoOp until the TP
+        #       read catches up (then total == owned -> arm C NoOp).
+        #   (b) AMEND SKIPPED — the downsize amend above was skipped because the uic
+        #       is in amend_recently_failed (or oco_unsupported), so the stop leg may
+        #       still be > owned (a genuine over-hedge, not merely a lag). NoOp is
+        #       the deliberate hold: the OCO stop keeps covering the downside (excess
+        #       sell NotOwned-capped, cash account cannot short), the TTL self-clears,
+        #       and the next tick's downsize amend resizes to owned. Place-residual-
+        #       first here would POST a doomed 3rd sell (SellOrdersAlreadyExist while
+        #       the OCO rests) -> alert spam, ending equally over-covered.
+        # Either way the downside is fully covered and the pair is never torn down.
+        # Gated on _amend_enabled() so arm A stays byte-identical when the flag off.
         if _amend_enabled() and oco_stop is not None:
             return [NoOp()]
         bad = _group_with_partial_fill(legs) or _newest_group(legs)

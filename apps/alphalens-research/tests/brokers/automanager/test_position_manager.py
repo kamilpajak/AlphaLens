@@ -37,6 +37,9 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
 from alphalens_pipeline.brokers.automanager.position_manager import (
     _reconcile_long as reconcile_long,
 )
+from alphalens_pipeline.brokers.automanager.position_manager import (
+    _tp_only_leg_ids as tp_only_leg_ids,
+)
 from alphalens_pipeline.brokers.contract import (
     InstrumentRef,
     OrderState,
@@ -1297,6 +1300,31 @@ class TestOcoStopLegSelector(unittest.TestCase):
         self.assertIs(oco_stop_leg((stop, tp)), stop)
 
 
+class TestTpOnlyLegIdsExcludesOco(unittest.TestCase):
+    """``_tp_only_leg_ids`` feeds ``cancel_conflicting`` (cancelled BEFORE a place)
+    for the Bug-B lone-TP shape. It must name STANDALONE TP legs only — an OCO
+    Limit is mutually exclusive with its sibling stop and cancelling it cascade-
+    cancels the covering stop, so an OCO leg here would open a naked window."""
+
+    def test_standalone_lone_tp_is_named(self) -> None:
+        legs = (_leg("stop-1", "StopIfTraded", 20.0), _leg("tp-1", "Limit", 20.0))
+        self.assertEqual(tp_only_leg_ids(legs), ("tp-1",))
+
+    def test_oco_pair_yields_no_cancel_ids(self) -> None:
+        legs = (_oco_leg("oco-stop", "StopIfTraded", 4.0), _oco_leg("oco-tp", "Limit", 4.0))
+        self.assertEqual(tp_only_leg_ids(legs), ())  # OCO Limit excluded — never pre-cancel
+
+    def test_oco_tp_excluded_but_standalone_tp_kept(self) -> None:
+        # Mixed shape: an OCO pair plus a stray STANDALONE TP. Only the standalone
+        # TP (which holds an independent commitment) may be pre-cancelled.
+        legs = (
+            _oco_leg("oco-stop", "StopIfTraded", 4.0),
+            _oco_leg("oco-tp", "Limit", 4.0),
+            _leg("tp-standalone", "Limit", 3.0),
+        )
+        self.assertEqual(tp_only_leg_ids(legs), ("tp-standalone",))
+
+
 class TestOcoGrowAmendArm(unittest.TestCase):
     """Stage 3.5 GROW-after-OCO amend arm (arm B): a CLEAN unfilled resting OCO
     pair under-covers (owned grew) -> PATCH the OCO stop leg UP to live owned in
@@ -1348,6 +1376,10 @@ class TestOcoGrowAmendArm(unittest.TestCase):
         self.assertIsInstance(action, PlaceStop)
         assert isinstance(action, PlaceStop)
         self.assertEqual(action.qty, 3.0)  # B1 delta (owned 7 - covered 4)
+        # NEVER-NAKED: the B1 additive fallback KEEPS the resting OCO pair and adds
+        # a delta stop on top; it must NOT pre-cancel either OCO leg (cancel-before
+        # cascades the pair -> a fully-naked window before the delta lands).
+        self.assertEqual(action.cancel_conflicting, ())
 
     def test_grow_after_oco_recently_failed_falls_to_b1_additive(self) -> None:
         pos, view = self._grow_view(amend_recently_failed=frozenset({_UIC}))
@@ -1359,8 +1391,14 @@ class TestOcoGrowAmendArm(unittest.TestCase):
         self.assertIsInstance(action, PlaceStop)
         assert isinstance(action, PlaceStop)
         self.assertEqual(action.qty, 3.0)  # B1 additive covers the delta
+        # NEVER-NAKED: the OCO Limit (TP) leg must not be pre-cancelled — an OCO leg
+        # in cancel_conflicting cascade-cancels its sibling stop BEFORE the delta
+        # place, tearing the whole pair down (the exact bug this pins).
+        self.assertEqual(action.cancel_conflicting, ())
+        self.assertNotIn("oco-tp", action.cancel_conflicting)
+        self.assertNotIn("oco-stop", action.cancel_conflicting)
 
-    def test_grow_after_oco_uic_unsupported_falls_to_b1(self) -> None:
+    def test_grow_after_oco_uic_unsupported_falls_to_b2(self) -> None:
         # oco_unsupported gates BOTH the OCO amend and the B1 additive block, so the
         # uic falls to the place-first B2 path (full owned, stale stop superseded).
         pos, view = self._grow_view(oco_unsupported=frozenset({_UIC}))
@@ -1372,6 +1410,11 @@ class TestOcoGrowAmendArm(unittest.TestCase):
         self.assertIsInstance(action, PlaceStop)
         assert isinstance(action, PlaceStop)
         self.assertEqual(action.qty, 7.0)  # full owned, place-first B2
+        # NEVER-NAKED: the OCO stop leaves via supersede_ids (cancel AFTER the
+        # full-owned place); the OCO Limit (TP) leg must NEVER sit in
+        # cancel_conflicting (pre-cancel cascade-cancels the covering stop).
+        self.assertEqual(action.cancel_conflicting, ())
+        self.assertEqual(action.supersede_ids, ("oco-stop",))
 
     def test_grow_amend_order_type_defaults_stopiftraded_when_none(self) -> None:
         # The AmendStop preserves the OCO stop leg's order_type, defaulting to
@@ -1449,6 +1492,28 @@ class TestOcoDownsizeAmendArm(unittest.TestCase):
         with patch.dict(os.environ, _AMEND_ON):
             actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
+
+    def test_downsize_recently_failed_over_hedge_noops_not_teardown(self) -> None:
+        # M1 also holds an OVER-hedged clean OCO pair (stop=5 > owned=3) when the
+        # downsize amend was skipped because the uic recently failed an amend. NoOp
+        # is the deliberate SAFE hold: the OCO stop keeps covering the downside
+        # (excess sell NotOwned-capped on a cash account), the amend_recently_failed
+        # TTL self-clears, and the next tick's downsize amend resizes to owned.
+        # Tearing down via place-residual-first would POST a doomed 3-stop (Saxo
+        # SellOrdersAlreadyExist while the OCO rests) -> alert spam, ending equally
+        # over-covered. Never naked either way.
+        pos = _pos(3.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0)
+        tp = _oco_leg("oco-tp", "Limit", 5.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+            amend_recently_failed=frozenset({_UIC}),
+        )
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])  # safe hold, never a teardown/naked window
 
     def test_downsize_partial_fill_defers_to_place_residual_first(self) -> None:
         # OCO tp partially filled (2 of the old size), owned=3 -> _oco_stop_leg None

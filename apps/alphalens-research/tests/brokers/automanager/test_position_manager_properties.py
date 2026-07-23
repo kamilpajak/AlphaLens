@@ -50,6 +50,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlannedExit,
     ProtectionView,
     UpgradeToOco,
+    _is_oco_leg,
     reconcile_protection,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
@@ -1173,6 +1174,186 @@ class TestStage3AmendAndB0Properties(unittest.TestCase):
             actions = reconcile_long(_UIC, pos, view)
         final = _final_sell_including_amend(actions, legs, _UIC, owned)
         self.assertTrue(_le(final, owned), f"double-commit: final {final} > owned {owned} ({case})")
+
+
+# --------------------------------------------------------------------------
+# Stage 3.5 — in-place OCO-pair resize (OCO-leg PATCH amend) invariants. A
+# resting OCO exit pair {StopIfTraded, Limit} resizes via a PATCH on its child
+# stop leg (Q9 propagates symmetrically to the Limit sibling). These run with the
+# amend flag forced ON; the fallback modes (amend skipped) pin the never-naked
+# guarantee that NO OCO leg is ever pre-cancelled.
+# --------------------------------------------------------------------------
+
+_OCO_MODES = (
+    "grow_amend",
+    "downsize_amend",
+    "lag_noop",
+    "grow_fallback_recently_failed",
+    "grow_fallback_unsupported",
+    "downsize_fallback_recently_failed",
+)
+_OCO_AMEND_MODES = frozenset({"grow_amend", "downsize_amend"})
+
+
+def _mk_oco_leg(
+    order_id: str,
+    order_type: str,
+    amount: float,
+    uic: int,
+    *,
+    base: str = "crid-oco-0",
+    filled: float = 0.0,
+) -> OrderState:
+    """A resting OCO exit leg (``OrderRelation='Oco'`` + shared base ref with a
+    ``-stop`` / ``-tp`` suffix, what ``_build_oco_exit_body`` stamps)."""
+    suffix = "-stop" if order_type in STOP_TYPES else "-tp"
+    return OrderState(
+        order_id=order_id,
+        status=OrderStatus.WORKING,
+        instrument=None,
+        filled_quantity=filled,
+        raw_status="Working",
+        uic=uic,
+        side="SELL",
+        order_type=order_type,
+        amount=amount,
+        external_reference=f"{base}{suffix}",
+        order_relation="Oco",
+    )
+
+
+def _build_oco_case(mode: str, owned: float, uic: int) -> tuple[Position, ProtectionView]:
+    """Canonical resting-OCO-pair state for one mode (amend flag ON at call site).
+
+    grow modes rest a clean pair UNDER owned (owned grew); downsize/lag modes rest
+    a pair AT/OVER owned. The two fallback modes degrade the uic (amend_recently_
+    failed / oco_unsupported) so the OCO-amend arm is skipped and the reconciler
+    falls to B1 additive / B2 place-first / the M1 NoOp hold."""
+    pos = _mk_pos(owned, uic)
+    grow_amt = max(2.0, owned - 2.0)  # clean pair under owned (a genuine deficit)
+    over_amt = owned + 3.0  # clean pair over owned (over-hedge / lag)
+    amend_recently_failed: frozenset[int] = frozenset()
+    oco_unsupported: frozenset[int] = frozenset()
+    if mode in ("grow_amend", "grow_fallback_recently_failed", "grow_fallback_unsupported"):
+        stop_amt = tp_amt = grow_amt
+    elif mode in ("downsize_amend", "downsize_fallback_recently_failed"):
+        stop_amt = tp_amt = over_amt
+    else:  # lag_noop — stop already == owned, tp lags at the OLD larger amount
+        stop_amt, tp_amt = owned, over_amt
+    if mode in ("grow_fallback_recently_failed", "downsize_fallback_recently_failed"):
+        amend_recently_failed = frozenset({uic})
+    if mode == "grow_fallback_unsupported":
+        oco_unsupported = frozenset({uic})
+    legs = (
+        _mk_oco_leg(f"{uic}-oco-stop", "StopIfTraded", stop_amt, uic),
+        _mk_oco_leg(f"{uic}-oco-tp", "Limit", tp_amt, uic),
+    )
+    view = ProtectionView(
+        long_positions={uic: pos},
+        all_positions={uic: pos},
+        sell_legs_by_uic={uic: legs},
+        planned_by_uic={uic: _mk_plan(uic, tp_price=306.72)},
+        oco_unsupported=oco_unsupported,
+        amend_recently_failed=amend_recently_failed,
+    )
+    return pos, view
+
+
+def _oco_leg_ids(view: ProtectionView, uic: int) -> set[str]:
+    return {leg.order_id for leg in view.sell_legs_by_uic.get(uic, ()) if _is_oco_leg(leg)}
+
+
+class TestOcoAmendInvariantsPBT(unittest.TestCase):
+    """Stage 3.5 OCO-leg PATCH-amend invariants (money-adjacent). The teeth: no OCO
+    leg is EVER pre-cancelled (cancel_conflicting / CancelSellLegs), so the pair is
+    never torn down before a replacement lands — the never-naked guarantee across
+    the amend arms AND every fallback (amend skipped)."""
+
+    @given(
+        owned=st.integers(4, 5000).map(float),
+        mode=st.sampled_from(_OCO_MODES),
+    )
+    @_LONG_SETTINGS
+    def test_pbt_oco_amend_never_naked_never_double_commit_never_oversell(
+        self, owned: float, mode: str
+    ) -> None:
+        event(f"oco_mode:{mode}")
+        with patch.dict(os.environ, _stage3_env(ALPHALENS_BROKER_AMEND_ENABLED="1"), clear=True):
+            pos, view = _build_oco_case(mode, owned, _UIC)
+            actions = reconcile_long(_UIC, pos, view)
+        oco_ids = _oco_leg_ids(view, _UIC)
+        self.assertEqual(len(oco_ids), 2, "canonical case must rest a 2-leg OCO pair")
+
+        # NEVER-NAKED: no OCO leg id may sit in an unconditional PRE-cancel
+        # (cancel_conflicting is cancelled BEFORE the place; cancelling one OCO leg
+        # cascade-cancels its covering sibling -> a naked window). OCO legs leave
+        # ONLY via supersede_ids (cancel AFTER a successful place).
+        for a in _placestops(actions, _UIC):
+            self.assertEqual(
+                set(a.cancel_conflicting) & oco_ids,
+                set(),
+                f"OCO leg pre-cancelled in cancel_conflicting (mode={mode})",
+            )
+        for a in _cancels(actions, _UIC):
+            self.assertEqual(
+                set(a.order_ids) & oco_ids,
+                set(),
+                f"OCO leg in an unconditional CancelSellLegs (mode={mode})",
+            )
+
+        # ABSOLUTE-TARGET: an OCO-amend resizes to live owned (never a sum), and is
+        # the WHOLE action (the pair commits owned ONCE after Q9 propagation).
+        amends = [a for a in actions if isinstance(a, AmendStop)]
+        for a in amends:
+            self.assertTrue(_close(a.target_qty, owned), f"amend target {a.target_qty} != owned")
+            self.assertIn(a.order_id, oco_ids, "amend must target the OCO stop leg")
+        if mode in _OCO_AMEND_MODES:
+            self.assertEqual(len(actions), 1, f"amend arm must emit exactly one action ({mode})")
+            self.assertEqual(len(amends), 1, f"amend arm must emit an AmendStop ({mode})")
+
+        # NEVER-OVERSELL on a placed fallback stop: B1 delta covers owned-stop_qty;
+        # B2 places full owned. A placed stop never exceeds owned.
+        for a in _placestops(actions, _UIC):
+            self.assertTrue(
+                _le(a.qty, owned), f"placed stop {a.qty} exceeds owned {owned} ({mode})"
+            )
+
+    @given(owned=st.integers(4, 5000).map(float))
+    @_LONG_SETTINGS
+    def test_anchor_grow_downsize_lag_arms_execute(self, owned: float) -> None:
+        # AFFIRMATIVE non-vacuousness anchors: each mode emits its SPECIFIC action on
+        # its canonical state. Fails loudly if an arm collapses into a neighbour.
+        with patch.dict(os.environ, _stage3_env(ALPHALENS_BROKER_AMEND_ENABLED="1"), clear=True):
+            # grow amend -> one AmendStop up to owned, reason 'grow-after-OCO'.
+            pos, view = _build_oco_case("grow_amend", owned, _UIC)
+            grow = reconcile_long(_UIC, pos, view)
+            self.assertEqual(len(grow), 1)
+            self.assertIsInstance(grow[0], AmendStop)
+            assert isinstance(grow[0], AmendStop)
+            self.assertTrue(grow[0].reason.startswith("grow-after-OCO"))
+            self.assertTrue(_close(grow[0].target_qty, owned))
+
+            # downsize amend -> one AmendStop down to owned, reason 'OCO downsize'.
+            pos, view = _build_oco_case("downsize_amend", owned, _UIC)
+            down = reconcile_long(_UIC, pos, view)
+            self.assertEqual(len(down), 1)
+            self.assertIsInstance(down[0], AmendStop)
+            assert isinstance(down[0], AmendStop)
+            self.assertTrue(down[0].reason.startswith("OCO downsize"))
+            self.assertTrue(_close(down[0].target_qty, owned))
+
+            # lag -> M1 NoOp (stop already == owned, tp read lags), never a teardown.
+            pos, view = _build_oco_case("lag_noop", owned, _UIC)
+            self.assertEqual(reconcile_long(_UIC, pos, view), [NoOp()])
+
+            # grow fallback (recently failed) -> B1 additive delta, NO OCO pre-cancel.
+            pos, view = _build_oco_case("grow_fallback_recently_failed", owned, _UIC)
+            fb = reconcile_long(_UIC, pos, view)
+            self.assertEqual(len(fb), 1)
+            self.assertIsInstance(fb[0], PlaceStop)
+            assert isinstance(fb[0], PlaceStop)
+            self.assertEqual(fb[0].cancel_conflicting, ())
+            self.assertTrue(_close(fb[0].qty, owned - max(2.0, owned - 2.0)))
 
 
 if __name__ == "__main__":
