@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, cast
 from alphalens_pipeline.brokers.automanager.position_manager import (
     Action,
     AlertOnly,
+    AmendStop,
     BrokerView,
     CancelRemaining,
     CancelSellLegs,
@@ -29,7 +30,9 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlannedExit,
     ProtectionView,
     UpgradeToOco,
+    _amend_enabled,
     _exit_oco_ref,
+    _exit_stop_ref,
     _oco_enabled,
     advance,
     reconcile_protection,
@@ -41,6 +44,7 @@ from alphalens_pipeline.brokers.contract import (
     OrderRejectedError,
     PlacedOrder,
     Position,
+    SupportsAmendStop,
     SupportsOcoExit,
     SupportsStandaloneStop,
     _is_sell_orders_already_exist,
@@ -55,6 +59,10 @@ logger = logging.getLogger(__name__)
 # The rung 1 -> 2 OCO exit placer signature (SupportsOcoExit.place_oco_exit):
 # (uic, side, qty, stop_price, take_profit, request_id, position_id) -> PlacedOrder.
 OcoPlacer = Callable[[int, str, float, float, float, str, "str | None"], PlacedOrder]
+
+# The Stage-3 in-place stop-resize primitive (SupportsAmendStop.amend_stop_amount):
+# (uic, order_id, side, order_type, new_qty, stop_price, request_id) -> PlacedOrder.
+AmendStopPlacer = Callable[[int, str, str, str, float, float, str], PlacedOrder]
 
 # The runtime data root ($HOME/.alphalens) and its broker-orders subtree have ONE
 # home here so the literal is not duplicated across the kill-file + journal +
@@ -100,6 +108,12 @@ class LoopDeps:
     # bare LoopDeps field would be unreachable by the pre-built executor); kept
     # here for symmetry / introspection.
     place_oco_exit: OcoPlacer | None = None
+    # Stage-3 in-place stop-resize primitive (saxo Stage-3 memo), or None when the
+    # wired broker lacks SupportsAmendStop -> the loop uses the additive-stop
+    # fallback. Detected once in build_default_deps (which FAIL-FASTS if the amend
+    # flag is on but the capability is absent) and injected into the protection
+    # executor closure; kept here for symmetry / introspection.
+    amend_stop: AmendStopPlacer | None = None
 
 
 @dataclass
@@ -377,6 +391,20 @@ def build_default_deps() -> LoopDeps:
     oco_placer: OcoPlacer | None = (
         broker.place_oco_exit if isinstance(broker, SupportsOcoExit) else None
     )
+    # Stage-3 amend capability. FAIL-FAST when the amend flag is on but the wired
+    # broker cannot amend — so the pure layer may emit AmendStop freely, knowing a
+    # capable broker is guaranteed at runtime (saxo Stage-3 memo, §Env gates). When
+    # the flag is off, an incapable broker simply gets amend_placer=None and the
+    # pure arm never emits AmendStop (additive-stop fallback, unchanged).
+    if _amend_enabled() and not isinstance(broker, SupportsAmendStop):
+        raise BrokerCapabilityError(
+            f"broker {broker.name!r} does not implement amend_stop_amount "
+            "(SupportsAmendStop) but ALPHALENS_BROKER_AMEND_ENABLED=1 — the Stage-3 "
+            "AmendStop resize requires it; wire a capable broker or unset the flag."
+        )
+    amend_placer: AmendStopPlacer | None = (
+        broker.amend_stop_amount if isinstance(broker, SupportsAmendStop) else None
+    )
     keeper = session_keeper.SessionKeeper(_default_oauth_provider())
 
     def _read_records() -> list[Mapping[str, Any]]:
@@ -398,11 +426,14 @@ def build_default_deps() -> LoopDeps:
         verdicts_fn=reconcile_bridge.verdicts,
         build_position_view=_make_position_view_builder(broker),
         build_protection_view=build_protection_view,
-        execute_protection=_make_protection_executor(broker, throttle, place_oco_exit=oco_placer),
+        execute_protection=_make_protection_executor(
+            broker, throttle, place_oco_exit=oco_placer, amend_stop=amend_placer
+        ),
         sweep_orphans_fn=lambda b: orphan_sweeper.sweep(b, _read_records()),
         alert=base_alert,
         alert_throttled=lambda message, reason: throttle.emit(message, reason=reason),
         place_oco_exit=oco_placer,
+        amend_stop=amend_placer,
     )
 
 
@@ -603,6 +634,7 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
             conflicting=n_plans > 1,
             n_plans=n_plans,
             next_gen=_make_next_gen(uic),
+            next_amend_seq=_make_next_amend_seq(uic),
         )
     return result
 
@@ -637,6 +669,91 @@ def _fold_oco_unsupported(lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
         except (KeyError, TypeError, ValueError):
             continue
     return frozenset(disabled)
+
+
+# Stage-3 TTL folds (saxo Stage-3 memo). Both start at 120s (~2-3 poll intervals),
+# a value BETWEEN Saxo's 15s request-id dedup and the 45s poll so the JOURNAL — not
+# request-id dedup — suppresses a B0 re-fire / an amend retry across the window.
+# Tune after observing real SIM list-orders propagation lag + amend-retry cadence.
+_OCO_PLACED_TTL_S = 120.0
+_AMEND_FAILED_TTL_S = 120.0
+
+
+def _journal_oco_placed(uic: int, *, clock: Callable[[], float] = time.time) -> None:
+    """Persist a timestamped ``oco_placed`` marker (saxo Stage-3 memo, H1b/A1).
+
+    Written by the executor ONLY on a CONFIRMED 2xx B0 OCO placement.
+    ``build_protection_view`` folds markers newer than ``_OCO_PLACED_TTL_S`` into
+    ``ProtectionView.oco_recently_placed`` so a second B0 cannot double-commit atop
+    a resting OCO pair that live list-orders has not yet surfaced. The ``clock``
+    seam keeps the marker's ``ts`` testable (default wall clock)."""
+    _append_standalone_stop_journal({"kind": "oco_placed", "uic": int(uic), "ts": float(clock())})
+
+
+def _journal_amend_failed(uic: int, *, clock: Callable[[], float] = time.time) -> None:
+    """Persist a timestamped ``amend_failed`` marker (saxo Stage-3 memo, A4).
+
+    Written by the executor on ANY AmendStop failure. Folded (within
+    ``_AMEND_FAILED_TTL_S``) into ``ProtectionView.amend_recently_failed`` so the
+    NEXT tick's grow/downsize arm SKIPS amend and falls to the proven B1 additive /
+    place-residual-first primitive. NOT a permanent latch — a benign fill-race 400
+    self-clears after the TTL and amend is retried."""
+    _append_standalone_stop_journal({"kind": "amend_failed", "uic": int(uic), "ts": float(clock())})
+
+
+def _fold_ttl_markers(
+    lines: Iterable[Mapping[str, Any]], kind: str, now: float, ttl_s: float
+) -> frozenset[int]:
+    """Fold timestamped ``kind`` markers into the set of uics whose newest marker is
+    within ``ttl_s`` of ``now`` (saxo Stage-3 memo). Append-only, so a uic with BOTH
+    a stale and a fresh marker still counts (the fresh one adds it; the stale one is
+    simply skipped). Malformed (missing / unparsable uic or ts) lines are skipped."""
+    fresh: set[int] = set()
+    for line in lines:
+        if line.get("kind") != kind:
+            continue
+        try:
+            uic = int(line["uic"])
+            ts = float(line["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if now - ts <= ttl_s:
+            fresh.add(uic)
+    return frozenset(fresh)
+
+
+def _read_persisted_amend_seq(uic: int) -> int:
+    """The highest ``amend_seq`` recorded for ``uic`` in the append-only journal, or
+    ``-1`` when the uic has never been amend-sequenced (so the first seq is 0)."""
+    seq = -1
+    for line in _iter_standalone_stop_journal():
+        if line.get("kind") != "amend_seq":
+            continue
+        try:
+            if int(line["uic"]) != uic:
+                continue
+            seq = max(seq, int(line["seq"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return seq
+
+
+def _make_next_amend_seq(uic: int) -> Callable[[], int]:
+    """A per-uic MONOTONIC amend-sequence bound to the journal (saxo Stage-3 memo).
+
+    Returns ``max+1`` ALWAYS (never qty-keyed), so a genuine re-resize to a
+    previously-seen target qty gets a FRESH ``-amend-<seq>`` ref and is never
+    dedup-swallowed by Saxo's 15s request-id window (mitigation A3/H3). Absolute-
+    target semantics make a cross-tick re-emit safe (two sets of Amount=owned =
+    owned, never 2x), so monotonic-not-qty-keyed never double-commits. The bump is
+    appended, never rewritten, so the counter survives a systemd restart."""
+
+    def _next_seq() -> int:
+        seq = _read_persisted_amend_seq(uic) + 1
+        _append_standalone_stop_journal({"kind": "amend_seq", "uic": int(uic), "seq": int(seq)})
+        return seq
+
+    return _next_seq
 
 
 def _default_oauth_provider() -> Any:
@@ -962,7 +1079,12 @@ def _position_uic(pos: Position) -> int | None:
         return None
 
 
-def build_protection_view(broker: Broker, _records: list[Mapping[str, Any]]) -> ProtectionView:
+def build_protection_view(
+    broker: Broker,
+    _records: list[Mapping[str, Any]],
+    *,
+    clock: Callable[[], float] = time.time,
+) -> ProtectionView:
     """Assemble the ONE per-tick protection snapshot (saxo-oco memo §6): live
     netted positions + live working SELL legs (correlated by uic) + the plan
     PRICES folded from the append-only ``planned`` journal. Protection status is
@@ -971,7 +1093,9 @@ def build_protection_view(broker: Broker, _records: list[Mapping[str, Any]]) -> 
     ``oco_unsupported`` (Stage 2) folds the persisted per-instrument capability
     flag from the SAME append-only journal that carries the plan prices — read
     ONCE here so both folds see the same lines (a second pass over the generator
-    would be empty)."""
+    would be empty). Stage 3 additionally folds the timestamped ``oco_placed`` /
+    ``amend_failed`` markers against ``clock`` (default wall clock; injected in
+    tests) into the TTL sets ``oco_recently_placed`` / ``amend_recently_failed``."""
     all_positions: dict[int, Position] = {}
     for pos in broker.get_positions():
         uic = _position_uic(pos)
@@ -997,15 +1121,21 @@ def build_protection_view(broker: Broker, _records: list[Mapping[str, Any]]) -> 
         if order.uic is not None:
             sell_legs.setdefault(int(order.uic), []).append(order)
 
-    # Materialize the append-only journal ONCE so both folds read the same lines
-    # (a second pass over the generator would be empty).
+    # Materialize the append-only journal ONCE so every fold reads the same lines
+    # (a second pass over the generator would be empty). ``now`` is sampled ONCE
+    # so both TTL folds classify against a single instant.
     journal_lines = list(_iter_standalone_stop_journal())
+    now = clock()
     return ProtectionView(
         long_positions=long_positions,
         all_positions=all_positions,
         sell_legs_by_uic={uic: tuple(legs) for uic, legs in sell_legs.items()},
         planned_by_uic=_fold_planned_exits(journal_lines),
         oco_unsupported=_fold_oco_unsupported(journal_lines),
+        oco_recently_placed=_fold_ttl_markers(journal_lines, "oco_placed", now, _OCO_PLACED_TTL_S),
+        amend_recently_failed=_fold_ttl_markers(
+            journal_lines, "amend_failed", now, _AMEND_FAILED_TTL_S
+        ),
     )
 
 
@@ -1128,9 +1258,13 @@ def _execute_cancel_sell_legs(
 
 
 def _make_protection_executor(
-    broker: Broker, throttle: _AlertThrottle, *, place_oco_exit: OcoPlacer | None = None
+    broker: Broker,
+    throttle: _AlertThrottle,
+    *,
+    place_oco_exit: OcoPlacer | None = None,
+    amend_stop: AmendStopPlacer | None = None,
 ) -> Callable[[Action, bool, TickReport], None]:
-    """The protection-pass executor (saxo-oco memo §6). Per Action:
+    """The protection-pass executor (saxo-oco memo §6 + Stage 3). Per Action:
 
     - ``NoOp`` — nothing.
     - ``AlertOnly`` — a throttled alert.
@@ -1142,16 +1276,22 @@ def _make_protection_executor(
       ``SellOrdersAlreadyExist`` rejection defers to next tick; any other place
       failure is counted for escalation and retried next tick (protection is
       broker-state truth, so nothing is recorded on failure -> Bug A cannot recur).
-    - ``UpgradeToOco`` — rung 1 -> 2 (saxo-oco memo §6). Dark unless
-      ``_oco_enabled()``; SKIPPED under KILL (a new OCO + a rung-1 cancel are order
-      churn, not exposure reduction). Places the OCO exit pair FIRST, then cancels
-      the rung-1 stop (``supersede_ids``) ONLY on success — never a naked window.
-      ANY BrokerError degrades to stop-only: persist ``oco_unsupported``, alert,
-      leave the rung-1 stop live (no re-attempt after a restart).
+    - ``UpgradeToOco`` — B0 OCO-direct-on-fill (saxo Stage-3 memo). A truly naked
+      fresh fill goes straight to a resting OCO pair. Under KILL / no OCO
+      capability / OCO disabled it instead covers the naked fill with a plain
+      standalone stop (never left naked). A three-way FAILURE TAXONOMY: a benign
+      ``SellOrdersAlreadyExist`` defers (an OCO already rests); a CLEAN structural
+      reject covers the fill with a fallback stop + marks ``oco_unsupported``; an
+      AMBIGUOUS write places NO inline fallback (it may have landed -> would
+      double-commit) and reconciles next tick.
+    - ``AmendStop`` — a Stage-3 in-place PATCH resize of a single clean standalone
+      stop to LIVE owned (both directions). NO cancel; ALLOWED under KILL. On any
+      failure it journals ``amend_failed`` (TTL fold) so the next tick falls to the
+      proven B1 additive / place-first primitive — no permanent latch.
 
-    ``place_oco_exit`` is the SupportsOcoExit capability (or None when the broker
-    lacks it -> the upgrade stays stop-only), injected here so the pre-built
-    executor closure can reach it."""
+    ``place_oco_exit`` / ``amend_stop`` are the SupportsOcoExit / SupportsAmendStop
+    capabilities (or None when the broker lacks them), injected here so the
+    pre-built executor closure can reach them."""
 
     def _execute(action: Action, kill: bool, report: TickReport) -> None:
         if isinstance(action, NoOp):
@@ -1168,8 +1308,33 @@ def _make_protection_executor(
             return
         if isinstance(action, UpgradeToOco):
             _execute_upgrade_to_oco(broker, throttle, place_oco_exit, action, kill, report)
+            return
+        if isinstance(action, AmendStop):
+            _execute_amend_stop(broker, throttle, amend_stop, action, report)
 
     return _execute
+
+
+def _execute_place_fallback_stop(
+    broker: Broker, throttle: _AlertThrottle, action: UpgradeToOco, report: TickReport
+) -> None:
+    """Cover a B0 naked fill with a PLAIN standalone stop (no TP), reusing the full
+    ``PlaceStop`` executor path (execute-time owned re-read + clamp + flat-skip +
+    SellOrdersAlreadyExist defer + escalation). Used when OCO is off / KILL / no
+    capability, and after a CLEAN OCO reject — never a naked window. The stop ref is
+    the standalone ``-stop-`` namespace derived from the same entry_crid + gen."""
+    _execute_place_stop(
+        broker,
+        throttle,
+        PlaceStop(
+            action.uic,
+            action.side,
+            action.qty,
+            action.stop_price,
+            _exit_stop_ref(action.entry_crid, action.gen),
+        ),
+        report,
+    )
 
 
 def _execute_upgrade_to_oco(
@@ -1180,20 +1345,30 @@ def _execute_upgrade_to_oco(
     kill: bool,
     report: TickReport,
 ) -> None:
-    """Execute a rung 1 -> 2 OCO upgrade (saxo-oco memo §6). No-naked-window
-    discipline: place the OCO exit pair FIRST, cancel the rung-1 stop
-    (``supersede_ids``) ONLY after the place returns success. ANY BrokerError
-    degrades conservatively to the proven stop-only rung — persist
-    ``oco_unsupported`` (no re-attempt, even after a restart), alert, leave the
-    rung-1 stop LIVE."""
-    if not _oco_enabled():
-        return  # ship dark: the single env gate keeps the rung-2 arm off
-    if kill:
-        return  # KILL: no new order churn; the rung-1 stop already covers downside
-    if place_oco_exit is None:
-        return  # flag on but this broker has no OCO capability -> stay stop-only
+    """Execute a B0 OCO-direct-on-fill (saxo Stage-3 memo). The action is a TRULY
+    NAKED fresh fill (the pure arm emits it only on ``not legs``), so the fill MUST
+    end this tick either behind a resting OCO pair or a plain standalone stop —
+    never left naked.
 
-    # Execute-time owned re-check (mirror _execute_place_stop): never upgrade a
+    When OCO is disabled / the broker has no OCO capability / under KILL, cover the
+    naked fill with a plain standalone stop (no TP churn, KILL-safe). Otherwise
+    place the OCO pair with a three-way FAILURE TAXONOMY (mitigation H1/A2/H4):
+      - benign ``SellOrdersAlreadyExist`` -> an OCO already rests from a prior
+        tick's landed write; NO fallback (would double-commit), NO degrade, defer;
+      - a CLEAN structural reject (provably NOT landed) -> mark ``oco_unsupported``
+        and cover the naked fill NOW with a plain standalone stop;
+      - an AMBIGUOUS write (5xx / network-after-send / rate-limit) -> it MAY have
+        landed; NO inline fallback (would double-commit), NO ``oco_placed`` marker,
+        CRITICAL alert, reconcile against live broker state next tick.
+    On success: count the exit, journal an ``oco_placed`` marker (suppresses a B0
+    re-fire while list-orders lags), then run the (empty for B0) supersede loop."""
+    if not _oco_enabled() or place_oco_exit is None or kill:
+        # OCO off / no capability / KILL: the fill is naked, so cover it NOW with a
+        # plain standalone stop (a new OCO would be order churn under KILL).
+        _execute_place_fallback_stop(broker, throttle, action, report)
+        return
+
+    # Execute-time owned re-check (mirror _execute_place_stop): never place on a
     # uic that shrank / closed between the snapshot and now.
     qty = action.qty
     get_by_uic = getattr(broker, "get_positions_by_uic", None)
@@ -1203,7 +1378,7 @@ def _execute_upgrade_to_oco(
             qty = max(live.quantity, 0.0)
     if qty <= _QTY_EPS:
         if throttle.emit(
-            f"uic {action.uic}: position gone before OCO upgrade — skipped",
+            f"uic {action.uic}: position gone before OCO placement — skipped",
             uic=action.uic,
             reason="flat-skip",
         ):
@@ -1219,26 +1394,137 @@ def _execute_upgrade_to_oco(
             action.stop_price,
             action.tp_price,
             request_id,
-            None,  # position_id: Stage 3 (reduce-only linkage); unused here
+            None,  # position_id: reduce-only linkage refuted (Stage 3, Q3); unused
         )
-    except BrokerError as exc:
-        # Conservative degrade to stop-only: mark the uic so the upgrade is never
-        # re-attempted (even after a systemd restart), keep the rung-1 stop LIVE.
-        _mark_oco_unsupported(action.uic)
+    except BrokerCapabilityError as exc:
+        # PROVABLY UNSENT: placement is structurally disabled (ALLOW_ORDERS off or a
+        # missing capability) — nothing reached Saxo. This is NEITHER an ambiguous
+        # write (no CRITICAL, and a fallback stop is equally gated so it would fail
+        # too) NOR a clean structural reject (do NOT mark oco_unsupported — a
+        # transient env gate is not an instrument incapability). Throttled alert;
+        # reconcile against live broker state next tick (the gate self-clears).
         if throttle.emit(
-            f"uic {action.uic}: OCO upgrade failed ({exc}); staying rung-1 stop-only",
+            f"uic {action.uic}: order placement disabled — OCO not sent ({exc})",
+            uic=action.uic,
+            reason="orders-disabled",
+        ):
+            report.alerts += 1
+        return
+    except OrderRejectedError as exc:
+        if _is_sell_orders_already_exist(exc):
+            # BENIGN: an OCO already rests from a prior tick's landed write that
+            # live list-orders had not yet surfaced. NO fallback (a stop atop the
+            # resting OCO pair = 2x owned), NO degrade, NO marker — just defer.
+            if throttle.emit(
+                f"uic {action.uic}: OCO already rests (sell-commit held) — deferring",
+                uic=action.uic,
+                reason="oco-already",
+            ):
+                report.alerts += 1
+            return
+        # CLEAN structural reject (provably NOT landed): cover the naked fill NOW
+        # with a plain stop, and degrade the uic so B0 is not re-attempted on it.
+        _mark_oco_unsupported(action.uic)
+        _execute_place_fallback_stop(broker, throttle, action, report)
+        if throttle.emit(
+            f"uic {action.uic}: OCO rejected ({exc}); placed fallback stop, degraded stop-only",
             uic=action.uic,
             reason="oco-degrade",
         ):
             report.alerts += 1
         return
+    except BrokerError as exc:
+        # AMBIGUOUS/maybe-sent: the OCO MAY have landed. NO inline fallback (would
+        # double-commit if it did), NO oco_placed marker (so next tick re-evaluates
+        # against live broker state). Escalate loudly; the residual naked window is
+        # bounded to <=1 poll interval and self-heals on reconcile.
+        if throttle.emit(
+            f"CRITICAL uic {action.uic}: OCO placement ambiguous ({exc}) — "
+            "no fallback, reconciling next tick",
+            uic=action.uic,
+            reason="oco-ambiguous",
+        ):
+            report.alerts += 1
+        return
 
-    # SUCCESS: the OCO now covers the downside. Cancel the rung-1 stop ONLY now
-    # (the OCO stop leg is already live -> never a naked window on the shares).
+    # SUCCESS: a resting OCO pair now covers the position. Journal the marker so a
+    # list-orders-lagged next tick does not re-fire B0 and double-commit.
     report.exits_placed += 1
-    for order_id in action.supersede_ids:
+    _journal_oco_placed(action.uic)
+    for order_id in action.supersede_ids:  # always () for B0 — no-op
         _idempotent_cancel(broker, order_id)
         report.cancels += 1
+
+
+def _execute_amend_stop(
+    broker: Broker,
+    throttle: _AlertThrottle,
+    amend_stop: AmendStopPlacer | None,
+    action: AmendStop,
+    report: TickReport,
+) -> None:
+    """Execute a Stage-3 ``AmendStop`` PATCH resize (saxo Stage-3 memo). NO cancel
+    anywhere; ALLOWED under KILL (an in-place resize of a protective stop only
+    reduces exposure or enlarges cover — it never adds a TP or market exposure, so
+    no kill gate).
+
+    ABSOLUTE-target (mitigation verdict-2 clamp): re-read LIVE owned and amend to
+    it in BOTH directions (a position that grew between snapshot and execute is
+    covered up to live owned, never stranded naked; one that shrank is never
+    oversold). On ANY amend failure, journal ``amend_failed`` (folded into
+    ``amend_recently_failed`` for one TTL) so the NEXT tick's grow/downsize arm
+    SKIPS amend and the delta is covered by the proven B1 additive / place-first
+    primitive, and escalate via ``record_place_failure`` — NO permanent capability
+    latch (a benign fill-race 400 self-clears after the TTL and amend retries)."""
+    if amend_stop is None:
+        return  # broker lacks SupportsAmendStop -> the pure arm never emits this
+
+    target = action.target_qty
+    get_by_uic = getattr(broker, "get_positions_by_uic", None)
+    if get_by_uic is not None:
+        target = max(get_by_uic(action.uic).quantity, 0.0)
+    if target <= _QTY_EPS:
+        if throttle.emit(
+            f"uic {action.uic}: position gone before amend — skipped",
+            uic=action.uic,
+            reason="flat-skip",
+        ):
+            report.alerts += 1
+        return
+
+    try:
+        amend_stop(
+            action.uic,
+            action.order_id,
+            action.side,
+            action.order_type,
+            target,
+            action.stop_price,
+            action.request_id,
+        )
+    except BrokerCapabilityError as exc:
+        # PROVABLY UNSENT (orders disabled / no capability): NOT an amend rejection.
+        # Do NOT journal amend_failed (it would needlessly skip amend next tick) and
+        # do NOT escalate as a place-failure — a throttled alert; the env gate
+        # self-clears and the amend retries next tick.
+        if throttle.emit(
+            f"uic {action.uic}: order placement disabled — amend not sent ({exc})",
+            uic=action.uic,
+            reason="orders-disabled",
+        ):
+            report.alerts += 1
+        return
+    except BrokerError as exc:
+        # ANY OTHER failure (clean reject, ambiguous 5xx/network): journal
+        # amend_failed (TTL fold -> next tick skips amend, B1 additive / place-first
+        # covers the delta) and escalate. record_place_failure gives the naked-
+        # position escalation without a permanent latch.
+        _journal_amend_failed(action.uic)
+        throttle.record_place_failure(action.uic, f"uic {action.uic}: stop amend failed — {exc}")
+        return
+
+    report.exits_placed += 1
+    throttle.record_place_success(action.uic)
 
 
 def _execute_place_stop(

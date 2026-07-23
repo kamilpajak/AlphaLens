@@ -8,14 +8,17 @@ REALIZED fill (2.0), never the planned qty (3). Realized-qty = design memo Risk 
 
 from __future__ import annotations
 
+import itertools
 import os
 import unittest
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import patch
 
 from alphalens_pipeline.brokers.automanager import position_manager as pm
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AlertOnly,
+    AmendStop,
     BrokerView,
     CancelRemaining,
     CancelSellLegs,
@@ -190,7 +193,11 @@ def _plan(
     tp_price: float | None = None,
     conflicting: bool = False,
     n_plans: int = 1,
+    next_amend_seq: Callable[[], int] | None = None,
 ) -> PlannedExit:
+    kwargs: dict[str, Any] = {}
+    if next_amend_seq is not None:
+        kwargs["next_amend_seq"] = next_amend_seq
     return PlannedExit(
         uic=uic,
         entry_crid=entry_crid,
@@ -199,6 +206,7 @@ def _plan(
         tp_price=tp_price,
         conflicting=conflicting,
         n_plans=n_plans,
+        **kwargs,
     )
 
 
@@ -209,6 +217,8 @@ def _pview(
     sell_legs_by_uic: dict[int, tuple[OrderState, ...]] | None = None,
     planned_by_uic: dict[int, PlannedExit] | None = None,
     oco_unsupported: frozenset[int] = frozenset(),
+    oco_recently_placed: frozenset[int] = frozenset(),
+    amend_recently_failed: frozenset[int] = frozenset(),
 ) -> ProtectionView:
     longs = long_positions if long_positions is not None else {}
     alls = all_positions if all_positions is not None else dict(longs)
@@ -218,6 +228,8 @@ def _pview(
         sell_legs_by_uic=sell_legs_by_uic or {},
         planned_by_uic=planned_by_uic or {},
         oco_unsupported=oco_unsupported,
+        oco_recently_placed=oco_recently_placed,
+        amend_recently_failed=amend_recently_failed,
     )
 
 
@@ -566,9 +578,11 @@ class TestReconcileDecisionTable(unittest.TestCase):
 
 
 class TestOcoEnablementGate(unittest.TestCase):
-    """Stage 2 arm-C emission (saxo-oco memo §6/§11): a covered long WITH a
-    journaled TP price upgrades to OCO ONLY when the env flag is on AND the uic is
-    not oco_unsupported. Default OFF (ship dark): the arm degrades to NoOp."""
+    """Stage 3 rung-1 REFUSE (saxo Stage-3 memo): a covered long that ALREADY has
+    a resting standalone stop stays STOP-ONLY for its whole life — arm C never
+    upgrades a resting stop to OCO (PATCH cannot add a TP leg, cancel-then-OCO is
+    naked, OCO-then-cancel is 2x-owned rejected live). OCO is reached only via B0
+    on a fresh naked fill. Arm C is therefore always NoOp on a covered long."""
 
     def _covered_view(
         self, *, oco_unsupported: frozenset[int] = frozenset()
@@ -591,21 +605,14 @@ class TestOcoEnablementGate(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertIsInstance(actions[0], NoOp)
 
-    def test_covered_with_tp_emits_upgrade_when_flag_on(self) -> None:
+    def test_covered_with_resting_stop_stays_noop_rung1_refuse(self) -> None:
+        # Stage 3 rung-1 REFUSE: a covered long with a resting standalone stop is
+        # NEVER upgraded to OCO, even with the flag on — it stays stop-only NoOp.
         pos, view = self._covered_view()
         with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
             actions = reconcile_long(_UIC, pos, view)
-        self.assertEqual(len(actions), 1)
-        action = actions[0]
-        self.assertIsInstance(action, UpgradeToOco)
-        assert isinstance(action, UpgradeToOco)
-        self.assertEqual(action.uic, _UIC)
-        self.assertEqual(action.side, "SELL")
-        self.assertEqual(action.qty, 46.0)
-        self.assertEqual(action.stop_price, 216.48)
-        self.assertEqual(action.tp_price, 306.72)
-        self.assertEqual(action.entry_crid, "crid")
-        self.assertEqual(action.supersede_ids, ("stop-1",))
+        self.assertEqual(actions, [NoOp()])
+        self.assertNotIsInstance(actions[0], UpgradeToOco)
 
     def test_covered_with_tp_stays_noop_when_oco_unsupported_even_if_flag_on(self) -> None:
         pos, view = self._covered_view(oco_unsupported=frozenset({_UIC}))
@@ -739,9 +746,10 @@ class TestOcoSteadyStateNotOverHedge(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         self.assertIsInstance(actions[0], NoOp)
 
-    def test_first_upgrade_still_fires_with_only_rung1_stop(self) -> None:
-        # Control for the grow-after-OCO guard: with ONLY a rung-1 standalone stop
-        # (no OCO leg) the FIRST upgrade must still fire when the flag is on.
+    def test_resting_rung1_stop_no_longer_upgrades_stays_noop(self) -> None:
+        # Stage 3 rung-1 REFUSE: with ONLY a rung-1 standalone stop (no OCO leg)
+        # covering owned, arm C is now a NoOp — the Stage-2 first-upgrade emission
+        # was deleted (a resting stop cannot be safely converted to an OCO pair).
         pos = _pos(46.0)
         stop = _leg("stop-1", "StopIfTraded", 46.0)  # plain, order_relation=None
         view = _pview(
@@ -751,8 +759,7 @@ class TestOcoSteadyStateNotOverHedge(unittest.TestCase):
         )
         with patch.dict(os.environ, {"ALPHALENS_BROKER_OCO_ENABLED": "1"}):
             actions = reconcile_long(_UIC, pos, view)
-        self.assertEqual(len(actions), 1)
-        self.assertIsInstance(actions[0], UpgradeToOco)
+        self.assertEqual(actions, [NoOp()])
 
     def test_shrunk_oco_over_hedge_never_cancels_oco_leg(self) -> None:
         # A genuine over-hedge WITH an OCO pair: the OCO limit leg partially filled
@@ -840,6 +847,407 @@ class TestReconcileProtectionArms(unittest.TestCase):
         kinds = [type(a).__name__ for a in actions]
         self.assertIn("NoOp", kinds)
         self.assertIn("CancelSellLegs", kinds)
+
+
+_OCO_ON = {"ALPHALENS_BROKER_OCO_ENABLED": "1"}
+_AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
+
+
+class TestB0OcoDirectOnFill(unittest.TestCase):
+    """Stage 3 arm B0 (saxo Stage-3 memo): a truly naked fresh fill (no resting
+    legs) with OCO wanted goes STRAIGHT to a resting OCO pair via
+    ``UpgradeToOco(supersede_ids=())`` — never a stop-only rung 1 first. Suppressed
+    while an OCO was just placed but list-orders lags (oco_recently_placed)."""
+
+    def _naked_view(
+        self,
+        *,
+        oco_recently_placed: frozenset[int] = frozenset(),
+        oco_unsupported: frozenset[int] = frozenset(),
+        tp_price: float | None = 306.72,
+    ) -> tuple[Position, ProtectionView]:
+        pos = _pos(46.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={},  # truly naked
+            planned_by_uic={_UIC: _plan(tp_price=tp_price)},
+            oco_unsupported=oco_unsupported,
+            oco_recently_placed=oco_recently_placed,
+        )
+        return pos, view
+
+    def test_b0_naked_fill_oco_enabled_emits_upgradetooco_empty_supersede(self) -> None:
+        pos, view = self._naked_view()
+        with patch.dict(os.environ, _OCO_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, UpgradeToOco)
+        assert isinstance(action, UpgradeToOco)
+        self.assertEqual(action.qty, 46.0)
+        self.assertEqual(action.stop_price, 216.48)
+        self.assertEqual(action.tp_price, 306.72)
+        self.assertEqual(action.supersede_ids, ())  # nothing to supersede on a naked fill
+
+    def test_b0_suppressed_when_uic_in_oco_recently_placed(self) -> None:
+        # A just-placed OCO rests but list-orders lags (empty legs). The marker
+        # suppresses B0 AND must NoOp — a PlaceStop(owned) here would commit a
+        # second owned SELL on top of the invisible resting OCO pair (2x owned,
+        # the exact double-commit the marker exists to prevent). The OCO stop
+        # leg already covers the downside; NoOp until the pair becomes visible
+        # or the TTL expires and B0 re-evaluates against live broker state.
+        pos, view = self._naked_view(oco_recently_placed=frozenset({_UIC}))
+        with patch.dict(os.environ, _OCO_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_b0_not_emitted_when_oco_disabled_falls_to_b2_stop_only(self) -> None:
+        pos, view = self._naked_view()
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_OCO_ENABLED"}
+        with patch.dict(os.environ, env, clear=True):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 46.0)
+
+    def test_b0_not_emitted_when_uic_oco_unsupported(self) -> None:
+        pos, view = self._naked_view(oco_unsupported=frozenset({_UIC}))
+        with patch.dict(os.environ, _OCO_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], PlaceStop)
+
+    def test_b0_not_emitted_without_tp_price_falls_to_b2(self) -> None:
+        pos, view = self._naked_view(tp_price=None)
+        with patch.dict(os.environ, _OCO_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        self.assertIsInstance(actions[0], PlaceStop)
+
+
+class TestGrowAmendStop(unittest.TestCase):
+    """Stage 3 GROW amend arm: a SINGLE clean standalone stop under-covers (owned
+    grew) -> PATCH amend it UP to live owned in place. Falls through to B1 additive
+    when amend is off, >1 stop rests, a TP leg is present, the stop partially
+    filled, or the uic recently failed an amend."""
+
+    def test_grow_emits_amendstop_when_sole_clean_stop_amend_enabled(self) -> None:
+        pos = _pos(7.0)
+        stop = _leg("stop-1", "StopIfTraded", 4.0)  # filled 0, no TP leg
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: _plan()},
+        )
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertEqual(action.target_qty, 7.0)  # absolute target = live owned
+        self.assertEqual(action.order_id, "stop-1")
+        self.assertEqual(action.order_type, "StopIfTraded")
+        self.assertEqual(action.stop_price, 216.48)
+        self.assertIn("-amend-", action.request_id)
+
+    def test_grow_no_amend_when_amend_disabled_falls_to_b1(self) -> None:
+        pos = _pos(7.0)
+        stop = _leg("stop-1", "StopIfTraded", 4.0)
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_AMEND_ENABLED"}
+        with patch.dict(os.environ, env, clear=True):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop,)},
+                    planned_by_uic={_UIC: _plan()},
+                ),
+            )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 3.0)  # B1 delta (owned 7 - covered 4)
+        self.assertEqual(action.supersede_ids, ())
+
+    def test_grow_no_amend_when_sole_stop_partially_filled_falls_to_b1(self) -> None:
+        pos = _pos(7.0)
+        stop = _leg("stop-1", "StopIfTraded", 4.0, filled=3.0)  # partially triggered
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop,)},
+                    planned_by_uic={_UIC: _plan()},
+                ),
+            )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertNotIsInstance(action, AmendStop)
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 3.0)  # B1 additive delta
+
+    def test_grow_no_amend_when_tp_leg_present_falls_to_b1(self) -> None:
+        pos = _pos(7.0)
+        stop = _leg("stop-1", "StopIfTraded", 4.0)
+        tp = _leg("tp-1", "Limit", 2.0)  # total 6 <= owned 7 -> stays in deficit block
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop, tp)},
+                    planned_by_uic={_UIC: _plan(tp_price=306.72)},
+                ),
+            )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertNotIsInstance(action, AmendStop)
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 3.0)  # B1 delta
+        self.assertEqual(action.cancel_conflicting, ("tp-1",))
+
+    def test_grow_falls_to_b1_additive_when_two_stop_legs(self) -> None:
+        pos = _pos(8.0)
+        stop_a = _leg("stop-a", "StopIfTraded", 4.0)
+        stop_b = _leg("stop-b", "StopIfTraded", 3.0)  # two stops -> not sole
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop_a, stop_b)},
+                    planned_by_uic={_UIC: _plan()},
+                ),
+            )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertNotIsInstance(action, AmendStop)
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 1.0)  # B1 delta (owned 8 - covered 7)
+        self.assertEqual(action.supersede_ids, ())
+
+    def test_grow_falls_to_b1_when_amend_recently_failed(self) -> None:
+        pos = _pos(7.0)
+        stop = _leg("stop-1", "StopIfTraded", 4.0)
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop,)},
+                    planned_by_uic={_UIC: _plan()},
+                    amend_recently_failed=frozenset({_UIC}),
+                ),
+            )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertNotIsInstance(action, AmendStop)
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 3.0)  # B1 additive covers the delta
+
+
+class TestDownsizeAmendStop(unittest.TestCase):
+    """Stage 3 DOWNSIZE amend arm (#884 gap): a SINGLE clean standalone stop
+    over-covers (owned shrank) -> PATCH amend it DOWN to live owned in place.
+    Multi-stop / OCO over-hedge keeps the unchanged place-residual-first arm."""
+
+    def test_downsize_emits_amendstop_when_sole_oversized_stop(self) -> None:
+        pos = _pos(4.0)
+        stop = _leg("stop-1", "StopIfTraded", 7.0)  # over-covers owned 4
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop,)},
+                    planned_by_uic={_UIC: _plan()},
+                ),
+            )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertEqual(action.target_qty, 4.0)  # absolute target = live owned
+        self.assertEqual(action.order_id, "stop-1")
+        self.assertIn("-amend-", action.request_id)
+
+    def test_downsize_falls_to_place_first_when_two_stops(self) -> None:
+        pos = _pos(5.0)
+        stop_a = _leg("stop-a", "StopIfTraded", 4.0)
+        stop_b = _leg("stop-b", "StopIfTraded", 3.0)  # sum 7 > owned 5, two stops
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop_a, stop_b)},
+                    planned_by_uic={_UIC: _plan()},
+                ),
+            )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertNotIsInstance(action, AmendStop)
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 5.0)  # residual == netted owned
+        self.assertEqual(set(action.supersede_ids), {"stop-a", "stop-b"})
+
+    def test_downsize_falls_to_place_first_when_oco_leg(self) -> None:
+        pos = _pos(20.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0)
+        tp = _oco_leg("oco-tp", "Limit", 46.0, filled=26.0)
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop, tp)},
+                    planned_by_uic={_UIC: _plan(tp_price=306.72)},
+                ),
+            )
+        self.assertEqual([type(a).__name__ for a in actions], ["PlaceStop"])
+        action = actions[0]
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 20.0)
+        self.assertEqual(action.supersede_ids, ("oco-stop",))
+
+    def test_downsize_falls_to_place_first_when_stray_non_stop_sell_leg(self) -> None:
+        # A lone clean stop over-covers, but a stray resting SELL leg of a type
+        # OUTSIDE STOP_TYPES/TP_TYPES (e.g. a Market sell) also rests. Amending
+        # only the stop and returning would leave that stray leg resting -> a
+        # residual over-commit (stop=owned + stray > owned). _sole_standalone_stop
+        # must reject any shape that is not the SOLE resting sell leg, so this
+        # falls to the always-correct place-residual-first arm (over-covered,
+        # never naked) which supersedes the stop and cancels the stray leg.
+        pos = _pos(4.0)
+        stop = _leg("stop-1", "StopIfTraded", 7.0)  # over-covers owned 4
+        stray = _leg("mkt-1", "Market", 2.0)  # not a stop, not a TP
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop, stray)},
+                    planned_by_uic={_UIC: _plan()},
+                ),
+            )
+        self.assertFalse(
+            any(isinstance(a, AmendStop) for a in actions),
+            "a stray non-stop sell leg must block the sole-standalone-stop amend",
+        )
+        place = next(a for a in actions if isinstance(a, PlaceStop))
+        self.assertEqual(place.qty, 4.0)  # residual == netted owned
+        self.assertIn("stop-1", place.supersede_ids)  # old stop superseded AFTER the place
+
+    def test_downsize_no_amend_when_amend_disabled_falls_to_place_first(self) -> None:
+        pos = _pos(4.0)
+        stop = _leg("stop-1", "StopIfTraded", 7.0)
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_AMEND_ENABLED"}
+        with patch.dict(os.environ, env, clear=True):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop,)},
+                    planned_by_uic={_UIC: _plan()},
+                ),
+            )
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertNotIsInstance(action, AmendStop)
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 4.0)
+        self.assertEqual(action.supersede_ids, ("stop-1",))
+
+
+class TestAmendRefAndSeq(unittest.TestCase):
+    def test_amend_ref_distinct_amend_namespace(self) -> None:
+        pos = _pos(7.0)
+        stop = _leg("stop-1", "StopIfTraded", 4.0)
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(
+                _UIC,
+                pos,
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop,)},
+                    planned_by_uic={_UIC: _plan(entry_crid="crid")},
+                ),
+            )
+        action = actions[0]
+        assert isinstance(action, AmendStop)
+        self.assertIn("-amend-", action.request_id)
+        self.assertNotIn("-stop-", action.request_id)
+        self.assertNotIn("-oco-", action.request_id)
+
+    def test_amend_seq_monotonic_never_repeats_same_target(self) -> None:
+        # Two amend emissions to the SAME target qty across ticks must carry
+        # DIFFERENT seqs (mitigation A3: a monotonic ref never dedup-swallows a
+        # genuine re-resize to a previously-seen qty).
+        counter = itertools.count(1)
+        plan = _plan(next_amend_seq=lambda: next(counter))
+        pos = _pos(7.0)
+        stop = _leg("stop-1", "StopIfTraded", 4.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: plan},
+        )
+        with patch.dict(os.environ, _AMEND_ON):
+            first = reconcile_long(_UIC, pos, view)[0]
+            second = reconcile_long(_UIC, pos, view)[0]
+        assert isinstance(first, AmendStop)
+        assert isinstance(second, AmendStop)
+        self.assertEqual(first.target_qty, second.target_qty)  # SAME target
+        self.assertNotEqual(first.request_id, second.request_id)  # different seq
+
+
+class TestRung1Refuse(unittest.TestCase):
+    def test_rung1_resting_stop_oco_enabled_returns_noop(self) -> None:
+        pos = _pos(46.0)
+        stop = _leg("stop-1", "StopIfTraded", 46.0)  # lone resting rung-1 stop
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, _OCO_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+        self.assertNotIsInstance(actions[0], UpgradeToOco)
+
+    def test_arm_c_healthy_oco_pair_still_noop(self) -> None:
+        pos = _pos(46.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0)
+        tp = _oco_leg("oco-tp", "Limit", 46.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, _OCO_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
 
 
 if __name__ == "__main__":

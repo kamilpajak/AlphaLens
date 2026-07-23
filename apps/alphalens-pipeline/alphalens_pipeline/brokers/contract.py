@@ -298,6 +298,43 @@ class SupportsOcoExit(Protocol):
     ) -> PlacedOrder: ...
 
 
+@runtime_checkable
+class SupportsAmendStop(Protocol):
+    """Extension capability: an in-place PATCH resize of a resting stop order.
+
+    Stage 3 (saxo Stage-3 memo, ``AmendStop``). Re-applies ``Amount == qty`` to
+    an EXISTING resting standalone StopIfTraded via ``PATCH /trade/v2/orders``
+    (Saxo Q8), keyed by ``order_id`` — the order never leaves the book, so
+    growing a stop up (compose with additive B1) or converging an over-hedge
+    stop DOWN opens no naked window. Because the target is ABSOLUTE (set
+    ``Amount = live-owned``), a cross-tick re-emit is idempotent-in-effect (two
+    sets = owned, never 2x), which is why the PATCH rides the never-blind-retry
+    lane with a monotonic ``-amend-`` request_id.
+
+    Off the frozen base :class:`Broker` Protocol (capability-protocol pattern,
+    like :class:`SupportsStandaloneStop` / :class:`SupportsOcoExit`): a caller
+    ``isinstance``-narrows a ``Broker`` to this Protocol rather than widening the
+    base contract. A broker without it (or with the amend env flag off) keeps
+    the additive-stop fallback, unchanged.
+
+    ``request_id`` is the PATCH x-request-id (dedup key in the header, NOT the
+    body — the amend preserves the resting order's own ``ExternalReference``).
+    Returns ``PlacedOrder(entry_order_id="", exit_order_ids=(order_id,))`` on a
+    confirmed resize of the SAME ``order_id``.
+    """
+
+    def amend_stop_amount(
+        self,
+        uic: int,
+        order_id: str,
+        side: str,
+        order_type: str,
+        new_qty: float,
+        stop_price: float,
+        request_id: str,
+    ) -> PlacedOrder: ...
+
+
 __all__ = [
     "AccountSnapshot",
     "BracketOrderRequest",
@@ -313,6 +350,7 @@ __all__ = [
     "OrderStatus",
     "PlacedOrder",
     "Position",
+    "SupportsAmendStop",
     "SupportsOcoExit",
     "SupportsStandaloneStop",
 ]

@@ -458,13 +458,15 @@ The minimal increment that stops the naked-position bug. Uses only confirmed fac
 
 Add `place_oco_exit` + `_build_oco_exit_body` + `SupportsOcoExit`; add the `UpgradeToOco` arm behind `_oco_enabled()` (env flag) AND the persisted per-instrument `oco_unsupported` capability flag. Land the Q1/Q2/Q7 SIM probes first; enable per-instrument only after green. Any OCO failure degrades to rung-1 + persists unsupported. Ship dark (flag OFF) until probes pass.
 
-### Stage 3 — robustness end-state (gated on Q3/Q5/Q8)
+### Stage 3 — robustness end-state (SUPERSEDED — see the locked Stage-3 memo)
 
-- `PositionId`-linked reduce-only exits (Q3) — Saxo clips fills to owned, removing the oversell-into-short residual risk structurally.
-- Additive-on-growth same-uic stops (Q5) — zero naked window on grow without place-first overlap.
-- PATCH/modify-Amount atomic resize (Q8) — no cancel/replace at all on resize. Requires wiring PATCH into `_send_write`.
+> **SUPERSEDED 2026-07-23.** The original Stage-3 plan below hinged on `PositionId`-linked reduce-only exits (Q3). That plan is **REFUTED**: a live SIM POST proved Saxo rejects a `PositionId` on an OCO master (HTTP 400), so reduce-only cannot be attached and the oversell-into-short guard stays the cash-account `NotOwned` backstop (Q3a, live-confirmed). **Q8 is CONFIRMED live** — PATCH preserves `OrderId` on an `Amount` change — so the atomic-resize path is real. The user chose **option X** (reach OCO only at the fresh-fill moment via `UpgradeToOco(supersede_ids=())`, converge by turnover; NO rung1->2 upgrade of a resting standalone stop, which is unsafe by construction). The locked Stage-3 design is now **[`saxo_stage3_oco_amend_design_2026_07_23.md`](saxo_stage3_oco_amend_design_2026_07_23.md)** — read it for the authoritative signatures, branch conditions, mitigations, and the two dark env flags (`ALPHALENS_BROKER_OCO_ENABLED` for B0, `ALPHALENS_BROKER_AMEND_ENABLED` for the PATCH-amend resize arms). The bullets below are retained only as the historical framing.
 
-Each is an independent, probe-gated increment; none block Stage 1 or 2.
+- ~~`PositionId`-linked reduce-only exits (Q3)~~ — **REFUTED** (400 on the OCO master); replaced by option X (OCO-direct-on-fill) + the cash-account `NotOwned` oversell backstop.
+- Additive-on-growth same-uic stops (Q5) — shipped in Stage 1.5 (#879) as the always-correct fallback; the Stage-3 PATCH-amend UP composes with it (amend one clean standalone stop in place, fall to B1 additive otherwise).
+- PATCH/modify-Amount atomic resize (Q8 — **CONFIRMED live**) — no cancel/replace on resize; PATCH wired into the never-blind-retry write lane (`idempotent=False`). Attended SIM amend probe: `apps/alphalens-research/tests/live/test_saxo_amend_probe_live.py` (flag `SAXO_LIVE_AMEND_PROBE=1`), which rests a standalone stop, amends its `Amount` UP then DOWN, and confirms the `OrderId` is preserved and the order never leaves the book — the gate before flipping `ALPHALENS_BROKER_AMEND_ENABLED=1`.
+
+Each is an independent, dark-shipped increment; none block Stage 1 or 2.
 
 ---
 

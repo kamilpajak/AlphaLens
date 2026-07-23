@@ -258,6 +258,26 @@ class SaxoClient:
         resp = self._send_write("POST", "/trade/v2/orders", json_body=body, request_id=request_id)
         return resp.status_code, self._safe_json(resp)
 
+    def amend_order(
+        self, patch_body: dict[str, Any], *, request_id: str
+    ) -> tuple[int, dict[str, Any]]:
+        """PATCH ``/trade/v2/orders`` — an in-place resize of a resting order.
+
+        Rides the POST-safe never-blind-retry lane (``idempotent=False``): an
+        ambiguous 5xx/post-send failure raises immediately carrying
+        ``request_id`` instead of blind-hammering the resize. ``OrderId``
+        travels in ``patch_body`` (same path as ``place_order``'s POST, no
+        path templating). Like ``place_order``, ``request_id`` is the caller's
+        dedup key — a cross-tick re-emit is safe ONLY because AmendStop is
+        absolute-target (set Amount=live-owned twice = owned). Returns
+        ``(status_code, parsed_body)`` including 4xx/202 bodies for the broker
+        to translate.
+        """
+        resp = self._send_write(
+            "PATCH", "/trade/v2/orders", json_body=patch_body, request_id=request_id
+        )
+        return resp.status_code, self._safe_json(resp)
+
     def cancel_order_ids(self, order_ids: str, *, account_key: str) -> tuple[int, dict[str, Any]]:
         """DELETE ``/trade/v2/orders/{OrderIds}`` — idempotent, normal retry.
 
@@ -571,7 +591,11 @@ class SaxoClient:
         params: dict[str, Any] | None,
         request_id: str,
     ) -> dict[str, Any]:
-        """Assemble per-attempt request kwargs: fresh-token headers, params, POST body."""
+        """Assemble per-attempt request kwargs: fresh-token headers, params, POST/PATCH body.
+
+        PATCH shares POST's body attachment (a bodiless PATCH 400s at Saxo) and
+        POST's never-blind-retry lane — it is POST-safe, never idempotent.
+        """
         headers = {
             "Authorization": f"Bearer {self._token_provider.get_access_token()}",
             "Accept": "application/json",
@@ -583,7 +607,7 @@ class SaxoClient:
             "params": params,
             "timeout": self._timeout,
         }
-        if method_lower == "post":
+        if method_lower in ("post", "patch"):
             kwargs["json"] = json_body
         return kwargs
 
@@ -704,7 +728,7 @@ class SaxoClient:
         params: dict[str, Any] | None = None,
         request_id: str,
     ) -> requests.Response:
-        """POST/DELETE through the shared throttle with a WRITE-safe retry policy.
+        """POST/DELETE/PATCH through the shared throttle with a WRITE-safe retry policy.
 
         Shares the 401-refresh-once and 429 Retry-After machinery with the
         read path, but the retry policy differs by verb:
@@ -716,6 +740,12 @@ class SaxoClient:
           ambiguous network error after send raises immediately, carrying
           ``request_id`` so the operator can reconcile (``broker orders``)
           before any re-run.
+        - **PATCH is POST-safe (idempotent=False)** — the amend lane rides the
+          exact POST policy: never blind-retried, ambiguous 5xx/post-send
+          errors raise immediately with the ``x-request-id``. Safe to re-emit
+          cross-tick only because the amend is absolute-target (set
+          Amount=live-owned twice = owned), which the CALLER guarantees — the
+          transport itself never blind-retries a PATCH inside one write.
         - **DELETE is idempotent** — normal transient/5xx retry ladder.
 
         Returns the final response for every other status INCLUDING 4xx/202:
@@ -724,8 +754,8 @@ class SaxoClient:
         """
         url = self._join_url(path)
         method_lower = method.lower()
-        if method_lower not in ("post", "delete"):
-            raise ValueError(f"_send_write supports POST/DELETE only, got {method!r}")
+        if method_lower not in ("post", "delete", "patch"):
+            raise ValueError(f"_send_write supports POST/DELETE/PATCH only, got {method!r}")
         idempotent = method_lower == "delete"
         auth_retried = False
         net_attempt = 0

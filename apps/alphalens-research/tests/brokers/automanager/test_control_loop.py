@@ -21,17 +21,20 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager.picks import Pick
 from alphalens_pipeline.brokers.automanager.position_manager import (
+    AmendStop,
     BrokerView,
     CancelSellLegs,
     PlaceStop,
     PlannedExit,
     ProtectionView,
     UpgradeToOco,
+    _exit_amend_ref,
     _exit_oco_ref,
     _exit_stop_ref,
     _exit_tp_ref,
 )
 from alphalens_pipeline.brokers.contract import (
+    BrokerCapabilityError,
     BrokerError,
     InstrumentRef,
     OrderRejectedError,
@@ -188,6 +191,7 @@ class _ProtBroker:
         by_uic: dict[int, Position] | None = None,
         place_error: Any = None,
         cancel_errors: dict[str, BrokerError] | None = None,
+        amend_error: Any = None,
     ) -> None:
         self._positions = positions or []
         self._sells = sells or []
@@ -195,8 +199,11 @@ class _ProtBroker:
         self._place_error = place_error
         self._place_calls = 0
         self._cancel_errors = cancel_errors or {}
+        self._amend_error = amend_error
         self.placed: list[tuple[int, str, float, float, str | None]] = []
         self.cancelled: list[str] = []
+        # (uic, order_id, side, order_type, new_qty, stop_price, request_id)
+        self.amended: list[tuple[int, str, str, str, float, float, str]] = []
 
     def get_positions(self) -> list[Position]:
         return list(self._positions)
@@ -221,6 +228,21 @@ class _ProtBroker:
             raise err
         self.placed.append((uic, side, qty, stop_price, request_id))
         return PlacedOrder(entry_order_id="S-1", exit_order_ids=())
+
+    def amend_stop_amount(
+        self,
+        uic: int,
+        order_id: str,
+        side: str,
+        order_type: str,
+        new_qty: float,
+        stop_price: float,
+        request_id: str,
+    ) -> PlacedOrder:
+        if self._amend_error is not None:
+            raise self._amend_error
+        self.amended.append((uic, order_id, side, order_type, new_qty, stop_price, request_id))
+        return PlacedOrder(entry_order_id="", exit_order_ids=(order_id,))
 
     def cancel_order(self, order_id: str) -> None:
         err = self._cancel_errors.get(order_id)
@@ -722,31 +744,6 @@ class TestLatestPlannedSkipsMalformedLines(unittest.TestCase):
 
 
 class TestProtectionExecutorUpgradeToOcoNoop(unittest.TestCase):
-    def test_upgrade_to_oco_is_noop_while_oco_disabled(self) -> None:
-        # Stage 1 keeps _oco_enabled() False, so an UpgradeToOco action is a pure
-        # no-op (the rung-2 arm stays dark) — no place, no cancel, no alert.
-        from alphalens_pipeline.brokers.automanager.position_manager import UpgradeToOco
-
-        broker = _StubBroker()
-        alerts: list[str] = []
-        throttle = cl._AlertThrottle(alerts.append)
-        execute = cl._make_protection_executor(broker, throttle)  # type: ignore[arg-type]
-        report = cl.TickReport()
-        action = UpgradeToOco(
-            uic=_UIC,
-            side="SELL",
-            qty=5.0,
-            stop_price=9.0,
-            tp_price=12.0,
-            entry_crid="c0",
-            gen=0,
-            supersede_ids=(),
-        )
-        execute(action, False, report)
-        self.assertEqual((report.exits_placed, report.cancels, report.alerts), (0, 0, 0))
-        self.assertEqual(broker.cancelled, [])
-        self.assertEqual(alerts, [])
-
     def test_noop_is_silent_and_alertonly_alerts(self) -> None:
         from alphalens_pipeline.brokers.automanager.position_manager import AlertOnly, NoOp
 
@@ -839,55 +836,68 @@ def _oco_placer(calls: list, *, error: Exception | None = None):
 _OCO_ON = {"ALPHALENS_BROKER_OCO_ENABLED": "1"}
 
 
-class TestUpgradeOcoSuccessSupersedesRung1(unittest.TestCase):
-    """A successful OCO place covers the downside, so the rung-1 stop is cancelled
-    ONLY AFTER the place confirms — never a naked window (saxo-oco memo §6)."""
+def _b0_action(**over: Any) -> UpgradeToOco:
+    """A B0 OCO-direct-on-fill action (supersede_ids ALWAYS empty in Stage 3)."""
+    base: dict[str, Any] = {
+        "uic": _UIC,
+        "side": "SELL",
+        "qty": 46.0,
+        "stop_price": 216.48,
+        "tp_price": 306.72,
+        "entry_crid": "crid-0",
+        "gen": 0,
+        "supersede_ids": (),
+    }
+    base.update(over)
+    return UpgradeToOco(**base)
 
-    def test_success_places_then_cancels_rung1(self) -> None:
-        with mock.patch.dict(os.environ, _OCO_ON):
+
+class TestExecuteB0Success(unittest.TestCase):
+    """B0 OCO-direct-on-fill success (saxo Stage-3 memo): a truly naked fresh fill
+    reaches a resting OCO pair. On a confirmed 2xx the executor counts the exit AND
+    journals an ``oco_placed`` marker (so the next tick's B0 is suppressed while
+    list-orders lags), with NO fallback stop placed."""
+
+    def test_execute_b0_success_places_oco_and_journals_oco_placed(self) -> None:
+        with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
+            journal = Path(d) / "standalone_stops.jsonl"
             broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
             calls: list = []
             executor = cl._make_protection_executor(
                 broker, _throttle_to([]), place_oco_exit=_oco_placer(calls)
             )
-            action = UpgradeToOco(
-                uic=_UIC,
-                side="SELL",
-                qty=46.0,
-                stop_price=216.48,
-                tp_price=306.72,
-                entry_crid="crid-0",
-                gen=0,
-                supersede_ids=("rung1-stop",),
-            )
             report = cl.TickReport()
-            executor(action, False, report)
-        self.assertEqual(len(calls), 1)
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_b0_action(), False, report)
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "oco_placed"
+                ]
+        self.assertEqual(len(calls), 1, "the OCO pair was placed once")
         self.assertEqual(
             calls[0][:6], (_UIC, "SELL", 46.0, 216.48, 306.72, _exit_oco_ref("crid-0", 0))
         )
-        self.assertEqual(broker.cancelled, ["rung1-stop"], "rung-1 cancelled AFTER the OCO place")
+        self.assertEqual(broker.placed, [], "no fallback standalone stop on a successful OCO")
         self.assertEqual(report.exits_placed, 1)
+        self.assertEqual([m.get("uic") for m in markers], [_UIC], "oco_placed marker journaled")
 
 
-class TestUpgradeOcoFailKeepsRung1AndMarksUnsupported(unittest.TestCase):
-    """A structural OCO reject (SellOrdersAlreadyExist) is caught: the rung-1 stop
-    stays LIVE (never naked), the uic is persisted oco_unsupported, and a rebuilt
-    view on the next tick degrades arm-C to NoOp — no re-attempt churn."""
+class TestRung1RefuseViaLoopStaysStopOnly(unittest.TestCase):
+    """Stage 3 rung-1 REFUSE end-to-end (saxo Stage-3 memo): a resting rung-1
+    standalone stop with OCO enabled is NEVER upgraded through the loop — the pure
+    reconciler returns NoOp, no OCO is attempted, the rung-1 stop stays LIVE, and
+    the uic is NOT degraded to oco_unsupported. OCO is reached only via B0 on a
+    fresh naked fill; the stop-only residue drains purely by turnover."""
 
-    def test_fail_marks_unsupported_no_reattempt_rung1_kept(self) -> None:
+    def test_resting_rung1_stop_not_upgraded_no_oco_no_degrade(self) -> None:
         with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
             journal = Path(d) / "standalone_stops.jsonl"
             alerts: list[str] = []
             rung1 = _leg("rung1-stop", "StopIfTraded", 46.0)
             broker = _ProtBroker(positions=[_pos(46.0)], sells=[rung1], by_uic={_UIC: _pos(46.0)})
             calls: list = []
-            placer = _oco_placer(
-                calls,
-                error=OrderRejectedError(
-                    "blocked", error_code="SellOrdersAlreadyExistForOwnedContracts"
-                ),
-            )
+            placer = _oco_placer(calls)
             throttle = _throttle_to(alerts)
             deps = _deps(
                 broker,
@@ -905,111 +915,167 @@ class TestUpgradeOcoFailKeepsRung1AndMarksUnsupported(unittest.TestCase):
                 r1 = cl.run_once(deps)
                 r2 = cl.run_once(deps)
                 folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
-        self.assertEqual(len(calls), 1, "OCO attempted once, never re-attempted after the mark")
-        self.assertEqual(broker.cancelled, [], "rung-1 stop kept LIVE on the degrade path")
+        self.assertEqual(len(calls), 0, "rung-1 REFUSE: OCO never attempted from a resting stop")
+        self.assertEqual(broker.cancelled, [], "rung-1 stop kept LIVE (never touched)")
         self.assertEqual((r1.exits_placed, r2.exits_placed), (0, 0))
-        self.assertIn(_UIC, folded, "the failed uic is persisted oco_unsupported")
-        self.assertTrue(any("oco" in a.lower() for a in alerts), "degrade alert fires")
+        self.assertNotIn(_UIC, folded, "no degrade: a refused rung-1 is not marked oco_unsupported")
 
 
-class TestUpgradeOcoBroadCatch(unittest.TestCase):
-    """ANY BrokerError (a plain 202 / rate-limit / reject) degrades to stop-only:
-    caught, rung-1 kept, uic marked unsupported — never a naked window."""
+class TestExecuteB0FailureTaxonomy(unittest.TestCase):
+    """B0's three-way failure taxonomy (saxo Stage-3 memo, mitigation H1/A2/H4).
 
-    def test_plain_broker_error_caught_rung1_kept(self) -> None:
+    An AMBIGUOUS write (a non-``OrderRejectedError`` BrokerError — 5xx / network /
+    rate-limit) MAY have landed: NO inline fallback (would double-commit), NO
+    ``oco_placed`` marker (next tick reconciles against live state), NO degrade —
+    only a CRITICAL alert. A CLEAN structural reject is provably NOT landed: cover
+    the naked fill NOW with a plain standalone stop AND mark the uic
+    ``oco_unsupported``. A benign ``SellOrdersAlreadyExist`` means an OCO already
+    rests from a prior tick's landed write: NO fallback, NO degrade, just defer."""
+
+    def test_execute_b0_ambiguous_write_no_fallback_no_marker_alerts_critical(self) -> None:
         with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
             journal = Path(d) / "standalone_stops.jsonl"
             alerts: list[str] = []
             broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
             calls: list = []
-            placer = _oco_placer(calls, error=BrokerError("202 TradeNotCompleted"))
+            placer = _oco_placer(calls, error=BrokerError("500 network blip after send"))
             executor = cl._make_protection_executor(
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
-            action = UpgradeToOco(
-                uic=_UIC,
-                side="SELL",
-                qty=46.0,
-                stop_price=216.48,
-                tp_price=306.72,
-                entry_crid="crid-0",
-                gen=0,
-                supersede_ids=("rung1-stop",),
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_b0_action(), False, report)  # must NOT raise
+                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "oco_placed"
+                ]
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(broker.placed, [], "NO inline fallback — the OCO may have landed")
+        self.assertEqual(broker.cancelled, [])
+        self.assertEqual(report.exits_placed, 0)
+        self.assertNotIn(_UIC, folded, "ambiguous never degrades to oco_unsupported")
+        self.assertEqual(markers, [], "no oco_placed marker on an ambiguous write")
+        self.assertTrue(
+            any("CRITICAL" in a for a in alerts), f"expected a CRITICAL alert, got {alerts}"
+        )
+
+    def test_execute_b0_clean_reject_places_fallback_and_marks_oco_unsupported(self) -> None:
+        with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+            calls: list = []
+            # A clean structural reject (NOT SellOrdersAlreadyExist) — provably not landed.
+            placer = _oco_placer(
+                calls, error=OrderRejectedError("bad OCO", error_code="OrderRelationInvalid")
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
             with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
-                executor(action, False, report)  # must NOT raise
+                executor(_b0_action(), False, report)  # must NOT raise
                 folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
         self.assertEqual(len(calls), 1)
-        self.assertEqual(broker.cancelled, [], "rung-1 kept — never a naked window on the degrade")
+        self.assertEqual(
+            len(broker.placed), 1, "the naked fill is covered by a plain standalone stop"
+        )
+        self.assertEqual(broker.placed[0][:4], (_UIC, "SELL", 46.0, 216.48))
+        self.assertEqual(report.exits_placed, 1)
+        self.assertIn(_UIC, folded, "a clean structural reject degrades the uic to oco_unsupported")
+
+    def test_execute_b0_sell_orders_already_exist_benign(self) -> None:
+        with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+            calls: list = []
+            placer = _oco_placer(
+                calls,
+                error=OrderRejectedError(
+                    "already", error_code="SellOrdersAlreadyExistForOwnedContracts"
+                ),
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to(alerts), place_oco_exit=placer
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_b0_action(), False, report)  # must NOT raise
+                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            broker.placed, [], "an OCO already rests — NO fallback (would double-commit)"
+        )
+        self.assertNotIn(_UIC, folded, "benign fill-race never degrades to oco_unsupported")
         self.assertEqual(report.exits_placed, 0)
-        self.assertIn(_UIC, folded)
-        self.assertTrue(any("oco" in a.lower() for a in alerts))
+        self.assertTrue(alerts, "the benign already-rests case is surfaced as a deferring alert")
+
+    def test_execute_b0_capability_error_provably_unsent_no_fallback_no_degrade(self) -> None:
+        # A BrokerCapabilityError (ALLOW_ORDERS off / no placement capability) is a
+        # BrokerError subclass but is PROVABLY UNSENT — it must NOT read as an
+        # ambiguous write (no CRITICAL; a fallback stop is equally gated so it would
+        # fail too) NOR as a clean structural reject (no oco_unsupported degrade — a
+        # transient env gate is not an instrument incapability).
+        with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+            calls: list = []
+            placer = _oco_placer(calls, error=BrokerCapabilityError("order placement disabled"))
+            executor = cl._make_protection_executor(
+                broker, _throttle_to(alerts), place_oco_exit=placer
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_b0_action(), False, report)  # must NOT raise
+                folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "oco_placed"
+                ]
+        self.assertEqual(
+            broker.placed, [], "no fallback — placement is globally gated (would fail too)"
+        )
+        self.assertNotIn(_UIC, folded, "an env gate never degrades the uic to oco_unsupported")
+        self.assertEqual(markers, [], "no oco_placed marker on a provably-unsent write")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertFalse(
+            any("CRITICAL" in a for a in alerts),
+            f"a provably-unsent capability error is NOT a CRITICAL ambiguous write: {alerts}",
+        )
+        self.assertTrue(alerts, "the orders-disabled state is surfaced (throttled)")
 
 
-class TestKillBlocksUpgrade(unittest.TestCase):
-    """Under KILL the OCO upgrade is skipped (no new order churn, no rung-1
-    cancel), while the exposure-reducing protective stop still places."""
+class TestExecuteB0UnderKill(unittest.TestCase):
+    """Under KILL a B0 naked fill still needs covering — no OCO churn (a new OCO is
+    order churn, not exposure reduction), but a plain standalone stop IS placed (it
+    only reduces exposure). The fill is never left naked under KILL."""
 
-    def test_kill_skips_oco_but_stop_still_places(self) -> None:
+    def test_execute_b0_under_kill_places_plain_stop_no_oco(self) -> None:
         with mock.patch.dict(os.environ, _OCO_ON):
             broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
             calls: list = []
             executor = cl._make_protection_executor(
                 broker, _throttle_to([]), place_oco_exit=_oco_placer(calls)
             )
-            upgrade = UpgradeToOco(
-                uic=_UIC,
-                side="SELL",
-                qty=46.0,
-                stop_price=216.48,
-                tp_price=306.72,
-                entry_crid="crid-0",
-                gen=0,
-                supersede_ids=("rung1-stop",),
-            )
             report = cl.TickReport()
-            executor(upgrade, True, report)  # kill = True -> upgrade skipped
-            self.assertEqual(calls, [], "no OCO place under KILL")
-            self.assertEqual(broker.cancelled, [], "rung-1 not cancelled under KILL")
-            # The protective stop only REDUCES exposure -> still allowed under KILL.
-            stop = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
-            executor(stop, True, report)
-            self.assertEqual(len(broker.placed), 1, "protective stop still places under KILL")
+            executor(_b0_action(), True, report)  # kill = True
+        self.assertEqual(calls, [], "no OCO place under KILL")
+        self.assertEqual(
+            len(broker.placed), 1, "the naked fill is covered by a plain stop under KILL"
+        )
+        self.assertEqual(broker.placed[0][:4], (_UIC, "SELL", 46.0, 216.48))
+        self.assertEqual(report.exits_placed, 1)
 
 
-class TestUpgradeOcoDarkByDefault(unittest.TestCase):
-    """Ship dark: with the env flag unset, an UpgradeToOco action is a pure no-op
-    even when a placer IS wired (the single ``_oco_enabled()`` env gate governs)."""
-
-    def test_flag_unset_no_place_even_with_placer(self) -> None:
-        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_OCO_ENABLED"}
-        with mock.patch.dict(os.environ, env, clear=True):
-            broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
-            calls: list = []
-            executor = cl._make_protection_executor(
-                broker, _throttle_to([]), place_oco_exit=_oco_placer(calls)
-            )
-            action = UpgradeToOco(
-                uic=_UIC,
-                side="SELL",
-                qty=46.0,
-                stop_price=216.48,
-                tp_price=306.72,
-                entry_crid="crid-0",
-                gen=0,
-                supersede_ids=("rung1-stop",),
-            )
-            report = cl.TickReport()
-            executor(action, False, report)
-        self.assertEqual(calls, [], "no OCO place while dark")
-        self.assertEqual(broker.cancelled, [])
-        self.assertEqual(report.exits_placed, 0)
-
-
-class TestUpgradeOcoFlatUicSkips(unittest.TestCase):
+class TestExecuteB0FlatUicSkips(unittest.TestCase):
     """Execute-time owned re-check: the snapshot showed owned=46 but the position
-    is flat now -> the OCO is skipped and the rung-1 stop is left untouched."""
+    is flat now -> the OCO is skipped (never oversell / plant on a flat uic), no
+    fallback stop, a flat-skip alert."""
 
     def test_flat_at_execute_skips_oco(self) -> None:
         with mock.patch.dict(os.environ, _OCO_ON):
@@ -1019,46 +1085,28 @@ class TestUpgradeOcoFlatUicSkips(unittest.TestCase):
             executor = cl._make_protection_executor(
                 broker, _throttle_to(alerts), place_oco_exit=_oco_placer(calls)
             )
-            action = UpgradeToOco(
-                uic=_UIC,
-                side="SELL",
-                qty=46.0,
-                stop_price=216.48,
-                tp_price=306.72,
-                entry_crid="crid-0",
-                gen=0,
-                supersede_ids=("rung1-stop",),
-            )
             report = cl.TickReport()
-            executor(action, False, report)
+            executor(_b0_action(), False, report)
         self.assertEqual(calls, [], "no OCO placed on a flat uic")
-        self.assertEqual(broker.cancelled, [], "rung-1 stop untouched")
+        self.assertEqual(broker.placed, [], "no fallback stop on a flat uic")
         self.assertEqual(report.exits_placed, 0)
+        self.assertTrue(any("gone" in a for a in alerts))
 
 
-class TestUpgradeOcoMissingCapabilityStaysStopOnly(unittest.TestCase):
-    """Flag on but the wired broker has no OCO capability (placer is None): the
-    upgrade must not raise (AttributeError would escape the per-action boundary) —
-    it stays rung-1 stop-only, rung-1 untouched."""
+class TestExecuteB0NoCapability(unittest.TestCase):
+    """Flag on but the wired broker has no OCO capability (placer is None): B0 must
+    not raise (an AttributeError would escape the per-action boundary) — it covers
+    the naked fill with a plain standalone stop instead."""
 
-    def test_no_placer_no_crash_rung1_kept(self) -> None:
+    def test_execute_b0_no_capability_places_plain_stop(self) -> None:
         with mock.patch.dict(os.environ, _OCO_ON):
             broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
             executor = cl._make_protection_executor(broker, _throttle_to([]))  # no placer
-            action = UpgradeToOco(
-                uic=_UIC,
-                side="SELL",
-                qty=46.0,
-                stop_price=216.48,
-                tp_price=306.72,
-                entry_crid="crid-0",
-                gen=0,
-                supersede_ids=("rung1-stop",),
-            )
             report = cl.TickReport()
-            executor(action, False, report)  # must NOT raise
-        self.assertEqual(broker.cancelled, [], "rung-1 kept when OCO capability is absent")
-        self.assertEqual(report.exits_placed, 0)
+            executor(_b0_action(), False, report)  # must NOT raise
+        self.assertEqual(len(broker.placed), 1, "the naked fill is covered by a plain stop")
+        self.assertEqual(broker.placed[0][:4], (_UIC, "SELL", 46.0, 216.48))
+        self.assertEqual(report.exits_placed, 1)
 
 
 def _raise_broker_error(*_a: Any, **_k: Any) -> Any:
@@ -1811,6 +1859,255 @@ class TestGenStampedRefChangesOnResize(unittest.TestCase):
                 self.assertEqual(cl._make_next_gen(43070)(30.0), 1)
                 self.assertEqual(cl._make_next_gen(43070)(20.0), 2)
                 self.assertEqual(cl._make_next_gen(99999)(10.0), 0)
+
+
+_AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
+
+
+def _amend_action(**over: Any) -> AmendStop:
+    base: dict[str, Any] = {
+        "uic": _UIC,
+        "side": "SELL",
+        "order_id": "stop-1",
+        "order_type": "StopIfTraded",
+        "target_qty": 4.0,
+        "stop_price": 216.48,
+        "request_id": _exit_amend_ref("crid-0", 0),
+        "reason": "grow — PATCH amend stop up in place",
+    }
+    base.update(over)
+    return AmendStop(**base)
+
+
+class TestExecuteAmendStop(unittest.TestCase):
+    """The Stage-3 AmendStop executor (saxo Stage-3 memo). Absolute-target: it
+    re-reads LIVE owned at execute time and amends to it in BOTH directions (a
+    position that grew or shrank since the snapshot is covered up to live owned,
+    never stranded naked, never oversold). NO cancel; ALLOWED under KILL (an
+    in-place resize only reduces exposure or enlarges cover). On ANY amend failure
+    it journals ``amend_failed`` (TTL fold -> ``amend_recently_failed`` skips amend
+    next tick, falling to the proven B1 additive / place-first) AND escalates via
+    ``record_place_failure`` — no permanent capability latch."""
+
+    def test_execute_amend_targets_live_owned_when_grew(self) -> None:
+        broker = _ProtBroker(by_uic={_UIC: _pos(6.0)})  # grew to 6 since the snapshot (4)
+        executor = cl._make_protection_executor(
+            broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+        )
+        report = cl.TickReport()
+        executor(_amend_action(target_qty=4.0), False, report)
+        self.assertEqual(len(broker.amended), 1)
+        self.assertEqual(broker.amended[0][4], 6.0, "amend to LIVE owned (grew), never the stale 4")
+        self.assertEqual(report.exits_placed, 1)
+
+    def test_execute_amend_targets_live_owned_when_shrank(self) -> None:
+        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)})  # shrank to 4 since the snapshot (7)
+        executor = cl._make_protection_executor(
+            broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+        )
+        report = cl.TickReport()
+        executor(_amend_action(target_qty=7.0), False, report)
+        self.assertEqual(len(broker.amended), 1)
+        self.assertEqual(
+            broker.amended[0][4], 4.0, "amend to LIVE owned (shrank), never oversell 7"
+        )
+
+    def test_execute_amend_flat_skip_when_live_below_eps(self) -> None:
+        alerts: list[str] = []
+        broker = _ProtBroker(by_uic={_UIC: _pos(0.2)})  # effectively flat
+        executor = cl._make_protection_executor(
+            broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
+        )
+        report = cl.TickReport()
+        executor(_amend_action(target_qty=4.0), False, report)
+        self.assertEqual(broker.amended, [], "no amend on a flat uic")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertTrue(any("gone" in a or "skip" in a for a in alerts))
+
+    def test_execute_amend_capability_error_no_journal_no_escalation(self) -> None:
+        # A BrokerCapabilityError (orders disabled) is PROVABLY UNSENT, not an amend
+        # rejection: it must NOT journal amend_failed (which would needlessly skip
+        # amend next tick) nor escalate via record_place_failure — just a throttled
+        # alert; the env gate self-clears and amend retries next tick.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            sent: list[str] = []
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                amend_error=BrokerCapabilityError("order placement disabled"),
+            )
+            throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
+            executor = cl._make_protection_executor(
+                broker, throttle, amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)  # must NOT raise
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual(
+            markers, [], "a provably-unsent capability error never journals amend_failed"
+        )
+        self.assertEqual(broker.amended, [], "nothing was amended")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertTrue(sent, "the orders-disabled state is surfaced (throttled)")
+        self.assertFalse(
+            any("amend failed" in a for a in sent),
+            f"a provably-unsent error does not escalate as a place-failure: {sent}",
+        )
+
+    def test_execute_amend_reject_journals_amend_failed_and_records_failure(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            sent: list[str] = []
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                amend_error=OrderRejectedError("terminal order", error_code="OrderNotWorking"),
+            )
+            throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
+            executor = cl._make_protection_executor(
+                broker, throttle, amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)  # must NOT raise
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual([m.get("uic") for m in markers], [_UIC], "amend_failed marker journaled")
+        self.assertEqual(report.exits_placed, 0)
+        # record_place_failure emitted the routine place-failure alert (below threshold).
+        self.assertTrue(sent, "the amend failure escalates via record_place_failure")
+        # No permanent latch: the uic is NOT marked oco_unsupported by an amend failure.
+        with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            self.assertNotIn(
+                _UIC, cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
+            )
+
+    def test_execute_amend_allowed_under_kill(self) -> None:
+        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)})
+        executor = cl._make_protection_executor(
+            broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+        )
+        report = cl.TickReport()
+        executor(_amend_action(), True, report)  # kill = True
+        self.assertEqual(
+            len(broker.amended), 1, "an in-place protective resize is allowed under KILL"
+        )
+        self.assertEqual(report.exits_placed, 1)
+
+    def test_execute_amend_no_capability_is_noop(self) -> None:
+        # A broker without SupportsAmendStop leaves amend_stop=None; the executor
+        # must NOT crash (AttributeError escapes the per-action boundary) — it is a
+        # pure no-op (the pure arm never emits AmendStop without the capability).
+        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)})
+        executor = cl._make_protection_executor(broker, _throttle_to([]))  # amend_stop=None
+        report = cl.TickReport()
+        executor(_amend_action(), False, report)  # must NOT raise
+        self.assertEqual(broker.amended, [])
+        self.assertEqual(report.exits_placed, 0)
+
+
+class TestBuildProtectionViewTtlFolds(unittest.TestCase):
+    """build_protection_view folds the append-only TTL markers against the injected
+    clock (saxo Stage-3 memo): only markers newer than the TTL count. A stale marker
+    expires so B0 re-fires / amend retries after the window."""
+
+    def _broker(self) -> _ProtBroker:
+        return _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
+
+    def test_build_protection_view_folds_oco_recently_placed_within_ttl_and_expires_after(
+        self,
+    ) -> None:
+        fresh_uic, stale_uic = _UIC, 99999
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                cl._journal_oco_placed(fresh_uic, clock=lambda: 1000.0 - 30.0)  # 30s ago
+                cl._journal_oco_placed(stale_uic, clock=lambda: 1000.0 - 300.0)  # 300s ago
+                view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
+        self.assertIn(fresh_uic, view.oco_recently_placed, "the 30s-old marker is fresh (TTL 120s)")
+        self.assertNotIn(stale_uic, view.oco_recently_placed, "the 300s-old marker expired")
+
+    def test_build_protection_view_folds_amend_recently_failed_within_ttl(self) -> None:
+        fresh_uic, stale_uic = _UIC, 99999
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                cl._journal_amend_failed(fresh_uic, clock=lambda: 1000.0 - 30.0)
+                cl._journal_amend_failed(stale_uic, clock=lambda: 1000.0 - 300.0)
+                view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
+        self.assertIn(fresh_uic, view.amend_recently_failed)
+        self.assertNotIn(stale_uic, view.amend_recently_failed)
+
+    def test_ttl_folds_default_empty_without_markers(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                view = cl.build_protection_view(self._broker(), [])
+        self.assertEqual(view.oco_recently_placed, frozenset())
+        self.assertEqual(view.amend_recently_failed, frozenset())
+
+
+class TestAmendSeqMonotonicJournalBacked(unittest.TestCase):
+    """The journal-backed amend sequence is ALWAYS max+1 (never qty-keyed), so a
+    re-resize to a previously-seen target qty gets a fresh ref and is never
+    dedup-swallowed (mitigation A3). It persists append-only across restarts."""
+
+    def test_amend_seq_is_monotonic_and_persists(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                self.assertEqual(cl._make_next_amend_seq(_UIC)(), 0)
+                self.assertEqual(cl._make_next_amend_seq(_UIC)(), 1)
+                self.assertEqual(cl._make_next_amend_seq(_UIC)(), 2)
+                self.assertEqual(cl._make_next_amend_seq(88888)(), 0, "seq is per-uic")
+
+    def test_fold_planned_exits_wires_journal_backed_amend_seq(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                planned = cl._fold_planned_exits(list(cl._iter_standalone_stop_journal()))[_UIC]
+                s0 = planned.next_amend_seq()
+                s1 = planned.next_amend_seq()
+        self.assertEqual((s0, s1), (0, 1), "the folded PlannedExit carries the monotonic seq")
+
+
+class _StopOnlyBroker:
+    """SupportsStandaloneStop but NOT SupportsAmendStop (no amend_stop_amount)."""
+
+    name = "stoponly"
+
+    def place_standalone_stop(
+        self, uic: int, side: str, qty: float, stop_price: float, request_id: str | None = None
+    ) -> PlacedOrder:
+        return PlacedOrder(entry_order_id="S-1", exit_order_ids=())
+
+
+class TestBuildDefaultDepsAmendFailFast(unittest.TestCase):
+    """build_default_deps FAIL-FASTS when the amend flag is on but the wired broker
+    has no SupportsAmendStop capability — so the pure layer may emit AmendStop
+    freely, knowing a capable broker is guaranteed at runtime (saxo Stage-3 memo)."""
+
+    def test_fail_fast_when_amend_enabled_but_no_capability(self) -> None:
+        with (
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),
+            ),
+            mock.patch.dict(os.environ, _AMEND_ON),
+        ):
+            with self.assertRaises(BrokerCapabilityError):
+                cl.build_default_deps()
 
 
 class TestManageCommandRegistered(unittest.TestCase):
