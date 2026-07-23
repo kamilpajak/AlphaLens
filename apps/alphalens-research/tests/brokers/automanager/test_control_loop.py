@@ -104,7 +104,15 @@ def _deps(
     chain_alive: bool = True,
     build_protection_view: Any = None,
     execute_protection: Any = None,
+    alert_throttled: Any = None,
 ) -> cl.LoopDeps:
+    # Default: un-throttled passthrough (records the alert, always "sent") so
+    # existing tests keep asserting on `alerts`. The throttle test injects a real
+    # _AlertThrottle to exercise the per-reason dedup.
+    def _default_throttled(message: str, reason: str) -> bool:
+        alerts.append(message)
+        return True
+
     return cl.LoopDeps(
         broker=broker,
         kill_file=kill_file,
@@ -118,6 +126,7 @@ def _deps(
         execute_protection=execute_protection or (lambda action, kill, report: None),
         sweep_orphans_fn=lambda broker: [],
         alert=lambda msg: alerts.append(msg),  # noqa: PLW0108
+        alert_throttled=alert_throttled or _default_throttled,
     )
 
 
@@ -686,6 +695,62 @@ class TestProtectionExecutorUpgradeToOcoNoop(unittest.TestCase):
         execute(AlertOnly("naked uic 7 — no protective stop"), False, report)  # AlertOnly branch
         self.assertEqual(report.alerts, 1)
         self.assertIn("naked uic 7 — no protective stop", alerts)
+
+
+class TestDivergenceAlertThrottled(unittest.TestCase):
+    """A stuck FILLED-but-unmatched reconcile divergence must page ONCE per re-alert
+    interval, not every tick (overnight-spam incident 2026-07-23). The verdict-level
+    AlertOnly now routes through the daemon-lifetime throttle, keyed per crid."""
+
+    _DIVERGENCE_REASON = (
+        "audit log says FILLED but no open position or closed pair matched "
+        "client_request_id 'rid-KO'"
+    )
+
+    def _run_advance(self, deps: cl.LoopDeps, verdict: ReconcileVerdict) -> None:
+        cl._advance_and_execute(deps, verdict, _view(), cl.TickReport())
+
+    def test_same_divergence_alerts_once_then_re_alerts_after_interval(self) -> None:
+        from alphalens_pipeline.brokers.automanager.position_manager import AlertOnly, advance
+
+        alerts: list[str] = []
+        clock = {"t": 1000.0}
+        throttle = cl._AlertThrottle(alerts.append, clock=lambda: clock["t"], interval_s=1800.0)
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=alerts,
+            alert_throttled=lambda m, r: throttle.emit(m, reason=r),
+        )
+        verdict = _verdict(divergence=True, reason=self._DIVERGENCE_REASON)
+        self.assertIsInstance(advance(verdict), AlertOnly, "a divergence verdict -> AlertOnly")
+
+        for _ in range(5):  # five consecutive ticks, same stuck crid
+            self._run_advance(deps, verdict)
+        self.assertEqual(len(alerts), 1, "a stuck divergence pages ONCE within the interval")
+
+        clock["t"] += 1801.0  # the re-alert interval elapses
+        self._run_advance(deps, verdict)
+        self.assertEqual(len(alerts), 2, "it re-alerts once per interval, not every tick")
+
+    def test_distinct_crids_are_independent_alerts(self) -> None:
+        alerts: list[str] = []
+        throttle = cl._AlertThrottle(alerts.append, clock=lambda: 1000.0, interval_s=1800.0)
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=alerts,
+            alert_throttled=lambda m, r: throttle.emit(m, reason=r),
+        )
+        v_a = _verdict(divergence=True, reason="a", details={"client_request_id": "rid-A"})
+        v_b = _verdict(divergence=True, reason="b", details={"client_request_id": "rid-B"})
+        self._run_advance(deps, v_a)
+        self._run_advance(deps, v_b)  # different crid -> distinct throttle key
+        self.assertEqual(len(alerts), 2, "distinct client_request_ids alert independently")
 
 
 def _oco_placer(calls: list, *, error: Exception | None = None):

@@ -87,6 +87,13 @@ class LoopDeps:
     execute_protection: Callable[[Action, bool, TickReport], None]
     sweep_orphans_fn: Callable[[Broker], list[Any]]
     alert: Callable[[str], None]
+    # Throttled alert sink (message, reason_key) -> was-sent. Shares the daemon-
+    # lifetime _AlertThrottle with the protection pass, so a PERSISTENT per-tick
+    # condition (a stuck FILLED-but-unmatched divergence, a sustained broker
+    # outage) pages ONCE per re-alert interval instead of every tick — the
+    # overnight-spam incident 2026-07-23. Keyed per reason so distinct conditions
+    # stay independent; a NEW divergence (different crid) alerts immediately.
+    alert_throttled: Callable[[str, str], bool]
     # Rung 1 -> 2 OCO exit placer (saxo-oco memo §10), or None when the wired
     # broker lacks SupportsOcoExit -> the loop runs stop-only. Detected once in
     # build_default_deps and injected into the protection executor closure (a
@@ -214,8 +221,13 @@ def _run_verdict_advance(
     try:
         verdicts = deps.verdicts_fn(records, deps.broker)
     except BrokerError as exc:
-        deps.alert(f"reconcile failed (broker error) — verdicts skipped this tick: {exc}")
-        report.alerts += 1
+        # THROTTLED (static reason): a sustained broker outage must not page every
+        # tick — one alert per re-alert interval (overnight-spam incident 2026-07-23).
+        if deps.alert_throttled(
+            f"reconcile failed (broker error) — verdicts skipped this tick: {exc}",
+            "reconcile-fail",
+        ):
+            report.alerts += 1
         verdicts = []
     report.verdict_count = len(verdicts)
     if not verdicts:
@@ -223,8 +235,11 @@ def _run_verdict_advance(
     try:
         position_view = deps.build_position_view(deps.broker, records)
     except BrokerError as exc:
-        deps.alert(f"position-view build failed (broker error) — actions skipped this tick: {exc}")
-        report.alerts += 1
+        if deps.alert_throttled(
+            f"position-view build failed (broker error) — actions skipped this tick: {exc}",
+            "posview-fail",
+        ):
+            report.alerts += 1
         return
     for verdict in verdicts:
         _advance_and_execute(deps, verdict, position_view, report)
@@ -257,8 +272,11 @@ def _run_protection_pass(
     try:
         protection_view = deps.build_protection_view(deps.broker, records)
     except BrokerError as exc:
-        deps.alert(f"protection-view build failed (broker error) — protection skipped: {exc}")
-        report.alerts += 1
+        if deps.alert_throttled(
+            f"protection-view build failed (broker error) — protection skipped: {exc}",
+            "protview-fail",
+        ):
+            report.alerts += 1
         return
     for action in reconcile_protection(protection_view):
         report.actions.append(("protection", type(action).__name__))
@@ -284,8 +302,16 @@ def _execute_action(
     if isinstance(action, NoOp):
         return
     if isinstance(action, AlertOnly):
-        deps.alert(action.reason)
-        report.alerts += 1
+        # Reconcile-verdict alerts (e.g. a stuck FILLED-but-unmatched divergence)
+        # are THROTTLED per client_request_id — a persistent divergence pages once
+        # per re-alert interval, not every tick (overnight-spam incident
+        # 2026-07-23). A different crid is a distinct key -> alerts immediately.
+        # Fall back to the ticker when the crid is absent so two unattributable
+        # divergences on different tickers are not deduped into one (the key only;
+        # request_id stays the crid for the CancelRemaining lookup below).
+        divergence_key = f"divergence:{request_id or verdict.ticker}"
+        if deps.alert_throttled(action.reason, divergence_key):
+            report.alerts += 1
         return
     if isinstance(action, CancelRemaining):
         for order_id in position_view.working_children.get(request_id, ()):  # ungated safe op
@@ -375,6 +401,7 @@ def build_default_deps() -> LoopDeps:
         execute_protection=_make_protection_executor(broker, throttle, place_oco_exit=oco_placer),
         sweep_orphans_fn=lambda b: orphan_sweeper.sweep(b, _read_records()),
         alert=base_alert,
+        alert_throttled=lambda message, reason: throttle.emit(message, reason=reason),
         place_oco_exit=oco_placer,
     )
 
