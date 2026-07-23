@@ -23,6 +23,7 @@ import contextlib
 import dataclasses
 import datetime as dt
 import logging
+import math
 import os
 import uuid
 from collections import OrderedDict
@@ -567,7 +568,7 @@ class SaxoBroker:
         # Degenerate-ordering guard ONLY (a long SELL OCO needs stop < tp). The
         # wide child-distance guard is deliberately skipped — the OCO exit is the
         # escape for a disaster stop 15-30% away (saxo-oco memo §4.4).
-        if not stop_q < tp_q:
+        if stop_q >= tp_q:
             raise OrderRejectedError(
                 f"degenerate OCO exit Uic {uic}: stop {stop_q} must be strictly below "
                 f"take_profit {tp_q} for a long SELL OCO pair"
@@ -1037,6 +1038,11 @@ class SaxoBroker:
         nearest tick moves the price by more than the (call-time read) policy
         cap, the placement fails loudly instead of drifting the geometry.
         """
+        if not math.isfinite(price):
+            # A non-finite price would quantize to NaN/inf (or crash the round),
+            # then slip a garbage OrderPrice into a live order — fail loud here so
+            # downstream relation checks only ever compare finite numbers.
+            raise OrderRejectedError(f"{label} must be a finite number, got {price}")
         if price <= 0:
             raise OrderRejectedError(f"{label} must be > 0, got {price}")
         tick = self._tick_size_for(price, details)
