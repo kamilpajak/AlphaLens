@@ -37,7 +37,9 @@ Each candidate is scored `criticality × suitability` (both 1–5):
 | `paper/sizing.py` | #855 | 425/440 = **96.6%** (was 86.1%); 15 documented equivalents |
 | `thematic/screening/selection_score.py` | #856 | 84/110 = **76.4%** (was 73.6%); 26 documented equivalents |
 | `scorers/cohen_malloy_classifier.py` | #857 | 45/46 = **97.8%** (was 76.1%); 1 documented equivalent |
-| `brokers/contract.py` | *this PR* | 33/66 = **50.0%** (was 40.9%); all 6 killable killed, 33 documented equivalents |
+| `brokers/contract.py` | #892 | 33/66 = **50.0%** (was 40.9%); all 6 killable killed, 33 documented equivalents |
+| `brokers/submission_log.py` | *this PR* | all 3 killable killed; 110 annotation-`|` + 2 kw-only-marker equivalents |
+| `brokers/reconcile.py` | *this PR* | all 33 killable killed; 154 annotation-`|` + 7 equivalent + 7 low-value |
 
 ### `feedback/ladder_replay.py` — batch 1 (#853)
 
@@ -156,6 +158,38 @@ The 33 documented equivalents are all `X | Y` swaps inside type annotations
 (`error_code: str | None`, the two Protocol-method signatures) — dead under
 `from __future__ import annotations`, the same dominant equivalent class seen in
 every prior run.
+
+### `brokers/submission_log.py` — complete (this PR)
+
+The append-only submission journal (161 LOC) that IS the auto-manager's
+crash-recovery source of truth: `run_once` re-derives the placement state from it
+on every restart. Baseline census: **218 mutants, 103 killed, 115 survived
+(52.8 %)**. Of the 115, **3 KILLABLE / 110 EQUIVALENT / 2 LOW_VALUE**. The 3
+killable, each pinned and verified KILLED by a targeted re-run:
+`precheck or []` -> `and` (the `and` variant leaks `None` when precheck is falsy
+instead of defaulting to `[]`); `mkdir(parents=True)` -> `False` (a missing
+grandparent dir would raise `FileNotFoundError` instead of creating the chain);
+`json.dumps(sort_keys=True)` -> `False` (the on-disk line must be deterministic).
+The 110 equivalents are annotation-`|`; the 2 low-value are the
+`*,` -> `/,` keyword-only-marker swap on helpers never called positionally.
+
+### `brokers/reconcile.py` — complete (this PR)
+
+The read-only reconcile verdict engine (679 LOC): WORKING/PAST-TTL divergence,
+closed-FIFO-pair realized-R, terminal classification, and the CLI summary counters
+that surface divergences. Baseline census: **503 mutants, 302 killed, 201 survived
+(40.0 %)** — the biggest absolute gap in the broker core. Of the 201, **33
+KILLABLE / 154 EQUIVALENT (annotation-`|`) / 7 EQUIVALENT-other / 7 LOW_VALUE**.
+The 33 killable, all verified KILLED by a targeted re-run, include the
+money-critical ones: `entry - stop` -> `entry % stop` (the R denominator),
+`risk <= 0` -> `risk == 0` (lets a negative risk through and fabricates a negative
+R), `<= eps` -> `< eps` (the fill-vs-owned tolerance edge), the summary counters
+`+= 1` -> `+= 0` / `+= 2` (a dropped `divergent` counter would hide divergences
+in the CLI summary), `@dataclass(frozen=True)` -> `False` on the verdict + the
+cross-check snapshot, the enum `is` -> `==` identity checks, and the `request_id`
+correlation comparisons. Classified + drafted via a Workflow (5 classify agents +
+2 draft agents), then verified inline — cosmic-ray must run single-process (it
+mutates in place), so the verify never fans out.
 
 ## Backlog (ranked)
 
