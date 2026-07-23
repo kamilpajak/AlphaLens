@@ -32,7 +32,13 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     reconcile_protection,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
+    _oco_stop_leg as oco_stop_leg,
+)
+from alphalens_pipeline.brokers.automanager.position_manager import (
     _reconcile_long as reconcile_long,
+)
+from alphalens_pipeline.brokers.automanager.position_manager import (
+    _tp_only_leg_ids as tp_only_leg_ids,
 )
 from alphalens_pipeline.brokers.contract import (
     InstrumentRef,
@@ -1248,6 +1254,335 @@ class TestRung1Refuse(unittest.TestCase):
         with patch.dict(os.environ, _OCO_ON):
             actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
+
+
+class TestOcoStopLegSelector(unittest.TestCase):
+    """Stage 3.5 selector ``_oco_stop_leg``: the OCO-REQUIRING inverse of
+    ``_sole_standalone_stop`` — returns the child StopIfTraded leg of a CLEAN
+    unfilled two-leg OCO pair, else ``None``."""
+
+    def test_returns_child_stop_for_clean_unfilled_oco_pair(self) -> None:
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0)
+        tp = _oco_leg("oco-tp", "Limit", 5.0)
+        self.assertIs(oco_stop_leg((stop, tp)), stop)
+
+    def test_none_when_oco_stop_leg_partially_filled(self) -> None:
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0, filled=2.0)
+        tp = _oco_leg("oco-tp", "Limit", 5.0)
+        self.assertIsNone(oco_stop_leg((stop, tp)))
+
+    def test_none_when_oco_tp_leg_partially_filled(self) -> None:
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0)
+        tp = _oco_leg("oco-tp", "Limit", 5.0, filled=2.0)
+        self.assertIsNone(oco_stop_leg((stop, tp)))
+
+    def test_none_when_stray_standalone_stop_alongside_pair(self) -> None:
+        # 3 legs (OCO stop + OCO tp + a standalone stop) -> len != 2 -> None.
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0)
+        tp = _oco_leg("oco-tp", "Limit", 5.0)
+        stray = _leg("stray-stop", "StopIfTraded", 5.0)  # order_relation=None, plain ref
+        self.assertIsNone(oco_stop_leg((stop, tp, stray)))
+
+    def test_none_for_lone_standalone_stop_no_tp(self) -> None:
+        stop = _leg("stop-1", "StopIfTraded", 5.0)  # single non-OCO stop
+        self.assertIsNone(oco_stop_leg((stop,)))
+
+    def test_recognises_pair_via_orderrelation_only(self) -> None:
+        # Q7: both legs OrderRelation=='Oco' but neither carries the -oco- ref infix.
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0, external_reference=None)
+        tp = _oco_leg("oco-tp", "Limit", 5.0, external_reference=None)
+        self.assertIs(oco_stop_leg((stop, tp)), stop)
+
+    def test_recognises_pair_via_ref_infix_only(self) -> None:
+        # Both legs carry the -oco- ref infix but OrderRelation is absent.
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0, order_relation=None)
+        tp = _oco_leg("oco-tp", "Limit", 5.0, order_relation=None)
+        self.assertIs(oco_stop_leg((stop, tp)), stop)
+
+
+class TestTpOnlyLegIdsExcludesOco(unittest.TestCase):
+    """``_tp_only_leg_ids`` feeds ``cancel_conflicting`` (cancelled BEFORE a place)
+    for the Bug-B lone-TP shape. It must name STANDALONE TP legs only — an OCO
+    Limit is mutually exclusive with its sibling stop and cancelling it cascade-
+    cancels the covering stop, so an OCO leg here would open a naked window."""
+
+    def test_standalone_lone_tp_is_named(self) -> None:
+        legs = (_leg("stop-1", "StopIfTraded", 20.0), _leg("tp-1", "Limit", 20.0))
+        self.assertEqual(tp_only_leg_ids(legs), ("tp-1",))
+
+    def test_oco_pair_yields_no_cancel_ids(self) -> None:
+        legs = (_oco_leg("oco-stop", "StopIfTraded", 4.0), _oco_leg("oco-tp", "Limit", 4.0))
+        self.assertEqual(tp_only_leg_ids(legs), ())  # OCO Limit excluded — never pre-cancel
+
+    def test_oco_tp_excluded_but_standalone_tp_kept(self) -> None:
+        # Mixed shape: an OCO pair plus a stray STANDALONE TP. Only the standalone
+        # TP (which holds an independent commitment) may be pre-cancelled.
+        legs = (
+            _oco_leg("oco-stop", "StopIfTraded", 4.0),
+            _oco_leg("oco-tp", "Limit", 4.0),
+            _leg("tp-standalone", "Limit", 3.0),
+        )
+        self.assertEqual(tp_only_leg_ids(legs), ("tp-standalone",))
+
+
+class TestOcoGrowAmendArm(unittest.TestCase):
+    """Stage 3.5 GROW-after-OCO amend arm (arm B): a CLEAN unfilled resting OCO
+    pair under-covers (owned grew) -> PATCH the OCO stop leg UP to live owned in
+    place; Q9 propagates symmetrically to the Limit sibling. Falls to B1 additive
+    when amend is off / the uic is degraded (DARK parity with #894)."""
+
+    def _grow_view(
+        self,
+        *,
+        owned: float = 7.0,
+        stop_amount: float = 4.0,
+        oco_unsupported: frozenset[int] = frozenset(),
+        amend_recently_failed: frozenset[int] = frozenset(),
+        stop_order_type: str = "StopIfTraded",
+    ) -> tuple[Position, ProtectionView]:
+        pos = _pos(owned)
+        stop = _oco_leg("oco-stop", stop_order_type, stop_amount)
+        tp = _oco_leg("oco-tp", "Limit", stop_amount)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+            oco_unsupported=oco_unsupported,
+            amend_recently_failed=amend_recently_failed,
+        )
+        return pos, view
+
+    def test_grow_after_oco_emits_amend_up_to_owned(self) -> None:
+        pos, view = self._grow_view(owned=7.0, stop_amount=4.0)
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertEqual(action.order_id, "oco-stop")
+        self.assertEqual(action.target_qty, 7.0)  # absolute target = live owned
+        self.assertTrue(action.reason.startswith("grow-after-OCO"))
+        self.assertIn("-amend-", action.request_id)
+
+    def test_grow_after_oco_amend_disabled_falls_to_b1_additive(self) -> None:
+        pos, view = self._grow_view(owned=7.0, stop_amount=4.0)
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_AMEND_ENABLED"}
+        with patch.dict(os.environ, env, clear=True):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertNotIsInstance(action, AmendStop)
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 3.0)  # B1 delta (owned 7 - covered 4)
+        # NEVER-NAKED: the B1 additive fallback KEEPS the resting OCO pair and adds
+        # a delta stop on top; it must NOT pre-cancel either OCO leg (cancel-before
+        # cascades the pair -> a fully-naked window before the delta lands).
+        self.assertEqual(action.cancel_conflicting, ())
+
+    def test_grow_after_oco_recently_failed_falls_to_b1_additive(self) -> None:
+        pos, view = self._grow_view(amend_recently_failed=frozenset({_UIC}))
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertNotIsInstance(action, AmendStop)
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 3.0)  # B1 additive covers the delta
+        # NEVER-NAKED: the OCO Limit (TP) leg must not be pre-cancelled — an OCO leg
+        # in cancel_conflicting cascade-cancels its sibling stop BEFORE the delta
+        # place, tearing the whole pair down (the exact bug this pins).
+        self.assertEqual(action.cancel_conflicting, ())
+        self.assertNotIn("oco-tp", action.cancel_conflicting)
+        self.assertNotIn("oco-stop", action.cancel_conflicting)
+
+    def test_grow_after_oco_uic_unsupported_falls_to_b2(self) -> None:
+        # oco_unsupported gates BOTH the OCO amend and the B1 additive block, so the
+        # uic falls to the place-first B2 path (full owned, stale stop superseded).
+        pos, view = self._grow_view(oco_unsupported=frozenset({_UIC}))
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertNotIsInstance(action, AmendStop)
+        self.assertIsInstance(action, PlaceStop)
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 7.0)  # full owned, place-first B2
+        # NEVER-NAKED: the OCO stop leaves via supersede_ids (cancel AFTER the
+        # full-owned place); the OCO Limit (TP) leg must NEVER sit in
+        # cancel_conflicting (pre-cancel cascade-cancels the covering stop).
+        self.assertEqual(action.cancel_conflicting, ())
+        self.assertEqual(action.supersede_ids, ("oco-stop",))
+
+    def test_grow_amend_order_type_defaults_stopiftraded_when_none(self) -> None:
+        # The AmendStop preserves the OCO stop leg's order_type, defaulting to
+        # 'StopIfTraded' (not '') via ``order_type or "StopIfTraded"``. The selector
+        # requires STOP_TYPES membership, so a reachable OCO stop always carries a
+        # concrete stop type; the default is the naive-read (OrderType:None) belt.
+        pos, view = self._grow_view(stop_order_type="StopIfTraded")
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        action = actions[0]
+        assert isinstance(action, AmendStop)
+        self.assertEqual(action.order_type, "StopIfTraded")
+        self.assertNotEqual(action.order_type, "")
+
+
+class TestOcoDownsizeAmendArm(unittest.TestCase):
+    """Stage 3.5 OCO-DOWNSIZE amend arm (arm A) + M1 propagation-lag NoOp guard: a
+    CLEAN unfilled resting OCO pair over-covers -> PATCH the OCO stop leg DOWN to
+    live owned in place; a stop-already-<=owned/tp-lags read NoOps one tick rather
+    than tearing the pair down."""
+
+    def test_downsize_oco_emits_amend_down_to_owned(self) -> None:
+        pos = _pos(3.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0)
+        tp = _oco_leg("oco-tp", "Limit", 5.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertEqual(action.order_id, "oco-stop")
+        self.assertEqual(action.target_qty, 3.0)  # absolute target = live owned
+        self.assertTrue(action.reason.startswith("OCO downsize"))
+        self.assertIn("-amend-", action.request_id)
+
+    def test_downsize_oco_amend_disabled_falls_to_place_residual_first(self) -> None:
+        pos = _pos(3.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0)
+        tp = _oco_leg("oco-tp", "Limit", 5.0)
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_AMEND_ENABLED"}
+        with patch.dict(os.environ, env, clear=True):
+            actions = reconcile_long(
+                _UIC,
+                _pos(3.0),
+                _pview(
+                    long_positions={_UIC: pos},
+                    sell_legs_by_uic={_UIC: (stop, tp)},
+                    planned_by_uic={_UIC: _plan(tp_price=306.72)},
+                ),
+            )
+        # DARK: place-residual-first, OCO stop superseded AFTER, never a NoOp/amend.
+        self.assertEqual([type(a).__name__ for a in actions], ["PlaceStop"])
+        action = actions[0]
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 3.0)  # residual == netted owned
+        self.assertEqual(action.supersede_ids, ("oco-stop",))
+
+    def test_downsize_lag_guard_noops_when_stop_equals_owned_tp_lags(self) -> None:
+        # Clean unfilled OCO stop=3 (already == owned) / tp=5 (read lags Q9's
+        # symmetric propagation), owned=3 -> M1 NoOps one tick, NOT a teardown.
+        pos = _pos(3.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 3.0)
+        tp = _oco_leg("oco-tp", "Limit", 5.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_downsize_recently_failed_over_hedge_noops_not_teardown(self) -> None:
+        # M1 also holds an OVER-hedged clean OCO pair (stop=5 > owned=3) when the
+        # downsize amend was skipped because the uic recently failed an amend. NoOp
+        # is the deliberate SAFE hold: the OCO stop keeps covering the downside
+        # (excess sell NotOwned-capped on a cash account), the amend_recently_failed
+        # TTL self-clears, and the next tick's downsize amend resizes to owned.
+        # Tearing down via place-residual-first would POST a doomed 3-stop (Saxo
+        # SellOrdersAlreadyExist while the OCO rests) -> alert spam, ending equally
+        # over-covered. Never naked either way.
+        pos = _pos(3.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0)
+        tp = _oco_leg("oco-tp", "Limit", 5.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+            amend_recently_failed=frozenset({_UIC}),
+        )
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])  # safe hold, never a teardown/naked window
+
+    def test_downsize_partial_fill_defers_to_place_residual_first(self) -> None:
+        # OCO tp partially filled (2 of the old size), owned=3 -> _oco_stop_leg None
+        # (guard 3) -> place-residual-first via _group_with_partial_fill, never NoOp.
+        pos = _pos(3.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 5.0)
+        tp = _oco_leg("oco-tp", "Limit", 3.0, filled=2.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertFalse(any(isinstance(a, (AmendStop, NoOp)) for a in actions))
+        self.assertEqual([type(a).__name__ for a in actions], ["PlaceStop"])
+        action = actions[0]
+        assert isinstance(action, PlaceStop)
+        self.assertEqual(action.qty, 3.0)
+        self.assertEqual(action.supersede_ids, ("oco-stop",))
+
+
+class TestOcoAmendSteadyState(unittest.TestCase):
+    """Stage 3.5 steady state: a healthy OCO pair {stop=owned, tp=owned} trips
+    neither amend arm nor the M1 lag guard; a grow-then-downsize across ticks
+    yields distinct monotonic -amend- refs with absolute targets."""
+
+    def test_healthy_oco_pair_owned_equal_noops(self) -> None:
+        pos = _pos(46.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0)
+        tp = _oco_leg("oco-tp", "Limit", 46.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72)},
+        )
+        with patch.dict(os.environ, _AMEND_ON):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_grow_then_downsize_across_ticks_distinct_refs(self) -> None:
+        counter = itertools.count(1)
+        plan = _plan(tp_price=306.72, next_amend_seq=lambda: next(counter))
+        # tick 1: owned grew to 7 over a resting OCO {4, 4} -> grow amend up.
+        grow_pos = _pos(7.0)
+        grow_view = _pview(
+            long_positions={_UIC: grow_pos},
+            sell_legs_by_uic={
+                _UIC: (_oco_leg("oco-stop", "StopIfTraded", 4.0), _oco_leg("oco-tp", "Limit", 4.0))
+            },
+            planned_by_uic={_UIC: plan},
+        )
+        # tick 2: owned shrank to 3 over the propagated OCO {7, 7} -> downsize amend.
+        shrink_pos = _pos(3.0)
+        shrink_view = _pview(
+            long_positions={_UIC: shrink_pos},
+            sell_legs_by_uic={
+                _UIC: (_oco_leg("oco-stop", "StopIfTraded", 7.0), _oco_leg("oco-tp", "Limit", 7.0))
+            },
+            planned_by_uic={_UIC: plan},
+        )
+        with patch.dict(os.environ, _AMEND_ON):
+            first = reconcile_long(_UIC, grow_pos, grow_view)[0]
+            second = reconcile_long(_UIC, shrink_pos, shrink_view)[0]
+        assert isinstance(first, AmendStop)
+        assert isinstance(second, AmendStop)
+        self.assertEqual(first.target_qty, 7.0)  # absolute grow target
+        self.assertEqual(second.target_qty, 3.0)  # absolute downsize target
+        self.assertNotEqual(first.request_id, second.request_id)  # distinct -amend- seqs
 
 
 if __name__ == "__main__":

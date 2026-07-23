@@ -32,6 +32,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     _exit_oco_ref,
     _exit_stop_ref,
     _exit_tp_ref,
+    _reconcile_long,
 )
 from alphalens_pipeline.brokers.contract import (
     BrokerCapabilityError,
@@ -2011,6 +2012,151 @@ class TestExecuteAmendStop(unittest.TestCase):
         executor(_amend_action(), False, report)  # must NOT raise
         self.assertEqual(broker.amended, [])
         self.assertEqual(report.exits_placed, 0)
+
+
+def _oco_leg(
+    order_id: str, order_type: str, amount: float, *, base: str = "crid-oco-0"
+) -> OrderState:
+    """A resting OCO exit leg (``OrderRelation='Oco'`` + shared base ref), what
+    ``_build_oco_exit_body`` stamps and ``_to_order_state`` maps back."""
+    suffix = "-stop" if order_type in ("Stop", "StopIfTraded", "StopLimit") else "-tp"
+    return OrderState(
+        order_id=order_id,
+        status=OrderStatus.WORKING,
+        instrument=None,
+        filled_quantity=0.0,
+        raw_status="Working",
+        uic=_UIC,
+        side="SELL",
+        order_type=order_type,
+        amount=amount,
+        external_reference=f"{base}{suffix}",
+        order_relation="Oco",
+    )
+
+
+class TestOcoAmendExecutorReuse(unittest.TestCase):
+    """Stage-3.5 REUSES the Stage-3 AmendStop executor + dispatch BYTE-FOR-BYTE for
+    an OCO-leg amend. An OCO-leg ``AmendStop`` is the SAME dataclass — only its
+    ``order_id`` points at a resting OCO child stop and its ``reason`` carries the
+    OCO telemetry string. These pins prove the executor is leg-shape-agnostic: the
+    dispatch routes it, the executor re-reads + clamps to live owned, and an OCO-leg
+    amend failure journals ``amend_failed`` so the NEXT tick skips the OCO amend and
+    falls to the proven B1 additive fallback (never a naked window)."""
+
+    def test_amend_stop_dispatch_routes_oco_leg_amend(self) -> None:
+        # An OCO-leg AmendStop (order_id = OCO child stop, reason 'grow-after-OCO')
+        # routes through the UNCHANGED isinstance(AmendStop) dispatch into
+        # _execute_amend_stop — the same executor as a standalone amend.
+        broker = _ProtBroker(by_uic={_UIC: _pos(7.0)})
+        executor = cl._make_protection_executor(
+            broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+        )
+        report = cl.TickReport()
+        action = _amend_action(
+            order_id="oco-stop-1",
+            target_qty=7.0,
+            reason="grow-after-OCO — PATCH OCO stop leg up in place",
+        )
+        executor(action, False, report)
+        self.assertEqual(len(broker.amended), 1, "OCO-leg AmendStop routes through the dispatch")
+        self.assertEqual(broker.amended[0][1], "oco-stop-1", "PATCH targets the OCO child stop id")
+        self.assertEqual(report.exits_placed, 1)
+
+    def test_executor_rereads_and_clamps_oco_amend_target(self) -> None:
+        # owned shrank to 5 between the decision (stale target 9) and execute; the
+        # executor re-reads LIVE owned via get_positions_by_uic and clamps the PATCH
+        # target to it, never the stale 9 — identical to the standalone path.
+        broker = _ProtBroker(by_uic={_UIC: _pos(5.0)})
+        executor = cl._make_protection_executor(
+            broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+        )
+        report = cl.TickReport()
+        executor(
+            _amend_action(
+                order_id="oco-stop-1",
+                target_qty=9.0,
+                reason="OCO downsize — PATCH OCO stop leg down in place",
+            ),
+            False,
+            report,
+        )
+        self.assertEqual(len(broker.amended), 1)
+        self.assertEqual(
+            broker.amended[0][4], 5.0, "OCO amend clamps to re-read live owned, never the stale 9"
+        )
+
+    def test_oco_amend_failure_journals_amend_failed(self) -> None:
+        # An OCO-leg amend that rejects journals ``amend_failed`` for the uic (same
+        # executor path). The NEXT tick folds it into ``amend_recently_failed`` and
+        # the pure OCO-grow arm SKIPS the amend, falling to the B1 additive delta
+        # (a PlaceStop with NO pre-cancel of the OCO pair — never naked).
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(7.0)},
+                amend_error=OrderRejectedError("stale order", error_code="OrderNotWorking"),
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(
+                    _amend_action(
+                        order_id="oco-stop-1",
+                        reason="grow-after-OCO — PATCH OCO stop leg up in place",
+                    ),
+                    False,
+                    report,
+                )
+                lines = list(cl._iter_standalone_stop_journal())
+                markers = [line for line in lines if line.get("kind") == "amend_failed"]
+                folded = cl._fold_ttl_markers(
+                    lines, "amend_failed", now=0.0, ttl_s=cl._AMEND_FAILED_TTL_S
+                )
+        self.assertEqual([m.get("uic") for m in markers], [_UIC], "amend_failed journaled for uic")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertIn(_UIC, folded, "the fold marks the uic amend_recently_failed next tick")
+
+        # Next tick: the resting OCO pair (grew to owned=7) with the uic in
+        # amend_recently_failed must SKIP the OCO-grow amend and fall to B1 additive.
+        pos = _pos(7.0)
+        legs = (
+            _oco_leg("oco-stop-1", "StopIfTraded", 5.0),
+            _oco_leg("oco-tp-1", "Limit", 5.0),
+        )
+        view = ProtectionView(
+            long_positions={_UIC: pos},
+            all_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: legs},
+            planned_by_uic={
+                _UIC: PlannedExit(
+                    uic=_UIC,
+                    entry_crid="crid-0",
+                    side="SELL",
+                    stop_price=216.48,
+                    tp_price=306.72,
+                    conflicting=False,
+                    n_plans=1,
+                )
+            },
+            oco_unsupported=frozenset(),
+            amend_recently_failed=frozenset({_UIC}),
+        )
+        with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}):
+            actions = _reconcile_long(_UIC, pos, view)
+        self.assertFalse(
+            any(isinstance(a, AmendStop) for a in actions),
+            "amend_recently_failed skips the OCO amend on the next tick",
+        )
+        places = [a for a in actions if isinstance(a, PlaceStop)]
+        self.assertEqual(len(places), 1, "the delta falls to a B1 additive PlaceStop")
+        self.assertEqual(
+            set(places[0].cancel_conflicting) & {"oco-stop-1", "oco-tp-1"},
+            set(),
+            "the B1 additive fallback never pre-cancels an OCO leg (never naked)",
+        )
 
 
 class TestBuildProtectionViewTtlFolds(unittest.TestCase):
