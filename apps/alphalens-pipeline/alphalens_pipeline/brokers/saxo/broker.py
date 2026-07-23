@@ -545,7 +545,7 @@ class SaxoBroker:
         stop_ref: str,
         tp_ref: str,
     ) -> dict[str, Any]:
-        """Siblings-array OCO exit body: two SELL legs, no top-level order.
+        """Real-POST OCO exit body: a top-level Limit take-profit master with the StopIfTraded child nested in its ``Orders`` array (ManualOrder + OrderRelation:"Oco" on both legs; the pure siblings-array envelope only passes lenient precheck and 400s on the real POST).
 
         Both legs ``Amount == qty`` (Q3a makes owned-sized safe: a cash account
         cannot oversell), ``OrderRelation:"Oco"``, GoodTillCancel, ``ManualOrder``
@@ -669,6 +669,126 @@ class SaxoBroker:
                 f"AFTER accepting leg {live_order_id} ({detail}); cleanup: {cleanup}"
             )
         raise OrderRejectedError(f"Saxo rejected OCO {request_id} with HTTP {status}: {detail}")
+
+    def amend_stop_amount(
+        self,
+        uic: int,
+        order_id: str,
+        side: str,
+        order_type: str,
+        new_qty: float,
+        stop_price: float,
+        request_id: str,
+    ) -> PlacedOrder:
+        """Resize a resting standalone stop IN PLACE via ``PATCH /trade/v2/orders``.
+
+        The Stage-3 ``AmendStop`` primitive (saxo Stage-3 memo): re-applies
+        ``Amount == new_qty`` to the EXISTING ``order_id`` — the order never
+        leaves the book, so growing a stop up or converging an over-hedge stop
+        DOWN opens no naked window. There is NO PATCH precheck endpoint and NO
+        cancel: the resize is a single write on the never-blind-retry lane
+        (``idempotent=False`` in the client), safe to re-emit cross-tick ONLY
+        because the target is ABSOLUTE (set ``Amount = live-owned`` twice =
+        owned, never 2x).
+
+        Same safety order as :meth:`place_standalone_stop`: the ALLOW_ORDERS
+        gate FIRST (before any client call), then the Q8 body build + the ONE
+        PATCH with x-request-id = ``request_id``. The body carries NO
+        ``ExternalReference`` (the amend preserves the resting order's own ref)
+        and NO ``PositionId`` (reduce-only refuted, Stage 3). Returns
+        ``PlacedOrder(entry_order_id="", exit_order_ids=(order_id,))`` on a
+        confirmed 2xx echoing the SAME ``order_id``; a 202 or a 2xx with a
+        different/absent OrderId is ambiguous (:class:`BrokerError`, resting
+        order left in place); a non-2xx is an :class:`OrderRejectedError`.
+        """
+        if os.environ.get(ALLOW_ORDERS_ENV) != "1":
+            raise BrokerCapabilityError(
+                f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
+                "SIM order submission (design memo §P2 safety rail). No order was sent."
+            )
+        with _translate_saxo_errors():
+            account_key = self._resolve_account_key()
+            body = self._build_amend_stop_body(
+                uic, order_id, side, order_type, new_qty, stop_price, account_key
+            )
+            status, payload = self._client.amend_order(body, request_id=request_id)
+            return self._handle_amend_response(status, payload, order_id, request_id)
+
+    def _build_amend_stop_body(
+        self,
+        uic: int,
+        order_id: str,
+        side: str,
+        order_type: str,
+        new_qty: float,
+        stop_price: float,
+        account_key: str,
+    ) -> dict[str, Any]:
+        """Q8 PATCH body — resize a resting stop by OrderId, no ref, no PositionId.
+
+        The OrderId travels in the body (same ``/trade/v2/orders`` path as the
+        POST, no path templating). The order's own ``ExternalReference`` is
+        preserved by the amend — it is NEVER restamped here — and no
+        ``PositionId`` is attached (reduce-only refuted). ``stop_price`` is
+        quantized to the instrument tick like every other exit price.
+        """
+        asset_type = "Stock"  # MVP scope: single-name equities only
+        details = self._client.get_instrument_details(uic, asset_type)
+        stop_q = self._quantize_price(stop_price, details, label="stop_price")
+        return {
+            "OrderId": order_id,
+            "Uic": int(uic),
+            "AssetType": asset_type,
+            "AccountKey": account_key,
+            "OrderType": order_type,
+            "OrderPrice": stop_q,
+            "OrderDuration": {"DurationType": execution_policy._EXIT_DURATION},
+            "Amount": new_qty,
+            "BuySell": "Sell" if side == "SELL" else "Buy",
+            "ManualOrder": execution_policy._MANUAL_ORDER,
+        }
+
+    def _handle_amend_response(
+        self,
+        status: int,
+        payload: dict[str, Any],
+        order_id: str,
+        request_id: str,
+    ) -> PlacedOrder:
+        """Parse the PATCH amend response — 2xx-same-OrderId is the ONLY success.
+
+        A 2xx that echoes the SAME ``order_id`` confirms the in-place resize ->
+        ``PlacedOrder(entry_order_id="", exit_order_ids=(order_id,))``. A 2xx
+        with a different or absent OrderId, and a 202, are AMBIGUOUS: the resize
+        may or may not have landed, so raise :class:`BrokerError` WITHOUT
+        touching the resting order (the executor journals amend_failed and the
+        additive-B1 fallback covers any delta next tick). A non-2xx is a clean
+        reject -> :class:`OrderRejectedError` with the verbatim Saxo ErrorCode
+        attached (safety branches classify on the STRUCTURED code, never the
+        message string).
+        """
+        if status == 202:
+            raise BrokerError(
+                f"Saxo 202 TradeNotCompleted for amend {request_id} of order {order_id}: "
+                "the resize outcome is genuinely unknown for ~seconds. No automatic "
+                "action taken — the resting order was left in place; reconcile next tick."
+            )
+        if 200 <= status < 300:
+            returned_id = payload.get("OrderId")
+            if returned_id is not None and str(returned_id) == str(order_id):
+                return PlacedOrder(entry_order_id="", exit_order_ids=(order_id,))
+            raise BrokerError(
+                f"Saxo amend {request_id} returned HTTP {status} but its OrderId "
+                f"{returned_id!r} does not match the target {order_id!r} ({payload!r}) — "
+                "outcome ambiguous, the resting order was left in place"
+            )
+        detail = self._rejection_detail(payload)
+        error_info = payload.get("ErrorInfo")
+        error_code = error_info.get("ErrorCode") if isinstance(error_info, dict) else None
+        raise OrderRejectedError(
+            f"Saxo rejected amend {request_id} of order {order_id} with HTTP {status}: {detail}",
+            error_code=error_code,
+        )
 
     def get_order(self, order_id: str) -> OrderState:
         with _translate_saxo_errors():
