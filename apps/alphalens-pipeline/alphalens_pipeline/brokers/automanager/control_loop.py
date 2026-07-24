@@ -12,6 +12,8 @@ real modules.
 from __future__ import annotations
 
 import logging
+import math
+import os
 import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -52,6 +54,9 @@ from alphalens_pipeline.brokers.contract import (
 )
 
 if TYPE_CHECKING:
+    import threading
+
+    from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
     from alphalens_pipeline.brokers.contract import Broker
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
@@ -76,6 +81,26 @@ KILL_FILE_PATH = _BROKER_ORDERS_DIR / "KILL"
 # Prometheus heartbeat gauge (Task 13 wires _default_emit_heartbeat as the
 # run_daemon default; the metric name has one home here).
 HEARTBEAT_METRIC = 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"}'
+
+# --- Streaming (dark, SIM-only) env gates + liveness metric --------------------
+# Master gate for the Saxo WebSocket early-wake reader (design memo
+# saxo_streaming_design_2026_07_24.md). DEFAULTS OFF: unset -> wake_event=None and
+# run_daemon is byte-identical to today's blocking sleep. Mirrors the OCO/AMEND
+# gates — read at call time (no import-time snapshot), restart-consistent.
+_STREAMING_ENABLED_ENV = "ALPHALENS_BROKER_STREAMING_ENABLED"
+
+# Main-thread stale-alert threshold (seconds). Kept <= poll_seconds so the alert
+# never lags a full poll cycle behind the already-covered protection, and >= the
+# observed ~20-30s SIM heartbeat cadence so a quiet-but-alive stream is not flagged.
+_STREAM_STALE_ENV = "ALPHALENS_BROKER_STREAM_STALE_S"
+_DEFAULT_STREAM_STALE_S = 45.0
+
+# Prometheus liveness gauge: seconds since the last streamed message (age). Watched
+# by an AlphalensBrokerStreamStale rule, distinct from the per-poll heartbeat gauge
+# (a dead stream still emits heartbeats — the poll backstop keeps running).
+STREAM_LAST_MESSAGE_METRIC = (
+    'alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager"}'
+)
 
 # Consecutive-tick threshold for the persistent OCO-lag monitor (issue #5). The M1
 # guard NoOp'ing a clean over-covered OCO pair is SAFE for a tick or two (a TP-read
@@ -130,6 +155,16 @@ class LoopDeps:
     # pages once via the shared throttle. Frozen forbids REBINDING the field, not
     # mutating the dict it points at.
     oco_lag_counts: dict[int, int] = field(default_factory=dict)
+    # Streaming early-wake handles (design memo saxo_streaming_design_2026_07_24.md),
+    # ALL None unless ALPHALENS_BROKER_STREAMING_ENABLED=1 AND the broker is Saxo
+    # (SIM rail) AND the provider is OAuth AND the reader actually started. When
+    # None the daemon runs poll-only, byte-identical to today. ``wake_event`` is
+    # the Event run_daemon waits on; ``stream_tick`` is the per-tick push-token +
+    # stale-alert hook (main thread); ``stream_trigger`` is retained so the manage
+    # command can stop() the reader on shutdown (DELETE subs + join the thread).
+    wake_event: threading.Event | None = None
+    stream_tick: Callable[[], None] | None = None
+    stream_trigger: StreamTrigger | None = None
 
 
 @dataclass
@@ -398,16 +433,166 @@ def run_daemon(
     sleep_fn: Callable[[float], None] = time.sleep,
     is_running: Callable[[], bool] = _always,
     heartbeat_fn: Callable[[], None] = _default_emit_heartbeat,
+    wake_event: threading.Event | None = None,
+    on_tick: Callable[[], None] | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> None:
-    """Drive run_once forever (orphan sweep on the FIRST tick only), or once."""
+    """Drive run_once forever (orphan sweep on the FIRST tick only), or once.
+
+    ``wake_event`` toggles the streaming early-wake path (design memo
+    saxo_streaming_design_2026_07_24.md). When ``None`` (streaming off / disabled
+    / non-Saxo / static token) the loop is BYTE-IDENTICAL to the historical
+    blocking ``sleep_fn(poll_seconds)`` — same call, same cadence, ``monotonic``
+    never consulted.
+
+    When an Event is supplied, the blocking sleep becomes an ABSOLUTE-DEADLINE
+    interruptible wait: the loop waits until the next fixed ``poll_seconds``
+    wall-clock grid point, but the stream thread's ``wake_event.set()`` makes that
+    wait return EARLY, giving an EXTRA run_once pass. The grid deadline advances
+    ONLY on a timeout-driven pass (``now >= deadline``), NEVER on an early wake, so
+    any number of stale early wakes cannot push the guaranteed backstop pass past
+    ``poll_seconds`` from the last full-cadence pass (adversary-2 timer-reset fix).
+    The advance uses ``pass_end`` (the clock read right after ``run_once``, BEFORE
+    ``on_tick``) so a slow ``on_tick`` is absorbed into the wait, never added on top
+    of a fresh poll (PR #900 review).
+    A woken pass calls the SAME ``run_once`` — kill/records/view all recomputed —
+    so it is behaviourally identical to a poll pass at that instant. The single
+    guarantee holds: a stream that never fires the Event degrades to EXACTLY the
+    poll-only floor.
+
+    ``on_tick`` (main thread) runs once per pass after the heartbeat — it pushes
+    the current bearer to the reader and raises the throttled stream-stale alert.
+    It is best-effort by construction (the streaming closure swallows its own
+    errors) so it can never crash the protective loop."""
+    if wake_event is not None and not (math.isfinite(poll_seconds) and poll_seconds > 0):
+        # Event.wait(inf/None) would block forever and Event.wait with a 0/neg grid
+        # would busy-spin — either breaks the never-naked backstop. Fail loud at
+        # startup rather than silently run without a backstop (adversary-1).
+        raise ValueError(
+            f"poll_seconds must be finite and positive for the interruptible wait, "
+            f"got {poll_seconds!r}"
+        )
     first = True
+    deadline = monotonic() + poll_seconds if wake_event is not None else 0.0
     while is_running():
         run_once(deps, sweep_orphans=first)
+        # Anchor the backstop to the moment protection COMPLETED (before on_tick),
+        # NOT to a clock read taken after on_tick. A slow on_tick (a hung Telegram
+        # POST inside the stale/breaker alert can block ~tens of seconds) must only
+        # SHRINK the remaining wait below — never inflate ``now`` so the timeout
+        # branch schedules a fresh full poll ON TOP of the block, which would push
+        # the next pass past poll_seconds (worse than poll-only). PR #900 review.
+        pass_end = monotonic() if wake_event is not None else 0.0
         heartbeat_fn()  # Task 13: writes the Prometheus heartbeat gauge
+        if on_tick is not None:
+            on_tick()  # push_token + stream stale/breaker alert + liveness gauge (main thread)
         first = False
         if once:
             return
-        sleep_fn(poll_seconds)
+        if wake_event is None:
+            sleep_fn(poll_seconds)  # legacy/disabled path — byte-identical to today
+            continue
+        if pass_end >= deadline:  # a TIMEOUT pass just ran -> schedule the next grid point
+            deadline = pass_end + poll_seconds
+        # Remaining wait to the grid point, read fresh so any on_tick block already
+        # elapsed is absorbed here (never added on top). Early wakes shrink it too.
+        wake_event.wait(max(0.0, deadline - monotonic()))
+        wake_event.clear()
+
+
+def _streaming_enabled() -> bool:
+    """Whether the dark streaming early-wake reader is enabled (read at call time).
+
+    Master gate, mirroring ``_oco_enabled`` / ``_amend_enabled``. Defaults OFF —
+    unset -> the daemon runs poll-only, byte-identical to today."""
+    return os.environ.get(_STREAMING_ENABLED_ENV) == "1"
+
+
+def _stream_stale_s() -> float:
+    """The main-thread stale-alert threshold in seconds (read at call time).
+
+    ``ALPHALENS_BROKER_STREAM_STALE_S`` override, falling back to
+    ``_DEFAULT_STREAM_STALE_S``. A non-finite / non-positive / unparsable value
+    falls back to the default (a bad env value must never disable the backstop
+    alert with a zero threshold or a never-firing infinity)."""
+    raw = os.environ.get(_STREAM_STALE_ENV)
+    if raw is None:
+        return _DEFAULT_STREAM_STALE_S
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_STREAM_STALE_S
+    if not math.isfinite(value) or value <= 0:
+        return _DEFAULT_STREAM_STALE_S
+    return value
+
+
+def _emit_stream_gauge(age_seconds: float) -> None:
+    """Best-effort Prometheus liveness gauge (seconds since the last streamed
+    message). A textfile-dir hiccup must never crash the loop — the poll backstop
+    covers protection regardless of observability."""
+    from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+    try:
+        emit_domain_metrics("broker-manager", {STREAM_LAST_MESSAGE_METRIC: age_seconds})
+    except OSError:
+        logger.warning("broker-manager stream-liveness gauge emit failed", exc_info=True)
+
+
+def _make_stream_tick(
+    trigger: StreamTrigger,
+    *,
+    get_bearer: Callable[[], str],
+    alert_throttled: Callable[[str, str], bool],
+    stale_s: float,
+    emit_gauge: Callable[[float], None] = _emit_stream_gauge,
+) -> Callable[[], None]:
+    """Build the per-tick streaming hook run by ``run_daemon`` on the MAIN thread.
+
+    If the reader's circuit breaker has tripped (``trigger.is_streaming`` False) it
+    pages a THROTTLED ``stream-breaker`` alert and returns — the daemon is on the
+    poll backstop, and this is the only place a permanent trip surfaces to the
+    operator on a thread where the alert sink is safe. Otherwise each tick it
+    (1) pushes the current bearer into the reader so a mid-stream
+    token rotation is re-authorized in place (never pulled by the reader — it
+    can never stall on the token flock), and (2) reads the reader's
+    ``seconds_since_last_message`` for the liveness gauge + a THROTTLED
+    ``stream-dead`` alert once silence exceeds ``stale_s``. Both the alert and the
+    gauge run only on the main thread (the shared ``_AlertThrottle`` is not
+    thread-safe). Fully best-effort: a bearer-read error (chain loss) degrades to
+    poll-only silently rather than crashing the protective loop."""
+
+    def _tick() -> None:
+        if not trigger.is_streaming:
+            # The circuit breaker tripped PERMANENTLY -> the reader thread is dead and
+            # the daemon is on the poll backstop. Page once (throttled) on the MAIN
+            # thread — the breaker's own alert runs on the reader thread where the
+            # _AlertThrottle/Telegram sink is not thread-safe, and the 'stream-dead'
+            # silence alert never fires when the stream never delivered a message
+            # (seconds_since_last_message stays None). zen MEDIUM, PR #900.
+            alert_throttled(
+                "saxo stream circuit breaker tripped — running on poll backstop",
+                "stream-breaker",
+            )
+            return
+        try:
+            bearer = get_bearer()
+        except Exception:  # a token/chain error must never crash the protective loop
+            logger.warning("streaming: bearer read failed — skipping push this tick", exc_info=True)
+            bearer = None
+        if bearer:
+            trigger.push_token(bearer)
+        silence = trigger.seconds_since_last_message()
+        if silence is None:
+            return  # no message yet — the poll backstop covers protection
+        emit_gauge(silence)
+        if silence > stale_s:
+            alert_throttled(
+                f"saxo stream silent >{stale_s:.0f}s ({silence:.0f}s) — running on poll backstop",
+                "stream-dead",
+            )
+
+    return _tick
 
 
 def build_default_deps() -> LoopDeps:
@@ -467,7 +652,11 @@ def build_default_deps() -> LoopDeps:
     amend_placer: AmendStopPlacer | None = (
         broker.amend_stop_amount if isinstance(broker, SupportsAmendStop) else None
     )
-    keeper = session_keeper.SessionKeeper(_default_oauth_provider())
+    # ONE OAuth provider instance is shared by the SessionKeeper AND the streaming
+    # reader, so there is a single OAuth chain / one flock owner and the reader can
+    # re-authorize in place off the same bearer the main loop pushes.
+    provider = _default_oauth_provider()
+    keeper = session_keeper.SessionKeeper(provider)
 
     def _read_records() -> list[Mapping[str, Any]]:
         return list(iter_submission_records(DEFAULT_SUBMISSIONS_PATH))
@@ -477,6 +666,16 @@ def build_default_deps() -> LoopDeps:
     # same base sink the generic (un-throttled) tick alerts use.
     base_alert = _default_alert()
     throttle = _AlertThrottle(base_alert)
+
+    def _throttled(message: str, reason: str) -> bool:
+        return throttle.emit(message, reason=reason)
+
+    # Streaming early-wake handles (dark, SIM-only). All None unless the flag is on
+    # AND the broker is Saxo AND the provider is OAuth AND the reader started — in
+    # which case the daemon degrades to poll-only, byte-identical to today. The
+    # _compact_standalone_stop_journal() above already ran, so the reader thread
+    # never races the compaction rewrite (thread-model §Startup ordering).
+    wake_event, stream_tick, stream_trigger = _build_stream_handles(broker, provider, _throttled)
 
     return LoopDeps(
         broker=broker,
@@ -493,10 +692,100 @@ def build_default_deps() -> LoopDeps:
         ),
         sweep_orphans_fn=lambda b: orphan_sweeper.sweep(b, _read_records()),
         alert=base_alert,
-        alert_throttled=lambda message, reason: throttle.emit(message, reason=reason),
+        alert_throttled=_throttled,
         place_oco_exit=oco_placer,
         amend_stop=amend_placer,
+        wake_event=wake_event,
+        stream_tick=stream_tick,
+        stream_trigger=stream_trigger,
     )
+
+
+def _build_streaming_subscriber(provider: Any) -> Any:
+    """The subscription-REST client for the streaming reader thread.
+
+    A DEDICATED SaxoClient with its OWN ``requests.Session`` — never the shared
+    ``get_default_saxo_client()`` singleton. ``requests.Session`` is not
+    thread-safe, so sharing it between the reader thread (subscription POST/DELETE
+    on connect / reconnect) and the main protective thread (``get_positions`` /
+    ``place_standalone_stop``) could corrupt the urllib3 connection pool and skip a
+    protection pass — leaving a position naked longer than ``poll_seconds`` (worse
+    than poll-only). The thread-safe OAuth ``provider`` IS shared so both clients
+    see the same rotated bearer; only the HTTP session is isolated. Streaming REST
+    is bounded by the reader's circuit breaker, so an independent throttle budget is
+    acceptable (zen HIGH, PR #900)."""
+    from alphalens_pipeline.brokers.saxo.client import SaxoClient
+
+    return SaxoClient(provider)
+
+
+def _build_stream_handles(
+    broker: Broker,
+    provider: Any,
+    alert_throttled: Callable[[str, str], bool],
+) -> tuple[threading.Event | None, Callable[[], None] | None, StreamTrigger | None]:
+    """Construct + start the dark streaming reader when every structural
+    precondition holds, else return the poll-only ``(None, None, None)``.
+
+    Preconditions (each a fail-safe-to-poll gate, design memo §Env gates):
+      1. ``ALPHALENS_BROKER_STREAMING_ENABLED=1`` (master dark gate);
+      2. the broker is Saxo (the streaming REST + SIM rail live on ``SaxoClient``);
+      3. the provider is OAuth — a static 24h token cannot be PUT-reauthorized in
+         place, so :meth:`SaxoStreamingClient.start` would refuse anyway;
+      4. the reader thread actually started (``start()`` returns True).
+
+    SIM-probe-only (no hermetic cycle — the run_daemon wait + the per-tick hook are
+    unit-tested against stubs). A construction / start failure logs once and falls
+    back to poll-only rather than raising — streaming is a pure latency win and its
+    absence must never block the protective loop."""
+    if not _streaming_enabled():
+        return None, None, None
+
+    from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
+    from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
+    from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
+
+    if not isinstance(broker, SaxoBroker):
+        logger.warning(
+            "streaming enabled but broker %r is not Saxo — running poll-only", broker.name
+        )
+        return None, None, None
+    if not isinstance(provider, OAuthTokenProvider):
+        logger.warning(
+            "streaming enabled but the token provider is not OAuth (a static token "
+            "cannot be re-authorized in place) — running poll-only"
+        )
+        return None, None, None
+
+    stale_s = _stream_stale_s()
+    context_id = f"almgr-{os.getpid()}-{int(time.time())}"  # <=50 chars, [a-zA-Z0-9-]
+    try:
+        trigger = StreamTrigger(
+            token_provider=provider,
+            subscriber=_build_streaming_subscriber(
+                provider
+            ),  # dedicated session, never the singleton
+            context_id=context_id,
+            client_stale_after_s=stale_s,
+        )
+        started = trigger.start()
+    except Exception:  # any streaming-setup failure degrades to poll-only, never raises
+        logger.warning(
+            "streaming client construction/start failed — running poll-only", exc_info=True
+        )
+        return None, None, None
+    if not started:
+        logger.warning("streaming client refused to start — running poll-only")
+        return None, None, None
+
+    logger.info("saxo streaming reader started (context_id=%s, stale_s=%.0f)", context_id, stale_s)
+    stream_tick = _make_stream_tick(
+        trigger,
+        get_bearer=provider.get_access_token,
+        alert_throttled=alert_throttled,
+        stale_s=stale_s,
+    )
+    return trigger.wake_event, stream_tick, trigger
 
 
 # --- SIM-probe-only factory helpers (Component 6 "placer" home) --------------

@@ -13,6 +13,7 @@ import contextlib
 import datetime as dt
 import os
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -2804,6 +2805,607 @@ class TestPersistentOcoLagMonitor(unittest.TestCase):
                 for _ in range(cl._OCO_LAG_ALERT_TICKS + 2):
                     cl.run_once(deps)
         self.assertEqual(deps.oco_lag_counts, {})
+
+
+# --------------------------------------------------------------------------
+# Task 4 — streaming daemon wiring (the never-worse-than-poll core).
+# run_daemon's absolute-deadline interruptible wait + the per-tick stream
+# hook. The single guarantee: a total streaming failure degrades to EXACTLY
+# today's poll-only cadence, never worse.
+# --------------------------------------------------------------------------
+
+
+class _Clock:
+    """A mutable monotonic clock the scripted fake Event advances."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _ScriptedWait:
+    """A fake ``threading.Event`` whose ``.wait(timeout)`` consumes one scripted
+    step, advancing a shared clock, and returns whether it was an EARLY wake.
+
+    Steps are ``("timeout",)`` (advance the clock by the full ``timeout`` and
+    return False, i.e. the backstop fired) or ``("wake", dt)`` (advance the
+    clock by ``dt`` < timeout and return True, i.e. the stream woke us early).
+    Records every ``timeout`` passed to ``.wait`` and every ``set()`` call."""
+
+    def __init__(self, clock: _Clock, steps: list[tuple[Any, ...]]) -> None:
+        self._clock = clock
+        self._steps = list(steps)
+        self.timeouts: list[float] = []
+        self.set_calls = 0
+
+    def wait(self, timeout: float | None = None) -> bool:
+        assert timeout is not None
+        self.timeouts.append(timeout)
+        kind, *rest = self._steps.pop(0)
+        if kind == "timeout":
+            self._clock.now += timeout
+            return False
+        self._clock.now += rest[0]
+        return True
+
+    def set(self) -> None:
+        self.set_calls += 1
+
+    def clear(self) -> None:
+        pass
+
+
+def _stop_after(n: int) -> Callable[[], bool]:
+    """is_running that returns True for the first ``n`` checks, then False."""
+    state = {"i": 0}
+
+    def _running() -> bool:
+        state["i"] += 1
+        return state["i"] <= n
+
+    return _running
+
+
+def _daemon_deps(run_once_at: list[float], clock: _Clock) -> cl.LoopDeps:
+    """LoopDeps whose run_once (via build_protection_view) records the clock
+    reading at each tick — the observable proxy for 'a protection pass ran'."""
+
+    def _record_view(broker: Any, records: Any) -> ProtectionView:
+        run_once_at.append(clock.now)
+        return _empty_pview()
+
+    with TemporaryDirectory() as d:
+        base = _deps(
+            _StubBroker(),
+            kill_file=Path(d) / "KILL",
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+            build_protection_view=_record_view,
+        )
+    return base
+
+
+class TestRunDaemonNeverNaked(unittest.TestCase):
+    """The never-naked-under-streaming-failure property: whatever the stream
+    does (nothing / crashes / storms), the protection pass runs at least every
+    poll_seconds of wall clock — exactly today's poll-only floor."""
+
+    def test_wake_event_never_set_runs_exactly_one_run_once_per_poll_seconds(self) -> None:
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+        event = _ScriptedWait(clock, [("timeout",), ("timeout",), ("timeout",)])
+        cl.run_daemon(
+            deps,
+            once=False,
+            poll_seconds=45.0,
+            is_running=_stop_after(3),
+            heartbeat_fn=lambda: None,
+            wake_event=event,  # type: ignore[arg-type]
+            monotonic=clock,
+        )
+        # One pass per poll_seconds — the backstop timeout is always the full 45s.
+        self.assertEqual(len(run_at), 3)
+        self.assertEqual(event.timeouts, [45.0, 45.0, 45.0])
+        self.assertEqual(run_at, [1000.0, 1045.0, 1090.0])
+
+    def test_streaming_thread_crash_does_not_stall_loop(self) -> None:
+        # A raising/hung stub stream thread never fires the Event -> identical to
+        # the never-set case: the backstop cadence is unchanged.
+        crashed = {"raised": False}
+
+        def _crash() -> None:
+            crashed["raised"] = True
+            raise RuntimeError("stream reader died")
+
+        thread = __import__("threading").Thread(target=_crash, daemon=True)
+        thread.start()
+        thread.join()
+        self.assertTrue(crashed["raised"])
+
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+        event = _ScriptedWait(clock, [("timeout",), ("timeout",)])
+        cl.run_daemon(
+            deps,
+            once=False,
+            poll_seconds=45.0,
+            is_running=_stop_after(2),
+            heartbeat_fn=lambda: None,
+            wake_event=event,  # type: ignore[arg-type]
+            monotonic=clock,
+        )
+        self.assertEqual(run_at, [1000.0, 1045.0])
+
+    def test_wake_event_none_path_byte_identical_to_sleep_fn(self) -> None:
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+        slept: list[float] = []
+
+        # monotonic must NOT be consulted on the disabled path (byte-identical to
+        # today's blocking sleep_fn); a sentinel that raises proves it.
+        def _forbidden_monotonic() -> float:
+            raise AssertionError("monotonic must not be read on the wake_event=None path")
+
+        cl.run_daemon(
+            deps,
+            once=False,
+            poll_seconds=45.0,
+            is_running=_stop_after(2),
+            heartbeat_fn=lambda: None,
+            sleep_fn=slept.append,
+            wake_event=None,
+            monotonic=_forbidden_monotonic,
+        )
+        self.assertEqual(slept, [45.0, 45.0])
+        self.assertEqual(len(run_at), 2)
+
+
+class TestRunDaemonAbsoluteDeadline(unittest.TestCase):
+    """Absolute-deadline scheduling: early wakes give EXTRA passes but never push
+    the guaranteed backstop past the fixed wall-clock grid (adversary-2 fix)."""
+
+    def test_stale_early_wakes_do_not_push_backstop_past_grid(self) -> None:
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+        # Two stale early wakes (advance 10s, 5s) then a timeout: the timeout pass
+        # must land at exactly start+45, NOT start+45+10+5.
+        event = _ScriptedWait(
+            clock, [("wake", 10.0), ("wake", 5.0), ("timeout",), ("timeout",), ("timeout",)]
+        )
+        cl.run_daemon(
+            deps,
+            once=False,
+            poll_seconds=45.0,
+            is_running=_stop_after(5),
+            heartbeat_fn=lambda: None,
+            wake_event=event,  # type: ignore[arg-type]
+            monotonic=clock,
+        )
+        # run_once at t=0 (1000), 10, 15 (early wakes), then the backstop timeout
+        # pass at exactly t=45 (1045) — the grid was NOT pushed out.
+        self.assertEqual(run_at[:4], [1000.0, 1010.0, 1015.0, 1045.0])
+        # The waits shrank to the remaining time to the absolute deadline.
+        self.assertEqual(event.timeouts[:3], [45.0, 35.0, 30.0])
+        # After the timeout pass, the next grid point is start+90.
+        self.assertEqual(run_at[4], 1090.0)
+
+    def test_early_wake_runs_extra_run_once_then_backstop_still_fires(self) -> None:
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+        event = _ScriptedWait(clock, [("wake", 3.0), ("timeout",)])
+        cl.run_daemon(
+            deps,
+            once=False,
+            poll_seconds=45.0,
+            is_running=_stop_after(2),
+            heartbeat_fn=lambda: None,
+            wake_event=event,  # type: ignore[arg-type]
+            monotonic=clock,
+        )
+        # The early wake produced an EXTRA pass at t=3, then the backstop pass
+        # still fired within poll_seconds of the last full-cadence pass (t=45).
+        self.assertEqual(run_at, [1000.0, 1003.0])
+        self.assertEqual(event.timeouts, [45.0, 42.0])
+
+
+class TestRunDaemonGuards(unittest.TestCase):
+    def test_wake_event_with_nonfinite_or_zero_poll_seconds_raises(self) -> None:
+        clock = _Clock()
+        deps = _daemon_deps([], clock)
+        event = _ScriptedWait(clock, [])
+        for bad in (0.0, -1.0, float("inf"), float("nan")):
+            with self.assertRaises(ValueError):
+                cl.run_daemon(
+                    deps,
+                    once=False,
+                    poll_seconds=bad,
+                    is_running=_stop_after(1),
+                    heartbeat_fn=lambda: None,
+                    wake_event=event,  # type: ignore[arg-type]
+                    monotonic=clock,
+                )
+
+    def test_nonfinite_poll_seconds_allowed_when_streaming_off(self) -> None:
+        # The disabled path is unchanged: no interruptible wait, no guard — a
+        # finite poll_seconds is the operator's responsibility as it is today.
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+        cl.run_daemon(
+            deps,
+            once=True,
+            poll_seconds=45.0,
+            is_running=_stop_after(1),
+            heartbeat_fn=lambda: None,
+            sleep_fn=lambda s: None,
+            wake_event=None,
+        )
+        self.assertEqual(len(run_at), 1)
+
+
+class TestWokenPassRecomputesState(unittest.TestCase):
+    def test_woken_tick_rereads_kill_and_records_and_fresh_report(self) -> None:
+        # A woken pass calls the SAME run_once, which re-reads kill + records and
+        # builds a fresh view — no partial path. Prove it by toggling the KILL
+        # file between the leading wake and the backstop pass and asserting the
+        # protection executor sees the flipped kill flag on the later pass.
+        clock = _Clock()
+        with TemporaryDirectory() as d:
+            kill_file = Path(d) / "KILL"
+            reads: list[bool] = []
+            kills_seen: list[bool] = []
+
+            def _read_records() -> list[dict[str, Any]]:
+                reads.append(True)
+                # Create the KILL file after the first read so the SECOND tick
+                # sees it (proves records + kill are recomputed per pass).
+                if len(reads) == 1:
+                    kill_file.touch()
+                return []
+
+            def _exec(action: Any, kill: bool, report: Any) -> None:
+                kills_seen.append(kill)
+
+            broker = _ProtBroker(positions=[_pos(3.0)], sells=[], by_uic={_UIC: _pos(3.0)})
+            base = _deps(
+                broker,
+                kill_file=kill_file,
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                build_protection_view=lambda b, r: ProtectionView(
+                    long_positions={_UIC: _pos(3.0)},
+                    all_positions={_UIC: _pos(3.0)},
+                    sell_legs_by_uic={},
+                    planned_by_uic={
+                        _UIC: PlannedExit(
+                            uic=_UIC,
+                            entry_crid="crid-0",
+                            side="SELL",
+                            stop_price=216.48,
+                            tp_price=None,
+                            conflicting=False,
+                            n_plans=1,
+                            next_gen=lambda qty: 0,
+                            next_amend_seq=lambda: 0,
+                        )
+                    },
+                    oco_unsupported=frozenset(),
+                ),
+                execute_protection=_exec,
+            )
+            deps = cl.LoopDeps(**{**base.__dict__, "read_records": _read_records})
+            event = _ScriptedWait(clock, [("wake", 1.0), ("timeout",)])
+            cl.run_daemon(
+                deps,
+                once=False,
+                poll_seconds=45.0,
+                is_running=_stop_after(2),
+                heartbeat_fn=lambda: None,
+                wake_event=event,  # type: ignore[arg-type]
+                monotonic=clock,
+            )
+        # The protection executor saw kill=False on the first pass and kill=True
+        # on the woken/backstop pass — kill IS recomputed per run_once, not cached
+        # from the first tick. (read_records is called once per protection pass
+        # plus once more by the tick-1 placement drain, so >= 2 reads occurred.)
+        self.assertGreaterEqual(len(reads), 2)
+        self.assertEqual(kills_seen, [False, True])
+
+
+class TestStreamRestBudget(unittest.TestCase):
+    def test_reconnect_storm_does_not_starve_protective_place(self) -> None:
+        # A reconnect/reset storm = the stream thread spamming spurious early
+        # wakes. The protective place_standalone_stop still executes on every
+        # pass and the backstop still fires within poll_seconds — never starved.
+        clock = _Clock()
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(positions=[_pos(3.0)], sells=[], by_uic={_UIC: _pos(3.0)})
+            throttle = _throttle_to([])
+            base = _deps(
+                broker,
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                build_protection_view=cl.build_protection_view,
+                execute_protection=cl._make_protection_executor(broker, throttle),
+            )
+            # Storm: many tiny early wakes, then one backstop timeout.
+            event = _ScriptedWait(
+                clock,
+                [("wake", 0.01)] * 5 + [("timeout",)],
+            )
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                cl.run_daemon(
+                    base,
+                    once=False,
+                    poll_seconds=45.0,
+                    is_running=_stop_after(6),
+                    heartbeat_fn=lambda: None,
+                    wake_event=event,  # type: ignore[arg-type]
+                    monotonic=clock,
+                )
+        # The protective stop was placed (deficit -> place_standalone_stop ran);
+        # the storm never starved it, and the backstop timeout still fired.
+        self.assertGreaterEqual(len(broker.placed), 1)
+        self.assertEqual(broker.placed[0][:2], (_UIC, "SELL"))
+        self.assertIn(45.0, event.timeouts)
+
+
+class TestStreamStaleAlert(unittest.TestCase):
+    def test_stream_silence_beyond_stale_s_raises_throttled_alert_on_main_thread(self) -> None:
+        alerts: list[tuple[str, str]] = []
+
+        class _Trig:
+            is_streaming = True
+
+            def __init__(self, silence: float | None) -> None:
+                self._silence = silence
+                self.pushed: list[str] = []
+
+            def push_token(self, tok: str) -> None:
+                self.pushed.append(tok)
+
+            def seconds_since_last_message(self) -> float | None:
+                return self._silence
+
+        gauges: list[float] = []
+        # Silence beyond stale_s -> throttled 'stream-dead' alert fires.
+        trig = _Trig(silence=90.0)
+        tick = cl._make_stream_tick(
+            trig,
+            get_bearer=lambda: "BEARER-1",
+            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
+            stale_s=45.0,
+            emit_gauge=gauges.append,
+        )
+        tick()
+        self.assertEqual(trig.pushed, ["BEARER-1"])
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0][1], "stream-dead")
+        self.assertEqual(gauges, [90.0])
+
+        # Fresh stream (silence <= stale_s) -> no alert, still pushes + gauges.
+        alerts.clear()
+        gauges.clear()
+        trig2 = _Trig(silence=5.0)
+        tick2 = cl._make_stream_tick(
+            trig2,
+            get_bearer=lambda: "BEARER-2",
+            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
+            stale_s=45.0,
+            emit_gauge=gauges.append,
+        )
+        tick2()
+        self.assertEqual(trig2.pushed, ["BEARER-2"])
+        self.assertEqual(alerts, [])
+        self.assertEqual(gauges, [5.0])
+
+    def test_no_message_yet_neither_alerts_nor_gauges(self) -> None:
+        alerts: list[tuple[str, str]] = []
+        gauges: list[float] = []
+
+        class _Trig:
+            is_streaming = True
+
+            def push_token(self, tok: str) -> None:
+                pass
+
+            def seconds_since_last_message(self) -> float | None:
+                return None
+
+        tick = cl._make_stream_tick(
+            _Trig(),
+            get_bearer=lambda: "B",
+            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
+            stale_s=45.0,
+            emit_gauge=gauges.append,
+        )
+        tick()
+        self.assertEqual(alerts, [])
+        self.assertEqual(gauges, [])
+
+    def test_bearer_read_failure_never_crashes_the_tick(self) -> None:
+        # A token flock / chain-loss error while reading the bearer must degrade
+        # to poll-only silently (never-worse-than-poll), never crash the loop.
+        alerts: list[tuple[str, str]] = []
+
+        class _Trig:
+            is_streaming = True
+
+            def __init__(self) -> None:
+                self.pushed: list[str] = []
+
+            def push_token(self, tok: str) -> None:
+                self.pushed.append(tok)
+
+            def seconds_since_last_message(self) -> float | None:
+                return None
+
+        def _raise_bearer() -> str:
+            raise RuntimeError("chain lost")
+
+        trig = _Trig()
+        tick = cl._make_stream_tick(
+            trig,
+            get_bearer=_raise_bearer,
+            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
+            stale_s=45.0,
+            emit_gauge=lambda v: None,
+        )
+        tick()  # must not raise
+        self.assertEqual(trig.pushed, [])
+
+    def test_default_stale_threshold_le_poll_seconds(self) -> None:
+        # The stale alert must not lag a full poll cycle behind protection.
+        self.assertLessEqual(cl._DEFAULT_STREAM_STALE_S, 45.0)
+
+    def test_stream_stale_s_reads_env_with_finite_positive_guard(self) -> None:
+        with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_STREAM_STALE_S": "30"}, clear=False):
+            self.assertEqual(cl._stream_stale_s(), 30.0)
+        for bad in ("0", "-5", "nan", "inf", "notafloat", ""):
+            with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_STREAM_STALE_S": bad}, clear=False):
+                self.assertEqual(cl._stream_stale_s(), cl._DEFAULT_STREAM_STALE_S)
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_STREAM_STALE_S"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(cl._stream_stale_s(), cl._DEFAULT_STREAM_STALE_S)
+
+
+class TestBlockingOnTickDoesNotExtendGap(unittest.TestCase):
+    """PR #900 adversarial-review MEDIUM: a slow on_tick (a hung Telegram POST in
+    the stale/breaker alert) must be ABSORBED into the poll interval, never added
+    on top of a fresh poll. The absolute deadline is anchored to the moment the
+    protection pass completed (before on_tick), so on_tick's blocking duration only
+    shrinks the remaining wait — it can never push the backstop past poll_seconds
+    (which would be worse than poll-only)."""
+
+    def test_blocking_on_tick_absorbed_into_poll_not_added_on_top(self) -> None:
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+
+        def _blocking_tick() -> None:
+            clock.now += 30.0  # a ~30s synchronous alert POST on the main thread
+
+        event = _ScriptedWait(clock, [("timeout",), ("timeout",), ("timeout",)])
+        cl.run_daemon(
+            deps,
+            once=False,
+            poll_seconds=45.0,
+            is_running=_stop_after(3),
+            heartbeat_fn=lambda: None,
+            on_tick=_blocking_tick,
+            wake_event=event,  # type: ignore[arg-type]
+            monotonic=clock,
+        )
+        # Passes stay on the 45s grid; the 30s block shrinks each wait to 15s
+        # instead of scheduling a fresh 45s AFTER the block (which would put the
+        # 3rd pass at 1120, a 75s gap).
+        # Exact 45s grid (each gap 45s) — NOT [1000, 1045, 1120] (a 75s 3rd gap).
+        self.assertEqual(run_at, [1000.0, 1045.0, 1090.0])
+        self.assertEqual(event.timeouts, [15.0, 15.0, 15.0])
+
+
+class TestStreamBreakerAlert(unittest.TestCase):
+    """zen MEDIUM: when the circuit breaker trips permanently (is_streaming False),
+    the operator must be paged on the MAIN thread — even if the stream never
+    delivered a single message (seconds_since_last_message stays None, so the
+    'stream-dead' silence alert would never fire)."""
+
+    def _trig(self, *, is_streaming: bool, silence: float | None):
+        class _Trig:
+            def __init__(self) -> None:
+                self.pushed: list[str] = []
+                self.is_streaming = is_streaming
+
+            def push_token(self, tok: str) -> None:
+                self.pushed.append(tok)
+
+            def seconds_since_last_message(self) -> float | None:
+                return silence
+
+        return _Trig()
+
+    def test_breaker_tripped_pages_even_with_no_message(self) -> None:
+        alerts: list[tuple[str, str]] = []
+        trig = self._trig(is_streaming=False, silence=None)
+        tick = cl._make_stream_tick(
+            trig,
+            get_bearer=lambda: "B",
+            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
+            stale_s=45.0,
+            emit_gauge=lambda v: None,
+        )
+        tick()
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0][1], "stream-breaker")
+
+    def test_live_stream_does_not_page_breaker(self) -> None:
+        alerts: list[tuple[str, str]] = []
+        trig = self._trig(is_streaming=True, silence=5.0)
+        tick = cl._make_stream_tick(
+            trig,
+            get_bearer=lambda: "B",
+            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
+            stale_s=45.0,
+            emit_gauge=lambda v: None,
+        )
+        tick()
+        self.assertEqual([r for _, r in alerts], [])
+
+
+class TestStreamingSubscriberIsolation(unittest.TestCase):
+    """zen HIGH: the streaming subscriber must NOT share the process-wide
+    SaxoClient singleton's requests.Session (requests.Session is not thread-safe;
+    concurrent subscription-REST on the stream thread + get_positions on the main
+    thread could corrupt the pool and skip a protection pass). It gets its OWN
+    session while sharing the thread-safe OAuth provider for token consistency."""
+
+    def _provider(self):
+        class _StubProvider:
+            def get_access_token(self) -> str:
+                return "TOK"
+
+            def invalidate(self) -> None:
+                pass
+
+        return _StubProvider()
+
+    def test_subscriber_has_own_session_and_shared_provider(self) -> None:
+        from alphalens_pipeline.brokers.saxo.client import SaxoClient
+
+        provider = self._provider()
+        sub = cl._build_streaming_subscriber(provider)
+        self.assertIsInstance(sub, SaxoClient)
+        self.assertIs(sub._token_provider, provider)
+        # A fresh session per construction -> never the shared singleton's session.
+        other = cl._build_streaming_subscriber(provider)
+        self.assertIsNot(sub._session, other._session)
+
+
+class TestStreamingEnabledGate(unittest.TestCase):
+    def test_streaming_enabled_reads_env_flag(self) -> None:
+        with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_STREAMING_ENABLED": "1"}, clear=False):
+            self.assertTrue(cl._streaming_enabled())
+        for off in ("0", "", "true", "yes"):
+            with mock.patch.dict(
+                os.environ, {"ALPHALENS_BROKER_STREAMING_ENABLED": off}, clear=False
+            ):
+                self.assertFalse(cl._streaming_enabled())
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_STREAMING_ENABLED"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertFalse(cl._streaming_enabled())
 
 
 if __name__ == "__main__":
