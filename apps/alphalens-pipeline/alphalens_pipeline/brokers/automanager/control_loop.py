@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from alphalens_pipeline.brokers.automanager.position_manager import (
+    _OCO_LAG_HOLD_REASON,
     Action,
     AlertOnly,
     AmendStop,
@@ -76,6 +77,13 @@ KILL_FILE_PATH = _BROKER_ORDERS_DIR / "KILL"
 # run_daemon default; the metric name has one home here).
 HEARTBEAT_METRIC = 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"}'
 
+# Consecutive-tick threshold for the persistent OCO-lag monitor (issue #5). The M1
+# guard NoOp'ing a clean over-covered OCO pair is SAFE for a tick or two (a TP-read
+# lag behind Q9's symmetric propagation, or a skipped downsize amend), but a genuine
+# stall — Q9 never propagating — is otherwise invisible. When a uic emits the M1
+# hold for this many consecutive protection ticks, the driver pages ONCE (throttled).
+_OCO_LAG_ALERT_TICKS = 5
+
 
 @dataclass(frozen=True)
 class LoopDeps:
@@ -114,6 +122,14 @@ class LoopDeps:
     # flag is on but the capability is absent) and injected into the protection
     # executor closure; kept here for symmetry / introspection.
     amend_stop: AmendStopPlacer | None = None
+    # Daemon-lifetime per-uic consecutive-count of M1 oco-lag-hold NoOps (issue #5).
+    # A MUTABLE dict on the (frozen) deps — built once in build_default_deps and
+    # carried across every tick — so the pure reconcile module stays stateless. The
+    # protection driver increments a uic's count each tick it holds and resets it
+    # (drops the key) the moment any other action fires; crossing _OCO_LAG_ALERT_TICKS
+    # pages once via the shared throttle. Frozen forbids REBINDING the field, not
+    # mutating the dict it points at.
+    oco_lag_counts: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -212,18 +228,23 @@ def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
 
 def _run_placement_drain(deps: LoopDeps, report: TickReport) -> None:
     # Drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
-    # step 4). Read the journal ONCE before the drain; a pick placed earlier in
-    # THIS tick is added to already_submitted below so a duplicate armed line
-    # later in the same tick is skipped (an out-of-tick placement is caught by
-    # the next tick's fresh read).
+    # step 4). Read the journal ONCE before the drain — this snapshot is the
+    # CROSS-tick join (an out-of-tick placement is caught by the next tick's
+    # fresh read). ``placed_this_tick`` is the WITHIN-tick guard: it starts empty
+    # each tick and records every pick we ATTEMPT to place, so two armed lines
+    # with the same (ticker, brief_date) in ONE tick never both drive placement —
+    # even when the first attempt returns False (refused / zero-sized / partial-
+    # then-failed). Recording the attempt (not just a success) guards the
+    # never-double-commit invariant against a retry inside the same tick.
     already_submitted = _submitted_pick_keys(deps.read_records())
+    placed_this_tick: set[tuple[str, str]] = set()
     for pick in deps.iter_picks():
         key = _pick_key(pick)
-        if key in already_submitted:
+        if key in already_submitted or key in placed_this_tick:
             continue
+        placed_this_tick.add(key)
         if deps.place_pick(pick):
             report.picks_placed += 1
-            already_submitted.add(key)
 
 
 def _run_verdict_advance(
@@ -292,12 +313,48 @@ def _run_protection_pass(
         ):
             report.alerts += 1
         return
-    for action in reconcile_protection(protection_view):
+    actions = reconcile_protection(protection_view)
+    for action in actions:
         report.actions.append(("protection", type(action).__name__))
         try:
             deps.execute_protection(action, kill, report)
         except BrokerError as exc:
             deps.alert(f"protection {type(action).__name__} failed (broker error) — skipped: {exc}")
+            report.alerts += 1
+    _track_oco_lag(deps, actions, report)
+
+
+def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) -> None:
+    """Daemon-lifetime per-uic monitor for a persistently-stuck OCO propagation lag
+    (issue #5). The M1 guard NoOp'ing a clean over-covered OCO pair is SAFE for a
+    tick or two but must not be invisible if Q9 never propagates. Increment a uic's
+    consecutive-hold count each tick it emits an ``oco-lag-hold`` NoOp; RESET (drop
+    the key) the moment that uic emits ANY other action — a real place/amend/cancel
+    means the lag cleared. Crossing ``_OCO_LAG_ALERT_TICKS`` pages ONCE (the shared
+    throttle dedups the repeat per-tick calls into a single alert per interval)."""
+    counts = deps.oco_lag_counts
+    lag_uics: set[int] = set()
+    resolved_uics: set[int] = set()
+    for action in actions:
+        uic = getattr(action, "uic", None)
+        if uic is None:
+            continue
+        if isinstance(action, NoOp) and action.reason == _OCO_LAG_HOLD_REASON:
+            lag_uics.add(uic)
+        else:
+            resolved_uics.add(uic)
+    # Any non-lag action for a uic wins — the hold cleared, so reset even if some
+    # (impossible-in-practice) second action on the same uic was a lag NoOp.
+    for uic in resolved_uics:
+        counts.pop(uic, None)
+        lag_uics.discard(uic)
+    for uic in lag_uics:
+        counts[uic] = counts.get(uic, 0) + 1
+        if counts[uic] >= _OCO_LAG_ALERT_TICKS and deps.alert_throttled(
+            f"uic {uic}: OCO exit propagation lag held {counts[uic]} consecutive ticks "
+            f"(>= {_OCO_LAG_ALERT_TICKS}) — Q9 may be stalled, check the resting OCO pair",
+            f"oco-lag-persistent:{uic}",
+        ):
             report.alerts += 1
 
 
@@ -377,6 +434,11 @@ def build_default_deps() -> LoopDeps:
         DEFAULT_SUBMISSIONS_PATH,
         iter_submission_records,
     )
+
+    # One-shot bounded-growth maintenance: fold the append-only standalone-stop
+    # journal down to its minimal fold-equivalent set (issue #895). Runs here —
+    # at startup, before the tick loop — so no concurrent tick races the rewrite.
+    _compact_standalone_stop_journal()
 
     broker = get_default_broker()
     if not isinstance(broker, SupportsStandaloneStop):
@@ -466,12 +528,20 @@ class _AlreadyGatedSessionState:
 
 
 def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
-    """Append one line to the out-of-band standalone-stop journal (never rewrites)."""
+    """Append one line to the out-of-band standalone-stop journal (never rewrites).
+
+    Flush + fsync after the append so a plan price / capability marker is durable
+    the instant it is written — a buffered write lost to a crash (or systemd
+    SIGKILL) would silently drop a disaster-stop plan, and the protection pass
+    can never re-derive a price the broker does not know."""
     import json
+    import os
 
     STANDALONE_STOP_JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
     with STANDALONE_STOP_JOURNAL_PATH.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 _INITIAL_GEN = 0  # entry-placement plan is generation 0; resizes bump it via next_gen() (Task 4)
@@ -754,6 +824,123 @@ def _make_next_amend_seq(uic: int) -> Callable[[], int]:
         return seq
 
     return _next_seq
+
+
+def _compact_standalone_stop_journal_lines(
+    lines: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the MINIMAL set of journal lines that folds IDENTICALLY to ``lines``
+    (issue #895 — bound the append-only journal's unbounded growth).
+
+    Keeps exactly what the readers need and nothing else:
+      - the NEWEST ``planned`` per client_request_id (mirroring
+        ``_latest_planned_by_crid`` — highest ``gen`` wins, later line breaks a
+        tie), so ``_fold_planned_exits`` is unchanged;
+      - ONE ``oco_unsupported`` per uic (``_fold_oco_unsupported`` only needs the
+        uic present);
+      - the NEWEST (max ``ts``) ``oco_placed`` / ``amend_failed`` per uic — the
+        TTL fold's membership for ANY ``now`` is decided by the newest marker, so
+        older ones are redundant;
+      - the ``amend_seq`` carrying the MAX seq per uic (``_read_persisted_amend_seq``
+        returns that max).
+
+    Every other line — ``gen`` markers (read only by ``_read_persisted_gen``, whose
+    reset to the initial gen is harmless: post-restart re-emits are past Saxo's 15s
+    request-id dedup window, and protection is broker-state-truth not journal-derived),
+    unknown kinds, and malformed lines — is dropped; none contributes to the four
+    folds above. Pure: no I/O, input never mutated (kept lines are shallow-copied)."""
+    materialized = list(lines)
+
+    # Newest planned per crid — reuse the fold's own selection so the compacted
+    # set contains EXACTLY the line _fold_planned_exits would elect. Sorted by
+    # crid for a deterministic, stable file order.
+    planned_by_crid = _latest_planned_by_crid(materialized)
+    planned: list[dict[str, Any]] = [
+        dict(planned_by_crid[crid][1]) for crid in sorted(planned_by_crid)
+    ]
+
+    oco_unsupported: dict[int, dict[str, Any]] = {}
+    ttl_latest: dict[str, dict[int, tuple[float, dict[str, Any]]]] = {
+        "oco_placed": {},
+        "amend_failed": {},
+    }
+    amend_seq: dict[int, tuple[int, dict[str, Any]]] = {}
+
+    for line in materialized:
+        kind = line.get("kind")
+        if kind == "oco_unsupported":
+            try:
+                uic = int(line["uic"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            oco_unsupported.setdefault(uic, dict(line))
+        elif kind in ttl_latest:
+            try:
+                uic = int(line["uic"])
+                ts = float(line["ts"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            prev = ttl_latest[kind].get(uic)
+            if prev is None or ts >= prev[0]:
+                ttl_latest[kind][uic] = (ts, dict(line))
+        elif kind == "amend_seq":
+            try:
+                uic = int(line["uic"])
+                seq = int(line["seq"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            prev = amend_seq.get(uic)
+            if prev is None or seq >= prev[0]:
+                amend_seq[uic] = (seq, dict(line))
+
+    compacted: list[dict[str, Any]] = list(planned)
+    compacted.extend(oco_unsupported[uic] for uic in sorted(oco_unsupported))
+    compacted.extend(ttl_latest["oco_placed"][uic][1] for uic in sorted(ttl_latest["oco_placed"]))
+    compacted.extend(
+        ttl_latest["amend_failed"][uic][1] for uic in sorted(ttl_latest["amend_failed"])
+    )
+    compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
+    return compacted
+
+
+def _compact_standalone_stop_journal() -> None:
+    """Atomically rewrite the standalone-stop journal with its compacted form.
+
+    Read the current file, compute the minimal fold-equivalent line set, and
+    replace the file in place (temp file in the SAME dir + ``os.replace`` — an
+    atomic rename on POSIX, so a crash mid-rewrite leaves the old journal intact).
+    A NO-OP when the journal is absent or holds no parseable records — never
+    creates or truncates a file that has nothing to compact.
+
+    Call ONCE at daemon startup (``build_default_deps``), BEFORE the tick loop, so
+    no concurrent tick can race the rewrite against an append."""
+    import contextlib
+    import json
+    import os
+    import tempfile
+
+    path = STANDALONE_STOP_JOURNAL_PATH
+    if not path.exists():
+        return
+    lines = list(_iter_standalone_stop_journal())
+    if not lines:
+        return
+    compacted = _compact_standalone_stop_journal_lines(lines)
+
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=".standalone_stops.compact-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for record in compacted:
+                fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, str(path))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
 
 
 def _default_oauth_provider() -> Any:
@@ -1491,6 +1678,30 @@ def _execute_amend_stop(
         ):
             report.alerts += 1
         return
+
+    # Execute-time OCO-leg / standalone fill re-check (Q10 mid-fill TOCTOU): the
+    # SPECIFIC resting stop being amended may have partially filled OR vanished
+    # (gone / fully filled) between the decision snapshot and this PATCH landing.
+    # Saxo's partial-fill amend semantics are UNPROVEN (Q10), so amending a leg
+    # that already began filling is unsafe. Bail leg-shape-agnostically (covers a
+    # standalone stop AND an OCO child stop): journal ``amend_failed`` (TTL fold)
+    # and a throttled alert so the NEXT tick falls to the proven B1 additive /
+    # place-residual-first primitive (never naked). Defensive getattr: a broker
+    # without ``list_working_sell_orders`` keeps the prior behavior (the amend
+    # capability implies Saxo, which has it).
+    list_sells = getattr(broker, "list_working_sell_orders", None)
+    if list_sells is not None:
+        resting = next((o for o in list_sells() if str(o.order_id) == str(action.order_id)), None)
+        if resting is None or resting.filled_quantity > _QTY_EPS:
+            _journal_amend_failed(action.uic)
+            if throttle.emit(
+                f"uic {action.uic}: stop {action.order_id} gone/partially-filled "
+                "before amend — skipped, residual covered next tick",
+                uic=action.uic,
+                reason="amend-skip-filled",
+            ):
+                report.alerts += 1
+            return
 
     try:
         amend_stop(

@@ -69,6 +69,45 @@ class IterPicksTest(unittest.TestCase):
         self.assertIsInstance(picks[0], Pick)
         self.assertEqual(picks[0].status, STATUS_ARMED)
 
+    def test_iter_yields_only_armed_status_lines(self) -> None:
+        # A non-armed status line (cancelled / filled / expired) must NEVER be
+        # yielded — the drain places whatever iter_picks emits, so the ARMED
+        # filter belongs inside iter_picks (defence in depth against re-placing a
+        # retired intent).
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(
+            json.dumps(
+                {
+                    "ticker": "ARMEDX",
+                    "date": "2026-07-20",
+                    "armed_ts": "2026-07-20T00:00:00+00:00",
+                    "status": "armed",
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "ticker": "CANCELLEDX",
+                    "date": "2026-07-20",
+                    "armed_ts": "2026-07-20T00:00:00+00:00",
+                    "status": "cancelled",
+                }
+            )
+            + "\n"
+            + json.dumps(
+                {
+                    "ticker": "FILLEDX",
+                    "date": "2026-07-21",
+                    "armed_ts": "2026-07-21T00:00:00+00:00",
+                    "status": "filled",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        picks = list(iter_picks(path=self.path))
+        self.assertEqual([p.ticker for p in picks], ["ARMEDX"])
+
     def test_iter_skips_malformed_and_undated_lines(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(

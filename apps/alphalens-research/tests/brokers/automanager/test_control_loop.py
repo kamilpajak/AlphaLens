@@ -24,6 +24,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     BrokerView,
     CancelSellLegs,
+    NoOp,
     PlaceStop,
     PlannedExit,
     ProtectionView,
@@ -160,12 +161,14 @@ def _pos(qty: float, uic: int = _UIC) -> Position:
     )
 
 
-def _leg(order_id: str, order_type: str, amount: float, *, uic: int = _UIC) -> OrderState:
+def _leg(
+    order_id: str, order_type: str, amount: float, *, uic: int = _UIC, filled: float = 0.0
+) -> OrderState:
     return OrderState(
         order_id=order_id,
         status=OrderStatus.WORKING,
         instrument=None,
-        filled_quantity=0.0,
+        filled_quantity=filled,
         raw_status="Working",
         uic=uic,
         side="SELL",
@@ -268,6 +271,24 @@ def _seed_planned(journal: Path, uic: int = _UIC, crid: str = "crid-0") -> None:
 
 def _throttle_to(alerts: list[str]) -> cl._AlertThrottle:
     return cl._AlertThrottle(alerts.append)
+
+
+class TestStandaloneStopJournalDurability(unittest.TestCase):
+    """The out-of-band standalone-stop journal is the source of truth for plan
+    prices + capability markers; a buffered write lost to a crash silently drops
+    a disaster-stop plan. Each append is flushed + fsync'd for crash-durability."""
+
+    def test_append_flushes_and_fsyncs(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                with mock.patch("os.fsync") as fsync:
+                    cl._append_standalone_stop_journal({"kind": "gen", "uic": 1, "gen": 0})
+                fsync.assert_called_once()
+            # The record is durably persisted (survives read-back).
+            lines = journal.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertIn('"uic": 1', lines[0])
 
 
 class TestRunOncePlacement(unittest.TestCase):
@@ -414,6 +435,38 @@ class TestPickSubmissionJoin(unittest.TestCase):
             report = cl.run_once(deps)
             self.assertEqual(place_calls, [p1], "the duplicate armed line must be skipped")
             self.assertEqual(report.picks_placed, 1)
+
+    def test_duplicate_armed_pick_in_one_tick_attempted_once_even_when_place_fails(self) -> None:
+        # A within-tick duplicate must be skipped even when the FIRST place returns
+        # False (refused / zero-sized / partial-then-failed). The placed_this_tick
+        # set records the ATTEMPT, so a same-key line later in the same tick can
+        # never re-drive placement (guards the never-double-commit invariant).
+        with TemporaryDirectory() as d:
+            attempts: list = []
+            p1 = _pick("KO", "2026-07-20")
+            p2 = _pick("KO", "2026-07-20")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                picks=[p1, p2],
+            )
+            deps = cl.LoopDeps(
+                **{
+                    **deps.__dict__,
+                    "read_records": list,
+                    "place_pick": lambda pick: bool(
+                        attempts.append(pick)
+                    ),  # append -> None -> False
+                }
+            )
+            report = cl.run_once(deps)
+            self.assertEqual(
+                attempts, [p1], "the duplicate must be skipped even when the first place fails"
+            )
+            self.assertEqual(report.picks_placed, 0)
 
 
 class _CrashError(Exception):
@@ -1891,7 +1944,8 @@ class TestExecuteAmendStop(unittest.TestCase):
     ``record_place_failure`` — no permanent capability latch."""
 
     def test_execute_amend_targets_live_owned_when_grew(self) -> None:
-        broker = _ProtBroker(by_uic={_UIC: _pos(6.0)})  # grew to 6 since the snapshot (4)
+        # grew to 6 since the snapshot (4); the resting stop is present + unfilled.
+        broker = _ProtBroker(by_uic={_UIC: _pos(6.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)])
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -1902,7 +1956,8 @@ class TestExecuteAmendStop(unittest.TestCase):
         self.assertEqual(report.exits_placed, 1)
 
     def test_execute_amend_targets_live_owned_when_shrank(self) -> None:
-        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)})  # shrank to 4 since the snapshot (7)
+        # shrank to 4 since the snapshot (7); the resting stop is present + unfilled.
+        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 7.0)])
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -1935,6 +1990,7 @@ class TestExecuteAmendStop(unittest.TestCase):
             sent: list[str] = []
             broker = _ProtBroker(
                 by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0)],
                 amend_error=BrokerCapabilityError("order placement disabled"),
             )
             throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
@@ -1966,6 +2022,7 @@ class TestExecuteAmendStop(unittest.TestCase):
             sent: list[str] = []
             broker = _ProtBroker(
                 by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0)],
                 amend_error=OrderRejectedError("terminal order", error_code="OrderNotWorking"),
             )
             throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
@@ -1991,7 +2048,7 @@ class TestExecuteAmendStop(unittest.TestCase):
             )
 
     def test_execute_amend_allowed_under_kill(self) -> None:
-        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)})
+        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)])
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -2012,6 +2069,88 @@ class TestExecuteAmendStop(unittest.TestCase):
         executor(_amend_action(), False, report)  # must NOT raise
         self.assertEqual(broker.amended, [])
         self.assertEqual(report.exits_placed, 0)
+
+    def test_execute_amend_bails_when_resting_order_partially_filled(self) -> None:
+        # Q10 mid-fill TOCTOU: the SPECIFIC resting stop being amended partially
+        # filled between the decision snapshot and the PATCH. Saxo's partial-fill
+        # amend semantics are unproven -> do NOT amend; journal amend_failed + a
+        # throttled alert so the next tick falls to the proven B1 additive primitive.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0, filled=2.0)],  # 2 of 4 already filled
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual(broker.amended, [], "no amend on a partially-filled resting stop (Q10)")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertEqual(
+            [m.get("uic") for m in markers], [_UIC], "amend_failed journaled -> B1 next tick"
+        )
+        self.assertTrue(any("skip" in a.lower() for a in alerts), alerts)
+
+    def test_execute_amend_bails_when_resting_order_gone(self) -> None:
+        # The resting stop vanished (gone/filled) between snapshot and execute — it
+        # is absent from list_working_sell_orders. Same bail: no amend, journal
+        # amend_failed, alert; the residual is covered next tick (never naked).
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("other-stop", "StopIfTraded", 4.0)],  # NOT the amended order_id
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual(broker.amended, [], "no amend on a vanished resting stop (Q10)")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertEqual([m.get("uic") for m in markers], [_UIC], "amend_failed journaled")
+        self.assertTrue(any("skip" in a.lower() for a in alerts), alerts)
+
+    def test_execute_amend_proceeds_when_resting_order_fully_unfilled(self) -> None:
+        # The resting stop is present and untouched (filled_quantity == 0) -> the
+        # amend proceeds unchanged (re-read owned + clamp + PATCH), no amend_failed.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0)],  # present, unfilled
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(target_qty=4.0), False, report)
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual(len(broker.amended), 1, "unfilled resting stop -> amend proceeds")
+        self.assertEqual(broker.amended[0][4], 4.0)
+        self.assertEqual(report.exits_placed, 1)
+        self.assertEqual(markers, [], "no amend_failed journaled on a clean amend")
 
 
 def _oco_leg(
@@ -2048,7 +2187,9 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
         # An OCO-leg AmendStop (order_id = OCO child stop, reason 'grow-after-OCO')
         # routes through the UNCHANGED isinstance(AmendStop) dispatch into
         # _execute_amend_stop — the same executor as a standalone amend.
-        broker = _ProtBroker(by_uic={_UIC: _pos(7.0)})
+        broker = _ProtBroker(
+            by_uic={_UIC: _pos(7.0)}, sells=[_oco_leg("oco-stop-1", "StopIfTraded", 5.0)]
+        )
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -2067,7 +2208,9 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
         # owned shrank to 5 between the decision (stale target 9) and execute; the
         # executor re-reads LIVE owned via get_positions_by_uic and clamps the PATCH
         # target to it, never the stale 9 — identical to the standalone path.
-        broker = _ProtBroker(by_uic={_UIC: _pos(5.0)})
+        broker = _ProtBroker(
+            by_uic={_UIC: _pos(5.0)}, sells=[_oco_leg("oco-stop-1", "StopIfTraded", 9.0)]
+        )
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -2095,6 +2238,7 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             broker = _ProtBroker(
                 by_uic={_UIC: _pos(7.0)},
+                sells=[_oco_leg("oco-stop-1", "StopIfTraded", 5.0)],
                 amend_error=OrderRejectedError("stale order", error_code="OrderNotWorking"),
             )
             executor = cl._make_protection_executor(
@@ -2294,6 +2438,372 @@ class TestHeartbeatEmitter(unittest.TestCase):
 
         sig = inspect.signature(cl.run_daemon)
         self.assertIs(sig.parameters["heartbeat_fn"].default, cl._default_emit_heartbeat)
+
+
+def _rich_standalone_stop_journal() -> list[dict[str, Any]]:
+    """A synthetic journal exercising every compactable line kind, with a
+    redundant older entry per key that compaction must fold away."""
+    uic_a, uic_b = 111, 222
+    return [
+        # planned — crid-A0 appears twice; the higher-gen resize wins.
+        {
+            "kind": "planned",
+            "client_request_id": "crid-A0",
+            "uic": uic_a,
+            "side": "SELL",
+            "stop_price": 10.0,
+            "take_profit": 20.0,
+            "tier_index": 0,
+            "gen": 0,
+        },
+        {
+            "kind": "planned",
+            "client_request_id": "crid-A0",
+            "uic": uic_a,
+            "side": "SELL",
+            "stop_price": 11.0,
+            "take_profit": 21.0,
+            "tier_index": 0,
+            "gen": 1,
+        },
+        {
+            "kind": "planned",
+            "client_request_id": "crid-A1",
+            "uic": uic_a,
+            "side": "SELL",
+            "stop_price": 10.0,
+            "take_profit": 19.0,
+            "tier_index": 1,
+            "gen": 0,
+        },
+        {
+            "kind": "planned",
+            "client_request_id": "crid-B0",
+            "uic": uic_b,
+            "side": "SELL",
+            "stop_price": 5.0,
+            "take_profit": 8.0,
+            "tier_index": 0,
+            "gen": 0,
+        },
+        # gen kind — never read by the four verified folds; dropped by compaction.
+        {"kind": "gen", "uic": uic_a, "gen": 1, "qty": 7.0},
+        # oco_unsupported — duplicated on one uic; folds to a single set member.
+        {"kind": "oco_unsupported", "uic": uic_a},
+        {"kind": "oco_unsupported", "uic": uic_a},
+        # oco_placed — the newer ts is the one that governs the TTL fold.
+        {"kind": "oco_placed", "uic": uic_a, "ts": 100.0},
+        {"kind": "oco_placed", "uic": uic_a, "ts": 250.0},
+        # amend_failed — newer ts governs.
+        {"kind": "amend_failed", "uic": uic_b, "ts": 100.0},
+        {"kind": "amend_failed", "uic": uic_b, "ts": 300.0},
+        # amend_seq — the max per uic is what _read_persisted_amend_seq returns.
+        {"kind": "amend_seq", "uic": uic_a, "seq": 0},
+        {"kind": "amend_seq", "uic": uic_a, "seq": 1},
+        {"kind": "amend_seq", "uic": uic_a, "seq": 2},
+        {"kind": "amend_seq", "uic": uic_b, "seq": 0},
+        # malformed — a planned line with no client_request_id; every fold skips it.
+        {"kind": "planned", "uic": uic_a, "stop_price": 1.0},
+    ]
+
+
+def _planned_fold_data(
+    fold: dict[int, PlannedExit],
+) -> dict[int, tuple[Any, ...]]:
+    """PlannedExit fields excluding the ``next_gen`` / ``next_amend_seq`` closures
+    (which compare by identity, so a fresh fold is never ``==`` a prior one)."""
+    return {
+        uic: (
+            planned.uic,
+            planned.entry_crid,
+            planned.side,
+            planned.stop_price,
+            planned.tp_price,
+            planned.conflicting,
+            planned.n_plans,
+        )
+        for uic, planned in fold.items()
+    }
+
+
+class TestCompactStandaloneStopJournalLines(unittest.TestCase):
+    """Issue #895: the pure compaction returns the minimal fold-equivalent set."""
+
+    def test_folds_are_identical_on_original_vs_compacted(self) -> None:
+        original = _rich_standalone_stop_journal()
+        compacted = cl._compact_standalone_stop_journal_lines(original)
+
+        self.assertEqual(
+            _planned_fold_data(cl._fold_planned_exits(original)),
+            _planned_fold_data(cl._fold_planned_exits(compacted)),
+        )
+        self.assertEqual(
+            cl._fold_oco_unsupported(original),
+            cl._fold_oco_unsupported(compacted),
+        )
+        for kind in ("oco_placed", "amend_failed"):
+            for now in (300.0, 1000.0):
+                self.assertEqual(
+                    cl._fold_ttl_markers(original, kind, now, 120.0),
+                    cl._fold_ttl_markers(compacted, kind, now, 120.0),
+                    msg=f"{kind} @ now={now}",
+                )
+
+    def test_compacted_set_is_minimal_one_line_per_key(self) -> None:
+        compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
+        kinds = [line["kind"] for line in compacted]
+        # 3 planned (crid-A0 newest, crid-A1, crid-B0), 1 oco_unsupported,
+        # 1 oco_placed, 1 amend_failed, 2 amend_seq (one per uic). No gen/malformed.
+        self.assertEqual(kinds.count("planned"), 3)
+        self.assertEqual(kinds.count("oco_unsupported"), 1)
+        self.assertEqual(kinds.count("oco_placed"), 1)
+        self.assertEqual(kinds.count("amend_failed"), 1)
+        self.assertEqual(kinds.count("amend_seq"), 2)
+        self.assertNotIn("gen", kinds)
+        self.assertEqual(len(compacted), 8)
+
+    def test_newest_planned_per_crid_survives(self) -> None:
+        compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
+        a0 = [
+            line
+            for line in compacted
+            if line.get("kind") == "planned" and line.get("client_request_id") == "crid-A0"
+        ]
+        self.assertEqual(len(a0), 1)
+        self.assertEqual(a0[0]["gen"], 1)
+        self.assertAlmostEqual(a0[0]["stop_price"], 11.0)
+
+    def test_empty_input_is_empty_output(self) -> None:
+        self.assertEqual(cl._compact_standalone_stop_journal_lines([]), [])
+
+
+class TestCompactStandaloneStopJournalFile(unittest.TestCase):
+    """Issue #895: the startup rewrite is atomic, a no-op on absent/empty files,
+    and preserves the newest-per-key semantics the folds and amend-seq reader see."""
+
+    def test_absent_file_is_noop(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._compact_standalone_stop_journal()
+            self.assertFalse(journal.exists())
+
+    def test_empty_file_is_noop(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            journal.write_text("", encoding="utf-8")
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._compact_standalone_stop_journal()
+            self.assertTrue(journal.exists())
+            self.assertEqual(journal.read_text(encoding="utf-8"), "")
+
+    def test_rewrite_shrinks_file_and_preserves_folds_and_amend_seq(self) -> None:
+        import json
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            journal.write_text(
+                "".join(
+                    json.dumps(line, sort_keys=True) + "\n"
+                    for line in _rich_standalone_stop_journal()
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                before_lines = list(cl._iter_standalone_stop_journal())
+                planned_before = _planned_fold_data(cl._fold_planned_exits(before_lines))
+                oco_before = cl._fold_oco_unsupported(before_lines)
+                seq_a_before = cl._read_persisted_amend_seq(111)
+                seq_b_before = cl._read_persisted_amend_seq(222)
+
+                cl._compact_standalone_stop_journal()
+
+                after_lines = list(cl._iter_standalone_stop_journal())
+                self.assertLess(len(after_lines), len(before_lines))
+                self.assertEqual(
+                    planned_before,
+                    _planned_fold_data(cl._fold_planned_exits(after_lines)),
+                )
+                self.assertEqual(oco_before, cl._fold_oco_unsupported(after_lines))
+                self.assertEqual(seq_a_before, cl._read_persisted_amend_seq(111))
+                self.assertEqual(seq_b_before, cl._read_persisted_amend_seq(222))
+                for kind in ("oco_placed", "amend_failed"):
+                    self.assertEqual(
+                        cl._fold_ttl_markers(before_lines, kind, 300.0, 120.0),
+                        cl._fold_ttl_markers(after_lines, kind, 300.0, 120.0),
+                    )
+            # No temp artifacts left behind in the journal dir.
+            leftovers = [p.name for p in Path(d).iterdir() if p.name != journal.name]
+            self.assertEqual(leftovers, [])
+
+
+_AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
+
+
+def _m1_lag_pview(*, owned: float = 3.0, stop_amount: float = 3.0, tp_amount: float = 5.0):
+    """A CLEAN unfilled resting OCO pair whose stop is already <= owned but whose TP
+    read still lags Q9's symmetric propagation (tp_amount > owned). With amend on the
+    OCO-downsize arm is skipped (stop already <= owned) and _reconcile_long emits the
+    M1 ``oco-lag-hold`` NoOp — the exact persistently-stuck-lag shape (issue #5)."""
+    pos = _pos(owned)
+    legs = (
+        _oco_leg("oco-stop-1", "StopIfTraded", stop_amount),
+        _oco_leg("oco-tp-1", "Limit", tp_amount),
+    )
+    return ProtectionView(
+        long_positions={_UIC: pos},
+        all_positions={_UIC: pos},
+        sell_legs_by_uic={_UIC: legs},
+        planned_by_uic={
+            _UIC: PlannedExit(
+                uic=_UIC,
+                entry_crid="crid-0",
+                side="SELL",
+                stop_price=216.48,
+                tp_price=306.72,
+                conflicting=False,
+                n_plans=1,
+            )
+        },
+        oco_unsupported=frozenset(),
+        amend_recently_failed=frozenset(),
+    )
+
+
+class TestPersistentOcoLagMonitor(unittest.TestCase):
+    """Issue #5: the M1 guard NoOp'ing a clean over-covered OCO pair is SAFE for a
+    tick or two, but a genuinely-stalled Q9 propagation must not stay invisible. The
+    protection driver counts a uic's consecutive ``oco-lag-hold`` holds on a daemon-
+    lifetime dict and pages ONCE (throttled) at ``_OCO_LAG_ALERT_TICKS``; any other
+    action on that uic resets the count. Dark when amend is off (the M1 guard is
+    ``_amend_enabled()``-gated, so it never emits and the counter never advances)."""
+
+    def _lag_action(self) -> list:
+        return [NoOp(uic=_UIC, reason=cl._OCO_LAG_HOLD_REASON)]
+
+    def test_persistent_lag_pages_once_at_threshold(self) -> None:
+        # N == _OCO_LAG_ALERT_TICKS consecutive holds -> exactly ONE throttled alert.
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+        )
+        alerts: list[str] = []
+        throttle = cl._AlertThrottle(alerts.append)
+        deps = cl.LoopDeps(
+            **{**deps.__dict__, "alert_throttled": lambda m, r: throttle.emit(m, reason=r)}
+        )
+        report = cl.TickReport()
+        for _ in range(cl._OCO_LAG_ALERT_TICKS + 3):  # keep holding past the threshold
+            cl._track_oco_lag(deps, self._lag_action(), report)
+        self.assertEqual(deps.oco_lag_counts[_UIC], cl._OCO_LAG_ALERT_TICKS + 3)
+        persistent = [a for a in alerts if "propagation lag held" in a]
+        self.assertEqual(
+            len(persistent), 1, f"expected exactly one persistent-lag page, got {alerts}"
+        )
+        self.assertIn(str(_UIC), persistent[0])
+
+    def test_no_alert_below_threshold(self) -> None:
+        # _OCO_LAG_ALERT_TICKS - 1 holds stay silent (safe transient lag).
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+        )
+        alerts: list[str] = []
+        throttle = cl._AlertThrottle(alerts.append)
+        deps = cl.LoopDeps(
+            **{**deps.__dict__, "alert_throttled": lambda m, r: throttle.emit(m, reason=r)}
+        )
+        report = cl.TickReport()
+        for _ in range(cl._OCO_LAG_ALERT_TICKS - 1):
+            cl._track_oco_lag(deps, self._lag_action(), report)
+        self.assertEqual(deps.oco_lag_counts[_UIC], cl._OCO_LAG_ALERT_TICKS - 1)
+        self.assertEqual([a for a in alerts if "propagation lag held" in a], [])
+
+    def test_non_lag_action_resets_the_counter(self) -> None:
+        # A real action for the uic (a PlaceStop) means the lag cleared -> reset.
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+        )
+        alerts: list[str] = []
+        throttle = cl._AlertThrottle(alerts.append)
+        deps = cl.LoopDeps(
+            **{**deps.__dict__, "alert_throttled": lambda m, r: throttle.emit(m, reason=r)}
+        )
+        report = cl.TickReport()
+        for _ in range(cl._OCO_LAG_ALERT_TICKS - 1):  # climb to just below the threshold
+            cl._track_oco_lag(deps, self._lag_action(), report)
+        # A non-lag action for the uic resets it (drops the key).
+        place = PlaceStop(_UIC, "SELL", 3.0, 216.48, "crid-0-stop-0")
+        cl._track_oco_lag(deps, [place], report)
+        self.assertNotIn(_UIC, deps.oco_lag_counts)
+        # The next hold restarts the climb from 1 -> still below threshold, silent.
+        cl._track_oco_lag(deps, self._lag_action(), report)
+        self.assertEqual(deps.oco_lag_counts[_UIC], 1)
+        self.assertEqual([a for a in alerts if "propagation lag held" in a], [])
+
+    def test_bare_noop_does_not_advance_counter(self) -> None:
+        # A healthy-covered bare NoOp (reason "") is NOT a lag hold -> no counting.
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+        )
+        report = cl.TickReport()
+        for _ in range(cl._OCO_LAG_ALERT_TICKS + 2):
+            cl._track_oco_lag(deps, [NoOp()], report)
+        self.assertEqual(deps.oco_lag_counts, {})
+
+    def test_run_once_end_to_end_pages_once_on_persistent_lag(self) -> None:
+        # Full path: run_once -> _run_protection_pass -> reconcile_protection emits
+        # the M1 NoOp -> _track_oco_lag counts + pages once through the real throttle.
+        with TemporaryDirectory() as d:
+            alerts: list[str] = []
+            throttle = cl._AlertThrottle(alerts.append)
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                build_protection_view=lambda broker, records: _m1_lag_pview(),
+                alert_throttled=lambda m, r: throttle.emit(m, reason=r),
+            )
+            with mock.patch.dict(os.environ, _AMEND_ON):
+                for _ in range(cl._OCO_LAG_ALERT_TICKS + 2):
+                    cl.run_once(deps)
+        self.assertEqual(deps.oco_lag_counts[_UIC], cl._OCO_LAG_ALERT_TICKS + 2)
+        persistent = [a for a in alerts if "propagation lag held" in a]
+        self.assertEqual(len(persistent), 1, f"expected one persistent-lag page, got {alerts}")
+
+    def test_dark_when_amend_off_no_hold_no_counter(self) -> None:
+        # Amend OFF: the M1 guard never fires (place-residual-first arm runs instead),
+        # so run_once never emits an oco-lag-hold and the counter stays empty.
+        with TemporaryDirectory() as d:
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                build_protection_view=lambda broker, records: _m1_lag_pview(),
+            )
+            env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_AMEND_ENABLED"}
+            with mock.patch.dict(os.environ, env, clear=True):
+                for _ in range(cl._OCO_LAG_ALERT_TICKS + 2):
+                    cl.run_once(deps)
+        self.assertEqual(deps.oco_lag_counts, {})
 
 
 if __name__ == "__main__":
