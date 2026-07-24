@@ -1492,6 +1492,30 @@ def _execute_amend_stop(
             report.alerts += 1
         return
 
+    # Execute-time OCO-leg / standalone fill re-check (Q10 mid-fill TOCTOU): the
+    # SPECIFIC resting stop being amended may have partially filled OR vanished
+    # (gone / fully filled) between the decision snapshot and this PATCH landing.
+    # Saxo's partial-fill amend semantics are UNPROVEN (Q10), so amending a leg
+    # that already began filling is unsafe. Bail leg-shape-agnostically (covers a
+    # standalone stop AND an OCO child stop): journal ``amend_failed`` (TTL fold)
+    # and a throttled alert so the NEXT tick falls to the proven B1 additive /
+    # place-residual-first primitive (never naked). Defensive getattr: a broker
+    # without ``list_working_sell_orders`` keeps the prior behavior (the amend
+    # capability implies Saxo, which has it).
+    list_sells = getattr(broker, "list_working_sell_orders", None)
+    if list_sells is not None:
+        resting = next((o for o in list_sells() if str(o.order_id) == str(action.order_id)), None)
+        if resting is None or resting.filled_quantity > _QTY_EPS:
+            _journal_amend_failed(action.uic)
+            if throttle.emit(
+                f"uic {action.uic}: stop {action.order_id} gone/partially-filled "
+                "before amend — skipped, residual covered next tick",
+                uic=action.uic,
+                reason="amend-skip-filled",
+            ):
+                report.alerts += 1
+            return
+
     try:
         amend_stop(
             action.uic,

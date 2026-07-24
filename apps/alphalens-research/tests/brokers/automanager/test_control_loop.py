@@ -160,12 +160,14 @@ def _pos(qty: float, uic: int = _UIC) -> Position:
     )
 
 
-def _leg(order_id: str, order_type: str, amount: float, *, uic: int = _UIC) -> OrderState:
+def _leg(
+    order_id: str, order_type: str, amount: float, *, uic: int = _UIC, filled: float = 0.0
+) -> OrderState:
     return OrderState(
         order_id=order_id,
         status=OrderStatus.WORKING,
         instrument=None,
-        filled_quantity=0.0,
+        filled_quantity=filled,
         raw_status="Working",
         uic=uic,
         side="SELL",
@@ -1891,7 +1893,8 @@ class TestExecuteAmendStop(unittest.TestCase):
     ``record_place_failure`` — no permanent capability latch."""
 
     def test_execute_amend_targets_live_owned_when_grew(self) -> None:
-        broker = _ProtBroker(by_uic={_UIC: _pos(6.0)})  # grew to 6 since the snapshot (4)
+        # grew to 6 since the snapshot (4); the resting stop is present + unfilled.
+        broker = _ProtBroker(by_uic={_UIC: _pos(6.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)])
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -1902,7 +1905,8 @@ class TestExecuteAmendStop(unittest.TestCase):
         self.assertEqual(report.exits_placed, 1)
 
     def test_execute_amend_targets_live_owned_when_shrank(self) -> None:
-        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)})  # shrank to 4 since the snapshot (7)
+        # shrank to 4 since the snapshot (7); the resting stop is present + unfilled.
+        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 7.0)])
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -1935,6 +1939,7 @@ class TestExecuteAmendStop(unittest.TestCase):
             sent: list[str] = []
             broker = _ProtBroker(
                 by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0)],
                 amend_error=BrokerCapabilityError("order placement disabled"),
             )
             throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
@@ -1966,6 +1971,7 @@ class TestExecuteAmendStop(unittest.TestCase):
             sent: list[str] = []
             broker = _ProtBroker(
                 by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0)],
                 amend_error=OrderRejectedError("terminal order", error_code="OrderNotWorking"),
             )
             throttle = cl._AlertThrottle(sent.append, clock=lambda: 0.0)
@@ -1991,7 +1997,7 @@ class TestExecuteAmendStop(unittest.TestCase):
             )
 
     def test_execute_amend_allowed_under_kill(self) -> None:
-        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)})
+        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)])
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -2012,6 +2018,88 @@ class TestExecuteAmendStop(unittest.TestCase):
         executor(_amend_action(), False, report)  # must NOT raise
         self.assertEqual(broker.amended, [])
         self.assertEqual(report.exits_placed, 0)
+
+    def test_execute_amend_bails_when_resting_order_partially_filled(self) -> None:
+        # Q10 mid-fill TOCTOU: the SPECIFIC resting stop being amended partially
+        # filled between the decision snapshot and the PATCH. Saxo's partial-fill
+        # amend semantics are unproven -> do NOT amend; journal amend_failed + a
+        # throttled alert so the next tick falls to the proven B1 additive primitive.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0, filled=2.0)],  # 2 of 4 already filled
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual(broker.amended, [], "no amend on a partially-filled resting stop (Q10)")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertEqual(
+            [m.get("uic") for m in markers], [_UIC], "amend_failed journaled -> B1 next tick"
+        )
+        self.assertTrue(any("skip" in a.lower() for a in alerts), alerts)
+
+    def test_execute_amend_bails_when_resting_order_gone(self) -> None:
+        # The resting stop vanished (gone/filled) between snapshot and execute — it
+        # is absent from list_working_sell_orders. Same bail: no amend, journal
+        # amend_failed, alert; the residual is covered next tick (never naked).
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("other-stop", "StopIfTraded", 4.0)],  # NOT the amended order_id
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual(broker.amended, [], "no amend on a vanished resting stop (Q10)")
+        self.assertEqual(report.exits_placed, 0)
+        self.assertEqual([m.get("uic") for m in markers], [_UIC], "amend_failed journaled")
+        self.assertTrue(any("skip" in a.lower() for a in alerts), alerts)
+
+    def test_execute_amend_proceeds_when_resting_order_fully_unfilled(self) -> None:
+        # The resting stop is present and untouched (filled_quantity == 0) -> the
+        # amend proceeds unchanged (re-read owned + clamp + PATCH), no amend_failed.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0)],  # present, unfilled
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(target_qty=4.0), False, report)
+                markers = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual(len(broker.amended), 1, "unfilled resting stop -> amend proceeds")
+        self.assertEqual(broker.amended[0][4], 4.0)
+        self.assertEqual(report.exits_placed, 1)
+        self.assertEqual(markers, [], "no amend_failed journaled on a clean amend")
 
 
 def _oco_leg(
@@ -2048,7 +2136,9 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
         # An OCO-leg AmendStop (order_id = OCO child stop, reason 'grow-after-OCO')
         # routes through the UNCHANGED isinstance(AmendStop) dispatch into
         # _execute_amend_stop — the same executor as a standalone amend.
-        broker = _ProtBroker(by_uic={_UIC: _pos(7.0)})
+        broker = _ProtBroker(
+            by_uic={_UIC: _pos(7.0)}, sells=[_oco_leg("oco-stop-1", "StopIfTraded", 5.0)]
+        )
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -2067,7 +2157,9 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
         # owned shrank to 5 between the decision (stale target 9) and execute; the
         # executor re-reads LIVE owned via get_positions_by_uic and clamps the PATCH
         # target to it, never the stale 9 — identical to the standalone path.
-        broker = _ProtBroker(by_uic={_UIC: _pos(5.0)})
+        broker = _ProtBroker(
+            by_uic={_UIC: _pos(5.0)}, sells=[_oco_leg("oco-stop-1", "StopIfTraded", 9.0)]
+        )
         executor = cl._make_protection_executor(
             broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
         )
@@ -2095,6 +2187,7 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
             journal = Path(d) / "standalone_stops.jsonl"
             broker = _ProtBroker(
                 by_uic={_UIC: _pos(7.0)},
+                sells=[_oco_leg("oco-stop-1", "StopIfTraded", 5.0)],
                 amend_error=OrderRejectedError("stale order", error_code="OrderNotWorking"),
             )
             executor = cl._make_protection_executor(
