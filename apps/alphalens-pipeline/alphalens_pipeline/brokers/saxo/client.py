@@ -309,6 +309,75 @@ class SaxoClient:
         except SaxoNotFoundError:
             return None
 
+    # ----- streaming subscriptions (WebSocket reader routes REST through here) -----
+
+    def _create_subscription(
+        self, kind: str, *, context_id: str, reference_id: str, client_key: str
+    ) -> tuple[int, dict[str, Any]]:
+        """POST ``/port/v1/{kind}/subscriptions`` — arm one streaming subscription.
+
+        Body ``{ContextId, ReferenceId, Arguments:{ClientKey}}``; Saxo answers
+        HTTP 201 with the ``{ContextId, Format, InactivityTimeout, ReferenceId,
+        RefreshRate, Snapshot, State}`` envelope (``Snapshot.Data`` = current
+        rows). Routed through :meth:`_send_write` so subscription HTTP inherits
+        the SIM-only rail, Bearer discipline, shared throttle, and
+        ``x-request-id`` — keeping ``test_no_raw_saxo_http`` green. ``Format``
+        is omitted so Saxo defaults to JSON (the parser rejects protobuf).
+        """
+        body = {
+            "ContextId": context_id,
+            "ReferenceId": reference_id,
+            "Arguments": {"ClientKey": client_key},
+        }
+        resp = self._send_write(
+            "POST", f"/port/v1/{kind}/subscriptions", json_body=body, request_id=str(uuid.uuid4())
+        )
+        return resp.status_code, self._safe_json(resp)
+
+    def create_positions_subscription(
+        self, *, context_id: str, reference_id: str, client_key: str
+    ) -> tuple[int, dict[str, Any]]:
+        """POST ``/port/v1/positions/subscriptions`` — the primary fill trigger.
+
+        The snapshot-bearing positions subscription is the sub-second fill
+        signal (a forced market-buy yields an immediate ``pos`` frame). Returns
+        ``(status_code, parsed_envelope)``.
+        """
+        return self._create_subscription(
+            "positions", context_id=context_id, reference_id=reference_id, client_key=client_key
+        )
+
+    def create_orders_subscription(
+        self, *, context_id: str, reference_id: str, client_key: str
+    ) -> tuple[int, dict[str, Any]]:
+        """POST ``/port/v1/orders/subscriptions`` — order-state trigger.
+
+        Complements the positions subscription; returns
+        ``(status_code, parsed_envelope)``.
+        """
+        return self._create_subscription(
+            "orders", context_id=context_id, reference_id=reference_id, client_key=client_key
+        )
+
+    def delete_all_subscriptions(self, context_id: str) -> list[tuple[int, dict[str, Any]]]:
+        """DELETE both ``/port/v1/{positions,orders}/subscriptions/{contextId}``.
+
+        Tears down every subscription bound to the context in one call (Saxo
+        answers HTTP 202 per endpoint). DELETE is idempotent — a missing
+        subscription is not an error — so this is safe to call on close or on a
+        forced ``_resetsubscriptions``. Returns one ``(status_code, parsed)``
+        per endpoint, positions first.
+        """
+        results: list[tuple[int, dict[str, Any]]] = []
+        for kind in ("positions", "orders"):
+            resp = self._send_write(
+                "DELETE",
+                f"/port/v1/{kind}/subscriptions/{context_id}",
+                request_id=str(uuid.uuid4()),
+            )
+            results.append((resp.status_code, self._safe_json(resp)))
+        return results
+
     # ----- audit + closed-positions reads (P3 reconciliation) -----
 
     def get_order_activities(
