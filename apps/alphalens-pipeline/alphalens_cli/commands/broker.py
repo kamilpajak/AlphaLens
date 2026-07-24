@@ -940,7 +940,22 @@ def manage_command(
 
     try:
         deps = build_default_deps()
-        run_daemon(deps, once=once, poll_seconds=poll_seconds)
+        # Dark streaming early-wake: build_default_deps returns wake_event/stream_tick
+        # only when ALPHALENS_BROKER_STREAMING_ENABLED=1 and the reader started; both
+        # None otherwise -> run_daemon is byte-identical to today's poll-only loop.
+        try:
+            run_daemon(
+                deps,
+                once=once,
+                poll_seconds=poll_seconds,
+                wake_event=deps.wake_event,
+                on_tick=deps.stream_tick,
+            )
+        finally:
+            # Stop the streaming reader (DELETE subs + join the thread) so a --once
+            # run or a daemon exit never leaves an orphan subscription/thread.
+            if deps.stream_trigger is not None:
+                deps.stream_trigger.stop()
     except BrokerError as exc:
         raise _fail(f"broker manage failed: {exc}") from exc
     if once:
