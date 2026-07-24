@@ -3168,6 +3168,8 @@ class TestStreamStaleAlert(unittest.TestCase):
         alerts: list[tuple[str, str]] = []
 
         class _Trig:
+            is_streaming = True
+
             def __init__(self, silence: float | None) -> None:
                 self._silence = silence
                 self.pushed: list[str] = []
@@ -3215,6 +3217,8 @@ class TestStreamStaleAlert(unittest.TestCase):
         gauges: list[float] = []
 
         class _Trig:
+            is_streaming = True
+
             def push_token(self, tok: str) -> None:
                 pass
 
@@ -3238,6 +3242,8 @@ class TestStreamStaleAlert(unittest.TestCase):
         alerts: list[tuple[str, str]] = []
 
         class _Trig:
+            is_streaming = True
+
             def __init__(self) -> None:
                 self.pushed: list[str] = []
 
@@ -3274,6 +3280,118 @@ class TestStreamStaleAlert(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_STREAM_STALE_S"}
         with mock.patch.dict(os.environ, env, clear=True):
             self.assertEqual(cl._stream_stale_s(), cl._DEFAULT_STREAM_STALE_S)
+
+
+class TestBlockingOnTickDoesNotExtendGap(unittest.TestCase):
+    """PR #900 adversarial-review MEDIUM: a slow on_tick (a hung Telegram POST in
+    the stale/breaker alert) must be ABSORBED into the poll interval, never added
+    on top of a fresh poll. The absolute deadline is anchored to the moment the
+    protection pass completed (before on_tick), so on_tick's blocking duration only
+    shrinks the remaining wait — it can never push the backstop past poll_seconds
+    (which would be worse than poll-only)."""
+
+    def test_blocking_on_tick_absorbed_into_poll_not_added_on_top(self) -> None:
+        clock = _Clock()
+        run_at: list[float] = []
+        deps = _daemon_deps(run_at, clock)
+
+        def _blocking_tick() -> None:
+            clock.now += 30.0  # a ~30s synchronous alert POST on the main thread
+
+        event = _ScriptedWait(clock, [("timeout",), ("timeout",), ("timeout",)])
+        cl.run_daemon(
+            deps,
+            once=False,
+            poll_seconds=45.0,
+            is_running=_stop_after(3),
+            heartbeat_fn=lambda: None,
+            on_tick=_blocking_tick,
+            wake_event=event,  # type: ignore[arg-type]
+            monotonic=clock,
+        )
+        # Passes stay on the 45s grid; the 30s block shrinks each wait to 15s
+        # instead of scheduling a fresh 45s AFTER the block (which would put the
+        # 3rd pass at 1120, a 75s gap).
+        # Exact 45s grid (each gap 45s) — NOT [1000, 1045, 1120] (a 75s 3rd gap).
+        self.assertEqual(run_at, [1000.0, 1045.0, 1090.0])
+        self.assertEqual(event.timeouts, [15.0, 15.0, 15.0])
+
+
+class TestStreamBreakerAlert(unittest.TestCase):
+    """zen MEDIUM: when the circuit breaker trips permanently (is_streaming False),
+    the operator must be paged on the MAIN thread — even if the stream never
+    delivered a single message (seconds_since_last_message stays None, so the
+    'stream-dead' silence alert would never fire)."""
+
+    def _trig(self, *, is_streaming: bool, silence: float | None):
+        class _Trig:
+            def __init__(self) -> None:
+                self.pushed: list[str] = []
+                self.is_streaming = is_streaming
+
+            def push_token(self, tok: str) -> None:
+                self.pushed.append(tok)
+
+            def seconds_since_last_message(self) -> float | None:
+                return silence
+
+        return _Trig()
+
+    def test_breaker_tripped_pages_even_with_no_message(self) -> None:
+        alerts: list[tuple[str, str]] = []
+        trig = self._trig(is_streaming=False, silence=None)
+        tick = cl._make_stream_tick(
+            trig,
+            get_bearer=lambda: "B",
+            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
+            stale_s=45.0,
+            emit_gauge=lambda v: None,
+        )
+        tick()
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0][1], "stream-breaker")
+
+    def test_live_stream_does_not_page_breaker(self) -> None:
+        alerts: list[tuple[str, str]] = []
+        trig = self._trig(is_streaming=True, silence=5.0)
+        tick = cl._make_stream_tick(
+            trig,
+            get_bearer=lambda: "B",
+            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
+            stale_s=45.0,
+            emit_gauge=lambda v: None,
+        )
+        tick()
+        self.assertEqual([r for _, r in alerts], [])
+
+
+class TestStreamingSubscriberIsolation(unittest.TestCase):
+    """zen HIGH: the streaming subscriber must NOT share the process-wide
+    SaxoClient singleton's requests.Session (requests.Session is not thread-safe;
+    concurrent subscription-REST on the stream thread + get_positions on the main
+    thread could corrupt the pool and skip a protection pass). It gets its OWN
+    session while sharing the thread-safe OAuth provider for token consistency."""
+
+    def _provider(self):
+        class _StubProvider:
+            def get_access_token(self) -> str:
+                return "TOK"
+
+            def invalidate(self) -> None:
+                pass
+
+        return _StubProvider()
+
+    def test_subscriber_has_own_session_and_shared_provider(self) -> None:
+        from alphalens_pipeline.brokers.saxo.client import SaxoClient
+
+        provider = self._provider()
+        sub = cl._build_streaming_subscriber(provider)
+        self.assertIsInstance(sub, SaxoClient)
+        self.assertIs(sub._token_provider, provider)
+        # A fresh session per construction -> never the shared singleton's session.
+        other = cl._build_streaming_subscriber(provider)
+        self.assertIsNot(sub._session, other._session)
 
 
 class TestStreamingEnabledGate(unittest.TestCase):

@@ -452,6 +452,9 @@ def run_daemon(
     ONLY on a timeout-driven pass (``now >= deadline``), NEVER on an early wake, so
     any number of stale early wakes cannot push the guaranteed backstop pass past
     ``poll_seconds`` from the last full-cadence pass (adversary-2 timer-reset fix).
+    The advance uses ``pass_end`` (the clock read right after ``run_once``, BEFORE
+    ``on_tick``) so a slow ``on_tick`` is absorbed into the wait, never added on top
+    of a fresh poll (PR #900 review).
     A woken pass calls the SAME ``run_once`` — kill/records/view all recomputed —
     so it is behaviourally identical to a poll pass at that instant. The single
     guarantee holds: a stream that never fires the Event degrades to EXACTLY the
@@ -473,19 +476,27 @@ def run_daemon(
     deadline = monotonic() + poll_seconds if wake_event is not None else 0.0
     while is_running():
         run_once(deps, sweep_orphans=first)
+        # Anchor the backstop to the moment protection COMPLETED (before on_tick),
+        # NOT to a clock read taken after on_tick. A slow on_tick (a hung Telegram
+        # POST inside the stale/breaker alert can block ~tens of seconds) must only
+        # SHRINK the remaining wait below — never inflate ``now`` so the timeout
+        # branch schedules a fresh full poll ON TOP of the block, which would push
+        # the next pass past poll_seconds (worse than poll-only). PR #900 review.
+        pass_end = monotonic() if wake_event is not None else 0.0
         heartbeat_fn()  # Task 13: writes the Prometheus heartbeat gauge
         if on_tick is not None:
-            on_tick()  # push_token + stream-stale alert + liveness gauge (main thread)
+            on_tick()  # push_token + stream stale/breaker alert + liveness gauge (main thread)
         first = False
         if once:
             return
         if wake_event is None:
             sleep_fn(poll_seconds)  # legacy/disabled path — byte-identical to today
             continue
-        now = monotonic()
-        if now >= deadline:  # a TIMEOUT pass just ran -> schedule the next grid point
-            deadline = now + poll_seconds
-        wake_event.wait(max(0.0, deadline - now))  # early wakes shrink this; deadline held
+        if pass_end >= deadline:  # a TIMEOUT pass just ran -> schedule the next grid point
+            deadline = pass_end + poll_seconds
+        # Remaining wait to the grid point, read fresh so any on_tick block already
+        # elapsed is absorbed here (never added on top). Early wakes shrink it too.
+        wake_event.wait(max(0.0, deadline - monotonic()))
         wake_event.clear()
 
 
@@ -538,7 +549,11 @@ def _make_stream_tick(
 ) -> Callable[[], None]:
     """Build the per-tick streaming hook run by ``run_daemon`` on the MAIN thread.
 
-    Each tick it (1) pushes the current bearer into the reader so a mid-stream
+    If the reader's circuit breaker has tripped (``trigger.is_streaming`` False) it
+    pages a THROTTLED ``stream-breaker`` alert and returns — the daemon is on the
+    poll backstop, and this is the only place a permanent trip surfaces to the
+    operator on a thread where the alert sink is safe. Otherwise each tick it
+    (1) pushes the current bearer into the reader so a mid-stream
     token rotation is re-authorized in place (never pulled by the reader — it
     can never stall on the token flock), and (2) reads the reader's
     ``seconds_since_last_message`` for the liveness gauge + a THROTTLED
@@ -548,6 +563,18 @@ def _make_stream_tick(
     poll-only silently rather than crashing the protective loop."""
 
     def _tick() -> None:
+        if not trigger.is_streaming:
+            # The circuit breaker tripped PERMANENTLY -> the reader thread is dead and
+            # the daemon is on the poll backstop. Page once (throttled) on the MAIN
+            # thread — the breaker's own alert runs on the reader thread where the
+            # _AlertThrottle/Telegram sink is not thread-safe, and the 'stream-dead'
+            # silence alert never fires when the stream never delivered a message
+            # (seconds_since_last_message stays None). zen MEDIUM, PR #900.
+            alert_throttled(
+                "saxo stream circuit breaker tripped — running on poll backstop",
+                "stream-breaker",
+            )
+            return
         try:
             bearer = get_bearer()
         except Exception:  # a token/chain error must never crash the protective loop
@@ -674,6 +701,24 @@ def build_default_deps() -> LoopDeps:
     )
 
 
+def _build_streaming_subscriber(provider: Any) -> Any:
+    """The subscription-REST client for the streaming reader thread.
+
+    A DEDICATED SaxoClient with its OWN ``requests.Session`` — never the shared
+    ``get_default_saxo_client()`` singleton. ``requests.Session`` is not
+    thread-safe, so sharing it between the reader thread (subscription POST/DELETE
+    on connect / reconnect) and the main protective thread (``get_positions`` /
+    ``place_standalone_stop``) could corrupt the urllib3 connection pool and skip a
+    protection pass — leaving a position naked longer than ``poll_seconds`` (worse
+    than poll-only). The thread-safe OAuth ``provider`` IS shared so both clients
+    see the same rotated bearer; only the HTTP session is isolated. Streaming REST
+    is bounded by the reader's circuit breaker, so an independent throttle budget is
+    acceptable (zen HIGH, PR #900)."""
+    from alphalens_pipeline.brokers.saxo.client import SaxoClient
+
+    return SaxoClient(provider)
+
+
 def _build_stream_handles(
     broker: Broker,
     provider: Any,
@@ -698,7 +743,6 @@ def _build_stream_handles(
 
     from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
     from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
-    from alphalens_pipeline.brokers.saxo.client import get_default_saxo_client
     from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
 
     if not isinstance(broker, SaxoBroker):
@@ -718,7 +762,9 @@ def _build_stream_handles(
     try:
         trigger = StreamTrigger(
             token_provider=provider,
-            subscriber=get_default_saxo_client(),  # the shared throttle-coordinated singleton
+            subscriber=_build_streaming_subscriber(
+                provider
+            ),  # dedicated session, never the singleton
             context_id=context_id,
             client_stale_after_s=stale_s,
         )
