@@ -826,6 +826,32 @@ def _make_next_amend_seq(uic: int) -> Callable[[], int]:
     return _next_seq
 
 
+def _coerce(line: Mapping[str, Any], key: str, caster: Callable[[Any], Any]) -> Any:
+    """Cast ``line[key]`` via ``caster``, or return None if the key is missing or
+    the value is uncastable — the "skip this malformed field" primitive for the
+    journal compactor."""
+    try:
+        return caster(line[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _keep_latest_marker(
+    dest: dict[int, tuple[float, dict[str, Any]]],
+    uic: Any,
+    sort_key: Any,
+    line: Mapping[str, Any],
+) -> None:
+    """Record ``line`` as ``dest[uic] = (sort_key, dict(line))`` keeping the MAX
+    ``sort_key`` per uic (a later line breaks a tie via ``>=``). No-op when ``uic``
+    or ``sort_key`` is None (a malformed line contributes nothing)."""
+    if uic is None or sort_key is None:
+        return
+    prev = dest.get(uic)
+    if prev is None or sort_key >= prev[0]:
+        dest[uic] = (sort_key, dict(line))
+
+
 def _compact_standalone_stop_journal_lines(
     lines: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -864,34 +890,22 @@ def _compact_standalone_stop_journal_lines(
         "oco_placed": {},
         "amend_failed": {},
     }
-    amend_seq: dict[int, tuple[int, dict[str, Any]]] = {}
+    amend_seq: dict[int, tuple[float, dict[str, Any]]] = {}
 
     for line in materialized:
         kind = line.get("kind")
         if kind == "oco_unsupported":
-            try:
-                uic = int(line["uic"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            oco_unsupported.setdefault(uic, dict(line))
+            uic = _coerce(line, "uic", int)
+            if uic is not None:
+                oco_unsupported.setdefault(uic, dict(line))
         elif kind in ttl_latest:
-            try:
-                uic = int(line["uic"])
-                ts = float(line["ts"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            prev = ttl_latest[kind].get(uic)
-            if prev is None or ts >= prev[0]:
-                ttl_latest[kind][uic] = (ts, dict(line))
+            _keep_latest_marker(
+                ttl_latest[kind], _coerce(line, "uic", int), _coerce(line, "ts", float), line
+            )
         elif kind == "amend_seq":
-            try:
-                uic = int(line["uic"])
-                seq = int(line["seq"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            prev = amend_seq.get(uic)
-            if prev is None or seq >= prev[0]:
-                amend_seq[uic] = (seq, dict(line))
+            _keep_latest_marker(
+                amend_seq, _coerce(line, "uic", int), _coerce(line, "seq", int), line
+            )
 
     compacted: list[dict[str, Any]] = list(planned)
     compacted.extend(oco_unsupported[uic] for uic in sorted(oco_unsupported))
@@ -1389,6 +1403,21 @@ class _AlertThrottle:
         self._escalated.discard(uic)
 
 
+def _emit_alert(
+    throttle: _AlertThrottle,
+    report: TickReport,
+    message: str,
+    *,
+    uic: int | None = None,
+    reason: str | None = None,
+) -> None:
+    """Emit a throttled protection alert and count it in ``report`` iff it was
+    actually sent (a dedup-suppressed repeat is not counted). Folds the ubiquitous
+    ``if throttle.emit(...): report.alerts += 1`` idiom into one call."""
+    if throttle.emit(message, uic=uic, reason=reason):
+        report.alerts += 1
+
+
 # Message tokens that mean "the order is already gone" — an idempotent cancel of
 # an already-cancelled / cascade-removed sibling must be a success, not a raise
 # (saxo-oco memo §5). Cancel carries no structured code, so classify on the
@@ -1564,12 +1593,13 @@ def _execute_upgrade_to_oco(
         if live.quantity + _QTY_EPS < qty:
             qty = max(live.quantity, 0.0)
     if qty <= _QTY_EPS:
-        if throttle.emit(
+        _emit_alert(
+            throttle,
+            report,
             f"uic {action.uic}: position gone before OCO placement — skipped",
             uic=action.uic,
             reason="flat-skip",
-        ):
-            report.alerts += 1
+        )
         return
 
     request_id = _exit_oco_ref(action.entry_crid, action.gen)
@@ -1590,48 +1620,52 @@ def _execute_upgrade_to_oco(
         # too) NOR a clean structural reject (do NOT mark oco_unsupported — a
         # transient env gate is not an instrument incapability). Throttled alert;
         # reconcile against live broker state next tick (the gate self-clears).
-        if throttle.emit(
+        _emit_alert(
+            throttle,
+            report,
             f"uic {action.uic}: order placement disabled — OCO not sent ({exc})",
             uic=action.uic,
             reason="orders-disabled",
-        ):
-            report.alerts += 1
+        )
         return
     except OrderRejectedError as exc:
         if _is_sell_orders_already_exist(exc):
             # BENIGN: an OCO already rests from a prior tick's landed write that
             # live list-orders had not yet surfaced. NO fallback (a stop atop the
             # resting OCO pair = 2x owned), NO degrade, NO marker — just defer.
-            if throttle.emit(
+            _emit_alert(
+                throttle,
+                report,
                 f"uic {action.uic}: OCO already rests (sell-commit held) — deferring",
                 uic=action.uic,
                 reason="oco-already",
-            ):
-                report.alerts += 1
+            )
             return
         # CLEAN structural reject (provably NOT landed): cover the naked fill NOW
         # with a plain stop, and degrade the uic so B0 is not re-attempted on it.
         _mark_oco_unsupported(action.uic)
         _execute_place_fallback_stop(broker, throttle, action, report)
-        if throttle.emit(
+        _emit_alert(
+            throttle,
+            report,
             f"uic {action.uic}: OCO rejected ({exc}); placed fallback stop, degraded stop-only",
             uic=action.uic,
             reason="oco-degrade",
-        ):
-            report.alerts += 1
+        )
         return
     except BrokerError as exc:
         # AMBIGUOUS/maybe-sent: the OCO MAY have landed. NO inline fallback (would
         # double-commit if it did), NO oco_placed marker (so next tick re-evaluates
         # against live broker state). Escalate loudly; the residual naked window is
         # bounded to <=1 poll interval and self-heals on reconcile.
-        if throttle.emit(
+        _emit_alert(
+            throttle,
+            report,
             f"CRITICAL uic {action.uic}: OCO placement ambiguous ({exc}) — "
             "no fallback, reconciling next tick",
             uic=action.uic,
             reason="oco-ambiguous",
-        ):
-            report.alerts += 1
+        )
         return
 
     # SUCCESS: a resting OCO pair now covers the position. Journal the marker so a
@@ -1671,12 +1705,13 @@ def _execute_amend_stop(
     if get_by_uic is not None:
         target = max(get_by_uic(action.uic).quantity, 0.0)
     if target <= _QTY_EPS:
-        if throttle.emit(
+        _emit_alert(
+            throttle,
+            report,
             f"uic {action.uic}: position gone before amend — skipped",
             uic=action.uic,
             reason="flat-skip",
-        ):
-            report.alerts += 1
+        )
         return
 
     # Execute-time OCO-leg / standalone fill re-check (Q10 mid-fill TOCTOU): the
@@ -1694,13 +1729,14 @@ def _execute_amend_stop(
         resting = next((o for o in list_sells() if str(o.order_id) == str(action.order_id)), None)
         if resting is None or resting.filled_quantity > _QTY_EPS:
             _journal_amend_failed(action.uic)
-            if throttle.emit(
+            _emit_alert(
+                throttle,
+                report,
                 f"uic {action.uic}: stop {action.order_id} gone/partially-filled "
                 "before amend — skipped, residual covered next tick",
                 uic=action.uic,
                 reason="amend-skip-filled",
-            ):
-                report.alerts += 1
+            )
             return
 
     try:
@@ -1718,12 +1754,13 @@ def _execute_amend_stop(
         # Do NOT journal amend_failed (it would needlessly skip amend next tick) and
         # do NOT escalate as a place-failure — a throttled alert; the env gate
         # self-clears and the amend retries next tick.
-        if throttle.emit(
+        _emit_alert(
+            throttle,
+            report,
             f"uic {action.uic}: order placement disabled — amend not sent ({exc})",
             uic=action.uic,
             reason="orders-disabled",
-        ):
-            report.alerts += 1
+        )
         return
     except BrokerError as exc:
         # ANY OTHER failure (clean reject, ambiguous 5xx/network): journal

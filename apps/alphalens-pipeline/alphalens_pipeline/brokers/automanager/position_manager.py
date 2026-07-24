@@ -569,255 +569,10 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     # the terminal rung-2 state, never a 2*owned over-hedge (saxo-oco memo, Stage 2).
     total = _sell_commitment(legs)
 
-    # (A) OVER-HEDGE: an exit leg partially filled (netted owned shrank) or the
-    #     position shrank -> total sell > owned. Place a residual-sized stop FIRST
-    #     (never a naked repair window). The old STOP legs leave EXCLUSIVELY via
-    #     PlaceStop.supersede_ids — i.e. ONLY after the residual place succeeds — so
-    #     a deferred place (Saxo SellOrdersAlreadyExist) leaves the old over-sized
-    #     stop resting = over-covered, NEVER naked (the Bug-A cardinal sin). The
-    #     separate, unconditional CancelSellLegs names ONLY the NON-stop legs
-    #     (TP / Market noise); when there are none (Stage-1 stop-only) it is not
-    #     emitted at all. Stops must never sit in an unconditional cancel.
     if total > owned + _QTY_EPS:
-        # (DOWNSIZE amend, Stage 3): a SINGLE clean standalone stop over-covers
-        # (owned shrank) -> PATCH amend it DOWN to live owned in place (the #884
-        # gap), no cancel, no naked window. Absolute-target (Amount = owned) so a
-        # cross-tick re-emit is idempotent. Only when amend is enabled and the uic
-        # is not degraded (oco_unsupported / amend_recently_failed); a multi-stop
-        # or OCO-leg over-hedge keeps the unchanged place-residual-first arm below
-        # (over-covered, never naked — Q9 residual).
-        sole = _sole_standalone_stop(legs)
-        if (
-            _amend_enabled()
-            and sole is not None
-            and uic not in view.oco_unsupported
-            and uic not in view.amend_recently_failed
-            and _leg_amount(sole) > owned + _QTY_EPS
-        ):
-            return [
-                AmendStop(
-                    uic,
-                    _SIDE,
-                    sole.order_id,
-                    sole.order_type or "",
-                    owned,
-                    plan.stop_price,
-                    _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
-                    reason="over-hedge downsize — PATCH amend in place",
-                )
-            ]
-        # (OCO DOWNSIZE amend, Stage 3.5): a CLEAN unfilled resting OCO pair
-        # over-covers (owned shrank) -> PATCH the OCO stop leg DOWN to live owned in
-        # place; Q9 propagates symmetrically to the Limit sibling so the pair still
-        # commits owned ONCE — no cancel, no naked window. Absolute-target so a
-        # cross-tick re-emit is idempotent. Same guards as the standalone downsize;
-        # gated on _amend_enabled() ONLY (a resting OCO exists because OCO was
-        # enabled at B0-placement, and resizing it in place is strictly safer than
-        # a fallback teardown even if OCO was since disabled).
-        oco_stop = _oco_stop_leg(legs)
-        if (
-            _amend_enabled()
-            and oco_stop is not None
-            and uic not in view.oco_unsupported
-            and uic not in view.amend_recently_failed
-            and _leg_amount(oco_stop) > owned + _QTY_EPS
-        ):
-            return [
-                AmendStop(
-                    uic,
-                    _SIDE,
-                    oco_stop.order_id,
-                    oco_stop.order_type or "StopIfTraded",
-                    owned,
-                    plan.stop_price,
-                    _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
-                    reason="OCO downsize — PATCH OCO stop leg down in place",
-                )
-            ]
-        # (M1) OCO NoOp guard: reaching here with a clean unfilled OCO pair
-        # (oco_stop is not None) yet commitment > owned is one of two SAFE states,
-        # both NoOp'd one tick rather than torn down:
-        #   (a) PROPAGATION LAG — the downsize amend already resized the stop to
-        #       <= owned last tick, but list-orders lags Q9's symmetric propagation
-        #       so the TP leg still shows the OLD larger Amount. NoOp until the TP
-        #       read catches up (then total == owned -> arm C NoOp).
-        #   (b) AMEND SKIPPED — the downsize amend above was skipped because the uic
-        #       is in amend_recently_failed (or oco_unsupported), so the stop leg may
-        #       still be > owned (a genuine over-hedge, not merely a lag). NoOp is
-        #       the deliberate hold: the OCO stop keeps covering the downside (excess
-        #       sell NotOwned-capped, cash account cannot short), the TTL self-clears,
-        #       and the next tick's downsize amend resizes to owned. Place-residual-
-        #       first here would POST a doomed 3rd sell (SellOrdersAlreadyExist while
-        #       the OCO rests) -> alert spam, ending equally over-covered.
-        # Either way the downside is fully covered and the pair is never torn down.
-        # Gated on _amend_enabled() so arm A stays byte-identical when the flag off.
-        # The NoOp carries uic + reason so the control loop can count consecutive
-        # holds and page once if a lag genuinely stalls (issue #5); the executor
-        # still treats it as nothing.
-        if _amend_enabled() and oco_stop is not None:
-            return [NoOp(uic=uic, reason=_OCO_LAG_HOLD_REASON)]
-        bad = _group_with_partial_fill(legs) or _newest_group(legs)
-        gen = plan.next_gen(owned)
-        stop_ids = set(bad.stop_leg_ids)
-        # NEVER name a live OCO leg in an unconditional cancel: cancelling one OCO
-        # leg cascade-cancels its sibling, and the replacement PlaceStop can be
-        # rejected (SellOrdersAlreadyExist) while the OCO still commits owned -> a
-        # naked window. An OCO leg leaves only via supersede-after-a-successful
-        # place (its stop leg is in supersede_ids); its TP leg is simply left in
-        # place (Q3a caps oversell, the OCO stop keeps covering the downside).
-        oco_ids = {leg.order_id for leg in legs if _is_oco_leg(leg)}
-        non_stop_ids = tuple(
-            oid for oid in bad.order_ids if oid not in stop_ids and oid not in oco_ids
-        )
-        actions: list[Action] = [
-            PlaceStop(
-                uic,
-                _SIDE,
-                owned,
-                plan.stop_price,
-                _exit_stop_ref(plan.entry_crid, gen),
-                supersede_ids=bad.stop_leg_ids,  # keep old stop until the residual is confirmed
-            )
-        ]
-        if non_stop_ids:
-            actions.append(
-                CancelSellLegs(uic, non_stop_ids, reason="over-hedge repair — non-stop legs")
-            )
-        return actions
-
-    # (B) DOWNSIDE DEFICIT: naked, grew past the covering stop, a lone-TP Bug-B
-    #     shape, or a stale/partial stop. A lone TP is always cancelled BEFORE the
-    #     place (it holds the conflicting sell commitment — Bug B).
+        return _reconcile_over_hedge(uic, owned, plan, legs, view)
     if stop_qty + _QTY_EPS < owned:
-        # (B0) OCO-DIRECT-ON-FILL (Stage 3): a TRULY NAKED fresh fill (no resting
-        #      legs) with OCO wanted goes STRAIGHT to a resting OCO pair via
-        #      UpgradeToOco(supersede_ids=()) — never a stop-only rung 1 first (the
-        #      system reaches OCO only at the fresh-fill moment; rung-1 stops are
-        #      never upgraded, see arm C). Suppressed while a just-placed OCO rests
-        #      but list-orders lags (oco_recently_placed) so a 2nd B0 can never
-        #      double-commit (H1b/A1). Fires ONLY on `not legs`, so total after
-        #      placement == owned once, never 2x.
-        if (
-            _oco_enabled()
-            and plan.tp_price is not None
-            and uic not in view.oco_unsupported
-            and not legs
-        ):
-            if uic in view.oco_recently_placed:
-                # A just-placed OCO pair rests but list-orders lags (the view
-                # shows no legs). Placing ANY stop now would commit a second
-                # owned SELL atop the invisible resting OCO pair -> 2x owned,
-                # the exact double-commit the marker exists to prevent (H1b/A1).
-                # NoOp — the OCO stop leg already covers the downside; next tick
-                # the pair becomes visible (arm C -> NoOp) or the TTL expires and
-                # B0 re-evaluates against live broker state.
-                return [NoOp()]
-            return [
-                UpgradeToOco(
-                    uic,
-                    _SIDE,
-                    owned,
-                    plan.stop_price,
-                    plan.tp_price,
-                    plan.entry_crid,
-                    plan.next_gen(owned),
-                    supersede_ids=(),
-                )
-            ]
-        # (GROW amend, Stage 3): a SINGLE clean standalone stop under-covers (owned
-        #      grew) -> PATCH amend it UP to live owned in place (absolute-target,
-        #      no naked window). Falls through to the B1 additive-delta stop below
-        #      when amend is off, >1 stop rests (B1-grown multi-tier), a TP leg is
-        #      present, the stop partially filled, or the uic recently failed an
-        #      amend — B1 is the always-correct fallback that covers the delta with
-        #      a second stop.
-        sole = _sole_standalone_stop(legs)
-        if (
-            _amend_enabled()
-            and sole is not None
-            and uic not in view.oco_unsupported
-            and uic not in view.amend_recently_failed
-            and _leg_amount(sole) + _QTY_EPS < owned
-        ):
-            return [
-                AmendStop(
-                    uic,
-                    _SIDE,
-                    sole.order_id,
-                    sole.order_type or "",
-                    owned,
-                    plan.stop_price,
-                    _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
-                    reason="grow — PATCH amend stop up in place",
-                )
-            ]
-        # (GROW-after-OCO amend, Stage 3.5): a CLEAN unfilled resting OCO pair
-        #      under-covers (owned grew) -> PATCH the OCO stop leg UP to live owned
-        #      in place; Q9 propagates symmetrically to the Limit sibling so both
-        #      legs resize and the pair commits owned ONCE, no naked window.
-        #      Absolute-target. B0 is skipped for a resting OCO (`not legs` False)
-        #      and the standalone grow amend returns None (a TP leg is present), so
-        #      this is the first arm that can fire. Falls through to B1 additive
-        #      below when amend is off / the uic is degraded (oco_unsupported /
-        #      amend_recently_failed) — the always-correct fallback covers the delta.
-        oco_stop = _oco_stop_leg(legs)
-        if (
-            _amend_enabled()
-            and oco_stop is not None
-            and uic not in view.oco_unsupported
-            and uic not in view.amend_recently_failed
-            and _leg_amount(oco_stop) + _QTY_EPS < owned
-        ):
-            return [
-                AmendStop(
-                    uic,
-                    _SIDE,
-                    oco_stop.order_id,
-                    oco_stop.order_type or "StopIfTraded",
-                    owned,
-                    plan.stop_price,
-                    _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
-                    reason="grow-after-OCO — PATCH OCO stop leg up in place",
-                )
-            ]
-        # (B1) ADDITIVE-ON-GROWTH (Q5 confirmed live): a covering stop already
-        #      holds stop_qty and the position simply GREW (another tier filled).
-        #      Place a stop for the DELTA only, KEEPING the existing stop — no
-        #      supersede, no naked window, and the sell side sums to exactly owned.
-        #      Skipped when Q5 is off or the uic opted out of broker multi-order
-        #      features (oco_unsupported), which fall through to cancel-replace.
-        #      Edge: ``next_gen`` keys the ref on qty, so two grow steps of the SAME
-        #      delta within Saxo's 15 s request-id dedup window share a ref and the
-        #      2nd is deduped away — that slice is under-covered for < 15 s and
-        #      self-heals on the next tick once the window passes (the disaster stop
-        #      is deep OTM, so the transient gap is immaterial).
-        if ADDITIVE_STOPS_CONFIRMED and stop_qty > _QTY_EPS and uic not in view.oco_unsupported:
-            deficit = owned - stop_qty
-            return [
-                PlaceStop(
-                    uic,
-                    _SIDE,
-                    deficit,
-                    plan.stop_price,
-                    _exit_stop_ref(plan.entry_crid, plan.next_gen(deficit)),
-                    cancel_conflicting=_tp_only_leg_ids(legs),  # lone TP -> cancel BEFORE (Bug B)
-                )
-            ]
-        # (B2) CANCEL-REPLACE (naked, Q5 off, or oco_unsupported): place the full
-        #      owned stop FIRST, supersede any stale stop AFTER (no naked window on
-        #      the already-covered shares).
-        return [
-            PlaceStop(
-                uic,
-                _SIDE,
-                owned,
-                plan.stop_price,
-                _exit_stop_ref(plan.entry_crid, plan.next_gen(owned)),
-                supersede_ids=_stop_leg_ids(legs),  # stale stop -> cancel AFTER
-                cancel_conflicting=_tp_only_leg_ids(legs),  # lone TP -> cancel BEFORE (Bug B)
-            )
-        ]
-
+        return _reconcile_deficit(uic, owned, stop_qty, plan, legs, view)
     # (C) DOWNSIDE COVERED. A resting exit already covers the position.
     if tp_qty + _QTY_EPS >= owned:
         # A full TP + a covering stop == a healthy resting OCO pair (from B0): the
@@ -831,6 +586,270 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     # covering OCO stop leg without a full TP) therefore stays stop-only for its whole
     # life; the system converges to full OCO coverage purely by turnover.
     return [NoOp()]
+
+
+def _reconcile_over_hedge(
+    uic: int, owned: float, plan: PlannedExit, legs: tuple[OrderState, ...], view: ProtectionView
+) -> list[Action]:
+    """(A) OVER-HEDGE arm of ``_reconcile_long``: the sell commitment exceeds netted
+    owned (an exit partially filled or the position shrank). Places a residual-sized
+    stop FIRST (never a naked repair window) — see the inline notes."""
+    # (A) OVER-HEDGE: an exit leg partially filled (netted owned shrank) or the
+    #     position shrank -> total sell > owned. Place a residual-sized stop FIRST
+    #     (never a naked repair window). The old STOP legs leave EXCLUSIVELY via
+    #     PlaceStop.supersede_ids — i.e. ONLY after the residual place succeeds — so
+    #     a deferred place (Saxo SellOrdersAlreadyExist) leaves the old over-sized
+    #     stop resting = over-covered, NEVER naked (the Bug-A cardinal sin). The
+    #     separate, unconditional CancelSellLegs names ONLY the NON-stop legs
+    #     (TP / Market noise); when there are none (Stage-1 stop-only) it is not
+    #     emitted at all. Stops must never sit in an unconditional cancel.
+    # (DOWNSIZE amend, Stage 3): a SINGLE clean standalone stop over-covers
+    # (owned shrank) -> PATCH amend it DOWN to live owned in place (the #884
+    # gap), no cancel, no naked window. Absolute-target (Amount = owned) so a
+    # cross-tick re-emit is idempotent. Only when amend is enabled and the uic
+    # is not degraded (oco_unsupported / amend_recently_failed); a multi-stop
+    # or OCO-leg over-hedge keeps the unchanged place-residual-first arm below
+    # (over-covered, never naked — Q9 residual).
+    sole = _sole_standalone_stop(legs)
+    if (
+        _amend_enabled()
+        and sole is not None
+        and uic not in view.oco_unsupported
+        and uic not in view.amend_recently_failed
+        and _leg_amount(sole) > owned + _QTY_EPS
+    ):
+        return [
+            AmendStop(
+                uic,
+                _SIDE,
+                sole.order_id,
+                sole.order_type or "",
+                owned,
+                plan.stop_price,
+                _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+                reason="over-hedge downsize — PATCH amend in place",
+            )
+        ]
+    # (OCO DOWNSIZE amend, Stage 3.5): a CLEAN unfilled resting OCO pair
+    # over-covers (owned shrank) -> PATCH the OCO stop leg DOWN to live owned in
+    # place; Q9 propagates symmetrically to the Limit sibling so the pair still
+    # commits owned ONCE — no cancel, no naked window. Absolute-target so a
+    # cross-tick re-emit is idempotent. Same guards as the standalone downsize;
+    # gated on _amend_enabled() ONLY (a resting OCO exists because OCO was
+    # enabled at B0-placement, and resizing it in place is strictly safer than
+    # a fallback teardown even if OCO was since disabled).
+    oco_stop = _oco_stop_leg(legs)
+    if (
+        _amend_enabled()
+        and oco_stop is not None
+        and uic not in view.oco_unsupported
+        and uic not in view.amend_recently_failed
+        and _leg_amount(oco_stop) > owned + _QTY_EPS
+    ):
+        return [
+            AmendStop(
+                uic,
+                _SIDE,
+                oco_stop.order_id,
+                oco_stop.order_type or "StopIfTraded",
+                owned,
+                plan.stop_price,
+                _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+                reason="OCO downsize — PATCH OCO stop leg down in place",
+            )
+        ]
+    # (M1) OCO NoOp guard: reaching here with a clean unfilled OCO pair
+    # (oco_stop is not None) yet commitment > owned is one of two SAFE states,
+    # both NoOp'd one tick rather than torn down:
+    #   (a) PROPAGATION LAG — the downsize amend already resized the stop to
+    #       <= owned last tick, but list-orders lags Q9's symmetric propagation
+    #       so the TP leg still shows the OLD larger Amount. NoOp until the TP
+    #       read catches up (then total == owned -> arm C NoOp).
+    #   (b) AMEND SKIPPED — the downsize amend above was skipped because the uic
+    #       is in amend_recently_failed (or oco_unsupported), so the stop leg may
+    #       still be > owned (a genuine over-hedge, not merely a lag). NoOp is
+    #       the deliberate hold: the OCO stop keeps covering the downside (excess
+    #       sell NotOwned-capped, cash account cannot short), the TTL self-clears,
+    #       and the next tick's downsize amend resizes to owned. Place-residual-
+    #       first here would POST a doomed 3rd sell (SellOrdersAlreadyExist while
+    #       the OCO rests) -> alert spam, ending equally over-covered.
+    # Either way the downside is fully covered and the pair is never torn down.
+    # Gated on _amend_enabled() so arm A stays byte-identical when the flag off.
+    # The NoOp carries uic + reason so the control loop can count consecutive
+    # holds and page once if a lag genuinely stalls (issue #5); the executor
+    # still treats it as nothing.
+    if _amend_enabled() and oco_stop is not None:
+        return [NoOp(uic=uic, reason=_OCO_LAG_HOLD_REASON)]
+    bad = _group_with_partial_fill(legs) or _newest_group(legs)
+    gen = plan.next_gen(owned)
+    stop_ids = set(bad.stop_leg_ids)
+    # NEVER name a live OCO leg in an unconditional cancel: cancelling one OCO
+    # leg cascade-cancels its sibling, and the replacement PlaceStop can be
+    # rejected (SellOrdersAlreadyExist) while the OCO still commits owned -> a
+    # naked window. An OCO leg leaves only via supersede-after-a-successful
+    # place (its stop leg is in supersede_ids); its TP leg is simply left in
+    # place (Q3a caps oversell, the OCO stop keeps covering the downside).
+    oco_ids = {leg.order_id for leg in legs if _is_oco_leg(leg)}
+    non_stop_ids = tuple(oid for oid in bad.order_ids if oid not in stop_ids and oid not in oco_ids)
+    actions: list[Action] = [
+        PlaceStop(
+            uic,
+            _SIDE,
+            owned,
+            plan.stop_price,
+            _exit_stop_ref(plan.entry_crid, gen),
+            supersede_ids=bad.stop_leg_ids,  # keep old stop until the residual is confirmed
+        )
+    ]
+    if non_stop_ids:
+        actions.append(
+            CancelSellLegs(uic, non_stop_ids, reason="over-hedge repair — non-stop legs")
+        )
+    return actions
+
+
+def _reconcile_deficit(
+    uic: int,
+    owned: float,
+    stop_qty: float,
+    plan: PlannedExit,
+    legs: tuple[OrderState, ...],
+    view: ProtectionView,
+) -> list[Action]:
+    """(B) DOWNSIDE-DEFICIT arm of ``_reconcile_long``: the resting stop qty is below
+    netted owned (naked, grew past the covering stop, a lone-TP Bug-B shape, or a
+    stale/partial stop). Covers the deficit without ever opening a naked window."""
+    # (B) DOWNSIDE DEFICIT: naked, grew past the covering stop, a lone-TP Bug-B
+    #     shape, or a stale/partial stop. A lone TP is always cancelled BEFORE the
+    #     place (it holds the conflicting sell commitment — Bug B).
+    # (B0) OCO-DIRECT-ON-FILL (Stage 3): a TRULY NAKED fresh fill (no resting
+    #      legs) with OCO wanted goes STRAIGHT to a resting OCO pair via
+    #      UpgradeToOco(supersede_ids=()) — never a stop-only rung 1 first (the
+    #      system reaches OCO only at the fresh-fill moment; rung-1 stops are
+    #      never upgraded, see arm C). Suppressed while a just-placed OCO rests
+    #      but list-orders lags (oco_recently_placed) so a 2nd B0 can never
+    #      double-commit (H1b/A1). Fires ONLY on `not legs`, so total after
+    #      placement == owned once, never 2x.
+    if (
+        _oco_enabled()
+        and plan.tp_price is not None
+        and uic not in view.oco_unsupported
+        and not legs
+    ):
+        if uic in view.oco_recently_placed:
+            # A just-placed OCO pair rests but list-orders lags (the view
+            # shows no legs). Placing ANY stop now would commit a second
+            # owned SELL atop the invisible resting OCO pair -> 2x owned,
+            # the exact double-commit the marker exists to prevent (H1b/A1).
+            # NoOp — the OCO stop leg already covers the downside; next tick
+            # the pair becomes visible (arm C -> NoOp) or the TTL expires and
+            # B0 re-evaluates against live broker state.
+            return [NoOp()]
+        return [
+            UpgradeToOco(
+                uic,
+                _SIDE,
+                owned,
+                plan.stop_price,
+                plan.tp_price,
+                plan.entry_crid,
+                plan.next_gen(owned),
+                supersede_ids=(),
+            )
+        ]
+    # (GROW amend, Stage 3): a SINGLE clean standalone stop under-covers (owned
+    #      grew) -> PATCH amend it UP to live owned in place (absolute-target,
+    #      no naked window). Falls through to the B1 additive-delta stop below
+    #      when amend is off, >1 stop rests (B1-grown multi-tier), a TP leg is
+    #      present, the stop partially filled, or the uic recently failed an
+    #      amend — B1 is the always-correct fallback that covers the delta with
+    #      a second stop.
+    sole = _sole_standalone_stop(legs)
+    if (
+        _amend_enabled()
+        and sole is not None
+        and uic not in view.oco_unsupported
+        and uic not in view.amend_recently_failed
+        and _leg_amount(sole) + _QTY_EPS < owned
+    ):
+        return [
+            AmendStop(
+                uic,
+                _SIDE,
+                sole.order_id,
+                sole.order_type or "",
+                owned,
+                plan.stop_price,
+                _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+                reason="grow — PATCH amend stop up in place",
+            )
+        ]
+    # (GROW-after-OCO amend, Stage 3.5): a CLEAN unfilled resting OCO pair
+    #      under-covers (owned grew) -> PATCH the OCO stop leg UP to live owned
+    #      in place; Q9 propagates symmetrically to the Limit sibling so both
+    #      legs resize and the pair commits owned ONCE, no naked window.
+    #      Absolute-target. B0 is skipped for a resting OCO (`not legs` False)
+    #      and the standalone grow amend returns None (a TP leg is present), so
+    #      this is the first arm that can fire. Falls through to B1 additive
+    #      below when amend is off / the uic is degraded (oco_unsupported /
+    #      amend_recently_failed) — the always-correct fallback covers the delta.
+    oco_stop = _oco_stop_leg(legs)
+    if (
+        _amend_enabled()
+        and oco_stop is not None
+        and uic not in view.oco_unsupported
+        and uic not in view.amend_recently_failed
+        and _leg_amount(oco_stop) + _QTY_EPS < owned
+    ):
+        return [
+            AmendStop(
+                uic,
+                _SIDE,
+                oco_stop.order_id,
+                oco_stop.order_type or "StopIfTraded",
+                owned,
+                plan.stop_price,
+                _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+                reason="grow-after-OCO — PATCH OCO stop leg up in place",
+            )
+        ]
+    # (B1) ADDITIVE-ON-GROWTH (Q5 confirmed live): a covering stop already
+    #      holds stop_qty and the position simply GREW (another tier filled).
+    #      Place a stop for the DELTA only, KEEPING the existing stop — no
+    #      supersede, no naked window, and the sell side sums to exactly owned.
+    #      Skipped when Q5 is off or the uic opted out of broker multi-order
+    #      features (oco_unsupported), which fall through to cancel-replace.
+    #      Edge: ``next_gen`` keys the ref on qty, so two grow steps of the SAME
+    #      delta within Saxo's 15 s request-id dedup window share a ref and the
+    #      2nd is deduped away — that slice is under-covered for < 15 s and
+    #      self-heals on the next tick once the window passes (the disaster stop
+    #      is deep OTM, so the transient gap is immaterial).
+    if ADDITIVE_STOPS_CONFIRMED and stop_qty > _QTY_EPS and uic not in view.oco_unsupported:
+        deficit = owned - stop_qty
+        return [
+            PlaceStop(
+                uic,
+                _SIDE,
+                deficit,
+                plan.stop_price,
+                _exit_stop_ref(plan.entry_crid, plan.next_gen(deficit)),
+                cancel_conflicting=_tp_only_leg_ids(legs),  # lone TP -> cancel BEFORE (Bug B)
+            )
+        ]
+    # (B2) CANCEL-REPLACE (naked, Q5 off, or oco_unsupported): place the full
+    #      owned stop FIRST, supersede any stale stop AFTER (no naked window on
+    #      the already-covered shares).
+    return [
+        PlaceStop(
+            uic,
+            _SIDE,
+            owned,
+            plan.stop_price,
+            _exit_stop_ref(plan.entry_crid, plan.next_gen(owned)),
+            supersede_ids=_stop_leg_ids(legs),  # stale stop -> cancel AFTER
+            cancel_conflicting=_tp_only_leg_ids(legs),  # lone TP -> cancel BEFORE (Bug B)
+        )
+    ]
 
 
 def advance(verdict: ReconcileVerdict) -> Action:
