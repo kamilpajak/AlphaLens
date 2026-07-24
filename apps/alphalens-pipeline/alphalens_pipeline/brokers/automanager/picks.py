@@ -44,7 +44,10 @@ def arm_pick(ticker: str, date: dt.date, *, path: Path | None = None) -> None:
 
 
 def iter_picks(*, path: Path | None = None) -> Iterator[Pick]:
-    """Yield parsed picks in append order. Malformed/undated lines skipped."""
+    """Yield ARMED picks in append order. Malformed/undated lines skipped, and a
+    non-armed status line (cancelled / filled / expired) is never yielded — the
+    control-loop drain places whatever this emits, so the ARMED filter lives here
+    (defence in depth against re-placing a retired intent)."""
     target = path or DEFAULT_PICKS_PATH
     if not target.exists():
         return
@@ -58,6 +61,8 @@ def iter_picks(*, path: Path | None = None) -> Iterator[Pick]:
             except json.JSONDecodeError:
                 continue
             if not isinstance(record, dict):
+                continue
+            if str(record.get("status", "")) != STATUS_ARMED:
                 continue
             try:
                 parsed_date = dt.date.fromisoformat(str(record["date"]))

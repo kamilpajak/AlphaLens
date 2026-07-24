@@ -212,18 +212,23 @@ def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
 
 def _run_placement_drain(deps: LoopDeps, report: TickReport) -> None:
     # Drain only picks NOT yet joined to submissions.jsonl (design §Data-flow
-    # step 4). Read the journal ONCE before the drain; a pick placed earlier in
-    # THIS tick is added to already_submitted below so a duplicate armed line
-    # later in the same tick is skipped (an out-of-tick placement is caught by
-    # the next tick's fresh read).
+    # step 4). Read the journal ONCE before the drain — this snapshot is the
+    # CROSS-tick join (an out-of-tick placement is caught by the next tick's
+    # fresh read). ``placed_this_tick`` is the WITHIN-tick guard: it starts empty
+    # each tick and records every pick we ATTEMPT to place, so two armed lines
+    # with the same (ticker, brief_date) in ONE tick never both drive placement —
+    # even when the first attempt returns False (refused / zero-sized / partial-
+    # then-failed). Recording the attempt (not just a success) guards the
+    # never-double-commit invariant against a retry inside the same tick.
     already_submitted = _submitted_pick_keys(deps.read_records())
+    placed_this_tick: set[tuple[str, str]] = set()
     for pick in deps.iter_picks():
         key = _pick_key(pick)
-        if key in already_submitted:
+        if key in already_submitted or key in placed_this_tick:
             continue
+        placed_this_tick.add(key)
         if deps.place_pick(pick):
             report.picks_placed += 1
-            already_submitted.add(key)
 
 
 def _run_verdict_advance(
@@ -466,12 +471,20 @@ class _AlreadyGatedSessionState:
 
 
 def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
-    """Append one line to the out-of-band standalone-stop journal (never rewrites)."""
+    """Append one line to the out-of-band standalone-stop journal (never rewrites).
+
+    Flush + fsync after the append so a plan price / capability marker is durable
+    the instant it is written — a buffered write lost to a crash (or systemd
+    SIGKILL) would silently drop a disaster-stop plan, and the protection pass
+    can never re-derive a price the broker does not know."""
     import json
+    import os
 
     STANDALONE_STOP_JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
     with STANDALONE_STOP_JOURNAL_PATH.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
 
 
 _INITIAL_GEN = 0  # entry-placement plan is generation 0; resizes bump it via next_gen() (Task 4)

@@ -272,6 +272,24 @@ def _throttle_to(alerts: list[str]) -> cl._AlertThrottle:
     return cl._AlertThrottle(alerts.append)
 
 
+class TestStandaloneStopJournalDurability(unittest.TestCase):
+    """The out-of-band standalone-stop journal is the source of truth for plan
+    prices + capability markers; a buffered write lost to a crash silently drops
+    a disaster-stop plan. Each append is flushed + fsync'd for crash-durability."""
+
+    def test_append_flushes_and_fsyncs(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                with mock.patch("os.fsync") as fsync:
+                    cl._append_standalone_stop_journal({"kind": "gen", "uic": 1, "gen": 0})
+                fsync.assert_called_once()
+            # The record is durably persisted (survives read-back).
+            lines = journal.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 1)
+            self.assertIn('"uic": 1', lines[0])
+
+
 class TestRunOncePlacement(unittest.TestCase):
     def test_drains_armed_pick_when_chain_alive_and_no_kill(self) -> None:
         with TemporaryDirectory() as d:
@@ -416,6 +434,38 @@ class TestPickSubmissionJoin(unittest.TestCase):
             report = cl.run_once(deps)
             self.assertEqual(place_calls, [p1], "the duplicate armed line must be skipped")
             self.assertEqual(report.picks_placed, 1)
+
+    def test_duplicate_armed_pick_in_one_tick_attempted_once_even_when_place_fails(self) -> None:
+        # A within-tick duplicate must be skipped even when the FIRST place returns
+        # False (refused / zero-sized / partial-then-failed). The placed_this_tick
+        # set records the ATTEMPT, so a same-key line later in the same tick can
+        # never re-drive placement (guards the never-double-commit invariant).
+        with TemporaryDirectory() as d:
+            attempts: list = []
+            p1 = _pick("KO", "2026-07-20")
+            p2 = _pick("KO", "2026-07-20")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                picks=[p1, p2],
+            )
+            deps = cl.LoopDeps(
+                **{
+                    **deps.__dict__,
+                    "read_records": list,
+                    "place_pick": lambda pick: bool(
+                        attempts.append(pick)
+                    ),  # append -> None -> False
+                }
+            )
+            report = cl.run_once(deps)
+            self.assertEqual(
+                attempts, [p1], "the duplicate must be skipped even when the first place fails"
+            )
+            self.assertEqual(report.picks_placed, 0)
 
 
 class _CrashError(Exception):
