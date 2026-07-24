@@ -709,7 +709,7 @@
 									<!-- Stop click propagation so the ticker link navigates to the
 									     brief instead of toggling the row. -->
 									<a
-										href="/brief/{o.brief_date}"
+										href="/brief/{o.brief_date}#{o.ticker}"
 										onclick={(e) => e.stopPropagation()}
 										class="font-display font-bold text-base text-fg group-hover:text-amber transition-colors whitespace-nowrap"
 									>
