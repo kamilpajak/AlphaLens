@@ -1343,8 +1343,12 @@ class TestOcoAmendInvariantsPBT(unittest.TestCase):
             self.assertTrue(_close(down[0].target_qty, owned))
 
             # lag -> M1 NoOp (stop already == owned, tp read lags), never a teardown.
+            # The hold stamps uic + reason so the control loop can count consecutive
+            # holds and page a genuinely-stuck lag (issue #5); still a no-op action.
             pos, view = _build_oco_case("lag_noop", owned, _UIC)
-            self.assertEqual(reconcile_long(_UIC, pos, view), [NoOp()])
+            self.assertEqual(
+                reconcile_long(_UIC, pos, view), [NoOp(uic=_UIC, reason="oco-lag-hold")]
+            )
 
             # grow fallback (recently failed) -> B1 additive delta, NO OCO pre-cancel.
             pos, view = _build_oco_case("grow_fallback_recently_failed", owned, _UIC)

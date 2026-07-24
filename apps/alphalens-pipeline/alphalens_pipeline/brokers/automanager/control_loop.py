@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from alphalens_pipeline.brokers.automanager.position_manager import (
+    _OCO_LAG_HOLD_REASON,
     Action,
     AlertOnly,
     AmendStop,
@@ -76,6 +77,13 @@ KILL_FILE_PATH = _BROKER_ORDERS_DIR / "KILL"
 # run_daemon default; the metric name has one home here).
 HEARTBEAT_METRIC = 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"}'
 
+# Consecutive-tick threshold for the persistent OCO-lag monitor (issue #5). The M1
+# guard NoOp'ing a clean over-covered OCO pair is SAFE for a tick or two (a TP-read
+# lag behind Q9's symmetric propagation, or a skipped downsize amend), but a genuine
+# stall — Q9 never propagating — is otherwise invisible. When a uic emits the M1
+# hold for this many consecutive protection ticks, the driver pages ONCE (throttled).
+_OCO_LAG_ALERT_TICKS = 5
+
 
 @dataclass(frozen=True)
 class LoopDeps:
@@ -114,6 +122,14 @@ class LoopDeps:
     # flag is on but the capability is absent) and injected into the protection
     # executor closure; kept here for symmetry / introspection.
     amend_stop: AmendStopPlacer | None = None
+    # Daemon-lifetime per-uic consecutive-count of M1 oco-lag-hold NoOps (issue #5).
+    # A MUTABLE dict on the (frozen) deps — built once in build_default_deps and
+    # carried across every tick — so the pure reconcile module stays stateless. The
+    # protection driver increments a uic's count each tick it holds and resets it
+    # (drops the key) the moment any other action fires; crossing _OCO_LAG_ALERT_TICKS
+    # pages once via the shared throttle. Frozen forbids REBINDING the field, not
+    # mutating the dict it points at.
+    oco_lag_counts: dict[int, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -297,12 +313,48 @@ def _run_protection_pass(
         ):
             report.alerts += 1
         return
-    for action in reconcile_protection(protection_view):
+    actions = reconcile_protection(protection_view)
+    for action in actions:
         report.actions.append(("protection", type(action).__name__))
         try:
             deps.execute_protection(action, kill, report)
         except BrokerError as exc:
             deps.alert(f"protection {type(action).__name__} failed (broker error) — skipped: {exc}")
+            report.alerts += 1
+    _track_oco_lag(deps, actions, report)
+
+
+def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) -> None:
+    """Daemon-lifetime per-uic monitor for a persistently-stuck OCO propagation lag
+    (issue #5). The M1 guard NoOp'ing a clean over-covered OCO pair is SAFE for a
+    tick or two but must not be invisible if Q9 never propagates. Increment a uic's
+    consecutive-hold count each tick it emits an ``oco-lag-hold`` NoOp; RESET (drop
+    the key) the moment that uic emits ANY other action — a real place/amend/cancel
+    means the lag cleared. Crossing ``_OCO_LAG_ALERT_TICKS`` pages ONCE (the shared
+    throttle dedups the repeat per-tick calls into a single alert per interval)."""
+    counts = deps.oco_lag_counts
+    lag_uics: set[int] = set()
+    resolved_uics: set[int] = set()
+    for action in actions:
+        uic = getattr(action, "uic", None)
+        if uic is None:
+            continue
+        if isinstance(action, NoOp) and action.reason == _OCO_LAG_HOLD_REASON:
+            lag_uics.add(uic)
+        else:
+            resolved_uics.add(uic)
+    # Any non-lag action for a uic wins — the hold cleared, so reset even if some
+    # (impossible-in-practice) second action on the same uic was a lag NoOp.
+    for uic in resolved_uics:
+        counts.pop(uic, None)
+        lag_uics.discard(uic)
+    for uic in lag_uics:
+        counts[uic] = counts.get(uic, 0) + 1
+        if counts[uic] >= _OCO_LAG_ALERT_TICKS and deps.alert_throttled(
+            f"uic {uic}: OCO exit propagation lag held {counts[uic]} consecutive ticks "
+            f"(>= {_OCO_LAG_ALERT_TICKS}) — Q9 may be stalled, check the resting OCO pair",
+            f"oco-lag-persistent:{uic}",
+        ):
             report.alerts += 1
 
 

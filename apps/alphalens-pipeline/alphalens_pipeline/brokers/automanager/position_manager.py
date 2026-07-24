@@ -164,9 +164,25 @@ class AlertOnly:
     reason: str
 
 
+# Reason tag the M1 OCO-lag guard stamps on its hold NoOp (issue #5). The control
+# loop keys a daemon-lifetime per-uic consecutive counter on this exact string to
+# surface a genuinely-stuck Q9 propagation lag; a wording change here fails the
+# control-loop tests loudly rather than silently blinding the monitor.
+_OCO_LAG_HOLD_REASON = "oco-lag-hold"
+
+
 @dataclass(frozen=True)
 class NoOp:
-    pass
+    """Do nothing this tick. The executor treats every NoOp as a no-op.
+
+    ``uic`` / ``reason`` are OPTIONAL diagnostics (default ``None`` / ``""``) so
+    every bare ``NoOp()`` construction is byte-identical to before. The M1 OCO-lag
+    guard stamps ``NoOp(uic=uic, reason=_OCO_LAG_HOLD_REASON)`` so the control loop
+    can track a persistently-stuck lag (issue #5); a healthy-covered NoOp stays
+    bare (``reason == ""``)."""
+
+    uic: int | None = None
+    reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -635,8 +651,11 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
         #       the OCO rests) -> alert spam, ending equally over-covered.
         # Either way the downside is fully covered and the pair is never torn down.
         # Gated on _amend_enabled() so arm A stays byte-identical when the flag off.
+        # The NoOp carries uic + reason so the control loop can count consecutive
+        # holds and page once if a lag genuinely stalls (issue #5); the executor
+        # still treats it as nothing.
         if _amend_enabled() and oco_stop is not None:
-            return [NoOp()]
+            return [NoOp(uic=uic, reason=_OCO_LAG_HOLD_REASON)]
         bad = _group_with_partial_fill(legs) or _newest_group(legs)
         gen = plan.next_gen(owned)
         stop_ids = set(bad.stop_leg_ids)
@@ -854,6 +873,7 @@ def _advance_filled(verdict: ReconcileVerdict) -> Action:
 
 
 __all__ = [
+    "_OCO_LAG_HOLD_REASON",
     "Action",
     "AlertOnly",
     "AmendStop",

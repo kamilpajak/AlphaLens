@@ -1491,7 +1491,9 @@ class TestOcoDownsizeAmendArm(unittest.TestCase):
         )
         with patch.dict(os.environ, _AMEND_ON):
             actions = reconcile_long(_UIC, pos, view)
-        self.assertEqual(actions, [NoOp()])
+        # M1 hold stamps uic + reason so the control loop can count consecutive
+        # holds (issue #5); the executor still treats it as a no-op.
+        self.assertEqual(actions, [NoOp(uic=_UIC, reason="oco-lag-hold")])
 
     def test_downsize_recently_failed_over_hedge_noops_not_teardown(self) -> None:
         # M1 also holds an OVER-hedged clean OCO pair (stop=5 > owned=3) when the
@@ -1513,7 +1515,9 @@ class TestOcoDownsizeAmendArm(unittest.TestCase):
         )
         with patch.dict(os.environ, _AMEND_ON):
             actions = reconcile_long(_UIC, pos, view)
-        self.assertEqual(actions, [NoOp()])  # safe hold, never a teardown/naked window
+        # safe hold, never a teardown/naked window; stamped for the persistent-lag
+        # monitor (issue #5).
+        self.assertEqual(actions, [NoOp(uic=_UIC, reason="oco-lag-hold")])
 
     def test_downsize_partial_fill_defers_to_place_residual_first(self) -> None:
         # OCO tp partially filled (2 of the old size), owned=3 -> _oco_stop_leg None
@@ -1552,7 +1556,13 @@ class TestOcoAmendSteadyState(unittest.TestCase):
         )
         with patch.dict(os.environ, _AMEND_ON):
             actions = reconcile_long(_UIC, pos, view)
+        # The healthy-covered NoOp stays BARE (reason "") — only the M1 lag guard
+        # stamps oco-lag-hold, so the persistent-lag monitor never counts a healthy
+        # steady-state pair (issue #5).
         self.assertEqual(actions, [NoOp()])
+        assert isinstance(actions[0], NoOp)
+        self.assertEqual(actions[0].reason, "")
+        self.assertIsNone(actions[0].uic)
 
     def test_grow_then_downsize_across_ticks_distinct_refs(self) -> None:
         counter = itertools.count(1)

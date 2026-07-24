@@ -24,6 +24,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     BrokerView,
     CancelSellLegs,
+    NoOp,
     PlaceStop,
     PlannedExit,
     ProtectionView,
@@ -2634,6 +2635,175 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
             # No temp artifacts left behind in the journal dir.
             leftovers = [p.name for p in Path(d).iterdir() if p.name != journal.name]
             self.assertEqual(leftovers, [])
+
+
+_AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
+
+
+def _m1_lag_pview(*, owned: float = 3.0, stop_amount: float = 3.0, tp_amount: float = 5.0):
+    """A CLEAN unfilled resting OCO pair whose stop is already <= owned but whose TP
+    read still lags Q9's symmetric propagation (tp_amount > owned). With amend on the
+    OCO-downsize arm is skipped (stop already <= owned) and _reconcile_long emits the
+    M1 ``oco-lag-hold`` NoOp — the exact persistently-stuck-lag shape (issue #5)."""
+    pos = _pos(owned)
+    legs = (
+        _oco_leg("oco-stop-1", "StopIfTraded", stop_amount),
+        _oco_leg("oco-tp-1", "Limit", tp_amount),
+    )
+    return ProtectionView(
+        long_positions={_UIC: pos},
+        all_positions={_UIC: pos},
+        sell_legs_by_uic={_UIC: legs},
+        planned_by_uic={
+            _UIC: PlannedExit(
+                uic=_UIC,
+                entry_crid="crid-0",
+                side="SELL",
+                stop_price=216.48,
+                tp_price=306.72,
+                conflicting=False,
+                n_plans=1,
+            )
+        },
+        oco_unsupported=frozenset(),
+        amend_recently_failed=frozenset(),
+    )
+
+
+class TestPersistentOcoLagMonitor(unittest.TestCase):
+    """Issue #5: the M1 guard NoOp'ing a clean over-covered OCO pair is SAFE for a
+    tick or two, but a genuinely-stalled Q9 propagation must not stay invisible. The
+    protection driver counts a uic's consecutive ``oco-lag-hold`` holds on a daemon-
+    lifetime dict and pages ONCE (throttled) at ``_OCO_LAG_ALERT_TICKS``; any other
+    action on that uic resets the count. Dark when amend is off (the M1 guard is
+    ``_amend_enabled()``-gated, so it never emits and the counter never advances)."""
+
+    def _lag_action(self) -> list:
+        return [NoOp(uic=_UIC, reason=cl._OCO_LAG_HOLD_REASON)]
+
+    def test_persistent_lag_pages_once_at_threshold(self) -> None:
+        # N == _OCO_LAG_ALERT_TICKS consecutive holds -> exactly ONE throttled alert.
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+        )
+        alerts: list[str] = []
+        throttle = cl._AlertThrottle(alerts.append)
+        deps = cl.LoopDeps(
+            **{**deps.__dict__, "alert_throttled": lambda m, r: throttle.emit(m, reason=r)}
+        )
+        report = cl.TickReport()
+        for _ in range(cl._OCO_LAG_ALERT_TICKS + 3):  # keep holding past the threshold
+            cl._track_oco_lag(deps, self._lag_action(), report)
+        self.assertEqual(deps.oco_lag_counts[_UIC], cl._OCO_LAG_ALERT_TICKS + 3)
+        persistent = [a for a in alerts if "propagation lag held" in a]
+        self.assertEqual(
+            len(persistent), 1, f"expected exactly one persistent-lag page, got {alerts}"
+        )
+        self.assertIn(str(_UIC), persistent[0])
+
+    def test_no_alert_below_threshold(self) -> None:
+        # _OCO_LAG_ALERT_TICKS - 1 holds stay silent (safe transient lag).
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+        )
+        alerts: list[str] = []
+        throttle = cl._AlertThrottle(alerts.append)
+        deps = cl.LoopDeps(
+            **{**deps.__dict__, "alert_throttled": lambda m, r: throttle.emit(m, reason=r)}
+        )
+        report = cl.TickReport()
+        for _ in range(cl._OCO_LAG_ALERT_TICKS - 1):
+            cl._track_oco_lag(deps, self._lag_action(), report)
+        self.assertEqual(deps.oco_lag_counts[_UIC], cl._OCO_LAG_ALERT_TICKS - 1)
+        self.assertEqual([a for a in alerts if "propagation lag held" in a], [])
+
+    def test_non_lag_action_resets_the_counter(self) -> None:
+        # A real action for the uic (a PlaceStop) means the lag cleared -> reset.
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+        )
+        alerts: list[str] = []
+        throttle = cl._AlertThrottle(alerts.append)
+        deps = cl.LoopDeps(
+            **{**deps.__dict__, "alert_throttled": lambda m, r: throttle.emit(m, reason=r)}
+        )
+        report = cl.TickReport()
+        for _ in range(cl._OCO_LAG_ALERT_TICKS - 1):  # climb to just below the threshold
+            cl._track_oco_lag(deps, self._lag_action(), report)
+        # A non-lag action for the uic resets it (drops the key).
+        place = PlaceStop(_UIC, "SELL", 3.0, 216.48, "crid-0-stop-0")
+        cl._track_oco_lag(deps, [place], report)
+        self.assertNotIn(_UIC, deps.oco_lag_counts)
+        # The next hold restarts the climb from 1 -> still below threshold, silent.
+        cl._track_oco_lag(deps, self._lag_action(), report)
+        self.assertEqual(deps.oco_lag_counts[_UIC], 1)
+        self.assertEqual([a for a in alerts if "propagation lag held" in a], [])
+
+    def test_bare_noop_does_not_advance_counter(self) -> None:
+        # A healthy-covered bare NoOp (reason "") is NOT a lag hold -> no counting.
+        deps = _deps(
+            _StubBroker(),
+            kill_file=Path("/nonexistent/KILL"),
+            verdicts=[],
+            place_calls=[],
+            alerts=[],
+        )
+        report = cl.TickReport()
+        for _ in range(cl._OCO_LAG_ALERT_TICKS + 2):
+            cl._track_oco_lag(deps, [NoOp()], report)
+        self.assertEqual(deps.oco_lag_counts, {})
+
+    def test_run_once_end_to_end_pages_once_on_persistent_lag(self) -> None:
+        # Full path: run_once -> _run_protection_pass -> reconcile_protection emits
+        # the M1 NoOp -> _track_oco_lag counts + pages once through the real throttle.
+        with TemporaryDirectory() as d:
+            alerts: list[str] = []
+            throttle = cl._AlertThrottle(alerts.append)
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                build_protection_view=lambda broker, records: _m1_lag_pview(),
+                alert_throttled=lambda m, r: throttle.emit(m, reason=r),
+            )
+            with mock.patch.dict(os.environ, _AMEND_ON):
+                for _ in range(cl._OCO_LAG_ALERT_TICKS + 2):
+                    cl.run_once(deps)
+        self.assertEqual(deps.oco_lag_counts[_UIC], cl._OCO_LAG_ALERT_TICKS + 2)
+        persistent = [a for a in alerts if "propagation lag held" in a]
+        self.assertEqual(len(persistent), 1, f"expected one persistent-lag page, got {alerts}")
+
+    def test_dark_when_amend_off_no_hold_no_counter(self) -> None:
+        # Amend OFF: the M1 guard never fires (place-residual-first arm runs instead),
+        # so run_once never emits an oco-lag-hold and the counter stays empty.
+        with TemporaryDirectory() as d:
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                build_protection_view=lambda broker, records: _m1_lag_pview(),
+            )
+            env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_AMEND_ENABLED"}
+            with mock.patch.dict(os.environ, env, clear=True):
+                for _ in range(cl._OCO_LAG_ALERT_TICKS + 2):
+                    cl.run_once(deps)
+        self.assertEqual(deps.oco_lag_counts, {})
 
 
 if __name__ == "__main__":
