@@ -101,6 +101,14 @@ _DEFAULT_STREAM_STALE_S = 45.0
 STREAM_LAST_MESSAGE_METRIC = (
     'alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager"}'
 )
+# The stream gauge writes to its OWN domain textfile, NOT "broker-manager". Both
+# emit_domain_metrics(...) writes atomically OVERWRITE alphalens_domain_<job>.prom,
+# and _emit_stream_gauge runs AFTER heartbeat_fn every tick — sharing the
+# "broker-manager" job would clobber the heartbeat gauge and break the liveness
+# alert while streaming is on. node_exporter merges every *.prom in the dir, so a
+# distinct file keeps BOTH series scraped (the metric name + {job} label are
+# unchanged — only the containing file differs).
+_STREAM_GAUGE_DOMAIN_JOB = "broker-manager-stream"
 
 # Consecutive-tick threshold for the persistent OCO-lag monitor (issue #5). The M1
 # guard NoOp'ing a clean over-covered OCO pair is SAFE for a tick or two (a TP-read
@@ -534,7 +542,7 @@ def _emit_stream_gauge(age_seconds: float) -> None:
     from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
     try:
-        emit_domain_metrics("broker-manager", {STREAM_LAST_MESSAGE_METRIC: age_seconds})
+        emit_domain_metrics(_STREAM_GAUGE_DOMAIN_JOB, {STREAM_LAST_MESSAGE_METRIC: age_seconds})
     except OSError:
         logger.warning("broker-manager stream-liveness gauge emit failed", exc_info=True)
 

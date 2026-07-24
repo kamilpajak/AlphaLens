@@ -3394,6 +3394,33 @@ class TestStreamingSubscriberIsolation(unittest.TestCase):
         self.assertIsNot(sub._session, other._session)
 
 
+class TestStreamGaugeDoesNotClobberHeartbeat(unittest.TestCase):
+    """Live-validation regression (streaming ON): the stream-liveness gauge and the
+    per-tick heartbeat gauge must NOT share one textfile. emit_domain_metrics
+    atomically OVERWRITES alphalens_domain_<job>.prom with only the metrics it is
+    handed, and _emit_stream_gauge runs after heartbeat_fn every tick — so writing
+    both under job 'broker-manager' made the stream gauge clobber the heartbeat
+    every tick, erasing alphalens_broker_manager_last_tick_timestamp_seconds and
+    breaking the AlphalensBrokerManagerHeartbeatStale liveness alert. They now write
+    to DISTINCT domain files; node_exporter merges all .prom files in the dir, so
+    both series stay scraped (the metric names + {job} labels are unchanged)."""
+
+    def test_both_gauges_survive_in_the_textfile_dir(self) -> None:
+        with (
+            TemporaryDirectory() as d,
+            mock.patch.dict(os.environ, {"ALPHALENS_TEXTFILE_DIR": d}, clear=False),
+        ):
+            cl._default_emit_heartbeat()  # per-tick heartbeat gauge
+            cl._emit_stream_gauge(5.0)  # stream-liveness gauge (runs AFTER heartbeat)
+            proms = sorted(Path(d).glob("*.prom"))
+            blob = "\n".join(p.read_text() for p in proms)
+        # Both series present (neither atomic overwrite clobbered the other) ...
+        self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", blob)
+        self.assertIn("alphalens_broker_manager_stream_last_message_age_seconds", blob)
+        # ... because they live in two separate domain files.
+        self.assertEqual(len(proms), 2, [p.name for p in proms])
+
+
 class TestStreamingEnabledGate(unittest.TestCase):
     def test_streaming_enabled_reads_env_flag(self) -> None:
         with mock.patch.dict(os.environ, {"ALPHALENS_BROKER_STREAMING_ENABLED": "1"}, clear=False):
