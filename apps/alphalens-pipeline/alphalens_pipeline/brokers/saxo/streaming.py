@@ -159,6 +159,19 @@ class StreamAction(enum.Enum):
     RECONNECT = "reconnect"
 
 
+@dataclass(frozen=True)
+class ReconnectStep:
+    """The synchronous DECISION for what the supervisor does after a connection
+    ENDED (a connect/subscribe exception OR a clean RECONNECT-return — both
+    counted identically). ``give_up`` means the breaker tripped and streaming
+    shuts to poll-only; otherwise ``backoff_s`` is the sleep before the next
+    attempt. Extracted so the reconnect-storm discipline is hermetically
+    testable, not buried in the async ``_supervise`` loop (finding #3)."""
+
+    give_up: bool
+    backoff_s: float
+
+
 def _refuse_non_sim_streaming(streaming_base_url: str) -> None:
     """SIM-only structural rail — mirrors ``SaxoClient``'s equality-to-SIM guard.
 
@@ -176,6 +189,21 @@ def _refuse_non_sim_streaming(streaming_base_url: str) -> None:
         raise SaxoLiveEnvironmentBlockedError(
             f"SaxoStreamingClient is SIM-only: streaming_base_url must be "
             f"{SIM_STREAMING_BASE_URL!r}, got {streaming_base_url!r}."
+        )
+
+
+_SUBSCRIPTION_CREATED_STATUS = 201
+
+
+def _require_subscription_created(status_code: int, reference_id: str) -> None:
+    """Assert a subscription POST returned 201 (finding #2). A silently-rejected
+    subscription (e.g. wrong ClientKey scope) would leave the recv loop waiting
+    for data that never arrives -> a ~60s stale reconnect loop; raising here
+    makes the supervisor count it as a connection failure (backoff + breaker)."""
+    if status_code != _SUBSCRIPTION_CREATED_STATUS:
+        raise SaxoStreamError(
+            f"subscription {reference_id!r} POST returned {status_code}, expected "
+            f"{_SUBSCRIPTION_CREATED_STATUS} — treated as a connection failure"
         )
 
 
@@ -316,6 +344,7 @@ class SaxoStreamingClient:
     def _route_message(self, msg: StreamMessage) -> StreamAction:
         ref = msg.reference_id
         if ref == _HEARTBEAT_REF:
+            self._mark_delivered()
             self._on_heartbeat(self._monotonic())
             return StreamAction.CONTINUE
         if ref == _RESET_REF:
@@ -323,16 +352,28 @@ class SaxoStreamingClient:
             return StreamAction.CONTINUE
         if ref == _DISCONNECT_REF:
             # A WS auth drop never flows through the HTTP 401 seam, so invalidate
-            # ourselves before the supervisor reconnects fresh.
+            # ourselves before the supervisor reconnects fresh. NOT a delivery —
+            # this is a teardown signal, so it never clears the failure streak.
             self._token_provider.invalidate()
             return StreamAction.RECONNECT
         if ref.startswith("_"):
             # Unknown control message — liveness only, never a trigger.
+            self._mark_delivered()
             self._on_heartbeat(self._monotonic())
             return StreamAction.CONTINUE
         # Data (positions / orders) — fire the trigger; reconcile re-reads REST.
+        self._mark_delivered()
         self._on_trigger()
         return StreamAction.CONTINUE
+
+    def _mark_delivered(self) -> None:
+        """A real server frame arrived (heartbeat / data / unknown-control
+        liveness) — the connection is demonstrably delivering, so clear the
+        failure streak. Reset is gated on DELIVERY, never on a mere
+        subscribe-dispatch or a ``_disconnect``/``_resetsubscriptions`` teardown,
+        so a connect -> immediate-drop storm keeps counting toward the breaker
+        (finding #1)."""
+        self._reset_failures()
 
     # ----- subscriptions (synchronous, through the shared SaxoClient) -----
 
@@ -358,12 +399,14 @@ class SaxoStreamingClient:
         self._subscription_generation += 1
         pos_ref = "pos" if generation == 0 else f"pos-{generation}"
         ord_ref = "ord" if generation == 0 else f"ord-{generation}"
-        self._subscriber.create_positions_subscription(
+        pos_status, _ = self._subscriber.create_positions_subscription(
             context_id=self._context_id, reference_id=pos_ref, client_key=client_key
         )
-        self._subscriber.create_orders_subscription(
+        _require_subscription_created(pos_status, pos_ref)
+        ord_status, _ = self._subscriber.create_orders_subscription(
             context_id=self._context_id, reference_id=ord_ref, client_key=client_key
         )
+        _require_subscription_created(ord_status, ord_ref)
 
     # ----- reconnect + circuit breaker (synchronous) -----
 
@@ -389,6 +432,21 @@ class SaxoStreamingClient:
 
     def _reset_failures(self) -> None:
         self._consecutive_failures = 0
+
+    def _plan_reconnect_step(self) -> ReconnectStep:
+        """DECIDE what to do after a connection ENDED — a connect/subscribe
+        exception OR a clean RECONNECT-return (socket EOF, ``_disconnect``,
+        stale-timeout, reauth non-202). Both are counted identically: register
+        the failure, trip the breaker on the Nth (``give_up``), otherwise return
+        the exponential backoff to sleep before the next attempt. The streak is
+        reset ONLY by :meth:`_mark_delivered` (a real frame), so a
+        connect-then-drop storm that never delivers still trips the breaker
+        instead of spinning resubscribe REST at full speed (finding #1)."""
+        if self._register_failure():
+            return ReconnectStep(give_up=True, backoff_s=0.0)
+        return ReconnectStep(
+            give_up=False, backoff_s=self._compute_backoff(self._consecutive_failures)
+        )
 
     def _trip_breaker(self) -> None:
         self._is_streaming = False
@@ -424,6 +482,11 @@ class SaxoStreamingClient:
         token = self._current_token
         if token is None or token == self._last_authorized_token:
             return StreamAction.CONTINUE
+        # Intentional blocking ``requests`` PUT on the stream thread's asyncio
+        # loop (finding #4): the loop is single-purpose (no sibling coroutines to
+        # starve) and never blocks the MAIN protective thread. Worst case a hung
+        # streaming host stalls only this reader's own recv for up to
+        # ``self._timeout`` — the poll backstop still covers protection.
         resp = self._session.put(
             self._authorize_url(),
             headers={"Authorization": f"BEARER {token}"},
@@ -453,13 +516,18 @@ class SaxoStreamingClient:
         while not self._stop and self._is_streaming:
             try:
                 await self._run_one_connection(is_reconnect=is_reconnect)
-                is_reconnect = True
             except Exception as exc:
                 logger.warning("saxo stream session failed: %s", exc)
-                if self._register_failure():
-                    return
-                await async_sleep(self._compute_backoff(self._consecutive_failures))
-                is_reconnect = True
+            is_reconnect = True
+            # A clean RECONNECT-return and an exception are counted identically
+            # (finding #1): both mean the connection ended and must be throttled.
+            # A stop / already-tripped breaker exit needs no failure registration.
+            if self._stop or not self._is_streaming:
+                return
+            step = self._plan_reconnect_step()
+            if step.give_up:
+                return
+            await async_sleep(step.backoff_s)
 
     async def _run_one_connection(self, *, is_reconnect: bool) -> None:  # pragma: no cover
         token = self._current_token
@@ -470,8 +538,11 @@ class SaxoStreamingClient:
         self._last_authorized_token = token
         self._last_recv_mono = self._monotonic()
         try:
+            # NOTE: the failure streak is NOT reset here. A dispatched subscribe
+            # is no proof the connection delivers — the reset happens only when a
+            # real frame arrives (:meth:`_mark_delivered`), so a connect ->
+            # subscribe -> immediate-drop storm still trips the breaker.
             self._subscribe(delete_first=is_reconnect)
-            self._reset_failures()
             while not self._stop:
                 if await self._recv_and_route(conn) is StreamAction.RECONNECT:
                     return
@@ -502,6 +573,7 @@ class SaxoStreamingClient:
 
 __all__ = [
     "SIM_STREAMING_BASE_URL",
+    "ReconnectStep",
     "SaxoStreamError",
     "SaxoStreamProtocolError",
     "SaxoStreamingClient",

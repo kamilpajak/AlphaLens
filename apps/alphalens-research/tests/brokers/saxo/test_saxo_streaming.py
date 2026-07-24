@@ -22,6 +22,7 @@ from typing import Any
 
 from alphalens_pipeline.brokers.saxo.streaming import (
     SIM_STREAMING_BASE_URL,
+    SaxoStreamError,
     SaxoStreamingClient,
     SaxoStreamProtocolError,
     StreamAction,
@@ -350,6 +351,116 @@ class TestStreamCircuitBreaker(unittest.TestCase):
         self.assertEqual(client._consecutive_failures, 2)
         client._reset_failures()
         self.assertEqual(client._consecutive_failures, 0)
+
+
+class TestStreamReconnectStormDiscipline(unittest.TestCase):
+    """The RECONNECT class (socket EOF, ``_disconnect``, stale-timeout, reauth
+    non-202) must be counted, backed off, and breaker-tripped exactly like a
+    connect/subscribe exception — otherwise a connect-then-drop gateway becomes
+    an unthrottled reconnect+resubscribe storm through the shared SaxoClient
+    (adversary-2 fix #2). The failure streak resets ONLY on evidence the
+    connection is actually delivering a frame, never on a mere subscribe
+    dispatch."""
+
+    def test_undelivering_reconnect_storm_trips_breaker_with_backoff(self):
+        # Every connection ends WITHOUT delivering a frame (e.g. an immediate
+        # ``_disconnect``). Each end is planned as a reconnect step: it must
+        # count toward the streak, hand back a positive backoff, and trip the
+        # breaker on the Nth — never spin at full speed.
+        client, _ = _make_client(max_consecutive_failures=6)
+        backoffs: list[float] = []
+        trips = 0
+        for _ in range(6):
+            step = client._plan_reconnect_step()
+            if step.give_up:
+                trips += 1
+                break
+            self.assertGreater(step.backoff_s, 0.0)
+            backoffs.append(step.backoff_s)
+        self.assertEqual(trips, 1)
+        self.assertFalse(client.is_streaming)
+        # Exponential backoff was applied between every reconnect (never zero).
+        self.assertEqual(backoffs, [1.0, 2.0, 4.0, 8.0, 16.0])
+
+    def test_delivery_resets_streak_so_healthy_drop_backs_off_minimally(self):
+        # A connection that delivered a real frame (heartbeat) then dropped is
+        # NOT a storm: the streak resets on delivery, so the next reconnect step
+        # uses the floor backoff, not a grown one.
+        client, _ = _make_client()
+        for _ in range(4):
+            client._plan_reconnect_step()
+        self.assertEqual(client._consecutive_failures, 4)
+        client._route_message(StreamMessage(1, "_heartbeat", b"[]"))
+        self.assertEqual(client._consecutive_failures, 0)
+        step = client._plan_reconnect_step()
+        self.assertFalse(step.give_up)
+        self.assertEqual(step.backoff_s, 1.0)
+
+    def test_data_frame_also_resets_streak(self):
+        client, _ = _make_client()
+        for _ in range(3):
+            client._plan_reconnect_step()
+        client._route_message(StreamMessage(1, "pos", b"{}"))
+        self.assertEqual(client._consecutive_failures, 0)
+
+    def test_subscribe_dispatch_alone_does_not_reset_streak(self):
+        # The exact hole finding #1 flagged: a successful subscribe is NOT proof
+        # the connection delivers, so it must NOT clear the streak — otherwise a
+        # connect -> subscribe -> immediate ``_disconnect`` loop never trips.
+        sub = _FakeSubscriber()
+        client, _ = _make_client(subscriber=sub)
+        client._register_failure()
+        client._register_failure()
+        client._subscribe(delete_first=False)
+        self.assertEqual(client._consecutive_failures, 2)
+
+    def test_disconnect_control_frame_does_not_reset_streak(self):
+        client, _ = _make_client()
+        client._register_failure()
+        client._register_failure()
+        client._route_message(StreamMessage(1, "_disconnect", b"[]"))
+        self.assertEqual(client._consecutive_failures, 2)
+
+    def test_plan_reconnect_step_reports_breaker_trip(self):
+        client, _ = _make_client(max_consecutive_failures=2)
+        first = client._plan_reconnect_step()
+        self.assertFalse(first.give_up)
+        second = client._plan_reconnect_step()
+        self.assertTrue(second.give_up)
+        self.assertFalse(client.is_streaming)
+
+
+class TestStreamSubscriptionAcceptance(unittest.TestCase):
+    """A subscription POST that does not return 201 is a dead subscription: the
+    recv loop would then wait for data that never arrives. It must raise so the
+    supervisor counts it as a connection failure (backoff + breaker), rather
+    than resetting the streak and silently looping every ~60s (finding #2)."""
+
+    def test_non_201_positions_subscription_raises(self):
+        class _RejectingSubscriber(_FakeSubscriber):
+            def create_positions_subscription(self, **kwargs: Any):
+                self.created.append(("positions", kwargs["reference_id"]))
+                return 400, {"Message": "invalid ClientKey scope"}
+
+        client, _ = _make_client(subscriber=_RejectingSubscriber())
+        with self.assertRaises(SaxoStreamError):
+            client._subscribe(delete_first=False)
+
+    def test_non_201_orders_subscription_raises(self):
+        class _RejectingSubscriber(_FakeSubscriber):
+            def create_orders_subscription(self, **kwargs: Any):
+                self.created.append(("orders", kwargs["reference_id"]))
+                return 500, {}
+
+        client, _ = _make_client(subscriber=_RejectingSubscriber())
+        with self.assertRaises(SaxoStreamError):
+            client._subscribe(delete_first=False)
+
+    def test_201_subscription_succeeds(self):
+        sub = _FakeSubscriber()
+        client, events = _make_client(subscriber=sub)
+        client._subscribe(delete_first=False)  # _FakeSubscriber returns 201
+        self.assertEqual(len(events["trigger"]), 1)
 
 
 class TestStreamTokenReauth(unittest.TestCase):
