@@ -2439,5 +2439,202 @@ class TestHeartbeatEmitter(unittest.TestCase):
         self.assertIs(sig.parameters["heartbeat_fn"].default, cl._default_emit_heartbeat)
 
 
+def _rich_standalone_stop_journal() -> list[dict[str, Any]]:
+    """A synthetic journal exercising every compactable line kind, with a
+    redundant older entry per key that compaction must fold away."""
+    uic_a, uic_b = 111, 222
+    return [
+        # planned — crid-A0 appears twice; the higher-gen resize wins.
+        {
+            "kind": "planned",
+            "client_request_id": "crid-A0",
+            "uic": uic_a,
+            "side": "SELL",
+            "stop_price": 10.0,
+            "take_profit": 20.0,
+            "tier_index": 0,
+            "gen": 0,
+        },
+        {
+            "kind": "planned",
+            "client_request_id": "crid-A0",
+            "uic": uic_a,
+            "side": "SELL",
+            "stop_price": 11.0,
+            "take_profit": 21.0,
+            "tier_index": 0,
+            "gen": 1,
+        },
+        {
+            "kind": "planned",
+            "client_request_id": "crid-A1",
+            "uic": uic_a,
+            "side": "SELL",
+            "stop_price": 10.0,
+            "take_profit": 19.0,
+            "tier_index": 1,
+            "gen": 0,
+        },
+        {
+            "kind": "planned",
+            "client_request_id": "crid-B0",
+            "uic": uic_b,
+            "side": "SELL",
+            "stop_price": 5.0,
+            "take_profit": 8.0,
+            "tier_index": 0,
+            "gen": 0,
+        },
+        # gen kind — never read by the four verified folds; dropped by compaction.
+        {"kind": "gen", "uic": uic_a, "gen": 1, "qty": 7.0},
+        # oco_unsupported — duplicated on one uic; folds to a single set member.
+        {"kind": "oco_unsupported", "uic": uic_a},
+        {"kind": "oco_unsupported", "uic": uic_a},
+        # oco_placed — the newer ts is the one that governs the TTL fold.
+        {"kind": "oco_placed", "uic": uic_a, "ts": 100.0},
+        {"kind": "oco_placed", "uic": uic_a, "ts": 250.0},
+        # amend_failed — newer ts governs.
+        {"kind": "amend_failed", "uic": uic_b, "ts": 100.0},
+        {"kind": "amend_failed", "uic": uic_b, "ts": 300.0},
+        # amend_seq — the max per uic is what _read_persisted_amend_seq returns.
+        {"kind": "amend_seq", "uic": uic_a, "seq": 0},
+        {"kind": "amend_seq", "uic": uic_a, "seq": 1},
+        {"kind": "amend_seq", "uic": uic_a, "seq": 2},
+        {"kind": "amend_seq", "uic": uic_b, "seq": 0},
+        # malformed — a planned line with no client_request_id; every fold skips it.
+        {"kind": "planned", "uic": uic_a, "stop_price": 1.0},
+    ]
+
+
+def _planned_fold_data(
+    fold: dict[int, PlannedExit],
+) -> dict[int, tuple[Any, ...]]:
+    """PlannedExit fields excluding the ``next_gen`` / ``next_amend_seq`` closures
+    (which compare by identity, so a fresh fold is never ``==`` a prior one)."""
+    return {
+        uic: (
+            planned.uic,
+            planned.entry_crid,
+            planned.side,
+            planned.stop_price,
+            planned.tp_price,
+            planned.conflicting,
+            planned.n_plans,
+        )
+        for uic, planned in fold.items()
+    }
+
+
+class TestCompactStandaloneStopJournalLines(unittest.TestCase):
+    """Issue #895: the pure compaction returns the minimal fold-equivalent set."""
+
+    def test_folds_are_identical_on_original_vs_compacted(self) -> None:
+        original = _rich_standalone_stop_journal()
+        compacted = cl._compact_standalone_stop_journal_lines(original)
+
+        self.assertEqual(
+            _planned_fold_data(cl._fold_planned_exits(original)),
+            _planned_fold_data(cl._fold_planned_exits(compacted)),
+        )
+        self.assertEqual(
+            cl._fold_oco_unsupported(original),
+            cl._fold_oco_unsupported(compacted),
+        )
+        for kind in ("oco_placed", "amend_failed"):
+            for now in (300.0, 1000.0):
+                self.assertEqual(
+                    cl._fold_ttl_markers(original, kind, now, 120.0),
+                    cl._fold_ttl_markers(compacted, kind, now, 120.0),
+                    msg=f"{kind} @ now={now}",
+                )
+
+    def test_compacted_set_is_minimal_one_line_per_key(self) -> None:
+        compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
+        kinds = [line["kind"] for line in compacted]
+        # 3 planned (crid-A0 newest, crid-A1, crid-B0), 1 oco_unsupported,
+        # 1 oco_placed, 1 amend_failed, 2 amend_seq (one per uic). No gen/malformed.
+        self.assertEqual(kinds.count("planned"), 3)
+        self.assertEqual(kinds.count("oco_unsupported"), 1)
+        self.assertEqual(kinds.count("oco_placed"), 1)
+        self.assertEqual(kinds.count("amend_failed"), 1)
+        self.assertEqual(kinds.count("amend_seq"), 2)
+        self.assertNotIn("gen", kinds)
+        self.assertEqual(len(compacted), 8)
+
+    def test_newest_planned_per_crid_survives(self) -> None:
+        compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
+        a0 = [
+            line
+            for line in compacted
+            if line.get("kind") == "planned" and line.get("client_request_id") == "crid-A0"
+        ]
+        self.assertEqual(len(a0), 1)
+        self.assertEqual(a0[0]["gen"], 1)
+        self.assertAlmostEqual(a0[0]["stop_price"], 11.0)
+
+    def test_empty_input_is_empty_output(self) -> None:
+        self.assertEqual(cl._compact_standalone_stop_journal_lines([]), [])
+
+
+class TestCompactStandaloneStopJournalFile(unittest.TestCase):
+    """Issue #895: the startup rewrite is atomic, a no-op on absent/empty files,
+    and preserves the newest-per-key semantics the folds and amend-seq reader see."""
+
+    def test_absent_file_is_noop(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._compact_standalone_stop_journal()
+            self.assertFalse(journal.exists())
+
+    def test_empty_file_is_noop(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            journal.write_text("", encoding="utf-8")
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._compact_standalone_stop_journal()
+            self.assertTrue(journal.exists())
+            self.assertEqual(journal.read_text(encoding="utf-8"), "")
+
+    def test_rewrite_shrinks_file_and_preserves_folds_and_amend_seq(self) -> None:
+        import json
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            journal.write_text(
+                "".join(
+                    json.dumps(line, sort_keys=True) + "\n"
+                    for line in _rich_standalone_stop_journal()
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                before_lines = list(cl._iter_standalone_stop_journal())
+                planned_before = _planned_fold_data(cl._fold_planned_exits(before_lines))
+                oco_before = cl._fold_oco_unsupported(before_lines)
+                seq_a_before = cl._read_persisted_amend_seq(111)
+                seq_b_before = cl._read_persisted_amend_seq(222)
+
+                cl._compact_standalone_stop_journal()
+
+                after_lines = list(cl._iter_standalone_stop_journal())
+                self.assertLess(len(after_lines), len(before_lines))
+                self.assertEqual(
+                    planned_before,
+                    _planned_fold_data(cl._fold_planned_exits(after_lines)),
+                )
+                self.assertEqual(oco_before, cl._fold_oco_unsupported(after_lines))
+                self.assertEqual(seq_a_before, cl._read_persisted_amend_seq(111))
+                self.assertEqual(seq_b_before, cl._read_persisted_amend_seq(222))
+                for kind in ("oco_placed", "amend_failed"):
+                    self.assertEqual(
+                        cl._fold_ttl_markers(before_lines, kind, 300.0, 120.0),
+                        cl._fold_ttl_markers(after_lines, kind, 300.0, 120.0),
+                    )
+            # No temp artifacts left behind in the journal dir.
+            leftovers = [p.name for p in Path(d).iterdir() if p.name != journal.name]
+            self.assertEqual(leftovers, [])
+
+
 if __name__ == "__main__":
     unittest.main()

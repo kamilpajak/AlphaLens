@@ -383,6 +383,11 @@ def build_default_deps() -> LoopDeps:
         iter_submission_records,
     )
 
+    # One-shot bounded-growth maintenance: fold the append-only standalone-stop
+    # journal down to its minimal fold-equivalent set (issue #895). Runs here —
+    # at startup, before the tick loop — so no concurrent tick races the rewrite.
+    _compact_standalone_stop_journal()
+
     broker = get_default_broker()
     if not isinstance(broker, SupportsStandaloneStop):
         raise BrokerCapabilityError(
@@ -767,6 +772,123 @@ def _make_next_amend_seq(uic: int) -> Callable[[], int]:
         return seq
 
     return _next_seq
+
+
+def _compact_standalone_stop_journal_lines(
+    lines: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the MINIMAL set of journal lines that folds IDENTICALLY to ``lines``
+    (issue #895 — bound the append-only journal's unbounded growth).
+
+    Keeps exactly what the readers need and nothing else:
+      - the NEWEST ``planned`` per client_request_id (mirroring
+        ``_latest_planned_by_crid`` — highest ``gen`` wins, later line breaks a
+        tie), so ``_fold_planned_exits`` is unchanged;
+      - ONE ``oco_unsupported`` per uic (``_fold_oco_unsupported`` only needs the
+        uic present);
+      - the NEWEST (max ``ts``) ``oco_placed`` / ``amend_failed`` per uic — the
+        TTL fold's membership for ANY ``now`` is decided by the newest marker, so
+        older ones are redundant;
+      - the ``amend_seq`` carrying the MAX seq per uic (``_read_persisted_amend_seq``
+        returns that max).
+
+    Every other line — ``gen`` markers (read only by ``_read_persisted_gen``, whose
+    reset to the initial gen is harmless: post-restart re-emits are past Saxo's 15s
+    request-id dedup window, and protection is broker-state-truth not journal-derived),
+    unknown kinds, and malformed lines — is dropped; none contributes to the four
+    folds above. Pure: no I/O, input never mutated (kept lines are shallow-copied)."""
+    materialized = list(lines)
+
+    # Newest planned per crid — reuse the fold's own selection so the compacted
+    # set contains EXACTLY the line _fold_planned_exits would elect. Sorted by
+    # crid for a deterministic, stable file order.
+    planned_by_crid = _latest_planned_by_crid(materialized)
+    planned: list[dict[str, Any]] = [
+        dict(planned_by_crid[crid][1]) for crid in sorted(planned_by_crid)
+    ]
+
+    oco_unsupported: dict[int, dict[str, Any]] = {}
+    ttl_latest: dict[str, dict[int, tuple[float, dict[str, Any]]]] = {
+        "oco_placed": {},
+        "amend_failed": {},
+    }
+    amend_seq: dict[int, tuple[int, dict[str, Any]]] = {}
+
+    for line in materialized:
+        kind = line.get("kind")
+        if kind == "oco_unsupported":
+            try:
+                uic = int(line["uic"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            oco_unsupported.setdefault(uic, dict(line))
+        elif kind in ttl_latest:
+            try:
+                uic = int(line["uic"])
+                ts = float(line["ts"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            prev = ttl_latest[kind].get(uic)
+            if prev is None or ts >= prev[0]:
+                ttl_latest[kind][uic] = (ts, dict(line))
+        elif kind == "amend_seq":
+            try:
+                uic = int(line["uic"])
+                seq = int(line["seq"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            prev = amend_seq.get(uic)
+            if prev is None or seq >= prev[0]:
+                amend_seq[uic] = (seq, dict(line))
+
+    compacted: list[dict[str, Any]] = list(planned)
+    compacted.extend(oco_unsupported[uic] for uic in sorted(oco_unsupported))
+    compacted.extend(ttl_latest["oco_placed"][uic][1] for uic in sorted(ttl_latest["oco_placed"]))
+    compacted.extend(
+        ttl_latest["amend_failed"][uic][1] for uic in sorted(ttl_latest["amend_failed"])
+    )
+    compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
+    return compacted
+
+
+def _compact_standalone_stop_journal() -> None:
+    """Atomically rewrite the standalone-stop journal with its compacted form.
+
+    Read the current file, compute the minimal fold-equivalent line set, and
+    replace the file in place (temp file in the SAME dir + ``os.replace`` — an
+    atomic rename on POSIX, so a crash mid-rewrite leaves the old journal intact).
+    A NO-OP when the journal is absent or holds no parseable records — never
+    creates or truncates a file that has nothing to compact.
+
+    Call ONCE at daemon startup (``build_default_deps``), BEFORE the tick loop, so
+    no concurrent tick can race the rewrite against an append."""
+    import contextlib
+    import json
+    import os
+    import tempfile
+
+    path = STANDALONE_STOP_JOURNAL_PATH
+    if not path.exists():
+        return
+    lines = list(_iter_standalone_stop_journal())
+    if not lines:
+        return
+    compacted = _compact_standalone_stop_journal_lines(lines)
+
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=".standalone_stops.compact-", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for record in compacted:
+                fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, str(path))
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_name)
+        raise
 
 
 def _default_oauth_provider() -> Any:
