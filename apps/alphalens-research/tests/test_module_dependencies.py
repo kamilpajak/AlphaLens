@@ -142,6 +142,21 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # ADR 0014: the automanager reaches concrete saxo ONLY via the broker
+        # registry or a lazy import inside a composition-root wiring function
+        # (build_default_deps / _default_oauth_provider /
+        # _build_streaming_subscriber / _build_stream_handles) — those pass
+        # automatically because top_level_only skips function bodies. A
+        # top-level saxo import would hard-wire the vendor into the manager.
+        "name": "automanager must not import concrete saxo at top level (ADR 0014 wiring)",
+        "from_pkg": "alphalens_pipeline.brokers.automanager",
+        "forbidden_prefix": "alphalens_pipeline.brokers.saxo",
+        "top_level_only": True,
+        "exemptions": {
+            "streaming_trigger.py"
+        },  # anti-rot: drop when the module relocates under brokers/saxo/
+    },
+    {
         # Workspace split (PR2): the pipeline tier hosts live infrastructure
         # (data, core, scorers, edgar_detector, thematic, literature_scanner) and
         # must remain downstream-free. The research tier consumes pipeline,
@@ -223,10 +238,12 @@ class TestModuleDependencies(unittest.TestCase):
             # Cross-tier pipeline rule: skip function-scope imports because the
             # CLI is allowed to lazy-import the research tier inside command
             # bodies (see module docstring).
-            top_level_only = rule["from_pkg"] == "alphalens_pipeline"
+            top_level_only = (
+                rule.get("top_level_only", False) or rule["from_pkg"] == "alphalens_pipeline"
+            )
             for path in _python_files(pkg_dir):
                 rel = str(path.relative_to(WORKSPACE_ROOT))
-                if rel in rule["exemptions"]:
+                if path.name in rule["exemptions"]:
                     continue
                 for module in _iter_imports(path, include_function_scope=not top_level_only):
                     if module.startswith(rule["forbidden_prefix"]):
@@ -274,6 +291,61 @@ class TestModuleDependencies(unittest.TestCase):
                     f"rule {rule['name']!r} would not catch the synthetic violation",
                 )
 
+    def test_automanager_saxo_boundary_positive_control(self):
+        """The automanager -> saxo boundary rule cannot rot silently.
+
+        Pins BOTH arms of the ADR-0014 wiring contract:
+          - a TOP-LEVEL ``from alphalens_pipeline.brokers.saxo...`` import IS
+            surfaced when function scope is excluded (the forbidden shape);
+          - the SAME import INSIDE a def body is NOT surfaced (the allowed
+            composition-root lazy-wiring shape — build_default_deps /
+            _default_oauth_provider / _build_streaming_subscriber /
+            _build_stream_handles pass because ``top_level_only`` skips bodies).
+        Also pins that the streaming_trigger.py file-level exemption survives.
+        """
+        import tempfile
+
+        forbidden_prefix = "alphalens_pipeline.brokers.saxo"
+
+        top_level = (
+            "from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError\nSaxoAuthError\n"
+        )
+        lazy = (
+            "def _wire():\n"
+            "    from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError\n"
+            "    return SaxoAuthError\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            top_path = Path(tmp) / "top_level_violation.py"
+            top_path.write_text(top_level)
+            lazy_path = Path(tmp) / "lazy_wiring.py"
+            lazy_path.write_text(lazy)
+
+            top_modules = list(_iter_imports(top_path, include_function_scope=False))
+            lazy_modules = list(_iter_imports(lazy_path, include_function_scope=False))
+
+        self.assertTrue(
+            any(m.startswith(forbidden_prefix) for m in top_modules),
+            "top-level saxo import must be flagged by the boundary walker",
+        )
+        self.assertFalse(
+            any(m.startswith(forbidden_prefix) for m in lazy_modules),
+            "lazy-wiring saxo import inside a def body must NOT be flagged",
+        )
+
+        automanager_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_pipeline.brokers.automanager"
+            and rule["forbidden_prefix"] == forbidden_prefix
+        ]
+        self.assertEqual(
+            len(automanager_rules),
+            1,
+            "the automanager -> saxo boundary rule must exist exactly once",
+        )
+        self.assertIn("streaming_trigger.py", automanager_rules[0]["exemptions"])
+
     def test_exemptions_still_exist(self):
         """A documented exemption must stay tied to a real violation.
 
@@ -286,16 +358,19 @@ class TestModuleDependencies(unittest.TestCase):
         re-introduction of the same forbidden import.
         """
         for rule in RULES:
-            for rel in rule["exemptions"]:
-                path = WORKSPACE_ROOT / rel
-                self.assertTrue(
-                    path.exists(),
-                    f"exemption refers to missing file: {rel}",
+            pkg_dir = _resolve_pkg_dir(rule["from_pkg"])
+            by_name = {p.name: p for p in _python_files(pkg_dir)}
+            for name in rule["exemptions"]:
+                path = by_name.get(name)
+                self.assertIsNotNone(
+                    path,
+                    f"exemption refers to missing file: {name} under {rule['from_pkg']}",
                 )
+                assert path is not None  # narrow for the type checker (assertIsNotNone does not)
                 modules = list(_iter_imports(path, include_function_scope=True))
                 self.assertTrue(
                     any(m.startswith(rule["forbidden_prefix"]) for m in modules),
-                    f"dead exemption: {rel} no longer imports "
+                    f"dead exemption: {name} no longer imports "
                     f"{rule['forbidden_prefix']!r} — remove it from rule "
                     f"{rule['name']!r}",
                 )

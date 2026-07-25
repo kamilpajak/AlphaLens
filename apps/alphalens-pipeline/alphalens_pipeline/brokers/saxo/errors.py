@@ -11,12 +11,14 @@ boundary.
 
 from __future__ import annotations
 
+from alphalens_pipeline.brokers.contract import BrokerAuthError
+
 
 class SaxoError(RuntimeError):
     """Non-transient Saxo failure (schema, permanent 4xx, exhausted retries)."""
 
 
-class SaxoAuthError(SaxoError):
+class SaxoAuthError(SaxoError, BrokerAuthError):
     """401 after one token-refresh attempt, or no token configured.
 
     Distinct so callers can short-circuit to operator action (regenerate the
