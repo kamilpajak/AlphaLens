@@ -426,6 +426,10 @@ def _context_bars(
 
     raw = list(daily_bar_fetch(ticker, start, end))
     if not raw:
+        # A delisted / never-covered ticker has a genuinely empty context feed —
+        # not a failure. The caller stamps CONTEXT_OK on the empty band, so the
+        # terminal freezes on a marker-core-only chart rather than re-fetching an
+        # empty feed forever.
         return [], []
 
     folded = _daily_bars_from_context(raw, keep_sessions=keep, exchange=exchange)
@@ -908,9 +912,11 @@ def _build_nonfrozen_payloads(
     non-frozen row (this never consults the deadline — no maturation timing or
     queue position can defer an exit marker). The scarce cosmetic context band is
     rationed OLDEST-MATURED-FIRST: candidates are sorted by maturation recency and
-    the deadline is checked LIVE right before each row's build, so the actual
-    Polygon fetch work accrues wall-clock between checks and the budget genuinely
-    bounds the fetch phase. A zero-I/O grant census could NOT do this — with the
+    the deadline is checked LIVE right before each row's CONTEXT fetch (never the
+    marker core, which is always built), so the actual Polygon fetch work accrues
+    wall-clock between checks and the budget genuinely bounds the fetch phase. The
+    check gates the next candidate based on whether the previous fetch spent the
+    budget, so one final fetch may overrun the deadline before the next is refused. A zero-I/O grant census could NOT do this — with the
     real time-based ``_RunDeadline`` its ``should_stop()`` returns the same verdict
     for every candidate, granting all-or-nothing and leaving the Polygon phase
     unbounded. ``deadline is None`` means unbounded (every row builds full context).
@@ -951,6 +957,13 @@ def _build_nonfrozen_payloads(
         # Anti-downgrade guard: a fresh non-OK build never overwrites an existing
         # OK payload. Keep the prior string verbatim (not re-dumped) and flag it
         # preserved so an all-preserved file skips the rewrite.
+        # NOTE: the guard is on status only, not on context tier. A fresh OK build
+        # with a lower context tier ("in_trade_only"/"reused" after budget
+        # exhaustion) DOES replace a prior "OK"-context payload. That is a cosmetic
+        # one-cycle downgrade (markers stay intact); the freeze gate keeps such a
+        # row eligible, so oldest-matured-first restores "OK" on the next budgeted
+        # night. Ranking context tiers here would add complexity for a transient,
+        # self-healing regression — the status-only contract is intentional.
         if payload.get("status") != "OK" and _prior_payload_is_ok(prior_str):
             built[(path_str, iloc)] = (prior_str, True, True)  # type: ignore[arg-type]
         else:
