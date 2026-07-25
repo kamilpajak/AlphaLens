@@ -76,6 +76,9 @@ def sweep(broker: Broker, journal: Iterable[Mapping[str, Any]]) -> list[Orphan]:
             # avoids a false-positive alert on every restart that happens while
             # protection is resting (the sweeper would otherwise flag the daemon's
             # OWN stop/OCO legs). Only entry-side (BUY / unknown) orders qualify.
+            # Fail-safe: a broker that leaves side=None on a real protection leg
+            # reverts to the OLD false positive (a noisy but harmless alert) — never
+            # a missed genuine orphan.
             continue
         if str(state.order_id) not in known_order_ids:
             orphans.append(
