@@ -27,6 +27,7 @@ from alphalens_pipeline.brokers.saxo.streaming import (
     SaxoStreamProtocolError,
     StreamAction,
     StreamMessage,
+    StreamTuning,
     parse_stream_frames,
 )
 
@@ -197,9 +198,44 @@ def _make_client(
         on_trigger=lambda: events["trigger"].append(True),
         on_heartbeat=events["heartbeat"].append,
         session=session or _RecordingSession(),
-        max_consecutive_failures=max_consecutive_failures,
+        tuning=StreamTuning(max_consecutive_failures=max_consecutive_failures),
     )
     return client, events
+
+
+class TestStreamTuningWiring(unittest.TestCase):
+    """The StreamTuning policy object threads into the client's internal knobs
+    (defaults used everywhere except stale_after_s, which StreamTrigger passes)."""
+
+    def test_defaults_match_the_documented_sim_policy(self):
+        client, _ = _make_client()
+        self.assertEqual(client._stale_after_s, 45.0)
+        self.assertEqual(client._recv_timeout_s, 30.0)
+        self.assertEqual(client._max_consecutive_failures, 6)
+        self.assertEqual(client._backoff_floor_s, 1.0)
+        self.assertEqual(client._backoff_ceiling_s, 30.0)
+
+    def test_custom_tuning_overrides_flow_to_the_client(self):
+        client = SaxoStreamingClient(
+            _SpyTokenProvider(),
+            _FakeSubscriber(),
+            context_id=_CTX,
+            on_trigger=lambda: None,
+            on_heartbeat=lambda ts: None,
+            session=_RecordingSession(),
+            tuning=StreamTuning(
+                stale_after_s=12.0,
+                recv_timeout_s=7.0,
+                max_consecutive_failures=3,
+                backoff_floor_s=0.5,
+                backoff_ceiling_s=8.0,
+            ),
+        )
+        self.assertEqual(client._stale_after_s, 12.0)
+        self.assertEqual(client._recv_timeout_s, 7.0)
+        self.assertEqual(client._max_consecutive_failures, 3)
+        self.assertEqual(client._backoff_floor_s, 0.5)
+        self.assertEqual(client._backoff_ceiling_s, 8.0)
 
 
 class TestStreamControlMessages(unittest.TestCase):
@@ -329,7 +365,7 @@ class TestStreamCircuitBreaker(unittest.TestCase):
             on_trigger=lambda: None,
             on_heartbeat=lambda ts: None,
             session=_RecordingSession(),
-            max_consecutive_failures=6,
+            tuning=StreamTuning(max_consecutive_failures=6),
             alert=alerts.append,
         )
         self.assertTrue(client.is_streaming)

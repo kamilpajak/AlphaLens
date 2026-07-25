@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, Any
 from alphalens_pipeline.brokers.saxo.streaming import (
     SIM_STREAMING_BASE_URL,
     SaxoStreamingClient,
+    StreamTuning,
 )
 
 if TYPE_CHECKING:
@@ -119,7 +120,7 @@ class StreamTrigger:
             on_trigger=self.on_trigger,
             on_heartbeat=self.on_heartbeat,
             streaming_base_url=streaming_base_url,
-            stale_after_s=client_stale_after_s,
+            tuning=StreamTuning(stale_after_s=client_stale_after_s),
         )
 
     # ----- surfaces the main loop reads -----
