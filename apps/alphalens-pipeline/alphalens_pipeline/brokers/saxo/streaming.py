@@ -220,6 +220,22 @@ async def _default_ws_connect(url: str, headers: dict[str, str]) -> Any:
         return await connect(url, extra_headers=headers)
 
 
+@dataclass(frozen=True)
+class StreamTuning:
+    """Reconnect / backoff / staleness policy for the streaming reader.
+
+    Grouped into one immutable object so the client constructor stays within a
+    sane parameter count and the retry discipline reads as one cohesive, testable
+    unit. Defaults are the SIM values locked in the design memo; production keeps
+    them all except ``stale_after_s`` (passed through by :class:`StreamTrigger`)."""
+
+    stale_after_s: float = 45.0
+    recv_timeout_s: float = 30.0
+    max_consecutive_failures: int = 6
+    backoff_floor_s: float = 1.0
+    backoff_ceiling_s: float = 30.0
+
+
 class SaxoStreamingClient:
     """SIM-only Saxo WebSocket reader. DI-clean, mirrors ``SaxoClient``.
 
@@ -239,11 +255,7 @@ class SaxoStreamingClient:
         on_trigger: Callable[[], None],
         on_heartbeat: Callable[[float], None],
         streaming_base_url: str = SIM_STREAMING_BASE_URL,
-        stale_after_s: float = 45.0,
-        recv_timeout_s: float = 30.0,
-        max_consecutive_failures: int = 6,
-        backoff_floor_s: float = 1.0,
-        backoff_ceiling_s: float = 30.0,
+        tuning: StreamTuning = StreamTuning(),
         session: requests.Session | None = None,
         ws_connect: Callable[[str, dict[str, str]], Awaitable[Any]] | None = None,
         async_sleep: Callable[[float], Awaitable[None]] | None = None,
@@ -258,11 +270,11 @@ class SaxoStreamingClient:
         self._on_trigger = on_trigger
         self._on_heartbeat = on_heartbeat
         self._streaming_base_url = streaming_base_url
-        self._stale_after_s = stale_after_s
-        self._recv_timeout_s = recv_timeout_s
-        self._max_consecutive_failures = max_consecutive_failures
-        self._backoff_floor_s = backoff_floor_s
-        self._backoff_ceiling_s = backoff_ceiling_s
+        self._stale_after_s = tuning.stale_after_s
+        self._recv_timeout_s = tuning.recv_timeout_s
+        self._max_consecutive_failures = tuning.max_consecutive_failures
+        self._backoff_floor_s = tuning.backoff_floor_s
+        self._backoff_ceiling_s = tuning.backoff_ceiling_s
         self._session = session or requests.Session()
         self._ws_connect = ws_connect or _default_ws_connect
         self._async_sleep = async_sleep
@@ -465,11 +477,12 @@ class SaxoStreamingClient:
     # ----- token re-authorize (synchronous, off the hot path) -----
 
     def _authorize_url(self) -> str:
+        # The SIM rail (_refuse_non_sim_streaming, enforced in __init__) guarantees a
+        # wss:// base, so the authorize endpoint is its https:// sibling. A plaintext
+        # ws:// base can never reach here, so no insecure-scheme normalization exists.
         base = self._streaming_base_url
         if base.startswith("wss://"):
             base = "https://" + base[len("wss://") :]
-        elif base.startswith("ws://"):
-            base = "http://" + base[len("ws://") :]
         if base.endswith("/connect"):
             base = base[: -len("/connect")] + "/authorize"
         return f"{base}?contextid={self._context_id}"
