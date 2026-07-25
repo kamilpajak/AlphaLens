@@ -280,6 +280,8 @@ class ManagerWorld:
             ensure_alive=lambda: self._chain,
             iter_picks=lambda: iter(self._picks),
             place_pick=self._place_pick,
+            # No submission records: the protection pass reads live broker state,
+            # not these records (build_protection_view ignores its records arg).
             read_records=list,
             verdicts_fn=lambda _records, _broker: list(self._verdicts),
             build_position_view=lambda _broker, _records: cl.BrokerView(

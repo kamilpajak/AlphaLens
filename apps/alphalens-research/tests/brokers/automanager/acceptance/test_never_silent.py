@@ -21,7 +21,8 @@ class ItNeverFailsSilently(unittest.TestCase):
 
         world.run_tick()
 
-        self.assertTrue(world.alerts, "a failed protective placement must alert")
+        # THEN it says specifically that placing the protective stop failed
+        world.assert_alerted(containing="placement failed")
 
     def test_it_alerts_when_the_broker_and_its_records_disagree(self) -> None:
         world = ManagerWorld(self)
@@ -30,7 +31,8 @@ class ItNeverFailsSilently(unittest.TestCase):
 
         world.run_tick()
 
-        self.assertTrue(world.alerts, "a reconcile divergence must alert")
+        # THEN it says specifically that a divergence was found
+        world.assert_alerted(containing="divergence")
 
     def test_it_alerts_when_the_broker_session_is_dead(self) -> None:
         world = ManagerWorld(self)

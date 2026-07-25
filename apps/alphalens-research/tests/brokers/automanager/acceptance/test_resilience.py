@@ -26,7 +26,7 @@ class ItKeepsGoingWhenTheBrokerMisbehaves(unittest.TestCase):
         # THEN MO is still protected despite KO failing ...
         world.assert_protected("MO")
         # ... and KO's failure is not swallowed
-        self.assertTrue(world.alerts, "KO's placement failure should have raised an alert")
+        world.assert_alerted(containing="placement failed")
 
     def test_an_oco_rejection_degrades_to_a_plain_stop_never_to_nothing(self) -> None:
         world = ManagerWorld(self)
