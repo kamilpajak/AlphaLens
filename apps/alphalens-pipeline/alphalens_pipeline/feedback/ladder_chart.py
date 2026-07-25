@@ -424,18 +424,12 @@ def _context_bars(
     start = dt.datetime.combine(oldest_lead_in, dt.time.min, tzinfo=dt.UTC) - dt.timedelta(days=1)
     end = dt.datetime.combine(newest_trailing, dt.time.min, tzinfo=dt.UTC) + dt.timedelta(days=2)
 
-    try:
-        raw = list(daily_bar_fetch(ticker, start, end))
-    except Exception as exc:
-        logger.warning(
-            "chart-payload: daily context fetch failed for %s [%s, %s] — %s; in-trade only.",
-            ticker,
-            oldest_lead_in.isoformat(),
-            newest_trailing.isoformat(),
-            exc,
-        )
-        return [], []
+    raw = list(daily_bar_fetch(ticker, start, end))
     if not raw:
+        # A delisted / never-covered ticker has a genuinely empty context feed —
+        # not a failure. The caller stamps CONTEXT_OK on the empty band, so the
+        # terminal freezes on a marker-core-only chart rather than re-fetching an
+        # empty feed forever.
         return [], []
 
     folded = _daily_bars_from_context(raw, keep_sessions=keep, exchange=exchange)
@@ -466,6 +460,92 @@ def _merge_bars(
     return [by_time[t] for t in sorted(by_time)]
 
 
+# Context-state stamp values (memo §3a). Written on every OK payload so the freeze
+# gate + anti-downgrade guard can tell a full-context chart from a marker-core-only
+# one. A MISSING key defaults to CONTEXT_OK (the legacy already-final tail).
+CONTEXT_OK = "OK"
+CONTEXT_REUSED = "reused"
+CONTEXT_IN_TRADE_ONLY = "in_trade_only"
+
+
+def _split_reused_context(
+    reused_bars: Sequence[Mapping[str, Any]],
+    arrival_session: dt.date,
+    horizon_session: dt.date,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split reused prior-payload bars into ``(lead_in, trailing)`` around the trade.
+
+    Reused bars are daily candles from a prior ``chart_payload_json`` (``time`` /
+    ``open`` / ``high`` / ``low`` / ``close`` / ``volume``). Bars strictly BEFORE
+    arrival are lead-in, bars strictly AFTER the horizon are trailing; bars inside
+    ``[arrival, horizon]`` are dropped — the fresh in-trade minute fold owns those
+    sessions and wins on overlap in :func:`_merge_bars`, so a reused bar now inside
+    an extended hold is correctly superseded.
+    """
+    arrival_iso = arrival_session.isoformat()
+    horizon_iso = horizon_session.isoformat()
+    lead: list[dict[str, Any]] = []
+    trail: list[dict[str, Any]] = []
+    for bar in reused_bars:
+        time = bar.get("time")
+        if not isinstance(time, str):
+            continue
+        if time < arrival_iso:
+            lead.append(dict(bar))
+        elif time > horizon_iso:
+            trail.append(dict(bar))
+    return lead, trail
+
+
+def _resolve_context_bars(
+    ticker: str,
+    daily_bar_fetch: DailyBarFetch | None,
+    reused_context_bars: Sequence[Mapping[str, Any]] | None,
+    *,
+    arrival_session: dt.date,
+    horizon_session: dt.date,
+    has_in_trade: bool,
+    exchange: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
+    """``(lead_in, trailing, context_state)`` for the payload's cosmetic band.
+
+    * ``daily_bar_fetch`` supplied and it did not raise -> ``CONTEXT_OK`` (even when
+      it returns ``[]`` — a delisted / empty ticker resolves to OK-context rather
+      than retrying forever); a raised fetch degrades to ``CONTEXT_IN_TRADE_ONLY``
+      so a later run re-attempts the band.
+    * ``daily_bar_fetch`` None and ``reused_context_bars`` given -> the reused band
+      is spliced in and stamped ``CONTEXT_REUSED``.
+    * neither -> ``CONTEXT_IN_TRADE_ONLY``.
+    """
+    if daily_bar_fetch is not None:
+        hold_sessions = (
+            trading_days_elapsed(arrival_session, horizon_session, exchange) if has_in_trade else 0
+        )
+        try:
+            lead_in, trailing = _context_bars(
+                ticker,
+                daily_bar_fetch,
+                arrival_session=arrival_session,
+                horizon_session=horizon_session,
+                hold_sessions=hold_sessions,
+                exchange=exchange,
+            )
+        except Exception as exc:
+            logger.warning(
+                "chart-payload: daily context fetch failed for %s — %s; in-trade only.",
+                ticker,
+                exc,
+            )
+            return [], [], CONTEXT_IN_TRADE_ONLY
+        return lead_in, trailing, CONTEXT_OK
+    if reused_context_bars:
+        lead_in, trailing = _split_reused_context(
+            reused_context_bars, arrival_session, horizon_session
+        )
+        return lead_in, trailing, CONTEXT_REUSED
+    return [], [], CONTEXT_IN_TRADE_ONLY
+
+
 def build_chart_payload(
     setup: Mapping[str, Any] | None,
     bars: Sequence[Mapping[str, Any]],
@@ -476,6 +556,7 @@ def build_chart_payload(
     exchange: str = DEFAULT_EXCHANGE,
     ticker: str = "",
     daily_bar_fetch: DailyBarFetch | None = None,
+    reused_context_bars: Sequence[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build the chart payload for one (brief_date, ticker).
 
@@ -507,26 +588,24 @@ def build_chart_payload(
     daily = _daily_bars_from_minute(bars, session_windows)
 
     # The daily CONTEXT bars (lead-in before arrival + trailing after the horizon)
-    # are computed regardless of whether the in-trade window produced any candle. A
+    # are resolved regardless of whether the in-trade window produced any candle. A
     # freshly-started OPEN position has no in-trade minute bars yet, but its PLAN
     # (lead-in context candles + the entry/TP/stop price lines) must still render —
     # never an empty "no data" box. When there ARE in-trade bars the hold spans
     # arrival..horizon; with none yet the hold is 0 sessions so the LEAD_IN_FLOOR
-    # (20) still governs the lead-in.
-    lead_in: list[dict[str, Any]] = []
-    trailing: list[dict[str, Any]] = []
-    if daily_bar_fetch is not None:
-        hold_sessions = (
-            trading_days_elapsed(arrival_session, horizon_session, exchange) if daily else 0
-        )
-        lead_in, trailing = _context_bars(
-            ticker,
-            daily_bar_fetch,
-            arrival_session=arrival_session,
-            horizon_session=horizon_session,
-            hold_sessions=hold_sessions,
-            exchange=exchange,
-        )
+    # (20) still governs the lead-in. The marker-core / in-trade candles are built
+    # in EVERY branch (Polygon-free); ``context_state`` records whether the cosmetic
+    # band is fresh ("OK"), spliced from a prior payload ("reused"), or absent
+    # ("in_trade_only") so the freeze gate + anti-downgrade guard can reason on it.
+    lead_in, trailing, context_state = _resolve_context_bars(
+        ticker,
+        daily_bar_fetch,
+        reused_context_bars,
+        arrival_session=arrival_session,
+        horizon_session=horizon_session,
+        has_in_trade=bool(daily),
+        exchange=exchange,
+    )
 
     if not daily:
         # In-trade window empty. Plan-preview the PLAN over the context bars when
@@ -537,6 +616,7 @@ def build_chart_payload(
             return _no_data_payload()
         return {
             "status": "OK",
+            "context": context_state,
             "bars": context_bars,
             "price_lines": _price_lines(setup),
             "markers": [],  # no fills yet — a plan preview, not a replay
@@ -558,6 +638,7 @@ def build_chart_payload(
 
     return {
         "status": "OK",
+        "context": context_state,
         "bars": bars_out,
         "price_lines": _price_lines(setup),
         "markers": markers,
@@ -658,54 +739,56 @@ def _is_frozen_terminal_ok(row: Any) -> bool:
     if not bars:
         return False
     last_bar = _as_date(bars[-1].get("time"))
-    return last_bar is not None and last_bar >= matured
+    if last_bar is None or last_bar < matured:
+        return False
+    # Context-completeness gate (memo §3e): a marker-core-only chart is not final
+    # until its cosmetic band is filled. A "reused" / "in_trade_only" terminal stays
+    # eligible so a later budgeted run upgrades its band to "OK", then it freezes. A
+    # MISSING key defaults to OK so the legacy already-final tail stays frozen (no
+    # mass unfreeze / 429 storm on pre-fix DONE charts).
+    return payload.get("context", CONTEXT_OK) == CONTEXT_OK
+
+
+# One non-frozen row's build result: (payload_json_or_prior, is_ok, preserved).
+# ``preserved`` is True only when the anti-downgrade guard kept the prior OK string
+# byte-identical (so an all-preserved file skips the rewrite).
+_BuiltPayload = tuple[str, bool, bool]
 
 
 def _chart_frame_payloads(
     df: pd.DataFrame,
     *,
-    fetch: ChartBarFetch,
-    daily_fetch: DailyBarFetch,
-    exchange: str,
-    setups_by_date: dict[dt.date, dict[str, dict] | None],
-    briefs: Path,
-    deadline: Any,
-) -> tuple[list[str], int, bool, bool]:
-    """Build the ``chart_payload_json`` column for one frame.
+    path: Path,
+    built: dict[tuple[str, int], _BuiltPayload],
+) -> tuple[list[str], int, bool]:
+    """Assemble the ``chart_payload_json`` column for one frame from pre-built rows.
 
-    Returns ``(payload_col, n_with_chart, stopped_early, recomputed_any)``. A
-    frozen terminal-OK row is preserved verbatim (no fetch); the deadline breaks
-    the loop mid-frame with ``stopped_early=True`` so the caller leaves the
-    parquet untouched. Rows counted before an early break still contribute to
-    ``n_with_chart`` (matching the pre-refactor accounting).
+    Returns ``(payload_col, n_with_chart, recomputed_any)``. A frozen terminal-OK
+    row is preserved verbatim (never in ``built``). Every non-frozen row's payload
+    was already built by :func:`_build_nonfrozen_payloads` (which rebuilds the
+    Polygon-free marker core unconditionally and spends the scarce context band
+    oldest-matured-first under a live wall-clock check); this pass only copies the
+    result into position. A row whose result was anti-downgrade-preserved does NOT
+    flip ``recomputed_any`` so an all-frozen / all-preserved file skips the rewrite
+    and stays byte-identical on disk.
     """
     payload_col: list[str] = []
     n_with_chart = 0
-    stopped_early = False
     recomputed_any = False
-    for _, row in df.iterrows():
+    for iloc, (_, row) in enumerate(df.iterrows()):
         if _is_frozen_terminal_ok(row):
-            # Resolved position with an OK chart — never changes. Preserve the
-            # existing payload byte-for-byte and spend no Polygon budget on it.
+            # Resolved position with a complete OK chart — never changes. Preserve
+            # the existing payload byte-for-byte and spend no fetch on it.
             payload_col.append(str(row[CHART_PAYLOAD_COLUMN]))
             n_with_chart += 1
             continue
-        if deadline is not None and deadline.should_stop():
-            stopped_early = True
-            break
-        payload = _payload_for_row(
-            dict(row),
-            fetch=fetch,
-            daily_fetch=daily_fetch,
-            exchange=exchange,
-            setups_by_date=setups_by_date,
-            briefs_dir=briefs,
-        )
-        if payload.get("status") == "OK":
+        payload_str, is_ok, preserved = built[(str(path), iloc)]
+        payload_col.append(payload_str)
+        if is_ok:
             n_with_chart += 1
-        payload_col.append(json.dumps(payload))
-        recomputed_any = True
-    return payload_col, n_with_chart, stopped_early, recomputed_any
+        if not preserved:
+            recomputed_any = True
+    return payload_col, n_with_chart, recomputed_any
 
 
 def enrich_store_with_chart_payloads(
@@ -732,20 +815,21 @@ def enrich_store_with_chart_payloads(
     raises per row (a bad row / missing brief leaves a NO_DATA payload and is
     logged), idempotent + self-healing over every store parquet, atomic write.
 
-    When ``deadline`` is provided and ``deadline.should_stop()`` is True at the
-    top of the per-row loop, the loop breaks early. Rows left unprocessed keep
-    their existing values in the store and are retried on the next run. ``deadline``
-    is typed ``Any`` to avoid a circular import; callers pass a ``_RunDeadline``
-    instance.
+    ``deadline`` gates ONLY the cosmetic context band, never the exit marker. The
+    Polygon-free marker core + in-trade candles are rebuilt for EVERY non-frozen
+    row on EVERY run (no file-walk early break, no per-row break), so no maturation
+    timing or queue position can defer an exit marker. When ``deadline`` is provided
+    the scarce context band is spent OLDEST-MATURED-FIRST (:func:`_build_nonfrozen_payloads`)
+    with a live per-fetch wall-clock check, so a long-held terminal's cosmetic band
+    is not perpetually starved behind newer rows and the Polygon fetch phase stays
+    bounded. ``deadline`` is typed ``Any`` to avoid a circular import; callers pass a
+    ``_RunDeadline`` instance.
 
-    Polygon-budget fast-follow: parquets are visited NEWEST-date first, and a
-    frozen terminal-OK row (a resolved position that already carries an OK chart —
+    Polygon-budget fast-follow: a frozen terminal-OK row (a resolved position whose
+    OK chart already reaches its close AND whose context band is complete —
     :func:`_is_frozen_terminal_ok`) is preserved verbatim WITHOUT re-fetching, since
-    its price path and ladder never change. Together these stop the pass from
-    re-pricing the ~90 resolved rows every night, which is what starved the Polygon
-    quota into a 429 storm and hung the run. Newest-first means a deadline that
-    trips mid-run has already spent the budget on the recent, still-ongoing rows
-    (the ones whose charts actually move) rather than on old resolved ones.
+    its price path and ladder never change. An all-frozen file skips the rewrite
+    entirely (``recomputed_any`` False) so the fully-resolved tail costs zero I/O.
     """
     store = Path(store_dir)
     briefs = Path(briefs_dir)
@@ -754,10 +838,10 @@ def enrich_store_with_chart_payloads(
     fetch = bar_fetch or _default_bar_fetch
     daily_fetch = _memoized_daily_fetch(daily_bar_fetch or _default_daily_bar_fetch)
 
-    n_with_chart = 0
-    setups_by_date: dict[dt.date, dict[str, dict] | None] = {}
-
-    for path in sorted(store.glob("*.parquet"), reverse=True):
+    # Load every frame once (the maturation-ordered build + the per-frame assembly
+    # read the SAME df objects, so the (path, iloc) keys line up between passes).
+    frames: list[tuple[Path, pd.DataFrame]] = []
+    for path in sorted(store.glob("*.parquet")):
         try:
             df = pd.read_parquet(path)
         except (OSError, ValueError) as exc:
@@ -765,33 +849,158 @@ def enrich_store_with_chart_payloads(
             continue
         if df.empty:
             continue
+        frames.append((path, df))
 
-        payload_col, n_delta, stopped_early, recomputed_any = _chart_frame_payloads(
-            df,
-            fetch=fetch,
-            daily_fetch=daily_fetch,
-            exchange=exchange,
-            setups_by_date=setups_by_date,
-            briefs=briefs,
-            deadline=deadline,
-        )
+    # Build every non-frozen row's payload in ONE pass, oldest-matured-first. The
+    # Polygon-free marker core is rebuilt unconditionally; the scarce context band
+    # is rationed by a LIVE ``deadline.should_stop()`` check evaluated right before
+    # each row's fetch, so the real Polygon work accrues wall-clock and the budget
+    # genuinely bounds the fetch phase (a zero-I/O grant census could not — it
+    # would grant all-or-nothing whenever any budget remained).
+    setups_by_date: dict[dt.date, dict[str, dict] | None] = {}
+    built = _build_nonfrozen_payloads(
+        frames,
+        fetch=fetch,
+        daily_fetch=daily_fetch,
+        exchange=exchange,
+        setups_by_date=setups_by_date,
+        briefs=briefs,
+        deadline=deadline,
+    )
+
+    n_with_chart = 0
+    for path, df in frames:
+        payload_col, n_delta, recomputed_any = _chart_frame_payloads(df, path=path, built=built)
         n_with_chart += n_delta
 
-        if stopped_early:
-            # Deadline tripped mid-file: leave the parquet untouched so
-            # unprocessed rows are retried on the next run. Break rather
-            # than continue — every subsequent file would be opened only to
-            # immediately skip (deadline latches), so skip the open entirely.
-            break
-
         if recomputed_any:
-            # An all-frozen file's payload_col is byte-identical to what is on
-            # disk — skip the rewrite so the fully-resolved tail costs zero I/O
-            # (not just zero fetches) every night.
+            # An all-frozen (or all-anti-downgrade-preserved) file's payload_col is
+            # byte-identical to what is on disk — skip the rewrite so the resolved
+            # tail costs zero I/O (not just zero fetches) every night.
             df[CHART_PAYLOAD_COLUMN] = payload_col
             _write_atomic(path, df)
 
     return n_with_chart
+
+
+def _maturation_sort_key(row: Mapping[str, Any]) -> dt.date:
+    """Sort key for the residual context budget: oldest matured session first.
+
+    A terminal carries ``matured_at`` (the close session); an ongoing row (no
+    ``matured_at``) sorts LAST — its chart is re-priced nightly anyway, so deferring
+    its cosmetic band one night never strands a resolved position.
+    """
+    matured = _as_date(row.get("matured_at"))
+    return matured if matured is not None else dt.date.max
+
+
+def _build_nonfrozen_payloads(
+    frames: Sequence[tuple[Path, pd.DataFrame]],
+    *,
+    fetch: ChartBarFetch,
+    daily_fetch: DailyBarFetch,
+    exchange: str,
+    setups_by_date: dict[dt.date, dict[str, dict] | None],
+    briefs: Path,
+    deadline: Any,
+) -> dict[tuple[str, int], _BuiltPayload]:
+    """Build every non-frozen row's payload, oldest-matured-first (memo §3c/§3d).
+
+    Returns ``{(path_str, iloc): (payload_json_or_prior, is_ok, preserved)}``.
+
+    The Polygon-free marker core + in-trade candles are rebuilt for EVERY
+    non-frozen row (this never consults the deadline — no maturation timing or
+    queue position can defer an exit marker). The scarce cosmetic context band is
+    rationed OLDEST-MATURED-FIRST: candidates are sorted by maturation recency and
+    the deadline is checked LIVE right before each row's CONTEXT fetch (never the
+    marker core, which is always built), so the actual Polygon fetch work accrues
+    wall-clock between checks and the budget genuinely bounds the fetch phase. The
+    check gates the next candidate based on whether the previous fetch spent the
+    budget, so one final fetch may overrun the deadline before the next is refused. A zero-I/O grant census could NOT do this — with the
+    real time-based ``_RunDeadline`` its ``should_stop()`` returns the same verdict
+    for every candidate, granting all-or-nothing and leaving the Polygon phase
+    unbounded. ``deadline is None`` means unbounded (every row builds full context).
+
+    The anti-downgrade guard (memo §3c) keeps a prior OK payload byte-identical
+    when a fresh build is non-OK (a transient empty minute cache must not blank a
+    chart that already shows the trade); such rows are flagged ``preserved`` so an
+    all-preserved file skips the rewrite.
+    """
+    candidates: list[tuple[dt.date, str, int, Mapping[str, Any]]] = []
+    for path, df in frames:
+        for iloc, (_, row) in enumerate(df.iterrows()):
+            if _is_frozen_terminal_ok(row):
+                continue
+            row_map = dict(row)
+            candidates.append((_maturation_sort_key(row_map), str(path), iloc, row_map))
+    # Sort by (matured, path, iloc) only — never compare the row mappings.
+    candidates.sort(key=lambda c: (c[0], c[1], c[2]))
+
+    built: dict[tuple[str, int], _BuiltPayload] = {}
+    for _key, path_str, iloc, row in candidates:
+        prior = row.get(CHART_PAYLOAD_COLUMN)
+        prior_str = prior if isinstance(prior, str) and prior else None
+        # Live wall-clock check AT fetch time (in maturation order): the real
+        # Polygon fetch below advances the monotonic clock, so a finite budget
+        # bounds how many context bands are fetched and the oldest maturers win.
+        context_allowed = deadline is None or not deadline.should_stop()
+        payload = _payload_for_row(
+            row,
+            fetch=fetch,
+            daily_fetch=daily_fetch,
+            exchange=exchange,
+            setups_by_date=setups_by_date,
+            briefs_dir=briefs,
+            context_allowed=context_allowed,
+            prior_payload_json=prior_str,
+        )
+        # Anti-downgrade guard: a fresh non-OK build never overwrites an existing
+        # OK payload. Keep the prior string verbatim (not re-dumped) and flag it
+        # preserved so an all-preserved file skips the rewrite.
+        # NOTE: the guard is on status only, not on context tier. A fresh OK build
+        # with a lower context tier ("in_trade_only"/"reused" after budget
+        # exhaustion) DOES replace a prior "OK"-context payload. That is a cosmetic
+        # one-cycle downgrade (markers stay intact); the freeze gate keeps such a
+        # row eligible, so oldest-matured-first restores "OK" on the next budgeted
+        # night. Ranking context tiers here would add complexity for a transient,
+        # self-healing regression — the status-only contract is intentional.
+        if payload.get("status") != "OK" and _prior_payload_is_ok(prior_str):
+            built[(path_str, iloc)] = (prior_str, True, True)  # type: ignore[arg-type]
+        else:
+            built[(path_str, iloc)] = (json.dumps(payload), payload.get("status") == "OK", False)
+    return built
+
+
+def _reused_context_from_prior(
+    prior_payload_json: str | None,
+) -> list[Mapping[str, Any]] | None:
+    """Parse the prior payload's ``bars`` as a reusable context band (never raises).
+
+    Returns the prior daily candles so :func:`build_chart_payload` can splice their
+    lead-in / trailing sessions back in when the context budget is exhausted this
+    run. ``None`` when the prior is missing / unparseable / has no bars.
+    """
+    if not isinstance(prior_payload_json, str) or not prior_payload_json:
+        return None
+    try:
+        prior = json.loads(prior_payload_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(prior, dict):
+        return None
+    bars = prior.get("bars")
+    return bars if isinstance(bars, list) and bars else None
+
+
+def _prior_payload_is_ok(prior_payload_json: str | None) -> bool:
+    """Whether the prior stored payload parses to ``status == "OK"`` (never raises)."""
+    if not isinstance(prior_payload_json, str) or not prior_payload_json:
+        return False
+    try:
+        prior = json.loads(prior_payload_json)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(prior, dict) and prior.get("status") == "OK"
 
 
 def _payload_for_row(
@@ -802,8 +1011,17 @@ def _payload_for_row(
     exchange: str,
     setups_by_date: dict[dt.date, dict[str, dict] | None],
     briefs_dir: Path,
+    context_allowed: bool = True,
+    prior_payload_json: str | None = None,
 ) -> dict[str, Any]:
-    """Build one row's chart payload; never raises (NO_DATA on any failure)."""
+    """Build one row's chart payload; never raises (NO_DATA on any failure).
+
+    The marker core + in-trade candles are built from the disk minute cache in
+    either branch (Polygon-free). ``context_allowed`` gates only the cosmetic band:
+    when True the daily context is fetched (``context == "OK"``); when False the
+    prior payload's lead-in / trailing bars are reused (``context == "reused"``) or,
+    absent a prior, the chart is in-trade-only (``context == "in_trade_only"``).
+    """
     try:
         # Lazy import (population_ladder_monitor <-> ladder_chart would be a top-level
         # import cycle): _filter_bars_to_rth and _engine_cutoffs both live there.
@@ -845,6 +1063,19 @@ def _payload_for_row(
             entry_expiry_ms=entry_expiry_ms,
             position_expiry_ms=position_expiry_ms,
         )
+        if context_allowed:
+            return build_chart_payload(
+                setup,
+                rth_bars,
+                outcome,
+                arrival_session=arrival_session,
+                horizon_session=horizon_session,
+                exchange=exchange,
+                ticker=ticker,
+                daily_bar_fetch=daily_fetch,
+            )
+        # Context budget exhausted this run: build the Polygon-free marker core and
+        # reuse the prior payload's lead-in / trailing band (if any).
         return build_chart_payload(
             setup,
             rth_bars,
@@ -853,7 +1084,8 @@ def _payload_for_row(
             horizon_session=horizon_session,
             exchange=exchange,
             ticker=ticker,
-            daily_bar_fetch=daily_fetch,
+            daily_bar_fetch=None,
+            reused_context_bars=_reused_context_from_prior(prior_payload_json),
         )
     except Exception:
         logger.exception(
