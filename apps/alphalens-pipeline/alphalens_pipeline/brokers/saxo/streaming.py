@@ -227,7 +227,11 @@ class StreamTuning:
     Grouped into one immutable object so the client constructor stays within a
     sane parameter count and the retry discipline reads as one cohesive, testable
     unit. Defaults are the SIM values locked in the design memo; production keeps
-    them all except ``stale_after_s`` (passed through by :class:`StreamTrigger`)."""
+    them all except ``stale_after_s`` (passed through by :class:`StreamTrigger`).
+
+    ``frozen=True`` is load-bearing: it is what makes a single shared instance
+    safe as the constructor's default argument (no mutable-default aliasing trap).
+    Keep it frozen and keep every field immutable."""
 
     stale_after_s: float = 45.0
     recv_timeout_s: float = 30.0
