@@ -25,14 +25,18 @@ from pathlib import Path
 
 import pandas as pd
 from alphalens_pipeline.feedback.ladder_chart import (
+    CHART_PAYLOAD_COLUMN,
     LEAD_IN_CAP,
     LEAD_IN_FLOOR,
     TRAILING_SESSIONS,
     _horizon_session,
+    _is_frozen_terminal_ok,
+    _merge_bars,
     build_chart_payload,
     enrich_store_with_chart_payloads,
 )
 from alphalens_pipeline.feedback.ladder_replay import replay_ladder
+from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
 from alphalens_pipeline.paper.calendar import (
     advance_trading_sessions,
     previous_trading_day,
@@ -891,9 +895,15 @@ class TestEnrichSkipsFrozenTerminalRows(unittest.TestCase):
             )
             self.assertEqual(calls, ["OPEN"])  # ongoing -> always re-priced
 
-    def test_processes_newest_store_file_first(self) -> None:
-        """Store parquets are enriched newest-date first so a starved deadline
-        spends the Polygon budget on recent (ongoing) rows before old ones."""
+    def test_free_tier_unconditional_every_parquet_visited(self) -> None:
+        """REPLACES the removed newest-first heuristic (memo §5 item 14).
+
+        The Polygon-free marker tier is UNCONDITIONAL: even with the deadline
+        already exhausted, EVERY store parquet is still visited and every
+        non-frozen row's cached minute bars are folded (no file-walk early
+        break). So both files' tickers are fetched from the disk minute cache
+        regardless of budget — the exit marker can never be starved out by
+        queue position or maturation timing."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store_dir = root / "population_ladders"
@@ -904,11 +914,14 @@ class TestEnrichSkipsFrozenTerminalRows(unittest.TestCase):
             _write_brief(briefs_dir, d_old, "AAA", _OK_SETUP)
             _write_brief(briefs_dir, d_new, "BBB", _OK_SETUP)
 
-            order: list[str] = []
+            fetched: list[str] = []
 
             def bar_fetch(ticker: str, arrival_session: dt.date) -> list[dict]:
-                order.append(ticker)
-                return []  # NO_DATA is fine — we only pin the visit order
+                fetched.append(ticker)
+                return [
+                    _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+                    _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+                ]
 
             enrich_store_with_chart_payloads(
                 store_dir,
@@ -916,8 +929,10 @@ class TestEnrichSkipsFrozenTerminalRows(unittest.TestCase):
                 bar_fetch=bar_fetch,
                 daily_bar_fetch=lambda *_a, **_k: [],
                 exchange=_EXCHANGE,
+                deadline=_StubDeadline(stop=True),  # budget already exhausted
             )
-            self.assertEqual(order, ["BBB", "AAA"])  # newest date visited first
+            # Every parquet visited despite the tripped deadline (no early break).
+            self.assertEqual(sorted(fetched), ["AAA", "BBB"])
 
     def test_all_frozen_file_is_not_rewritten(self) -> None:
         """A store parquet whose every row is frozen terminal-OK is NOT rewritten:
@@ -1193,6 +1208,692 @@ class TestChartReplayHonoursTtlCutoffs(unittest.TestCase):
 
         time_stops = [m for m in payload["markers"] if m["kind"] == "TIME_STOP"]
         self.assertEqual(len(time_stops), 1, "position-TTL must draw exactly one TIME_STOP marker")
+
+
+class _StubDeadline:
+    """A ``_RunDeadline``-shaped stub: ``should_stop()`` returns a fixed flag.
+
+    The enrich pass only calls ``should_stop()`` on the deadline; a constant
+    stub lets a test simulate an already-exhausted Polygon budget
+    (``stop=True``) or an unbounded one (``stop=False``) without touching the
+    monotonic clock.
+    """
+
+    def __init__(self, *, stop: bool) -> None:
+        self._stop = stop
+
+    def should_stop(self) -> bool:
+        return self._stop
+
+
+class _BudgetDeadline:
+    """Allows the paid context band for the first ``allow`` rows, then stops.
+
+    Each ``should_stop()`` call that returns ``False`` consumes one unit of the
+    residual context budget; once exhausted every later call returns ``True``.
+    Used to pin WHICH row spends the scarce context budget first (the free
+    marker tier is unconditional and never consults the deadline in the fixed
+    design)."""
+
+    def __init__(self, *, allow: int) -> None:
+        self._remaining = allow
+
+    def should_stop(self) -> bool:
+        if self._remaining > 0:
+            self._remaining -= 1
+            return False
+        return True
+
+
+# The FTRE regression geometry (memo §5 test 5): brief 2026-06-12, arrival
+# 2026-06-16, matured 2026-07-23, sequence E1 -> TP1 (TP1 sold). These are the
+# exact levels the live store row carried.
+_FTRE_ARRIVAL = dt.date(2026, 6, 16)
+_FTRE_MATURED = dt.date(2026, 7, 23)
+_FTRE_ENTRY = 15.988738606366711
+_FTRE_STOP = 10.855612341290005
+_FTRE_TP1 = 18.670000076293945
+_FTRE_SETUP = {
+    "status": "OK",
+    "schema_version": "1.0.0",
+    "suggested_size_pct": 2.0,
+    "disaster_stop": _FTRE_STOP,
+    "atr": 1.0,
+    "order_ttl_days": 7,
+    "entry_tiers": [{"limit": _FTRE_ENTRY, "alloc_pct": 100.0}],
+    "tp_tranches": [{"target": _FTRE_TP1, "tranche_pct": 100.0}],
+}
+
+
+def _lead_in_payload_bars(arrival: dt.date, n: int) -> list[dict]:
+    """``n`` daily-candle dicts on the sessions strictly before ``arrival``.
+
+    Shaped like the ``bars`` a prior ``chart_payload_json`` carries so a test
+    can plant a reusable lead-in context band on an existing payload."""
+    return [
+        {
+            "time": s.isoformat(),
+            "open": 40.0,
+            "high": 41.0,
+            "low": 39.0,
+            "close": 40.5,
+            "volume": 1.0,
+        }
+        for s in _sessions_before(arrival, n)
+    ]
+
+
+class TestBuildChartContextStamp(unittest.TestCase):
+    """``build_chart_payload`` stamps a ``context`` state on the payload so the
+    freeze gate + anti-downgrade guard can tell a full-context chart from a
+    marker-core-only one (memo §3a)."""
+
+    def _in_trade(self) -> list[dict]:
+        return [
+            _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+            _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+        ]
+
+    def test_context_ok_when_daily_fetch_supplied(self) -> None:
+        """A supplied ``daily_bar_fetch`` that returns a lead-in bar -> the
+        payload is stamped ``context == 'OK'`` and a pre-arrival bar is
+        present."""
+        in_trade = self._in_trade()
+        pre = _sessions_before(_ARRIVAL, 25)
+
+        def daily_fetch(ticker, start, end):
+            return [_daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre]
+
+        payload = _payload(
+            in_trade, replay_ladder(_OK_SETUP, in_trade), daily_bar_fetch=daily_fetch
+        )
+        self.assertEqual(payload.get("context"), "OK")
+        times = [b["time"] for b in payload["bars"]]
+        self.assertTrue(any(t < _ARRIVAL.isoformat() for t in times))
+
+    def test_context_in_trade_only_when_no_fetch_no_reuse(self) -> None:
+        """No ``daily_bar_fetch`` and no reused context -> ``context ==
+        'in_trade_only'`` with the markers still folded from the minute
+        bars."""
+        in_trade = self._in_trade()
+        payload = _payload(in_trade, replay_ladder(_OK_SETUP, in_trade), daily_bar_fetch=None)
+        self.assertEqual(payload.get("context"), "in_trade_only")
+        self.assertTrue(payload["markers"])
+
+    def test_context_reused_when_prior_bars_spliced(self) -> None:
+        """With ``daily_bar_fetch=None`` but a ``reused_context_bars`` lead-in
+        band supplied, the band is spliced in and stamped ``context ==
+        'reused'`` while the fresh in-trade fold + exit marker stay."""
+        in_trade = self._in_trade()
+        reused = _lead_in_payload_bars(_ARRIVAL, 10)
+        payload = build_chart_payload(
+            _OK_SETUP,
+            in_trade,
+            replay_ladder(_OK_SETUP, in_trade),
+            arrival_session=_ARRIVAL,
+            horizon_session=_HORIZON,
+            exchange=_EXCHANGE,
+            ticker="NVDA",
+            daily_bar_fetch=None,
+            reused_context_bars=reused,
+        )
+        self.assertEqual(payload.get("context"), "reused")
+        times = [b["time"] for b in payload["bars"]]
+        self.assertTrue(any(t < _ARRIVAL.isoformat() for t in times))  # lead-in kept
+        kinds = {m["kind"] for m in payload["markers"]}
+        self.assertIn("ENTRY", kinds)
+        self.assertIn("TP", kinds)  # fresh in-trade exit marker
+
+
+class TestMergeBarsInTradeWinsOnOverlap(unittest.TestCase):
+    """Direct pin of the ``_merge_bars`` tie-break: on any date overlap the
+    in-trade minute-fold candle wins over a lead-in / trailing context bar so a
+    daily [low, high] is never overwritten by a coarser context candle."""
+
+    def test_in_trade_bar_overwrites_overlapping_context_bar(self) -> None:
+        overlap = _NEXT_SESSION.isoformat()
+        lead_in = [{"time": overlap, "open": 9.0, "high": 9.9, "low": 8.0, "close": 9.0}]
+        in_trade = [{"time": overlap, "open": 1.1, "high": 1.3, "low": 0.85, "close": 1.25}]
+        trailing = [{"time": overlap, "open": 5.0, "high": 5.5, "low": 4.5, "close": 5.0}]
+        merged = {b["time"]: b for b in _merge_bars(lead_in, in_trade, trailing)}
+        self.assertEqual(merged[overlap]["high"], 1.3)  # minute union wins
+        self.assertEqual(merged[overlap]["low"], 0.85)
+
+
+class TestReusedContextMergeInTradeWins(unittest.TestCase):
+    """A reused prior-payload bar that now falls INSIDE the (extended) hold is
+    dropped by ``_split_reused_context`` before it can reach ``_merge_bars`` — the
+    fresh in-trade minute fold owns those sessions, so the daily candle stays the
+    minute union (memo §5 test 4). The reuse path never hands ``_merge_bars`` an
+    overlapping bar; the split owns that guarantee (the ``_merge_bars`` tie-break
+    itself is pinned directly by :class:`TestMergeBarsInTradeWinsOnOverlap`)."""
+
+    def test_reused_trailing_bar_inside_extended_hold_overwritten(self) -> None:
+        open_ms = _session_open_ms(_ARRIVAL)
+        next_open_ms = _session_open_ms(_NEXT_SESSION)
+        # The hold now extends to _NEXT_SESSION (two in-trade minute bars).
+        in_trade = [
+            _bar(open_ms, o=1.0, h=1.2, low=0.9, c=1.1, v=100.0),
+            _bar(next_open_ms, o=1.1, h=1.3, low=0.85, c=1.25, v=250.0),
+        ]
+        # A reused context bar is stamped ON _NEXT_SESSION with DIFFERENT
+        # highs/lows — once that session is inside the extended hold
+        # (arrival..horizon) _split_reused_context drops it, so the fresh minute
+        # fold is the only candle for that session.
+        reused = [
+            {
+                "time": _NEXT_SESSION.isoformat(),
+                "open": 9.0,
+                "high": 9.9,
+                "low": 8.0,
+                "close": 9.0,
+                "volume": 1.0,
+            }
+        ]
+        payload = build_chart_payload(
+            _OK_SETUP,
+            in_trade,
+            replay_ladder(_OK_SETUP, in_trade),
+            arrival_session=_ARRIVAL,
+            horizon_session=_NEXT_SESSION,
+            exchange=_EXCHANGE,
+            ticker="NVDA",
+            daily_bar_fetch=None,
+            reused_context_bars=reused,
+        )
+        by_time = {b["time"]: b for b in payload["bars"]}
+        candle = by_time[_NEXT_SESSION.isoformat()]
+        self.assertEqual(candle["high"], 1.3)  # minute union, NOT the 9.9 reused bar
+        self.assertEqual(candle["low"], 0.85)
+
+
+class TestFreeTierAlwaysRebuiltPastDeadline(unittest.TestCase):
+    """The Polygon-free marker tier is rebuilt UNCONDITIONALLY — an exhausted
+    deadline gates only the cosmetic context band, never the exit marker (memo
+    §3c). This is the class the FTRE staleness bug lives in."""
+
+    def test_stale_terminal_gets_exit_marker_when_deadline_exhausted(self) -> None:
+        """THE FTRE REGRESSION. A long-held terminal (brief 2026-06-16, matured
+        2026-07-23) whose stored chart froze days early, an already-tripped
+        deadline, and a ``daily_bar_fetch`` that raises if touched -> the
+        rebuilt payload STILL carries the TP1 sell marker at maturity, status
+        OK, and the daily fetch is never called."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            stale = {
+                "status": "OK",
+                "context": "in_trade_only",
+                "bars": [{"time": _FTRE_ARRIVAL.isoformat()}, {"time": "2026-07-14"}],
+                "markers": [
+                    {
+                        "kind": "ENTRY",
+                        "level_id": "E1",
+                        "label": "E1",
+                        "time": _FTRE_ARRIVAL.isoformat(),
+                    }
+                ],
+            }
+            _write_terminal_store_row(
+                store_dir,
+                _FTRE_ARRIVAL,
+                "FTRE",
+                terminal=True,
+                chart_payload=stale,
+                matured_at=_FTRE_MATURED,
+            )
+            _write_brief(briefs_dir, _FTRE_ARRIVAL, "FTRE", _FTRE_SETUP)
+
+            ftre_bars = [
+                # Arrival session: dips to the entry limit (low <= 15.9887) -> E1 fills.
+                _bar(_session_open_ms(_FTRE_ARRIVAL), o=16.0, h=16.2, low=15.9, c=16.0),
+                # Maturity session: rallies through the TP target (high >= 18.67) -> TP1 sells.
+                _bar(_session_open_ms(_FTRE_MATURED), o=18.0, h=18.7, low=17.9, c=18.6),
+            ]
+
+            def bar_fetch(ticker: str, arrival_session: dt.date) -> list[dict]:
+                if ticker.upper() == "FTRE" and arrival_session == _FTRE_ARRIVAL:
+                    return ftre_bars
+                return []
+
+            daily_calls: list[tuple] = []
+
+            def daily_boom(ticker, start, end):
+                daily_calls.append((ticker, start, end))
+                raise AssertionError("daily context fetch must not run past the deadline")
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=daily_boom,
+                exchange=_EXCHANGE,
+                deadline=_StubDeadline(stop=True),
+            )
+
+            df = pd.read_parquet(store_dir / f"{_FTRE_ARRIVAL.isoformat()}.parquet")
+            payload = json.loads(df.set_index("ticker").loc["FTRE", "chart_payload_json"])
+            self.assertEqual(payload["status"], "OK")
+            self.assertEqual(daily_calls, [])  # marker core needs zero Polygon
+            tp_markers = [m for m in payload["markers"] if m["kind"] == "TP"]
+            self.assertTrue(tp_markers, "the TP1 sell marker must survive the tripped deadline")
+            self.assertEqual(tp_markers[0]["label"], "TP1")
+            self.assertEqual(tp_markers[0]["time"], _FTRE_MATURED.isoformat())
+            self.assertAlmostEqual(tp_markers[0]["price"], _FTRE_TP1, places=4)
+
+    def test_context_skipped_reuses_prior_lead_in(self) -> None:
+        """Deadline exhausted, the prior payload carries a lead-in band -> the
+        rebuilt payload keeps that lead-in, adds the fresh in-trade fold + exit
+        marker, is stamped ``context == 'reused'``, and never fetches."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            prior = {
+                "status": "OK",
+                "context": "OK",
+                "bars": [
+                    *_lead_in_payload_bars(_ARRIVAL, 5),
+                    {"time": _ARRIVAL.isoformat(), "open": 1, "high": 1, "low": 1, "close": 1},
+                ],
+                "markers": [],
+            }
+            # Ongoing row so it is always reprocessed (not frozen).
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "OPEN", terminal=False, chart_payload=prior
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "OPEN", _OK_SETUP)
+
+            def bar_fetch(ticker, arrival_session):
+                return [
+                    _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+                    _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+                ]
+
+            def daily_boom(ticker, start, end):
+                raise AssertionError("must not fetch when the deadline is exhausted")
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=daily_boom,
+                exchange=_EXCHANGE,
+                deadline=_StubDeadline(stop=True),
+            )
+            df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+            payload = json.loads(df.loc[0, "chart_payload_json"])
+            self.assertEqual(payload["status"], "OK")
+            self.assertEqual(payload.get("context"), "reused")
+            times = [b["time"] for b in payload["bars"]]
+            self.assertTrue(any(t < _ARRIVAL.isoformat() for t in times))  # lead-in reused
+            self.assertIn("TP", {m["kind"] for m in payload["markers"]})  # fresh exit marker
+
+    def test_every_parquet_visited_no_early_break(self) -> None:
+        """Two dated store files, deadline exhausted -> the OLDER file's
+        non-frozen row still gets a free-tier OK payload with its exit marker
+        (the file-walk early break is gone)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            d_old, d_new = _ARRIVAL, _NEXT_SESSION  # 2026-05-01 < 2026-05-04
+            _write_store_row(store_dir, d_old, "AAA")
+            _write_store_row(store_dir, d_new, "BBB")
+            _write_brief(briefs_dir, d_old, "AAA", _OK_SETUP)
+            _write_brief(briefs_dir, d_new, "BBB", _OK_SETUP)
+
+            def bar_fetch(ticker, arrival_session):
+                return [
+                    _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+                    _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+                ]
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=lambda *_a, **_k: [],
+                exchange=_EXCHANGE,
+                deadline=_StubDeadline(stop=True),
+            )
+            df_old = pd.read_parquet(store_dir / f"{d_old.isoformat()}.parquet")
+            # Defensive read: today the early break leaves the older file with no
+            # chart_payload_json column at all, so surface it as a clean assertion
+            # (older file was still visited -> its row carries an OK marker chart).
+            raw = (
+                df_old.set_index("ticker").loc["AAA", "chart_payload_json"]
+                if "chart_payload_json" in df_old.columns
+                else None
+            )
+            payload = json.loads(raw) if isinstance(raw, str) else {}
+            self.assertEqual(payload.get("status"), "OK")  # older file was still visited
+            self.assertTrue(payload.get("markers"))
+
+
+class TestAntiDowngradeGuard(unittest.TestCase):
+    """A fresh non-OK build never overwrites a stored OK payload (memo §3c) —
+    a transient empty minute cache must not blank a chart that already shows the
+    trade."""
+
+    def test_empty_minute_cache_keeps_prior_ok_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            prior = {
+                "status": "OK",
+                "context": "OK",
+                "bars": [{"time": _ARRIVAL.isoformat()}, {"time": _NEXT_SESSION.isoformat()}],
+                "markers": [
+                    {"kind": "ENTRY", "level_id": "E1", "label": "E1", "time": _ARRIVAL.isoformat()}
+                ],
+            }
+            # Ongoing row so the pass reprocesses it (frozen rows are a separate path).
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "GAP", terminal=False, chart_payload=prior
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "GAP", _OK_SETUP)
+            before = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet").loc[
+                0, "chart_payload_json"
+            ]
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=lambda *_a, **_k: [],  # empty minute cache -> a fresh NO_DATA build
+                daily_bar_fetch=lambda *_a, **_k: [],
+                exchange=_EXCHANGE,
+            )
+            after = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet").loc[
+                0, "chart_payload_json"
+            ]
+            self.assertEqual(after, before)  # prior OK payload preserved byte-identical
+
+
+class TestFrozenGateRequiresFullContext(unittest.TestCase):
+    """``_is_frozen_terminal_ok`` freezes a terminal only when the chart reaches
+    ``matured_at`` AND its context band is complete; a MISSING ``context`` key
+    defaults to complete so the legacy DONE tail stays frozen (memo §3e)."""
+
+    def _row(
+        self, payload: dict, *, matured: dt.date | None = _NEXT_SESSION, terminal: bool = True
+    ) -> dict:
+        row: dict = {"terminal": terminal, CHART_PAYLOAD_COLUMN: json.dumps(payload)}
+        if matured is not None:
+            row["matured_at"] = matured
+        return row
+
+    def test_in_trade_only_terminal_not_frozen_and_reattempts_context(self) -> None:
+        """context 'in_trade_only', last bar AT the close -> NOT frozen; a later
+        budgeted run stamps context 'OK' then it freezes."""
+        in_trade_only = {
+            "status": "OK",
+            "context": "in_trade_only",
+            "bars": [{"time": _ARRIVAL.isoformat()}, {"time": _NEXT_SESSION.isoformat()}],
+            "markers": [],
+        }
+        self.assertFalse(_is_frozen_terminal_ok(self._row(in_trade_only)))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            _write_terminal_store_row(
+                store_dir,
+                _ARRIVAL,
+                "REDO",
+                terminal=True,
+                chart_payload=in_trade_only,
+                matured_at=_NEXT_SESSION,
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "REDO", _OK_SETUP)
+
+            def bar_fetch(ticker, arrival_session):
+                return [
+                    _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+                    _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+                ]
+
+            pre = _sessions_before(_ARRIVAL, 25)
+
+            def daily_fetch(ticker, start, end):
+                return [_daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre]
+
+            # Budgeted run: the in-trade-only terminal is re-priced and its
+            # context band completed to OK.
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=daily_fetch,
+                exchange=_EXCHANGE,
+            )
+            df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+            payload = json.loads(df.loc[0, "chart_payload_json"])
+            self.assertEqual(payload.get("context"), "OK")
+
+            # Now it is context-complete + reaches the close -> a second run
+            # freezes it (no fetch).
+            calls: list[str] = []
+
+            def track_bar_fetch(ticker, arrival_session):
+                calls.append(ticker)
+                return bar_fetch(ticker, arrival_session)
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=track_bar_fetch,
+                daily_bar_fetch=daily_fetch,
+                exchange=_EXCHANGE,
+            )
+            self.assertEqual(calls, [])  # frozen once context is complete
+
+    def test_full_context_terminal_freezes(self) -> None:
+        """context 'OK', last bar AT the close -> frozen."""
+        full = {
+            "status": "OK",
+            "context": "OK",
+            "bars": [{"time": _ARRIVAL.isoformat()}, {"time": _NEXT_SESSION.isoformat()}],
+            "markers": [],
+        }
+        self.assertTrue(_is_frozen_terminal_ok(self._row(full)))
+
+    def test_legacy_payload_missing_context_key_stays_frozen(self) -> None:
+        """An OK payload with NO ``context`` key, last bar AT the close -> frozen
+        (the missing key defaults to complete; no re-fetch storm on the pre-fix
+        DONE tail)."""
+        legacy = {
+            "status": "OK",
+            "bars": [{"time": _ARRIVAL.isoformat()}, {"time": _NEXT_SESSION.isoformat()}],
+            "markers": [],
+        }
+        self.assertTrue(_is_frozen_terminal_ok(self._row(legacy)))
+
+
+class TestContextBudgetOrdering(unittest.TestCase):
+    """The residual context budget is spent oldest-matured-first so a long-held
+    maturer's cosmetic band is not perpetually starved behind newer rows (memo
+    §3d)."""
+
+    def test_long_held_maturer_gets_context_before_recent_ongoing(self) -> None:
+        old_arrival = previous_trading_day(_ARRIVAL, _EXCHANGE)  # 2026-04-30, older file
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            # Old-dated, long-held, freshly matured terminal (no chart yet).
+            _write_terminal_store_row(
+                store_dir,
+                old_arrival,
+                "LONGHELD",
+                terminal=True,
+                chart_payload=None,
+                matured_at=_ARRIVAL,
+            )
+            # Newer-dated, still-ongoing row.
+            _write_store_row(store_dir, _ARRIVAL, "RECENT")
+            _write_brief(briefs_dir, old_arrival, "LONGHELD", _OK_SETUP)
+            _write_brief(briefs_dir, _ARRIVAL, "RECENT", _OK_SETUP)
+
+            bars_by_arrival = {
+                old_arrival: [
+                    _bar(_session_open_ms(old_arrival), o=101.0, h=102.0, low=99.0, c=100.5),
+                    _bar(_session_open_ms(_ARRIVAL), o=105.0, h=111.0, low=104.0, c=110.5),
+                ],
+                _ARRIVAL: [
+                    _bar(_session_open_ms(_ARRIVAL), o=101.0, h=102.0, low=99.0, c=100.5),
+                    _bar(_session_open_ms(_NEXT_SESSION), o=105.0, h=111.0, low=104.0, c=110.5),
+                ],
+            }
+
+            def bar_fetch(ticker, arrival_session):
+                return bars_by_arrival.get(arrival_session, [])
+
+            daily_tickers: list[str] = []
+            pre = _sessions_before(old_arrival, 40)
+
+            def daily_fetch(ticker, start, end):
+                daily_tickers.append(ticker)
+                return [_daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre]
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=daily_fetch,
+                exchange=_EXCHANGE,
+                deadline=_BudgetDeadline(allow=1),  # room for exactly one context band
+            )
+            # The long-held maturer wins the single context slot; the recent
+            # ongoing row's band is deferred.
+            self.assertIn("LONGHELD", daily_tickers)
+            self.assertNotIn("RECENT", daily_tickers)
+
+    def test_context_budget_bounded_by_real_wall_clock_deadline(self) -> None:
+        """The scarce context band is rationed by the REAL time-based
+        ``_RunDeadline``, spent oldest-matured-first, and the wall-clock genuinely
+        bounds the fetch phase.
+
+        Regression for the census-does-no-I/O bug: a zero-I/O grant census calls
+        ``should_stop()`` between candidates without advancing the monotonic
+        clock, so the real ``_RunDeadline`` returns the same verdict for every
+        candidate — all rows get context (all-or-nothing) and nothing bounds the
+        Polygon fetch phase. Here a fake monotonic clock advances ONLY when a
+        daily-context fetch runs, and the budget fits ~2 of the 3 fetches: only
+        the two OLDEST-matured rows may fetch, the newest is deferred. The old
+        census granted all three; a live per-fetch deadline check grants two."""
+        # Three terminal rows, matured oldest -> newest, no chart yet (all
+        # non-frozen so all must be rebuilt), one per store file.
+        a_old = previous_trading_day(previous_trading_day(_ARRIVAL, _EXCHANGE), _EXCHANGE)
+        a_mid = previous_trading_day(_ARRIVAL, _EXCHANGE)
+        a_new = _ARRIVAL
+        arrivals = {"OLD": a_old, "MID": a_mid, "NEW": a_new}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            for tkr, arr in arrivals.items():
+                _write_terminal_store_row(
+                    store_dir,
+                    arr,
+                    tkr,
+                    terminal=True,
+                    chart_payload=None,
+                    matured_at=advance_trading_sessions(arr, 1, _EXCHANGE),
+                )
+                _write_brief(briefs_dir, arr, tkr, _OK_SETUP)
+
+            def bar_fetch(ticker, arrival_session):
+                return [
+                    _bar(_session_open_ms(arrival_session), o=101.0, h=102.0, low=99.0, c=100.5),
+                    _bar(
+                        _session_open_ms(advance_trading_sessions(arrival_session, 1, _EXCHANGE)),
+                        o=105.0,
+                        h=111.0,
+                        low=104.0,
+                        c=110.5,
+                    ),
+                ]
+
+            # A fake monotonic clock that advances ONLY when a context fetch runs;
+            # the free-tier build (bar_fetch + replay + fold) costs no clock time.
+            clock = {"t": 0.0}
+            fetch_cost_s = 1.0
+            daily_tickers: list[str] = []
+
+            def daily_fetch(ticker, start, end):
+                daily_tickers.append(ticker)
+                clock["t"] += fetch_cost_s
+                pre = _sessions_before(arrivals[ticker], 25)
+                return [_daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre]
+
+            # Budget fits exactly two fetches: the deadline is checked BEFORE each
+            # fetch, so 1.0 (after OLD) < 1.5 and 2.0 (after MID) >= 1.5 -> the
+            # third (NEW) is deferred.
+            deadline = _RunDeadline(1.5, monotonic=lambda: clock["t"])
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=daily_fetch,
+                exchange=_EXCHANGE,
+                deadline=deadline,
+            )
+            # Wall-clock bounded the fetch phase to the two oldest maturers; the
+            # newest was deferred (the old all-or-nothing census fetched all three).
+            self.assertEqual(daily_tickers, ["OLD", "MID"])
+
+
+class TestFrozenSkipPreserved(unittest.TestCase):
+    """A frozen terminal-OK row (context complete, chart at the close) is still
+    preserved verbatim with zero fetches under the new gate (memo §5 test 13 —
+    the §3e change must not regress the frozen fast-path)."""
+
+    def test_frozen_rows_never_fetched_and_preserved_verbatim(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            frozen = {
+                "status": "OK",
+                "context": "OK",
+                "bars": [{"time": _ARRIVAL.isoformat()}, {"time": _NEXT_SESSION.isoformat()}],
+                "markers": [
+                    {"kind": "ENTRY", "level_id": "E1", "label": "E1", "time": _ARRIVAL.isoformat()}
+                ],
+            }
+            _write_terminal_store_row(
+                store_dir,
+                _ARRIVAL,
+                "DONE",
+                terminal=True,
+                chart_payload=frozen,
+                matured_at=_NEXT_SESSION,
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "DONE", _OK_SETUP)
+            before = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet").loc[
+                0, "chart_payload_json"
+            ]
+
+            bar_calls: list[str] = []
+            daily_calls: list[str] = []
+
+            def bar_fetch(ticker, arrival_session):
+                bar_calls.append(ticker)
+                return []
+
+            def daily_fetch(ticker, start, end):
+                daily_calls.append(ticker)
+                return []
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=bar_fetch,
+                daily_bar_fetch=daily_fetch,
+                exchange=_EXCHANGE,
+            )
+            after = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet").loc[
+                0, "chart_payload_json"
+            ]
+            self.assertEqual(after, before)  # preserved byte-identical
+            self.assertEqual(bar_calls, [])
+            self.assertEqual(daily_calls, [])
 
 
 if __name__ == "__main__":
