@@ -15,13 +15,14 @@ from alphalens_pipeline.brokers.automanager.orphan_sweeper import Orphan, sweep
 from alphalens_pipeline.brokers.contract import OrderState, OrderStatus
 
 
-def _order_state(order_id: str) -> OrderState:
+def _order_state(order_id: str, *, side: str | None = None) -> OrderState:
     return OrderState(
         order_id=order_id,
         status=OrderStatus.WORKING,
         instrument=None,
         filled_quantity=0.0,
         raw_status="",
+        side=side,
     )
 
 
@@ -90,6 +91,24 @@ class OrphanSweeperTests(unittest.TestCase):
         self.assertEqual(
             sweep(broker, [_record()]),
             [Orphan(order_id="X-9", external_reference="", kind="order")],
+        )
+
+    def test_protective_sell_legs_are_never_orphans(self) -> None:
+        # A protective SELL exit leg (a standalone stop or an OCO leg) is placed by
+        # the protection pass, journaled separately from the entry submission
+        # journal, and reconciled from live broker state every tick — so it can
+        # never be a place-before-journal orphan of the entry flow. Without this,
+        # every restart while protection is resting alerts on the daemon's OWN legs.
+        broker = _OrdersOnlyStubBroker(
+            open_orders=[
+                _order_state("SELL-STOP-1", side="SELL"),  # protection leg — not journaled here
+                _order_state("BUY-ENTRY-9", side="BUY"),  # a genuine unjournaled entry
+            ]
+        )
+        # Only the unjournaled BUY entry is an orphan; the SELL protection leg is not.
+        self.assertEqual(
+            sweep(broker, [_record()]),
+            [Orphan(order_id="BUY-ENTRY-9", external_reference="", kind="order")],
         )
 
 

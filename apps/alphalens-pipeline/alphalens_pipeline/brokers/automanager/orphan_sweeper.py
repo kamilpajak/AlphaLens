@@ -6,7 +6,15 @@ recorded. On start-of-process the sweeper flags them (design memo, Components
 §12): an open ORDER whose id is absent from the journal's known entry + exit
 order ids, and an open POSITION whose ExternalReference (the bracket
 client_request_id) is absent from the journal's client_request_ids. STRICTLY
-read-only + alert-only — never cancels an unrecorded order. The position arm is
+read-only + alert-only — never cancels an unrecorded order.
+
+The order arm considers ONLY entry-side orders. A protective SELL exit leg (a
+standalone stop or an OCO leg) is placed by the protection pass, journaled in a
+SEPARATE journal (standalone_stops.jsonl), and reconciled from live broker state
+every tick — so it is never a place-before-journal orphan of the entry flow.
+Flagging it would raise a false alert on every restart that happens while
+protection is resting (the daemon's own stop/OCO legs), so SELL orders are
+skipped. The position arm is
 gated on SupportsFillCrossCheck, so a broker without it degrades to an
 order-only sweep (mirrors the reconcile engine's capability degradation).
 """
@@ -60,6 +68,15 @@ def sweep(broker: Broker, journal: Iterable[Mapping[str, Any]]) -> list[Orphan]:
     known_order_ids, known_refs = _journal_index(journal)
     orphans: list[Orphan] = []
     for state in broker.list_open_orders():
+        if state.side == "SELL":
+            # A protective SELL exit leg (a standalone stop / an OCO leg): placed by
+            # the protection pass, journaled separately from this ENTRY submission
+            # journal, and reconciled from live broker state every tick — so it is
+            # never a place-before-journal orphan of the entry flow. Skipping it
+            # avoids a false-positive alert on every restart that happens while
+            # protection is resting (the sweeper would otherwise flag the daemon's
+            # OWN stop/OCO legs). Only entry-side (BUY / unknown) orders qualify.
+            continue
         if str(state.order_id) not in known_order_ids:
             orphans.append(
                 Orphan(order_id=str(state.order_id), external_reference="", kind="order")
