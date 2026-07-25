@@ -243,6 +243,11 @@ class TestModuleDependencies(unittest.TestCase):
             )
             for path in _python_files(pkg_dir):
                 rel = str(path.relative_to(WORKSPACE_ROOT))
+                # Exemptions are keyed by BASENAME intentionally: the packages these
+                # rules scan are flat, so a basename is unambiguous, and it keeps the
+                # RULES entries readable (bare filename, not a workspace-relative path).
+                # If a scanned package ever grows subdirectories, switch this + the
+                # anti-rot check in test_exemptions_still_exist to relative paths.
                 if path.name in rule["exemptions"]:
                     continue
                 for module in _iter_imports(path, include_function_scope=not top_level_only):
