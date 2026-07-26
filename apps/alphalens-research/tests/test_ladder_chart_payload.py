@@ -2209,11 +2209,17 @@ class TestReuseFirstCompositionAndBasis(unittest.TestCase):
             run()
             self.assertEqual(daily.calls, 1)  # healed -> no further fetch
 
-    def test_reuse_preserves_markers_when_minute_cache_transiently_empty(self) -> None:
-        """A reuse-path row (established OK context) whose minute cache is
-        transiently empty this run: the daily fetch must not even be attempted
-        (reuse-first), and the anti-downgrade guard keeps the prior OK payload
-        byte-identical (a transient minute-cache gap must not blank the chart)."""
+    def test_reuse_splices_prior_lead_in_and_never_fetches_with_real_in_trade_bars(
+        self,
+    ) -> None:
+        """An established-ongoing row (prior ``context == 'OK'``) with a REAL,
+        non-empty in-trade minute cache this run: reuse-first must resolve the
+        row's cosmetic band from the prior payload's lead-in WITHOUT ever
+        calling the daily fetch — proven by a ``daily_bar_fetch`` that raises
+        if invoked, not by an incidental NO_DATA early-return (the vacuous
+        framing the prior version of this test had: an EMPTY-bars stub makes
+        ``_payload_for_row`` return before ``context_allowed`` is even
+        consulted, so it never actually exercises reuse-first)."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store_dir, briefs_dir = root / "population_ladders", root / "briefs"
@@ -2232,9 +2238,6 @@ class TestReuseFirstCompositionAndBasis(unittest.TestCase):
                 store_dir, _ARRIVAL, "GAP2", terminal=False, chart_payload=prior
             )
             _write_brief(briefs_dir, _ARRIVAL, "GAP2", _OK_SETUP)
-            before = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet").loc[
-                0, "chart_payload_json"
-            ]
 
             def boom(ticker, start, end):
                 raise AssertionError("reuse-first must not fetch — a usable prior exists")
@@ -2242,8 +2245,59 @@ class TestReuseFirstCompositionAndBasis(unittest.TestCase):
             enrich_store_with_chart_payloads(
                 store_dir,
                 briefs_dir,
-                bar_fetch=lambda *_a, **_k: [],  # transient empty minute cache
+                # REAL non-empty in-trade minute bars this run, so the row does
+                # NOT short-circuit to NO_DATA before context_allowed is ever
+                # consulted — this is what actually exercises reuse-first.
+                bar_fetch=lambda ticker, arrival_session: _in_trade_bars(),
                 daily_bar_fetch=boom,
+                exchange=_EXCHANGE,
+                deadline=_StubDeadline(stop=False),
+            )
+            after_json = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet").loc[
+                0, "chart_payload_json"
+            ]
+            after = json.loads(after_json)
+            self.assertEqual(after["status"], "OK")
+            self.assertEqual(after["context"], "reused")
+            arrival_iso = _ARRIVAL.isoformat()
+            prior_lead_in_times = {b["time"] for b in prior["bars"] if b["time"] < arrival_iso}
+            after_lead_in_times = {b["time"] for b in after["bars"] if b["time"] < arrival_iso}
+            self.assertEqual(after_lead_in_times, prior_lead_in_times)
+
+    def test_transient_empty_minute_cache_preserves_prior_via_anti_downgrade_guard(
+        self,
+    ) -> None:
+        """Anti-downgrade guard ONLY (not reuse-first): when the in-trade minute
+        cache is transiently empty this run, ``_payload_for_row`` builds a fresh
+        ``NO_DATA`` payload regardless of the context policy, and the guard keeps
+        the prior OK payload byte-identical rather than blanking the chart."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            prior = {
+                "status": "OK",
+                "context": "OK",
+                "bars": [
+                    *_lead_in_payload_bars(_ARRIVAL, 20),
+                    {"time": _ARRIVAL.isoformat(), "open": 1, "high": 1, "low": 1, "close": 1},
+                ],
+                "markers": [
+                    {"kind": "ENTRY", "level_id": "E1", "label": "E1", "time": _ARRIVAL.isoformat()}
+                ],
+            }
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "GAP3", terminal=False, chart_payload=prior
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "GAP3", _OK_SETUP)
+            before = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet").loc[
+                0, "chart_payload_json"
+            ]
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=lambda *_a, **_k: [],  # transient empty minute cache
+                daily_bar_fetch=_CountingDailyFetch(),
                 exchange=_EXCHANGE,
                 deadline=_StubDeadline(stop=False),
             )
