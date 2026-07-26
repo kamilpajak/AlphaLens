@@ -46,12 +46,33 @@ def fetch_mcap(ticker: str, *, asof: dt.date | None = None) -> float | None:
     - ``None`` or today/future → ``fast_info.market_cap``, with a persistent
       cache fallback (a transient yfinance failure returns the last-known value
       if it is ≤ ``_MCAP_CACHE_MAX_STALE_DAYS`` old).
-    - past date → ``close(asof) × shares_outstanding(≤ asof)``; NO cache (PIT
-      mcap is per-date, the live cache would inject forward bias).
+    - past date → ``close(asof) × shares_outstanding(≤ asof)``. On a PIT failure
+      for a RECENT date (within ``_MCAP_CACHE_MAX_STALE_DAYS`` of today — i.e. the
+      daily T-1 pipeline), fall back to the live mcap: yfinance's history
+      endpoint rate-limits far more readily than the lighter ``fast_info`` one,
+      and for a near-today date the live mcap is a fine proxy for the PIT mcap on
+      a wide market-cap BRACKET filter — far better than dropping every candidate
+      and collapsing the day's briefs to zero (incident 2026-07-25). An OLD
+      backtest date gets NO live fallback: a today mcap there would be look-ahead
+      forward bias.
     """
     if asof is None or asof >= dt.date.today():
         return _fetch_live_mcap_with_cache(ticker)
-    return _fetch_pit_mcap(ticker, asof)
+    mcap = _fetch_pit_mcap(ticker, asof)
+    if mcap is not None:
+        return mcap
+    if asof >= dt.date.today() - dt.timedelta(days=_MCAP_CACHE_MAX_STALE_DAYS):
+        live = _fetch_live_mcap_with_cache(ticker)
+        if live is not None:
+            logger.info(
+                "mcap PIT fetch failed for %s (asof %s); using live mcap %.0f as a "
+                "recent-date proxy (PIT history endpoint likely rate-limited)",
+                ticker,
+                asof.isoformat(),
+                live,
+            )
+        return live
+    return None
 
 
 def _fetch_live_mcap(ticker: str) -> float | None:

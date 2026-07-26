@@ -154,13 +154,63 @@ class TestMcapCacheFallback(unittest.TestCase):
         with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
             self.assertIsNone(mcap_filter.fetch_mcap("OLD"))
 
-    def test_pit_path_does_not_use_live_cache(self):
-        # A historical (asof past) fetch must NOT fall back to the live-mcap
-        # cache — PIT mcap is price(asof) × shares(asof), not today's value.
+    def test_old_backtest_pit_path_does_not_use_live(self):
+        # An OLD historical (backtest) date must NOT fall back to the live mcap —
+        # today's value there is look-ahead forward bias. (A RECENT date DOES fall
+        # back; see TestRecentPitFallsBackToLive.)
         with patch("yfinance.Ticker", return_value=_live_ticker(9_000_000_000.0)):
             mcap_filter.fetch_mcap("PIT")  # seeds the live cache
         with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
             self.assertIsNone(mcap_filter.fetch_mcap("PIT", asof=dt.date(2020, 1, 2)))
+
+
+class TestRecentPitFallsBackToLive(unittest.TestCase):
+    """When the PIT history endpoint rate-limits (it throttles far sooner than
+    the lighter fast_info one), a RECENT-date fetch — the daily T-1 pipeline —
+    falls back to the live mcap instead of dropping every candidate and
+    collapsing the day's briefs to zero (incident 2026-07-25). Old backtest dates
+    stay strict (no forward bias)."""
+
+    def setUp(self):
+        self._td = tempfile.TemporaryDirectory()
+        self._patch = patch.object(
+            mcap_filter, "_MCAP_CACHE_PATH", Path(self._td.name) / "mcap_cache.json"
+        )
+        self._patch.start()
+
+    def tearDown(self):
+        self._patch.stop()
+        self._td.cleanup()
+
+    def test_recent_pit_failure_falls_back_to_live(self):
+        recent = dt.date.today() - dt.timedelta(days=1)
+        with (
+            patch.object(mcap_filter, "_fetch_pit_mcap", return_value=None),
+            patch.object(mcap_filter, "_fetch_live_mcap", return_value=8_880_000_000.0),
+        ):
+            self.assertEqual(mcap_filter.fetch_mcap("KTOS", asof=recent), 8_880_000_000.0)
+
+    def test_old_pit_failure_does_not_fall_back_to_live(self):
+        old = dt.date.today() - dt.timedelta(days=mcap_filter._MCAP_CACHE_MAX_STALE_DAYS + 5)
+        with (
+            patch.object(mcap_filter, "_fetch_pit_mcap", return_value=None),
+            patch.object(
+                mcap_filter, "_fetch_live_mcap", return_value=8_880_000_000.0
+            ) as live_mock,
+        ):
+            self.assertIsNone(mcap_filter.fetch_mcap("KTOS", asof=old))
+            live_mock.assert_not_called()
+
+    def test_recent_pit_success_returns_pit_not_live(self):
+        recent = dt.date.today() - dt.timedelta(days=1)
+        with (
+            patch.object(mcap_filter, "_fetch_pit_mcap", return_value=5_000_000_000.0),
+            patch.object(
+                mcap_filter, "_fetch_live_mcap", return_value=8_880_000_000.0
+            ) as live_mock,
+        ):
+            self.assertEqual(mcap_filter.fetch_mcap("X", asof=recent), 5_000_000_000.0)
+            live_mock.assert_not_called()
 
 
 class TestFetchMcapYfinanceContract(unittest.TestCase):
