@@ -205,7 +205,10 @@ def _mcap_cache_get(ticker: str, *, now: dt.datetime | None = None) -> float | N
         ts = dt.datetime.fromisoformat(entry["ts"])
         if now - ts > dt.timedelta(days=_MCAP_CACHE_MAX_STALE_DAYS):
             return None
-        return float(entry["mcap"])
+        # Neutralise a non-finite value at the read source — an entry written by
+        # an OLD build (before the finiteness guard) could hold a NaN, and a
+        # future direct reader must never be served NaN as a "recent" value.
+        return _finite_or_none(float(entry["mcap"]))
     except (ValueError, KeyError, TypeError) as exc:
         # The ticker IS present (entry was truthy) but its record is malformed
         # — distinguish corruption / a manual-edit typo from a plain cache miss.

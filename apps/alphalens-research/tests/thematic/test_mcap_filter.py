@@ -154,6 +154,15 @@ class TestMcapCacheFallback(unittest.TestCase):
             self.assertIsNone(mcap_filter.fetch_mcap("NANNY"))
         self.assertFalse(self.cache.exists() and "NANNY" in json.loads(self.cache.read_text()))
 
+    def test_pre_poisoned_nan_cache_entry_is_ignored_at_read_source(self):
+        # A cache entry written by an OLD build (before the finiteness guard)
+        # could hold a NaN. _mcap_cache_get must neutralise it at the read
+        # source — belt-and-suspenders, so a future direct reader never serves
+        # NaN as a "recent" value even without fetch_mcap's outer guard.
+        fresh_ts = dt.datetime.now(dt.UTC).isoformat()
+        self.cache.write_text(json.dumps({"OLD": {"mcap": float("nan"), "ts": fresh_ts}}))
+        self.assertIsNone(mcap_filter._mcap_cache_get("OLD"))
+
     def test_live_failure_stale_cache_returns_none(self):
         stale_ts = (
             dt.datetime.now(dt.UTC) - dt.timedelta(days=mcap_filter._MCAP_CACHE_MAX_STALE_DAYS + 1)
