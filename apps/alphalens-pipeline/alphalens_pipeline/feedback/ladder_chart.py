@@ -386,6 +386,7 @@ def _context_bars(
     horizon_session: dt.date,
     hold_sessions: int,
     exchange: str,
+    deep_lead_in: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """``(lead_in_bars, trailing_bars)`` daily context candles around the trade.
 
@@ -396,8 +397,14 @@ def _context_bars(
     — Polygon daily aggregates are already session-only, no weekend/holiday
     phantoms). A fetch that raises or returns empty degrades to no context
     (``([], [])``) so the caller falls back to the in-trade bars only.
+
+    ``deep_lead_in`` (PR-2 write-once fetch): when True the lead-in is captured
+    at the full ``LEAD_IN_CAP`` depth regardless of ``hold_sessions``, so a young
+    position's later-deepening hold never needs a second fetch to widen an
+    already-persisted band — the caller sets this whenever it is about to spend a
+    genuine Polygon fetch (``context_allowed`` True in the enrich pass).
     """
-    lead_in = _lead_in_sessions(hold_sessions)
+    lead_in = LEAD_IN_CAP if deep_lead_in else _lead_in_sessions(hold_sessions)
     oldest_lead_in = _retreat_sessions(arrival_session, lead_in, exchange)
     newest_trailing = advance_trading_sessions(horizon_session, TRAILING_SESSIONS, exchange)
 
@@ -506,6 +513,7 @@ def _resolve_context_bars(
     horizon_session: dt.date,
     has_in_trade: bool,
     exchange: str,
+    deep_lead_in: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
     """``(lead_in, trailing, context_state)`` for the payload's cosmetic band.
 
@@ -516,6 +524,9 @@ def _resolve_context_bars(
     * ``daily_bar_fetch`` None and ``reused_context_bars`` given -> the reused band
       is spliced in and stamped ``CONTEXT_REUSED``.
     * neither -> ``CONTEXT_IN_TRADE_ONLY``.
+
+    ``deep_lead_in`` is forwarded to :func:`_context_bars` unchanged (PR-2
+    write-once fetch depth); irrelevant when no fetch runs.
     """
     if daily_bar_fetch is not None:
         hold_sessions = (
@@ -529,6 +540,7 @@ def _resolve_context_bars(
                 horizon_session=horizon_session,
                 hold_sessions=hold_sessions,
                 exchange=exchange,
+                deep_lead_in=deep_lead_in,
             )
         except Exception as exc:
             logger.warning(
@@ -557,6 +569,7 @@ def build_chart_payload(
     ticker: str = "",
     daily_bar_fetch: DailyBarFetch | None = None,
     reused_context_bars: Sequence[Mapping[str, Any]] | None = None,
+    deep_lead_in: bool = False,
 ) -> dict[str, Any]:
     """Build the chart payload for one (brief_date, ticker).
 
@@ -578,7 +591,9 @@ def build_chart_payload(
     (after horizon) band of DAILY aggregates is fetched and merged around the
     in-trade candles for readable market structure. Context bars carry NO markers
     and the in-trade bar wins on any date overlap. A failed / empty context fetch
-    degrades silently to the in-trade bars only.
+    degrades silently to the in-trade bars only. ``deep_lead_in`` (PR-2 write-once
+    fetch): when a fetch actually runs, pass True to capture the lead-in at the
+    full ``LEAD_IN_CAP`` depth so the persisted band never needs deepening later.
     """
     parsed = parse_ladder(setup)
     if not parsed.ok:
@@ -605,6 +620,7 @@ def build_chart_payload(
         horizon_session=horizon_session,
         has_in_trade=bool(daily),
         exchange=exchange,
+        deep_lead_in=deep_lead_in,
     )
 
     if not daily:
@@ -1093,6 +1109,9 @@ def _payload_for_row(
             position_expiry_ms=position_expiry_ms,
         )
         if context_allowed:
+            # A genuine Polygon fetch is about to run: capture the lead-in at
+            # LEAD_IN_CAP depth (deep-first-fetch, PR-2) so the persisted band
+            # is write-once and never needs deepening as the hold grows.
             return build_chart_payload(
                 setup,
                 rth_bars,
@@ -1102,6 +1121,7 @@ def _payload_for_row(
                 exchange=exchange,
                 ticker=ticker,
                 daily_bar_fetch=daily_fetch,
+                deep_lead_in=True,
             )
         # Context budget exhausted this run: build the Polygon-free marker core and
         # reuse the prior payload's lead-in / trailing band (if any).

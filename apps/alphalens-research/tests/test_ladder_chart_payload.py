@@ -2096,5 +2096,55 @@ class TestReuseFirstContextPolicy(unittest.TestCase):
             self.assertTrue(_is_frozen_terminal_ok(row))
 
 
+class TestDeepFirstFetch(unittest.TestCase):
+    """PR-2: when a fetch runs, its lead-in is captured at ``LEAD_IN_CAP`` depth
+    (not the ``2*hold``/floor value) so the reused band is write-once — a young
+    position's later-deepening hold never needs a second fetch to catch up."""
+
+    def test_first_fetch_captures_full_lead_in_cap(self) -> None:
+        """A young position (hold ~0) that fetches must persist a lead-in at
+        LEAD_IN_CAP depth, not the 2*hold floor, so the reused band never needs
+        deepening."""
+        pre = _sessions_before(_ARRIVAL, LEAD_IN_CAP + 10)
+
+        def daily_fetch(ticker, start, end):
+            return [_daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre]
+
+        payload = build_chart_payload(
+            _OK_SETUP,
+            [],  # no in-trade minute bars yet -> hold_sessions == 0
+            replay_ladder(_OK_SETUP, []),
+            arrival_session=_ARRIVAL,
+            horizon_session=_ARRIVAL,
+            exchange=_EXCHANGE,
+            ticker="YOUNG",
+            daily_bar_fetch=daily_fetch,
+            deep_lead_in=True,
+        )
+        pre_arrival = [b for b in payload["bars"] if b["time"] < _ARRIVAL.isoformat()]
+        self.assertEqual(len(pre_arrival), LEAD_IN_CAP)
+
+    def test_default_deep_lead_in_false_preserves_hold_based_floor(self) -> None:
+        """``deep_lead_in`` defaults to False — a plan-preview / non-fetch caller
+        (unchanged behaviour) still gets the ``2*hold``/floor lead-in depth."""
+        pre = _sessions_before(_ARRIVAL, LEAD_IN_CAP + 10)
+
+        def daily_fetch(ticker, start, end):
+            return [_daily_bar(s, o=40.0, h=41.0, low=39.0, c=40.5) for s in pre]
+
+        payload = build_chart_payload(
+            _OK_SETUP,
+            [],
+            replay_ladder(_OK_SETUP, []),
+            arrival_session=_ARRIVAL,
+            horizon_session=_ARRIVAL,
+            exchange=_EXCHANGE,
+            ticker="YOUNG",
+            daily_bar_fetch=daily_fetch,
+        )
+        pre_arrival = [b for b in payload["bars"] if b["time"] < _ARRIVAL.isoformat()]
+        self.assertEqual(len(pre_arrival), LEAD_IN_FLOOR)  # hold==0 -> the floor, not the cap
+
+
 if __name__ == "__main__":
     unittest.main()
