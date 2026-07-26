@@ -2146,5 +2146,144 @@ class TestDeepFirstFetch(unittest.TestCase):
         self.assertEqual(len(pre_arrival), LEAD_IN_FLOOR)  # hold==0 -> the floor, not the cap
 
 
+class TestReuseFirstCompositionAndBasis(unittest.TestCase):
+    """Locks the remaining PR-2 composition invariants: a delisted ongoing ticker
+    reuses forever (never re-fetches an empty band), a blanked prior self-heals
+    with exactly one refetch, the anti-downgrade guard keeps a reused payload
+    byte-identical under a transient minute-cache gap, and a basis control pins
+    that the production daily fetch is Polygon ``timespan='day'`` (adjusted=false)
+    and that this module never references the separate adjusted=true O'Neil
+    grouped-daily store."""
+
+    def test_delisted_ongoing_reuses_and_never_refetches(self) -> None:
+        """An ongoing prior with context=='OK' but an EMPTY lead-in (the delisted
+        / never-covered ticker shape) reuses — zero fetch — never re-attempted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            prior = {"status": "OK", "context": "OK", "bars": [], "markers": []}
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "DELIST", terminal=False, chart_payload=prior
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "DELIST", _OK_SETUP)
+
+            daily = _CountingDailyFetch()
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=lambda ticker, arrival_session: _in_trade_bars(),
+                daily_bar_fetch=daily,
+                exchange=_EXCHANGE,
+                deadline=_StubDeadline(stop=False),
+            )
+            self.assertEqual(daily.calls, 0)
+
+    def test_blanked_prior_self_heals_with_one_refetch(self) -> None:
+        """A prior stamped NO_DATA (blanked, e.g. a past transient gap) is NOT a
+        usable context -> exactly one refetch heals it to OK; a second enrich
+        over the now-healed store makes zero further fetches."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            prior = {"status": "NO_DATA", "bars": [], "markers": []}
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "HEAL2", terminal=False, chart_payload=prior
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "HEAL2", _OK_SETUP)
+
+            daily = _CountingDailyFetch()
+
+            def run() -> None:
+                enrich_store_with_chart_payloads(
+                    store_dir,
+                    briefs_dir,
+                    bar_fetch=lambda ticker, arrival_session: _in_trade_bars(),
+                    daily_bar_fetch=daily,
+                    exchange=_EXCHANGE,
+                    deadline=_StubDeadline(stop=False),
+                )
+
+            run()
+            self.assertEqual(daily.calls, 1)
+
+            run()
+            self.assertEqual(daily.calls, 1)  # healed -> no further fetch
+
+    def test_reuse_preserves_markers_when_minute_cache_transiently_empty(self) -> None:
+        """A reuse-path row (established OK context) whose minute cache is
+        transiently empty this run: the daily fetch must not even be attempted
+        (reuse-first), and the anti-downgrade guard keeps the prior OK payload
+        byte-identical (a transient minute-cache gap must not blank the chart)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            prior = {
+                "status": "OK",
+                "context": "OK",
+                "bars": [
+                    *_lead_in_payload_bars(_ARRIVAL, 20),
+                    {"time": _ARRIVAL.isoformat(), "open": 1, "high": 1, "low": 1, "close": 1},
+                ],
+                "markers": [
+                    {"kind": "ENTRY", "level_id": "E1", "label": "E1", "time": _ARRIVAL.isoformat()}
+                ],
+            }
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "GAP2", terminal=False, chart_payload=prior
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "GAP2", _OK_SETUP)
+            before = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet").loc[
+                0, "chart_payload_json"
+            ]
+
+            def boom(ticker, start, end):
+                raise AssertionError("reuse-first must not fetch — a usable prior exists")
+
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=lambda *_a, **_k: [],  # transient empty minute cache
+                daily_bar_fetch=boom,
+                exchange=_EXCHANGE,
+                deadline=_StubDeadline(stop=False),
+            )
+            after = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet").loc[
+                0, "chart_payload_json"
+            ]
+            self.assertEqual(after, before)  # preserved byte-identical
+
+    def test_default_daily_bar_fetch_uses_polygon_timespan_day(self) -> None:
+        """Positive control: the production daily-context source calls the
+        canonical Polygon client with ``timespan='day'`` (default adjusted=false)
+        — the ONLY daily fetch path this module is allowed to use."""
+        from unittest.mock import MagicMock, patch
+
+        from alphalens_pipeline.feedback.ladder_chart import _default_daily_bar_fetch
+
+        fake_client = MagicMock()
+        fake_client.get_agg_range.return_value = []
+        start = dt.datetime(2026, 1, 1, tzinfo=UTC)
+        end = dt.datetime(2026, 1, 2, tzinfo=UTC)
+        with patch(
+            "alphalens_pipeline.data.alt_data.polygon_client.get_default_polygon_client",
+            return_value=fake_client,
+        ):
+            _default_daily_bar_fetch("AAA", start, end)
+        fake_client.get_agg_range.assert_called_once_with(
+            ticker="AAA", start=start, end=end, timespan="day"
+        )
+
+    def test_source_never_references_oneil_grouped_store(self) -> None:
+        """Basis control: this module must NEVER read the separate adjusted=true
+        O'Neil ``grouped_daily_history`` store — the only daily fetch path is the
+        canonical Polygon client via ``_default_daily_bar_fetch``."""
+        import inspect
+
+        from alphalens_pipeline.feedback import ladder_chart
+
+        src = inspect.getsource(ladder_chart)
+        self.assertNotIn("grouped_daily_history", src)
+
+
 if __name__ == "__main__":
     unittest.main()
