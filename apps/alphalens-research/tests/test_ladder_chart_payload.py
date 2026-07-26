@@ -655,7 +655,11 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
 
             # Reuse-first: NVDA's context is now established OK, so a second
             # enrich must NEVER call the (raising) daily fetch for it — the
-            # reuse path splices the prior lead-in back in instead.
+            # reuse path splices the prior lead-in back in instead. The band is
+            # already ESTABLISHED (needs_fetch is False for this row), so the
+            # reuse stamps "OK" again (steady-state), not the provisional
+            # "reused" tag — a reused stamp here would downgrade the row's own
+            # prior and re-trigger needs_fetch on the very next run.
             def boom(ticker, start, end):
                 raise AssertionError("established context must not re-fetch")
 
@@ -669,7 +673,7 @@ class TestEnrichStoreWithChartPayloads(unittest.TestCase):
             df = pd.read_parquet(store_dir / f"{brief_date.isoformat()}.parquet")
             payload = json.loads(df.set_index("ticker").loc["NVDA", "chart_payload_json"])
             self.assertEqual(payload["status"], "OK")
-            self.assertEqual(payload.get("context"), "reused")
+            self.assertEqual(payload.get("context"), "OK")
             times = [b["time"] for b in payload["bars"]]
             self.assertTrue(any(t < _ARRIVAL.isoformat() for t in times))  # lead-in reused
 
@@ -1520,9 +1524,11 @@ class TestFreeTierAlwaysRebuiltPastDeadline(unittest.TestCase):
             self.assertAlmostEqual(tp_markers[0]["price"], _FTRE_TP1, places=4)
 
     def test_context_skipped_reuses_prior_lead_in(self) -> None:
-        """Deadline exhausted, the prior payload carries a lead-in band -> the
-        rebuilt payload keeps that lead-in, adds the fresh in-trade fold + exit
-        marker, is stamped ``context == 'reused'``, and never fetches."""
+        """Deadline exhausted, the prior payload already carries an ESTABLISHED
+        ('OK') lead-in band -> needs_fetch is False regardless of the deadline,
+        so the rebuilt payload keeps that lead-in, adds the fresh in-trade fold
+        + exit marker, is stamped ``context == 'OK'`` (steady-state, not the
+        provisional 'reused'), and never fetches."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store_dir, briefs_dir = root / "population_ladders", root / "briefs"
@@ -1561,7 +1567,7 @@ class TestFreeTierAlwaysRebuiltPastDeadline(unittest.TestCase):
             df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
             payload = json.loads(df.loc[0, "chart_payload_json"])
             self.assertEqual(payload["status"], "OK")
-            self.assertEqual(payload.get("context"), "reused")
+            self.assertEqual(payload.get("context"), "OK")
             times = [b["time"] for b in payload["bars"]]
             self.assertTrue(any(t < _ARRIVAL.isoformat() for t in times))  # lead-in reused
             self.assertIn("TP", {m["kind"] for m in payload["markers"]})  # fresh exit marker
@@ -2095,6 +2101,126 @@ class TestReuseFirstContextPolicy(unittest.TestCase):
             row = df.set_index("ticker").loc["CCC"].to_dict()
             self.assertTrue(_is_frozen_terminal_ok(row))
 
+    def test_established_ongoing_zero_fetches_across_three_nights(self) -> None:
+        """Regression for the reuse-first OSCILLATION bug: an established
+        ongoing row (prior ``context == 'OK'``) must stay at ZERO daily
+        fetches and ``context == 'OK'`` across MULTIPLE consecutive enrich
+        nights, not just one. Before the fix the reuse branch DOWNGRADED the
+        row's own stamp to ``'reused'`` every time it was taken, which flipped
+        ``needs_fetch`` back to True the very next night — the row fetched
+        every other run (~50%) instead of settling at zero."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            prior = {
+                "status": "OK",
+                "context": "OK",
+                "bars": [
+                    *_lead_in_payload_bars(_ARRIVAL, 30),
+                    {"time": _ARRIVAL.isoformat(), "open": 1, "high": 1, "low": 1, "close": 1},
+                ],
+                "markers": [],
+            }
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "STABLE", terminal=False, chart_payload=prior
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "STABLE", _OK_SETUP)
+
+            daily = _CountingDailyFetch()
+            for night in range(3):
+                enrich_store_with_chart_payloads(
+                    store_dir,
+                    briefs_dir,
+                    bar_fetch=lambda ticker, arrival_session: _in_trade_bars(),
+                    daily_bar_fetch=daily,
+                    exchange=_EXCHANGE,
+                    deadline=_StubDeadline(stop=False),  # budget always available
+                )
+                self.assertEqual(daily.calls, 0, f"night {night}: unexpected daily fetch")
+                df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+                payload = json.loads(df.set_index("ticker").loc["STABLE", "chart_payload_json"])
+                self.assertEqual(
+                    payload.get("context"), "OK", f"night {night}: context was downgraded"
+                )
+
+    def test_delisted_ongoing_zero_fetches_across_three_nights(self) -> None:
+        """Same oscillation regression for the delisted-ticker shape: an
+        ongoing row whose established context band is EMPTY (``context ==
+        'OK'``, ``bars == []``) stays at zero daily fetches AND ``context ==
+        'OK'`` across multiple nights — it must never degrade to
+        'in_trade_only' (which would re-trigger a fetch attempt against a
+        ticker that will never return daily bars, forever)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            prior = {"status": "OK", "context": "OK", "bars": [], "markers": []}
+            _write_terminal_store_row(
+                store_dir, _ARRIVAL, "DELIST2", terminal=False, chart_payload=prior
+            )
+            _write_brief(briefs_dir, _ARRIVAL, "DELIST2", _OK_SETUP)
+
+            daily = _CountingDailyFetch()
+            for night in range(3):
+                enrich_store_with_chart_payloads(
+                    store_dir,
+                    briefs_dir,
+                    bar_fetch=lambda ticker, arrival_session: _in_trade_bars(),
+                    daily_bar_fetch=daily,
+                    exchange=_EXCHANGE,
+                    deadline=_StubDeadline(stop=False),
+                )
+                self.assertEqual(daily.calls, 0, f"night {night}: unexpected daily fetch")
+                df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+                payload = json.loads(df.set_index("ticker").loc["DELIST2", "chart_payload_json"])
+                self.assertEqual(
+                    payload.get("context"), "OK", f"night {night}: context was downgraded"
+                )
+
+    def test_starved_new_ongoing_self_heals_when_budget_returns(self) -> None:
+        """A brand-new ongoing row with NO prior context: night 1's deadline is
+        already exhausted, so ``needs_fetch`` (True, no usable prior) still
+        cannot spend the budget -> the reuse branch has nothing to reuse and
+        the row is left PROVISIONAL (``context != 'OK'``), never a fetch.
+        Night 2's budget is available -> exactly ONE real fetch runs and the
+        row settles at ``context == 'OK'`` (the intended self-heal)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            store_dir, briefs_dir = root / "population_ladders", root / "briefs"
+            _write_store_row(store_dir, _ARRIVAL, "STARVED")
+            _write_brief(briefs_dir, _ARRIVAL, "STARVED", _OK_SETUP)
+
+            daily = _CountingDailyFetch()
+
+            # Night 1: deadline already exhausted -> no prior to reuse either,
+            # so the row is built in-trade-only and stays provisional.
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=lambda ticker, arrival_session: _in_trade_bars(),
+                daily_bar_fetch=daily,
+                exchange=_EXCHANGE,
+                deadline=_StubDeadline(stop=True),
+            )
+            self.assertEqual(daily.calls, 0)
+            df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+            payload = json.loads(df.set_index("ticker").loc["STARVED", "chart_payload_json"])
+            self.assertEqual(payload["status"], "OK")
+            self.assertNotEqual(payload.get("context"), "OK")  # still provisional
+
+            # Night 2: budget returns -> exactly one real fetch, settles at OK.
+            enrich_store_with_chart_payloads(
+                store_dir,
+                briefs_dir,
+                bar_fetch=lambda ticker, arrival_session: _in_trade_bars(),
+                daily_bar_fetch=daily,
+                exchange=_EXCHANGE,
+                deadline=_StubDeadline(stop=False),
+            )
+            self.assertEqual(daily.calls, 1)
+            df = pd.read_parquet(store_dir / f"{_ARRIVAL.isoformat()}.parquet")
+            payload = json.loads(df.set_index("ticker").loc["STARVED", "chart_payload_json"])
+            self.assertEqual(payload.get("context"), "OK")
+
 
 class TestDeepFirstFetch(unittest.TestCase):
     """PR-2: when a fetch runs, its lead-in is captured at ``LEAD_IN_CAP`` depth
@@ -2219,7 +2345,9 @@ class TestReuseFirstCompositionAndBasis(unittest.TestCase):
         if invoked, not by an incidental NO_DATA early-return (the vacuous
         framing the prior version of this test had: an EMPTY-bars stub makes
         ``_payload_for_row`` return before ``context_allowed`` is even
-        consulted, so it never actually exercises reuse-first)."""
+        consulted, so it never actually exercises reuse-first). The band is
+        already ESTABLISHED (needs_fetch False), so the reuse stamps
+        ``context == 'OK'`` (steady-state), not the provisional 'reused'."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             store_dir, briefs_dir = root / "population_ladders", root / "briefs"
@@ -2258,7 +2386,7 @@ class TestReuseFirstCompositionAndBasis(unittest.TestCase):
             ]
             after = json.loads(after_json)
             self.assertEqual(after["status"], "OK")
-            self.assertEqual(after["context"], "reused")
+            self.assertEqual(after["context"], "OK")
             arrival_iso = _ARRIVAL.isoformat()
             prior_lead_in_times = {b["time"] for b in prior["bars"] if b["time"] < arrival_iso}
             after_lead_in_times = {b["time"] for b in after["bars"] if b["time"] < arrival_iso}
