@@ -191,7 +191,7 @@ class TestRecentPitFallsBackToLive(unittest.TestCase):
             self.assertEqual(mcap_filter.fetch_mcap("KTOS", asof=recent), 8_880_000_000.0)
 
     def test_old_pit_failure_does_not_fall_back_to_live(self):
-        old = dt.date.today() - dt.timedelta(days=mcap_filter._MCAP_CACHE_MAX_STALE_DAYS + 5)
+        old = dt.date.today() - dt.timedelta(days=mcap_filter._PIT_LIVE_FALLBACK_MAX_AGE_DAYS + 5)
         with (
             patch.object(mcap_filter, "_fetch_pit_mcap", return_value=None),
             patch.object(

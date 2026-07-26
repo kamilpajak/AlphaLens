@@ -34,6 +34,13 @@ logger = logging.getLogger(__name__)
 # for a wide market-cap BRACKET filter — far better than dropping the candidate.
 _MCAP_CACHE_PATH = Path.home() / ".alphalens" / "mcap_cache.json"
 _MCAP_CACHE_MAX_STALE_DAYS = 14
+# Recency window within which a PIT-mcap failure may substitute today's LIVE mcap
+# (the daily T-1 pipeline). A distinct knob from the cache-staleness tolerance
+# above — same value today (mcap is slow-moving, so ≤2 weeks is a fine proxy for
+# a wide BRACKET filter) but a separate concept: this bounds FORWARD BIAS, and an
+# older backtest date must NEVER take the live proxy. Shorten it to tighten
+# research purity at the cost of resilience over longer weekend/holiday gaps.
+_PIT_LIVE_FALLBACK_MAX_AGE_DAYS = _MCAP_CACHE_MAX_STALE_DAYS
 
 
 def fetch_mcap(ticker: str, *, asof: dt.date | None = None) -> float | None:
@@ -47,8 +54,8 @@ def fetch_mcap(ticker: str, *, asof: dt.date | None = None) -> float | None:
       cache fallback (a transient yfinance failure returns the last-known value
       if it is ≤ ``_MCAP_CACHE_MAX_STALE_DAYS`` old).
     - past date → ``close(asof) × shares_outstanding(≤ asof)``. On a PIT failure
-      for a RECENT date (within ``_MCAP_CACHE_MAX_STALE_DAYS`` of today — i.e. the
-      daily T-1 pipeline), fall back to the live mcap: yfinance's history
+      for a RECENT date (within ``_PIT_LIVE_FALLBACK_MAX_AGE_DAYS`` of today — i.e.
+      the daily T-1 pipeline), fall back to the live mcap: yfinance's history
       endpoint rate-limits far more readily than the lighter ``fast_info`` one,
       and for a near-today date the live mcap is a fine proxy for the PIT mcap on
       a wide market-cap BRACKET filter — far better than dropping every candidate
@@ -61,10 +68,10 @@ def fetch_mcap(ticker: str, *, asof: dt.date | None = None) -> float | None:
     mcap = _fetch_pit_mcap(ticker, asof)
     if mcap is not None:
         return mcap
-    if asof >= dt.date.today() - dt.timedelta(days=_MCAP_CACHE_MAX_STALE_DAYS):
+    if asof >= dt.date.today() - dt.timedelta(days=_PIT_LIVE_FALLBACK_MAX_AGE_DAYS):
         live = _fetch_live_mcap_with_cache(ticker)
         if live is not None:
-            logger.info(
+            logger.warning(
                 "mcap PIT fetch failed for %s (asof %s); using live mcap %.0f as a "
                 "recent-date proxy (PIT history endpoint likely rate-limited)",
                 ticker,
