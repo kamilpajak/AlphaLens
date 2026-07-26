@@ -20,12 +20,32 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import math
 import os
 from pathlib import Path
 
 from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
 
 logger = logging.getLogger(__name__)
+
+
+def _finite_or_none(mcap: float | None) -> float | None:
+    """Collapse a non-finite mcap (NaN / ±inf) to ``None``.
+
+    A throttled yfinance response can yield a NaN price or NaN shares count, so
+    ``close × shares`` comes back as NaN rather than a clean ``None``. NaN
+    silently survives an ``mcap is not None`` check and then poisons the
+    ``min_cap <= mcap <= max_cap`` bracket test — every comparison with NaN is
+    False, so the candidate is dropped with no trace (incident 2026-07-25 —
+    NaN PIT mcap collapsed a whole day's briefs). Routing every fetched value
+    through this guard turns a non-finite result into an honest failure that
+    callers can fall back on. ``math.isfinite`` is the check (NOT ``x == x``,
+    which Sonar S1764 flags as identical sub-expressions).
+    """
+    if mcap is None or not math.isfinite(mcap):
+        return None
+    return mcap
+
 
 # Persistent last-known live mcap, so a TRANSIENT yfinance/Yahoo outage does not
 # silently drop every candidate (and collapse the brief to zero). On the live
@@ -64,12 +84,12 @@ def fetch_mcap(ticker: str, *, asof: dt.date | None = None) -> float | None:
       forward bias.
     """
     if asof is None or asof >= dt.date.today():
-        return _fetch_live_mcap_with_cache(ticker)
-    mcap = _fetch_pit_mcap(ticker, asof)
+        return _finite_or_none(_fetch_live_mcap_with_cache(ticker))
+    mcap = _finite_or_none(_fetch_pit_mcap(ticker, asof))
     if mcap is not None:
         return mcap
     if asof >= dt.date.today() - dt.timedelta(days=_PIT_LIVE_FALLBACK_MAX_AGE_DAYS):
-        live = _fetch_live_mcap_with_cache(ticker)
+        live = _finite_or_none(_fetch_live_mcap_with_cache(ticker))
         if live is not None:
             logger.warning(
                 "mcap PIT fetch failed for %s (asof %s); using live mcap %.0f as a "
@@ -93,7 +113,7 @@ def _fetch_live_mcap(ticker: str) -> float | None:
 
 def _fetch_live_mcap_with_cache(ticker: str) -> float | None:
     """Live mcap with a persistent fallback for transient yfinance failures."""
-    mc = _fetch_live_mcap(ticker)
+    mc = _finite_or_none(_fetch_live_mcap(ticker))
     if mc is not None:
         _mcap_cache_put(ticker, mc)
         return mc
@@ -138,7 +158,9 @@ def _fetch_pit_mcap(ticker: str, asof: dt.date) -> float | None:
         shares = client.shares(ticker, asof=asof)
         if not shares:
             return None
-        return close * shares
+        # Honour the "None on failure" contract: a NaN close or NaN shares makes
+        # the product NaN, which must read as a failure, not a valid mcap.
+        return _finite_or_none(close * shares)
     except Exception as exc:
         logger.warning("mcap PIT fetch failed for %s: %s", ticker, exc)
         return None
