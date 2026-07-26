@@ -63,6 +63,44 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
         self.assertEqual(candidates, [])
         self.assertIn("proposed 0 (LLM returned no candidate)", logs)
 
+    def test_returns_the_in_bracket_subset_sorted_by_confidence(self):
+        # Behaviour-preservation lock: the log addition must not alter WHICH
+        # candidates are returned. Result = the in-bracket subset, confidence desc.
+        proposal = {
+            "candidates": [
+                {"ticker": "LOW", "confidence": 0.3},
+                {"ticker": "HIGH", "confidence": 0.9},
+                {"ticker": "OUT", "confidence": 0.8},  # dropped by mcap
+                {"ticker": "MID", "confidence": 0.6},
+            ],
+            "search_keywords": [],
+        }
+        with (
+            mock.patch.object(
+                orchestrator.theme_mapper, "propose_candidates", return_value=proposal
+            ),
+            mock.patch.object(
+                orchestrator.mcap_filter,
+                "filter_by_mcap",
+                return_value={
+                    "HIGH": 1_000_000_000.0,
+                    "MID": 2_000_000_000.0,
+                    "LOW": 3_000_000_000.0,
+                },
+            ),
+        ):
+            candidates, in_bracket, _keywords = orchestrator._propose_and_filter_candidates(
+                theme="ai_defense",
+                api_key="k",
+                pro_client=None,
+                min_cap=500_000_000,
+                max_cap=10_000_000_000,
+                asof=dt.date(2026, 7, 25),
+            )
+        # OUT is filtered (not in bracket); the rest are sorted by confidence desc.
+        self.assertEqual([c["ticker"] for c in candidates], ["HIGH", "MID", "LOW"])
+        self.assertEqual(set(in_bracket), {"HIGH", "MID", "LOW"})
+
 
 if __name__ == "__main__":
     unittest.main()
