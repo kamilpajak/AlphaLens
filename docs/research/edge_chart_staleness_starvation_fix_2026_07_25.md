@@ -112,7 +112,19 @@ docker compose -f deploy/docker/django-prod/docker-compose.yaml \
   --profile maintenance run --rm rebuild-ladder-outcomes
 ```
 
-**Emergency fallback** if Polygon is down: add `daily_bar_fetch=lambda *a, **k: []` — rebuilds all markers in seconds with zero Polygon; under the new freeze gate those rows are stamped `context=="in_trade_only"` (NOT frozen), so the next nightly enrich backfills their cosmetic band oldest-matured-first, then freezes them. No permanent precision cut.
+**Fast Polygon-free path** (markers now, context self-heals) — use an already-expired deadline, NOT an empty fetch:
+
+```python
+from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
+e(Path.home()/'.alphalens'/'population_ladders', Path.home()/'.alphalens'/'thematic_briefs',
+  deadline=_RunDeadline(0.0))
+```
+
+An expired deadline makes `context_allowed` False for every row, so `_payload_for_row` rebuilds the marker core from the minute cache and passes `daily_bar_fetch=None` + the prior payload's bars as `reused_context_bars` → `context=="reused"` (or `"in_trade_only"` when there is no prior). Those rows are NOT frozen (context != "OK"), so the next budgeted nightly enrich upgrades their cosmetic band oldest-matured-first, then freezes them. Zero Polygon, seconds, no permanent precision cut.
+
+> ⚠️ Do NOT use `daily_bar_fetch=lambda *a, **k: []` for this. An empty return that does not RAISE is treated as a *successful* fetch, so `_resolve_context_bars` stamps `context=="OK"` on an empty band — the freeze gate then freezes the row **permanently with no context**. The empty-fetch degradation only applies when the real fetch RAISES (`context=="in_trade_only"`); the expired-deadline path above is the correct Polygon-free rebuild.
+
+**As executed (2026-07-25):** the `deadline=None` full run hit the Polygon free-tier 429 wall (ran 1h+, and the pass only writes parquets at the very end, so a mid-run kill loses everything). Switched to the expired-deadline path above: 634 rows rebuilt in ~18 s, zero Polygon; FTRE 2026-06-12 went to bars `2026-04-30 → 2026-07-23` with the `TP1` marker, and the 07-14 stale cohort dropped 79 → 23 (the residual 23 are freshly-matured positions whose minute cache is one session behind `matured_at`, self-healing on the next nightly monitor run — not the starvation bug). Also note `/etc/alphalens/env` cannot be shell-`source`d (the `SEC_EDGAR_USER_AGENT` value has unquoted spaces); parse `KEY=VALUE` in Python instead.
 
 ## 7. Verification
 
