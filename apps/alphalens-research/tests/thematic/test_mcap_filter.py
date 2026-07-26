@@ -146,6 +146,23 @@ class TestMcapCacheFallback(unittest.TestCase):
         with patch("yfinance.Ticker", side_effect=RuntimeError("network")):
             self.assertIsNone(mcap_filter.fetch_mcap("BRANDNEW"))
 
+    def test_nan_live_mcap_collapses_to_none_and_is_not_cached(self):
+        # Defensive: a non-finite live mcap must not leak into the bracket test
+        # (NaN survives ``is not None``) and must not poison the persistent cache
+        # (a cached NaN would be served as a "recent" value on the next outage).
+        with patch("yfinance.Ticker", return_value=_live_ticker(float("nan"))):
+            self.assertIsNone(mcap_filter.fetch_mcap("NANNY"))
+        self.assertFalse(self.cache.exists() and "NANNY" in json.loads(self.cache.read_text()))
+
+    def test_pre_poisoned_nan_cache_entry_is_ignored_at_read_source(self):
+        # A cache entry written by an OLD build (before the finiteness guard)
+        # could hold a NaN. _mcap_cache_get must neutralise it at the read
+        # source — belt-and-suspenders, so a future direct reader never serves
+        # NaN as a "recent" value even without fetch_mcap's outer guard.
+        fresh_ts = dt.datetime.now(dt.UTC).isoformat()
+        self.cache.write_text(json.dumps({"OLD": {"mcap": float("nan"), "ts": fresh_ts}}))
+        self.assertIsNone(mcap_filter._mcap_cache_get("OLD"))
+
     def test_live_failure_stale_cache_returns_none(self):
         stale_ts = (
             dt.datetime.now(dt.UTC) - dt.timedelta(days=mcap_filter._MCAP_CACHE_MAX_STALE_DAYS + 1)
@@ -211,6 +228,21 @@ class TestRecentPitFallsBackToLive(unittest.TestCase):
         ):
             self.assertEqual(mcap_filter.fetch_mcap("X", asof=recent), 5_000_000_000.0)
             live_mock.assert_not_called()
+
+    def test_recent_pit_nan_falls_back_to_live(self):
+        # Reality check (incident 2026-07-25): a throttled history endpoint makes
+        # _fetch_pit_mcap return NaN (a NaN close or NaN shares → close × shares =
+        # NaN), NOT a clean None. NaN silently survives ``mcap is not None``, so
+        # without a finiteness guard fetch_mcap returns NaN and the bracket test
+        # ``min_cap <= NaN <= max_cap`` is False for EVERY candidate — collapsing
+        # the whole day's briefs to zero with no trace. A NaN PIT must fall back
+        # to the live mcap exactly as a None PIT does.
+        recent = dt.date.today() - dt.timedelta(days=1)
+        with (
+            patch.object(mcap_filter, "_fetch_pit_mcap", return_value=float("nan")),
+            patch.object(mcap_filter, "_fetch_live_mcap", return_value=8_880_000_000.0),
+        ):
+            self.assertEqual(mcap_filter.fetch_mcap("KTOS", asof=recent), 8_880_000_000.0)
 
 
 class TestFetchMcapYfinanceContract(unittest.TestCase):
