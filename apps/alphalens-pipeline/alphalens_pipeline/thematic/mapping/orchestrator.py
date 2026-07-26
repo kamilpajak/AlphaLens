@@ -400,19 +400,37 @@ def _propose_and_filter_candidates(
         llm_client=pro_client,
         model=model or theme_mapper.DEFAULT_MODEL,
     )
-    candidates = proposal.get("candidates") or []
-    if not candidates:
+    proposed = proposal.get("candidates") or []
+    if not proposed:
+        logger.info(
+            "map_themes %s: theme %r funnel — proposed 0 (LLM returned no candidate)",
+            asof.isoformat(),
+            theme,
+        )
         return [], {}, []
     in_bracket = mcap_filter.filter_by_mcap(
-        [c["ticker"] for c in candidates],
+        [c["ticker"] for c in proposed],
         min_cap=min_cap,
         max_cap=max_cap,
         asof=asof,
     )
     candidates = sorted(
-        [c for c in candidates if c["ticker"] in in_bracket],
+        [c for c in proposed if c["ticker"] in in_bracket],
         key=lambda c: c.get("confidence", 0.0),
         reverse=True,
+    )
+    # Funnel telemetry: the mcap stage is otherwise SILENT when it drops
+    # everything (nothing reaches the later kept/dropped log), which is exactly
+    # how a yfinance/mcap outage collapses the whole day's briefs to zero
+    # candidates invisibly. Log proposed -> in-bracket per theme so a mass
+    # off-bracket / no-mcap drop is diagnosable at a glance.
+    logger.info(
+        "map_themes %s: theme %r funnel — proposed %d, in mcap bracket %d (%d dropped off-bracket / no mcap)",
+        asof.isoformat(),
+        theme,
+        len(proposed),
+        len(candidates),
+        len(proposed) - len(candidates),
     )
     keywords = _theme_keywords(theme, pro_keywords=proposal.get("search_keywords") or [])
     return candidates, in_bracket, keywords
