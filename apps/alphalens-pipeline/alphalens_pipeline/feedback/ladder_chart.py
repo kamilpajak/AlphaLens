@@ -940,10 +940,18 @@ def _build_nonfrozen_payloads(
     for _key, path_str, iloc, row in candidates:
         prior = row.get(CHART_PAYLOAD_COLUMN)
         prior_str = prior if isinstance(prior, str) and prior else None
+        is_terminal = not pd.isna(row.get("terminal")) and bool(row.get("terminal"))
+        # Reuse-first (PR-2): an ongoing row with a usable prior OK-context band
+        # reuses it (its lead-in is immutable history). Fetch only genuine new
+        # work: a terminal not yet frozen (one-time trailing band) or an ongoing
+        # row lacking a usable prior (new arrival / self-heal). The marker core
+        # is rebuilt Polygon-free for every row regardless (needs_fetch gates
+        # only the cosmetic context band).
+        needs_fetch = is_terminal or not _prior_context_is_ok(prior_str)
         # Live wall-clock check AT fetch time (in maturation order): the real
         # Polygon fetch below advances the monotonic clock, so a finite budget
         # bounds how many context bands are fetched and the oldest maturers win.
-        context_allowed = deadline is None or not deadline.should_stop()
+        context_allowed = needs_fetch and (deadline is None or not deadline.should_stop())
         payload = _payload_for_row(
             row,
             fetch=fetch,
