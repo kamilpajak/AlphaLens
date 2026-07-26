@@ -1003,6 +1003,27 @@ def _prior_payload_is_ok(prior_payload_json: str | None) -> bool:
     return isinstance(prior, dict) and prior.get("status") == "OK"
 
 
+def _prior_context_is_ok(prior_payload_json: str | None) -> bool:
+    """Whether the prior stored payload is reusable as a full context band.
+
+    True iff it parses, ``status == "OK"``, AND its context tier is complete
+    (``context == "OK"``; a MISSING key defaults to OK, matching the freeze gate).
+    Keyed on ``context`` — NOT on non-empty ``bars`` — so a delisted ticker whose
+    empty band is stamped ``CONTEXT_OK`` is reused, never re-fetched forever.
+    """
+    if not isinstance(prior_payload_json, str) or not prior_payload_json:
+        return False
+    try:
+        prior = json.loads(prior_payload_json)
+    except (ValueError, TypeError):
+        return False
+    return (
+        isinstance(prior, dict)
+        and prior.get("status") == "OK"
+        and prior.get("context", CONTEXT_OK) == CONTEXT_OK
+    )
+
+
 def _payload_for_row(
     row: Mapping[str, Any],
     *,

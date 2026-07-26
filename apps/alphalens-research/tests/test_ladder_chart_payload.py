@@ -1896,5 +1896,51 @@ class TestFrozenSkipPreserved(unittest.TestCase):
             self.assertEqual(daily_calls, [])
 
 
+class TestPriorContextIsOk(unittest.TestCase):
+    """``_prior_context_is_ok`` gates PR-2's reuse-first policy: a prior payload
+    is reusable only when it parses, ``status == 'OK'``, AND its context tier is
+    complete (``context == 'OK'``). Keyed on ``context`` — NOT on non-empty
+    ``bars`` — so a delisted ongoing ticker's empty band (stamped ``CONTEXT_OK``)
+    is reused, never re-fetched forever."""
+
+    def test_ok_status_and_ok_context(self) -> None:
+        from alphalens_pipeline.feedback.ladder_chart import _prior_context_is_ok
+
+        self.assertTrue(
+            _prior_context_is_ok(json.dumps({"status": "OK", "context": "OK", "bars": []}))
+        )
+
+    def test_missing_context_key_defaults_ok(self) -> None:
+        from alphalens_pipeline.feedback.ladder_chart import _prior_context_is_ok
+
+        self.assertTrue(_prior_context_is_ok(json.dumps({"status": "OK", "bars": []})))
+
+    def test_reused_context_is_not_ok(self) -> None:
+        from alphalens_pipeline.feedback.ladder_chart import _prior_context_is_ok
+
+        self.assertFalse(
+            _prior_context_is_ok(json.dumps({"status": "OK", "context": "reused", "bars": []}))
+        )
+
+    def test_in_trade_only_is_not_ok(self) -> None:
+        from alphalens_pipeline.feedback.ladder_chart import _prior_context_is_ok
+
+        self.assertFalse(
+            _prior_context_is_ok(json.dumps({"status": "OK", "context": "in_trade_only"}))
+        )
+
+    def test_non_ok_status_is_not_ok(self) -> None:
+        from alphalens_pipeline.feedback.ladder_chart import _prior_context_is_ok
+
+        self.assertFalse(_prior_context_is_ok(json.dumps({"status": "NO_DATA", "context": "OK"})))
+
+    def test_missing_or_unparseable_is_not_ok(self) -> None:
+        from alphalens_pipeline.feedback.ladder_chart import _prior_context_is_ok
+
+        self.assertFalse(_prior_context_is_ok(None))
+        self.assertFalse(_prior_context_is_ok(""))
+        self.assertFalse(_prior_context_is_ok("{not json"))
+
+
 if __name__ == "__main__":
     unittest.main()
