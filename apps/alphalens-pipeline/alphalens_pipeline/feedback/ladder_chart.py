@@ -514,6 +514,7 @@ def _resolve_context_bars(
     has_in_trade: bool,
     exchange: str,
     deep_lead_in: bool = False,
+    reuse_is_complete: bool = False,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
     """``(lead_in, trailing, context_state)`` for the payload's cosmetic band.
 
@@ -521,12 +522,23 @@ def _resolve_context_bars(
       it returns ``[]`` — a delisted / empty ticker resolves to OK-context rather
       than retrying forever); a raised fetch degrades to ``CONTEXT_IN_TRADE_ONLY``
       so a later run re-attempts the band.
-    * ``daily_bar_fetch`` None and ``reused_context_bars`` given -> the reused band
-      is spliced in and stamped ``CONTEXT_REUSED``.
-    * neither -> ``CONTEXT_IN_TRADE_ONLY``.
+    * ``daily_bar_fetch`` None and ``reuse_is_complete`` True -> the band is
+      ESTABLISHED (the caller took the reuse branch because nothing needed
+      fetching, not because the budget was exhausted): stamp ``CONTEXT_OK`` — the
+      reused bars are spliced in when present, or the band stays empty (a
+      delisted / never-covered ticker) — either way the band is complete and must
+      never be re-attempted.
+    * ``daily_bar_fetch`` None and ``reuse_is_complete`` False -> the caller was
+      STARVED (a genuine fetch was owed but the deadline stopped it): splice in
+      ``reused_context_bars`` when present and stamp ``CONTEXT_REUSED``
+      (provisional), else ``CONTEXT_IN_TRADE_ONLY``. Both provisional stamps keep
+      the row eligible so a later budgeted night fetches the real band.
 
     ``deep_lead_in`` is forwarded to :func:`_context_bars` unchanged (PR-2
-    write-once fetch depth); irrelevant when no fetch runs.
+    write-once fetch depth); irrelevant when no fetch runs. ``reuse_is_complete``
+    is the caller's ``not needs_fetch`` (memo: reuse-first steady-state fix) —
+    it is what lets an established ongoing row's reuse stamp ``OK`` forever
+    instead of oscillating OK -> reused -> re-fetch -> OK each cycle.
     """
     if daily_bar_fetch is not None:
         hold_sessions = (
@@ -550,10 +562,14 @@ def _resolve_context_bars(
             )
             return [], [], CONTEXT_IN_TRADE_ONLY
         return lead_in, trailing, CONTEXT_OK
+    lead_in, trailing = (
+        _split_reused_context(reused_context_bars, arrival_session, horizon_session)
+        if reused_context_bars
+        else ([], [])
+    )
+    if reuse_is_complete:
+        return lead_in, trailing, CONTEXT_OK
     if reused_context_bars:
-        lead_in, trailing = _split_reused_context(
-            reused_context_bars, arrival_session, horizon_session
-        )
         return lead_in, trailing, CONTEXT_REUSED
     return [], [], CONTEXT_IN_TRADE_ONLY
 
@@ -570,6 +586,7 @@ def build_chart_payload(
     daily_bar_fetch: DailyBarFetch | None = None,
     reused_context_bars: Sequence[Mapping[str, Any]] | None = None,
     deep_lead_in: bool = False,
+    reuse_is_complete: bool = False,
 ) -> dict[str, Any]:
     """Build the chart payload for one (brief_date, ticker).
 
@@ -594,6 +611,15 @@ def build_chart_payload(
     degrades silently to the in-trade bars only. ``deep_lead_in`` (PR-2 write-once
     fetch): when a fetch actually runs, pass True to capture the lead-in at the
     full ``LEAD_IN_CAP`` depth so the persisted band never needs deepening later.
+
+    ``reuse_is_complete`` (reuse-first steady-state fix): only meaningful when
+    ``daily_bar_fetch`` is None. True means the caller took the reuse branch
+    because the band is already ESTABLISHED (nothing needed fetching), so the
+    reused band — spliced when present, empty for a delisted ticker — is
+    stamped ``CONTEXT_OK`` and never revisited. False (the default) means the
+    caller was STARVED (a fetch was owed but the budget/deadline stopped it),
+    so the reused band stays provisional (``CONTEXT_REUSED`` /
+    ``CONTEXT_IN_TRADE_ONLY``) and stays eligible for a real fetch later.
     """
     parsed = parse_ladder(setup)
     if not parsed.ok:
@@ -621,6 +647,7 @@ def build_chart_payload(
         has_in_trade=bool(daily),
         exchange=exchange,
         deep_lead_in=deep_lead_in,
+        reuse_is_complete=reuse_is_complete,
     )
 
     if not daily:
@@ -971,6 +998,18 @@ def _build_nonfrozen_payloads(
         # is rebuilt Polygon-free for every row regardless (needs_fetch gates
         # only the cosmetic context band).
         needs_fetch = is_terminal or not _prior_context_is_ok(prior_str)
+        # reuse_is_complete (the fix for the reuse-first oscillation bug): True
+        # only when the row does NOT need a fetch at all — an established
+        # ongoing row whose prior is already OK. It threads down into the reuse
+        # branch so THAT case stamps "OK" (permanent) instead of "reused"
+        # (provisional), which is what used to make the row's own reuse
+        # DOWNGRADE its own stamp and re-trigger needs_fetch=True the very next
+        # night — an OK -> reused -> re-fetch -> OK oscillation instead of the
+        # intended steady-state zero fetches. A row that DOES need a fetch
+        # (terminal, or a starved new/self-healing ongoing row) always has
+        # reuse_is_complete False, so a deadline-starved reuse for THAT row
+        # stays provisional and genuinely retries next budgeted night.
+        reuse_is_complete = not needs_fetch
         # Live wall-clock check AT fetch time (in maturation order): the real
         # Polygon fetch below advances the monotonic clock, so a finite budget
         # bounds how many context bands are fetched and the oldest maturers win.
@@ -984,17 +1023,22 @@ def _build_nonfrozen_payloads(
             briefs_dir=briefs,
             context_allowed=context_allowed,
             prior_payload_json=prior_str,
+            reuse_is_complete=reuse_is_complete,
         )
         # Anti-downgrade guard: a fresh non-OK build never overwrites an existing
         # OK payload. Keep the prior string verbatim (not re-dumped) and flag it
         # preserved so an all-preserved file skips the rewrite.
         # NOTE: the guard is on status only, not on context tier. A fresh OK build
-        # with a lower context tier ("in_trade_only"/"reused" after budget
-        # exhaustion) DOES replace a prior "OK"-context payload. That is a cosmetic
-        # one-cycle downgrade (markers stay intact); the freeze gate keeps such a
-        # row eligible, so oldest-matured-first restores "OK" on the next budgeted
-        # night. Ranking context tiers here would add complexity for a transient,
-        # self-healing regression — the status-only contract is intentional.
+        # with a lower context tier ("in_trade_only"/"reused") DOES replace a
+        # prior "OK"-context payload. That only happens for a row that genuinely
+        # needs a fetch (reuse_is_complete False — a starved terminal or a
+        # self-healing ongoing row): a one-cycle provisional downgrade the freeze
+        # gate keeps eligible, so oldest-matured-first restores "OK" on the next
+        # budgeted night. An established ongoing row (reuse_is_complete True)
+        # never takes this path at all — its reuse stamps "OK" directly, so it
+        # never downgrades its own prior. Ranking context tiers here would add
+        # complexity for a transient, self-healing regression — the status-only
+        # contract is intentional.
         if payload.get("status") != "OK" and _prior_payload_is_ok(prior_str):
             built[(path_str, iloc)] = (prior_str, True, True)  # type: ignore[arg-type]
         else:
@@ -1066,14 +1110,18 @@ def _payload_for_row(
     briefs_dir: Path,
     context_allowed: bool = True,
     prior_payload_json: str | None = None,
+    reuse_is_complete: bool = False,
 ) -> dict[str, Any]:
     """Build one row's chart payload; never raises (NO_DATA on any failure).
 
     The marker core + in-trade candles are built from the disk minute cache in
     either branch (Polygon-free). ``context_allowed`` gates only the cosmetic band:
     when True the daily context is fetched (``context == "OK"``); when False the
-    prior payload's lead-in / trailing bars are reused (``context == "reused"``) or,
-    absent a prior, the chart is in-trade-only (``context == "in_trade_only"``).
+    prior payload's lead-in / trailing bars are reused. The reuse outcome depends
+    on ``reuse_is_complete`` (the caller's ``not needs_fetch``): True stamps
+    ``context == "OK"`` (the band is already established, never re-attempted);
+    False stamps the provisional ``context == "reused"`` (or, absent a prior,
+    ``"in_trade_only"``) so a starved row stays eligible for a real fetch later.
     """
     try:
         # Lazy import (population_ladder_monitor <-> ladder_chart would be a top-level
@@ -1143,6 +1191,7 @@ def _payload_for_row(
             ticker=ticker,
             daily_bar_fetch=None,
             reused_context_bars=_reused_context_from_prior(prior_payload_json),
+            reuse_is_complete=reuse_is_complete,
         )
     except Exception:
         logger.exception(
