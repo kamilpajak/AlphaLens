@@ -715,6 +715,16 @@ def _memoized_daily_fetch(daily_fetch: DailyBarFetch) -> DailyBarFetch:
     return cached
 
 
+def _is_terminal_row(row: Mapping[str, Any]) -> bool:
+    """Whether a store row is a resolved (terminal) position; NaN/None/missing -> False.
+
+    ``pd.isna`` guards a NaN terminal (``bool(nan)`` is True) and a missing column
+    (``None``); only a real truthy flag counts as terminal.
+    """
+    terminal = row.get("terminal")
+    return not pd.isna(terminal) and bool(terminal)
+
+
 def _is_frozen_terminal_ok(row: Any) -> bool:
     """Whether a store row is a resolved position whose chart is already final.
 
@@ -734,10 +744,7 @@ def _is_frozen_terminal_ok(row: Any) -> bool:
       the chart reaches the close, then freezes. A row with no ``matured_at``
       (old-format tail) keeps the legacy freeze.
     """
-    terminal = row.get("terminal")
-    # pd.isna guards a NaN terminal (bool(nan) is True) and a missing column
-    # (None); only a real truthy flag counts as terminal.
-    if pd.isna(terminal) or not bool(terminal):
+    if not _is_terminal_row(row):
         return False
     existing = row.get(CHART_PAYLOAD_COLUMN)
     if not isinstance(existing, str) or not existing:
@@ -956,7 +963,7 @@ def _build_nonfrozen_payloads(
     for _key, path_str, iloc, row in candidates:
         prior = row.get(CHART_PAYLOAD_COLUMN)
         prior_str = prior if isinstance(prior, str) and prior else None
-        is_terminal = not pd.isna(row.get("terminal")) and bool(row.get("terminal"))
+        is_terminal = _is_terminal_row(row)
         # Reuse-first (PR-2): an ongoing row with a usable prior OK-context band
         # reuses it (its lead-in is immutable history). Fetch only genuine new
         # work: a terminal not yet frozen (one-time trailing band) or an ongoing
@@ -995,6 +1002,22 @@ def _build_nonfrozen_payloads(
     return built
 
 
+def _parse_prior_payload(prior_payload_json: str | None) -> dict[str, Any] | None:
+    """Parse a stored ``chart_payload_json`` string to a dict, or ``None`` (never raises).
+
+    Shared parse-guard for the three prior-payload predicates below: a
+    non-string / empty / unparseable / non-dict value all resolve to ``None``
+    rather than raising, so the caller never needs its own try/except.
+    """
+    if not isinstance(prior_payload_json, str) or not prior_payload_json:
+        return None
+    try:
+        parsed = json.loads(prior_payload_json)
+    except (ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def _reused_context_from_prior(
     prior_payload_json: str | None,
 ) -> list[Mapping[str, Any]] | None:
@@ -1004,13 +1027,8 @@ def _reused_context_from_prior(
     lead-in / trailing sessions back in when the context budget is exhausted this
     run. ``None`` when the prior is missing / unparseable / has no bars.
     """
-    if not isinstance(prior_payload_json, str) or not prior_payload_json:
-        return None
-    try:
-        prior = json.loads(prior_payload_json)
-    except (ValueError, TypeError):
-        return None
-    if not isinstance(prior, dict):
+    prior = _parse_prior_payload(prior_payload_json)
+    if prior is None:
         return None
     bars = prior.get("bars")
     return bars if isinstance(bars, list) and bars else None
@@ -1018,13 +1036,8 @@ def _reused_context_from_prior(
 
 def _prior_payload_is_ok(prior_payload_json: str | None) -> bool:
     """Whether the prior stored payload parses to ``status == "OK"`` (never raises)."""
-    if not isinstance(prior_payload_json, str) or not prior_payload_json:
-        return False
-    try:
-        prior = json.loads(prior_payload_json)
-    except (ValueError, TypeError):
-        return False
-    return isinstance(prior, dict) and prior.get("status") == "OK"
+    prior = _parse_prior_payload(prior_payload_json)
+    return prior is not None and prior.get("status") == "OK"
 
 
 def _prior_context_is_ok(prior_payload_json: str | None) -> bool:
@@ -1035,14 +1048,9 @@ def _prior_context_is_ok(prior_payload_json: str | None) -> bool:
     Keyed on ``context`` — NOT on non-empty ``bars`` — so a delisted ticker whose
     empty band is stamped ``CONTEXT_OK`` is reused, never re-fetched forever.
     """
-    if not isinstance(prior_payload_json, str) or not prior_payload_json:
-        return False
-    try:
-        prior = json.loads(prior_payload_json)
-    except (ValueError, TypeError):
-        return False
+    prior = _parse_prior_payload(prior_payload_json)
     return (
-        isinstance(prior, dict)
+        prior is not None
         and prior.get("status") == "OK"
         and prior.get("context", CONTEXT_OK) == CONTEXT_OK
     )
