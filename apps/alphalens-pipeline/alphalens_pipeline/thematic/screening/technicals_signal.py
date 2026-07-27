@@ -102,7 +102,11 @@ def _compute_atr_pct(ohlcv: pd.DataFrame, *, period: int = _ATR_PERIOD) -> float
     )
     atr = tr.ewm(alpha=1.0 / period, adjust=False).mean().iloc[-1]
     last = float(close.iloc[-1])
-    if not np.isfinite(atr) or last <= 0:
+    # A NaN last close (e.g. a settled Yahoo daily bar with OHLV populated but
+    # Close=NaN) must be rejected explicitly: `NaN <= 0` is False, so it would
+    # otherwise slip past the `last <= 0` guard and leak `100*atr/NaN = NaN`
+    # (not None) into the downstream JSONField.
+    if not np.isfinite(atr) or not np.isfinite(last) or last <= 0:
         return None
     return 100.0 * float(atr) / last
 
