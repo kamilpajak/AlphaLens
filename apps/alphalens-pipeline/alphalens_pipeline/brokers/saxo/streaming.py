@@ -556,7 +556,10 @@ class SaxoStreamingClient:
                 return
             # A connect that could not even start because the main loop has not
             # pushed the first token yet is a startup-window wait, not a failure
-            # (2026-07-27 breaker-trip incident) — see _plan_reconnect_step.
+            # (2026-07-27 breaker-trip incident) — see _plan_reconnect_step. The
+            # wait cannot spin unbounded: this reader is a daemon thread of the
+            # main loop, which pushes a token every tick — if the main loop dies,
+            # the process exits and takes this thread with it.
             step = self._plan_reconnect_step(token_missing=self._current_token is None)
             if step.give_up:
                 return
