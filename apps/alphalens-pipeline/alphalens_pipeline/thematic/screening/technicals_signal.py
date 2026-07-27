@@ -102,7 +102,11 @@ def _compute_atr_pct(ohlcv: pd.DataFrame, *, period: int = _ATR_PERIOD) -> float
     )
     atr = tr.ewm(alpha=1.0 / period, adjust=False).mean().iloc[-1]
     last = float(close.iloc[-1])
-    if not np.isfinite(atr) or last <= 0:
+    # A NaN last close (e.g. a settled Yahoo daily bar with OHLV populated but
+    # Close=NaN) must be rejected explicitly: `NaN <= 0` is False, so it would
+    # otherwise slip past the `last <= 0` guard and leak `100*atr/NaN = NaN`
+    # (not None) into the downstream JSONField.
+    if not np.isfinite(atr) or not np.isfinite(last) or last <= 0:
         return None
     return 100.0 * float(atr) / last
 
@@ -197,17 +201,30 @@ def score_technicals_from_frame(ohlcv: pd.DataFrame) -> dict[str, float | None |
     (lowercase, yfinance-cache convention). Returns ``None`` for each metric
     when the window is too short. Summary is always a string.
     """
+    empty: dict[str, float | None] = {
+        "rsi": None,
+        "ma50_distance_pct": None,
+        "atr_pct": None,
+        "volume_zscore": None,
+        "pct_off_52w_high": None,
+        "pct_off_52w_low": None,
+        "ma200_distance_pct": None,
+        "ma200_slope_pct_per_day": None,
+    }
     if ohlcv is None or ohlcv.empty or "close" not in ohlcv.columns:
-        empty: dict[str, float | None] = {
-            "rsi": None,
-            "ma50_distance_pct": None,
-            "atr_pct": None,
-            "volume_zscore": None,
-            "pct_off_52w_high": None,
-            "pct_off_52w_low": None,
-            "ma200_distance_pct": None,
-            "ma200_slope_pct_per_day": None,
-        }
+        return {**empty, "summary": _format_summary(empty)}
+
+    # Drop rows whose close is non-finite (e.g. a settled Yahoo daily bar with
+    # OHLV populated but Close=NaN, or a +/-inf artifact) BEFORE any metric
+    # reads `close.iloc[-1]`. Only `_compute_atr_pct` had its own last-close
+    # guard; `_ma_distance_pct` / `_pct_off_52w_high` / `_pct_off_52w_low`
+    # read the raw last close unguarded and would leak a real NaN float
+    # (not None) that renders as "nan%" and does not round-trip through the
+    # Django JSONField. This mirrors the builder's Fix B pattern
+    # (build_trade_setup_from_frame) as the single choke point for this
+    # function, rather than adding a per-metric guard to each caller.
+    ohlcv = ohlcv[np.isfinite(ohlcv["close"].astype(float))]
+    if ohlcv.empty:
         return {**empty, "summary": _format_summary(empty)}
 
     close = ohlcv["close"].astype(float)

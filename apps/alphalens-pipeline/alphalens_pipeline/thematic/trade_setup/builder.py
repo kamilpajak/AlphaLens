@@ -17,6 +17,7 @@ import datetime as dt
 import logging
 from collections.abc import Callable
 
+import numpy as np
 import pandas as pd
 
 from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
@@ -124,6 +125,18 @@ def build_trade_setup_from_frame(
 ) -> TradeSetup:
     """Compute a TradeSetup from an OHLCV frame (lowercase yfinance schema)."""
     if ohlcv is None or ohlcv.empty or "close" not in ohlcv.columns or len(ohlcv) < _MIN_BARS:
+        return TradeSetup.no_structure(asof_close=0.0, atr=0.0, order_ttl_days=order_ttl_days)
+
+    # Drop rows whose close is non-finite (e.g. a settled Yahoo daily bar with
+    # OHLV populated but Close=NaN, or a +inf artifact) BEFORE deriving
+    # `close`/`close_series`. This guard is required even though the
+    # yfinance-client normalize step (_normalize_ohlcv) does the same drop at
+    # the vendor choke point: the brief loader reads the cached parquet
+    # DIRECTLY (bypassing that step), so an already-poisoned or externally
+    # written frame must be cleaned here too. Falling back to the prior
+    # FINITE close is not look-ahead (an OLDER close, never a future one).
+    ohlcv = ohlcv[np.isfinite(ohlcv["close"].astype(float))]
+    if len(ohlcv) < _MIN_BARS:
         return TradeSetup.no_structure(asof_close=0.0, atr=0.0, order_ttl_days=order_ttl_days)
 
     close_series = ohlcv["close"].astype(float)
