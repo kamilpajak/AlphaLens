@@ -466,6 +466,53 @@ class TestStreamReconnectStormDiscipline(unittest.TestCase):
         self.assertFalse(client.is_streaming)
 
 
+class TestStreamStartupTokenRace(unittest.TestCase):
+    """The reader thread is spawned before the main loop pushes the first bearer
+    token, so its first connect attempts can find ``_current_token is None`` and
+    raise "no bearer token pushed before connect". That is "not ready yet", NOT a
+    connection failure: waiting for the token must NEVER count toward the breaker.
+    Otherwise a slow first tick (e.g. a Saxo 503 on the initial reconcile) burns
+    the whole 6-attempt budget and shuts streaming to poll-only for the entire
+    session — the exact 2026-07-27 incident. ``_current_token`` is only ever set
+    (never re-cleared to None) once the main loop pushes, so ``token_missing`` is
+    an exact, self-limiting flag for the pre-first-token startup window."""
+
+    def test_missing_token_wait_never_counts_toward_breaker(self):
+        client, _ = _make_client(max_consecutive_failures=6)
+        self.assertIsNone(client._current_token)  # no token pushed yet
+        for _ in range(20):  # far past the 6-failure breaker budget
+            step = client._plan_reconnect_step(token_missing=True)
+            self.assertFalse(step.give_up)
+            self.assertEqual(step.backoff_s, client._backoff_floor_s)
+        self.assertEqual(client._consecutive_failures, 0)
+        self.assertTrue(client.is_streaming)  # breaker never tripped
+
+    def test_real_failures_still_count_once_token_present(self):
+        # The exemption is scoped to the tokenless startup window: once the token
+        # is present a genuine connection failure counts and still trips the Nth.
+        client, _ = _make_client(max_consecutive_failures=6)
+        client.push_token("bearer")
+        trips = 0
+        for _ in range(6):
+            step = client._plan_reconnect_step(token_missing=False)
+            if step.give_up:
+                trips += 1
+                break
+        self.assertEqual(trips, 1)
+        self.assertFalse(client.is_streaming)
+
+    def test_tokenless_waits_do_not_erode_a_later_real_failure_budget(self):
+        # A stretch of tokenless waits must leave the full failure budget intact
+        # for real failures that come after the token finally arrives.
+        client, _ = _make_client(max_consecutive_failures=6)
+        for _ in range(10):
+            client._plan_reconnect_step(token_missing=True)
+        client.push_token("bearer")
+        self.assertEqual(client._consecutive_failures, 0)
+        trips = [client._plan_reconnect_step().give_up for _ in range(6)]
+        self.assertEqual(trips, [False, False, False, False, False, True])
+
+
 class TestStreamSubscriptionAcceptance(unittest.TestCase):
     """A subscription POST that does not return 201 is a dead subscription: the
     recv loop would then wait for data that never arrives. It must raise so the

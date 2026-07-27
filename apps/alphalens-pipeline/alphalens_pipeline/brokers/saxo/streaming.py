@@ -449,7 +449,7 @@ class SaxoStreamingClient:
     def _reset_failures(self) -> None:
         self._consecutive_failures = 0
 
-    def _plan_reconnect_step(self) -> ReconnectStep:
+    def _plan_reconnect_step(self, *, token_missing: bool = False) -> ReconnectStep:
         """DECIDE what to do after a connection ENDED — a connect/subscribe
         exception OR a clean RECONNECT-return (socket EOF, ``_disconnect``,
         stale-timeout, reauth non-202). Both are counted identically: register
@@ -457,7 +457,20 @@ class SaxoStreamingClient:
         the exponential backoff to sleep before the next attempt. The streak is
         reset ONLY by :meth:`_mark_delivered` (a real frame), so a
         connect-then-drop storm that never delivers still trips the breaker
-        instead of spinning resubscribe REST at full speed (finding #1)."""
+        instead of spinning resubscribe REST at full speed (finding #1).
+
+        ``token_missing`` marks the pre-first-token STARTUP window: the reader
+        thread is spawned before the main loop pushes the first bearer, so the
+        first connect(s) can find no token. That is "not ready yet", NOT a
+        connection failure — it must NOT count toward the breaker (else a slow
+        first tick, e.g. a Saxo 503 on the initial reconcile, burns the whole
+        6-attempt budget and shuts streaming to poll-only for the entire session
+        — the 2026-07-27 incident). ``_current_token`` is only ever set, never
+        re-cleared to None, so this exemption is self-limiting to startup: it
+        just waits the floor backoff and re-checks, never eroding the real
+        failure budget."""
+        if token_missing:
+            return ReconnectStep(give_up=False, backoff_s=self._backoff_floor_s)
         if self._register_failure():
             return ReconnectStep(give_up=True, backoff_s=0.0)
         return ReconnectStep(
@@ -541,7 +554,10 @@ class SaxoStreamingClient:
             # A stop / already-tripped breaker exit needs no failure registration.
             if self._stop or not self._is_streaming:
                 return
-            step = self._plan_reconnect_step()
+            # A connect that could not even start because the main loop has not
+            # pushed the first token yet is a startup-window wait, not a failure
+            # (2026-07-27 breaker-trip incident) — see _plan_reconnect_step.
+            step = self._plan_reconnect_step(token_missing=self._current_token is None)
             if step.give_up:
                 return
             await async_sleep(step.backoff_s)
