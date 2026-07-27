@@ -70,6 +70,43 @@ class TestDailyOhlcvSuccess(unittest.TestCase):
         self.assertTrue(df.empty)
 
 
+class TestDailyOhlcvNonFiniteClose(unittest.TestCase):
+    def test_drops_nan_and_inf_close_rows_keeping_prior_finite_close(self):
+        # Real failure payload (2026-07-24 incident): Yahoo settled the last
+        # daily bar with OHLV populated but Close=NaN, universe-wide. A
+        # trailing +inf close is included too, to prove the guard uses
+        # np.isfinite over pd.notna/dropna (which both pass +inf through).
+        frame = pd.DataFrame(
+            {
+                "Open": [10.0, 10.2, 10.6],
+                "High": [11.0, 11.1, 11.4],
+                "Low": [9.0, 9.4, 9.6],
+                "Close": [10.5, float("inf"), float("nan")],
+                "Volume": [5000.0, 5200.0, 5100.0],
+            },
+            index=pd.DatetimeIndex(
+                ["2026-07-22", "2026-07-23", "2026-07-24"], tz="America/New_York"
+            ),
+        )
+        fake = MagicMock()
+        fake.history.return_value = frame
+        with patch("yfinance.Ticker", return_value=fake):
+            df = _client().daily_ohlcv("QUBT", start=dt.date(2026, 6, 1), end=dt.date(2026, 7, 25))
+        # Both the NaN-close and +inf-close rows are dropped.
+        self.assertEqual(len(df), 1)
+        self.assertEqual(float(df["close"].iloc[-1]), 10.5)
+
+    def test_fully_finite_frame_is_unchanged(self):
+        # Positive control: a healthy frame passes through untouched.
+        frame = _history_frame()
+        fake = MagicMock()
+        fake.history.return_value = frame
+        with patch("yfinance.Ticker", return_value=fake):
+            df = _client().daily_ohlcv("QUBT", start=dt.date(2026, 6, 1), end=dt.date(2026, 7, 25))
+        self.assertEqual(len(df), 1)
+        self.assertEqual(float(df["close"].iloc[-1]), 10.5)
+
+
 class TestDailyOhlcvRetry(unittest.TestCase):
     def test_retries_on_rate_limit_then_succeeds(self):
         # First call raises YFRateLimitError (transient), second returns data.

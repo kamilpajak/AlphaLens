@@ -41,6 +41,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from yfinance.exceptions import YFRateLimitError
 
@@ -535,12 +536,22 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     Mirrors the legacy ``scorer._fetch_ohlcv_via_yfinance`` normalisation:
     lowercase columns, select the canonical OHLCV set, force a tz-naive index
     so downstream date-level comparisons stay simple.
+
+    Also drops any row whose close is non-finite (NaN or +/-inf) — Yahoo
+    occasionally settles a daily bar with OHLV populated but Close=NaN
+    (2026-07-24 incident: universe-wide, degraded every trade-setup ladder to
+    NO_STRUCTURE). Uses ``np.isfinite`` rather than ``pd.notna``/``dropna``,
+    which both pass +/-inf through unfiltered. This is the single vendor
+    choke point, so it heals every close consumer (trade-setup builder +
+    technicals) at once. The ``cached_daily_ohlcv`` stale-cache fallback
+    (``df.empty`` check) is the safety net if dropping empties the frame.
     """
     out = df.copy()
     out.columns = [str(c).lower() for c in out.columns]
     if isinstance(out.index, pd.DatetimeIndex) and out.index.tz is not None:
         out.index = out.index.tz_localize(None)
-    return out[list(_OHLCV_COLUMNS)]
+    out = out[list(_OHLCV_COLUMNS)]
+    return out[np.isfinite(out["close"].astype(float))]
 
 
 def _slice_to_asof(df: pd.DataFrame, asof: dt.date) -> pd.DataFrame:
