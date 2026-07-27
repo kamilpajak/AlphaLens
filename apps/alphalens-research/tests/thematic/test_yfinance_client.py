@@ -106,6 +106,64 @@ class TestDailyOhlcvNonFiniteClose(unittest.TestCase):
         self.assertEqual(len(df), 1)
         self.assertEqual(float(df["close"].iloc[-1]), 10.5)
 
+    def test_drops_row_with_nan_high_even_when_close_is_finite(self):
+        # Zen-review gap: the guard only checked `close`, so a poisoned
+        # `high`/`low` (both feed ATR + level computation downstream) slipped
+        # through untouched as long as `close` itself was finite.
+        frame = pd.DataFrame(
+            {
+                "Open": [10.0, 10.2],
+                "High": [11.0, float("nan")],
+                "Low": [9.0, 9.4],
+                "Close": [10.5, 10.6],
+                "Volume": [5000.0, 5200.0],
+            },
+            index=pd.DatetimeIndex(["2026-07-22", "2026-07-23"], tz="America/New_York"),
+        )
+        fake = MagicMock()
+        fake.history.return_value = frame
+        with patch("yfinance.Ticker", return_value=fake):
+            df = _client().daily_ohlcv("QUBT", start=dt.date(2026, 6, 1), end=dt.date(2026, 7, 25))
+        self.assertEqual(len(df), 1)
+        self.assertEqual(float(df["close"].iloc[-1]), 10.5)
+
+    def test_drops_row_with_inf_low_even_when_close_is_finite(self):
+        frame = pd.DataFrame(
+            {
+                "Open": [10.0, 10.2],
+                "High": [11.0, 11.1],
+                "Low": [9.0, float("-inf")],
+                "Close": [10.5, 10.6],
+                "Volume": [5000.0, 5200.0],
+            },
+            index=pd.DatetimeIndex(["2026-07-22", "2026-07-23"], tz="America/New_York"),
+        )
+        fake = MagicMock()
+        fake.history.return_value = frame
+        with patch("yfinance.Ticker", return_value=fake):
+            df = _client().daily_ohlcv("QUBT", start=dt.date(2026, 6, 1), end=dt.date(2026, 7, 25))
+        self.assertEqual(len(df), 1)
+        self.assertEqual(float(df["close"].iloc[-1]), 10.5)
+
+    def test_volume_only_nan_does_not_drop_price_valid_row(self):
+        # A NaN volume must NOT drop an otherwise price-valid bar — volume is
+        # deliberately excluded from the finite-price-vector guard.
+        frame = pd.DataFrame(
+            {
+                "Open": [10.0, 10.2],
+                "High": [11.0, 11.1],
+                "Low": [9.0, 9.4],
+                "Close": [10.5, 10.6],
+                "Volume": [5000.0, float("nan")],
+            },
+            index=pd.DatetimeIndex(["2026-07-22", "2026-07-23"], tz="America/New_York"),
+        )
+        fake = MagicMock()
+        fake.history.return_value = frame
+        with patch("yfinance.Ticker", return_value=fake):
+            df = _client().daily_ohlcv("QUBT", start=dt.date(2026, 6, 1), end=dt.date(2026, 7, 25))
+        self.assertEqual(len(df), 2)
+
 
 class TestDailyOhlcvRetry(unittest.TestCase):
     def test_retries_on_rate_limit_then_succeeds(self):
