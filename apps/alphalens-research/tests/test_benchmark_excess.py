@@ -981,6 +981,64 @@ class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
                 cm.output[-1],
             )
 
+    def test_summary_log_excludes_deadline_stopped_file_rows(self) -> None:
+        # A file whose sweep is cut off mid-way by the deadline is left UNWRITTEN
+        # (retried next run), so its partially-processed rows must NOT be counted
+        # in the summary line. Two gap rows in distinct windows; budget allows the
+        # first fetch but trips before the second -> stopped_early, file not written
+        # -> the log must report enriched 0, not 1.
+        from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
+
+        elapsed = [0.0]
+
+        def spy_fetch(t, s, e):
+            elapsed[0] += 60.0
+            return _spy_bars(s, reference=100.0, last_close=102.0)
+
+        dead = _RunDeadline(50.0, monotonic=lambda: elapsed[0])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            path = store / f"{d.isoformat()}.parquet"
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                    },
+                    {
+                        "brief_date": d,
+                        "ticker": "BB",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 28),
+                        "forward_return": 0.04,
+                    },
+                ]
+            ).to_parquet(path)
+
+            with self.assertLogs(
+                "alphalens_pipeline.feedback.benchmark_excess", level="INFO"
+            ) as cm:
+                enrich_store_with_benchmark_excess(
+                    store,
+                    bar_fetch=spy_fetch,
+                    now=dt.datetime(2026, 6, 3, tzinfo=UTC),
+                    deadline=dead,
+                )
+
+            self.assertIn(
+                "benchmark-excess: enriched 0 (reused 0, fetched 0)",
+                cm.output[-1],
+            )
+            # The stopped file was left untouched: the benchmark column was never
+            # added (the seeded frame had none, and stopped_early skips the write).
+            out = pd.read_parquet(path)
+            self.assertNotIn("benchmark_window_return", out.columns)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -400,16 +400,21 @@ def enrich_store_with_benchmark_excess(
             window_cache=window_cache,
             deadline=deadline,
         )
-        n_enriched += n_delta
-        n_reused_total += n_reused
-        n_fetched_total += n_fetched
-
         if stopped_early:
             # Deadline tripped mid-file: leave the parquet untouched so
             # unprocessed rows are retried on the next run. Break rather
             # than continue — every subsequent file would be opened only to
             # immediately skip (deadline latches), so skip the open entirely.
+            # Do NOT count this file's partial rows: they were computed but
+            # never persisted, so the log must not report them as enriched.
             break
+
+        # Count only rows that are (or already are) persisted: a non-stopped file
+        # is fully written below, and a reuse-only (n_fetched == 0) file keeps its
+        # values on disk from a prior run — both are honestly "enriched".
+        n_enriched += n_delta
+        n_reused_total += n_reused
+        n_fetched_total += n_fetched
 
         if n_fetched == 0:
             # Every row in this file was reused (M3) — nothing changed, so
