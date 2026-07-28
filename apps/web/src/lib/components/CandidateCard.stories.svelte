@@ -291,6 +291,132 @@
 		industry_name: ''
 	};
 
+	// Story 5 — PAR (rank 16/16), the honest "brief unavailable" state (#921):
+	//   - brief_status "unavailable" + brief_error_kind "truncated", brief_tldr null
+	//   - the blockquote shows the tone-neutral muted label above the italic
+	//     rationale fallback (no verdict words, no authority colours)
+	//   - source: verbatim from tests/fixtures/api-mock/days/2026-05-18.json
+	//     candidates[15]
+	const candidatePARBriefUnavailable: Candidate = {
+		date: '2026-05-18',
+		theme: 'promotions',
+		ticker: 'PAR',
+		company_name: 'PAR Technology Corporation',
+		rationale:
+			"PAR Technology's Punchh division is a leading provider of loyalty and promotional offer management software for enterprise restaurant chains.",
+		llm_confidence: 0.75,
+		market_cap: 588170807.1805058,
+		gates_passed: ['tenk'],
+		n_gates_passed: 1,
+		gates_failed: ['press', 'insider'],
+		n_gates_failed: 2,
+		gates_unknown: ['etf'],
+		n_gates_unknown: 1,
+		gate_verdict_json: null,
+		verified: true,
+		// The parquet row carries null here; the TS contract types these as
+		// plain `string` (Django serves "" for blanks). Both are falsy — the
+		// source-event link is gated out either way.
+		source_event_url: '',
+		source_event_title: '',
+		source_event_published_at: '',
+		theme_search_keywords: [
+			'promotional products',
+			'digital coupons',
+			'cash-back offers',
+			'loyalty program',
+			'promotional campaigns',
+			'trade promotions',
+			'branded merchandise',
+			'promotional marketing',
+			'discount codes',
+			'card-linked offers'
+		],
+		industry_id: 101003.0,
+		industry_name: 'Application Software',
+		sector_name: 'Technology',
+		peer_cohort_level: null,
+		insider_score_usd: 0.0,
+		insider_score_sector_percentile: 96.92307692307692,
+		insider_signal_version: null,
+		fcff_yield_pct: null,
+		fcff_yield_sector_percentile: null,
+		valuation_pe: null,
+		valuation_ps: 1.249388203632117,
+		valuation_ev_rev: 1.9396770212513748,
+		valuation_ev_ebitda: null,
+		valuation_fcf_margin: null,
+		valuation_composite_sector_percentile: 60.8,
+		valuation_financials_publish_date: '2026-04-16',
+		valuation_financials_age_days: 32,
+		roic_pct: -6.034613626252513,
+		roe_pct: -10.235835908622674,
+		magic_formula_health_pass: false,
+		technical_rsi: 48.833479835849936,
+		technical_ma50_distance_pct: 0.9607205183212039,
+		technical_atr_pct: 6.977062309522344,
+		technical_volume_zscore: -1.1031444860364434,
+		technical_pct_off_52w_high: -79.99438533142664,
+		technical_pct_off_52w_low: 20.5583787471656,
+		technical_ma200_distance_pct: -54.29660078750816,
+		technical_ma200_slope_pct_per_day: -0.7382796701139313,
+		catalyst_strength: 0.0,
+		catalyst_event_type: null,
+		catalyst_confidence: null,
+		magic_formula_rank: null,
+		magic_formula_cohort_n: 3,
+		deep_drawdown_reversal: false,
+		layer4_weighted_score: 1,
+		selection_score: null,
+		atr_penalty: null,
+		scorer_config_version: null,
+		expert_assessments: null,
+		also_in_themes: [],
+		rank_in_day: 16,
+		cohort_size_in_day: 16,
+		next_earnings_date: null,
+		brief_model_used: 'gemini-2.5-flash',
+		brief_tldr: null,
+		brief_supply_chain_md:
+			"PAR Technology's Punchh division provides loyalty and promotional offer management software, directly influencing the demand generation and customer retention strategies for enterprise restaurant chains. This software acts as a critical component in the digital infrastructure of restaurants, enabling them to optimize customer engagement and drive sales through targeted promotions. By streamlining loyalty programs, Punchh helps restaurants secure recurring revenue and maintain a competitive edge.",
+		brief_bear_summary_md:
+			'PAR shows weak Phase D signal alignment (1/5) and significant negative technical momentum, with MA200 down 54.3% and a steep negative slope. Risks include zero insider opportunistic buys and an unknown FCF margin, suggesting a lack of insider conviction and an incomplete financial view.',
+		brief_catalyst_failure_exit:
+			"Exit if Punchh's growth in restaurant loyalty software adoption falters, or if Phase D signal alignment deteriorates, indicating a sustained lack of positive momentum for PAR Technology.",
+		brief_trade_setup: {
+			schema_version: '1.0.0',
+			status: 'OK',
+			asof_close: 54.2,
+			atr: 2.71,
+			disaster_stop: 44.71,
+			suggested_size_pct: 13.0,
+			order_ttl_days: 10,
+			entry_tiers: [
+				{ limit: 52.85, alloc_pct: 50, atr_distance: 0.5, tag: 'shallow pullback' },
+				{ limit: 50.95, alloc_pct: 30, atr_distance: 1.2, tag: 'momentum reset' },
+				{ limit: 48.78, alloc_pct: 20, atr_distance: 2.0, tag: 'deep value add' }
+			],
+			tp_tranches: [
+				{ target: 56.91, tranche_pct: 40, r_multiple: 0.3, tag: 'first scale-out' },
+				{ target: 60.16, tranche_pct: 35, r_multiple: 0.6, tag: 'overhead resistance' },
+				{ target: 63.69, tranche_pct: 25, r_multiple: 1.0, tag: 'measured-move target' }
+			]
+		},
+		brief_template_id: null,
+		brief_template_facts: null,
+		brief_generated_at: '2026-05-19T10:54:59.878202+00:00',
+		brief_status: 'unavailable',
+		brief_error_kind: 'truncated',
+		market_state: 'unknown',
+		market_state_atr_pct: null,
+		market_state_atr_pct_q: null,
+		market_state_dist200: null,
+		market_state_vix: null,
+		market_state_vix_decile: null,
+		market_state_squeeze_on: null,
+		market_state_config_version: null
+	};
+
 	const { Story } = defineMeta({
 		title: 'Composites/CandidateCard',
 		component: CandidateCard,
@@ -360,6 +486,26 @@
 	{#snippet template()}
 		<div style="width: 56rem; padding: 2rem;">
 			<CandidateCard candidate={candidateEmptyDisplayFields} index={0} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Story 5: PAR — brief_status "unavailable": the muted tone-neutral label renders above the italic rationale fallback -->
+<Story
+	name="Brief Unavailable"
+	play={async ({ canvas }) => {
+		await waitFor(() =>
+			expect(canvas.getByText('brief unavailable — generation failed (truncated)')).toBeVisible()
+		);
+		// The italic screener-rationale fallback stays rendered below the label.
+		await waitFor(() =>
+			expect(canvas.getByText(/Punchh division is a leading provider/)).toBeVisible()
+		);
+	}}
+>
+	{#snippet template()}
+		<div style="width: 56rem; padding: 2rem;">
+			<CandidateCard candidate={candidatePARBriefUnavailable} index={15} />
 		</div>
 	{/snippet}
 </Story>

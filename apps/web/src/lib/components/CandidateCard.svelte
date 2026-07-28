@@ -16,7 +16,8 @@
 		fcffYieldRawDisplay,
 		tenkAvailable,
 		selectionBadge,
-		catalystLabel
+		catalystLabel,
+		briefUnavailableLabel
 	} from '$lib/format';
 	import { ExternalLink, Sparkle } from 'lucide-svelte';
 	import SignalBar from './SignalBar.svelte';
@@ -69,6 +70,10 @@
 	// Humanised catalyst event type for the CATALYST & EVENT bar label (M&A / IPO /
 	// underscores→spaces); null when absent so the " · <type>" suffix is dropped.
 	const catLabel = $derived(catalystLabel(c.catalyst_event_type));
+	// Honest "brief unavailable" label (#921): non-null ONLY when the backend
+	// marked this row brief_status "unavailable"; null on "ok" and on legacy
+	// null rows so those render byte-identical to before.
+	const briefUnavailable = $derived(briefUnavailableLabel(c.brief_status, c.brief_error_kind));
 	// Tier colour for the catalyst-strength chip: strong (≥0.70, +2) green, moderate
 	// (≥0.45, +1) amber, weak (no lift) muted — mirrors the lift the tooltip explains.
 	const catalystTone = $derived(
@@ -355,6 +360,11 @@
 					{/if}
 				</div>
 				<blockquote class="border-l-2 border-violet pl-4">
+					{#if briefUnavailable}
+						<!-- Tone-neutral pipeline fact, not a verdict: muted, small, no
+						     authority colour. The italic rationale fallback stays below. -->
+						<p class="text-[11px] text-fg-muted mb-1">{briefUnavailable}</p>
+					{/if}
 					{#if c.brief_tldr}
 						<p class="text-fg text-sm leading-relaxed">{c.brief_tldr}</p>
 					{:else}
