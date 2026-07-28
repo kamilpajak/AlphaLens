@@ -752,6 +752,92 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
             self.assertFalse(pd.isna(old_row["benchmark_window_return"]))
 
 
+class TestCheapTerminalMaturationComposition(unittest.TestCase):
+    """(I3) End-to-end lock for Change B (population_ladder_monitor's cheap NO_FILL
+    terminal maturation, ``_cheap_update_row``): it nulls any carried
+    ``(benchmark_window_return, market_excess_return)`` pair on the terminal
+    transition, so THIS module's reuse-first (``_has_consistent_stored_pair``)
+    sees a GAP on the next enrich pass and recomputes it -- instead of freezing
+    a value computed against the row's prior, still-growing ONGOING window.
+    """
+
+    def test_nulled_pair_from_cheap_terminal_maturation_is_recomputed(self) -> None:
+        # Simulates exactly what Change B leaves on disk: a TERMINAL NO_FILL row
+        # whose benchmark pair was nulled by the cheap terminal-maturation branch.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": None,
+                        "market_excess_return": None,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            arrival_open = session_open_utc(session_on_or_after(d))
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(arrival_open, reference=100.0, last_close=102.0)
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            self.assertEqual(calls, ["SPY"], "a nulled pair is a GAP -> must be fetched")
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.02, places=6)
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+    def test_why_change_b_matters_a_non_nulled_stale_consistent_pair_would_freeze(self) -> None:
+        # Documents WHY Change B is load-bearing: WITHOUT it, a stale-but-still-
+        # CONSISTENT (bench, excess) pair carried verbatim from the ONGOING window
+        # (0.03 == 0.05 - 0.02, so it passes the consistency check even though it
+        # was computed against the growing window, not the final terminal one)
+        # would be reused/frozen -- never recomputed with the terminal window's
+        # true benchmark. This is the counterfactual the null in Change B prevents.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            arrival_open = session_open_utc(session_on_or_after(d))
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(arrival_open, reference=100.0, last_close=999.0)
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            self.assertEqual(calls, [], "a consistent stored pair is reused, NOT recomputed")
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.02, places=6)
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+
 class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
     """M3 (skip the parquet write when a file's rows were all reused) + M4
     (the ``enriched N (reused M, fetched F)`` INFO summary line). Neither had
