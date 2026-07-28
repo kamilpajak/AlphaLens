@@ -277,13 +277,18 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
 
     Other failure kinds (MALFORMED_JSON, SAFETY, TRANSPORT) do NOT retry —
     they will not be helped by more tokens or different temperature.
+
+    The wrapper returns ``(brief, BriefErrorKind)`` — ``NONE`` on success,
+    the LAST failing kind observed on failure (the terminal outcome after
+    the retry policy is exhausted).
     """
 
     def test_no_retry_on_success(self):
         fake = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
         with patch.object(generator, "_call_llm", return_value=fake) as mock_call:
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
         self.assertIsNotNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(mock_call.call_count, 1)
 
     def test_truncated_escalates_through_the_cap_ladder(self):
@@ -299,13 +304,16 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
             return _truncated_response()  # always truncate -> exhaust the ladder
 
         with patch.object(generator, "_call_llm", side_effect=fake_call):
-            brief = generator.generate_brief_with_retry(
+            brief, kind = generator.generate_brief_with_retry(
                 _facts(weighted_score=2),
                 api_key="k",
                 base_max_output_tokens=2000,
                 max_output_tokens_ceiling=8000,
             )
         self.assertIsNone(brief)  # every attempt truncated -> give up
+        # Ladder exhaustion surfaces the terminal kind: the LAST failing kind
+        # observed (every rung truncated, so TRUNCATED).
+        self.assertEqual(kind, generator.BriefErrorKind.TRUNCATED)
         self.assertEqual([c["max"] for c in captured], [2000, 4000, 8000])
         # First attempt uses the default temperature; every escalation is greedy.
         self.assertEqual(captured[0]["temp"], generator._DEFAULT_TEMPERATURE)
@@ -322,13 +330,14 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
 
         with patch.object(generator, "_call_llm", side_effect=fake_call):
-            brief = generator.generate_brief_with_retry(
+            brief, kind = generator.generate_brief_with_retry(
                 _facts(weighted_score=2),
                 api_key="k",
                 base_max_output_tokens=2000,
                 max_output_tokens_ceiling=8000,
             )
         self.assertIsNotNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual([c["max"] for c in captured], [2000, 4000])  # stopped, no 8000
         self.assertEqual(captured[1]["temp"], 0.0)
 
@@ -348,8 +357,10 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
             candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))],
         )
         with patch.object(generator, "_call_llm", return_value=resp) as mock_call:
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
+        # Non-retryable -> the terminal kind is the immediate failure kind.
+        self.assertEqual(kind, generator.BriefErrorKind.MALFORMED_JSON)
         self.assertEqual(mock_call.call_count, 1)
 
     def test_retry_recovers_empty_first_response(self):
@@ -364,8 +375,9 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         )
         good_resp = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
         with patch.object(generator, "_call_llm", side_effect=[empty_resp, good_resp]) as mock_call:
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
         self.assertIsNotNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(brief["tldr"], _SAMPLE_BRIEF["tldr"])
         self.assertEqual(brief["bear_summary"], _SAMPLE_BRIEF["bear_summary"])
         self.assertEqual(mock_call.call_count, 2)
@@ -385,8 +397,9 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         blank_resp = SimpleNamespace(text=json.dumps(blank))
         good_resp = SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
         with patch.object(generator, "_call_llm", side_effect=[blank_resp, good_resp]) as mock_call:
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
         self.assertIsNotNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(brief["supply_chain_reasoning"], _SAMPLE_BRIEF["supply_chain_reasoning"])
         self.assertEqual(mock_call.call_count, 2)
 
@@ -403,8 +416,11 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         with patch.object(
             generator, "_call_llm", side_effect=[blank_resp, blank_resp]
         ) as mock_call:
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
         self.assertIsNone(brief)
+        # Both attempts came back content-less -> terminal kind is the retry's
+        # failing kind (EMPTY_CONTENT).
+        self.assertEqual(kind, generator.BriefErrorKind.EMPTY_CONTENT)
         self.assertEqual(mock_call.call_count, 2)
 
     def test_empty_content_retry_keeps_base_token_cap(self):
@@ -425,10 +441,11 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
 
         with patch.object(generator, "_call_llm", side_effect=fake_call):
-            brief = generator.generate_brief_with_retry(
+            brief, kind = generator.generate_brief_with_retry(
                 _facts(weighted_score=4), api_key="k", base_max_output_tokens=2000
             )
         self.assertIsNotNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(len(captured), 2)
         self.assertEqual(captured[1]["temp"], 0.0)
         self.assertEqual(captured[1]["max"], 2000)
@@ -447,10 +464,11 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
 
         with patch.object(generator, "_call_llm", side_effect=fake_call):
-            brief = generator.generate_brief_with_retry(
+            brief, kind = generator.generate_brief_with_retry(
                 _facts(weighted_score=2), api_key="k", base_max_output_tokens=2000
             )
         self.assertIsNotNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(len(captured), 2)
         self.assertEqual(captured[1]["temp"], 0.0)
         # EMPTY is NOT a truncation, so the retry keeps the BASE token cap
@@ -467,26 +485,32 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         with patch.object(
             generator, "_call_llm", side_effect=[empty_resp, empty_resp]
         ) as mock_call:
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
+        # Double EMPTY failure -> terminal kind is the retry's failing kind.
+        self.assertEqual(kind, generator.BriefErrorKind.EMPTY)
         self.assertEqual(mock_call.call_count, 2)
 
     def test_no_retry_on_safety(self):
         with patch.object(
             generator, "_call_llm", return_value=_truncated_response("SAFETY")
         ) as mock_call:
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.SAFETY)
         self.assertEqual(mock_call.call_count, 1)
 
     def test_no_retry_on_transport_error(self):
         # Network exceptions are not retried at this layer — let the operator
-        # / outer cron decide on backoff.
+        # / outer cron decide on backoff. ``generate_brief`` catches the raised
+        # exception and classifies it TRANSPORT; the wrapper must surface that
+        # terminal kind unchanged.
         with patch.object(
             generator, "_call_llm", side_effect=RuntimeError("transport boom")
         ) as mock_call:
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
         self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.TRANSPORT)
         self.assertEqual(mock_call.call_count, 1)
 
     def test_truncations_exhausting_the_ladder_give_up(self):
@@ -496,13 +520,14 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         with patch.object(
             generator, "_call_llm", side_effect=[_truncated_response(), _truncated_response()]
         ) as mock_call:
-            brief = generator.generate_brief_with_retry(
+            brief, kind = generator.generate_brief_with_retry(
                 _facts(weighted_score=2),
                 api_key="k",
                 base_max_output_tokens=2000,
                 max_output_tokens_ceiling=4000,
             )
         self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.TRUNCATED)
         self.assertEqual(mock_call.call_count, 2)
 
 
@@ -641,8 +666,11 @@ class TestGenerateBriefWithRetryClient(unittest.TestCase):
                     SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF)),
                 ],
             ):
-                brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+                brief, kind = generator.generate_brief_with_retry(
+                    _facts(weighted_score=2), api_key="k"
+                )
         self.assertIsNotNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(mock_ctor.call_count, 1)
 
 
@@ -705,8 +733,9 @@ class TestLanguageDriftRetry(unittest.TestCase):
                 SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF)),
             ],
         ):
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
         self.assertIsNotNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
         self.assertEqual(brief["tldr"], _SAMPLE_BRIEF["tldr"])
 
     def test_language_drift_retry_uses_temperature_zero_and_base_tokens(self):
@@ -732,8 +761,9 @@ class TestLanguageDriftRetry(unittest.TestCase):
             "_call_llm",
             return_value=SimpleNamespace(text=json.dumps(_CJK_BRIEF, ensure_ascii=False)),
         ):
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
+            brief, kind = generator.generate_brief_with_retry(_facts(weighted_score=4), api_key="k")
         self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.LANGUAGE_DRIFT)
 
 
 if __name__ == "__main__":

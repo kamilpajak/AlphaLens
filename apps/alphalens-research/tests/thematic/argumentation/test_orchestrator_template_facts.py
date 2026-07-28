@@ -154,7 +154,11 @@ class TestOrchestratorBriefParquetCarriesTemplateFacts(unittest.TestCase):
             ]
         )
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF, None)):
+            with patch.object(
+                orchestrator,
+                "_brief_for_row",
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+            ):
                 out = orchestrator.generate_briefs(
                     scored,
                     asof=dt.date(2026, 5, 31),
@@ -175,7 +179,11 @@ class TestOrchestratorBriefParquetCarriesTemplateFacts(unittest.TestCase):
             [_scored_row(ticker="ABC", theme="ai", template_id=None, template_facts=None)]
         )
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF, None)):
+            with patch.object(
+                orchestrator,
+                "_brief_for_row",
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+            ):
                 out = orchestrator.generate_briefs(
                     scored,
                     asof=dt.date(2026, 5, 31),
@@ -228,7 +236,11 @@ class TestDedupAtInjectionGuard(unittest.TestCase):
         scored = pd.DataFrame([sparse, rich])
 
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF, None)):
+            with patch.object(
+                orchestrator,
+                "_brief_for_row",
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+            ):
                 out = orchestrator.generate_briefs(
                     scored,
                     asof=dt.date(2026, 5, 31),
@@ -269,7 +281,11 @@ class TestDedupAtInjectionGuard(unittest.TestCase):
         )
         scored = pd.DataFrame([row_a, row_b])
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF, None)):
+            with patch.object(
+                orchestrator,
+                "_brief_for_row",
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+            ):
                 out = orchestrator.generate_briefs(
                     scored,
                     asof=dt.date(2026, 5, 31),

@@ -16,6 +16,7 @@ import datetime as dt
 import json
 import logging
 import os
+from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
@@ -241,26 +242,31 @@ def _brief_for_row(
     llm_client_flash,
     asof: dt.date | None = None,
     base_max_output_tokens: int = generator._DEFAULT_MAX_OUTPUT_TOKENS,
-) -> tuple[dict | None, str | None]:
+) -> tuple[dict | None, str | None, generator.BriefErrorKind]:
     """Single-row LLM call with per-row exception absorption.
 
-    Returns ``(brief_dict, next_earnings_date_iso)``. The earnings date is
-    surfaced separately so the orchestrator can persist it to the brief
-    parquet AND pass it to the renderer — without this split it was only
-    reaching the LLM prompt and getting dropped before reaching the
+    Returns ``(brief_dict, next_earnings_date_iso, terminal_kind)``. The
+    earnings date is surfaced separately so the orchestrator can persist it
+    to the brief parquet AND pass it to the renderer — without this split it
+    was only reaching the LLM prompt and getting dropped before reaching the
     operator (bug 2026-05-18: next_earnings_date column was always None).
+    ``terminal_kind`` is the ``BriefErrorKind`` from the retry ladder
+    (``NONE`` on success) so the orchestrator can stamp an honest per-row
+    ``brief_status`` / ``brief_error_kind`` into the output parquet; the
+    internal exception path maps to ``TRANSPORT`` (the SDK/plumbing raised
+    before producing a classified response).
 
-    Uses ``generator.generate_brief_with_retry`` so a Flash truncation
-    (``finish_reason == MAX_TOKENS``) auto-retries once with double
-    ``max_output_tokens`` + ``temperature=0`` before giving up. Other
-    failure kinds (MALFORMED_JSON, SAFETY, TRANSPORT) do not retry.
+    Uses ``generator.generate_brief_with_retry`` so a truncation
+    (``finish_reason == MAX_TOKENS``) escalates ``max_output_tokens`` through
+    the doubling ladder up to the ceiling at ``temperature=0`` before giving
+    up. Other failure kinds (MALFORMED_JSON, SAFETY, TRANSPORT) do not retry.
     """
     facts = _row_to_facts(row)
     if asof is not None:
         facts = _enrich_facts_with_earnings(facts, asof)
     next_earnings = facts.get("next_earnings_date")
     try:
-        brief = generator.generate_brief_with_retry(
+        brief, kind = generator.generate_brief_with_retry(
             facts,
             llm_client_pro=llm_client_pro,
             llm_client_flash=llm_client_flash,
@@ -269,7 +275,8 @@ def _brief_for_row(
     except Exception as exc:
         logger.warning("brief generation raised for %s: %s", row.get("ticker"), exc, exc_info=True)
         brief = None
-    return brief, next_earnings
+        kind = generator.BriefErrorKind.TRANSPORT
+    return brief, next_earnings, kind
 
 
 def _build_clients(api_key: str | None):
@@ -309,6 +316,12 @@ _EMPTY_OUT_COLUMNS = (
     # mirrors brief_trade_setup's already-shipped pattern.
     "brief_template_id",
     "brief_template_facts_json",
+    # Honest per-row LLM outcome: "ok" | "unavailable" + the terminal
+    # BriefErrorKind value ("truncated", "transport", …) when unavailable.
+    # Present on the empty-day schema too so downstream readers never
+    # branch on column existence.
+    "brief_status",
+    "brief_error_kind",
     "brief_generated_at",
 )
 
@@ -475,8 +488,9 @@ def generate_briefs(
     rows: list[dict] = []
     n_pro = 0
     n_flash = 0
+    failed_kinds: list[str] = []
     for _, row in verified.iterrows():
-        brief, next_earnings = _brief_for_row(
+        brief, next_earnings, terminal_kind = _brief_for_row(
             row,
             llm_client_pro=client_pro,
             llm_client_flash=client_flash,
@@ -514,9 +528,15 @@ def generate_briefs(
         # MEDIUM 2026-05-31.
         tmpl_id = _row_template_id(row)
         tmpl_facts = _row_template_facts(row)
+        if brief is None:
+            failed_kinds.append(terminal_kind.value)
         rows.append(
             {
                 "ticker": row["ticker"],
+                # Honest LLM outcome: downstream readers must not have to
+                # infer "the LLM failed" from all-None prose columns.
+                "brief_status": "ok" if brief is not None else "unavailable",
+                "brief_error_kind": (terminal_kind.value if brief is None else None),
                 "next_earnings_date": next_earnings,
                 "brief_model_used": b.get("model_used"),
                 "brief_tldr": b.get("tldr"),
@@ -539,12 +559,18 @@ def generate_briefs(
     out_path = output_dir / f"{asof.isoformat()}.parquet"
     merged.to_parquet(out_path, index=False)
     _write_sidecar(output_dir, asof, n_pro=n_pro, n_flash=n_flash)
+    kinds_summary = ""
+    if failed_kinds:
+        kinds = ", ".join(f"{kind}={n}" for kind, n in sorted(Counter(failed_kinds).items()))
+        kinds_summary = f" (kinds: {kinds})"
     logger.info(
-        "generate_briefs %s: wrote %d briefs (Pro=%d, Flash=%d) → %s",
+        "generate_briefs %s: wrote %d briefs (Pro=%d, Flash=%d), %d unavailable%s → %s",
         asof.isoformat(),
         len(merged),
         n_pro,
         n_flash,
+        len(failed_kinds),
+        kinds_summary,
         out_path,
     )
     return merged

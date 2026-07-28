@@ -306,6 +306,56 @@ class TestThematicBriefEmitsDomainMetrics(unittest.TestCase):
             self.assertEqual(metrics["alphalens_thematic_brief_template_id_total"], 0)
             self.assertEqual(metrics["alphalens_thematic_brief_template_id_fill_ratio"], 0.0)
 
+    def test_brief_emits_unavailable_count_from_brief_status(self) -> None:
+        # Honest-flag telemetry: the brief emit must carry the count of rows
+        # whose text generation terminally failed (brief_status="unavailable")
+        # so the AlphalensThematicBriefUnavailableHigh rule has a series to
+        # ratio against briefs_total. Prometheus-only — no Telegram send.
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        enriched = pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C"],
+                "brief_status": ["ok", "unavailable", "unavailable"],
+            }
+        )
+        enriched.attrs["n_pro"] = 1
+        enriched.attrs["n_flash"] = 2
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scored_dir = Path(tmp) / "scored"
+            scored_dir.mkdir()
+            (scored_dir / "2026-05-29.parquet").touch()
+            output_dir = Path(tmp) / "briefs"
+            output_dir.mkdir()
+
+            with (
+                patch.object(thematic.pd, "read_parquet", return_value=pd.DataFrame({"x": [1]})),
+                patch.object(thematic.brief_orchestrator, "generate_briefs", return_value=enriched),
+                patch.object(thematic, "emit_domain_metrics") as emit,
+            ):
+                thematic.brief(date="2026-05-29", scored_dir=scored_dir, output_dir=output_dir)
+
+            metrics = emit.call_args.kwargs["metrics"]
+            self.assertEqual(metrics["alphalens_thematic_brief_unavailable_count"], 2)
+
+    def test_brief_unavailable_count_degrades_to_zero_without_the_column(self) -> None:
+        # Legacy frame (pre-honest-flag parquet) or an empty day must emit 0,
+        # never KeyError — the gauge going absent would trip MetricMissing
+        # instead of reading as a clean day.
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        self.assertEqual(thematic._brief_unavailable_count(pd.DataFrame({"ticker": ["A"]})), 0)
+        self.assertEqual(thematic._brief_unavailable_count(pd.DataFrame()), 0)
+        self.assertEqual(
+            thematic._brief_unavailable_count(
+                pd.DataFrame({"ticker": ["A"], "brief_status": ["ok"]})
+            ),
+            0,
+        )
+
     def test_brief_fill_metrics_handles_pd_na_dtype_without_crashing(self) -> None:
         # Nullable string dtype surfaces pd.NA, not None -> bool(pd.NA) would
         # raise TypeError through .apply. The pd.isna guard must count it as
