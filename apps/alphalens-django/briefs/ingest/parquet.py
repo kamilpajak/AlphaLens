@@ -197,7 +197,12 @@ def _coerce_for_field(field: django_models.Field, raw):
         value = coerce_int(raw)
     else:
         text = coerce_str(raw)
-        return text if text is not None else ""
+        if text is None:
+            # Nullable CharField (e.g. brief_status / brief_error_kind) keeps
+            # the NULL tri-state — a legacy parquet without the column must not
+            # read as an empty-string value. NOT-NULL text fields floor to "".
+            return None if field.null else ""
+        return text
 
     if value is None and not field.null:
         return field.get_default()
