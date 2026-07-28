@@ -110,6 +110,20 @@ def _brief_template_fill_metrics(enriched: pd.DataFrame) -> dict[str, float | in
     }
 
 
+def _brief_unavailable_count(enriched: pd.DataFrame) -> int:
+    """Count briefs whose text generation terminally failed.
+
+    The orchestrator stamps ``brief_status`` as ``"ok"`` / ``"unavailable"``
+    on every output row; this counts the ``"unavailable"`` rows for the
+    ``alphalens_thematic_brief_unavailable_count`` gauge. Missing column
+    (legacy frame) or an empty day degrades to 0 — the gauge must stay
+    present so a clean day reads as 0, not as an absent series.
+    """
+    if enriched.empty or "brief_status" not in enriched.columns:
+        return 0
+    return int((enriched["brief_status"] == "unavailable").sum())
+
+
 def _emit_stage_volume(stage: str, *, output_rows: int, input_rows: int) -> None:
     """Emit a stage's volume gauges to its own ``thematic-<stage>`` file.
 
@@ -736,6 +750,12 @@ def brief(
                 # same thematic-build file; a recording gauge for the dashboard,
                 # no alert rule.
                 **_brief_template_fill_metrics(enriched),
+                # Honest-flag telemetry: rows whose brief text terminally
+                # failed (brief_status="unavailable"). Prometheus-only by
+                # user decision — no Telegram send here; the paired
+                # AlphalensThematicBriefUnavailableHigh rule alerts when
+                # the ratio vs briefs_total is sustained across slots.
+                "alphalens_thematic_brief_unavailable_count": _brief_unavailable_count(enriched),
             },
         )
     except Exception:

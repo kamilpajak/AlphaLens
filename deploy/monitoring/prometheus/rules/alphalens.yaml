@@ -478,6 +478,37 @@ groups:
           summary: "thematic brief volume {{ $value }} is <34% of 7-day median"
           description: "Brief output collapsed vs baseline (not zero). Possible partial LLM / quota degradation. Check the daily thematic-build logs."
 
+      # Honest-flag degradation: too many of the day's briefs carry
+      # ``brief_status="unavailable"`` (text generation terminally
+      # failed; the row still ships so the parquet stays honest).
+      # Numerator and denominator come from the SAME thematic-build
+      # emit (``briefs_total`` == the brief row count), so the ratio
+      # is always same-run consistent and label-compatible — no
+      # vector-matching gymnastics against the stage-labelled series.
+      # ``>= 3`` volume guard mirrors the sibling rule above: a 1-2
+      # brief day tripping on a single failure is noise, not signal.
+      # ``for: 6h`` = sustained across at least two 4-hourly slots;
+      # a one-slot LLM hiccup that the next slot's rerun heals must
+      # not page. Prometheus-only by user decision — the CLI emits no
+      # Telegram for this condition.
+      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
+      # — copy this file over and HUP prometheus after editing.
+      - alert: AlphalensThematicBriefUnavailableHigh
+        expr: |
+          alphalens_thematic_brief_unavailable_count
+          >
+          0.33 * alphalens_thematic_briefs_total
+          and
+          alphalens_thematic_briefs_total >= 3
+        for: 6h
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "{{ $value }} thematic briefs are brief_status=unavailable (>1/3 of the day)"
+          description: "A sustained large fraction of today's briefs shipped without text (terminal generation failure). Possible LLM model retirement / quota exhaustion surviving the retry ladder. Check the daily thematic-build logs."
+
       # ---------------------------------------------------------------
       # Structured-event-template health (epic #321 PR-1).
       # ---------------------------------------------------------------
