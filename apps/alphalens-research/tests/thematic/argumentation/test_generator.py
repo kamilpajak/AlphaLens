@@ -286,25 +286,59 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         self.assertIsNotNone(brief)
         self.assertEqual(mock_call.call_count, 1)
 
-    def test_retry_doubles_max_tokens_and_drops_temperature(self):
+    def test_truncated_escalates_through_the_cap_ladder(self):
+        # A TRUNCATED response escalates the token cap by doubling up to the
+        # ceiling. The old single 2000->4000 bump was too small for the
+        # reasoning trace + JSON to finish (2026-07-28 XMTR incident: the
+        # reasoning-model budget was exhausted before the ~300-token JSON
+        # closed). base=2000, ceiling=8000 -> attempt at 2000, retries 4000, 8000.
         captured: list[dict] = []
 
         def fake_call(client, prompt, *, model, max_output_tokens, temperature):
             captured.append({"max": max_output_tokens, "temp": temperature})
-            if len(captured) == 1:
+            return _truncated_response()  # always truncate -> exhaust the ladder
+
+        with patch.object(generator, "_call_llm", side_effect=fake_call):
+            brief = generator.generate_brief_with_retry(
+                _facts(weighted_score=2),
+                api_key="k",
+                base_max_output_tokens=2000,
+                max_output_tokens_ceiling=8000,
+            )
+        self.assertIsNone(brief)  # every attempt truncated -> give up
+        self.assertEqual([c["max"] for c in captured], [2000, 4000, 8000])
+        # First attempt uses the default temperature; every escalation is greedy.
+        self.assertEqual(captured[0]["temp"], generator._DEFAULT_TEMPERATURE)
+        self.assertEqual([c["temp"] for c in captured[1:]], [0.0, 0.0])
+
+    def test_truncated_stops_escalating_on_first_success(self):
+        # The ladder halts the moment a retry succeeds — no wasted calls past it.
+        captured: list[dict] = []
+
+        def fake_call(client, prompt, *, model, max_output_tokens, temperature):
+            captured.append({"max": max_output_tokens, "temp": temperature})
+            if len(captured) < 2:
                 return _truncated_response()
             return SimpleNamespace(text=json.dumps(_SAMPLE_BRIEF))
 
         with patch.object(generator, "_call_llm", side_effect=fake_call):
             brief = generator.generate_brief_with_retry(
-                _facts(weighted_score=2), api_key="k", base_max_output_tokens=2000
+                _facts(weighted_score=2),
+                api_key="k",
+                base_max_output_tokens=2000,
+                max_output_tokens_ceiling=8000,
             )
         self.assertIsNotNone(brief)
-        self.assertEqual(len(captured), 2)
-        self.assertEqual(captured[0]["max"], 2000)
-        self.assertEqual(captured[1]["max"], 4000)
-        # Retry must use deterministic decode (greedy).
+        self.assertEqual([c["max"] for c in captured], [2000, 4000])  # stopped, no 8000
         self.assertEqual(captured[1]["temp"], 0.0)
+
+    def test_default_base_and_ceiling_and_ladder(self):
+        # Pin the production budget: base 8000 (measured XMTR completion need
+        # ~279 tokens + reasoning-trace headroom), ceiling 32000, so the default
+        # truncation ladder is 8000 -> 16000 -> 32000.
+        self.assertEqual(generator._DEFAULT_MAX_OUTPUT_TOKENS, 8000)
+        self.assertEqual(generator._MAX_OUTPUT_TOKENS_CEILING, 32000)
+        self.assertEqual(generator._truncation_retry_caps(8000, 32000), [16000, 32000])
 
     def test_no_retry_on_malformed_json(self):
         # MALFORMED_JSON with finish_reason STOP — model finished but bad
@@ -455,11 +489,19 @@ class TestGenerateBriefWithRetry(unittest.TestCase):
         self.assertIsNone(brief)
         self.assertEqual(mock_call.call_count, 1)
 
-    def test_two_truncations_give_up(self):
+    def test_truncations_exhausting_the_ladder_give_up(self):
+        # Every attempt (initial + every ladder rung) truncates -> None. With
+        # base=2000, ceiling=4000 the ladder is a single rung [4000], so it gives
+        # up after 2 calls; the honest-failure surface then flags it.
         with patch.object(
             generator, "_call_llm", side_effect=[_truncated_response(), _truncated_response()]
         ) as mock_call:
-            brief = generator.generate_brief_with_retry(_facts(weighted_score=2), api_key="k")
+            brief = generator.generate_brief_with_retry(
+                _facts(weighted_score=2),
+                api_key="k",
+                base_max_output_tokens=2000,
+                max_output_tokens_ceiling=4000,
+            )
         self.assertIsNone(brief)
         self.assertEqual(mock_call.call_count, 2)
 
