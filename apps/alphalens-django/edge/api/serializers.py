@@ -176,6 +176,10 @@ class ChartResponseSerializer(serializers.Serializer):
     open_r = serializers.FloatField(allow_null=True)
     realized_r = serializers.FloatField(allow_null=True)
     status = serializers.ChoiceField(choices=["OK", "NO_DATA", "NO_STRUCTURE"])
+    # Producer-side freshness of the daily lead-in/trailing CONTEXT band (PR
+    # #912). "OK" = full band; "reused"/"in_trade_only" = band deadline-starved,
+    # trade itself fully rendered; null on legacy rows predating the stamp.
+    context = serializers.ChoiceField(choices=["OK", "reused", "in_trade_only"], allow_null=True)
     bars = ChartBarSerializer(many=True)
     price_lines = ChartPriceLinesSerializer()
     markers = ChartMarkerSerializer(many=True)
