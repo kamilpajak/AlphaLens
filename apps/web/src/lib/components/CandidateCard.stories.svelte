@@ -375,14 +375,14 @@
 		rank_in_day: 16,
 		cohort_size_in_day: 16,
 		next_earnings_date: null,
-		brief_model_used: 'gemini-2.5-flash',
+		// brief_status "unavailable" ⇒ ALL LLM prose columns are None (the
+		// orchestrator's `b = brief or {}` path); only the deterministic trade
+		// setup + generated_at stamp survive a failed LLM brief.
+		brief_model_used: null,
 		brief_tldr: null,
-		brief_supply_chain_md:
-			"PAR Technology's Punchh division provides loyalty and promotional offer management software, directly influencing the demand generation and customer retention strategies for enterprise restaurant chains. This software acts as a critical component in the digital infrastructure of restaurants, enabling them to optimize customer engagement and drive sales through targeted promotions. By streamlining loyalty programs, Punchh helps restaurants secure recurring revenue and maintain a competitive edge.",
-		brief_bear_summary_md:
-			'PAR shows weak Phase D signal alignment (1/5) and significant negative technical momentum, with MA200 down 54.3% and a steep negative slope. Risks include zero insider opportunistic buys and an unknown FCF margin, suggesting a lack of insider conviction and an incomplete financial view.',
-		brief_catalyst_failure_exit:
-			"Exit if Punchh's growth in restaurant loyalty software adoption falters, or if Phase D signal alignment deteriorates, indicating a sustained lack of positive momentum for PAR Technology.",
+		brief_supply_chain_md: null,
+		brief_bear_summary_md: null,
+		brief_catalyst_failure_exit: null,
 		brief_trade_setup: {
 			schema_version: '1.0.0',
 			status: 'OK',
