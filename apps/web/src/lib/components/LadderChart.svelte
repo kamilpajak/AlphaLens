@@ -61,6 +61,14 @@
 	} as const;
 
 	const hasStructure = $derived(payload.status === 'OK');
+	// Producer-side freshness of the lead-in/trailing CONTEXT band (PR #912).
+	// Only ever meaningful on a fully-structured (OK) trade — the trade itself
+	// is always fully drawn; this just qualifies the surrounding band as
+	// deadline-starved. Never a marker-counting heuristic (NO_FILL/TIME_STOP
+	// legitimately draw no exit marker).
+	const contextIncomplete = $derived(
+		payload.context === 'reused' || payload.context === 'in_trade_only'
+	);
 
 	// ── Lifecycle derivation ──────────────────────────────────────────────
 	// Markers are the source of truth for "was anything filled". A PLANNED
@@ -472,11 +480,12 @@
 					to replay.
 				</p>
 			{:else}
-				<div class="text-fg-muted uppercase tracking-widest mb-1">no bars for this window</div>
+				<div class="text-fg-muted uppercase tracking-widest mb-1">
+					chart computing — not available yet
+				</div>
 				<p class="text-fg-dim leading-relaxed">
-					No price bars are available for this window
-					<span class="whitespace-nowrap">(RTH-only / Polygon free)</span>, so the ladder cannot be
-					drawn on the tape.
+					The pre-computed chart projection for this row is not available yet — it may appear on a
+					later nightly pipeline run.
 				</p>
 			{/if}
 		</div>
@@ -565,5 +574,12 @@
 			RTH-only modeled · overnight/pre-market moves not seen{#if shadeDegraded}
 				· in-trade band unavailable{/if}
 		</p>
+		{#if contextIncomplete}
+			<!-- Subtle freshness note: qualifies only the surrounding lead-in/
+			     trailing band — the trade itself above is still fully drawn. -->
+			<p class="relative mt-1 text-[10px] uppercase tracking-widest text-fg-muted/70">
+				context band incomplete — recomputes nightly
+			</p>
+		{/if}
 	{/if}
 </div>

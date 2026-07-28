@@ -448,6 +448,11 @@ export interface ChartMarker {
  *  render the dotted-border empty box instead. */
 export interface ChartPayload {
 	status: 'OK' | 'NO_DATA' | 'NO_STRUCTURE';
+	/** Producer-side freshness of the daily lead-in/trailing CONTEXT band
+	 *  (PR #912). 'OK' = full band; 'reused' | 'in_trade_only' = band was
+	 *  deadline-starved (the trade itself is still fully drawn); undefined/null
+	 *  on legacy rows predating the stamp. */
+	context?: 'OK' | 'reused' | 'in_trade_only' | null;
 	bars: ChartBar[];
 	price_lines: ChartPriceLines;
 	markers: ChartMarker[];

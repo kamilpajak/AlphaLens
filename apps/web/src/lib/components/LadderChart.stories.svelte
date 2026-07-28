@@ -270,3 +270,74 @@
 		</div>
 	{/snippet}
 </Story>
+
+<!-- No Data (computing): status NO_DATA — the honest "chart computing — not
+     available yet" caption instead of a generic empty box (the daily bars
+     backfill on the nightly pipeline run). Same empty-box shape as No
+     Structure, only the status + copy differ. -->
+<Story
+	name="No Data (computing)"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByText(/chart computing/i)).toBeVisible());
+	}}
+>
+	{#snippet template()}
+		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
+			<LadderChart
+				payload={{
+					status: 'NO_DATA',
+					ticker: 'XYZ',
+					brief_date: '2026-06-27',
+					ladder_classification: 'NO_STRUCTURE',
+					terminal: false,
+					holding_days_elapsed: null,
+					realized_r: null,
+					open_r: null,
+					ambiguous_bars: 0,
+					intrabar_rule: null,
+					rth_only: true,
+					bars: [],
+					price_lines: { entry: null, tp: [], stop: null },
+					markers: []
+				}}
+			/>
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Context Reused: OK payload (CLOSED fixture — real bars/markers, unchanged)
+     but the producer-side lead-in/trailing CONTEXT band was deadline-starved
+     (PR #912). The trade itself renders exactly as "Closed Trade"; only the
+     subtle footnote below qualifies the surrounding band. -->
+<Story
+	name="Context Reused"
+	play={async ({ canvas }) => {
+		await waitFor(() =>
+			expect(canvas.getByText(/context band incomplete/i)).toBeVisible()
+		);
+	}}
+>
+	{#snippet template()}
+		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
+			<LadderChart payload={{ ...CLOSED_PAYLOAD, context: 'reused' }} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Context In-Trade-Only: same freshness footnote, different producer-side
+     reason (band computed only through the in-trade window). OPEN fixture —
+     real bars/markers, unchanged. -->
+<Story
+	name="Context In-Trade-Only"
+	play={async ({ canvas }) => {
+		await waitFor(() =>
+			expect(canvas.getByText(/context band incomplete/i)).toBeVisible()
+		);
+	}}
+>
+	{#snippet template()}
+		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
+			<LadderChart payload={{ ...OPEN_PAYLOAD, context: 'in_trade_only' }} />
+		</div>
+	{/snippet}
+</Story>
