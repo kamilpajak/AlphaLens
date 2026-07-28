@@ -1202,6 +1202,31 @@ class TestChartPayloadCarryForward(_MonitorTestBase):
         self.assertTrue(bool(row["terminal"]), "precondition: resolved terminal")
         self.assertEqual(row[_CHART_PAYLOAD_COLUMN], self._CHART)
 
+    def test_terminal_row_minute_resolve_has_no_benchmark_columns(self):
+        # (I2) The OTHER ongoing->terminal path (_terminal_row, the minute-resolve
+        # rebuild) must ALSO yield an honest gap: it builds a FRESH dict that never
+        # sets benchmark_window_return/market_excess_return, so a stale pair can
+        # never survive a minute resolve into reuse-first's terminal+consistent
+        # check. Regression lock -- this test is a guard against a future edit
+        # naturally adding a BENCHMARK_COLUMNS carry alongside the
+        # _CHART_PAYLOAD_COLUMN carry a few lines below in _terminal_row.
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, "XNYS")
+        arrival = cutoffs[0]
+        base = int(session_open_utc(arrival, "XNYS").timestamp() * 1000)
+        bars = [
+            {"t": base, "o": 100.0, "h": 103.0, "l": 99.0, "c": 102.0, "v": 1000.0},  # E1 fills
+            # Next session breaks the disaster stop (low<=95) -> terminal SL_HIT.
+            {"t": base + 86_400_000, "o": 100.0, "h": 100.0, "l": 94.0, "c": 95.0, "v": 1000.0},
+        ]
+        outcome = replay_ladder(
+            _OK_SETUP, bars, entry_expiry_ms=cutoffs[5], position_expiry_ms=cutoffs[6]
+        )
+        row = _terminal_row(brief_date, "NVDA", _OK_SETUP, outcome, cutoffs, dt.date(2026, 5, 15))
+        self.assertTrue(row["terminal"], "precondition: resolved terminal")
+        self.assertIsNone(row.get("benchmark_window_return"))
+        self.assertIsNone(row.get("market_excess_return"))
+
 
 class TestIncrementalCache(_MonitorTestBase):
     def test_second_run_fetches_only_tail(self):
@@ -2538,6 +2563,57 @@ class TestCheapPathNoMultiDayFreeze(unittest.TestCase):
         # forward_return is refreshed for the ongoing mark (gemini MEDIUM fix —
         # applies to every ongoing state, not only OPEN).
         self.assertAlmostEqual(row["forward_return"], (100.0 - 100.0) / 100.0, places=9)
+
+
+class TestCheapTerminalMaturationNullsBenchmarkPair(unittest.TestCase):
+    """(Task2-test-B1) A cheap NO_FILL maturing to terminal must DROP any carried
+    benchmark/excess pair -- the window is only fixed once terminal, so a pair
+    computed against the prior ONGOING (growing) window is stale even when it is
+    still internally consistent with the (unchanged) forward_return. Nulling it
+    lets the benchmark pass's reuse-first recompute with the final window instead
+    of freezing the stale value forever.
+    """
+
+    def test_cheap_terminal_maturation_nulls_benchmark_pair(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _cheap_update_row
+
+        brief_date = dt.date(2026, 5, 1)
+        cutoffs = _engine_cutoffs(brief_date, _OK_SETUP, _XNYS)
+        entry_expiry_session = cutoffs[1]
+        last_priced = cutoffs[0]  # arrival
+        # The entry window has closed as of the new session -> NO_FILL matures.
+        new_session = advance_trading_sessions(entry_expiry_session, 1, _XNYS)
+        last_closed_session = new_session
+        grouped = {new_session: _grouped(NVDA=(100.0, 101.0, 99.0, 100.0, 1000))}
+        prior = _open_prior(
+            setup=_OK_SETUP,
+            last_priced_session=last_priced,
+            classification="NO_FILL",
+            sequence_str="",
+            blended_entry=None,
+        )
+        # A stale-but-still-consistent (benchmark, excess) pair carried from the
+        # ONGOING window -- Change B must drop it on the terminal transition.
+        prior["forward_return"] = 0.05
+        prior["benchmark_window_return"] = 0.02
+        prior["market_excess_return"] = 0.03
+        result = _cheap_update_row(
+            _OK_SETUP,
+            prior,
+            "NVDA",
+            [new_session],
+            grouped,
+            cutoffs,
+            last_closed_session,
+            reference_close=100.0,
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        row, tag = result
+        self.assertEqual(tag, "terminal")
+        self.assertTrue(row["terminal"])
+        self.assertIsNone(row["benchmark_window_return"])
+        self.assertIsNone(row["market_excess_return"])
 
 
 class TestCheapAdvanceWidensExcursionBand(unittest.TestCase):

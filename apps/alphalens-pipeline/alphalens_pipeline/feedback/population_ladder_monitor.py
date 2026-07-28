@@ -900,6 +900,16 @@ def _terminal_row(
     # an ongoing position's chart blank. The enrich pass still UPGRADES the carried
     # payload whenever it runs. Assigned AFTER ``_size_fields`` so a future size key
     # can never silently clobber the carried chart.
+    #
+    # Guard: do NOT add a similar carry for benchmark_window_return /
+    # market_excess_return here. This function already builds ``row`` from
+    # scratch and never sets those two columns, so a minute-resolve maturation
+    # (ongoing -> terminal) yields an honest gap that the benchmark pass
+    # recomputes. A carried (possibly stale) pair would satisfy reuse-first's
+    # terminal+consistent check (_has_consistent_stored_pair) and be frozen
+    # forever -- see population_ladder_monitor's Change B (the cheap-path
+    # sibling, which explicitly NULLS the pair on terminal maturation) and
+    # test_terminal_row_minute_resolve_has_no_benchmark_columns (I2).
     row[_CHART_PAYLOAD_COLUMN] = prior_chart_payload
     return row
 
@@ -1905,6 +1915,13 @@ def _cheap_update_row(
     if classification == "NO_FILL" and entry_expiry_session <= last_closed_session:
         row["terminal"] = True
         row["matured_at"] = last_closed_session
+        # The benchmark window is only fixed once terminal; a value carried from
+        # the ongoing (growing-window) state is stale even when it is still
+        # internally consistent with the (unchanged) forward_return. Null it so
+        # the benchmark pass's reuse-first (_has_consistent_stored_pair) sees a
+        # GAP and recomputes with the final window instead of freezing it.
+        row["benchmark_window_return"] = None
+        row["market_excess_return"] = None
         return row, "terminal"
 
     if classification == "OPEN":
