@@ -247,6 +247,10 @@ class EdgeSummarySerializer(serializers.Serializer):
     whatif = WhatIfPanelSerializer()
     deployment = DeploymentPanelSerializer()
     open_positions = OpenPositionsSerializer()
+    # ISO-8601 UTC timestamp of the last COMPLETED enrichment run (the settled
+    # watermark). Drives the /edge "last computed X ago" banner. Null before the
+    # first watermarked run.
+    enriched_at = serializers.DateTimeField(allow_null=True)
 
 
 class EdgeExcessPointSerializer(serializers.Serializer):

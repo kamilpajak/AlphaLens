@@ -9,6 +9,8 @@ benchmark-excess is carried through at the return level.
 from __future__ import annotations
 
 import datetime as dt
+import json
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -241,3 +243,26 @@ def test_excess_telemetry_endpoint_shape(tmp_path: Path):
         body["points"][0]
     )
     assert body["trend"] and {"date", "mean", "lo", "hi"} <= set(body["trend"][0])
+
+
+@pytest.mark.django_db
+def test_summary_exposes_enriched_at_from_watermark(tmp_path: Path, monkeypatch):
+    # DEFAULT_LADDER_OUTCOMES_DIR is import-frozen (edge/ingest/parquet.py:49-52),
+    # so monkeypatch.setenv would be a no-op here — patch the module attribute
+    # directly, and the view must re-read it off the module at call time.
+    monkeypatch.setattr("edge.ingest.parquet.DEFAULT_LADDER_OUTCOMES_DIR", tmp_path)
+    ts = time.time()
+    (tmp_path / ".ingest_watermark.json").write_text(json.dumps({"completed_at": ts}))
+
+    resp = APIClient().get("/v1/edge/summary")
+    assert resp.status_code == 200
+    assert resp.json()["enriched_at"] is not None  # ISO-8601 string
+
+
+@pytest.mark.django_db
+def test_summary_enriched_at_null_without_watermark(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr("edge.ingest.parquet.DEFAULT_LADDER_OUTCOMES_DIR", tmp_path)
+
+    resp = APIClient().get("/v1/edge/summary")
+    assert resp.status_code == 200
+    assert resp.json()["enriched_at"] is None
