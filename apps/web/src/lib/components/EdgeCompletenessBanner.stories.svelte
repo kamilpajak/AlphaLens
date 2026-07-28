@@ -39,13 +39,21 @@
 	}}
 />
 
-<!-- No watermarked enrichment run yet — "last computed —". -->
+<!-- No watermarked enrichment run yet — "last computed —". The em dash sits in
+     its own nested `whitespace-nowrap` span, so DOM Testing Library's default
+     getByText (which only concatenates an element's DIRECT text-node
+     children) can never match the combined "last computed —" string — use a
+     function matcher against the full normalized textContent instead. -->
 <Story
 	name="NoWatermark"
 	args={{ enrichedAt: null, nTerminal: 121, nMatured: 118 } satisfies BannerProps}
 	play={async ({ canvasElement }) => {
 		const canvas = within(canvasElement);
-		await expect(canvas.getByText('last computed —')).toBeVisible();
+		await expect(
+			canvas.getByText(
+				(_, el) => el?.textContent?.replace(/\s+/g, ' ').trim() === 'last computed —'
+			)
+		).toBeVisible();
 	}}
 />
 

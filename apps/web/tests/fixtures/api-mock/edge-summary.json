@@ -3,6 +3,7 @@
 	"n_plannable": 132,
 	"n_terminal": 121,
 	"n_matured": 118,
+	"enriched_at": "2026-07-27T09:36:00Z",
 	"n_gate_threshold": 30,
 	"benchmark": "SPY",
 	"metric_note": "excess-of-benchmark, gross of cost, mechanical ladder",
