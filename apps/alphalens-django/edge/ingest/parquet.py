@@ -20,6 +20,7 @@ the slim image needs nothing new.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 from collections.abc import Iterable
@@ -57,6 +58,29 @@ REQUIRED_PARQUET_COLUMNS: frozenset[str] = frozenset({"brief_date", "ticker"})
 # filesystems is not guaranteed.
 _MTIME_EPS = 1e-6
 
+# Settled-watermark sentinel written by the pipeline nightly after ALL enrichment
+# passes (benchmark/sector/size/chart). A parquet whose st_mtime exceeds this
+# watermark was written by an in-progress (or failed) run and MUST NOT be ingested
+# — that is the mid-run half-state the mirror used to race into. See
+# docs/research/edge_enrichment_completion_stamp_design_2026_07_28.md.
+_INGEST_WATERMARK_NAME = ".ingest_watermark.json"
+
+
+def read_ingest_watermark(store_dir: Path) -> float | None:
+    """Read ``completed_at`` from the sentinel, or None if absent/unparseable.
+
+    None means "no settled gate" → the caller falls back to the pure mtime gate
+    (bootstrap: a fresh system, or one whose pipeline has not yet shipped the
+    writer, must not freeze /edge).
+    """
+    sentinel = store_dir / _INGEST_WATERMARK_NAME
+    try:
+        raw = json.loads(sentinel.read_text())
+        value = raw.get("completed_at")
+        return float(value) if value is not None else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
 
 @dataclass(frozen=True, slots=True)
 class RebuildResult:
@@ -64,6 +88,7 @@ class RebuildResult:
     skipped_dates: tuple[dt.date, ...]
     deleted_dates: tuple[dt.date, ...]
     total_rows: int
+    unsettled_dates: tuple[dt.date, ...]
 
     @property
     def n_rebuilt(self) -> int:
@@ -76,6 +101,10 @@ class RebuildResult:
     @property
     def n_deleted(self) -> int:
         return len(self.deleted_dates)
+
+    @property
+    def n_unsettled(self) -> int:
+        return len(self.unsettled_dates)
 
 
 def _coerce_for_field(field: django_models.Field, raw):
@@ -195,15 +224,24 @@ def rebuild_from_parquet(
 
     parquet_by_date = _scan_parquets(resolved)
     stored_mtimes = _stored_mtimes()
+    watermark = read_ingest_watermark(resolved)
 
     rebuilt: list[dt.date] = []
     skipped: list[dt.date] = []
+    unsettled: list[dt.date] = []
     total = 0
     now = timezone.now()
 
     for date in sorted(parquet_by_date):
         parquet_path = parquet_by_date[date]
         mtime = parquet_path.stat().st_mtime
+        if not force and watermark is not None and mtime > watermark:
+            # Written by an in-progress / killed run — not settled. Skip so the DB
+            # keeps the last COMPLETE state; the next completed run advances the
+            # watermark. `force` bypasses this (and the mtime gate) so operator
+            # remediation (`--force`) still rebuilds a hand-fixed date.
+            unsettled.append(date)
+            continue
         if not force and abs(stored_mtimes.get(date, -1.0) - mtime) < _MTIME_EPS:
             skipped.append(date)
             continue
@@ -225,4 +263,5 @@ def rebuild_from_parquet(
         skipped_dates=tuple(skipped),
         deleted_dates=tuple(deleted),
         total_rows=total,
+        unsettled_dates=tuple(unsettled),
     )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -245,3 +246,88 @@ def test_ingest_sector_excess_defaults_when_columns_absent(tmp_path: Path):
     assert outcome.sector_etf_window_return is None
     assert outcome.sector_excess_return is None
     assert outcome.outcome_benchmark_version == ""
+
+
+def _write_watermark(store_dir: Path, completed_at: float) -> None:
+    (store_dir / ".ingest_watermark.json").write_text(json.dumps({"completed_at": completed_at}))
+
+
+@pytest.mark.django_db
+def test_ingest_skips_parquet_newer_than_watermark_and_preserves_prior_data(tmp_path: Path):
+    # A settled first run: parquet WITH benchmark + watermark strictly newer than it.
+    _write_parquet(tmp_path, "2026-07-17", [_terminal_row("BIO", excess=0.05)])
+    p = tmp_path / "2026-07-17.parquet"
+    _write_watermark(tmp_path, p.stat().st_mtime + 10.0)
+    r1 = rebuild_from_parquet(tmp_path)
+    assert dt.date(2026, 7, 17) in r1.rebuilt_dates
+
+    # Simulate a MID-RUN rewrite: rewrite the CONTENT to the half-state the race
+    # captures (fresh terminal, benchmark NOT yet computed -> None), then bump mtime
+    # past the unchanged watermark. Rewriting content (not just os.utime) is what
+    # makes the assertion falsifiable: if the gate failed, the None would overwrite.
+    _write_parquet(tmp_path, "2026-07-17", [_terminal_row("BIO", excess=None)])
+    newer = p.stat().st_mtime + 100.0
+    os.utime(p, (newer, newer))
+    r2 = rebuild_from_parquet(tmp_path)
+    assert dt.date(2026, 7, 17) in r2.unsettled_dates
+    assert dt.date(2026, 7, 17) not in r2.rebuilt_dates
+    # DB still holds the prior COMPLETE row — the mid-run None was NOT ingested.
+    row = LadderOutcome.objects.get(brief_date="2026-07-17", ticker="BIO")
+    assert row.market_excess_return == pytest.approx(0.05)
+
+
+@pytest.mark.django_db
+def test_force_bypasses_the_settled_gate(tmp_path: Path):
+    # An operator hand-fixed a date's parquet (mtime now ahead of a stale watermark);
+    # --force must rebuild it anyway, per its documented "ignore the gate" contract.
+    _write_parquet(tmp_path, "2026-07-17", [_terminal_row("BIO", excess=0.05)])
+    p = tmp_path / "2026-07-17.parquet"
+    _write_watermark(tmp_path, p.stat().st_mtime - 10.0)  # parquet is "unsettled"
+    result = rebuild_from_parquet(tmp_path, force=True)
+    assert dt.date(2026, 7, 17) in result.rebuilt_dates
+    assert dt.date(2026, 7, 17) not in result.unsettled_dates
+
+
+@pytest.mark.django_db
+def test_mtime_equal_to_watermark_is_settled(tmp_path: Path):
+    # Boundary: mtime == watermark counts as settled (strict `>` is unsettled only).
+    _write_parquet(tmp_path, "2026-07-17", [_terminal_row("BIO", excess=0.05)])
+    p = tmp_path / "2026-07-17.parquet"
+    _write_watermark(tmp_path, p.stat().st_mtime)  # exactly equal
+    result = rebuild_from_parquet(tmp_path)
+    assert dt.date(2026, 7, 17) in result.rebuilt_dates
+    assert dt.date(2026, 7, 17) not in result.unsettled_dates
+
+
+@pytest.mark.django_db
+def test_ingest_reingests_after_watermark_advances(tmp_path: Path):
+    _write_parquet(tmp_path, "2026-07-17", [_terminal_row("BIO", excess=None)])
+    p = tmp_path / "2026-07-17.parquet"
+    _write_watermark(tmp_path, p.stat().st_mtime - 10.0)  # parquet is "unsettled"
+    r1 = rebuild_from_parquet(tmp_path)
+    assert dt.date(2026, 7, 17) in r1.unsettled_dates
+
+    # Run completes: rewrite parquet WITH benchmark, advance watermark past it.
+    _write_parquet(tmp_path, "2026-07-17", [_terminal_row("BIO", excess=0.05)])
+    _write_watermark(tmp_path, (tmp_path / "2026-07-17.parquet").stat().st_mtime + 10.0)
+    r2 = rebuild_from_parquet(tmp_path)
+    assert dt.date(2026, 7, 17) in r2.rebuilt_dates
+    assert LadderOutcome.objects.get(
+        brief_date="2026-07-17", ticker="BIO"
+    ).market_excess_return == pytest.approx(0.05)
+
+
+@pytest.mark.django_db
+def test_ingest_without_watermark_falls_back_to_mtime_gate(tmp_path: Path):
+    # No sentinel present → existing behaviour (mtime gate only), no regression.
+    _write_parquet(tmp_path, "2026-07-17", [_terminal_row("BIO", excess=0.05)])
+    result = rebuild_from_parquet(tmp_path)  # no watermark file written
+    assert dt.date(2026, 7, 17) in result.rebuilt_dates
+
+
+@pytest.mark.django_db
+def test_ingest_tolerates_malformed_watermark(tmp_path: Path):
+    _write_parquet(tmp_path, "2026-07-17", [_terminal_row("BIO", excess=0.05)])
+    (tmp_path / ".ingest_watermark.json").write_text("{not json")
+    result = rebuild_from_parquet(tmp_path)  # malformed → fallback, still ingests
+    assert dt.date(2026, 7, 17) in result.rebuilt_dates
