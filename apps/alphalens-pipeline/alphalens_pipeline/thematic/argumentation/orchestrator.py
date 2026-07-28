@@ -260,7 +260,9 @@ def _brief_for_row(
         facts = _enrich_facts_with_earnings(facts, asof)
     next_earnings = facts.get("next_earnings_date")
     try:
-        brief = generator.generate_brief_with_retry(
+        # The terminal BriefErrorKind is not threaded further yet — the
+        # orchestrator keeps its (brief, next_earnings) return shape.
+        brief, _kind = generator.generate_brief_with_retry(
             facts,
             llm_client_pro=llm_client_pro,
             llm_client_flash=llm_client_flash,

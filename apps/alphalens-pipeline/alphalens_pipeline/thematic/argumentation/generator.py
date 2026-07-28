@@ -18,7 +18,9 @@ was empty/whitespace-only — a transient no-content response) or
 is blank — the MC/Moelis empty-card incident) retry once with the same token
 cap and ``temperature=0``. Other failure kinds (``MALFORMED_JSON`` /
 ``SAFETY`` / ``TRANSPORT``) do not retry — they will not be helped by more
-tokens or different temperature.
+tokens or different temperature. The wrapper also returns
+``(brief | None, BriefErrorKind)`` — ``NONE`` on success, otherwise the
+LAST failing kind observed once the retry policy is exhausted.
 """
 
 from __future__ import annotations
@@ -361,7 +363,7 @@ def generate_brief_with_retry(
     llm_client_flash: OpenRouterClient | None = None,
     base_max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
     max_output_tokens_ceiling: int = _MAX_OUTPUT_TOKENS_CEILING,
-) -> dict | None:
+) -> tuple[dict | None, BriefErrorKind]:
     """Generate a brief, retrying on ``TRUNCATED`` / ``EMPTY`` / drift.
 
     Retryable kinds:
@@ -387,13 +389,17 @@ def generate_brief_with_retry(
       English directive the retry is deterministically English.
 
     Non-retryable kinds (``MALFORMED_JSON``, ``SAFETY``, ``TRANSPORT``)
-    return None without retrying — extra tokens won't fix bad JSON, safety
-    blocks, or network errors.
+    fail immediately without retrying — extra tokens won't fix bad JSON,
+    safety blocks, or network errors.
 
-    Either way the retry runs at most once (no loop). Returns the brief
-    dict (with ``model_used``) on success, ``None`` otherwise. The
-    orchestrator's graceful-degradation renderer then surfaces the
-    deterministic facts even when this returns None.
+    Either way the single-retry kinds retry at most once (no loop). Returns
+    ``(brief_dict_with_model_used, BriefErrorKind.NONE)`` on success, or
+    ``(None, terminal_kind)`` on failure, where the terminal kind is the
+    LAST failing kind observed: ``TRUNCATED`` after the token ladder is
+    exhausted (or whatever kind the last rung failed with), the immediate
+    kind for non-retryable failures, and the retry's failing kind for the
+    single-retry kinds. The orchestrator's graceful-degradation renderer
+    then surfaces the deterministic facts even when the brief is None.
     """
     # Resolve clients ONCE so the retry path doesn't re-do lazy-singleton
     # lookup. Cheap when the caller already hoisted (orchestrator batch
@@ -411,14 +417,14 @@ def generate_brief_with_retry(
         temperature=_DEFAULT_TEMPERATURE,
     )
     if kind == BriefErrorKind.NONE:
-        return brief
+        return brief, kind
     if kind not in (
         BriefErrorKind.TRUNCATED,
         BriefErrorKind.EMPTY,
         BriefErrorKind.EMPTY_CONTENT,
         BriefErrorKind.LANGUAGE_DRIFT,
     ):
-        return None
+        return None, kind
 
     # TRUNCATED = the reasoning trace + JSON ran out of room -> escalate the cap
     # through the doubling ladder, stopping at the first success. EMPTY /
@@ -442,8 +448,10 @@ def generate_brief_with_retry(
                 temperature=_RETRY_TEMPERATURE,
             )
             if kind == BriefErrorKind.NONE:
-                return brief
-        return None
+                return brief, kind
+        # Ladder exhausted — surface the LAST failing kind observed (usually
+        # TRUNCATED, but the final rung may have failed differently).
+        return None, kind
 
     logger.info(
         "brief retry for %s (kind=%s): max_output_tokens %d (unchanged), temperature=%.1f",
@@ -459,7 +467,9 @@ def generate_brief_with_retry(
         max_output_tokens=base_max_output_tokens,
         temperature=_RETRY_TEMPERATURE,
     )
-    return brief if kind == BriefErrorKind.NONE else None
+    # On a failed retry the terminal kind is the RETRY's failing kind (it may
+    # differ from the first attempt's kind).
+    return (brief, kind) if kind == BriefErrorKind.NONE else (None, kind)
 
 
 __all__ = [
