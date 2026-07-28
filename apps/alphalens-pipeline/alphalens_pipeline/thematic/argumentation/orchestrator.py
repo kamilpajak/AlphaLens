@@ -256,10 +256,10 @@ def _brief_for_row(
     internal exception path maps to ``TRANSPORT`` (the SDK/plumbing raised
     before producing a classified response).
 
-    Uses ``generator.generate_brief_with_retry`` so a Flash truncation
-    (``finish_reason == MAX_TOKENS``) auto-retries once with double
-    ``max_output_tokens`` + ``temperature=0`` before giving up. Other
-    failure kinds (MALFORMED_JSON, SAFETY, TRANSPORT) do not retry.
+    Uses ``generator.generate_brief_with_retry`` so a truncation
+    (``finish_reason == MAX_TOKENS``) escalates ``max_output_tokens`` through
+    the doubling ladder up to the ceiling at ``temperature=0`` before giving
+    up. Other failure kinds (MALFORMED_JSON, SAFETY, TRANSPORT) do not retry.
     """
     facts = _row_to_facts(row)
     if asof is not None:
