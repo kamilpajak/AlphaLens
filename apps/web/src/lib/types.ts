@@ -102,6 +102,14 @@ export interface Candidate {
 	brief_template_id: string | null;
 	brief_template_facts: Record<string, unknown> | null;
 	brief_generated_at: string | null;
+	/**
+	 * Honest brief-status surface (#921) — `brief_status` is `"ok"` /
+	 * `"unavailable"`, null on pre-feature rows; `brief_error_kind` is the
+	 * retry-ladder terminal kind (`"truncated"`, `"transport"`, …), null on
+	 * success.
+	 */
+	brief_status: string | null;
+	brief_error_kind: string | null;
 
 	/**
 	 * Market-state context signal (PR-3) — an INDEX-LEVEL (SPY) daily regime
