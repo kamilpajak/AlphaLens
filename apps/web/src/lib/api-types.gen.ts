@@ -370,6 +370,8 @@ export interface components {
             brief_template_facts?: unknown;
             /** Format: date-time */
             brief_generated_at?: string | null;
+            brief_status?: string | null;
+            brief_error_kind?: string | null;
         };
         /**
          * @description One candidate for the single-candidate DETAIL endpoint
@@ -502,6 +504,8 @@ export interface components {
             brief_template_facts?: unknown;
             /** Format: date-time */
             brief_generated_at?: string | null;
+            brief_status?: string | null;
+            brief_error_kind?: string | null;
         };
         /**
          * @description One daily OHLC candle (folded from the cached minute bars, RTH-only).
@@ -596,6 +600,7 @@ export interface components {
                 [key: string]: number;
             };
             candidates: components["schemas"]["Candidate"][];
+            meta: components["schemas"]["DayMetaBlock"];
         };
         /** @description Row in ``/v1/days``: per-day metadata only (no candidates). */
         DayMeta: {
@@ -608,6 +613,18 @@ export interface components {
             /** @description Empty-string DB default → None on the wire (parity with legacy API). */
             readonly top_theme: string | null;
         };
+        /** @description The additive top-level ``meta`` block on ``/v1/days/{date}``. */
+        DayMetaBlock: {
+            validation: components["schemas"]["DayValidation"];
+        };
+        /** @description Machine-generated honesty context (see ``briefs.api.day_validation``). */
+        DayValidation: {
+            selection_status: string;
+            layer4_weighted_score_note: string;
+            edge_base_rate: components["schemas"]["EdgeBaseRate"];
+            brief_dating: string;
+            scorer_config_version: string | null;
+        };
         /** @description The DEPLOYMENT panel — N-INDEPENDENT, always populated. */
         DeploymentPanel: {
             n_terminal: number;
@@ -619,6 +636,27 @@ export interface components {
             no_fill_rate: number | null;
             /** Format: double */
             mean_tiers_filled_count: number | null;
+        };
+        /**
+         * @description Live edge base rate for ``meta.validation`` (see ``edge.api.base_rate``).
+         *
+         *     Pool = plannable AND terminal AND finite realized_r over all dates. N-gated
+         *     like /edge (stats null below 30 matured); degenerate math is null, never inf.
+         */
+        EdgeBaseRate: {
+            /** @description Size of the realized-R pool (plannable, terminal, finite realized_r) — /edge's gross_realized_r_n, NOT its excess-keyed n_matured. */
+            n_matured: number;
+            /** Format: double */
+            mean_realized_r: number | null;
+            /** Format: double */
+            payoff_ratio: number | null;
+            /** Format: double */
+            breakeven_win_rate: number | null;
+            /**
+             * Format: date
+             * @description Max matured_at among contributing rows; null for an empty pool.
+             */
+            as_of: string | null;
         };
         /** @description One per-trade point in the SPY-excess scatter. */
         EdgeExcessPoint: {

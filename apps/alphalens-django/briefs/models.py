@@ -182,6 +182,14 @@ class Brief(models.Model):
     brief_template_id = models.CharField(max_length=128, blank=True, default="")
     brief_template_facts = models.JSONField(null=True, blank=True)
     brief_generated_at = models.DateTimeField(null=True, blank=True)
+    # PR #921 follow-through: honest per-row LLM brief outcome stamped by the
+    # pipeline orchestrator. ``brief_status`` is "ok" | "unavailable";
+    # ``brief_error_kind`` is the retry-ladder terminal kind ("truncated",
+    # "transport", ...) and is null when the brief rendered. Both are NULLABLE
+    # (not blank-default) so parquets written before the columns existed ingest
+    # as NULL — "unknown" must stay distinct from "ok" on the wire.
+    brief_status = models.CharField(max_length=16, null=True, blank=True)
+    brief_error_kind = models.CharField(max_length=32, null=True, blank=True)
 
     class Meta:
         indexes = [

@@ -1088,6 +1088,16 @@
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
+                    },
+                    "brief_status": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 16
+                    },
+                    "brief_error_kind": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
                     }
                 },
                 "required": [
@@ -1445,6 +1455,16 @@
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
+                    },
+                    "brief_status": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 16
+                    },
+                    "brief_error_kind": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
                     }
                 },
                 "required": [

@@ -697,3 +697,59 @@ class TestDayValidationMeta:
 
 # silence linter when datetime isn't used in this file path-wise
 _ = dt
+
+
+@pytest.mark.django_db
+class TestBriefStatusOnAPI:
+    """PR #921 follow-through: brief_status / brief_error_kind must ride every
+    candidate-bearing payload (the SPA badge reads them). Serializers use
+    Meta.exclude=("pk",) so the fields are auto-exposed; these tests are the
+    regression guard against a future exclude-tuple change dropping them."""
+
+    @staticmethod
+    def _status_fixture(tmp_path: "Path") -> None:
+        _write_parquet(
+            tmp_path,
+            "2026-07-27",
+            [
+                {
+                    "ticker": "NVDA",
+                    "theme": "ai-infra",
+                    "layer4_weighted_score": 15,
+                    "brief_status": "unavailable",
+                    "brief_error_kind": "truncated",
+                },
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+    def test_status_fields_round_trip_on_detail(self, client, tmp_path):
+        self._status_fixture(tmp_path)
+        body = client.get("/v1/candidates/2026-07-27/NVDA").json()
+        assert body["brief_status"] == "unavailable"
+        assert body["brief_error_kind"] == "truncated"
+
+    def test_status_fields_present_on_candidate_list(self, client, tmp_path):
+        self._status_fixture(tmp_path)
+        body = client.get("/v1/days/2026-07-27/candidates").json()
+        cand = body["data"][0]
+        assert cand["brief_status"] == "unavailable"
+        assert cand["brief_error_kind"] == "truncated"
+
+    def test_legacy_rows_serialize_null_not_empty(self, client, tmp_path):
+        # Pre-#921 ingested row: both fields NULL on the wire (unknown), never "".
+        _write_parquet(
+            tmp_path,
+            "2026-05-22",
+            [{"ticker": "AAA", "theme": "t", "layer4_weighted_score": 1}],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        body = client.get("/v1/candidates/2026-05-22/AAA").json()
+        assert body["brief_status"] is None
+        assert body["brief_error_kind"] is None
+
+    def test_status_fields_present_in_both_serializers(self):
+        assert "brief_status" in CandidateSerializer().fields
+        assert "brief_error_kind" in CandidateSerializer().fields
+        assert "brief_status" in CandidateDetailSerializer().fields
+        assert "brief_error_kind" in CandidateDetailSerializer().fields

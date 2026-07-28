@@ -292,3 +292,21 @@ export function catalystLabel(eventType: string | null | undefined): string | nu
 	if (!eventType) return null;
 	return CATALYST_LABELS[eventType] ?? eventType.replaceAll('_', ' ');
 }
+
+/**
+ * The honest "brief unavailable" label for the catalyst.event blockquote
+ * (#921). Returns the tone-neutral label ONLY when `brief_status` is
+ * `"unavailable"`, appending the terminal `brief_error_kind` in parentheses
+ * when present (e.g. "(truncated)"). For `"ok"` and for null/undefined
+ * (legacy pre-feature rows) it returns null so the card renders byte-identical
+ * to the pre-#921 behaviour. Deliberately verdict-free wording — the status is
+ * a pipeline fact, not a signal.
+ */
+export function briefUnavailableLabel(
+	status: string | null | undefined,
+	errorKind: string | null | undefined
+): string | null {
+	if (status !== 'unavailable') return null;
+	const base = 'brief unavailable — generation failed';
+	return errorKind ? `${base} (${errorKind})` : base;
+}

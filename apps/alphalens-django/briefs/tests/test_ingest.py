@@ -724,3 +724,51 @@ class TestMarketStateIngest:
         assert aaa.market_state == ""
         assert aaa.market_state_atr_pct is None
         assert aaa.market_state_squeeze_on is None
+
+
+@pytest.mark.django_db
+class TestBriefStatusIngest:
+    """PR #921 carried into Django: the pipeline stamps ``brief_status``
+    ("ok" | "unavailable") + ``brief_error_kind`` (retry-ladder terminal kind,
+    null on success) on every brief parquet row. Ingest must map both onto the
+    Brief model; parquets written before the columns existed must ingest as
+    NULL/NULL (tri-state: unknown, not "ok")."""
+
+    def test_status_columns_round_trip(self, tmp_path: Path):
+        _write_parquet(
+            tmp_path,
+            "2026-07-27",
+            [
+                {
+                    "ticker": "NVDA",
+                    "theme": "ai-infra",
+                    "brief_status": "ok",
+                    "brief_error_kind": None,
+                },
+                {
+                    "ticker": "AVGO",
+                    "theme": "ai-infra",
+                    "brief_status": "unavailable",
+                    "brief_error_kind": "truncated",
+                },
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        nvda = Brief.objects.get(ticker="NVDA")
+        assert nvda.brief_status == "ok"
+        assert nvda.brief_error_kind is None
+
+        avgo = Brief.objects.get(ticker="AVGO")
+        assert avgo.brief_status == "unavailable"
+        assert avgo.brief_error_kind == "truncated"
+
+    def test_legacy_parquet_without_status_columns_ingests_null(self, tmp_path: Path):
+        # Pre-#921 parquet: no brief_status / brief_error_kind columns at all.
+        # Both fields must land as NULL (unknown), NOT "" and NOT "ok".
+        _write_parquet(tmp_path, "2026-05-22", [{"ticker": "AAA", "theme": "t"}])
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        aaa = Brief.objects.get(ticker="AAA")
+        assert aaa.brief_status is None
+        assert aaa.brief_error_kind is None
