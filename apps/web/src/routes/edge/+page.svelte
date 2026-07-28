@@ -9,6 +9,7 @@
 	import StatusPill from '$lib/components/StatusPill.svelte';
 	import WhatIfPanel from '$lib/components/WhatIfPanel.svelte';
 	import ExcessScatter from '$lib/components/ExcessScatter.svelte';
+	import EdgeCompletenessBanner from '$lib/components/EdgeCompletenessBanner.svelte';
 	import { isPendingStatus, ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
 	import { getEdgeChart, getEdgeExcessTelemetry } from '$lib/api';
 	import { fmtNum } from '$lib/format';
@@ -589,6 +590,14 @@
 						ongoing [{nOngoing}]
 					</button>
 				</div>
+			</div>
+
+			<div class="mb-3">
+				<EdgeCompletenessBanner
+					enrichedAt={summary.enriched_at}
+					nTerminal={summary.n_terminal}
+					nMatured={summary.n_matured}
+				/>
 			</div>
 
 			<EdgeOutcomesFilter

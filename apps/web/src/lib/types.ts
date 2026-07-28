@@ -372,6 +372,9 @@ export interface EdgeSummary {
 	n_gate_threshold: number;
 	benchmark: string;
 	metric_note: string;
+	/** ISO-8601 UTC time of the last completed enrichment run (settled
+	 *  watermark). Null before the first watermarked run. */
+	enriched_at: string | null;
 	edge: EdgePanel;
 	portfolio: PortfolioPanel;
 	whatif: WhatIfPanel;
