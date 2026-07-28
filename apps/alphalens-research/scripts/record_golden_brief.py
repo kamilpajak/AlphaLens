@@ -34,7 +34,7 @@ import pandas as pd
 from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orch
 from tests.golden.projection import brief_projection
-from tests.golden.replay_client import RecordingOpenRouter
+from tests.golden.replay_client import GOLDEN_RECORDED_MAX_OUTPUT_TOKENS, RecordingOpenRouter
 
 # The frozen day + the slice. All four tickers have a matching OHLCV cache file
 # for this asof; DFIN/QLYS score >=4 (route to Pro), QUBT/MANH <4 (route to
@@ -100,6 +100,10 @@ def main() -> None:
             asof=ASOF,
             output_dir=golden_dir,
             ohlcv_loader=_build_ohlcv_loader(ohlcv_dir),
+            # Record at the pinned golden cap so the cassette keys (which include
+            # max_tokens) match what the replay test drives — decoupled from the
+            # production default (see GOLDEN_RECORDED_MAX_OUTPUT_TOKENS).
+            base_max_output_tokens=GOLDEN_RECORDED_MAX_OUTPUT_TOKENS,
         )
 
     (golden_dir / "projection.json").write_text(

@@ -240,6 +240,7 @@ def _brief_for_row(
     llm_client_pro,
     llm_client_flash,
     asof: dt.date | None = None,
+    base_max_output_tokens: int = generator._DEFAULT_MAX_OUTPUT_TOKENS,
 ) -> tuple[dict | None, str | None]:
     """Single-row LLM call with per-row exception absorption.
 
@@ -263,6 +264,7 @@ def _brief_for_row(
             facts,
             llm_client_pro=llm_client_pro,
             llm_client_flash=llm_client_flash,
+            base_max_output_tokens=base_max_output_tokens,
         )
     except Exception as exc:
         logger.warning("brief generation raised for %s: %s", row.get("ticker"), exc, exc_info=True)
@@ -437,11 +439,17 @@ def generate_briefs(
     output_dir: Path = DEFAULT_OUTPUT_DIR,
     api_key: str | None = None,
     ohlcv_loader: Callable[[str, dt.date], pd.DataFrame] | None = None,
+    base_max_output_tokens: int = generator._DEFAULT_MAX_OUTPUT_TOKENS,
 ) -> pd.DataFrame:
     """Enrich Phase D-scored candidates with composed briefs; persist.
 
     ``ohlcv_loader`` is injectable for tests; it defaults to a cache-only
     reader over the scorer's ``thematic_ohlcv`` cache (no network).
+
+    ``base_max_output_tokens`` is the LLM output-token budget floor threaded to
+    each brief's retry ladder; it defaults to the production budget and is pinned
+    to the recorded cap only by the golden replay / record harness (so the frozen
+    cassettes match — the projection under test is budget-independent).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     ohlcv_loader = ohlcv_loader or _cache_only_ohlcv_loader()
@@ -473,6 +481,7 @@ def generate_briefs(
             llm_client_pro=client_pro,
             llm_client_flash=client_flash,
             asof=asof,
+            base_max_output_tokens=base_max_output_tokens,
         )
         if brief is not None:
             if brief.get("model_used") == generator.PRO_MODEL:

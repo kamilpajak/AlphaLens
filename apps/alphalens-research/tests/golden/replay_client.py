@@ -40,6 +40,17 @@ from alphalens_pipeline.data.alt_data.openrouter_client import (
 
 logger = logging.getLogger(__name__)
 
+# The output-token cap the golden brief cassettes were recorded at. The cassette
+# key (see ``_config_to_dict``) includes ``max_tokens``, so BOTH the record
+# script and the replay test must drive ``generate_briefs`` at this exact cap or
+# no cassette matches. Deliberately DECOUPLED from the production default
+# (``generator._DEFAULT_MAX_OUTPUT_TOKENS``, raised to 8000 for the reasoning-
+# trace headroom): a production cap tuning must NOT force a golden re-record,
+# because the golden validates the deterministic PROJECTION of a frozen response,
+# which is budget-independent (the cap only decides whether the JSON completes,
+# not its schema). Bump this only on a genuine re-record at a new cap.
+GOLDEN_RECORDED_MAX_OUTPUT_TOKENS = 2000
+
 
 class CassetteMissError(KeyError):
     """Raised when a replay request has no recorded cassette (fail-loud)."""
