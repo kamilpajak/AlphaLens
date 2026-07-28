@@ -261,6 +261,13 @@ def _enrich_frame_rows(
         )
         bench_col.append(bench)
         excess_col.append(excess)
+        # n_fetched counts rows that ENTERED the fetch branch (including rows
+        # short-circuited by a missing forward_return before any network call),
+        # NOT strictly rows that issued a Polygon call — it is the "did this
+        # frame change?" signal the M3 skip-write decision below reads. A file
+        # whose only unresolved rows are ongoing / no-forward-return is still
+        # rewritten (content unchanged, mtime bumps) — acceptable, since it
+        # never causes a needed write to be wrongly skipped.
         n_fetched += 1
         if excess is not None:
             n_enriched += 1
@@ -276,8 +283,18 @@ def _is_real(value: Any) -> TypeGuard[float]:
 def _has_consistent_stored_pair(row: pd.Series) -> bool:
     """True when the row is TERMINAL and already carries a benchmark/excess pair
     consistent with its forward_return. A terminal window is fixed, so such a pair
-    is settled and needs no refetch. (Same predicate the removed
-    _carry_forward_prev_pair used; it now lives only here.)"""
+    is settled and needs no refetch.
+
+    The consistency check (not just the ``matured_at`` gate) matters because of
+    the maturation-transition hazard: when an ongoing row matures, the monitor
+    advances ``forward_return`` and stamps ``matured_at`` in the SAME rewrite,
+    but a stale ``(benchmark, excess)`` pair computed against the OLD
+    ``forward_return`` can be carried forward verbatim on that write. Such a
+    pair would pass a ``matured_at``-only gate yet no longer satisfy
+    ``excess == forward - benchmark``, so it must be recomputed rather than
+    reused — this is what ``test_transient_none_drops_a_stale_pair_inconsistent_with_forward``
+    guards. (Same predicate the removed _carry_forward_prev_pair used; it now
+    lives only here.)"""
     if _as_date(row.get("matured_at")) is None:
         return False
     bench = row.get("benchmark_window_return")

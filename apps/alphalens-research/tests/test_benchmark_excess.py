@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime as dt
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -749,6 +750,150 @@ class ReuseFirstBenchmarkExcess(unittest.TestCase):
 
             old_row = pd.read_parquet(store / f"{old.isoformat()}.parquet").iloc[0]
             self.assertFalse(pd.isna(old_row["benchmark_window_return"]))
+
+
+class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
+    """M3 (skip the parquet write when a file's rows were all reused) + M4
+    (the ``enriched N (reused M, fetched F)`` INFO summary line). Neither had
+    a dedicated assertion before — this pins both as genuinely red-if-removed.
+    """
+
+    def test_all_reused_file_is_not_rewritten(self) -> None:
+        # GIVEN a store parquet where EVERY row is a settled TERMINAL row with
+        # a consistent stored pair -> every row is reused (n_fetched == 0 for
+        # this file), so the write must be skipped: mtime stays bit-for-bit
+        # identical and the values are untouched.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            path = store / f"{d.isoformat()}.parquet"
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    },
+                    {
+                        "brief_date": d,
+                        "ticker": "BB",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 28),
+                        "forward_return": 0.04,
+                        "benchmark_window_return": 0.01,
+                        "market_excess_return": 0.03,
+                    },
+                ]
+            ).to_parquet(path)
+            mtime_before = path.stat().st_mtime_ns
+
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(s, reference=100.0, last_close=999.0)
+
+            # WHEN enrichment runs over an all-reused file
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            # THEN no fetch was issued, the file was never rewritten...
+            self.assertEqual(calls, [])
+            self.assertEqual(path.stat().st_mtime_ns, mtime_before)
+            # ...and the stored values are exactly what was seeded.
+            out = pd.read_parquet(path)
+            aa = out[out["ticker"] == "AA"].iloc[0]
+            bb = out[out["ticker"] == "BB"].iloc[0]
+            self.assertAlmostEqual(float(aa["market_excess_return"]), 0.03, places=6)
+            self.assertAlmostEqual(float(bb["market_excess_return"]), 0.03, places=6)
+
+    def test_a_gap_row_triggers_rewrite(self) -> None:
+        # GIVEN a store parquet with a single GAP (null benchmark) TERMINAL
+        # row -> that row must be fetched, so the file is rewritten (mtime
+        # changes) and the gap gets filled.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            path = store / f"{d.isoformat()}.parquet"
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "GAP",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                    }
+                ]
+            ).to_parquet(path)
+            mtime_before = path.stat().st_mtime_ns
+            time.sleep(0.01)  # ensure a distinguishable mtime tick
+
+            arrival_open = session_open_utc(session_on_or_after(d))
+
+            def _fetch(t, s, e):
+                return _spy_bars(arrival_open, reference=100.0, last_close=102.0)
+
+            # WHEN enrichment runs over a file with a real gap
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            # THEN the file was rewritten...
+            self.assertNotEqual(path.stat().st_mtime_ns, mtime_before)
+            # ...and the gap is filled.
+            row = pd.read_parquet(path).iloc[0]
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+    def test_summary_log_line_reports_enriched_reused_fetched(self) -> None:
+        # GIVEN a mixed store: one settled (reused) terminal row and one gap
+        # (fetched) terminal row in the same file -> enriched=2 (both end up
+        # with a non-null excess), reused=1, fetched=1.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    },
+                    {
+                        "brief_date": d,
+                        "ticker": "GAP",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 28),
+                        "forward_return": 0.04,
+                    },
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            def _fetch(t, s, e):
+                return _spy_bars(s, reference=100.0, last_close=102.0)
+
+            # WHEN enrichment runs, capturing the module logger at INFO
+            with self.assertLogs(
+                "alphalens_pipeline.feedback.benchmark_excess", level="INFO"
+            ) as cm:
+                enrich_store_with_benchmark_excess(
+                    store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                )
+
+            # THEN the summary line reports the exact reused/fetched split.
+            self.assertIn(
+                "benchmark-excess: enriched 2 (reused 1, fetched 1)",
+                cm.output[-1],
+            )
 
 
 if __name__ == "__main__":
