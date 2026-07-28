@@ -4,9 +4,12 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from alphalens_cli.commands.feedback import _write_ingest_watermark
+from alphalens_cli.commands.feedback import _INGEST_WATERMARK_NAME, _write_ingest_watermark
 
-_WATERMARK_NAME = ".ingest_watermark.json"
+# Track the real writer-side constant instead of a copied literal — a hardcoded
+# duplicate here would silently rot if the writer's filename ever changed (see
+# tests/test_ingest_watermark_parity.py for the cross-app writer/reader guard).
+_WATERMARK_NAME = _INGEST_WATERMARK_NAME
 
 
 class WriteIngestWatermarkTest(unittest.TestCase):

@@ -288,8 +288,13 @@ one, so they cannot be quietly written to dodge the starvation path.
 CLI/feedback seam):**
 - `_write_ingest_watermark` writes valid JSON with `completed_at` > all parquet mtimes in the
   store.
-- a successful `_refresh_population_ladders` leaves a sentinel; a simulated crash in a pass
-  (propagating exception) leaves the **previous** sentinel intact (no half-advance).
+- a successful `_refresh_population_ladders` leaves a sentinel; a degraded run (replay or an
+  enrich pass raising) still stamps the watermark, because every pass swallows its own errors
+  internally (§7) — nothing propagates out of `_refresh_population_ladders` for a test to catch.
+  The implemented test therefore pins the achievable invariant: a completed-but-degraded run
+  still advances the watermark. Process-kill protection (the previous sentinel staying intact) is
+  a property of construction — the write happens only after the last pass returns, so a killed
+  process never reaches it — not something a unit test can simulate.
 
 **Component 2 — Django chart API (`edge/tests/test_api.py` / chart test):**
 - `context` + `status` from the payload appear in the serialized chart response; absent keys →
