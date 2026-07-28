@@ -183,6 +183,7 @@ class TestGenerateBriefs(unittest.TestCase):
             side_effect=lambda row, **kw: (
                 (_FAKE_BRIEF_PRO if row["ticker"] == "IONQ" else _FAKE_BRIEF_FLASH),
                 None,
+                generator.BriefErrorKind.NONE,
             ),
         ):
             with tempfile.TemporaryDirectory() as tmp:
@@ -205,7 +206,9 @@ class TestGenerateBriefs(unittest.TestCase):
         with (
             patch.object(orchestrator, "_CANONICAL_TITLE_ENABLED", True),
             patch.object(
-                orchestrator, "_brief_for_row", side_effect=lambda row, **kw: (None, None)
+                orchestrator,
+                "_brief_for_row",
+                side_effect=lambda row, **kw: (None, None, generator.BriefErrorKind.TRANSPORT),
             ),
             patch(
                 "alphalens_pipeline.thematic.sources.canonical_title.canonical_title_for",
@@ -225,7 +228,7 @@ class TestGenerateBriefs(unittest.TestCase):
         def fake_brief(row, **kw):
             brief = _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
             captured_models[row["ticker"]] = brief["model_used"]
-            return brief, None
+            return brief, None, generator.BriefErrorKind.NONE
 
         with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
             with tempfile.TemporaryDirectory() as tmp:
@@ -236,7 +239,11 @@ class TestGenerateBriefs(unittest.TestCase):
         self.assertEqual(captured_models["IONQ"], generator.PRO_MODEL)  # score 4 → Pro
 
     def test_writes_parquet_with_structured_brief_columns(self):
-        with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
+        with patch.object(
+            orchestrator,
+            "_brief_for_row",
+            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE),
+        ):
             with tempfile.TemporaryDirectory() as tmp:
                 output_dir = Path(tmp)
                 out = orchestrator.generate_briefs(
@@ -252,7 +259,11 @@ class TestGenerateBriefs(unittest.TestCase):
         self.assertNotIn("brief_full_md", out.columns)
 
     def test_writes_parquet_only_no_markdown_file(self):
-        with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
+        with patch.object(
+            orchestrator,
+            "_brief_for_row",
+            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE),
+        ):
             with tempfile.TemporaryDirectory() as tmp:
                 output_dir = Path(tmp)
                 orchestrator.generate_briefs(
@@ -268,7 +279,11 @@ class TestGenerateBriefs(unittest.TestCase):
         # signal columns are always persisted, so a Flash truncation never
         # hides the quantitative signal (2026-05-17 QUBT incident). The
         # brief_* prose columns simply stay None.
-        with patch.object(orchestrator, "_brief_for_row", return_value=(None, None)):
+        with patch.object(
+            orchestrator,
+            "_brief_for_row",
+            return_value=(None, None, generator.BriefErrorKind.TRANSPORT),
+        ):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
                     _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
@@ -283,7 +298,7 @@ class TestGenerateBriefs(unittest.TestCase):
     def test_attrs_contain_per_model_counts(self):
         def fake_brief(row, **kw):
             brief = _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
-            return brief, None
+            return brief, None, generator.BriefErrorKind.NONE
 
         with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
             with tempfile.TemporaryDirectory() as tmp:
@@ -292,6 +307,86 @@ class TestGenerateBriefs(unittest.TestCase):
                 )
         self.assertEqual(out.attrs.get("n_pro"), 1)
         self.assertEqual(out.attrs.get("n_flash"), 1)
+
+
+class TestBriefStatusStamping(unittest.TestCase):
+    """Honest per-row brief_status / brief_error_kind columns.
+
+    A row whose LLM call terminally failed must say so in the parquet
+    (``brief_status="unavailable"`` + the terminal ``BriefErrorKind``
+    value) instead of silently carrying all-None prose columns.
+    """
+
+    def _run_with_retry(self, retry_side_effect):
+        with (
+            patch.object(orchestrator, "_build_clients", return_value=(None, None)),
+            patch.object(
+                orchestrator.generator,
+                "generate_brief_with_retry",
+                side_effect=retry_side_effect,
+            ),
+            patch(
+                "alphalens_pipeline.thematic.sources.earnings_calendar.fetch_next_earnings",
+                lambda *, ticker, asof, today=None: None,
+            ),
+            tempfile.TemporaryDirectory() as tmp,
+        ):
+            return orchestrator.generate_briefs(
+                _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+            )
+
+    @staticmethod
+    def _one_failure_retry(facts, **kw):
+        if facts["ticker"] == "IONQ":
+            return dict(_FAKE_BRIEF_PRO), generator.BriefErrorKind.NONE
+        return None, generator.BriefErrorKind.TRUNCATED
+
+    def test_failed_row_stamped_unavailable_with_terminal_kind(self):
+        out = self._run_with_retry(self._one_failure_retry)
+        by_ticker = out.set_index("ticker")
+        self.assertEqual(by_ticker.loc["QUBT", "brief_status"], "unavailable")
+        self.assertEqual(by_ticker.loc["QUBT", "brief_error_kind"], "truncated")
+        self.assertEqual(by_ticker.loc["IONQ", "brief_status"], "ok")
+        # None becomes NaN under pandas string inference once the column
+        # mixes strings and nulls — null-ness is the contract, not None.
+        self.assertTrue(pd.isna(by_ticker.loc["IONQ", "brief_error_kind"]))
+
+    def test_exception_in_retry_stamped_as_transport(self):
+        def raising_retry(facts, **kw):
+            raise RuntimeError("boom")
+
+        out = self._run_with_retry(raising_retry)
+        self.assertTrue((out["brief_status"] == "unavailable").all())
+        self.assertTrue((out["brief_error_kind"] == "transport").all())
+
+    def test_brief_for_row_exception_maps_to_transport_kind(self):
+        row = _scored_df().iloc[1]  # IONQ (verified)
+        with patch.object(
+            orchestrator.generator,
+            "generate_brief_with_retry",
+            side_effect=RuntimeError("boom"),
+        ):
+            brief, next_earnings, kind = orchestrator._brief_for_row(
+                row, llm_client_pro=None, llm_client_flash=None
+            )
+        self.assertIsNone(brief)
+        self.assertIsNone(next_earnings)
+        self.assertIs(kind, generator.BriefErrorKind.TRANSPORT)
+
+    def test_empty_day_output_carries_status_columns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = orchestrator.generate_briefs(
+                pd.DataFrame(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
+            )
+        self.assertIn("brief_status", out.columns)
+        self.assertIn("brief_error_kind", out.columns)
+
+    def test_summary_log_reports_unavailable_count_and_kinds(self):
+        with self.assertLogs(orchestrator.logger, level="INFO") as captured:
+            self._run_with_retry(self._one_failure_retry)
+        joined = "\n".join(captured.output)
+        self.assertIn("1 unavailable", joined)
+        self.assertIn("truncated", joined)
 
 
 class TestEarningsDatePropagation(unittest.TestCase):
@@ -303,7 +398,9 @@ class TestEarningsDatePropagation(unittest.TestCase):
         # exercises orchestrator's promise to persist the 2nd tuple slot
         # into the brief parquet as ``next_earnings_date``.
         with patch.object(
-            orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, "2026-05-08")
+            orchestrator,
+            "_brief_for_row",
+            return_value=(_FAKE_BRIEF_FLASH, "2026-05-08", generator.BriefErrorKind.NONE),
         ):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
@@ -314,7 +411,11 @@ class TestEarningsDatePropagation(unittest.TestCase):
             self.assertEqual(row["next_earnings_date"], "2026-05-08")
 
     def test_next_earnings_date_none_when_fetch_returns_none(self):
-        with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
+        with patch.object(
+            orchestrator,
+            "_brief_for_row",
+            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE),
+        ):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
                     _scored_df(), asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
@@ -366,7 +467,7 @@ class TestSidecarPersistence(unittest.TestCase):
     def test_sidecar_records_per_model_counts(self):
         def fake_brief(row, **kw):
             brief = _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
-            return brief, None
+            return brief, None, generator.BriefErrorKind.NONE
 
         with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
             with tempfile.TemporaryDirectory() as tmp:
@@ -388,7 +489,11 @@ class TestDedupOnMerge(unittest.TestCase):
         df = _scored_df()
         verified = df[df["verified"]].copy()
         duped = pd.concat([verified, verified.iloc[[0]]], ignore_index=True)
-        with patch.object(orchestrator, "_brief_for_row", return_value=(_FAKE_BRIEF_FLASH, None)):
+        with patch.object(
+            orchestrator,
+            "_brief_for_row",
+            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE),
+        ):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
                     duped, asof=dt.date(2026, 4, 14), output_dir=Path(tmp)
