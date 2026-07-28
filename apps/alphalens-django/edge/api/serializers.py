@@ -176,6 +176,18 @@ class ChartResponseSerializer(serializers.Serializer):
     open_r = serializers.FloatField(allow_null=True)
     realized_r = serializers.FloatField(allow_null=True)
     status = serializers.ChoiceField(choices=["OK", "NO_DATA", "NO_STRUCTURE"])
+    # Producer-side freshness of the daily lead-in/trailing CONTEXT band (PR
+    # #912). "OK" = full band; "reused"/"in_trade_only" = band deadline-starved,
+    # trade itself fully rendered; null on legacy rows predating the stamp.
+    context = serializers.ChoiceField(  # pyright: ignore[reportAssignmentType]
+        # Field name shadows the inherited DRF Serializer.context property — safe at
+        # runtime because the ModelSerializer/Serializer metaclass pops declared
+        # Field attributes into _declared_fields before the class body settles, so
+        # the base property survives on the instance. pyright doesn't model that
+        # metaclass rewrite and reports reportAssignmentType against the property.
+        choices=["OK", "reused", "in_trade_only"],
+        allow_null=True,
+    )
     bars = ChartBarSerializer(many=True)
     price_lines = ChartPriceLinesSerializer()
     markers = ChartMarkerSerializer(many=True)
@@ -243,6 +255,10 @@ class EdgeSummarySerializer(serializers.Serializer):
     whatif = WhatIfPanelSerializer()
     deployment = DeploymentPanelSerializer()
     open_positions = OpenPositionsSerializer()
+    # ISO-8601 UTC timestamp of the last COMPLETED enrichment run (the settled
+    # watermark). Drives the /edge "last computed X ago" banner. Null before the
+    # first watermarked run.
+    enriched_at = serializers.DateTimeField(allow_null=True)
 
 
 class EdgeExcessPointSerializer(serializers.Serializer):

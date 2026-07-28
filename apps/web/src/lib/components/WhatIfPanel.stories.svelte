@@ -23,6 +23,7 @@
 		n_gate_threshold: 30,
 		benchmark: 'SPY',
 		metric_note: 'excess-of-benchmark, gross of cost, mechanical ladder',
+		enriched_at: '2026-01-01T06:30:00Z',
 		edge: {
 			status: 'ok',
 			n_matured: 118,

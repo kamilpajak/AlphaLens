@@ -93,6 +93,18 @@ class EdgeSummaryView(APIView):
 
         rows = list(qs.values(*_LADDER_FIELD_NAMES))
         payload = build_edge_summary(rows)
+
+        # Import the MODULE (not the names) and read the dir attribute at call
+        # time so a test's monkeypatch.setattr on the module constant takes
+        # effect — DEFAULT_LADDER_OUTCOMES_DIR is otherwise import-frozen.
+        from datetime import datetime, timezone as _tz
+
+        from edge.ingest import parquet as _ingest
+
+        watermark = _ingest.read_ingest_watermark(_ingest.DEFAULT_LADDER_OUTCOMES_DIR)
+        payload["enriched_at"] = (
+            datetime.fromtimestamp(watermark, tz=_tz.utc) if watermark is not None else None
+        )
         return Response(EdgeSummarySerializer(payload).data)
 
 

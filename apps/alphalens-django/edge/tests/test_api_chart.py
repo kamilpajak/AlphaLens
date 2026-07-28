@@ -259,3 +259,25 @@ def test_chart_endpoint_is_auth_gated(tmp_path: Path) -> None:
         else:
             EdgeChartView.permission_classes = original
     assert resp.status_code == 401
+
+
+@pytest.mark.django_db
+def test_chart_endpoint_exposes_context_from_payload(tmp_path: Path) -> None:
+    """Producer-side freshness stamp (PR #912) surfaces on the chart response."""
+    payload = {**_OK_PAYLOAD, "context": "reused"}
+    _write_and_ingest(tmp_path, [_row("BIO", chart_payload_json=json.dumps(payload))])
+
+    resp = APIClient().get(f"/v1/edge/chart/{_BRIEF_DATE}/BIO")
+    assert resp.status_code == 200
+    assert resp.json()["context"] == "reused"
+
+
+@pytest.mark.django_db
+def test_chart_endpoint_context_null_when_absent(tmp_path: Path) -> None:
+    """A legacy payload predating the PR #912 stamp has no ``context`` key."""
+    payload = {k: v for k, v in _OK_PAYLOAD.items() if k != "context"}
+    _write_and_ingest(tmp_path, [_row("BIO", chart_payload_json=json.dumps(payload))])
+
+    resp = APIClient().get(f"/v1/edge/chart/{_BRIEF_DATE}/BIO")
+    assert resp.status_code == 200
+    assert resp.json()["context"] is None

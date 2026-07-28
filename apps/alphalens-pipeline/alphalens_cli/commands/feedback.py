@@ -13,7 +13,10 @@ need on that path).
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +33,34 @@ feedback_app = typer.Typer(
 # Per-user runtime data root (``~/.alphalens``). Holds the daily thematic brief
 # parquets the broker-free population replay reads.
 _ALPHALENS_HOME = Path.home() / ".alphalens"
+
+# Settled-watermark sentinel: written after ALL enrichment passes finish so the
+# Django mirror can tell a completed run's parquets ("settled") from a half-run
+# mid-rewrite. Content carries an explicit epoch (not the file mtime) so a
+# backup/rsync pass that rewrites file mtimes cannot corrupt the watermark. The
+# name is intentionally not ``*.parquet`` so the ingest's ``_scan_parquets`` glob
+# skips it. See docs/research/edge_enrichment_completion_stamp_design_2026_07_28.md.
+_INGEST_WATERMARK_NAME = ".ingest_watermark.json"
+
+
+def _write_ingest_watermark(store_dir: Path) -> None:
+    """Stamp ``store_dir`` as settled as of now. Never raises. Atomic.
+
+    ``completed_at`` is captured AFTER the last pass returns, so it is strictly
+    greater than every parquet ``st_mtime`` written during the run. The Django
+    ingest only trusts a parquet whose mtime is <= this watermark. Written via
+    tmp + ``os.replace`` so a mirror never reads a torn sentinel (a torn read
+    would fall back to the pure mtime gate and re-open the race for that tick).
+    """
+    try:
+        if not store_dir.exists():
+            return
+        sentinel = store_dir / _INGEST_WATERMARK_NAME
+        tmp = sentinel.with_suffix(sentinel.suffix + ".tmp")
+        tmp.write_text(json.dumps({"completed_at": time.time()}))
+        os.replace(tmp, sentinel)
+    except Exception:
+        logger.exception("failed to write ingest watermark; continuing")
 
 
 # NOTE: the command name ``backfill-shadow-returns`` is retained for the existing
@@ -76,8 +107,6 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     the chart pass gets its own deadline at the full ``total`` so it can never be
     starved to zero by a grown upstream backlog.
     """
-    import os
-
     # Two deadlines, one pool: the upstream passes (replay + benchmark/sector/size)
     # share ``total - reserve`` while the chart pass gets its own deadline carrying
     # the full ``total``. Both anchor at the same wall-clock start, so the chart
@@ -134,6 +163,17 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     _enrich_population_sector_excess(deadline=deadline)
     _enrich_population_size_fields(briefs_dir, deadline=deadline)
     _enrich_population_chart_payloads(briefs_dir, deadline=chart_deadline)
+
+    # Final step: stamp the store as settled so the mirror ingests the COMPLETE
+    # multi-pass state (never a mid-run half-state). Every pass above is swallow-all
+    # (replay is inside a try/except; each _enrich_* "never raises"), so this
+    # advances on EVERY run that reaches here — i.e. every run that is NOT
+    # process-killed (SIGTERM at TimeoutStartSec / OOM). A killed run leaves its
+    # half-rewritten parquets at mtime > the PREVIOUS watermark, so the mirror
+    # skips them and /edge holds the last complete state. Columns from an
+    # internally-failed-but-completed pass are honestly degraded by that pass's own
+    # guard (benchmark -> NULL/#847 pending; chart -> last-good), NOT withheld.
+    _write_ingest_watermark(_ALPHALENS_HOME / "population_ladders")
 
 
 def _enrich_population_size_fields(briefs_dir: Path, *, deadline: Any = None) -> None:
