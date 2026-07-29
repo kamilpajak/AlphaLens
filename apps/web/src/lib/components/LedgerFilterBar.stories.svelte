@@ -55,6 +55,18 @@
 		}
 	];
 
+	// Def-less chips: the theme facet on /brief/<date> and /briefs — tags are
+	// self-explanatory, so the chips carry no ChipTip definition and render as
+	// bare buttons. Keys drawn from real theme tags in
+	// tests/fixtures/api-mock/days/2026-05-18.json.
+	const THEME_CHIPS = [
+		{ key: 'ALL', label: 'all', count: 16, tone: 'text-fg-muted border-grid' },
+		{ key: 'promotions', label: '#promotions', count: 4, tone: 'text-fg-muted border-grid' },
+		{ key: 'retail', label: '#retail', count: 3, tone: 'text-fg-muted border-grid' },
+		{ key: 'IPO', label: '#IPO', count: 3, tone: 'text-fg-muted border-grid' },
+		{ key: 'discounts', label: '#discounts', count: 2, tone: 'text-fg-muted border-grid' }
+	];
+
 	const { Story } = defineMeta({
 		title: 'Primitives/LedgerFilterBar',
 		component: LedgerFilterBar,
@@ -120,6 +132,26 @@
 				chips={SAMPLE_CHIPS}
 				allKey="ALL"
 				selected={new Set(['SL_HIT'])}
+			/>
+		</div>
+	{/snippet}
+</Story>
+
+<!-- (3) Def-less chips (theme facet) — bare buttons, no ChipTip wrappers. -->
+<Story
+	name="Without tooltips (def-less chips)"
+	play={async ({ canvas, canvasElement }) => {
+		await waitFor(() => expect(canvas.getByText('#promotions')).toBeVisible());
+		expect(canvasElement.querySelector('[data-testid="chip-tip"]')).toBeNull();
+	}}
+>
+	{#snippet template()}
+		<div style="padding: 4rem 6rem;">
+			<LedgerFilterBar
+				label="theme"
+				chips={THEME_CHIPS}
+				allKey="ALL"
+				selected={new Set()}
 			/>
 		</div>
 	{/snippet}

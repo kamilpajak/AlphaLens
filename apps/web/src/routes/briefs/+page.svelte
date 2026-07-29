@@ -41,20 +41,18 @@
 
 	const sortedDays = $derived(sortDays(filteredDays, sortKey, sortDir));
 
-	// Top-theme facet chips (count-desc). Themes carry no formal definition, so the
-	// ChipTip just names the tag.
+	// Top-theme facet chips (count-desc). Theme tags are self-explanatory, so no
+	// defs — no tooltips.
 	const themeChips = $derived(
 		buildFilterChips(
 			deriveFacet(data.days, (d) => d.top_theme),
 			{
 				all: {
 					count: data.days.length,
-					tone: 'text-fg-muted border-grid',
-					def: 'Show every brief day.'
+					tone: 'text-fg-muted border-grid'
 				},
 				label: (k) => `#${k}`,
-				tone: () => 'text-fg-muted border-grid',
-				def: (k) => `Days whose top theme is "${k}".`
+				tone: () => 'text-fg-muted border-grid'
 			}
 		)
 	);
