@@ -377,7 +377,9 @@ class ProtectionView:
 
     ``planned_by_uic`` supplies the plan PRICES the broker cannot know, joined by
     uic. ``oco_unsupported`` is the persisted per-instrument capability flag
-    (Stage 2)."""
+    (Stage 2) UNIONED with unexpired transient ``oco_too_far`` markers (a
+    TooFarFromMarket reject degrades the uic only for a TTL — see
+    ``control_loop.build_protection_view``)."""
 
     long_positions: Mapping[int, Position]  # uic -> netted long, quantity > _QTY_EPS
     all_positions: Mapping[int, Position]  # includes flats/shorts (orphan + short arms)

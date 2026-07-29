@@ -157,6 +157,26 @@ class TestStandaloneStopSafety(unittest.TestCase):
         self.assertEqual(stub.place_calls, [], "a failed precheck must block the real POST")
         self.assertIn("OrderValueToSmall", str(ctx.exception))
 
+    def test_saxo_form_side_rejected_before_any_http(self):
+        # Incident 2026-07: an ad-hoc probe passed the Saxo-form side="Sell";
+        # the body builder's else-Buy fallback silently flipped it into a BUY
+        # stop that later FIRED at the open and bought stock. Any non-canonical
+        # side must raise BEFORE any client call.
+        broker, stub = _make(_StubStopClient())
+        for bad_side in ("Sell", "Buy", "sell", "buy", ""):
+            with self.subTest(side=bad_side):
+                with mock.patch.dict("os.environ", _ALLOW):
+                    with self.assertRaises(ValueError) as ctx:
+                        broker.place_standalone_stop(
+                            uic=307, side=bad_side, qty=2, stop_price=61.36
+                        )
+                message = str(ctx.exception)
+                self.assertIn("'BUY'", message)
+                self.assertIn("'SELL'", message)
+                self.assertIn("NOT accepted", message, "message must name the rejected Saxo form")
+        self.assertEqual(stub.precheck_calls, [], "an invalid side must never precheck")
+        self.assertEqual(stub.place_calls, [], "an invalid side must never POST")
+
     def test_unsupported_stop_type_rejected_pre_post(self):
         no_stop = dict(_DETAILS_KO)
         no_stop["SupportedOrderTypes"] = ["Limit", "Market"]

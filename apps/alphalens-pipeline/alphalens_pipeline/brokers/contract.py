@@ -51,7 +51,8 @@ class OrderRejectedError(BrokerError):
     (set in ``SaxoBroker._precheck_or_raise``); ``None`` when the rejection
     carried no structured code. Safety branches classify on this STRUCTURED
     code (see :func:`_is_sell_orders_already_exist` /
-    :func:`_is_too_far_from_entry`), never by parsing the message string —
+    :func:`_is_too_far_from_entry` / :func:`_is_too_far_from_market`),
+    never by parsing the message string —
     string parsing is brittle and rots silently.
     """
 
@@ -94,6 +95,19 @@ def _is_too_far_from_entry(e: BrokerError) -> bool:
     OCO bracket child.
     """
     return isinstance(e, OrderRejectedError) and e.error_code == "TooFarFromEntryOrder"
+
+
+def _is_too_far_from_market(e: BrokerError) -> bool:
+    """True iff ``e`` is Saxo's ``TooFarFromMarket`` rejection.
+
+    A PRICE-dependent reject: the order's trigger/limit distance from the
+    CURRENT market breached Saxo's per-instrument bound — typical at a
+    volatile open (VRNS incident 2026-07-29). Transient by nature (the same
+    order placed after prices settle succeeds), so callers must NOT treat it
+    as a permanent instrument incapability. Distinct from the sibling
+    ``TooFarFromEntryOrder`` (bracket-child geometry vs the ENTRY price).
+    """
+    return isinstance(e, OrderRejectedError) and e.error_code == "TooFarFromMarket"
 
 
 # --------------------------------------------------------------------------

@@ -230,6 +230,22 @@ class TestAmendSafety(unittest.TestCase):
                 self.assertIn(ALLOW_ORDERS_ENV, str(ctx.exception))
         self.assertEqual(stub.amend_calls, [], "gate must fire before any PATCH")
 
+    def test_saxo_form_side_rejected_before_any_http(self):
+        # Incident 2026-07 (standalone-stop probe): the Saxo-form side "Sell"
+        # fell into the else-Buy fallback and silently flipped direction. The
+        # same fallback lived in the amend body builder — any non-canonical
+        # side must raise BEFORE any client call.
+        broker, stub = _make(_StubAmendClient())
+        for bad_side in ("Sell", "Buy", "sell", "buy", ""):
+            with self.subTest(side=bad_side):
+                with self.assertRaises(ValueError) as ctx:
+                    _amend(broker, side=bad_side)
+                message = str(ctx.exception)
+                self.assertIn("'BUY'", message)
+                self.assertIn("'SELL'", message)
+                self.assertIn("NOT accepted", message, "message must name the rejected Saxo form")
+        self.assertEqual(stub.amend_calls, [], "an invalid side must never PATCH")
+
     def test_non_finite_stop_price_rejected_before_patch(self):
         broker, stub = _make(_StubAmendClient())
         with self.assertRaises(OrderRejectedError):

@@ -1146,6 +1146,108 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
         self.assertTrue(alerts, "the orders-disabled state is surfaced (throttled)")
 
 
+class TestExecuteB0TooFarFromMarketTransient(unittest.TestCase):
+    """A ``TooFarFromMarket`` OCO reject is PRICE-dependent and transient (VRNS
+    incident 2026-07-29: one volatile open must not permanently degrade the uic
+    to stop-only). The executor journals a timestamped ``oco_too_far`` TTL marker
+    instead of the permanent ``oco_unsupported`` flag; the CURRENT fill is still
+    covered by the fallback stop (never-naked first, unchanged)."""
+
+    def test_too_far_reject_journals_ttl_marker_not_permanent(self) -> None:
+        with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
+            journal = Path(d) / "standalone_stops.jsonl"
+            alerts: list[str] = []
+            broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+            calls: list = []
+            placer = _oco_placer(
+                calls, error=OrderRejectedError("too far", error_code="TooFarFromMarket")
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to(alerts), place_oco_exit=placer
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_b0_action(), False, report)  # must NOT raise
+                lines = list(cl._iter_standalone_stop_journal())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(
+            len(broker.placed), 1, "the naked fill is covered by a plain standalone stop"
+        )
+        self.assertEqual(broker.placed[0][:4], (_UIC, "SELL", 46.0, 216.48))
+        self.assertEqual(report.exits_placed, 1)
+        self.assertNotIn(
+            _UIC,
+            cl._fold_oco_unsupported(lines),
+            "a transient TooFarFromMarket must NOT write the permanent marker",
+        )
+        markers = [line for line in lines if line.get("kind") == "oco_too_far"]
+        self.assertEqual(
+            [m.get("uic") for m in markers], [_UIC], "a timestamped oco_too_far marker journaled"
+        )
+        self.assertIn("ts", markers[0], "the marker is timestamped so the TTL fold can expire it")
+
+    def test_structural_reject_still_marks_permanent_no_ttl_marker(self) -> None:
+        with TemporaryDirectory() as d, mock.patch.dict(os.environ, _OCO_ON):
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+            placer = _oco_placer(
+                [], error=OrderRejectedError("bad OCO", error_code="OrderRelationInvalid")
+            )
+            executor = cl._make_protection_executor(broker, _throttle_to([]), place_oco_exit=placer)
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_b0_action(), False, cl.TickReport())
+                lines = list(cl._iter_standalone_stop_journal())
+        self.assertIn(_UIC, cl._fold_oco_unsupported(lines), "structural reject stays permanent")
+        self.assertEqual(
+            [line for line in lines if line.get("kind") == "oco_too_far"],
+            [],
+            "no TTL marker on a structural reject",
+        )
+
+
+class TestBuildProtectionViewOcoTooFarTtl(unittest.TestCase):
+    """The view folds unexpired ``oco_too_far`` markers into the EXISTING
+    ``ProtectionView.oco_unsupported`` set (union with the permanent markers), so
+    all downstream B0 logic is untouched and the uic re-qualifies for OCO on
+    fresh fills once the TTL expires. Permanent markers never expire."""
+
+    def _broker(self) -> _ProtBroker:
+        return _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
+
+    def test_fresh_too_far_marker_degrades_transiently(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                cl._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - 30.0)  # 30s ago
+                view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
+        self.assertIn(_UIC, view.oco_unsupported, "an unexpired oco_too_far degrades the uic")
+
+    def test_expired_too_far_marker_re_enables_oco(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                cl._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - cl._OCO_TOO_FAR_TTL_S - 1.0)
+                view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
+        self.assertNotIn(
+            _UIC, view.oco_unsupported, "an expired oco_too_far re-enables OCO for fresh fills"
+        )
+
+    def test_permanent_marker_never_expires(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                cl._mark_oco_unsupported(_UIC)
+                # A clock arbitrarily far in the future — the permanent marker
+                # (no ts) is TTL-immune; clearing it is a manual operator action.
+                view = cl.build_protection_view(
+                    self._broker(), [], clock=lambda: 10.0 * cl._OCO_TOO_FAR_TTL_S
+                )
+        self.assertIn(_UIC, view.oco_unsupported, "a permanent oco_unsupported stays forever")
+
+
 class TestExecuteB0UnderKill(unittest.TestCase):
     """Under KILL a B0 naked fill still needs covering — no OCO churn (a new OCO is
     order churn, not exposure reduction), but a plain standalone stop IS placed (it
@@ -1667,6 +1769,72 @@ class TestAlertThrottleByUicReason(unittest.TestCase):
         # A fresh streak starts from zero (no escalation on the very next failure).
         throttle.record_place_failure(7, "fail-again")
         self.assertFalse(any("CRITICAL" in s for s in sent))
+
+
+class TestAlertSinkJournalsToLogger(unittest.TestCase):
+    """VRNS incident 2026-07-29: alerts went to Telegram ONLY, so journalctl greps
+    came back empty mid-incident. Every alert the sink actually emits must ALSO be
+    logger.warning'd (journald) BEFORE the Telegram send — at the sink seam, not
+    the ~30 call sites."""
+
+    def test_journaled_alert_logs_message_before_telegram_send(self) -> None:
+        sent: list[str] = []
+        sink = cl._journaled_alert(sent.append)
+        with self.assertLogs(cl.logger, level="WARNING") as captured:
+            sink("OCO rejected uic 123: stop deferred")
+        self.assertEqual(sent, ["OCO rejected uic 123: stop deferred"])
+        self.assertTrue(
+            any("OCO rejected uic 123: stop deferred" in line for line in captured.output),
+            captured.output,
+        )
+
+    def test_journaled_alert_logs_even_when_telegram_send_raises(self) -> None:
+        def _exploding_send(message: str) -> None:
+            raise RuntimeError("telegram down")
+
+        sink = cl._journaled_alert(_exploding_send)
+        with self.assertLogs(cl.logger, level="WARNING") as captured:
+            with contextlib.suppress(RuntimeError):
+                sink("stop deferred — sell-commit not yet released")
+        self.assertTrue(
+            any("sell-commit not yet released" in line for line in captured.output),
+            captured.output,
+        )
+
+    def test_default_alert_sink_journals_every_message(self) -> None:
+        client = mock.Mock()
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "42"},
+                clear=False,
+            ),
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.telegram_client.TelegramClient",
+                return_value=client,
+            ),
+        ):
+            sink = cl._default_alert()
+        with self.assertLogs(cl.logger, level="WARNING") as captured:
+            sink("orphan (placed but never journaled): X")
+        self.assertTrue(
+            any("orphan (placed but never journaled): X" in line for line in captured.output),
+            captured.output,
+        )
+        client.send_message.assert_called_once_with(
+            "42", "orphan (placed but never journaled): X", parse_mode=""
+        )
+
+    def test_throttle_suppressed_repeat_does_not_log(self) -> None:
+        sent: list[str] = []
+        throttle = cl._AlertThrottle(
+            cl._journaled_alert(sent.append), clock=lambda: 0.0, interval_s=1800.0
+        )
+        with self.assertLogs(cl.logger, level="WARNING"):
+            self.assertTrue(throttle.emit("naked", uic=1, reason="deficit"))
+        with self.assertNoLogs(cl.logger, level="WARNING"):
+            self.assertFalse(throttle.emit("naked", uic=1, reason="deficit"))
+        self.assertEqual(sent, ["naked"])
 
 
 class TestPerCallBrokerErrorBoundary(unittest.TestCase):
@@ -2539,6 +2707,9 @@ def _rich_standalone_stop_journal() -> list[dict[str, Any]]:
         # amend_failed — newer ts governs.
         {"kind": "amend_failed", "uic": uic_b, "ts": 100.0},
         {"kind": "amend_failed", "uic": uic_b, "ts": 300.0},
+        # oco_too_far — transient TooFarFromMarket TTL marker; newer ts governs.
+        {"kind": "oco_too_far", "uic": uic_b, "ts": 150.0},
+        {"kind": "oco_too_far", "uic": uic_b, "ts": 280.0},
         # amend_seq — the max per uic is what _read_persisted_amend_seq returns.
         {"kind": "amend_seq", "uic": uic_a, "seq": 0},
         {"kind": "amend_seq", "uic": uic_a, "seq": 1},
@@ -2583,7 +2754,7 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
             cl._fold_oco_unsupported(original),
             cl._fold_oco_unsupported(compacted),
         )
-        for kind in ("oco_placed", "amend_failed"):
+        for kind in ("oco_placed", "amend_failed", "oco_too_far"):
             for now in (300.0, 1000.0):
                 self.assertEqual(
                     cl._fold_ttl_markers(original, kind, now, 120.0),
@@ -2595,14 +2766,16 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
         compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
         kinds = [line["kind"] for line in compacted]
         # 3 planned (crid-A0 newest, crid-A1, crid-B0), 1 oco_unsupported,
-        # 1 oco_placed, 1 amend_failed, 2 amend_seq (one per uic). No gen/malformed.
+        # 1 oco_placed, 1 amend_failed, 1 oco_too_far, 2 amend_seq (one per uic).
+        # No gen/malformed.
         self.assertEqual(kinds.count("planned"), 3)
         self.assertEqual(kinds.count("oco_unsupported"), 1)
         self.assertEqual(kinds.count("oco_placed"), 1)
         self.assertEqual(kinds.count("amend_failed"), 1)
+        self.assertEqual(kinds.count("oco_too_far"), 1)
         self.assertEqual(kinds.count("amend_seq"), 2)
         self.assertNotIn("gen", kinds)
-        self.assertEqual(len(compacted), 8)
+        self.assertEqual(len(compacted), 9)
 
     def test_newest_planned_per_crid_survives(self) -> None:
         compacted = cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal())
@@ -2669,7 +2842,7 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
                 self.assertEqual(oco_before, cl._fold_oco_unsupported(after_lines))
                 self.assertEqual(seq_a_before, cl._read_persisted_amend_seq(111))
                 self.assertEqual(seq_b_before, cl._read_persisted_amend_seq(222))
-                for kind in ("oco_placed", "amend_failed"):
+                for kind in ("oco_placed", "amend_failed", "oco_too_far"):
                     self.assertEqual(
                         cl._fold_ttl_markers(before_lines, kind, 300.0, 120.0),
                         cl._fold_ttl_markers(after_lines, kind, 300.0, 120.0),
