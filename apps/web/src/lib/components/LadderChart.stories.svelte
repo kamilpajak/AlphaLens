@@ -150,6 +150,46 @@
 		]
 	};
 
+	// GAP-THROUGH (PEGA 2026-07-14 case): a fast gap-down open trades through all
+	// three entry rungs AND the stop in ONE session (2026-07-22). Every tier + the
+	// SL land on the same bar, so the entry markers collapse into one "E1·E2·E3"
+	// arrow and E2/E3 get their own dashed tier lines — the case that motivated
+	// both. Real numbers from the population-ladder payload. Note the wide-range
+	// plunge bar (25.10–27.50) sits far below the E1 entry line at 29.90.
+	const GAP_THROUGH_PAYLOAD: ChartPayload = {
+		status: 'OK',
+		ticker: 'PEGA',
+		brief_date: '2026-07-14',
+		ladder_classification: 'SL_HIT',
+		terminal: true,
+		holding_days_elapsed: 0,
+		realized_r: -1.0,
+		open_r: null,
+		// Verbatim from the real payload: the plunge bar is ambiguous because the
+		// entries AND the stop resolve on that one session (sl_first), so the SL
+		// marker below carries ambiguous:true — broader than the type doc's "TP∧SL"
+		// phrasing, which is why the entries stay ambiguous:false.
+		ambiguous_bars: 1,
+		intrabar_rule: 'sl_first',
+		rth_only: true,
+		bars: [
+			bar('2026-07-14', 31.07),
+			bar('2026-07-15', 31.6),
+			bar('2026-07-16', 32.2),
+			bar('2026-07-17', 31.4),
+			bar('2026-07-20', 30.8),
+			bar('2026-07-21', 30.1),
+			{ time: '2026-07-22', open: 25.32, high: 27.5, low: 25.1, close: 25.99, volume: 3_200_000 }
+		],
+		price_lines: { entry: 29.9, tp: [38.14, 43.27, 44.62], stop: 25.91 },
+		markers: [
+			{ time: '2026-07-22', kind: 'ENTRY', level_id: 'e1', price: 29.9, label: 'E1', ambiguous: false },
+			{ time: '2026-07-22', kind: 'ENTRY', level_id: 'e2', price: 28.66, label: 'E2', ambiguous: false },
+			{ time: '2026-07-22', kind: 'ENTRY', level_id: 'e3', price: 27.57, label: 'E3', ambiguous: false },
+			{ time: '2026-07-22', kind: 'SL', level_id: 'sl', price: 25.91, label: 'SL', ambiguous: true }
+		]
+	};
+
 	const { Story } = defineMeta({
 		title: 'Data-viz/LadderChart',
 		component: LadderChart,
@@ -182,6 +222,26 @@
 	{#snippet template()}
 		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
 			<LadderChart payload={PARTIAL_CAPTURE_PAYLOAD} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- GAP-THROUGH: all three entry tiers + the stop fill in one gap-down session.
+     The entry arrows collapse to one "E1·E2·E3" mark and E2/E3 draw as dashed
+     tier lines below the E1 entry line — the fix for "entry looks level with SL"
+     and "no E2/E3". -->
+<Story
+	name="Gap-through (all tiers one bar)"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByTestId('ladder-lifecycle-chip')).toBeVisible());
+		await waitFor(() =>
+			expect(canvas.getByTestId('ladder-lifecycle-chip').textContent).toMatch(/closed/i)
+		);
+	}}
+>
+	{#snippet template()}
+		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
+			<LadderChart payload={GAP_THROUGH_PAYLOAD} />
 		</div>
 	{/snippet}
 </Story>
