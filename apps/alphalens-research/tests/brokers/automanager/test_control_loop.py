@@ -658,9 +658,19 @@ class TestPlacePickBranches(unittest.TestCase):
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
             "build_record": lambda **kw: dict(kw),
+            # Default the earnings-window gate OPEN (and hermetic — the real
+            # gate would hit the yfinance calendar); tests override to a
+            # refusal reason to exercise the gate branch.
+            "earnings_refusal": lambda *_a, **_k: None,
             **over,
         }
         p = stack.enter_context
+        p(
+            mock.patch(
+                f"{pkg}.automanager.earnings_gate.earnings_window_refusal",
+                m["earnings_refusal"],
+            )
+        )
         p(mock.patch(f"{pkg}.submission_log.build_submission_record", m["build_record"]))
         p(mock.patch(f"{pkg}.submission_log.append_submission_record", m["append"]))
         p(mock.patch(f"{pkg}.submission_log.iter_submission_records", m["iter_records"]))
@@ -698,6 +708,37 @@ class TestPlacePickBranches(unittest.TestCase):
             _PlaceBroker(), safety_check=lambda *_a, **_k: Refuse(reason="cap hit")
         )
         self.assertFalse(placer(_pick()))
+
+    def test_earnings_window_refusal_blocks_before_resolve(self) -> None:
+        # The gate refuses BEFORE resolve/size — no instrument lookup, no
+        # placement — and the pick returns False (stays queued; self-heals
+        # once the earnings date passes).
+        resolve_calls: list = []
+
+        def _spy_resolve(_b: Any, _t: Any) -> Any:
+            resolve_calls.append(_t)
+            return _instr()
+
+        placer = self._placer(
+            _PlaceBroker(),
+            earnings_refusal=lambda *_a, **_k: "earnings 2026-08-04 inside the window",
+            resolve=_spy_resolve,
+        )
+        self.assertFalse(placer(_pick()))
+        self.assertEqual(resolve_calls, [])
+
+    def test_earnings_gate_open_proceeds_to_placement(self) -> None:
+        # Companion: with the gate open (None) the pick places normally —
+        # pins that the gate wiring cannot refuse on its own.
+        placed: list = []
+        broker = _PlaceBroker(
+            on_place=lambda b: (
+                placed.append(b)
+                or type("Placed", (), {"entry_order_id": "E-1", "exit_order_ids": ()})()
+            )
+        )
+        self.assertTrue(self._placer(broker)(_pick()))
+        self.assertEqual(len(placed), 1)
 
     def test_no_instrument_currency_returns_false(self) -> None:
         placer = self._placer(_PlaceBroker(), resolve=lambda _b, _t: _instr(currency=""))
