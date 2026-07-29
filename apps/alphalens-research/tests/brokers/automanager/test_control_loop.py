@@ -1739,6 +1739,62 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
                 self.assertEqual(lines, [], f"no stop_placed on the {label} path")
 
 
+class TestOutcomeJournalIoFailureNeverBlocksProtection(unittest.TestCase):
+    """The ``stop_placed`` / ``amend_ok`` outcome records are observability-only,
+    so a fallible journal append (OSError: disk full, ENOSPC on fsync, permission)
+    must NEVER change protection behavior: the supersede cancels of the OLD stop
+    still run (never two live sell stops on the same shares), no exception escapes
+    the executor (an OSError is not a BrokerError, so it would blow through the
+    per-action boundary and kill the tick), and the failure surfaces as a
+    throttled alert only."""
+
+    def test_supersede_cancels_survive_stop_placed_journal_oserror(self) -> None:
+        alerts: list[str] = []
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, _throttle_to(alerts))
+        action = PlaceStop(
+            _UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 1), supersede_ids=("old-stop",)
+        )
+        report = cl.TickReport()
+        with mock.patch.object(
+            cl,
+            "_append_standalone_stop_journal",
+            side_effect=OSError("No space left on device"),
+        ):
+            executor(action, False, report)  # must NOT raise
+        self.assertEqual(len(broker.placed), 1)
+        self.assertEqual(
+            broker.cancelled,
+            ["old-stop"],
+            "superseded stop still cancelled — never two live sell stops on the same shares",
+        )
+        self.assertEqual(report.exits_placed, 1)
+        self.assertTrue(
+            any("journal" in a for a in alerts),
+            f"journal write failure surfaced as a throttled alert: {alerts}",
+        )
+
+    def test_amend_ok_journal_oserror_does_not_escape_executor(self) -> None:
+        alerts: list[str] = []
+        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)])
+        executor = cl._make_protection_executor(
+            broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
+        )
+        report = cl.TickReport()
+        with mock.patch.object(
+            cl,
+            "_append_standalone_stop_journal",
+            side_effect=OSError("Permission denied"),
+        ):
+            executor(_amend_action(), False, report)  # must NOT raise
+        self.assertEqual(len(broker.amended), 1, "the amend itself succeeded")
+        self.assertEqual(report.exits_placed, 1)
+        self.assertTrue(
+            any("journal" in a for a in alerts),
+            f"journal write failure surfaced as a throttled alert: {alerts}",
+        )
+
+
 class TestIdempotentCancelNoThrash(unittest.TestCase):
     """A-S5: cancelling an already-gone order is a success, not a raise."""
 

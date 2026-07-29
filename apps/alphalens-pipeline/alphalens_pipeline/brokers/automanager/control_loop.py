@@ -1819,6 +1819,33 @@ def _emit_alert(
         report.alerts += 1
 
 
+def _journal_outcome_best_effort(
+    append: Callable[[], None],
+    throttle: _AlertThrottle,
+    report: TickReport,
+    *,
+    uic: int,
+    kind: str,
+) -> None:
+    """Best-effort append of an observability-only outcome record (``stop_placed``
+    / ``amend_ok``). The journal write is fallible I/O (``mkdir``/``open``/``fsync``
+    raise ``OSError`` on disk full, ENOSPC, permission) and an ``OSError`` is NOT a
+    ``BrokerError``, so unhandled it would blow through the per-action boundary in
+    ``_run_protection_pass`` and abort the tick mid-protection. An outcome record
+    is read by nothing in the protection logic, so its failure must never change
+    protection behavior — swallow to a throttled alert."""
+    try:
+        append()
+    except OSError as exc:
+        _emit_alert(
+            throttle,
+            report,
+            f"uic {uic}: {kind} outcome journal write failed — {exc}",
+            uic=uic,
+            reason="outcome-journal-io",
+        )
+
+
 # Message tokens that mean "the order is already gone" — an idempotent cancel of
 # an already-cancelled / cascade-removed sibling must be a success, not a raise
 # (saxo-oco memo §5). Cancel carries no structured code, so classify on the
@@ -2185,7 +2212,13 @@ def _execute_amend_stop(
     report.exits_placed += 1
     throttle.record_place_success(action.uic)
     # Outcome record with the qty the stop was amended to (live-clamped target).
-    _journal_amend_ok(action.uic, target)
+    _journal_outcome_best_effort(
+        lambda: _journal_amend_ok(action.uic, target),
+        throttle,
+        report,
+        uic=action.uic,
+        kind="amend_ok",
+    )
 
 
 def _execute_place_stop(
@@ -2243,13 +2276,24 @@ def _execute_place_stop(
 
     report.exits_placed += 1
     throttle.record_place_success(action.uic)
-    # Outcome record with the qty ACTUALLY placed (post-clamp), never action.qty.
-    _journal_stop_placed(action.uic, qty)
     # Cancel the OLD / stale / smaller stop only AFTER the new one is confirmed —
-    # never a naked window on the shares that were already covered.
+    # never a naked window on the shares that were already covered. The
+    # confirmed-place -> supersede-cancel adjacency is safety-critical (a break
+    # between them leaves TWO live sell stops on the same shares, the double-sell
+    # class killed in #878), so nothing fallible may sit between them.
     for order_id in action.supersede_ids:
         _idempotent_cancel(broker, order_id)
         report.cancels += 1
+    # Outcome record with the qty ACTUALLY placed (post-clamp), never action.qty.
+    # AFTER the supersede cancels: the record is observability-only (read by
+    # nothing), so its ordering is irrelevant — its failure mode is not.
+    _journal_outcome_best_effort(
+        lambda: _journal_stop_placed(action.uic, qty),
+        throttle,
+        report,
+        uic=action.uic,
+        kind="stop_placed",
+    )
 
 
 __all__ = [
