@@ -9,9 +9,9 @@
 	// brand-label discipline now applies to the DeepSeek labels.
 	// The pipeline source carries exact IDs; the SPA shows brand names.
 	const layers = [
-		{ id: 'L1', name: 'EDGAR Watchdog', what: 'detects S&P 100 filings + macro news', model: 'rule-based + systemd' },
+		{ id: 'L1', name: 'EDGAR Watchdog', what: 'detects mega-cap + sector-leader filings + macro news', model: 'rule-based + systemd' },
 		{ id: 'L2', name: 'Theme Extraction', what: 'distills news → tradeable thematic narrative', model: MODELS.FLASH },
-		{ id: 'L3', name: 'Beneficiary Mapping', what: 'theme → 5-15 small-cap second-order beneficiaries (≤3 shipped per theme)', model: MODELS.PRO },
+		{ id: 'L3', name: 'Beneficiary Mapping', what: 'theme → 5-15 small/mid-cap second-order beneficiaries (≤3 shipped per theme)', model: MODELS.PRO },
 		{ id: 'V', name: 'Verification Gates', what: 'press · insider · 10-K (tri-state, post-PR #150; ETF dropped #185)', model: 'polygon + form-4 parquet + EDGAR' },
 		{ id: 'L4', name: 'Quant Scorer', what: 'insider × FCFF × Magic Formula × technicals × catalyst-floor', model: 'reused paradigm #11 + #13 scorers' },
 		{ id: 'L5', name: 'Brief Generator', what: 'per-candidate WhatsApp-format markdown', model: MODELS.PRO_OR_FLASH }
