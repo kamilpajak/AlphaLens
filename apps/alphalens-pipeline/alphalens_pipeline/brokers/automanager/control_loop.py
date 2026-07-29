@@ -51,6 +51,7 @@ from alphalens_pipeline.brokers.contract import (
     SupportsOcoExit,
     SupportsStandaloneStop,
     _is_sell_orders_already_exist,
+    _is_too_far_from_market,
 )
 
 if TYPE_CHECKING:
@@ -1026,7 +1027,12 @@ def _fold_oco_unsupported(lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
     A uic marked once stays marked (append-only, so a rebuilt view after a restart
     still carries the flag and ``_reconcile_long`` degrades the covered branch to
     ``NoOp`` -> no re-attempt churn). Non-``oco_unsupported`` and malformed lines
-    (missing / unparsable uic) are skipped."""
+    (missing / unparsable uic) are skipped.
+
+    Clearing a permanent marker is a MANUAL operator action (delete its journal
+    line while the daemon is stopped) — there is no un-mark fold. Markers written
+    before the transient ``oco_too_far`` split (e.g. VRNS's from the 2026-07-29
+    TooFarFromMarket open) keep their permanent stop-only meaning."""
     disabled: set[int] = set()
     for line in lines:
         if line.get("kind") != "oco_unsupported":
@@ -1044,6 +1050,28 @@ def _fold_oco_unsupported(lines: Iterable[Mapping[str, Any]]) -> frozenset[int]:
 # Tune after observing real SIM list-orders propagation lag + amend-retry cadence.
 _OCO_PLACED_TTL_S = 120.0
 _AMEND_FAILED_TTL_S = 120.0
+
+# A TooFarFromMarket OCO reject is PRICE-dependent, not an instrument
+# incapability: Saxo bounds the exit's distance from the CURRENT market, so a
+# volatile open (VRNS incident 2026-07-29) rejects a bracket that succeeds once
+# prices settle. 15 min — deliberately longer than the 120s folds above — rides
+# out the opening dislocation instead of thrashing B0 retries against a
+# still-moving price, while re-qualifying the uic for OCO the same session.
+# Only FRESH naked fills consult it (B0), and the rejected fill is already
+# covered by the fallback stop, so the longer TTL costs nothing in churn.
+_OCO_TOO_FAR_TTL_S = 900.0
+
+
+def _journal_oco_too_far(uic: int, *, clock: Callable[[], float] = time.time) -> None:
+    """Persist a timestamped ``oco_too_far`` marker (overnight-drift memo, action 5).
+
+    Written by the B0 executor on a clean ``TooFarFromMarket`` OCO reject
+    INSTEAD of the permanent ``oco_unsupported`` flag. ``build_protection_view``
+    unions markers newer than ``_OCO_TOO_FAR_TTL_S`` into the EXISTING
+    ``ProtectionView.oco_unsupported`` set, so downstream B0 logic is untouched
+    and the uic automatically becomes OCO-eligible again for fresh fills once
+    the TTL expires."""
+    _append_standalone_stop_journal({"kind": "oco_too_far", "uic": int(uic), "ts": float(clock())})
 
 
 def _journal_oco_placed(uic: int, *, clock: Callable[[], float] = time.time) -> None:
@@ -1161,9 +1189,9 @@ def _compact_standalone_stop_journal_lines(
         tie), so ``_fold_planned_exits`` is unchanged;
       - ONE ``oco_unsupported`` per uic (``_fold_oco_unsupported`` only needs the
         uic present);
-      - the NEWEST (max ``ts``) ``oco_placed`` / ``amend_failed`` per uic — the
-        TTL fold's membership for ANY ``now`` is decided by the newest marker, so
-        older ones are redundant;
+      - the NEWEST (max ``ts``) ``oco_placed`` / ``amend_failed`` / ``oco_too_far``
+        per uic — the TTL fold's membership for ANY ``now`` is decided by the
+        newest marker, so older ones are redundant;
       - the ``amend_seq`` carrying the MAX seq per uic (``_read_persisted_amend_seq``
         returns that max).
 
@@ -1186,6 +1214,7 @@ def _compact_standalone_stop_journal_lines(
     ttl_latest: dict[str, dict[int, tuple[float, dict[str, Any]]]] = {
         "oco_placed": {},
         "amend_failed": {},
+        "oco_too_far": {},
     }
     amend_seq: dict[int, tuple[float, dict[str, Any]]] = {}
 
@@ -1210,6 +1239,7 @@ def _compact_standalone_stop_journal_lines(
     compacted.extend(
         ttl_latest["amend_failed"][uic][1] for uic in sorted(ttl_latest["amend_failed"])
     )
+    compacted.extend(ttl_latest["oco_too_far"][uic][1] for uic in sorted(ttl_latest["oco_too_far"]))
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
     return compacted
 
@@ -1628,7 +1658,10 @@ def build_protection_view(
     ONCE here so both folds see the same lines (a second pass over the generator
     would be empty). Stage 3 additionally folds the timestamped ``oco_placed`` /
     ``amend_failed`` markers against ``clock`` (default wall clock; injected in
-    tests) into the TTL sets ``oco_recently_placed`` / ``amend_recently_failed``."""
+    tests) into the TTL sets ``oco_recently_placed`` / ``amend_recently_failed``.
+    Unexpired ``oco_too_far`` markers (transient TooFarFromMarket rejects) are
+    unioned into ``oco_unsupported`` itself, so the degrade self-clears after
+    ``_OCO_TOO_FAR_TTL_S`` with no downstream branching change."""
     all_positions: dict[int, Position] = {}
     for pos in broker.get_positions():
         uic = _position_uic(pos)
@@ -1664,7 +1697,11 @@ def build_protection_view(
         all_positions=all_positions,
         sell_legs_by_uic={uic: tuple(legs) for uic, legs in sell_legs.items()},
         planned_by_uic=_fold_planned_exits(journal_lines),
-        oco_unsupported=_fold_oco_unsupported(journal_lines),
+        # Permanent capability markers UNION unexpired transient oco_too_far
+        # markers — a TooFarFromMarket reject degrades the uic only for
+        # _OCO_TOO_FAR_TTL_S, after which fresh fills re-qualify for OCO.
+        oco_unsupported=_fold_oco_unsupported(journal_lines)
+        | _fold_ttl_markers(journal_lines, "oco_too_far", now, _OCO_TOO_FAR_TTL_S),
         oco_recently_placed=_fold_ttl_markers(journal_lines, "oco_placed", now, _OCO_PLACED_TTL_S),
         amend_recently_failed=_fold_ttl_markers(
             journal_lines, "amend_failed", now, _AMEND_FAILED_TTL_S
@@ -1973,14 +2010,24 @@ def _execute_upgrade_to_oco(
                 reason="oco-already",
             )
             return
-        # CLEAN structural reject (provably NOT landed): cover the naked fill NOW
-        # with a plain stop, and degrade the uic so B0 is not re-attempted on it.
-        _mark_oco_unsupported(action.uic)
+        if _is_too_far_from_market(exc):
+            # TRANSIENT price-dependent reject (VRNS incident 2026-07-29): the
+            # exit distance vs the CURRENT market failed, not the instrument's
+            # OCO capability. Journal the TTL marker, NOT the permanent flag,
+            # so fresh fills re-qualify for OCO once the open settles.
+            _journal_oco_too_far(action.uic)
+            degrade_note = f"degraded stop-only for {_OCO_TOO_FAR_TTL_S:.0f}s (transient)"
+        else:
+            # CLEAN structural reject (provably NOT landed): degrade the uic
+            # permanently so B0 is not re-attempted on it.
+            _mark_oco_unsupported(action.uic)
+            degrade_note = "degraded stop-only"
+        # Either way, cover the naked fill NOW with a plain stop (never-naked first).
         _execute_place_fallback_stop(broker, throttle, action, report)
         _emit_alert(
             throttle,
             report,
-            f"uic {action.uic}: OCO rejected ({exc}); placed fallback stop, degraded stop-only",
+            f"uic {action.uic}: OCO rejected ({exc}); placed fallback stop, {degrade_note}",
             uic=action.uic,
             reason="oco-degrade",
         )

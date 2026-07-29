@@ -45,6 +45,7 @@ from alphalens_pipeline.brokers.contract import (
     Position,
     _is_sell_orders_already_exist,
     _is_too_far_from_entry,
+    _is_too_far_from_market,
 )
 
 
@@ -296,6 +297,17 @@ class TestErrorClassifiersPositiveControl(unittest.TestCase):
         self.assertTrue(_is_too_far_from_entry(matching))
         self.assertFalse(_is_too_far_from_entry(BrokerError("boom")))
         self.assertFalse(_is_too_far_from_entry(OrderRejectedError("x", error_code="OtherCode")))
+
+    def test_too_far_from_market_matches_only_its_code(self):
+        matching = OrderRejectedError("rejected", error_code="TooFarFromMarket")
+        self.assertTrue(_is_too_far_from_market(matching))
+        self.assertFalse(_is_too_far_from_market(BrokerError("boom")))
+        self.assertFalse(_is_too_far_from_market(OrderRejectedError("x", error_code="OtherCode")))
+        # The sibling price-distance code must NOT match — TooFarFromEntryOrder
+        # is the bracket-child geometry reject, a different remediation path.
+        self.assertFalse(
+            _is_too_far_from_market(OrderRejectedError("x", error_code="TooFarFromEntryOrder"))
+        )
 
 
 class BrokerConformanceMixin:
