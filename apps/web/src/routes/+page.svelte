@@ -83,13 +83,13 @@
 			<div class="max-w-2xl mt-6 space-y-3 text-fg-dim text-sm leading-relaxed">
 				<p>
 					Mega-caps catch the headline. The structural beneficiaries are often
-					<span class="text-cyan">under-covered small-caps</span> nobody is writing about —
+					<span class="text-cyan">under-covered small/mid-caps</span> nobody is writing about —
 					that's where this pipeline looks.
 				</p>
 				<p>
-					Six times a day (every 4h, at <span class="text-amber whitespace-nowrap">HH:30 UTC</span>) it scans S&amp;P 100 news,
-					distills thematic narratives, and surfaces a ranked watchlist of small-cap
-					beneficiaries.
+					Six times a day (every 4h, at <span class="text-amber whitespace-nowrap">HH:30 UTC</span>) it scans mega-cap
+					and sector-leader news, distills thematic narratives, and surfaces a ranked
+					watchlist of small/mid-cap beneficiaries.
 				</p>
 			</div>
 
