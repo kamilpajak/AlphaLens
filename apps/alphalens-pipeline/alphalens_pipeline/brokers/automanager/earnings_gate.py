@@ -45,7 +45,15 @@ def _clear_lookup_cache_for_tests() -> None:
 
 
 def _fetch_next_earnings(*, ticker: str, asof: dt.date) -> dt.date | None:
-    """Seam over the canonical earnings-calendar helper (patchable in tests)."""
+    """Seam over the canonical earnings-calendar helper (patchable in tests).
+
+    Dependency note (deliberate, ADR-0013-legal): this is the trade side
+    (``brokers.automanager``) READING selection-side data (``thematic.sources``)
+    — the allowed direction. The enforced anti-collider rule is the REVERSE
+    (``thematic`` must never import ``brokers``: execution output must never
+    feed selection, ADR 0013 R2 / test_module_dependencies). Lazy import keeps
+    the daemon's startup path free of thematic's import cost.
+    """
     from alphalens_pipeline.thematic.sources.earnings_calendar import fetch_next_earnings
 
     return fetch_next_earnings(ticker=ticker, asof=asof)
@@ -83,7 +91,9 @@ def earnings_window_refusal(
     try:
         next_earnings = lookup(ticker=ticker, asof=today)
     except Exception as exc:
-        logger.warning("earnings gate: lookup failed for %s (%s); failing open", ticker, exc)
+        logger.warning(
+            "earnings gate: lookup failed for %s (%s); failing open", ticker, exc, exc_info=True
+        )
         return None
     if next_earnings is None:
         return None
