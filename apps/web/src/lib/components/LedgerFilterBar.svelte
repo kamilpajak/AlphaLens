@@ -34,9 +34,10 @@
 	}
 
 	// Toggle a status in/out of the selection (the ALL key clears it), then blur
-	// BOTH the button (a click focuses it) and the ChipTip wrapper (its
-	// onpointerdown focuses it) so the clicked chip's tooltip doesn't stay pinned
-	// via focus-within while the next chip is hovered (two tooltips at once).
+	// BOTH the button (a click focuses it) and, if present, the ChipTip wrapper
+	// (its onpointerdown focuses it) so the clicked chip's tooltip doesn't stay
+	// pinned via focus-within while the next chip is hovered (two tooltips at
+	// once). Def-less chips have no wrapper — closest() returns null, no-op.
 	function toggle(key: string, e: Event) {
 		if (key === allKey) {
 			selected = new Set();
