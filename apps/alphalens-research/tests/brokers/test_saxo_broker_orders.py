@@ -171,6 +171,31 @@ class TestAllowOrdersEnvGate(unittest.TestCase):
         self.assertEqual(stub.cancel_calls, [("E-100", "AK-1")])
 
 
+class TestBracketSideValidation(unittest.TestCase):
+    def test_saxo_form_side_rejected_before_any_http(self):
+        # Same incident class the standalone-stop fix closed (2026-07): the
+        # bracket body builder's else-Sell fallback silently flips any
+        # non-canonical side into a SELL entry with BUY exit children. With
+        # SELL-shaped prices the flipped bracket sails through the local
+        # geometry check, so today a bad side reaches precheck + POST. Any
+        # non-canonical side must raise BEFORE any client call.
+        broker, stub = _make_broker()
+        for bad_side in ("Buy", "Sell", "buy", "sell", ""):
+            with self.subTest(side=bad_side):
+                request = _request(
+                    side=bad_side, entry_limit=50.0, stop_loss=55.0, take_profit=45.0
+                )
+                with mock.patch.dict("os.environ", _ALLOW):
+                    with self.assertRaises(ValueError) as ctx:
+                        broker.place_bracket_order(request)
+                message = str(ctx.exception)
+                self.assertIn("'BUY'", message)
+                self.assertIn("'SELL'", message)
+                self.assertIn("NOT accepted", message, "message must name the rejected Saxo form")
+        self.assertEqual(stub.precheck_calls, [], "an invalid side must never precheck")
+        self.assertEqual(stub.place_calls, [], "an invalid side must never POST")
+
+
 class TestPrecheckGate(unittest.TestCase):
     def test_precheck_runs_before_place_and_blocks_on_not_ok(self):
         broker, stub = _make_broker(

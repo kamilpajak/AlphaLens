@@ -403,6 +403,7 @@ class SaxoBroker:
         :meth:`_handle_placement_response` (partial-acceptance auto-repair,
         honest 202).
         """
+        _require_order_side(request.side)
         if os.environ.get(ALLOW_ORDERS_ENV) != "1":
             raise BrokerCapabilityError(
                 f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
@@ -1240,8 +1241,8 @@ class SaxoBroker:
 
         manual_order = execution_policy._MANUAL_ORDER
         exit_duration = {"DurationType": execution_policy._EXIT_DURATION}
-        side = "Buy" if request.side == "BUY" else "Sell"
-        opposite = "Sell" if request.side == "BUY" else "Buy"
+        side = _SIDE_TO_SAXO_BUY_SELL[request.side]
+        opposite = _SIDE_TO_SAXO_BUY_SELL["SELL" if request.side == "BUY" else "BUY"]
 
         entry_q = self._quantize_price(request.entry_limit, details, label="entry_limit")
         tp_q = (
