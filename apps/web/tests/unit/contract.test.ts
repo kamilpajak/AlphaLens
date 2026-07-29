@@ -107,6 +107,8 @@ const TS_CANDIDATE_KEYS = [
 	'brief_template_id',
 	'brief_template_facts',
 	'brief_generated_at',
+	'brief_status',
+	'brief_error_kind',
 	'market_state',
 	'market_state_atr_pct',
 	'market_state_atr_pct_q',

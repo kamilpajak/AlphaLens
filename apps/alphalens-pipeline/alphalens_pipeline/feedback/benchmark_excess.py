@@ -214,21 +214,43 @@ def _enrich_frame_rows(
     exchange: str,
     window_cache: dict[tuple[dt.date, dt.date], float | None],
     deadline: Any,
-) -> tuple[list[float | None], list[float | None], int, bool]:
+) -> tuple[list[float | None], list[float | None], int, bool, int, int]:
     """Compute the two benchmark columns for one frame.
 
-    Returns ``(bench_col, excess_col, n_enriched, stopped_early)``. When the
-    deadline trips mid-frame the partial columns are returned with
-    ``stopped_early=True`` so the caller can leave the parquet untouched; rows
-    already processed still count toward ``n_enriched`` (matching the pre-refactor
-    behaviour where the counter incremented before the break).
+    Reuse-first: a TERMINAL row with a consistent stored ``(benchmark, excess)``
+    pair is settled — its window is frozen, so the stored pair is reused
+    verbatim with NO fetch. Only gaps (missing/inconsistent pair) and ongoing
+    rows pay a fetch. This is what lets the shared wall-clock budget reach the
+    old unbenchmarked tail instead of being spent re-fetching already-settled
+    rows every run.
+
+    Returns ``(bench_col, excess_col, n_enriched, stopped_early, n_reused,
+    n_fetched)``. When the deadline trips mid-frame the partial columns are
+    returned with ``stopped_early=True`` so the caller can leave the parquet
+    untouched; rows already processed still count toward ``n_enriched``
+    (matching the pre-refactor behaviour where the counter incremented before
+    the break).
     """
     bench_col: list[float | None] = []
     excess_col: list[float | None] = []
     n_enriched = 0
+    n_reused = 0
+    n_fetched = 0
     for _, row in df.iterrows():
         if deadline is not None and deadline.should_stop():
-            return bench_col, excess_col, n_enriched, True
+            return bench_col, excess_col, n_enriched, True, n_reused, n_fetched
+        if _has_consistent_stored_pair(row):
+            bench = float(row["benchmark_window_return"])
+            excess = float(row["market_excess_return"])
+            bench_col.append(bench)
+            excess_col.append(excess)
+            n_enriched += 1
+            n_reused += 1
+            # Seed the per-window cache so a GAP sibling in the same
+            # (arrival, exit) window is served free instead of paying its own
+            # fetch (M1).
+            _seed_window_cache_from_reused(row, window_cache, last_closed_session, exchange)
+            continue
         bench, excess = _row_excess_cached(
             dict(row),
             fetch=fetch,
@@ -237,12 +259,19 @@ def _enrich_frame_rows(
             exchange=exchange,
             window_cache=window_cache,
         )
-        bench, excess = _carry_forward_prev_pair(row, bench=bench, excess=excess)
         bench_col.append(bench)
         excess_col.append(excess)
+        # n_fetched counts rows that ENTERED the fetch branch (including rows
+        # short-circuited by a missing forward_return before any network call),
+        # NOT strictly rows that issued a Polygon call — it is the "did this
+        # frame change?" signal the M3 skip-write decision below reads. A file
+        # whose only unresolved rows are ongoing / no-forward-return is still
+        # rewritten (content unchanged, mtime bumps) — acceptable, since it
+        # never causes a needed write to be wrongly skipped.
+        n_fetched += 1
         if excess is not None:
             n_enriched += 1
-    return bench_col, excess_col, n_enriched, False
+    return bench_col, excess_col, n_enriched, False, n_reused, n_fetched
 
 
 def _is_real(value: Any) -> TypeGuard[float]:
@@ -251,40 +280,61 @@ def _is_real(value: Any) -> TypeGuard[float]:
     return value is not None and not (isinstance(value, float) and pd.isna(value))
 
 
-def _carry_forward_prev_pair(
-    row: pd.Series,
-    *,
-    bench: float | None,
-    excess: float | None,
-) -> tuple[float | None, float | None]:
-    """Preserve a previously-stored ``(benchmark, excess)`` pair on a transient miss.
+def _has_consistent_stored_pair(row: pd.Series) -> bool:
+    """True when the row is TERMINAL and already carries a benchmark/excess pair
+    consistent with its forward_return. A terminal window is fixed, so such a pair
+    is settled and needs no refetch.
 
-    Non-destructive: a transient fetch miss (``bench is None``) must NOT overwrite an
-    already-good value with NULL on this whole-store rewrite — the enrich only ever
-    FILLS a gap. Two guards keep it honest. (1) matured_at set — an ONGOING window
-    GROWS every session so an older benchmark would be stale. (2) the stored pair is
-    still CONSISTENT with the current forward_return (excess == forward - benchmark):
-    on the ongoing->terminal maturation the monitor advances forward_return but
-    carries the OLD benchmark/excess pair verbatim, so matured_at alone is
-    insufficient — a pair that no longer matches forward_return is stale and must
-    recompute, not be preserved.
-
-    Returns the incoming ``(bench, excess)`` unchanged unless the stored pair is
-    both present and consistent, in which case that pair is returned instead.
-    """
-    if bench is not None or _as_date(row.get("matured_at")) is None:
-        return bench, excess
-    prev_bench = row["benchmark_window_return"] if "benchmark_window_return" in row.index else None
-    prev_excess = row["market_excess_return"] if "market_excess_return" in row.index else None
-    forward = row["forward_return"] if "forward_return" in row.index else None
-    if (
-        _is_real(prev_bench)
-        and _is_real(prev_excess)
+    The consistency check (not just the ``matured_at`` gate) matters because of
+    the maturation-transition hazard: when an ongoing row matures, the monitor
+    advances ``forward_return`` and stamps ``matured_at`` in the SAME rewrite,
+    but a stale ``(benchmark, excess)`` pair computed against the OLD
+    ``forward_return`` can be carried forward verbatim on that write. Such a
+    pair would pass a ``matured_at``-only gate yet no longer satisfy
+    ``excess == forward - benchmark``, so it must be recomputed rather than
+    reused — this is what ``test_transient_none_drops_a_stale_pair_inconsistent_with_forward``
+    guards. (Same predicate the removed _carry_forward_prev_pair used; it now
+    lives only here.)"""
+    if _as_date(row.get("matured_at")) is None:
+        return False
+    bench = row.get("benchmark_window_return")
+    excess = row.get("market_excess_return")
+    forward = row.get("forward_return")
+    return (
+        _is_real(bench)
+        and _is_real(excess)
         and _is_real(forward)
-        and abs(float(prev_excess) - (float(forward) - float(prev_bench))) < 1e-9
-    ):
-        return float(prev_bench), float(prev_excess)
-    return bench, excess
+        and abs(float(excess) - (float(forward) - float(bench))) < 1e-9
+    )
+
+
+def _seed_window_cache_from_reused(
+    row: pd.Series,
+    window_cache: dict[tuple[dt.date, dt.date], float | None],
+    last_closed_session: dt.date,
+    exchange: str,
+) -> None:
+    """Best-effort: seed the per-window benchmark cache from a reused row (M1).
+
+    A reused row already carries a settled ``benchmark_window_return`` for its
+    (arrival, exit) window. Seeding the cache lets a GAP sibling sharing the
+    same window (same brief_date + matured_at) be served for free instead of
+    paying its own fetch. Skips silently when the window can't be recovered —
+    this is a pure optimisation, never a correctness requirement.
+    """
+    row_dict = dict(row)
+    brief_date = _as_date(row_dict.get("brief_date"))
+    if brief_date is None:
+        return
+    exit_session = _recover_exit_session(row_dict, last_closed_session=last_closed_session)
+    if exit_session is None:
+        return
+    arrival_session = session_on_or_after(brief_date, exchange)
+    if exit_session < arrival_session:
+        return
+    key = (arrival_session, exit_session)
+    if key not in window_cache:
+        window_cache[key] = float(row["benchmark_window_return"])
 
 
 def enrich_store_with_benchmark_excess(
@@ -317,6 +367,7 @@ def enrich_store_with_benchmark_excess(
 
     store = Path(store_dir)
     if not store.exists():
+        logger.info("benchmark-excess: enriched 0 (reused 0, fetched 0)")
         return 0
     fetch = bar_fetch or _default_bar_fetch
     now = now or dt.datetime.now(dt.UTC)
@@ -327,6 +378,8 @@ def enrich_store_with_benchmark_excess(
     # one fetch serves all of them.
     window_cache: dict[tuple[dt.date, dt.date], float | None] = {}
     n_enriched = 0
+    n_reused_total = 0
+    n_fetched_total = 0
 
     # Newest first: under the shared run deadline a truncated sweep must heal the
     # recent, dashboard-visible dates before the deep history. ISO-named files sort
@@ -338,7 +391,7 @@ def enrich_store_with_benchmark_excess(
             logger.warning("benchmark-excess: bad store parquet %s — %s; skipping.", path, exc)
             continue
 
-        bench_col, excess_col, n_delta, stopped_early = _enrich_frame_rows(
+        bench_col, excess_col, n_delta, stopped_early, n_reused, n_fetched = _enrich_frame_rows(
             df,
             fetch=fetch,
             last_closed_session=last_closed_session,
@@ -347,19 +400,39 @@ def enrich_store_with_benchmark_excess(
             window_cache=window_cache,
             deadline=deadline,
         )
-        n_enriched += n_delta
-
         if stopped_early:
             # Deadline tripped mid-file: leave the parquet untouched so
             # unprocessed rows are retried on the next run. Break rather
             # than continue — every subsequent file would be opened only to
             # immediately skip (deadline latches), so skip the open entirely.
+            # Do NOT count this file's partial rows: they were computed but
+            # never persisted, so the log must not report them as enriched.
             break
+
+        # Count only rows that are (or already are) persisted: a non-stopped file
+        # is fully written below, and a reuse-only (n_fetched == 0) file keeps its
+        # values on disk from a prior run — both are honestly "enriched".
+        n_enriched += n_delta
+        n_reused_total += n_reused
+        n_fetched_total += n_fetched
+
+        if n_fetched == 0:
+            # Every row in this file was reused (M3) — nothing changed, so
+            # skip the write. Avoids bumping the parquet mtime for no reason,
+            # which matters for downstream mtime-gated caches (e.g. the Django
+            # edge-mirror).
+            continue
 
         df["benchmark_window_return"] = bench_col
         df["market_excess_return"] = excess_col
         _write_atomic(path, df)
 
+    logger.info(
+        "benchmark-excess: enriched %d (reused %d, fetched %d)",
+        n_enriched,
+        n_reused_total,
+        n_fetched_total,
+    )
     return n_enriched
 
 

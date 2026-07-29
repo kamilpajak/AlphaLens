@@ -143,10 +143,15 @@ def _wrap_response(payload: dict[str, Any]) -> SimpleNamespace:
     ``.text == ""`` lets the adapter's existing
     "unparseable JSON" branch log + skip rather than crash.
     """
+    # ``usage`` (prompt_tokens / completion_tokens / total_tokens) is surfaced
+    # as a first-class attribute so the brief truncation-retry ladder can log the
+    # real completion_tokens and a live probe can size the token cap from data
+    # rather than a guess. ``None`` when absent (older shape / empty-choices).
+    usage = payload.get("usage")
     choices = payload.get("choices") or []
     if not choices:
         empty_candidate = SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
-        return SimpleNamespace(text="", candidates=[empty_candidate], _raw=payload)
+        return SimpleNamespace(text="", candidates=[empty_candidate], usage=usage, _raw=payload)
     choice = choices[0]
     content = choice.get("message", {}).get("content", "") or ""
     raw_reason = choice.get("finish_reason")
@@ -154,7 +159,7 @@ def _wrap_response(payload: dict[str, Any]) -> SimpleNamespace:
     # land on ``"UNKNOWN"`` rather than silently degrading to ``"STOP"``.
     gemini_name = _FINISH_REASON_MAP.get(raw_reason, _UNKNOWN_FINISH_REASON)
     candidate = SimpleNamespace(finish_reason=SimpleNamespace(name=gemini_name))
-    return SimpleNamespace(text=content, candidates=[candidate], _raw=payload)
+    return SimpleNamespace(text=content, candidates=[candidate], usage=usage, _raw=payload)
 
 
 @dataclass

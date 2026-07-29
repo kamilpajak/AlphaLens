@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import datetime as dt
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -540,6 +541,503 @@ class TestBenchmarkAnchorInvariants(unittest.TestCase):
                 session_open_utc(d, self._EXCHANGE),
                 dt.datetime(d.year, d.month, d.day, 13, 30, tzinfo=UTC),
             )
+
+
+class ReuseFirstBenchmarkExcess(unittest.TestCase):
+    """Reuse-first: a settled TERMINAL row is served from its stored pair with
+    NO fetch, so the wall-clock budget is spent only on gaps + ongoing rows.
+    """
+
+    def test_settled_terminal_row_is_reused_without_fetch(self) -> None:
+        # A TERMINAL row with a consistent stored (benchmark, excess) pair is
+        # reused verbatim -> the bar-fetch spy must NOT be called.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(s, reference=100.0, last_close=999.0)
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            self.assertEqual(calls, [])
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.02, places=6)
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+    def test_gap_terminal_row_is_fetched(self) -> None:
+        # A TERMINAL row with a NULL benchmark (gap) IS fetched and filled.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "GAP",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            arrival_open = session_open_utc(session_on_or_after(d))
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(arrival_open, reference=100.0, last_close=102.0)
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            self.assertEqual(calls, ["SPY"])
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+    def test_ongoing_row_is_not_reused(self) -> None:
+        # An ONGOING row (matured_at None) with a stored pair is NOT reused —
+        # its window keeps growing every session, so it must recompute.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "ONG",
+                        "terminal": False,
+                        "matured_at": None,
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(s, reference=100.0, last_close=101.0)
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            self.assertEqual(calls, ["SPY"])
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            # Recomputed against the new fetch (1%), not the stale stored 2%.
+            self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.01, places=6)
+
+    def test_inconsistent_terminal_pair_is_recomputed(self) -> None:
+        # A TERMINAL row whose stored excess != forward - benchmark is stale
+        # (e.g. forward advanced past a maturation rewrite) -> recomputed.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "STALE",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.09,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,  # stale: 0.09-0.02 != 0.03
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(s, reference=100.0, last_close=102.0)
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            self.assertEqual(calls, ["SPY"])
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.07, places=6)
+
+    def test_budget_drains_gap_because_settled_rows_dont_fetch(self) -> None:
+        # Pins the starvation fix: budget consumed ONLY by real fetches. Store
+        # has a newest parquet with 2 settled terminal rows (different windows,
+        # so 2 distinct fetches PRE-fix) and an oldest parquet with 1 gap row.
+        # Deadline budget ~= 1.5 fetches. PRE-fix the 2 settled-row fetches
+        # exhaust the budget before the oldest gap file is even opened -> gap
+        # starved. POST-fix the settled rows fetch nothing -> budget intact ->
+        # the gap fills.
+        from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
+
+        elapsed = [0.0]
+
+        def spy_fetch(ticker, start, end):
+            elapsed[0] += 60.0  # one fetch burns 60s of budget
+            return _spy_bars(start, reference=100.0, last_close=102.0)
+
+        dead = _RunDeadline(90.0, monotonic=lambda: elapsed[0])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            new = dt.date(2026, 6, 1)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": new,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 6, 8),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    },
+                    {
+                        "brief_date": new,
+                        "ticker": "BB",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 6, 9),
+                        "forward_return": 0.04,
+                        "benchmark_window_return": 0.01,
+                        "market_excess_return": 0.03,
+                    },
+                ]
+            ).to_parquet(store / f"{new.isoformat()}.parquet")
+
+            old = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": old,
+                        "ticker": "GAP",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.06,
+                    }
+                ]
+            ).to_parquet(store / f"{old.isoformat()}.parquet")
+
+            enrich_store_with_benchmark_excess(
+                store,
+                bar_fetch=spy_fetch,
+                now=dt.datetime(2026, 6, 10, tzinfo=UTC),
+                deadline=dead,
+            )
+
+            old_row = pd.read_parquet(store / f"{old.isoformat()}.parquet").iloc[0]
+            self.assertFalse(pd.isna(old_row["benchmark_window_return"]))
+
+
+class TestCheapTerminalMaturationComposition(unittest.TestCase):
+    """(I3) End-to-end lock for Change B (population_ladder_monitor's cheap NO_FILL
+    terminal maturation, ``_cheap_update_row``): it nulls any carried
+    ``(benchmark_window_return, market_excess_return)`` pair on the terminal
+    transition, so THIS module's reuse-first (``_has_consistent_stored_pair``)
+    sees a GAP on the next enrich pass and recomputes it -- instead of freezing
+    a value computed against the row's prior, still-growing ONGOING window.
+    """
+
+    def test_nulled_pair_from_cheap_terminal_maturation_is_recomputed(self) -> None:
+        # Simulates exactly what Change B leaves on disk: a TERMINAL NO_FILL row
+        # whose benchmark pair was nulled by the cheap terminal-maturation branch.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": None,
+                        "market_excess_return": None,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            arrival_open = session_open_utc(session_on_or_after(d))
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(arrival_open, reference=100.0, last_close=102.0)
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            self.assertEqual(calls, ["SPY"], "a nulled pair is a GAP -> must be fetched")
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.02, places=6)
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+    def test_why_change_b_matters_a_non_nulled_stale_consistent_pair_would_freeze(self) -> None:
+        # Documents WHY Change B is load-bearing: WITHOUT it, a stale-but-still-
+        # CONSISTENT (bench, excess) pair carried verbatim from the ONGOING window
+        # (0.03 == 0.05 - 0.02, so it passes the consistency check even though it
+        # was computed against the growing window, not the final terminal one)
+        # would be reused/frozen -- never recomputed with the terminal window's
+        # true benchmark. This is the counterfactual the null in Change B prevents.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    }
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            arrival_open = session_open_utc(session_on_or_after(d))
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(arrival_open, reference=100.0, last_close=999.0)
+
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            self.assertEqual(calls, [], "a consistent stored pair is reused, NOT recomputed")
+            row = pd.read_parquet(store / f"{d.isoformat()}.parquet").iloc[0]
+            self.assertAlmostEqual(float(row["benchmark_window_return"]), 0.02, places=6)
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+
+class TestEnrichSkipWriteAndLogFormat(unittest.TestCase):
+    """M3 (skip the parquet write when a file's rows were all reused) + M4
+    (the ``enriched N (reused M, fetched F)`` INFO summary line). Neither had
+    a dedicated assertion before — this pins both as genuinely red-if-removed.
+    """
+
+    def test_all_reused_file_is_not_rewritten(self) -> None:
+        # GIVEN a store parquet where EVERY row is a settled TERMINAL row with
+        # a consistent stored pair -> every row is reused (n_fetched == 0 for
+        # this file), so the write must be skipped: mtime stays bit-for-bit
+        # identical and the values are untouched.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            path = store / f"{d.isoformat()}.parquet"
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    },
+                    {
+                        "brief_date": d,
+                        "ticker": "BB",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 28),
+                        "forward_return": 0.04,
+                        "benchmark_window_return": 0.01,
+                        "market_excess_return": 0.03,
+                    },
+                ]
+            ).to_parquet(path)
+            mtime_before = path.stat().st_mtime_ns
+
+            calls: list[str] = []
+
+            def _fetch(t, s, e):
+                calls.append(t)
+                return _spy_bars(s, reference=100.0, last_close=999.0)
+
+            # WHEN enrichment runs over an all-reused file
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            # THEN no fetch was issued, the file was never rewritten...
+            self.assertEqual(calls, [])
+            self.assertEqual(path.stat().st_mtime_ns, mtime_before)
+            # ...and the stored values are exactly what was seeded.
+            out = pd.read_parquet(path)
+            aa = out[out["ticker"] == "AA"].iloc[0]
+            bb = out[out["ticker"] == "BB"].iloc[0]
+            self.assertAlmostEqual(float(aa["market_excess_return"]), 0.03, places=6)
+            self.assertAlmostEqual(float(bb["market_excess_return"]), 0.03, places=6)
+
+    def test_a_gap_row_triggers_rewrite(self) -> None:
+        # GIVEN a store parquet with a single GAP (null benchmark) TERMINAL
+        # row -> that row must be fetched, so the file is rewritten (mtime
+        # changes) and the gap gets filled.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            path = store / f"{d.isoformat()}.parquet"
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "GAP",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                    }
+                ]
+            ).to_parquet(path)
+            mtime_before = path.stat().st_mtime_ns
+            time.sleep(0.01)  # ensure a distinguishable mtime tick
+
+            arrival_open = session_open_utc(session_on_or_after(d))
+
+            def _fetch(t, s, e):
+                return _spy_bars(arrival_open, reference=100.0, last_close=102.0)
+
+            # WHEN enrichment runs over a file with a real gap
+            enrich_store_with_benchmark_excess(
+                store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+            )
+
+            # THEN the file was rewritten...
+            self.assertNotEqual(path.stat().st_mtime_ns, mtime_before)
+            # ...and the gap is filled.
+            row = pd.read_parquet(path).iloc[0]
+            self.assertAlmostEqual(float(row["market_excess_return"]), 0.03, places=6)
+
+    def test_summary_log_line_reports_enriched_reused_fetched(self) -> None:
+        # GIVEN a mixed store: one settled (reused) terminal row and one gap
+        # (fetched) terminal row in the same file -> enriched=2 (both end up
+        # with a non-null excess), reused=1, fetched=1.
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                        "benchmark_window_return": 0.02,
+                        "market_excess_return": 0.03,
+                    },
+                    {
+                        "brief_date": d,
+                        "ticker": "GAP",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 28),
+                        "forward_return": 0.04,
+                    },
+                ]
+            ).to_parquet(store / f"{d.isoformat()}.parquet")
+
+            def _fetch(t, s, e):
+                return _spy_bars(s, reference=100.0, last_close=102.0)
+
+            # WHEN enrichment runs, capturing the module logger at INFO
+            with self.assertLogs(
+                "alphalens_pipeline.feedback.benchmark_excess", level="INFO"
+            ) as cm:
+                enrich_store_with_benchmark_excess(
+                    store, bar_fetch=_fetch, now=dt.datetime(2026, 6, 3, tzinfo=UTC)
+                )
+
+            # THEN the summary line reports the exact reused/fetched split.
+            self.assertIn(
+                "benchmark-excess: enriched 2 (reused 1, fetched 1)",
+                cm.output[-1],
+            )
+
+    def test_summary_log_excludes_deadline_stopped_file_rows(self) -> None:
+        # A file whose sweep is cut off mid-way by the deadline is left UNWRITTEN
+        # (retried next run), so its partially-processed rows must NOT be counted
+        # in the summary line. Two gap rows in distinct windows; budget allows the
+        # first fetch but trips before the second -> stopped_early, file not written
+        # -> the log must report enriched 0, not 1.
+        from alphalens_pipeline.feedback.population_ladder_monitor import _RunDeadline
+
+        elapsed = [0.0]
+
+        def spy_fetch(t, s, e):
+            elapsed[0] += 60.0
+            return _spy_bars(s, reference=100.0, last_close=102.0)
+
+        dead = _RunDeadline(50.0, monotonic=lambda: elapsed[0])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            d = dt.date(2026, 5, 18)
+            path = store / f"{d.isoformat()}.parquet"
+            pd.DataFrame(
+                [
+                    {
+                        "brief_date": d,
+                        "ticker": "AA",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 27),
+                        "forward_return": 0.05,
+                    },
+                    {
+                        "brief_date": d,
+                        "ticker": "BB",
+                        "terminal": True,
+                        "matured_at": dt.date(2026, 5, 28),
+                        "forward_return": 0.04,
+                    },
+                ]
+            ).to_parquet(path)
+
+            with self.assertLogs(
+                "alphalens_pipeline.feedback.benchmark_excess", level="INFO"
+            ) as cm:
+                enrich_store_with_benchmark_excess(
+                    store,
+                    bar_fetch=spy_fetch,
+                    now=dt.datetime(2026, 6, 3, tzinfo=UTC),
+                    deadline=dead,
+                )
+
+            self.assertIn(
+                "benchmark-excess: enriched 0 (reused 0, fetched 0)",
+                cm.output[-1],
+            )
+            # The stopped file was left untouched: the benchmark column was never
+            # added (the seeded frame had none, and stopped_early skips the write).
+            out = pd.read_parquet(path)
+            self.assertNotIn("benchmark_window_return", out.columns)
 
 
 if __name__ == "__main__":

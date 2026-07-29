@@ -49,6 +49,7 @@ class Command(BaseCommand):
         self.stdout.write(
             self.style.SUCCESS(
                 f"rebuilt={result.n_rebuilt} skipped={result.n_skipped} "
-                f"deleted={result.n_deleted} total_rows={result.total_rows}"
+                f"deleted={result.n_deleted} unsettled={result.n_unsettled} "
+                f"total_rows={result.total_rows}"
             )
         )

@@ -142,6 +142,13 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     "market_state_vix_decile",
     "market_state_squeeze_on",
     "market_state_config_version",
+    # Post-legacy extension (2026-07-28, PR #921 follow-through): honest per-row
+    # LLM brief outcome — brief_status "ok"|"unavailable" + the retry-ladder
+    # terminal brief_error_kind (null on success). Nullable so pre-#921 rows
+    # stay tri-state NULL (unknown). Auto-served via exclude=("pk",); additive,
+    # non-breaking response extension.
+    "brief_status",
+    "brief_error_kind",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.

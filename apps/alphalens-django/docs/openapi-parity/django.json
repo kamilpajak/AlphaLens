@@ -1088,6 +1088,16 @@
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
+                    },
+                    "brief_status": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 16
+                    },
+                    "brief_error_kind": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
                     }
                 },
                 "required": [
@@ -1445,6 +1455,16 @@
                         "type": "string",
                         "format": "date-time",
                         "nullable": true
+                    },
+                    "brief_status": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 16
+                    },
+                    "brief_error_kind": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
                     }
                 },
                 "required": [
@@ -1587,6 +1607,17 @@
                     "status": {
                         "$ref": "#/components/schemas/ChartResponseStatusEnum"
                     },
+                    "context": {
+                        "nullable": true,
+                        "oneOf": [
+                            {
+                                "$ref": "#/components/schemas/ContextEnum"
+                            },
+                            {
+                                "$ref": "#/components/schemas/NullEnum"
+                            }
+                        ]
+                    },
                     "bars": {
                         "type": "array",
                         "items": {
@@ -1616,6 +1647,7 @@
                     "ambiguous_bars",
                     "bars",
                     "brief_date",
+                    "context",
                     "holding_days_elapsed",
                     "intrabar_rule",
                     "ladder_classification",
@@ -1637,6 +1669,15 @@
                 ],
                 "type": "string",
                 "description": "* `OK` - OK\n* `NO_DATA` - NO_DATA\n* `NO_STRUCTURE` - NO_STRUCTURE"
+            },
+            "ContextEnum": {
+                "enum": [
+                    "OK",
+                    "reused",
+                    "in_trade_only"
+                ],
+                "type": "string",
+                "description": "* `OK` - OK\n* `reused` - reused\n* `in_trade_only` - in_trade_only"
             },
             "DayBrief": {
                 "type": "object",
@@ -2166,12 +2207,18 @@
                     },
                     "open_positions": {
                         "$ref": "#/components/schemas/OpenPositions"
+                    },
+                    "enriched_at": {
+                        "type": "string",
+                        "format": "date-time",
+                        "nullable": true
                     }
                 },
                 "required": [
                     "benchmark",
                     "deployment",
                     "edge",
+                    "enriched_at",
                     "metric_note",
                     "n_brief",
                     "n_gate_threshold",
@@ -2214,6 +2261,11 @@
                     "is_trading_day",
                     "next_close_iso",
                     "next_open_iso"
+                ]
+            },
+            "NullEnum": {
+                "enum": [
+                    null
                 ]
             },
             "OpenPositions": {

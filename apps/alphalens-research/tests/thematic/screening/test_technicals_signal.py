@@ -140,6 +140,15 @@ class TestComputeATR(unittest.TestCase):
         df = _ohlcv(n=5)
         self.assertIsNone(technicals_signal._compute_atr_pct(df, period=14))
 
+    def test_atr_pct_returns_none_when_last_close_is_nan(self):
+        # Real failure payload: Yahoo settled the last daily bar with
+        # OHLV populated but Close=NaN (2026-07-24 incident). The old
+        # `last <= 0` guard lets NaN through (`NaN <= 0` is False), leaking
+        # `100*atr/NaN = NaN` (not None) into the downstream JSONField.
+        df = _ohlcv()
+        df.loc[df.index[-1], "close"] = np.nan
+        self.assertIsNone(technicals_signal._compute_atr_pct(df, period=14))
+
 
 class TestVolumeZScore(unittest.TestCase):
     def test_zscore_zero_for_flat_volume(self):
@@ -186,6 +195,25 @@ class TestScoreTechnicals(unittest.TestCase):
         )
         self.assertIsNone(out["rsi"])
         self.assertIn("no data", out["summary"].lower())
+
+    def test_score_technicals_no_nan_leak_when_last_close_is_nan(self):
+        # Zen-review gap: only _compute_atr_pct had a finite-close guard.
+        # A poisoned frame reaching this function directly (e.g. via the
+        # cache-only loader, which bypasses _normalize_ohlcv) with OHLV
+        # populated but the LAST close=NaN (2026-07-24 incident shape) made
+        # _ma_distance_pct / _pct_off_52w_high / _pct_off_52w_low each read
+        # `close.iloc[-1]` unguarded and leak a real NaN float instead of
+        # None. That NaN renders as "nan%" and does not round-trip through
+        # the Django JSONField.
+        df = _ohlcv(n=260)
+        df.loc[df.index[-1], "close"] = np.nan
+        out = technicals_signal.score_technicals_from_frame(df)
+        for key, value in out.items():
+            if key == "summary":
+                self.assertIsInstance(value, str)
+                continue
+            if value is not None:
+                self.assertTrue(np.isfinite(value), f"{key} leaked a non-finite value: {value!r}")
 
 
 if __name__ == "__main__":

@@ -88,6 +88,23 @@ class TestBuildFromFrame(unittest.TestCase):
         setup = builder.build_trade_setup_from_frame(pd.DataFrame())
         self.assertEqual(setup.status, STATUS_NO_STRUCTURE)
 
+    def test_nan_last_close_drops_to_prior_finite_close(self):
+        # Real failure payload: Yahoo settled the last daily bar with OHLV
+        # populated but Close=NaN (2026-07-24 incident: universe-wide,
+        # degraded every candidate to NO_STRUCTURE(asof_close=0.0, atr=0.0)).
+        # Dropping the poisoned trailing row must fall back to the prior
+        # FINITE close (not look-ahead — an OLDER close) and still yield a
+        # full OK setup.
+        frame = _synth_frame(_oscillating_uptrend())
+        last_valid_close = float(frame["close"].iloc[-2])
+        frame.loc[frame.index[-1], "close"] = np.nan
+
+        setup = builder.build_trade_setup_from_frame(frame)
+
+        self.assertEqual(setup.status, STATUS_OK)
+        self.assertEqual(setup.asof_close, last_valid_close)
+        self.assertGreater(len(setup.entry_tiers), 0)
+
     def test_to_dict_carries_schema_version_and_status(self):
         setup = builder.build_trade_setup_from_frame(_synth_frame(_oscillating_uptrend()))
         d = setup.to_dict()

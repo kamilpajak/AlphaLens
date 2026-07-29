@@ -27,7 +27,7 @@ import pandas as pd
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orch
 
 from tests.golden.projection import brief_projection
-from tests.golden.replay_client import ReplayOpenRouter
+from tests.golden.replay_client import GOLDEN_RECORDED_MAX_OUTPUT_TOKENS, ReplayOpenRouter
 
 _ASOF = dt.date(2026, 5, 24)
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "brief_day"
@@ -72,7 +72,14 @@ def _replay_briefs(out_dir: Path) -> pd.DataFrame:
         ),
     ):
         return brief_orch.generate_briefs(
-            scored, asof=_ASOF, output_dir=out_dir, ohlcv_loader=_ohlcv_loader
+            scored,
+            asof=_ASOF,
+            output_dir=out_dir,
+            ohlcv_loader=_ohlcv_loader,
+            # Drive at the cap the cassettes were recorded at (the cassette key
+            # includes max_tokens); the production default is higher but the
+            # projection under test is budget-independent.
+            base_max_output_tokens=GOLDEN_RECORDED_MAX_OUTPUT_TOKENS,
         )
 
 

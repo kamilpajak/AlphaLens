@@ -102,6 +102,14 @@ export interface Candidate {
 	brief_template_id: string | null;
 	brief_template_facts: Record<string, unknown> | null;
 	brief_generated_at: string | null;
+	/**
+	 * Honest brief-status surface (#921) — `brief_status` is `"ok"` /
+	 * `"unavailable"`, null on pre-feature rows; `brief_error_kind` is the
+	 * retry-ladder terminal kind (`"truncated"`, `"transport"`, …), null on
+	 * success.
+	 */
+	brief_status: string | null;
+	brief_error_kind: string | null;
 
 	/**
 	 * Market-state context signal (PR-3) — an INDEX-LEVEL (SPY) daily regime
@@ -372,6 +380,9 @@ export interface EdgeSummary {
 	n_gate_threshold: number;
 	benchmark: string;
 	metric_note: string;
+	/** ISO-8601 UTC time of the last completed enrichment run (settled
+	 *  watermark). Null before the first watermarked run. */
+	enriched_at: string | null;
 	edge: EdgePanel;
 	portfolio: PortfolioPanel;
 	whatif: WhatIfPanel;
@@ -448,6 +459,11 @@ export interface ChartMarker {
  *  render the dotted-border empty box instead. */
 export interface ChartPayload {
 	status: 'OK' | 'NO_DATA' | 'NO_STRUCTURE';
+	/** Producer-side freshness of the daily lead-in/trailing CONTEXT band
+	 *  (PR #912). 'OK' = full band; 'reused' | 'in_trade_only' = band was
+	 *  deadline-starved (the trade itself is still fully drawn); undefined/null
+	 *  on legacy rows predating the stamp. */
+	context?: 'OK' | 'reused' | 'in_trade_only' | null;
 	bars: ChartBar[];
 	price_lines: ChartPriceLines;
 	markers: ChartMarker[];

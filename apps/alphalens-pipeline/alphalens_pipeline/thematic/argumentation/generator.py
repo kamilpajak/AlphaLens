@@ -6,17 +6,21 @@ both so the orchestrator + renderer don't need to branch.
 
 ``generate_brief`` returns ``(brief | None, BriefErrorKind)`` so callers
 can branch on the exact failure mode. ``generate_brief_with_retry`` wraps
-it with the Perplexity-recommended retry policy (2026-05-17): on
-``BriefErrorKind.TRUNCATED`` (OpenRouter ``finish_reason == "length"``,
-translated to ``"MAX_TOKENS"`` by the OpenRouter client wrapper) retry
-once with double ``max_output_tokens`` and ``temperature=0``; on
+it with the retry policy: on ``BriefErrorKind.TRUNCATED`` (OpenRouter
+``finish_reason == "length"``, translated to ``"MAX_TOKENS"`` by the client
+wrapper) ESCALATE ``max_output_tokens`` through a doubling ladder up to the
+ceiling (8000 → 16000 → 32000) at ``temperature=0``, stopping at the first
+success — the reasoning trace, not the ~300-token JSON, is what exhausts the
+budget, so one fixed double is not enough (2026-07-28 XMTR incident). On
 ``BriefErrorKind.EMPTY`` (finish_reason STOP/absent but the response body
 was empty/whitespace-only — a transient no-content response) or
 ``BriefErrorKind.EMPTY_CONTENT`` (valid JSON parsed but every required field
 is blank — the MC/Moelis empty-card incident) retry once with the same token
 cap and ``temperature=0``. Other failure kinds (``MALFORMED_JSON`` /
 ``SAFETY`` / ``TRANSPORT``) do not retry — they will not be helped by more
-tokens or different temperature.
+tokens or different temperature. The wrapper also returns
+``(brief | None, BriefErrorKind)`` — ``NONE`` on success, otherwise the
+LAST failing kind observed once the retry policy is exhausted.
 """
 
 from __future__ import annotations
@@ -41,9 +45,33 @@ logger = logging.getLogger(__name__)
 PRO_MODEL = "deepseek/deepseek-v4-pro"
 FLASH_MODEL = "deepseek/deepseek-v4-flash"
 
-_DEFAULT_MAX_OUTPUT_TOKENS = 2000
+# Base output-token budget. DeepSeek v4 is a REASONING model: its thinking trace
+# counts against max_tokens, so a small cap can be exhausted by reasoning before
+# the ~300-token JSON closes -> finish_reason=length -> empty brief. Measured
+# 2026-07-28: XMTR's brief emits only ~279 completion tokens but truncates at
+# 2000/4000 and completes cleanly at 8000, so the base carries real reasoning
+# headroom. OpenRouter bills tokens GENERATED, not the ceiling, so a generous cap
+# is free on healthy briefs and only pays on the reasoning-heavy ones we want to
+# succeed.
+_DEFAULT_MAX_OUTPUT_TOKENS = 8000
+# The truncation retry ladder doubles the cap up to this ceiling (8000 -> 16000
+# -> 32000) before giving up, covering a rare heavier reasoning trace.
+_MAX_OUTPUT_TOKENS_CEILING = 32000
 _DEFAULT_TEMPERATURE = 0.2
 _RETRY_TEMPERATURE = 0.0  # greedy decode for stability on the retry
+
+
+def _truncation_retry_caps(base: int, ceiling: int) -> list[int]:
+    """The escalating retry caps for a TRUNCATED brief: double ``base`` until the
+    ceiling, which appears exactly once. ``[]`` when ``base >= ceiling`` (no room
+    to escalate). E.g. ``(8000, 32000) -> [16000, 32000]``."""
+    caps: list[int] = []
+    cap = base
+    while cap < ceiling:
+        cap = min(cap * 2, ceiling)
+        caps.append(cap)
+    return caps
+
 
 # CJK Unicode blocks: a brief is English prose, so ANY Han / Kana / Hangul
 # character signals whole-language drift (DeepSeek v4 is Chinese-developed and
@@ -334,14 +362,17 @@ def generate_brief_with_retry(
     llm_client_pro: OpenRouterClient | None = None,
     llm_client_flash: OpenRouterClient | None = None,
     base_max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
-) -> dict | None:
-    """Generate a brief, retrying once on ``TRUNCATED`` or ``EMPTY``.
+    max_output_tokens_ceiling: int = _MAX_OUTPUT_TOKENS_CEILING,
+) -> tuple[dict | None, BriefErrorKind]:
+    """Generate a brief, retrying on ``TRUNCATED`` / ``EMPTY`` / drift.
 
     Retryable kinds:
 
-    * ``BriefErrorKind.TRUNCATED`` — the retry doubles ``max_output_tokens``
-      (the model ran out of room) and sets ``temperature=0`` so decoding is
-      greedy/deterministic.
+    * ``BriefErrorKind.TRUNCATED`` — escalate ``max_output_tokens`` through a
+      doubling ladder up to ``max_output_tokens_ceiling`` (8000 -> 16000 ->
+      32000), stopping at the first success, each retry at ``temperature=0`` for
+      greedy/deterministic decoding. The reasoning trace, not the tiny JSON, is
+      what exhausts the budget, so one fixed double is not enough (2026-07-28).
     * ``BriefErrorKind.EMPTY`` — a transient no-content response (empty /
       whitespace-only body with finish_reason STOP/absent). The recovery is
       a fresh call at ``temperature=0``; the token cap is left unchanged —
@@ -358,13 +389,17 @@ def generate_brief_with_retry(
       English directive the retry is deterministically English.
 
     Non-retryable kinds (``MALFORMED_JSON``, ``SAFETY``, ``TRANSPORT``)
-    return None without retrying — extra tokens won't fix bad JSON, safety
-    blocks, or network errors.
+    fail immediately without retrying — extra tokens won't fix bad JSON,
+    safety blocks, or network errors.
 
-    Either way the retry runs at most once (no loop). Returns the brief
-    dict (with ``model_used``) on success, ``None`` otherwise. The
-    orchestrator's graceful-degradation renderer then surfaces the
-    deterministic facts even when this returns None.
+    Either way the single-retry kinds retry at most once (no loop). Returns
+    ``(brief_dict_with_model_used, BriefErrorKind.NONE)`` on success, or
+    ``(None, terminal_kind)`` on failure, where the terminal kind is the
+    LAST failing kind observed: ``TRUNCATED`` after the token ladder is
+    exhausted (or whatever kind the last rung failed with), the immediate
+    kind for non-retryable failures, and the retry's failing kind for the
+    single-retry kinds. The orchestrator's graceful-degradation renderer
+    then surfaces the deterministic facts even when the brief is None.
     """
     # Resolve clients ONCE so the retry path doesn't re-do lazy-singleton
     # lookup. Cheap when the caller already hoisted (orchestrator batch
@@ -382,36 +417,59 @@ def generate_brief_with_retry(
         temperature=_DEFAULT_TEMPERATURE,
     )
     if kind == BriefErrorKind.NONE:
-        return brief
+        return brief, kind
     if kind not in (
         BriefErrorKind.TRUNCATED,
         BriefErrorKind.EMPTY,
         BriefErrorKind.EMPTY_CONTENT,
         BriefErrorKind.LANGUAGE_DRIFT,
     ):
-        return None
+        return None, kind
 
-    # Only TRUNCATED needs more room; EMPTY / LANGUAGE_DRIFT were not token-
-    # exhaustion, so a fresh greedy call at the base cap is the right recovery.
-    retry_tokens = (
-        base_max_output_tokens * 2 if kind == BriefErrorKind.TRUNCATED else base_max_output_tokens
-    )
+    # TRUNCATED = the reasoning trace + JSON ran out of room -> escalate the cap
+    # through the doubling ladder, stopping at the first success. EMPTY /
+    # EMPTY_CONTENT / LANGUAGE_DRIFT were NOT token-exhaustion, so a single fresh
+    # greedy call at the base cap is the right recovery (more tokens do nothing).
+    if kind == BriefErrorKind.TRUNCATED:
+        for retry_tokens in _truncation_retry_caps(
+            base_max_output_tokens, max_output_tokens_ceiling
+        ):
+            logger.info(
+                "brief retry for %s (kind=truncated): max_output_tokens -> %d, temperature=%.1f",
+                facts.get("ticker"),
+                retry_tokens,
+                _RETRY_TEMPERATURE,
+            )
+            brief, kind = generate_brief(
+                facts,
+                llm_client_pro=llm_client_pro,
+                llm_client_flash=llm_client_flash,
+                max_output_tokens=retry_tokens,
+                temperature=_RETRY_TEMPERATURE,
+            )
+            if kind == BriefErrorKind.NONE:
+                return brief, kind
+        # Ladder exhausted — surface the LAST failing kind observed (usually
+        # TRUNCATED, but the final rung may have failed differently).
+        return None, kind
+
     logger.info(
-        "brief retry for %s (kind=%s): max_output_tokens %d -> %d, temperature=%.1f",
+        "brief retry for %s (kind=%s): max_output_tokens %d (unchanged), temperature=%.1f",
         facts.get("ticker"),
         kind.value,
         base_max_output_tokens,
-        retry_tokens,
         _RETRY_TEMPERATURE,
     )
     brief, kind = generate_brief(
         facts,
         llm_client_pro=llm_client_pro,
         llm_client_flash=llm_client_flash,
-        max_output_tokens=retry_tokens,
+        max_output_tokens=base_max_output_tokens,
         temperature=_RETRY_TEMPERATURE,
     )
-    return brief if kind == BriefErrorKind.NONE else None
+    # On a failed retry the terminal kind is the RETRY's failing kind (it may
+    # differ from the first attempt's kind).
+    return (brief, kind) if kind == BriefErrorKind.NONE else (None, kind)
 
 
 __all__ = [

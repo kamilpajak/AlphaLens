@@ -211,6 +211,29 @@ class TestGenerateContentResponseShape(unittest.TestCase):
         response = client.generate_content(model="deepseek/deepseek-v4-flash", contents="anything")
         self.assertEqual(response.text, "")
 
+    def test_usage_attribute_exposes_token_counts(self) -> None:
+        # The truncation-retry ladder + the live budget probe need to see how
+        # many completion tokens a response actually consumed (to size the cap
+        # from data, not a guess). _wrap_response dropped usage; expose it.
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=_mock_chat_response('{"ok": 1}'))
+
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
+        response = client.generate_content(model="deepseek/deepseek-v4-flash", contents="hi")
+        self.assertIsNotNone(response.usage)
+        self.assertEqual(response.usage["completion_tokens"], 50)
+        self.assertEqual(response.usage["prompt_tokens"], 100)
+
+    def test_usage_is_none_when_absent(self) -> None:
+        # A response with no usage block (the empty-choices quirk / an older
+        # shape) must expose usage=None, never raise — the caller degrades.
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"id": "x", "model": "y", "choices": []})
+
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
+        response = client.generate_content(model="deepseek/deepseek-v4-flash", contents="hi")
+        self.assertIsNone(response.usage)
+
     def test_5xx_raises_with_status(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(503, text="upstream busy")
