@@ -119,6 +119,31 @@ def _order_side(value: Any) -> Literal["BUY", "SELL"] | None:
     return None
 
 
+# Canonical contract side -> Saxo ``BuySell``. The ONLY place the mapping lives:
+# body builders index this dict directly, so an unvalidated side KeyErrors loudly
+# instead of falling into a silent else-``Buy`` default.
+_SIDE_TO_SAXO_BUY_SELL: dict[str, str] = {"BUY": "Buy", "SELL": "Sell"}
+
+
+def _require_order_side(side: str) -> None:
+    """Fail fast on a non-canonical order side BEFORE any client call.
+
+    Incident 2026-07: an ad-hoc probe passed the Saxo-form ``"Sell"`` to
+    :meth:`SaxoBroker.place_standalone_stop`; the body builder's else-``Buy``
+    fallback silently flipped it into a BUY stop that later fired at the open
+    and bought stock. Order-placing entry points accept ONLY the contract's
+    canonical ``"BUY"`` / ``"SELL"``; the Saxo-form ``"Buy"`` / ``"Sell"`` is
+    deliberately rejected — mapping to Saxo's ``BuySell`` happens exactly once,
+    via :data:`_SIDE_TO_SAXO_BUY_SELL`.
+    """
+    if side not in _SIDE_TO_SAXO_BUY_SELL:
+        raise ValueError(
+            f"invalid order side {side!r}: accepted forms are 'BUY' and 'SELL' "
+            "(the Saxo-form 'Buy'/'Sell' is NOT accepted — a typo must fail loud, "
+            "never silently flip direction). No order was sent."
+        )
+
+
 def _oco_leg_ref(request_id: str, leg: str) -> str:
     """Per-leg ``ExternalReference`` derived from the OCO base ``request_id``.
 
@@ -431,6 +456,7 @@ class SaxoBroker:
         crash-window re-POST hits Saxo's 15 s x-request-id dedup instead of placing
         a second live stop; omit it (None) to mint a fresh uuid4 per call.
         """
+        _require_order_side(side)
         if os.environ.get(ALLOW_ORDERS_ENV) != "1":
             raise BrokerCapabilityError(
                 f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
@@ -471,7 +497,7 @@ class SaxoBroker:
             "AssetType": asset_type,
             "AccountKey": account_key,
             "Amount": qty,
-            "BuySell": "Sell" if side == "SELL" else "Buy",
+            "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
             "OrderType": stop_type,
             "OrderPrice": stop_q,
             "OrderDuration": {"DurationType": execution_policy._EXIT_DURATION},
@@ -516,6 +542,7 @@ class SaxoBroker:
         Returns ``PlacedOrder(entry_order_id="", exit_order_ids=(stop_id, tp_id))``.
         """
         _ = position_id  # Stage 3 (reduce-only linkage); accepted, unused here.
+        _require_order_side(side)
         if os.environ.get(ALLOW_ORDERS_ENV) != "1":
             raise BrokerCapabilityError(
                 f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
@@ -573,7 +600,7 @@ class SaxoBroker:
                 f"degenerate OCO exit Uic {uic}: stop {stop_q} must be strictly below "
                 f"take_profit {tp_q} for a long SELL OCO pair"
             )
-        buy_sell = "Sell" if side == "SELL" else "Buy"
+        buy_sell = _SIDE_TO_SAXO_BUY_SELL[side]
         exit_duration = {"DurationType": execution_policy._EXIT_DURATION}
         manual_order = execution_policy._MANUAL_ORDER
 
@@ -701,6 +728,7 @@ class SaxoBroker:
         different/absent OrderId is ambiguous (:class:`BrokerError`, resting
         order left in place); a non-2xx is an :class:`OrderRejectedError`.
         """
+        _require_order_side(side)
         if os.environ.get(ALLOW_ORDERS_ENV) != "1":
             raise BrokerCapabilityError(
                 f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
@@ -750,7 +778,7 @@ class SaxoBroker:
             "OrderPrice": stop_q,
             "OrderDuration": {"DurationType": execution_policy._EXIT_DURATION},
             "Amount": new_qty,
-            "BuySell": "Sell" if side == "SELL" else "Buy",
+            "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
             "ManualOrder": execution_policy._MANUAL_ORDER,
         }
 

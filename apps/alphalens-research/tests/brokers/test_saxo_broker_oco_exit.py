@@ -277,6 +277,23 @@ class TestOcoSafety(unittest.TestCase):
         self.assertEqual(stub.precheck_calls, [], "gate must fire before precheck")
         self.assertEqual(stub.place_calls, [], "gate must fire before any POST")
 
+    def test_saxo_form_side_rejected_before_any_http(self):
+        # Incident 2026-07 (standalone-stop probe): the Saxo-form side "Sell"
+        # fell into the else-Buy fallback and silently flipped direction. The
+        # same fallback lived here — any non-canonical side must raise BEFORE
+        # any client call.
+        broker, stub = _make(_StubOcoClient())
+        for bad_side in ("Sell", "Buy", "sell", "buy", ""):
+            with self.subTest(side=bad_side):
+                with self.assertRaises(ValueError) as ctx:
+                    _place(broker, side=bad_side)
+                message = str(ctx.exception)
+                self.assertIn("'BUY'", message)
+                self.assertIn("'SELL'", message)
+                self.assertIn("NOT accepted", message, "message must name the rejected Saxo form")
+        self.assertEqual(stub.precheck_calls, [], "an invalid side must never precheck")
+        self.assertEqual(stub.place_calls, [], "an invalid side must never POST")
+
     def test_precheck_reject_blocks_post(self):
         stub = _StubOcoClient(
             precheck_response=(
