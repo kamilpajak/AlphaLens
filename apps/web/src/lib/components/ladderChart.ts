@@ -28,6 +28,69 @@ export function finalExitMarkerTime(markers: ChartMarker[]): string | null {
 	return null;
 }
 
+/** Join separator for a folded multi-tier entry label (E1·E2·E3). */
+const TIER_JOIN = '·';
+
+/** Fold coincident entry-tier markers into a single marker.
+ *
+ *  When a fast move fills several entry rungs in the SAME daily session (e.g. a
+ *  gap-down open that trades through E1, E2 and E3 at once), every tier emits an
+ *  ENTRY marker on that one bar. They all render `belowBar` at the same slot, so
+ *  three arrows and their "E1"/"E2"/"E3" labels overlap into one illegible mark
+ *  — the user then sees only "E1" and reasonably concludes E2/E3 are missing.
+ *
+ *  This collapses each same-day ENTRY group into ONE marker whose label joins the
+ *  tier ids with `·` (E1·E2·E3), anchored at the first tier of the group and
+ *  keeping its other fields. Non-ENTRY markers (TP/SL/…) and entries that fill on
+ *  DISTINCT sessions pass through untouched — separating them in time is exactly
+ *  the informative case we must not flatten. Order is preserved. */
+export function collapseEntryMarkers(markers: ChartMarker[]): ChartMarker[] {
+	const out: ChartMarker[] = [];
+	// time -> index in `out` of the folded ENTRY marker for that session.
+	const entryIndexByTime = new Map<string, number>();
+	for (const m of markers) {
+		if (m.kind !== 'ENTRY') {
+			out.push(m);
+			continue;
+		}
+		const existing = entryIndexByTime.get(m.time);
+		if (existing === undefined) {
+			entryIndexByTime.set(m.time, out.length);
+			out.push({ ...m });
+		} else {
+			out[existing] = { ...out[existing], label: `${out[existing].label}${TIER_JOIN}${m.label}` };
+		}
+	}
+	return out;
+}
+
+/** A deeper entry-tier horizontal line: its limit price and axis title. */
+export interface EntryTierLine {
+	price: number;
+	title: string;
+}
+
+/** The filled entry tiers BELOW E1, each as a {price, title} price line.
+ *
+ *  The chart's single `entry` price line only ever draws E1 (the blended-entry
+ *  anchor). When a multi-rung ladder also fills E2/E3, those deeper limit prices
+ *  have no line, so the ladder geometry is invisible — worse when the tier
+ *  markers collapse onto one bar. This returns every ENTRY marker deeper than E1
+ *  (identified by its `level_id`) so each rung gets its own dashed line at its
+ *  real price. Title is the lowercased tier id (e2, e3) to match the lowercase
+ *  axis labels of the entry/tp/stop lines. Markers with no `level_id` are skipped
+ *  — the tier identity is unknown, so we cannot say it is not E1. */
+export function deeperEntryTierLines(markers: ChartMarker[]): EntryTierLine[] {
+	const lines: EntryTierLine[] = [];
+	for (const m of markers) {
+		if (m.kind !== 'ENTRY') continue;
+		const id = m.level_id?.trim().toLowerCase();
+		if (!id || id === 'e1') continue;
+		lines.push({ price: m.price, title: id });
+	}
+	return lines;
+}
+
 /** The bar time anchoring the "brief" vertical line: the first bar at/after
  *  brief_date, i.e. the arrival session (session_on_or_after semantics), since
  *  a brief dated on a non-trading day snaps forward to the next session.

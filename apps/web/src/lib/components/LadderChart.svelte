@@ -35,7 +35,12 @@
 	} from 'lightweight-charts';
 	import type { ChartPayload, ChartMarker } from '$lib/types';
 	import { fmtR } from '$lib/edge';
-	import { briefLineTime, finalExitMarkerTime } from './ladderChart';
+	import {
+		briefLineTime,
+		collapseEntryMarkers,
+		deeperEntryTierLines,
+		finalExitMarkerTime
+	} from './ladderChart';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
 	import { Crosshair } from 'lucide-svelte';
@@ -227,6 +232,22 @@
 					title: 'entry'
 				});
 			}
+			// Deeper filled entry tiers (E2, E3, …). The `entry` line above draws
+			// ONLY E1; without these a multi-rung ladder's deeper limits are
+			// invisible — and when those tiers fill on the same bar as E1 their
+			// markers collapse into one (see collapseEntryMarkers below), so the
+			// line becomes the only way to read the tier geometry. Always dashed +
+			// dimmed cyan: secondary to the E1 anchor, at each rung's real price.
+			deeperEntryTierLines(payload.markers).forEach((tier) => {
+				series.createPriceLine({
+					price: tier.price,
+					color: dim(COLOR.cyan),
+					lineWidth: 1,
+					lineStyle: LineStyle.Dashed,
+					axisLabelVisible: true,
+					title: tier.title
+				});
+			});
 			// A level is rendered "pending" (solid + bright) only when the trade
 			// is OPEN and the level has NOT been hit yet — that is the live,
 			// forward-looking target/stop. Everything else (planned plan-preview,
@@ -265,7 +286,7 @@
 			// Per-point markers (v5 plugin). Marker time MUST match an existing
 			// bar timestamp — the backend computes them from the same bars, so a
 			// marker can never land in a non-trading gap.
-			const markers = buildMarkers(payload.markers);
+			const markers = buildMarkers(collapseEntryMarkers(payload.markers));
 			if (markers.length > 0) {
 				createSeriesMarkers(series, markers);
 			}
