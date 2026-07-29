@@ -30,6 +30,7 @@ from __future__ import annotations
 import datetime as dt
 
 from alphalens_pipeline.paper import calendar as paper_cal
+
 from market import calendar as market_cal
 
 # A full calendar year exercises every XNYS holiday (New Year, MLK, Presidents,

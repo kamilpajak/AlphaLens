@@ -16,7 +16,6 @@ from rest_framework import serializers
 
 from briefs.models import Brief, DayMeta
 
-
 # PR-5a reverses the PR-4 (#546) wire-split: the SPA card is now BLOB-DRIVEN — it
 # reads the per-expert buffett values from expert_assessments instead of the flat
 # buffett_* fields — so the always-visible card chip needs the blob IN the bulk

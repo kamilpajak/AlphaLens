@@ -363,8 +363,8 @@ keyword regardless of resource. OpenAPI client codegen by się rozsypał.
 
 **Fix**: w każdym viewset (`Day`, `Theme`, `Ticker`) dodaję:
 ```python
-lookup_field = "date"          # / "theme" / "ticker"
-lookup_url_kwarg = "date"      # j.w.
+lookup_field = "date"  # / "theme" / "ticker"
+lookup_url_kwarg = "date"  # j.w.
 lookup_value_regex = r"[^/.]+"
 ```
 + rename handler signatures (`def retrieve(self, request, date=...)` zamiast `pk=...`).

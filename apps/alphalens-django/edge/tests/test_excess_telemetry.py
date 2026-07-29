@@ -80,7 +80,7 @@ def test_gate_ok_at_threshold():
     assert out["n_total"] == N_GATE_THRESHOLD
 
 
-from edge.api.excess_telemetry import _trailing_trend  # noqa: E402
+from edge.api.excess_telemetry import _trailing_trend
 
 
 def _pts(spec):

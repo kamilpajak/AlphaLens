@@ -302,9 +302,7 @@ def main(argv: list[str] | None = None) -> int:
         if qp.get("missing"):
             return True
         rf = method_diff.get("response_fields") or {}
-        if rf.get("classification") == "breaking":
-            return True
-        return False
+        return rf.get("classification") == "breaking"
 
     breaking = bool(report["missing_in_django"]) or any(
         any(_is_breaking(m) for m in methods.values())

@@ -27,6 +27,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+from django.db import models as django_models
+from django.db import transaction
+from django.utils import timezone
+
 from briefs.ingest.coerce import (
     coerce_bool,
     coerce_date,
@@ -34,10 +38,6 @@ from briefs.ingest.coerce import (
     coerce_int,
     coerce_str,
 )
-from django.db import models as django_models
-from django.db import transaction
-from django.utils import timezone
-
 from edge.models import DayMetaLadderOutcome, LadderOutcome
 
 logger = logging.getLogger(__name__)

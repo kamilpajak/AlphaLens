@@ -11,7 +11,6 @@ import pytest
 
 from briefs.ingest.coerce import (
     coerce_bool,
-    coerce_optional_bool,
     coerce_date,
     coerce_datetime,
     coerce_expert_blob,
@@ -20,6 +19,7 @@ from briefs.ingest.coerce import (
     coerce_int,
     coerce_json_obj,
     coerce_list_str,
+    coerce_optional_bool,
     coerce_str,
     is_missing,
 )

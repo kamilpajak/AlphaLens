@@ -40,16 +40,16 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from django.db import models as django_models
-from rest_framework.test import APIClient
-
 from alphalens_pipeline.feedback.benchmark_excess import enrich_store_with_benchmark_excess
 from alphalens_pipeline.feedback.ladder_chart import enrich_store_with_chart_payloads
-from alphalens_pipeline.feedback.sector_excess import enrich_store_with_sector_excess
 from alphalens_pipeline.feedback.population_ladder_monitor import (
     enrich_store_with_size_fields,
     replay_population_ladders,
 )
+from alphalens_pipeline.feedback.sector_excess import enrich_store_with_sector_excess
+from django.db import models as django_models
+from rest_framework.test import APIClient
+
 from edge.ingest.parquet import rebuild_from_parquet
 from edge.models import DayMetaLadderOutcome, LadderOutcome
 

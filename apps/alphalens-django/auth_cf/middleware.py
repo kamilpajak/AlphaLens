@@ -14,7 +14,7 @@ anonymous user gets through is up to the view's own decorator
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 from django.contrib.auth import get_user_model
 from django.http import HttpRequest, HttpResponse

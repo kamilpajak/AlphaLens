@@ -63,8 +63,8 @@ def _patch_cf_conf(monkeypatch, jwks):
     inconsistent ordering with our autouse cleanup, so we re-trigger the
     reload by hand after the test exits.
     """
-    from django.test.signals import setting_changed
     from django.conf import settings as dj_settings
+    from django.test.signals import setting_changed
 
     monkeypatch.setattr(conf, "CF_ACCESS_TEAM", TEST_TEAM)
     monkeypatch.setattr(conf, "CF_ACCESS_AUD", TEST_AUD)

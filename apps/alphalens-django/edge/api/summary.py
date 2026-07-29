@@ -47,7 +47,7 @@ _LENS_PREREGISTERED_REF: dict[str, str] = {
     "be_0p5r_trail0p6": "exit_geometry_2026_06_30 s7 be0.5/trail0.6",
     # One line on purpose: the research-side parity test greps for the exact
     # '"lens_id": "ref"' substring, so the ref must not be paren-wrapped.
-    "atr_bracket_1p5": "betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)",  # noqa: E501
+    "atr_bracket_1p5": "betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)",
 }
 
 

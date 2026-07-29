@@ -11,7 +11,7 @@ that non-DRF views (admin, healthz) also see the authenticated user.
 # actually references so static checkers don't flag them as undefined.
 from django.core.exceptions import ImproperlyConfigured
 
-from .base import *  # noqa: F401,F403  # NOSONAR python:S2208
+from .base import *  # NOSONAR python:S2208
 from .base import MIDDLEWARE, SECRET_KEY, env
 
 DEBUG = False
