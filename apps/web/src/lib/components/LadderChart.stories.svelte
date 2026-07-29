@@ -165,8 +165,12 @@
 		holding_days_elapsed: 0,
 		realized_r: -1.0,
 		open_r: null,
+		// Verbatim from the real payload: the plunge bar is ambiguous because the
+		// entries AND the stop resolve on that one session (sl_first), so the SL
+		// marker below carries ambiguous:true — broader than the type doc's "TP∧SL"
+		// phrasing, which is why the entries stay ambiguous:false.
 		ambiguous_bars: 1,
-		intrabar_rule: 'SL-first',
+		intrabar_rule: 'sl_first',
 		rth_only: true,
 		bars: [
 			bar('2026-07-14', 31.07),
