@@ -454,7 +454,18 @@ def _enriched_row(
     setup,
 ) -> dict:
     """Project one verified row + its LLM outcome into an enrichment record."""
-    b = brief or {}
+    # Single explicit branch on the LLM outcome (not `brief or {}` + repeated
+    # ternaries): the honest-status columns and the prose lookups all key off
+    # the same condition, and one branch keeps flow analysers from inventing
+    # a path where ``b`` is None (Sonar S2259).
+    if brief is None:
+        b: dict = {}
+        status = "unavailable"
+        error_kind: str | None = terminal_kind.value
+    else:
+        b = brief
+        status = "ok"
+        error_kind = None
     # PR-3: serialise the template_facts dict we already projected into
     # facts above so the SPA can render typed citations without
     # re-touching the events parquet. Mirror b.get for trade_setup —
@@ -471,8 +482,8 @@ def _enriched_row(
         "ticker": row["ticker"],
         # Honest LLM outcome: downstream readers must not have to
         # infer "the LLM failed" from all-None prose columns.
-        "brief_status": "ok" if brief is not None else "unavailable",
-        "brief_error_kind": (terminal_kind.value if brief is None else None),
+        "brief_status": status,
+        "brief_error_kind": error_kind,
         "next_earnings_date": next_earnings,
         "brief_model_used": b.get("model_used"),
         "brief_tldr": b.get("tldr"),
