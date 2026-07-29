@@ -1662,6 +1662,165 @@ class TestSellOrdersAlreadyExistDefersNotCrashes(unittest.TestCase):
         self.assertEqual(broker.cancelled, [], "old stop NOT cancelled when the new place fails")
 
 
+class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
+    """A successful standalone-stop placement journals a timestamped ``stop_placed``
+    outcome record (observability-only: fill-to-protection latency for the non-OCO
+    path). The qty journaled is the qty ACTUALLY placed (post execute-time clamp),
+    and NO record is written on any rejection / error / flat-skip path."""
+
+    def _stop_placed_lines(self) -> list[dict[str, Any]]:
+        return [
+            line for line in cl._iter_standalone_stop_journal() if line.get("kind") == "stop_placed"
+        ]
+
+    def test_journal_stop_placed_record_shape_with_injected_clock(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._journal_stop_placed(_UIC, 46.0, clock=lambda: 1234.5)
+                lines = self._stop_placed_lines()
+        self.assertEqual(lines, [{"kind": "stop_placed", "uic": _UIC, "qty": 46.0, "ts": 1234.5}])
+
+    def test_success_appends_stop_placed_with_ts_and_qty(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+            executor = cl._make_protection_executor(broker, _throttle_to([]))
+            action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(action, False, report)
+                lines = self._stop_placed_lines()
+        self.assertEqual(report.exits_placed, 1)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["uic"], _UIC)
+        self.assertEqual(lines[0]["qty"], 46.0)
+        self.assertIsInstance(lines[0]["ts"], float)
+
+    def test_clamped_qty_is_journaled_when_position_shrank(self) -> None:
+        # The live re-check clips 46 -> 20; the journal must carry the 20 actually
+        # placed, never the stale action.qty.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(by_uic={_UIC: _pos(20.0)})
+            executor = cl._make_protection_executor(broker, _throttle_to([]))
+            action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(action, False, report)
+                lines = self._stop_placed_lines()
+        self.assertEqual(broker.placed[0][2], 20.0)
+        self.assertEqual([line["qty"] for line in lines], [20.0])
+
+    def test_no_stop_placed_on_failure_paths(self) -> None:
+        failure_brokers = {
+            "flat-skip": _ProtBroker(by_uic={_UIC: _pos(0.0)}),
+            "defer-sell-exist": _ProtBroker(
+                by_uic={_UIC: _pos(46.0)},
+                place_error=OrderRejectedError(
+                    "blocked", error_code="SellOrdersAlreadyExistForOwnedContracts"
+                ),
+            ),
+            "clean-reject": _ProtBroker(
+                by_uic={_UIC: _pos(46.0)}, place_error=OrderRejectedError("rejected")
+            ),
+            "broker-error": _ProtBroker(by_uic={_UIC: _pos(46.0)}, place_error=BrokerError("boom")),
+        }
+        for label, broker in failure_brokers.items():
+            with self.subTest(label), TemporaryDirectory() as d:
+                journal = Path(d) / "standalone_stops.jsonl"
+                executor = cl._make_protection_executor(broker, _throttle_to([]))
+                action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
+                report = cl.TickReport()
+                with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                    executor(action, False, report)
+                    lines = self._stop_placed_lines()
+                self.assertEqual(report.exits_placed, 0)
+                self.assertEqual(lines, [], f"no stop_placed on the {label} path")
+
+
+class TestOutcomeJournalIoFailureNeverBlocksProtection(unittest.TestCase):
+    """The ``stop_placed`` / ``amend_ok`` outcome records are observability-only,
+    so a fallible journal append (OSError: disk full, ENOSPC on fsync, permission)
+    must NEVER change protection behavior: the supersede cancels of the OLD stop
+    still run (never two live sell stops on the same shares), no exception escapes
+    the executor (an OSError is not a BrokerError, so it would blow through the
+    per-action boundary and kill the tick), and the failure surfaces as a
+    throttled alert only."""
+
+    def test_supersede_cancels_survive_stop_placed_journal_oserror(self) -> None:
+        alerts: list[str] = []
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, _throttle_to(alerts))
+        action = PlaceStop(
+            _UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 1), supersede_ids=("old-stop",)
+        )
+        report = cl.TickReport()
+        with mock.patch.object(
+            cl,
+            "_append_standalone_stop_journal",
+            side_effect=OSError("No space left on device"),
+        ):
+            executor(action, False, report)  # must NOT raise
+        self.assertEqual(len(broker.placed), 1)
+        self.assertEqual(
+            broker.cancelled,
+            ["old-stop"],
+            "superseded stop still cancelled — never two live sell stops on the same shares",
+        )
+        self.assertEqual(report.exits_placed, 1)
+        self.assertTrue(
+            any("journal" in a for a in alerts),
+            f"journal write failure surfaced as a throttled alert: {alerts}",
+        )
+
+    def test_non_oserror_from_journal_append_does_not_escape_executor(self) -> None:
+        """The containment intent is 'the journal can NEVER abort protection', not
+        'disk errors cannot'. A non-OSError bug in the append (e.g. a future
+        non-JSON-serializable field -> TypeError, or a RuntimeError) must be
+        contained the same way — it is not a BrokerError either, so unhandled it
+        would abort the remaining protection actions of the tick."""
+        alerts: list[str] = []
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, _throttle_to(alerts))
+        action = PlaceStop(
+            _UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 1), supersede_ids=("old-stop",)
+        )
+        report = cl.TickReport()
+        with mock.patch.object(
+            cl,
+            "_append_standalone_stop_journal",
+            side_effect=RuntimeError("journal append bug"),
+        ):
+            executor(action, False, report)  # must NOT raise
+        self.assertEqual(broker.cancelled, ["old-stop"], "supersede cancel still ran")
+        self.assertEqual(report.exits_placed, 1)
+        self.assertTrue(
+            any("journal" in a for a in alerts),
+            f"journal write failure surfaced as a throttled alert: {alerts}",
+        )
+
+    def test_amend_ok_journal_oserror_does_not_escape_executor(self) -> None:
+        alerts: list[str] = []
+        broker = _ProtBroker(by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)])
+        executor = cl._make_protection_executor(
+            broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
+        )
+        report = cl.TickReport()
+        with mock.patch.object(
+            cl,
+            "_append_standalone_stop_journal",
+            side_effect=OSError("Permission denied"),
+        ):
+            executor(_amend_action(), False, report)  # must NOT raise
+        self.assertEqual(len(broker.amended), 1, "the amend itself succeeded")
+        self.assertEqual(report.exits_placed, 1)
+        self.assertTrue(
+            any("journal" in a for a in alerts),
+            f"journal write failure surfaced as a throttled alert: {alerts}",
+        )
+
+
 class TestIdempotentCancelNoThrash(unittest.TestCase):
     """A-S5: cancelling an already-gone order is a success, not a raise."""
 
@@ -2363,6 +2522,92 @@ class TestExecuteAmendStop(unittest.TestCase):
         self.assertEqual(markers, [], "no amend_failed journaled on a clean amend")
 
 
+class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
+    """A successful AmendStop PATCH journals a timestamped ``amend_ok`` outcome
+    record carrying the qty actually amended to (the live-clamped target), so
+    fill-to-protection latency is measurable on the amend path too. Failure paths
+    keep their existing ``amend_failed`` / no-journal behavior — never ``amend_ok``."""
+
+    def _amend_ok_lines(self) -> list[dict[str, Any]]:
+        return [
+            line for line in cl._iter_standalone_stop_journal() if line.get("kind") == "amend_ok"
+        ]
+
+    def test_journal_amend_ok_record_shape_with_injected_clock(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._journal_amend_ok(_UIC, 6.0, clock=lambda: 1234.5)
+                lines = self._amend_ok_lines()
+        self.assertEqual(lines, [{"kind": "amend_ok", "uic": _UIC, "qty": 6.0, "ts": 1234.5}])
+
+    def test_amend_success_appends_amend_ok_with_live_clamped_qty(self) -> None:
+        # grew to 6 since the snapshot (target_qty 4): the amend targets LIVE owned
+        # and the journal carries that actually-amended 6, never the stale 4.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(6.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)]
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(target_qty=4.0), False, report)
+                lines = self._amend_ok_lines()
+        self.assertEqual(report.exits_placed, 1)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["uic"], _UIC)
+        self.assertEqual(lines[0]["qty"], 6.0)
+        self.assertIsInstance(lines[0]["ts"], float)
+
+    def test_no_amend_ok_on_capability_error(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0)],
+                amend_error=BrokerCapabilityError("order placement disabled"),
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)
+                lines = self._amend_ok_lines()
+        self.assertEqual(lines, [], "no amend_ok on a provably-unsent capability error")
+        self.assertEqual(report.exits_placed, 0)
+
+    def test_no_amend_ok_on_broker_error_and_amend_failed_kept(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0)],
+                amend_error=OrderRejectedError("terminal order", error_code="OrderNotWorking"),
+            )
+            throttle = cl._AlertThrottle([].append, clock=lambda: 0.0)
+            executor = cl._make_protection_executor(
+                broker, throttle, amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)
+                ok_lines = self._amend_ok_lines()
+                failed_lines = [
+                    line
+                    for line in cl._iter_standalone_stop_journal()
+                    if line.get("kind") == "amend_failed"
+                ]
+        self.assertEqual(ok_lines, [], "no amend_ok on a rejected amend")
+        self.assertEqual(
+            [m.get("uic") for m in failed_lines], [_UIC], "amend_failed keeps its behavior"
+        )
+        self.assertEqual(report.exits_placed, 0)
+
+
 def _oco_leg(
     order_id: str, order_type: str, amount: float, *, base: str = "crid-oco-0"
 ) -> OrderState:
@@ -2555,6 +2800,40 @@ class TestBuildProtectionViewTtlFolds(unittest.TestCase):
                 view = cl.build_protection_view(self._broker(), [])
         self.assertEqual(view.oco_recently_placed, frozenset())
         self.assertEqual(view.amend_recently_failed, frozenset())
+
+
+class TestProtectionViewIgnoresOutcomeRecords(unittest.TestCase):
+    """``stop_placed`` / ``amend_ok`` are observability-only: build_protection_view
+    and every fold must produce EXACTLY the same view with or without them — zero
+    behavioral change to protection logic."""
+
+    def _broker(self) -> _ProtBroker:
+        return _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
+
+    def _view_fields(self, view: ProtectionView) -> tuple[Any, ...]:
+        return (
+            _planned_fold_data(view.planned_by_uic),
+            view.oco_unsupported,
+            view.oco_recently_placed,
+            view.amend_recently_failed,
+        )
+
+    def test_view_identical_with_and_without_outcome_records(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                cl._journal_oco_placed(_UIC, clock=lambda: 1000.0 - 30.0)
+                cl._journal_amend_failed(_UIC, clock=lambda: 1000.0 - 30.0)
+                before = self._view_fields(
+                    cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
+                )
+                cl._journal_stop_placed(_UIC, 46.0, clock=lambda: 1000.0 - 5.0)
+                cl._journal_amend_ok(_UIC, 46.0, clock=lambda: 1000.0 - 5.0)
+                after = self._view_fields(
+                    cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
+                )
+        self.assertEqual(before, after, "the outcome records change nothing in the view")
 
 
 class TestAmendSeqMonotonicJournalBacked(unittest.TestCase):
@@ -2790,6 +3069,31 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
 
     def test_empty_input_is_empty_output(self) -> None:
         self.assertEqual(cl._compact_standalone_stop_journal_lines([]), [])
+
+    def test_keeps_newest_stop_placed_and_amend_ok_per_uic(self) -> None:
+        # The compactor drops unknown kinds, so the outcome records MUST be listed
+        # in its newest-per-uic retention or a startup compaction silently loses
+        # the latency observability the records exist for.
+        lines = [
+            {"kind": "stop_placed", "uic": 111, "qty": 46.0, "ts": 100.0},
+            {"kind": "stop_placed", "uic": 111, "qty": 20.0, "ts": 250.0},
+            {"kind": "stop_placed", "uic": 222, "qty": 7.0, "ts": 50.0},
+            {"kind": "amend_ok", "uic": 111, "qty": 6.0, "ts": 90.0},
+            {"kind": "amend_ok", "uic": 111, "qty": 8.0, "ts": 260.0},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(lines)
+        stop_placed = [line for line in compacted if line["kind"] == "stop_placed"]
+        amend_ok = [line for line in compacted if line["kind"] == "amend_ok"]
+        self.assertEqual(
+            sorted((line["uic"], line["ts"], line["qty"]) for line in stop_placed),
+            [(111, 250.0, 20.0), (222, 50.0, 7.0)],
+            "the newest stop_placed per uic survives; older ones are dropped",
+        )
+        self.assertEqual(
+            [(line["uic"], line["ts"], line["qty"]) for line in amend_ok],
+            [(111, 260.0, 8.0)],
+            "the newest amend_ok per uic survives; the older one is dropped",
+        )
 
 
 class TestCompactStandaloneStopJournalFile(unittest.TestCase):

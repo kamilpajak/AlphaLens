@@ -1096,6 +1096,32 @@ def _journal_amend_failed(uic: int, *, clock: Callable[[], float] = time.time) -
     _append_standalone_stop_journal({"kind": "amend_failed", "uic": int(uic), "ts": float(clock())})
 
 
+def _journal_stop_placed(uic: int, qty: float, *, clock: Callable[[], float] = time.time) -> None:
+    """Persist a timestamped ``stop_placed`` outcome record (observability-only).
+
+    Written by the executor ONLY on a confirmed standalone-stop placement, with the
+    qty ACTUALLY placed (post execute-time clamp). Read by nothing in the protection
+    logic — no fold consumes it — it exists so fill-to-protection latency is
+    measurable for the non-OCO path too (``oco_placed`` covers the OCO path). The
+    ``clock`` seam keeps the record's ``ts`` testable (default wall clock)."""
+    _append_standalone_stop_journal(
+        {"kind": "stop_placed", "uic": int(uic), "qty": float(qty), "ts": float(clock())}
+    )
+
+
+def _journal_amend_ok(uic: int, qty: float, *, clock: Callable[[], float] = time.time) -> None:
+    """Persist a timestamped ``amend_ok`` outcome record (observability-only).
+
+    Written by the executor ONLY on a confirmed AmendStop PATCH, with the qty the
+    stop was amended to (the live-clamped absolute target). Read by nothing in the
+    protection logic — no fold consumes it — it exists so fill-to-protection latency
+    is measurable on the amend path (``amend_failed`` already covers failures). The
+    ``clock`` seam keeps the record's ``ts`` testable (default wall clock)."""
+    _append_standalone_stop_journal(
+        {"kind": "amend_ok", "uic": int(uic), "qty": float(qty), "ts": float(clock())}
+    )
+
+
 def _fold_ttl_markers(
     lines: Iterable[Mapping[str, Any]], kind: str, now: float, ttl_s: float
 ) -> frozenset[int]:
@@ -1191,7 +1217,9 @@ def _compact_standalone_stop_journal_lines(
         uic present);
       - the NEWEST (max ``ts``) ``oco_placed`` / ``amend_failed`` / ``oco_too_far``
         per uic — the TTL fold's membership for ANY ``now`` is decided by the
-        newest marker, so older ones are redundant;
+        newest marker, so older ones are redundant — plus the NEWEST ``stop_placed``
+        / ``amend_ok`` outcome record per uic (observability-only, no fold reads
+        them; the latest outcome is what latency inspection needs);
       - the ``amend_seq`` carrying the MAX seq per uic (``_read_persisted_amend_seq``
         returns that max).
 
@@ -1215,6 +1243,8 @@ def _compact_standalone_stop_journal_lines(
         "oco_placed": {},
         "amend_failed": {},
         "oco_too_far": {},
+        "stop_placed": {},
+        "amend_ok": {},
     }
     amend_seq: dict[int, tuple[float, dict[str, Any]]] = {}
 
@@ -1240,6 +1270,8 @@ def _compact_standalone_stop_journal_lines(
         ttl_latest["amend_failed"][uic][1] for uic in sorted(ttl_latest["amend_failed"])
     )
     compacted.extend(ttl_latest["oco_too_far"][uic][1] for uic in sorted(ttl_latest["oco_too_far"]))
+    compacted.extend(ttl_latest["stop_placed"][uic][1] for uic in sorted(ttl_latest["stop_placed"]))
+    compacted.extend(ttl_latest["amend_ok"][uic][1] for uic in sorted(ttl_latest["amend_ok"]))
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
     return compacted
 
@@ -1787,6 +1819,37 @@ def _emit_alert(
         report.alerts += 1
 
 
+def _journal_outcome_best_effort(
+    append: Callable[[], None],
+    throttle: _AlertThrottle,
+    report: TickReport,
+    *,
+    uic: int,
+    kind: str,
+) -> None:
+    """Best-effort append of an observability-only outcome record (``stop_placed``
+    / ``amend_ok``). The journal write is fallible I/O (``mkdir``/``open``/``fsync``
+    raise ``OSError`` on disk full, ENOSPC, permission) and an ``OSError`` is NOT a
+    ``BrokerError``, so unhandled it would blow through the per-action boundary in
+    ``_run_protection_pass`` and abort the tick mid-protection. An outcome record
+    is read by nothing in the protection logic, so its failure must never change
+    protection behavior — swallow to a throttled alert. The catch is deliberately
+    ``Exception``, not just ``OSError``: the containment intent is "the journal can
+    NEVER abort protection", and a future append bug (a non-JSON-serializable field
+    -> ``TypeError``) is exactly as non-Broker as ENOSPC. ``BaseException``
+    (KeyboardInterrupt / SystemExit) still propagates."""
+    try:
+        append()
+    except Exception as exc:
+        _emit_alert(
+            throttle,
+            report,
+            f"uic {uic}: {kind} outcome journal write failed — {exc}",
+            uic=uic,
+            reason="outcome-journal-io",
+        )
+
+
 # Message tokens that mean "the order is already gone" — an idempotent cancel of
 # an already-cancelled / cascade-removed sibling must be a success, not a raise
 # (saxo-oco memo §5). Cancel carries no structured code, so classify on the
@@ -2152,6 +2215,14 @@ def _execute_amend_stop(
 
     report.exits_placed += 1
     throttle.record_place_success(action.uic)
+    # Outcome record with the qty the stop was amended to (live-clamped target).
+    _journal_outcome_best_effort(
+        lambda: _journal_amend_ok(action.uic, target),
+        throttle,
+        report,
+        uic=action.uic,
+        kind="amend_ok",
+    )
 
 
 def _execute_place_stop(
@@ -2210,10 +2281,25 @@ def _execute_place_stop(
     report.exits_placed += 1
     throttle.record_place_success(action.uic)
     # Cancel the OLD / stale / smaller stop only AFTER the new one is confirmed —
-    # never a naked window on the shares that were already covered.
+    # never a naked window on the shares that were already covered. The
+    # confirmed-place -> supersede-cancel adjacency is safety-critical (a break
+    # between them leaves TWO live sell stops on the same shares, the double-sell
+    # class killed in #878), so nothing fallible may sit between them.
     for order_id in action.supersede_ids:
         _idempotent_cancel(broker, order_id)
         report.cancels += 1
+    # Outcome record with the qty ACTUALLY placed (post-clamp), never action.qty.
+    # AFTER the supersede cancels: the record is observability-only (read by
+    # nothing), so its ordering is irrelevant — its failure mode is not. Flip
+    # side: a cancel that raises skips the record, so a MISSING stop_placed
+    # never implies a naked position — the place above already succeeded.
+    _journal_outcome_best_effort(
+        lambda: _journal_stop_placed(action.uic, qty),
+        throttle,
+        report,
+        uic=action.uic,
+        kind="stop_placed",
+    )
 
 
 __all__ = [
