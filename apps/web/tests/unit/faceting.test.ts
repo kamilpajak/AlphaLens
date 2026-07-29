@@ -76,10 +76,25 @@ describe('buildFilterChips', () => {
 
 	it('prepends an ALL chip and maps each option in the given order', () => {
 		expect(buildFilterChips(facet, cfg)).toEqual([
-			{ key: 'ALL', label: 'all', count: 5, tone: 'text-fg border-fg-muted', def: 'Show all.' },
+			{
+				key: 'ALL',
+				label: 'all',
+				count: 5,
+				tone: 'text-fg border-fg-muted',
+				def: undefined
+			},
 			{ key: 'SL_HIT', label: 'sl_hit', count: 3, tone: 'tone-SL_HIT', def: 'def SL_HIT' },
 			{ key: 'TP_FULL', label: 'tp_full', count: 2, tone: 'tone-TP_FULL', def: 'def TP_FULL' }
 		]);
+	});
+
+	it('emits def-less chips when no def callback is configured (no tooltips)', () => {
+		const chips = buildFilterChips(facet, {
+			all: { count: 5 },
+			label: (k: string) => `#${k.toLowerCase()}`,
+			tone: () => 'text-fg-muted border-grid'
+		});
+		expect(chips.every((c) => c.def === undefined)).toBe(true);
 	});
 
 	it('honors ALL-chip overrides (key/label/def/tone)', () => {

@@ -13,13 +13,15 @@ export interface FacetOption {
 }
 
 /** A single chip for `LedgerFilterBar`: its key + label, the row count it covers,
- *  a Tailwind `text-* border-*` tone, and the plain-text `ChipTip` definition. */
+ *  a Tailwind `text-* border-*` tone, and optionally a plain-text `ChipTip`
+ *  definition. A chip without `def` renders as a bare button — no tooltip. Facets
+ *  whose keys are self-explanatory (e.g. theme tags) omit defs entirely. */
 export interface FilterChip {
 	key: string;
 	label: string;
 	count: number;
 	tone: string;
-	def: string;
+	def?: string;
 }
 
 /** Normalize a nullable value to the empty-string bucket so null/missing values
@@ -66,7 +68,8 @@ export interface BuildChipsConfig {
 	all: AllChipConfig;
 	label: (key: string) => string;
 	tone: (key: string) => string;
-	def: (key: string) => string;
+	/** Omit (together with `all.def`) for a tooltip-free bar. */
+	def?: (key: string) => string;
 }
 
 /** Build the `LedgerFilterBar` chip array: the leading "all" chip followed by one
@@ -79,7 +82,7 @@ export function buildFilterChips(facet: FacetOption[], cfg: BuildChipsConfig): F
 		label: cfg.all.label ?? 'all',
 		count: cfg.all.count,
 		tone: cfg.all.tone ?? 'text-fg border-fg-muted',
-		def: cfg.all.def ?? 'Show all.'
+		def: cfg.all.def
 	};
 	return [
 		all,
@@ -88,7 +91,7 @@ export function buildFilterChips(facet: FacetOption[], cfg: BuildChipsConfig): F
 			label: cfg.label(f.key),
 			count: f.count,
 			tone: cfg.tone(f.key),
-			def: cfg.def(f.key)
+			def: cfg.def?.(f.key)
 		}))
 	];
 }

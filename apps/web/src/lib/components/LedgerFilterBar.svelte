@@ -1,10 +1,12 @@
 <script lang="ts">
 	// Sticky multi-select filter bar shared by both /experiments ledgers (the
 	// paradigm ledger and the tool.experiments ledger). It doubles as the visible
-	// status legend: each chip is a toggle carrying a ChipTip definition, several
-	// can be active at once, and a row shows if its status is in the selection
-	// (empty selection = ALL). Owns the toggle / clear / blur-on-click behaviour;
-	// the parent owns `selected` (bindable) and does the row filtering.
+	// status legend: each chip is a toggle, several can be active at once, and a
+	// row shows if its status is in the selection (empty selection = ALL). A chip
+	// with a `def` carries a ChipTip definition; a def-less chip (self-explanatory
+	// facets like theme tags) renders as a bare button with no tooltip. Owns the
+	// toggle / clear / blur-on-click behaviour; the parent owns `selected`
+	// (bindable) and does the row filtering.
 	//
 	// The ALL chip (key === allKey) clears the selection; every other chip toggles
 	// its key in/out. `selected` holds only the non-ALL keys — empty means ALL.
@@ -55,22 +57,31 @@
 	}
 </script>
 
+{#snippet chipButton(fc: FilterChip)}
+	{@const active = isActive(fc.key)}
+	<button
+		type="button"
+		onclick={(e) => toggle(fc.key, e)}
+		aria-pressed={active}
+		class="border px-2 py-0.5 text-[10px] uppercase tracking-widest transition-colors {fc.tone} {active
+			? 'bg-bg-3 ring-1 ring-inset ring-current'
+			: 'opacity-70 hover:opacity-100'}"
+	>{fc.label} <span class="font-mono">{fc.count}</span></button>
+{/snippet}
+
 <div class="sticky top-0 z-20 flex flex-wrap items-center gap-2 border-b border-grid bg-bg-1/95 px-4 sm:px-5 py-2.5 backdrop-blur">
 	<span class="text-[10px] uppercase tracking-widest text-fg-muted mr-0.5">{label}</span>
 	{#each chips as fc}
-		{@const active = isActive(fc.key)}
-		<ChipTip term={fc.key} body={fc.def}>
-			{#snippet chip()}
-				<button
-					type="button"
-					onclick={(e) => toggle(fc.key, e)}
-					aria-pressed={active}
-					class="border px-2 py-0.5 text-[10px] uppercase tracking-widest transition-colors {fc.tone} {active
-						? 'bg-bg-3 ring-1 ring-inset ring-current'
-						: 'opacity-70 hover:opacity-100'}"
-				>{fc.label} <span class="font-mono">{fc.count}</span></button>
-			{/snippet}
-		</ChipTip>
+		{#if fc.def}
+			<ChipTip term={fc.key} body={fc.def}>
+				{#snippet chip()}
+					{@render chipButton(fc)}
+				{/snippet}
+			</ChipTip>
+		{:else}
+			<!-- Self-explanatory chip (e.g. a theme tag) — no ChipTip, bare toggle. -->
+			{@render chipButton(fc)}
+		{/if}
 	{/each}
 	{#if selected.size > 0}
 		<button

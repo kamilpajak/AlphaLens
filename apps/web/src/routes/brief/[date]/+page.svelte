@@ -66,7 +66,7 @@
 	);
 
 	// Theme facet chips for the shared LedgerFilterBar, in count-desc (then key)
-	// order. Themes carry no formal definition, so the ChipTip just names the tag.
+	// order. Theme tags are self-explanatory, so no defs — no tooltips.
 	const themeChips = $derived(
 		buildFilterChips(
 			Object.entries(data.brief.theme_counts)
@@ -75,12 +75,10 @@
 			{
 				all: {
 					count: data.brief.n_candidates,
-					tone: 'text-fg-muted border-grid',
-					def: 'Show every candidate.'
+					tone: 'text-fg-muted border-grid'
 				},
 				label: (k) => `#${k}`,
-				tone: () => 'text-fg-muted border-grid',
-				def: (k) => `Candidates tagged "${k}".`
+				tone: () => 'text-fg-muted border-grid'
 			}
 		)
 	);
