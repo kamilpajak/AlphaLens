@@ -1774,6 +1774,32 @@ class TestOutcomeJournalIoFailureNeverBlocksProtection(unittest.TestCase):
             f"journal write failure surfaced as a throttled alert: {alerts}",
         )
 
+    def test_non_oserror_from_journal_append_does_not_escape_executor(self) -> None:
+        """The containment intent is 'the journal can NEVER abort protection', not
+        'disk errors cannot'. A non-OSError bug in the append (e.g. a future
+        non-JSON-serializable field -> TypeError, or a RuntimeError) must be
+        contained the same way — it is not a BrokerError either, so unhandled it
+        would abort the remaining protection actions of the tick."""
+        alerts: list[str] = []
+        broker = _ProtBroker(by_uic={_UIC: _pos(46.0)})
+        executor = cl._make_protection_executor(broker, _throttle_to(alerts))
+        action = PlaceStop(
+            _UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 1), supersede_ids=("old-stop",)
+        )
+        report = cl.TickReport()
+        with mock.patch.object(
+            cl,
+            "_append_standalone_stop_journal",
+            side_effect=RuntimeError("journal append bug"),
+        ):
+            executor(action, False, report)  # must NOT raise
+        self.assertEqual(broker.cancelled, ["old-stop"], "supersede cancel still ran")
+        self.assertEqual(report.exits_placed, 1)
+        self.assertTrue(
+            any("journal" in a for a in alerts),
+            f"journal write failure surfaced as a throttled alert: {alerts}",
+        )
+
     def test_amend_ok_journal_oserror_does_not_escape_executor(self) -> None:
         alerts: list[str] = []
         broker = _ProtBroker(by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)])

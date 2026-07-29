@@ -1833,10 +1833,14 @@ def _journal_outcome_best_effort(
     ``BrokerError``, so unhandled it would blow through the per-action boundary in
     ``_run_protection_pass`` and abort the tick mid-protection. An outcome record
     is read by nothing in the protection logic, so its failure must never change
-    protection behavior — swallow to a throttled alert."""
+    protection behavior — swallow to a throttled alert. The catch is deliberately
+    ``Exception``, not just ``OSError``: the containment intent is "the journal can
+    NEVER abort protection", and a future append bug (a non-JSON-serializable field
+    -> ``TypeError``) is exactly as non-Broker as ENOSPC. ``BaseException``
+    (KeyboardInterrupt / SystemExit) still propagates."""
     try:
         append()
-    except OSError as exc:
+    except Exception as exc:
         _emit_alert(
             throttle,
             report,
@@ -2286,7 +2290,9 @@ def _execute_place_stop(
         report.cancels += 1
     # Outcome record with the qty ACTUALLY placed (post-clamp), never action.qty.
     # AFTER the supersede cancels: the record is observability-only (read by
-    # nothing), so its ordering is irrelevant — its failure mode is not.
+    # nothing), so its ordering is irrelevant — its failure mode is not. Flip
+    # side: a cancel that raises skips the record, so a MISSING stop_placed
+    # never implies a naked position — the place above already succeeded.
     _journal_outcome_best_effort(
         lambda: _journal_stop_placed(action.uic, qty),
         throttle,
