@@ -21,7 +21,7 @@ members = ["apps/alphalens-feedback", "apps/alphalens-pipeline", "apps/alphalens
 # Per-app test-runners (pytest-django for the django app) live here too so a
 # single `uv sync --group dev` boots the full CI test matrix.
 dev = [
-    "ruff>=0.15.21",
+    "ruff>=0.16.0",
     "coverage>=7.15.1",
     "pre-commit>=4.6.0",
     "bandit>=1.9.4",
@@ -71,6 +71,8 @@ ignore = [
     "E501",   # line-too-long (formatter handles it)
     "PLR2004",  # magic numbers — quant code uses many literals (lookback windows, thresholds)
     "PLR0913",  # too many args — research code often has wide signatures
+    "PLR0917",  # too many positional args — same family as PLR0913 (stabilized in ruff 0.16)
+    "RUF012",   # mutable class-attribute defaults — 60+ pre-existing sites (rule scope widened in ruff 0.16); ClassVar adoption tracked separately
     "PLR0915",  # too many statements — backtest functions are linear sequences
     "PLR0912",  # too many branches — verdict logic
     "PLR0911",  # too many returns — verdict classifiers + value-mappers are linear early-return ladders (same family as PLR0912 verdict-logic)
@@ -117,3 +119,7 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
+# ruff 0.16 started formatting fenced Python blocks inside Markdown; keep the
+# hand-aligned code examples in READMEs (e.g. the automanager acceptance GWT
+# walkthrough) as authored.
+exclude = ["*.md"]

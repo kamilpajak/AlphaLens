@@ -463,7 +463,7 @@ class TestAtrTiltFieldsOnAPI:
     """
 
     @staticmethod
-    def _atr_fixture(tmp_path: "Path") -> None:
+    def _atr_fixture(tmp_path: Path) -> None:
         _write_parquet(
             tmp_path,
             "2026-05-22",
@@ -707,7 +707,7 @@ class TestBriefStatusOnAPI:
     regression guard against a future exclude-tuple change dropping them."""
 
     @staticmethod
-    def _status_fixture(tmp_path: "Path") -> None:
+    def _status_fixture(tmp_path: Path) -> None:
         _write_parquet(
             tmp_path,
             "2026-07-27",

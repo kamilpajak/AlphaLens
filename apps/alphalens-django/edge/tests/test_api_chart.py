@@ -15,8 +15,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from django.test import override_settings
-from edge.ingest.parquet import rebuild_from_parquet
 from rest_framework.test import APIClient
+
+from edge.ingest.parquet import rebuild_from_parquet
 
 _BRIEF_DATE = "2026-05-27"
 

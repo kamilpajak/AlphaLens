@@ -194,7 +194,7 @@ def _format_summary(metrics: dict[str, float | None]) -> str:
     return " / ".join(rendered)
 
 
-def score_technicals_from_frame(ohlcv: pd.DataFrame) -> dict[str, float | None | str]:
+def score_technicals_from_frame(ohlcv: pd.DataFrame) -> dict[str, float | str | None]:
     """Compute the 4 technical metrics + a summary string from an OHLCV frame.
 
     The OHLCV frame must have ``[open, high, low, close, volume]`` columns
@@ -247,7 +247,7 @@ def score_technicals(
     ticker: str,
     asof: dt.date,
     loader: Callable[[str, dt.date], pd.DataFrame],
-) -> dict[str, float | None | str]:
+) -> dict[str, float | str | None]:
     """Top-level entry point — delegates OHLCV fetch to ``loader``.
 
     ``loader(ticker, asof)`` should return an OHLCV DataFrame ending at or

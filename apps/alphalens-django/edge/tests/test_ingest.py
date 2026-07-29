@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 from django.core.management import call_command
+
 from edge.ingest.parquet import rebuild_from_parquet
 from edge.models import DayMetaLadderOutcome, LadderOutcome
 

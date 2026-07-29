@@ -23,8 +23,9 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from briefs.ingest.parquet import rebuild_from_parquet
 from rest_framework.test import APIClient
+
+from briefs.ingest.parquet import rebuild_from_parquet
 
 _ASOF = dt.date(2026, 5, 24)
 # Single source of truth: the golden produced by the research-side recorder.

@@ -108,7 +108,7 @@ class TestAssertSchemaCurrent:
         class _FakeLoader:
             applied_migrations = {("briefs", "0006")}
 
-            class graph:  # noqa: N801 - mimics MigrationLoader.graph attr
+            class graph:
                 @staticmethod
                 def leaf_nodes():
                     return [("briefs", "0007")]
@@ -134,7 +134,7 @@ class TestAssertSchemaCurrent:
         class _FakeLoader:
             applied_migrations = {("briefs", "0006"), ("briefs", "0007")}
 
-            class graph:  # noqa: N801
+            class graph:
                 @staticmethod
                 def leaf_nodes():
                     return [("briefs", "0006")]
@@ -163,7 +163,7 @@ class TestAssertSchemaCurrent:
         class _FakeLoader:
             applied_migrations = {("briefs", "0006"), ("briefs", "0007")}
 
-            class graph:  # noqa: N801
+            class graph:
                 @staticmethod
                 def leaf_nodes():
                     return [("briefs", "0006")]

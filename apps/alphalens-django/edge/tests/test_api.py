@@ -15,9 +15,10 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from rest_framework.test import APIClient
+
 from edge.api.summary import N_GATE_THRESHOLD
 from edge.ingest.parquet import rebuild_from_parquet
-from rest_framework.test import APIClient
 
 
 def _write_parquet(directory: Path, iso_date: str, rows: list[dict]) -> None:

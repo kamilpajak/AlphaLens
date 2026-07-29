@@ -12,9 +12,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from briefs.migration_guard import SchemaSkewError, assert_schema_current
 from django.core.management.base import BaseCommand, CommandError
 
+from briefs.migration_guard import SchemaSkewError, assert_schema_current
 from edge.ingest.parquet import DEFAULT_LADDER_OUTCOMES_DIR, rebuild_from_parquet
 
 

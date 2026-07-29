@@ -96,8 +96,8 @@ def _percentile(sorted_vals: list[float], pct: float) -> float:
     if len(sorted_vals) == 1:
         return sorted_vals[0]
     rank = pct / 100.0 * (len(sorted_vals) - 1)
-    lo_i = int(math.floor(rank))
-    hi_i = int(math.ceil(rank))
+    lo_i = math.floor(rank)
+    hi_i = math.ceil(rank)
     if lo_i == hi_i:
         return sorted_vals[lo_i]
     frac = rank - lo_i

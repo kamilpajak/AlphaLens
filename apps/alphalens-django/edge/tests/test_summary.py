@@ -507,7 +507,7 @@ def _base_rate_row(
     plannable: bool = True,
     terminal: bool = True,
     realized_r: float | None = None,
-    matured_at: "dt.date | None" = None,
+    matured_at: dt.date | None = None,
 ) -> dict:
     return {
         "plannable": plannable,
