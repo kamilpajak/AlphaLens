@@ -928,13 +928,18 @@ class TestArmIdentityAnchors(unittest.TestCase):
 
     @given(_build_cancel_replace_oco_unsupported(_UIC))
     @_LONG_SETTINGS
-    def test_oco_unsupported_forces_cancel_replace(self, c: _LongComp) -> None:
-        # ANCHOR 3 — a B1-eligible SHAPE (deficit, covering stop in band) but the
-        # uic is oco_unsupported. SPEC: B2 full-owned place + supersede the input
-        # STOP legs — NEVER a delta.
+    def test_oco_unsupported_still_takes_the_additive_delta(self, c: _LongComp) -> None:
+        # ANCHOR 3 (REWRITTEN after the VRNS 2026-07-29 naked-delta incident) —
+        # a B1-eligible SHAPE (deficit, covering stop in band) on an
+        # oco_unsupported uic. OLD SPEC forced B2 full-owned place-first, which
+        # can NEVER be accepted while the partial stop rests (sum > owned ->
+        # SellOrdersAlreadyExist -> deferred every tick -> the grown delta stays
+        # naked). NEW SPEC: oco_unsupported marks the OCO PAIR feature only —
+        # plain additive stops are unaffected, so B1 places the DELTA and keeps
+        # the resting stop (sell side sums to exactly owned).
         owned = c.position.quantity
         stop_qty = _stop_qty(c.legs)
-        self.assertTrue(c.oco_unsupported, "B2 antecedent: oco_unsupported")
+        self.assertTrue(c.oco_unsupported, "antecedent: oco_unsupported")
         self.assertGreater(stop_qty, _QTY_EPS, "shape antecedent: covering stop present")
         self.assertLess(stop_qty + _QTY_EPS, owned, "shape antecedent: genuine deficit")
         actions = reconcile_long(c.uic, c.position, _view_from_long(c))
@@ -942,14 +947,10 @@ class TestArmIdentityAnchors(unittest.TestCase):
         self.assertEqual(len(stops), 1)
         place = stops[0]
         self.assertTrue(
-            _close(place.qty, owned), f"oco_unsupported must place full owned, got {place.qty}"
+            _close(place.qty, owned - stop_qty),
+            f"oco_unsupported must place the additive DELTA, got {place.qty}",
         )
-        self.assertEqual(
-            set(place.supersede_ids),
-            _stop_leg_ids(c.legs),
-            "B2 must supersede the input STOP legs",
-        )
-        self.assertNotEqual(place.supersede_ids, (), "B2 must supersede (never a bare delta)")
+        self.assertEqual(place.supersede_ids, (), "B1 keeps the resting stop (no supersede)")
 
     @given(_build_cancel_replace_zero_amount(_UIC))
     @_LONG_SETTINGS

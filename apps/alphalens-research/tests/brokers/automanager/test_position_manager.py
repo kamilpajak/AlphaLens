@@ -422,9 +422,17 @@ class TestReconcileDecisionTable(unittest.TestCase):
         self.assertEqual(action.qty, 46.0)  # full netted owned, place-first
         self.assertEqual(action.supersede_ids, ("stop-old",))  # old stop cancelled AFTER
 
-    def test_grow_additive_skipped_when_oco_unsupported(self) -> None:
-        # A uic flagged oco_unsupported opts out of additive too (same broker
-        # multi-order capability gate) -> cancel-replace full-owned, never a delta.
+    def test_grow_additive_fires_even_when_oco_unsupported(self) -> None:
+        # VRNS incident 2026-07-29 (multi-tier gap fill at the open): the tier-0
+        # OCO was rejected TooFarFromMarket -> the uic was marked oco_unsupported
+        # -> the OLD guard also disabled B1 additive -> the deficit fell to B2
+        # cancel-replace, whose place-FIRST full-owned stop can NEVER be accepted
+        # while the partial stop rests (sum > owned -> SellOrdersAlreadyExist) ->
+        # deferred every tick FOREVER -> the grown delta stayed naked ~20 minutes
+        # until a manual cover. oco_unsupported means the OCO PAIR feature failed
+        # (often transiently, e.g. TooFarFromMarket at a volatile open); it says
+        # NOTHING about plain additive stops — Saxo accepted the manual additive
+        # delta immediately. B1 must therefore fire regardless of the marker.
         pos = _pos(46.0)
         old_stop = _leg("stop-old", "StopIfTraded", 20.0)
         actions = reconcile_long(
@@ -440,8 +448,8 @@ class TestReconcileDecisionTable(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         action = actions[0]
         assert isinstance(action, PlaceStop)
-        self.assertEqual(action.qty, 46.0)  # full netted owned, place-first
-        self.assertEqual(action.supersede_ids, ("stop-old",))
+        self.assertEqual(action.qty, 26.0)  # the DELTA (46 owned - 20 resting)
+        self.assertEqual(action.supersede_ids, ())  # additive KEEPS the old stop
 
     def test_over_hedge_places_residual_before_cancel(self) -> None:
         # TP leg partially filled (26 of 46), owned dropped to 20, the stop still
@@ -1398,9 +1406,13 @@ class TestOcoGrowAmendArm(unittest.TestCase):
         self.assertNotIn("oco-tp", action.cancel_conflicting)
         self.assertNotIn("oco-stop", action.cancel_conflicting)
 
-    def test_grow_after_oco_uic_unsupported_falls_to_b2(self) -> None:
-        # oco_unsupported gates BOTH the OCO amend and the B1 additive block, so the
-        # uic falls to the place-first B2 path (full owned, stale stop superseded).
+    def test_grow_after_oco_uic_unsupported_falls_to_b1_additive(self) -> None:
+        # oco_unsupported gates the OCO amend, and the uic then falls to B1
+        # ADDITIVE (the Stage-3.5 comment's "always-correct fallback") — NOT to
+        # B2: place-first full-owned can never be accepted while the resting
+        # legs commit owned (sum > owned -> SellOrdersAlreadyExist -> deferred
+        # forever, the VRNS 2026-07-29 naked-delta incident). The delta stop
+        # sums the sell side to exactly owned next to the resting pair.
         pos, view = self._grow_view(oco_unsupported=frozenset({_UIC}))
         with patch.dict(os.environ, _AMEND_ON):
             actions = reconcile_long(_UIC, pos, view)
@@ -1409,12 +1421,12 @@ class TestOcoGrowAmendArm(unittest.TestCase):
         self.assertNotIsInstance(action, AmendStop)
         self.assertIsInstance(action, PlaceStop)
         assert isinstance(action, PlaceStop)
-        self.assertEqual(action.qty, 7.0)  # full owned, place-first B2
-        # NEVER-NAKED: the OCO stop leaves via supersede_ids (cancel AFTER the
-        # full-owned place); the OCO Limit (TP) leg must NEVER sit in
-        # cancel_conflicting (pre-cancel cascade-cancels the covering stop).
+        self.assertEqual(action.qty, 3.0)  # the DELTA (7 owned - 4 resting stop)
+        # NEVER-NAKED: additive keeps the resting OCO pair untouched — no
+        # supersede, and the OCO Limit (TP) leg must NEVER sit in
+        # cancel_conflicting (pre-cancel would cascade-cancel the covering stop).
+        self.assertEqual(action.supersede_ids, ())
         self.assertEqual(action.cancel_conflicting, ())
-        self.assertEqual(action.supersede_ids, ("oco-stop",))
 
     def test_grow_amend_order_type_defaults_stopiftraded_when_none(self) -> None:
         # The AmendStop preserves the OCO stop leg's order_type, defaulting to

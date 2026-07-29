@@ -817,14 +817,21 @@ def _reconcile_deficit(
     #      holds stop_qty and the position simply GREW (another tier filled).
     #      Place a stop for the DELTA only, KEEPING the existing stop — no
     #      supersede, no naked window, and the sell side sums to exactly owned.
-    #      Skipped when Q5 is off or the uic opted out of broker multi-order
-    #      features (oco_unsupported), which fall through to cancel-replace.
+    #      Skipped only when Q5 is off. DELIBERATELY NOT gated on
+    #      ``oco_unsupported`` (VRNS incident 2026-07-29): that marker means the
+    #      OCO PAIR feature failed — often transiently, e.g. TooFarFromMarket at
+    #      a volatile open — and says nothing about plain additive stops, which
+    #      the broker accepts on such a uic. Gating B1 on it dropped a
+    #      multi-tier gap fill into B2, whose place-FIRST full-owned stop can
+    #      never be accepted while the partial stop rests (sum > owned ->
+    #      SellOrdersAlreadyExist) -> deferred every tick -> the grown delta
+    #      stayed naked until a manual cover.
     #      Edge: ``next_gen`` keys the ref on qty, so two grow steps of the SAME
     #      delta within Saxo's 15 s request-id dedup window share a ref and the
     #      2nd is deduped away — that slice is under-covered for < 15 s and
     #      self-heals on the next tick once the window passes (the disaster stop
     #      is deep OTM, so the transient gap is immaterial).
-    if ADDITIVE_STOPS_CONFIRMED and stop_qty > _QTY_EPS and uic not in view.oco_unsupported:
+    if ADDITIVE_STOPS_CONFIRMED and stop_qty > _QTY_EPS:
         deficit = owned - stop_qty
         return [
             PlaceStop(
