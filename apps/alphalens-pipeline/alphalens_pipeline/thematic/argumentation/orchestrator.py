@@ -445,6 +445,68 @@ def _empty_output(output_dir: Path, asof: dt.date) -> pd.DataFrame:
     return empty
 
 
+def _enriched_row(
+    row: pd.Series,
+    *,
+    brief: dict | None,
+    terminal_kind: generator.BriefErrorKind,
+    next_earnings: str | None,
+    setup,
+) -> dict:
+    """Project one verified row + its LLM outcome into an enrichment record."""
+    # Single explicit branch on the LLM outcome (not `brief or {}` + repeated
+    # ternaries): the honest-status columns and the prose lookups all key off
+    # the same condition, and one branch keeps flow analysers from inventing
+    # a path where ``b`` is None (Sonar S2259).
+    if brief is None:
+        b: dict = {}
+        status = "unavailable"
+        error_kind: str | None = terminal_kind.value
+    else:
+        b = brief
+        status = "ok"
+        error_kind = None
+    # PR-3: serialise the template_facts dict we already projected into
+    # facts above so the SPA can render typed citations without
+    # re-touching the events parquet. Mirror b.get for trade_setup —
+    # use json string everywhere on the orchestrator's output edge.
+    # Intentional double-serialise: scorer wrote catalyst_template_facts_json,
+    # _row_template_facts parsed it back to a dict for the prompt builder +
+    # richness counter, and now we re-emit a fresh json string keyed to the
+    # brief's column name. The roundtrip costs ~microseconds per row and
+    # keeps every consumer (parquet, Django ingest, SPA wire format) on the
+    # same canonical interop boundary. Acked as intentional by zen pre-merge
+    # MEDIUM 2026-05-31.
+    tmpl_facts = _row_template_facts(row)
+    return {
+        "ticker": row["ticker"],
+        # Honest LLM outcome: downstream readers must not have to
+        # infer "the LLM failed" from all-None prose columns.
+        "brief_status": status,
+        "brief_error_kind": error_kind,
+        "next_earnings_date": next_earnings,
+        "brief_model_used": b.get("model_used"),
+        "brief_tldr": b.get("tldr"),
+        "brief_supply_chain_md": b.get("supply_chain_reasoning"),
+        "brief_bear_summary_md": b.get("bear_summary"),
+        "brief_catalyst_failure_exit": b.get("catalyst_failure_exit"),
+        "brief_trade_setup": json.dumps(setup.to_dict()),
+        "brief_template_id": _row_template_id(row),
+        "brief_template_facts_json": (
+            json.dumps(tmpl_facts, sort_keys=True) if tmpl_facts else None
+        ),
+        "brief_generated_at": pd.Timestamp.now(tz="UTC"),
+    }
+
+
+def _failed_kinds_summary(failed_kinds: list[str]) -> str:
+    """Render `` (kinds: truncated=2, transport=1)`` for the completion log line."""
+    if not failed_kinds:
+        return ""
+    kinds = ", ".join(f"{kind}={n}" for kind, n in sorted(Counter(failed_kinds).items()))
+    return f" (kinds: {kinds})"
+
+
 def generate_briefs(
     scored: pd.DataFrame,
     *,
@@ -486,9 +548,6 @@ def generate_briefs(
     client_pro, client_flash = _build_clients(api_key)
 
     rows: list[dict] = []
-    n_pro = 0
-    n_flash = 0
-    failed_kinds: list[str] = []
     for _, row in verified.iterrows():
         brief, next_earnings, terminal_kind = _brief_for_row(
             row,
@@ -497,11 +556,6 @@ def generate_briefs(
             asof=asof,
             base_max_output_tokens=base_max_output_tokens,
         )
-        if brief is not None:
-            if brief.get("model_used") == generator.PRO_MODEL:
-                n_pro += 1
-            else:
-                n_flash += 1
         # Graceful degradation without a rendered blob: the deterministic
         # Phase D signal columns (catalyst, insider, valuation, technicals,
         # gates) are always persisted below regardless of whether the LLM
@@ -514,43 +568,20 @@ def generate_briefs(
         setup = trade_setup_builder.build_trade_setup(
             ticker=str(row["ticker"]), asof=asof, loader=ohlcv_loader
         )
-        b = brief or {}
-        # PR-3: serialise the template_facts dict we already projected into
-        # facts above so the SPA can render typed citations without
-        # re-touching the events parquet. Mirror b.get for trade_setup —
-        # use json string everywhere on the orchestrator's output edge.
-        # Intentional double-serialise: scorer wrote catalyst_template_facts_json,
-        # _row_template_facts parsed it back to a dict for the prompt builder +
-        # richness counter, and now we re-emit a fresh json string keyed to the
-        # brief's column name. The roundtrip costs ~microseconds per row and
-        # keeps every consumer (parquet, Django ingest, SPA wire format) on the
-        # same canonical interop boundary. Acked as intentional by zen pre-merge
-        # MEDIUM 2026-05-31.
-        tmpl_id = _row_template_id(row)
-        tmpl_facts = _row_template_facts(row)
-        if brief is None:
-            failed_kinds.append(terminal_kind.value)
         rows.append(
-            {
-                "ticker": row["ticker"],
-                # Honest LLM outcome: downstream readers must not have to
-                # infer "the LLM failed" from all-None prose columns.
-                "brief_status": "ok" if brief is not None else "unavailable",
-                "brief_error_kind": (terminal_kind.value if brief is None else None),
-                "next_earnings_date": next_earnings,
-                "brief_model_used": b.get("model_used"),
-                "brief_tldr": b.get("tldr"),
-                "brief_supply_chain_md": b.get("supply_chain_reasoning"),
-                "brief_bear_summary_md": b.get("bear_summary"),
-                "brief_catalyst_failure_exit": b.get("catalyst_failure_exit"),
-                "brief_trade_setup": json.dumps(setup.to_dict()),
-                "brief_template_id": tmpl_id,
-                "brief_template_facts_json": (
-                    json.dumps(tmpl_facts, sort_keys=True) if tmpl_facts else None
-                ),
-                "brief_generated_at": pd.Timestamp.now(tz="UTC"),
-            }
+            _enriched_row(
+                row,
+                brief=brief,
+                terminal_kind=terminal_kind,
+                next_earnings=next_earnings,
+                setup=setup,
+            )
         )
+
+    n_ok = sum(1 for r in rows if r["brief_status"] == "ok")
+    n_pro = sum(1 for r in rows if r["brief_model_used"] == generator.PRO_MODEL)
+    n_flash = n_ok - n_pro
+    failed_kinds = [str(r["brief_error_kind"]) for r in rows if r["brief_status"] != "ok"]
 
     enrichment = pd.DataFrame(rows).drop_duplicates(subset=["ticker"], keep="first")
     merged = verified.merge(enrichment, on="ticker", how="left")
@@ -559,10 +590,6 @@ def generate_briefs(
     out_path = output_dir / f"{asof.isoformat()}.parquet"
     merged.to_parquet(out_path, index=False)
     _write_sidecar(output_dir, asof, n_pro=n_pro, n_flash=n_flash)
-    kinds_summary = ""
-    if failed_kinds:
-        kinds = ", ".join(f"{kind}={n}" for kind, n in sorted(Counter(failed_kinds).items()))
-        kinds_summary = f" (kinds: {kinds})"
     logger.info(
         "generate_briefs %s: wrote %d briefs (Pro=%d, Flash=%d), %d unavailable%s → %s",
         asof.isoformat(),
@@ -570,7 +597,7 @@ def generate_briefs(
         n_pro,
         n_flash,
         len(failed_kinds),
-        kinds_summary,
+        _failed_kinds_summary(failed_kinds),
         out_path,
     )
     return merged

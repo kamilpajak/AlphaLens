@@ -187,9 +187,11 @@ class Brief(models.Model):
     # ``brief_error_kind`` is the retry-ladder terminal kind ("truncated",
     # "transport", ...) and is null when the brief rendered. Both are NULLABLE
     # (not blank-default) so parquets written before the columns existed ingest
-    # as NULL — "unknown" must stay distinct from "ok" on the wire.
-    brief_status = models.CharField(max_length=16, null=True, blank=True)
-    brief_error_kind = models.CharField(max_length=32, null=True, blank=True)
+    # as NULL — "unknown" must stay distinct from "ok" on the wire. That
+    # tri-state is why S6553 ("avoid null=True on CharField") is suppressed:
+    # collapsing NULL into "" would silently relabel pre-#921 rows as a value.
+    brief_status = models.CharField(max_length=16, null=True, blank=True)  # NOSONAR
+    brief_error_kind = models.CharField(max_length=32, null=True, blank=True)  # NOSONAR
 
     class Meta:
         indexes = [

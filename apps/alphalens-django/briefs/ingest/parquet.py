@@ -23,7 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -165,6 +165,38 @@ class RebuildResult:
         return len(self.retained_dates)
 
 
+def _coerce_json_field(field: django_models.Field, raw):
+    # Object-shaped JSONFields (a dict the pipeline stores as a json.dumps
+    # string) go through coerce_json_obj; every other JSONField holds a
+    # list[str] (gates_*, also_in_themes, …). A NEW object field must be
+    # added to _OBJECT_JSON_FIELDS or it will be silently corrupted by
+    # coerce_list_str (which would iterate the dict's keys).
+    if field.name in _OBJECT_JSON_FIELDS:
+        return coerce_json_obj(raw)
+    return coerce_list_str(raw)
+
+
+def _coerce_text_field(field: django_models.Field, raw):
+    text = coerce_str(raw)
+    if text is None:
+        # Nullable CharField (e.g. brief_status / brief_error_kind) keeps
+        # the NULL tri-state — a legacy parquet without the column must not
+        # read as an empty-string value. NOT-NULL text fields floor to "".
+        return None if field.null else ""
+    return text
+
+
+# Scalar field types whose coerced None floors to the field default when the
+# column is NOT NULL. DateTimeField subclasses DateField — keep it first so
+# isinstance dispatch resolves the more specific type.
+_SCALAR_COERCERS: tuple[tuple[type[django_models.Field], Callable[[object], object]], ...] = (
+    (django_models.DateTimeField, coerce_datetime),
+    (django_models.DateField, coerce_date),
+    (django_models.FloatField, coerce_float),
+    (django_models.IntegerField, coerce_int),
+)
+
+
 def _coerce_for_field(field: django_models.Field, raw):
     """Dispatch by Django field type to the matching coerce helper.
 
@@ -175,38 +207,18 @@ def _coerce_for_field(field: django_models.Field, raw):
     the constraint.
     """
     if isinstance(field, django_models.JSONField):
-        # Object-shaped JSONFields (a dict the pipeline stores as a json.dumps
-        # string) go through coerce_json_obj; every other JSONField holds a
-        # list[str] (gates_*, also_in_themes, …). A NEW object field must be
-        # added to _OBJECT_JSON_FIELDS or it will be silently corrupted by
-        # coerce_list_str (which would iterate the dict's keys).
-        if field.name in _OBJECT_JSON_FIELDS:
-            return coerce_json_obj(raw)
-        return coerce_list_str(raw)
-    if isinstance(field, django_models.DateTimeField):
-        value = coerce_datetime(raw)
-    elif isinstance(field, django_models.DateField):
-        value = coerce_date(raw)
-    elif isinstance(field, django_models.BooleanField):
+        return _coerce_json_field(field, raw)
+    if isinstance(field, django_models.BooleanField):
         # Nullable bool (e.g. buffett_understandable) keeps the None/True/False
         # tri-state; a NOT-NULL bool floors missing -> field default (False).
         return coerce_optional_bool(raw) if field.null else coerce_bool(raw)
-    elif isinstance(field, django_models.FloatField):
-        value = coerce_float(raw)
-    elif isinstance(field, django_models.IntegerField):
-        value = coerce_int(raw)
-    else:
-        text = coerce_str(raw)
-        if text is None:
-            # Nullable CharField (e.g. brief_status / brief_error_kind) keeps
-            # the NULL tri-state — a legacy parquet without the column must not
-            # read as an empty-string value. NOT-NULL text fields floor to "".
-            return None if field.null else ""
-        return text
-
-    if value is None and not field.null:
-        return field.get_default()
-    return value
+    for field_type, coercer in _SCALAR_COERCERS:
+        if isinstance(field, field_type):
+            value = coercer(raw)
+            if value is None and not field.null:
+                return field.get_default()
+            return value
+    return _coerce_text_field(field, raw)
 
 
 # Brief fields populated by parquet rows. We skip the synthetic composite-pk

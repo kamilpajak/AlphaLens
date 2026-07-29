@@ -944,6 +944,24 @@ def _maturation_sort_key(row: Mapping[str, Any]) -> dt.date:
     return matured if matured is not None else dt.date.max
 
 
+def _nonfrozen_candidates(
+    frames: Sequence[tuple[Path, pd.DataFrame]],
+) -> list[tuple[dt.date, str, int, Mapping[str, Any]]]:
+    """Collect every non-frozen row as ``(matured, path_str, iloc, row_map)``.
+
+    Sorted by ``(matured, path, iloc)`` only — never comparing the row mappings.
+    """
+    candidates: list[tuple[dt.date, str, int, Mapping[str, Any]]] = []
+    for path, df in frames:
+        for iloc, (_, row) in enumerate(df.iterrows()):
+            if _is_frozen_terminal_ok(row):
+                continue
+            row_map = dict(row)
+            candidates.append((_maturation_sort_key(row_map), str(path), iloc, row_map))
+    candidates.sort(key=lambda c: (c[0], c[1], c[2]))
+    return candidates
+
+
 def _build_nonfrozen_payloads(
     frames: Sequence[tuple[Path, pd.DataFrame]],
     *,
@@ -976,18 +994,8 @@ def _build_nonfrozen_payloads(
     chart that already shows the trade); such rows are flagged ``preserved`` so an
     all-preserved file skips the rewrite.
     """
-    candidates: list[tuple[dt.date, str, int, Mapping[str, Any]]] = []
-    for path, df in frames:
-        for iloc, (_, row) in enumerate(df.iterrows()):
-            if _is_frozen_terminal_ok(row):
-                continue
-            row_map = dict(row)
-            candidates.append((_maturation_sort_key(row_map), str(path), iloc, row_map))
-    # Sort by (matured, path, iloc) only — never compare the row mappings.
-    candidates.sort(key=lambda c: (c[0], c[1], c[2]))
-
     built: dict[tuple[str, int], _BuiltPayload] = {}
-    for _key, path_str, iloc, row in candidates:
+    for _key, path_str, iloc, row in _nonfrozen_candidates(frames):
         prior = row.get(CHART_PAYLOAD_COLUMN)
         prior_str = prior if isinstance(prior, str) and prior else None
         is_terminal = _is_terminal_row(row)
