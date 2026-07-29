@@ -244,6 +244,74 @@ class TestOcoPlacementResponse(unittest.TestCase):
         self.assertEqual(stub.cancel_calls, ["A-1"], "the accepted leg must be cancelled")
 
 
+class TestOcoRejectErrorCode(unittest.TestCase):
+    """OCO rejections must carry the STRUCTURED Saxo ErrorCode.
+
+    Live incident (SIM 2026-07-29, VRNS): Saxo rejected the OCO pair with
+    HTTP 400 ``TooFarFromMarket`` but the raise sites dropped the code, so
+    ``_is_too_far_from_market`` never matched and the control loop journaled
+    the PERMANENT ``oco_unsupported`` marker instead of the transient 900s
+    ``oco_too_far`` one. Pins both payload shapes ``_rejection_detail``
+    understands (nested ``ErrorInfo`` + top-level ``ErrorCode``), both raise
+    paths (with and without an accepted leg), and the end-to-end classifier.
+    """
+
+    def test_nested_error_info_shape_carries_error_code(self):
+        reject = (
+            400,
+            {"ErrorInfo": {"ErrorCode": "TooFarFromMarket", "Message": "too far"}},
+        )
+        broker, _ = _make(_StubOcoClient(place_response=reject))
+        with self.assertRaises(OrderRejectedError) as ctx:
+            _place(broker)
+        self.assertEqual(ctx.exception.error_code, "TooFarFromMarket")
+
+    def test_top_level_error_code_shape_carries_error_code(self):
+        reject = (
+            400,
+            {"ErrorCode": "TooFarFromMarket", "Message": "too far"},
+        )
+        broker, _ = _make(_StubOcoClient(place_response=reject))
+        with self.assertRaises(OrderRejectedError) as ctx:
+            _place(broker)
+        self.assertEqual(ctx.exception.error_code, "TooFarFromMarket")
+
+    def test_reject_after_accepting_a_leg_carries_error_code(self):
+        reject = (
+            400,
+            {
+                "OrderId": "A-1",
+                "ErrorInfo": {"ErrorCode": "TooFarFromMarket", "Message": "too far"},
+            },
+        )
+        broker, stub = _make(_StubOcoClient(place_response=reject))
+        with self.assertRaises(OrderRejectedError) as ctx:
+            _place(broker)
+        self.assertEqual(ctx.exception.error_code, "TooFarFromMarket")
+        self.assertEqual(stub.cancel_calls, ["A-1"], "the accepted leg must still be cancelled")
+
+    def test_reject_without_any_error_code_leaves_none(self):
+        reject = (400, {"Message": "no structured code here"})
+        broker, _ = _make(_StubOcoClient(place_response=reject))
+        with self.assertRaises(OrderRejectedError) as ctx:
+            _place(broker)
+        self.assertIsNone(ctx.exception.error_code)
+
+    def test_too_far_reject_classifies_as_too_far_from_market(self):
+        # End-to-end pin for the live incident: the #930 control-loop branch
+        # classifies via this predicate, so it MUST match the raised exception.
+        from alphalens_pipeline.brokers.contract import _is_too_far_from_market
+
+        reject = (
+            400,
+            {"ErrorInfo": {"ErrorCode": "TooFarFromMarket", "Message": "too far"}},
+        )
+        broker, _ = _make(_StubOcoClient(place_response=reject))
+        with self.assertRaises(OrderRejectedError) as ctx:
+            _place(broker)
+        self.assertTrue(_is_too_far_from_market(ctx.exception))
+
+
 class TestOcoDegenerateOrdering(unittest.TestCase):
     def test_stop_not_below_tp_rejected_before_post(self):
         broker, stub = _make(_StubOcoClient())

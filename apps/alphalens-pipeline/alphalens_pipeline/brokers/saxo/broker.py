@@ -689,14 +689,29 @@ class SaxoBroker:
                 "for ~seconds. Reconcile via 'alphalens broker orders'."
             )
         detail = self._rejection_detail(payload)
+        # Attach the verbatim Saxo ErrorCode so safety branches classify on a
+        # STRUCTURED code (memo §4.2), never by parsing the message. Covers the
+        # same two payload shapes as _rejection_detail: nested {"ErrorInfo":
+        # {...}} first, then top-level {"ErrorCode": ...}. Live incident
+        # 2026-07-29: a TooFarFromMarket OCO reject dropped here without its
+        # code, so the control loop journaled the PERMANENT oco_unsupported
+        # marker instead of the transient 900s oco_too_far one.
+        error_info = payload.get("ErrorInfo")
+        error_code = error_info.get("ErrorCode") if isinstance(error_info, dict) else None
+        if error_code is None and payload.get("ErrorCode"):
+            error_code = payload.get("ErrorCode")
         live_order_id = self._find_order_id(payload)
         if live_order_id:
             cleanup = self._repair_partial_acceptance(live_order_id, account_key)
             raise OrderRejectedError(
                 f"Saxo rejected OCO {request_id} with HTTP {status} "
-                f"AFTER accepting leg {live_order_id} ({detail}); cleanup: {cleanup}"
+                f"AFTER accepting leg {live_order_id} ({detail}); cleanup: {cleanup}",
+                error_code=error_code,
             )
-        raise OrderRejectedError(f"Saxo rejected OCO {request_id} with HTTP {status}: {detail}")
+        raise OrderRejectedError(
+            f"Saxo rejected OCO {request_id} with HTTP {status}: {detail}",
+            error_code=error_code,
+        )
 
     def amend_stop_amount(
         self,
