@@ -1514,6 +1514,21 @@ def _place_pick(broker: Broker, pick: Any) -> bool:
         logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
         return False
 
+    # Earnings-window gate (overnight-drift memo 2026-07-29, exposure J): never
+    # rest a NEW entry across a known earnings date. Runs after the safety rails
+    # (cheap, local) and before resolve/size (network). Fail-open inside the
+    # gate; the armed pick stays queued, so it self-heals once the date passes.
+    from alphalens_pipeline.brokers.automanager.earnings_gate import earnings_window_refusal
+    from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
+
+    setup = candidate.trade_setup
+    raw_ttl = setup.get("order_ttl_days") if hasattr(setup, "get") else None
+    ttl_days = int(raw_ttl or 0) or DEFAULT_ORDER_TTL_DAYS
+    earnings_reason = earnings_window_refusal(ticker, ttl_days=ttl_days)
+    if earnings_reason:
+        logger.warning("place_pick %s: refused — %s", ticker, earnings_reason)
+        return False
+
     resolved = _resolve_and_size(broker, ticker, account, candidate.trade_setup)
     if resolved is None:
         return False
