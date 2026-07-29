@@ -1669,6 +1669,72 @@ class TestAlertThrottleByUicReason(unittest.TestCase):
         self.assertFalse(any("CRITICAL" in s for s in sent))
 
 
+class TestAlertSinkJournalsToLogger(unittest.TestCase):
+    """VRNS incident 2026-07-29: alerts went to Telegram ONLY, so journalctl greps
+    came back empty mid-incident. Every alert the sink actually emits must ALSO be
+    logger.warning'd (journald) BEFORE the Telegram send — at the sink seam, not
+    the ~30 call sites."""
+
+    def test_journaled_alert_logs_message_before_telegram_send(self) -> None:
+        sent: list[str] = []
+        sink = cl._journaled_alert(sent.append)
+        with self.assertLogs(cl.logger, level="WARNING") as captured:
+            sink("OCO rejected uic 123: stop deferred")
+        self.assertEqual(sent, ["OCO rejected uic 123: stop deferred"])
+        self.assertTrue(
+            any("OCO rejected uic 123: stop deferred" in line for line in captured.output),
+            captured.output,
+        )
+
+    def test_journaled_alert_logs_even_when_telegram_send_raises(self) -> None:
+        def _exploding_send(message: str) -> None:
+            raise RuntimeError("telegram down")
+
+        sink = cl._journaled_alert(_exploding_send)
+        with self.assertLogs(cl.logger, level="WARNING") as captured:
+            with contextlib.suppress(RuntimeError):
+                sink("stop deferred — sell-commit not yet released")
+        self.assertTrue(
+            any("sell-commit not yet released" in line for line in captured.output),
+            captured.output,
+        )
+
+    def test_default_alert_sink_journals_every_message(self) -> None:
+        client = mock.Mock()
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "42"},
+                clear=False,
+            ),
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.telegram_client.TelegramClient",
+                return_value=client,
+            ),
+        ):
+            sink = cl._default_alert()
+        with self.assertLogs(cl.logger, level="WARNING") as captured:
+            sink("orphan (placed but never journaled): X")
+        self.assertTrue(
+            any("orphan (placed but never journaled): X" in line for line in captured.output),
+            captured.output,
+        )
+        client.send_message.assert_called_once_with(
+            "42", "orphan (placed but never journaled): X", parse_mode=""
+        )
+
+    def test_throttle_suppressed_repeat_does_not_log(self) -> None:
+        sent: list[str] = []
+        throttle = cl._AlertThrottle(
+            cl._journaled_alert(sent.append), clock=lambda: 0.0, interval_s=1800.0
+        )
+        with self.assertLogs(cl.logger, level="WARNING"):
+            self.assertTrue(throttle.emit("naked", uic=1, reason="deficit"))
+        with self.assertNoLogs(cl.logger, level="WARNING"):
+            self.assertFalse(throttle.emit("naked", uic=1, reason="deficit"))
+        self.assertEqual(sent, ["naked"])
+
+
 class TestPerCallBrokerErrorBoundary(unittest.TestCase):
     """One uic's broker error inside the protection pass does not prevent other
     uics being processed (per-action boundary in run_once)."""

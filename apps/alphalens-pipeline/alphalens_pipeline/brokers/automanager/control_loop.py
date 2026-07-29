@@ -1261,10 +1261,30 @@ def _default_oauth_provider() -> Any:
     return OAuthTokenProvider.from_env()
 
 
+def _journaled_alert(send: Callable[[str], None]) -> Callable[[str], None]:
+    """Wrap an alert delivery callable so every emitted alert ALSO lands in
+    journald via logger.warning BEFORE the delivery attempt.
+
+    Sink-level seam (one place, not the ~30 call sites): the VRNS naked-delta
+    incident (2026-07-29) was undiagnosable from the box because "OCO rejected",
+    "stop deferred" and orphan alerts went to Telegram ONLY — journalctl had no
+    trace while the daemon was actively deferring every tick. Logging first means
+    Telegram success/failure cannot affect the journald line. Throttle semantics
+    are preserved for free: _AlertThrottle calls its base sink only when an alert
+    is actually emitted, so a suppressed repeat never spams journald."""
+
+    def _alert(message: str) -> None:
+        logger.warning("alert: %s", message)
+        send(message)
+
+    return _alert
+
+
 def _default_alert() -> Callable[[str], None]:
     """Env-driven Telegram alert sink over the canonical TelegramClient
-    (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID). send_message never raises, so a
-    delivery blip cannot crash a tick. SIM-probe-only.
+    (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID), journald-mirrored via
+    _journaled_alert. send_message never raises, so a delivery blip cannot crash
+    a tick. SIM-probe-only.
 
     Operational alert bodies carry raw request-id reprs / reasons with `_`, `*`,
     `[` — under the client's default parse_mode="Markdown" those trip a Telegram
@@ -1278,10 +1298,10 @@ def _default_alert() -> Callable[[str], None]:
     client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
     chat_id = os.environ["TELEGRAM_CHAT_ID"]
 
-    def _alert(message: str) -> None:
+    def _send(message: str) -> None:
         client.send_message(chat_id, message, parse_mode="")
 
-    return _alert
+    return _journaled_alert(_send)
 
 
 def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
