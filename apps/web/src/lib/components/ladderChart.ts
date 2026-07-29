@@ -41,9 +41,14 @@ const TIER_JOIN = '·';
  *
  *  This collapses each same-day ENTRY group into ONE marker whose label joins the
  *  tier ids with `·` (E1·E2·E3), anchored at the first tier of the group and
- *  keeping its other fields. Non-ENTRY markers (TP/SL/…) and entries that fill on
+ *  keeping EVERY other field (time/price/level_id/ambiguous) of that first tier —
+ *  only the label is mutated. Non-ENTRY markers (TP/SL/…) and entries that fill on
  *  DISTINCT sessions pass through untouched — separating them in time is exactly
- *  the informative case we must not flatten. Order is preserved. */
+ *  the informative case we must not flatten. Order is preserved.
+ *
+ *  Grouping is EXACT `time` string equality, which is same-session iff bars are
+ *  daily (YYYY-MM-DD) — the only resolution the payload builder emits. An
+ *  intraday-bar migration would need a session-key normalization here first. */
 export function collapseEntryMarkers(markers: ChartMarker[]): ChartMarker[] {
 	const out: ChartMarker[] = [];
 	// time -> index in `out` of the folded ENTRY marker for that session.
@@ -79,13 +84,17 @@ export interface EntryTierLine {
  *  (identified by its `level_id`) so each rung gets its own dashed line at its
  *  real price. Title is the lowercased tier id (e2, e3) to match the lowercase
  *  axis labels of the entry/tp/stop lines. Markers with no `level_id` are skipped
- *  — the tier identity is unknown, so we cannot say it is not E1. */
+ *  — the tier identity is unknown, so we cannot say it is not E1. One line per
+ *  tier id: a duplicated tier marker (a backend-contract violation — a tier
+ *  fills once) must not draw two identical overlapping lines. */
 export function deeperEntryTierLines(markers: ChartMarker[]): EntryTierLine[] {
 	const lines: EntryTierLine[] = [];
+	const seen = new Set<string>();
 	for (const m of markers) {
 		if (m.kind !== 'ENTRY') continue;
 		const id = m.level_id?.trim().toLowerCase();
-		if (!id || id === 'e1') continue;
+		if (!id || id === 'e1' || seen.has(id)) continue;
+		seen.add(id);
 		lines.push({ price: m.price, title: id });
 	}
 	return lines;

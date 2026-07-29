@@ -198,6 +198,12 @@ describe('collapseEntryMarkers', () => {
 	it('returns an empty list for no markers', () => {
 		expect(collapseEntryMarkers([])).toEqual([]);
 	});
+
+	it('mutates ONLY the label — every other field stays the first tier’s', () => {
+		const raw = [entryMarker('2026-07-22', 'E1', 29.9), entryMarker('2026-07-22', 'E2', 28.66)];
+		const out = collapseEntryMarkers(raw);
+		expect(out).toEqual([{ ...raw[0], label: 'E1·E2' }]);
+	});
 });
 
 // Pins the deeper-tier price lines. The horizontal `entry` price line only ever
@@ -232,6 +238,17 @@ describe('deeperEntryTierLines', () => {
 			entryMarker('2026-07-22', 'E1', 29.9),
 			entryMarker('2026-07-22', 'E2', 28.66),
 			marker('SL', '2026-07-22', 'SL')
+		];
+		expect(deeperEntryTierLines(raw)).toEqual([{ price: 28.66, title: 'e2' }]);
+	});
+
+	it('emits one line per tier even if a tier marker is duplicated', () => {
+		// Backend contract says a tier fills once; if that is ever violated, two
+		// identical overlapping price lines would draw. Dedupe keeps it cosmetic-proof.
+		const raw = [
+			entryMarker('2026-07-22', 'E1', 29.9),
+			entryMarker('2026-07-22', 'E2', 28.66),
+			entryMarker('2026-07-23', 'E2', 28.66)
 		];
 		expect(deeperEntryTierLines(raw)).toEqual([{ price: 28.66, title: 'e2' }]);
 	});
