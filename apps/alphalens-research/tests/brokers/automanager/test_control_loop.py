@@ -470,6 +470,49 @@ class TestPickSubmissionJoin(unittest.TestCase):
             self.assertEqual(report.picks_placed, 0)
 
 
+class TestRefusedPickNotRetriedAcrossTicks(unittest.TestCase):
+    """End-to-end queue semantics over a REAL picks.jsonl: once the placer
+    journals a terminal refusal, the NEXT tick's drain never calls the placer
+    for that pick again (kills the live 2026-07-30 every-45s retry that would
+    self-place a stale week-old brief signal once capacity freed)."""
+
+    def test_refused_pick_is_drained_once_then_never_again(self) -> None:
+        from alphalens_pipeline.brokers.automanager import picks as picks_mod
+
+        with TemporaryDirectory() as d:
+            picks_path = Path(d) / "picks.jsonl"
+            picks_mod.arm_pick("KO", dt.date(2026, 7, 29), path=picks_path)
+            attempts: list = []
+
+            def _refusing_place(pick: Any) -> bool:
+                # Models _place_pick's safety-refusal branch: journal the
+                # terminal refusal, do not place.
+                attempts.append(pick)
+                picks_mod.mark_refused(
+                    pick.ticker, pick.date, "portfolio cap exceeded", path=picks_path
+                )
+                return False
+
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+            )
+            deps = cl.LoopDeps(
+                **{
+                    **deps.__dict__,
+                    "iter_picks": lambda: picks_mod.iter_picks(path=picks_path),
+                    "place_pick": _refusing_place,
+                    "read_records": list,
+                }
+            )
+            cl.run_once(deps)
+            cl.run_once(deps)
+            self.assertEqual(len(attempts), 1, "a refused pick must never retry on later ticks")
+
+
 class _CrashError(Exception):
     """A hard, non-BrokerError crash (models a process death / uncaught bug)."""
 
@@ -662,6 +705,10 @@ class TestPlacePickBranches(unittest.TestCase):
             # gate would hit the yfinance calendar); tests override to a
             # refusal reason to exercise the gate branch.
             "earnings_refusal": lambda *_a, **_k: None,
+            # Default the terminal-refusal writer to a no-op (hermetic — the
+            # real writer appends to ~/.alphalens picks.jsonl); tests override
+            # with a capture to pin the refused-line append.
+            "mark_refused": lambda *_a, **_k: None,
             **over,
         }
         p = stack.enter_context
@@ -671,6 +718,7 @@ class TestPlacePickBranches(unittest.TestCase):
                 m["earnings_refusal"],
             )
         )
+        p(mock.patch(f"{pkg}.automanager.picks.mark_refused", m["mark_refused"]))
         p(mock.patch(f"{pkg}.submission_log.build_submission_record", m["build_record"]))
         p(mock.patch(f"{pkg}.submission_log.append_submission_record", m["append"]))
         p(mock.patch(f"{pkg}.submission_log.iter_submission_records", m["iter_records"]))
@@ -708,6 +756,101 @@ class TestPlacePickBranches(unittest.TestCase):
             _PlaceBroker(), safety_check=lambda *_a, **_k: Refuse(reason="cap hit")
         )
         self.assertFalse(placer(_pick()))
+
+    def test_terminal_safety_refuse_appends_terminal_refused_line(self) -> None:
+        # Queue-semantics fix (2026-07-30): a capacity/cap refusal retires the
+        # pick via a terminal refused line — otherwise it retries every ~45s
+        # tick and self-places a stale brief signal days later when capacity
+        # frees. Re-arming via `alphalens broker arm` is the human path back.
+        from alphalens_pipeline.brokers.automanager.safety import Refuse
+
+        refusals: list[tuple] = []
+        placer = self._placer(
+            _PlaceBroker(),
+            safety_check=lambda *_a, **_k: Refuse(reason="portfolio cap exceeded", terminal=True),
+            mark_refused=lambda *a: refusals.append(a),
+        )
+        self.assertFalse(placer(_pick()))
+        self.assertEqual(refusals, [("KO", dt.date(2026, 7, 20), "portfolio cap exceeded")])
+
+    def test_non_terminal_safety_refuse_does_not_append_refused_line(self) -> None:
+        # Only the CAPACITY rails (MAX_OPEN / portfolio gross) are terminal.
+        # The KILL-file, master-arm (ALLOW_ORDERS) and daily-loss rails also
+        # return Refuse but are transient by design — an inert/paused daemon
+        # must NEVER retire the armed queue; the pick stays armed and places
+        # once the rail clears.
+        from alphalens_pipeline.brokers.automanager.safety import ALLOW_ORDERS_ENV, Refuse
+
+        for reason in (
+            "KILL file present — emergency stop, placement halted",
+            f"{ALLOW_ORDERS_ENV} != '1' — master arm not set, placement inert",
+            "daily realized r -3.50 <= -3.00 daily-loss limit — the day is closed to new picks",
+        ):
+            with self.subTest(reason=reason):
+                refusals: list[tuple] = []
+                placer = self._placer(
+                    _PlaceBroker(),
+                    safety_check=lambda *_a, _r=reason, **_k: Refuse(reason=_r, terminal=False),
+                    mark_refused=lambda *a, _acc=refusals: _acc.append(a),
+                )
+                self.assertFalse(placer(_pick()))
+                self.assertEqual(refusals, [])
+
+    def test_earnings_refusal_does_not_append_refused_line(self) -> None:
+        # #926 semantics preserved: the earnings-window refusal is a retryable
+        # self-heal (the pick stays armed and places once the date passes) — it
+        # must NEVER write the terminal refused line.
+        refusals: list[tuple] = []
+        placer = self._placer(
+            _PlaceBroker(),
+            earnings_refusal=lambda *_a, **_k: "earnings 2026-08-04 inside the window",
+            mark_refused=lambda *a: refusals.append(a),
+        )
+        self.assertFalse(placer(_pick()))
+        self.assertEqual(refusals, [])
+
+    def test_transient_place_error_does_not_append_refused_line(self) -> None:
+        # A broker failure during actual placement is transient (429/5xx/reject)
+        # — the pick stays armed and retries; no terminal refused line.
+        refusals: list[tuple] = []
+
+        def _boom(_bracket: Any) -> Any:
+            raise BrokerError("exchange rejected")
+
+        placer = self._placer(
+            _PlaceBroker(on_place=_boom), mark_refused=lambda *a: refusals.append(a)
+        )
+        self.assertFalse(placer(_pick()))
+        self.assertEqual(refusals, [])
+
+    def test_broker_read_error_does_not_append_refused_line(self) -> None:
+        refusals: list[tuple] = []
+
+        def _boom() -> Any:
+            raise BrokerError("account read down")
+
+        placer = self._placer(
+            _PlaceBroker(on_account=_boom), mark_refused=lambda *a: refusals.append(a)
+        )
+        self.assertFalse(placer(_pick()))
+        self.assertEqual(refusals, [])
+
+    def test_refused_line_append_oserror_never_crashes_the_drain(self) -> None:
+        # The refused-line append is fallible I/O inside the drain: an OSError
+        # must be contained (log + return False). The pick then stays armed —
+        # the refusal re-fires next tick and re-attempts the append (acceptable
+        # degradation, never a crash).
+        from alphalens_pipeline.brokers.automanager.safety import Refuse
+
+        def _disk_full(*_a: Any, **_k: Any) -> None:
+            raise OSError("disk full")
+
+        placer = self._placer(
+            _PlaceBroker(),
+            safety_check=lambda *_a, **_k: Refuse(reason="portfolio cap exceeded", terminal=True),
+            mark_refused=_disk_full,
+        )
+        self.assertFalse(placer(_pick()))  # must not raise
 
     def test_earnings_window_refusal_blocks_before_resolve(self) -> None:
         # The gate refuses BEFORE resolve/size — no instrument lookup, no

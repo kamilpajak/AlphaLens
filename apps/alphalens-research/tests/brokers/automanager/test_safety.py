@@ -62,6 +62,8 @@ class SafetyGateTest(unittest.TestCase):
         )
         self.assertIsInstance(d, Refuse)
         self.assertIn("KILL", d.reason)
+        # An emergency PAUSE must never permanently retire the queue.
+        self.assertFalse(d.terminal)
 
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "1"}, clear=False)
     def test_dead_chain_refuses(self) -> None:
@@ -70,6 +72,8 @@ class SafetyGateTest(unittest.TestCase):
         )
         self.assertIsInstance(d, Refuse)
         self.assertIn("chain", d.reason.lower())
+        # Auth self-heals via `broker auth` — transient, never terminal.
+        self.assertFalse(d.terminal)
 
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "0"}, clear=False)
     def test_allow_orders_not_set_refuses(self) -> None:
@@ -78,23 +82,31 @@ class SafetyGateTest(unittest.TestCase):
         )
         self.assertIsInstance(d, Refuse)
         self.assertIn(ALLOW_ORDERS_ENV, d.reason)
+        # Master-arm off = documented inert observation mode. Marking it
+        # terminal would retire the WHOLE armed queue on the daemon's first
+        # tick — the pick must stay armed until the operator arms orders.
+        self.assertFalse(d.terminal)
 
     @mock.patch.dict(os.environ, {ALLOW_ORDERS_ENV: "1", MAX_OPEN_ENV: "2"}, clear=False)
-    def test_max_open_cap_refuses(self) -> None:
+    def test_max_open_cap_refuses_terminally(self) -> None:
         journal = JournalView(open_bracket_count=1, gross_committed=0.0, realized_r_today=0.0)
         broker = BrokerView(open_position_count=1, equity=1_000.0)
         d = check(_PICK, journal, broker, _StubSession(alive=True), kill_path=self.kill)
         self.assertIsInstance(d, Refuse)
         self.assertIn("MAX_OPEN", d.reason)
+        # Capacity refusal is terminal: retrying every tick would self-place a
+        # stale brief signal once capacity frees.
+        self.assertTrue(d.terminal)
 
     @mock.patch.dict(
         os.environ, {ALLOW_ORDERS_ENV: "1", PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=False
     )
-    def test_portfolio_gross_cap_refuses(self) -> None:
+    def test_portfolio_gross_cap_refuses_terminally(self) -> None:
         journal = JournalView(open_bracket_count=0, gross_committed=1_200.0, realized_r_today=0.0)
         d = check(_PICK, journal, _CLEAR_BROKER, _StubSession(alive=True), kill_path=self.kill)
         self.assertIsInstance(d, Refuse)
         self.assertIn("gross", d.reason.lower())
+        self.assertTrue(d.terminal)
 
     @mock.patch.dict(
         os.environ, {ALLOW_ORDERS_ENV: "1", DAILY_LOSS_LIMIT_R_ENV: "3.0"}, clear=False
@@ -105,6 +117,13 @@ class SafetyGateTest(unittest.TestCase):
         self.assertIsInstance(d, Refuse)
         self.assertIn("loss", d.reason.lower())
         self.assertFalse(self.kill.exists())
+        # Day-scoped lockout: the pick may place tomorrow, so not terminal.
+        self.assertFalse(d.terminal)
+
+    def test_refuse_default_is_non_terminal(self) -> None:
+        # Fail-safe default: a Refuse constructed without an explicit flag must
+        # never retire a pick.
+        self.assertFalse(Refuse(reason="anything").terminal)
 
 
 if __name__ == "__main__":

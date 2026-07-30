@@ -35,7 +35,20 @@ class Allow:
 
 @dataclass(frozen=True)
 class Refuse:
+    """A refused placement. ``terminal`` splits the rails by queue semantics:
+
+    - terminal=True — CAPACITY refusals (MAX_OPEN cap, portfolio gross cap).
+      The drain retires the pick with a refused line in picks.jsonl; left
+      armed it would retry every tick and self-place a stale brief signal
+      once capacity frees. `alphalens broker arm` is the human path back.
+    - terminal=False (default, fail-safe) — transient rails (KILL file,
+      dead chain, ALLOW_ORDERS master arm, daily-loss lockout). The pick
+      stays armed and places once the rail clears; an inert/paused daemon
+      must never destroy the armed queue.
+    """
+
     reason: str
+    terminal: bool = False
 
 
 Decision = Allow | Refuse
@@ -106,7 +119,8 @@ def check(
     open_total = journal_view.open_bracket_count + broker_view.open_position_count
     if open_total >= max_open:
         return Refuse(
-            f"open brackets+positions {open_total} >= MAX_OPEN {max_open} — refusing new pick"
+            f"open brackets+positions {open_total} >= MAX_OPEN {max_open} — refusing new pick",
+            terminal=True,
         )
 
     gross_frac = _float_env(PORTFOLIO_GROSS_FRAC_ENV, DEFAULT_PORTFOLIO_GROSS_FRAC)
@@ -114,7 +128,8 @@ def check(
     if journal_view.gross_committed > gross_limit:
         return Refuse(
             f"committed gross {journal_view.gross_committed:,.2f} exceeds portfolio cap "
-            f"{gross_limit:,.2f} ({gross_frac:g} x equity {broker_view.equity:,.2f})"
+            f"{gross_limit:,.2f} ({gross_frac:g} x equity {broker_view.equity:,.2f})",
+            terminal=True,
         )
 
     loss_limit_r = abs(_float_env(DAILY_LOSS_LIMIT_R_ENV, DEFAULT_DAILY_LOSS_LIMIT_R))
