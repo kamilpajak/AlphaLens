@@ -190,6 +190,31 @@
 		]
 	};
 
+	// LONG LEAD-IN: the pipeline persists up to 90 pre-brief sessions for a
+	// short hold. The component must display only the last 20 of them — the
+	// brief line should sit ~20 bars from the left edge with the trade filling
+	// the rest, plus an empty right margin (RIGHT_OFFSET_BARS) before the axis.
+	function leadInBars(startISO: string, count: number, base: number): ChartBar[] {
+		const out: ChartBar[] = [];
+		const d = new Date(`${startISO}T00:00:00Z`);
+		while (out.length < count) {
+			const day = d.getUTCDay();
+			if (day !== 0 && day !== 6) {
+				out.push(bar(d.toISOString().slice(0, 10), base + Math.sin(out.length / 7) * 4));
+			}
+			d.setUTCDate(d.getUTCDate() + 1);
+		}
+		return out;
+	}
+
+	// 90 weekday sessions starting 2026-02-02 end well before the CLOSED trade's
+	// first bar (2026-06-10) — same trade shape as CLOSED_PAYLOAD, longer tail.
+	const LONG_LEADIN_PAYLOAD: ChartPayload = {
+		...CLOSED_PAYLOAD,
+		ticker: 'PSN',
+		bars: [...leadInBars('2026-02-02', 90, 116), ...CLOSED_PAYLOAD.bars]
+	};
+
 	const { Story } = defineMeta({
 		title: 'Data-viz/LadderChart',
 		component: LadderChart,
@@ -211,6 +236,18 @@
 	{#snippet template()}
 		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
 			<LadderChart payload={CLOSED_PAYLOAD} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- LONG LEAD-IN (trimmed): 90 persisted pre-brief sessions cut down to the last
+     20 before display — the trade region owns the chart width instead of 90
+     sessions of pre-brief drift. No play fn: the trim itself is pinned by unit
+     tests (ladderChart.test.ts); this story is the visual spec. -->
+<Story name="Long Lead-In (trimmed)">
+	{#snippet template()}
+		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
+			<LadderChart payload={LONG_LEADIN_PAYLOAD} />
 		</div>
 	{/snippet}
 </Story>

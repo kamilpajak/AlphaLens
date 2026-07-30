@@ -3,7 +3,9 @@ import {
 	briefLineTime,
 	collapseEntryMarkers,
 	deeperEntryTierLines,
-	finalExitMarkerTime
+	finalExitMarkerTime,
+	trimLeadInBars,
+	LEAD_IN_DISPLAY_SESSIONS
 } from '$lib/components/ladderChart';
 import type { ChartBar, ChartMarker } from '$lib/types';
 
@@ -259,5 +261,87 @@ describe('deeperEntryTierLines', () => {
 			{ time: '2026-07-22', kind: 'ENTRY', level_id: null, price: 28.66, label: '', ambiguous: false }
 		];
 		expect(deeperEntryTierLines(raw)).toEqual([]);
+	});
+});
+
+// Test helpers for trimLeadInBars
+function tbar(time: string): ChartBar {
+	return { time, open: 10, high: 11, low: 9, close: 10.5, volume: 1000 };
+}
+
+// Sequential ISO weekdays starting 2026-01-05 (a Monday), skipping weekends —
+// enough like real sessions for lexicographic time comparisons.
+function sessions(count: number): string[] {
+	const out: string[] = [];
+	const d = new Date('2026-01-05T00:00:00Z');
+	while (out.length < count) {
+		const day = d.getUTCDay();
+		if (day !== 0 && day !== 6) out.push(d.toISOString().slice(0, 10));
+		d.setUTCDate(d.getUTCDate() + 1);
+	}
+	return out;
+}
+
+describe('trimLeadInBars', () => {
+	it('keeps exactly LEAD_IN_DISPLAY_SESSIONS bars before the brief session on a long lead-in', () => {
+		// 60 sessions; brief on session index 50 → 30 in-window from the brief on.
+		const times = sessions(60);
+		const bars = times.map(tbar);
+		const briefDate = times[50];
+
+		const trimmed = trimLeadInBars(bars, briefDate, []);
+
+		expect(trimmed.length).toBe(LEAD_IN_DISPLAY_SESSIONS + 10);
+		expect(trimmed[0].time).toBe(times[50 - LEAD_IN_DISPLAY_SESSIONS]);
+		expect(trimmed[trimmed.length - 1].time).toBe(times[59]);
+	});
+
+	it('is a no-op when the lead-in is already at or under the display cap', () => {
+		const times = sessions(25);
+		const bars = times.map(tbar);
+		// Brief on index 20 → lead-in exactly 20 sessions: nothing to cut.
+		expect(trimLeadInBars(bars, times[20], [])).toBe(bars);
+	});
+
+	it('is a no-op when there is no anchor at all (no brief date, no ENTRY marker)', () => {
+		const bars = sessions(40).map(tbar);
+		expect(trimLeadInBars(bars, null, [])).toBe(bars);
+	});
+
+	it('anchors on the brief session for a PLANNED payload (empty marker list)', () => {
+		const times = sessions(40);
+		const bars = times.map(tbar);
+		const trimmed = trimLeadInBars(bars, times[30], []);
+		expect(trimmed[0].time).toBe(times[30 - LEAD_IN_DISPLAY_SESSIONS]);
+	});
+
+	it('falls back to the first ENTRY marker session when the brief date is missing', () => {
+		const times = sessions(40);
+		const bars = times.map(tbar);
+		const markers = [marker('ENTRY', times[32], 'E1')];
+		const trimmed = trimLeadInBars(bars, null, markers);
+		expect(trimmed[0].time).toBe(times[32 - LEAD_IN_DISPLAY_SESSIONS]);
+	});
+
+	it('snaps a non-trading brief date forward to the next session (briefLineTime semantics)', () => {
+		const times = sessions(40);
+		const bars = times.map(tbar);
+		// A Saturday between times[29] (Fri) and times[30] (Mon): brief snaps to times[30].
+		const friday = new Date(`${times[29]}T00:00:00Z`);
+		friday.setUTCDate(friday.getUTCDate() + 1);
+		const saturday = friday.toISOString().slice(0, 10);
+		const trimmed = trimLeadInBars(bars, saturday, []);
+		expect(trimmed[0].time).toBe(times[30 - LEAD_IN_DISPLAY_SESSIONS]);
+	});
+
+	it('never trims when the anchor is not found in the bars (brief postdates every bar)', () => {
+		const times = sessions(40);
+		const bars = times.map(tbar);
+		expect(trimLeadInBars(bars, '2027-01-01', [])).toBe(bars);
+	});
+
+	it('returns an empty bars array unchanged (no bar can anchor the window)', () => {
+		const bars: ChartBar[] = [];
+		expect(trimLeadInBars(bars, '2026-06-15', [])).toBe(bars);
 	});
 });
