@@ -258,6 +258,30 @@ class TestRateLimitHandling(unittest.TestCase):
             client.get_user()
         self.assertEqual(len(session.calls), 4, "4 attempts = 1 + 3 retries")
 
+    def test_429_exhausted_error_names_the_path(self):
+        """The read-transport rate-limit error must name the throttled endpoint —
+        without it a live 429 storm is undiagnosable (the alert says only
+        'persisted after 4 attempts'; the write transport already includes the
+        path). Live incident 2026-07-30: a rhythmic 429 could not be attributed
+        to an endpoint from the journal alone."""
+        session = _RecordingSession([_FakeResponse(429)])
+        client, _, _ = _make_client(session)
+
+        with self.assertRaises(SaxoRateLimitError) as ctx:
+            client.get_user()
+        self.assertIn("/port/v1/users/me", str(ctx.exception))
+
+    def test_429_attempt_warning_names_the_path(self):
+        session = _RecordingSession([_FakeResponse(429), _FakeResponse(200)])
+        client, _, _ = _make_client(session)
+
+        with self.assertLogs("alphalens_pipeline.brokers.saxo.client", level="WARNING") as logs:
+            client.get_user()
+        self.assertTrue(
+            any("/port/v1/users/me" in line for line in logs.output),
+            f"429 warning must name the endpoint: {logs.output}",
+        )
+
 
 class TestServerErrorHandling(unittest.TestCase):
     def test_5xx_backoffs_then_saxo_error(self):

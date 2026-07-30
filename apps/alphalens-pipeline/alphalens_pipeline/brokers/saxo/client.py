@@ -571,7 +571,8 @@ class SaxoClient:
                     resp, floor=self._RATE_LIMIT_FLOOR_S, ceiling=self._RATE_LIMIT_CEILING_S
                 )
                 logger.warning(
-                    "saxo 429 rate-limited (attempt %d/%d); sleeping %ds",
+                    "saxo 429 rate-limited on GET %s (attempt %d/%d); sleeping %ds",
+                    path,
                     attempt + 1,
                     self._MAX_REQUEST_ATTEMPTS,
                     backoff,
@@ -600,8 +601,10 @@ class SaxoClient:
                 "SAXO_SIM_TOKEN at developer.saxo (static)"
             )
         if resp.status_code == 429:
+            # Name the endpoint — the write transport already does; without it a
+            # live 429 storm is unattributable from the journal (2026-07-30).
             raise SaxoRateLimitError(
-                f"Saxo 429 persisted after {self._MAX_REQUEST_ATTEMPTS} attempts"
+                f"Saxo 429 persisted after {self._MAX_REQUEST_ATTEMPTS} attempts on GET {path}"
             )
         if resp.status_code == 404:
             raise SaxoNotFoundError(f"Saxo 404: {resp.text[:200]}")
