@@ -244,7 +244,13 @@
      20 before display — the trade region owns the chart width instead of 90
      sessions of pre-brief drift. No play fn: the trim itself is pinned by unit
      tests (ladderChart.test.ts); this story is the visual spec. -->
-<Story name="Long Lead-In (trimmed)" args={{ payload: LONG_LEADIN_PAYLOAD }} />
+<Story name="Long Lead-In (trimmed)">
+	{#snippet template()}
+		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
+			<LadderChart payload={LONG_LEADIN_PAYLOAD} />
+		</div>
+	{/snippet}
+</Story>
 
 <!-- PARTIAL CAPTURE: TP_FULL by class, but only TP1 sold; TP2/TP3 are touched-not-
      sold (dimmed circles, not solid arrows) — the honest signal that three green
