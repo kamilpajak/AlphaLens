@@ -39,7 +39,8 @@
 		briefLineTime,
 		collapseEntryMarkers,
 		deeperEntryTierLines,
-		finalExitMarkerTime
+		finalExitMarkerTime,
+		trimLeadInBars
 	} from './ladderChart';
 	import JargonTip from './JargonTip.svelte';
 	import ChipTip from './ChipTip.svelte';
@@ -64,6 +65,10 @@
 		red: '#ff5566',
 		amber: '#ffb000'
 	} as const;
+
+	// Empty bar slots kept right of the last candle so the E1/TP1 marker arrows
+	// and the last candle do not butt against the price-scale labels.
+	const RIGHT_OFFSET_BARS = 3;
 
 	const hasStructure = $derived(payload.status === 'OK');
 	// Producer-side freshness of the lead-in/trailing CONTEXT band (PR #912).
@@ -200,7 +205,14 @@
 			};
 			const series: ISeriesApi<'Candlestick'> = chart.addSeries(CandlestickSeries, candleOptions);
 
-			const candles: CandlestickData<Time>[] = payload.bars.map((b) => ({
+			// Display window: cut the persisted lead-in (up to 90 sessions) down to
+			// LEAD_IN_DISPLAY_SESSIONS before the brief so the trade region — not the
+			// pre-brief drift — owns the chart width. Everything else (band, brief
+			// line, in-trade counts) keeps reading payload.bars; the trim only affects
+			// what the candle series draws, and the trimmed window always contains the
+			// brief session onward, so every marker/overlay anchor stays on-chart.
+			const displayBars = trimLeadInBars(payload.bars, payload.brief_date, payload.markers);
+			const candles: CandlestickData<Time>[] = displayBars.map((b) => ({
 				time: b.time as Time,
 				open: b.open,
 				high: b.high,
@@ -291,7 +303,17 @@
 				createSeriesMarkers(series, markers);
 			}
 
-			chart.timeScale().fitContent();
+			// Static replay viewport with breathing room: fitContent() would butt the
+			// last bar against the price scale, colliding marker arrows with the axis
+			// labels. Bar 0 starts at logical -0.5; ending RIGHT_OFFSET_BARS past the
+			// last bar keeps the whole window visible plus a small right margin.
+			const applyViewport = () => {
+				chart?.timeScale().setVisibleLogicalRange({
+					from: -0.5,
+					to: candles.length - 0.5 + RIGHT_OFFSET_BARS
+				});
+			};
+			applyViewport();
 			timeScale = chart.timeScale();
 
 			// ── In-trade shading band (best-effort) ─────────────────────────
@@ -377,6 +399,9 @@
 			resizeObserver = new ResizeObserver(() => {
 				if (chart && chartContainer) {
 					chart.applyOptions({ width: chartContainer.clientWidth });
+					// Width changes must not drift the viewport — re-pin the logical
+					// range (never fitContent) before repositioning the overlays.
+					applyViewport();
 					updateOverlays();
 				}
 			});
