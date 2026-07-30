@@ -83,6 +83,19 @@ _MIC_TO_SAXO_EXCHANGE_ID: dict[str, str] = {
 
 _DEFAULT_INSTRUMENT_CACHE_SIZE = 256
 
+# Order outcomes that can never change once classified — the ONLY states
+# resolve_order_outcome may memoize. Explicit allowlist (not "anything but
+# UNKNOWN") so a future non-terminal classification cannot silently become
+# cacheable.
+_TERMINAL_OUTCOME_STATUSES = frozenset(
+    {
+        OrderStatus.FILLED,
+        OrderStatus.CANCELLED,
+        OrderStatus.REJECTED,
+        OrderStatus.EXPIRED,
+    }
+)
+
 
 def _today() -> dt.date:
     """UTC today — module-level so tests can pin the GTD calendar math."""
@@ -245,6 +258,16 @@ class SaxoBroker:
         # the working set is small (daily brief candidates), and FIFO keeps
         # eviction deterministic without LRU bookkeeping.
         self._instrument_cache: OrderedDict[tuple[str, str], InstrumentRef] = OrderedDict()
+        # order_id -> TERMINAL OrderState memo for resolve_order_outcome.
+        # Terminal outcomes are immutable facts, yet the per-tick reconcile
+        # re-audited every disappeared entry order — ~10.7 GETs/min at 8
+        # fills against a /cs audit bucket of ~10/min (rhythmic 429 bursts,
+        # live-diagnosed 2026-07-30). A plain dict suffices: only the single
+        # tick thread calls resolve_order_outcome (the streaming thread never
+        # reconciles). Unbounded BY DESIGN: one small OrderState per terminal
+        # order for the process lifetime, and the daemon restarts daily-ish —
+        # eviction would only reintroduce re-audits.
+        self._order_outcome_cache: dict[str, OrderState] = {}
 
     # ----- reads (P1) -----
 
@@ -988,7 +1011,14 @@ class SaxoBroker:
         in ``raw_status`` (``not_in_retention`` / ``fill_fields_unverified``
         / ``inconsistent_state`` / ``unrecognized``) — the mapping never
         guesses; the reconciler surfaces these as UNRESOLVED verdicts.
+
+        TERMINAL classifications are memoized per instance (immutable facts;
+        see ``_order_outcome_cache`` in ``__init__``). UNKNOWN stays uncached
+        so the reconciler re-audits it next run.
         """
+        cached = self._order_outcome_cache.get(order_id)
+        if cached is not None:
+            return cached
         with _translate_saxo_errors():
             client_key = str(self._client.get_client_info()["ClientKey"])
             payload = self._client.get_order_activities(
@@ -1003,7 +1033,14 @@ class SaxoBroker:
             # Retention exceeded, or an id Saxo never knew.
             return self._unresolved_state(order_id, "not_in_retention")
         row = max(rows, key=lambda r: int(r.get("LogId") or 0))
-        return self._classify_activity_row(order_id, row)
+        state = self._classify_activity_row(order_id, row)
+        # Cache ONLY clearly-terminal classifications. UNKNOWN (the
+        # unresolved sentinel) can still change — not_in_retention /
+        # fill_fields_unverified / inconsistent_state / unrecognized rows
+        # may resolve on a later audit read.
+        if state.status in _TERMINAL_OUTCOME_STATUSES:
+            self._order_outcome_cache[order_id] = state
+        return state
 
     _NON_TERMINAL_PAIRS = frozenset(
         {

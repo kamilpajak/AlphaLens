@@ -568,6 +568,91 @@ class TestResolveOrderOutcome(unittest.TestCase):
             broker.resolve_order_outcome("5039272886")
 
 
+class _CountingStubSaxoClient(_StubSaxoClient):
+    """Stub that counts audit GETs — pins the terminal-outcome memoization."""
+
+    def __init__(self, **kw: Any):
+        super().__init__(**kw)
+        self.activity_call_order_ids: list[str | None] = []
+
+    def get_order_activities(self, client_key: str, **kw: Any) -> dict[str, Any]:
+        self.activity_call_order_ids.append(kw.get("order_id"))
+        return super().get_order_activities(client_key, **kw)
+
+
+class TestResolveOrderOutcomeMemoization(unittest.TestCase):
+    """Terminal outcomes are immutable facts — resolved once per process.
+
+    Live-diagnosed 2026-07-30: the per-tick reconcile re-audited every
+    disappeared entry order (~10.7 GETs/min at 8 fills) and exhausted the
+    /cs audit bucket (~10/min) in rhythmic 429 bursts.
+    """
+
+    def _broker_and_client(
+        self, activities: dict[str, list[dict[str, Any]]]
+    ) -> tuple[SaxoBroker, _CountingStubSaxoClient]:
+        client = _CountingStubSaxoClient()
+        client.activities = activities  # type: ignore[attr-defined]
+        return SaxoBroker(client), client  # type: ignore[arg-type]
+
+    def test_terminal_outcome_is_cached_no_second_audit_get(self):
+        # RED-FIRST regression for the /cs rate-limit bug.
+        order_id = str(_ROW_CANCELLED_CONFIRMED["OrderId"])
+        broker, client = self._broker_and_client({order_id: [_ROW_CANCELLED_CONFIRMED]})
+
+        first = broker.resolve_order_outcome(order_id)
+        second = broker.resolve_order_outcome(order_id)
+
+        self.assertEqual(first.status, OrderStatus.CANCELLED)
+        self.assertEqual(second, first)
+        self.assertEqual(
+            len(client.activity_call_order_ids),
+            1,
+            "terminal outcome must be memoized — no re-audit per tick",
+        )
+
+    def test_unresolved_not_in_retention_is_not_cached(self):
+        broker, client = self._broker_and_client({})
+
+        first = broker.resolve_order_outcome("5039279999")
+        second = broker.resolve_order_outcome("5039279999")
+
+        self.assertEqual(first.status, OrderStatus.UNKNOWN)
+        self.assertIn("not_in_retention", second.raw_status)
+        self.assertEqual(
+            len(client.activity_call_order_ids),
+            2,
+            "UNKNOWN must stay uncached so the reconciler retries next run",
+        )
+
+    def test_distinct_order_ids_cache_independently(self):
+        cancelled_id = str(_ROW_CANCELLED_CONFIRMED["OrderId"])
+        filled_id = str(_ROW_FINAL_FILL["OrderId"])
+        broker, client = self._broker_and_client(
+            {cancelled_id: [_ROW_CANCELLED_CONFIRMED], filled_id: [_ROW_FINAL_FILL]}
+        )
+
+        self.assertEqual(broker.resolve_order_outcome(cancelled_id).status, OrderStatus.CANCELLED)
+        self.assertEqual(broker.resolve_order_outcome(filled_id).status, OrderStatus.FILLED)
+        self.assertEqual(broker.resolve_order_outcome(cancelled_id).status, OrderStatus.CANCELLED)
+        self.assertEqual(broker.resolve_order_outcome(filled_id).status, OrderStatus.FILLED)
+
+        self.assertEqual(client.activity_call_order_ids, [cancelled_id, filled_id])
+
+    def test_non_terminal_pair_inconsistent_state_is_not_cached(self):
+        # (Placed, Confirmed) is in _NON_TERMINAL_PAIRS -> UNKNOWN
+        # inconsistent_state; the order could still reach a terminal row.
+        order_id = str(_ROW_PLACED_CONFIRMED["OrderId"])
+        broker, client = self._broker_and_client({order_id: [_ROW_PLACED_CONFIRMED]})
+
+        first = broker.resolve_order_outcome(order_id)
+        second = broker.resolve_order_outcome(order_id)
+
+        self.assertEqual(first.status, OrderStatus.UNKNOWN)
+        self.assertIn("inconsistent_state", second.raw_status)
+        self.assertEqual(len(client.activity_call_order_ids), 2)
+
+
 # Byte-shaped from the REAL SIM FinalFill audit row captured 2026-07-20
 # (first-fill experiment, entry order 5039287596 —
 # ~/.alphalens/broker_orders/experiments/first_fill_2026-07-20/11_entry_activities_all.json,
