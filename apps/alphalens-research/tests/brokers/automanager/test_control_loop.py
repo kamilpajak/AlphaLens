@@ -757,7 +757,7 @@ class TestPlacePickBranches(unittest.TestCase):
         )
         self.assertFalse(placer(_pick()))
 
-    def test_safety_refuse_appends_terminal_refused_line(self) -> None:
+    def test_terminal_safety_refuse_appends_terminal_refused_line(self) -> None:
         # Queue-semantics fix (2026-07-30): a capacity/cap refusal retires the
         # pick via a terminal refused line — otherwise it retries every ~45s
         # tick and self-places a stale brief signal days later when capacity
@@ -767,11 +767,34 @@ class TestPlacePickBranches(unittest.TestCase):
         refusals: list[tuple] = []
         placer = self._placer(
             _PlaceBroker(),
-            safety_check=lambda *_a, **_k: Refuse(reason="portfolio cap exceeded"),
+            safety_check=lambda *_a, **_k: Refuse(reason="portfolio cap exceeded", terminal=True),
             mark_refused=lambda *a: refusals.append(a),
         )
         self.assertFalse(placer(_pick()))
         self.assertEqual(refusals, [("KO", dt.date(2026, 7, 20), "portfolio cap exceeded")])
+
+    def test_non_terminal_safety_refuse_does_not_append_refused_line(self) -> None:
+        # Only the CAPACITY rails (MAX_OPEN / portfolio gross) are terminal.
+        # The KILL-file, master-arm (ALLOW_ORDERS) and daily-loss rails also
+        # return Refuse but are transient by design — an inert/paused daemon
+        # must NEVER retire the armed queue; the pick stays armed and places
+        # once the rail clears.
+        from alphalens_pipeline.brokers.automanager.safety import ALLOW_ORDERS_ENV, Refuse
+
+        for reason in (
+            "KILL file present — emergency stop, placement halted",
+            f"{ALLOW_ORDERS_ENV} != '1' — master arm not set, placement inert",
+            "daily realized r -3.50 <= -3.00 daily-loss limit — the day is closed to new picks",
+        ):
+            with self.subTest(reason=reason):
+                refusals: list[tuple] = []
+                placer = self._placer(
+                    _PlaceBroker(),
+                    safety_check=lambda *_a, _r=reason, **_k: Refuse(reason=_r, terminal=False),
+                    mark_refused=lambda *a, _acc=refusals: _acc.append(a),
+                )
+                self.assertFalse(placer(_pick()))
+                self.assertEqual(refusals, [])
 
     def test_earnings_refusal_does_not_append_refused_line(self) -> None:
         # #926 semantics preserved: the earnings-window refusal is a retryable
@@ -824,7 +847,7 @@ class TestPlacePickBranches(unittest.TestCase):
 
         placer = self._placer(
             _PlaceBroker(),
-            safety_check=lambda *_a, **_k: Refuse(reason="portfolio cap exceeded"),
+            safety_check=lambda *_a, **_k: Refuse(reason="portfolio cap exceeded", terminal=True),
             mark_refused=_disk_full,
         )
         self.assertFalse(placer(_pick()))  # must not raise
