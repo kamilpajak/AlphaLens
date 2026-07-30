@@ -178,9 +178,10 @@
 					horzLine: { color: COLOR.grid, labelBackgroundColor: COLOR.bg2 }
 				},
 				// Static replay viewport: the window is deliberately bounded
-				// (lead-in + trade + trailing, fitContent on mount), so wheel/pinch
-				// zoom and drag-pan only hijack page scroll and can strand the
-				// trade region off-view (overlays then hide with no visible reset).
+				// (trimmed lead-in + trade + trailing, pinned via
+				// setVisibleLogicalRange on mount), so wheel/pinch zoom and
+				// drag-pan only hijack page scroll and can strand the trade
+				// region off-view (overlays then hide with no visible reset).
 				// Crosshair hover is a separate subsystem and stays interactive.
 				handleScroll: false,
 				handleScale: false
@@ -307,14 +308,15 @@
 			// last bar against the price scale, colliding marker arrows with the axis
 			// labels. Bar 0 starts at logical -0.5; ending RIGHT_OFFSET_BARS past the
 			// last bar keeps the whole window visible plus a small right margin.
+			const ts = chart.timeScale();
 			const applyViewport = () => {
-				chart?.timeScale().setVisibleLogicalRange({
+				ts.setVisibleLogicalRange({
 					from: -0.5,
 					to: candles.length - 0.5 + RIGHT_OFFSET_BARS
 				});
 			};
 			applyViewport();
-			timeScale = chart.timeScale();
+			timeScale = ts;
 
 			// ── In-trade shading band (best-effort) ─────────────────────────
 			// Lightweight Charts v5 has no native rectangle, so the band is an
@@ -388,10 +390,11 @@
 			};
 			rangeHandler = updateOverlays;
 			timeScale.subscribeVisibleTimeRangeChange(rangeHandler);
-			// Defer the FIRST paint one frame: right after fitContent the time
-			// scale may not have applied yet, so timeToCoordinate() returns null
-			// and the overlays stay hidden until the next resize/range event. A
-			// RAF lets the scale settle first (guarded against disposal).
+			// Defer the FIRST paint one frame: right after the initial
+			// setVisibleLogicalRange the time scale may not have applied yet, so
+			// timeToCoordinate() returns null and the overlays stay hidden until
+			// the next resize/range event. A RAF lets the scale settle first
+			// (guarded against disposal).
 			requestAnimationFrame(() => {
 				if (!disposed) updateOverlays();
 			});

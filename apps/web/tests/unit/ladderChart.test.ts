@@ -339,4 +339,9 @@ describe('trimLeadInBars', () => {
 		const bars = times.map(tbar);
 		expect(trimLeadInBars(bars, '2027-01-01', [])).toBe(bars);
 	});
+
+	it('returns an empty bars array unchanged (no bar can anchor the window)', () => {
+		const bars: ChartBar[] = [];
+		expect(trimLeadInBars(bars, '2026-06-15', [])).toBe(bars);
+	});
 });
