@@ -1594,6 +1594,21 @@ def _place_pick(broker: Broker, pick: Any) -> bool:
     )
     if isinstance(decision, safety.Refuse):
         logger.warning("place_pick %s: refused — %s", ticker, decision.reason)
+        # Terminal refusal (queue-semantics fix 2026-07-30): journal a refused
+        # line so the pick never retries — a capacity/cap-refused pick left
+        # armed would retry every tick for days and then self-place a stale
+        # brief signal once capacity frees. Re-arming via `alphalens broker
+        # arm` is the explicit human path back. The append is fallible I/O and
+        # must never crash the drain: on OSError the pick stays armed and the
+        # refusal re-fires next tick (re-attempting the append).
+        from alphalens_pipeline.brokers.automanager import picks
+
+        try:
+            picks.mark_refused(ticker, pick.date, decision.reason)
+        except OSError as exc:
+            logger.warning(
+                "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
+            )
         return False
 
     # Earnings-window gate (overnight-drift memo 2026-07-29, exposure J): never
