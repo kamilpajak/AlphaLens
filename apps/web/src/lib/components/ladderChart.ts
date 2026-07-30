@@ -114,3 +114,33 @@ export function briefLineTime(
 	if (!briefDate) return null;
 	return bars.find((b) => b.time >= briefDate)?.time ?? null;
 }
+
+/** Sessions of pre-brief lead-in kept in the DISPLAYED window. The pipeline
+ *  persists up to 90 lead-in sessions (min(90, max(20, 2×hold))) for context,
+ *  but on a short hold that squeezes the entire ladder into the right ~10% of
+ *  the chart width. 20 sessions ≈ one trading month: enough recent range to
+ *  read the setup against, while the trade region keeps most of the width. */
+export const LEAD_IN_DISPLAY_SESSIONS = 20;
+
+/** Bars cut down to at most `keep` sessions before the anchor session.
+ *
+ *  Anchor = the brief (arrival) session when known, else the first ENTRY
+ *  marker session — an entry can only postdate the brief, so the fallback
+ *  only ever widens the kept lead-in, never cuts into the trade. No anchor
+ *  at all (context-only payload: no brief date, no fills) → bars returned
+ *  unchanged, same when the anchor is not present in the bars. Trailing
+ *  bars are never touched. */
+export function trimLeadInBars(
+	bars: ChartBar[],
+	briefDate: string | null | undefined,
+	markers: ChartMarker[],
+	keep: number = LEAD_IN_DISPLAY_SESSIONS
+): ChartBar[] {
+	const anchor =
+		briefLineTime(bars, briefDate) ?? markers.find((m) => m.kind === 'ENTRY')?.time ?? null;
+	if (anchor == null) return bars;
+	const anchorIdx = bars.findIndex((b) => b.time >= anchor);
+	// Covers anchorIdx === -1 (anchor past every bar) and short lead-ins alike.
+	if (anchorIdx <= keep) return bars;
+	return bars.slice(anchorIdx - keep);
+}
