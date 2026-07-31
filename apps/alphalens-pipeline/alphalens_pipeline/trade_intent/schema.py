@@ -9,6 +9,13 @@ reaction plan the executor evaluates after fill (memo revision R3). These are
 pure data: no validation, no parsing, no I/O. The client-side parse/validate
 step is deferred to a later PR in the broker-manager extraction sequence (see
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``).
+
+Immutability caveat: the tuple-typed fields (``entry_tiers``, ``tp_tranches``,
+``reaction_plan``) are declared ``tuple`` and callers MUST pass actual tuples.
+``@dataclass(frozen=True)`` freezes the reference, not the container, and no
+``__post_init__`` coercion is done by design (pure data) — the deferred client
+parse step is the single place that constructs these, so it is responsible for
+passing tuples, not lists.
 """
 
 from __future__ import annotations
@@ -33,12 +40,18 @@ class InstrumentHint:
     """Identifies the tradable instrument (memo section 2.3 Boundary-2 contract)."""
 
     ticker: str
+    # ISO 10383 Market Identifier Code, e.g. "XNYS", "XNAS", "XWAR".
     mic: str
 
 
 @dataclass(frozen=True)
 class EntryTierSpec:
-    """One rung of the client-computed entry ladder."""
+    """One rung of the client-computed entry ladder.
+
+    ``alloc_pct`` is a PERCENTAGE (0-100), not a fraction; the tiers sum to
+    ~100 across the ladder. This matches ``compute_setup_plan``, which sizes
+    each tier as ``total_notional * (alloc_pct / 100)`` (paper/sizing.py).
+    """
 
     limit_price: float
     alloc_pct: float
@@ -46,7 +59,11 @@ class EntryTierSpec:
 
 @dataclass(frozen=True)
 class TpTrancheSpec:
-    """One take-profit tranche of the client-computed TP ladder."""
+    """One take-profit tranche of the client-computed TP ladder.
+
+    ``alloc_pct`` is a PERCENTAGE (0-100), matching the entry-tier convention
+    and ``compute_setup_plan``'s tranche sizing.
+    """
 
     price: float
     alloc_pct: float
@@ -54,7 +71,11 @@ class TpTrancheSpec:
 
 @dataclass(frozen=True)
 class TradeSpec:
-    """Formalizes ``compute_setup_plan``'s UNSIZED dict input (memo section 2.3)."""
+    """Formalizes ``compute_setup_plan``'s UNSIZED dict input (memo section 2.3).
+
+    ``suggested_size_pct`` is a PERCENTAGE (0-100) of account equity, matching
+    ``compute_setup_plan``'s ``suggested_size_pct / 100 * equity`` sizing.
+    """
 
     entry_tiers: tuple[EntryTierSpec, ...]
     disaster_stop: float
@@ -154,7 +175,8 @@ class TradeIntent:
     intent_id: str
     instrument: InstrumentHint
     spec: TradeSpec
-    # Field name "exit" per the memo contract.
+    # Field name "exit" per the memo contract — deliberately shadows the
+    # builtin `exit` as an attribute (safe: instance attribute, never called).
     exit: ExitGeometrySpec
     meta: IntentMeta
     # Reserved tenant dimension; single value today.
