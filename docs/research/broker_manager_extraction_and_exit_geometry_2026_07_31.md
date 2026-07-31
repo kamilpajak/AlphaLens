@@ -1,6 +1,6 @@
 # Broker-manager extraction + exit-geometry wiring
 
-**Status: DRAFT (zen-reviewed 2026-07-31)** · 2026-07-31
+**Status: LOCKED (zen-reviewed + operator-decided 2026-07-31)** · 2026-07-31
 
 > **Adversarial review applied (zen deepseek-v4-pro, 2026-07-31):** one P0 surfaced — the planned-vs-realized blend anchor places a wrong-distance stop and is fixed by a MANDATORY `avg_price` re-anchor in PR-6, not deferred (§4.3, Risk 2a). Three calibrated honesty notes added: persistence is a genuine reimpl across the network boundary, not a "file-for-socket swap" (§5.2); service-internal deps (auth token store, `TimeSource` clock, A2 market-data) named so "standalone" ≠ "dependency-free" (§5.2); the acceptance-DSL-green-per-PR is the coherence gate that removes any half-ported-interval risk (§6). Two claims held firm: the unsized-spec refinement (preserves current per-drain re-sizing) and the two-CLIENT-ports discipline.
 
@@ -15,6 +15,18 @@
 > - **New manager verb `amend_exit(position, new_stop, new_tp)`** — the client's channel to move levels; the manager executes it with no naked window.
 >
 > **Simplifications:** **zero client-facing ports** (EarningsPort deleted; NotificationPort folds into `stream_events` — the manager EMITS events, the client routes them). Client contract = the API alone: `submit_intent` + `amend_exit` + `cancel` + `query_state` + `stream_events`. The P0 anchor risk is unchanged in substance but **moves to the client**; the manager only executes amends safely. **AlphaLens-the-client grows an exit-management loop** (watch fills → re-anchor/trail → amend) — new client scope the autonomous daemon used to absorb. Questions 4–6 deferred by the operator.
+
+> **Revision R3 — declarative reaction-plan (operator-confirmed 2026-07-31; refines R2's "client loop"):** the intent carries INITIAL levels **plus an optional declarative REACTION PLAN** — a bounded, deterministic primitive vocabulary the EXECUTOR evaluates each tick, NOT a client watch-loop. The executor stays client-logic-agnostic: it knows the PRIMITIVES, never the strategy (the client compiles "bezpazery"/"trail0.6" into primitive params).
+>
+> **Primitive vocabulary (ship two, both cover a real policy with NO client loop and NO `amend_exit`):**
+> - `reanchor_on_fill(k_atr, …)` — on fill-complete, set stop/TP to `avg_price ± k·ATR`. **Covers bezpazery** (a static bracket re-anchored to the realized entry). Uses `Position.avg_price` (already live in `ProtectionView`) → **this primitive IS the §4.3 P0 fix**, evaluated executor-side where `avg_price` lives. Cheap: no new executor capability.
+> - `trailing_stop(arm_trigger_r, trail_frac)` — arm break-even at `+arm_trigger_r` MFE, then trail at `trail_frac` of peak. **Covers `be_0p5r_trail0p6`.** Requires the executor to gain **per-position peak-tracking** (a `ProtectionView` peak field fed by the already-wired streaming price) — bounded/deterministic, not arbitrary client code. Ships WITH trail0.6, later than bezpazery.
+>
+> **Mechanical safety is orthogonal:** a reaction primitive produces a LEVEL; the level is applied through the existing never-naked `AmendStop` path (position_manager.py:240). A bad rule → a bad level, NEVER a naked window or oversell.
+>
+> **`amend_exit` (client push) is reserved for `kind="model"`/ML** — where the next level comes from a model call, not a closed-form primitive — and any future bespoke client logic outside the vocabulary. It is the escape hatch, NOT the path for bezpazery or trail0.6.
+>
+> **Supersedes R2's "AlphaLens grows an exit-management loop":** bezpazery + trail0.6 need NO client loop (executor-evaluated primitives, robust to client downtime); only ML uses the push channel. `ExitGeometrySpec` (R2 concrete-levels) becomes `initial_levels + optional reaction_plan[]`; the `kind` discriminant maps to primitive types (`reanchor_on_fill` / `trailing_stop` / `model`→push). The manager remains a pure executor: it runs the client's compiled reaction rules, it does not author or name them.
 
 One design, two deliverables: (a) wire exit-geometry into the SIM Saxo auto-manager **through the future service boundary** so extraction is a transport swap, not a rewrite; (b) map the exact coupling cut-line for extracting the broker-manager into a standalone, multi-client service. Produced via a design workflow (coupling map + dependency DAG + proto-API readers → minimal-cut vs clean-ports proposals → synthesis); every load-bearing seam verified against source.
 
