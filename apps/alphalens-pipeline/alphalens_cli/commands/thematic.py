@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import os
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import typer
 from alphalens_pipeline.observability.textfile import emit_domain_metrics
@@ -19,6 +21,7 @@ from alphalens_pipeline.thematic.extraction import event_extractor
 from alphalens_pipeline.thematic.extraction import themes as themes_mod
 from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
 from alphalens_pipeline.thematic.screening import scorer as screening_scorer
+from alphalens_pipeline.thematic.trade_setup import model as trade_setup_model
 
 thematic_app = typer.Typer(
     name="thematic",
@@ -124,19 +127,132 @@ def _brief_unavailable_count(enriched: pd.DataFrame) -> int:
     return int((enriched["brief_status"] == "unavailable").sum())
 
 
-def _emit_stage_volume(stage: str, *, output_rows: int, input_rows: int) -> None:
+def _has_usable_ladder(v: Any) -> bool:
+    """True when a ``brief_trade_setup`` cell carries an actionable entry ladder.
+
+    "Usable" = the deterministic setup builder produced ``status == "OK"``
+    AND at least one entry tier. Anything else (NO_STRUCTURE, an OK shell
+    with zero tiers, a null / truncated / non-dict payload) is a card the
+    user cannot act on.
+
+    The column is persisted as a JSON STRING in parquet but is still a plain
+    dict on the in-memory hand-off from the orchestrator, so both shapes are
+    accepted. Every parse failure degrades to False rather than raising: this
+    feeds a metrics dict, and one malformed row must not delete the whole
+    day's gauge set.
+    """
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except (ValueError, TypeError):
+            return False
+    if not isinstance(v, dict):
+        return False
+    return v.get("status") == trade_setup_model.STATUS_OK and bool(v.get("entry_tiers"))
+
+
+def _brief_usable_ladder_metrics(enriched: pd.DataFrame) -> dict[str, float | int]:
+    """Share of a day's briefs carrying an actionable entry ladder.
+
+    The QUALITY counterpart to ``alphalens_thematic_briefs_total``. The two
+    July 2026 collapses (#910 NaN market_cap, #917 universe-wide NaN close)
+    both produced a volume-NORMAL day in which every ``brief_trade_setup``
+    came back ``NO_STRUCTURE`` with zero entry tiers — a card with nothing to
+    act on. No existing gauge moved, so no rule fired and the user found it
+    days later. This is the series the paired
+    ``AlphalensThematicBriefLadderUsableLow`` rule alerts on.
+
+    Emits the count + the precomputed ratio, mirroring
+    :func:`_brief_template_fill_metrics`, so a Grafana panel gets the trend
+    without a division in PromQL. Missing column (legacy frame) or an empty
+    day yields 0 / 0.0 — the gauges must stay PRESENT so a clean day reads as
+    a value rather than an absent series.
+    """
+    total = len(enriched)
+    if total == 0 or "brief_trade_setup" not in enriched.columns:
+        usable = 0
+    else:
+        usable = int(enriched["brief_trade_setup"].apply(_has_usable_ladder).sum())
+    ratio = round(usable / total, 4) if total else 0.0
+    return {
+        "alphalens_thematic_brief_usable_ladder_total": usable,
+        "alphalens_thematic_brief_usable_ladder_ratio": ratio,
+    }
+
+
+# The two scored-frame numerics whose silent NaN drained the downstream
+# ladder while every row count stayed normal: ``market_cap`` (the #908/#910
+# 0-candidate collapse, a NaN PIT mcap that passed an ``is not None`` check)
+# and ``technical_atr_pct`` (the #917 collapse — the ATR helper returns None
+# on a non-finite last close, so a NaN close surfaces here). The row-set
+# equivalence was verified on the only two degraded days still on disk,
+# 2026-05-27 and 2026-05-28 (finite-numerics rows == usable-ladder rows,
+# 20/21 and 16/19). It could NOT be verified on the July incident days
+# themselves: 2026-07-25 / 2026-07-26 were regenerated after the #917 fix
+# and now read 1.0, so no 0.0 day survives to measure.
+_SCORE_CORE_NUMERIC_COLUMNS = ("market_cap", "technical_atr_pct")
+
+
+def _score_core_numerics_metrics(enriched: pd.DataFrame) -> dict[str, float | int]:
+    """Share of scored rows whose core numerics are all FINITE.
+
+    The score-stage counterpart to :func:`_brief_usable_ladder_metrics`:
+    catches the same symptom class one stage earlier, where it is still
+    attributable to a data source rather than to the setup builder.
+
+    Finiteness is ``np.isfinite``, never ``pd.notna`` — ``pd.notna`` returns
+    True for ``+/-inf``, and an infinite market cap or ATR is exactly as
+    unusable downstream as a NaN (recorded project gotcha). Values are pushed
+    through ``pd.to_numeric(errors="coerce")`` first because older scored
+    parquets read some numeric columns back as ``object`` dtype, on which
+    ``np.isfinite`` raises ``TypeError``.
+
+    A missing column, an empty day, or any unexpected failure degrades to
+    0 / 0.0. This is evaluated as an ARGUMENT to :func:`_emit_stage_volume`
+    (outside its try/except), so it owns its own guard — the same contract as
+    :func:`_parquet_num_rows`.
+    """
+    total = len(enriched)
+    finite = 0
+    try:
+        if total and all(c in enriched.columns for c in _SCORE_CORE_NUMERIC_COLUMNS):
+            mask = np.ones(total, dtype=bool)
+            for col in _SCORE_CORE_NUMERIC_COLUMNS:
+                values = pd.to_numeric(enriched[col], errors="coerce").to_numpy(dtype="float64")
+                mask &= np.isfinite(values)
+            finite = int(mask.sum())
+    except Exception:
+        logger.exception("core-numerics gauge failed; the score stage succeeded")
+        finite = 0
+    ratio = round(finite / total, 4) if total else 0.0
+    return {
+        "alphalens_thematic_score_core_numerics_finite_total": finite,
+        "alphalens_thematic_score_core_numerics_finite_ratio": ratio,
+    }
+
+
+def _emit_stage_volume(
+    stage: str,
+    *,
+    output_rows: int,
+    input_rows: int,
+    extra_metrics: dict[str, float | int] | None = None,
+) -> None:
     """Emit a stage's volume gauges to its own ``thematic-<stage>`` file.
 
     Each stage is a separate process in ``run_thematic_day.sh`` and the
     textfile name is keyed on ``job`` — a shared job would have each stage
     clobber the prior one's file, so every stage gets a distinct job name.
+    ``extra_metrics`` rides the SAME emit for the same reason at one level
+    down: ``emit_domain_metrics`` overwrites the job's ``.prom`` file, so a
+    second call would delete the volume gauges it just wrote.
     Wrapped in try/except (zen PR #311 rule): the stage's parquet is already
     written, so a metrics-dir failure must not turn a good run into a unit
     failure.
     """
     try:
         metrics = _stage_volume_metrics(stage, output_rows=output_rows, input_rows=input_rows)
-        emit_domain_metrics(job=f"thematic-{stage}", metrics=metrics)
+        emit_domain_metrics(job=f"thematic-{stage}", metrics={**metrics, **(extra_metrics or {})})
     except Exception:
         logger.exception("emit_domain_metrics failed for stage %s; the run succeeded", stage)
 
@@ -604,7 +720,17 @@ def score(
 
     # Left-merge enrich: input == output in the normal case; a divergence
     # would flag a merge bug. Kept for uniform per-stage coverage.
-    _emit_stage_volume("score", output_rows=len(enriched), input_rows=len(candidates))
+    #
+    # The core-numerics pair rides the SAME emit (one .prom file per job, and
+    # the emitter overwrites it): a volume gauge cannot see a day whose rows
+    # are all present but whose market_cap / ATR came back NaN — the shape of
+    # both July 2026 collapses.
+    _emit_stage_volume(
+        "score",
+        output_rows=len(enriched),
+        input_rows=len(candidates),
+        extra_metrics=_score_core_numerics_metrics(enriched),
+    )
 
     typer.echo(f"Wrote {len(enriched)} scored rows → {out_path}")
     if enriched.empty:
@@ -756,6 +882,13 @@ def brief(
                 # AlphalensThematicBriefUnavailableHigh rule alerts when
                 # the ratio vs briefs_total is sustained across slots.
                 "alphalens_thematic_brief_unavailable_count": _brief_unavailable_count(enriched),
+                # Ladder-quality telemetry: fraction of the day's briefs that
+                # carry an actionable entry ladder. A volume-normal day whose
+                # setups all came back NO_STRUCTURE (the #910 / #917 signature)
+                # moves NOTHING else in this dict — this is the only series
+                # that sees it. Paired rule:
+                # AlphalensThematicBriefLadderUsableLow.
+                **_brief_usable_ladder_metrics(enriched),
             },
         )
     except Exception:
