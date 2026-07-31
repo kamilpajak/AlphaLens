@@ -715,10 +715,6 @@ class TestPlacePickBranches(unittest.TestCase):
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
             "build_record": lambda **kw: dict(kw),
-            # Default the earnings-window gate OPEN (and hermetic — the real
-            # gate would hit the yfinance calendar); tests override to a
-            # refusal reason to exercise the gate branch.
-            "earnings_refusal": lambda *_a, **_k: None,
             # Default the terminal-refusal writer to a no-op (hermetic — the
             # real writer appends to ~/.alphalens picks.jsonl); tests override
             # with a capture to pin the refused-line append.
@@ -726,12 +722,6 @@ class TestPlacePickBranches(unittest.TestCase):
             **over,
         }
         p = stack.enter_context
-        p(
-            mock.patch(
-                f"{pkg}.automanager.earnings_gate.earnings_window_refusal",
-                m["earnings_refusal"],
-            )
-        )
         p(mock.patch(f"{pkg}.automanager.picks.mark_refused", m["mark_refused"]))
         p(mock.patch(f"{pkg}.submission_log.build_submission_record", m["build_record"]))
         p(mock.patch(f"{pkg}.submission_log.append_submission_record", m["append"]))
@@ -797,19 +787,6 @@ class TestPlacePickBranches(unittest.TestCase):
                 self.assertFalse(placer(_pick()))
                 self.assertEqual(refusals, [])
 
-    def test_earnings_refusal_does_not_append_refused_line(self) -> None:
-        # #926 semantics preserved: the earnings-window refusal is a retryable
-        # self-heal (the pick stays armed and places once the date passes) — it
-        # must NEVER write the terminal refused line.
-        refusals: list[tuple] = []
-        placer = self._placer(
-            _PlaceBroker(),
-            earnings_refusal=lambda *_a, **_k: "earnings 2026-08-04 inside the window",
-            mark_refused=lambda *a: refusals.append(a),
-        )
-        self.assertFalse(placer(_pick()))
-        self.assertEqual(refusals, [])
-
     def test_transient_place_error_does_not_append_refused_line(self) -> None:
         # A broker failure during actual placement is transient (429/5xx/reject)
         # — the pick stays armed and retries; no terminal refused line.
@@ -852,37 +829,6 @@ class TestPlacePickBranches(unittest.TestCase):
             mark_refused=_disk_full,
         )
         self.assertFalse(placer(_pick()))  # must not raise
-
-    def test_earnings_window_refusal_blocks_before_resolve(self) -> None:
-        # The gate refuses BEFORE resolve/size — no instrument lookup, no
-        # placement — and the pick returns False (stays queued; self-heals
-        # once the earnings date passes).
-        resolve_calls: list = []
-
-        def _spy_resolve(_b: Any, _t: Any) -> Any:
-            resolve_calls.append(_t)
-            return _instr()
-
-        placer = self._placer(
-            _PlaceBroker(),
-            earnings_refusal=lambda *_a, **_k: "earnings 2026-08-04 inside the window",
-            resolve=_spy_resolve,
-        )
-        self.assertFalse(placer(_pick()))
-        self.assertEqual(resolve_calls, [])
-
-    def test_earnings_gate_open_proceeds_to_placement(self) -> None:
-        # Companion: with the gate open (None) the pick places normally —
-        # pins that the gate wiring cannot refuse on its own.
-        placed: list = []
-        broker = _PlaceBroker(
-            on_place=lambda b: (
-                placed.append(b)
-                or type("Placed", (), {"entry_order_id": "E-1", "exit_order_ids": ()})()
-            )
-        )
-        self.assertTrue(self._placer(broker)(_pick()))
-        self.assertEqual(len(placed), 1)
 
     def test_no_instrument_currency_returns_false(self) -> None:
         placer = self._placer(_PlaceBroker(), resolve=lambda _b, _t: _instr(currency=""))

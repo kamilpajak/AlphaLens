@@ -841,6 +841,13 @@ def arm_command(
     briefs_dir: Path = typer.Option(
         _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
     ),
+    allow_earnings_window: bool = typer.Option(
+        False,
+        "--allow-earnings-window",
+        help="Arm even when the ticker's next earnings date falls inside the entry's "
+        "TTL window (same override as ALPHALENS_BROKER_ALLOW_EARNINGS_WINDOW=1) — "
+        "for deliberate earnings-window entries (e.g. a SIM soak experiment).",
+    ),
 ) -> None:
     """Arm a picked candidate — parse the brief into a TradeIntent client-side
     and append it to the picks queue.
@@ -852,15 +859,28 @@ def arm_command(
     section 5, PR-7), then appends ONE 'armed' line carrying the full intent
     to picks.jsonl. The VPS control loop drains the queue and never touches
     a brief; this command places nothing.
+
+    Earnings-window gate (memo Revision R2, 2026-07-31): deciding whether to
+    send an order — including earnings-window avoidance — is CLIENT
+    responsibility; the daemon never knows about earnings any more (the old
+    per-tick ``brokers.automanager.earnings_gate`` self-healing drain gate is
+    deleted). This is a ONE-SHOT snapshot check at arm time, not a retrying
+    rail: a ticker whose next earnings date falls inside the entry's TTL
+    window is refused outright (nothing is appended to picks.jsonl) — the
+    human re-arms after the date passes, or opts out with
+    ``--allow-earnings-window`` / ``ALPHALENS_BROKER_ALLOW_EARNINGS_WINDOW=1``.
     """
     from alphalens_pipeline.brokers.automanager.picks import DEFAULT_PICKS_PATH, arm_pick
     from alphalens_pipeline.paper.brief_loader import load_brief
+    from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
     from alphalens_pipeline.paper.sizing import (
         TradeSetupNotPlannableError,
         build_exit_geometry_spec,
         parse_brief_to_spec,
     )
     from alphalens_pipeline.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
+
+    from alphalens_cli.commands._earnings_window import earnings_window_refusal
 
     try:
         brief_date = dt.date.fromisoformat(date)
@@ -883,6 +903,13 @@ def arm_command(
         spec = parse_brief_to_spec(candidate.trade_setup)
     except TradeSetupNotPlannableError as exc:
         raise _fail(f"{wanted}: trade_setup not plannable — {exc}") from exc
+
+    if not allow_earnings_window:
+        ttl_days = int(spec.order_ttl_days or 0) or DEFAULT_ORDER_TTL_DAYS
+        earnings_reason = earnings_window_refusal(wanted, ttl_days=ttl_days)
+        if earnings_reason:
+            raise _fail(f"{wanted}: refused — {earnings_reason}")
+
     exit_spec = build_exit_geometry_spec(
         candidate.trade_setup, candidate.technical_pct_off_52w_high
     )

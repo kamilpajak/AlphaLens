@@ -5,11 +5,19 @@ trade_setup into a full TradeIntent CLIENT-SIDE (parse_brief_to_spec +
 build_exit_geometry_spec) and persists it via arm_pick — the daemon never
 touches a brief. Loading is lazy-imported inside the command body, so patches
 target the SOURCE modules.
+
+Revision R2 (earnings-deletion, 2026-07-31): the earnings-window gate moved
+from the daemon (deleted ``brokers.automanager.earnings_gate``) to arm-time
+here — arming refuses outright (nothing appended to picks.jsonl) when the
+ticker's next earnings date falls inside the entry's TTL window, unless
+``--allow-earnings-window`` or the ``ALPHALENS_BROKER_ALLOW_EARNINGS_WINDOW``
+env opts out. See ``test_earnings_window.py`` for the pure-function gate tests.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import os
 import unittest
 from unittest import mock
 
@@ -57,6 +65,15 @@ def _candidate(ticker: str = "KO", *, trade_setup: dict | None = "__default__") 
 class ArmCommandTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
+        # Hermetic: the per-(ticker, today) earnings lookup cache and the
+        # opt-out env must not leak between tests / in from the host env.
+        from alphalens_cli.commands import _earnings_window
+
+        _earnings_window._clear_lookup_cache_for_tests()
+        self._env = mock.patch.dict(os.environ, {}, clear=False)
+        self._env.start()
+        os.environ.pop(_earnings_window.EARNINGS_GATE_OPT_OUT_ENV, None)
+        self.addCleanup(self._env.stop)
 
     def test_arm_valid_pick_appends_and_exits_zero(self) -> None:
         from alphalens_cli.commands.broker import broker_app
@@ -141,6 +158,82 @@ class ArmCommandTest(unittest.TestCase):
             result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
         self.assertEqual(result.exit_code, 1)
         arm.assert_not_called()
+
+    def test_arm_earnings_inside_ttl_window_refuses_and_appends_nothing(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.paper.brief_loader.load_brief",
+                return_value=[_candidate("KO")],
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
+            mock.patch(
+                "alphalens_cli.commands._earnings_window._fetch_next_earnings",
+                return_value=dt.date.today() + dt.timedelta(days=2),
+            ),
+        ):
+            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("earnings", result.output)
+        arm.assert_not_called()
+
+    def test_arm_earnings_allow_flag_overrides_the_refusal(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.paper.brief_loader.load_brief",
+                return_value=[_candidate("KO")],
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
+            mock.patch(
+                "alphalens_cli.commands._earnings_window._fetch_next_earnings",
+                return_value=dt.date.today() + dt.timedelta(days=2),
+            ),
+        ):
+            result = self.runner.invoke(
+                broker_app, ["arm", "KO", "--date", "2026-07-20", "--allow-earnings-window"]
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        arm.assert_called_once()
+
+    def test_arm_earnings_env_opt_out_overrides_the_refusal(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.paper.brief_loader.load_brief",
+                return_value=[_candidate("KO")],
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
+            mock.patch(
+                "alphalens_cli.commands._earnings_window._fetch_next_earnings",
+                return_value=dt.date.today() + dt.timedelta(days=2),
+            ),
+            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ALLOW_EARNINGS_WINDOW": "1"}),
+        ):
+            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        arm.assert_called_once()
+
+    def test_arm_earnings_outside_window_arms_normally(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.paper.brief_loader.load_brief",
+                return_value=[_candidate("KO")],
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
+            mock.patch(
+                "alphalens_cli.commands._earnings_window._fetch_next_earnings",
+                return_value=dt.date.today() + dt.timedelta(days=90),
+            ),
+        ):
+            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        arm.assert_called_once()
 
 
 if __name__ == "__main__":

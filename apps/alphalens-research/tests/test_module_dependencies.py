@@ -201,14 +201,27 @@ RULES = (
         # (``alphalens_cli/commands/broker.py`` and
         # ``alphalens_pipeline/feedback/population_ladder_monitor.py`` still
         # import ``brief_loader`` legitimately, from OUTSIDE brokers/, so
-        # this rule only ever fires on a brokers-side regression). Does NOT
-        # add a ``brokers -> thematic`` rule: ``earnings_gate`` still
-        # lazy-imports ``thematic.sources.earnings_calendar`` (a separate,
-        # still-live coupling — earnings-deletion is a deferred step, out of
-        # PR-8 scope).
+        # this rule only ever fires on a brokers-side regression).
         "name": "brokers must not import paper.brief_loader (PR-7 deleted the brief read; PR-8 tripwire)",
         "from_pkg": "alphalens_pipeline.brokers",
         "forbidden_prefix": "alphalens_pipeline.paper.brief_loader",
+        "exemptions": set(),
+    },
+    {
+        # Broker-manager extraction memo Revision R2 (operator decision,
+        # 2026-07-31): "Earnings gate leaves the manager entirely ... The
+        # brokers->thematic coupling is removed by DELETION, not a port —
+        # earnings_gate moves client-side." This deletes
+        # ``brokers.automanager.earnings_gate`` (the sole
+        # ``brokers -> thematic`` coupling, memo cut-table V3) outright; the
+        # relocated gate lives at ``alphalens_cli.commands._earnings_window``
+        # and runs once at arm time, outside the ``brokers`` package. No
+        # ``top_level_only`` — the deleted coupling was itself a lazy
+        # function-scope import (``earnings_gate._fetch_next_earnings``), so
+        # the walker must catch that shape too.
+        "name": "brokers must not import thematic (V3: earnings-gate deletion is the last brokers->thematic coupling)",
+        "from_pkg": "alphalens_pipeline.brokers",
+        "forbidden_prefix": "alphalens_pipeline.thematic",
         "exemptions": set(),
     },
 )
@@ -443,6 +456,49 @@ class TestModuleDependencies(unittest.TestCase):
         )
         self.assertTrue(
             any(m.startswith(brief_loader_rules[0]["forbidden_prefix"]) for m in modules),
+            "rule would not catch the synthetic violation",
+        )
+
+    def test_brokers_thematic_tripwire_positive_control(self):
+        """Earnings-deletion (memo Revision R2) removed the last
+        ``brokers -> thematic`` coupling (``earnings_gate`` lazy-imported
+        ``thematic.sources.earnings_calendar``). Pins the tripwire so a
+        regression (a lazy re-import inside brokers/ code, the exact shape
+        the deleted gate used) is caught. Mirrors
+        ``test_brokers_brief_loader_tripwire_positive_control`` — a single
+        rule, a function-scope synthetic import, ``include_function_scope=True``
+        (the deleted coupling was itself lazy, so the walker must catch that
+        shape too).
+        """
+        import tempfile
+
+        synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_pipeline.thematic.sources.earnings_calendar import "
+            "fetch_next_earnings\n"
+            "    return fetch_next_earnings\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_thematic_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn("alphalens_pipeline.thematic.sources.earnings_calendar", modules)
+
+        thematic_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_pipeline.brokers"
+            and rule["forbidden_prefix"] == "alphalens_pipeline.thematic"
+        ]
+        self.assertEqual(len(thematic_rules), 1, "the brokers -> thematic rule must exist once")
+        self.assertNotIn(
+            "top_level_only",
+            thematic_rules[0],
+            "the brokers -> thematic rule must catch function-scope (lazy) imports too",
+        )
+        self.assertTrue(
+            any(m.startswith(thematic_rules[0]["forbidden_prefix"]) for m in modules),
             "rule would not catch the synthetic violation",
         )
 
