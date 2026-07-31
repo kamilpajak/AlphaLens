@@ -1474,7 +1474,11 @@ def _resolve_and_size(
     from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.execution import build_fx_conversion
     from alphalens_pipeline.brokers.routing import resolve_us_instrument
-    from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, compute_setup_plan
+    from alphalens_pipeline.paper.sizing import (
+        TradeSetupNotPlannableError,
+        compute_setup_plan,
+        parse_brief_to_spec,
+    )
 
     try:
         instrument = resolve_us_instrument(broker, ticker)
@@ -1493,8 +1497,9 @@ def _resolve_and_size(
                 )
                 return None
             fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
+        spec = parse_brief_to_spec(trade_setup)
         plan = compute_setup_plan(
-            brief_trade_setup=trade_setup,
+            spec,
             paper_equity=account.total_value,
             scale_factor=1.0,
             fx=fx,

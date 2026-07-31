@@ -19,10 +19,11 @@ from alphalens_pipeline.paper.sizing import (
     TpTranchePlan,
     TradeSetupNotPlannableError,
     compute_daily_scale_factor,
-    compute_setup_plan,
     setup_plan_gross_guard_limit,
     validate_trade_setup,
 )
+
+from tests.paper.sizing_test_helpers import plan_from_brief
 
 _ASOF = dt.datetime(2026, 7, 18, 12, 0, tzinfo=dt.UTC)
 
@@ -177,7 +178,7 @@ class ComputeDailyScaleFactorHardeningTests(unittest.TestCase):
 
 class ComputeSetupPlanHardeningTests(unittest.TestCase):
     def _plan(self, **kw):
-        return compute_setup_plan(
+        return plan_from_brief(
             brief_trade_setup=_setup(**kw), paper_equity=100_000.0, scale_factor=1.0
         )
 
@@ -227,7 +228,7 @@ class ComputeSetupPlanHardeningTests(unittest.TestCase):
 
 class TpTrancheHardeningTests(unittest.TestCase):
     def _plan(self, tp_tranches):
-        return compute_setup_plan(
+        return plan_from_brief(
             brief_trade_setup=_setup(tp_tranches=tp_tranches),
             paper_equity=100_000.0,
             scale_factor=1.0,
@@ -265,7 +266,7 @@ class TpTrancheHardeningTests(unittest.TestCase):
 
 class FxGuardHardeningTests(unittest.TestCase):
     def _plan(self, fx):
-        return compute_setup_plan(
+        return plan_from_brief(
             brief_trade_setup=_setup(entry_tiers=[{"limit": 100.0, "alloc_pct": 100.0}]),
             paper_equity=10_000.0,
             scale_factor=1.0,
@@ -304,7 +305,7 @@ class FxGuardHardeningTests(unittest.TestCase):
         # (1 - buffer/100), floored per tier. A big buffer (50%) and a $1 limit
         # make the floor cross an integer boundary, so a NumberReplacer on the
         # `/ 100.0` divisor (L272) shifts the qty (a small buffer floors away).
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(entry_tiers=[{"limit": 1.0, "alloc_pct": 100.0}]),
             paper_equity=10_000.0,
             scale_factor=1.0,
@@ -320,9 +321,7 @@ class GrossGuardHardeningTests(unittest.TestCase):
     def test_gross_guard_frac_is_keyword_only(self):
         # gross_safety_frac is keyword-only (the `*` marker); a `*`->`/` mutant
         # would accept it positionally (L341).
-        plan = compute_setup_plan(
-            brief_trade_setup=_setup(), paper_equity=10_000.0, scale_factor=1.0
-        )
+        plan = plan_from_brief(brief_trade_setup=_setup(), paper_equity=10_000.0, scale_factor=1.0)
         with self.assertRaises(TypeError):
             setup_plan_gross_guard_limit(plan, 0.5)  # type: ignore[misc]
 

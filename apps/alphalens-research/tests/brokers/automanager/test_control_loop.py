@@ -604,7 +604,14 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
             )
             p(
                 mock.patch(
-                    "alphalens_pipeline.paper.sizing.compute_setup_plan", lambda **_k: object()
+                    "alphalens_pipeline.paper.sizing.parse_brief_to_spec",
+                    lambda _brief_trade_setup: object(),
+                )
+            )
+            p(
+                mock.patch(
+                    "alphalens_pipeline.paper.sizing.compute_setup_plan",
+                    lambda _spec, **_k: object(),
                 )
             )
             p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
@@ -697,7 +704,8 @@ class TestPlacePickBranches(unittest.TestCase):
             "safety_check": lambda *_a, **_k: object(),
             "resolve": lambda _b, _t: _instr(),
             "classify": lambda *_a, **_k: _placement(),
-            "compute_plan": lambda **_k: object(),
+            "parse_spec": lambda _brief_trade_setup: object(),
+            "compute_plan": lambda _spec, **_k: object(),
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
             "build_record": lambda **kw: dict(kw),
@@ -727,6 +735,7 @@ class TestPlacePickBranches(unittest.TestCase):
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
         p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
         p(mock.patch("alphalens_pipeline.paper.brief_loader.load_brief", m["load_brief"]))
+        p(mock.patch("alphalens_pipeline.paper.sizing.parse_brief_to_spec", m["parse_spec"]))
         p(mock.patch("alphalens_pipeline.paper.sizing.compute_setup_plan", m["compute_plan"]))
         p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
         return cl._make_place_pick(broker)

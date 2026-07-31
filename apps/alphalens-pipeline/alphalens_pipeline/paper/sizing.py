@@ -46,6 +46,7 @@ from alphalens_pipeline.paper.constants import (
     STEADY_STATE_GROSS_FRAC,
 )
 from alphalens_pipeline.paper.fx import FxConversion
+from alphalens_pipeline.trade_intent.schema import EntryTierSpec, TpTrancheSpec, TradeSpec
 
 
 @dataclass(frozen=True)
@@ -175,6 +176,60 @@ def validate_trade_setup(brief_trade_setup: dict) -> float:
     return float(suggested_size_pct)
 
 
+def parse_brief_to_spec(brief_trade_setup: dict) -> TradeSpec:
+    """Parse a raw ``brief_trade_setup`` dict into an unsized :class:`TradeSpec`.
+
+    Kept in ``paper/sizing.py`` (not ``thematic/intent_builder.py``) — the
+    daemon still parses at drain time, so moving it now would introduce a
+    transient brokers->thematic import edge; PR-7 relocates it when the
+    parse moves to arm-time (memo section 2.3).
+
+    Runs :func:`validate_trade_setup` FIRST so the same unplannable briefs
+    raise :class:`TradeSetupNotPlannableError` here as they did inside the
+    pre-split ``compute_setup_plan``. Every raw entry tier / TP tranche is
+    carried through IN ORDER (including non-positive ``limit``/``target``
+    rows) — the money half (:func:`compute_setup_plan`) is what drops them,
+    so ``tier_index``/``tranche_index`` downstream stay the raw enumerate
+    index either way.
+    """
+    suggested_size_pct = validate_trade_setup(brief_trade_setup)
+
+    entry_tiers_raw = brief_trade_setup["entry_tiers"]
+    entry_tiers = tuple(
+        EntryTierSpec(
+            limit_price=float(raw["limit"]),
+            alloc_pct=float(raw.get("alloc_pct", 0.0)),
+            tag=str(raw.get("tag", "")),
+        )
+        for raw in entry_tiers_raw
+    )
+
+    tp_tranches_raw = brief_trade_setup.get("tp_tranches") or ()
+    tp_tranches = tuple(
+        TpTrancheSpec(
+            price=float(raw["target"]),
+            tranche_pct=float(raw.get("tranche_pct", 0.0)),
+            r_multiple=float(raw.get("r_multiple", 0.0)),
+            tag=str(raw.get("tag", "")),
+        )
+        for raw in tp_tranches_raw
+    )
+
+    disaster_stop = float(brief_trade_setup["disaster_stop"])
+    order_ttl_days = int(
+        brief_trade_setup.get("order_ttl_days") or 0
+    )  # 0 sentinel preserved — must NOT fall through to TradeSpec's default (7)
+
+    return TradeSpec(
+        entry_tiers=entry_tiers,
+        disaster_stop=disaster_stop,
+        tp_tranches=tp_tranches,
+        suggested_size_pct=suggested_size_pct,
+        order_ttl_days=order_ttl_days,
+        side="long",
+    )
+
+
 def compute_daily_scale_factor(
     plannable_suggested_pcts: Iterable[float],
     paper_equity: float,
@@ -213,42 +268,41 @@ def compute_daily_scale_factor(
     return min(1.0, daily_target / aggregate_uncapped)
 
 
-def _build_tp_tranches(tp_tranches_raw: Iterable[dict]) -> list[TpTranchePlan]:
+def _build_tp_tranches(tp_tranches: Iterable[TpTrancheSpec]) -> list[TpTranchePlan]:
     """Render the take-profit tranches, dropping any with a non-positive target.
 
     Extracted verbatim from :func:`compute_setup_plan` to keep the exit-reference
     build a single self-contained pass. Prices are never converted — targets stay
-    in INSTRUMENT currency. A tranche with ``target <= 0`` is skipped as
+    in INSTRUMENT currency. A tranche with ``price <= 0`` is skipped as
     defense-in-depth against a malformed brief row.
     """
     tranches: list[TpTranchePlan] = []
-    for idx, raw in enumerate(tp_tranches_raw):
-        target = float(raw["target"])
-        if target <= 0:
+    for idx, t in enumerate(tp_tranches):
+        if t.price <= 0:
             continue
         tranches.append(
             TpTranchePlan(
                 tranche_index=idx,
-                target_price=target,
-                tranche_pct=float(raw.get("tranche_pct", 0.0)),
-                r_multiple=float(raw.get("r_multiple", 0.0)),
-                tag=str(raw.get("tag", "")),
+                target_price=t.price,
+                tranche_pct=t.tranche_pct,
+                r_multiple=t.r_multiple,
+                tag=t.tag,
             )
         )
     return tranches
 
 
 def compute_setup_plan(
+    spec: TradeSpec,
     *,
-    brief_trade_setup: dict,
     paper_equity: float,
     scale_factor: float,
     fx: FxConversion | None = None,
 ) -> SetupPlan:
-    """Turn a parsed ``brief_trade_setup`` dict into a :class:`SetupPlan`.
+    """Turn an unsized :class:`TradeSpec` into a concrete :class:`SetupPlan`.
 
     Args:
-        brief_trade_setup: parsed JSON dict from the brief parquet row.
+        spec: parsed, unsized trade spec — see :func:`parse_brief_to_spec`.
         paper_equity: live account equity in the ACCOUNT currency.
         scale_factor: pre-computed daily scale factor from
             :func:`compute_daily_scale_factor`. Pass ``1.0`` for unit tests
@@ -262,14 +316,13 @@ def compute_setup_plan(
             division. Prices (tier limits, targets, stop) are NEVER
             converted.
 
-    Raises :class:`TradeSetupNotPlannableError` for the documented
-    unplannable cases (status != OK, no entry tiers, missing
-    ``suggested_size_pct``, …) plus the FX refusals (non-positive rate,
-    same-currency ``FxConversion`` — same-currency must pass ``fx=None``).
-    Shares its validation with :func:`validate_trade_setup` so the two
-    cannot drift.
+    Raises :class:`TradeSetupNotPlannableError` for the FX refusals
+    (non-positive rate, same-currency ``FxConversion`` — same-currency must
+    pass ``fx=None``) plus "no usable entry tiers after sanitisation" when
+    every tier in ``spec`` has a non-positive ``limit_price``. The brief-side
+    plannability checks (status != OK, missing ``suggested_size_pct``, …) now
+    run earlier, inside :func:`parse_brief_to_spec` / :func:`validate_trade_setup`.
     """
-    suggested_size_pct = validate_trade_setup(brief_trade_setup)
     if fx is not None:
         if fx.account_currency == fx.instrument_currency:
             raise TradeSetupNotPlannableError(
@@ -281,9 +334,9 @@ def compute_setup_plan(
                 f"FxConversion rate {fx.rate!r} not usable "
                 f"({fx.account_currency}->{fx.instrument_currency})"
             )
-    disaster_stop = float(brief_trade_setup["disaster_stop"])
-    entry_tiers_raw = brief_trade_setup["entry_tiers"]
-    tp_tranches_raw = brief_trade_setup.get("tp_tranches") or ()
+
+    suggested_size_pct = spec.suggested_size_pct
+    disaster_stop = spec.disaster_stop
 
     final_size_pct = suggested_size_pct * float(scale_factor)
     total_notional = final_size_pct / 100.0 * float(paper_equity)
@@ -297,13 +350,13 @@ def compute_setup_plan(
         sizing_notional = total_notional * fx.rate * (1.0 - fx.sizing_buffer_pct / 100.0)
 
     entries: list[TierPlan] = []
-    for idx, raw in enumerate(entry_tiers_raw):
-        limit = float(raw["limit"])
+    for idx, t in enumerate(spec.entry_tiers):
+        limit = t.limit_price
         if limit <= 0:
             # Defense-in-depth — trade_setup generator already guards against
             # this. Skip the offending tier rather than the whole plan.
             continue
-        alloc_pct = float(raw.get("alloc_pct", 0.0))
+        alloc_pct = t.alloc_pct
         tier_notional = sizing_notional * (alloc_pct / 100.0)
         qty = max(0, math.floor(tier_notional / limit))
         entries.append(
@@ -312,18 +365,16 @@ def compute_setup_plan(
                 limit_price=limit,
                 qty=qty,
                 alloc_pct=alloc_pct,
-                tag=str(raw.get("tag", "")),
+                tag=t.tag,
             )
         )
 
     if not entries:
         raise TradeSetupNotPlannableError("no usable entry tiers after sanitisation")
 
-    tranches = _build_tp_tranches(tp_tranches_raw)
+    tranches = _build_tp_tranches(spec.tp_tranches)
 
-    order_ttl_days = int(
-        brief_trade_setup.get("order_ttl_days") or 0
-    )  # 0 sentinel → planner falls back to default
+    order_ttl_days = spec.order_ttl_days  # 0 sentinel → planner falls back to default
 
     return SetupPlan(
         suggested_size_pct=suggested_size_pct,
@@ -373,6 +424,7 @@ __all__ = [
     "TradeSetupNotPlannableError",
     "compute_daily_scale_factor",
     "compute_setup_plan",
+    "parse_brief_to_spec",
     "setup_plan_gross_guard_limit",
     "setup_plan_gross_notional",
     "validate_trade_setup",

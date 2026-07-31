@@ -51,22 +51,31 @@ class EntryTierSpec:
     ``alloc_pct`` is a PERCENTAGE (0-100), not a fraction; the tiers sum to
     ~100 across the ladder. This matches ``compute_setup_plan``, which sizes
     each tier as ``total_notional * (alloc_pct / 100)`` (paper/sizing.py).
+    ``tag`` mirrors the brief entry tier's free-text label (e.g. "T1"); it
+    carries no sizing semantics.
     """
 
     limit_price: float
     alloc_pct: float
+    tag: str = ""
 
 
 @dataclass(frozen=True)
 class TpTrancheSpec:
     """One take-profit tranche of the client-computed TP ladder.
 
-    ``alloc_pct`` is a PERCENTAGE (0-100), matching the entry-tier convention
-    and ``compute_setup_plan``'s tranche sizing.
+    Mirrors the brief TP tranche shape exactly: ``price`` is the target
+    price, ``tranche_pct`` is a PERCENTAGE (0-100, matching the entry-tier
+    convention and ``compute_setup_plan``'s tranche sizing), ``r_multiple``
+    is the tranche's R-multiple label, and ``tag`` is the tranche's
+    free-text label (e.g. "TP1"). ``r_multiple``/``tag`` carry no sizing
+    semantics of their own.
     """
 
     price: float
-    alloc_pct: float
+    tranche_pct: float
+    r_multiple: float = 0.0
+    tag: str = ""
 
 
 @dataclass(frozen=True)
