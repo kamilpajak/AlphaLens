@@ -36,6 +36,7 @@ executes the returned Actions; this module performs no I/O.
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -116,6 +117,17 @@ def _exit_amend_ref(entry_crid: str, seq: int) -> str:
 
 
 @dataclass(frozen=True)
+class ReanchorFacts:
+    """The fill-complete STOP re-anchor facts (PR-6b, broker-manager extraction
+    memo §4.3), folded from the geometry shadow stamp journaled at placement
+    (PR-6a's ``_geometry_stamp``). Minimal — TP reanchor is OUT OF SCOPE, only
+    the disaster stop moves with the realized fill blend."""
+
+    k_atr: float
+    atr: float
+
+
+@dataclass(frozen=True)
 class PlannedExit:
     """The plan PRICES the broker cannot know, folded per NETTED uic from the
     append-only ``planned`` journal lines (saxo-oco memo §7). Carries NO
@@ -142,6 +154,13 @@ class PlannedExit:
     next_amend_seq: Callable[[], int] = field(
         default=_default_next_amend_seq, compare=False, repr=False
     )
+    # PR-6b: the fill-complete reanchor facts (k_atr/atr), folded ONLY when the
+    # governing planned line carries a "geometry" shadow stamp (PR-6a). ``None``
+    # for every pre-PR-6a journal line and for every hand-built PlannedExit that
+    # omits it — the default keeps every existing construction byte-identical.
+    # Deliberately kept OUT of the deterministic-ref governing logic (next_gen /
+    # next_amend_seq) — a reanchor arm never bumps those counters itself.
+    reanchor: ReanchorFacts | None = None
 
 
 @dataclass(frozen=True)
@@ -259,6 +278,11 @@ class AmendStop:
     stop_price: float
     request_id: str  # gen-stamped deterministic -amend- ref (_exit_amend_ref)
     reason: str
+    # PR-6b: the avg_price this amend reanchors the stop to, so the executor can
+    # latch it (ProtectionView.reanchored_by_uic) ONLY on confirmed PATCH success.
+    # ``None`` for every non-reanchor AmendStop (over-hedge downsize / plain grow)
+    # — additive, so every existing construction stays byte-identical.
+    reanchor_avg_price: float | None = None
 
 
 Action = PlaceStop | UpgradeToOco | AmendStop | CancelSellLegs | CancelRemaining | AlertOnly | NoOp
@@ -372,9 +396,9 @@ def _amend_enabled() -> bool:
 # Env flag selecting the placement-time exit-geometry policy (PR-6a, broker-
 # manager extraction memo §2.5 / §4.1). DEFAULTS to the brief's static
 # disaster_stop/tp (geometry INERT — byte-identical to pre-PR-6 placement).
-# Flipping to "atr_bracket_1p5" is guarded by build_default_deps: it FAILS
-# FAST until the PR-6b avg_price re-anchor ships (memo §4.3 P0 blocker), so
-# this flag cannot be turned on live before the fix that makes it safe exists.
+# Flipping to "atr_bracket_1p5" is now safe to enable live: the PR-6b
+# fill-complete avg_price reanchor (``_maybe_reanchor`` below) ships alongside
+# this flag, so ``build_default_deps`` no longer fail-fasts on it.
 _EXIT_POLICY_ENV = "ALPHALENS_BROKER_EXIT_POLICY"
 _DEFAULT_EXIT_POLICY = "setup_static"
 
@@ -385,10 +409,18 @@ def _exit_policy() -> str:
 
     Default ``"setup_static"`` = the brief's static disaster_stop/tp (geometry
     INERT, byte-identical to pre-PR-6 placement). Flip to ``"atr_bracket_1p5"``
-    only AFTER the PR-6b avg_price reanchor ships — see ``build_default_deps``'s
-    fail-fast guard."""
+    to activate both the placement-time ATR-bracket geometry (PR-6a) AND the
+    fill-complete avg_price reanchor (PR-6b, ``_maybe_reanchor``) together —
+    the two ship as one flag so a live flip is never geometry-without-reanchor."""
     value = os.environ.get(_EXIT_POLICY_ENV, "").strip()
     return value or _DEFAULT_EXIT_POLICY
+
+
+# PR-6b idempotence-latch tolerance: avg_price only changes on a NEW fill (a
+# qty-weighted blend re-averages), so a near-exact match against the last
+# reanchored value means the reanchor already fired for this blend — never a
+# genuine drift worth re-firing over. Same order of magnitude as _QTY_EPS.
+_REANCHOR_AVG_PRICE_EPS = 1e-6
 
 
 @dataclass(frozen=True)
@@ -416,6 +448,20 @@ class ProtectionView:
     # / place-first covers the delta by a proven primitive (verdict-2-finding-2).
     oco_recently_placed: frozenset[int] = frozenset()
     amend_recently_failed: frozenset[int] = frozenset()
+    # PR-6b: the idempotence latch for the fill-complete reanchor — uic -> the
+    # avg_price it was last reanchored at (folded from the ``reanchored``
+    # journal marker, written ONLY on a confirmed amend success). A PERMANENT
+    # latch per blend (no TTL, unlike the two sets above): avg_price only
+    # changes on a new fill, so a near-exact match means the reanchor already
+    # fired for THIS blend. The latch is JOURNAL-lifetime, not position-lifetime
+    # (latest-by-ts per uic across all history): if a uic reanchors at price X,
+    # fully exits, and a brand-new position on the same uic later realizes a blend
+    # within _REANCHOR_AVG_PRICE_EPS of X, the stale latch suppresses that new
+    # reanchor — the stop then simply stays at its placement-time planned distance
+    # (benign: never a naked window or a bad stop, and an exact 1e-6 collision is
+    # negligible). Default empty dict so pure tests + a second broker stay
+    # source-compatible.
+    reanchored_by_uic: Mapping[int, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -563,6 +609,80 @@ def reconcile_protection(view: ProtectionView) -> list[Action]:
     return actions
 
 
+def _maybe_reanchor(
+    uic: int,
+    pos: Position,
+    plan: PlannedExit,
+    legs: tuple[OrderState, ...],
+    view: ProtectionView,
+) -> AmendStop | None:
+    """PR-6b: the fill-complete STOP re-anchor arm (broker-manager extraction
+    memo §4.3). A covered position's resting standalone stop was sized to the
+    PLANNED blend at placement time; a gapped / deep fill realizes a DIFFERENT
+    avg_price, so the live risk distance (``avg_price - stop_price``) drifts
+    from the intended ``k_atr * atr``. This arm PATCHes the stop back to
+    ``avg_price - k_atr * atr`` once the fill is complete, restoring the
+    invariant — never on placement, never mid-fill (Q10 TOCTOU, the amend
+    executor's own re-check).
+
+    Fires ONLY when ALL hold:
+      - ``_exit_policy() != "setup_static"`` — the dark gate; the arm is
+        INERT by default and only activates once the operator flips the
+        exit-geometry flag (which itself requires this arm to exist).
+      - ``plan.reanchor is not None`` — the governing planned line carried a
+        geometry shadow stamp (PR-6a); a pre-PR-6a plan never reanchors.
+      - ``pos.avg_price`` is finite and > 0 — never anchor on the SIM
+        NoAccess ``<= 0`` sentinel or a NaN/inf blend.
+      - ``plan.reanchor.atr`` is finite and > 0 — never divide the risk
+        distance by a degenerate ATR.
+      - ``_sole_standalone_stop(legs)`` is not ``None`` — SCOPE: a clean
+        resting standalone stop only. An OCO pair or a multi-stop shape is
+        left to its own arms; this never touches them.
+      - ``uic`` is not in ``view.amend_recently_failed`` — same retry
+        backoff as every other amend arm.
+      - the uic has NEVER been reanchored at THIS avg_price
+        (``view.reanchored_by_uic``, ``_REANCHOR_AVG_PRICE_EPS`` tolerance) —
+        the idempotence latch: a confirmed reanchor for a blend never re-fires
+        for that same blend, only for a NEW one (the position grew/shrank via
+        another fill).
+
+    Returns ``None`` (never a bad stop) when the computed target is
+    non-finite or ``<= 0``."""
+    if _exit_policy() == "setup_static":
+        return None
+    if plan.reanchor is None:
+        return None
+    avg_price = pos.avg_price
+    if not math.isfinite(avg_price) or avg_price <= 0:
+        return None
+    atr = plan.reanchor.atr
+    if not math.isfinite(atr) or atr <= 0:
+        return None
+    sole = _sole_standalone_stop(legs)
+    if sole is None:
+        return None
+    if uic in view.amend_recently_failed:
+        return None
+    latched = view.reanchored_by_uic.get(uic)
+    if latched is not None and abs(latched - avg_price) <= _REANCHOR_AVG_PRICE_EPS:
+        return None
+    target = avg_price - plan.reanchor.k_atr * atr
+    if not math.isfinite(target) or target <= 0:
+        return None
+    owned = pos.quantity
+    return AmendStop(
+        uic,
+        _SIDE,
+        sole.order_id,
+        sole.order_type or "StopIfTraded",
+        owned,
+        target,
+        _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+        reason="reanchor-on-fill",
+        reanchor_avg_price=avg_price,
+    )
+
+
 def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Action]:
     """The downside-cover arm for ONE netted long (memo §6). Sizes every stop to
     ``pos.quantity`` (netted realized owned) — never a planned tier qty."""
@@ -609,6 +729,13 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     # on a fresh naked fill. A position that already has a resting rung-1 stop (or a
     # covering OCO stop leg without a full TP) therefore stays stop-only for its whole
     # life; the system converges to full OCO coverage purely by turnover.
+    # (PR-6b) FILL-COMPLETE REANCHOR: a covered standalone stop was sized to the
+    # planned blend at placement; PATCH it back onto the realized avg_price once
+    # the fill is complete (dark by default — see _maybe_reanchor). Never fires
+    # on the OCO-healthy branch above (standalone stop only, by construction).
+    action = _maybe_reanchor(uic, pos, plan, legs, view)
+    if action is not None:
+        return [action]
     return [NoOp()]
 
 
@@ -934,6 +1061,7 @@ __all__ = [
     "PlaceStop",
     "PlannedExit",
     "ProtectionView",
+    "ReanchorFacts",
     "UpgradeToOco",
     "advance",
     "reconcile_protection",

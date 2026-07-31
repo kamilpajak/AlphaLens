@@ -157,11 +157,11 @@ def _instrument(uic: int = _UIC) -> InstrumentRef:
     )
 
 
-def _pos(qty: float, uic: int = _UIC) -> Position:
+def _pos(qty: float, uic: int = _UIC, *, avg_price: float = 296.0) -> Position:
     return Position(
         instrument=_instrument(uic),
         quantity=qty,
-        avg_price=296.0,
+        avg_price=avg_price,
         market_value=None,
         unrealized_pnl=None,
         position_id="pos-1",
@@ -200,6 +200,7 @@ def _plan(
     conflicting: bool = False,
     n_plans: int = 1,
     next_amend_seq: Callable[[], int] | None = None,
+    reanchor: pm.ReanchorFacts | None = None,
 ) -> PlannedExit:
     kwargs: dict[str, Any] = {}
     if next_amend_seq is not None:
@@ -212,6 +213,7 @@ def _plan(
         tp_price=tp_price,
         conflicting=conflicting,
         n_plans=n_plans,
+        reanchor=reanchor,
         **kwargs,
     )
 
@@ -225,6 +227,7 @@ def _pview(
     oco_unsupported: frozenset[int] = frozenset(),
     oco_recently_placed: frozenset[int] = frozenset(),
     amend_recently_failed: frozenset[int] = frozenset(),
+    reanchored_by_uic: dict[int, float] | None = None,
 ) -> ProtectionView:
     longs = long_positions if long_positions is not None else {}
     alls = all_positions if all_positions is not None else dict(longs)
@@ -236,6 +239,7 @@ def _pview(
         oco_unsupported=oco_unsupported,
         oco_recently_placed=oco_recently_placed,
         amend_recently_failed=amend_recently_failed,
+        reanchored_by_uic=reanchored_by_uic or {},
     )
 
 
@@ -865,6 +869,7 @@ class TestReconcileProtectionArms(unittest.TestCase):
 
 _OCO_ON = {"ALPHALENS_BROKER_OCO_ENABLED": "1"}
 _AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
+_EXIT_POLICY_ATR_BRACKET = {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}
 
 
 class TestB0OcoDirectOnFill(unittest.TestCase):
@@ -1605,6 +1610,178 @@ class TestOcoAmendSteadyState(unittest.TestCase):
         self.assertEqual(first.target_qty, 7.0)  # absolute grow target
         self.assertEqual(second.target_qty, 3.0)  # absolute downsize target
         self.assertNotEqual(first.request_id, second.request_id)  # distinct -amend- seqs
+
+
+class TestFillCompleteReanchor(unittest.TestCase):
+    """PR-6b: the fill-complete STOP reanchor arm (broker-manager extraction
+    memo §4.3). A covered standalone stop was sized to the PLANNED blend at
+    placement; ``_maybe_reanchor`` PATCHes it onto the REALIZED avg_price once
+    the fill is complete — dark by default (``_exit_policy() == "setup_static"``)."""
+
+    def _facts(self, *, k_atr: float = 1.5, atr: float = 4.0) -> pm.ReanchorFacts:
+        return pm.ReanchorFacts(k_atr=k_atr, atr=atr)
+
+    def _covered_view(
+        self,
+        owned: float = 7.0,
+        *,
+        avg_price: float = 95.0,
+        reanchor: pm.ReanchorFacts | None,
+        amend_recently_failed: frozenset[int] = frozenset(),
+        reanchored_by_uic: dict[int, float] | None = None,
+    ) -> tuple[Position, ProtectionView]:
+        pos = _pos(owned, avg_price=avg_price)
+        stop = _leg("stop-1", "StopIfTraded", owned)  # sole clean covering stop, no TP
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: _plan(reanchor=reanchor)},
+            amend_recently_failed=amend_recently_failed,
+            reanchored_by_uic=reanchored_by_uic,
+        )
+        return pos, view
+
+    def test_policy_off_is_noop_byte_identical_even_with_reanchor_facts(self) -> None:
+        pos, view = self._covered_view(reanchor=self._facts())
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_EXIT_POLICY"}
+        with patch.dict(os.environ, env, clear=True):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_policy_on_covered_sole_stop_valid_avg_price_emits_amendstop(self) -> None:
+        pos, view = self._covered_view(owned=7.0, avg_price=95.0, reanchor=self._facts())
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertAlmostEqual(action.stop_price, 95.0 - 1.5 * 4.0)  # 89.0
+        self.assertEqual(action.target_qty, 7.0)  # owned
+        self.assertEqual(action.order_id, "stop-1")
+        self.assertEqual(action.reason, "reanchor-on-fill")
+        self.assertEqual(action.reanchor_avg_price, 95.0)
+        self.assertIn("-amend-", action.request_id)
+
+    def test_already_reanchored_at_this_avg_price_is_noop(self) -> None:
+        pos, view = self._covered_view(
+            owned=7.0,
+            avg_price=95.0,
+            reanchor=self._facts(),
+            reanchored_by_uic={_UIC: 95.0},
+        )
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_avg_price_moved_since_last_reanchor_refires(self) -> None:
+        pos, view = self._covered_view(
+            owned=7.0,
+            avg_price=95.0,
+            reanchor=self._facts(),
+            reanchored_by_uic={_UIC: 90.0},  # a prior, DIFFERENT blend
+        )
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertEqual(action.reanchor_avg_price, 95.0)
+
+    def test_plan_reanchor_none_is_noop(self) -> None:
+        pos, view = self._covered_view(reanchor=None)
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_oco_healthy_covered_full_tp_is_noop_never_reanchors(self) -> None:
+        pos = _pos(46.0, avg_price=95.0)
+        stop = _oco_leg("oco-stop", "StopIfTraded", 46.0)
+        tp = _oco_leg("oco-tp", "Limit", 46.0)
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop, tp)},
+            planned_by_uic={_UIC: _plan(tp_price=306.72, reanchor=self._facts())},
+        )
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_avg_price_sentinel_le_zero_is_noop(self) -> None:
+        pos, view = self._covered_view(avg_price=0.0, reanchor=self._facts())
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_computed_target_le_zero_is_noop(self) -> None:
+        # avg_price 5.0 - 1.5*4.0 = -1.0 <= 0 -> never a bad stop.
+        pos, view = self._covered_view(avg_price=5.0, reanchor=self._facts(k_atr=1.5, atr=4.0))
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_amend_recently_failed_is_noop(self) -> None:
+        pos, view = self._covered_view(
+            reanchor=self._facts(), amend_recently_failed=frozenset({_UIC})
+        )
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+
+class TestGappedDeepFillReanchorGating(unittest.TestCase):
+    """HEADLINE gating test (PR-6b): a 2-tier ladder with a gapped DEEP fill.
+
+    Planned blend 100.0, ATR 4.0, k_atr 1.5 -> planned stop 94.0 (the resting
+    standalone stop, sized at PLACEMENT time to the planned blend). The
+    REALIZED avg_price is 95.0 (a deep gap-down fill, below the planned blend).
+
+    WITHOUT the reanchor the live risk distance is
+    ``avg_price - planned_stop = 95.0 - 94.0 = 1.0``, which DRIFTS from the
+    intended ``1.5 * ATR = 6.0`` — the stop sits far too close to the realized
+    entry. Reconciling with the exit-geometry policy ON must emit an AmendStop
+    that restores the invariant EXACTLY: ``stop_price == 95.0 - 1.5*4.0 == 89.0``,
+    i.e. risk == 1.5*ATR again."""
+
+    def test_drift_exists_pre_reanchor_and_amendstop_restores_the_invariant(self) -> None:
+        planned_blend = 100.0
+        atr = 4.0
+        k_atr = 1.5
+        planned_stop = planned_blend - k_atr * atr  # 94.0 — sized at placement
+        realized_avg_price = 95.0  # deep gap-down fill, below the planned blend
+
+        # (a) the drift exists pre-reanchor: live risk != intended risk.
+        pre_reanchor_risk = realized_avg_price - planned_stop
+        intended_risk = k_atr * atr
+        self.assertAlmostEqual(pre_reanchor_risk, 1.0)
+        self.assertNotAlmostEqual(pre_reanchor_risk, intended_risk)
+
+        owned = 10.0  # a 2-tier ladder's netted owned qty after both fills
+        pos = _pos(owned, avg_price=realized_avg_price)
+        # The resting standalone stop, still at the PLANNED price (placement-time).
+        stop = _leg("stop-1", "StopIfTraded", owned)
+        plan = _plan(stop_price=planned_stop, reanchor=pm.ReanchorFacts(k_atr=k_atr, atr=atr))
+        view = _pview(
+            long_positions={_UIC: pos},
+            sell_legs_by_uic={_UIC: (stop,)},
+            planned_by_uic={_UIC: plan},
+        )
+
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+
+        # (b) the emitted stop_price restores the invariant EXACTLY.
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        corrected_stop_price = realized_avg_price - k_atr * atr
+        self.assertAlmostEqual(corrected_stop_price, 89.0)
+        self.assertAlmostEqual(action.stop_price, corrected_stop_price)
+        self.assertAlmostEqual(realized_avg_price - action.stop_price, intended_risk)
+        self.assertEqual(action.target_qty, owned)
+        self.assertEqual(action.reanchor_avg_price, realized_avg_price)
 
 
 class TestExitPolicyFlag(unittest.TestCase):
