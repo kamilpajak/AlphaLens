@@ -179,11 +179,13 @@ def _position_uic(position: Position) -> int | None:
 
 
 def _blend_avg_price(q_a: float, p_a: float, q_b: float, p_b: float) -> float:
-    """Quantity-weighted mean of two lots' avg_price. On a degenerate net-flat
-    (|q_a + q_b| <= _QTY_EPS) it keeps p_a rather than dividing (never raises
-    ZeroDivisionError): such a position is filtered out of get_long_positions
-    (quantity <= _QTY_EPS), and in get_positions_by_uic its avg_price is
-    unconsumed (only quantity is read)."""
+    """Quantity-weighted mean of two lots' avg_price. Quantities are SIGNED, so
+    mixing a long and a short lot yields the net cost basis (each price weighted
+    by its signed quantity); in practice only long lots are netted here. On a
+    degenerate net-flat (|q_a + q_b| <= _QTY_EPS) it keeps p_a rather than
+    dividing (never raises ZeroDivisionError): such a position is filtered out of
+    get_long_positions (quantity <= _QTY_EPS), and in get_positions_by_uic its
+    avg_price is unconsumed (only quantity is read)."""
     total = q_a + q_b
     if abs(total) <= _QTY_EPS:
         return p_a
