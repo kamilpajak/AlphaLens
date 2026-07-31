@@ -47,6 +47,7 @@ from alphalens_pipeline.brokers.contract import (
     Position,
 )
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
+from alphalens_pipeline.trade_intent.schema import ExitGeometrySpec, InitialLevels, ReanchorOnFill
 
 _RID = "rid-KO"
 _UIC = 43070
@@ -955,6 +956,168 @@ class TestPlacePickBranches(unittest.TestCase):
         self.assertEqual(captured["jv"].open_bracket_count, 1)
         self.assertEqual(captured["jv"].gross_committed, 50.0)
         self.assertEqual(captured["jv"].realized_r_today, 1.5)
+
+
+def _exit_spec(*, stop: float, tp: float, atr: float, ceiling: float | None = None) -> Any:
+    return ExitGeometrySpec(
+        initial_levels=InitialLevels(stop=stop, tp=tp),
+        reaction_plan=(ReanchorOnFill(k_atr=1.5, atr=atr, ceiling_price=ceiling),),
+    )
+
+
+class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
+    """PR-6a: ``_place_tiers`` journals the geometry SHADOW STAMP unconditionally
+    (memo §4.3 — the dark shadow measures anchor divergence before any flip), but
+    only OVERRIDES the journaled stop/TP prices when the ``ALPHALENS_BROKER_EXIT_POLICY``
+    env flag is not the default ``"setup_static"`` AND a buildable ``exit_spec`` exists.
+    The default (unset flag) path must stay BYTE-IDENTICAL to pre-PR-6a."""
+
+    def _run(
+        self, *, exit_spec: Any, trade_setup: Any = None, env: dict[str, str] | None = None
+    ) -> tuple[int, list[dict[str, Any]]]:
+        journaled: list[dict[str, Any]] = []
+        pkg = "alphalens_pipeline.brokers"
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch.object(cl, "_append_standalone_stop_journal", journaled.append))
+            if env is not None:
+                p(mock.patch.dict(os.environ, env))
+            else:
+                # Explicitly clear the flag so a leftover CI/dev env var can never
+                # flip the "dark" branch under test.
+                clean = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_EXIT_POLICY"}
+                p(mock.patch.dict(os.environ, clean, clear=True))
+            count = cl._place_tiers(
+                _PlaceBroker(),
+                _pick("KO", "2026-07-20"),
+                "KO",
+                _instr(),
+                _acct(),
+                None,
+                _placement(),
+                trade_setup,
+                exit_spec,
+            )
+        return count, journaled
+
+    def test_dark_default_planned_line_byte_identical_to_pre_pr6a(self) -> None:
+        spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
+        count, journaled = self._run(exit_spec=spec)
+        self.assertEqual(count, 1)
+        line = journaled[0]
+        self.assertAlmostEqual(line["stop_price"], 9.0)  # placement.disaster_stop_price, unchanged
+        self.assertAlmostEqual(line["take_profit"], 12.0)  # tier.tp, unchanged
+
+    def test_dark_default_still_journals_the_geometry_shadow_stamp(self) -> None:
+        spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0, ceiling=20.0)
+        _count, journaled = self._run(exit_spec=spec)
+        stamp = journaled[0]["geometry"]
+        self.assertEqual(stamp["policy_name"], "atr_bracket_1p5")
+        self.assertEqual(stamp["policy_version"], 1)
+        self.assertAlmostEqual(stamp["geometry_stop"], 8.5)
+        self.assertAlmostEqual(stamp["geometry_tp"], 13.0)
+        self.assertAlmostEqual(stamp["atr"], 1.0)
+        self.assertAlmostEqual(stamp["ceiling_price"], 20.0)
+        self.assertFalse(stamp["applied"])
+
+    def test_forced_on_overrides_the_journaled_prices(self) -> None:
+        spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
+        _count, journaled = self._run(
+            exit_spec=spec, env={"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}
+        )
+        line = journaled[0]
+        self.assertAlmostEqual(line["stop_price"], 8.5)
+        self.assertAlmostEqual(line["take_profit"], 13.0)
+        self.assertTrue(line["geometry"]["applied"])
+
+    def test_exit_spec_none_never_overrides_even_when_flag_on(self) -> None:
+        _count, journaled = self._run(
+            exit_spec=None, env={"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}
+        )
+        line = journaled[0]
+        self.assertAlmostEqual(line["stop_price"], 9.0)
+        self.assertAlmostEqual(line["take_profit"], 12.0)
+        self.assertNotIn("geometry", line)
+
+    def test_exit_spec_none_never_crashes_placement(self) -> None:
+        count, _journaled = self._run(exit_spec=None)
+        self.assertEqual(count, 1)
+
+
+class TestBuildPlannedLineGeometryStamp(unittest.TestCase):
+    """Direct unit coverage of ``_build_planned_line``'s ``geometry_stamp`` param
+    (PR-6a) -- the namespacing + byte-identical-when-omitted contract."""
+
+    def _line(self, **over: Any) -> dict[str, Any]:
+        base: dict[str, Any] = {
+            "entry_crid": "crid-0",
+            "uic": _UIC,
+            "side": "SELL",
+            "stop_price": 216.48,
+            "take_profit": 306.72,
+            "tier_index": 0,
+        }
+        base.update(over)
+        return cl._build_planned_line(**base)
+
+    def test_omitted_by_default_no_geometry_key(self) -> None:
+        line = self._line()
+        self.assertNotIn("geometry", line)
+
+    def test_none_geometry_stamp_omits_the_key(self) -> None:
+        line = self._line(geometry_stamp=None)
+        self.assertNotIn("geometry", line)
+
+    def test_present_geometry_stamp_is_namespaced_under_geometry_key(self) -> None:
+        stamp = {"policy_name": "atr_bracket_1p5", "applied": False}
+        line = self._line(geometry_stamp=stamp)
+        self.assertEqual(line["geometry"], stamp)
+        # Never overwrites/collides with the fold-read fields.
+        self.assertAlmostEqual(line["stop_price"], 216.48)
+        self.assertAlmostEqual(line["take_profit"], 306.72)
+
+
+class TestFoldPlannedExitsIgnoresGeometryStamp(unittest.TestCase):
+    """Regression guard (PR-6a): the additive ``"geometry"`` shadow stamp is
+    telemetry-only and must never change ``_fold_planned_exits``'s output --
+    a future refactor that starts reading it by mistake would silently change
+    live protection derivation."""
+
+    def test_fold_output_identical_with_and_without_geometry_stamp(self) -> None:
+        plain = cl._build_planned_line(
+            entry_crid="crid-0",
+            uic=_UIC,
+            side="SELL",
+            stop_price=216.48,
+            take_profit=306.72,
+            tier_index=0,
+        )
+        stamped = cl._build_planned_line(
+            entry_crid="crid-0",
+            uic=_UIC,
+            side="SELL",
+            stop_price=216.48,
+            take_profit=306.72,
+            tier_index=0,
+            geometry_stamp={
+                "policy_name": "atr_bracket_1p5",
+                "policy_version": 1,
+                "planned_blend": 100.0,
+                "geometry_stop": 97.0,
+                "geometry_tp": 103.0,
+                "atr": 2.0,
+                "ceiling_price": None,
+                "applied": True,
+            },
+        )
+        without_stamp = cl._fold_planned_exits([plain])
+        with_stamp = cl._fold_planned_exits([stamped])
+        self.assertEqual(
+            {u: (p.stop_price, p.tp_price, p.entry_crid) for u, p in without_stamp.items()},
+            {u: (p.stop_price, p.tp_price, p.entry_crid) for u, p in with_stamp.items()},
+        )
 
 
 class TestRunOnceAlertsEachOrphan(unittest.TestCase):
@@ -3015,6 +3178,39 @@ class TestBuildDefaultDepsAmendFailFast(unittest.TestCase):
         ):
             with self.assertRaises(BrokerCapabilityError):
                 cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
+
+
+class TestBuildDefaultDepsExitPolicyFailFast(unittest.TestCase):
+    """PR-6a: build_default_deps FAIL-FASTS when ALPHALENS_BROKER_EXIT_POLICY is
+    flipped off "setup_static" -- the P0 avg_price re-anchor (PR-6b, exit-geometry
+    memo §4.3) is not shipped yet, so live exit-geometry override is not safe.
+    PR-6b removes this guard."""
+
+    def test_fail_fast_when_exit_policy_flipped_off_setup_static(self) -> None:
+        with (
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),
+            ),
+            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}),
+        ):
+            with self.assertRaises(BrokerCapabilityError):
+                cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
+
+    def test_does_not_raise_when_exit_policy_left_at_default(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_EXIT_POLICY"}
+        with (
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+            mock.patch.dict(os.environ, env, clear=True),
+        ):
+            deps = cl.build_default_deps(
+                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+            )
+        self.assertIsNotNone(deps)
 
 
 class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):

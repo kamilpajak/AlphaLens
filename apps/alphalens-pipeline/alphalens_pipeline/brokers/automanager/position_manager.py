@@ -369,6 +369,28 @@ def _amend_enabled() -> bool:
     return os.environ.get(_AMEND_ENABLED_ENV) == "1"
 
 
+# Env flag selecting the placement-time exit-geometry policy (PR-6a, broker-
+# manager extraction memo §2.5 / §4.1). DEFAULTS to the brief's static
+# disaster_stop/tp (geometry INERT — byte-identical to pre-PR-6 placement).
+# Flipping to "atr_bracket_1p5" is guarded by build_default_deps: it FAILS
+# FAST until the PR-6b avg_price re-anchor ships (memo §4.3 P0 blocker), so
+# this flag cannot be turned on live before the fix that makes it safe exists.
+_EXIT_POLICY_ENV = "ALPHALENS_BROKER_EXIT_POLICY"
+_DEFAULT_EXIT_POLICY = "setup_static"
+
+
+def _exit_policy() -> str:
+    """Active exit-geometry policy name (read at call time, restart-consistent
+    and hermetically testable — same pattern as ``_oco_enabled``/``_amend_enabled``).
+
+    Default ``"setup_static"`` = the brief's static disaster_stop/tp (geometry
+    INERT, byte-identical to pre-PR-6 placement). Flip to ``"atr_bracket_1p5"``
+    only AFTER the PR-6b avg_price reanchor ships — see ``build_default_deps``'s
+    fail-fast guard."""
+    value = os.environ.get(_EXIT_POLICY_ENV, "").strip()
+    return value or _DEFAULT_EXIT_POLICY
+
+
 @dataclass(frozen=True)
 class ProtectionView:
     """The ONE per-tick snapshot the pure reconciler diffs (assembled by

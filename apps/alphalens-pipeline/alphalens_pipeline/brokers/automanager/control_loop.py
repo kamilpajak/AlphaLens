@@ -35,6 +35,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     UpgradeToOco,
     _amend_enabled,
     _exit_oco_ref,
+    _exit_policy,
     _exit_stop_ref,
     _oco_enabled,
     advance,
@@ -721,6 +722,17 @@ def build_default_deps(
     amend_placer: AmendStopPlacer | None = (
         broker.amend_stop_amount if isinstance(broker, SupportsAmendStop) else None
     )
+    # Exit-geometry (PR-6a) FAIL-FAST: the P0 avg_price re-anchor (PR-6b, exit-
+    # geometry memo §4.3) is not yet shipped, so flipping the dark flag off
+    # "setup_static" would place a wrong-distance stop under grow-amend once the
+    # realized blend drifts from the planned one. PR-6b removes this guard.
+    if _exit_policy() != "setup_static":
+        raise BrokerCapabilityError(
+            f"ALPHALENS_BROKER_EXIT_POLICY={_exit_policy()!r} but the fill-complete avg_price "
+            "reanchor (PR-6b, memo §4.3) is not yet shipped — flipping exit-geometry live "
+            "without it places a wrong-distance stop under grow-amend. Unset the flag "
+            "(setup_static) or ship PR-6b first."
+        )
     # ONE OAuth provider instance is shared by the SessionKeeper AND the streaming
     # reader, so there is a single OAuth chain / one flock owner and the reader can
     # re-authorize in place off the same bearer the main loop pushes.
@@ -914,13 +926,21 @@ def _build_planned_line(
     take_profit: float | None,
     tier_index: int,
     gen: int = _INITIAL_GEN,
+    geometry_stamp: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One append-only `planned` journal line — the plan PRICES the broker cannot
     know (disaster stop + in-band TP), keyed to the entry client_request_id and
     its ORIGINAL tier_index, plus the resize `gen`. `_fold_planned_exits` (Task 4)
     reads these back per-uic into PlannedExit; NO line here confers protection —
-    protection is derived from live broker state only (design memo §7)."""
-    return {
+    protection is derived from live broker state only (design memo §7).
+
+    ``geometry_stamp`` (PR-6a dark shadow, exit-geometry memo §4.1/§4.3) is
+    TELEMETRY ONLY — namespaced under a single ``"geometry"`` key so it can
+    never collide with a field `_fold_planned_exits` reads, and it is never
+    read by the fold (measures anchor divergence; confers no protection).
+    ``None`` (the default) omits the key entirely, so a caller that never
+    passes it keeps a byte-identical record to pre-PR-6a."""
+    record: dict[str, Any] = {
         "kind": "planned",
         "client_request_id": entry_crid,
         "uic": int(uic),
@@ -930,6 +950,9 @@ def _build_planned_line(
         "tier_index": int(tier_index),
         "gen": int(gen),
     }
+    if geometry_stamp is not None:
+        record["geometry"] = geometry_stamp
+    return record
 
 
 def _iter_standalone_stop_journal() -> Iterator[dict[str, Any]]:
@@ -1458,16 +1481,31 @@ def _summarize_open_verdicts(
 
 
 def _resolve_and_size(
-    broker: Broker, ticker: str, account: Any, trade_setup: Any
-) -> tuple[Any, Any, Any] | None:
+    broker: Broker,
+    ticker: str,
+    account: Any,
+    trade_setup: Any,
+    *,
+    pct_off_52w_high: float | None = None,
+) -> tuple[Any, Any, Any, Any] | None:
     """Resolve the US instrument, build any needed FX conversion, and size the
-    setup plan. Returns ``(instrument, fx, plan)`` or ``None`` on any resolve/size
-    failure (logged) — one bad pick must never crash a tick."""
+    setup plan. Returns ``(instrument, fx, plan, exit_spec)`` or ``None`` on any
+    resolve/size failure (logged) — one bad pick must never crash a tick.
+
+    ``exit_spec`` (PR-6a, exit-geometry memo §4.1) is the ``atr_bracket_1p5``
+    :class:`~alphalens_pipeline.trade_intent.schema.ExitGeometrySpec` built from
+    ``trade_setup`` + ``pct_off_52w_high`` (the candidate/brief row's
+    ``technical_pct_off_52w_high`` — NOT a key inside ``trade_setup`` itself,
+    memo §4.3), or ``None`` when ``trade_setup`` is not a dict / the builder
+    cannot construct a bracket (missing ATR, no tiers, degenerate levels).
+    Building it is dark-shadow-only telemetry — a builder failure must never
+    crash placement, so any exception is caught and logged, never re-raised."""
     from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.execution import build_fx_conversion
     from alphalens_pipeline.brokers.routing import resolve_us_instrument
     from alphalens_pipeline.paper.sizing import (
         TradeSetupNotPlannableError,
+        build_exit_geometry_spec,
         compute_setup_plan,
         parse_brief_to_spec,
     )
@@ -1499,22 +1537,68 @@ def _resolve_and_size(
     except (BrokerError, TradeSetupNotPlannableError) as exc:
         logger.warning("place_pick %s: resolve/size failed: %s", ticker, exc)
         return None
-    return instrument, fx, plan
+
+    exit_spec = None
+    if isinstance(trade_setup, dict):
+        try:
+            exit_spec = build_exit_geometry_spec(trade_setup, pct_off_52w_high)
+        except Exception:  # dark shadow-only — never let a builder bug crash placement
+            logger.warning("place_pick %s: exit-geometry build failed", ticker, exc_info=True)
+            exit_spec = None
+
+    return instrument, fx, plan, exit_spec
 
 
 def _place_tiers(
-    broker: Broker, pick: Any, ticker: str, instrument: Any, account: Any, fx: Any, placement: Any
+    broker: Broker,
+    pick: Any,
+    ticker: str,
+    instrument: Any,
+    account: Any,
+    fx: Any,
+    placement: Any,
+    trade_setup: Any = None,
+    exit_spec: Any = None,
 ) -> int:
     """Place each entry tier's bracket, journaling IMMEDIATELY after each fill so a
     mid-loop crash leaves at most a partial ladder joined to submissions.jsonl (the
     drain then never re-places the full set on restart). Returns the count actually
     placed; a BrokerError stops the loop and writes a note-only trace record so the
-    failure is auditable and an all-fail pick is not retried forever."""
+    failure is auditable and an all-fail pick is not retried forever.
+
+    ``exit_spec`` (PR-6a) is the ``atr_bracket_1p5`` geometry built by
+    ``_resolve_and_size``. When ``ALPHALENS_BROKER_EXIT_POLICY`` is the default
+    ``"setup_static"`` (dark), the journaled ``planned`` line's stop/TP stay the
+    brief's static ``placement.disaster_stop_price`` / ``tier.tp`` — BYTE
+    IDENTICAL to pre-PR-6a. Flipping the flag overrides the journaled stop/TP
+    with ``exit_spec.initial_levels`` instead (guarded by
+    ``build_default_deps``'s fail-fast — see ``position_manager._exit_policy``).
+    Either way, whenever ``exit_spec`` is buildable a ``"geometry"`` shadow
+    stamp is journaled alongside the plan prices (telemetry only, memo §4.3) —
+    this is unconditional on the flag so the dark shadow can measure
+    anchor divergence before any flip."""
     from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
         build_submission_record,
     )
+    from alphalens_pipeline.paper.sizing import planned_blended_entry
+
+    def _geometry_stamp(*, use_geometry: bool) -> dict[str, Any] | None:
+        if exit_spec is None:
+            return None
+        reanchor = exit_spec.reaction_plan[0]  # ReanchorOnFill — the only PR-6a primitive
+        blend = planned_blended_entry(trade_setup) if isinstance(trade_setup, dict) else None
+        return {
+            "policy_name": "atr_bracket_1p5",
+            "policy_version": 1,
+            "planned_blend": blend,
+            "geometry_stop": exit_spec.initial_levels.stop,
+            "geometry_tp": exit_spec.initial_levels.tp,
+            "atr": reanchor.atr,
+            "ceiling_price": reanchor.ceiling_price,
+            "applied": use_geometry,
+        }
 
     def _journal_tier(tier: Any, placed: Any) -> None:
         bracket = tier.bracket
@@ -1543,14 +1627,22 @@ def _place_tiers(
                 fx=fx,
             )
         )
+        use_geometry = _exit_policy() != "setup_static" and exit_spec is not None
+        if use_geometry and exit_spec is not None:  # 2nd clause restated to narrow exit_spec
+            stop_price = exit_spec.initial_levels.stop
+            take_profit = exit_spec.initial_levels.tp
+        else:
+            stop_price = placement.disaster_stop_price
+            take_profit = tier.tp
         _append_standalone_stop_journal(
             _build_planned_line(
                 entry_crid=bracket.client_request_id,
                 uic=int(instrument.broker_instrument_id),
                 side=_DISASTER_STOP_SIDE,
-                stop_price=placement.disaster_stop_price,
-                take_profit=tier.tp,
+                stop_price=stop_price,
+                take_profit=take_profit,
                 tier_index=tier.tier_index,
+                geometry_stamp=_geometry_stamp(use_geometry=use_geometry),
             )
         )
 
@@ -1677,17 +1769,36 @@ def _place_pick(broker: Broker, pick: Any) -> bool:
         logger.warning("place_pick %s: refused — %s", ticker, earnings_reason)
         return False
 
-    resolved = _resolve_and_size(broker, ticker, account, candidate.trade_setup)
+    resolved = _resolve_and_size(
+        broker,
+        ticker,
+        account,
+        candidate.trade_setup,
+        pct_off_52w_high=getattr(candidate, "technical_pct_off_52w_high", None),
+    )
     if resolved is None:
         return False
-    instrument, fx, plan = resolved
+    instrument, fx, plan, exit_spec = resolved
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:
         logger.warning("place_pick %s: every entry tier sized to zero shares", ticker)
         return False
 
-    return _place_tiers(broker, pick, ticker, instrument, account, fx, placement) > 0
+    return (
+        _place_tiers(
+            broker,
+            pick,
+            ticker,
+            instrument,
+            account,
+            fx,
+            placement,
+            candidate.trade_setup,
+            exit_spec,
+        )
+        > 0
+    )
 
 
 def _make_position_view_builder(

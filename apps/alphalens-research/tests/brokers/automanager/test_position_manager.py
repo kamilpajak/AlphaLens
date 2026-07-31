@@ -1607,5 +1607,24 @@ class TestOcoAmendSteadyState(unittest.TestCase):
         self.assertNotEqual(first.request_id, second.request_id)  # distinct -amend- seqs
 
 
+class TestExitPolicyFlag(unittest.TestCase):
+    """PR-6a dark flag: ``_exit_policy()`` defaults to ``"setup_static"`` (geometry
+    INERT, byte-identical placement) and only reports another value when the env
+    var is explicitly set — mirrors ``_amend_enabled``/``_oco_enabled``."""
+
+    def test_defaults_to_setup_static_when_unset(self) -> None:
+        env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_EXIT_POLICY"}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertEqual(pm._exit_policy(), "setup_static")
+
+    def test_blank_env_value_falls_back_to_setup_static(self) -> None:
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "  "}):
+            self.assertEqual(pm._exit_policy(), "setup_static")
+
+    def test_reports_the_overridden_policy_name(self) -> None:
+        with patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}):
+            self.assertEqual(pm._exit_policy(), "atr_bracket_1p5")
+
+
 if __name__ == "__main__":
     unittest.main()
