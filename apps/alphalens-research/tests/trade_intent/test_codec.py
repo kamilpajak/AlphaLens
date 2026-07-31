@@ -149,5 +149,25 @@ class TestDecodeErrors(unittest.TestCase):
             intent_from_jsonable(["not", "a", "mapping"])  # type: ignore[arg-type]
 
 
+class TestUnknownKeyObservability(unittest.TestCase):
+    """zen review (PR-7): an unknown key is dropped (forward-compat) but WARNED so
+    a typo / schema drift whose value silently vanishes surfaces early. The
+    decoded intent stays byte-identical to the same payload without the extra key."""
+
+    def test_unknown_nested_key_is_dropped_and_warned(self) -> None:
+        intent = _intent_with_reanchor()
+        data = intent_to_jsonable(intent)
+        data["spec"]["limit_pirce"] = 999  # typo of a would-be field, on the spec leaf
+        with self.assertLogs("alphalens_pipeline.trade_intent.codec", level="WARNING") as cm:
+            restored = intent_from_jsonable(data)
+        self.assertEqual(restored, intent)  # value dropped -> decoded identically
+        self.assertTrue(any("limit_pirce" in line for line in cm.output))
+
+    def test_clean_payload_emits_no_warning(self) -> None:
+        data = intent_to_jsonable(_intent_with_reanchor())
+        with self.assertNoLogs("alphalens_pipeline.trade_intent.codec", level="WARNING"):
+            intent_from_jsonable(data)
+
+
 if __name__ == "__main__":
     unittest.main()

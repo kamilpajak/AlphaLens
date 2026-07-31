@@ -16,6 +16,7 @@ literal via a small registry and never hand-decodes the well-typed leaves.
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -33,6 +34,8 @@ from alphalens_pipeline.trade_intent.schema import (
     TradeSpec,
     TrailingStop,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TradeIntentDecodeError(ValueError):
@@ -66,8 +69,22 @@ def _require_mapping(data: Any, *, what: str) -> Mapping[str, Any]:
 
 
 def _filtered(cls: type, data: Mapping[str, Any]) -> dict[str, Any]:
-    """Filter ``data`` down to ``cls``'s declared field names before construction."""
+    """Filter ``data`` down to ``cls``'s declared field names before construction.
+
+    Unknown keys are dropped (forward-compat: a newer client may carry fields an
+    older daemon does not model). With a single client + one ``schema_version``
+    today, an unknown key instead signals drift or a typo (e.g. ``limit_pirce``)
+    whose value would silently vanish — log it at WARNING so drift surfaces early
+    (zen review, PR-7). The decoded object is identical either way.
+    """
     field_names = {f.name for f in dataclasses.fields(cls)}
+    extra = sorted(k for k in data if k not in field_names)
+    if extra:
+        logger.warning(
+            "TradeIntent decode: dropping unknown %s key(s) %s (schema drift or typo?)",
+            cls.__name__,
+            extra,
+        )
     return {k: v for k, v in data.items() if k in field_names}
 
 
