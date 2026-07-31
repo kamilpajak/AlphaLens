@@ -324,6 +324,39 @@ jobs:
   # SonarCloud — runs after research/django produce coverage. Skipped on
   # scheduled (weekly) CI to avoid daily quota churn.
   # -----------------------------------------------------------------------
+  # -----------------------------------------------------------------------
+  # PromQL syntax gate for the Prometheus rules file.
+  #
+  # The research job's test_monitoring_alerts.py parses the rules as YAML and
+  # asserts on structure and substrings — to it, `expr` is an opaque string.
+  # Only promtool parses PromQL. Without this job a malformed expression
+  # merges green, the operator hand-copies the file to the VPS, HUPs
+  # Prometheus, and Prometheus REFUSES THE WHOLE FILE: all 35
+  # alphalens-cron-health rules stop evaluating at once, silently, because
+  # the alerting that would report it is what just died.
+  #
+  # Pinned to the version running on the production VPS, NOT :latest — a
+  # newer parser can accept syntax the live server rejects, which would move
+  # this failure to production instead of preventing it. Parity between this
+  # tag, the `just lint-rules` recipe, and the server is pinned by
+  # apps/alphalens-research/tests/test_promtool_lint_parity.py.
+  # -----------------------------------------------------------------------
+  prom-rules:
+    name: prometheus rules (promtool)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: promtool check rules
+        run: |
+          docker run --rm \
+            --entrypoint promtool \
+            -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" \
+            prom/prometheus:v3.3.1 check rules /r/alphalens.yaml
+
   sonar:
     name: sonarcloud
     needs: [research, django, web]

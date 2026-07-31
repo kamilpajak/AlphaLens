@@ -29,6 +29,16 @@ lint:
     uv run ruff check apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
     cd apps/web && pnpm run check
 
+# Lint the Prometheus rules with promtool (PromQL syntax — the unit tests
+# only check YAML structure). Containerised so no native promtool install is
+# needed. Pinned to the VPS Prometheus version: a newer parser can accept
+# expressions the live server rejects. Same command as the CI prom-rules job;
+# parity pinned by tests/test_promtool_lint_parity.py.
+lint-rules:
+    docker run --rm --entrypoint promtool \
+        -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" \
+        prom/prometheus:v3.3.1 check rules /r/alphalens.yaml
+
 # Format Python (all members)
 fmt:
     uv run ruff format apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django
