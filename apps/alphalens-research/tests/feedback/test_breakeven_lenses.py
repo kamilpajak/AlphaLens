@@ -12,6 +12,7 @@ import re
 import unittest
 from pathlib import Path
 
+from alphalens_pipeline.exit_geometry.registry import resolve_policy
 from alphalens_pipeline.feedback.breakeven_lenses import (
     BREAKEVEN_LENSES,
     BreakevenLens,
@@ -178,6 +179,17 @@ class TestBreakevenRegistry(unittest.TestCase):
         self.assertEqual(lens.category, "exit-stop")
         self.assertEqual(lens.label, "ATR bracket 1.5 (bezpazery)")
         self.assertEqual(lens.preregistered_ref, _BEZPAZERY_REF)
+
+    def test_atr_bracket_lens_matches_exit_geometry_registry_sot(self):
+        # SoT parity guard: the BreakevenLens registration and the exit-geometry
+        # policy registry (apps/alphalens-pipeline/.../exit_geometry/registry.py)
+        # must pin the SAME numbers, so a future edit to one cannot silently drift
+        # from the other.
+        lens = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}["atr_bracket_1p5"]
+        policy = resolve_policy("atr_bracket_1p5")
+        self.assertEqual(lens.stop_atr_mult, policy.stop_atr_mult)
+        self.assertEqual(lens.tp_atr_mult, policy.tp_atr_mult)
+        self.assertEqual(lens.tp_floor_frac, policy.tp_floor_frac)
 
     def test_atr_bracket_grid_threads_52w_ceiling(self):
         # Ceiling reconstructed from asof_close + pct_off_52w_high must cap the

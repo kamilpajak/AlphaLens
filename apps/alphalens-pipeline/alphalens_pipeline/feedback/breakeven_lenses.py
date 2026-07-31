@@ -37,11 +37,11 @@ kept to avoid a data migration on the live stamped column. Read them as the gene
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from alphalens_pipeline.exit_geometry.levels import ceiling_from_52w_high
 from alphalens_pipeline.feedback.ladder_replay import (
     realized_r_fill_anchored,
     replay_ladder_atr_bracket,
@@ -157,32 +157,6 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
 )
 
 
-def _ceiling_from_52w_high(
-    trade_setup: Mapping[str, Any] | None, pct_off_52w_high: float | None
-) -> float | None:
-    """Reconstruct the trailing 52w-high price from the brief's distance column.
-
-    ``technical_pct_off_52w_high`` is ``100 * (last - peak) / peak`` (<= 0 by
-    construction; 0 = at the high), so ``peak = asof_close / (1 + pct/100)``.
-    Returns ``None`` (-> UNCAPPED TP, memo §4.2) when the pct or the setup's
-    ``asof_close`` is missing / non-finite / degenerate — a missing 52w history
-    is coverage, not a null.
-    """
-    if trade_setup is None or pct_off_52w_high is None:
-        return None
-    try:
-        pct = float(pct_off_52w_high)
-        asof_close = float(trade_setup.get("asof_close"))  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(pct) or not math.isfinite(asof_close) or asof_close <= 0:
-        return None
-    denom = 1.0 + pct / 100.0
-    if denom <= 0:
-        return None
-    return asof_close / denom
-
-
 def _lens_realized_r(
     lens: BreakevenLens,
     trade_setup: Mapping[str, Any] | None,
@@ -219,7 +193,7 @@ def _lens_realized_r(
                 if lens.tp_floor_frac is not None
                 else _DEFAULT_BRACKET_TP_FLOOR_FRAC
             ),
-            ceiling_price=_ceiling_from_52w_high(trade_setup, pct_off_52w_high),
+            ceiling_price=ceiling_from_52w_high(trade_setup, pct_off_52w_high),
         )
     if lens.kind == "breakeven":
         # MFE-triggered break-even / trailing. A missing trigger reduces to a static

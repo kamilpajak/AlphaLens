@@ -44,6 +44,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from alphalens_pipeline.exit_geometry.levels import atr_bracket_levels
+
 # Within one bar we cannot order an SL touch vs a TP touch (minute granularity
 # hides intra-bar sequence). We resolve it CONSERVATIVELY -- assume the adverse
 # (SL) leg happened first -- and flag the bar so the bias is auditable. Finer
@@ -653,19 +655,17 @@ def replay_ladder_atr_bracket(
     if not walk.filled:
         return None
     blended = _blended_entry(walk.filled)
-    bracket_stop = blended - stop_atr_mult * atr
-    if bracket_stop <= 0:
-        # A stop at a non-positive price cannot be placed in reality (ATR wider
-        # than ~1/stop_atr_mult of the entry) — degenerate bracket, same class
-        # as the ceiling-below-floor case: None, not a never-hit stop that
-        # would silently dilute R.
+    levels = atr_bracket_levels(
+        blended,
+        atr,
+        stop_atr_mult=stop_atr_mult,
+        tp_atr_mult=tp_atr_mult,
+        tp_floor_frac=tp_floor_frac,
+        ceiling_price=ceiling_price,
+    )
+    if levels is None:
         return None
-    tp_floor = blended * (1.0 + tp_floor_frac)
-    tp = max(tp_floor, blended + tp_atr_mult * atr)
-    if ceiling_price is not None and math.isfinite(ceiling_price):
-        if ceiling_price <= tp_floor:
-            return None  # bracket not constructible (memo section 4.1)
-        tp = min(tp, ceiling_price)
+    bracket_stop, tp = levels
     # Walk-2: same entries, single 100% TP tranche + the bracket stop, replayed
     # with no expiries (the modified-setup reuse pattern of the exit grid).
     setup_bracket = _with_tp_tranches(trade_setup, [{"target": tp, "tranche_pct": 100.0}])
