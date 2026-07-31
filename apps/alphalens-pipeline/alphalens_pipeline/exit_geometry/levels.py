@@ -49,13 +49,16 @@ def atr_bracket_levels(
 ) -> tuple[float, float] | None:
     """Compute the (stop, tp) pair for a symmetric ATR bracket exit.
 
-    Precondition: callers pre-validate that ``atr`` is finite and positive
-    (this function does not re-check it). Returns ``None`` for a non-positive
-    risk (``stop_atr_mult <= 0``), a bracket stop at/below zero (ATR wider
-    than ~1/stop_atr_mult of the entry), or a ceiling at/below the cost floor
-    (bracket not constructible). A ``None`` / non-finite ``ceiling_price``
-    leaves the TP uncapped.
+    Returns ``None`` for any degenerate input: a non-finite / non-positive
+    ``atr``, a non-positive risk (``stop_atr_mult <= 0``), a bracket stop
+    at/below zero (ATR wider than ~1/stop_atr_mult of the entry), or a
+    ceiling at/below the cost floor (bracket not constructible). A ``None`` /
+    non-finite ``ceiling_price`` leaves the TP uncapped. The function
+    self-guards ``atr`` so future direct callers cannot poison the arithmetic
+    into NaN levels; the current feedback callpath still pre-validates it.
     """
+    if not math.isfinite(atr) or atr <= 0:
+        return None
     if stop_atr_mult <= 0:
         return None
     bracket_stop = blended - stop_atr_mult * atr

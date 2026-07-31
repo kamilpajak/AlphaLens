@@ -20,6 +20,28 @@ class TestAtrBracketLevels(unittest.TestCase):
         )
         self.assertEqual(result, (85.0, 115.0))
 
+    def test_non_finite_atr_returns_none(self):
+        # A public leaf must self-guard: a NaN/inf atr from a future caller
+        # would otherwise poison the arithmetic into NaN levels.
+        self.assertIsNone(
+            atr_bracket_levels(
+                100.0, math.nan, stop_atr_mult=1.5, tp_atr_mult=1.5, tp_floor_frac=0.006
+            )
+        )
+        self.assertIsNone(
+            atr_bracket_levels(
+                100.0, math.inf, stop_atr_mult=1.5, tp_atr_mult=1.5, tp_floor_frac=0.006
+            )
+        )
+
+    def test_non_positive_atr_returns_none(self):
+        self.assertIsNone(
+            atr_bracket_levels(100.0, 0.0, stop_atr_mult=1.5, tp_atr_mult=1.5, tp_floor_frac=0.006)
+        )
+        self.assertIsNone(
+            atr_bracket_levels(100.0, -5.0, stop_atr_mult=1.5, tp_atr_mult=1.5, tp_floor_frac=0.006)
+        )
+
     def test_non_positive_stop_atr_mult_returns_none(self):
         result = atr_bracket_levels(
             100.0, 10.0, stop_atr_mult=0.0, tp_atr_mult=1.5, tp_floor_frac=0.006
