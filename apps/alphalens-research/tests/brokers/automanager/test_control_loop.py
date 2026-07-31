@@ -29,6 +29,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlaceStop,
     PlannedExit,
     ProtectionView,
+    ReanchorFacts,
     UpgradeToOco,
     _exit_amend_ref,
     _exit_oco_ref,
@@ -1018,6 +1019,7 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
         self.assertEqual(stamp["policy_version"], 1)
         self.assertAlmostEqual(stamp["geometry_stop"], 8.5)
         self.assertAlmostEqual(stamp["geometry_tp"], 13.0)
+        self.assertAlmostEqual(stamp["k_atr"], 1.5)  # PR-6b: reanchor.k_atr (see _exit_spec)
         self.assertAlmostEqual(stamp["atr"], 1.0)
         self.assertAlmostEqual(stamp["ceiling_price"], 20.0)
         self.assertFalse(stamp["applied"])
@@ -1118,6 +1120,72 @@ class TestFoldPlannedExitsIgnoresGeometryStamp(unittest.TestCase):
             {u: (p.stop_price, p.tp_price, p.entry_crid) for u, p in without_stamp.items()},
             {u: (p.stop_price, p.tp_price, p.entry_crid) for u, p in with_stamp.items()},
         )
+
+
+class TestFoldPlannedExitsBuildsReanchorFacts(unittest.TestCase):
+    """PR-6b: ``_fold_planned_exits`` folds the governing line's geometry stamp
+    (when it carries ``k_atr`` + ``atr``) into ``PlannedExit.reanchor``. Every
+    pre-PR-6a journal line (no ``"geometry"`` key at all) still folds to
+    ``reanchor=None`` — BYTE-IDENTICAL to before this PR for that history."""
+
+    def test_geometry_blob_with_k_atr_and_atr_builds_reanchor_facts(self) -> None:
+        stamped = cl._build_planned_line(
+            entry_crid="crid-0",
+            uic=_UIC,
+            side="SELL",
+            stop_price=216.48,
+            take_profit=306.72,
+            tier_index=0,
+            geometry_stamp={
+                "policy_name": "atr_bracket_1p5",
+                "policy_version": 1,
+                "planned_blend": 100.0,
+                "geometry_stop": 94.0,
+                "geometry_tp": 112.0,
+                "k_atr": 1.5,
+                "atr": 4.0,
+                "ceiling_price": None,
+                "applied": False,
+            },
+        )
+        planned = cl._fold_planned_exits([stamped])[_UIC]
+        self.assertEqual(planned.reanchor, ReanchorFacts(k_atr=1.5, atr=4.0))
+
+    def test_geometry_absent_folds_reanchor_none_byte_identical(self) -> None:
+        plain = cl._build_planned_line(
+            entry_crid="crid-0",
+            uic=_UIC,
+            side="SELL",
+            stop_price=216.48,
+            take_profit=306.72,
+            tier_index=0,
+        )
+        planned = cl._fold_planned_exits([plain])[_UIC]
+        self.assertIsNone(planned.reanchor)
+
+    def test_geometry_missing_k_atr_folds_reanchor_none(self) -> None:
+        # A stamp journaled before PR-6b added "k_atr" to _geometry_stamp: the
+        # key is absent -> the fold must never KeyError, just fold to None.
+        stamped = cl._build_planned_line(
+            entry_crid="crid-0",
+            uic=_UIC,
+            side="SELL",
+            stop_price=216.48,
+            take_profit=306.72,
+            tier_index=0,
+            geometry_stamp={
+                "policy_name": "atr_bracket_1p5",
+                "policy_version": 1,
+                "planned_blend": 100.0,
+                "geometry_stop": 94.0,
+                "geometry_tp": 112.0,
+                "atr": 4.0,
+                "ceiling_price": None,
+                "applied": False,
+            },
+        )
+        planned = cl._fold_planned_exits([stamped])[_UIC]
+        self.assertIsNone(planned.reanchor)
 
 
 class TestRunOnceAlertsEachOrphan(unittest.TestCase):
@@ -2899,6 +2967,92 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
         self.assertEqual(report.exits_placed, 0)
 
 
+class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
+    """PR-6b: a CONFIRMED AmendStop success journals a ``reanchored`` marker
+    ONLY when ``action.reanchor_avg_price`` is set (a plain grow/downsize amend
+    carries ``None`` and never journals it). A failed amend never latches —
+    it journals ``amend_failed`` like any other amend and retries."""
+
+    def _reanchored_lines(self) -> list[dict[str, Any]]:
+        return [
+            line for line in cl._iter_standalone_stop_journal() if line.get("kind") == "reanchored"
+        ]
+
+    def test_journal_reanchored_record_shape_with_injected_clock(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                cl._journal_reanchored(_UIC, 95.0, clock=lambda: 1234.5)
+                lines = self._reanchored_lines()
+        self.assertEqual(
+            lines, [{"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "ts": 1234.5}]
+        )
+
+    def test_confirmed_success_with_reanchor_avg_price_journals_reanchored(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)]
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(
+                    _amend_action(reason="reanchor-on-fill", reanchor_avg_price=95.0),
+                    False,
+                    report,
+                )
+                lines = self._reanchored_lines()
+        self.assertEqual(report.exits_placed, 1)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["uic"], _UIC)
+        self.assertEqual(lines[0]["avg_price"], 95.0)
+        self.assertIsInstance(lines[0]["ts"], float)
+
+    def test_confirmed_success_without_reanchor_avg_price_never_journals(self) -> None:
+        # A plain grow/downsize AmendStop (reanchor_avg_price=None, the default)
+        # must NEVER journal a reanchored marker on success.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)}, sells=[_leg("stop-1", "StopIfTraded", 4.0)]
+            )
+            executor = cl._make_protection_executor(
+                broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(_amend_action(), False, report)  # reanchor_avg_price defaults None
+                lines = self._reanchored_lines()
+        self.assertEqual(report.exits_placed, 1)
+        self.assertEqual(lines, [], "a non-reanchor amend never journals reanchored")
+
+    def test_failed_amend_never_journals_reanchored(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            broker = _ProtBroker(
+                by_uic={_UIC: _pos(4.0)},
+                sells=[_leg("stop-1", "StopIfTraded", 4.0)],
+                amend_error=OrderRejectedError("terminal order", error_code="OrderNotWorking"),
+            )
+            throttle = cl._AlertThrottle([].append, clock=lambda: 0.0)
+            executor = cl._make_protection_executor(
+                broker, throttle, amend_stop=broker.amend_stop_amount
+            )
+            report = cl.TickReport()
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                executor(
+                    _amend_action(reason="reanchor-on-fill", reanchor_avg_price=95.0),
+                    False,
+                    report,
+                )
+                lines = self._reanchored_lines()
+        self.assertEqual(lines, [], "a failed reanchor amend never latches")
+        self.assertEqual(report.exits_placed, 0)
+
+
 def _oco_leg(
     order_id: str, order_type: str, amount: float, *, base: str = "crid-oco-0"
 ) -> OrderState:
@@ -3093,6 +3247,56 @@ class TestBuildProtectionViewTtlFolds(unittest.TestCase):
         self.assertEqual(view.amend_recently_failed, frozenset())
 
 
+class TestFoldReanchoredMarkers(unittest.TestCase):
+    """PR-6b: ``_fold_reanchored_markers`` folds the LATEST (by ts) avg_price per
+    uic — a plain dict, PERMANENT (no TTL), unlike ``_fold_ttl_markers``."""
+
+    def test_latest_avg_price_wins_per_uic(self) -> None:
+        lines = [
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 95.0, "ts": 100.0},
+            {"kind": "reanchored", "uic": _UIC, "avg_price": 97.5, "ts": 200.0},  # newer wins
+            {"kind": "reanchored", "uic": 99999, "avg_price": 10.0, "ts": 50.0},
+        ]
+        result = cl._fold_reanchored_markers(lines)
+        self.assertEqual(result, {_UIC: 97.5, 99999: 10.0})
+
+    def test_malformed_lines_skipped(self) -> None:
+        lines = [
+            {"kind": "reanchored", "uic": _UIC},  # missing avg_price/ts
+            {"kind": "reanchored", "avg_price": 95.0, "ts": 100.0},  # missing uic
+            {"kind": "reanchored", "uic": "bad", "avg_price": 95.0, "ts": 100.0},
+        ]
+        self.assertEqual(cl._fold_reanchored_markers(lines), {})
+
+    def test_no_markers_folds_empty_dict(self) -> None:
+        self.assertEqual(cl._fold_reanchored_markers([]), {})
+
+
+class TestBuildProtectionViewWiresReanchoredByUic(unittest.TestCase):
+    """PR-6b: build_protection_view wires ``reanchored_by_uic`` from the
+    append-only ``reanchored`` journal markers into ``ProtectionView``."""
+
+    def _broker(self) -> _ProtBroker:
+        return _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
+
+    def test_wires_the_latched_avg_price(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                cl._journal_reanchored(_UIC, 95.0, clock=lambda: 1000.0)
+                view = cl.build_protection_view(self._broker(), [], clock=lambda: 2000.0)
+        self.assertEqual(view.reanchored_by_uic, {_UIC: 95.0})
+
+    def test_empty_without_markers(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                _seed_planned(journal)
+                view = cl.build_protection_view(self._broker(), [])
+        self.assertEqual(view.reanchored_by_uic, {})
+
+
 class TestProtectionViewIgnoresOutcomeRecords(unittest.TestCase):
     """``stop_placed`` / ``amend_ok`` are observability-only: build_protection_view
     and every fold must produce EXACTLY the same view with or without them — zero
@@ -3180,18 +3384,35 @@ class TestBuildDefaultDepsAmendFailFast(unittest.TestCase):
                 cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
 
 
-class TestBuildDefaultDepsExitPolicyFailFast(unittest.TestCase):
-    """PR-6a: build_default_deps FAIL-FASTS when ALPHALENS_BROKER_EXIT_POLICY is
-    flipped off "setup_static" -- the P0 avg_price re-anchor (PR-6b, exit-geometry
-    memo §4.3) is not shipped yet, so live exit-geometry override is not safe.
-    PR-6b removes this guard."""
+class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
+    """PR-6b: the PR-6a BLANKET fail-fast on ALPHALENS_BROKER_EXIT_POLICY !=
+    "setup_static" is replaced by a CAPABILITY gate. Geometry-live now ships with
+    the fill-complete avg_price reanchor (position_manager._maybe_reanchor), which
+    rides the AmendStop rail — so it is allowed only when the wired broker can amend
+    (SupportsAmendStop); a stop-only broker cannot run the reanchor and would leave a
+    wrong-distance stop, so it still fail-fasts. The default flag never gates."""
 
-    def test_fail_fast_when_exit_policy_flipped_off_setup_static(self) -> None:
+    def test_does_not_raise_when_flag_flipped_and_broker_can_amend(self) -> None:
         with (
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
-                return_value=_StopOnlyBroker(),
+                return_value=_ProtBroker(),  # SupportsStandaloneStop + SupportsAmendStop
             ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}),
+        ):
+            deps = cl.build_default_deps(
+                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+            )
+        self.assertIsNotNone(deps)
+
+    def test_fail_fasts_when_flag_flipped_but_broker_cannot_amend(self) -> None:
+        with (
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),  # no SupportsAmendStop -> no reanchor rail
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
             mock.patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}),
         ):
             with self.assertRaises(BrokerCapabilityError):

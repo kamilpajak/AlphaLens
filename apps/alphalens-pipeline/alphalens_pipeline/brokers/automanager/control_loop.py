@@ -32,6 +32,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     PlaceStop,
     PlannedExit,
     ProtectionView,
+    ReanchorFacts,
     UpgradeToOco,
     _amend_enabled,
     _exit_oco_ref,
@@ -722,16 +723,22 @@ def build_default_deps(
     amend_placer: AmendStopPlacer | None = (
         broker.amend_stop_amount if isinstance(broker, SupportsAmendStop) else None
     )
-    # Exit-geometry (PR-6a) FAIL-FAST: the P0 avg_price re-anchor (PR-6b, exit-
-    # geometry memo §4.3) is not yet shipped, so flipping the dark flag off
-    # "setup_static" would place a wrong-distance stop under grow-amend once the
-    # realized blend drifts from the planned one. PR-6b removes this guard.
-    if _exit_policy() != "setup_static":
+    # Exit-geometry (PR-6a/6b) CAPABILITY gate — the principled replacement for
+    # PR-6a's removed blanket fail-fast. Flipping ALPHALENS_BROKER_EXIT_POLICY off
+    # "setup_static" places an ATR-bracket stop anchored to the PLANNED blend, which
+    # the PR-6b fill-complete reanchor (position_manager._maybe_reanchor) MUST PATCH
+    # onto the realized avg_price via the AmendStop rail. A broker without
+    # SupportsAmendStop cannot run that reanchor, so geometry would go live leaving a
+    # wrong-distance stop (the memo §4.3 P0). Gate on the CAPABILITY, NOT on
+    # _amend_enabled(): the reanchor is part of the geometry feature, not the Stage-3
+    # grow/downsize amend that ALPHALENS_BROKER_AMEND_ENABLED gates — requiring that
+    # flag too would let geometry go live WITHOUT the reanchor, the exact unsafe combo.
+    if _exit_policy() != "setup_static" and not isinstance(broker, SupportsAmendStop):
         raise BrokerCapabilityError(
-            f"ALPHALENS_BROKER_EXIT_POLICY={_exit_policy()!r} but the fill-complete avg_price "
-            "reanchor (PR-6b, memo §4.3) is not yet shipped — flipping exit-geometry live "
-            "without it places a wrong-distance stop under grow-amend. Unset the flag "
-            "(setup_static) or ship PR-6b first."
+            f"ALPHALENS_BROKER_EXIT_POLICY={_exit_policy()!r} needs the AmendStop rail for "
+            f"the PR-6b fill-complete reanchor, but broker {broker.name!r} does not implement "
+            "amend_stop_amount (SupportsAmendStop) — geometry-live would leave a wrong-distance "
+            "stop. Wire an amend-capable broker or unset the flag (setup_static)."
         )
     # ONE OAuth provider instance is shared by the SessionKeeper AND the streaming
     # reader, so there is a single OAuth chain / one flock owner and the reader can
@@ -1086,8 +1093,28 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
             n_plans=n_plans,
             next_gen=_make_next_gen(uic),
             next_amend_seq=_make_next_amend_seq(uic),
+            reanchor=_reanchor_facts_from_governing(governing),
         )
     return result
+
+
+def _reanchor_facts_from_governing(governing: Mapping[str, Any]) -> ReanchorFacts | None:
+    """PR-6b: fold the governing planned line's ``"geometry"`` shadow stamp
+    (PR-6a's ``_geometry_stamp``) into ``ReanchorFacts(k_atr, atr)``, or
+    ``None`` when the blob is absent / malformed. ``None`` for every
+    pre-PR-6a journal line (no ``"geometry"`` key) — so ``_fold_planned_exits``
+    stays BYTE-IDENTICAL for the whole pre-PR-6a journal history."""
+    geo = governing.get("geometry")
+    if not isinstance(geo, dict):
+        return None
+    try:
+        k_atr = float(geo["k_atr"])
+        atr = float(geo["atr"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (math.isfinite(k_atr) and math.isfinite(atr)):
+        return None
+    return ReanchorFacts(k_atr=k_atr, atr=atr)
 
 
 def _mark_oco_unsupported(uic: int) -> None:
@@ -1203,6 +1230,46 @@ def _journal_amend_ok(uic: int, qty: float, *, clock: Callable[[], float] = time
     _append_standalone_stop_journal(
         {"kind": "amend_ok", "uic": int(uic), "qty": float(qty), "ts": float(clock())}
     )
+
+
+def _journal_reanchored(
+    uic: int, avg_price: float, *, clock: Callable[[], float] = time.time
+) -> None:
+    """Persist a timestamped ``reanchored`` marker (PR-6b, broker-manager
+    extraction memo §4.3). Written by the executor ONLY on a CONFIRMED
+    reanchor AmendStop PATCH success (never on a failed attempt — a failed
+    amend journals ``amend_failed`` like any other amend and simply retries).
+    ``_fold_reanchored_markers`` folds these into
+    ``ProtectionView.reanchored_by_uic``, the PERMANENT per-blend idempotence
+    latch (no TTL — unlike ``oco_placed`` / ``amend_failed``, a confirmed
+    reanchor for a given avg_price never needs to re-fire for that same
+    blend)."""
+    _append_standalone_stop_journal(
+        {"kind": "reanchored", "uic": int(uic), "avg_price": float(avg_price), "ts": float(clock())}
+    )
+
+
+def _fold_reanchored_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
+    """Fold the append-only ``reanchored`` journal markers into the LATEST
+    (by ``ts``) ``avg_price`` per uic (PR-6b). A DICT, not a TTL frozenset —
+    the reanchor latch is PERMANENT per blend (see ``_journal_reanchored``),
+    so this has no ``now`` / ``ttl_s`` parameters, unlike ``_fold_ttl_markers``.
+    Malformed (missing / unparsable uic, avg_price, or ts) lines are skipped."""
+    latest_ts: dict[int, float] = {}
+    latest_avg_price: dict[int, float] = {}
+    for line in lines:
+        if line.get("kind") != "reanchored":
+            continue
+        try:
+            uic = int(line["uic"])
+            avg_price = float(line["avg_price"])
+            ts = float(line["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if uic not in latest_ts or ts >= latest_ts[uic]:
+            latest_ts[uic] = ts
+            latest_avg_price[uic] = avg_price
+    return latest_avg_price
 
 
 def _fold_ttl_markers(
@@ -1571,8 +1638,9 @@ def _place_tiers(
     ``"setup_static"`` (dark), the journaled ``planned`` line's stop/TP stay the
     brief's static ``placement.disaster_stop_price`` / ``tier.tp`` — BYTE
     IDENTICAL to pre-PR-6a. Flipping the flag overrides the journaled stop/TP
-    with ``exit_spec.initial_levels`` instead (guarded by
-    ``build_default_deps``'s fail-fast — see ``position_manager._exit_policy``).
+    with ``exit_spec.initial_levels`` instead (safe to flip now that PR-6b's
+    fill-complete avg_price reanchor — ``position_manager._maybe_reanchor`` —
+    ships; ``build_default_deps`` no longer fail-fasts on the flag).
     Either way, whenever ``exit_spec`` is buildable a ``"geometry"`` shadow
     stamp is journaled alongside the plan prices (telemetry only, memo §4.3) —
     this is unconditional on the flag so the dark shadow can measure
@@ -1595,6 +1663,7 @@ def _place_tiers(
             "planned_blend": blend,
             "geometry_stop": exit_spec.initial_levels.stop,
             "geometry_tp": exit_spec.initial_levels.tp,
+            "k_atr": reanchor.k_atr,
             "atr": reanchor.atr,
             "ceiling_price": reanchor.ceiling_price,
             "applied": use_geometry,
@@ -1915,6 +1984,7 @@ def build_protection_view(
         amend_recently_failed=_fold_ttl_markers(
             journal_lines, "amend_failed", now, _AMEND_FAILED_TTL_S
         ),
+        reanchored_by_uic=_fold_reanchored_markers(journal_lines),
     )
 
 
@@ -2400,6 +2470,22 @@ def _execute_amend_stop(
         uic=action.uic,
         kind="amend_ok",
     )
+    # PR-6b: latch the reanchor ONLY on this confirmed success — a failed
+    # amend never reaches here (it returned above on the BrokerError branch,
+    # having journaled amend_failed like any other amend arm). The marker write
+    # is best-effort (like amend_ok): if it is dropped, the NEXT tick simply
+    # re-emits the SAME reanchor (absolute target price + qty, idempotent-in-
+    # effect) and re-journals — at worst one redundant, harmless PATCH, never a
+    # wrong or naked stop. No in-memory secondary latch is warranted for that.
+    if action.reanchor_avg_price is not None:
+        reanchor_avg_price = action.reanchor_avg_price
+        _journal_outcome_best_effort(
+            lambda: _journal_reanchored(action.uic, reanchor_avg_price),
+            throttle,
+            report,
+            uic=action.uic,
+            kind="reanchored",
+        )
 
 
 def _execute_place_stop(
