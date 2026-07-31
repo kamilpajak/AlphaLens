@@ -20,7 +20,6 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
-from alphalens_pipeline.brokers.automanager.picks import Pick
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     BrokerView,
@@ -48,18 +47,37 @@ from alphalens_pipeline.brokers.contract import (
     Position,
 )
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
-from alphalens_pipeline.trade_intent.schema import ExitGeometrySpec, InitialLevels, ReanchorOnFill
+from alphalens_pipeline.trade_intent.schema import (
+    EntryTierSpec,
+    ExitGeometrySpec,
+    InitialLevels,
+    InstrumentHint,
+    IntentMeta,
+    ReanchorOnFill,
+    TpTrancheSpec,
+    TradeIntent,
+    TradeSpec,
+    TrailingStop,
+)
 
 _RID = "rid-KO"
 _UIC = 43070
 
 
-def _pick(ticker: str = "KO", date: str = "2026-07-20") -> Pick:
-    return Pick(
-        ticker=ticker,
-        date=dt.date.fromisoformat(date),
-        armed_ts="2026-07-20T14:00:00+00:00",
-        status="armed",
+def _pick(ticker: str = "KO", date: str = "2026-07-20") -> TradeIntent:
+    """A minimal, structurally valid armed TradeIntent (PR-7: the daemon drains
+    TradeIntent, never a bare (ticker, date) Pick)."""
+    spec = TradeSpec(
+        entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=50.0, tag="T1"),),
+        disaster_stop=90.0,
+        tp_tranches=(TpTrancheSpec(price=110.0, tranche_pct=100.0, r_multiple=2.0, tag="TP1"),),
+        suggested_size_pct=2.0,
+    )
+    return TradeIntent(
+        intent_id=f"{ticker}:{date}",
+        instrument=InstrumentHint(ticker=ticker.upper(), mic="XNYS"),
+        spec=spec,
+        meta=IntentMeta(armed_ts="2026-07-20T14:00:00+00:00", brief_date=date),
     )
 
 
@@ -483,7 +501,7 @@ class TestRefusedPickNotRetriedAcrossTicks(unittest.TestCase):
 
         with TemporaryDirectory() as d:
             picks_path = Path(d) / "picks.jsonl"
-            picks_mod.arm_pick("KO", dt.date(2026, 7, 29), path=picks_path)
+            picks_mod.arm_pick(_pick("KO", "2026-07-29"), path=picks_path)
             attempts: list = []
 
             def _refusing_place(pick: Any) -> bool:
@@ -491,7 +509,10 @@ class TestRefusedPickNotRetriedAcrossTicks(unittest.TestCase):
                 # terminal refusal, do not place.
                 attempts.append(pick)
                 picks_mod.mark_refused(
-                    pick.ticker, pick.date, "portfolio cap exceeded", path=picks_path
+                    pick.instrument.ticker,
+                    dt.date.fromisoformat(pick.meta.brief_date),
+                    "portfolio cap exceeded",
+                    path=picks_path,
                 )
                 return False
 
@@ -564,7 +585,6 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
         instrument = type(
             "I", (), {"currency": "USD", "broker_instrument_id": 307, "exchange_mic": "XNYS"}
         )()
-        candidate = type("C", (), {"ticker": "KO", "trade_setup": object()})()
 
         class _Broker:
             def __init__(self) -> None:
@@ -596,18 +616,6 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
             p(
                 mock.patch(
                     f"{pkg}.automanager.placement_planner.classify", lambda *_a, **_k: placement
-                )
-            )
-            p(
-                mock.patch(
-                    "alphalens_pipeline.paper.brief_loader.load_brief",
-                    lambda *_a, **_k: [candidate],
-                )
-            )
-            p(
-                mock.patch(
-                    "alphalens_pipeline.paper.sizing.parse_brief_to_spec",
-                    lambda _brief_trade_setup: object(),
                 )
             )
             p(
@@ -699,14 +707,10 @@ class TestPlacePickBranches(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         m: dict[str, Any] = {
-            "load_brief": lambda *_a, **_k: [
-                type("C", (), {"ticker": "KO", "trade_setup": object()})()
-            ],
             "verdicts": lambda _r, _b: [],
             "safety_check": lambda *_a, **_k: object(),
             "resolve": lambda _b, _t: _instr(),
             "classify": lambda *_a, **_k: _placement(),
-            "parse_spec": lambda _brief_trade_setup: object(),
             "compute_plan": lambda _spec, **_k: object(),
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
@@ -736,23 +740,9 @@ class TestPlacePickBranches(unittest.TestCase):
         p(mock.patch(f"{pkg}.automanager.safety.check", m["safety_check"]))
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
         p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
-        p(mock.patch("alphalens_pipeline.paper.brief_loader.load_brief", m["load_brief"]))
-        p(mock.patch("alphalens_pipeline.paper.sizing.parse_brief_to_spec", m["parse_spec"]))
         p(mock.patch("alphalens_pipeline.paper.sizing.compute_setup_plan", m["compute_plan"]))
         p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
         return cl._make_place_pick(broker)
-
-    def test_brief_unavailable_returns_false(self) -> None:
-        def _raise(*_a: Any, **_k: Any) -> Any:
-            raise FileNotFoundError("no brief")
-
-        self.assertFalse(self._placer(_PlaceBroker(), load_brief=_raise)(_pick()))
-
-    def test_no_plannable_trade_setup_returns_false(self) -> None:
-        no_setup = [type("C", (), {"ticker": "KO", "trade_setup": None})()]
-        self.assertFalse(
-            self._placer(_PlaceBroker(), load_brief=lambda *_a, **_k: no_setup)(_pick())
-        )
 
     def test_broker_read_error_returns_false(self) -> None:
         def _boom() -> Any:
@@ -1046,6 +1036,39 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
     def test_exit_spec_none_never_crashes_placement(self) -> None:
         count, _journaled = self._run(exit_spec=None)
         self.assertEqual(count, 1)
+
+    def test_empty_reaction_plan_stamps_without_crashing(self) -> None:
+        # PR-7 opened a decode boundary (iter_picks -> codec): the schema permits
+        # a non-None exit with an EMPTY reaction_plan (reserved kind="levels", or a
+        # future policy-only client). Pre-PR-7 exit was always built in-process with
+        # a 1-element reaction_plan, so reaction_plan[0] was safe; a decoded
+        # empty-plan intent must stamp the geometry LEVELS and leave the reanchor
+        # facts None, never IndexError-crash the unattended drain.
+        spec = ExitGeometrySpec(initial_levels=InitialLevels(stop=8.5, tp=13.0))
+        count, journaled = self._run(exit_spec=spec)
+        self.assertEqual(count, 1)
+        stamp = journaled[0]["geometry"]
+        self.assertAlmostEqual(stamp["geometry_stop"], 8.5)
+        self.assertAlmostEqual(stamp["geometry_tp"], 13.0)
+        self.assertIsNone(stamp["k_atr"])
+        self.assertIsNone(stamp["atr"])
+        self.assertIsNone(stamp["ceiling_price"])
+
+    def test_non_reanchor_primitive_first_stamps_none_reanchor_facts(self) -> None:
+        # The "reaction_plan[0] is always ReanchorOnFill" assumption also breaks at
+        # the decode boundary when a non-reanchor primitive (TrailingStop / ModelPush)
+        # sits first. The stamp's k_atr/atr/ceiling are ReanchorOnFill-specific, so
+        # they must resolve by TYPE (not position) and stay None when absent —
+        # blind attribute access on a TrailingStop would AttributeError-crash.
+        spec = ExitGeometrySpec(
+            initial_levels=InitialLevels(stop=8.5, tp=13.0),
+            reaction_plan=(TrailingStop(arm_trigger_r=1.0, trail_frac=0.6),),
+        )
+        count, journaled = self._run(exit_spec=spec)
+        self.assertEqual(count, 1)
+        stamp = journaled[0]["geometry"]
+        self.assertAlmostEqual(stamp["geometry_stop"], 8.5)
+        self.assertIsNone(stamp["k_atr"])
 
 
 class TestBuildPlannedLineGeometryStamp(unittest.TestCase):

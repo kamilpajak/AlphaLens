@@ -178,15 +178,21 @@ class TradeIntent:
 
     See ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
     section 2.3 for the contract this formalizes.
+
+    ``exit`` is ``None`` when no geometry bracket is buildable from the source
+    brief (missing/degenerate ATR, no usable entry tiers, a non-constructible
+    bracket) — mirrors the daemon's pre-PR-7 ``exit_spec=None`` path, where the
+    placement falls back to the brief's static disaster-stop / tier TP levels
+    (memo section 5, PR-7).
     """
 
     # Client-authored idempotency key.
     intent_id: str
     instrument: InstrumentHint
     spec: TradeSpec
+    meta: IntentMeta
     # Field name "exit" per the memo contract — deliberately shadows the
     # builtin `exit` as an attribute (safe: instance attribute, never called).
-    exit: ExitGeometrySpec
-    meta: IntentMeta
+    exit: ExitGeometrySpec | None = None
     # Reserved tenant dimension; single value today.
     account_id: str = DEFAULT_ACCOUNT_ID

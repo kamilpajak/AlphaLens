@@ -228,9 +228,9 @@ def _submitted_pick_keys(records: Iterable[Mapping[str, Any]]) -> set[tuple[str,
     return keys
 
 
-def _pick_key(pick: Any) -> tuple[str, str]:
-    """The (ticker, brief_date) join key for one armed pick."""
-    return (str(pick.ticker).upper(), pick.date.isoformat())
+def _pick_key(intent: Any) -> tuple[str, str]:
+    """The (ticker, brief_date) join key for one armed intent."""
+    return (str(intent.instrument.ticker).upper(), str(intent.meta.brief_date))
 
 
 def _default_emit_heartbeat(kill: bool = False) -> None:
@@ -889,7 +889,6 @@ def _build_stream_handles(
 
 STANDALONE_STOP_JOURNAL_PATH = _BROKER_ORDERS_DIR / "standalone_stops.jsonl"
 
-_DEFAULT_BRIEFS_DIR = _ALPHALENS_HOME / "thematic_briefs"
 _ENTRY_SIDE = "BUY"  # MVP scope: long entries only (design memo, single-name equities)
 _DISASTER_STOP_SIDE = "SELL"  # protective exit of a long entry
 
@@ -1551,31 +1550,25 @@ def _resolve_and_size(
     broker: Broker,
     ticker: str,
     account: Any,
-    trade_setup: Any,
-    *,
-    pct_off_52w_high: float | None = None,
-) -> tuple[Any, Any, Any, Any] | None:
+    spec: Any,
+) -> tuple[Any, Any, Any] | None:
     """Resolve the US instrument, build any needed FX conversion, and size the
-    setup plan. Returns ``(instrument, fx, plan, exit_spec)`` or ``None`` on any
-    resolve/size failure (logged) — one bad pick must never crash a tick.
+    already-parsed :class:`~alphalens_pipeline.trade_intent.schema.TradeSpec`.
+    Returns ``(instrument, fx, plan)`` or ``None`` on any resolve/size failure
+    (logged) — one bad pick must never crash a tick.
 
-    ``exit_spec`` (PR-6a, exit-geometry memo §4.1) is the ``atr_bracket_1p5``
-    :class:`~alphalens_pipeline.trade_intent.schema.ExitGeometrySpec` built from
-    ``trade_setup`` + ``pct_off_52w_high`` (the candidate/brief row's
-    ``technical_pct_off_52w_high`` — NOT a key inside ``trade_setup`` itself,
-    memo §4.3), or ``None`` when ``trade_setup`` is not a dict / the builder
-    cannot construct a bracket (missing ATR, no tiers, degenerate levels).
-    Building it is dark-shadow-only telemetry — a builder failure must never
-    crash placement, so any exception is caught and logged, never re-raised."""
+    PR-7 (broker-manager extraction memo §5): the brief-side parse
+    (``parse_brief_to_spec``) and the exit-geometry build
+    (``build_exit_geometry_spec``) moved to arm-time (``arm_command``) — this
+    helper now only runs the money half (``compute_setup_plan``) on the
+    already-parsed ``spec`` the daemon received on the drained
+    ``TradeIntent``. The caller reads ``intent.exit`` directly for the
+    (possibly ``None``) exit-geometry spec; this helper never touches a
+    brief."""
     from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.execution import build_fx_conversion
     from alphalens_pipeline.brokers.routing import resolve_us_instrument
-    from alphalens_pipeline.paper.sizing import (
-        TradeSetupNotPlannableError,
-        build_exit_geometry_spec,
-        compute_setup_plan,
-        parse_brief_to_spec,
-    )
+    from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, compute_setup_plan
 
     try:
         instrument = resolve_us_instrument(broker, ticker)
@@ -1594,7 +1587,6 @@ def _resolve_and_size(
                 )
                 return None
             fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
-        spec = parse_brief_to_spec(trade_setup)
         plan = compute_setup_plan(
             spec,
             paper_equity=account.total_value,
@@ -1605,26 +1597,18 @@ def _resolve_and_size(
         logger.warning("place_pick %s: resolve/size failed: %s", ticker, exc)
         return None
 
-    exit_spec = None
-    if isinstance(trade_setup, dict):
-        try:
-            exit_spec = build_exit_geometry_spec(trade_setup, pct_off_52w_high)
-        except Exception:  # dark shadow-only — never let a builder bug crash placement
-            logger.warning("place_pick %s: exit-geometry build failed", ticker, exc_info=True)
-            exit_spec = None
-
-    return instrument, fx, plan, exit_spec
+    return instrument, fx, plan
 
 
 def _place_tiers(
     broker: Broker,
-    pick: Any,
+    intent: Any,
     ticker: str,
     instrument: Any,
     account: Any,
     fx: Any,
     placement: Any,
-    trade_setup: Any = None,
+    spec: Any = None,
     exit_spec: Any = None,
 ) -> int:
     """Place each entry tier's bracket, journaling IMMEDIATELY after each fill so a
@@ -1633,39 +1617,55 @@ def _place_tiers(
     placed; a BrokerError stops the loop and writes a note-only trace record so the
     failure is auditable and an all-fail pick is not retried forever.
 
-    ``exit_spec`` (PR-6a) is the ``atr_bracket_1p5`` geometry built by
-    ``_resolve_and_size``. When ``ALPHALENS_BROKER_EXIT_POLICY`` is the default
-    ``"setup_static"`` (dark), the journaled ``planned`` line's stop/TP stay the
-    brief's static ``placement.disaster_stop_price`` / ``tier.tp`` — BYTE
-    IDENTICAL to pre-PR-6a. Flipping the flag overrides the journaled stop/TP
-    with ``exit_spec.initial_levels`` instead (safe to flip now that PR-6b's
-    fill-complete avg_price reanchor — ``position_manager._maybe_reanchor`` —
-    ships; ``build_default_deps`` no longer fail-fasts on the flag).
+    ``exit_spec`` (PR-6a; PR-7: read off ``intent.exit``) is the
+    ``atr_bracket_1p5`` geometry. When ``ALPHALENS_BROKER_EXIT_POLICY`` is the
+    default ``"setup_static"`` (dark), the journaled ``planned`` line's
+    stop/TP stay the brief's static ``placement.disaster_stop_price`` /
+    ``tier.tp`` — BYTE IDENTICAL to pre-PR-6a. Flipping the flag overrides the
+    journaled stop/TP with ``exit_spec.initial_levels`` instead (safe to flip
+    now that PR-6b's fill-complete avg_price reanchor —
+    ``position_manager._maybe_reanchor`` — ships; ``build_default_deps`` no
+    longer fail-fasts on the flag).
     Either way, whenever ``exit_spec`` is buildable a ``"geometry"`` shadow
     stamp is journaled alongside the plan prices (telemetry only, memo §4.3) —
     this is unconditional on the flag so the dark shadow can measure
-    anchor divergence before any flip."""
+    anchor divergence before any flip.
+
+    ``spec`` (PR-7) is the already-parsed
+    :class:`~alphalens_pipeline.trade_intent.schema.TradeSpec` off the drained
+    ``TradeIntent`` — the geometry shadow stamp's ``planned_blend`` reads it
+    via :func:`~alphalens_pipeline.paper.sizing.planned_blended_entry_from_spec`
+    (the daemon no longer has the raw brief dict at drain time)."""
     from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
         build_submission_record,
     )
-    from alphalens_pipeline.paper.sizing import planned_blended_entry
+    from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
+    from alphalens_pipeline.trade_intent.schema import ReanchorOnFill
 
     def _geometry_stamp(*, use_geometry: bool) -> dict[str, Any] | None:
         if exit_spec is None:
             return None
-        reanchor = exit_spec.reaction_plan[0]  # ReanchorOnFill — the only PR-6a primitive
-        blend = planned_blended_entry(trade_setup) if isinstance(trade_setup, dict) else None
+        # PR-7 opened a decode boundary (iter_picks -> codec): the schema permits a
+        # non-None exit whose reaction_plan is empty (reserved kind="levels", or a
+        # future policy-only client) or whose first primitive is NOT a reanchor
+        # (TrailingStop / ModelPush). Pre-PR-7 the exit was always built in-process
+        # with a single ReanchorOnFill, so reaction_plan[0] was safe; now resolve
+        # the reanchor BY TYPE and leave the reanchor-specific k_atr/atr/ceiling
+        # facts None when absent — never index [0] / attribute-access blindly, or a
+        # valid-but-reanchor-less intent would crash the unattended drain every tick.
+        reanchor = next((p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill)), None)
+        blend = planned_blended_entry_from_spec(spec) if spec is not None else None
         return {
             "policy_name": "atr_bracket_1p5",
             "policy_version": 1,
             "planned_blend": blend,
             "geometry_stop": exit_spec.initial_levels.stop,
             "geometry_tp": exit_spec.initial_levels.tp,
-            "k_atr": reanchor.k_atr,
-            "atr": reanchor.atr,
-            "ceiling_price": reanchor.ceiling_price,
+            "k_atr": reanchor.k_atr if reanchor is not None else None,
+            "atr": reanchor.atr if reanchor is not None else None,
+            "ceiling_price": reanchor.ceiling_price if reanchor is not None else None,
             "applied": use_geometry,
         }
 
@@ -1673,7 +1673,7 @@ def _place_tiers(
         bracket = tier.bracket
         append_submission_record(
             build_submission_record(
-                brief_date=pick.date.isoformat(),
+                brief_date=intent.meta.brief_date,
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
@@ -1730,7 +1730,7 @@ def _place_tiers(
         # placed, the pick is not silently retried forever).
         append_submission_record(
             build_submission_record(
-                brief_date=pick.date.isoformat(),
+                brief_date=intent.meta.brief_date,
                 ticker=ticker,
                 mic=instrument.exchange_mic,
                 uic=instrument.broker_instrument_id,
@@ -1748,10 +1748,16 @@ def _place_tiers(
     return placed_count
 
 
-def _place_pick(broker: Broker, pick: Any) -> bool:
-    """Place one armed pick end-to-end (see _make_place_pick). Module-level so the
-    per-phase helpers keep the tick logic flat; every failure path logs and returns
-    False rather than raising."""
+def _place_pick(broker: Broker, intent: Any) -> bool:
+    """Place one armed :class:`~alphalens_pipeline.trade_intent.schema.TradeIntent`
+    end-to-end (see _make_place_pick). Module-level so the per-phase helpers
+    keep the tick logic flat; every failure path logs and returns False
+    rather than raising.
+
+    PR-7 (broker-manager extraction memo §5): the daemon never touches a
+    brief any more — ``ticker``/``brief_date``/``spec``/``exit_spec`` are all
+    read directly off the drained ``intent`` (the client already parsed +
+    validated the brief at arm time, in ``arm_command``)."""
     import datetime as _dt
 
     from alphalens_pipeline.brokers.automanager import safety
@@ -1764,18 +1770,11 @@ def _place_pick(broker: Broker, pick: Any) -> bool:
         DEFAULT_SUBMISSIONS_PATH,
         iter_submission_records,
     )
-    from alphalens_pipeline.paper.brief_loader import load_brief
 
-    ticker = pick.ticker.upper()
-    try:
-        candidates = load_brief(pick.date, _DEFAULT_BRIEFS_DIR)
-    except (FileNotFoundError, ValueError) as exc:
-        logger.warning("place_pick %s: brief unavailable for %s: %s", ticker, pick.date, exc)
-        return False
-    candidate = next((c for c in candidates if c.ticker.upper() == ticker), None)
-    if candidate is None or candidate.trade_setup is None:
-        logger.warning("place_pick %s: no plannable trade_setup in the %s brief", ticker, pick.date)
-        return False
+    ticker = intent.instrument.ticker.upper()
+    brief_date = _dt.date.fromisoformat(intent.meta.brief_date)
+    spec = intent.spec
+    exit_spec = intent.exit
 
     try:
         account = broker.get_account()
@@ -1790,7 +1789,7 @@ def _place_pick(broker: Broker, pick: Any) -> bool:
         open_verdicts, records, _dt.date.today().isoformat()
     )
     decision = safety.check(
-        pick,
+        intent,
         safety.JournalView(
             open_bracket_count=open_bracket_count,
             gross_committed=gross_committed,
@@ -1816,7 +1815,7 @@ def _place_pick(broker: Broker, pick: Any) -> bool:
             from alphalens_pipeline.brokers.automanager import picks
 
             try:
-                picks.mark_refused(ticker, pick.date, decision.reason)
+                picks.mark_refused(ticker, brief_date, decision.reason)
             except OSError as exc:
                 logger.warning(
                     "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
@@ -1830,24 +1829,16 @@ def _place_pick(broker: Broker, pick: Any) -> bool:
     from alphalens_pipeline.brokers.automanager.earnings_gate import earnings_window_refusal
     from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
 
-    setup = candidate.trade_setup
-    raw_ttl = setup.get("order_ttl_days") if hasattr(setup, "get") else None
-    ttl_days = int(raw_ttl or 0) or DEFAULT_ORDER_TTL_DAYS
+    ttl_days = int(spec.order_ttl_days or 0) or DEFAULT_ORDER_TTL_DAYS
     earnings_reason = earnings_window_refusal(ticker, ttl_days=ttl_days)
     if earnings_reason:
         logger.warning("place_pick %s: refused — %s", ticker, earnings_reason)
         return False
 
-    resolved = _resolve_and_size(
-        broker,
-        ticker,
-        account,
-        candidate.trade_setup,
-        pct_off_52w_high=getattr(candidate, "technical_pct_off_52w_high", None),
-    )
+    resolved = _resolve_and_size(broker, ticker, account, spec)
     if resolved is None:
         return False
-    instrument, fx, plan, exit_spec = resolved
+    instrument, fx, plan = resolved
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:
@@ -1857,13 +1848,13 @@ def _place_pick(broker: Broker, pick: Any) -> bool:
     return (
         _place_tiers(
             broker,
-            pick,
+            intent,
             ticker,
             instrument,
             account,
             fx,
             placement,
-            candidate.trade_setup,
+            spec,
             exit_spec,
         )
         > 0

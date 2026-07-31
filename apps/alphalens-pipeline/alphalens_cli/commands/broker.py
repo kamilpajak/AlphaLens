@@ -53,6 +53,13 @@ broker_app = typer.Typer(
 
 _DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
 
+# Advisory-only instrument hint MIC stamped on every armed TradeIntent (PR-7,
+# broker-manager extraction memo section 5). The daemon resolves the REAL
+# instrument via resolve_us_instrument at drain time — this hint is
+# informational metadata for a human/future multi-exchange client, never used
+# for routing.
+_ARM_INSTRUMENT_MIC = "XNYS"
+
 
 def _fail(message: str) -> typer.Exit:
     typer.secho(message, fg=typer.colors.RED, err=True)
@@ -835,15 +842,25 @@ def arm_command(
         _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
     ),
 ) -> None:
-    """Arm a picked candidate — append human intent to the picks queue.
+    """Arm a picked candidate — parse the brief into a TradeIntent client-side
+    and append it to the picks queue.
 
     Validates the row against the brief at arm time (fail fast if the parquet
-    is missing or the ticker is absent), then appends ONE 'armed' line to
-    picks.jsonl. The VPS control loop drains the queue; this command places
-    nothing.
+    is missing, the ticker is absent, or the row has no plannable
+    trade_setup), parses the brief's trade_setup into a
+    :class:`~alphalens_pipeline.trade_intent.schema.TradeIntent` (memo
+    section 5, PR-7), then appends ONE 'armed' line carrying the full intent
+    to picks.jsonl. The VPS control loop drains the queue and never touches
+    a brief; this command places nothing.
     """
     from alphalens_pipeline.brokers.automanager.picks import DEFAULT_PICKS_PATH, arm_pick
     from alphalens_pipeline.paper.brief_loader import load_brief
+    from alphalens_pipeline.paper.sizing import (
+        TradeSetupNotPlannableError,
+        build_exit_geometry_spec,
+        parse_brief_to_spec,
+    )
+    from alphalens_pipeline.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
 
     try:
         brief_date = dt.date.fromisoformat(date)
@@ -859,8 +876,28 @@ def arm_command(
     candidate = next((c for c in candidates if c.ticker.upper() == wanted), None)
     if candidate is None:
         raise _fail(f"{wanted} not in the {brief_date} brief ({len(candidates)} candidates)")
+    if candidate.trade_setup is None:
+        raise _fail(f"{wanted}: no plannable trade_setup on {brief_date}")
 
-    arm_pick(wanted, brief_date)
+    try:
+        spec = parse_brief_to_spec(candidate.trade_setup)
+    except TradeSetupNotPlannableError as exc:
+        raise _fail(f"{wanted}: trade_setup not plannable — {exc}") from exc
+    exit_spec = build_exit_geometry_spec(
+        candidate.trade_setup, candidate.technical_pct_off_52w_high
+    )
+
+    intent = TradeIntent(
+        intent_id=f"{wanted}:{brief_date.isoformat()}",
+        instrument=InstrumentHint(ticker=wanted, mic=_ARM_INSTRUMENT_MIC),
+        spec=spec,
+        exit=exit_spec,
+        meta=IntentMeta(
+            armed_ts=dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+            brief_date=brief_date.isoformat(),
+        ),
+    )
+    arm_pick(intent)
     typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {DEFAULT_PICKS_PATH}")
 
 

@@ -6,6 +6,16 @@ control loop drains. Mirrors submission_log.py: the file is NEVER rewritten;
 status is a recorded fact per line (T8 cohort discipline). Malformed/undated
 lines are skipped; a missing file yields nothing.
 
+PR-7 (broker-manager extraction memo section 5): ``arm_pick`` now persists the
+FULL :class:`~alphalens_pipeline.trade_intent.schema.TradeIntent` on the armed
+line (under the ``"intent"`` key) — ``arm_command`` already parses the brief
+into a ``TradeIntent`` at arm time, and ``iter_picks`` decodes it back so the
+daemon never touches a brief. No back-compat for the old bare
+(ticker, date) armed line shape (solo-project doctrine): an armed line missing
+the ``"intent"`` key, or carrying an undecodable one, is skipped exactly like
+any other malformed line — re-arming via `alphalens broker arm` is the
+explicit human path back.
+
 Queue semantics: the LATEST status line per (ticker, date) wins. A terminal
 ``refused`` line (capacity/cap safety refusal) retires the pick so the drain
 never retries it — re-arming via `alphalens broker arm` appends a fresh armed
@@ -16,9 +26,18 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
+
+from alphalens_pipeline.trade_intent.codec import (
+    TradeIntentDecodeError,
+    intent_from_jsonable,
+    intent_to_jsonable,
+)
+from alphalens_pipeline.trade_intent.schema import TradeIntent
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PICKS_PATH = Path.home() / ".alphalens" / "broker_orders" / "picks.jsonl"
 
@@ -26,15 +45,7 @@ STATUS_ARMED = "armed"
 STATUS_REFUSED = "refused"
 
 
-@dataclass(frozen=True)
-class Pick:
-    ticker: str
-    date: dt.date
-    armed_ts: str
-    status: str
-
-
-def _append_record(record: dict[str, str], path: Path | None) -> None:
+def _append_record(record: dict, path: Path | None) -> None:
     """Append one JSON line (append-only; never rewrites)."""
     target = path or DEFAULT_PICKS_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -43,14 +54,20 @@ def _append_record(record: dict[str, str], path: Path | None) -> None:
         fh.write(line + "\n")
 
 
-def arm_pick(ticker: str, date: dt.date, *, path: Path | None = None) -> None:
-    """Append one 'armed' intent line (append-only; never rewrites)."""
+def arm_pick(intent: TradeIntent, *, path: Path | None = None) -> None:
+    """Append one 'armed' intent line (append-only; never rewrites).
+
+    Persists the full ``intent`` under the ``"intent"`` key (PR-7) plus the
+    top-level ``ticker``/``date`` the latest-per-(ticker,date) fold + refused
+    correlation key on.
+    """
     _append_record(
         {
-            "ticker": ticker.upper(),
-            "date": date.isoformat(),
-            "armed_ts": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+            "ticker": intent.instrument.ticker.upper(),
+            "date": intent.meta.brief_date,
+            "armed_ts": intent.meta.armed_ts,
             "status": STATUS_ARMED,
+            "intent": intent_to_jsonable(intent),
         },
         path,
     )
@@ -93,13 +110,17 @@ def _parse_record(raw_line: str) -> tuple[tuple[str, dt.date], dict] | None:
     return (str(record.get("ticker", "")).upper(), parsed_date), record
 
 
-def iter_picks(*, path: Path | None = None) -> Iterator[Pick]:
-    """Yield ARMED picks; the LATEST status line per (ticker, date) wins.
+def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
+    """Yield ARMED picks as decoded :class:`TradeIntent`; the LATEST status
+    line per (ticker, date) wins.
 
     Malformed/undated lines are skipped, and a pick whose latest line is
     non-armed (refused / cancelled / filled / expired) is never yielded — the
     control-loop drain places whatever this emits, so the ARMED filter lives
-    here (defence in depth against re-placing a retired intent)."""
+    here (defence in depth against re-placing a retired intent). An armed line
+    with no ``"intent"`` key (the pre-PR-7 bare shape) or an undecodable one
+    is skipped with a warning — no back-compat, re-arm is the human path
+    back."""
     target = path or DEFAULT_PICKS_PATH
     if not target.exists():
         return
@@ -114,19 +135,31 @@ def iter_picks(*, path: Path | None = None) -> Iterator[Pick]:
     for (ticker, parsed_date), record in latest.items():
         if str(record.get("status", "")) != STATUS_ARMED:
             continue
-        yield Pick(
-            ticker=ticker,
-            date=parsed_date,
-            armed_ts=str(record.get("armed_ts", "")),
-            status=str(record.get("status", "")),
-        )
+        raw_intent = record.get("intent")
+        if raw_intent is None:
+            logger.warning(
+                "iter_picks %s/%s: armed line has no 'intent' (pre-PR-7 bare shape) — "
+                "skipped, re-arm via `alphalens broker arm`",
+                ticker,
+                parsed_date,
+            )
+            continue
+        try:
+            yield intent_from_jsonable(raw_intent)
+        except TradeIntentDecodeError as exc:
+            logger.warning(
+                "iter_picks %s/%s: armed line's intent failed to decode — skipped: %s",
+                ticker,
+                parsed_date,
+                exc,
+            )
+            continue
 
 
 __all__ = [
     "DEFAULT_PICKS_PATH",
     "STATUS_ARMED",
     "STATUS_REFUSED",
-    "Pick",
     "arm_pick",
     "iter_picks",
     "mark_refused",
