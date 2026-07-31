@@ -240,6 +240,23 @@ def parse_brief_to_spec(brief_trade_setup: dict) -> TradeSpec:
     )
 
 
+def _blend_priced_tiers(priced: list[tuple[float, float]]) -> float | None:
+    """Shared alloc-weighted-mean arithmetic for the dict and spec blend paths.
+
+    Weighted by the second element (alloc weight); equal-weight fallback when
+    weights sum to 0; ``None`` for an empty ``priced`` list. Extracted so
+    :func:`planned_blended_entry` and :func:`planned_blended_entry_from_spec`
+    cannot drift — both must produce identical results for
+    ``parse_brief_to_spec(setup)`` vs ``setup`` (PR-7).
+    """
+    if not priced:
+        return None
+    wsum = sum(w for _, w in priced)
+    if wsum > 0:
+        return sum(p * w for p, w in priced) / wsum
+    return sum(p for p, _ in priced) / len(priced)
+
+
 def planned_blended_entry(brief_trade_setup: Mapping[str, Any]) -> float | None:
     """Alloc-weighted mean price over ALL intended entry tiers (planned, pre-fill).
 
@@ -272,12 +289,24 @@ def planned_blended_entry(brief_trade_setup: Mapping[str, Any]) -> float | None:
         except (TypeError, ValueError):
             alloc_pct = 0.0
         priced.append((limit, alloc_pct))
-    if not priced:
-        return None
-    wsum = sum(w for _, w in priced)
-    if wsum > 0:
-        return sum(p * w for p, w in priced) / wsum
-    return sum(p for p, _ in priced) / len(priced)
+    return _blend_priced_tiers(priced)
+
+
+def planned_blended_entry_from_spec(spec: TradeSpec) -> float | None:
+    """Alloc-weighted mean price over an already-parsed :class:`TradeSpec`.
+
+    The arm-time (PR-7) mirror of :func:`planned_blended_entry`: the daemon's
+    geometry SHADOW stamp no longer has the raw brief dict at drain time (the
+    parse moved to arm time), only the already-parsed ``TradeSpec`` carried on
+    the :class:`~alphalens_pipeline.trade_intent.schema.TradeIntent`. Must
+    return the SAME value ``planned_blended_entry(setup)`` would for the
+    equivalent ``setup`` -- both routes share :func:`_blend_priced_tiers`.
+
+    Returns ``None`` when there are no usable entry tiers (all non-positive
+    ``limit_price``, or ``spec.entry_tiers`` is empty) -- never raises.
+    """
+    priced = [(t.limit_price, t.alloc_pct) for t in spec.entry_tiers if t.limit_price > 0]
+    return _blend_priced_tiers(priced)
 
 
 def build_exit_geometry_spec(
@@ -535,6 +564,7 @@ __all__ = [
     "compute_setup_plan",
     "parse_brief_to_spec",
     "planned_blended_entry",
+    "planned_blended_entry_from_spec",
     "setup_plan_gross_guard_limit",
     "setup_plan_gross_notional",
     "validate_trade_setup",

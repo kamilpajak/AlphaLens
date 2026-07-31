@@ -7,7 +7,6 @@ refusal branch per test; first failing rail wins.
 
 from __future__ import annotations
 
-import datetime as dt
 import os
 import unittest
 from dataclasses import dataclass
@@ -15,7 +14,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from alphalens_pipeline.brokers.automanager.picks import Pick
 from alphalens_pipeline.brokers.automanager.safety import (
     ALLOW_ORDERS_ENV,
     DAILY_LOSS_LIMIT_R_ENV,
@@ -34,7 +32,7 @@ class _StubSession:
     alive: bool
 
 
-_PICK = Pick(ticker="KO", date=dt.date(2026, 7, 20), armed_ts="ts", status="armed")
+_PICK = object()  # check()'s `pick` arg is vestigial — never referenced in the body
 _CLEAR_JOURNAL = JournalView(open_bracket_count=0, gross_committed=0.0, realized_r_today=0.0)
 _CLEAR_BROKER = BrokerView(open_position_count=0, equity=1_000.0)
 

@@ -337,16 +337,27 @@ class ManagerWorld:
 
 
 def _pick(ticker: str) -> Any:
-    """A minimal armed pick (only the fields the gate + drain read)."""
-    import datetime as dt
+    """A minimal, structurally valid armed TradeIntent (PR-7: the real
+    _run_placement_drain calls the real _pick_key, which reads
+    intent.instrument.ticker / intent.meta.brief_date)."""
+    from alphalens_pipeline.trade_intent.schema import (
+        EntryTierSpec,
+        InstrumentHint,
+        IntentMeta,
+        TradeIntent,
+        TradeSpec,
+    )
 
-    from alphalens_pipeline.brokers.automanager.picks import Pick
-
-    return Pick(
-        ticker=ticker.upper(),
-        date=dt.date(2026, 7, 23),
-        armed_ts="2026-07-23T00:00:00+00:00",
-        status="armed",
+    return TradeIntent(
+        intent_id=f"{ticker.upper()}:2026-07-23",
+        instrument=InstrumentHint(ticker=ticker.upper(), mic="XNYS"),
+        spec=TradeSpec(
+            entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=100.0),),
+            disaster_stop=90.0,
+            tp_tranches=(),
+            suggested_size_pct=3.0,
+        ),
+        meta=IntentMeta(armed_ts="2026-07-23T00:00:00+00:00", brief_date="2026-07-23"),
     )
 
 
