@@ -1631,7 +1631,7 @@ class TestRunDaemonOnce(unittest.TestCase):
                 once=True,
                 poll_seconds=45,
                 sleep_fn=lambda s: slept.append(s),  # noqa: PLW0108
-                heartbeat_fn=lambda: beats.append(1),
+                heartbeat_fn=lambda _kill: beats.append(1),
             )
             self.assertEqual(len(sweeps), 1)
             self.assertEqual(slept, [])
@@ -3564,7 +3564,7 @@ class TestRunDaemonNeverNaked(unittest.TestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(3),
-            heartbeat_fn=lambda: None,
+            heartbeat_fn=lambda _kill: None,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
         )
@@ -3596,7 +3596,7 @@ class TestRunDaemonNeverNaked(unittest.TestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(2),
-            heartbeat_fn=lambda: None,
+            heartbeat_fn=lambda _kill: None,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
         )
@@ -3618,7 +3618,7 @@ class TestRunDaemonNeverNaked(unittest.TestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(2),
-            heartbeat_fn=lambda: None,
+            heartbeat_fn=lambda _kill: None,
             sleep_fn=slept.append,
             wake_event=None,
             monotonic=_forbidden_monotonic,
@@ -3645,7 +3645,7 @@ class TestRunDaemonAbsoluteDeadline(unittest.TestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(5),
-            heartbeat_fn=lambda: None,
+            heartbeat_fn=lambda _kill: None,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
         )
@@ -3667,7 +3667,7 @@ class TestRunDaemonAbsoluteDeadline(unittest.TestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(2),
-            heartbeat_fn=lambda: None,
+            heartbeat_fn=lambda _kill: None,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
         )
@@ -3689,7 +3689,7 @@ class TestRunDaemonGuards(unittest.TestCase):
                     once=False,
                     poll_seconds=bad,
                     is_running=_stop_after(1),
-                    heartbeat_fn=lambda: None,
+                    heartbeat_fn=lambda _kill: None,
                     wake_event=event,  # type: ignore[arg-type]
                     monotonic=clock,
                 )
@@ -3705,7 +3705,7 @@ class TestRunDaemonGuards(unittest.TestCase):
             once=True,
             poll_seconds=45.0,
             is_running=_stop_after(1),
-            heartbeat_fn=lambda: None,
+            heartbeat_fn=lambda _kill: None,
             sleep_fn=lambda s: None,
             wake_event=None,
         )
@@ -3770,7 +3770,7 @@ class TestWokenPassRecomputesState(unittest.TestCase):
                 once=False,
                 poll_seconds=45.0,
                 is_running=_stop_after(2),
-                heartbeat_fn=lambda: None,
+                heartbeat_fn=lambda _kill: None,
                 wake_event=event,  # type: ignore[arg-type]
                 monotonic=clock,
             )
@@ -3813,7 +3813,7 @@ class TestStreamRestBudget(unittest.TestCase):
                     once=False,
                     poll_seconds=45.0,
                     is_running=_stop_after(6),
-                    heartbeat_fn=lambda: None,
+                    heartbeat_fn=lambda _kill: None,
                     wake_event=event,  # type: ignore[arg-type]
                     monotonic=clock,
                 )
@@ -3965,7 +3965,7 @@ class TestBlockingOnTickDoesNotExtendGap(unittest.TestCase):
             once=False,
             poll_seconds=45.0,
             is_running=_stop_after(3),
-            heartbeat_fn=lambda: None,
+            heartbeat_fn=lambda _kill: None,
             on_tick=_blocking_tick,
             wake_event=event,  # type: ignore[arg-type]
             monotonic=clock,
@@ -4094,6 +4094,100 @@ class TestStreamingEnabledGate(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_STREAMING_ENABLED"}
         with mock.patch.dict(os.environ, env, clear=True):
             self.assertFalse(cl._streaming_enabled())
+
+
+class TestKillActiveMetric(unittest.TestCase):
+    """The KILL-active gauge (level 0/1) MUST co-emit with the per-tick heartbeat in
+    ONE emit_domain_metrics("broker-manager", {...}) call — a second call to the same
+    domain would atomically OVERWRITE (clobber) the heartbeat gauge, and vice-versa.
+    Value is 1 when the KILL file is present, 0 when absent, so Prometheus can alert
+    on an active emergency stop (previously journald-only, invisible to monitoring)."""
+
+    def _emitted(self, kill: bool) -> dict[str, Any]:
+        captured: dict[str, Any] = {}
+
+        def _spy(job: str, metrics: Any) -> None:
+            captured["job"] = job
+            captured["metrics"] = dict(metrics)
+
+        with mock.patch("alphalens_pipeline.observability.textfile.emit_domain_metrics", _spy):
+            cl._default_emit_heartbeat(kill)
+        return captured
+
+    def test_kill_present_co_emits_kill_active_1_and_heartbeat(self) -> None:
+        cap = self._emitted(True)
+        self.assertEqual(cap["job"], "broker-manager")
+        self.assertEqual(cap["metrics"][cl.KILL_ACTIVE_METRIC], 1)
+        self.assertIn(cl.HEARTBEAT_METRIC, cap["metrics"], "heartbeat co-emitted, not clobbered")
+
+    def test_kill_absent_co_emits_kill_active_0_and_heartbeat(self) -> None:
+        cap = self._emitted(False)
+        self.assertEqual(cap["metrics"][cl.KILL_ACTIVE_METRIC], 0)
+        self.assertIn(cl.HEARTBEAT_METRIC, cap["metrics"], "heartbeat co-emitted, not clobbered")
+
+
+class TestKillEdgeAlert(unittest.TestCase):
+    """Edge-triggered KILL alert (observability only — placement/protection gating is
+    unchanged). deps.alert fires ONCE on each False->True / True->False transition,
+    never every tick while KILL is held. An empty state holder treats the missing
+    previous value as False, so a startup WITH KILL alerts once and a clean startup is
+    silent."""
+
+    def _deps_for(self, kill_file: Path, alerts: list[str]) -> cl.LoopDeps:
+        return _deps(
+            _StubBroker(),
+            kill_file=kill_file,
+            verdicts=[],
+            place_calls=[],
+            alerts=alerts,
+        )
+
+    def test_activation_alerts_once_then_silent_while_held(self) -> None:
+        with TemporaryDirectory() as d:
+            kill = Path(d) / "KILL"
+            alerts: list[str] = []
+            deps = self._deps_for(kill, alerts)
+            cl.run_once(deps)  # no KILL yet -> silent
+            self.assertEqual([a for a in alerts if "KILL" in a], [])
+            kill.write_text("halt")
+            cl.run_once(deps)  # False->True edge -> one alert
+            cl.run_once(deps)  # still True -> NO second alert
+            active = [a for a in alerts if "KILL active" in a]
+            self.assertEqual(len(active), 1, f"activation alerts exactly once, got {alerts}")
+
+    def test_clear_alerts_resumed_once(self) -> None:
+        with TemporaryDirectory() as d:
+            kill = Path(d) / "KILL"
+            kill.write_text("halt")
+            alerts: list[str] = []
+            deps = self._deps_for(kill, alerts)
+            cl.run_once(deps)  # startup WITH KILL -> active alert
+            kill.unlink()
+            cl.run_once(deps)  # True->False edge -> cleared alert
+            cleared = [a for a in alerts if "KILL cleared" in a]
+            self.assertEqual(len(cleared), 1, f"clear alerts exactly once, got {alerts}")
+
+    def test_startup_with_kill_present_alerts_once(self) -> None:
+        with TemporaryDirectory() as d:
+            kill = Path(d) / "KILL"
+            kill.write_text("halt")
+            alerts: list[str] = []
+            deps = self._deps_for(kill, alerts)
+            cl.run_once(deps)
+            active = [a for a in alerts if "KILL active" in a]
+            self.assertEqual(
+                len(active), 1, f"a startup with KILL already present alerts once, got {alerts}"
+            )
+
+    def test_clean_startup_no_kill_does_not_alert(self) -> None:
+        with TemporaryDirectory() as d:
+            kill = Path(d) / "KILL"  # never created
+            alerts: list[str] = []
+            deps = self._deps_for(kill, alerts)
+            cl.run_once(deps)
+            self.assertEqual(
+                [a for a in alerts if "KILL" in a], [], "a clean no-KILL startup is silent"
+            )
 
 
 if __name__ == "__main__":
