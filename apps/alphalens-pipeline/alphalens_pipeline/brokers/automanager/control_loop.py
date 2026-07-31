@@ -2472,7 +2472,11 @@ def _execute_amend_stop(
     )
     # PR-6b: latch the reanchor ONLY on this confirmed success — a failed
     # amend never reaches here (it returned above on the BrokerError branch,
-    # having journaled amend_failed like any other amend arm).
+    # having journaled amend_failed like any other amend arm). The marker write
+    # is best-effort (like amend_ok): if it is dropped, the NEXT tick simply
+    # re-emits the SAME reanchor (absolute target price + qty, idempotent-in-
+    # effect) and re-journals — at worst one redundant, harmless PATCH, never a
+    # wrong or naked stop. No in-memory secondary latch is warranted for that.
     if action.reanchor_avg_price is not None:
         reanchor_avg_price = action.reanchor_avg_price
         _journal_outcome_best_effort(
