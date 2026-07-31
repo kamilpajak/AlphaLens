@@ -6,10 +6,18 @@ mechanics the auto-manager actually uses — uic numbers, the plan journal, the
 env flags, the alert plumbing — live in here so the tests stay in plain business
 language.
 
-The tick runs the REAL manager (`control_loop.run_once` with the real
-`build_protection_view`, the real reconcile, and the real protection executor)
-against the fake in-memory broker. Nothing about the tick is stubbed except the
-inputs a human would set up (positions, plans, faults).
+PR-8 (broker-manager extraction memo section 5.3): the WHEN seam
+(``run_tick``) drives the REAL manager THROUGH the formal
+``ManagerService`` Protocol boundary — ``InProcessManagerService`` wraps the
+same real ``control_loop.run_once`` (with the real ``build_protection_view``,
+the real reconcile, and the real protection executor) against the fake
+in-memory broker, but the world's OWN code never calls ``control_loop``
+directly for placement or protection any more (``arm``/``run_tick`` go
+through ``submit_intent``/``run_cycle``). Nothing about the tick is stubbed
+except the inputs a human would set up (positions, plans, faults) — this
+proves the six acceptance guarantees hold identically when driven through the
+Protocol, not just against ``LoopDeps`` directly (the pre-extraction proof
+that the client<->manager boundary is real).
 """
 
 from __future__ import annotations
@@ -22,7 +30,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
-from alphalens_pipeline.brokers.automanager import safety
+from alphalens_pipeline.brokers.automanager import safety, service
 from alphalens_pipeline.brokers.contract import OrderStatus
 
 from .fake_broker import FakeBroker
@@ -50,8 +58,27 @@ class ManagerWorld:
 
     def __init__(self, test: unittest.TestCase, *, equity: float = 1_000_000.0) -> None:
         self.broker = FakeBroker(equity=equity)
+        # The REAL delivery sink — kept fed exactly as before (PR-8 does not
+        # change what gets alerted, only how the THEN-side asserts read it).
         self.alerts: list[str] = []
-        self._throttle = cl._AlertThrottle(self.alerts.append)
+        # What assert_alerted/assert_silent actually read: alert-kind events
+        # drained from service.stream_events() after every run_tick (memo
+        # section 5.3 — guarantee #5 becomes a direct assertion on the event
+        # stream). Accumulates across ticks within one test, mirroring the
+        # old self.alerts' never-cleared lifetime.
+        self._captured_alert_events: list[str] = []
+        # The tee lives at the shared _AlertThrottle's BASE sink, not on the
+        # deps.alert_throttled FIELD: the protection executor
+        # (_make_protection_executor) calls throttle.emit(...) directly on
+        # this SAME instance for PlaceStop/UpgradeToOco/AmendStop/AlertOnly,
+        # bypassing deps.alert_throttled entirely — teeing the base sink is
+        # the only seam that catches every throttled send uniformly (see
+        # service.InProcessManagerService's class docstring). The throttle
+        # itself is built ONCE here (persists dedup/escalation state across
+        # ticks); the CURRENT event-capturing closure is rebound on every
+        # _deps_factory call (the service hands a fresh one each cycle).
+        self._current_event_alert_throttled = lambda message, reason: None
+        self._throttle = cl._AlertThrottle(self._throttle_base_sink)
 
         self._tmp = TemporaryDirectory()
         root = Path(self._tmp.name)
@@ -59,7 +86,6 @@ class ManagerWorld:
         self.kill_file = root / "KILL"
 
         self._chain = _Chain(alive=True)
-        self._picks: list[Any] = []
         self.picks_placed: list[Any] = []
         self._verdicts: list[Any] = []
         self._working_children: dict[str, tuple[str, ...]] = {}
@@ -73,6 +99,11 @@ class ManagerWorld:
         self._journal_patch = mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", self.journal)
         self._journal_patch.start()
 
+        # PR-8: the world drives the manager THROUGH the ManagerService
+        # Protocol boundary — the in-process transport wrapping the SAME
+        # deps this world has always built.
+        self._service = service.InProcessManagerService(self._deps_factory)
+
         test.addCleanup(self._close)
 
     def _close(self) -> None:
@@ -84,7 +115,7 @@ class ManagerWorld:
 
     def arm(self, ticker: str) -> None:
         """A human arms this ticker (records the intent in the pick queue)."""
-        self._picks.append(_pick(ticker))
+        self._service.submit_intent(_pick(ticker))
 
     def entry_fills(
         self,
@@ -156,8 +187,17 @@ class ManagerWorld:
     # ==== WHEN =================================================================
 
     def run_tick(self) -> cl.TickReport:
-        """The manager runs one management tick."""
-        return cl.run_once(self._deps())
+        """The manager runs one management tick THROUGH the ManagerService
+        Protocol (PR-8), then drains the cycle's events into
+        ``_captured_alert_events`` so the THEN-side asserts have something to
+        read (the drain happens here, once per tick — assert_alerted /
+        assert_silent never drain themselves, so multiple asserts in one test
+        still see the same captured alerts)."""
+        report = self._service.run_cycle()
+        for event in self._service.stream_events():
+            if isinstance(event, service.AlertEvent):
+                self._captured_alert_events.append(event.message)
+        return report
 
     def run_ticks(self, count: int) -> cl.TickReport:
         report = cl.TickReport()
@@ -211,14 +251,15 @@ class ManagerWorld:
             raise AssertionError(f"expected {count} picks placed, got {len(self.picks_placed)}")
 
     def assert_alerted(self, *, containing: str) -> None:
-        if not any(containing.lower() in a.lower() for a in self.alerts):
+        if not any(containing.lower() in a.lower() for a in self._captured_alert_events):
             raise AssertionError(
-                f"expected an alert containing {containing!r}; alerts were: {self.alerts}"
+                f"expected an alert containing {containing!r}; "
+                f"alert events were: {self._captured_alert_events}"
             )
 
     def assert_silent(self) -> None:
-        if self.alerts:
-            raise AssertionError(f"expected no alerts, got: {self.alerts}")
+        if self._captured_alert_events:
+            raise AssertionError(f"expected no alerts, got: {self._captured_alert_events}")
 
     def assert_order_gone(self, order_id: str) -> None:
         if self.broker.has_order(order_id):
@@ -268,7 +309,34 @@ class ManagerWorld:
 
     # ==== internals ============================================================
 
-    def _deps(self) -> cl.LoopDeps:
+    def _throttle_base_sink(self, message: str) -> None:
+        """The shared _AlertThrottle's underlying sink (built once in
+        __init__). Feeds the real delivery list (self.alerts, unchanged) AND
+        tees to whichever event-capturing closure the service handed the
+        MOST RECENT ``_deps_factory`` call — see the __init__ comment."""
+        self.alerts.append(message)
+        self._current_event_alert_throttled(message, "")
+
+    def _deps_factory(
+        self,
+        event_alert: Any,
+        event_alert_throttled: Any,
+        picks: list[Any],
+    ) -> cl.LoopDeps:
+        """Build ONE cycle's real, fully-wired LoopDeps for the
+        InProcessManagerService (PR-8) — the same wiring this world has
+        always built, now handed the service's event-capturing alert sinks
+        + its internal pick queue instead of the world's own ``self._picks``.
+        """
+        self._current_event_alert_throttled = event_alert_throttled
+
+        def alert(message: str) -> None:
+            self.alerts.append(message)
+            event_alert(message)
+
+        def alert_throttled(message: str, reason: str) -> bool:
+            return self._throttle.emit(message, reason=reason)
+
         oco_placer = self.broker.place_oco_exit if self._oco_enabled else None
         amend_placer = self.broker.amend_stop_amount if self._amend_enabled else None
         executor = cl._make_protection_executor(
@@ -278,7 +346,7 @@ class ManagerWorld:
             broker=self.broker,
             kill_file=self.kill_file,
             ensure_alive=lambda: self._chain,
-            iter_picks=lambda: iter(self._picks),
+            iter_picks=lambda: iter(picks),
             place_pick=self._place_pick,
             # No submission records: the protection pass reads live broker state,
             # not these records (build_protection_view ignores its records arg).
@@ -290,8 +358,8 @@ class ManagerWorld:
             build_protection_view=cl.build_protection_view,
             execute_protection=executor,
             sweep_orphans_fn=lambda _broker: [],
-            alert=self.alerts.append,
-            alert_throttled=lambda message, reason: self._throttle.emit(message, reason=reason),
+            alert=alert,
+            alert_throttled=alert_throttled,
             place_oco_exit=oco_placer,
             amend_stop=amend_placer,
         )

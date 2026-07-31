@@ -190,6 +190,27 @@ RULES = (
         "forbidden_prefix": "alphalens_pipeline.data.alt_data.telegram",
         "exemptions": set(),
     },
+    {
+        # Broker-manager extraction, PR-7 deleted the daemon-side brief read
+        # (``load_brief`` inside ``_place_pick``, V1) + the brief-coupled
+        # parse (V2): the daemon now drains a fully-formed TradeIntent off
+        # the pick queue and never touches a brief. PR-8 formalizes the
+        # tripwire so a regression (a lazy re-import of ``load_brief``
+        # inside brokers/ code) fails loudly. No ``top_level_only`` — the
+        # deleted V1 read was itself a lazy function-scope import
+        # (``alphalens_cli/commands/broker.py`` and
+        # ``alphalens_pipeline/feedback/population_ladder_monitor.py`` still
+        # import ``brief_loader`` legitimately, from OUTSIDE brokers/, so
+        # this rule only ever fires on a brokers-side regression). Does NOT
+        # add a ``brokers -> thematic`` rule: ``earnings_gate`` still
+        # lazy-imports ``thematic.sources.earnings_calendar`` (a separate,
+        # still-live coupling — earnings-deletion is a deferred step, out of
+        # PR-8 scope).
+        "name": "brokers must not import paper.brief_loader (PR-7 deleted the brief read; PR-8 tripwire)",
+        "from_pkg": "alphalens_pipeline.brokers",
+        "forbidden_prefix": "alphalens_pipeline.paper.brief_loader",
+        "exemptions": set(),
+    },
 )
 
 
@@ -382,6 +403,48 @@ class TestModuleDependencies(unittest.TestCase):
                     any(m.startswith(rule["forbidden_prefix"]) for m in modules),
                     f"rule {rule['name']!r} would not catch the synthetic violation",
                 )
+
+    def test_brokers_brief_loader_tripwire_positive_control(self):
+        """PR-7 deleted the daemon-side ``load_brief`` read; PR-8 pins the
+        tripwire so a regression (a lazy re-import inside brokers/ code, the
+        exact shape the deleted V1 read used) is caught. Mirrors
+        ``test_brokers_egress_rules_positive_control`` — a single rule, a
+        function-scope synthetic import, ``include_function_scope=True``
+        (the walker must catch lazy imports too, since that's the shape that
+        was deleted).
+        """
+        import tempfile
+
+        synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_pipeline.paper.brief_loader import load_brief\n"
+            "    return load_brief\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_brief_loader_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn("alphalens_pipeline.paper.brief_loader", modules)
+
+        brief_loader_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_pipeline.brokers"
+            and rule["forbidden_prefix"] == "alphalens_pipeline.paper.brief_loader"
+        ]
+        self.assertEqual(
+            len(brief_loader_rules), 1, "the brokers -> paper.brief_loader rule must exist once"
+        )
+        self.assertNotIn(
+            "top_level_only",
+            brief_loader_rules[0],
+            "the brokers -> paper.brief_loader rule must catch function-scope (lazy) imports too",
+        )
+        self.assertTrue(
+            any(m.startswith(brief_loader_rules[0]["forbidden_prefix"]) for m in modules),
+            "rule would not catch the synthetic violation",
+        )
 
     def test_automanager_saxo_boundary_positive_control(self):
         """The automanager -> saxo boundary rule cannot rot silently.
