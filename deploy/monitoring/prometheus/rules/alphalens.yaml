@@ -591,8 +591,28 @@ groups:
           route: telegram
           unit: thematic-build
         annotations:
-          summary: "only {{ $value }} of today's thematic briefs carry a usable entry ladder"
+          summary: "only {{ $value | humanizePercentage }} of today's thematic briefs carry a usable entry ladder"
           description: "Briefs shipped in normal volume but most have brief_trade_setup status=NO_STRUCTURE / zero entry tiers, so the cards are not actionable. Past causes were non-finite market_cap and non-finite close prices reaching the setup builder. Check alphalens_thematic_score_core_numerics_finite_ratio first (it localises the failure to the score stage), then the daily thematic-build logs."
+
+      # The threshold rule above can only fire on a series that EXISTS. If
+      # the brief-stage emit is ever dropped — broken textfile collector,
+      # a refactor that loses the splice, a rename — the quality gauge
+      # vanishes and the alert goes silently dead. That is the same
+      # silent-disarm failure this whole family exists to catch, so the
+      # gauge gets the absent() partner the form4 / edgar / vix gauges
+      # already carry. Expected to fire once on a fresh deploy (the
+      # pipeline image must ship the new emit first); clears on the first
+      # thematic-build run that emits it.
+      - alert: AlphalensThematicBriefLadderUsableMetricMissing
+        expr: absent(alphalens_thematic_brief_usable_ladder_ratio)
+        for: 1h
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "thematic brief ladder-quality gauge missing"
+          description: "No alphalens_thematic_brief_usable_ladder_ratio series. The brief stage's emit has not succeeded since the gauge shipped, or the textfile collector / node_exporter scrape is broken — either way AlphalensThematicBriefLadderUsableLow is disarmed. Expected once on a fresh deploy; clears after the first thematic-build run carrying the gauge."
 
       # ---------------------------------------------------------------
       # Structured-event-template health (epic #321 PR-1).

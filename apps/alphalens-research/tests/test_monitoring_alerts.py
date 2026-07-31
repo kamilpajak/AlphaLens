@@ -692,6 +692,7 @@ class TestThematicBriefLadderQualityRule(unittest.TestCase):
     """
 
     LADDER_LOW = "AlphalensThematicBriefLadderUsableLow"
+    LADDER_MISSING = "AlphalensThematicBriefLadderUsableMetricMissing"
 
     def _rule(self, name: str) -> dict:
         rules = _load_rules()["groups"][0]["rules"]
@@ -740,6 +741,20 @@ class TestThematicBriefLadderQualityRule(unittest.TestCase):
         rule = self._rule(self.LADDER_LOW)
         self.assertNotIn("job", rule.get("labels", {}))
         self.assertNotIn('job="', rule["expr"])
+
+    def test_missing_gauge_has_its_own_rule(self) -> None:
+        # The threshold rule can only fire on a series that EXISTS. If the
+        # brief emit is dropped (broken textfile collector, a refactor that
+        # loses the splice), the quality gauge vanishes and the alert goes
+        # silently dead — the exact failure mode this whole family exists to
+        # prevent. Pair it with an absent() rule, as the form4 / edgar / vix
+        # gauges already do.
+        rule = self._rule(self.LADDER_MISSING)
+        self.assertEqual(
+            rule["expr"].strip(), "absent(alphalens_thematic_brief_usable_ladder_ratio)"
+        )
+        self.assertEqual(rule.get("for"), "1h")
+        self.assertEqual(rule.get("labels", {}).get("unit"), "thematic-build")
 
 
 class TestVixCacheStaleness(unittest.TestCase):

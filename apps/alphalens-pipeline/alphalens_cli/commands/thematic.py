@@ -215,7 +215,7 @@ def _score_core_numerics_metrics(enriched: pd.DataFrame) -> dict[str, float | in
     total = len(enriched)
     finite = 0
     try:
-        if total and all(c in enriched.columns for c in _SCORE_CORE_NUMERIC_COLUMNS):
+        if total > 0 and all(c in enriched.columns for c in _SCORE_CORE_NUMERIC_COLUMNS):
             mask = np.ones(total, dtype=bool)
             for col in _SCORE_CORE_NUMERIC_COLUMNS:
                 values = pd.to_numeric(enriched[col], errors="coerce").to_numpy(dtype="float64")
