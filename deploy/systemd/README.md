@@ -72,6 +72,12 @@ Read `Result` and `ExecMainStatus` only after that loop ends. Read while the
 unit is still `activating` and you get the **previous** run's values — that
 mistake produced a false "mtime gate skipped" alarm on 2026-06-11.
 
+That loop is for `Type=oneshot` units only. `alphalens-broker-manager.service`
+and `alphalens-form4-backfill.service` are `Type=simple` daemons: they sit at
+`active` for their whole lifetime by design, so the loop would never return.
+Check those with `systemctl --user status` and their own liveness signals
+(`AlphalensBrokerManagerHeartbeatStale` for the broker manager) instead.
+
 This matters most for the two long units: `alphalens-thematic-build.service`
 (~12-20 min, `TimeoutStartSec=75min`) and
 `alphalens-feedback-shadow-returns.service` (~5-30 min, `TimeoutStartSec=90min`).

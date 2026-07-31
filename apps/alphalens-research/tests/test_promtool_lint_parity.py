@@ -71,27 +71,28 @@ class TestPromtoolLintParity(unittest.TestCase):
             "`just lint-rules` is how the gate is reproduced locally before pushing.",
         )
 
-    def test_ci_and_justfile_pin_the_same_promtool_version(self) -> None:
-        ci = _versions_in(CI_WORKFLOW)
-        just = _versions_in(JUSTFILE)
-        self.assertTrue(ci, "no pinned prom/prometheus:<version> found in ci.yml")
-        self.assertTrue(just, "no pinned prom/prometheus:<version> found in justfile")
-        self.assertEqual(
-            set(ci),
-            set(just),
-            "CI and justfile lint with different promtool versions — a local green "
-            "would not mean CI passes.",
-        )
-
-    def test_pinned_version_matches_the_production_server(self) -> None:
-        # A newer parser can accept expressions the live 3.3.1 rejects, which
-        # would let the very failure this gate prevents through to production.
+    def test_both_call_sites_pin_the_production_server_version(self) -> None:
+        # Asserting each found version equals the constant also makes the two
+        # call sites equal to each other, so a separate CI-vs-justfile parity
+        # test would be redundant. The existence check is NOT redundant: with
+        # no version found the equality loop below would pass vacuously, which
+        # is exactly what an accidentally deleted pin looks like.
+        #
+        # Pinning to the SERVER version, not the newest, is deliberate: a newer
+        # parser can accept expressions the live 3.3.1 rejects, which would let
+        # the very failure this gate exists to prevent through to production.
         for path in (CI_WORKFLOW, JUSTFILE):
-            for found in _versions_in(path):
+            found = _versions_in(path)
+            self.assertTrue(
+                found,
+                f"no pinned prom/prometheus:<version> found in {path.name} — the "
+                f"lint either vanished or went unpinned.",
+            )
+            for version in found:
                 self.assertEqual(
-                    found,
+                    version,
                     EXPECTED_PROM_VERSION,
-                    f"{path.name} pins promtool {found} but the VPS Prometheus runs "
+                    f"{path.name} pins promtool {version} but the VPS Prometheus runs "
                     f"{EXPECTED_PROM_VERSION}. If the server was upgraded, bump "
                     f"EXPECTED_PROM_VERSION here and both call sites together.",
                 )
