@@ -657,6 +657,106 @@ class TestThematicVolumeRules(unittest.TestCase):
             self.assertIn("for", self._rule(name), f"{name} needs a `for:` debounce clause.")
 
 
+class TestThematicBriefLadderQualityRule(unittest.TestCase):
+    """Pin the brief-quality (not volume) rule.
+
+    2026-07-25/26 shipped volume-NORMAL days whose briefs all carried an
+    empty ladder (``brief_trade_setup`` status NO_STRUCTURE, 0 entry
+    tiers). Every volume rule above read healthy, so nothing fired. The
+    sibling July regression (#910) is deliberately OUT of scope here — it
+    collapsed briefs to zero, which the volume rules already own.
+    ``AlphalensThematicBriefLadderUsableLow`` ratios the new
+    ``alphalens_thematic_brief_usable_ladder_ratio`` gauge against an
+    ABSOLUTE floor rather than a rolling baseline — the failure signature
+    is a hard 0.0, and an absolute threshold has no cold-start blind
+    window on a brand-new series.
+
+    Threshold justification (measured over all 64 days in
+    ``~/.alphalens/thematic_briefs/`` that carry the column, 2026-05-27 ..
+    2026-07-29): ratio == 1.0 on 62 days; the only two exceptions are
+    0.9524 and 0.8421, both single-name yfinance gaps. ``< 0.5`` therefore
+    has ZERO historical false positives.
+
+    The incident days themselves are NOT measurable on disk — both
+    2026-07-25 and 2026-07-26 were regenerated after the #917 fix and now
+    read 1.0. The must-fire direction rests on #917's commit body ("every
+    candidate" degraded to ``NO_STRUCTURE``), i.e. ratio 0.0 at n=9 / n=14.
+
+    The benign per-name gap carries the SAME row signature as the incident
+    (NO_STRUCTURE, close=0.0, atr=0.0) and differs only in COUNT, so the
+    ratio alone is denominator-sensitive: the observed 3-bad-name day
+    replayed at n=3 or n=5 would trip a ratio-only rule. The absolute
+    ``unusable >= 4`` clause (one above the worst benign count) is what
+    makes the rule denominator-safe, mirroring the third clause of
+    ``AlphalensThematicBriefUnavailableHigh``.
+    """
+
+    LADDER_LOW = "AlphalensThematicBriefLadderUsableLow"
+    LADDER_MISSING = "AlphalensThematicBriefLadderUsableMetricMissing"
+
+    def _rule(self, name: str) -> dict:
+        rules = _load_rules()["groups"][0]["rules"]
+        matches = [r for r in rules if r.get("alert") == name]
+        self.assertEqual(len(matches), 1, f"expected exactly one {name} rule, got {len(matches)}")
+        return matches[0]
+
+    def test_rule_present_and_ratios_the_quality_gauge(self) -> None:
+        expr = self._rule(self.LADDER_LOW)["expr"]
+        self.assertIn("alphalens_thematic_brief_usable_ladder_ratio", expr)
+        self.assertIn("< 0.5", expr)
+
+    def test_rule_carries_the_volume_guard(self) -> None:
+        # A 1-2 brief day must not trip on one bad name; the guard reads
+        # briefs_total from the SAME thematic-build emit so the two series
+        # are label-compatible without vector-matching gymnastics.
+        expr = self._rule(self.LADDER_LOW)["expr"]
+        self.assertIn("alphalens_thematic_briefs_total >= 3", expr)
+
+    def test_rule_carries_the_absolute_unusable_count_guard(self) -> None:
+        # The ratio alone is denominator-sensitive: the worst OBSERVED
+        # benign day had 3 unusable names, which is 0.842 at n=19 (silent)
+        # but 0.4 at n=5 and 0.333 at n=3 (both would page). The absolute
+        # clause puts the floor one above that worst benign count so no
+        # observed benign pattern fires at any n, while a whole-day
+        # collapse (unusable == n) still clears it for every n >= 4.
+        expr = self._rule(self.LADDER_LOW)["expr"]
+        self.assertIn(
+            "(alphalens_thematic_briefs_total - alphalens_thematic_brief_usable_ladder_total) >= 4",
+            expr,
+        )
+
+    def test_rule_debounces_across_at_least_two_slots(self) -> None:
+        # thematic-build fires 6x/day (every 4h); 6h survives one bad slot
+        # that the next slot's rerun heals.
+        self.assertEqual(self._rule(self.LADDER_LOW).get("for"), "6h")
+
+    def test_rule_labels_match_the_thematic_family(self) -> None:
+        labels = self._rule(self.LADDER_LOW).get("labels", {})
+        self.assertEqual(labels.get("severity"), "warning")
+        self.assertEqual(labels.get("route"), "telegram")
+        self.assertEqual(labels.get("unit"), "thematic-build")
+
+    def test_rule_carries_no_job_label_or_matcher(self) -> None:
+        # Domain rules stay out of the job-keyed cron enumerations.
+        rule = self._rule(self.LADDER_LOW)
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertNotIn('job="', rule["expr"])
+
+    def test_missing_gauge_has_its_own_rule(self) -> None:
+        # The threshold rule can only fire on a series that EXISTS. If the
+        # brief emit is dropped (broken textfile collector, a refactor that
+        # loses the splice), the quality gauge vanishes and the alert goes
+        # silently dead — the exact failure mode this whole family exists to
+        # prevent. Pair it with an absent() rule, as the form4 / edgar / vix
+        # gauges already do.
+        rule = self._rule(self.LADDER_MISSING)
+        self.assertEqual(
+            rule["expr"].strip(), "absent(alphalens_thematic_brief_usable_ladder_ratio)"
+        )
+        self.assertEqual(rule.get("for"), "1h")
+        self.assertEqual(rule.get("labels", {}).get("unit"), "thematic-build")
+
+
 class TestVixCacheStaleness(unittest.TestCase):
     """Pin the VIX-cache staleness alert pair (Track A v2 PR-2 follow-up).
 

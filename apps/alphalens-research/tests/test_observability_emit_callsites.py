@@ -372,6 +372,306 @@ class TestThematicBriefEmitsDomainMetrics(unittest.TestCase):
         )
 
 
+class TestThematicBriefLadderQualityMetrics(unittest.TestCase):
+    """Quality (not volume) gauge for the brief stage: usable-ladder share.
+
+    The July 2026 incidents (#910 NaN market_cap, #917 universe-wide NaN
+    close) both shipped a volume-NORMAL day whose briefs were internally
+    degraded — every ``brief_trade_setup`` came out
+    ``status="NO_STRUCTURE"`` with zero entry tiers, so the card had no
+    ladder to show. Every existing gauge (briefs_total, the stage row
+    counts, the template fill-rate) read healthy, so nothing alerted and
+    the user found it days later. These tests pin the gauge that makes
+    that symptom class visible to Prometheus.
+    """
+
+    OK_SETUP = (
+        '{"schema_version": "1.1.0", "status": "OK", "entry_tiers": '
+        '[{"limit": 10.0, "alloc_pct": 50.0, "atr_distance": 0.5, "tag": "t1"}]}'
+    )
+    NO_STRUCTURE_SETUP = '{"schema_version": "1.1.0", "status": "NO_STRUCTURE", "entry_tiers": []}'
+    OK_BUT_EMPTY_TIERS = '{"schema_version": "1.1.0", "status": "OK", "entry_tiers": []}'
+    # Not reachable from today's builder (STATUS_NO_STRUCTURE always ships
+    # zero tiers), so the tier check alone would score it usable. Pinned so a
+    # future status that DOES carry tiers cannot silently start counting.
+    NOT_OK_WITH_TIERS = (
+        '{"schema_version": "1.1.0", "status": "NO_STRUCTURE", "entry_tiers": '
+        '[{"limit": 10.0, "alloc_pct": 50.0, "atr_distance": 0.5, "tag": "t1"}]}'
+    )
+
+    def test_counts_only_ok_status_with_non_empty_entry_tiers(self) -> None:
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        enriched = pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C", "D", "E"],
+                "brief_trade_setup": [
+                    self.OK_SETUP,
+                    self.NO_STRUCTURE_SETUP,
+                    self.OK_BUT_EMPTY_TIERS,
+                    self.OK_SETUP,
+                    self.NOT_OK_WITH_TIERS,
+                ],
+            }
+        )
+        out = thematic._brief_usable_ladder_metrics(enriched)
+        self.assertEqual(out["alphalens_thematic_brief_usable_ladder_total"], 2)
+        self.assertAlmostEqual(out["alphalens_thematic_brief_usable_ladder_ratio"], 0.4, places=4)
+
+    def test_incident_signature_reads_zero(self) -> None:
+        # The #917 signature: volume normal, every setup NO_STRUCTURE.
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        enriched = pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C"],
+                "brief_trade_setup": [self.NO_STRUCTURE_SETUP] * 3,
+            }
+        )
+        out = thematic._brief_usable_ladder_metrics(enriched)
+        self.assertEqual(out["alphalens_thematic_brief_usable_ladder_total"], 0)
+        self.assertEqual(out["alphalens_thematic_brief_usable_ladder_ratio"], 0.0)
+
+    def test_missing_column_and_empty_frame_degrade_to_zero(self) -> None:
+        # A legacy parquet (pre-trade-setup) or an empty day must emit 0 /
+        # 0.0, never KeyError or ZeroDivisionError — an absent gauge would
+        # trip MetricMissing instead of reading as "nothing usable".
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        no_column = thematic._brief_usable_ladder_metrics(pd.DataFrame({"ticker": ["A", "B"]}))
+        self.assertEqual(no_column["alphalens_thematic_brief_usable_ladder_total"], 0)
+        self.assertEqual(no_column["alphalens_thematic_brief_usable_ladder_ratio"], 0.0)
+
+        empty = thematic._brief_usable_ladder_metrics(pd.DataFrame())
+        self.assertEqual(empty["alphalens_thematic_brief_usable_ladder_total"], 0)
+        self.assertEqual(empty["alphalens_thematic_brief_usable_ladder_ratio"], 0.0)
+
+    def test_null_and_unparseable_json_count_as_unusable(self) -> None:
+        # The column is a JSON STRING in parquet; a null / truncated /
+        # non-dict payload must be counted as unusable, not raise through
+        # the emit and delete every gauge in the same call.
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        enriched = pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C", "D", "E"],
+                "brief_trade_setup": [
+                    self.OK_SETUP,
+                    None,
+                    "{not valid json",
+                    "",
+                    "[1, 2, 3]",
+                ],
+            }
+        )
+        out = thematic._brief_usable_ladder_metrics(enriched)
+        self.assertEqual(out["alphalens_thematic_brief_usable_ladder_total"], 1)
+        self.assertAlmostEqual(out["alphalens_thematic_brief_usable_ladder_ratio"], 0.2, places=4)
+
+    def test_dropped_column_reads_as_degraded_on_purpose(self) -> None:
+        # A day whose frame lost the column entirely reads 0 / 0.0, which on
+        # a normal-sized day clears every clause of
+        # AlphalensThematicBriefLadderUsableLow. That is INTENDED, not an
+        # accident of the degrade-to-zero guard: losing the setup column IS a
+        # ladder regression, and the alternative (a silent 1.0) would let a
+        # schema break ship unseen. Pinned here so a later "fix" of the
+        # missing-column branch cannot flip it to healthy unnoticed.
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        no_column = pd.DataFrame({"ticker": ["A", "B", "C", "D", "E", "F"]})
+        out = thematic._brief_usable_ladder_metrics(no_column)
+        total = out["alphalens_thematic_brief_usable_ladder_total"]
+        self.assertEqual(total, 0)
+        self.assertLess(out["alphalens_thematic_brief_usable_ladder_ratio"], 0.5)
+        self.assertGreaterEqual(len(no_column) - total, 4)
+
+    def test_already_parsed_dict_payload_is_accepted(self) -> None:
+        # The orchestrator hands the frame over in-memory before the parquet
+        # round-trip, so the cell can still be a dict rather than a string.
+        import json
+
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        enriched = pd.DataFrame(
+            {
+                "ticker": ["A", "B"],
+                "brief_trade_setup": [
+                    json.loads(self.OK_SETUP),
+                    json.loads(self.NO_STRUCTURE_SETUP),
+                ],
+            }
+        )
+        out = thematic._brief_usable_ladder_metrics(enriched)
+        self.assertEqual(out["alphalens_thematic_brief_usable_ladder_total"], 1)
+
+    def test_brief_emit_carries_the_usable_ladder_gauges(self) -> None:
+        # Folded into the SINGLE thematic-build emit (emit_domain_metrics
+        # overwrites the job's .prom file, so a second call would delete
+        # the volume gauges).
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        enriched = pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C", "D"],
+                "brief_trade_setup": [
+                    self.OK_SETUP,
+                    self.OK_SETUP,
+                    self.OK_SETUP,
+                    self.NO_STRUCTURE_SETUP,
+                ],
+            }
+        )
+        enriched.attrs["n_pro"] = 1
+        enriched.attrs["n_flash"] = 3
+
+        with tempfile.TemporaryDirectory() as tmp:
+            scored_dir = Path(tmp) / "scored"
+            scored_dir.mkdir()
+            (scored_dir / "2026-07-25.parquet").touch()
+            output_dir = Path(tmp) / "briefs"
+            output_dir.mkdir()
+
+            with (
+                patch.object(thematic.pd, "read_parquet", return_value=pd.DataFrame({"x": [1, 2]})),
+                patch.object(thematic.brief_orchestrator, "generate_briefs", return_value=enriched),
+                patch.object(thematic, "emit_domain_metrics") as emit,
+            ):
+                thematic.brief(date="2026-07-25", scored_dir=scored_dir, output_dir=output_dir)
+
+            emit.assert_called_once()
+            kwargs = emit.call_args.kwargs
+            self.assertEqual(kwargs["job"], "thematic-build")
+            metrics = kwargs["metrics"]
+            self.assertEqual(metrics["alphalens_thematic_brief_usable_ladder_total"], 3)
+            self.assertAlmostEqual(
+                metrics["alphalens_thematic_brief_usable_ladder_ratio"], 0.75, places=4
+            )
+            # The volume gauges must survive alongside the new quality pair.
+            self.assertEqual(metrics["alphalens_thematic_briefs_total"], 4)
+
+
+class TestThematicScoreCoreNumericsMetrics(unittest.TestCase):
+    """Quality gauge for the score stage: share of rows with finite core numerics.
+
+    ``market_cap`` (the #908/#910 collapse) and ``technical_atr_pct`` (the
+    #917 NaN-close collapse) are the two numerics whose silent NaN drained
+    the downstream ladder while every row count stayed normal. The gauge
+    uses ``np.isfinite`` semantics on purpose: ``pd.notna`` returns True for
+    ``+/-inf``, which is exactly as unusable downstream as NaN (recorded
+    project gotcha).
+    """
+
+    def _frame(self, mcap, atr):
+        import pandas as pd
+
+        return pd.DataFrame(
+            {
+                "ticker": [f"T{i}" for i in range(len(mcap))],
+                "market_cap": mcap,
+                "technical_atr_pct": atr,
+            }
+        )
+
+    def test_counts_rows_where_every_core_numeric_is_finite(self) -> None:
+        import numpy as np
+        from alphalens_cli.commands import thematic
+
+        frame = self._frame([1e9, 2e9, np.nan, 4e9], [3.1, np.nan, 2.2, 1.5])
+        out = thematic._score_core_numerics_metrics(frame)
+        self.assertEqual(out["alphalens_thematic_score_core_numerics_finite_total"], 2)
+        self.assertAlmostEqual(
+            out["alphalens_thematic_score_core_numerics_finite_ratio"], 0.5, places=4
+        )
+
+    def test_infinities_are_not_finite(self) -> None:
+        # pd.notna(np.inf) is True — using it here would score an infinite
+        # market cap as healthy. np.isfinite is the correct predicate.
+        import numpy as np
+        from alphalens_cli.commands import thematic
+
+        frame = self._frame([np.inf, -np.inf, 3e9], [1.0, 1.0, 1.0])
+        out = thematic._score_core_numerics_metrics(frame)
+        self.assertEqual(out["alphalens_thematic_score_core_numerics_finite_total"], 1)
+
+    def test_missing_column_and_empty_frame_degrade_to_zero(self) -> None:
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        no_atr = thematic._score_core_numerics_metrics(
+            pd.DataFrame({"ticker": ["A"], "market_cap": [1e9]})
+        )
+        self.assertEqual(no_atr["alphalens_thematic_score_core_numerics_finite_total"], 0)
+        self.assertEqual(no_atr["alphalens_thematic_score_core_numerics_finite_ratio"], 0.0)
+
+        empty = thematic._score_core_numerics_metrics(pd.DataFrame())
+        self.assertEqual(empty["alphalens_thematic_score_core_numerics_finite_total"], 0)
+        self.assertEqual(empty["alphalens_thematic_score_core_numerics_finite_ratio"], 0.0)
+
+    def test_object_dtype_column_is_coerced_not_raised(self) -> None:
+        # Older scored parquets read some numeric columns back as object
+        # dtype; np.isfinite on an object array raises TypeError, which
+        # would kill the whole emit.
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        frame = pd.DataFrame(
+            {
+                "ticker": ["A", "B"],
+                "market_cap": pd.Series([1e9, "n/a"], dtype="object"),
+                "technical_atr_pct": pd.Series([2.0, 3.0], dtype="object"),
+            }
+        )
+        out = thematic._score_core_numerics_metrics(frame)
+        self.assertEqual(out["alphalens_thematic_score_core_numerics_finite_total"], 1)
+
+    def test_score_emit_carries_the_core_numerics_gauges(self) -> None:
+        import numpy as np
+        import pandas as pd
+        from alphalens_cli.commands import thematic
+
+        candidates = pd.DataFrame({"ticker": ["A", "B", "C", "D"]})
+        enriched = pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C", "D"],
+                "layer4_weighted_score": [1, 2, 3, 4],
+                "market_cap": [1e9, 2e9, 3e9, np.nan],
+                "technical_atr_pct": [1.0, 2.0, 3.0, 4.0],
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            candidates_dir = Path(tmp) / "candidates"
+            output_dir = Path(tmp) / "scored"
+            candidates_dir.mkdir()
+            (candidates_dir / "2026-07-25.parquet").touch()
+
+            with (
+                patch.object(thematic.pd, "read_parquet", return_value=candidates),
+                patch.object(thematic.screening_scorer, "score_candidates", return_value=enriched),
+                patch.object(thematic, "emit_domain_metrics") as emit,
+            ):
+                thematic.score(
+                    date="2026-07-25", candidates_dir=candidates_dir, output_dir=output_dir
+                )
+
+            # Still ONE emit for the stage — the .prom file is overwritten
+            # per call, so a second emit would drop the volume gauges.
+            emit.assert_called_once()
+            metrics = emit.call_args.kwargs["metrics"]
+            self.assertEqual(metrics['alphalens_thematic_stage_output_rows{stage="score"}'], 4)
+            self.assertEqual(metrics["alphalens_thematic_score_core_numerics_finite_total"], 3)
+            self.assertAlmostEqual(
+                metrics["alphalens_thematic_score_core_numerics_finite_ratio"], 0.75, places=4
+            )
+
+
 class TestThematicStageVolumeEmits(unittest.TestCase):
     """Phase 4 dead-man-switch: each upstream stage emits an input/output
     row-count gauge pair so a silent mid-pipeline failure (e.g. an LLM model
