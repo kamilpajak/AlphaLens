@@ -4,6 +4,18 @@
 
 > **Adversarial review applied (zen deepseek-v4-pro, 2026-07-31):** one P0 surfaced — the planned-vs-realized blend anchor places a wrong-distance stop and is fixed by a MANDATORY `avg_price` re-anchor in PR-6, not deferred (§4.3, Risk 2a). Three calibrated honesty notes added: persistence is a genuine reimpl across the network boundary, not a "file-for-socket swap" (§5.2); service-internal deps (auth token store, `TimeSource` clock, A2 market-data) named so "standalone" ≠ "dependency-free" (§5.2); the acceptance-DSL-green-per-PR is the coherence gate that removes any half-ported-interval risk (§6). Two claims held firm: the unsized-spec refinement (preserves current per-drain re-sizing) and the two-CLIENT-ports discipline.
 
+> **Revision R2 — operator decisions 2026-07-31 (broker-manager = pure executor; SUPERSEDES the sections noted):**
+> 1. **Earnings gate leaves the manager entirely (supersedes §2.4, §3-V3, EarningsPort).** Deciding whether to send an order — earnings-window avoidance included — is CLIENT responsibility; the manager never knows about earnings. The `brokers→thematic` coupling is removed by **DELETION, not a port** — `earnings_gate` moves client-side. **EarningsPort dropped.**
+> 2. **Package `broker_contract`; A2 infra as a separate pinned module (confirms §2.1).**
+> 3. **Bring-your-own CONCRETE levels now; the manager resolves NO policies (supersedes §2.3 ExitGeometrySpec, §4.1).** The client computes exit levels (using the SHARED `exit_geometry` leaf — single-source-of-truth preserved) and sends explicit `{stop, tp}`. `kind="policy"` (manager-side resolution) dropped; the wire carries concrete levels called CLIENT-side.
+>
+> **The mechanical/geometric line this draws:**
+> - **Manager (autonomous) = MECHANICAL safety only:** never-naked, keep the protective order sized to the netted position (grow-amend qty), no oversell, OCO commit-once, clean terminals. Protects at whatever LEVELS the client last set.
+> - **Client (owns the loop) = ALL geometry:** initial levels, the realized-blend RE-ANCHOR (the former P0 — now client work: watch fills via events → recompute → amend), and future trail0.6 / ML.
+> - **New manager verb `amend_exit(position, new_stop, new_tp)`** — the client's channel to move levels; the manager executes it with no naked window.
+>
+> **Simplifications:** **zero client-facing ports** (EarningsPort deleted; NotificationPort folds into `stream_events` — the manager EMITS events, the client routes them). Client contract = the API alone: `submit_intent` + `amend_exit` + `cancel` + `query_state` + `stream_events`. The P0 anchor risk is unchanged in substance but **moves to the client**; the manager only executes amends safely. **AlphaLens-the-client grows an exit-management loop** (watch fills → re-anchor/trail → amend) — new client scope the autonomous daemon used to absorb. Questions 4–6 deferred by the operator.
+
 One design, two deliverables: (a) wire exit-geometry into the SIM Saxo auto-manager **through the future service boundary** so extraction is a transport swap, not a rewrite; (b) map the exact coupling cut-line for extracting the broker-manager into a standalone, multi-client service. Produced via a design workflow (coupling map + dependency DAG + proto-API readers → minimal-cut vs clean-ports proposals → synthesis); every load-bearing seam verified against source.
 
 ---
