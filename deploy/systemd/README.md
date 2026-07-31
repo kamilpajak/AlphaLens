@@ -37,6 +37,53 @@ hosts where launchd is unavailable.
 > snapshot (502 tickers) is archived in Nextcloud `AlphaLens-prod/caches/`
 > (`av_cache_2026-07-05.tar.zst`).
 
+## Running a unit by hand
+
+`Type=oneshot` units block. `systemctl --user start alphalens-thematic-build.service`
+does not return until `ExecStart` exits — for that unit, the full run length.
+Run it in the foreground and read the exit code. Do not background it, and do
+not pass `--no-block`.
+
+If you are attaching to a run already in flight (a timer fired it), do **not**
+wait on `systemctl is-active`. While a oneshot runs, `is-active` prints
+`activating` and exits **3**, so `until ! systemctl --user is-active --quiet
+<unit>` exits after zero iterations and falsely reports the run as finished.
+The inverse form `until systemctl --user is-active --quiet <unit>` never
+returns, because a finished oneshot settles at `inactive` and never exits 0.
+Exit code 3 means "not active"; exit code **4** means "no such unit", which is
+also what a typo in the unit name gives you — so the exit code alone cannot
+tell "still running" from "I misspelled it".
+
+Wait on the state string instead, and treat both `activating` and `active` as
+still-going. Testing only against `activating` has the mirror-image race: a
+unit reports `inactive` between job enqueue and job start, so a loop entered
+too early exits immediately for the same reason as the broken form.
+
+```bash
+UNIT=alphalens-thematic-build.service
+while state=$(systemctl --user show "$UNIT" -p ActiveState --value); \
+      [ "$state" = activating ] || [ "$state" = active ]; do
+  sleep 5
+done
+systemctl --user show "$UNIT" -p Result -p ExecMainStatus --value
+```
+
+Read `Result` and `ExecMainStatus` only after that loop ends. Read while the
+unit is still `activating` and you get the **previous** run's values — that
+mistake produced a false "mtime gate skipped" alarm on 2026-06-11.
+
+That loop is for `Type=oneshot` units only. `alphalens-broker-manager.service`
+and `alphalens-form4-backfill.service` are `Type=simple` daemons: they sit at
+`active` for their whole lifetime by design, so the loop would never return.
+Check those with `systemctl --user status` and their own liveness signals
+(`AlphalensBrokerManagerHeartbeatStale` for the broker manager) instead.
+
+This matters most for the two long units: `alphalens-thematic-build.service`
+(~12-20 min, `TimeoutStartSec=75min`) and
+`alphalens-feedback-shadow-returns.service` (~5-30 min, `TimeoutStartSec=90min`).
+Both feed user-facing surfaces, so a false "verified" hides a broken deploy
+until `AlphalensJobStale` (48h) or `AlphalensEdgeStale` (36h) fires.
+
 ## Environment file setup (`/etc/alphalens/env`)
 
 AlphaLens systemd units load secrets via

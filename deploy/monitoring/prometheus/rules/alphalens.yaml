@@ -6,12 +6,17 @@
 #
 #     docker exec prometheus kill -HUP 1
 #
-# Lint locally with:
+# Lint locally with ``just lint-rules`` (containerised promtool, pinned to the
+# VPS Prometheus version — no native install needed). The same command runs as
+# the CI job "prometheus rules (promtool)".
 #
-#     promtool check rules deploy/monitoring/prometheus/rules/alphalens.yaml
+# PromQL EXPRESSION SYNTAX is checked ONLY by that promtool gate. The unit
+# tests below parse this file as YAML, where ``expr`` is an opaque string; a
+# malformed expression passes every one of them and then makes Prometheus
+# reject the WHOLE file on reload, silently stopping all rules at once.
 #
 # Pre-merge test coverage at
-# ``apps/alphalens-research/tests/test_monitoring_alerts.py``:
+# ``apps/alphalens-research/tests/test_monitoring_alerts.py`` (structure only):
 #  - YAML well-formed
 #  - every job emits has at least one staleness rule
 #  - alert thresholds expressed as integer seconds (not human strings)
