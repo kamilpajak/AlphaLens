@@ -780,6 +780,161 @@ class TestAuthCommand(unittest.TestCase):
         self.assertNotIn("ref-refreshed", result.output)
 
 
+class TestTelegramNotificationFactories(unittest.TestCase):
+    """PR-4 (broker-manager extraction, NotificationPort): the CLI is the ONLY
+    site allowed to import telegram (client C). These factories build the
+    concrete alert sinks that ``build_default_deps`` (``manage``) and
+    ``OAuthTokenProvider.from_env`` (``auth --refresh``) consume as an
+    injected ``NotificationPort`` — brokers/ itself never imports telegram."""
+
+    def test_daemon_notify_builds_client_once_and_sends_plain(self):
+        from alphalens_cli.commands.broker import _telegram_daemon_notify
+
+        client = mock.Mock()
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "42"},
+                clear=False,
+            ),
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.telegram_client.TelegramClient",
+                return_value=client,
+            ) as ctor,
+        ):
+            notify = _telegram_daemon_notify()
+            notify("orphan (placed but never journaled): X")
+            notify("second message")
+        ctor.assert_called_once_with("tok")
+        self.assertEqual(
+            client.send_message.call_args_list,
+            [
+                mock.call("42", "orphan (placed but never journaled): X", parse_mode=""),
+                mock.call("42", "second message", parse_mode=""),
+            ],
+        )
+
+    def test_daemon_notify_raises_on_missing_env(self):
+        from alphalens_cli.commands.broker import _telegram_daemon_notify
+
+        with mock.patch.dict("os.environ", {}, clear=True):
+            with self.assertRaises(KeyError):
+                _telegram_daemon_notify()
+
+    def test_chain_loss_notify_is_silent_when_env_missing(self):
+        from alphalens_cli.commands.broker import _telegram_chain_loss_notify
+
+        notify = _telegram_chain_loss_notify()
+        with mock.patch.dict("os.environ", {}, clear=True):
+            notify("chain lost")  # must not raise, must not construct a client
+
+    def test_chain_loss_notify_sends_with_default_parse_mode(self):
+        from alphalens_cli.commands.broker import _telegram_chain_loss_notify
+
+        client = mock.Mock()
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "42"},
+                clear=False,
+            ),
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.telegram_client.TelegramClient",
+                return_value=client,
+            ),
+        ):
+            _telegram_chain_loss_notify()("Saxo OAuth refresh chain lost")
+        client.send_message.assert_called_once_with("42", "Saxo OAuth refresh chain lost")
+
+    def test_chain_loss_notify_swallows_send_exceptions(self):
+        from alphalens_cli.commands.broker import _telegram_chain_loss_notify
+
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "42"},
+                clear=False,
+            ),
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.telegram_client.TelegramClient",
+                side_effect=RuntimeError("boom"),
+            ),
+        ):
+            _telegram_chain_loss_notify()("chain lost")  # must not raise
+
+
+class TestManageCommandWiresNotificationPorts(unittest.TestCase):
+    def test_manage_wires_the_telegram_factories_into_build_default_deps(self):
+        from alphalens_cli.commands.broker import broker_app
+
+        sentinel_notify = object()
+        sentinel_chain_loss = object()
+        captured: dict[str, object] = {}
+
+        def _fake_build_default_deps(*, notify, chain_loss_notify):
+            captured["notify"] = notify
+            captured["chain_loss_notify"] = chain_loss_notify
+            deps = mock.Mock()
+            deps.wake_event = None
+            deps.stream_tick = None
+            deps.stream_trigger = None
+            return deps
+
+        with (
+            mock.patch(
+                "alphalens_cli.commands.broker._telegram_daemon_notify",
+                return_value=sentinel_notify,
+            ),
+            mock.patch(
+                "alphalens_cli.commands.broker._telegram_chain_loss_notify",
+                return_value=sentinel_chain_loss,
+            ),
+            mock.patch(
+                "alphalens_pipeline.brokers.automanager.control_loop.build_default_deps",
+                side_effect=_fake_build_default_deps,
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.control_loop.run_daemon"),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(broker_app, ["manage", "--once"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIs(captured["notify"], sentinel_notify)
+        self.assertIs(captured["chain_loss_notify"], sentinel_chain_loss)
+
+
+class TestAuthRefreshWiresChainLossNotify(unittest.TestCase):
+    def test_refresh_passes_the_telegram_chain_loss_sink(self):
+        from alphalens_cli.commands.broker import broker_app
+
+        sentinel = object()
+        captured: dict[str, object] = {}
+
+        class _StubProvider:
+            def refresh_now(self) -> str:
+                return "tok"
+
+        def _fake_from_env(*, alert):
+            captured["alert"] = alert
+            return _StubProvider()
+
+        with (
+            mock.patch(
+                "alphalens_cli.commands.broker._telegram_chain_loss_notify",
+                return_value=sentinel,
+            ),
+            mock.patch(
+                "alphalens_pipeline.brokers.saxo.tokens.OAuthTokenProvider.from_env",
+                side_effect=_fake_from_env,
+            ),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(broker_app, ["auth", "--refresh"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIs(captured["alert"], sentinel)
+
+
 class TestCliImportsStayLazy(unittest.TestCase):
     def test_no_top_level_brokers_import_in_command_module(self):
         """The +913ms lazy-CLI doctrine: brokers imports live in command bodies."""

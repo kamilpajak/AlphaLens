@@ -167,6 +167,29 @@ RULES = (
         "forbidden_prefix": "alphalens_research.",
         "exemptions": set(),
     },
+    {
+        # Broker-manager extraction, PR-4: execution never reads the replay
+        # ledger. The feedback replay engines are a MEASUREMENT tier (ADR
+        # 0012); brokers reaching into feedback would let live execution
+        # branch on historical replay output, the reverse of the existing
+        # "feedback must not import brokers" rule above.
+        "name": "brokers must not import feedback (execution never reads the replay ledger)",
+        "from_pkg": "alphalens_pipeline.brokers",
+        "forbidden_prefix": "alphalens_pipeline.feedback",
+        "exemptions": set(),
+    },
+    {
+        # Broker-manager extraction, PR-4: brokers/ depends on the ABSTRACT
+        # NotificationPort (brokers/notifications.py); the concrete
+        # telegram-backed sink is wired in ONLY at the CLI composition root
+        # (alphalens_cli/commands/broker.py, client C). No `top_level_only`
+        # here — the telegram imports this rule replaces were lazy
+        # (function-scope), so the walker must catch those too.
+        "name": "brokers must not import telegram directly (NotificationPort is injected at the CLI root, PR-4)",
+        "from_pkg": "alphalens_pipeline.brokers",
+        "forbidden_prefix": "alphalens_pipeline.data.alt_data.telegram",
+        "exemptions": set(),
+    },
 )
 
 
@@ -291,6 +314,70 @@ class TestModuleDependencies(unittest.TestCase):
         )
         for rule in brokers_rules:
             with self.subTest(rule=rule["name"]):
+                self.assertTrue(
+                    any(m.startswith(rule["forbidden_prefix"]) for m in modules),
+                    f"rule {rule['name']!r} would not catch the synthetic violation",
+                )
+
+    def test_brokers_egress_rules_positive_control(self):
+        """PR-4 (NotificationPort): brokers must not import feedback (execution
+        never reads the replay ledger) or telegram directly (the sink is
+        injected at the CLI composition root). Both telegram imports the
+        old code carried were LAZY (function-scope), so this positive control
+        MUST run the walker with ``include_function_scope=True`` — a
+        ``top_level_only`` rule would silently never catch a regression here.
+        """
+        import tempfile
+
+        feedback_synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_pipeline.feedback.shadow_returns import replay\n"
+            "    return replay\n"
+        )
+        telegram_synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_pipeline.data.alt_data.telegram_client import TelegramClient\n"
+            "    return TelegramClient\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            feedback_path = Path(tmp) / "synthetic_feedback_violation.py"
+            feedback_path.write_text(feedback_synthetic)
+            telegram_path = Path(tmp) / "synthetic_telegram_violation.py"
+            telegram_path.write_text(telegram_synthetic)
+
+            feedback_modules = list(_iter_imports(feedback_path, include_function_scope=True))
+            telegram_modules = list(_iter_imports(telegram_path, include_function_scope=True))
+
+        self.assertIn("alphalens_pipeline.feedback.shadow_returns", feedback_modules)
+        self.assertIn("alphalens_pipeline.data.alt_data.telegram_client", telegram_modules)
+
+        feedback_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_pipeline.brokers"
+            and rule["forbidden_prefix"] == "alphalens_pipeline.feedback"
+        ]
+        telegram_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_pipeline.brokers"
+            and rule["forbidden_prefix"] == "alphalens_pipeline.data.alt_data.telegram"
+        ]
+        self.assertEqual(len(feedback_rules), 1, "the brokers -> feedback rule must exist once")
+        self.assertEqual(len(telegram_rules), 1, "the brokers -> telegram rule must exist once")
+        self.assertNotIn(
+            "top_level_only",
+            feedback_rules[0],
+            "the brokers -> feedback rule must catch function-scope imports too",
+        )
+        self.assertNotIn(
+            "top_level_only",
+            telegram_rules[0],
+            "the brokers -> telegram rule must catch function-scope (lazy) imports too",
+        )
+        for rule in (*feedback_rules, *telegram_rules):
+            with self.subTest(rule=rule["name"]):
+                modules = feedback_modules if rule is feedback_rules[0] else telegram_modules
                 self.assertTrue(
                     any(m.startswith(rule["forbidden_prefix"]) for m in modules),
                     f"rule {rule['name']!r} would not catch the synthetic violation",

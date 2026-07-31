@@ -10,9 +10,11 @@ changes between them):
   ``expires_in − 120 s`` on the monotonic clock, atomic newest-pair
   persistence to ``~/.alphalens/saxo_auth/token_store.json`` (0600, flock on
   a sibling ``.lock``), sibling-process adoption instead of burning a
-  rotation, and a best-effort Telegram alert on refresh-chain loss
-  (re-solving the job of the ``alphalens-saxo-refresh`` unit removed by
-  ADR 0012).
+  rotation, and a best-effort alert on refresh-chain loss (re-solving the job
+  of the ``alphalens-saxo-refresh`` unit removed by ADR 0012). The alert sink
+  is a ``NotificationPort`` (PR-4): the composition root (CLI) injects the
+  concrete Telegram sink; an un-injected default just logs to journald via
+  ``_log_chain_loss`` — this module never imports telegram.
 
 The client's contract with a provider:
 
@@ -42,6 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn, Protocol, runtime_checkable
 
+from alphalens_pipeline.brokers.notifications import NotificationPort
 from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError
 from alphalens_pipeline.brokers.saxo.oauth import SaxoAuthClient, TokenBundle
 
@@ -103,18 +106,11 @@ def _require_env(name: str) -> str:
     return value
 
 
-def _send_chain_loss_telegram(message: str) -> None:
-    """Best-effort default chain-loss alert; every failure path is swallowed."""
-    try:
-        from alphalens_pipeline.data.alt_data.telegram_client import TelegramClient
-
-        bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
-        chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-        if not bot_token or not chat_id:
-            return
-        TelegramClient(bot_token).send_message(chat_id, message)
-    except Exception:
-        logger.warning("saxo chain-loss Telegram alert failed", exc_info=True)
+def _log_chain_loss(message: str) -> None:
+    """Default chain-loss alert when no ``NotificationPort`` is injected —
+    journald only (matches the ``streaming.py:287`` pattern). The concrete
+    Telegram sink is wired in by the composition root (CLI) instead."""
+    logger.warning("saxo chain-loss (no alert sink injected): %s", message)
 
 
 @dataclass(frozen=True)
@@ -348,7 +344,7 @@ class OAuthTokenProvider:
         refresh_margin_s: float = REFRESH_MARGIN_S,
         now: Callable[[], float] = time.monotonic,
         wall_now: Callable[[], dt.datetime] = _utc_now,
-        alert: Callable[[str], None] | None = None,
+        alert: NotificationPort | None = None,
     ):
         self._auth_client = auth_client
         self._store = store
@@ -356,7 +352,7 @@ class OAuthTokenProvider:
         self._refresh_margin_s = refresh_margin_s
         self._now = now
         self._wall_now = wall_now
-        self._alert = alert if alert is not None else _send_chain_loss_telegram
+        self._alert = alert if alert is not None else _log_chain_loss
         self._fingerprint = app_key_fingerprint(auth_client.app_key)
         self._lock = threading.RLock()
         self._access_token: str | None = None
@@ -366,7 +362,7 @@ class OAuthTokenProvider:
         self._alerted = False
 
     @classmethod
-    def from_env(cls, *, alert: Callable[[str], None] | None = None) -> OAuthTokenProvider:
+    def from_env(cls, *, alert: NotificationPort | None = None) -> OAuthTokenProvider:
         """Construct from ``SAXO_APP_KEY`` / ``SAXO_APP_SECRET`` /
         ``SAXO_AUTH_REDIRECT_URL`` (+ optional ``SAXO_TOKEN_STORE_PATH``).
 

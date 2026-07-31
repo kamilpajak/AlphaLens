@@ -2112,30 +2112,6 @@ class TestAlertSinkJournalsToLogger(unittest.TestCase):
             captured.output,
         )
 
-    def test_default_alert_sink_journals_every_message(self) -> None:
-        client = mock.Mock()
-        with (
-            mock.patch.dict(
-                os.environ,
-                {"TELEGRAM_BOT_TOKEN": "tok", "TELEGRAM_CHAT_ID": "42"},
-                clear=False,
-            ),
-            mock.patch(
-                "alphalens_pipeline.data.alt_data.telegram_client.TelegramClient",
-                return_value=client,
-            ),
-        ):
-            sink = cl._default_alert()
-        with self.assertLogs(cl.logger, level="WARNING") as captured:
-            sink("orphan (placed but never journaled): X")
-        self.assertTrue(
-            any("orphan (placed but never journaled): X" in line for line in captured.output),
-            captured.output,
-        )
-        client.send_message.assert_called_once_with(
-            "42", "orphan (placed but never journaled): X", parse_mode=""
-        )
-
     def test_throttle_suppressed_repeat_does_not_log(self) -> None:
         sent: list[str] = []
         throttle = cl._AlertThrottle(
@@ -3038,7 +3014,46 @@ class TestBuildDefaultDepsAmendFailFast(unittest.TestCase):
             mock.patch.dict(os.environ, _AMEND_ON),
         ):
             with self.assertRaises(BrokerCapabilityError):
-                cl.build_default_deps()
+                cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
+
+
+class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
+    """PR-4 (NotificationPort): build_default_deps takes the concrete alert
+    sinks as REQUIRED kwargs from its caller (the CLI composition root) —
+    control_loop.py itself never imports telegram. ``notify`` becomes the
+    daemon's journaled base alert; ``chain_loss_notify`` is threaded into the
+    OAuth provider for the refresh-chain-lost alert."""
+
+    def test_notify_is_wrapped_in_journaled_alert(self) -> None:
+        sent: list[str] = []
+        with (
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+        ):
+            deps = cl.build_default_deps(notify=sent.append, chain_loss_notify=lambda _msg: None)
+        with self.assertLogs(cl.logger, level="WARNING") as captured:
+            deps.alert("naked position uic 999")
+        self.assertEqual(sent, ["naked position uic 999"])
+        self.assertTrue(
+            any("naked position uic 999" in line for line in captured.output), captured.output
+        )
+
+    def test_chain_loss_notify_is_threaded_into_the_oauth_provider(self) -> None:
+        chain_loss_sink = mock.Mock()
+        with (
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),
+            ),
+            mock.patch.object(
+                cl, "_default_oauth_provider", return_value=mock.Mock()
+            ) as oauth_factory,
+        ):
+            cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=chain_loss_sink)
+        oauth_factory.assert_called_once_with(alert=chain_loss_sink)
 
 
 class TestManageCommandRegistered(unittest.TestCase):

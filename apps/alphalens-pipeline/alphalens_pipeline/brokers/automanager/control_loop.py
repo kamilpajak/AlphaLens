@@ -59,6 +59,7 @@ if TYPE_CHECKING:
 
     from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
     from alphalens_pipeline.brokers.contract import Broker
+    from alphalens_pipeline.brokers.notifications import NotificationPort
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
 logger = logging.getLogger(__name__)
@@ -653,7 +654,9 @@ def _make_stream_tick(
     return _tick
 
 
-def build_default_deps() -> LoopDeps:
+def build_default_deps(
+    *, notify: NotificationPort, chain_loss_notify: NotificationPort
+) -> LoopDeps:
     """Wire the real Task 1-10 seams. Imported lazily so the alphalens binary's
     startup budget stays off this path (lazy-CLI doctrine); covered by the
     SAXO_LIVE_TEST=1 SIM probe, not the hermetic unit tests. The factory helpers
@@ -663,7 +666,15 @@ def build_default_deps() -> LoopDeps:
     (fill_source.PollingFillSource) stays a tested seam for the phase-B streaming
     drop-in; the MVP loop detects fills through reconcile_bridge.verdicts
     (reconcile classifies FILLED), so no PollingFillSource instance is wired
-    into LoopDeps here."""
+    into LoopDeps here.
+
+    ``notify`` and ``chain_loss_notify`` are the concrete alert sinks (PR-4,
+    NotificationPort) — injected by the CLI composition root
+    (``alphalens_cli.commands.broker``), which is the only site allowed to
+    import telegram. ``notify`` is the raw daemon alert sink (wrapped here in
+    ``_journaled_alert`` so journald always gets the line first);
+    ``chain_loss_notify`` is threaded into the OAuth provider for the
+    refresh-chain-lost alert. This module never imports telegram itself."""
     from alphalens_pipeline.brokers.automanager import (  # noqa: F401 (planner/safety used by _make_place_pick)
         orphan_sweeper,
         picks,
@@ -713,7 +724,7 @@ def build_default_deps() -> LoopDeps:
     # ONE OAuth provider instance is shared by the SessionKeeper AND the streaming
     # reader, so there is a single OAuth chain / one flock owner and the reader can
     # re-authorize in place off the same bearer the main loop pushes.
-    provider = _default_oauth_provider()
+    provider = _default_oauth_provider(alert=chain_loss_notify)
     keeper = session_keeper.SessionKeeper(provider)
 
     def _read_records() -> list[Mapping[str, Any]]:
@@ -722,7 +733,7 @@ def build_default_deps() -> LoopDeps:
     # One throttle instance lives for the daemon's lifetime so the re-alert
     # interval + per-uic failure escalation persist across ticks; it wraps the
     # same base sink the generic (un-throttled) tick alerts use.
-    base_alert = _default_alert()
+    base_alert = _journaled_alert(notify)
     throttle = _AlertThrottle(base_alert)
 
     def _throttled(message: str, reason: str) -> bool:
@@ -1365,11 +1376,16 @@ def _compact_standalone_stop_journal() -> None:
         raise
 
 
-def _default_oauth_provider() -> Any:
-    """Return the shipped OAuthTokenProvider wired from the Saxo env vars."""
+def _default_oauth_provider(*, alert: NotificationPort | None = None) -> Any:
+    """Return the shipped OAuthTokenProvider wired from the Saxo env vars.
+
+    ``alert`` is the chain-loss ``NotificationPort``, injected by
+    ``build_default_deps`` from the CLI composition root (PR-4) — when
+    omitted, ``OAuthTokenProvider`` falls back to its own journald-only
+    default (``tokens._log_chain_loss``)."""
     from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
 
-    return OAuthTokenProvider.from_env()
+    return OAuthTokenProvider.from_env(alert=alert)
 
 
 def _journaled_alert(send: Callable[[str], None]) -> Callable[[str], None]:
@@ -1389,30 +1405,6 @@ def _journaled_alert(send: Callable[[str], None]) -> Callable[[str], None]:
         send(message)
 
     return _alert
-
-
-def _default_alert() -> Callable[[str], None]:
-    """Env-driven Telegram alert sink over the canonical TelegramClient
-    (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID), journald-mirrored via
-    _journaled_alert. send_message never raises, so a delivery blip cannot crash
-    a tick. SIM-probe-only.
-
-    Operational alert bodies carry raw request-id reprs / reasons with `_`, `*`,
-    `[` — under the client's default parse_mode="Markdown" those trip a Telegram
-    400 and the alert is SILENTLY dropped (defeating the safety-alert path). Send
-    plain: parse_mode="" disables entity parsing so the body goes through
-    verbatim."""
-    import os
-
-    from alphalens_pipeline.data.alt_data.telegram_client import TelegramClient
-
-    client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
-    chat_id = os.environ["TELEGRAM_CHAT_ID"]
-
-    def _send(message: str) -> None:
-        client.send_message(chat_id, message, parse_mode="")
-
-    return _journaled_alert(_send)
 
 
 def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:

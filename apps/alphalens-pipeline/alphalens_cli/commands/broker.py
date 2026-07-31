@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -39,7 +40,10 @@ if TYPE_CHECKING:
     # TYPE_CHECKING so they never run at import time (lazy-CLI startup budget) —
     # `from __future__ import annotations` keeps the annotations as strings.
     from alphalens_pipeline.brokers.contract import Broker, InstrumentRef
+    from alphalens_pipeline.brokers.notifications import NotificationPort
     from alphalens_pipeline.paper.fx import FxConversion
+
+logger = logging.getLogger(__name__)
 
 broker_app = typer.Typer(
     name="broker",
@@ -136,13 +140,65 @@ def _auth_status() -> None:
     raise _fail("refresh chain is dead — re-run `alphalens broker auth`")
 
 
+def _telegram_chain_loss_notify() -> NotificationPort:
+    """Best-effort Saxo chain-loss Telegram alert (PR-4 composition root).
+
+    This is the CLI's concrete ``NotificationPort`` for the OAuth provider's
+    chain-loss alert — the exact behavior of the old
+    ``tokens._send_chain_loss_telegram`` default, moved up here so
+    ``brokers/`` stays free of the telegram import. Every failure path is
+    swallowed (missing env = silent no-op; a send exception is logged, never
+    raised) so a broken alert path can never crash the caller."""
+
+    def _notify(message: str) -> None:
+        import os
+
+        from alphalens_pipeline.data.alt_data.telegram_client import TelegramClient
+
+        try:
+            bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+            chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+            if not bot_token or not chat_id:
+                return
+            TelegramClient(bot_token).send_message(chat_id, message)
+        except Exception:
+            logger.warning("saxo chain-loss Telegram alert failed", exc_info=True)
+
+    return _notify
+
+
+def _telegram_daemon_notify() -> NotificationPort:
+    """Env-driven Telegram alert sink over the canonical TelegramClient
+    (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID) for the ``manage`` daemon's tick
+    alerts. ``control_loop.build_default_deps`` journald-mirrors this via
+    ``_journaled_alert`` before every delivery attempt. send_message never
+    raises, so a delivery blip cannot crash a tick. SIM-probe-only.
+
+    Operational alert bodies carry raw request-id reprs / reasons with `_`,
+    `*`, `[` — under the client's default parse_mode="Markdown" those trip a
+    Telegram 400 and the alert is SILENTLY dropped (defeating the
+    safety-alert path). Send plain: parse_mode="" disables entity parsing so
+    the body goes through verbatim."""
+    import os
+
+    from alphalens_pipeline.data.alt_data.telegram_client import TelegramClient
+
+    client = TelegramClient(os.environ["TELEGRAM_BOT_TOKEN"])
+    chat_id = os.environ["TELEGRAM_CHAT_ID"]
+
+    def _notify(message: str) -> None:
+        client.send_message(chat_id, message, parse_mode="")
+
+    return _notify
+
+
 def _auth_refresh() -> None:
     """One silent refresh cycle — the future keep-alive timer's primitive."""
     from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError
     from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
 
     try:
-        OAuthTokenProvider.from_env().refresh_now()
+        OAuthTokenProvider.from_env(alert=_telegram_chain_loss_notify()).refresh_now()
     except SaxoAuthError as exc:
         raise _fail(f"refresh failed: {exc}") from exc
     typer.echo("refreshed — the rotated pair was persisted to the token store")
@@ -941,7 +997,10 @@ def manage_command(
     from alphalens_pipeline.brokers.contract import BrokerError
 
     try:
-        deps = build_default_deps()
+        deps = build_default_deps(
+            notify=_telegram_daemon_notify(),
+            chain_loss_notify=_telegram_chain_loss_notify(),
+        )
         # Dark streaming early-wake: build_default_deps returns wake_event/stream_tick
         # only when ALPHALENS_BROKER_STREAMING_ENABLED=1 and the reader started; both
         # None otherwise -> run_daemon is byte-identical to today's poll-only loop.
