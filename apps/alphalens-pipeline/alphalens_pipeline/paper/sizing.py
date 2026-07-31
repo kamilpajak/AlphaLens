@@ -37,16 +37,26 @@ the analysis pipeline needs to be able to detect.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
+from alphalens_pipeline.exit_geometry.levels import ceiling_from_52w_high
+from alphalens_pipeline.exit_geometry.registry import resolve_policy
 from alphalens_pipeline.paper.constants import (
     EXPECTED_AVG_HOLD_DAYS,
     GROSS_SAFETY_FRAC,
     STEADY_STATE_GROSS_FRAC,
 )
 from alphalens_pipeline.paper.fx import FxConversion
-from alphalens_pipeline.trade_intent.schema import EntryTierSpec, TpTrancheSpec, TradeSpec
+from alphalens_pipeline.trade_intent.schema import (
+    EntryTierSpec,
+    ExitGeometrySpec,
+    InitialLevels,
+    ReanchorOnFill,
+    TpTrancheSpec,
+    TradeSpec,
+)
 
 
 @dataclass(frozen=True)
@@ -227,6 +237,104 @@ def parse_brief_to_spec(brief_trade_setup: dict) -> TradeSpec:
         suggested_size_pct=suggested_size_pct,
         order_ttl_days=order_ttl_days,
         side="long",
+    )
+
+
+def planned_blended_entry(brief_trade_setup: Mapping[str, Any]) -> float | None:
+    """Alloc-weighted mean price over ALL intended entry tiers (planned, pre-fill).
+
+    Mirrors ``alphalens_pipeline.feedback.ladder_replay._blended_entry``'s formula
+    (weighted by ``alloc_pct``, equal-weight fallback when weights sum to 0) but
+    applies it to the FULL set of intended entry tiers rather than tiers that
+    actually filled -- at placement time no bars / fills exist yet, so the
+    "planned" blend (alloc-weighted tier limits) is the only anchor available
+    (broker-manager extraction memo section 4.3). Tiers with a non-positive
+    ``limit`` are dropped (mirrors :func:`validate_trade_setup`'s sanitisation).
+
+    Returns ``None`` when there are no usable entry tiers, or the input is not a
+    mapping / a tier is malformed -- never raises.
+    """
+    if not isinstance(brief_trade_setup, Mapping):
+        return None
+    raw_entries = brief_trade_setup.get("entry_tiers") or []
+    priced: list[tuple[float, float]] = []
+    for t in raw_entries:
+        if not isinstance(t, Mapping):
+            continue
+        try:
+            limit = float(t.get("limit", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        if limit <= 0:
+            continue
+        try:
+            alloc_pct = float(t.get("alloc_pct", 0.0))
+        except (TypeError, ValueError):
+            alloc_pct = 0.0
+        priced.append((limit, alloc_pct))
+    if not priced:
+        return None
+    wsum = sum(w for _, w in priced)
+    if wsum > 0:
+        return sum(p * w for p, w in priced) / wsum
+    return sum(p for p, _ in priced) / len(priced)
+
+
+def build_exit_geometry_spec(
+    brief_trade_setup: dict, pct_off_52w_high: float | None = None
+) -> ExitGeometrySpec | None:
+    """Build the ``atr_bracket_1p5`` exit-geometry spec for one brief trade setup.
+
+    The client-precomputed levels for the (currently dark) exit-geometry
+    override at placement (broker-manager extraction memo section 4.1 / 4.3).
+    Mirrors exactly what
+    :func:`alphalens_pipeline.feedback.ladder_replay.replay_ladder_atr_bracket`
+    (the ``/edge`` what-if replay) reads off the SAME setup dict, so "live ==
+    replay via shared formula" holds for the anchor FACTS -- ATR is
+    ``brief_trade_setup["atr"]`` (the identical brief key the replay leaf reads)
+    and the 52w ceiling comes from the identical
+    :func:`~alphalens_pipeline.exit_geometry.levels.ceiling_from_52w_high` leaf.
+
+    The one place this diverges from the replay's ``_blended_entry`` by
+    necessity: replay anchors the bracket at the blend over tiers that actually
+    TOUCHED in the bar-replay walk, but at PLACEMENT time no bars/fills exist
+    yet -- ``pct_off_52w_high`` is deliberately NOT read off ``brief_trade_setup``
+    (it is a sibling column on the candidate/brief row, e.g.
+    ``CandidateBrief.technical_pct_off_52w_high`` in ``paper/brief_loader.py``,
+    never a key inside the ``trade_setup`` JSON blob itself -- confirmed against
+    ``population_ladder_monitor.py``'s ``_replay_candidate`` call site, which
+    threads it as a SEPARATE kwarg). Callers pass it in explicitly. This is
+    exactly the "planned-vs-realized BLEND anchor" divergence the memo elevates
+    to a P0 blocker (section 4.3) -- fixed by the PR-6b ``avg_price`` re-anchor,
+    NOT by this function; :func:`~alphalens_pipeline.brokers.automanager.
+    control_loop.build_default_deps`'s fail-fast guard keeps the flag from
+    flipping live before that ships.
+
+    Returns ``None`` (never raises) when there are no usable entry tiers, the
+    ATR is missing / non-finite / non-positive, or the bracket is not
+    constructible (degenerate ceiling, non-positive bracket stop) -- the same
+    degenerate-input contract as :func:`~alphalens_pipeline.exit_geometry.
+    levels.atr_bracket_levels`.
+    """
+    blended = planned_blended_entry(brief_trade_setup)
+    if blended is None:
+        return None
+    raw_atr = brief_trade_setup.get("atr") if hasattr(brief_trade_setup, "get") else None
+    try:
+        atr = float(raw_atr) if raw_atr is not None else None
+    except (TypeError, ValueError):
+        atr = None
+    if atr is None:
+        return None
+    ceiling = ceiling_from_52w_high(brief_trade_setup, pct_off_52w_high)
+    policy = resolve_policy("atr_bracket_1p5")
+    levels = policy.levels(blended, atr, ceiling_price=ceiling)
+    if levels is None:
+        return None
+    stop, tp = levels
+    return ExitGeometrySpec(
+        initial_levels=InitialLevels(stop=stop, tp=tp),
+        reaction_plan=(ReanchorOnFill(k_atr=policy.stop_atr_mult, atr=atr, ceiling_price=ceiling),),
     )
 
 
@@ -422,9 +530,11 @@ __all__ = [
     "TierPlan",
     "TpTranchePlan",
     "TradeSetupNotPlannableError",
+    "build_exit_geometry_spec",
     "compute_daily_scale_factor",
     "compute_setup_plan",
     "parse_brief_to_spec",
+    "planned_blended_entry",
     "setup_plan_gross_guard_limit",
     "setup_plan_gross_notional",
     "validate_trade_setup",
