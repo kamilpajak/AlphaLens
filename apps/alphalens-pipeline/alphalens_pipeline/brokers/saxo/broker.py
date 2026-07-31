@@ -178,6 +178,18 @@ def _position_uic(position: Position) -> int | None:
         return None
 
 
+def _blend_avg_price(q_a: float, p_a: float, q_b: float, p_b: float) -> float:
+    """Quantity-weighted mean of two lots' avg_price. On a degenerate net-flat
+    (|q_a + q_b| <= _QTY_EPS) it keeps p_a rather than dividing (never raises
+    ZeroDivisionError): such a position is filtered out of get_long_positions
+    (quantity <= _QTY_EPS), and in get_positions_by_uic its avg_price is
+    unconsumed (only quantity is read)."""
+    total = q_a + q_b
+    if abs(total) <= _QTY_EPS:
+        return p_a
+    return (q_a * p_a + q_b * p_b) / total
+
+
 def _validate_price_relations(
     side: str,
     entry_q: float,
@@ -908,11 +920,11 @@ class SaxoBroker:
         view keys by uic, so the lots MUST be summed here — otherwise they
         overwrite each other and the stop is sized to one lot, leaving the rest
         of the position naked. Mirrors the per-uic summing in
-        ``get_positions_by_uic``. The netted Position keeps the first lot's
-        non-quantity fields (``avg_price`` is NOT a weighted average) — only
-        ``quantity`` drives protection sizing, same as ``get_positions_by_uic``.
-        Positions whose uic cannot be parsed are passed through individually
-        (they cannot be keyed, and the protection view skips them anyway).
+        ``get_positions_by_uic``. The netted Position's ``avg_price`` is the
+        quantity-weighted blend across lots (``_blend_avg_price``); ``quantity``
+        drives protection sizing, same as ``get_positions_by_uic``. Positions
+        whose uic cannot be parsed are passed through individually (they cannot
+        be keyed, and the protection view skips them anyway).
         """
         by_uic: dict[int, Position] = {}
         no_uic: list[Position] = []
@@ -922,14 +934,17 @@ class SaxoBroker:
                 no_uic.append(pos)
                 continue
             existing = by_uic.get(uic)
-            by_uic[uic] = (
-                pos
-                if existing is None
-                else cast(
-                    Position,
-                    dataclasses.replace(existing, quantity=existing.quantity + pos.quantity),
+            if existing is None:
+                by_uic[uic] = pos
+            else:
+                new_qty = existing.quantity + pos.quantity
+                blended = _blend_avg_price(
+                    existing.quantity, existing.avg_price, pos.quantity, pos.avg_price
                 )
-            )
+                by_uic[uic] = cast(
+                    Position,
+                    dataclasses.replace(existing, quantity=new_qty, avg_price=blended),
+                )
         return [p for p in (*by_uic.values(), *no_uic) if p.quantity > _QTY_EPS]
 
     def list_working_sell_orders(self) -> list[OrderState]:
@@ -966,9 +981,15 @@ class SaxoBroker:
                 position_id="",
             )
         netted_qty = sum(p.quantity for p in matching)
+        acc_qty, acc_px = matching[0].quantity, matching[0].avg_price
+        for p in matching[1:]:
+            acc_px = _blend_avg_price(acc_qty, acc_px, p.quantity, p.avg_price)
+            acc_qty += p.quantity
         # dataclasses.replace is typed to return the generic DataclassInstance, so
         # narrow it back to Position for the annotated return (S5886).
-        return cast(Position, dataclasses.replace(matching[0], quantity=netted_qty))
+        return cast(
+            Position, dataclasses.replace(matching[0], quantity=netted_qty, avg_price=acc_px)
+        )
 
     def cancel_order(self, order_id: str) -> None:
         """Cancel an order. Deliberately NOT behind the placement env gate.
