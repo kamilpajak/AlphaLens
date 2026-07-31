@@ -83,6 +83,14 @@ KILL_FILE_PATH = _BROKER_ORDERS_DIR / "KILL"
 # run_daemon default; the metric name has one home here).
 HEARTBEAT_METRIC = 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"}'
 
+# Prometheus KILL-active gauge (level, 0/1): 1 while the KILL file is present, 0 when
+# absent, so Prometheus can alert on an active emergency stop (KILL was journald-only
+# before, invisible to monitoring — the heartbeat kept ticking under KILL). It is
+# CO-EMITTED with HEARTBEAT_METRIC in the SAME emit_domain_metrics("broker-manager",
+# {...}) call: that write atomically OVERWRITES the whole broker-manager textfile, so
+# a separate call to this domain would clobber the heartbeat gauge and vice-versa.
+KILL_ACTIVE_METRIC = 'alphalens_broker_manager_kill_active{job="broker-manager"}'
+
 # --- Streaming (dark, SIM-only) env gates + liveness metric --------------------
 # Master gate for the Saxo WebSocket early-wake reader (design memo
 # saxo_streaming_design_2026_07_24.md). DEFAULTS OFF: unset -> wake_event=None and
@@ -164,6 +172,16 @@ class LoopDeps:
     # pages once via the shared throttle. Frozen forbids REBINDING the field, not
     # mutating the dict it points at.
     oco_lag_counts: dict[int, int] = field(default_factory=dict)
+    # Daemon-lifetime single-slot holder of the PREVIOUS tick's KILL state, so the
+    # edge-triggered KILL alert (run_once) fires ONCE per False->True / True->False
+    # transition instead of every tick while KILL is held. Edges are rare and each
+    # must send, so they use deps.alert (guaranteed-send), NOT the throttle (which is
+    # for sustained level conditions). A MUTABLE dict on the (frozen) deps — built
+    # once in build_default_deps, carried across ticks; frozen forbids REBINDING the
+    # field, not mutating the dict. A missing key == "was False", so a startup WITH a
+    # KILL already present alerts once (the operator sees it) while a clean no-KILL
+    # startup stays silent.
+    kill_state: dict[str, bool] = field(default_factory=dict)
     # Streaming early-wake handles (design memo saxo_streaming_design_2026_07_24.md),
     # ALL None unless ALPHALENS_BROKER_STREAMING_ENABLED=1 AND the broker is Saxo
     # (SIM rail) AND the provider is OAuth AND the reader actually started. When
@@ -212,15 +230,22 @@ def _pick_key(pick: Any) -> tuple[str, str]:
     return (str(pick.ticker).upper(), pick.date.isoformat())
 
 
-def _default_emit_heartbeat() -> None:
-    """Write the per-tick Prometheus heartbeat gauge. A Type=simple daemon rarely
-    triggers ExecStopPost, so the emit-job-metrics last_success clock is the
-    wrong health signal — this gauge (watched by AlphalensBrokerManagerHeartbeatStale)
-    is. Best-effort: a textfile-dir hiccup must never crash the loop."""
+def _default_emit_heartbeat(kill: bool = False) -> None:
+    """Write the per-tick Prometheus heartbeat + KILL-active gauges. A Type=simple
+    daemon rarely triggers ExecStopPost, so the emit-job-metrics last_success clock is
+    the wrong health signal — the heartbeat gauge (watched by
+    AlphalensBrokerManagerHeartbeatStale) is. The KILL-active gauge co-emits here (1
+    when the KILL file is present, 0 when absent) so an emergency stop is visible to
+    Prometheus. BOTH gauges MUST go in ONE emit call: the write atomically overwrites
+    the whole broker-manager textfile, so a separate call would clobber the other
+    gauge. Best-effort: a textfile-dir hiccup must never crash the loop."""
     from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
     try:
-        emit_domain_metrics("broker-manager", {HEARTBEAT_METRIC: int(time.time())})
+        emit_domain_metrics(
+            "broker-manager",
+            {HEARTBEAT_METRIC: int(time.time()), KILL_ACTIVE_METRIC: int(kill)},
+        )
     except OSError:
         logger.warning("broker-manager heartbeat emit failed", exc_info=True)
 
@@ -233,6 +258,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     failing never starves the safety-critical protection pass."""
     report = TickReport()
     kill = deps.kill_file.exists()
+    _alert_kill_transition(deps, kill)
     chain = deps.ensure_alive()
     alive = bool(getattr(chain, "alive", False))
     if not alive:
@@ -254,6 +280,27 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     _run_verdict_advance(deps, records, report)
     _run_protection_pass(deps, records, kill, report)
     return report
+
+
+def _alert_kill_transition(deps: LoopDeps, kill: bool) -> None:
+    """Edge-triggered KILL alert (observability only — placement/protection gating is
+    UNCHANGED). Fire deps.alert ONCE when KILL goes False->True and ONCE True->False,
+    never every tick while it stays True (that would spam the operator). Uses the
+    guaranteed-send deps.alert sink — NOT alert_throttled — because edges are rare and
+    each transition must deliver. The previous state lives in the daemon-lifetime
+    deps.kill_state holder; a missing key == "was False", so a startup WITH a KILL
+    already present alerts once (the operator sees it) but a clean no-KILL startup is
+    silent."""
+    previous = deps.kill_state.get("active", False)
+    if kill != previous:
+        if kill:
+            deps.alert(
+                "KILL active — emergency stop; new placements halted, "
+                "existing positions still protected"
+            )
+        else:
+            deps.alert("KILL cleared — placement resumed")
+    deps.kill_state["active"] = kill
 
 
 def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
@@ -441,7 +488,7 @@ def run_daemon(
     poll_seconds: float,
     sleep_fn: Callable[[float], None] = time.sleep,
     is_running: Callable[[], bool] = _always,
-    heartbeat_fn: Callable[[], None] = _default_emit_heartbeat,
+    heartbeat_fn: Callable[[bool], None] = _default_emit_heartbeat,
     wake_event: threading.Event | None = None,
     on_tick: Callable[[], None] | None = None,
     monotonic: Callable[[], float] = time.monotonic,
@@ -492,7 +539,9 @@ def run_daemon(
         # branch schedules a fresh full poll ON TOP of the block, which would push
         # the next pass past poll_seconds (worse than poll-only). PR #900 review.
         pass_end = monotonic() if wake_event is not None else 0.0
-        heartbeat_fn()  # Task 13: writes the Prometheus heartbeat gauge
+        # Task 13: writes the Prometheus heartbeat gauge + the KILL-active gauge
+        # (co-emitted so an emergency stop is visible to Prometheus, not just journald).
+        heartbeat_fn(deps.kill_file.exists())
         if on_tick is not None:
             on_tick()  # push_token + stream stale/breaker alert + liveness gauge (main thread)
         first = False
@@ -2324,6 +2373,7 @@ def _execute_place_stop(
 
 __all__ = [
     "HEARTBEAT_METRIC",
+    "KILL_ACTIVE_METRIC",
     "KILL_FILE_PATH",
     "LoopDeps",
     "TickReport",
