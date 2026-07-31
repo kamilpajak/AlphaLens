@@ -547,6 +547,40 @@ class TestChainLossAlert(unittest.TestCase):
         self.assertIn(_REAUTH_HINT, str(ctx.exception))
 
 
+class TestChainLossDefaultAlertIsLogOnly(unittest.TestCase):
+    """PR-4 (broker-manager extraction, NotificationPort): the default
+    chain-loss alert (no ``alert`` injected) is a journald log line only.
+    Telegram is wired ONLY at the CLI composition root
+    (``alphalens_cli.commands.broker``), never as a ``tokens.py`` default —
+    this is the accepted PR-4 behavior delta for ``SaxoClient.from_env()``
+    (see the extraction memo, PR-4)."""
+
+    def test_default_alert_logs_a_warning_without_telegram(self):
+        from alphalens_pipeline.brokers.saxo import tokens as tokens_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = TokenStore(Path(tmp) / "token_store.json")
+            provider = OAuthTokenProvider(
+                _BombTransport(),
+                store,
+                redirect_uri=_REDIRECT_URI,
+            )
+            with self.assertLogs(tokens_mod.logger, level="WARNING") as captured:
+                with self.assertRaises(SaxoAuthError):
+                    provider.get_access_token()  # absent store = dead chain
+        self.assertTrue(
+            any("Saxo OAuth refresh chain lost" in line for line in captured.output),
+            captured.output,
+        )
+
+    def test_log_chain_loss_helper_journals_the_message(self):
+        from alphalens_pipeline.brokers.saxo import tokens as tokens_mod
+
+        with self.assertLogs(tokens_mod.logger, level="WARNING") as captured:
+            tokens_mod._log_chain_loss("boom")
+        self.assertTrue(any("boom" in line for line in captured.output), captured.output)
+
+
 class TestOAuthProviderFromEnv(unittest.TestCase):
     def test_missing_app_key_raises_naming_the_var(self):
         env = {APP_SECRET_ENV: "s", REDIRECT_URL_ENV: _REDIRECT_URI}
