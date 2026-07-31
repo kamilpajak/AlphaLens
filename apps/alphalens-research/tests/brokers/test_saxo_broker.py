@@ -18,6 +18,10 @@ conformance-mixin lifecycle pin.
 
 Also runs the shared :class:`BrokerConformanceMixin` against SaxoBroker so the
 real adapter proves the same behavioral contract as any future broker.
+
+Also pins the PR-6b-pre quantity-weighted ``avg_price`` blend across same-uic
+lots in ``get_long_positions`` / ``get_positions_by_uic`` (the reanchor PR is
+the first consumer of ``avg_price`` and needs the correct blend to anchor on).
 """
 
 from __future__ import annotations
@@ -768,12 +772,14 @@ class TestFillCrossCheckCapability(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-def _position_row(*, uic: int, amount: float, position_id: str, symbol: str) -> dict[str, Any]:
+def _position_row(
+    *, uic: int, amount: float, position_id: str, symbol: str, open_price: float = 50.0
+) -> dict[str, Any]:
     return {
         "PositionId": position_id,
         "PositionBase": {
             "Amount": amount,
-            "OpenPrice": 50.0,
+            "OpenPrice": open_price,
             "Uic": uic,
             "AssetType": "Stock",
         },
@@ -915,6 +921,44 @@ class TestGetLongPositionsAggregatesLots(unittest.TestCase):
         by_uic = {_position_uic(p): p.quantity for p in longs}
         self.assertEqual(by_uic, {1: 3.0, 2: 3.0})
 
+    def test_multi_lot_avg_price_is_qty_weighted_blend(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(
+                    uic=573264,
+                    amount=4.0,
+                    position_id="lot-a",
+                    symbol="MARA:xnas",
+                    open_price=100.0,
+                ),
+                _position_row(
+                    uic=573264, amount=3.0, position_id="lot-b", symbol="MARA:xnas", open_price=50.0
+                ),
+            ]
+        }
+        longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
+        self.assertEqual(len(longs), 1)
+        self.assertEqual(longs[0].quantity, 7.0)
+        self.assertAlmostEqual(longs[0].avg_price, (4.0 * 100.0 + 3.0 * 50.0) / 7.0)
+
+    def test_single_lot_avg_price_unchanged(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(
+                    uic=43070,
+                    amount=46.0,
+                    position_id="p-long",
+                    symbol="BIO:xnys",
+                    open_price=123.45,
+                ),
+            ]
+        }
+        longs = SaxoBroker(client).get_long_positions()  # type: ignore[arg-type]
+        self.assertEqual(len(longs), 1)
+        self.assertEqual(longs[0].avg_price, 123.45)
+
 
 class TestListWorkingSellOrders(unittest.TestCase):
     """Only SELL orders in WORKING / PARTIALLY_FILLED survive (memo §4.1)."""
@@ -976,6 +1020,43 @@ class TestGetPositionsByUicNetted(unittest.TestCase):
     def test_absent_uic_returns_zero_qty_sentinel(self):
         netted = _make_broker().get_positions_by_uic(999999)
         self.assertEqual(netted.quantity, 0.0)
+
+    def test_multi_lot_avg_price_is_qty_weighted_blend(self):
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(
+                    uic=43070, amount=30.0, position_id="lot-1", symbol="BIO:xnys", open_price=100.0
+                ),
+                _position_row(
+                    uic=43070, amount=16.0, position_id="lot-2", symbol="BIO:xnys", open_price=50.0
+                ),
+            ]
+        }
+        netted = SaxoBroker(client).get_positions_by_uic(43070)  # type: ignore[arg-type]
+        self.assertEqual(netted.quantity, 46.0)
+        self.assertAlmostEqual(netted.avg_price, (30.0 * 100.0 + 16.0 * 50.0) / 46.0)
+
+    def test_three_lot_avg_price_folds_all_lots(self):
+        # Three distinct-priced lots pin that the fold walks ALL of ``matching``,
+        # not just the first two (guards against a truncated ``matching[1:2]``).
+        client = _StubSaxoClient()
+        client.positions_payload = {  # type: ignore[attr-defined]
+            "Data": [
+                _position_row(
+                    uic=43070, amount=10.0, position_id="lot-1", symbol="BIO:xnys", open_price=100.0
+                ),
+                _position_row(
+                    uic=43070, amount=20.0, position_id="lot-2", symbol="BIO:xnys", open_price=70.0
+                ),
+                _position_row(
+                    uic=43070, amount=30.0, position_id="lot-3", symbol="BIO:xnys", open_price=40.0
+                ),
+            ]
+        }
+        netted = SaxoBroker(client).get_positions_by_uic(43070)  # type: ignore[arg-type]
+        self.assertEqual(netted.quantity, 60.0)
+        self.assertAlmostEqual(netted.avg_price, (10.0 * 100.0 + 20.0 * 70.0 + 30.0 * 40.0) / 60.0)
 
 
 class TestValidatePriceRelationsOneSided(unittest.TestCase):
