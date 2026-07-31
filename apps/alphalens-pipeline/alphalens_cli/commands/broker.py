@@ -455,6 +455,7 @@ def _resolve_instrument_and_plan(
     from alphalens_pipeline.paper.sizing import (
         TradeSetupNotPlannableError,
         compute_setup_plan,
+        parse_brief_to_spec,
     )
 
     try:
@@ -482,8 +483,9 @@ def _resolve_instrument_and_plan(
                     f"(policy {execution_policy._MISSING_FX_RATE_POLICY!r})"
                 )
             fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
+        spec = parse_brief_to_spec(trade_setup)
         plan = compute_setup_plan(
-            brief_trade_setup=trade_setup,
+            spec,
             paper_equity=sizing_equity,
             scale_factor=scale_factor,
             fx=fx,

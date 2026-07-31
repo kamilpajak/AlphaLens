@@ -30,9 +30,9 @@ from alphalens_pipeline.trade_intent.schema import (
 
 def _build_trade_intent() -> TradeIntent:
     spec = TradeSpec(
-        entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=50.0),),
+        entry_tiers=(EntryTierSpec(limit_price=100.0, alloc_pct=50.0, tag="T1"),),
         disaster_stop=90.0,
-        tp_tranches=(TpTrancheSpec(price=110.0, alloc_pct=100.0),),
+        tp_tranches=(TpTrancheSpec(price=110.0, tranche_pct=100.0, r_multiple=2.0, tag="TP1"),),
         suggested_size_pct=2.0,
     )
     exit_spec = ExitGeometrySpec(
@@ -61,9 +61,12 @@ class TestTradeIntentRoundTrip(unittest.TestCase):
         self.assertEqual(intent.instrument.mic, "XNAS")
         self.assertEqual(intent.spec.entry_tiers[0].limit_price, 100.0)
         self.assertEqual(intent.spec.entry_tiers[0].alloc_pct, 50.0)
+        self.assertEqual(intent.spec.entry_tiers[0].tag, "T1")
         self.assertEqual(intent.spec.disaster_stop, 90.0)
         self.assertEqual(intent.spec.tp_tranches[0].price, 110.0)
-        self.assertEqual(intent.spec.tp_tranches[0].alloc_pct, 100.0)
+        self.assertEqual(intent.spec.tp_tranches[0].tranche_pct, 100.0)
+        self.assertEqual(intent.spec.tp_tranches[0].r_multiple, 2.0)
+        self.assertEqual(intent.spec.tp_tranches[0].tag, "TP1")
         self.assertEqual(intent.spec.suggested_size_pct, 2.0)
         self.assertEqual(intent.exit.initial_levels.stop, 90.0)
         self.assertEqual(intent.exit.initial_levels.tp, 110.0)
@@ -107,6 +110,15 @@ class TestDefaults(unittest.TestCase):
     def test_trade_intent_account_id_defaults(self):
         intent = _build_trade_intent()
         self.assertEqual(intent.account_id, DEFAULT_ACCOUNT_ID)
+
+    def test_entry_tier_spec_tag_defaults_empty(self):
+        tier = EntryTierSpec(limit_price=100.0, alloc_pct=50.0)
+        self.assertEqual(tier.tag, "")
+
+    def test_tp_tranche_spec_r_multiple_and_tag_default(self):
+        tranche = TpTrancheSpec(price=110.0, tranche_pct=100.0)
+        self.assertEqual(tranche.r_multiple, 0.0)
+        self.assertEqual(tranche.tag, "")
 
 
 class TestReactionPrimitiveDiscriminatedUnion(unittest.TestCase):

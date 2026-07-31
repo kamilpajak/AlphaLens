@@ -18,10 +18,11 @@ from alphalens_pipeline.paper.constants import GROSS_SAFETY_FRAC
 from alphalens_pipeline.paper.fx import FxConversion, FxRateQuote
 from alphalens_pipeline.paper.sizing import (
     TradeSetupNotPlannableError,
-    compute_setup_plan,
     setup_plan_gross_guard_limit,
     setup_plan_gross_notional,
 )
+
+from tests.paper.sizing_test_helpers import plan_from_brief
 
 _ASOF = dt.datetime(2026, 7, 18, 10, 0, 0, tzinfo=dt.UTC)
 _EQUITY_EUR = 1_000_000.0
@@ -72,10 +73,10 @@ class TestSameCurrencyNoOpByteExact(unittest.TestCase):
 
     def test_fx_none_plan_is_field_identical_to_the_implicit_default(self):
         setup = _setup()
-        implicit = compute_setup_plan(
+        implicit = plan_from_brief(
             brief_trade_setup=setup, paper_equity=_EQUITY_EUR, scale_factor=0.05
         )
-        explicit = compute_setup_plan(
+        explicit = plan_from_brief(
             brief_trade_setup=setup, paper_equity=_EQUITY_EUR, scale_factor=0.05, fx=None
         )
         self.assertEqual(dataclasses.asdict(implicit), dataclasses.asdict(explicit))
@@ -83,7 +84,7 @@ class TestSameCurrencyNoOpByteExact(unittest.TestCase):
     def test_fx_none_golden_numbers_unchanged(self):
         # The pre-FX-leg golden: 6% x 0.05 -> 0.3% -> EUR 3000; qty floors
         # 15 / 9 / 6 on the 100/95/90 tiers at 50/30/20 alloc.
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=0.05
         )
         self.assertAlmostEqual(plan.total_notional, 3_000.0)
@@ -91,7 +92,7 @@ class TestSameCurrencyNoOpByteExact(unittest.TestCase):
         self.assertIsNone(plan.fx)
 
     def test_sizing_notional_is_identity_when_fx_is_none(self):
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=0.05
         )
         self.assertEqual(plan.sizing_notional, plan.total_notional)
@@ -101,7 +102,7 @@ class TestCrossCurrencyConversion(unittest.TestCase):
     def test_conversion_applied_between_notional_and_qty_division(self):
         # EUR 60,000 (6% x 1.0) x 4.34 x 0.99 = PLN 257,796; tier qtys floor
         # against INSTRUMENT-currency limits.
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0, fx=_fx()
         )
         expected_sizing = 60_000.0 * 4.34 * 0.99
@@ -113,13 +114,13 @@ class TestCrossCurrencyConversion(unittest.TestCase):
         self.assertEqual([t.qty for t in plan.entry_tiers], expected_qtys)
 
     def test_total_notional_stays_account_currency(self):
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0, fx=_fx()
         )
         self.assertAlmostEqual(plan.total_notional, 60_000.0, msg="account-ccy, unconverted")
 
     def test_prices_are_never_converted(self):
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0, fx=_fx()
         )
         self.assertEqual([t.limit_price for t in plan.entry_tiers], [100.0, 95.0, 90.0])
@@ -127,7 +128,7 @@ class TestCrossCurrencyConversion(unittest.TestCase):
         self.assertEqual(plan.tp_tranches[0].target_price, 110.0)
 
     def test_zero_buffer_is_the_pure_rate(self):
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(),
             paper_equity=_EQUITY_EUR,
             scale_factor=1.0,
@@ -141,10 +142,10 @@ class TestCrossCurrencyConversion(unittest.TestCase):
         # BEFORE the qty floor.
         tiers = [{"limit": 43_400.0, "alloc_pct": 100.0, "atr_distance": 0.0, "tag": "t0"}]
         setup = _setup(suggested_size_pct=1.0, entry_tiers=tiers)
-        buffered = compute_setup_plan(
+        buffered = plan_from_brief(
             brief_trade_setup=setup, paper_equity=_EQUITY_EUR, scale_factor=1.0, fx=_fx()
         )
-        unbuffered = compute_setup_plan(
+        unbuffered = plan_from_brief(
             brief_trade_setup=setup,
             paper_equity=_EQUITY_EUR,
             scale_factor=1.0,
@@ -155,7 +156,7 @@ class TestCrossCurrencyConversion(unittest.TestCase):
 
     def test_fx_object_is_carried_on_the_plan(self):
         fx = _fx()
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0, fx=fx
         )
         self.assertIs(plan.fx, fx)
@@ -164,7 +165,7 @@ class TestCrossCurrencyConversion(unittest.TestCase):
 class TestFxRefusals(unittest.TestCase):
     def test_non_positive_rate_refused(self):
         with self.assertRaises(TradeSetupNotPlannableError):
-            compute_setup_plan(
+            plan_from_brief(
                 brief_trade_setup=_setup(),
                 paper_equity=_EQUITY_EUR,
                 scale_factor=1.0,
@@ -175,7 +176,7 @@ class TestFxRefusals(unittest.TestCase):
         # Same-currency must pass fx=None (strict no-op) — a EUR->EUR
         # "conversion" is a caller bug, not a 1.0 rate.
         with self.assertRaises(TradeSetupNotPlannableError):
-            compute_setup_plan(
+            plan_from_brief(
                 brief_trade_setup=_setup(),
                 paper_equity=_EQUITY_EUR,
                 scale_factor=1.0,
@@ -185,14 +186,14 @@ class TestFxRefusals(unittest.TestCase):
 
 class TestGrossGuardSingleCurrency(unittest.TestCase):
     def test_same_currency_limit_is_frac_times_equity(self):
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0
         )
         self.assertAlmostEqual(setup_plan_gross_guard_limit(plan), GROSS_SAFETY_FRAC * _EQUITY_EUR)
 
     def test_cross_currency_limit_converts_equity_through_the_plan_rate(self):
         # SAME rate object as sizing, NO buffer on the ceiling.
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0, fx=_fx()
         )
         self.assertAlmostEqual(
@@ -202,7 +203,7 @@ class TestGrossGuardSingleCurrency(unittest.TestCase):
     def test_gross_and_limit_share_the_instrument_currency(self):
         # Both sides of the compare are instrument-ccy: a sane plan's gross
         # sits far below the converted ceiling.
-        plan = compute_setup_plan(
+        plan = plan_from_brief(
             brief_trade_setup=_setup(), paper_equity=_EQUITY_EUR, scale_factor=1.0, fx=_fx()
         )
         self.assertLess(setup_plan_gross_notional(plan), setup_plan_gross_guard_limit(plan))

@@ -28,10 +28,11 @@ from alphalens_pipeline.paper.sizing import (
     SetupPlan,
     TradeSetupNotPlannableError,
     compute_daily_scale_factor,
-    compute_setup_plan,
     setup_plan_gross_notional,
     validate_trade_setup,
 )
+
+from tests.paper.sizing_test_helpers import plan_from_brief
 
 
 def _make_setup(
@@ -131,18 +132,14 @@ class TestDailyScaleFactor(unittest.TestCase):
 class TestSetupPlanWithScale(unittest.TestCase):
     def test_final_size_pct_equals_suggested_times_scale(self):
         setup = _make_setup(suggested_size_pct=6.0)
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.05
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.05)
         self.assertAlmostEqual(plan.suggested_size_pct, 6.0)
         self.assertAlmostEqual(plan.scale_factor, 0.05)
         self.assertAlmostEqual(plan.final_size_pct, 6.0 * 0.05)
 
     def test_total_notional_equals_final_pct_over_100_times_equity(self):
         setup = _make_setup(suggested_size_pct=6.0)
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.04
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.04)
         expected = (6.0 * 0.04) / 100.0 * 1_000_000.0
         self.assertAlmostEqual(plan.total_notional, expected, places=4)
 
@@ -150,9 +147,7 @@ class TestSetupPlanWithScale(unittest.TestCase):
         """When scale=1.0 (quiet day), each candidate gets its full
         suggested_size_pct as the final size."""
         setup = _make_setup(suggested_size_pct=2.5)
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0)
         self.assertAlmostEqual(plan.final_size_pct, 2.5)
 
 
@@ -169,9 +164,7 @@ class TestPerTierQuantity(unittest.TestCase):
         # Tier 1: alloc 30% → tier_notional $750 / limit $95 → floor 7
         # Tier 2: alloc 20% → tier_notional $500 / limit $90 → floor 5
         setup = _make_setup(suggested_size_pct=5.0)
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.05
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.05)
 
         total = 5.0 * 0.05 / 100.0 * 1_000_000.0
         expected_qtys = [
@@ -188,9 +181,7 @@ class TestPerTierQuantity(unittest.TestCase):
                 {"limit": 95.0, "alloc_pct": 0.0, "atr_distance": 1.0, "tag": "t1"},
             ],
         )
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.05
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.05)
         self.assertEqual(plan.entry_tiers[1].qty, 0)
 
     def test_small_alloc_below_one_share_floors_to_zero(self):
@@ -201,9 +192,7 @@ class TestPerTierQuantity(unittest.TestCase):
                 {"limit": 500.0, "alloc_pct": 100.0, "atr_distance": 0.0, "tag": "expensive"},
             ],
         )
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0)
         self.assertEqual(plan.entry_tiers[0].qty, 0)
 
 
@@ -214,9 +203,7 @@ class TestPerTierQuantity(unittest.TestCase):
 
 class TestUnplannable(unittest.TestCase):
     def _compute(self, setup):
-        return compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0
-        )
+        return plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0)
 
     def test_status_no_structure_rejected(self):
         with self.assertRaises(TradeSetupNotPlannableError):
@@ -258,7 +245,7 @@ class TestUnplannable(unittest.TestCase):
 
     def test_non_dict_rejected(self):
         with self.assertRaises(TradeSetupNotPlannableError):
-            compute_setup_plan(
+            plan_from_brief(
                 brief_trade_setup="not a dict", paper_equity=1_000_000.0, scale_factor=1.0
             )
 
@@ -342,9 +329,7 @@ class TestValidateOnly(unittest.TestCase):
 class TestTpTranches(unittest.TestCase):
     def test_tp_tranches_preserved_in_order(self):
         setup = _make_setup()
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0)
         self.assertEqual(len(plan.tp_tranches), 2)
         self.assertEqual(plan.tp_tranches[0].tranche_index, 0)
         self.assertEqual(plan.tp_tranches[0].target_price, 110.0)
@@ -352,18 +337,14 @@ class TestTpTranches(unittest.TestCase):
 
     def test_tp_tranches_empty_is_allowed(self):
         setup = _make_setup(tp_tranches=[])
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0)
         self.assertEqual(len(plan.tp_tranches), 0)
 
 
 class TestGrossNotional(unittest.TestCase):
     def test_gross_notional_sums_qty_times_limit(self):
         setup = _make_setup(suggested_size_pct=5.0)
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.05
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=0.05)
         gross = setup_plan_gross_notional(plan)
         expected = sum(t.qty * t.limit_price for t in plan.entry_tiers)
         self.assertAlmostEqual(gross, expected)
@@ -372,9 +353,7 @@ class TestGrossNotional(unittest.TestCase):
 class TestPlanReturnsAFrozenDataclass(unittest.TestCase):
     def test_plan_is_frozen(self):
         setup = _make_setup()
-        plan = compute_setup_plan(
-            brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0
-        )
+        plan = plan_from_brief(brief_trade_setup=setup, paper_equity=1_000_000.0, scale_factor=1.0)
         self.assertIsInstance(plan, SetupPlan)
         with self.assertRaises(Exception):
             plan.disaster_stop = 999.0  # type: ignore[misc]
