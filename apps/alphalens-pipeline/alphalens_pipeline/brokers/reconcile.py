@@ -669,8 +669,13 @@ def _reconcile_filled(
     # netted-tier arm needs BOTH owned>0 AND filled_amount>0, so a broker that
     # reports FILLED with filled_quantity==0 on a still-open uic would slip past
     # it — this arm must never presume-close a live position on its own.
+    # ``uic_key`` must be truthy too: without a recorded uic, ``_uic_key`` yields
+    # "" and ``owned`` is forced to 0.0 VACUOUSLY (no position lookup happened),
+    # so an uncorrelatable FILLED entry must stay a (loud) divergence, never be
+    # silently presumed-closed (zen review).
     if (
-        owned <= _QTY_EPS
+        uic_key
+        and owned <= _QTY_EPS
         and submission_date is not None
         and asof is not None
         and submission_date < asof

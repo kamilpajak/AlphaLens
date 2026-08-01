@@ -560,6 +560,27 @@ class TestFilledPresumedClosedAgedOutRecord(unittest.TestCase):
             "owned>0 must never be presumed-closed, even with a zero audit fill_quantity",
         )
 
+    def test_missing_uic_stays_a_divergence(self):
+        # zen review: without a recorded uic, _uic_key -> "" forces owned=0.0
+        # VACUOUSLY (not from verified flatness), so the owned<=_QTY_EPS guard
+        # would pass with no position correlation at all. An uncorrelatable
+        # FILLED entry must stay LOUD (divergence), never be silently
+        # presumed-closed — a missing uic is a data-integrity anomaly worth
+        # surfacing, not a routine aged-out round trip.
+        broker = self._broker()  # flat, FILLED E-1
+        record = _record(
+            ticker="OWL",
+            uic=None,  # no per-uic correlation possible
+            brackets=[_bracket(client_request_id="c6b40e78", entry_order_id="E-1")],
+        )
+
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        self.assertTrue(
+            verdict.divergence,
+            "a FILLED entry with no uic to correlate must stay loud, not presumed-closed",
+        )
+
     def test_closed_match_present_still_terminalizes_via_closed_pair(self):
         # The round-trip path is unchanged when a closed row IS still present
         # (within the window) — the age-grace never intercepts a real match.
