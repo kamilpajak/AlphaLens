@@ -408,6 +408,8 @@ def _reconcile_one(
         brief=(brief_date, ticker, qty, entry_order_id),
         details=details,
         cross_check=cross_check,
+        submission_date=_submission_date(record),
+        asof=today,
     )
 
 
@@ -468,6 +470,8 @@ def _reconcile_resolved(
     brief: tuple[str, str, float, str],
     details: dict[str, Any],
     cross_check: _CrossCheckData | None,
+    submission_date: dt.date | None = None,
+    asof: dt.date | None = None,
 ) -> ReconcileVerdict:
     brief_date, ticker, qty, entry_order_id = brief
     details["raw_status"] = state.raw_status
@@ -481,6 +485,8 @@ def _reconcile_resolved(
             details=details,
             cross_check=cross_check,
             activity_time=activity_time,
+            submission_date=submission_date,
+            asof=asof,
         )
     if state.status in (OrderStatus.CANCELLED, OrderStatus.REJECTED, OrderStatus.EXPIRED):
         note = None
@@ -573,6 +579,8 @@ def _reconcile_filled(
     details: dict[str, Any],
     cross_check: _CrossCheckData | None,
     activity_time: str | None,
+    submission_date: dt.date | None = None,
+    asof: dt.date | None = None,
 ) -> ReconcileVerdict:
     brief_date, ticker, qty, entry_order_id = brief
     if state.filled_quantity:
@@ -645,6 +653,50 @@ def _reconcile_filled(
             verdict=OrderStatus.FILLED.value,
             activity_time=activity_time,
             note="position open (netted tier), matched by uic",
+            details=details,
+        )
+    # Presumed-closed (round-trip aged out of the broker window): the uic is
+    # FLAT (no live position rescued it above), no open reference and no
+    # closed-position row matched — but the SUBMISSION predates today, and
+    # Saxo SIM's closedpositions view only spans a small trailing window (a
+    # few sessions), so an entry that filled and round-tripped days ago can
+    # legitimately have no closed row left to join against. A FRESH (same-day)
+    # or unknown-age submission stays on the divergence path below — same-day
+    # flat-and-unmatched could be a real anomaly or a broker position-
+    # appearance lag, and must stay loud. Gated on the SUBMISSION date (robust,
+    # from the journal), never on ``activity_time`` (display-only regex token).
+    # The ``owned <= _QTY_EPS`` guard re-asserts flatness LOCALLY: the earlier
+    # netted-tier arm needs BOTH owned>0 AND filled_amount>0, so a broker that
+    # reports FILLED with filled_quantity==0 on a still-open uic would slip past
+    # it — this arm must never presume-close a live position on its own.
+    # ``uic_key`` must be truthy too: without a recorded uic, ``_uic_key`` yields
+    # "" and ``owned`` is forced to 0.0 VACUOUSLY (no position lookup happened),
+    # so an uncorrelatable FILLED entry must stay a (loud) divergence, never be
+    # silently presumed-closed (zen review).
+    if (
+        uic_key
+        and owned <= _QTY_EPS
+        and submission_date is not None
+        and asof is not None
+        and submission_date < asof
+    ):
+        details["submission_date"] = submission_date.isoformat()
+        return ReconcileVerdict(
+            brief_date=brief_date,
+            ticker=ticker,
+            qty=qty,
+            entry_order_id=entry_order_id,
+            status=OrderStatus.FILLED.value,
+            verdict="FILLED(closed, record unavailable)",
+            reason=(
+                "audit log says FILLED, uic is flat, and no live position or closed "
+                f"pair matched client_request_id {request_id!r} — the broker's closed-"
+                "position window is short-lived and the submission predates it; "
+                "presumed round-tripped"
+            ),
+            note="presumed round trip (closed record aged out of broker window)",
+            activity_time=activity_time,
+            divergence=False,
             details=details,
         )
     return ReconcileVerdict(
