@@ -18,6 +18,12 @@ import datetime as dt
 import unittest
 from typing import Any
 
+from alphalens_pipeline.brokers.automanager.position_manager import (
+    AlertOnly,
+    CancelRemaining,
+    NoOp,
+    advance,
+)
 from alphalens_pipeline.brokers.contract import (
     BrokerError,
     InstrumentRef,
@@ -420,9 +426,14 @@ class TestDivergenceClassification(unittest.TestCase):
         self.assertIn("position open", verdict.note or "")
 
     def test_filled_without_position_or_closed_pair_is_a_divergence(self):
+        # Same-day submission (ts date == today): the age-grace (see
+        # TestFilledPresumedClosedAgedOutRecord below) must NOT rescue an
+        # unmatched FILLED verdict when the submission is fresh/unknown-age —
+        # only a submission that PREDATES today gets presumed-closed.
         broker = _FullBroker(outcomes={"E-1": self._FILLED})
+        record = _record(ts="2026-07-08T18:00:00+00:00")
 
-        verdict = _single(reconcile_brackets([_record()], broker, today=_TODAY_FRESH))
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
 
         self.assertEqual(verdict.status, "FILLED")
         self.assertTrue(verdict.divergence)
@@ -433,6 +444,135 @@ class TestDivergenceClassification(unittest.TestCase):
         self.assertEqual(compute_realized_r(55.0, 50.0, 45.0), 1.0)
         self.assertIsNone(compute_realized_r(55.0, 50.0, 50.0), "zero risk -> None")
         self.assertIsNone(compute_realized_r(55.0, 50.0, None), "no stop -> None")
+
+
+class TestFilledPresumedClosedAgedOutRecord(unittest.TestCase):
+    """OWL live bug (2026-07-30ish): a round-tripped bracket (FILLED entry ->
+    OCO exit -> closed) whose ClosedPosition row aged out of Saxo SIM's tiny
+    intraday closed-position window. The audit-log ENTRY still resolves
+    FILLED (longer retention than closedpositions), the uic is flat, and no
+    open reference / closed-pair matches — so, unguarded, this fell through
+    to ``divergence=True`` on every reconcile tick FOREVER (stateless
+    re-check of the permanent journal record), paging Telegram every ~30 min.
+
+    Fix: gate on the bracket's SUBMISSION date (from the journal ``ts``, via
+    ``_submission_date`` — robust) predating ``asof``, NOT on the display-only
+    ``activity_time`` regex token. A prior-day submission with this exact
+    shape is presumed round-tripped and returns ``divergence=False`` (silent,
+    action-free — maps to ``NoOp`` in ``position_manager.advance``, never
+    ``AlertOnly`` or ``CancelRemaining``)."""
+
+    _FILLED = _order_state("E-1", OrderStatus.FILLED, filled=10.0, raw_status="FinalFill/Confirmed")
+
+    def _owl_record(self) -> dict[str, Any]:
+        # Submitted 2026-07-06, reconciled 2026-07-08 (2 XNYS sessions later,
+        # well past Saxo SIM's tiny closedpositions window) — prior-day.
+        return _record(
+            ticker="OWL",
+            uic="42",
+            brackets=[_bracket(client_request_id="c6b40e78", entry_order_id="E-1")],
+        )
+
+    def _broker(self) -> _FullBroker:
+        # Flat: no open reference, no closed row, no netted position on uic 42.
+        return _FullBroker(
+            outcomes={"E-1": self._FILLED}, open_refs=[], closed_rows=[], positions=[]
+        )
+
+    def test_owl_shape_presumed_closed_not_divergent(self):
+        broker = self._broker()
+        record = self._owl_record()
+
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        self.assertEqual(verdict.status, "FILLED")
+        self.assertFalse(verdict.divergence, "prior-day round-tripped OWL must not page forever")
+        self.assertIn("presumed round-tripped", verdict.reason or "")
+        self.assertIn("aged out", verdict.note or "")
+        self.assertFalse(has_failures([verdict]))
+
+    def test_owl_shape_advances_to_noop_not_alert_or_cancel(self):
+        broker = self._broker()
+        record = self._owl_record()
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        action = advance(verdict)
+
+        self.assertIsInstance(action, NoOp)
+        self.assertNotIsInstance(action, AlertOnly)
+        self.assertNotIsInstance(action, CancelRemaining)
+
+    def test_same_day_submission_stays_a_divergence(self):
+        # Grace holds only for a PRIOR-day submission — same-day (fresh /
+        # unknown-age) stays loud, since it could be a real anomaly or a
+        # broker position-appearance lag, not a stale closed-position window.
+        broker = self._broker()
+        record = _record(
+            ticker="OWL",
+            uic="42",
+            ts="2026-07-08T18:00:00+00:00",
+            brackets=[_bracket(client_request_id="c6b40e78", entry_order_id="E-1")],
+        )
+
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        self.assertTrue(verdict.divergence, "same-day flat-and-unmatched must stay loud")
+
+    def test_live_open_position_is_never_presumed_closed(self):
+        # owned > _QTY_EPS on the uic is caught by the EARLIER netted-tier
+        # arm regardless of submission age — a real open position is never
+        # silently swallowed by the age-grace.
+        broker = _FullBroker(
+            outcomes={"E-1": self._FILLED},
+            open_refs=[],
+            closed_rows=[],
+            positions=[_position(uic=42, quantity=10.0)],
+        )
+        record = self._owl_record()
+
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        self.assertFalse(verdict.divergence)
+        self.assertIn("position open (netted tier)", verdict.note or "")
+
+    def test_open_position_with_zero_audit_fill_is_not_presumed_closed(self):
+        # Defense in depth: the EARLIER netted-tier arm requires BOTH owned>0
+        # AND filled_amount>0, so a (hypothetical future) broker adapter that
+        # reports the entry FILLED with filled_quantity==0 while the uic still
+        # holds an open position (owned>0) would slip past it. The age-grace arm
+        # must therefore RE-ASSERT flatness (owned<=_QTY_EPS) itself, never rely
+        # on the earlier arm — a real open position is never silently swallowed.
+        filled_zero = _order_state(
+            "E-1", OrderStatus.FILLED, filled=0.0, raw_status="FinalFill/Confirmed"
+        )
+        broker = _FullBroker(
+            outcomes={"E-1": filled_zero},
+            open_refs=[],
+            closed_rows=[],
+            positions=[_position(uic=42, quantity=10.0)],
+        )
+        record = self._owl_record()  # prior-day submission
+
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        self.assertTrue(
+            verdict.divergence,
+            "owned>0 must never be presumed-closed, even with a zero audit fill_quantity",
+        )
+
+    def test_closed_match_present_still_terminalizes_via_closed_pair(self):
+        # The round-trip path is unchanged when a closed row IS still present
+        # (within the window) — the age-grace never intercepts a real match.
+        broker = _FullBroker(
+            outcomes={"E-1": self._FILLED},
+            closed_rows=[{"OpeningExternalReferenceId": "c6b40e78", "ClosingPrice": 55.0}],
+        )
+        record = self._owl_record()
+
+        verdict = _single(reconcile_brackets([record], broker, today=_TODAY_FRESH))
+
+        self.assertFalse(verdict.divergence)
+        self.assertEqual(verdict.note, "round trip closed (FIFO pair)")
 
 
 class TestFxDiagnostics(unittest.TestCase):
@@ -646,6 +786,8 @@ class TestSecondFilledTierNotDivergent(unittest.TestCase):
     def test_filled_tier_on_flat_uic_still_diverges(self):
         # No netted position on the uic (owned == 0) and no open ref / closed
         # pair → the per-uic match must NOT rescue it; genuine divergence stands.
+        # Same-day submission (ts date == today) — see
+        # TestFilledPresumedClosedAgedOutRecord for the prior-day age-grace case.
         broker = _FullBroker(
             outcomes={
                 "E-1": _order_state("E-1", OrderStatus.FILLED, filled=26.0, raw_status=self._FINAL)
@@ -655,6 +797,7 @@ class TestSecondFilledTierNotDivergent(unittest.TestCase):
         )
         record = _record(
             uic="307",
+            ts="2026-07-08T18:00:00+00:00",
             brackets=[_bracket(client_request_id="rid-1", entry_order_id="E-1", qty=26)],
         )
 
