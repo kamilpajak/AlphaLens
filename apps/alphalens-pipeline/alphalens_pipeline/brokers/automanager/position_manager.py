@@ -41,12 +41,13 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-from alphalens_pipeline.brokers.contract import (
+from broker_contract.contract import (
     _QTY_EPS,
     OrderState,
     OrderStatus,
     Position,
 )
+
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
 # Exact reconcile note string this module keys on (brokers/reconcile.py

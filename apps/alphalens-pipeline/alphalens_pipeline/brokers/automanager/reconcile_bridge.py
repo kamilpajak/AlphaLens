@@ -14,7 +14,8 @@ import datetime as dt
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from alphalens_pipeline.brokers.contract import Broker
+from broker_contract.contract import Broker
+
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict, reconcile_brackets
 
 

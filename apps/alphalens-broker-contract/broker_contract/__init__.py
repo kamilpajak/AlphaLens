@@ -7,7 +7,12 @@ stdlib-only value types + pure math, consumed by BOTH ``alphalens_pipeline``
 and ``alphalens_research`` (and, later, by out-of-tenancy broker-manager
 clients once the extraction epic physically splits the repo).
 
-Sub-packages:
+Sub-packages / modules:
+    broker_contract.contract — Boundary-1 broker Protocol + frozen value types
+        (the exception hierarchy, ``InstrumentRef``/``OrderState``/``Position``/
+        ``AccountSnapshot``/``BracketOrderRequest``/``PlacedOrder``, the
+        ``Broker`` Protocol, and the ``SupportsAmendStop``/``SupportsOcoExit``/
+        ``SupportsStandaloneStop`` capability Protocols)
     broker_contract.exit_geometry — pure ATR-bracket exit-geometry leaf (§4)
 
 Dependency direction: this package must never import from

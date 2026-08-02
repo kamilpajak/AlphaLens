@@ -21,7 +21,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from alphalens_pipeline.brokers.contract import Broker, OrderStatus
+from broker_contract.contract import Broker, OrderStatus
+
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict, reconcile_brackets
 
 TransitionKind = Literal["FILLED", "TERMINAL", "PARTIAL"]

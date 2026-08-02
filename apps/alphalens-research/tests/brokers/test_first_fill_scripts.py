@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from alphalens_pipeline.brokers.contract import (
+from broker_contract.contract import (
     BracketOrderRequest,
     InstrumentRef,
     OrderRejectedError,

@@ -12,8 +12,8 @@ import unittest
 from typing import Any
 
 from alphalens_pipeline.brokers.automanager.reconcile_bridge import verdicts
-from alphalens_pipeline.brokers.contract import OrderState, OrderStatus
 from alphalens_pipeline.brokers.reconcile import reconcile_brackets
+from broker_contract.contract import OrderState, OrderStatus
 
 _TS = "2026-07-06T18:00:00+00:00"
 _TODAY_FRESH = dt.date(2026, 7, 8)

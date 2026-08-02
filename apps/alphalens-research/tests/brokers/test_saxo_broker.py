@@ -29,7 +29,17 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
-from alphalens_pipeline.brokers.contract import (
+from alphalens_pipeline.brokers.saxo.broker import (
+    SaxoBroker,
+    _position_uic,
+    _validate_price_relations,
+)
+from alphalens_pipeline.brokers.saxo.client import (
+    SaxoAuthError,
+    SaxoError,
+    SaxoRateLimitError,
+)
+from broker_contract.contract import (
     AccountSnapshot,
     Broker,
     BrokerAuthError,
@@ -40,16 +50,6 @@ from alphalens_pipeline.brokers.contract import (
     OrderRejectedError,
     OrderStatus,
     Position,
-)
-from alphalens_pipeline.brokers.saxo.broker import (
-    SaxoBroker,
-    _position_uic,
-    _validate_price_relations,
-)
-from alphalens_pipeline.brokers.saxo.client import (
-    SaxoAuthError,
-    SaxoError,
-    SaxoRateLimitError,
 )
 
 from tests.brokers.test_broker_contract import BrokerConformanceMixin

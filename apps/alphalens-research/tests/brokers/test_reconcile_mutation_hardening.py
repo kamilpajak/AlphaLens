@@ -19,11 +19,6 @@ import datetime as dt
 import math
 import unittest
 
-from alphalens_pipeline.brokers.contract import (
-    _QTY_EPS,
-    OrderState,
-    OrderStatus,
-)
 from alphalens_pipeline.brokers.reconcile import (
     _UNRESOLVED,
     ReconcileVerdict,
@@ -38,6 +33,11 @@ from alphalens_pipeline.brokers.reconcile import (
     compute_realized_r,
     filled_sum_matches_owned,
     summarize,
+)
+from broker_contract.contract import (
+    _QTY_EPS,
+    OrderState,
+    OrderStatus,
 )
 from hypothesis import given, settings
 from hypothesis import strategies as st

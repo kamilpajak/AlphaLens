@@ -18,7 +18,7 @@ import os
 import threading
 from collections.abc import Callable
 
-from alphalens_pipeline.brokers.contract import Broker, BrokerError
+from broker_contract.contract import Broker, BrokerError
 
 # Env var selecting the default broker name when ``get_default_broker`` is
 # called without an explicit name.

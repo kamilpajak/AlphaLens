@@ -27,12 +27,12 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from alphalens_pipeline.brokers.contract import (
+from alphalens_pipeline.brokers.saxo.broker import ALLOW_ORDERS_ENV, SaxoBroker
+from broker_contract.contract import (
     BrokerCapabilityError,
     OrderRejectedError,
     PlacedOrder,
 )
-from alphalens_pipeline.brokers.saxo.broker import ALLOW_ORDERS_ENV, SaxoBroker
 
 _ALLOW = {ALLOW_ORDERS_ENV: "1"}
 _ACCOUNTS = {"Data": [{"AccountKey": "AK-1", "AccountId": "16371XYZ", "Currency": "USD"}]}
@@ -187,7 +187,7 @@ class TestOcoPlacementResponse(unittest.TestCase):
     def test_master_without_child_2xx_cleans_up_and_raises(self):
         # A half-accepted OCO (master only, no child) must cancel the stranded
         # master (its cascade cleans the rest) and raise — never a lone leg.
-        from alphalens_pipeline.brokers.contract import BrokerError
+        from broker_contract.contract import BrokerError
 
         broker, stub = _make(_StubOcoClient(place_response=(201, {"OrderId": "L-1", "Orders": []})))
         with self.assertRaises(BrokerError) as ctx:
@@ -197,7 +197,7 @@ class TestOcoPlacementResponse(unittest.TestCase):
 
     def test_child_without_master_2xx_cleans_up_and_raises(self):
         # The inverse half-accept: a child leg but no top-level master.
-        from alphalens_pipeline.brokers.contract import BrokerError
+        from broker_contract.contract import BrokerError
 
         broker, stub = _make(_StubOcoClient(place_response=(201, {"Orders": [{"OrderId": "S-2"}]})))
         with self.assertRaises(BrokerError):
@@ -206,7 +206,7 @@ class TestOcoPlacementResponse(unittest.TestCase):
 
     def test_response_with_no_legs_raises_brokererror(self):
         # A 2xx with neither a master nor a child is a failure, not a silent no-op.
-        from alphalens_pipeline.brokers.contract import BrokerError
+        from broker_contract.contract import BrokerError
 
         broker, stub = _make(_StubOcoClient(place_response=(201, {"Orders": []})))
         with self.assertRaises(BrokerError):
@@ -214,7 +214,7 @@ class TestOcoPlacementResponse(unittest.TestCase):
         self.assertEqual(stub.cancel_calls, [], "no accepted leg → nothing to clean up")
 
     def test_202_raises_brokererror_no_silent_placement(self):
-        from alphalens_pipeline.brokers.contract import BrokerError
+        from broker_contract.contract import BrokerError
 
         broker, _ = _make(_StubOcoClient(place_response=(202, {"OrderId": "X-1"})))
         with self.assertRaises(BrokerError) as ctx:
@@ -300,7 +300,7 @@ class TestOcoRejectErrorCode(unittest.TestCase):
     def test_too_far_reject_classifies_as_too_far_from_market(self):
         # End-to-end pin for the live incident: the #930 control-loop branch
         # classifies via this predicate, so it MUST match the raised exception.
-        from alphalens_pipeline.brokers.contract import _is_too_far_from_market
+        from broker_contract.contract import _is_too_far_from_market
 
         reject = (
             400,

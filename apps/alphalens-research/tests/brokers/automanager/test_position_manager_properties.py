@@ -56,7 +56,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
 from alphalens_pipeline.brokers.automanager.position_manager import (
     _reconcile_long as reconcile_long,
 )
-from alphalens_pipeline.brokers.contract import (
+from broker_contract.contract import (
     _QTY_EPS,
     InstrumentRef,
     OrderState,

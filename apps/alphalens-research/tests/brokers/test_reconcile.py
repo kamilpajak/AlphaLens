@@ -24,13 +24,6 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     NoOp,
     advance,
 )
-from alphalens_pipeline.brokers.contract import (
-    BrokerError,
-    InstrumentRef,
-    OrderState,
-    OrderStatus,
-    Position,
-)
 from alphalens_pipeline.brokers.reconcile import (
     REASON_AUDIT_ERROR,
     REASON_CAPABILITY_ABSENT,
@@ -43,6 +36,13 @@ from alphalens_pipeline.brokers.reconcile import (
     has_failures,
     reconcile_brackets,
     summarize,
+)
+from broker_contract.contract import (
+    BrokerError,
+    InstrumentRef,
+    OrderState,
+    OrderStatus,
+    Position,
 )
 
 from tests.brokers.test_broker_contract import FakeBroker

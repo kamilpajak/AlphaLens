@@ -22,8 +22,9 @@ from __future__ import annotations
 import dataclasses
 from typing import Literal
 
+from broker_contract.contract import BracketOrderRequest, InstrumentRef
+
 from alphalens_pipeline.brokers import execution as execution_policy
-from alphalens_pipeline.brokers.contract import BracketOrderRequest, InstrumentRef
 from alphalens_pipeline.brokers.execution import decompose_setup_plan
 from alphalens_pipeline.paper.sizing import SetupPlan
 

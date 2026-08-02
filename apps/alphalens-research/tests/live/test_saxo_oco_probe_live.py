@@ -146,11 +146,11 @@ def _oco_leg(
 @unittest.skipUnless(_LIVE, f"set {_LIVE_FLAG}=1 to run the attended Saxo SIM OCO probe")
 class TestSaxoOcoExitProbe(unittest.TestCase):
     def test_oco_and_oversell_prechecks(self):
-        from alphalens_pipeline.brokers.contract import OrderRejectedError
         from alphalens_pipeline.brokers.saxo.broker import (
             ALLOW_ORDERS_ENV,
             create_saxo_broker_from_env,
         )
+        from broker_contract.contract import OrderRejectedError
 
         if os.environ.get(ALLOW_ORDERS_ENV) != "1":
             self.skipTest(

@@ -82,11 +82,11 @@ def _classify(exc: Exception) -> Exception:
 @unittest.skipUnless(_LIVE, f"set {_LIVE_ORDER_FLAG}=1 to run the live Saxo SIM order probe")
 class TestSaxoSimLiveOrder(unittest.TestCase):
     def test_place_assert_working_cancel(self):
-        from alphalens_pipeline.brokers.contract import BracketOrderRequest, OrderStatus
         from alphalens_pipeline.brokers.saxo.broker import (
             ALLOW_ORDERS_ENV,
             create_saxo_broker_from_env,
         )
+        from broker_contract.contract import BracketOrderRequest, OrderStatus
 
         if os.environ.get(ALLOW_ORDERS_ENV) != "1":
             self.skipTest(

@@ -21,14 +21,14 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from alphalens_pipeline.brokers.contract import (
+from alphalens_pipeline.brokers.saxo.broker import ALLOW_ORDERS_ENV, SaxoBroker
+from broker_contract.contract import (
     BrokerCapabilityError,
     BrokerError,
     OrderRejectedError,
     PlacedOrder,
     SupportsAmendStop,
 )
-from alphalens_pipeline.brokers.saxo.broker import ALLOW_ORDERS_ENV, SaxoBroker
 
 _ALLOW = {ALLOW_ORDERS_ENV: "1"}
 _ACCOUNTS = {"Data": [{"AccountKey": "AK-1", "AccountId": "16371XYZ", "Currency": "USD"}]}
