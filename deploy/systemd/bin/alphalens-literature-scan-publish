@@ -58,6 +58,18 @@ git fetch --quiet origin main
 git checkout --quiet main
 git pull --quiet --ff-only origin main
 
+# Keep the host venv in lockstep with the freshly-pulled tree. The
+# ff-only pull above can advance main across a code/package change (e.g.
+# a new uv workspace member); without re-syncing, the venv drifts behind
+# the tree and the always-on broker-manager daemon fails to import on
+# its next restart. Real incident 2026-08-02: main advanced to the
+# broker_contract (2A) extraction, no uv sync ran, `import
+# broker_contract` failed, and the daemon was one crash from an
+# unmanaged position. Fatal-on-failure (set -e) is deliberate: a skewed
+# venv is a safety hazard worth an Alertmanager page, not a silent skip.
+# uv is not on the systemd unit PATH; the host install lives here.
+"$HOME/.local/bin/uv" sync --quiet
+
 # Run the scan with GH_TOKEN scrubbed from the subprocess env. The CLI
 # does not need it and we don't want it reaching Perplexity error logs
 # or a future verbose env dump. ``env -u`` is POSIX-portable; the parent
