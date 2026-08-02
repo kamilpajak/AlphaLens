@@ -19,7 +19,7 @@ import unittest
 
 from alphalens_pipeline.feedback.ladder_replay import replay_ladder_atr_bracket
 from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, planned_blended_entry
-from alphalens_pipeline.trade_intent.schema import ExitGeometrySpec, ReanchorOnFill
+from broker_contract.trade_intent.schema import ExitGeometrySpec, ReanchorOnFill
 
 
 def _bar(t: int, low: float, high: float, close: float) -> dict:

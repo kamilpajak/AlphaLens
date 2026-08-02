@@ -58,8 +58,9 @@ from alphalens_pipeline.paper.calendar import (
     session_on_or_after,
     session_open_utc,
 )
-from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS, TIME_STOP_DAYS
+from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
 from alphalens_research.diagnostics import edge_stores, fixed_horizon
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 
 
 def _close(snapshot: dict | None, ticker: str) -> float | None:

@@ -32,10 +32,11 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
+from broker_contract.trade_intent.schema import TradeIntent
+
 from alphalens_pipeline.brokers.automanager import control_loop
 from alphalens_pipeline.brokers.automanager.control_loop import LoopDeps, TickReport
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
-from alphalens_pipeline.trade_intent.schema import TradeIntent
 
 # Resting SELL leg order types that count as protective stop coverage — mirrors
 # the acceptance world's ``_resting_stop_qty`` (Stop / StopIfTraded /

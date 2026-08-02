@@ -1553,7 +1553,7 @@ def _resolve_and_size(
     spec: Any,
 ) -> tuple[Any, Any, Any] | None:
     """Resolve the US instrument, build any needed FX conversion, and size the
-    already-parsed :class:`~alphalens_pipeline.trade_intent.schema.TradeSpec`.
+    already-parsed :class:`~broker_contract.trade_intent.schema.TradeSpec`.
     Returns ``(instrument, fx, plan)`` or ``None`` on any resolve/size failure
     (logged) — one bad pick must never crash a tick.
 
@@ -1632,17 +1632,18 @@ def _place_tiers(
     anchor divergence before any flip.
 
     ``spec`` (PR-7) is the already-parsed
-    :class:`~alphalens_pipeline.trade_intent.schema.TradeSpec` off the drained
+    :class:`~broker_contract.trade_intent.schema.TradeSpec` off the drained
     ``TradeIntent`` — the geometry shadow stamp's ``planned_blend`` reads it
     via :func:`~alphalens_pipeline.paper.sizing.planned_blended_entry_from_spec`
     (the daemon no longer has the raw brief dict at drain time)."""
+    from broker_contract.trade_intent.schema import ReanchorOnFill
+
     from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
         build_submission_record,
     )
     from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
-    from alphalens_pipeline.trade_intent.schema import ReanchorOnFill
 
     def _geometry_stamp(*, use_geometry: bool) -> dict[str, Any] | None:
         if exit_spec is None:
@@ -1749,7 +1750,7 @@ def _place_tiers(
 
 
 def _place_pick(broker: Broker, intent: Any) -> bool:
-    """Place one armed :class:`~alphalens_pipeline.trade_intent.schema.TradeIntent`
+    """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
     keep the tick logic flat; every failure path logs and returns False
     rather than raising.

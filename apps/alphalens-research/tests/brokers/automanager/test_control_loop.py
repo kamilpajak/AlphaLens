@@ -47,7 +47,7 @@ from alphalens_pipeline.brokers.contract import (
     Position,
 )
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
-from alphalens_pipeline.trade_intent.schema import (
+from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
     InitialLevels,

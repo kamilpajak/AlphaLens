@@ -43,14 +43,7 @@ from typing import Any
 
 from broker_contract.exit_geometry.levels import ceiling_from_52w_high
 from broker_contract.exit_geometry.registry import resolve_policy
-
-from alphalens_pipeline.paper.constants import (
-    EXPECTED_AVG_HOLD_DAYS,
-    GROSS_SAFETY_FRAC,
-    STEADY_STATE_GROSS_FRAC,
-)
-from alphalens_pipeline.paper.fx import FxConversion
-from alphalens_pipeline.trade_intent.schema import (
+from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
     InitialLevels,
@@ -58,6 +51,13 @@ from alphalens_pipeline.trade_intent.schema import (
     TpTrancheSpec,
     TradeSpec,
 )
+
+from alphalens_pipeline.paper.constants import (
+    EXPECTED_AVG_HOLD_DAYS,
+    GROSS_SAFETY_FRAC,
+    STEADY_STATE_GROSS_FRAC,
+)
+from alphalens_pipeline.paper.fx import FxConversion
 
 
 @dataclass(frozen=True)
@@ -299,7 +299,7 @@ def planned_blended_entry_from_spec(spec: TradeSpec) -> float | None:
     The arm-time (PR-7) mirror of :func:`planned_blended_entry`: the daemon's
     geometry SHADOW stamp no longer has the raw brief dict at drain time (the
     parse moved to arm time), only the already-parsed ``TradeSpec`` carried on
-    the :class:`~alphalens_pipeline.trade_intent.schema.TradeIntent`. Must
+    the :class:`~broker_contract.trade_intent.schema.TradeIntent`. Must
     return the SAME value ``planned_blended_entry(setup)`` would for the
     equivalent ``setup`` -- both routes share :func:`_blend_priced_tiers`.
 

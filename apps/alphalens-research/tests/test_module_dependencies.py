@@ -36,6 +36,7 @@ PACKAGE_DIRS: dict[str, Path] = {
     "alphalens_pipeline": WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_pipeline",
     "alphalens_research": WORKSPACE_ROOT / "apps" / "alphalens-research" / "alphalens_research",
     "alphalens_cli": WORKSPACE_ROOT / "apps" / "alphalens-pipeline" / "alphalens_cli",
+    "broker_contract": WORKSPACE_ROOT / "apps" / "alphalens-broker-contract" / "broker_contract",
 }
 
 RULES = (
@@ -222,6 +223,24 @@ RULES = (
         "name": "brokers must not import thematic (V3: earnings-gate deletion is the last brokers->thematic coupling)",
         "from_pkg": "alphalens_pipeline.brokers",
         "forbidden_prefix": "alphalens_pipeline.thematic",
+        "exemptions": set(),
+    },
+    {
+        # Broker-manager extraction 2A-2: broker_contract is the shared
+        # A-tier leaf (exit_geometry, trade_intent) consumed by BOTH
+        # alphalens_pipeline and alphalens_research. No `top_level_only` —
+        # a pure published leaf must not import either consumer even
+        # lazily, unlike the pipeline<->research cross-tier rule above.
+        "name": "broker_contract must not import from alphalens_pipeline",
+        "from_pkg": "broker_contract",
+        "forbidden_prefix": "alphalens_pipeline",
+        "exemptions": set(),
+    },
+    {
+        # Broker-manager extraction 2A-2: same rationale, opposite consumer.
+        "name": "broker_contract must not import from alphalens_research",
+        "from_pkg": "broker_contract",
+        "forbidden_prefix": "alphalens_research",
         "exemptions": set(),
     },
 )
@@ -556,6 +575,61 @@ class TestModuleDependencies(unittest.TestCase):
             "the automanager -> saxo boundary rule must exist exactly once",
         )
         self.assertIn("streaming_trigger.py", automanager_rules[0]["exemptions"])
+
+    def test_broker_contract_leaf_positive_control(self):
+        """The broker_contract leaf rules cannot rot silently.
+
+        Feeds the walker a synthetic module that imports both consumers
+        (``alphalens_pipeline.something`` and ``alphalens_research.something``)
+        at top level and asserts (a) the walker surfaces both, (b) exactly
+        one rule exists per forbidden_prefix, (c) each rule matches the
+        synthetic import — so neither rule can drift to a never-firing
+        state.
+        """
+        import tempfile
+
+        synthetic = (
+            "from alphalens_pipeline.something import whatever\n"
+            "from alphalens_research.something import other\n"
+            "whatever, other\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_broker_contract_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn("alphalens_pipeline.something", modules)
+        self.assertIn("alphalens_research.something", modules)
+
+        pipeline_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "broker_contract"
+            and rule["forbidden_prefix"] == "alphalens_pipeline"
+        ]
+        research_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "broker_contract"
+            and rule["forbidden_prefix"] == "alphalens_research"
+        ]
+        self.assertEqual(
+            len(pipeline_rules), 1, "the broker_contract -> alphalens_pipeline rule must exist once"
+        )
+        self.assertEqual(
+            len(research_rules), 1, "the broker_contract -> alphalens_research rule must exist once"
+        )
+        for rule in (*pipeline_rules, *research_rules):
+            self.assertNotIn(
+                "top_level_only",
+                rule,
+                f"rule {rule['name']!r} must catch function-scope (lazy) imports too",
+            )
+            with self.subTest(rule=rule["name"]):
+                self.assertTrue(
+                    any(m.startswith(rule["forbidden_prefix"]) for m in modules),
+                    f"rule {rule['name']!r} would not catch the synthetic violation",
+                )
 
     def test_exemptions_still_exist(self):
         """A documented exemption must stay tied to a real violation.

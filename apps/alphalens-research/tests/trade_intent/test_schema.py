@@ -10,8 +10,8 @@ from __future__ import annotations
 import dataclasses
 import unittest
 
-from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
-from alphalens_pipeline.trade_intent.schema import (
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
+from broker_contract.trade_intent.schema import (
     DEFAULT_ACCOUNT_ID,
     SCHEMA_VERSION,
     EntryTierSpec,

@@ -70,7 +70,7 @@ class TestParityWithDictVersion(unittest.TestCase):
         # parse_brief_to_spec would reject all-non-positive-limit tiers at
         # validate_trade_setup, so this exercises the standalone function via
         # a spec built directly with a single non-positive tier.
-        from alphalens_pipeline.trade_intent.schema import EntryTierSpec, TradeSpec
+        from broker_contract.trade_intent.schema import EntryTierSpec, TradeSpec
 
         spec = TradeSpec(
             entry_tiers=(EntryTierSpec(limit_price=0.0, alloc_pct=100.0, tag="bad"),),
@@ -81,7 +81,7 @@ class TestParityWithDictVersion(unittest.TestCase):
         self.assertIsNone(planned_blended_entry_from_spec(spec))
 
     def test_no_entry_tiers_returns_none(self) -> None:
-        from alphalens_pipeline.trade_intent.schema import TradeSpec
+        from broker_contract.trade_intent.schema import TradeSpec
 
         spec = TradeSpec(
             entry_tiers=(),

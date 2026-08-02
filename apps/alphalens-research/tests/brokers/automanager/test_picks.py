@@ -22,7 +22,7 @@ from alphalens_pipeline.brokers.automanager.picks import (
     iter_picks,
     mark_refused,
 )
-from alphalens_pipeline.trade_intent.schema import (
+from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
     InitialLevels,
@@ -142,7 +142,7 @@ class IterPicksTest(unittest.TestCase):
         # retired intent).
         armed = _intent("ARMEDX", "2026-07-20")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        from alphalens_pipeline.trade_intent.codec import intent_to_jsonable
+        from broker_contract.trade_intent.codec import intent_to_jsonable
 
         self.path.write_text(
             json.dumps(

@@ -7,7 +7,7 @@ status is a recorded fact per line (T8 cohort discipline). Malformed/undated
 lines are skipped; a missing file yields nothing.
 
 PR-7 (broker-manager extraction memo section 5): ``arm_pick`` now persists the
-FULL :class:`~alphalens_pipeline.trade_intent.schema.TradeIntent` on the armed
+FULL :class:`~broker_contract.trade_intent.schema.TradeIntent` on the armed
 line (under the ``"intent"`` key) — ``arm_command`` already parses the brief
 into a ``TradeIntent`` at arm time, and ``iter_picks`` decodes it back so the
 daemon never touches a brief. No back-compat for the old bare
@@ -30,12 +30,12 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 
-from alphalens_pipeline.trade_intent.codec import (
+from broker_contract.trade_intent.codec import (
     TradeIntentDecodeError,
     intent_from_jsonable,
     intent_to_jsonable,
 )
-from alphalens_pipeline.trade_intent.schema import TradeIntent
+from broker_contract.trade_intent.schema import TradeIntent
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,5 @@
 """Unit tests for ``trade_intent/codec.py`` — the JSON round-trip for
-:class:`~alphalens_pipeline.trade_intent.schema.TradeIntent` (PR-7, memo
+:class:`~broker_contract.trade_intent.schema.TradeIntent` (PR-7, memo
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
 section 5). Pure stdlib json/dataclasses; no I/O.
 """
@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import unittest
 
-from alphalens_pipeline.trade_intent.codec import (
+from broker_contract.trade_intent.codec import (
     TradeIntentDecodeError,
     intent_from_jsonable,
     intent_to_jsonable,
 )
-from alphalens_pipeline.trade_intent.schema import (
+from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
     InitialLevels,
@@ -158,14 +158,14 @@ class TestUnknownKeyObservability(unittest.TestCase):
         intent = _intent_with_reanchor()
         data = intent_to_jsonable(intent)
         data["spec"]["limit_pirce"] = 999  # typo of a would-be field, on the spec leaf
-        with self.assertLogs("alphalens_pipeline.trade_intent.codec", level="WARNING") as cm:
+        with self.assertLogs("broker_contract.trade_intent.codec", level="WARNING") as cm:
             restored = intent_from_jsonable(data)
         self.assertEqual(restored, intent)  # value dropped -> decoded identically
         self.assertTrue(any("limit_pirce" in line for line in cm.output))
 
     def test_clean_payload_emits_no_warning(self) -> None:
         data = intent_to_jsonable(_intent_with_reanchor())
-        with self.assertNoLogs("alphalens_pipeline.trade_intent.codec", level="WARNING"):
+        with self.assertNoLogs("broker_contract.trade_intent.codec", level="WARNING"):
             intent_from_jsonable(data)
 
 
