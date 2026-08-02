@@ -12,15 +12,15 @@ import dataclasses
 import datetime as dt
 import unittest
 
-from alphalens_pipeline.paper.constants import EXPECTED_AVG_HOLD_DAYS, STEADY_STATE_GROSS_FRAC
-from alphalens_pipeline.paper.fx import FxConversion
-from alphalens_pipeline.paper.sizing import (
+from alphalens_pipeline.paper.sizing import validate_trade_setup
+from broker_contract.constants import EXPECTED_AVG_HOLD_DAYS, STEADY_STATE_GROSS_FRAC
+from broker_contract.fx import FxConversion
+from broker_contract.sizing import (
     TierPlan,
     TpTranchePlan,
     TradeSetupNotPlannableError,
     compute_daily_scale_factor,
     setup_plan_gross_guard_limit,
-    validate_trade_setup,
 )
 
 from tests.paper.sizing_test_helpers import plan_from_brief

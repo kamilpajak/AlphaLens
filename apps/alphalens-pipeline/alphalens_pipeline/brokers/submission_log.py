@@ -54,8 +54,9 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from broker_contract.fx import FxConversion
+
 from alphalens_pipeline.brokers.execution import execution_config_version
-from alphalens_pipeline.paper.fx import FxConversion
 
 DEFAULT_SUBMISSIONS_PATH = Path.home() / ".alphalens" / "broker_orders" / "submissions.jsonl"
 

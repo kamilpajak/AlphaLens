@@ -20,16 +20,16 @@ from __future__ import annotations
 import math
 import unittest
 
-from alphalens_pipeline.paper.constants import (
+from alphalens_pipeline.paper.sizing import validate_trade_setup
+from broker_contract.constants import (
     EXPECTED_AVG_HOLD_DAYS,
     STEADY_STATE_GROSS_FRAC,
 )
-from alphalens_pipeline.paper.sizing import (
+from broker_contract.sizing import (
     SetupPlan,
     TradeSetupNotPlannableError,
     compute_daily_scale_factor,
     setup_plan_gross_notional,
-    validate_trade_setup,
 )
 
 from tests.paper.sizing_test_helpers import plan_from_brief

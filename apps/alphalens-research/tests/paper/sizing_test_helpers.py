@@ -13,12 +13,9 @@ any expected value — the behavior-preservation guard for this split.
 
 from __future__ import annotations
 
-from alphalens_pipeline.paper.fx import FxConversion
-from alphalens_pipeline.paper.sizing import (
-    SetupPlan,
-    compute_setup_plan,
-    parse_brief_to_spec,
-)
+from alphalens_pipeline.paper.sizing import parse_brief_to_spec
+from broker_contract.fx import FxConversion
+from broker_contract.sizing import SetupPlan, compute_setup_plan
 
 
 def plan_from_brief(
@@ -30,7 +27,7 @@ def plan_from_brief(
 ) -> SetupPlan:
     """Parse-then-size, mirroring the pre-split ``compute_setup_plan`` signature.
 
-    Raises :class:`~alphalens_pipeline.paper.sizing.TradeSetupNotPlannableError`
+    Raises :class:`~broker_contract.sizing.TradeSetupNotPlannableError`
     via :func:`parse_brief_to_spec` for the same unplannable briefs the
     pre-split function rejected.
     """

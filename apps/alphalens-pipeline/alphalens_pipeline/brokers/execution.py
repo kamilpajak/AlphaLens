@@ -41,9 +41,8 @@ from typing import Literal
 
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.contract import BracketOrderRequest, InstrumentRef
-
-from alphalens_pipeline.paper.fx import FxConversion, FxRateQuote
-from alphalens_pipeline.paper.sizing import SetupPlan, TradeSetupNotPlannableError
+from broker_contract.fx import FxConversion, FxRateQuote
+from broker_contract.sizing import SetupPlan, TradeSetupNotPlannableError
 
 logger = logging.getLogger(__name__)
 

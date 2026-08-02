@@ -40,8 +40,8 @@ if TYPE_CHECKING:
     # TYPE_CHECKING so they never run at import time (lazy-CLI startup budget) —
     # `from __future__ import annotations` keeps the annotations as strings.
     from alphalens_pipeline.brokers.notifications import NotificationPort
-    from alphalens_pipeline.paper.fx import FxConversion
     from broker_contract.contract import Broker, InstrumentRef
+    from broker_contract.fx import FxConversion
 
 logger = logging.getLogger(__name__)
 
@@ -514,12 +514,9 @@ def _resolve_instrument_and_plan(
     from alphalens_pipeline.brokers.execution import build_fx_conversion
     from alphalens_pipeline.brokers.registry import get_default_broker
     from alphalens_pipeline.brokers.routing import resolve_us_instrument
-    from alphalens_pipeline.paper.sizing import (
-        TradeSetupNotPlannableError,
-        compute_setup_plan,
-        parse_brief_to_spec,
-    )
+    from alphalens_pipeline.paper.sizing import parse_brief_to_spec
     from broker_contract.contract import BrokerError
+    from broker_contract.sizing import TradeSetupNotPlannableError, compute_setup_plan
 
     try:
         broker = get_default_broker()
@@ -740,7 +737,7 @@ def submit_command(
     """
     from alphalens_pipeline.brokers.execution import decompose_setup_plan
     from alphalens_pipeline.paper.brief_loader import load_brief
-    from alphalens_pipeline.paper.sizing import (
+    from broker_contract.sizing import (
         setup_plan_gross_guard_limit,
         setup_plan_gross_notional,
     )
@@ -872,12 +869,9 @@ def arm_command(
     """
     from alphalens_pipeline.brokers.automanager.picks import DEFAULT_PICKS_PATH, arm_pick
     from alphalens_pipeline.paper.brief_loader import load_brief
-    from alphalens_pipeline.paper.sizing import (
-        TradeSetupNotPlannableError,
-        build_exit_geometry_spec,
-        parse_brief_to_spec,
-    )
+    from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, parse_brief_to_spec
     from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
+    from broker_contract.sizing import TradeSetupNotPlannableError
     from broker_contract.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
 
     from alphalens_cli.commands._earnings_window import earnings_window_refusal

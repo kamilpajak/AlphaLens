@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import unittest
 
-from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, parse_brief_to_spec
+from alphalens_pipeline.paper.sizing import parse_brief_to_spec
+from broker_contract.sizing import TradeSetupNotPlannableError
 from broker_contract.trade_intent.schema import EntryTierSpec, TpTrancheSpec, TradeSpec
 
 

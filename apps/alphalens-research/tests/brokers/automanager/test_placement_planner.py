@@ -18,8 +18,8 @@ from alphalens_pipeline.brokers.automanager.placement_planner import (
     TierPlacement,
     classify,
 )
-from alphalens_pipeline.paper.sizing import SetupPlan, TierPlan, TpTranchePlan
 from broker_contract.contract import BracketOrderRequest, InstrumentRef
+from broker_contract.sizing import SetupPlan, TierPlan, TpTranchePlan
 
 
 def _instrument(ticker: str = "LAZ") -> InstrumentRef:
