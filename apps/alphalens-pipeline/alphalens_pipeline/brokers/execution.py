@@ -39,8 +39,9 @@ import logging
 import uuid
 from typing import Literal
 
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
+
 from alphalens_pipeline.brokers.contract import BracketOrderRequest, InstrumentRef
-from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
 from alphalens_pipeline.paper.fx import FxConversion, FxRateQuote
 from alphalens_pipeline.paper.sizing import SetupPlan, TradeSetupNotPlannableError
 

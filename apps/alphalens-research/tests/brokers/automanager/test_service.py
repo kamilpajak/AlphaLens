@@ -22,7 +22,7 @@ from alphalens_pipeline.brokers.automanager.service import (
     LivenessEvent,
     TickReportEvent,
 )
-from alphalens_pipeline.trade_intent.schema import (
+from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     InstrumentHint,
     IntentMeta,

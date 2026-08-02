@@ -408,7 +408,7 @@ def _pick(ticker: str) -> Any:
     """A minimal, structurally valid armed TradeIntent (PR-7: the real
     _run_placement_drain calls the real _pick_key, which reads
     intent.instrument.ticker / intent.meta.brief_date)."""
-    from alphalens_pipeline.trade_intent.schema import (
+    from broker_contract.trade_intent.schema import (
         EntryTierSpec,
         InstrumentHint,
         IntentMeta,

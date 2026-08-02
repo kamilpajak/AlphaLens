@@ -19,8 +19,8 @@ from collections.abc import Callable
 
 import numpy as np
 import pandas as pd
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 
-from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
 from alphalens_pipeline.thematic.screening.technicals_signal import _compute_atr_pct
 from alphalens_pipeline.thematic.trade_setup import ladder, levels, sizing
 from alphalens_pipeline.thematic.trade_setup.config_version import (
@@ -43,9 +43,10 @@ _SHALLOW_PULLBACK_MULT = 0.5  # nearest fallback entry = close - 0.5*ATR
 _DEEP_FALLBACK_MULT = 2.0  # deep fallback entry = close - 2.0*ATR
 _DISASTER_FLOOR_FRAC = 0.75  # stop >= blended_entry * 0.75 (i.e. >= -25%)
 _DEFAULT_RISK_BUDGET_PCT = 1.0
-# Entry-order TTL default is single-sourced from ``paper.constants`` so the brief
-# producer and the replay fallback can never diverge (the prior local ``= 10``
-# left briefs stamping a 10-trading-day TTL while the replay fell back to 7).
+# Entry-order TTL default is single-sourced from ``broker_contract.constants`` so
+# the brief producer and the replay fallback can never diverge (the prior local
+# ``= 10`` left briefs stamping a 10-trading-day TTL while the replay fell back
+# to 7).
 
 
 def _sma(close: pd.Series, period: int) -> float | None:

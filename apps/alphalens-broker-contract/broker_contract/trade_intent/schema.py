@@ -23,7 +23,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 
 # Wire schema version stamped on every TradeSpec / IntentMeta instance so a
 # future broker-manager can detect + reject stale client payloads.

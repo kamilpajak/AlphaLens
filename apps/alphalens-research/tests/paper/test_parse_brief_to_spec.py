@@ -4,7 +4,7 @@ the PR-5 ``compute_setup_plan`` split (memo
 section 2.3).
 
 Pins the field mapping from a raw ``brief_trade_setup`` dict onto the
-unsized :class:`~alphalens_pipeline.trade_intent.schema.TradeSpec`: every
+unsized :class:`~broker_contract.trade_intent.schema.TradeSpec`: every
 raw entry tier / TP tranche is carried through IN ORDER (including
 non-positive ``limit``/``target`` rows — sanitisation is the money half's
 job, not the parse half's), the ``order_ttl_days`` 0-sentinel survives, and
@@ -16,7 +16,7 @@ from __future__ import annotations
 import unittest
 
 from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, parse_brief_to_spec
-from alphalens_pipeline.trade_intent.schema import EntryTierSpec, TpTrancheSpec, TradeSpec
+from broker_contract.trade_intent.schema import EntryTierSpec, TpTrancheSpec, TradeSpec
 
 
 def _make_setup(

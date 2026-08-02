@@ -4,7 +4,7 @@ PR-5 (broker-manager extraction, memo
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``)
 splits the pre-split ``compute_setup_plan(*, brief_trade_setup, paper_equity,
 scale_factor, fx=None)`` into a brief-parse half (``parse_brief_to_spec``,
-emitting a :class:`~alphalens_pipeline.trade_intent.schema.TradeSpec`) and a
+emitting a :class:`~broker_contract.trade_intent.schema.TradeSpec`) and a
 money-math half (``compute_setup_plan(spec, ...)``). :func:`plan_from_brief`
 re-composes the two so the existing sizing test suites keep calling with the
 SAME ``brief_trade_setup=`` kwarg shape they always did, without rewriting

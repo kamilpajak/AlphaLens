@@ -54,17 +54,6 @@ GROSS_SAFETY_FRAC = 1.0
 # observances + ~104 weekend days per year).
 TIME_STOP_DAYS = 42
 
-# Entry-order TTL fallback if a candidate's brief_trade_setup omits
-# ``order_ttl_days`` (older parquet schema). Matches the trade_setup memo's
-# documented default.
-#
-# Unit: **trading days** (XNYS) since PR-B. 7 trading days ≈ a clean
-# calendar week-and-a-half of trading exposure. The prior 10-calendar-day
-# value compressed to ~7 trading sessions in normal weeks and ~6 around
-# Memorial Day / July 4 long weekends; pinning the unit to trading days
-# removes the holiday drift.
-DEFAULT_ORDER_TTL_DAYS = 7
-
 # Default location for the paper ledger SQLite file. Operator can override
 # via CLI flag or env (analogous to ALPHALENS_BRIEFS_DIR for Django).
 DEFAULT_LEDGER_RELPATH = ".alphalens/paper_ledger.db"

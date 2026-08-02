@@ -855,7 +855,7 @@ def arm_command(
     Validates the row against the brief at arm time (fail fast if the parquet
     is missing, the ticker is absent, or the row has no plannable
     trade_setup), parses the brief's trade_setup into a
-    :class:`~alphalens_pipeline.trade_intent.schema.TradeIntent` (memo
+    :class:`~broker_contract.trade_intent.schema.TradeIntent` (memo
     section 5, PR-7), then appends ONE 'armed' line carrying the full intent
     to picks.jsonl. The VPS control loop drains the queue and never touches
     a brief; this command places nothing.
@@ -872,13 +872,13 @@ def arm_command(
     """
     from alphalens_pipeline.brokers.automanager.picks import DEFAULT_PICKS_PATH, arm_pick
     from alphalens_pipeline.paper.brief_loader import load_brief
-    from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
     from alphalens_pipeline.paper.sizing import (
         TradeSetupNotPlannableError,
         build_exit_geometry_spec,
         parse_brief_to_spec,
     )
-    from alphalens_pipeline.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
+    from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
+    from broker_contract.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
 
     from alphalens_cli.commands._earnings_window import earnings_window_refusal
 

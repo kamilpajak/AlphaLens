@@ -22,9 +22,9 @@ from alphalens_pipeline.paper.calendar import (
     previous_trading_day,
     session_on_or_after,
 )
-from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
 from alphalens_research.diagnostics import anchor as anchor_mod
 from alphalens_research.diagnostics import edge_stores, fill_survival, fixed_horizon, nofill
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 
 _SPY = "SPY"
 _FILLED = {"OPEN", "PARTIAL_TP_OPEN", "TP_FULL", "SL_HIT"}

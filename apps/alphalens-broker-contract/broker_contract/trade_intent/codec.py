@@ -1,4 +1,4 @@
-"""JSON round-trip codec for :class:`~alphalens_pipeline.trade_intent.schema.TradeIntent`.
+"""JSON round-trip codec for :class:`~broker_contract.trade_intent.schema.TradeIntent`.
 
 PR-7 of the broker-manager extraction arc (memo
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
@@ -20,7 +20,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any
 
-from alphalens_pipeline.trade_intent.schema import (
+from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
     InitialLevels,

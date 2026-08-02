@@ -24,8 +24,8 @@ from alphalens_pipeline.paper.calendar import (
     advance_trading_sessions,
     session_on_or_after,
 )
-from alphalens_pipeline.paper.constants import DEFAULT_ORDER_TTL_DAYS
 from alphalens_research.diagnostics import edge_stores, nofill
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 
 _TAIL_SESSIONS = 10  # post-TTL window for TOUCHED_AFTER_TTL detection
 
