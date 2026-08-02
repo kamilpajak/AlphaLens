@@ -41,8 +41,9 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from alphalens_pipeline.exit_geometry.levels import ceiling_from_52w_high
-from alphalens_pipeline.exit_geometry.registry import resolve_policy
+from broker_contract.exit_geometry.levels import ceiling_from_52w_high
+from broker_contract.exit_geometry.registry import resolve_policy
+
 from alphalens_pipeline.paper.constants import (
     EXPECTED_AVG_HOLD_DAYS,
     GROSS_SAFETY_FRAC,
@@ -322,7 +323,7 @@ def build_exit_geometry_spec(
     replay via shared formula" holds for the anchor FACTS -- ATR is
     ``brief_trade_setup["atr"]`` (the identical brief key the replay leaf reads)
     and the 52w ceiling comes from the identical
-    :func:`~alphalens_pipeline.exit_geometry.levels.ceiling_from_52w_high` leaf.
+    :func:`~broker_contract.exit_geometry.levels.ceiling_from_52w_high` leaf.
 
     The one place this diverges from the replay's ``_blended_entry`` by
     necessity: replay anchors the bracket at the blend over tiers that actually
@@ -342,7 +343,7 @@ def build_exit_geometry_spec(
     Returns ``None`` (never raises) when there are no usable entry tiers, the
     ATR is missing / non-finite / non-positive, or the bracket is not
     constructible (degenerate ceiling, non-positive bracket stop) -- the same
-    degenerate-input contract as :func:`~alphalens_pipeline.exit_geometry.
+    degenerate-input contract as :func:`~broker_contract.exit_geometry.
     levels.atr_bracket_levels`.
     """
     blended = planned_blended_entry(brief_trade_setup)

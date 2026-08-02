@@ -41,7 +41,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from alphalens_pipeline.exit_geometry.levels import ceiling_from_52w_high
+from broker_contract.exit_geometry.levels import ceiling_from_52w_high
+
 from alphalens_pipeline.feedback.ladder_replay import (
     realized_r_fill_anchored,
     replay_ladder_atr_bracket,

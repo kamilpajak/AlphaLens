@@ -12,7 +12,6 @@ import re
 import unittest
 from pathlib import Path
 
-from alphalens_pipeline.exit_geometry.registry import resolve_policy
 from alphalens_pipeline.feedback.breakeven_lenses import (
     BREAKEVEN_LENSES,
     BreakevenLens,
@@ -24,6 +23,7 @@ from alphalens_pipeline.feedback.ladder_replay import (
     replay_ladder_atr_bracket,
     replay_ladder_breakeven,
 )
+from broker_contract.exit_geometry.registry import resolve_policy
 
 _BEZPAZERY_REF = (
     "betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)"
@@ -182,7 +182,7 @@ class TestBreakevenRegistry(unittest.TestCase):
 
     def test_atr_bracket_lens_matches_exit_geometry_registry_sot(self):
         # SoT parity guard: the BreakevenLens registration and the exit-geometry
-        # policy registry (apps/alphalens-pipeline/.../exit_geometry/registry.py)
+        # policy registry (apps/alphalens-broker-contract/.../exit_geometry/registry.py)
         # must pin the SAME numbers, so a future edit to one cannot silently drift
         # from the other.
         lens = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}["atr_bracket_1p5"]

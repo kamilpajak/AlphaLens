@@ -69,6 +69,10 @@ dependencies = [
     # import the store from here. Same leaf package the slim Django image
     # depends on, so the ledger schema has a single owner across both images.
     "alphalens-feedback",
+    # Shared, dependency-free broker-contract leaf (exit_geometry today; see
+    # the broker-manager extraction design memo §2.1). feedback/ + paper/
+    # import broker_contract.exit_geometry.
+    "alphalens-broker-contract",
 ]
 
 [project.scripts]
@@ -76,6 +80,7 @@ alphalens = "alphalens_cli.main:app"
 
 [tool.uv.sources]
 alphalens-feedback = { workspace = true }
+alphalens-broker-contract = { workspace = true }
 
 [tool.setuptools.packages.find]
 include = ["alphalens_pipeline*", "alphalens_cli*"]

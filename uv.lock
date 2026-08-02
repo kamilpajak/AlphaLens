@@ -12,6 +12,7 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "alphalens-broker-contract",
     "alphalens-django",
     "alphalens-feedback",
     "alphalens-pipeline",
@@ -139,6 +140,11 @@ wheels = [
 ]
 
 [[package]]
+name = "alphalens-broker-contract"
+version = "0.1.0"
+source = { editable = "apps/alphalens-broker-contract" }
+
+[[package]]
 name = "alphalens-django"
 version = "0.1.0"
 source = { editable = "apps/alphalens-django" }
@@ -185,6 +191,7 @@ name = "alphalens-pipeline"
 version = "0.1.0"
 source = { editable = "apps/alphalens-pipeline" }
 dependencies = [
+    { name = "alphalens-broker-contract" },
     { name = "alphalens-feedback" },
     { name = "beautifulsoup4" },
     { name = "defusedxml" },
@@ -209,6 +216,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alphalens-broker-contract", editable = "apps/alphalens-broker-contract" },
     { name = "alphalens-feedback", editable = "apps/alphalens-feedback" },
     { name = "beautifulsoup4", specifier = ">=4.14.0" },
     { name = "defusedxml", specifier = ">=0.7.1" },
@@ -236,6 +244,7 @@ name = "alphalens-research"
 version = "0.1.0"
 source = { editable = "apps/alphalens-research" }
 dependencies = [
+    { name = "alphalens-broker-contract" },
     { name = "alphalens-pipeline" },
     { name = "lightgbm" },
     { name = "pandas" },
@@ -249,6 +258,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alphalens-broker-contract", editable = "apps/alphalens-broker-contract" },
     { name = "alphalens-pipeline", editable = "apps/alphalens-pipeline" },
     { name = "lightgbm", specifier = ">=4.6.0" },
     { name = "pandas", specifier = ">=2.3.0" },
