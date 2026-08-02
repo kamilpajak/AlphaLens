@@ -14,9 +14,9 @@ import datetime as dt
 import math
 import unittest
 
-from alphalens_pipeline.paper.constants import GROSS_SAFETY_FRAC
-from alphalens_pipeline.paper.fx import FxConversion, FxRateQuote
-from alphalens_pipeline.paper.sizing import (
+from broker_contract.constants import GROSS_SAFETY_FRAC
+from broker_contract.fx import FxConversion, FxRateQuote
+from broker_contract.sizing import (
     TradeSetupNotPlannableError,
     setup_plan_gross_guard_limit,
     setup_plan_gross_notional,

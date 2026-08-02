@@ -244,7 +244,7 @@ class TestSubmitExecute(unittest.TestCase):
 
 
 def _fx_quote(**overrides):
-    from alphalens_pipeline.paper.fx import FxRateQuote
+    from broker_contract.fx import FxRateQuote
 
     fields: dict = {
         "base_currency": "EUR",

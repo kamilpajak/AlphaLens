@@ -56,6 +56,7 @@ from typing import Any, cast
 
 import pandas as pd
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
+from broker_contract.sizing import TradeSetupNotPlannableError
 
 from alphalens_pipeline.feedback.bar_window import (
     ARRIVAL_VWAP_WINDOW_MIN,
@@ -78,7 +79,7 @@ from alphalens_pipeline.paper.calendar import (
     session_open_utc,
 )
 from alphalens_pipeline.paper.constants import TIME_STOP_DAYS
-from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, validate_trade_setup
+from alphalens_pipeline.paper.sizing import validate_trade_setup
 from alphalens_pipeline.thematic.theme_text import slugify_theme
 
 logger = logging.getLogger(__name__)

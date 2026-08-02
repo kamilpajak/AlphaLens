@@ -17,9 +17,9 @@ from alphalens_pipeline.brokers.execution import (
     _TTL_ZERO_SENTINEL_DAYS,
     decompose_setup_plan,
 )
-from alphalens_pipeline.paper.sizing import SetupPlan, TierPlan, TpTranchePlan
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.contract import BracketOrderRequest, InstrumentRef
+from broker_contract.sizing import SetupPlan, TierPlan, TpTranchePlan
 
 
 def _instrument(ticker: str = "KO", mic: str = "XNYS") -> InstrumentRef:

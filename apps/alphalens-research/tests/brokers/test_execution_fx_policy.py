@@ -19,8 +19,8 @@ from alphalens_pipeline.brokers.execution import (
     build_fx_conversion,
     fx_precheck_divergence_pct,
 )
-from alphalens_pipeline.paper.fx import FxRateQuote
-from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError
+from broker_contract.fx import FxRateQuote
+from broker_contract.sizing import TradeSetupNotPlannableError
 
 _ASOF = dt.datetime(2026, 7, 18, 10, 0, 0, tzinfo=dt.UTC)
 _TRADABLE = "Tradable"

@@ -9,7 +9,7 @@ dataclasses:
   filters: policy acceptance (accepted PriceTypes, staleness) is applied by
   :func:`alphalens_pipeline.brokers.execution.build_fx_conversion`.
 - :class:`FxConversion` — the policy-validated conversion consumed by
-  ``paper.sizing.compute_setup_plan(fx=...)``. ``rate`` is Mid, direction
+  ``broker_contract.sizing.compute_setup_plan(fx=...)``. ``rate`` is Mid, direction
   account-ccy -> instrument-ccy (e.g. EUR->PLN = 4.34 PLN per EUR). Prices
   are NEVER converted — only the sizing NOTIONAL crosses currencies
   (convert the notional first, divide by the native price).

@@ -17,8 +17,8 @@ from alphalens_pipeline.brokers.submission_log import (
     build_submission_record,
     iter_submission_records,
 )
-from alphalens_pipeline.paper.fx import FxConversion
 from broker_contract.contract import InstrumentNotFoundError, InstrumentRef
+from broker_contract.fx import FxConversion
 
 _FX_KEYS = (
     "sizing_currency",

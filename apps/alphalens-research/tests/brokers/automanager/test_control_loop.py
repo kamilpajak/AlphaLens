@@ -620,7 +620,7 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
             )
             p(
                 mock.patch(
-                    "alphalens_pipeline.paper.sizing.compute_setup_plan",
+                    "broker_contract.sizing.compute_setup_plan",
                     lambda _spec, **_k: object(),
                 )
             )
@@ -730,7 +730,7 @@ class TestPlacePickBranches(unittest.TestCase):
         p(mock.patch(f"{pkg}.automanager.safety.check", m["safety_check"]))
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
         p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
-        p(mock.patch("alphalens_pipeline.paper.sizing.compute_setup_plan", m["compute_plan"]))
+        p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
         p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
         return cl._make_place_pick(broker)
 

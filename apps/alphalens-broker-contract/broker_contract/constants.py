@@ -1,17 +1,19 @@
 """Contract-tier operational constants shared across the client<->broker-manager
 boundary.
 
-Today this holds only ``DEFAULT_ORDER_TTL_DAYS``, the entry-TTL default the
-Boundary-2 ``TradeSpec`` wire schema (``broker_contract.trade_intent.schema``)
-depends on. The sizing constants (``STEADY_STATE_GROSS_FRAC``,
-``EXPECTED_AVG_HOLD_DAYS``, ``N_FIXED``, ``DEFAULT_PAPER_EQUITY_USD``,
-``GROSS_SAFETY_FRAC``), ``TIME_STOP_DAYS``, and the ledger/briefs relpath
-defaults remain in ``alphalens_pipeline.paper.constants`` for now and join
-this module in a later sub-PR of the broker-manager extraction arc (see
+Holds ``DEFAULT_ORDER_TTL_DAYS``, the entry-TTL default the Boundary-2
+``TradeSpec`` wire schema (``broker_contract.trade_intent.schema``) depends
+on, plus the 3 money-math sizing constants (``STEADY_STATE_GROSS_FRAC``,
+``EXPECTED_AVG_HOLD_DAYS``, ``GROSS_SAFETY_FRAC``) that
+``broker_contract.sizing`` depends on (2A-4a, sub-PR of the broker-manager
+extraction arc — see
 ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``
-§2.1). Stdlib-only — this is the shared A-tier leaf, consumed by both
-``alphalens_pipeline`` and ``alphalens_research``, never a consumer of
-either.
+§2.1/§2.3). ``N_FIXED``, ``DEFAULT_PAPER_EQUITY_USD``, ``TIME_STOP_DAYS``,
+and the ledger/briefs relpath defaults remain in
+``alphalens_pipeline.paper.constants`` — those are client-side (brief-parse /
+operator-default) concerns, not consumed by the money-math leaf. Stdlib-only
+— this is the shared A-tier leaf, consumed by both ``alphalens_pipeline`` and
+``alphalens_research``, never a consumer of either.
 """
 
 from __future__ import annotations
@@ -26,3 +28,25 @@ from __future__ import annotations
 # Memorial Day / July 4 long weekends; pinning the unit to trading days
 # removes the holiday drift.
 DEFAULT_ORDER_TTL_DAYS = 7
+
+# v2 sizing constants (memo §2.3, supersedes v1's per-candidate cap).
+# The planner computes a daily global scale factor preserving
+# inter-candidate ratios while bounding aggregate steady-state gross:
+#
+#   daily_target  = STEADY_STATE_GROSS_FRAC × equity / EXPECTED_AVG_HOLD_DAYS
+#   aggregate     = Σ_i suggested_size_pct_i / 100 × equity
+#   scale_factor  = min(1.0, daily_target / aggregate)
+#   final_pct_i   = suggested_size_pct_i × scale_factor
+#
+# Average per-candidate notional matches v1 by construction (Little's Law
+# equivalence at steady state); variance / inter-candidate ratios restored.
+STEADY_STATE_GROSS_FRAC = 0.667
+EXPECTED_AVG_HOLD_DAYS = 30
+
+# Gross safety guard: block new orders if planned cumulative notional
+# would push the day's book past this fraction of equity. v2's global
+# scaling keeps the typical daily aggregate well below this (target
+# 2.2% of equity per day for steady-state ~67%), so the guard is a
+# belt-and-suspenders layer that catches realised-lambda spikes the
+# scale factor under-projects for.
+GROSS_SAFETY_FRAC = 1.0

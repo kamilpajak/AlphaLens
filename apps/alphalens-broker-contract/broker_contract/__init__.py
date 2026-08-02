@@ -14,6 +14,13 @@ Sub-packages / modules:
         ``Broker`` Protocol, and the ``SupportsAmendStop``/``SupportsOcoExit``/
         ``SupportsStandaloneStop`` capability Protocols)
     broker_contract.exit_geometry — pure ATR-bracket exit-geometry leaf (§4)
+    broker_contract.fx — pure FX data types (``FxRateQuote``, ``FxConversion``)
+    broker_contract.sizing — the money-math half of position sizing (value
+        types ``TierPlan``/``TpTranchePlan``/``SetupPlan``,
+        ``TradeSetupNotPlannableError``, ``compute_setup_plan``,
+        ``compute_daily_scale_factor``, ``setup_plan_gross_notional``,
+        ``setup_plan_gross_guard_limit``); the brief-parse / arm-time half
+        stays client-side in ``alphalens_pipeline.paper.sizing`` (2A-4a)
 
 Dependency direction: this package must never import from
 ``alphalens_pipeline`` or ``alphalens_research`` — it is a pure leaf consumed

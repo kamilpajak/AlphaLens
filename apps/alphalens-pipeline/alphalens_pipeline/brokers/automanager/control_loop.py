@@ -1568,10 +1568,10 @@ def _resolve_and_size(
     (possibly ``None``) exit-geometry spec; this helper never touches a
     brief."""
     from broker_contract.contract import BrokerError
+    from broker_contract.sizing import TradeSetupNotPlannableError, compute_setup_plan
 
     from alphalens_pipeline.brokers.execution import build_fx_conversion
     from alphalens_pipeline.brokers.routing import resolve_us_instrument
-    from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, compute_setup_plan
 
     try:
         instrument = resolve_us_instrument(broker, ticker)

@@ -46,6 +46,7 @@ from broker_contract.contract import (
     PlacedOrder,
     Position,
 )
+from broker_contract.fx import FxRateQuote
 
 from alphalens_pipeline.brokers import execution as execution_policy
 from alphalens_pipeline.brokers.saxo.client import (
@@ -56,7 +57,6 @@ from alphalens_pipeline.brokers.saxo.client import (
     get_default_saxo_client,
 )
 from alphalens_pipeline.paper.calendar import advance_trading_sessions
-from alphalens_pipeline.paper.fx import FxRateQuote
 
 logger = logging.getLogger(__name__)
 
