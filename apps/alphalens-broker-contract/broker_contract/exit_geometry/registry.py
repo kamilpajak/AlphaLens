@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from alphalens_pipeline.exit_geometry.levels import atr_bracket_levels
+from broker_contract.exit_geometry.levels import atr_bracket_levels
 
 
 @dataclass(frozen=True)

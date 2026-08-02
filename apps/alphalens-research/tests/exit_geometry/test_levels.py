@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from alphalens_pipeline.exit_geometry.levels import atr_bracket_levels, ceiling_from_52w_high
+from broker_contract.exit_geometry.levels import atr_bracket_levels, ceiling_from_52w_high
 
 
 class TestAtrBracketLevels(unittest.TestCase):

@@ -44,7 +44,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from alphalens_pipeline.exit_geometry.levels import atr_bracket_levels
+from broker_contract.exit_geometry.levels import atr_bracket_levels
 
 # Within one bar we cannot order an SL touch vs a TP touch (minute granularity
 # hides intra-bar sequence). We resolve it CONSERVATIVELY -- assume the adverse

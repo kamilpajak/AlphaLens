@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alphalens-broker-contract"
+version = "0.1.0"
+description = "Shared, dependency-free broker-contract primitives (Boundary-1/2 types + pure exit-geometry) consumed by BOTH alphalens-pipeline and alphalens-research."
+readme = "README.md"
+requires-python = ">=3.13"
+# INTENTIONALLY zero third-party dependencies — this is the A-tier shared
+# leaf (ADR 0006 phase-robust-backtesting extraction precedent / broker-manager
+# extraction design memo §2.1): stdlib-only value types + pure math so it can
+# be pulled out into a standalone published package later without carrying
+# any pipeline/research/broker-vendor dependency along with it.
+dependencies = []
+
+[tool.setuptools.packages.find]
+include = ["broker_contract*"]
+
+[tool.coverage.run]
+source = ["broker_contract"]
+omit = [
+    "*/tests/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

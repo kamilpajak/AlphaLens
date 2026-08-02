@@ -67,11 +67,17 @@ STDLIB_MODULES: frozenset[str] = frozenset(sys.stdlib_module_names)
 # top level. It is skipped here because it comes from the workspace, not
 # PyPI; its actual presence inside the image is proven by the image-smoke
 # CI job (build + import), not by this closure check.
+# ``broker_contract`` is the SAME workspace case (declared dependency of
+# alphalens-pipeline, distribution ``alphalens-broker-contract``): the
+# top-level import name (``broker_contract``) does not match the s/-/_/
+# heuristic on the dist name, but that mismatch is irrelevant here because
+# the module never comes from PyPI in the first place.
 FIRST_PARTY_PREFIXES: tuple[str, ...] = (
     "alphalens_pipeline",
     "alphalens_cli",
     "alphalens_research",
     "alphalens_feedback",
+    "broker_contract",
 )
 
 # Distribution name → top-level import-module names. Most are identical

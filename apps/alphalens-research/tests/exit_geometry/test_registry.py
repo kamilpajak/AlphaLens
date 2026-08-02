@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from alphalens_pipeline.exit_geometry.levels import atr_bracket_levels
-from alphalens_pipeline.exit_geometry.registry import resolve_policy
+from broker_contract.exit_geometry.levels import atr_bracket_levels
+from broker_contract.exit_geometry.registry import resolve_policy
 
 
 class TestResolvePolicy(unittest.TestCase):
