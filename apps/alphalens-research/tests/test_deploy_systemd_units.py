@@ -434,6 +434,42 @@ class TestLiteraturePublishWrapper(unittest.TestCase):
         # 2026-W22.md untracked, never committed).
         self.assertNotRegex(text, re.compile(r"git diff --quiet(?!\S)"))
 
+    def test_wrapper_resyncs_venv_after_pull(self) -> None:
+        # The ff-only pull above can advance main across a code/package
+        # change (e.g. a new uv workspace member). Without re-syncing the
+        # host venv the daemon drifts: real incident 2026-08-02 — main
+        # advanced to the broker_contract (2A) extraction, no `uv sync`
+        # ran, `import broker_contract` failed, and the always-on
+        # broker-manager daemon was one crash from an unmanaged position.
+        # Pin an `uv sync` AFTER the pull so the venv can never lag the
+        # freshly-pulled tree.
+        lines = LIT_PUBLISH_WRAPPER.read_text().splitlines()
+        pull_idx = next(
+            (i for i, ln in enumerate(lines) if "git pull --quiet --ff-only origin main" in ln),
+            -1,
+        )
+        # Match the EXACT command line, not a loose "uv"+"sync" substring —
+        # otherwise an innocuous `echo "uv sync ..."` could satisfy the test
+        # while the real hard-blocking sync is gone (zen pre-merge review).
+        sync_idx = next(
+            (i for i, ln in enumerate(lines) if '"$HOME/.local/bin/uv" sync --quiet' in ln),
+            -1,
+        )
+        self.assertGreaterEqual(pull_idx, 0, "ff-only pull line missing from wrapper")
+        self.assertGreaterEqual(
+            sync_idx,
+            0,
+            "`uv sync` after the pull is missing — the host venv would drift "
+            "behind the tree and the broker-manager daemon would fail to import "
+            "on its next restart (incident 2026-08-02).",
+        )
+        self.assertLess(
+            pull_idx,
+            sync_idx,
+            "`uv sync` must run AFTER the ff-only pull so the venv matches the "
+            "freshly-pulled tree.",
+        )
+
 
 class TestRunThematicDayChainContract(unittest.TestCase):
     """Pin the error-propagation contract of run_thematic_day.sh.
