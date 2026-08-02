@@ -39,9 +39,9 @@ if TYPE_CHECKING:
     # Type-only imports for the extracted submit helpers. Guarded by
     # TYPE_CHECKING so they never run at import time (lazy-CLI startup budget) —
     # `from __future__ import annotations` keeps the annotations as strings.
-    from alphalens_pipeline.brokers.contract import Broker, InstrumentRef
     from alphalens_pipeline.brokers.notifications import NotificationPort
     from alphalens_pipeline.paper.fx import FxConversion
+    from broker_contract.contract import Broker, InstrumentRef
 
 logger = logging.getLogger(__name__)
 
@@ -348,8 +348,8 @@ def auth_command(
 @broker_app.command(name="account")
 def account_command() -> None:
     """Print the broker account snapshot (cash, total value, margin)."""
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.registry import get_default_broker
+    from broker_contract.contract import BrokerError
 
     try:
         snapshot = get_default_broker().get_account()
@@ -368,8 +368,8 @@ def account_command() -> None:
 @broker_app.command(name="positions")
 def positions_command() -> None:
     """List open positions (signed quantity, avg price, market value, PnL)."""
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.registry import get_default_broker
+    from broker_contract.contract import BrokerError
 
     try:
         positions = get_default_broker().get_positions()
@@ -402,8 +402,8 @@ def resolve_command(
     ),
 ) -> None:
     """Resolve (ticker, MIC) to the broker instrument handle (Saxo: Uic)."""
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.registry import get_default_broker
+    from broker_contract.contract import BrokerError
 
     try:
         ref = get_default_broker().resolve_instrument(ticker, exchange)
@@ -511,7 +511,6 @@ def _resolve_instrument_and_plan(
     ``(broker, account, sizing_equity, instrument, fx, plan)``.
     """
     from alphalens_pipeline.brokers import execution as execution_policy
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.execution import build_fx_conversion
     from alphalens_pipeline.brokers.registry import get_default_broker
     from alphalens_pipeline.brokers.routing import resolve_us_instrument
@@ -520,6 +519,7 @@ def _resolve_instrument_and_plan(
         compute_setup_plan,
         parse_brief_to_spec,
     )
+    from broker_contract.contract import BrokerError
 
     try:
         broker = get_default_broker()
@@ -575,8 +575,8 @@ def _run_prechecks(
     ``(precheck_summaries, precheck_conversion_rate)``.
     """
     from alphalens_pipeline.brokers import execution as execution_policy
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.execution import fx_precheck_divergence_pct
+    from broker_contract.contract import BrokerError
 
     precheck_summaries: list[dict] = []
     precheck_conversion_rate: float | None = None
@@ -640,12 +640,12 @@ def _place_and_record(
     ``finally`` so a mid-run BrokerError still journals the already-placed
     entries; the command then exits non-zero with the reconcile hint.
     """
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.execution import execution_config_version
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
         build_submission_record,
     )
+    from broker_contract.contract import BrokerError
 
     placed_records: list[dict] = []
     failure_note: str | None = None
@@ -931,8 +931,8 @@ def arm_command(
 @broker_app.command(name="orders")
 def orders_command() -> None:
     """List open orders (entry + exit children; UNKNOWN never guessed)."""
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.registry import get_default_broker
+    from broker_contract.contract import BrokerError
 
     try:
         states = get_default_broker().list_open_orders()
@@ -972,7 +972,6 @@ def reconcile_command(
     Exit code 0 when clean, 1 when any UNRESOLVED or divergent row exists
     (scriptable; a still-working entry PAST its TTL is a divergence).
     """
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.reconcile import (
         has_failures,
         reconcile_brackets,
@@ -983,6 +982,7 @@ def reconcile_command(
         DEFAULT_SUBMISSIONS_PATH,
         iter_submission_records,
     )
+    from broker_contract.contract import BrokerError
 
     path = journal or DEFAULT_SUBMISSIONS_PATH
     malformed: list[str] = []
@@ -1035,8 +1035,8 @@ def cancel_command(
     order_id: str = typer.Argument(..., help="Broker OrderId (entry cancel cascades exits)."),
 ) -> None:
     """Cancel an order. Deliberately usable without the placement env gate."""
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.registry import get_default_broker
+    from broker_contract.contract import BrokerError
 
     try:
         get_default_broker().cancel_order(order_id)
@@ -1058,7 +1058,7 @@ def manage_command(
     SIM-only; placement still needs ALPHALENS_BROKER_ALLOW_ORDERS=1 (enforced
     inside the broker)."""
     from alphalens_pipeline.brokers.automanager.control_loop import build_default_deps, run_daemon
-    from alphalens_pipeline.brokers.contract import BrokerError
+    from broker_contract.contract import BrokerError
 
     try:
         deps = build_default_deps(

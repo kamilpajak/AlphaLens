@@ -46,7 +46,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
-from alphalens_pipeline.brokers.contract import (
+from broker_contract.contract import (
     _QTY_EPS,
     Broker,
     BrokerError,
@@ -54,6 +54,7 @@ from alphalens_pipeline.brokers.contract import (
     OrderStatus,
     Position,
 )
+
 from alphalens_pipeline.paper.calendar import trading_days_elapsed
 
 # Reason codes emitted by THIS module (the resolver-side codes travel in the

@@ -18,7 +18,8 @@ import uuid
 from pathlib import Path
 from unittest import mock
 
-from alphalens_pipeline.brokers.contract import (
+from alphalens_pipeline.paper.brief_loader import CandidateBrief
+from broker_contract.contract import (
     AccountSnapshot,
     BracketOrderRequest,
     BrokerError,
@@ -28,7 +29,6 @@ from alphalens_pipeline.brokers.contract import (
     OrderStatus,
     PlacedOrder,
 )
-from alphalens_pipeline.paper.brief_loader import CandidateBrief
 from typer.testing import CliRunner
 
 _TRADE_SETUP = {

@@ -25,7 +25,10 @@ import uuid
 from typing import Any
 from unittest import mock
 
-from alphalens_pipeline.brokers.contract import (
+from alphalens_pipeline.brokers.saxo import broker as broker_module
+from alphalens_pipeline.brokers.saxo.broker import ALLOW_ORDERS_ENV, SaxoBroker
+from alphalens_pipeline.paper.calendar import advance_trading_sessions
+from broker_contract.contract import (
     BracketOrderRequest,
     BrokerCapabilityError,
     BrokerError,
@@ -35,9 +38,6 @@ from alphalens_pipeline.brokers.contract import (
     OrderStatus,
     PlacedOrder,
 )
-from alphalens_pipeline.brokers.saxo import broker as broker_module
-from alphalens_pipeline.brokers.saxo.broker import ALLOW_ORDERS_ENV, SaxoBroker
-from alphalens_pipeline.paper.calendar import advance_trading_sessions
 
 _ALLOW = {ALLOW_ORDERS_ENV: "1"}
 

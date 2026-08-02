@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import unittest
 
-from alphalens_pipeline.brokers.contract import (
+from broker_contract.contract import (
     BrokerError,
     OrderRejectedError,
     SupportsOcoExit,

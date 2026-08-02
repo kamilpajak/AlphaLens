@@ -30,15 +30,15 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from alphalens_pipeline.brokers.contract import (
+from alphalens_pipeline.brokers.submission_log import (
+    append_submission_record,
+    build_submission_record,
+)
+from broker_contract.contract import (
     BracketOrderRequest,
     Broker,
     BrokerError,
     PlacedOrder,
-)
-from alphalens_pipeline.brokers.submission_log import (
-    append_submission_record,
-    build_submission_record,
 )
 
 SCRATCH_ENV = "SCRATCH"

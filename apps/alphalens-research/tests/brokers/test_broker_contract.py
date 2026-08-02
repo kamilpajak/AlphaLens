@@ -28,7 +28,7 @@ import uuid
 from unittest import mock
 
 from alphalens_pipeline.brokers import registry
-from alphalens_pipeline.brokers.contract import (
+from broker_contract.contract import (
     AccountSnapshot,
     BracketOrderRequest,
     Broker,

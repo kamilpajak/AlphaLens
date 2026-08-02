@@ -10,7 +10,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from alphalens_pipeline.brokers.contract import InstrumentNotFoundError, InstrumentRef
 from alphalens_pipeline.brokers.execution import execution_config_version
 from alphalens_pipeline.brokers.routing import US_MIC_PROBE_ORDER, resolve_us_instrument
 from alphalens_pipeline.brokers.submission_log import (
@@ -19,6 +18,7 @@ from alphalens_pipeline.brokers.submission_log import (
     iter_submission_records,
 )
 from alphalens_pipeline.paper.fx import FxConversion
+from broker_contract.contract import InstrumentNotFoundError, InstrumentRef
 
 _FX_KEYS = (
     "sizing_currency",

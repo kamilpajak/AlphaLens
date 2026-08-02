@@ -30,8 +30,7 @@ from collections import OrderedDict
 from collections.abc import Iterator
 from typing import Any, Literal, cast
 
-from alphalens_pipeline.brokers import execution as execution_policy
-from alphalens_pipeline.brokers.contract import (
+from broker_contract.contract import (
     _QTY_EPS,
     AccountSnapshot,
     BracketOrderRequest,
@@ -47,6 +46,8 @@ from alphalens_pipeline.brokers.contract import (
     PlacedOrder,
     Position,
 )
+
+from alphalens_pipeline.brokers import execution as execution_policy
 from alphalens_pipeline.brokers.saxo.client import (
     SaxoAuthError,
     SaxoClient,

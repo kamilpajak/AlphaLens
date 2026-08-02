@@ -17,7 +17,7 @@ from alphalens_pipeline.brokers.automanager.fill_source import (
     FillSource,
     PollingFillSource,
 )
-from alphalens_pipeline.brokers.contract import OrderState, OrderStatus
+from broker_contract.contract import OrderState, OrderStatus
 
 _TS = "2026-07-06T18:00:00+00:00"
 

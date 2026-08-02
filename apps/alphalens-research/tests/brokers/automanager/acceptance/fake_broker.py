@@ -16,7 +16,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 
-from alphalens_pipeline.brokers.contract import (
+from broker_contract.contract import (
     AccountSnapshot,
     BracketOrderRequest,
     BrokerError,

@@ -36,7 +36,8 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     _exit_tp_ref,
     _reconcile_long,
 )
-from alphalens_pipeline.brokers.contract import (
+from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
+from broker_contract.contract import (
     BrokerCapabilityError,
     BrokerError,
     InstrumentRef,
@@ -46,7 +47,6 @@ from alphalens_pipeline.brokers.contract import (
     PlacedOrder,
     Position,
 )
-from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,

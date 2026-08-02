@@ -25,7 +25,8 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from alphalens_pipeline.brokers.contract import Broker
+from broker_contract.contract import Broker
+
 from alphalens_pipeline.brokers.reconcile import SupportsFillCrossCheck
 
 OrphanKind = Literal["order", "position"]

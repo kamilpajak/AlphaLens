@@ -42,9 +42,9 @@ def _classify(exc: Exception) -> Exception:
 @unittest.skipUnless(_LIVE, "set SAXO_LIVE_TEST=1 to run the live Saxo SIM probe")
 class TestSaxoSimLive(unittest.TestCase):
     def test_sim_reads_and_instrument_resolution(self):
-        from alphalens_pipeline.brokers.contract import InstrumentNotFoundError
         from alphalens_pipeline.brokers.saxo.broker import create_saxo_broker_from_env
         from alphalens_pipeline.brokers.saxo.client import get_default_saxo_client
+        from broker_contract.contract import InstrumentNotFoundError
 
         client = get_default_saxo_client()
         broker = create_saxo_broker_from_env()

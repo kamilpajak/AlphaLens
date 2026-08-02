@@ -1,9 +1,13 @@
 """Broker-agnostic surface: dataclasses, the ``Broker`` Protocol, error taxonomy.
 
-ZERO vendor imports — a second broker (IBKR, ...) implements this contract
-without touching any Saxo code, and consumers (CLI, future reconciler) branch
-on nothing vendor-specific. Semantics a Protocol cannot pin (what an adapter
-must actually DO) live in the shared conformance mixin at
+The Boundary-1 broker Protocol from the broker-manager extraction design memo
+(§2.1, ``docs/research/broker_manager_extraction_and_exit_geometry_2026_07_31.md``)
+— the contract a future out-of-tree broker-manager (or a second broker adapter
+such as IBKR) implements without importing ``alphalens_pipeline`` or
+``alphalens_research``. ZERO vendor imports — a second broker implements this
+contract without touching any Saxo code, and consumers (CLI, future
+reconciler) branch on nothing vendor-specific. Semantics a Protocol cannot pin
+(what an adapter must actually DO) live in the shared conformance mixin at
 ``apps/alphalens-research/tests/brokers/test_broker_contract.py``.
 
 YAGNI cuts (deliberate, per the design memo): NO streaming, NO quotes/prices,

@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from alphalens_pipeline.brokers.contract import BrokerAuthError
+from broker_contract.contract import BrokerAuthError
 
 
 @dataclass(frozen=True)

@@ -11,8 +11,8 @@ from __future__ import annotations
 import unittest
 
 from alphalens_pipeline.brokers.automanager.session_keeper import ChainStatus, SessionKeeper
-from alphalens_pipeline.brokers.contract import BrokerAuthError
 from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError
+from broker_contract.contract import BrokerAuthError
 
 
 class _StubProvider:

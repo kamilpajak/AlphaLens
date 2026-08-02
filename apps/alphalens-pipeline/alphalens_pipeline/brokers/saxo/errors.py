@@ -11,7 +11,7 @@ boundary.
 
 from __future__ import annotations
 
-from alphalens_pipeline.brokers.contract import BrokerAuthError
+from broker_contract.contract import BrokerAuthError
 
 
 class SaxoError(RuntimeError):

@@ -40,13 +40,13 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
 from alphalens_pipeline.brokers.automanager.position_manager import (
     _tp_only_leg_ids as tp_only_leg_ids,
 )
-from alphalens_pipeline.brokers.contract import (
+from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
+from broker_contract.contract import (
     InstrumentRef,
     OrderState,
     OrderStatus,
     Position,
 )
-from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
 _RID = "87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d"
 _ENTRY = "5039287596"

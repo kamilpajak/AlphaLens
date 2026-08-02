@@ -18,13 +18,13 @@ from __future__ import annotations
 import unittest
 from typing import Any
 
-from alphalens_pipeline.brokers.contract import (
+from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
+from alphalens_pipeline.brokers.saxo.client import SaxoError
+from broker_contract.contract import (
     Broker,
     BrokerError,
     InstrumentNotFoundError,
 )
-from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
-from alphalens_pipeline.brokers.saxo.client import SaxoError
 
 _EURPLN_UIC = 1343
 

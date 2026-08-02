@@ -19,7 +19,7 @@ experiment passes (memo §6).
 
 from __future__ import annotations
 
-from alphalens_pipeline.brokers.contract import (
+from broker_contract.contract import (
     Broker,
     InstrumentNotFoundError,
     InstrumentRef,

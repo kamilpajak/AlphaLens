@@ -31,7 +31,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import safety, service
-from alphalens_pipeline.brokers.contract import OrderStatus
+from broker_contract.contract import OrderStatus
 
 from .fake_broker import FakeBroker
 

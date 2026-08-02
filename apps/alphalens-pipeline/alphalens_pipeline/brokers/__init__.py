@@ -12,12 +12,17 @@ ADR 0013 trade-side map. Hard rules inherited from that ADR:
 
 Package layering (strict, one-way)::
 
-    contract.py  (broker-agnostic; zero vendor imports)
+    broker_contract.contract  (broker-agnostic; zero vendor imports; shared
+                                A-tier leaf, apps/alphalens-broker-contract —
+                                moved out of this package per the
+                                broker-manager extraction design memo §2.1,
+                                step 2A-3)
     registry.py  (lazy factory map -> Broker)
     saxo/broker.py -> saxo/client.py -> saxo/tokens.py -> saxo/errors.py
 
-Consumers (CLI, future reconciler) import ONLY ``contract`` + ``registry``.
-P1 ships reads (account / positions / instrument resolution) on the Saxo SIM
+Consumers (CLI, future reconciler) import ONLY ``broker_contract.contract``
+(the shared package) + this package's ``registry``. P1 ships reads (account /
+positions / instrument resolution) on the Saxo SIM
 environment; the LIVE gateway is structurally unreachable
 (``saxo/client.py::LIVE_TRADING_ENABLED`` rail, lifted only by a future ADR).
 Design memo: ``docs/research/saxo_broker_layer_design_2026_07_17.md``.

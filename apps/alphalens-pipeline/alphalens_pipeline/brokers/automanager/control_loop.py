@@ -20,6 +20,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
+from broker_contract.contract import (
+    _QTY_EPS,
+    BrokerCapabilityError,
+    BrokerError,
+    OrderRejectedError,
+    PlacedOrder,
+    Position,
+    SupportsAmendStop,
+    SupportsOcoExit,
+    SupportsStandaloneStop,
+    _is_sell_orders_already_exist,
+    _is_too_far_from_market,
+)
+
 from alphalens_pipeline.brokers.automanager.position_manager import (
     _OCO_LAG_HOLD_REASON,
     Action,
@@ -42,25 +56,13 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     advance,
     reconcile_protection,
 )
-from alphalens_pipeline.brokers.contract import (
-    _QTY_EPS,
-    BrokerCapabilityError,
-    BrokerError,
-    OrderRejectedError,
-    PlacedOrder,
-    Position,
-    SupportsAmendStop,
-    SupportsOcoExit,
-    SupportsStandaloneStop,
-    _is_sell_orders_already_exist,
-    _is_too_far_from_market,
-)
 
 if TYPE_CHECKING:
     import threading
 
+    from broker_contract.contract import Broker
+
     from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
-    from alphalens_pipeline.brokers.contract import Broker
     from alphalens_pipeline.brokers.notifications import NotificationPort
     from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
@@ -1565,7 +1567,8 @@ def _resolve_and_size(
     ``TradeIntent``. The caller reads ``intent.exit`` directly for the
     (possibly ``None``) exit-geometry spec; this helper never touches a
     brief."""
-    from alphalens_pipeline.brokers.contract import BrokerError
+    from broker_contract.contract import BrokerError
+
     from alphalens_pipeline.brokers.execution import build_fx_conversion
     from alphalens_pipeline.brokers.routing import resolve_us_instrument
     from alphalens_pipeline.paper.sizing import TradeSetupNotPlannableError, compute_setup_plan
@@ -1636,9 +1639,9 @@ def _place_tiers(
     ``TradeIntent`` — the geometry shadow stamp's ``planned_blend`` reads it
     via :func:`~alphalens_pipeline.paper.sizing.planned_blended_entry_from_spec`
     (the daemon no longer has the raw brief dict at drain time)."""
+    from broker_contract.contract import BrokerError
     from broker_contract.trade_intent.schema import ReanchorOnFill
 
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
         build_submission_record,
@@ -1761,12 +1764,13 @@ def _place_pick(broker: Broker, intent: Any) -> bool:
     validated the brief at arm time, in ``arm_command``)."""
     import datetime as _dt
 
+    from broker_contract.contract import BrokerError
+
     from alphalens_pipeline.brokers.automanager import safety
     from alphalens_pipeline.brokers.automanager.placement_planner import classify
     from alphalens_pipeline.brokers.automanager.reconcile_bridge import (
         verdicts as reconcile_verdicts,
     )
-    from alphalens_pipeline.brokers.contract import BrokerError
     from alphalens_pipeline.brokers.submission_log import (
         DEFAULT_SUBMISSIONS_PATH,
         iter_submission_records,
@@ -1862,7 +1866,7 @@ def _make_position_view_builder(
     (``build_protection_view`` + ``reconcile_protection``)."""
 
     def _build(_broker: Broker, records: list[Mapping[str, Any]]) -> BrokerView:
-        from alphalens_pipeline.brokers.contract import OrderStatus
+        from broker_contract.contract import OrderStatus
 
         working_ids = {
             str(state.order_id)

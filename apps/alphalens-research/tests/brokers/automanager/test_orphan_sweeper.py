@@ -12,7 +12,7 @@ import unittest
 from typing import Any
 
 from alphalens_pipeline.brokers.automanager.orphan_sweeper import Orphan, sweep
-from alphalens_pipeline.brokers.contract import OrderState, OrderStatus
+from broker_contract.contract import OrderState, OrderStatus
 
 
 def _order_state(order_id: str, *, side: str | None = None) -> OrderState:
