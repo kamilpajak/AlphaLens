@@ -448,12 +448,11 @@ class TestLiteraturePublishWrapper(unittest.TestCase):
             (i for i, ln in enumerate(lines) if "git pull --quiet --ff-only origin main" in ln),
             -1,
         )
+        # Match the EXACT command line, not a loose "uv"+"sync" substring —
+        # otherwise an innocuous `echo "uv sync ..."` could satisfy the test
+        # while the real hard-blocking sync is gone (zen pre-merge review).
         sync_idx = next(
-            (
-                i
-                for i, ln in enumerate(lines)
-                if "sync" in ln and "uv" in ln and not ln.lstrip().startswith("#")
-            ),
+            (i for i, ln in enumerate(lines) if '"$HOME/.local/bin/uv" sync --quiet' in ln),
             -1,
         )
         self.assertGreaterEqual(pull_idx, 0, "ff-only pull line missing from wrapper")
