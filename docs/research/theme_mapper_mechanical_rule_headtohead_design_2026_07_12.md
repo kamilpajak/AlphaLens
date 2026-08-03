@@ -165,7 +165,7 @@ The +7.4% (H=21) draws on only **4 ISO weeks (21-24, late-May → mid-June)**. S
 
 ## 13. AMENDMENT 2026-08-03 — proposal-prompt change breaks the pre-registered cohort
 
-**Written 2026-08-03, BEFORE the change reaches production. Deploy date: TBD** (fill in when the VPS pipeline image carrying the change is rebuilt).
+**Written 2026-08-03, BEFORE the change reaches production. Deployed 2026-08-03 21:04 UTC** — VPS pipeline image `sha256:373c8393`, first run on the new prompt at 21:04:28 UTC over `asof=2026-08-02`. The cohort boundary is that run, not the merge.
 
 A pre-registration is amended by **addition, never by revision**. Sections 6, 8, 11 and 11.5 are left exactly as written on 2026-07-12 and remain authoritative for what was pre-registered; this section only records a treatment change that arrives after them and what it does to the cohort.
 
@@ -195,7 +195,7 @@ Changed:
 
 1. **Segment on `mapper_config_version`.** Every V-forward analysis splits the rows by this token and never pools across it. The token is stamped on both arms, so this splits both arms.
 2. **Retain, do not delete, the pre-change rows.** They are analysed as their own cohort (the pre-event-conditioning cohort) and remain the reference point for any later before/after comparison.
-3. **Restart the fresh-week counter at the deploy date.** §11.5 requires ">=8-10 fresh ISO weeks spanning a different regime" before any verdict. That counter restarts at deploy, so the verdict slips from the ~2026-09 stated in §11.5 to roughly **deploy + 8-10 weeks**. With a deploy in August 2026 that puts the window around **mid-October to mid-November 2026**; the exact dates are fixed once the deploy date above is filled in.
+3. **Restart the fresh-week counter at the deploy date.** §11.5 requires ">=8-10 fresh ISO weeks spanning a different regime" before any verdict. That counter restarts at deploy, so the verdict slips from the ~2026-09 stated in §11.5 to roughly **deploy + 8-10 weeks**. Deploy was 2026-08-03 (ISO week 32), so the earliest verdict window is **ISO week 40 to week 42, i.e. 2026-09-28 to 2026-10-18**.
 4. **BOTH arms restart, not only the LLM arm.** The mechanical *rule* is unchanged, but its *sampled theme population* is gated by the LLM arm's output (§13.3), so mechanical rows written before and after the deploy are not poolable either. The paired (theme, date) comparison restarts wholesale.
 5. **Endpoints and kill rules are unchanged** and apply per cohort: H=21 membership primary, recency7d confirmatory, H=10 logged with "H=10 keeps flipping positive" as the KILL signal (§11.5).
 
@@ -210,3 +210,22 @@ What is **unmeasured** is whether the surviving candidates have a different forw
 - **Epic #974** — event-grounding: the unit of analysis should be the event, not the article.
 - **Stage 1 #975** — `feature/mapper-event-conditioning`, the prompt change described above.
 - Pre-registered instrument: §8. Guardrails and verdict conditions: §11.5. Frozen mechanical rule: §6.
+
+### 13.7 First run after deploy — observed, n=1 day
+
+Recorded so the observation window has a written starting point rather than a remembered one. **One day is not evidence of a rate**; the same `asof=2026-08-02` had just been built by the old prompt, which makes this the one clean before/after pair we will get.
+
+| | old prompt (20:31 UTC run) | new prompt (21:04 UTC run) |
+|---|---|---|
+| themes mapped | 10 | 10 |
+| candidates written | 10 | 1 |
+| briefs | 10 | 1 |
+
+Per theme under the new prompt: five declined with a stated reason (`us_ukraine_relations`, `harassment`, `dividend_income`, `patriot_missile`, `singularity`); one returned an empty payload — a failure, not a decline (`iphone_sales`); one was skipped for having no catalyst in window (`china_technology`); three proposed candidates that the mcap band then cut (`lithography` 6 → 1, `ai_training_data` 5 → 2, `eu_policy` 3 → 0). Final: 1 verified candidate (`KLIC`, `lithography`).
+
+Two readings, both provisional:
+
+- The decline reasons are on-target. `harassment` — the theme that produced the LYFT card this change was written for — declined with "a one-time litigation payout by eBay with no clear transmission channel to benefit any other U.S.-listed company materially". `us_ukraine_relations` declined an adverse event rather than proposing its victim as a long.
+- **The mcap band, not the prompt, is the largest single cut** on this day: 14 proposed across three themes, 3 in band. Event-conditioning appears to pull proposals toward the companies an event actually implicates, which skew large. This was not anticipated in §13.5, which attributed the count change to the removed minimum and the `transmission_channel` drop. Whether it holds beyond one day is unmeasured.
+
+Expect `AlphalensThematicBriefVolumeAnomaly` to fire during the observation window (1 brief against a ~10 seven-day median) and to clear itself as the rolling median catches up. That firing is correct behaviour, not a false positive.
