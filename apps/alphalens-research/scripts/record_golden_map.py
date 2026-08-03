@@ -47,8 +47,9 @@ and nothing else did. A full capture would move the vendor payloads, the
 market-cap snapshot, the 10-K text and the event window at the same time as the
 prompt, so any change in the projection would be unattributable. Both modes
 write into the fixture's CURRENT recording directory; both refuse to touch a
-version that already holds a cassette, so a re-baseline must bump the
-descriptor's ``current_recording`` and leave the old recording in place.
+version that already holds ANY recorded artifact — cassette, candidates
+parquet, projection or provenance — so a re-baseline must bump the descriptor's
+``current_recording`` and leave the old recording in place.
 
 WHAT EVERY MODE WRITES
 ----------------------
@@ -81,7 +82,7 @@ from alphalens_pipeline.thematic.sources.form4_store import classification_years
 from alphalens_pipeline.thematic.verification import mcap_filter, recent_press, tenk_grep
 from alphalens_pipeline.thematic.verification.tenk_grep import _find_cached
 from tests.golden.map_fixtures import MAP_FIXTURES, MapFixture, fixture_by_name, frozen_surfaces
-from tests.golden.map_provenance import build_provenance, write_provenance
+from tests.golden.map_provenance import PROVENANCE_FILENAME, build_provenance, write_provenance
 from tests.golden.projection import map_themes_projection
 from tests.golden.replay_client import RecordingOpenRouter
 from tests.golden.vendor_cassette import RecordingVendor
@@ -233,14 +234,32 @@ def _write_provenance(fixture: MapFixture, *, mode: str) -> None:
 
 
 def _guard_recording_dir(fixture: MapFixture) -> Path:
-    """Refuse to overwrite an existing recording; return the empty target dir."""
+    """Refuse to overwrite an existing recording; return the empty target dir.
+
+    Checks EVERY artifact a recording is made of, not just the cassette: the
+    candidates parquet, the projection and the provenance document are written
+    into ``golden/<version>/`` by :func:`_write_golden` / :func:`_write_provenance`
+    unconditionally. A version whose cassette is absent — deleted, or never
+    written because an earlier capture died before the LLM call — but whose
+    golden directory still holds the approved projection would otherwise be
+    silently overwritten, which is exactly what this guard exists to prevent.
+    """
     llm_dir = fixture.llm_cassette_dir()
-    if llm_dir.exists() and any(llm_dir.glob("*.json")):
+    golden_dir = fixture.golden_dir()
+    candidates = [
+        *(sorted(llm_dir.glob("*.json")) if llm_dir.is_dir() else []),
+        golden_dir / "projection.json",
+        golden_dir / PROVENANCE_FILENAME,
+        golden_dir / f"{fixture.asof.isoformat()}.parquet",
+    ]
+    occupied = [path for path in candidates if path.exists()]
+    if occupied:
+        names = ", ".join(str(p.relative_to(fixture.root)) for p in occupied)
         raise SystemExit(
-            f"{llm_dir} already holds a recording — bump {fixture.name}'s "
-            "current_recording in tests/golden/map_fixtures.py and re-run. "
-            "Overwriting destroys the historical comparison a characterization "
-            "golden exists for."
+            f"{fixture.name}/{fixture.current_recording} already holds a recording "
+            f"({names}) — bump {fixture.name}'s current_recording in "
+            "tests/golden/map_fixtures.py and re-run. Overwriting destroys the "
+            "historical comparison a characterization golden exists for."
         )
     llm_dir.mkdir(parents=True, exist_ok=True)
     return llm_dir
