@@ -17,12 +17,16 @@ cached on ``LoopDeps``/``ProtectionView`` at startup
    protection or placement-journal code; the only allowed resolve site is
    startup, in ``build_default_deps``.
 
-This is a pure ``inspect.getsource`` text-scan guard — it holds even for
-code paths that no example-based test happens to exercise, and it is the
-adversarial-review guard from the refactor's design memo.
+This is a pure ``ast``-based EXECUTABLE-source text-scan guard (comments and
+docstrings stripped via ``_executable_source``, so a historical comment
+documenting the retired sentinel in past tense does not trip it) — it holds
+even for code paths that no example-based test happens to exercise, and it
+is the adversarial-review guard from the refactor's design memo.
 """
 
+import ast
 import inspect
+import textwrap
 import unittest
 
 from alphalens_pipeline.brokers.automanager.control_loop import _place_tiers
@@ -32,11 +36,37 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     reconcile_protection,
 )
 
-# The old env-sentinel comparisons. ``_journal_tier`` is a function NESTED
-# inside ``_place_tiers`` — ``inspect.getsource(_place_tiers)`` returns the
-# whole enclosing function body, which is what we want to scan for it.
-_SENTINEL_NE = '!= "setup_static"'
-_SENTINEL_EQ = '== "setup_static"'
+
+def _executable_source(fn) -> str:
+    """Source of fn with comments and docstrings removed (executable code only).
+
+    ``ast`` drops all comments; we additionally strip the docstring of the
+    function and every nested function so a historical/explanatory comment or
+    docstring can mention the retired sentinel (e.g. documenting what used to
+    be there, in past tense) without tripping this guard. The guard's job is
+    to catch a REINTRODUCED sentinel or hot-path resolve in real, executable
+    code — not prose that quotes it.
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                node.body = body[1:] or [ast.Pass()]
+    return ast.unparse(tree)
+
+
+# The old env-sentinel comparison, checked as the bare token (quote-agnostic:
+# ``ast.unparse`` normalizes string quotes to single quotes). ``_journal_tier``
+# is a function NESTED inside ``_place_tiers`` — ``inspect.getsource``/
+# ``_executable_source`` on ``_place_tiers`` returns the whole enclosing
+# function body, which is what we want to scan for it.
+_SENTINEL_TOKEN = "setup_static"
 
 # The registry-resolve call sites. ``build_default_deps`` (startup, NOT
 # scanned here) is the one allowed resolve site.
@@ -47,60 +77,39 @@ _HOT_PATH_RAW_ENV_READ_CALL = "_exit_policy()"
 class NoExitPolicySentinelSurvivesTheRefactor(unittest.TestCase):
     """Pins invariant 1 — no ``"setup_static"`` string-equality sentinel in
     the exit-policy decision paths (``_place_tiers``/nested ``_journal_tier``,
-    ``_maybe_reanchor``)."""
+    ``_maybe_reanchor``). Scanned on EXECUTABLE code only (comments and
+    docstrings stripped via ``_executable_source``) — a historical comment
+    documenting the retired sentinel in past tense is legitimate and must not
+    trip this guard; only a REINTRODUCED sentinel comparison in real code
+    should."""
 
-    def test_place_tiers_source_has_no_sentinel_inequality(self) -> None:
-        source = inspect.getsource(_place_tiers)
+    def test_place_tiers_source_has_no_sentinel(self) -> None:
+        source = _executable_source(_place_tiers)
         self.assertNotIn(
-            _SENTINEL_NE,
+            _SENTINEL_TOKEN,
             source,
             msg=(
                 "control_loop._place_tiers (which encloses the nested "
                 "_journal_tier) must dispatch placement geometry via the "
                 "cached ExitPolicy (exit_policy.applies_geometry), never via "
-                'a raw `_exit_policy() != "setup_static"` env-sentinel '
-                "comparison — adversarial-review guard, Task 6."
+                'a raw `_exit_policy() != "setup_static"` / `== "setup_static"` '
+                "env-sentinel comparison in EXECUTABLE code — adversarial-review "
+                "guard, Task 6."
             ),
         )
 
-    def test_place_tiers_source_has_no_sentinel_equality(self) -> None:
-        source = inspect.getsource(_place_tiers)
+    def test_maybe_reanchor_source_has_no_sentinel(self) -> None:
+        source = _executable_source(_maybe_reanchor)
         self.assertNotIn(
-            _SENTINEL_EQ,
-            source,
-            msg=(
-                "control_loop._place_tiers (which encloses the nested "
-                "_journal_tier) must dispatch placement geometry via the "
-                "cached ExitPolicy, never via a raw "
-                '`... == "setup_static"` env-sentinel comparison — '
-                "adversarial-review guard, Task 6."
-            ),
-        )
-
-    def test_maybe_reanchor_source_has_no_sentinel_inequality(self) -> None:
-        source = inspect.getsource(_maybe_reanchor)
-        self.assertNotIn(
-            _SENTINEL_NE,
+            _SENTINEL_TOKEN,
             source,
             msg=(
                 "position_manager._maybe_reanchor must gate the reanchor "
                 "arm via the cached ExitPolicy (policy.decide_reanchor "
                 "returning None for the inert policy), never via a raw "
-                '`_exit_policy() != "setup_static"` env-sentinel comparison '
-                "— adversarial-review guard, Task 6."
-            ),
-        )
-
-    def test_maybe_reanchor_source_has_no_sentinel_equality(self) -> None:
-        source = inspect.getsource(_maybe_reanchor)
-        self.assertNotIn(
-            _SENTINEL_EQ,
-            source,
-            msg=(
-                "position_manager._maybe_reanchor must gate the reanchor "
-                "arm via the cached ExitPolicy, never via a raw "
-                '`... == "setup_static"` env-sentinel comparison — '
-                "adversarial-review guard, Task 6."
+                '`_exit_policy() != "setup_static"` / `== "setup_static"` '
+                "env-sentinel comparison in EXECUTABLE code — adversarial-review "
+                "guard, Task 6."
             ),
         )
 
@@ -115,7 +124,7 @@ class NoHotPathExitPolicyResolveSurvivesTheRefactor(unittest.TestCase):
     close."""
 
     def test_place_tiers_never_resolves_on_the_hot_path(self) -> None:
-        source = inspect.getsource(_place_tiers)
+        source = _executable_source(_place_tiers)
         self.assertNotIn(
             _HOT_PATH_RESOLVE_CALL,
             source,
@@ -138,7 +147,7 @@ class NoHotPathExitPolicyResolveSurvivesTheRefactor(unittest.TestCase):
         )
 
     def test_maybe_reanchor_never_resolves_on_the_hot_path(self) -> None:
-        source = inspect.getsource(_maybe_reanchor)
+        source = _executable_source(_maybe_reanchor)
         self.assertNotIn(
             _HOT_PATH_RESOLVE_CALL,
             source,
@@ -158,7 +167,7 @@ class NoHotPathExitPolicyResolveSurvivesTheRefactor(unittest.TestCase):
         )
 
     def test_reconcile_long_never_resolves_on_the_hot_path(self) -> None:
-        source = inspect.getsource(_reconcile_long)
+        source = _executable_source(_reconcile_long)
         self.assertNotIn(
             _HOT_PATH_RESOLVE_CALL,
             source,
@@ -178,7 +187,7 @@ class NoHotPathExitPolicyResolveSurvivesTheRefactor(unittest.TestCase):
         )
 
     def test_reconcile_protection_never_resolves_on_the_hot_path(self) -> None:
-        source = inspect.getsource(reconcile_protection)
+        source = _executable_source(reconcile_protection)
         self.assertNotIn(
             _HOT_PATH_RESOLVE_CALL,
             source,

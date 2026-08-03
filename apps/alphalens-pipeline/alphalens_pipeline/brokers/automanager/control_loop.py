@@ -1682,8 +1682,8 @@ def _place_tiers(
     from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
 
     # Normalize the resolved-once cached policy (Task 4): the geometry-override
-    # gate below reads ``exit_policy.applies_geometry`` instead of the old
-    # ``_exit_policy() != "setup_static"`` env sentinel. Default inert (dark).
+    # gate below reads ``exit_policy.applies_geometry`` — the retired env-string
+    # sentinel is gone. Default inert (dark) when no policy was threaded in.
     exit_policy = exit_policy if exit_policy is not None else SetupStaticPolicy()
 
     def _geometry_stamp(*, use_geometry: bool) -> dict[str, Any] | None:
