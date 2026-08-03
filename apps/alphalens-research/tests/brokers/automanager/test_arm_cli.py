@@ -6,18 +6,20 @@ build_exit_geometry_spec) and persists it via arm_pick — the daemon never
 touches a brief. Loading is lazy-imported inside the command body, so patches
 target the SOURCE modules.
 
-Revision R2 (earnings-deletion, 2026-07-31): the earnings-window gate moved
-from the daemon (deleted ``brokers.automanager.earnings_gate``) to arm-time
-here — arming refuses outright (nothing appended to picks.jsonl) when the
-ticker's next earnings date falls inside the entry's TTL window, unless
-``--allow-earnings-window`` or the ``ALPHALENS_BROKER_ALLOW_EARNINGS_WINDOW``
-env opts out. See ``test_earnings_window.py`` for the pure-function gate tests.
+Pure executor (2026-08-03): arm carries NO selection / filtering logic — it
+arms exactly the named ticker after only the structural checks (brief present,
+ticker present, trade_setup plannable). The old arm-time earnings-window gate
+was removed: selection-policy filters (earnings-window avoidance included)
+belong at brief-creation (the selection tier), so a filtered-out candidate
+never reaches the brief in the first place. The client invoking arm is
+responsible for knowing what it arms; the command never second-guesses it.
 """
 
 from __future__ import annotations
 
+import ast
 import datetime as dt
-import os
+import inspect
 import unittest
 from unittest import mock
 
@@ -65,15 +67,6 @@ def _candidate(ticker: str = "KO", *, trade_setup: dict | None = "__default__") 
 class ArmCommandTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
-        # Hermetic: the per-(ticker, today) earnings lookup cache and the
-        # opt-out env must not leak between tests / in from the host env.
-        from alphalens_cli.commands import _earnings_window
-
-        _earnings_window._clear_lookup_cache_for_tests()
-        self._env = mock.patch.dict(os.environ, {}, clear=False)
-        self._env.start()
-        os.environ.pop(_earnings_window.EARNINGS_GATE_OPT_OUT_ENV, None)
-        self.addCleanup(self._env.stop)
 
     def test_arm_valid_pick_appends_and_exits_zero(self) -> None:
         from alphalens_cli.commands.broker import broker_app
@@ -159,7 +152,43 @@ class ArmCommandTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 1)
         arm.assert_not_called()
 
-    def test_arm_earnings_inside_ttl_window_refuses_and_appends_nothing(self) -> None:
+    def test_arm_has_no_earnings_or_selection_filtering_logic(self) -> None:
+        # arm is a pure executor: after the structural checks it arms the named
+        # ticker, full stop. It must consult NO selection-policy filter — the old
+        # arm-time earnings-window gate was removed (that policy moves to
+        # brief-creation). Walk the AST and collect every identifier / import —
+        # docstrings are Constant nodes, never collected, so a doc note about the
+        # removed gate is ignored while any real earnings identifier (a param, a
+        # lookup call, an import) is caught. Structural refusals (brief/ticker
+        # absent, unplannable setup) are fine — those are not selection policy.
+        from alphalens_cli.commands import broker
+
+        tree = ast.parse(inspect.getsource(broker.arm_command))
+        names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                names.add(node.id.lower())
+            elif isinstance(node, ast.Attribute):
+                names.add(node.attr.lower())
+            elif isinstance(node, ast.arg):
+                names.add(node.arg.lower())
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    names.add(alias.name.lower())
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    names.add(node.module.lower())
+        earnings_refs = sorted(n for n in names if "earnings" in n)
+        self.assertEqual(
+            earnings_refs,
+            [],
+            f"arm_command must carry no earnings/selection filter; found {earnings_refs}",
+        )
+
+    def test_arm_arms_even_with_imminent_earnings_no_lookup(self) -> None:
+        # The behavioural counterpart: a candidate the OLD gate would have
+        # refused (earnings imminent) now arms — because arm never looks earnings
+        # up. No earnings mock is needed precisely because no lookup happens
+        # (hermetic: zero network).
         from alphalens_cli.commands.broker import broker_app
 
         with (
@@ -168,68 +197,6 @@ class ArmCommandTest(unittest.TestCase):
                 return_value=[_candidate("KO")],
             ),
             mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
-            mock.patch(
-                "alphalens_cli.commands._earnings_window._fetch_next_earnings",
-                return_value=dt.date.today() + dt.timedelta(days=2),
-            ),
-        ):
-            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
-        self.assertEqual(result.exit_code, 1)
-        self.assertIn("earnings", result.output)
-        arm.assert_not_called()
-
-    def test_arm_earnings_allow_flag_overrides_the_refusal(self) -> None:
-        from alphalens_cli.commands.broker import broker_app
-
-        with (
-            mock.patch(
-                "alphalens_pipeline.paper.brief_loader.load_brief",
-                return_value=[_candidate("KO")],
-            ),
-            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
-            mock.patch(
-                "alphalens_cli.commands._earnings_window._fetch_next_earnings",
-                return_value=dt.date.today() + dt.timedelta(days=2),
-            ),
-        ):
-            result = self.runner.invoke(
-                broker_app, ["arm", "KO", "--date", "2026-07-20", "--allow-earnings-window"]
-            )
-        self.assertEqual(result.exit_code, 0, result.output)
-        arm.assert_called_once()
-
-    def test_arm_earnings_env_opt_out_overrides_the_refusal(self) -> None:
-        from alphalens_cli.commands.broker import broker_app
-
-        with (
-            mock.patch(
-                "alphalens_pipeline.paper.brief_loader.load_brief",
-                return_value=[_candidate("KO")],
-            ),
-            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
-            mock.patch(
-                "alphalens_cli.commands._earnings_window._fetch_next_earnings",
-                return_value=dt.date.today() + dt.timedelta(days=2),
-            ),
-            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ALLOW_EARNINGS_WINDOW": "1"}),
-        ):
-            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
-        self.assertEqual(result.exit_code, 0, result.output)
-        arm.assert_called_once()
-
-    def test_arm_earnings_outside_window_arms_normally(self) -> None:
-        from alphalens_cli.commands.broker import broker_app
-
-        with (
-            mock.patch(
-                "alphalens_pipeline.paper.brief_loader.load_brief",
-                return_value=[_candidate("KO")],
-            ),
-            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
-            mock.patch(
-                "alphalens_cli.commands._earnings_window._fetch_next_earnings",
-                return_value=dt.date.today() + dt.timedelta(days=90),
-            ),
         ):
             result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
         self.assertEqual(result.exit_code, 0, result.output)
