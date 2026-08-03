@@ -160,3 +160,44 @@ The +7.4% (H=21) draws on only **4 ISO weeks (21-24, late-May → mid-June)**. S
 - Strictly display-only / in-sample-labelled / EDGE-telemetry lane; **not** a production `theme_mapper` change.
 
 **Plain headline:** picking stocks by what's actually in the theme's news beat the LLM's gut picks over the tested month — but almost all the winning came from two hot weeks in mid-June, so V-forward watches it live to see if it holds outside that patch.
+
+---
+
+## 13. AMENDMENT 2026-08-03 — proposal-prompt change breaks the pre-registered LLM cohort
+
+**Written 2026-08-03, BEFORE the change reaches production. Deploy date: TBD** (fill in when the VPS pipeline image carrying the change is rebuilt).
+
+A pre-registration is amended by **addition, never by revision**. Sections 6, 8, 11 and 11.5 are left exactly as written on 2026-07-12 and remain authoritative for what was pre-registered; this section only records a treatment change that arrives after them and what it does to the cohort.
+
+### 13.1 What is about to change
+
+Epic #974 (event-grounding), stage 1 issue #975, branch `feature/mapper-event-conditioning` — **not merged and not deployed as of 2026-08-03**. It conditions the ticker-proposal prompt on the resolved catalyst event instead of passing only the bare theme slug. That edits `_PROMPT_TEMPLATE` in `alphalens_pipeline/thematic/mapping/theme_mapper.py`. The same branch also extracts the already-existing inline candidate ceiling into a named constant `_MAX_CANDIDATES = 15` and adds it — plus `block_tag` and `implications_max` — to the `mapper_config_version()` payload.
+
+### 13.2 Why it breaks the pre-registered cohort
+
+`mapper_config_version` is the poolability key stamped on every `proposal_shadow` row (§8). Its payload includes `prompt_sha = sha256(_PROMPT_TEMPLATE)[:12]`, so any prompt edit moves the token; the three added payload fields move it as well. Rows written to `proposal_shadow/{date}.parquet` **before** the deploy and rows written **after** it therefore carry different `mapper_config_version` values and come from **two different proposal-generating treatments**. Pooling them would mix treatments inside the LLM arm and make the arm's mean uninterpretable.
+
+### 13.3 What is NOT affected
+
+- **The mechanical arm.** It uses no LLM prompt at all — equal-weight salience membership over `primary_entities` (`proposal_shadow.mechanical_salience_candidates`), `MECH_RULE_VERSION = "mech-salience-equalweight-v1"`, unchanged. Its accrual runs continuously across the deploy.
+- **The mcap band.** Unchanged; `mcap_range` stays in the token payload with the same values, so the universe constraint (§6.3) is identical on both sides of the deploy.
+- **Proposal breadth.** **Unchanged.** Production already asks for "5 to 15" candidates inline; the branch only gives that same 15 a name. The candidate count does not move.
+- **The mechanical rule version** and the shadow schema (`proposal_shadow_version`, the shadow columns) — unchanged.
+
+### 13.4 Decision
+
+1. **Segment on `mapper_config_version`.** Every V-forward analysis splits the LLM arm by this token and never pools across it.
+2. **Retain, do not delete, the pre-change rows.** They are analysed as their own cohort (the pre-event-conditioning LLM arm) and remain the reference point for any later before/after comparison.
+3. **Restart the fresh-week counter for the LLM arm at the deploy date.** §11.5 requires ">=8-10 fresh ISO weeks spanning a different regime" before any verdict. For the LLM arm that counter restarts at deploy, so the LLM-arm verdict slips from the ~2026-09 stated in §11.5 to roughly **deploy + 8-10 weeks**. With a deploy in August 2026 that puts the window around **mid-October to mid-November 2026**; the exact dates are fixed once the deploy date above is filled in.
+4. **The head-to-head follows the LLM-arm clock.** The mechanical arm's accrual is not reset (§13.3), but a paired comparison is only as old as its younger arm.
+5. **Endpoints and kill rules are unchanged** and apply per cohort: H=21 membership primary, recency7d confirmatory, H=10 logged with "H=10 keeps flipping positive" as the KILL signal (§11.5).
+
+### 13.5 Limitation — the shift is assumed, not measured
+
+Whether event-conditioning actually shifts the LLM proposal **distribution** is **unmeasured**. No before/after comparison has been run, and nothing here claims one would find a difference. The segmentation is a precaution taken because the **treatment** changed, not because a change in **output** has been demonstrated. Should a later comparison find the two cohorts indistinguishable, pooling them is a decision to take at that point, on that evidence, and to record as a further amendment — not an assumption available now.
+
+### 13.6 Pointers
+
+- **Epic #974** — event-grounding: the unit of analysis should be the event, not the article.
+- **Stage 1 #975** — `feature/mapper-event-conditioning`, the prompt change described above.
+- Pre-registered instrument: §8. Guardrails and verdict conditions: §11.5. Frozen mechanical rule: §6.
