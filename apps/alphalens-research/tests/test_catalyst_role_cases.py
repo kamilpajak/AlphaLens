@@ -61,6 +61,12 @@ VERDICT_PROBE_VALUES: dict[str, Any] = {
 
 _REQUIRED_TOP_LEVEL_KEYS = ("case_set_version", "extracted_on", "purpose", "sources", "cases")
 _REQUIRED_CASE_KEYS = ("case_id", "anchor", "expected_role", "provenance", "event")
+
+# How a source file came to exist, which a path and a hash cannot express:
+#   recorded            - written by the pipeline over real ingested news
+#   seeded              - rows authored by hand into the store for an experiment
+#   derived-from-seeded - genuine pipeline output whose INPUT was a seeded row
+CAPTURE_KINDS = ("recorded", "seeded", "derived-from-seeded")
 _REQUIRED_EVENT_KEYS = (
     "ticker",
     "brief_date",
@@ -143,6 +149,28 @@ class TestCaseSetSchema(unittest.TestCase):
         for key in _REQUIRED_TOP_LEVEL_KEYS:
             self.assertIn(key, case_set)
         self.assertTrue(case_set["sources"], "sources must name where the payloads came from")
+
+    def test_every_source_declares_how_it_was_captured(self):
+        # A path and a hash say WHERE a payload came from, not whether anything
+        # produced it by hand. A store can hold a seeded row that looks exactly
+        # like pipeline output, so the distinction has to be declared, not
+        # inferred - a hand-authored row silently treated as a recording becomes
+        # the baseline every later change is measured against.
+        for source in load_case_set()["sources"]:
+            with self.subTest(source=source.get("name")):
+                self.assertIn(source.get("capture"), CAPTURE_KINDS)
+                if source["capture"] != "recorded":
+                    self.assertTrue(
+                        source.get("hand_authored_fields"),
+                        "a source that is not a plain recording must name what was authored by hand",
+                    )
+
+    def test_capture_check_rejects_an_undeclared_source(self):
+        # Positive control: without this the check above passes on a case set
+        # whose sources simply omit the field, which is the failure it exists
+        # to catch.
+        undeclared = {"name": "x", "path": "~/x.parquet"}
+        self.assertNotIn(undeclared.get("capture"), CAPTURE_KINDS)
 
     def test_every_source_is_re_readable(self):
         # A source named only in prose cannot be checked by anyone auditing the

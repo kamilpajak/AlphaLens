@@ -44,7 +44,24 @@ quiet edit. Add new cases (including new contested ones) freely; changing an exi
 `expected_role` needs its own justification.
 
 Every case names its `provenance`, and the top-level `sources` block records where each file
-came from. Nothing here is hand-written: all payloads were extracted from real recorded runs.
+came from. No payload was written for this fixture: each was copied out of a store. What that
+store held is a separate question, answered per source by `capture` below.
+
+## How each source was captured
+
+Every source declares a `capture` kind, because a path and a hash say *where* a payload came
+from and not whether a human typed it:
+
+- `recorded` - written by the pipeline over real ingested news.
+- `seeded` - rows authored by hand into the store for an experiment. A seeded row sits in the
+  same store, in the same schema, as a real one.
+- `derived-from-seeded` - genuine pipeline output whose *input* was a seeded row.
+
+Anything that is not `recorded` must list its `hand_authored_fields`. The six anchor cases are
+`recorded`. The one contested case (`QUBT@2026-04-14`) traces to a `seeded` row: the NVIDIA
+Ising press release it stands for is real, but the store row representing it was hand-authored
+in May 2026 for an earlier experiment. That is fine for a case that only tracks a rubric
+disagreement, and it is NOT fine as evidence of what the production extractor emits.
 
 Every source names a `path`, and the one that is not a live cache also names a `sha256`.
 `role_audit_input.parquet` - the source of all six anchor payloads - is an ad-hoc join that no

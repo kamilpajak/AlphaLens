@@ -17,17 +17,41 @@
       "name": "role_audit_input.parquet",
       "description": "450-row joined brief-row x catalyst-event corpus the role instrument was first run over. Supplies all six anchor payloads. Ad-hoc join: no script in the repo produces it, so it was moved out of the throwaway working directory into the runtime data tree at the path above and pinned by content hash. Unlike the two production caches below - which the pipeline rewrites - this corpus is frozen, so the hash stays valid and the six anchor payloads can be re-derived from it rather than taken on trust.",
       "path": "~/.alphalens/role_audit/role_audit_input.parquet",
-      "sha256": "91ed9759405152bc1126439061da955f5a2b75dbaa2c6711db19eddfaa6cfc85"
+      "sha256": "91ed9759405152bc1126439061da955f5a2b75dbaa2c6711db19eddfaa6cfc85",
+      "capture": "recorded"
     },
     {
       "name": "~/.alphalens/thematic_scored/2026-04-14.parquet",
-      "description": "Production scored-candidate cache for the 2026-04-14 asof. Supplies the QUBT company / sector / industry / theme and the source event title and URL for the contested case. Live production cache: the pipeline rewrites it, so it carries no content hash.",
-      "path": "~/.alphalens/thematic_scored/2026-04-14.parquet"
+      "description": "Scored-candidate output for the 2026-04-14 asof. Genuine pipeline output, but its INPUT was a seeded news row (see the next source), so every event-side field it carries traces back to a hand-authored row rather than to ingested news. Supplies the QUBT company / sector / industry / theme for the contested case. Live cache the pipeline rewrites, so it carries no content hash.",
+      "path": "~/.alphalens/thematic_scored/2026-04-14.parquet",
+      "capture": "derived-from-seeded",
+      "hand_authored_fields": [
+        "source_event_title",
+        "source_event_url",
+        "catalyst_event_type",
+        "sentiment",
+        "primary_entities",
+        "second_order_implications"
+      ]
     },
     {
       "name": "~/.alphalens/thematic_events/2026-04-14.parquet",
-      "description": "Production extracted-event cache for the 2026-04-14 asof. Supplies the recorded event_type, sentiment, primary_entities and second_order_implications of news_id nvda_ising_2026_04_14 (the NVIDIA Ising launch replayed by apps/alphalens-research/scripts/replay_nvda_qubt.py). Live production cache: the pipeline rewrites it, so it carries no content hash.",
-      "path": "~/.alphalens/thematic_events/2026-04-14.parquet"
+      "description": "Extracted-event row for the 2026-04-14 asof. NOT pipeline output: a single row authored by hand into the store in May 2026 for the original NVIDIA Ising experiment. Four things give it away - one row where a real day holds ~200, a slug news_id where real rows carry a 16-hex content hash, a 60-character body ending in a literal ellipsis, and model='gemini-2.5-flash' from a client this project removed in PR #416. The underlying press release is real; this row is a stand-in for it.",
+      "path": "~/.alphalens/thematic_events/2026-04-14.parquet",
+      "capture": "seeded",
+      "hand_authored_fields": [
+        "news_id",
+        "source",
+        "title",
+        "body",
+        "url",
+        "published_at",
+        "event_type",
+        "primary_entities",
+        "themes",
+        "sentiment",
+        "second_order_implications"
+      ]
     }
   ],
   "cases": [
@@ -210,7 +234,8 @@
         "second_order_implications": [
           "Quantum hardware vendors may benefit from Ising tooling"
         ]
-      }
+      },
+      "payload_caveat": "This case's event payload traces to a seeded store row, not to ingested news (see sources). It is usable as a contested case because the press release it stands for is real and the rubric disagreement is about the ROLE, not the wording - but it must not be cited as evidence of what the production extractor emits, and it should be replaced by a real recording if one is captured."
     }
   ]
 }
