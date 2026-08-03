@@ -11,6 +11,7 @@ real modules.
 
 from __future__ import annotations
 
+import functools
 import logging
 import math
 import os
@@ -32,6 +33,11 @@ from broker_contract.contract import (
     SupportsStandaloneStop,
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
+)
+from broker_contract.exit_geometry import (
+    ExitPolicy,
+    SetupStaticPolicy,
+    resolve_exit_policy,
 )
 
 from alphalens_pipeline.brokers.automanager.position_manager import (
@@ -197,6 +203,13 @@ class LoopDeps:
     wake_event: threading.Event | None = None
     stream_tick: Callable[[], None] | None = None
     stream_trigger: StreamTrigger | None = None
+    # Behavioral exit policy, resolved ONCE from ALPHALENS_BROKER_EXIT_POLICY in
+    # build_default_deps and cached here so the hot protection/placement paths read
+    # the instance instead of re-resolving the env string every tick (a ValueError
+    # there would starve the unconditional protection — adversarial-review P0). The
+    # default is the inert setup_static policy so every test/second-broker LoopDeps
+    # built without it behaves like today's dark path.
+    exit_policy: ExitPolicy = field(default_factory=SetupStaticPolicy)
 
 
 @dataclass
@@ -699,6 +712,11 @@ def build_default_deps(
     _compact_standalone_stop_journal()
 
     broker = get_default_broker()
+    # Resolve the behavioral exit policy ONCE, at startup — fail fast on a bad env
+    # name here (a ValueError inside the per-tick protection pass would starve every
+    # position that tick). The resolved instance is cached on LoopDeps + threaded
+    # into build_protection_view so no hot path ever re-resolves.
+    exit_policy = resolve_exit_policy(_exit_policy())
     if not isinstance(broker, SupportsStandaloneStop):
         raise BrokerCapabilityError(
             f"broker {broker.name!r} does not implement place_standalone_stop "
@@ -735,9 +753,9 @@ def build_default_deps(
     # _amend_enabled(): the reanchor is part of the geometry feature, not the Stage-3
     # grow/downsize amend that ALPHALENS_BROKER_AMEND_ENABLED gates — requiring that
     # flag too would let geometry go live WITHOUT the reanchor, the exact unsafe combo.
-    if _exit_policy() != "setup_static" and not isinstance(broker, SupportsAmendStop):
+    if exit_policy.requires_amend_stop and not isinstance(broker, SupportsAmendStop):
         raise BrokerCapabilityError(
-            f"ALPHALENS_BROKER_EXIT_POLICY={_exit_policy()!r} needs the AmendStop rail for "
+            f"exit policy {exit_policy.name!r} needs the AmendStop rail for "
             f"the PR-6b fill-complete reanchor, but broker {broker.name!r} does not implement "
             "amend_stop_amount (SupportsAmendStop) — geometry-live would leave a wrong-distance "
             "stop. Wire an amend-capable broker or unset the flag (setup_static)."
@@ -776,7 +794,7 @@ def build_default_deps(
         read_records=_read_records,
         verdicts_fn=reconcile_bridge.verdicts,
         build_position_view=_make_position_view_builder(broker),
-        build_protection_view=build_protection_view,
+        build_protection_view=functools.partial(build_protection_view, exit_policy=exit_policy),
         execute_protection=_make_protection_executor(
             broker, throttle, place_oco_exit=oco_placer, amend_stop=amend_placer
         ),
@@ -788,6 +806,7 @@ def build_default_deps(
         wake_event=wake_event,
         stream_tick=stream_tick,
         stream_trigger=stream_trigger,
+        exit_policy=exit_policy,
     )
 
 
@@ -1907,6 +1926,7 @@ def build_protection_view(
     broker: Broker,
     _records: list[Mapping[str, Any]],
     *,
+    exit_policy: ExitPolicy | None = None,
     clock: Callable[[], float] = time.time,
 ) -> ProtectionView:
     """Assemble the ONE per-tick protection snapshot (saxo-oco memo §6): live
@@ -1968,6 +1988,10 @@ def build_protection_view(
             journal_lines, "amend_failed", now, _AMEND_FAILED_TTL_S
         ),
         reanchored_by_uic=_fold_reanchored_markers(journal_lines),
+        # The startup wiring (build_default_deps) binds the real cached policy via
+        # functools.partial; the None default only guards direct test calls, where
+        # the inert setup_static policy keeps the view byte-identical to today.
+        exit_policy=exit_policy if exit_policy is not None else SetupStaticPolicy(),
     )
 
 

@@ -3374,6 +3374,10 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
                 notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
             )
         self.assertIsNotNone(deps)
+        # The policy is resolved ONCE at startup and cached on the deps so the hot
+        # protection path never re-resolves the env string (adversarial-review P0).
+        self.assertEqual(deps.exit_policy.name, "atr_bracket_1p5")
+        self.assertTrue(deps.exit_policy.requires_amend_stop)
 
     def test_fail_fasts_when_flag_flipped_but_broker_cannot_amend(self) -> None:
         with (
@@ -3401,6 +3405,23 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
                 notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
             )
         self.assertIsNotNone(deps)
+        # Default env resolves to the inert setup_static policy, cached on the deps.
+        self.assertEqual(deps.exit_policy.name, "setup_static")
+        self.assertFalse(deps.exit_policy.requires_amend_stop)
+
+    def test_raises_value_error_on_unknown_exit_policy_name(self) -> None:
+        # An unknown env name FAILS FAST at startup (build_default_deps), never
+        # deferred into a tick where a ValueError would starve the protection pass.
+        with (
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_ProtBroker(),  # capable broker: the name, not capability, fails
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_EXIT_POLICY": "bogus"}),
+        ):
+            with self.assertRaises(ValueError):
+                cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
 
 
 class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):

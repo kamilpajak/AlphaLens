@@ -47,6 +47,7 @@ from broker_contract.contract import (
     OrderStatus,
     Position,
 )
+from broker_contract.exit_geometry import ExitPolicy, SetupStaticPolicy
 
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 
@@ -463,6 +464,11 @@ class ProtectionView:
     # negligible). Default empty dict so pure tests + a second broker stay
     # source-compatible.
     reanchored_by_uic: Mapping[int, float] = field(default_factory=dict)
+    # The behavioral exit policy for this tick, threaded from ``deps.exit_policy``
+    # by ``control_loop.build_protection_view`` (resolved ONCE at startup). Default =
+    # the inert ``setup_static`` so any ProtectionView built without it behaves like
+    # today's dark path (pure tests + a second broker stay source-compatible).
+    exit_policy: ExitPolicy = field(default_factory=SetupStaticPolicy)
 
 
 @dataclass(frozen=True)
