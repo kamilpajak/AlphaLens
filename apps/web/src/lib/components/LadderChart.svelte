@@ -117,7 +117,9 @@
 		return hitLevelIds.has(`tp${index + 1}`);
 	}
 	const stopHit = $derived(
-		payload.markers.some((m) => m.kind === 'SL' || m.kind === 'TIME_STOP')
+		payload.markers.some(
+			(m) => m.kind === 'SL' || m.kind === 'SL_TOUCHED' || m.kind === 'TIME_STOP'
+		)
 	);
 
 	let chartContainer = $state<HTMLDivElement | undefined>(undefined);
@@ -439,6 +441,7 @@
 	//   ENTRY     → cyan  arrowUp   belowBar  (E1, E2, ...)  — prominent
 	//   TP        → green arrowDown aboveBar  (TP1, ...)
 	//   SL        → red   arrowDown belowBar  (SL)
+	//   SL_TOUCHED → dim red circle belowBar (stop crossed, closed nothing)
 	//   TIME_STOP → amber arrowDown aboveBar  (TS)
 	function buildMarkers(raw: ChartMarker[]): SeriesMarker<Time>[] {
 		return raw.map((m, i) => {
@@ -461,6 +464,12 @@
 					return { ...base, position: 'aboveBar', color: `${COLOR.green}66`, shape: 'circle' };
 				case 'SL':
 					return { ...base, position: 'belowBar', color: COLOR.red, shape: 'arrowDown' };
+				case 'SL_TOUCHED':
+					// Stop crossed but the position was already fully sold by earlier
+					// TPs — economically empty. Dimmed circle (no arrow), mirroring
+					// TP_TOUCHED: a solid red arrow must not overstate a loss that
+					// never happened.
+					return { ...base, position: 'belowBar', color: `${COLOR.red}66`, shape: 'circle' };
 				case 'TIME_STOP':
 					return { ...base, position: 'aboveBar', color: COLOR.amber, shape: 'arrowDown' };
 				default:

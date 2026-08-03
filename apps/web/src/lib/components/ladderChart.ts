@@ -4,12 +4,15 @@ import type { ChartBar, ChartMarker } from '$lib/types';
  *  it opens the position, never ends the in-trade window. TP_TOUCHED IS included:
  *  the replay marks exit_reached once every TP price level is touched, so a
  *  touched-but-unsold deeper TP still closes the in-trade window (matches the
- *  pipeline's holding period), even though it sold no tranche. */
+ *  pipeline's holding period), even though it sold no tranche. SL_TOUCHED IS
+ *  included too: an economically-empty stop (earlier TPs already sold the whole
+ *  position) still ends the in-trade window — the level WAS crossed. */
 const EXIT_KINDS: ReadonlySet<ChartMarker['kind']> = new Set([
 	'TP',
 	'TP_TOUCHED',
 	'SL',
-	'TIME_STOP'
+	'TIME_STOP',
+	'SL_TOUCHED'
 ]);
 
 /** The time of the position's FINAL exit crossing, or null if it never exited.
