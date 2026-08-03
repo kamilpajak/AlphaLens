@@ -47,6 +47,10 @@ from broker_contract.contract import (
     OrderStatus,
     Position,
 )
+from broker_contract.exit_geometry import (
+    SetupStaticPolicy,
+    resolve_exit_policy,
+)
 
 _RID = "87e0ab88-c1f2-4e88-b5b8-8fbbbb6e1a6d"
 _ENTRY = "5039287596"
@@ -228,9 +232,13 @@ def _pview(
     oco_recently_placed: frozenset[int] = frozenset(),
     amend_recently_failed: frozenset[int] = frozenset(),
     reanchored_by_uic: dict[int, float] | None = None,
+    exit_policy: Any = None,
 ) -> ProtectionView:
     longs = long_positions if long_positions is not None else {}
     alls = all_positions if all_positions is not None else dict(longs)
+    # Only override the ProtectionView default (inert SetupStaticPolicy) when a
+    # test passes an explicit policy — every non-reanchor caller stays byte-identical.
+    policy_kwargs: dict[str, Any] = {} if exit_policy is None else {"exit_policy": exit_policy}
     return ProtectionView(
         long_positions=longs,
         all_positions=alls,
@@ -240,6 +248,7 @@ def _pview(
         oco_recently_placed=oco_recently_placed,
         amend_recently_failed=amend_recently_failed,
         reanchored_by_uic=reanchored_by_uic or {},
+        **policy_kwargs,
     )
 
 
@@ -870,6 +879,11 @@ class TestReconcileProtectionArms(unittest.TestCase):
 _OCO_ON = {"ALPHALENS_BROKER_OCO_ENABLED": "1"}
 _AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
 _EXIT_POLICY_ATR_BRACKET = {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}
+# The cached behavioral policy the reanchor arm now reads off ``view.exit_policy``
+# (Task 5). The ``_EXIT_POLICY_ATR_BRACKET`` env patch remains on the pre-existing
+# tests only to keep them green across the env->view contract switch; the arm no
+# longer reads it (Task 6 removes the env sentinel entirely).
+_ATR_POLICY = resolve_exit_policy("atr_bracket_1p5")
 
 
 class TestB0OcoDirectOnFill(unittest.TestCase):
@@ -1629,15 +1643,22 @@ class TestFillCompleteReanchor(unittest.TestCase):
         reanchor: pm.ReanchorFacts | None,
         amend_recently_failed: frozenset[int] = frozenset(),
         reanchored_by_uic: dict[int, float] | None = None,
+        stop_price: float = 85.0,
+        exit_policy: Any = None,
     ) -> tuple[Position, ProtectionView]:
+        # ``stop_price`` is the placement-time brief disaster floor (``prior_stop``
+        # in the reanchor envelope). Default 85.0 sits BELOW the 89.0 reanchor
+        # target (avg_price 95.0 - 1.5*4.0) so the never-below-floor envelope
+        # ALLOWS the tighten — a realized fill above the planned blend.
         pos = _pos(owned, avg_price=avg_price)
         stop = _leg("stop-1", "StopIfTraded", owned)  # sole clean covering stop, no TP
         view = _pview(
             long_positions={_UIC: pos},
             sell_legs_by_uic={_UIC: (stop,)},
-            planned_by_uic={_UIC: _plan(reanchor=reanchor)},
+            planned_by_uic={_UIC: _plan(stop_price=stop_price, reanchor=reanchor)},
             amend_recently_failed=amend_recently_failed,
             reanchored_by_uic=reanchored_by_uic,
+            exit_policy=exit_policy,
         )
         return pos, view
 
@@ -1649,7 +1670,9 @@ class TestFillCompleteReanchor(unittest.TestCase):
         self.assertEqual(actions, [NoOp()])
 
     def test_policy_on_covered_sole_stop_valid_avg_price_emits_amendstop(self) -> None:
-        pos, view = self._covered_view(owned=7.0, avg_price=95.0, reanchor=self._facts())
+        pos, view = self._covered_view(
+            owned=7.0, avg_price=95.0, reanchor=self._facts(), exit_policy=_ATR_POLICY
+        )
         with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
             actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
@@ -1669,6 +1692,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=95.0,
             reanchor=self._facts(),
             reanchored_by_uic={_UIC: 95.0},
+            exit_policy=_ATR_POLICY,
         )
         with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
             actions = reconcile_long(_UIC, pos, view)
@@ -1680,6 +1704,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
             avg_price=95.0,
             reanchor=self._facts(),
             reanchored_by_uic={_UIC: 90.0},  # a prior, DIFFERENT blend
+            exit_policy=_ATR_POLICY,
         )
         with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
             actions = reconcile_long(_UIC, pos, view)
@@ -1690,7 +1715,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         self.assertEqual(action.reanchor_avg_price, 95.0)
 
     def test_plan_reanchor_none_is_noop(self) -> None:
-        pos, view = self._covered_view(reanchor=None)
+        pos, view = self._covered_view(reanchor=None, exit_policy=_ATR_POLICY)
         with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
             actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
@@ -1703,27 +1728,99 @@ class TestFillCompleteReanchor(unittest.TestCase):
             long_positions={_UIC: pos},
             sell_legs_by_uic={_UIC: (stop, tp)},
             planned_by_uic={_UIC: _plan(tp_price=306.72, reanchor=self._facts())},
+            exit_policy=_ATR_POLICY,
         )
         with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
             actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_avg_price_sentinel_le_zero_is_noop(self) -> None:
-        pos, view = self._covered_view(avg_price=0.0, reanchor=self._facts())
+        pos, view = self._covered_view(
+            avg_price=0.0, reanchor=self._facts(), exit_policy=_ATR_POLICY
+        )
         with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
             actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_computed_target_le_zero_is_noop(self) -> None:
-        # avg_price 5.0 - 1.5*4.0 = -1.0 <= 0 -> never a bad stop.
-        pos, view = self._covered_view(avg_price=5.0, reanchor=self._facts(k_atr=1.5, atr=4.0))
+        # avg_price 5.0 - 1.5*4.0 = -1.0 <= 0 -> the policy refuses (never a bad stop).
+        pos, view = self._covered_view(
+            avg_price=5.0, reanchor=self._facts(k_atr=1.5, atr=4.0), exit_policy=_ATR_POLICY
+        )
         with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
             actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_amend_recently_failed_is_noop(self) -> None:
         pos, view = self._covered_view(
-            reanchor=self._facts(), amend_recently_failed=frozenset({_UIC})
+            reanchor=self._facts(),
+            amend_recently_failed=frozenset({_UIC}),
+            exit_policy=_ATR_POLICY,
+        )
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    # ----- Task 5: cached-policy routing + never-below-brief-floor envelope -----
+
+    def test_setup_static_cached_policy_is_inert(self) -> None:
+        # The cached ``view.exit_policy`` is the inert SetupStaticPolicy: even with
+        # a realized fill ABOVE the planned blend (a would-be tighten), the null
+        # policy's ``decide_reanchor`` returns None so the arm never fires.
+        pos, view = self._covered_view(
+            avg_price=102.0,
+            reanchor=self._facts(),
+            stop_price=94.0,
+            exit_policy=SetupStaticPolicy(),
+        )
+        actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_above_blend_reanchor_tightens_and_is_preserved(self) -> None:
+        # Realized avg_price 102.0 ABOVE the planned blend -> reanchor target
+        # 102.0 - 1.5*4.0 = 96.0, which sits ABOVE the brief floor (94.0). The
+        # envelope allows it, byte-identical to the pre-envelope AmendStop.
+        pos, view = self._covered_view(
+            owned=7.0,
+            avg_price=102.0,
+            reanchor=self._facts(),
+            stop_price=94.0,
+            exit_policy=_ATR_POLICY,
+        )
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertAlmostEqual(action.stop_price, 102.0 - 1.5 * 4.0)  # 96.0, above the 94.0 floor
+        self.assertEqual(action.target_qty, 7.0)
+        self.assertEqual(action.reanchor_avg_price, 102.0)
+
+    def test_below_blend_reanchor_refused_by_brief_floor_envelope(self) -> None:
+        # The accepted Decision-1 break: realized avg_price 95.0 BELOW the planned
+        # blend -> reanchor target 95.0 - 1.5*4.0 = 89.0, which drops BELOW the
+        # brief disaster floor (94.0). Today's code would have emitted a looser
+        # AmendStop at 89.0; the never-below-brief-floor envelope now refuses and
+        # the resting stop stays at the brief floor.
+        pos, view = self._covered_view(
+            owned=7.0,
+            avg_price=95.0,
+            reanchor=self._facts(),
+            stop_price=94.0,
+            exit_policy=_ATR_POLICY,
+        )
+        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
+            actions = reconcile_long(_UIC, pos, view)
+        self.assertEqual(actions, [NoOp()])
+
+    def test_degenerate_atr_is_noop(self) -> None:
+        # A degenerate ATR (0.0) yields no reanchor target -> NoOp, never a bad stop.
+        pos, view = self._covered_view(
+            avg_price=95.0,
+            reanchor=self._facts(atr=0.0),
+            stop_price=94.0,
+            exit_policy=_ATR_POLICY,
         )
         with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
             actions = reconcile_long(_UIC, pos, view)
@@ -1731,31 +1828,31 @@ class TestFillCompleteReanchor(unittest.TestCase):
 
 
 class TestGappedDeepFillReanchorGating(unittest.TestCase):
-    """HEADLINE gating test (PR-6b): a 2-tier ladder with a gapped DEEP fill.
+    """HEADLINE gating test: a 2-tier ladder with a gapped DEEP fill, now under
+    the Task-5 never-below-brief-floor envelope (Decision 1).
 
     Planned blend 100.0, ATR 4.0, k_atr 1.5 -> planned stop 94.0 (the resting
-    standalone stop, sized at PLACEMENT time to the planned blend). The
-    REALIZED avg_price is 95.0 (a deep gap-down fill, below the planned blend).
+    standalone stop AND the brief disaster floor, sized at PLACEMENT time to the
+    planned blend). The REALIZED avg_price is 95.0 (a deep gap-down fill, below
+    the planned blend), so the raw reanchor target would be
+    ``95.0 - 1.5*4.0 == 89.0`` — which sits BELOW the 94.0 brief floor.
 
-    WITHOUT the reanchor the live risk distance is
-    ``avg_price - planned_stop = 95.0 - 94.0 = 1.0``, which DRIFTS from the
-    intended ``1.5 * ATR = 6.0`` — the stop sits far too close to the realized
-    entry. Reconciling with the exit-geometry policy ON must emit an AmendStop
-    that restores the invariant EXACTLY: ``stop_price == 95.0 - 1.5*4.0 == 89.0``,
-    i.e. risk == 1.5*ATR again."""
+    Pre-envelope, the arm would have PATCHed the stop DOWN to 89.0, loosening the
+    disaster stop below what the brief authorized. Decision 1 REFUSES that: a
+    reanchor may only ever tighten toward the floor, never move below it. So the
+    arm returns None and the resting stop stays at the 94.0 brief floor."""
 
-    def test_drift_exists_pre_reanchor_and_amendstop_restores_the_invariant(self) -> None:
+    def test_deep_gap_down_would_drop_below_brief_floor_so_envelope_refuses(self) -> None:
         planned_blend = 100.0
         atr = 4.0
         k_atr = 1.5
-        planned_stop = planned_blend - k_atr * atr  # 94.0 — sized at placement
+        planned_stop = planned_blend - k_atr * atr  # 94.0 — the brief disaster floor
         realized_avg_price = 95.0  # deep gap-down fill, below the planned blend
 
-        # (a) the drift exists pre-reanchor: live risk != intended risk.
-        pre_reanchor_risk = realized_avg_price - planned_stop
-        intended_risk = k_atr * atr
-        self.assertAlmostEqual(pre_reanchor_risk, 1.0)
-        self.assertNotAlmostEqual(pre_reanchor_risk, intended_risk)
+        # The raw (pre-envelope) reanchor target would loosen the stop below the floor.
+        raw_reanchor_target = realized_avg_price - k_atr * atr  # 89.0
+        self.assertAlmostEqual(raw_reanchor_target, 89.0)
+        self.assertLess(raw_reanchor_target, planned_stop)  # below the 94.0 brief floor
 
         owned = 10.0  # a 2-tier ladder's netted owned qty after both fills
         pos = _pos(owned, avg_price=realized_avg_price)
@@ -1766,22 +1863,14 @@ class TestGappedDeepFillReanchorGating(unittest.TestCase):
             long_positions={_UIC: pos},
             sell_legs_by_uic={_UIC: (stop,)},
             planned_by_uic={_UIC: plan},
+            exit_policy=_ATR_POLICY,
         )
 
         with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
             actions = reconcile_long(_UIC, pos, view)
 
-        # (b) the emitted stop_price restores the invariant EXACTLY.
-        self.assertEqual(len(actions), 1)
-        action = actions[0]
-        self.assertIsInstance(action, AmendStop)
-        assert isinstance(action, AmendStop)
-        corrected_stop_price = realized_avg_price - k_atr * atr
-        self.assertAlmostEqual(corrected_stop_price, 89.0)
-        self.assertAlmostEqual(action.stop_price, corrected_stop_price)
-        self.assertAlmostEqual(realized_avg_price - action.stop_price, intended_risk)
-        self.assertEqual(action.target_qty, owned)
-        self.assertEqual(action.reanchor_avg_price, realized_avg_price)
+        # The envelope refuses the below-floor reanchor: no AmendStop, resting stop stays.
+        self.assertEqual(actions, [NoOp()])
 
 
 class TestExitPolicyFlag(unittest.TestCase):
