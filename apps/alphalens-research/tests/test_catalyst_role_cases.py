@@ -338,13 +338,19 @@ class TestBlindnessCheckerPositiveControl(unittest.TestCase):
         self.assertTrue(violations)
         self.assertTrue(any(v.startswith("rationale=") for v in violations))
 
-    def test_checker_fires_once_per_leaked_field(self):
+    def test_checker_fires_for_every_leaked_field(self):
+        """A leaked field shows up twice - once as the bare field name, once as
+        ``name=value`` - so both halves of the checker are exercised per field.
+        The name says "for every", not "once per", because two entries is the
+        correct count."""
         leaky = "\n".join(
             [f"{name}: {value}" for name, value in VERDICT_PROBE_VALUES.items()],
         )
         violations = blindness_violations(leaky)
         for name in EXCLUDED_FIELDS:
-            self.assertIn(name, violations)
+            with self.subTest(field=name):
+                self.assertIn(name, violations)
+                self.assertIn(f"{name}={VERDICT_PROBE_VALUES[name]}", violations)
 
     def test_checker_is_silent_on_a_real_rendered_prompt(self):
         case = anchor_cases()[0]

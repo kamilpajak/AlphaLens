@@ -15,7 +15,7 @@
   "sources": [
     {
       "name": "role_audit_input.parquet",
-      "description": "450-row joined brief-row x catalyst-event corpus the role instrument was first run over. Supplies all six anchor payloads."
+      "description": "450-row joined brief-row x catalyst-event corpus the role instrument was first run over. Supplies all six anchor payloads. Ad-hoc join: no script in the repo produces it and the file was not kept, so unlike the two production caches below it cannot be re-read to re-check these payloads - the copies frozen here are the surviving record. New cases should come from a source that can be read again."
     },
     {
       "name": "~/.alphalens/thematic_scored/2026-04-14.parquet",
