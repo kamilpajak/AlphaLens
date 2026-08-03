@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from alphalens_pipeline.data.alt_data.polygon_client import PolygonClient
 from alphalens_pipeline.thematic.extraction import event_extractor
 from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
 REPLAY_DIR = Path.home() / ".alphalens" / "replay" / "nvda_qubt"
 REPLAY_DIR.mkdir(parents=True, exist_ok=True)
@@ -98,12 +99,37 @@ def step_layer2() -> dict:
     return event
 
 
+def _replay_catalyst() -> CatalystPayload:
+    """The press release this replay is built around, as the mapper input.
+
+    The proposal is event-conditioned, so the replay must hand the mapper
+    the same event the operator is replaying rather than a bare theme word.
+    """
+    return CatalystPayload(
+        url="https://nvidianews.nvidia.com/news/nvidia-ising",
+        title=HEADLINE,
+        published_at=ASOF.isoformat(),
+        event_type="product_launch",
+        primary_entities=["NVDA"],
+        confidence=0.9,
+        second_order_implications=[],
+        echo_count=1,
+        trigger_url="https://nvidianews.nvidia.com/news/nvidia-ising",
+        trigger_published_at=ASOF.isoformat(),
+        is_amplified=False,
+        template_id=None,
+        template_facts=None,
+    )
+
+
 def step_layer3_propose(themes: list[str]) -> dict[str, list[dict]]:
     banner(f"Layer 3 — DeepSeek v4 Pro mapper, themes={themes}")
     api_key = os.environ["OPENROUTER_API_KEY"]
     all_by_theme: dict[str, list[dict]] = {}
     for theme in themes:
-        cands = theme_mapper.propose_candidates(theme=theme, api_key=api_key)["candidates"]
+        cands = theme_mapper.propose_candidates(
+            theme=theme, catalyst=_replay_catalyst(), api_key=api_key
+        )["candidates"]
         all_by_theme[theme] = cands
         print(f"\n--- theme={theme!r}: {len(cands)} candidates ---")
         for c in cands:

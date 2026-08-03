@@ -454,6 +454,41 @@ def _soi_list(value: Any) -> list[str]:
         return []
 
 
+def _entity_list(row: pd.Series) -> list[str]:
+    """Order-preserving, de-duplicated ``primary_entities`` for the payload.
+
+    Deliberately NOT :func:`_entity_set`, which is the obvious-looking helper
+    sitting right here: it returns a ``set``, and CPython string-set iteration
+    order is hash-randomised per process. The mapper prompt renders these, so
+    a set-backed render would make the same catalyst produce a different
+    prompt on every run — silently defeating ``temperature=0.0`` and the
+    per-date candidate freeze. Shares the same null/bare-string defences.
+    """
+    try:
+        val = row.get("primary_entities")
+    except (AttributeError, TypeError):
+        return []
+    if val is None:
+        return []
+    if isinstance(val, str):
+        stripped = val.strip().upper()
+        return [stripped] if stripped else []
+    try:
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in val:
+            if not pd.notna(raw):
+                continue
+            entity = str(raw).strip().upper()
+            if not entity or entity in seen:
+                continue
+            seen.add(entity)
+            out.append(entity)
+        return out
+    except TypeError:
+        return []
+
+
 def _entity_set(row: pd.Series) -> set[str]:
     """Coerce a row's ``primary_entities`` field to a Python set of upper-cased strings.
 
@@ -560,6 +595,7 @@ def _build_catalyst_payload_v2(
         title=title,
         published_at=catalyst[time_col].date().isoformat(),
         event_type=str(catalyst.get("event_type", "") or "") or None,
+        primary_entities=_entity_list(catalyst),
         confidence=float(catalyst["confidence"]) if pd.notna(catalyst.get("confidence")) else None,
         second_order_implications=_soi_list(catalyst.get("second_order_implications")),
         echo_count=int(echo_count),

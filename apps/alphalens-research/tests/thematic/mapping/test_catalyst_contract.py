@@ -34,6 +34,7 @@ class TestCatalystPayloadContract(unittest.TestCase):
                 "title",
                 "published_at",
                 "event_type",
+                "primary_entities",
                 "confidence",
                 "second_order_implications",
                 "echo_count",
@@ -50,6 +51,7 @@ class TestCatalystPayloadContract(unittest.TestCase):
         d = payload.to_dict()
         self.assertEqual(d["url"], "https://x/news")
         self.assertEqual(d["event_type"], "m_and_a")
+        self.assertEqual(d["primary_entities"], ["ACME", "BETA"])
         self.assertEqual(d["template_id"], "m_and_a_press_release")
         self.assertEqual(d["template_facts"], {"deal_value_usd": 1.0})
         # to_dict carries exactly the field set (no extra / missing keys).
@@ -67,6 +69,7 @@ class TestProducerConsumerSeam(unittest.TestCase):
                 "event_type": "m_and_a",
                 "confidence": 0.9,
                 "second_order_implications": ["supplier upside"],
+                "primary_entities": ["ACME", "BETA"],
                 "timestamp": pd.Timestamp("2026-05-10T12:00:00Z"),
                 "template_id": "m_and_a_press_release",
                 "template_fields_json": '{"deal_value_usd": 1.0}',
@@ -85,6 +88,31 @@ class TestProducerConsumerSeam(unittest.TestCase):
         self.assertEqual(payload.template_id, "m_and_a_press_release")
         self.assertEqual(payload.template_facts, {"deal_value_usd": 1.0})
 
+    def test_producer_carries_primary_entities_in_order(self):
+        # The mapper prompt renders these, so the ORDER must be reproducible.
+        # ``_entity_set`` (the obvious-looking neighbouring helper) returns a
+        # set, and CPython string-set iteration is hash-randomised per process
+        # — a set-backed render would make the prompt differ run-to-run for the
+        # same catalyst, defeating temperature=0.0 and the per-date freeze.
+        payload = self._build_payload_from_resolver()
+        self.assertEqual(payload.primary_entities, ["ACME", "BETA"])
+        again = self._build_payload_from_resolver()
+        self.assertEqual(again.primary_entities, payload.primary_entities)
+
+    def test_producer_tolerates_a_missing_primary_entities_column(self):
+        catalyst = pd.Series(
+            {
+                "url": "https://x/news",
+                "title": "Acme acquires Beta",
+                "event_type": "m_and_a",
+                "confidence": 0.9,
+                "second_order_implications": [],
+                "timestamp": pd.Timestamp("2026-05-10T12:00:00Z"),
+            }
+        )
+        payload = catalyst_resolver._build_catalyst_payload(catalyst, "timestamp")
+        self.assertEqual(payload.primary_entities, [])
+
     def test_catalyst_signals_consumes_payload(self):
         payload = self._build_payload_from_resolver()
         strength = catalyst_signals.compute_catalyst_strength(payload)
@@ -98,6 +126,7 @@ def _sample_payload() -> CatalystPayload:
         title="Acme acquires Beta",
         published_at="2026-05-10",
         event_type="m_and_a",
+        primary_entities=["ACME", "BETA"],
         confidence=0.9,
         second_order_implications=["supplier upside"],
         echo_count=1,

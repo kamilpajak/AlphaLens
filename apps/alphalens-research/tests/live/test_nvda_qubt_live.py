@@ -12,7 +12,7 @@ Three independent shape probes (decoupled with hardcoded inputs so each stage's
 break localises):
   * extract  — ``extract_one(NEWS_ROW)`` returns a dict with a non-empty
                ``themes`` list (None = the silent-empty / model-retired signal).
-  * propose  — ``propose_candidates(theme="quantum_computing")`` returns the
+  * propose  — ``propose_candidates(theme=..., catalyst=...)`` returns the
                ``{"candidates": [...], "search_keywords": [...]}`` dict shape
                with at least one ticker-bearing candidate.
   * verify   — ``verify_candidate(ticker="IONQ", ...)`` returns the
@@ -31,6 +31,8 @@ from __future__ import annotations
 import datetime as dt
 import os
 import unittest
+
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
 from tests.live import PermanentProbeError, TransientProbeError, run_probes
 
@@ -55,6 +57,26 @@ NEWS_ROW = {
     ),
     "published_at": "2026-04-14T13:00:00Z",
 }
+
+# The mapper proposal is event-conditioned, so the probe supplies the catalyst
+# the same news row would resolve to. Built inline rather than run through the
+# resolver on purpose: the three probes stay decoupled, so a mapper break still
+# localises to the mapper instead of surfacing as a resolver failure.
+CATALYST = CatalystPayload(
+    url="https://nvidianews.nvidia.com/news/nvidia-ising",
+    title=NEWS_ROW["title"],
+    published_at="2026-04-14",
+    event_type="product_launch",
+    primary_entities=["NVDA"],
+    confidence=0.9,
+    second_order_implications=[],
+    echo_count=1,
+    trigger_url="https://nvidianews.nvidia.com/news/nvidia-ising",
+    trigger_published_at="2026-04-14",
+    is_amplified=False,
+    template_id=None,
+    template_facts=None,
+)
 
 
 def _classify_llm_error(exc: Exception) -> None:
@@ -106,7 +128,9 @@ class TestNvdaQubtLive(unittest.TestCase):
 
         def _probe_propose() -> None:
             try:
-                result = theme_mapper.propose_candidates(theme="quantum_computing")
+                result = theme_mapper.propose_candidates(
+                    theme="quantum_computing", catalyst=CATALYST
+                )
             except Exception as exc:
                 _classify_llm_error(exc)
                 return

@@ -15,8 +15,28 @@ import unittest
 from unittest import mock
 
 from alphalens_pipeline.thematic.mapping import orchestrator
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
 _LOGGER = "alphalens_pipeline.thematic.mapping.orchestrator"
+
+
+def _catalyst() -> CatalystPayload:
+    """The proposal is event-conditioned, so every call carries a catalyst."""
+    return CatalystPayload(
+        url="https://example.com/e",
+        title="Autonomous drone maker wins a USAF award",
+        published_at="2026-07-24",
+        event_type="contract_award",
+        primary_entities=[],
+        confidence=0.8,
+        second_order_implications=[],
+        echo_count=1,
+        trigger_url="https://example.com/e",
+        trigger_published_at="2026-07-24",
+        is_amplified=False,
+        template_id=None,
+        template_facts=None,
+    )
 
 
 class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
@@ -38,6 +58,7 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
         ):
             candidates, _mcap, _keywords = orchestrator._propose_and_filter_candidates(
                 theme="ai_defense",
+                catalyst=_catalyst(),
                 api_key="k",
                 pro_client=None,
                 min_cap=500_000_000,
@@ -91,6 +112,7 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
         ):
             candidates, in_bracket, _keywords = orchestrator._propose_and_filter_candidates(
                 theme="ai_defense",
+                catalyst=_catalyst(),
                 api_key="k",
                 pro_client=None,
                 min_cap=500_000_000,

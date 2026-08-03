@@ -44,6 +44,7 @@ def _payload(
         title="catalyst",
         published_at=published_at,
         event_type=event_type,
+        primary_entities=[],
         confidence=confidence,
         second_order_implications=[],
         echo_count=1,

@@ -284,6 +284,12 @@ def _build_row(
         "ticker": cand["ticker"],
         "company_name": cand.get("company_name", ""),
         "rationale": cand.get("rationale", ""),
+        # The causal path the model named from the catalyst event to this
+        # company's revenue / costs / cost of capital / competitive position.
+        # Persisted so the (event, ticker) plausibility audit that diagnosed
+        # the ungrounded-linkage defect can be re-run on the new output —
+        # without it the fix is unfalsifiable. Display-only downstream.
+        "transmission_channel": cand.get("transmission_channel", ""),
         "llm_confidence": cand.get("confidence", 0.0),
         "market_cap": market_cap,
         "gates_passed": verdict["gates_passed"],
@@ -311,6 +317,7 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     "ticker",
     "company_name",
     "rationale",
+    "transmission_channel",
     "llm_confidence",
     "market_cap",
     "gates_passed",
@@ -382,6 +389,7 @@ def _load_frozen_candidates(out_path: Path, config_version: str) -> pd.DataFrame
 def _propose_and_filter_candidates(
     *,
     theme: str,
+    catalyst: CatalystPayload,
     api_key: str,
     pro_client,
     min_cap: int,
@@ -391,11 +399,18 @@ def _propose_and_filter_candidates(
 ) -> tuple[list[dict], dict[str, float], list[str]]:
     """Pro proposal → real-time mcap filter → keyword harvest.
 
+    ``catalyst`` is the theme's resolved trigger event and is REQUIRED — the
+    proposal reasons from the event, not from the theme word. Typed
+    non-optional so that "a proposal made without a grounded event" is
+    unrepresentable; :func:`_rows_for_theme` already hard-returns before this
+    call when nothing resolved.
+
     Returns (in-bracket candidate dicts, ticker→mcap map, search keywords).
     Empty candidates list signals "nothing further to do for this theme".
     """
     proposal = theme_mapper.propose_candidates(
         theme=theme,
+        catalyst=catalyst,
         api_key=api_key,
         llm_client=pro_client,
         model=model or theme_mapper.DEFAULT_MODEL,
@@ -536,6 +551,10 @@ def _rows_for_theme(
         return [], 0, 0, []
     candidates, in_bracket, keywords = _propose_and_filter_candidates(
         theme=theme,
+        # The SAME payload the emitted rows are stamped with (see
+        # ``_build_row``), so the article the card cites as provenance is the
+        # article the model reasoned from — never re-resolve it here.
+        catalyst=catalyst,
         api_key=api_key,
         pro_client=pro_client,
         min_cap=min_cap,

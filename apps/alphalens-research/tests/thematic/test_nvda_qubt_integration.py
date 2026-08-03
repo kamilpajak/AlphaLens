@@ -30,6 +30,7 @@ from unittest.mock import Mock, patch
 
 from alphalens_pipeline.thematic.extraction import event_extractor
 from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
 ASOF = dt.date(2026, 4, 14)
 TARGET_SECOND_ORDER = "QUBT"  # the 2nd-order beneficiary the pipeline must surface
@@ -75,18 +76,27 @@ CANNED_MAPPER = {
             "ticker": "qubt",
             "company_name": "Quantum Computing Inc",
             "rationale": "Photonic quantum hardware; benefits from QEC tooling",
+            "transmission_channel": (
+                "NVDA ships QEC tooling -> photonic stacks integrate it faster "
+                "-> QUBT hardware revenue accelerates"
+            ),
             "confidence": 0.82,
         },
         {
             "ticker": "IONQ",
             "company_name": "IonQ Inc",
             "rationale": "Trapped-ion pure-play named in the release",
+            "transmission_channel": (
+                "the release names trapped-ion partners -> the named partner "
+                "wins follow-on orders -> IONQ backlog rises"
+            ),
             "confidence": 0.95,
         },
         {
             "ticker": "MADEUP",
             "company_name": "Made Up Inc",
             "rationale": "Low-confidence filler",
+            "transmission_channel": "event -> unclear -> revenue",
             "confidence": 0.3,
         },
     ],
@@ -121,9 +131,31 @@ def _run_extract() -> dict:
     return event
 
 
+# The proposal is event-conditioned: the mapper reasons from the resolved
+# catalyst event, not from the theme word. The replay's own catalyst is the
+# NVDA release, so the stub mirrors it.
+CANNED_CATALYST = CatalystPayload(
+    url="https://example.com/nvda-qec",
+    title="Nvidia opens its quantum error-correction toolkit to partners",
+    published_at="2026-04-14",
+    event_type="product_launch",
+    primary_entities=["NVDA"],
+    confidence=0.9,
+    second_order_implications=[],
+    echo_count=1,
+    trigger_url="https://example.com/nvda-qec",
+    trigger_published_at="2026-04-14",
+    is_amplified=False,
+    template_id=None,
+    template_facts=None,
+)
+
+
 def _run_propose() -> dict:
     with patch.object(theme_mapper, "_call_llm", return_value=_fake_llm_response(CANNED_MAPPER)):
-        return theme_mapper.propose_candidates(theme="quantum_computing", api_key="testkey")
+        return theme_mapper.propose_candidates(
+            theme="quantum_computing", catalyst=CANNED_CATALYST, api_key="testkey"
+        )
 
 
 class TestNvdaQubtGates(unittest.TestCase):
@@ -195,6 +227,13 @@ class TestNvdaQubtCallContracts(unittest.TestCase):
     def test_propose_candidates_accepts_api_key_kwarg(self):
         params = inspect.signature(theme_mapper.propose_candidates).parameters
         self.assertIn("api_key", params)
+
+    def test_propose_candidates_requires_the_catalyst_event(self):
+        # The proposal must be conditioned on the resolved event, never on the
+        # theme word alone — that is what made the linkage ungrounded.
+        params = inspect.signature(theme_mapper.propose_candidates).parameters
+        self.assertIn("catalyst", params)
+        self.assertIs(params["catalyst"].default, inspect.Parameter.empty)
 
     def test_propose_candidates_returns_dict_with_candidates_key(self):
         # The #328 break: this used to be a bare list. A dict with "candidates"
