@@ -538,6 +538,26 @@ class SaxoStreamingClient:
         except Exception:  # pragma: no cover - a reader crash must not touch main
             logger.warning("saxo stream reader thread crashed", exc_info=True)
 
+    def _log_session_failure(self, exc: Exception) -> None:
+        """Log a connection that ended, at the level its cause warrants.
+
+        Before the main loop has pushed the first bearer (``_current_token is
+        None``) a failed connect is the expected startup-window wait, NOT a real
+        failure: the reader thread is spawned before the first tick, and that
+        first tick can lag ~15s behind a full reconcile, so the pre-token
+        connect attempts raise "no bearer token pushed before connect" once a
+        second until the token lands (live 2026-08-02: 16 such lines over 16s,
+        then a silent, healthy stream). ``_current_token`` is set-once (never
+        re-cleared), so once a token has been pushed this branch never recurs.
+        DEBUG for that wait keeps a self-healing startup from reading as a 1/s
+        WARNING crisis; the same #918 exemption keeps it off the breaker. Any
+        failure AFTER a token is present is a genuine session failure -> WARNING.
+        """
+        if self._current_token is None:
+            logger.debug("saxo stream connect deferred (startup, no bearer yet): %s", exc)
+        else:
+            logger.warning("saxo stream session failed: %s", exc)
+
     async def _supervise(self) -> None:  # pragma: no cover - exercised by live probe
         import asyncio
 
@@ -547,7 +567,7 @@ class SaxoStreamingClient:
             try:
                 await self._run_one_connection(is_reconnect=is_reconnect)
             except Exception as exc:
-                logger.warning("saxo stream session failed: %s", exc)
+                self._log_session_failure(exc)
             is_reconnect = True
             # A clean RECONNECT-return and an exception are counted identically
             # (finding #1): both mean the connection ended and must be throttled.

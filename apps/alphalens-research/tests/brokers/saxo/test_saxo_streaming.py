@@ -17,6 +17,7 @@ exercised by the opt-in ``tests/live/test_saxo_stream_live.py`` probe, not here.
 
 from __future__ import annotations
 
+import logging
 import unittest
 from typing import Any
 
@@ -511,6 +512,45 @@ class TestStreamStartupTokenRace(unittest.TestCase):
         self.assertEqual(client._consecutive_failures, 0)
         trips = [client._plan_reconnect_step().give_up for _ in range(6)]
         self.assertEqual(trips, [False, False, False, False, False, True])
+
+    def test_startup_window_session_failure_logs_debug_not_warning(self):
+        # Same startup window, now on the LOG side. Before the main loop pushes
+        # the first bearer (_current_token is None) a failed connect is the
+        # expected "not ready yet" wait — the reader is spawned before the first
+        # tick and that tick can lag ~15s behind a full reconcile. It must log
+        # at DEBUG, not WARNING: at 1/s it reads as a crisis but is the exact
+        # self-healing wait #918 already exempts from the breaker (live 2026-08-02:
+        # 16 WARNING/s for 16s, then a silent, healthy stream once the token landed).
+        client, _ = _make_client()
+        self.assertIsNone(client._current_token)  # startup window
+        exc = SaxoStreamError("no bearer token pushed before connect")
+        with self.assertLogs(
+            "alphalens_pipeline.brokers.saxo.streaming", level="DEBUG"
+        ) as captured:
+            client._log_session_failure(exc)
+        self.assertTrue(
+            any("no bearer token" in r.getMessage() for r in captured.records),
+            "the deferred-connect wait must still be logged (troubleshooting)",
+        )
+        self.assertTrue(
+            all(r.levelno < logging.WARNING for r in captured.records),
+            "startup-window connect wait must not log at WARNING or above",
+        )
+
+    def test_session_failure_after_token_present_logs_warning(self):
+        # Once a token has been pushed (_current_token set-once), any connection
+        # that ends is a genuine session failure -> WARNING, unchanged.
+        client, _ = _make_client()
+        client.push_token("bearer")
+        exc = SaxoStreamError("websocket closed unexpectedly")
+        with self.assertLogs(
+            "alphalens_pipeline.brokers.saxo.streaming", level="WARNING"
+        ) as captured:
+            client._log_session_failure(exc)
+        self.assertTrue(
+            any("websocket closed" in r.getMessage() for r in captured.records),
+            "a real post-startup session failure must log at WARNING",
+        )
 
 
 class TestStreamSubscriptionAcceptance(unittest.TestCase):
