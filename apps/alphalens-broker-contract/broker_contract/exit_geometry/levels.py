@@ -71,3 +71,31 @@ def atr_bracket_levels(
             return None
         tp = min(tp, ceiling_price)
     return bracket_stop, tp
+
+
+def clamp_reanchor_target(
+    prior_stop: float,
+    proposed_target: float,
+    *,
+    anchor_price: float,
+    min_distance_frac: float,
+) -> float | None:
+    """Economic safety envelope for a reanchored disaster stop (memo section 3.1).
+
+    ``prior_stop`` is the placement-time planned disaster stop (the brief
+    disaster floor). Returns ``None`` = "do NOT reanchor — leave the resting stop
+    where it is" on any degenerate input or when the target would drop below
+    ``prior_stop``. NOTE: this enforces NEVER-BELOW-BRIEF-FLOOR, not
+    never-loosen-vs-the-current-live-stop (``OrderState`` carries no stop price).
+    The min-distance floor caps how close the stop may sit to ``anchor_price``
+    (a too-close proposal is pushed FARTHER from price); it is chosen so it never
+    binds the 1.5x-ATR policy and exists mainly for a future stochastic policy.
+    """
+    for value in (prior_stop, proposed_target, anchor_price):
+        if not math.isfinite(value) or value <= 0:
+            return None
+    floor_price = anchor_price * (1.0 - min_distance_frac)
+    target = min(proposed_target, floor_price)
+    if target < prior_stop:
+        return None
+    return target

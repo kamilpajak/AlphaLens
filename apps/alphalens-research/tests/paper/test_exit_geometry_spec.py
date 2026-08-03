@@ -19,6 +19,7 @@ import unittest
 
 from alphalens_pipeline.feedback.ladder_replay import replay_ladder_atr_bracket
 from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, planned_blended_entry
+from broker_contract.exit_geometry.registry import resolve_policy
 from broker_contract.trade_intent.schema import ExitGeometrySpec, ReanchorOnFill
 
 
@@ -92,6 +93,28 @@ class TestBuildExitGeometrySpec(unittest.TestCase):
         assert spec is not None
         self.assertAlmostEqual(spec.initial_levels.stop, 97.0)
         self.assertAlmostEqual(spec.initial_levels.tp, 103.0)
+
+    def test_levels_byte_identical_to_the_numeric_registry_policy(self) -> None:
+        # Task 4 routes the build through the BEHAVIORAL ExitPolicy
+        # (``resolve_exit_policy("atr_bracket_1p5").decide_placement_geometry``)
+        # instead of the numeric registry's ``resolve_policy(...).levels(...)``.
+        # Both must produce byte-identical stop/tp AND the reanchor k_atr must
+        # stay the policy's pinned 1.5x — a pure name→registry refactor of WHICH
+        # policy decides, not WHAT it decides.
+        setup = _setup(entries=[(100.0, 50.0), (98.0, 50.0)], tps=[(101.0, 100.0)], atr=2.0)
+        blended = planned_blended_entry(setup)
+        assert blended is not None
+        numeric = resolve_policy("atr_bracket_1p5")
+        expected = numeric.levels(blended, 2.0, ceiling_price=None)
+        assert expected is not None
+        expected_stop, expected_tp = expected
+
+        spec = build_exit_geometry_spec(setup)
+        assert spec is not None
+        self.assertAlmostEqual(spec.initial_levels.stop, expected_stop)
+        self.assertAlmostEqual(spec.initial_levels.tp, expected_tp)
+        self.assertAlmostEqual(spec.reaction_plan[0].k_atr, numeric.stop_atr_mult)
+        self.assertAlmostEqual(spec.reaction_plan[0].k_atr, 1.5)
 
     def test_reaction_plan_carries_a_single_reanchor_on_fill(self) -> None:
         setup = _setup(entries=[(100.0, 100.0)], atr=2.0)

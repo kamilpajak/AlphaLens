@@ -36,6 +36,7 @@ executes the returned Actions; this module performs no I/O.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 from collections.abc import Callable, Mapping
@@ -47,8 +48,15 @@ from broker_contract.contract import (
     OrderStatus,
     Position,
 )
+from broker_contract.exit_geometry import (
+    ExitPolicy,
+    SetupStaticPolicy,
+    clamp_reanchor_target,
+)
 
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
+
+logger = logging.getLogger(__name__)
 
 # Exact reconcile note string this module keys on (brokers/reconcile.py
 # _reconcile_filled). Pinned as a constant so a reconcile-side wording change
@@ -463,6 +471,11 @@ class ProtectionView:
     # negligible). Default empty dict so pure tests + a second broker stay
     # source-compatible.
     reanchored_by_uic: Mapping[int, float] = field(default_factory=dict)
+    # The behavioral exit policy for this tick, threaded from ``deps.exit_policy``
+    # by ``control_loop.build_protection_view`` (resolved ONCE at startup). Default =
+    # the inert ``setup_static`` so any ProtectionView built without it behaves like
+    # today's dark path (pure tests + a second broker stay source-compatible).
+    exit_policy: ExitPolicy = field(default_factory=SetupStaticPolicy)
 
 
 @dataclass(frozen=True)
@@ -627,9 +640,11 @@ def _maybe_reanchor(
     executor's own re-check).
 
     Fires ONLY when ALL hold:
-      - ``_exit_policy() != "setup_static"`` — the dark gate; the arm is
-        INERT by default and only activates once the operator flips the
-        exit-geometry flag (which itself requires this arm to exist).
+      - ``view.exit_policy.decide_reanchor`` returns a non-None target — the
+        cached behavioral policy (resolved ONCE at startup by
+        ``build_protection_view``) is an active geometry policy. The inert
+        ``setup_static`` policy always returns ``None`` here, so the arm stays
+        dark by default; no env sentinel is read in this pass.
       - ``plan.reanchor is not None`` — the governing planned line carried a
         geometry shadow stamp (PR-6a); a pre-PR-6a plan never reanchors.
       - ``pos.avg_price`` is finite and > 0 — never anchor on the SIM
@@ -647,10 +662,14 @@ def _maybe_reanchor(
         for that same blend, only for a NEW one (the position grew/shrank via
         another fill).
 
-    Returns ``None`` (never a bad stop) when the computed target is
-    non-finite or ``<= 0``."""
-    if _exit_policy() == "setup_static":
-        return None
+    Never-below-brief-floor envelope (Decision 1): the proposed target passes
+    through ``clamp_reanchor_target`` against ``plan.stop_price`` (the brief
+    disaster floor). A reanchor may only ever tighten toward the floor — it
+    NEVER moves the stop below ``plan.stop_price``. When the clamp would push
+    the stop below the floor (a deep gap-down fill) the arm returns ``None`` and
+    the resting stop stays put. Returns ``None`` (never a bad stop) whenever the
+    policy or the envelope refuses (non-finite / ``<= 0`` / below-floor)."""
+    policy = view.exit_policy
     if plan.reanchor is None:
         return None
     avg_price = pos.avg_price
@@ -667,9 +686,35 @@ def _maybe_reanchor(
     latched = view.reanchored_by_uic.get(uic)
     if latched is not None and abs(latched - avg_price) <= _REANCHOR_AVG_PRICE_EPS:
         return None
-    target = avg_price - plan.reanchor.k_atr * atr
-    if not math.isfinite(target) or target <= 0:
-        return None
+    proposed = policy.decide_reanchor(avg_price, atr)
+    if proposed is None:
+        return None  # setup_static inert, or a degenerate the policy refuses
+    clamped = clamp_reanchor_target(
+        plan.stop_price,
+        proposed,
+        anchor_price=avg_price,
+        min_distance_frac=policy.min_stop_distance_frac,
+    )
+    if clamped is None:
+        logger.info(
+            "reanchor refused (below brief floor): policy=%s proposed=%.4f prior_stop=%.4f avg_price=%.4f",
+            policy.name,
+            proposed,
+            plan.stop_price,
+            avg_price,
+        )
+        return None  # never-below-brief-floor (Decision 1) or degenerate -> keep the resting stop
+    if not math.isclose(clamped, proposed):
+        logger.info(
+            "reanchor envelope clamped: policy=%s proposed=%.4f clamped=%.4f prior_stop=%.4f",
+            policy.name,
+            proposed,
+            clamped,
+            plan.stop_price,
+        )
+        # TODO(INC-2): persist this divergence to the append-only journal (memo section 7),
+        # not log-only.
+    target = clamped
     owned = pos.quantity
     return AmendStop(
         uic,

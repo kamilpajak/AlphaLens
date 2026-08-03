@@ -256,6 +256,7 @@ class InProcessManagerService:
         narrows to nothing for that id, never raises)."""
         deps = self._build_deps()
         records = deps.read_records()
+        # read-only projection: never reconciles, so the unbound (inert) exit_policy is intentional
         view = control_loop.build_protection_view(deps.broker, records)
 
         wanted_symbols: set[str] | None = None
