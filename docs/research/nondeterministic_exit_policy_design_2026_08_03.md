@@ -20,7 +20,7 @@ Problems with the current shape:
 1. **Magic-string switch.** Policy selection is `os.environ["ALPHALENS_BROKER_EXIT_POLICY"]` read live in `_exit_policy()`, branched on with a **binary not-equal test** (`!= "setup_static"`). `"setup_static"` is a sentinel branched on directly, not a registry entry. A third policy would need surgery at two separate call-sites (`_journal_tier`'s `use_geometry` test **and** the reanchor gate).
 2. **Reanchor is a bolted-on arm, not part of the policy.** Placement geometry and its reanchor are co-gated by the same flag deliberately (geometry never goes live without its reanchor) — but that coupling lives in flag logic, not in one object.
 3. **The safety envelope bounds form, not economics.** Today's geometry checks that levels are constructible and under the 52w ceiling, but there is **no minimum stop-distance floor** and **no monotone-tighten rule**. A future policy could, entirely within the interface, hair-trigger-liquidate (stop too close) or **loosen a live disaster stop** below the brief-sized level.
-4. **Missing version key.** ADR 0013 ordering requires a `setup_builder_config_version` (T5) poolability key before any exit-geometry change; it is not stamped today.
+4. ~~Missing version key.~~ **Already shipped (verified 2026-08-03).** ADR 0013 R3 lists `setup_builder_config_version` (T5) as a known gap, but the key is in fact implemented (`thematic/trade_setup/config_version.py::setup_builder_config_version`) and stamped onto the frozen setup (`model.py::builder_config_version`, emitted by `to_dict()`; `builder.py:211`). The ADR R3 text is stale. No INC-0 work is needed; a one-line ADR correction is optional.
 
 ## 2. Goal (why)
 
@@ -50,7 +50,7 @@ Companion telemetry: journal a **raw-vs-clamped divergence** stamp whenever the 
 
 A single acceptance-gated PR sequence:
 
-- **INC-0 — version key.** Stamp the missing `setup_builder_config_version` (T5) poolability key. No behavior change; a clean cohort boundary ADR 0013 ordering requires before touching exit geometry.
+- **INC-0 — version key. ALREADY SHIPPED** (`setup_builder_config_version` is implemented and stamped, verified 2026-08-03 — see §1.4). ADR 0013's ordering precondition is already satisfied; no work here.
 - **INC-1 — registry + envelope (byte-identical live, modulo Decision 1).**
   - Introduce the `ExitPolicy` Protocol + a named registry (`broker_contract/exit_geometry/registry.py`).
   - `SetupStaticPolicy` becomes a real inert/null registry entry replacing the magic-string sentinel: `decide_placement_geometry` returns inert levels (static brief disaster-stop/TP still journals; nothing goes live), `decide_reanchor` returns `None`.
