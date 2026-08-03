@@ -47,6 +47,10 @@ from broker_contract.contract import (
     PlacedOrder,
     Position,
 )
+from broker_contract.exit_geometry import (
+    SetupStaticPolicy,
+    resolve_exit_policy,
+)
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
@@ -903,14 +907,17 @@ def _exit_spec(*, stop: float, tp: float, atr: float, ceiling: float | None = No
 
 
 class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
-    """PR-6a: ``_place_tiers`` journals the geometry SHADOW STAMP unconditionally
+    """``_place_tiers`` journals the geometry SHADOW STAMP unconditionally
     (memo §4.3 — the dark shadow measures anchor divergence before any flip), but
-    only OVERRIDES the journaled stop/TP prices when the ``ALPHALENS_BROKER_EXIT_POLICY``
-    env flag is not the default ``"setup_static"`` AND a buildable ``exit_spec`` exists.
-    The default (unset flag) path must stay BYTE-IDENTICAL to pre-PR-6a."""
+    only OVERRIDES the journaled stop/TP prices when the CACHED ``exit_policy``
+    reports ``applies_geometry`` AND a buildable ``exit_spec`` exists. The inert
+    ``SetupStaticPolicy`` (``applies_geometry=False``) path must stay
+    BYTE-IDENTICAL to pre-PR-6a. The gate reads the resolved-once policy object,
+    NOT the ``ALPHALENS_BROKER_EXIT_POLICY`` env var (Task 4 — name→registry
+    refactor of WHICH policy decides placement geometry)."""
 
     def _run(
-        self, *, exit_spec: Any, trade_setup: Any = None, env: dict[str, str] | None = None
+        self, *, exit_spec: Any, trade_setup: Any = None, exit_policy: Any = None
     ) -> tuple[int, list[dict[str, Any]]]:
         journaled: list[dict[str, Any]] = []
         pkg = "alphalens_pipeline.brokers"
@@ -919,13 +926,6 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
             p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
             p(mock.patch.object(cl, "_append_standalone_stop_journal", journaled.append))
-            if env is not None:
-                p(mock.patch.dict(os.environ, env))
-            else:
-                # Explicitly clear the flag so a leftover CI/dev env var can never
-                # flip the "dark" branch under test.
-                clean = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_EXIT_POLICY"}
-                p(mock.patch.dict(os.environ, clean, clear=True))
             count = cl._place_tiers(
                 _PlaceBroker(),
                 _pick("KO", "2026-07-20"),
@@ -936,20 +936,21 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
                 _placement(),
                 trade_setup,
                 exit_spec,
+                exit_policy=exit_policy if exit_policy is not None else SetupStaticPolicy(),
             )
         return count, journaled
 
-    def test_dark_default_planned_line_byte_identical_to_pre_pr6a(self) -> None:
+    def test_setup_static_policy_planned_line_byte_identical_to_pre_pr6a(self) -> None:
         spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
-        count, journaled = self._run(exit_spec=spec)
+        count, journaled = self._run(exit_spec=spec, exit_policy=SetupStaticPolicy())
         self.assertEqual(count, 1)
         line = journaled[0]
         self.assertAlmostEqual(line["stop_price"], 9.0)  # placement.disaster_stop_price, unchanged
         self.assertAlmostEqual(line["take_profit"], 12.0)  # tier.tp, unchanged
 
-    def test_dark_default_still_journals_the_geometry_shadow_stamp(self) -> None:
+    def test_setup_static_policy_still_journals_the_geometry_shadow_stamp(self) -> None:
         spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0, ceiling=20.0)
-        _count, journaled = self._run(exit_spec=spec)
+        _count, journaled = self._run(exit_spec=spec, exit_policy=SetupStaticPolicy())
         stamp = journaled[0]["geometry"]
         self.assertEqual(stamp["policy_name"], "atr_bracket_1p5")
         self.assertEqual(stamp["policy_version"], 1)
@@ -960,19 +961,19 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
         self.assertAlmostEqual(stamp["ceiling_price"], 20.0)
         self.assertFalse(stamp["applied"])
 
-    def test_forced_on_overrides_the_journaled_prices(self) -> None:
+    def test_geometry_policy_overrides_the_journaled_prices(self) -> None:
         spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
         _count, journaled = self._run(
-            exit_spec=spec, env={"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}
+            exit_spec=spec, exit_policy=resolve_exit_policy("atr_bracket_1p5")
         )
         line = journaled[0]
         self.assertAlmostEqual(line["stop_price"], 8.5)
         self.assertAlmostEqual(line["take_profit"], 13.0)
         self.assertTrue(line["geometry"]["applied"])
 
-    def test_exit_spec_none_never_overrides_even_when_flag_on(self) -> None:
+    def test_exit_spec_none_never_overrides_even_when_policy_applies_geometry(self) -> None:
         _count, journaled = self._run(
-            exit_spec=None, env={"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}
+            exit_spec=None, exit_policy=resolve_exit_policy("atr_bracket_1p5")
         )
         line = journaled[0]
         self.assertAlmostEqual(line["stop_price"], 9.0)

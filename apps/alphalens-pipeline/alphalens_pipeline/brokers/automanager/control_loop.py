@@ -790,7 +790,7 @@ def build_default_deps(
         kill_file=KILL_FILE_PATH,
         ensure_alive=keeper.ensure_alive,
         iter_picks=picks.iter_picks,
-        place_pick=_make_place_pick(broker),
+        place_pick=_make_place_pick(broker, exit_policy),
         read_records=_read_records,
         verdicts_fn=reconcile_bridge.verdicts,
         build_position_view=_make_position_view_builder(broker),
@@ -1517,17 +1517,27 @@ def _journaled_alert(send: Callable[[str], None]) -> Callable[[str], None]:
     return _alert
 
 
-def _make_place_pick(broker: Broker) -> Callable[[Any], bool]:
+def _make_place_pick(
+    broker: Broker, exit_policy: ExitPolicy | None = None
+) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
     "planned" half of the out-of-band standalone-stop journal (the entry's
     plan-level disaster stop, correlated by client_request_id for
     _make_position_view_builder to fold back later). A safety refusal or a
     resolve/size/placement failure logs and returns False rather than raising —
-    one bad pick must never crash a tick."""
+    one bad pick must never crash a tick.
+
+    ``exit_policy`` is the resolved-once cached ExitPolicy (Task 4): it decides
+    WHETHER the journaled planned stop/TP use the ``atr_bracket_1p5`` geometry
+    (``applies_geometry``) instead of the brief's static levels. It is threaded
+    down to ``_place_tiers`` because that gate lives in the nested
+    ``_journal_tier``, which has no LoopDeps in scope. Defaults to the inert
+    ``SetupStaticPolicy`` (dark) so non-geometry call sites/tests keep the
+    pre-Task-4 behavior."""
 
     def _place(pick: Any) -> bool:
-        return _place_pick(broker, pick)
+        return _place_pick(broker, pick, exit_policy)
 
     return _place
 
@@ -1632,6 +1642,7 @@ def _place_tiers(
     placement: Any,
     spec: Any = None,
     exit_spec: Any = None,
+    exit_policy: ExitPolicy | None = None,
 ) -> int:
     """Place each entry tier's bracket, journaling IMMEDIATELY after each fill so a
     mid-loop crash leaves at most a partial ladder joined to submissions.jsonl (the
@@ -1640,17 +1651,20 @@ def _place_tiers(
     failure is auditable and an all-fail pick is not retried forever.
 
     ``exit_spec`` (PR-6a; PR-7: read off ``intent.exit``) is the
-    ``atr_bracket_1p5`` geometry. When ``ALPHALENS_BROKER_EXIT_POLICY`` is the
-    default ``"setup_static"`` (dark), the journaled ``planned`` line's
-    stop/TP stay the brief's static ``placement.disaster_stop_price`` /
-    ``tier.tp`` — BYTE IDENTICAL to pre-PR-6a. Flipping the flag overrides the
-    journaled stop/TP with ``exit_spec.initial_levels`` instead (safe to flip
-    now that PR-6b's fill-complete avg_price reanchor —
-    ``position_manager._maybe_reanchor`` — ships; ``build_default_deps`` no
-    longer fail-fasts on the flag).
+    ``atr_bracket_1p5`` geometry. ``exit_policy`` (Task 4) is the resolved-once
+    cached :class:`~broker_contract.exit_geometry.ExitPolicy` — the geometry
+    override gate reads ``exit_policy.applies_geometry`` (NOT the old
+    ``ALPHALENS_BROKER_EXIT_POLICY`` env sentinel). With the inert
+    ``SetupStaticPolicy`` (``applies_geometry=False``, the default), the
+    journaled ``planned`` line's stop/TP stay the brief's static
+    ``placement.disaster_stop_price`` / ``tier.tp`` — BYTE IDENTICAL to
+    pre-PR-6a. A geometry policy (``atr_bracket_1p5``) overrides the journaled
+    stop/TP with ``exit_spec.initial_levels`` instead (safe now that PR-6b's
+    fill-complete avg_price reanchor — ``position_manager._maybe_reanchor`` —
+    ships; ``build_default_deps`` no longer fail-fasts on the flag).
     Either way, whenever ``exit_spec`` is buildable a ``"geometry"`` shadow
     stamp is journaled alongside the plan prices (telemetry only, memo §4.3) —
-    this is unconditional on the flag so the dark shadow can measure
+    this is unconditional on the policy so the dark shadow can measure
     anchor divergence before any flip.
 
     ``spec`` (PR-7) is the already-parsed
@@ -1666,6 +1680,11 @@ def _place_tiers(
         build_submission_record,
     )
     from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
+
+    # Normalize the resolved-once cached policy (Task 4): the geometry-override
+    # gate below reads ``exit_policy.applies_geometry`` instead of the old
+    # ``_exit_policy() != "setup_static"`` env sentinel. Default inert (dark).
+    exit_policy = exit_policy if exit_policy is not None else SetupStaticPolicy()
 
     def _geometry_stamp(*, use_geometry: bool) -> dict[str, Any] | None:
         if exit_spec is None:
@@ -1719,7 +1738,7 @@ def _place_tiers(
                 fx=fx,
             )
         )
-        use_geometry = _exit_policy() != "setup_static" and exit_spec is not None
+        use_geometry = exit_policy.applies_geometry and exit_spec is not None
         if use_geometry and exit_spec is not None:  # 2nd clause restated to narrow exit_spec
             stop_price = exit_spec.initial_levels.stop
             take_profit = exit_spec.initial_levels.tp
@@ -1771,11 +1790,15 @@ def _place_tiers(
     return placed_count
 
 
-def _place_pick(broker: Broker, intent: Any) -> bool:
+def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = None) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
     keep the tick logic flat; every failure path logs and returns False
     rather than raising.
+
+    ``exit_policy`` (Task 4) is the resolved-once cached policy passed straight
+    through to ``_place_tiers`` (whose nested ``_journal_tier`` owns the
+    geometry-override gate).
 
     PR-7 (broker-manager extraction memo §5): the daemon never touches a
     brief any more — ``ticker``/``brief_date``/``spec``/``exit_spec`` are all
@@ -1867,6 +1890,7 @@ def _place_pick(broker: Broker, intent: Any) -> bool:
             placement,
             spec,
             exit_spec,
+            exit_policy=exit_policy,
         )
         > 0
     )

@@ -22,8 +22,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from broker_contract.exit_geometry import resolve_exit_policy
 from broker_contract.exit_geometry.levels import ceiling_from_52w_high
-from broker_contract.exit_geometry.registry import resolve_policy
 from broker_contract.sizing import TradeSetupNotPlannableError
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
@@ -262,14 +262,16 @@ def build_exit_geometry_spec(
     if atr is None:
         return None
     ceiling = ceiling_from_52w_high(brief_trade_setup, pct_off_52w_high)
-    policy = resolve_policy("atr_bracket_1p5")
-    levels = policy.levels(blended, atr, ceiling_price=ceiling)
+    exit_policy = resolve_exit_policy("atr_bracket_1p5")
+    levels = exit_policy.decide_placement_geometry(blended, atr, ceiling_price=ceiling)
     if levels is None:
         return None
     stop, tp = levels
     return ExitGeometrySpec(
         initial_levels=InitialLevels(stop=stop, tp=tp),
-        reaction_plan=(ReanchorOnFill(k_atr=policy.stop_atr_mult, atr=atr, ceiling_price=ceiling),),
+        reaction_plan=(
+            ReanchorOnFill(k_atr=exit_policy.geom.stop_atr_mult, atr=atr, ceiling_price=ceiling),
+        ),
     )
 
 
