@@ -12,8 +12,12 @@ human alias (the betlejem5-inspired bracket doctrine, memo §2 /
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from broker_contract.exit_geometry.levels import atr_bracket_levels
+
+if TYPE_CHECKING:
+    from broker_contract.exit_geometry.policy import ExitPolicy
 
 
 @dataclass(frozen=True)
@@ -56,3 +60,22 @@ def resolve_policy(name: str, version: int = 1) -> ExitGeometryPolicy:
         return EXIT_GEOMETRY_POLICIES[(name, version)]
     except KeyError:
         raise ValueError(f"unknown exit-geometry policy: {name!r} v{version}") from None
+
+
+def resolve_exit_policy(name: str) -> ExitPolicy:
+    """Resolve a behavioral ExitPolicy by name (fail-fast on unknown).
+
+    CALL ONCE AT STARTUP — never inside the protection pass (a ValueError here
+    would starve the unconditional protection). Lazy import of ``policy`` avoids
+    a module import cycle (policy.py imports ExitGeometryPolicy from this module).
+    """
+    from broker_contract.exit_geometry.policy import AtrBracketPolicy, SetupStaticPolicy
+
+    registry: dict[str, ExitPolicy] = {
+        "setup_static": SetupStaticPolicy(),
+        "atr_bracket_1p5": AtrBracketPolicy(resolve_policy("atr_bracket_1p5")),
+    }
+    try:
+        return registry[name]
+    except KeyError:
+        raise ValueError(f"unknown exit policy: {name!r}") from None
