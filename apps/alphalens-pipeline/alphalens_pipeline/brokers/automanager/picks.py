@@ -137,7 +137,12 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
             continue
         raw_intent = record.get("intent")
         if raw_intent is None:
-            logger.warning(
+            # DEBUG, not WARNING: the manager daemon re-reads picks.jsonl every
+            # ~45s tick, so a WARNING per bare line per tick floods the journal
+            # for an expected, inert, self-healing condition (a pre-PR-7 armed
+            # line is skipped forever until re-armed — never placed). Keep it at
+            # DEBUG so troubleshooting can still surface it on demand.
+            logger.debug(
                 "iter_picks %s/%s: armed line has no 'intent' (pre-PR-7 bare shape) — "
                 "skipped, re-arm via `alphalens broker arm`",
                 ticker,
