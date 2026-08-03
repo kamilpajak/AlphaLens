@@ -1,0 +1,47 @@
+{
+  "columns": [
+    "company_name",
+    "gate_verdict_json",
+    "gates_failed",
+    "gates_failed_str",
+    "gates_passed",
+    "gates_passed_str",
+    "gates_unknown",
+    "gates_unknown_str",
+    "llm_confidence",
+    "mapper_config_version",
+    "market_cap",
+    "n_gates_failed",
+    "n_gates_passed",
+    "n_gates_unknown",
+    "novelty_config_version",
+    "novelty_rank",
+    "novelty_score",
+    "rationale",
+    "source_event_published_at",
+    "source_event_title",
+    "source_event_url",
+    "theme",
+    "theme_search_keywords",
+    "ticker",
+    "transmission_channel",
+    "verified"
+  ],
+  "row_count": 1,
+  "rows": [
+    {
+      "gates_passed_str": "tenk,press",
+      "has_catalyst": true,
+      "mcap_bucket": "3B-10B",
+      "n_gates_failed": 1,
+      "n_gates_passed": 2,
+      "n_gates_unknown": 0,
+      "theme": "quantum_computing",
+      "ticker": "RGTI",
+      "verified": true
+    }
+  ],
+  "tickers": [
+    "RGTI"
+  ]
+}

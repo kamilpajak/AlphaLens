@@ -1,7 +1,7 @@
 """Record the L3 golden-master fixtures for the map-themes stage (Phase 3b).
 
-ONE-TIME live capture. Drives the REAL ``orchestrator.map_themes`` once over a
-single theme + asof and freezes everything the hermetic replay test needs.
+Live capture. Drives the REAL ``orchestrator.map_themes`` once over a single
+theme + asof and freezes everything the hermetic replay test needs.
 
 The map-themes stage hits SIX external surfaces; this recorder captures each
 faithfully so the replay drives the REAL parsing / gate logic offline:
@@ -19,14 +19,33 @@ replay exercises the real parse/gate code. Surfaces 4-6 have NO client
 honest choice, and the real classifier / resolver logic still runs over the
 frozen data.
 
+TWO MODES
+---------
+Full capture — re-records ALL SIX surfaces from the live vendors and the local
+``~/.alphalens`` caches::
+
     OPENROUTER_API_KEY=... POLYGON_API_KEY=... SEC_EDGAR_USER_AGENT=... \
         uv run python -m scripts.record_golden_map
     # (run from apps/alphalens-research; needs ~/.alphalens/{thematic_events,
     #  thematic_news,form4_parquet} populated for the window)
+
+LLM-only re-baseline — re-records ONLY the Pro LLM cassette, serving the other
+five surfaces from the already-frozen fixtures::
+
+    OPENROUTER_API_KEY=... uv run python -m scripts.record_golden_map --llm-only
+
+Use ``--llm-only`` whenever the mapper prompt / model / sampling config changed
+and nothing else did. A full capture would move the vendor payloads, the
+market-cap snapshot, the 10-K text and the event window at the same time as the
+prompt, so any change in the projection would be unattributable. Both modes
+write into the CURRENT recording directory (``map_fixtures.CURRENT_RECORDING``);
+``--llm-only`` refuses to touch a version that already holds a cassette, so a
+re-baseline must bump that constant and leave the old recording in place.
 """
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import functools
 import json
@@ -43,18 +62,24 @@ from alphalens_pipeline.data.alt_data.sec_edgar_client import get_default_sec_cl
 from alphalens_pipeline.thematic.mapping import catalyst_resolver, orchestrator
 from alphalens_pipeline.thematic.verification import mcap_filter, recent_press, tenk_grep
 from alphalens_pipeline.thematic.verification.tenk_grep import _find_cached
+from tests.golden.map_fixtures import (
+    ASOF,
+    CURRENT_RECORDING,
+    FIXTURES,
+    THEME,
+    frozen_surfaces,
+    golden_dir,
+    llm_cassette_dir,
+)
 from tests.golden.projection import map_themes_projection
 from tests.golden.replay_client import RecordingOpenRouter
 from tests.golden.vendor_cassette import RecordingVendor
 
-THEME = "quantum_computing"
-ASOF = dt.date(2026, 5, 24)
 # 30-day catalyst + press window around ASOF (verified on-disk).
 _WINDOW_DATES = ("2026-05-15", "2026-05-18", "2026-05-24")
 # form4_store.classification_years(2026) = {2023, 2024, 2025, 2026}.
 _FORM4_YEARS = (2023, 2024, 2025, 2026)
 
-_FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "golden" / "fixtures" / "map_day"
 _ALPHALENS = Path.home() / ".alphalens"
 
 
@@ -75,7 +100,7 @@ def _build_form4_fixture(tickers: set[str]) -> None:
     same view ``has_opportunistic_buy`` loads. Writes the same hive layout.
     """
     root = _ALPHALENS / "form4_parquet"
-    out_root = _FIXTURES / "form4_parquet"
+    out_root = FIXTURES / "form4_parquet"
     upper = {t.upper() for t in tickers}
     ciks: set = set()
     per_year: dict[int, pd.DataFrame] = {}
@@ -105,7 +130,7 @@ def _freeze_tenk_cache(tickers: set[str]) -> None:
     one ``fetch_10k_text`` would pick at ``ASOF`` — the replay then reads it
     back identically (cache hit before any CIK/SEC resolution).
     """
-    dest = _FIXTURES / "tenk_cache"
+    dest = FIXTURES / "tenk_cache"
     dest.mkdir(parents=True, exist_ok=True)
     real_cache = _ALPHALENS / "thematic_tenk"
     frozen = []
@@ -129,7 +154,7 @@ def _trim_polygon_cassettes(tickers: set[str]) -> None:
     so the trimmed payload still serves the same call.
     """
     upper = {t.upper() for t in tickers}
-    vendor_dir = _FIXTURES / "cassettes_vendor"
+    vendor_dir = FIXTURES / "cassettes_vendor"
     for path in vendor_dir.glob("*.json"):
         rec = json.loads(path.read_text())
         if rec.get("method") != "get_news_range":
@@ -146,17 +171,83 @@ def _trim_polygon_cassettes(tickers: set[str]) -> None:
         )
 
 
-def main() -> None:
+def _write_golden(df: pd.DataFrame, out_dir: Path, dest: Path) -> None:
+    """Publish one capture: candidates parquet + projection into ``dest``.
+
+    ``map_themes`` runs against a throwaway ``out_dir`` rather than straight
+    into the fixture tree, because it FREEZES per date: an existing
+    ``<asof>.parquet`` whose ``mapper_config_version`` matches is loaded back
+    instead of recomputed. Writing the recorder's output where the recorder
+    later reads it would silently serve the previous capture and never fire the
+    live call this script exists to make.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    parquet = out_dir / f"{ASOF.isoformat()}.parquet"
+    if parquet.exists():
+        shutil.copyfile(parquet, dest / parquet.name)
+    (dest / "projection.json").write_text(
+        json.dumps(map_themes_projection(df), indent=2, sort_keys=True)
+    )
+
+
+def record_llm_only() -> None:
+    """Re-record ONLY the Pro LLM cassette, holding every other input constant.
+
+    Serves the five non-LLM surfaces from the already-frozen fixtures via
+    :func:`frozen_surfaces`, so exactly one variable moves: the request the
+    mapper sends. Makes ONE live LLM call.
+
+    Note what holding the surfaces constant implies for the result. The frozen
+    market-cap map bounds the reachable ticker universe — a newly proposed
+    ticker that is not in ``mcap.json`` gets ``None`` and is dropped by the
+    bracket filter — and the Polygon cassette was trimmed to the previous
+    capture's tickers. The re-baseline therefore characterizes the new prompt
+    ON THE OLD FIXTURE, which is the point: attribution. Widening the universe
+    is a separate, deliberate full re-capture.
+    """
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise SystemExit("OPENROUTER_API_KEY must be set for the live LLM capture")
+    llm_dir = llm_cassette_dir()
+    if llm_dir.exists() and any(llm_dir.glob("*.json")):
+        raise SystemExit(
+            f"{llm_dir} already holds a recording — bump map_fixtures.CURRENT_RECORDING "
+            "and re-run. Overwriting destroys the historical comparison a "
+            "characterization golden exists for."
+        )
+    llm_dir.mkdir(parents=True, exist_ok=True)
+    rec_pro = RecordingOpenRouter(
+        OpenRouterClient(api_key=os.environ["OPENROUTER_API_KEY"]), llm_dir
+    )
+    with tempfile.TemporaryDirectory(prefix="map_llm_record_") as out_str:
+        out_dir = Path(out_str)
+        with frozen_surfaces(pro_client=rec_pro):
+            df = orchestrator.map_themes(
+                themes=[THEME],
+                asof=ASOF,
+                api_key=os.environ["OPENROUTER_API_KEY"],
+                polygon_api_key="frozen",  # forces the patched PolygonClient branch
+                output_dir=out_dir,
+                market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
+            )
+        _write_golden(df, out_dir, golden_dir())
+    print(
+        f"re-recorded LLM cassette {CURRENT_RECORDING}: {len(df)} mapped rows; "
+        f"tickers={sorted(df['ticker']) if len(df) else []}; "
+        f"{len(list(llm_dir.glob('*.json')))} cassette(s) -> {llm_dir}"
+    )
+
+
+def record_full() -> None:
+    """Re-record ALL SIX surfaces from the live vendors and ``~/.alphalens``."""
     for env in ("OPENROUTER_API_KEY", "POLYGON_API_KEY", "SEC_EDGAR_USER_AGENT"):
         if not os.environ.get(env):
             raise SystemExit(f"{env} must be set for the live capture")
 
-    events_fix = _FIXTURES / "events"
-    news_fix = _FIXTURES / "news"
-    golden_dir = _FIXTURES / "golden"
-    llm_dir = _FIXTURES / "cassettes_llm"
-    vendor_dir = _FIXTURES / "cassettes_vendor"
-    for d in (golden_dir, llm_dir, vendor_dir):
+    events_fix = FIXTURES / "events"
+    news_fix = FIXTURES / "news"
+    llm_dir = llm_cassette_dir()
+    vendor_dir = FIXTURES / "cassettes_vendor"
+    for d in (llm_dir, vendor_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     _freeze_window("thematic_events", events_fix)
@@ -184,8 +275,12 @@ def main() -> None:
 
     # Fresh empty press cache so the Polygon firehose actually fires (gets
     # recorded); TemporaryDirectory cleans it on exit (no /tmp leak).
-    with tempfile.TemporaryDirectory(prefix="press_record_") as press_tmp_str:
+    with (
+        tempfile.TemporaryDirectory(prefix="press_record_") as press_tmp_str,
+        tempfile.TemporaryDirectory(prefix="map_full_record_") as out_str,
+    ):
         press_tmp = Path(press_tmp_str)
+        out_dir = Path(out_str)
         with (
             mock.patch.object(orchestrator, "_init_pro_client", lambda api_key: rec_pro),
             mock.patch.object(orchestrator, "PolygonClient", lambda *a, **k: rec_poly),
@@ -213,9 +308,10 @@ def main() -> None:
                 asof=ASOF,
                 api_key=os.environ["OPENROUTER_API_KEY"],
                 polygon_api_key="dummy",  # forces the `if polygon_api_key:` branch
-                output_dir=golden_dir,
+                output_dir=out_dir,
                 market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
             )
+        _write_golden(df, out_dir, golden_dir())
 
     # Form-4 fixture: trim to every ticker an mcap lookup touched (= every
     # proposed candidate that survived to the verify stage and beyond).
@@ -230,18 +326,32 @@ def main() -> None:
     # Shrink the 30-day Polygon firehose cassette (~15MB) to candidate rows.
     _trim_polygon_cassettes(set(df["ticker"]) if len(df) else set())
 
-    (_FIXTURES / "mcap.json").write_text(
+    (FIXTURES / "mcap.json").write_text(
         json.dumps(dict(sorted(mcap_capture.items())), indent=2, sort_keys=True)
-    )
-    (golden_dir / "projection.json").write_text(
-        json.dumps(map_themes_projection(df), indent=2, sort_keys=True)
     )
     n_llm = len(list(llm_dir.glob("*.json")))
     n_vendor = len(list(vendor_dir.glob("*.json")))
     print(
         f"captured {len(df)} mapped rows; tickers={sorted(df['ticker']) if len(df) else []}; "
-        f"{n_llm} LLM + {n_vendor} vendor cassettes; mcap for {len(mcap_capture)} tickers -> {_FIXTURES}"
+        f"{n_llm} LLM + {n_vendor} vendor cassettes; mcap for {len(mcap_capture)} tickers -> {FIXTURES}"
     )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--llm-only",
+        action="store_true",
+        help=(
+            "re-record ONLY the Pro LLM cassette against the already-frozen "
+            "vendor / event / 10-K / Form-4 / market-cap fixtures (one live call)"
+        ),
+    )
+    args = parser.parse_args()
+    if args.llm_only:
+        record_llm_only()
+    else:
+        record_full()
 
 
 if __name__ == "__main__":

@@ -1,117 +1,80 @@
 """L3 golden-master replay of the map-themes stage (test-strategy Phase 3b).
 
 Drives the REAL ``orchestrator.map_themes`` deterministically and offline over
-one theme (``quantum_computing`` @ 2026-05-24, → RGTI + QUBT). The six external
-surfaces are controlled at their natural seams so the REAL parse/gate logic
-runs:
+one theme (``quantum_computing`` @ 2026-05-24). The six external surfaces are
+controlled at their natural seams — the Pro LLM by a cassette, the other five by
+:func:`tests.golden.map_fixtures.frozen_surfaces` — so the REAL parse/gate logic
+runs while nothing leaves the machine.
 
-* Pro LLM       → ``ReplayOpenRouter`` cassette (real DeepSeek bytes)
-* Polygon press → ``VendorCassette`` (real ``get_news_range`` payload), injected
-  by patching ``orchestrator.PolygonClient``
-* SEC 10-K      → frozen on-disk 10-K text cache (``tenk_cache/``) read by the
-  real grep gate; no SEC client call fires (cache hit precedes CIK resolution)
-* yfinance mcap → frozen ``{ticker: mcap}`` map (no client to cassette)
-* Form-4        → trimmed hive parquet, real Cohen-Malloy classifier runs over it
-* catalyst      → frozen events/news window, real resolver runs over it
+WHAT THIS TEST IS
+-----------------
+It is a CHARACTERIZATION test, not a specification test. It answers exactly one
+question: *did this execution differ from the approved one?* It never answers
+*is this execution correct?* Concretely:
+
+* A failure means the pipeline's behaviour on this one frozen input moved. That
+  is a prompt to go and look, not a verdict that the new behaviour is wrong.
+* Passing proves the deterministic downstream machinery — parsing, the four
+  gates, the schema, the plumbing — still handles this recorded response the
+  approved way. It proves NOTHING about whether the model picks the right
+  companies: the cassette is ONE sample of a stochastic generator (the same
+  prompt and event, run 15 times, returned one target ticker 6/15 times).
+* Re-baselining is therefore legitimate and expected, but never casual. The
+  cassette miss stays fail-loud, the old recording is preserved beside the new
+  one under its own version directory, and the request/projection diff is
+  written up for review — see ``map_fixtures.CURRENT_RECORDING`` and
+  ``docs/research/golden_map_rebaseline_2026_08_03.md``.
 
 Assert SIDE EFFECTS, not exit codes: a verification regression flips the gate
 verdicts in the projection; a schema drift shows in ``columns``. Cassette /
-fixture miss is fail-loud — re-record with ``scripts/record_golden_map.py``.
+fixture miss is fail-loud — re-record with
+``scripts/record_golden_map.py --llm-only``.
 """
 
 from __future__ import annotations
 
-import datetime as dt
-import functools
 import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 import pandas as pd
-from alphalens_pipeline.thematic.mapping import catalyst_resolver, orchestrator
-from alphalens_pipeline.thematic.verification import insider, mcap_filter, recent_press, tenk_grep
+from alphalens_pipeline.thematic.mapping import orchestrator
 
+from tests.golden.map_fixtures import (
+    ASOF,
+    FIXTURES,
+    THEME,
+    frozen_surfaces,
+    golden_projection_path,
+    llm_cassette_dir,
+)
 from tests.golden.projection import map_themes_projection
 from tests.golden.replay_client import ReplayOpenRouter
-from tests.golden.vendor_cassette import VendorCassette
 
-_THEME = "quantum_computing"
-_ASOF = dt.date(2026, 5, 24)
-_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "map_day"
-_GOLDEN = _FIXTURES / "golden" / "projection.json"
-
-# Genuine module functions captured at import, BEFORE any patch — the partials
-# below wrap the REAL logic with a redirected dir/cache, not a patched stand-in.
-_REAL_FIND = catalyst_resolver.find_trigger_event
-_REAL_FWU = recent_press.fetch_window_universe
-_REAL_HTIRP = recent_press.has_theme_in_recent_press
-_REAL_TENK = tenk_grep.has_theme_keywords_in_10k
-_REAL_INSIDER = insider.has_opportunistic_buy
+_GOLDEN = golden_projection_path()
 
 
 def _replay_map(out_dir: Path) -> pd.DataFrame:
-    if not _GOLDEN.exists() or not any((_FIXTURES / "cassettes_vendor").glob("*.json")):
+    if not _GOLDEN.exists() or not any((FIXTURES / "cassettes_vendor").glob("*.json")):
         raise FileNotFoundError(
-            f"golden fixtures missing under {_FIXTURES} — run "
-            "scripts/record_golden_map.py (one-time live capture) to record them"
+            f"golden fixtures missing under {FIXTURES} (expected {_GOLDEN}) — run "
+            "scripts/record_golden_map.py --llm-only to re-baseline the current "
+            "recording, or without the flag for a full six-surface re-capture"
         )
-    pro = ReplayOpenRouter(_FIXTURES / "cassettes_llm")
-    vendor = VendorCassette(_FIXTURES / "cassettes_vendor")
-    mcap_map = {k.upper(): v for k, v in json.loads((_FIXTURES / "mcap.json").read_text()).items()}
-
-    # Fresh empty press cache so the Polygon get_news_range call fires (served
-    # by the cassette) and no write lands in ~/.alphalens; TemporaryDirectory
-    # cleans it on exit (no /tmp leak across runs).
-    with tempfile.TemporaryDirectory(prefix="press_replay_") as press_tmp_str:
-        press_tmp = Path(press_tmp_str)
-        with (
-            mock.patch.object(orchestrator, "_init_pro_client", lambda api_key: pro),
-            mock.patch.object(orchestrator, "PolygonClient", lambda *a, **k: vendor),
-            mock.patch.object(orchestrator, "get_default_polygon_client", lambda: vendor),
-            mock.patch.object(
-                catalyst_resolver,
-                "find_trigger_event",
-                functools.partial(
-                    _REAL_FIND, events_dir=_FIXTURES / "events", news_dir=_FIXTURES / "news"
-                ),
-            ),
-            mock.patch.object(
-                recent_press,
-                "fetch_window_universe",
-                functools.partial(_REAL_FWU, cache_dir=press_tmp),
-            ),
-            mock.patch.object(
-                recent_press,
-                "has_theme_in_recent_press",
-                functools.partial(_REAL_HTIRP, cache_dir=press_tmp),
-            ),
-            mock.patch.object(
-                tenk_grep,
-                "has_theme_keywords_in_10k",
-                functools.partial(_REAL_TENK, cache_dir=_FIXTURES / "tenk_cache"),
-            ),
-            mock.patch.object(
-                insider,
-                "has_opportunistic_buy",
-                functools.partial(_REAL_INSIDER, form4_root=_FIXTURES / "form4_parquet"),
-            ),
-            mock.patch.object(
-                mcap_filter, "fetch_mcap", lambda ticker, *, asof=None: mcap_map.get(ticker.upper())
-            ),
-        ):
-            return orchestrator.map_themes(
-                themes=[_THEME],
-                asof=_ASOF,
-                api_key="replay",
-                polygon_api_key="replay",  # forces the patched PolygonClient branch
-                output_dir=out_dir,
-                market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
-            )
+    pro = ReplayOpenRouter(llm_cassette_dir())
+    with frozen_surfaces(pro_client=pro):
+        return orchestrator.map_themes(
+            themes=[THEME],
+            asof=ASOF,
+            api_key="replay",
+            polygon_api_key="replay",  # forces the patched PolygonClient branch
+            output_dir=out_dir,
+            market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
+        )
 
 
-class TestGoldenMapReplay(unittest.TestCase):
+class TestGoldenMapCharacterization(unittest.TestCase):
     def test_replay_matches_golden_projection(self):
         with tempfile.TemporaryDirectory() as td:
             df = _replay_map(Path(td))
@@ -119,12 +82,16 @@ class TestGoldenMapReplay(unittest.TestCase):
         golden = json.loads(_GOLDEN.read_text())
         self.assertEqual(got, golden)
 
-    def test_both_candidates_pass_tenk_and_press(self):
+    def test_kept_candidates_pass_tenk_and_press(self):
         # The two verification surfaces with recorded/frozen external data
         # (Polygon press cassette + frozen 10-K text) must both fire and pass.
+        # The kept set is pinned exactly: v2 proposed IONQ/RGTI/QBTS and only
+        # RGTI is inside the 500M-10B bracket (v1 also kept QUBT, which v2 did
+        # not propose at all). Method renamed from ..._both_candidates_... with
+        # the v2 re-baseline; the assertions are unchanged.
         with tempfile.TemporaryDirectory() as td:
             df = _replay_map(Path(td))
-        self.assertEqual(sorted(df["ticker"]), ["QUBT", "RGTI"])
+        self.assertEqual(sorted(df["ticker"]), ["RGTI"])
         for _, row in df.iterrows():
             self.assertIn("tenk", row["gates_passed"])
             self.assertIn("press", row["gates_passed"])
@@ -132,8 +99,8 @@ class TestGoldenMapReplay(unittest.TestCase):
     def test_insider_gate_runs_over_frozen_form4(self):
         # The Cohen-Malloy classifier runs over the trimmed Form-4 fixture and
         # returns a DECISIVE verdict (pass or fail), never "unknown" — proving
-        # the frozen partitions actually fed the classifier. (Golden: both fail
-        # the insider gate, so n_gates_unknown == 0.)
+        # the frozen partitions actually fed the classifier. (Golden: the kept
+        # row fails the insider gate, so n_gates_unknown == 0.)
         with tempfile.TemporaryDirectory() as td:
             df = _replay_map(Path(td))
         # Without this the test is vacuous: a replay that returns no rows at all
@@ -153,7 +120,7 @@ class TestGoldenMapReplay(unittest.TestCase):
     def test_candidates_parquet_written(self):
         with tempfile.TemporaryDirectory() as td:
             _replay_map(Path(td))
-            self.assertTrue((Path(td) / f"{_ASOF.isoformat()}.parquet").exists())
+            self.assertTrue((Path(td) / f"{ASOF.isoformat()}.parquet").exists())
 
 
 if __name__ == "__main__":
