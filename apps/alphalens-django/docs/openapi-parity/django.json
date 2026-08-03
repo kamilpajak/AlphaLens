@@ -1513,7 +1513,7 @@
             },
             "ChartMarker": {
                 "type": "object",
-                "description": "One modeled fill / exit marker, snapped to a daily bar ``time``.\n\n``kind`` is the chart vocabulary (``ENTRY`` / ``TP`` / ``SL`` / ``TIME_STOP``);\n``ambiguous`` carries the SL-first intrabar flag (a bar that touched both a TP\nhigh and the SL low, resolved SL-first).",
+                "description": "One modeled fill / exit marker, snapped to a daily bar ``time``.\n\n``kind`` is the pipeline's marker vocabulary; opaque to this serializer (a\nplain passthrough, so new kinds need no change here). ``ambiguous`` carries\nthe SL-first intrabar flag (a bar that touched both a TP high and the SL\nlow, resolved SL-first).",
                 "properties": {
                     "time": {
                         "type": "string"
