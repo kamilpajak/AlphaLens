@@ -6,10 +6,10 @@
 
 ## What this is
 
-A SECOND golden fixture for the L3 map-themes replay, added beside the existing
-`quantum_computing @ 2026-05-24` one. Nothing was replaced. The two answer
-different questions and both are now replayed by
-`tests/golden/test_golden_map_replay.py`:
+A SECOND fixture for the L3 map-themes characterization test, added beside the
+existing `quantum_computing @ 2026-05-24` one. Nothing was replaced. The two
+answer different questions and both are now replayed by
+`tests/golden/test_golden_map_characterization.py`:
 
 * `quantum_2026_05_24` exists to isolate the prompt change. It was recorded
   under the old prompt (v1) and re-recorded under the new one (v2) with the
@@ -199,6 +199,11 @@ looking at the economics. Both assertions remain deferred to their own issue.
 | `mapper_config_version` | `{"block_tag":"untrusted_event","implications_max":5,"max_candidates":15,"max_output_tokens":8000,"mcap_range":[500000000,10000000000],"model":"deepseek/deepseek-v4-pro","prompt_sha":"52b12550f344","schema":"mapper-freeze-v2","schema_sha":"ec5d56e9d13a","temperature":0.0}` |
 | approved by | Kamil Pajak |
 
+The same facts, plus a sha256 of every frozen surface, are committed in
+machine-readable form as `golden/v1/provenance.json` and checked by
+`tests/golden/test_golden_map_provenance.py`.
+
 Re-recording this fixture bumps `current_recording` on its descriptor and adds a
 new version directory beside `v1`; the recorder refuses to write into a version
-that already holds a cassette.
+that already holds a cassette, and writes the new recording's provenance file
+last, after every frozen surface is on disk.

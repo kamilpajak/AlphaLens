@@ -1,4 +1,4 @@
-"""Record the L3 golden-master fixtures for the map-themes stage (Phase 3b).
+"""Record the L3 fixtures for the map-themes characterization test (Phase 3b).
 
 Live capture. Drives the REAL ``orchestrator.map_themes`` once over one
 fixture's theme + asof and freezes everything the hermetic replay test needs.
@@ -49,6 +49,15 @@ prompt, so any change in the projection would be unattributable. Both modes
 write into the fixture's CURRENT recording directory; both refuse to touch a
 version that already holds a cassette, so a re-baseline must bump the
 descriptor's ``current_recording`` and leave the old recording in place.
+
+WHAT EVERY MODE WRITES
+----------------------
+Beside the cassette and the golden projection, both modes end by writing
+``golden/<version>/provenance.json`` (:mod:`tests.golden.map_provenance`): the
+event, the prompt version, the model and sampling config, the cassette key, a
+sha256 of every frozen surface, the capture date and the approver. It is what
+makes the recording auditable after the fact, and
+``tests/golden/test_golden_map_provenance.py`` refuses a recording without it.
 """
 
 from __future__ import annotations
@@ -67,10 +76,12 @@ import pandas as pd
 from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
 from alphalens_pipeline.data.alt_data.polygon_client import PolygonClient
 from alphalens_pipeline.thematic.mapping import catalyst_resolver, orchestrator
+from alphalens_pipeline.thematic.mapping.theme_mapper import mapper_config_version
 from alphalens_pipeline.thematic.sources.form4_store import classification_years
 from alphalens_pipeline.thematic.verification import mcap_filter, recent_press, tenk_grep
 from alphalens_pipeline.thematic.verification.tenk_grep import _find_cached
 from tests.golden.map_fixtures import MAP_FIXTURES, MapFixture, fixture_by_name, frozen_surfaces
+from tests.golden.map_provenance import build_provenance, write_provenance
 from tests.golden.projection import map_themes_projection
 from tests.golden.replay_client import RecordingOpenRouter
 from tests.golden.vendor_cassette import RecordingVendor
@@ -200,6 +211,27 @@ def _write_golden(fixture: MapFixture, df: pd.DataFrame, out_dir: Path) -> None:
     )
 
 
+def _write_provenance(fixture: MapFixture, *, mode: str) -> None:
+    """Record what this capture was made from, beside the capture itself.
+
+    Every mode ends here so a recording cannot reach the fixture tree without
+    the one document that says which event, prompt version, model, sampling and
+    frozen evidence the approved execution came from. Call it LAST: the
+    document digests every frozen surface, so it must run after the surfaces
+    are on disk or it would pin a tree that no longer exists.
+    """
+    doc = build_provenance(
+        fixture,
+        version=fixture.current_recording,
+        mapper_config_version=mapper_config_version(
+            market_cap_range=orchestrator.DEFAULT_MCAP_RANGE
+        ),
+        recorded_by=f"scripts/record_golden_map.py --fixture {fixture.name}{mode}",
+        recorded_date=dt.date.today(),
+    )
+    print(f"  provenance -> {write_provenance(fixture, doc)}")
+
+
 def _guard_recording_dir(fixture: MapFixture) -> Path:
     """Refuse to overwrite an existing recording; return the empty target dir."""
     llm_dir = fixture.llm_cassette_dir()
@@ -247,6 +279,7 @@ def record_llm_only(fixture: MapFixture) -> None:
                 market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
             )
         _write_golden(fixture, df, out_dir)
+    _write_provenance(fixture, mode=" --llm-only")
     print(
         f"re-recorded LLM cassette {fixture.name}/{fixture.current_recording}: "
         f"{len(df)} mapped rows; tickers={sorted(df['ticker']) if len(df) else []}; "
@@ -355,6 +388,10 @@ def record_full(fixture: MapFixture) -> None:
     fixture.mcap_path.write_text(
         json.dumps(dict(sorted(mcap_capture.items())), indent=2, sort_keys=True)
     )
+
+    # LAST: the provenance manifest digests every frozen surface above.
+    _write_provenance(fixture, mode="")
+
     n_llm = len(list(llm_dir.glob("*.json")))
     n_vendor = len(list(vendor_dir.glob("*.json")))
     print(

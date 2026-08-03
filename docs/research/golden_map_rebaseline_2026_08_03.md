@@ -6,7 +6,8 @@
 
 ## What this is
 
-The L3 golden replay (`tests/golden/test_golden_map_replay.py`) drives the real
+The L3 map-themes characterization test
+(`tests/golden/test_golden_map_characterization.py`) drives the real
 `orchestrator.map_themes` offline over one theme (`quantum_computing`, asof
 `2026-05-24`) with six external surfaces frozen. The mapper prompt changed on
 `feature/mapper-event-conditioning` (the proposal call now receives the resolved
@@ -47,8 +48,9 @@ its content intact (`cassettes_llm/v1/a56054c7….json` still hashes to
 `9f97d6f7d756418a0be6d9d692be758d39c6bf270ed383a602dc7ef939e93424`,
 `golden/v1/projection.json` to
 `9216f02cdbfadb64e8066c9acf63d5d4890b62257ce84f674986d437a7479eb0`), and v2 was
-added beside it. `map_fixtures.CURRENT_RECORDING` selects which one the test
-loads; the fixture tree is never globbed for "whatever is on disk".
+added beside it. The fixture descriptor's `current_recording`
+(`map_fixtures.QUANTUM_2026_05_24`) selects which one the test loads; the
+fixture tree is never globbed for "whatever is on disk".
 
 ## 1. What changed in the request descriptor
 
@@ -230,9 +232,9 @@ Two limits, stated plainly:
 
 What a green replay does support: the deterministic downstream machinery —
 prompt rendering, response parsing, `_normalize` and its channel requirement,
-the four verification gates, the mcap bracket, the emitted schema — handles the
-new response shape the approved way, and the new `transmission_channel` column
-reaches the parquet.
+the three wired verification gates (`orchestrator.GATE_NAMES`), the mcap
+bracket, the emitted schema — handles the new response shape the approved way,
+and the new `transmission_channel` column reaches the parquet.
 
 Prohibition and invariant assertions ("the article subject must not be a
 beneficiary", "a candidate must state a transmission channel that is true") are
@@ -247,9 +249,10 @@ cannot see.
 
 | field | value |
 |---|---|
-| recording version | `v2` (`map_fixtures.CURRENT_RECORDING`) |
+| fixture | `quantum_2026_05_24` (`tests/golden/map_fixtures.py`) |
+| recording version | `v2` (the descriptor's `current_recording`) |
 | recorded | 2026-08-03 |
-| recorded by | `scripts/record_golden_map.py --llm-only` (one live call) |
+| recorded by | `scripts/record_golden_map.py --fixture quantum_2026_05_24 --llm-only` (one live call) |
 | theme / asof | `quantum_computing` / `2026-05-24` (unchanged from v1) |
 | model | `deepseek/deepseek-v4-pro` |
 | sampling | `temperature=0.0`, `max_tokens=8000`, `response_format={"type": "json_object"}` |
@@ -262,3 +265,17 @@ Note on the v1 artifacts: `golden/v1/2026-05-24.parquet` predates the
 `mapper_config_version` freeze column, so the v1 config version above is derived
 from the `origin/main` code rather than read off that parquet. The v1 projection
 is the authoritative v1 record.
+
+### Machine-readable form
+
+This table is the prose companion to
+`golden/v2/provenance.json`, which carries the same facts in machine-readable
+form plus a sha256 of every frozen surface. `golden/v1/provenance.json` exists
+beside it for the superseded recording; both were written on 2026-08-03, so v1
+carries `recorded_date` 2026-06-01 with `provenance_written` 2026-08-03 and a
+`notes` field saying which of its fields were reconstructed rather than read off
+an artifact (the config version above being the one).
+
+`tests/golden/test_golden_map_provenance.py` refuses a recording without a
+complete file, and re-reads the model, sampling, cassette key and event from the
+artifacts so the document cannot quietly disagree with them.

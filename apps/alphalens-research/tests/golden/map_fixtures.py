@@ -5,8 +5,10 @@ This is the ONE place that defines (a) which recorded map-themes cases exist,
 (d) how the five NON-LLM external surfaces are frozen. Both consumers import
 from here so they cannot drift:
 
-* ``tests/golden/test_golden_map_replay.py`` — replays all six surfaces offline,
-  once per fixture in :data:`MAP_FIXTURES`.
+* ``tests/golden/test_golden_map_characterization.py`` — replays all six
+  surfaces offline, once per fixture in :data:`MAP_FIXTURES`.
+* ``tests/golden/test_golden_map_provenance.py`` — checks that every recording
+  of every fixture carries a complete ``provenance.json``.
 * ``scripts/record_golden_map.py`` — records a fixture: all six surfaces
   (``--fixture NAME``) or only the Pro LLM cassette (``--llm-only``), serving
   the other five from these same frozen files so the prompt is the single
