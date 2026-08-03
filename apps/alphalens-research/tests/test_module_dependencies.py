@@ -211,15 +211,16 @@ RULES = (
     {
         # Broker-manager extraction memo Revision R2 (operator decision,
         # 2026-07-31): "Earnings gate leaves the manager entirely ... The
-        # brokers->thematic coupling is removed by DELETION, not a port —
-        # earnings_gate moves client-side." This deletes
-        # ``brokers.automanager.earnings_gate`` (the sole
-        # ``brokers -> thematic`` coupling, memo cut-table V3) outright; the
-        # relocated gate lives at ``alphalens_cli.commands._earnings_window``
-        # and runs once at arm time, outside the ``brokers`` package. No
+        # brokers->thematic coupling is removed by DELETION, not a port."
+        # This deleted ``brokers.automanager.earnings_gate`` (the sole
+        # ``brokers -> thematic`` coupling, memo cut-table V3) outright. The
+        # gate was then relocated to arm-time and, 2026-08-03, REMOVED from
+        # the arm CLI too: arm is a pure executor and selection filtering
+        # (earnings-window avoidance included) belongs at brief-creation, not
+        # in execution tooling. Either way the ``brokers`` package must never
+        # import ``thematic`` — a permanent invariant this rule pins. No
         # ``top_level_only`` — the deleted coupling was itself a lazy
-        # function-scope import (``earnings_gate._fetch_next_earnings``), so
-        # the walker must catch that shape too.
+        # function-scope import, so the walker must catch that shape too.
         "name": "brokers must not import thematic (V3: earnings-gate deletion is the last brokers->thematic coupling)",
         "from_pkg": "alphalens_pipeline.brokers",
         "forbidden_prefix": "alphalens_pipeline.thematic",

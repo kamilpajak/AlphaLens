@@ -838,43 +838,29 @@ def arm_command(
     briefs_dir: Path = typer.Option(
         _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
     ),
-    allow_earnings_window: bool = typer.Option(
-        False,
-        "--allow-earnings-window",
-        help="Arm even when the ticker's next earnings date falls inside the entry's "
-        "TTL window (same override as ALPHALENS_BROKER_ALLOW_EARNINGS_WINDOW=1) — "
-        "for deliberate earnings-window entries (e.g. a SIM soak experiment).",
-    ),
 ) -> None:
     """Arm a picked candidate — parse the brief into a TradeIntent client-side
     and append it to the picks queue.
 
-    Validates the row against the brief at arm time (fail fast if the parquet
-    is missing, the ticker is absent, or the row has no plannable
-    trade_setup), parses the brief's trade_setup into a
+    A PURE EXECUTOR: it carries no selection / filtering logic. After the
+    structural checks (parquet present, ticker present, row has a plannable
+    trade_setup) it parses the brief's trade_setup into a
     :class:`~broker_contract.trade_intent.schema.TradeIntent` (memo
-    section 5, PR-7), then appends ONE 'armed' line carrying the full intent
-    to picks.jsonl. The VPS control loop drains the queue and never touches
-    a brief; this command places nothing.
+    section 5, PR-7) and appends ONE 'armed' line carrying the full intent to
+    picks.jsonl. The VPS control loop drains the queue and never touches a
+    brief; this command places nothing.
 
-    Earnings-window gate (memo Revision R2, 2026-07-31): deciding whether to
-    send an order — including earnings-window avoidance — is CLIENT
-    responsibility; the daemon never knows about earnings any more (the old
-    per-tick ``brokers.automanager.earnings_gate`` self-healing drain gate is
-    deleted). This is a ONE-SHOT snapshot check at arm time, not a retrying
-    rail: a ticker whose next earnings date falls inside the entry's TTL
-    window is refused outright (nothing is appended to picks.jsonl) — the
-    human re-arms after the date passes, or opts out with
-    ``--allow-earnings-window`` / ``ALPHALENS_BROKER_ALLOW_EARNINGS_WINDOW=1``.
+    No selection-policy filter (2026-08-03): the arm-time earnings-window gate
+    was removed. Selection filters — earnings-window avoidance included — belong
+    at brief-creation (the selection tier), so a filtered-out candidate never
+    reaches the brief. The client invoking arm is responsible for knowing what
+    it arms; the command never second-guesses it.
     """
     from alphalens_pipeline.brokers.automanager.picks import DEFAULT_PICKS_PATH, arm_pick
     from alphalens_pipeline.paper.brief_loader import load_brief
     from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, parse_brief_to_spec
-    from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
     from broker_contract.sizing import TradeSetupNotPlannableError
     from broker_contract.trade_intent.schema import InstrumentHint, IntentMeta, TradeIntent
-
-    from alphalens_cli.commands._earnings_window import earnings_window_refusal
 
     try:
         brief_date = dt.date.fromisoformat(date)
@@ -897,12 +883,6 @@ def arm_command(
         spec = parse_brief_to_spec(candidate.trade_setup)
     except TradeSetupNotPlannableError as exc:
         raise _fail(f"{wanted}: trade_setup not plannable — {exc}") from exc
-
-    if not allow_earnings_window:
-        ttl_days = int(spec.order_ttl_days or 0) or DEFAULT_ORDER_TTL_DAYS
-        earnings_reason = earnings_window_refusal(wanted, ttl_days=ttl_days)
-        if earnings_reason:
-            raise _fail(f"{wanted}: refused — {earnings_reason}")
 
     exit_spec = build_exit_geometry_spec(
         candidate.trade_setup, candidate.technical_pct_off_52w_high
