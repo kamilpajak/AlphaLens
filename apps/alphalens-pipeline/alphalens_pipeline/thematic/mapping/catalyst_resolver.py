@@ -454,37 +454,57 @@ def _soi_list(value: Any) -> list[str]:
         return []
 
 
-def _entity_set(row: pd.Series) -> set[str]:
-    """Coerce a row's ``primary_entities`` field to a Python set of upper-cased strings.
+def _entity_list(row: pd.Series) -> list[str]:
+    """Order-preserving, de-duplicated ``primary_entities`` for the payload.
 
-    Mirrors the access pattern used by ``_has_theme`` for the ``themes`` field
-    but operates on a full row so it can be applied row-wise via ``.apply``.
-    Returns an empty set if the column is missing, ``None``, or non-iterable.
+    Deliberately NOT :func:`_entity_set`, which is the obvious-looking helper
+    sitting right here: it returns a ``set``, and CPython string-set iteration
+    order is hash-randomised per process. The mapper prompt renders these, so
+    a set-backed render would make the same catalyst produce a different
+    prompt on every run — silently defeating ``temperature=0.0`` and the
+    per-date candidate freeze. Shares the same null/bare-string defences.
     """
     try:
         val = row.get("primary_entities")
     except (AttributeError, TypeError):
-        return set()
+        return []
     if val is None:
-        return set()
-    # Defensive: a bare string (an LLM mistake emitting ``"AAPL"`` instead of
-    # ``["AAPL"]``) would otherwise be iterated character-by-character into
-    # ``{"A", "P", "L"}`` and poison the entity-overlap arc. Treat it as a
-    # single-entity input instead.
+        return []
     if isinstance(val, str):
         stripped = val.strip().upper()
-        return {stripped} if stripped else set()
+        return [stripped] if stripped else []
     try:
-        # Skip any null-like element (``None`` / ``np.nan`` / ``pd.NA``) in the
-        # list (e.g. ``["AAPL", None]`` from a malformed parquet): ``str(None)``
-        # / ``str(nan)`` / ``str(pd.NA)`` would otherwise enter the set as the
-        # spurious entities ``"NONE"`` / ``"NAN"`` / ``"<NA>"`` — both poisoning
-        # the entity-overlap arc AND making an otherwise entity-less row look
-        # entity-rich, slipping it past the state-media catalyst gate. pd.notna
-        # handles all the null variants in one check.
-        return {str(e).strip().upper() for e in val if pd.notna(e) and str(e).strip()}
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in val:
+            if not pd.notna(raw):
+                continue
+            entity = str(raw).strip().upper()
+            if not entity or entity in seen:
+                continue
+            seen.add(entity)
+            out.append(entity)
+        return out
     except TypeError:
-        return set()
+        return []
+
+
+def _entity_set(row: pd.Series) -> set[str]:
+    """Membership view of a row's ``primary_entities``, upper-cased.
+
+    Same coercion as :func:`_entity_list` — one implementation, two containers,
+    so the null / bare-string / non-iterable defences cannot drift apart. Those
+    defences matter: a bare string (an LLM emitting ``"AAPL"`` instead of
+    ``["AAPL"]``) would otherwise iterate character-by-character into
+    ``{"A", "P", "L"}``, and a null-like element would enter as the spurious
+    entity ``"NONE"`` / ``"NAN"`` / ``"<NA>"`` — both poisoning the
+    entity-overlap arc AND making an entity-less row look entity-rich, slipping
+    it past the state-media catalyst gate.
+
+    Used where only membership matters. Never use it to render the mapper
+    prompt: set iteration order is hash-randomised per process.
+    """
+    return set(_entity_list(row))
 
 
 def _coerce_template_facts(raw: Any) -> dict | None:
@@ -560,6 +580,7 @@ def _build_catalyst_payload_v2(
         title=title,
         published_at=catalyst[time_col].date().isoformat(),
         event_type=str(catalyst.get("event_type", "") or "") or None,
+        primary_entities=_entity_list(catalyst),
         confidence=float(catalyst["confidence"]) if pd.notna(catalyst.get("confidence")) else None,
         second_order_implications=_soi_list(catalyst.get("second_order_implications")),
         echo_count=int(echo_count),

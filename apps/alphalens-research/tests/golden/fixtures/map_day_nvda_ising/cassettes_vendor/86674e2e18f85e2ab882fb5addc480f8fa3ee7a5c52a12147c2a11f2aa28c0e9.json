@@ -1,0 +1,842 @@
+{
+  "args": {
+    "end": "2026-04-15T00:00:00+00:00",
+    "limit": 1000,
+    "order": "desc",
+    "sort": "published_utc",
+    "start": "2026-03-15T00:00:00+00:00",
+    "ticker": null
+  },
+  "key": "86674e2e18f85e2ab882fb5addc480f8fa3ee7a5c52a12147c2a11f2aa28c0e9",
+  "method": "get_news_range",
+  "payload": [
+    {
+      "article_url": "https://www.benzinga.com/trading-ideas/movers/26/04/51818832/d-wave-ceo-warns-nvidia-quantum-computers-are-coming-for-you?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Erica Kollmann",
+      "description": "D-Wave CEO Alan Baratz challenged Nvidia's dominance in AI accelerators, arguing that quantum computing represents the next wave of computational power that could eventually undercut GPU-based systems. While D-Wave positions itself as a pure-play quantum vendor with working systems, Nvidia is embedding itself in the quantum stack through software, simulation, and error-correction tools. The rivalry highlights a strategic split in how companies are approaching quantum computing's future.",
+      "id": "dc7218856e569371ba00d6f59d67eb33f47f272282bbc8f1ab1d8f2304af2117",
+      "image_url": "https://cdn.benzinga.com/files/images/story/2026/04/14/D-Wave.jpeg?width=1200&height=800&fit=crop",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "CEO making aggressive competitive claims about quantum computing's potential to disrupt GPU dominance; stock up 14.68% on the day; positioned as building real-world commercial quantum solutions today rather than waiting for future breakthroughs.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "While facing competitive threats from quantum computing, Nvidia is strategically positioning itself within the quantum ecosystem through software and simulation tools rather than building quantum chips; maintaining entrenched market position in classical AI, but long-term quantum threat acknowledged.",
+          "ticker": "NVDA"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "GPU accelerators",
+        "artificial intelligence",
+        "quantum error correction",
+        "competitive positioning",
+        "accelerated computing"
+      ],
+      "published_utc": "2026-04-14T20:13:06Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "QBTS",
+        "NVDA"
+      ],
+      "title": "D-Wave CEO Warns Nvidia: Quantum Computers Are Coming For You"
+    },
+    {
+      "article_url": "https://www.benzinga.com/trading-ideas/movers/26/04/51810126/10-stocks-for-world-quantum-day-from-pure-play-to-blue%E2%80%91chip?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Erica Kollmann",
+      "description": "On World Quantum Day (April 14), the article highlights 10 publicly traded companies across the quantum computing spectrum. It categorizes them from high-risk pure-play quantum stocks like IonQ and D-Wave, to established tech giants like NVIDIA, IBM, Microsoft, Google, and Amazon that are integrating quantum into broader platforms. The Defiance Quantum ETF is presented as a diversified alternative for investors seeking exposure without single-stock risk.",
+      "id": "ccf66f6f4a3aefb1474ac7d6a5ab458524c9e149bbcc63097d133403fa164f81",
+      "image_url": "https://cdn.benzinga.com/files/images/story/2026/04/14/Quantum-Computing-Concept-Revolutionizin.jpeg?width=1200&height=800&fit=crop",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Highlighted as one of the most closely watched pure-play quantum stocks with trapped-ion quantum hardware and cloud platform access, offering direct exposure to quantum progress.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Highlighted as one of the most closely watched pure-play quantum stocks with trapped-ion quantum hardware and cloud platform access, offering direct exposure to quantum progress.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Positioned as a high-reward pure-play option focusing on quantum annealing systems and hybrid solutions for optimization problems.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Recognized as a big tech leader positioning GPUs and quantum platforms as complementary, aiming to be central to accelerated and quantum computing workflows.",
+          "ticker": "NVDA"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Noted as a pioneer in superconducting quantum systems with a public roadmap and cloud-based access, representing established quantum leadership.",
+          "ticker": "IBM"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Mentioned as providing cloud gateways connecting users to multiple quantum hardware providers, enabling quantum accessibility.",
+          "ticker": "MSFT"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Highlighted for providing cloud gateways that connect users to multiple quantum hardware providers.",
+          "ticker": "AMZN"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Recognized for running a substantial quantum research program through Google, demonstrating significant quantum investment.",
+          "ticker": "GOOG"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Recognized for running a substantial quantum research program through Google, demonstrating significant quantum investment.",
+          "ticker": "GOOGL"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Mentioned as building superconducting quantum processors and full-stack systems, contributing to quantum hardware development.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Mentioned as building superconducting quantum processors and full-stack systems, contributing to quantum hardware development.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Positioned as focusing on quantum software and applications for logistics, finance, and data-heavy use cases.",
+          "ticker": "XNDU"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Presented as a diversified one-ticket approach offering exposure to quantum computing, communications, and related technologies while reducing single-stock risk.",
+          "ticker": "QTUM"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "World Quantum Day",
+        "quantum technology",
+        "pure-play stocks",
+        "blue-chip stocks",
+        "quantum hardware",
+        "quantum software",
+        "investment strategy"
+      ],
+      "published_utc": "2026-04-14T15:54:28Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "IONQ",
+        "IONQ.WS",
+        "QBTS",
+        "NVDA",
+        "IBM",
+        "MSFT",
+        "AMZN",
+        "GOOG",
+        "GOOGL",
+        "RGTI",
+        "RGTIW",
+        "XNDU",
+        "QTUM"
+      ],
+      "title": "10 Stocks For World Quantum Day From Pure-Play To Blue‑Chip"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/04/13/down-more-than-30-this-year-has-rigetti-computing/?source=iedfolrf0000001",
+      "author": "David Jagielski, Cpa",
+      "description": "Rigetti Computing stock has declined over 30% this year and is down 75% from its 52-week high, though it has rallied recently. While the quantum computing company has long-term potential, it faces significant challenges including worsening operating losses ($84.7M in 2025 vs $68.5M in 2024), intensifying cash burn ($58.5M in 2025 vs $50.6M in 2024), and a high valuation with a price-to-sales multiple exceeding 600. Analysts suggest the stock remains too risky for most investors despite recent gains.",
+      "id": "59afa3146b3d12328142b4912e75e0900ccfd54e2ba6ff5d0fdf9cb26de18ce0",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F865241%2Fbusinessman-checking-his-phone.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite recent stock rallies, the company faces deteriorating fundamentals with worsening operating losses and accelerating cash burn. The business remains unprofitable with poor financials and questionable long-term viability. The valuation is extremely high (P/S ratio >600) relative to the company's early-stage status and execution risks, making it unsuitable for most investors.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite recent stock rallies, the company faces deteriorating fundamentals with worsening operating losses and accelerating cash burn. The business remains unprofitable with poor financials and questionable long-term viability. The valuation is extremely high (P/S ratio >600) relative to the company's early-stage status and execution risks, making it unsuitable for most investors.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "stock decline",
+        "cash burn",
+        "operating losses",
+        "valuation concerns",
+        "early-stage tech",
+        "market volatility"
+      ],
+      "published_utc": "2026-04-13T19:15:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "Down More Than 30% This Year, Has Rigetti Computing Stock Bottomed Out?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/04/13/prediction-be-rigetti-computing-stock-price-1-year/?source=iedfolrf0000001",
+      "author": "Anthony Di Pizio",
+      "description": "Rigetti Computing, despite building capable quantum computers with its latest Cepheus-1-108Q system achieving 99.9% gate fidelity, faces significant challenges. The company's 2025 revenue dropped 34% to $7.1 million, and it trades at an extremely expensive P/S ratio of over 600. While Wall Street expects 2026 revenue to triple to $22.5 million, the analyst predicts at least a 50% stock decline over the next 12 months due to overvaluation, bringing the stock to around $7 or less.",
+      "id": "21c732971ad7d60ec30eebeefa0978d6069910b858a5551db2ca08d1e76ac950",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F864733%2Fan-engineer-looking-at-a-quantum-computer-while-taking-notes.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite technical achievements in quantum computing, the company faces severe valuation concerns with a P/S ratio of 600+ (current) and 210+ (forward). Revenue declined 34% in 2025, large operating losses of $216.2 million, and quantum computers still make too many errors for real-world applications. The analyst predicts a 50%+ stock decline over 12 months.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite technical achievements in quantum computing, the company faces severe valuation concerns with a P/S ratio of 600+ (current) and 210+ (forward). Revenue declined 34% in 2025, large operating losses of $216.2 million, and quantum computers still make too many errors for real-world applications. The analyst predicts a 50%+ stock decline over 12 months.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Used as a positive comparison point, trading at a reasonable P/S ratio of 21.1 despite being described as 'one of the highest-quality companies in the entire world,' highlighting Rigetti's overvaluation by contrast.",
+          "ticker": "NVDA"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Mentioned as developing quantum computers with a more attractive valuation (P/S ratio of 9.7), positioned favorably compared to Rigetti's expensive valuation.",
+          "ticker": "GOOG"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Mentioned as developing quantum computers with a more attractive valuation (P/S ratio of 9.7), positioned favorably compared to Rigetti's expensive valuation.",
+          "ticker": "GOOGL"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a distribution partner through Amazon Braket (quantum division of AWS), providing Rigetti with a cloud platform for leasing quantum computing capacity. No sentiment expressed about Amazon itself.",
+          "ticker": "AMZN"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "valuation",
+        "revenue growth",
+        "gate fidelity",
+        "stock price prediction",
+        "price-to-sales ratio",
+        "commercialization challenges"
+      ],
+      "published_utc": "2026-04-13T08:35:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "RGTI",
+        "RGTIW",
+        "NVDA",
+        "GOOG",
+        "GOOGL",
+        "AMZN"
+      ],
+      "title": "Prediction: This Will Be Rigetti Computing's Stock Price in 1 Year"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/04/07/up-1460-since-2024-is-it-too-late-to-buy-this-quan/?source=iedfolrf0000001",
+      "author": "Keithen Drury",
+      "description": "D-Wave Quantum has surged 1,460% since 2024, though it remains well below its all-time high. The company specializes in quantum annealing technology for optimization problems and has already deployed systems with multiple businesses. However, D-Wave is unprofitable with Q4 revenue of only $2.7 million against $37 million in operating expenses, though it has $600 million in cash reserves. With a market cap of $5.5 billion and a P/S ratio of 185, the stock is considered a high-risk, long-shot investment.",
+      "id": "df017e2facba1e69b0177cd8ff0bd201d64b0742d3891453b9e3033b488ff691",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F863342%2Fquantum-computing-cell.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "While the company has practical quantum annealing applications and growing bookings (up 471% Q3 to Q4), it remains deeply unprofitable with massive operating losses relative to revenue. The stock's lofty P/S ratio of 185 reflects significant future growth expectations already priced in. The author views it as a speculative long-shot investment suitable only for risk-tolerant investors willing to lose their investment.",
+          "ticker": "QBTS"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "quantum annealing",
+        "optimization problems",
+        "unprofitable",
+        "high valuation",
+        "emerging technology",
+        "long-shot investment"
+      ],
+      "published_utc": "2026-04-07T22:15:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "QBTS"
+      ],
+      "title": "Up 1,460% Since 2024, Is It Too Late to Buy This Quantum Computing Leader?"
+    },
+    {
+      "amp_url": "https://m.investing.com/analysis/is-dwave-the-latest-threat-to-bitcoin-200678013?ampMode=1",
+      "article_url": "https://www.investing.com/analysis/is-dwave-the-latest-threat-to-bitcoin-200678013",
+      "author": "Nathan Reiff",
+      "description": "Quantum computing advances, particularly from D-Wave Quantum Inc., pose a potential threat to Bitcoin and cryptocurrency security through the ability to crack cryptographic keys. However, D-Wave is positioning itself to benefit from this disruption by developing post-quantum security solutions and has shown strong operational growth. The company faces risks as a pre-profit, highly speculative stock despite analyst price targets suggesting 170% upside potential.",
+      "id": "ca3ce5f94d1454ee5ceb1f7c430b5055894f763d0fa0ec9dcf2b59ae7fbbadf8",
+      "image_url": "https://i-invdn-com.investing.com/redesign/images/seo/investingcom_analysis_og.jpg",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Despite current stock weakness (down 50% YTD), the article highlights D-Wave's strategic positioning to benefit from quantum computing's threat to crypto. The company shows strong revenue growth (nearly tripled YoY in 2025), new Fortune 100 contracts, government partnerships, and dual-technology advantages. Analysts project 170% upside potential with short squeeze possibilities.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned only as the source of a whitepaper discussing 'Q-Day' and quantum computing's threat to cryptocurrency. No direct impact on the company is discussed; it serves as a neutral information source.",
+          "ticker": "GOOG"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned only as the source of a whitepaper discussing 'Q-Day' and quantum computing's threat to cryptocurrency. No direct impact on the company is discussed; it serves as a neutral information source.",
+          "ticker": "GOOGL"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "cryptocurrency security",
+        "Bitcoin threat",
+        "post-quantum cryptography",
+        "D-Wave Quantum",
+        "Q-Day",
+        "encryption vulnerability"
+      ],
+      "published_utc": "2026-04-07T20:19:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/investing.ico",
+        "homepage_url": "https://www.investing.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/investing.png",
+        "name": "Investing.com"
+      },
+      "tickers": [
+        "QBTS",
+        "GOOG",
+        "GOOGL"
+      ],
+      "title": "Is D-Wave the Latest Threat to Bitcoin?"
+    },
+    {
+      "article_url": "https://www.globenewswire.com/news-release/2026/04/07/3268915/0/en/MEXC-Lists-Two-Ondo-Tokenized-Stock-Trading-Pairs-Tied-to-Quantum-Computing-Sector.html",
+      "author": "Na",
+      "description": "MEXC has listed IONQON/USDT and RGTION/USDT, tokenized versions of IonQ and Rigetti Computing stocks, on its spot market. The listings, issued through Ondo Global Markets, represent MEXC's expansion into real-world assets (RWA) and its effort to bridge traditional financial markets with the digital asset ecosystem.",
+      "id": "41ecfa9bdf0be14c516c9632727a8ed2162a5683defd3d03e62c3901ef5b60d6",
+      "image_url": "https://ml.globenewswire.com/Resource/Download/ab809ffe-026f-4cef-bb10-9cdce1c6acb9",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "IonQ's tokenized stock listing on a major exchange (MEXC) increases accessibility to retail investors and demonstrates growing institutional recognition of quantum computing companies. This expands market reach and liquidity.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "IonQ's tokenized stock listing on a major exchange (MEXC) increases accessibility to retail investors and demonstrates growing institutional recognition of quantum computing companies. This expands market reach and liquidity.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Rigetti's tokenized stock listing on MEXC provides similar benefits to IonQ, offering increased accessibility and market exposure. The listing reflects confidence in the quantum computing sector's commercial momentum.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Rigetti's tokenized stock listing on MEXC provides similar benefits to IonQ, offering increased accessibility and market exposure. The listing reflects confidence in the quantum computing sector's commercial momentum.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "tokenized stocks",
+        "quantum computing",
+        "real-world assets",
+        "RWA",
+        "IonQ",
+        "Rigetti Computing",
+        "blockchain",
+        "DeFi"
+      ],
+      "published_utc": "2026-04-07T10:00:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/globenewswire.ico",
+        "homepage_url": "https://www.globenewswire.com",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/globenewswire.svg",
+        "name": "GlobeNewswire Inc."
+      },
+      "tickers": [
+        "IONQ",
+        "IONQ.WS",
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "MEXC Lists Two Ondo Tokenized Stock Trading Pairs Tied to Quantum Computing Sector"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/04/01/d-wave-quantum-stock-lost-value-time-buy/?source=iedfolrf0000001",
+      "author": "Will Healy",
+      "description": "D-Wave Quantum's stock has plummeted two-thirds from its peak amid uncertainty in the quantum computing sector. While the company differentiates itself through practical quantum annealing applications and has attracted over 70 commercial customers with 180% revenue growth, it faces significant challenges including a $355 million net loss in 2025, negative free cash flow, and a stratospheric P/S ratio of 180. The article suggests the stock remains overvalued despite the pullback, with profitability years away and well-funded competitors posing risks.",
+      "id": "fa81e36ee3679ebd9fcd102fe4cc8246c74cd42b13f5aea04616df2249099154",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F862661%2Fquantum-chip.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Despite practical applications and revenue growth of 180%, the company faces mounting losses ($355M in 2025), negative free cash flow, extreme valuation multiples (P/S of 180), significant shareholder dilution (27% share increase), and remains years away from profitability with well-funded competitors. The two-thirds stock decline reflects fundamental concerns that the pullback has not adequately addressed.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a well-funded competitor in the quantum computing space that could potentially out-compete D-Wave, but no specific performance or strategic information provided about Alphabet itself.",
+          "ticker": "GOOG"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a well-funded competitor in the quantum computing space that could potentially out-compete D-Wave, but no specific performance or strategic information provided about Alphabet itself.",
+          "ticker": "GOOGL"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a well-funded competitor in the quantum computing space that could potentially out-compete D-Wave, but no specific performance or strategic information provided about IBM itself.",
+          "ticker": "IBM"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "D-Wave Quantum",
+        "stock valuation",
+        "quantum annealing",
+        "losses",
+        "artificial intelligence",
+        "technology stocks"
+      ],
+      "published_utc": "2026-04-01T20:04:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "QBTS",
+        "GOOG",
+        "GOOGL",
+        "IBM"
+      ],
+      "title": "D-Wave Quantum Stock Has Lost Two-Thirds of Its Value. Time to Buy?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/03/31/the-best-quantum-computing-stock-to-buy-with-1000/?source=iedfolrf0000001",
+      "author": "Adam Spatacco",
+      "description": "Nvidia is positioned as a superior quantum computing investment compared to pure-play quantum startups like IonQ and Rigetti Computing. The article argues that Nvidia's existing dominance in AI data centers, combined with its CUDA software platform extended into quantum toolkits, creates a unique advantage in the quantum AI ecosystem. Rather than betting on unproven quantum hardware companies, investors can gain quantum exposure through Nvidia's hybrid computing platform at a reasonable forward P/E of 21.",
+      "id": "86896ce320d992eae0d87312d96e4515297a94a0e54239ca891609d6e7d0700c",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F862245%2Fnvidia-headquarters-outside-with-black-nvidia-sign-with-nvidia-logo-16.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Nvidia is presented as the best quantum computing investment due to its established profitability, dominant market position in AI data centers (90% of world's AI infrastructure), extended CUDA platform into quantum toolkits, and ability to profit from quantum simulation layers. The article suggests investors are underpricing future quantum-driven growth opportunities.",
+          "ticker": "NVDA"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "IonQ is characterized as a speculative pure-play quantum startup that 'continues to burn cash on unproven physics' with uncertain timelines for commercial viability, contrasting unfavorably with Nvidia's established revenue streams and practical quantum simulation approach.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "IonQ is characterized as a speculative pure-play quantum startup that 'continues to burn cash on unproven physics' with uncertain timelines for commercial viability, contrasting unfavorably with Nvidia's established revenue streams and practical quantum simulation approach.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Rigetti is mentioned alongside IonQ as a pure-play quantum developer facing similar criticisms regarding unproven technology and lack of established profitability, making it a riskier investment compared to Nvidia's hybrid approach.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Rigetti is mentioned alongside IonQ as a pure-play quantum developer facing similar criticisms regarding unproven technology and lack of established profitability, making it a riskier investment compared to Nvidia's hybrid approach.",
+          "ticker": "RGTIW"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "artificial intelligence",
+        "GPU",
+        "data centers",
+        "CUDA software",
+        "quantum simulation",
+        "hybrid computing"
+      ],
+      "published_utc": "2026-03-31T07:30:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "NVDA",
+        "IONQ",
+        "IONQ.WS",
+        "RGTI",
+        "RGTIW"
+      ],
+      "title": "The Best Quantum Computing Stock to Buy With $1,000 Right Now"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/03/29/prediction-these-2-quantum-computing-stocks-will-s/?source=iedfolrf0000001",
+      "author": "Keithen Drury",
+      "description": "The article recommends IonQ and D-Wave Quantum as top quantum computing stocks poised for growth over the next 5 years. With the quantum computing market expected to reach $72 billion annually by 2035 and commercial viability expected by 2030, the author suggests allocating 1-3% of a portfolio to these emerging technology leaders. IonQ uses ion trapping technology and has achieved 429% year-over-year revenue growth, while D-Wave focuses on quantum annealing for optimization problems.",
+      "id": "794d8f9fd7df7045fed86be07816b137fda48fc2683f73974d6aa7dc2d697e21",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F861903%2Fimage-of-quantum-computing.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Company is described as the front-runner in quantum computing with superior accuracy, 429% YoY revenue growth, and holds the world record for most accurate quantum computer. Author considers it the best option for investors in the space.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Company is described as the front-runner in quantum computing with superior accuracy, 429% YoY revenue growth, and holds the world record for most accurate quantum computer. Author considers it the best option for investors in the space.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Company's specialized quantum annealing approach is well-suited for optimization problems, which represent the majority of expected quantum computing tasks. Author identifies it as a top pick with potential competitive advantages.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a large legacy tech company investing in quantum computing, but noted as a safer but limited upside option compared to pure-play quantum computing stocks.",
+          "ticker": "NVDA"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a large legacy tech company investing in quantum computing, but noted as a safer but limited upside option compared to pure-play quantum computing stocks.",
+          "ticker": "GOOG"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a large legacy tech company investing in quantum computing, but noted as a safer but limited upside option compared to pure-play quantum computing stocks.",
+          "ticker": "GOOGL"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a large legacy tech company investing in quantum computing, but noted as a safer but limited upside option compared to pure-play quantum computing stocks.",
+          "ticker": "MSFT"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "emerging technology",
+        "long-term investment",
+        "hybrid computing",
+        "quantum annealing",
+        "ion trapping",
+        "market opportunity"
+      ],
+      "published_utc": "2026-03-29T10:30:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "IONQ",
+        "IONQ.WS",
+        "QBTS",
+        "NVDA",
+        "GOOG",
+        "GOOGL",
+        "MSFT"
+      ],
+      "title": "Prediction: These 2 Quantum Computing Stocks Will Soar Over the Next 5 Years"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/03/27/quantum-computing-stocks-ionq-rgti-warning-wall-st/?source=iedfolrf0000001",
+      "author": "Sean Williams",
+      "description": "Despite quantum computing stocks IonQ, Rigetti Computing, and D-Wave Quantum surging 670-6,217% over the past year, insiders at these companies are selling shares aggressively while barely buying any, signaling they may not view their stocks as bargains. With quantum computers still years away from being cost-effective and these companies likely to continue losing money, their valuations may have gotten ahead of themselves despite the sector's long-term potential.",
+      "id": "dd975e1b72c075c6f735a095dd53e33b30bebe495fdb06c0e2cac5fcc2e20fbc",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F861958%2Fquantum-computer-digital-data-calculations-artificial-intelligence-getty.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Massive insider selling with minimal insider buying ($3.35M over 5 years), stock up 6,217% in 12 months suggesting overvaluation, and company still unprofitable with exorbitant price-to-sales ratios despite long-term potential.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Massive insider selling with minimal insider buying ($3.35M over 5 years), stock up 6,217% in 12 months suggesting overvaluation, and company still unprofitable with exorbitant price-to-sales ratios despite long-term potential.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Insiders are net sellers with virtually no buying activity ($625K over 5 years), indicating lack of confidence in valuation. Stock up 670% in 12 months with company still unprofitable and years away from commercial viability.",
+          "ticker": "RGTI"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Insiders are net sellers with virtually no buying activity ($625K over 5 years), indicating lack of confidence in valuation. Stock up 670% in 12 months with company still unprofitable and years away from commercial viability.",
+          "ticker": "RGTIW"
+        },
+        {
+          "sentiment": "negative",
+          "sentiment_reasoning": "Minimal insider buying ($309K over 5 years) despite aggressive selling, suggesting insiders don't view stock as a bargain. Company unprofitable with inflated valuations despite promising long-term sector outlook.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned as a positive client win for quantum computing companies through its Braket service, but no direct impact on Amazon's business model or valuation discussed.",
+          "ticker": "AMZN"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned for its $1.5 trillion 10-year Security and Resiliency Initiative investment in quantum computing, but this is contextual information about sector investment rather than commentary on JPMorgan's stock.",
+          "ticker": "AMJB"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned for its $1.5 trillion 10-year Security and Resiliency Initiative investment in quantum computing, but this is contextual information about sector investment rather than commentary on JPMorgan's stock.",
+          "ticker": "JPM"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned for its $1.5 trillion 10-year Security and Resiliency Initiative investment in quantum computing, but this is contextual information about sector investment rather than commentary on JPMorgan's stock.",
+          "ticker": "JPMpC"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned for its $1.5 trillion 10-year Security and Resiliency Initiative investment in quantum computing, but this is contextual information about sector investment rather than commentary on JPMorgan's stock.",
+          "ticker": "JPMpD"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned for its $1.5 trillion 10-year Security and Resiliency Initiative investment in quantum computing, but this is contextual information about sector investment rather than commentary on JPMorgan's stock.",
+          "ticker": "JPMpJ"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned for its $1.5 trillion 10-year Security and Resiliency Initiative investment in quantum computing, but this is contextual information about sector investment rather than commentary on JPMorgan's stock.",
+          "ticker": "JPMpK"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned for its $1.5 trillion 10-year Security and Resiliency Initiative investment in quantum computing, but this is contextual information about sector investment rather than commentary on JPMorgan's stock.",
+          "ticker": "JPMpL"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned for its $1.5 trillion 10-year Security and Resiliency Initiative investment in quantum computing, but this is contextual information about sector investment rather than commentary on JPMorgan's stock.",
+          "ticker": "JPMpM"
+        },
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mentioned for its $1.5 trillion 10-year Security and Resiliency Initiative investment in quantum computing, but this is contextual information about sector investment rather than commentary on JPMorgan's stock.",
+          "ticker": "VYLD"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "insider selling",
+        "stock valuation",
+        "Form 4 filings",
+        "technology stocks",
+        "market warning"
+      ],
+      "published_utc": "2026-03-27T08:06:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "IONQ",
+        "IONQ.WS",
+        "RGTI",
+        "RGTIW",
+        "QBTS",
+        "AMZN",
+        "AMJB",
+        "JPM",
+        "JPMpC",
+        "JPMpD",
+        "JPMpJ",
+        "JPMpK",
+        "JPMpL",
+        "JPMpM",
+        "VYLD"
+      ],
+      "title": "Quantum Computing Stocks IonQ, Rigetti Computing, and D-Wave Quantum Have Created Shockwaves With This $930 Million Warning to Wall Street"
+    },
+    {
+      "amp_url": "https://m.investing.com/analysis/dwave-where-is-the-bottom-and-when-is-it-time-to-sell-200677203?ampMode=1",
+      "article_url": "https://www.investing.com/analysis/dwave-where-is-the-bottom-and-when-is-it-time-to-sell-200677203",
+      "author": "Nathan Reiff",
+      "description": "D-Wave Quantum Inc. (QBTS) has experienced a 44% stock decline in 2026 despite strong fundamentals, including January bookings exceeding all of 2025 and a $30 million in major deals. While the company shows signs of being oversold with an RSI around 30 and maintains a solid $885 million cash position providing 3+ years of operating runway, its valuation remains extremely high at 237x sales. Analysts maintain a Moderate Buy rating with 132% upside potential, but investors must weigh the company's impressive growth trajectory against its current overvaluation.",
+      "id": "a845073851a14c2d80b4707a7f97b83a0833dc8d9a6816fcdb62560a7c55a504",
+      "image_url": "https://i-invdn-com.investing.com/redesign/images/seo/investingcom_analysis_og.jpg",
+      "insights": [
+        {
+          "sentiment": "neutral",
+          "sentiment_reasoning": "Mixed signals present conflicting investment thesis. Positive factors include strong revenue growth (nearly 3x YOY), impressive January bookings, solid $885M cash position, and analyst Moderate Buy rating with 132% upside. However, negative factors include 44% YTD stock decline, extreme overvaluation at 237x sales, and uncertainty about whether the selloff has bottomed. The article suggests the decline is rational despite strong fundamentals, indicating the stock is caught between oversold technical conditions and fundamental overvaluation.",
+          "ticker": "QBTS"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "D-Wave Quantum",
+        "stock decline",
+        "valuation",
+        "cash reserves",
+        "oversold",
+        "price-to-sales ratio",
+        "bookings growth"
+      ],
+      "published_utc": "2026-03-24T21:10:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/investing.ico",
+        "homepage_url": "https://www.investing.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/investing.png",
+        "name": "Investing.com"
+      },
+      "tickers": [
+        "QBTS"
+      ],
+      "title": "D-Wave: Where Is the Bottom and When Is It Time to Sell?"
+    },
+    {
+      "article_url": "https://www.fool.com/investing/2026/03/22/the-3-best-quantum-computing-stocks-to-buy-right-n/?source=iedfolrf0000001",
+      "author": "Keithen Drury",
+      "description": "As quantum computing approaches commercial viability, the article recommends three stocks: IonQ and D-Wave Quantum as pure-play quantum computing companies with strong revenue growth, and Alphabet as an established tech giant with massive resources and cloud computing infrastructure to deploy quantum technology. The author suggests a balanced portfolio approach across all three to maximize upside while managing risk.",
+      "id": "d49a6e4abc7542543c28506aa84c79baaadf537e38bcb01495653b5c123551d8",
+      "image_url": "https://g.foolcdn.com/image/?url=https%3A%2F%2Fg.foolcdn.com%2Feditorial%2Fimages%2F860578%2Fquantum-computing-cell.jpg&w=1200&op=resize",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Leading accuracy metrics in quantum computing, exceptional revenue growth (429% YoY to $62M in Q4 2025), and strong 2026 guidance ($235M expected revenue). Positioned as the most popular quantum computing technology currently.",
+          "ticker": "IONQ"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Leading accuracy metrics in quantum computing, exceptional revenue growth (429% YoY to $62M in Q4 2025), and strong 2026 guidance ($235M expected revenue). Positioned as the most popular quantum computing technology currently.",
+          "ticker": "IONQ.WS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Focused strategy on optimization problems with large addressable markets, strong revenue growth (179% YoY to $25M in Q4), and compelling investment thesis for specialized quantum applications.",
+          "ticker": "QBTS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Massive resources and established cloud computing platform provide competitive advantage and lower risk profile. Technological breakthroughs in quantum computing with potential to monetize through cloud services, though quantum computing is not core business.",
+          "ticker": "GOOG"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Massive resources and established cloud computing platform provide competitive advantage and lower risk profile. Technological breakthroughs in quantum computing with potential to monetize through cloud services, though quantum computing is not core business.",
+          "ticker": "GOOGL"
+        }
+      ],
+      "keywords": [
+        "quantum computing",
+        "investment opportunity",
+        "technology stocks",
+        "revenue growth",
+        "accuracy metrics",
+        "cloud computing"
+      ],
+      "published_utc": "2026-03-22T08:15:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/themotleyfool.ico",
+        "homepage_url": "https://www.fool.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/themotleyfool.svg",
+        "name": "The Motley Fool"
+      },
+      "tickers": [
+        "IONQ",
+        "IONQ.WS",
+        "QBTS",
+        "GOOG",
+        "GOOGL"
+      ],
+      "title": "The 3 Best Quantum Computing Stocks to Buy Right Now"
+    },
+    {
+      "article_url": "https://www.benzinga.com/pressreleases/26/03/n51359375/the-race-to-shield-global-infrastructure-from-the-coming-quantum-threat?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel",
+      "author": "Usa News Group",
+      "description": "As quantum computing threatens current encryption standards, companies are racing to implement post-quantum security solutions. Quantum Secure Encryption Corp announced its first municipal government pilot program, while Ciena partnered with Quantum Computing Inc to demonstrate quantum-secured communications. Zscaler expanded data sovereignty capabilities and Cloudflare released its 2026 Threat Report highlighting evolving cyber threats including AI-powered attacks and credential-based infiltration.",
+      "id": "f14282769f0fe1f9a0e4f56c93a039f083566a14c1fcb073434054d164ac84e7",
+      "image_url": "https://cdn.benzinga.com/files/imagecache/bz2_opengraph_meta_image_400x300/sites/all/themes/bz2/images/bz-icon.png",
+      "insights": [
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Partnered with Quantum Computing Inc to demonstrate next-generation quantum-secured communications at OFC 2026, positioning optical encryption capabilities as critical infrastructure for quantum transition with high-speed connectivity solutions.",
+          "ticker": "CIEN"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Partnered with Ciena to showcase time-frequency entanglement-based quantum key distribution technology integrated with quantum-safe communications platform, demonstrating commercial viability of quantum security solutions.",
+          "ticker": "QUBT"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Significantly expanded data sovereignty capabilities across Zero Trust Exchange platform with new regional deployments including Canada, enhanced local control planes, and 'Collect Once, Certify All' compliance framework addressing GDPR, NIS2, and DoD IL5 requirements.",
+          "ticker": "ZS"
+        },
+        {
+          "sentiment": "positive",
+          "sentiment_reasoning": "Published 2026 Threat Report analyzing 230 billion daily threats, demonstrating network scale and threat intelligence capabilities; positioned to translate insights into platform enhancements as AI-powered attacks and credential-based infiltration become dominant threat vectors.",
+          "ticker": "NET"
+        }
+      ],
+      "keywords": [
+        "quantum computing threat",
+        "post-quantum cryptography",
+        "quantum-resistant encryption",
+        "cybersecurity infrastructure",
+        "data sovereignty",
+        "harvest-now-decrypt-later",
+        "critical infrastructure protection"
+      ],
+      "published_utc": "2026-03-19T15:39:00Z",
+      "publisher": {
+        "favicon_url": "https://s3.polygon.io/public/assets/news/favicons/benzinga.ico",
+        "homepage_url": "https://www.benzinga.com/",
+        "logo_url": "https://s3.polygon.io/public/assets/news/logos/benzinga.svg",
+        "name": "Benzinga"
+      },
+      "tickers": [
+        "CIEN",
+        "QUBT",
+        "ZS",
+        "NET"
+      ],
+      "title": "The Race to Shield Global Infrastructure from the Coming Quantum Threat"
+    }
+  ],
+  "payload_kind": "json",
+  "vendor": "polygon"
+}

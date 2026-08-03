@@ -1,0 +1,52 @@
+{
+  "approved_by": "Kamil Pajak",
+  "cassette_key": "a56054c7d28c7b15c8696fcb57eb8f592b28602723fcee36cdf1b696f64b33af",
+  "event": {
+    "asof": "2026-05-24",
+    "event_id": "4e15ed5e6a1c18a79a9e28372d6a2df5cb2313d2d6bfb0a0f3fb7453711a1af3",
+    "event_type": "earnings",
+    "headline": "Weekend Round-Up: Nvidia's Q1 Triumph, SpaceX's IPO Filing, Musk's OpenAI Controversy, Google's AI Leap And More",
+    "published_at": "2026-05-24",
+    "theme": "quantum_computing",
+    "url": "https://www.benzinga.com/markets/tech/26/05/52763650/weekend-round-up-nvidias-q1-triumph-spacexs-ipo-filing-musks-openai-controversy-googles-ai-leap-and-?utm_source=benzinga_taxonomy&utm_medium=rss_feed_free&utm_content=taxonomy_rss&utm_campaign=channel"
+  },
+  "fixture": "quantum_2026_05_24",
+  "frozen_surfaces": {
+    "cassettes_vendor/6182cfb7b515c5d54609a5c9122bae0c99a0ea60abd9deff5efd4a78ed7a56a6.json": "5b9aee9eed8fef46fde31f7262c6e9ec9dd64a16d47e0e8ef44ec2361de6b64c",
+    "events/2026-05-15.parquet": "33f0ba41de5157fc0a94b0aa5c3bc67a677406fadcbc2455eea1f1bafcdbb148",
+    "events/2026-05-18.parquet": "060749a190bd88ebde47a8f0442cf40f4ce730044e742f500fd787e39e4f9684",
+    "events/2026-05-24.parquet": "9b8ff0b26945749b4519a87e95891eb29616b978ef7f6e269b1b20b0674fa731",
+    "form4_parquet/transaction_year=2023/compacted.parquet": "912a0ed3e585a4eab6a8b6e9b904ceba79b5508de657315dfa8fb9c5062d5d30",
+    "form4_parquet/transaction_year=2024/compacted.parquet": "f18c044b9725ff3001cc0265149854da8e13231c0a8c8729bd789a11c804a78d",
+    "form4_parquet/transaction_year=2025/compacted.parquet": "33085445028dc8c6e59f785b14588e1298f4290ea0f1d223a017439182d586c9",
+    "form4_parquet/transaction_year=2026/compacted.parquet": "87761b78ceae1a314f6c96e1117105aaeaa19ef02a73929bcaebd3bc1617f3ed",
+    "mcap.json": "d3f3356aa1fbfec0bfad4d0c87b98311e88ac3da361604ef138ca262cc044b67",
+    "news/2026-05-15.parquet": "b9f56e625648f013aecb9c8c8bfb4f7064332ddc8beb40c632e5e611e7549fe4",
+    "news/2026-05-18.parquet": "2a55e2841e8f2afc6b8d6ba6fe3fb18a90c888c2639cf367a62afaa9e1203ab5",
+    "news/2026-05-24.parquet": "a7d8b78e3b420c30a7986b7e43e361670c069bb60af1a984bcec37c7dfaca3ee",
+    "tenk_cache/QUBT_2026-03-02.txt": "74d5975cb3ac13456ed146ec17f32f846c6eaab4834d3020f54852970145fac2",
+    "tenk_cache/RGTI_2026-03-04.txt": "480d01ecdeb71ac021a42baad390d875b825fdd60819df58aae05233f46ba49d"
+  },
+  "model": "deepseek/deepseek-v4-pro",
+  "notes": "Superseded by v2. Provenance reconstructed on 2026-08-03 from the committed artifacts: model, sampling and cassette key are read off cassettes_llm/v1/, the event off the frozen window. golden/v1/2026-05-24.parquet predates the mapper_config_version freeze column, so the token above was recomputed by running origin/main's theme_mapper.mapper_config_version at the fixture's mcap bracket rather than read off an artifact. The recorder took no --fixture flag at the time; the fixture set was added on 2026-08-03.",
+  "prompt": {
+    "mapper_config_version": "{\"max_output_tokens\":8000,\"mcap_range\":[500000000,10000000000],\"model\":\"deepseek/deepseek-v4-pro\",\"prompt_sha\":\"308d9c81a82c\",\"schema\":\"mapper-freeze-v1\",\"schema_sha\":\"05321fb18541\",\"temperature\":0.0}",
+    "prompt_sha": "308d9c81a82c",
+    "schema": "mapper-freeze-v1",
+    "schema_sha": "05321fb18541",
+    "system_message_sha": "9eb5d311fd46"
+  },
+  "provenance_written": "2026-08-03",
+  "recorded_by": "scripts/record_golden_map.py (full six-surface capture, PR #369)",
+  "recorded_date": "2026-06-01",
+  "recording": "v1",
+  "sampling": {
+    "max_tokens": 8000,
+    "response_format": {
+      "type": "json_object"
+    },
+    "temperature": 0.0
+  },
+  "schema_version": 2,
+  "seeded_surfaces": {}
+}

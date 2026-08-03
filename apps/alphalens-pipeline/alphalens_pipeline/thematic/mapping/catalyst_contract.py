@@ -14,6 +14,13 @@ Field semantics:
 - ``url`` / ``title`` / ``published_at`` — the catalyst (story-arc root) event.
 - ``event_type`` / ``confidence`` / ``second_order_implications`` — the
   catalyst's classification (drives ``catalyst_signals.compute_catalyst_strength``).
+- ``primary_entities`` — the companies the extraction stage resolved as the
+  SUBJECT of the event, in the order they were extracted. Read by the mapper
+  prompt: a headline often carries a brand or product rather than the listed
+  issuer, and extraction already did that resolution, so re-deriving it from
+  the title string would re-run exactly the training-cutoff guessing the
+  project's LLM doctrine forbids. Order is part of the contract — the prompt
+  is rendered from it and must be byte-identical run to run.
 - ``echo_count`` / ``trigger_url`` / ``trigger_published_at`` / ``is_amplified``
   — story-arc amplification metadata; when the resolver degraded to single-event
   mode ``catalyst is trigger`` so the trigger-* fields equal the primary fields
@@ -35,6 +42,7 @@ class CatalystPayload:
     title: str
     published_at: str
     event_type: str | None
+    primary_entities: list[str]
     confidence: float | None
     second_order_implications: list[str]
     echo_count: int
@@ -51,6 +59,7 @@ class CatalystPayload:
             "title": self.title,
             "published_at": self.published_at,
             "event_type": self.event_type,
+            "primary_entities": self.primary_entities,
             "confidence": self.confidence,
             "second_order_implications": self.second_order_implications,
             "echo_count": self.echo_count,
