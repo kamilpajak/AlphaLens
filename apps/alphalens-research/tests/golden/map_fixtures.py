@@ -36,8 +36,17 @@ fixture                    theme               asof          why it exists
                                                              no small-cap; the
                                                              case the event
                                                              conditioning is
-                                                             about
+                                                             about. Its catalyst
+                                                             window is SEEDED -
+                                                             see
+                                                             ``seeded_surfaces``
 =========================  ==================  ============  ===================
+
+A fixture may declare ``seeded_surfaces``: frozen surfaces whose content was
+hand-authored instead of captured. The declaration is copied into every
+recording's ``provenance.json`` and checked by
+``tests/golden/test_golden_map_provenance.py``, so a reader is told which inputs
+are synthetic and a re-record cannot quietly drop the disclosure.
 
 RECORDING VERSIONS
 ------------------
@@ -107,6 +116,14 @@ class MapFixture:
     parquets exist on disk inside the resolver's 30-day lookback from ``asof``.
     They are listed explicitly rather than globbed so a capture freezes a known
     window and a later re-capture cannot silently widen it.
+
+    ``seeded_surfaces`` names the frozen surfaces whose CONTENT was written by
+    hand instead of produced by the live pipeline, each with the reason, as
+    ``(path relative to the fixture root, why)``. The recorder copies the
+    declaration into ``provenance.json``, so a reader of the recording is told
+    which inputs are synthetic without having to open a parquet — and a
+    re-record cannot drop the disclosure the way a hand-added note would. Empty
+    for a fixture whose every surface came from a vendor or a real store.
     """
 
     name: str
@@ -115,6 +132,7 @@ class MapFixture:
     window_dates: tuple[str, ...]
     current_recording: str
     dirname: str
+    seeded_surfaces: tuple[tuple[str, str], ...] = ()
 
     @property
     def root(self) -> Path:
@@ -165,16 +183,30 @@ QUANTUM_2026_05_24 = MapFixture(
     dirname="map_day",
 )
 
+_ISING_SEEDED_WHY = (
+    "Hand-authored scenario row, not an ingested article. The store window for "
+    "this date holds one row that was seeded for the NVDA->QUBT replay "
+    "(scripts/replay_nvda_qubt.py); the recorder copied it faithfully, but the "
+    "id, source, body and the extraction read-outs were typed, not produced by "
+    "news_ingest / event_extractor. Headline and URL are the real NVIDIA press "
+    "release."
+)
+
 NVDA_ISING_2026_04_14 = MapFixture(
     name="nvda_ising_2026_04_14",
     theme="quantum_computing",
     asof=dt.date(2026, 4, 14),
-    # The Ising press release is the ONLY theme-tagged event on disk inside the
-    # 30-day lookback from this asof, so the resolver has exactly one candidate
-    # trigger and the fixture is unambiguous about which event it characterizes.
+    # One date: the seeded Ising row is the only theme-tagged event in the
+    # store inside the 30-day lookback from this asof, so the resolver has
+    # exactly one candidate trigger. That is a property of the seeded window
+    # (see seeded_surfaces below), not a measurement of the news corpus.
     window_dates=("2026-04-14",),
     current_recording="v1",
     dirname="map_day_nvda_ising",
+    seeded_surfaces=(
+        ("events/2026-04-14.parquet", _ISING_SEEDED_WHY),
+        ("news/2026-04-14.parquet", _ISING_SEEDED_WHY),
+    ),
 )
 
 MAP_FIXTURES: tuple[MapFixture, ...] = (QUANTUM_2026_05_24, NVDA_ISING_2026_04_14)

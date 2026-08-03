@@ -8,7 +8,7 @@ frozen evidence, on what day, approved by whom. That record is
 ``golden/<version>/provenance.json``, and this module is what stops it from
 being absent, incomplete, or contradicted by the artifacts it describes.
 
-Three checks, each with a POSITIVE CONTROL that proves it still fires. A guard
+Four checks, each with a POSITIVE CONTROL that proves it still fires. A guard
 over committed fixtures is otherwise free to rot into a vacuous pass — the
 fixtures rarely change, so a checker that silently stopped checking would look
 exactly like a checker that keeps passing.
@@ -23,6 +23,10 @@ exactly like a checker that keeps passing.
 * SURFACE DIGESTS — for the CURRENT recording, the manifest lists exactly the
   frozen surface files on disk and every sha256 still matches
   (:func:`~tests.golden.map_provenance.audit_surfaces`).
+* DISCLOSURE — a frozen surface that was hand-authored is declared as such, and
+  a recording whose config token no artifact can pin says so in ``notes``.
+  Neither is derivable from the files, so both would otherwise survive only in
+  a memo that the next capture forgets.
 
 Why digests are audited for the current recording only: the frozen surfaces are
 SHARED across a fixture's recording versions. A superseded recording's manifest
@@ -38,7 +42,7 @@ from __future__ import annotations
 import copy
 import unittest
 
-from tests.golden.map_fixtures import MAP_FIXTURES
+from tests.golden.map_fixtures import MAP_FIXTURES, NVDA_ISING_2026_04_14
 from tests.golden.map_provenance import (
     REQUIRED_FIELDS,
     audit_recording,
@@ -47,6 +51,8 @@ from tests.golden.map_provenance import (
     missing_fields,
     provenance_path,
     recording_versions,
+    stamped_config_version,
+    surface_manifest,
 )
 
 _FIRST = MAP_FIXTURES[0]
@@ -128,6 +134,7 @@ class TestMapFixtureProvenance(unittest.TestCase):
             ("fixture", "not_this_fixture"),
             ("recording", "v99"),
             ("approved_by", "Somebody Else"),
+            ("seeded_surfaces", {"news/1970-01-01.parquet": "invented"}),
         )
         for dotted, value in tampers:
             with self.subTest(field=dotted):
@@ -136,6 +143,31 @@ class TestMapFixtureProvenance(unittest.TestCase):
                 self.assertTrue(
                     any(dotted in problem for problem in problems),
                     f"tampering {dotted} was not reported: {problems}",
+                )
+
+    def test_a_recording_whose_token_cannot_be_pinned_says_so(self):
+        # The three prompt fingerprints are checked against the document's own
+        # ``mapper_config_version``, so the only thing that pins that token to
+        # an artifact is the ``mapper_config_version`` column in the recording's
+        # parquet. A recording that predates the column has no such pin, and a
+        # wrong-but-internally-consistent token would pass every other check.
+        # It must therefore carry the disclosure in ``notes``; without it the
+        # limitation is invisible to a reader.
+        unpinnable = [
+            (fixture, version)
+            for fixture in MAP_FIXTURES
+            for version in recording_versions(fixture)
+            if stamped_config_version(fixture, version) is None
+        ]
+        self.assertTrue(unpinnable, "no unpinnable recording on disk — the control is vacuous")
+        for fixture, version in unpinnable:
+            with self.subTest(fixture=fixture.name, recording=version):
+                doc = load_provenance(fixture, version)
+                self.assertEqual(audit_recording(fixture, version, doc), [])
+                problems = audit_recording(fixture, version, _drop_field(doc, "notes"))
+                self.assertTrue(
+                    any("notes" in problem for problem in problems),
+                    f"an undisclosed unpinnable token was not reported: {problems}",
                 )
 
     def test_current_recording_manifest_matches_the_frozen_files_on_disk(self):
@@ -165,6 +197,62 @@ class TestMapFixtureProvenance(unittest.TestCase):
         phantom = copy.deepcopy(doc)
         phantom["frozen_surfaces"]["events/1970-01-01.parquet"] = "0" * 64
         self.assertTrue(any("1970-01-01" in problem for problem in audit_surfaces(_FIRST, phantom)))
+
+
+class TestSeededSurfacesAreDeclared(unittest.TestCase):
+    """A frozen surface that was HAND-AUTHORED must say so, in the document.
+
+    Not every surface of a fixture can be captured from a live vendor or a real
+    on-disk store. Where one was written by hand, the recording is still a
+    faithful capture of the pipeline's behaviour over that input — but a reader
+    who assumes every value came from production would over-read the result.
+    The declaration lives on the fixture descriptor and is copied into the
+    document by the recorder, so a re-record cannot silently drop it the way a
+    hand-added prose note would.
+    """
+
+    def test_every_recording_lists_the_fixtures_hand_authored_surfaces(self):
+        for fixture in MAP_FIXTURES:
+            expected = dict(fixture.seeded_surfaces)
+            for version in recording_versions(fixture):
+                with self.subTest(fixture=fixture.name, recording=version):
+                    doc = load_provenance(fixture, version)
+                    self.assertEqual(doc.get("seeded_surfaces") or {}, expected)
+
+    def test_declared_paths_are_real_frozen_surfaces(self):
+        # A declaration naming a path that is not a frozen surface would be
+        # decoration; it has to point at a file the replay actually reads.
+        for fixture in MAP_FIXTURES:
+            manifest = surface_manifest(fixture)
+            for path, why in fixture.seeded_surfaces:
+                with self.subTest(fixture=fixture.name, surface=path):
+                    self.assertIn(path, manifest)
+                    self.assertTrue(why.strip(), "a seeded surface must say why")
+
+    def test_the_ising_fixture_declares_its_hand_authored_catalyst_window(self):
+        # The one fixture whose event/news rows were written by hand rather
+        # than ingested. Pinned by name so the declaration cannot be dropped
+        # while the rows stay synthetic.
+        declared = {path for path, _ in NVDA_ISING_2026_04_14.seeded_surfaces}
+        self.assertIn("events/2026-04-14.parquet", declared)
+        self.assertIn("news/2026-04-14.parquet", declared)
+
+    def test_audit_reports_an_undeclared_seeded_surface(self):
+        # POSITIVE CONTROL: the check must fire in BOTH directions - a document
+        # that invents a declaration, and one that drops a real one.
+        seeded = NVDA_ISING_2026_04_14
+        version = seeded.current_recording
+        doc = load_provenance(seeded, version)
+        self.assertEqual(audit_recording(seeded, version, doc), [])
+        for tampered in (
+            _drop_field(doc, "seeded_surfaces"),
+            _set_field(doc, "seeded_surfaces", {}),
+        ):
+            problems = audit_recording(seeded, version, tampered)
+            self.assertTrue(
+                any("seeded_surfaces" in problem for problem in problems),
+                f"a dropped seeded-surface declaration was not reported: {problems}",
+            )
 
 
 if __name__ == "__main__":

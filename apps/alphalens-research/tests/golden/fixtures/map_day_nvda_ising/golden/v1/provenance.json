@@ -44,5 +44,9 @@
     },
     "temperature": 0.0
   },
-  "schema_version": 1
+  "schema_version": 2,
+  "seeded_surfaces": {
+    "events/2026-04-14.parquet": "Hand-authored scenario row, not an ingested article. The store window for this date holds one row that was seeded for the NVDA->QUBT replay (scripts/replay_nvda_qubt.py); the recorder copied it faithfully, but the id, source, body and the extraction read-outs were typed, not produced by news_ingest / event_extractor. Headline and URL are the real NVIDIA press release.",
+    "news/2026-04-14.parquet": "Hand-authored scenario row, not an ingested article. The store window for this date holds one row that was seeded for the NVDA->QUBT replay (scripts/replay_nvda_qubt.py); the recorder copied it faithfully, but the id, source, body and the extraction read-outs were typed, not produced by news_ingest / event_extractor. Headline and URL are the real NVIDIA press release."
+  }
 }

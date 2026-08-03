@@ -28,8 +28,10 @@ One full six-surface capture:
 uv run python -m scripts.record_golden_map --fixture nvda_ising_2026_04_14
 ```
 
-Every surface came from real data already on disk or from the live vendor. No
-value in this fixture was hand-written.
+Five of the six surfaces came from real data already on disk or from the live
+vendor. The sixth — the catalyst event + news window — is a HAND-AUTHORED
+scenario row; see "The seeded catalyst window" below before reading anything
+into the result.
 
 | # | surface | how it was captured | fixture file |
 |---|---|---|---|
@@ -38,11 +40,50 @@ value in this fixture was hand-written.
 | 3 | SEC 10-K | copied from the real text cache `~/.alphalens/thematic_tenk`, selected by the production `_find_cached` at this asof | `tenk_cache/{QBTS,QUBT,RGTI}_*.txt` |
 | 4 | yfinance market cap | live PIT lookup (`close(asof) × shares(≤asof)`), teed during the run | `mcap.json` |
 | 5 | Form-4 insider | trimmed from `~/.alphalens/form4_parquet` — 84 insider CIKs, 2446 rows over the four classification years | `form4_parquet/transaction_year=*/` |
-| 6 | Catalyst event + news | copied from `~/.alphalens/thematic_events/2026-04-14.parquet` and `~/.alphalens/thematic_news/2026-04-14.parquet` | `events/`, `news/` |
+| 6 | Catalyst event + news | copied from `~/.alphalens/thematic_events/2026-04-14.parquet` and `~/.alphalens/thematic_news/2026-04-14.parquet` — **those two store files hold one hand-seeded row, not an ingested article** | `events/`, `news/` |
 
-The Ising press release is the only theme-tagged event on disk inside the
+### The seeded catalyst window
+
+The recorder did what it says: it copied the two store files byte for byte. The
+files themselves were seeded by hand for the NVDA→QUBT replay scenario
+(`apps/alphalens-research/scripts/replay_nvda_qubt.py`), so surface 6 is
+synthetic and the recorder cannot tell. Hand-authored values, field by field:
+
+| field | value in the fixture | what a real ingested row carries |
+|---|---|---|
+| `news.id` / `events.news_id` | `nvda_ising_2026_04_14` (a slug) | a content hash (`b6fe5fcc…`) |
+| `news.source` | `nvidianews.nvidia.com` (a hostname) | the ingest channel: `rss`, `gdelt`, `polygon`, `edgar` |
+| `news.body` | a 60-char summary ending in `...` | the full article text |
+| `news.title` / `news.url` | the REAL NVIDIA press release headline and URL, minus the apostrophe in "World's" | — |
+| `news.tickers`, `events.primary_entities` | `["NVDA"]` | resolved upstream |
+| `events.themes`, `event_type`, `sentiment`, `confidence` | typed | written by `event_extractor` |
+| `events.second_order_implications` | `["Quantum hardware vendors may benefit from Ising tooling"]` | written by `event_extractor` |
+| `events.model` / `extracted_at` | `gemini-2.5-flash` / a month after publication | the model that ran, at extraction time |
+
+Why it was not captured for real: the store this capture ran against holds
+genuinely ingested days only from 2026-05-15 on (`2026-05-15`, `2026-05-18`,
+`2026-05-24` — the same window the `quantum_2026_05_24` fixture uses); the
+`2026-04-14` window exists only as the seeded scenario row. Re-ingesting a past
+day is not an option either: the GDELT and RSS windows have moved on. The
+choice was between a synthetic catalyst window and no second fixture at all.
+
+What that costs, precisely: `second_order_implications` is the single free-text
+field the new prompt injects as `extracted_implications`, and §2 shows it is
+what carries the quantum read. That sentence was typed, so the candidate set
+below is the model's response to a hand-written implication, not to an
+extraction the pipeline produced. The five OTHER surfaces are real, so
+everything downstream of the proposal — the gates, the bracket filter, the
+schema — is exercised against genuine data.
+
+The declaration is machine-readable and test-enforced, not only prose:
+`map_fixtures.NVDA_ISING_2026_04_14.seeded_surfaces` names both parquets with
+the reason, the recorder copies it into `golden/v1/provenance.json`, and
+`tests/golden/test_golden_map_provenance.py` fails if a recording drops it.
+
+The seeded Ising row is the only theme-tagged event in the store inside the
 resolver's 30-day lookback from this asof, so the window is a single date and
-the fixture is unambiguous about which event it characterizes.
+the resolver has exactly one candidate trigger. That is a property of the
+seeded window, not a measurement of the news corpus.
 
 sha256 of everything committed:
 
@@ -138,9 +179,10 @@ annealing, quantum cloud, error correction`.
 ## 3. Plain-language reading of this one draw
 
 The article is an NVIDIA product launch. It names one public company — NVIDIA
-itself — plus a long list of private labs and universities. The extraction stage
-distilled one implication: "quantum hardware vendors may benefit from Ising
-tooling".
+itself — plus a long list of private labs and universities. The event row
+carries one implication, "quantum hardware vendors may benefit from Ising
+tooling", which was typed by hand rather than produced by the extraction stage
+(see "The seeded catalyst window").
 
 In this recorded draw the model returned NVIDIA (the subject) and four quantum
 hardware names, three of which the article never mentions. Each came with a
@@ -169,6 +211,10 @@ answers "did this execution differ from the approved one" and nothing else.
   "QUBT must appear" assertion: at a measured 6/15 hit rate it would be flaky by
   construction and would dress a sampling artifact up as a specification.
 * **N = 1 event, 1 theme, 1 date, 1 draw.**
+* **The event itself is a seeded row.** The headline and URL are real, but the
+  implication the read hangs on was typed by a human. This fixture therefore
+  says nothing about what the extraction stage produces for a real NVIDIA
+  press release, only about what the mapper does with the input it was given.
 
 What a green replay does support: the deterministic downstream machinery —
 prompt rendering, response parsing, `_normalize` and its transmission-channel
@@ -193,6 +239,7 @@ looking at the economics. Both assertions remain deferred to their own issue.
 | recorded by | `scripts/record_golden_map.py --fixture nvda_ising_2026_04_14` |
 | theme / asof | `quantum_computing` / `2026-04-14` |
 | event | `nvda_ising_2026_04_14`, NVIDIA press release, published 2026-04-14 13:00 UTC |
+| seeded surfaces | `events/2026-04-14.parquet`, `news/2026-04-14.parquet` (hand-authored scenario row — see §Method) |
 | model | `deepseek/deepseek-v4-pro` |
 | sampling | `temperature=0.0`, `max_tokens=8000`, `response_format={"type": "json_object"}` |
 | cassette key | `ac60e901cec1e2f621b0e2a82ce30991ea0bd84db3a2ef08af00812059b20d8b` |

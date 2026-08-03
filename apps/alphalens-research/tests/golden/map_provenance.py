@@ -3,8 +3,9 @@
 A characterization fixture is only auditable if it says where it came from. The
 committed cassette and projection show WHAT was approved; this file records what
 it was recorded FROM — the event, the prompt version, the model and sampling
-config, the cassette key, the digest of every frozen surface, the day it was
-captured, and who approved it.
+config, the cassette key, the digest of every frozen surface, which of those
+surfaces were hand-authored rather than captured, the day it was captured, and
+who approved it.
 
 One document per RECORDING, at ``golden/<version>/provenance.json``, because
 those facts belong to the recording and not to the fixture: a re-baseline adds a
@@ -36,7 +37,9 @@ PROVENANCE_FILENAME = "provenance.json"
 
 # Bump when the document's shape changes, so an old file fails loud instead of
 # being read with a field silently absent.
-PROVENANCE_SCHEMA_VERSION = 1
+# v2: added ``seeded_surfaces`` — the frozen surfaces whose content was written
+# by hand rather than captured.
+PROVENANCE_SCHEMA_VERSION = 2
 
 # Re-recording a characterization golden is a reviewed operation, so the
 # document names the human who approved the execution it pins.
@@ -136,6 +139,18 @@ def surface_manifest(fixture: MapFixture) -> dict[str, str]:
             if path.is_file():
                 manifest[str(path.relative_to(fixture.root))] = sha256_file(path)
     return dict(sorted(manifest.items()))
+
+
+def seeded_surfaces(fixture: MapFixture) -> dict[str, str]:
+    """``{path relative to the fixture root: why it was hand-authored}``.
+
+    Read off the fixture descriptor, which is where the fixture author declares
+    it. Everything else in the document is re-derived from artifacts; this one
+    cannot be, because "was this row typed or ingested?" is not recoverable
+    from the row. Writing it through the recorder is what stops the disclosure
+    from living only in a memo that the next capture forgets to update.
+    """
+    return dict(sorted(fixture.seeded_surfaces))
 
 
 def cassette_record(fixture: MapFixture, version: str | None = None) -> dict[str, Any]:
@@ -239,12 +254,19 @@ def audit_recording(fixture: MapFixture, version: str, doc: dict[str, Any]) -> l
     they are checked against the frozen ``mapper_config_version`` token they are
     supposed to summarise, which for a recording whose parquet carries that
     token is in turn pinned to the parquet.
+
+    KNOWN LIMIT — a recording whose parquet predates the
+    ``mapper_config_version`` column has NO artifact to pin that token against,
+    so a wrong-but-internally-consistent token would pass every check here.
+    That case cannot be closed after the fact (the parquet is frozen), so it is
+    made visible instead: such a recording must disclose the gap in ``notes``,
+    and this function reports it when it does not.
     """
     record = cassette_record(fixture, version)
     config = record.get("config") or {}
     event = resolve_event(fixture)
     config_version = _parsed_config_version(doc)
-    stamped = _stamped_config_version(fixture, version)
+    stamped = stamped_config_version(fixture, version)
 
     expected: list[tuple[str, Any]] = [
         ("schema_version", PROVENANCE_SCHEMA_VERSION),
@@ -264,6 +286,10 @@ def audit_recording(fixture: MapFixture, version: str, doc: dict[str, Any]) -> l
         ("prompt.prompt_sha", config_version.get("prompt_sha")),
         ("prompt.schema_sha", config_version.get("schema_sha")),
         ("model", config_version.get("model")),
+        # Hand-authored surfaces are declared on the descriptor; the document
+        # must repeat the declaration verbatim, so neither side can drift into
+        # presenting a seeded input as a captured one.
+        ("seeded_surfaces", seeded_surfaces(fixture)),
     ]
     if stamped is not None:
         expected.append(("prompt.mapper_config_version", stamped))
@@ -272,10 +298,15 @@ def audit_recording(fixture: MapFixture, version: str, doc: dict[str, Any]) -> l
         got = _field(doc, dotted)
         if got != want:
             problems.append(f"{dotted} is {got!r}, artifacts say {want!r}")
+    if stamped is None and not str(doc.get("notes") or "").strip():
+        problems.append(
+            f"{fixture.name}/{version} stamps no mapper_config_version in its parquet, so "
+            "the token is pinned by nothing — notes must say where it came from"
+        )
     return problems
 
 
-def _stamped_config_version(fixture: MapFixture, version: str) -> str | None:
+def stamped_config_version(fixture: MapFixture, version: str) -> str | None:
     """The ``mapper_config_version`` the recording stamped into its parquet.
 
     ``None`` when the recording predates that freeze column (the earliest
@@ -352,6 +383,7 @@ def build_provenance(
         },
         "cassette_key": record["key"],
         "frozen_surfaces": surface_manifest(fixture),
+        "seeded_surfaces": seeded_surfaces(fixture),
         "recorded_date": recorded_date.isoformat(),
         "provenance_written": (provenance_written or recorded_date).isoformat(),
         "recorded_by": recorded_by,
@@ -383,8 +415,10 @@ __all__ = [
     "provenance_path",
     "recording_versions",
     "resolve_event",
+    "seeded_surfaces",
     "sha256_file",
     "sha256_text",
+    "stamped_config_version",
     "surface_manifest",
     "write_provenance",
 ]
