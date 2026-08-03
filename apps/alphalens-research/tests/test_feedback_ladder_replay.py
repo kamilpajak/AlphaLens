@@ -915,6 +915,18 @@ class TestResidualFraction(unittest.TestCase):
         self.assertIsNone(outcome.residual_fraction)
         self.assertFalse(outcome.sl_closed_nothing)
 
+    def test_no_fill_leaves_residual_none(self):
+        # Nothing ever filled -- the entry limit (99) is never touched, so the
+        # walk never opens a position. residual_fraction must be None (not 0
+        # or 1, which would misleadingly imply an exit happened) and
+        # sl_closed_nothing must stay False (no SL fired at all).
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(110.0, 100.0)], stop=92.0)
+        bars = [_bar(1, low=101.0, high=105.0, close=103.0)]  # low never reaches 99
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.classification, "NO_FILL")
+        self.assertIsNone(outcome.residual_fraction)
+        self.assertFalse(outcome.sl_closed_nothing)
+
 
 if __name__ == "__main__":
     unittest.main()

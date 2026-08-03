@@ -438,11 +438,12 @@
 	});
 
 	// Map a replay marker to a Lightweight Charts SeriesMarker.
-	//   ENTRY     → cyan  arrowUp   belowBar  (E1, E2, ...)  — prominent
-	//   TP        → green arrowDown aboveBar  (TP1, ...)
-	//   SL        → red   arrowDown belowBar  (SL)
-	//   SL_TOUCHED → dim red circle belowBar (stop crossed, closed nothing)
-	//   TIME_STOP → amber arrowDown aboveBar  (TS)
+	//   ENTRY      → cyan      arrowUp   belowBar  (E1, E2, ...) — prominent
+	//   TP         → green     arrowDown aboveBar  (TP1, ...)
+	//   TP_TOUCHED → dim green circle    aboveBar  (TP reached, sold nothing)
+	//   SL         → red       arrowDown belowBar  (SL)
+	//   SL_TOUCHED → dim red   circle    belowBar  (stop crossed, closed nothing)
+	//   TIME_STOP  → amber     arrowDown aboveBar  (TS)
 	function buildMarkers(raw: ChartMarker[]): SeriesMarker<Time>[] {
 		return raw.map((m, i) => {
 			const base = {

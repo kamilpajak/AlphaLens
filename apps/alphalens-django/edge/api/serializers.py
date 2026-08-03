@@ -131,9 +131,10 @@ class ChartBarSerializer(serializers.Serializer):
 class ChartMarkerSerializer(serializers.Serializer):
     """One modeled fill / exit marker, snapped to a daily bar ``time``.
 
-    ``kind`` is the chart vocabulary (``ENTRY`` / ``TP`` / ``SL`` / ``TIME_STOP``);
-    ``ambiguous`` carries the SL-first intrabar flag (a bar that touched both a TP
-    high and the SL low, resolved SL-first).
+    ``kind`` is the pipeline's marker vocabulary; opaque to this serializer (a
+    plain passthrough, so new kinds need no change here). ``ambiguous`` carries
+    the SL-first intrabar flag (a bar that touched both a TP high and the SL
+    low, resolved SL-first).
     """
 
     time = serializers.CharField()
