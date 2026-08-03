@@ -10,7 +10,11 @@ from __future__ import annotations
 import math
 import unittest
 
-from broker_contract.exit_geometry.levels import atr_bracket_levels, ceiling_from_52w_high
+from broker_contract.exit_geometry.levels import (
+    atr_bracket_levels,
+    ceiling_from_52w_high,
+    clamp_reanchor_target,
+)
 
 
 class TestAtrBracketLevels(unittest.TestCase):
@@ -134,6 +138,32 @@ class TestCeilingFrom52wHigh(unittest.TestCase):
         # pct <= -100 -> denom = 1 + pct/100 <= 0.
         result = ceiling_from_52w_high({"asof_close": 100.0}, -150.0)
         self.assertIsNone(result)
+
+
+class ClampReanchorTargetTest(unittest.TestCase):
+    def test_tighter_target_passes(self):
+        out = clamp_reanchor_target(98.0, 99.0, anchor_price=101.0, min_distance_frac=0.002)
+        self.assertTrue(math.isclose(out, 99.0))
+
+    def test_below_brief_floor_refused(self):
+        self.assertIsNone(
+            clamp_reanchor_target(98.0, 97.0, anchor_price=101.0, min_distance_frac=0.002)
+        )
+
+    def test_too_close_clamped_to_floor(self):
+        out = clamp_reanchor_target(98.0, 100.9, anchor_price=101.0, min_distance_frac=0.002)
+        self.assertTrue(math.isclose(out, 101.0 * (1 - 0.002)))
+
+    def test_degenerate_inputs_return_none(self):
+        self.assertIsNone(
+            clamp_reanchor_target(0.0, 99.0, anchor_price=101.0, min_distance_frac=0.002)
+        )
+        self.assertIsNone(
+            clamp_reanchor_target(98.0, float("nan"), anchor_price=101.0, min_distance_frac=0.002)
+        )
+        self.assertIsNone(
+            clamp_reanchor_target(98.0, 99.0, anchor_price=-1.0, min_distance_frac=0.002)
+        )
 
 
 if __name__ == "__main__":
