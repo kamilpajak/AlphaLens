@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -254,6 +255,11 @@ class IterPicksTest(unittest.TestCase):
     def test_armed_line_without_intent_key_is_skipped(self) -> None:
         # The pre-PR-7 bare (ticker, date) line shape — no back-compat per
         # solo-project doctrine (re-arm is the explicit human path back).
+        # The skip is logged at DEBUG, never WARNING: the manager daemon
+        # re-reads picks.jsonl every ~45s tick, so a WARNING per bare line
+        # per tick floods the journal (~28 lines x ~1900 ticks/day) for an
+        # expected, inert, self-healing condition. DEBUG keeps it available
+        # for troubleshooting without drowning real signal.
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             json.dumps(
@@ -267,9 +273,19 @@ class IterPicksTest(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
-        with self.assertLogs(level="WARNING"):
+        with self.assertLogs(level="DEBUG") as captured:
             intents = list(iter_picks(path=self.path))
         self.assertEqual(intents, [])
+        # The skip must be logged so troubleshooting is possible,
+        self.assertTrue(
+            any("bare shape" in r.getMessage() for r in captured.records),
+            "expected the bare-shape skip to be logged",
+        )
+        # but never at WARNING+ (that is the per-tick journal spam).
+        self.assertTrue(
+            all(r.levelno < logging.WARNING for r in captured.records),
+            "bare-shape skip must not log at WARNING or above",
+        )
 
     def test_armed_line_with_undecodable_intent_is_skipped(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
