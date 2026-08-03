@@ -696,6 +696,13 @@ def _maybe_reanchor(
         min_distance_frac=policy.min_stop_distance_frac,
     )
     if clamped is None:
+        logger.info(
+            "reanchor refused (below brief floor): policy=%s proposed=%.4f prior_stop=%.4f avg_price=%.4f",
+            policy.name,
+            proposed,
+            plan.stop_price,
+            avg_price,
+        )
         return None  # never-below-brief-floor (Decision 1) or degenerate -> keep the resting stop
     if not math.isclose(clamped, proposed):
         logger.info(

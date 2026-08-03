@@ -1684,7 +1684,9 @@ def _place_tiers(
     # Normalize the resolved-once cached policy (Task 4): the geometry-override
     # gate below reads ``exit_policy.applies_geometry`` — the retired env-string
     # sentinel is gone. Default inert (dark) when no policy was threaded in.
-    exit_policy = exit_policy if exit_policy is not None else SetupStaticPolicy()
+    resolved_exit_policy: ExitPolicy = (
+        exit_policy if exit_policy is not None else SetupStaticPolicy()
+    )
 
     def _geometry_stamp(*, use_geometry: bool) -> dict[str, Any] | None:
         if exit_spec is None:
@@ -1738,7 +1740,7 @@ def _place_tiers(
                 fx=fx,
             )
         )
-        use_geometry = exit_policy.applies_geometry and exit_spec is not None
+        use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
         if use_geometry and exit_spec is not None:  # 2nd clause restated to narrow exit_spec
             stop_price = exit_spec.initial_levels.stop
             take_profit = exit_spec.initial_levels.tp

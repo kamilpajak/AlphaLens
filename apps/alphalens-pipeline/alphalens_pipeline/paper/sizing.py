@@ -22,7 +22,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from broker_contract.exit_geometry import resolve_exit_policy
+from broker_contract.exit_geometry import AtrBracketPolicy, resolve_exit_policy
 from broker_contract.exit_geometry.levels import ceiling_from_52w_high
 from broker_contract.sizing import TradeSetupNotPlannableError
 from broker_contract.trade_intent.schema import (
@@ -263,6 +263,7 @@ def build_exit_geometry_spec(
         return None
     ceiling = ceiling_from_52w_high(brief_trade_setup, pct_off_52w_high)
     exit_policy = resolve_exit_policy("atr_bracket_1p5")
+    assert isinstance(exit_policy, AtrBracketPolicy)  # this builder handles only the ATR bracket
     levels = exit_policy.decide_placement_geometry(blended, atr, ceiling_price=ceiling)
     if levels is None:
         return None

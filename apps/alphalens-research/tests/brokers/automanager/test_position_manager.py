@@ -878,11 +878,8 @@ class TestReconcileProtectionArms(unittest.TestCase):
 
 _OCO_ON = {"ALPHALENS_BROKER_OCO_ENABLED": "1"}
 _AMEND_ON = {"ALPHALENS_BROKER_AMEND_ENABLED": "1"}
-_EXIT_POLICY_ATR_BRACKET = {"ALPHALENS_BROKER_EXIT_POLICY": "atr_bracket_1p5"}
-# The cached behavioral policy the reanchor arm now reads off ``view.exit_policy``
-# (Task 5). The ``_EXIT_POLICY_ATR_BRACKET`` env patch remains on the pre-existing
-# tests only to keep them green across the env->view contract switch; the arm no
-# longer reads it (Task 6 removes the env sentinel entirely).
+# The cached behavioral policy the reanchor arm reads off ``view.exit_policy``
+# (Task 5) — threaded explicitly per test, no env patch needed.
 _ATR_POLICY = resolve_exit_policy("atr_bracket_1p5")
 
 
@@ -1673,8 +1670,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         pos, view = self._covered_view(
             owned=7.0, avg_price=95.0, reanchor=self._facts(), exit_policy=_ATR_POLICY
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
         action = actions[0]
         self.assertIsInstance(action, AmendStop)
@@ -1694,8 +1690,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
             reanchored_by_uic={_UIC: 95.0},
             exit_policy=_ATR_POLICY,
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_avg_price_moved_since_last_reanchor_refires(self) -> None:
@@ -1706,8 +1701,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
             reanchored_by_uic={_UIC: 90.0},  # a prior, DIFFERENT blend
             exit_policy=_ATR_POLICY,
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
         action = actions[0]
         self.assertIsInstance(action, AmendStop)
@@ -1716,8 +1710,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
 
     def test_plan_reanchor_none_is_noop(self) -> None:
         pos, view = self._covered_view(reanchor=None, exit_policy=_ATR_POLICY)
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_oco_healthy_covered_full_tp_is_noop_never_reanchors(self) -> None:
@@ -1730,16 +1723,14 @@ class TestFillCompleteReanchor(unittest.TestCase):
             planned_by_uic={_UIC: _plan(tp_price=306.72, reanchor=self._facts())},
             exit_policy=_ATR_POLICY,
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_avg_price_sentinel_le_zero_is_noop(self) -> None:
         pos, view = self._covered_view(
             avg_price=0.0, reanchor=self._facts(), exit_policy=_ATR_POLICY
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_computed_target_le_zero_is_noop(self) -> None:
@@ -1747,8 +1738,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
         pos, view = self._covered_view(
             avg_price=5.0, reanchor=self._facts(k_atr=1.5, atr=4.0), exit_policy=_ATR_POLICY
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     def test_amend_recently_failed_is_noop(self) -> None:
@@ -1757,8 +1747,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
             amend_recently_failed=frozenset({_UIC}),
             exit_policy=_ATR_POLICY,
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
     # ----- Task 5: cached-policy routing + never-below-brief-floor envelope -----
@@ -1787,8 +1776,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
             stop_price=94.0,
             exit_policy=_ATR_POLICY,
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
         action = actions[0]
         self.assertIsInstance(action, AmendStop)
@@ -1810,9 +1798,25 @@ class TestFillCompleteReanchor(unittest.TestCase):
             stop_price=94.0,
             exit_policy=_ATR_POLICY,
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
+
+    def test_below_blend_reanchor_logs_refusal_below_brief_floor(self) -> None:
+        # The below-floor refusal (Decision 1) is the actual event of interest —
+        # it must not fail silently. Assert the INFO log fires and names it.
+        pos, view = self._covered_view(
+            owned=7.0,
+            avg_price=95.0,
+            reanchor=self._facts(),
+            stop_price=94.0,
+            exit_policy=_ATR_POLICY,
+        )
+        plan = view.planned_by_uic[_UIC]
+        legs = view.sell_legs_by_uic[_UIC]
+        with self.assertLogs(pm.__name__, level="INFO") as cm:
+            action = pm._maybe_reanchor(_UIC, pos, plan, legs, view)
+        self.assertIsNone(action)
+        self.assertTrue(any("below brief floor" in message for message in cm.output))
 
     def test_degenerate_atr_is_noop(self) -> None:
         # A degenerate ATR (0.0) yields no reanchor target -> NoOp, never a bad stop.
@@ -1822,8 +1826,7 @@ class TestFillCompleteReanchor(unittest.TestCase):
             stop_price=94.0,
             exit_policy=_ATR_POLICY,
         )
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
         self.assertEqual(actions, [NoOp()])
 
 
@@ -1866,8 +1869,7 @@ class TestGappedDeepFillReanchorGating(unittest.TestCase):
             exit_policy=_ATR_POLICY,
         )
 
-        with patch.dict(os.environ, _EXIT_POLICY_ATR_BRACKET):
-            actions = reconcile_long(_UIC, pos, view)
+        actions = reconcile_long(_UIC, pos, view)
 
         # The envelope refuses the below-floor reanchor: no AmendStop, resting stop stays.
         self.assertEqual(actions, [NoOp()])
