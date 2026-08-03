@@ -1,5 +1,7 @@
 # Exit-policy registry + stateful envelope — implementation plan (INC-1)
 
+**Status:** SHIPPED (2026-08-03) — all 6 tasks implemented subagent-driven; merged in PR #972 (squash `5b97e0aa`). zen deepseek-v4-pro high pre-merge clean (0 Critical/High/Medium). Suites green (automanager 432/432, exit_geometry 31/31). Deploy is a separate cycle.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Restructure the SIM exit-logic layer into a named `ExitPolicy` registry behind a stateful safety envelope, so today's deterministic policies re-express through one abstraction and a future ML policy plugs in as one more registry entry — zero ML, zero RNG in this increment.

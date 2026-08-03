@@ -1,6 +1,6 @@
 # Non-deterministic (ML-ready) exit-policy architecture — design
 
-**Status:** DRAFT (2026-08-03) — awaiting implementation plan.
+**Status:** LOCKED (2026-08-03) — INC-1 shipped in PR #972 (squash `5b97e0aa`, zen deepseek-v4-pro clean). ML apparatus (§7) deferred. Deploy = separate cycle.
 **Type:** design memo (architecture / refactor, deterministic-first).
 **Scope:** the Saxo SIM broker auto-manager exit-logic layer (`apps/alphalens-pipeline/alphalens_pipeline/brokers/automanager/` + `broker_contract/exit_geometry/`). SIM-only. No live-money change.
 
