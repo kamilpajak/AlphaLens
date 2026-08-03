@@ -851,5 +851,70 @@ class TestAtrBracketWhatIf(unittest.TestCase):
         self.assertAlmostEqual(r, 1.0, places=6)
 
 
+class TestResidualFraction(unittest.TestCase):
+    """``residual_fraction`` = the un-sold share of the FILLED position at exit
+    time, surfaced so the chart can distinguish an SL that closed a real
+    remainder from one that fired economically empty (the PSN 2026-07-19 case:
+    TP1's re-based share consumed the whole held position days before the
+    crash bar crossed the stop). ``sl_closed_nothing`` is the derived flag the
+    chart consumes."""
+
+    def test_sl_after_tp_consumed_all_is_economically_empty(self):
+        # Shallow fill (E1 only, filled_frac=1/3) -> TP1's re-based share is
+        # 1.0 and consumes the whole held position. The crash bar would cross
+        # E2/E3 too, so the entry TTL cutoff (ts >= 3) keeps them from
+        # refilling -- exactly the live PSN shape.
+        setup = _setup(**_EQUAL_3)
+        bars = [
+            _bar(1, low=98.0, high=100.0, close=99.0),  # fills E1 (99) only
+            _bar(2, low=100.0, high=103.0, close=102.5),  # touches TP1 (102) only
+            _bar(3, low=91.0, high=100.0, close=91.5),  # crash through E2/E3/SL
+        ]
+        outcome = replay_ladder(setup, bars, entry_expiry_ms=3)
+        self.assertEqual(outcome.entries_filled, ("E1",))
+        self.assertEqual(outcome.classification, "PARTIAL_TP_THEN_SL")
+        self.assertEqual(outcome.realized_tp_ids, ("TP1",))
+        self.assertAlmostEqual(outcome.residual_fraction, 0.0, places=9)
+        self.assertTrue(outcome.sl_closed_nothing)
+        self.assertAlmostEqual(outcome.realized_r, 3.0 / 7.0, places=3)  # TP1 only
+
+    def test_sl_with_real_remainder_is_not_empty(self):
+        # Full single-tier fill: TP1 sells 1/3, the SL closes the other 2/3.
+        setup = _setup(
+            entries=[(99.0, 100.0)],
+            tps=[(102.0, 33.3), (107.0, 33.3), (112.0, 33.3)],
+            stop=92.0,
+        )
+        bars = [
+            _bar(1, low=98.0, high=100.0, close=99.0),  # fills E1 fully
+            _bar(2, low=100.0, high=103.0, close=102.5),  # TP1 sells its tranche
+            _bar(3, low=91.0, high=100.0, close=91.5),  # SL closes the rest
+        ]
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.classification, "PARTIAL_TP_THEN_SL")
+        self.assertAlmostEqual(outcome.residual_fraction, 2.0 / 3.0, places=6)
+        self.assertFalse(outcome.sl_closed_nothing)
+
+    def test_straight_sl_has_full_remainder(self):
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(110.0, 100.0)], stop=92.0)
+        bars = [
+            _bar(1, low=98.0, high=100.0, close=99.0),  # fills E1
+            _bar(2, low=91.0, high=99.0, close=91.5),  # SL
+        ]
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.classification, "SL_HIT")
+        self.assertAlmostEqual(outcome.residual_fraction, 1.0, places=9)
+        self.assertFalse(outcome.sl_closed_nothing)
+
+    def test_bad_geometry_leaves_residual_none(self):
+        # BAD_GEOMETRY early-returns before realized-R is computed.
+        setup = _setup(entries=[(99.0, 100.0)], tps=[(110.0, 100.0)], stop=100.0)
+        bars = [_bar(1, low=98.0, high=99.0, close=98.5)]
+        outcome = replay_ladder(setup, bars)
+        self.assertEqual(outcome.classification, "BAD_GEOMETRY")
+        self.assertIsNone(outcome.residual_fraction)
+        self.assertFalse(outcome.sl_closed_nothing)
+
+
 if __name__ == "__main__":
     unittest.main()

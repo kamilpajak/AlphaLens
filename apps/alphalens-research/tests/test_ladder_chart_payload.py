@@ -272,6 +272,79 @@ class TestBuildChartPayload(unittest.TestCase):
         self.assertEqual(payload["bars"], [])
         self.assertEqual(payload["markers"], [])
 
+    def test_sl_that_closed_nothing_is_distinct_kind(self) -> None:
+        """An SL crossing that closed a ZERO economic remainder (an early TP
+        consumed the whole held position; entry TTL kept deeper tiers from
+        refilling on the crash bar) must render ``SL_TOUCHED`` -- a solid red
+        arrow would overstate a loss that never happened."""
+        setup = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            "disaster_stop": 70.0,
+            "atr": 2.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [
+                {"limit": 100.0, "alloc_pct": 33.3},
+                {"limit": 90.0, "alloc_pct": 33.3},
+                {"limit": 80.0, "alloc_pct": 33.3},
+            ],
+            "tp_tranches": [
+                {"target": 110.0, "tranche_pct": 33.3},
+                {"target": 120.0, "tranche_pct": 33.3},
+                {"target": 130.0, "tranche_pct": 33.3},
+            ],
+        }
+        arrival_open = _session_open_ms(_ARRIVAL)
+        bars = [
+            _bar(arrival_open, o=101.0, h=102.0, low=99.0, c=100.5),  # E1 only
+            _bar(arrival_open + 60_000, o=105.0, h=111.0, low=104.0, c=110.5),  # TP1 touch only
+            # Crash bar next session: would cross E2/E3 and the stop -- the
+            # TTL cutoff at the session open blocks the refills.
+            _bar(_session_open_ms(_NEXT_SESSION), o=95.0, h=96.0, low=69.0, c=70.5),
+        ]
+        outcome = replay_ladder(setup, bars, entry_expiry_ms=_session_open_ms(_NEXT_SESSION))
+        self.assertEqual(outcome.realized_tp_ids, ("TP1",))  # TP1 sold it all
+        self.assertTrue(outcome.sl_hit)
+        self.assertTrue(outcome.sl_closed_nothing)  # precondition from Task 1
+        payload = _payload(bars, outcome, setup=setup)
+        sl_markers = [m for m in payload["markers"] if m["level_id"] == "SL"]
+        self.assertEqual(len(sl_markers), 1)
+        self.assertEqual(sl_markers[0]["kind"], "SL_TOUCHED")
+        self.assertEqual(sl_markers[0]["label"], "SL")  # label text unchanged
+
+    def test_sl_with_real_remainder_stays_solid_kind(self) -> None:
+        """A stop that closed a REAL remainder keeps the solid ``SL`` kind."""
+        setup = {
+            "status": "OK",
+            "schema_version": "1.0.0",
+            "suggested_size_pct": 2.0,
+            "disaster_stop": 70.0,
+            "atr": 2.0,
+            "order_ttl_days": 7,
+            "entry_tiers": [{"limit": 100.0, "alloc_pct": 100.0}],
+            "tp_tranches": [
+                {"target": 110.0, "tranche_pct": 33.3},
+                {"target": 120.0, "tranche_pct": 33.3},
+                {"target": 130.0, "tranche_pct": 33.3},
+            ],
+        }
+        arrival_open = _session_open_ms(_ARRIVAL)
+        bars = [
+            _bar(arrival_open, o=101.0, h=102.0, low=99.0, c=100.5),  # full fill
+            _bar(arrival_open + 60_000, o=105.0, h=111.0, low=104.0, c=110.5),  # TP1 sells 1/3
+            _bar(
+                _session_open_ms(_NEXT_SESSION), o=95.0, h=96.0, low=69.0, c=70.5
+            ),  # SL closes 2/3
+        ]
+        outcome = replay_ladder(setup, bars)
+        self.assertTrue(outcome.sl_hit)
+        self.assertFalse(outcome.sl_closed_nothing)
+        payload = _payload(bars, outcome, setup=setup)
+        sl_markers = [m for m in payload["markers"] if m["level_id"] == "SL"]
+        self.assertEqual(len(sl_markers), 1)
+        self.assertEqual(sl_markers[0]["kind"], "SL")
+
 
 class TestContextWindow(unittest.TestCase):
     """Lead-in (pre-arrival) + trailing (post-horizon) DAILY context bars sit

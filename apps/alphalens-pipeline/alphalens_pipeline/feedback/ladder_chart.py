@@ -82,6 +82,12 @@ _MARKER_TP = "TP"
 # was actually captured. See LadderOutcome.realized_tp_ids.
 _MARKER_TP_TOUCHED = "TP_TOUCHED"
 _MARKER_SL = "SL"
+# An SL crossing that closed a ZERO economic remainder: the stop line WAS
+# crossed, but an earlier TP tranche had already consumed the whole held
+# position (LadderOutcome.sl_closed_nothing). Drawn dimmed so a solid red
+# arrow never overstates a loss that did not happen -- the exact mirror of
+# the TP_TOUCHED sold-vs-touched honesty above.
+_MARKER_SL_TOUCHED = "SL_TOUCHED"
 _MARKER_TIME_STOP = "TIME_STOP"
 
 # A (ticker, arrival_session) -> list of cached OHLC minute bars. The production
@@ -268,14 +274,15 @@ def _marker_kind_and_label(level_id: str, kind: str, *, sold: bool = True) -> tu
     Labels are the compact level ids the UI draws (``E1``, ``TP1``, ``SL``); the
     time-stop carries the ``TIME_STOP`` label so the tooltip reads honestly. A TP
     crossing that sold no tranche (``sold=False``) maps to ``TP_TOUCHED`` — the
-    price touched the level but the held position was already flat.
+    price touched the level but the held position was already flat. An SL
+    crossing that closed no remainder (``sold=False``) maps to ``SL_TOUCHED``.
     """
     if kind == "ENTRY":
         return _MARKER_ENTRY, level_id
     if kind == "TP":
         return (_MARKER_TP if sold else _MARKER_TP_TOUCHED), level_id
     if kind == "SL":
-        return _MARKER_SL, level_id
+        return (_MARKER_SL if sold else _MARKER_SL_TOUCHED), level_id
     return _MARKER_TIME_STOP, _MARKER_TIME_STOP
 
 
@@ -297,8 +304,14 @@ def _markers_from_sequence(
         if session is None:
             continue  # dangling time -> would not render; drop honestly
         # A TP crossing counts as SOLD only if it appears in realized_tp_ids
-        # (positive re-based share). Non-TP crossings pass sold=True unchanged.
-        sold = crossing.kind != "TP" or crossing.level_id in realized_tps
+        # (positive re-based share); an SL counts as SOLD only if it closed a
+        # real remainder. Every other kind passes sold=True unchanged.
+        if crossing.kind == "TP":
+            sold = crossing.level_id in realized_tps
+        elif crossing.kind == "SL":
+            sold = not outcome.sl_closed_nothing
+        else:
+            sold = True
         marker_kind, label = _marker_kind_and_label(crossing.level_id, crossing.kind, sold=sold)
         markers.append(
             {

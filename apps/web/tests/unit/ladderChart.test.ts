@@ -80,6 +80,17 @@ describe('finalExitMarkerTime', () => {
 		];
 		expect(finalExitMarkerTime(markers)).toBe('2026-06-23');
 	});
+
+	it('ends the band at an SL_TOUCHED crossing (economically empty stop)', () => {
+		// The stop was crossed but closed nothing (earlier TPs consumed the
+		// whole held position) — the in-trade window still ends there.
+		const markers = [
+			marker('ENTRY', '2026-06-13', 'E1'),
+			marker('TP', '2026-06-15', 'TP1'),
+			marker('SL_TOUCHED', '2026-06-18', 'SL')
+		];
+		expect(finalExitMarkerTime(markers)).toBe('2026-06-18');
+	});
 });
 
 // Pins the "brief" vertical-line anchor: the session the candidate appeared in

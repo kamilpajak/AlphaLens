@@ -147,6 +147,14 @@ class TestReplayInvariants(PropertyTestCase):
         if o.mfe is not None and o.mae is not None:
             self.assertGreaterEqual(o.mfe, o.mae)
 
+    @given(ladder_and_bars())
+    def test_residual_fraction_bounds(self, lab: Any) -> None:
+        setup, bars = lab
+        o = replay_ladder(setup, bars)
+        if o.residual_fraction is not None:
+            self.assertGreaterEqual(o.residual_fraction, 0.0)
+            self.assertLessEqual(o.residual_fraction, 1.0)
+
 
 class TestReplayMetamorphic(PropertyTestCase):
     """Relations under transformed inputs."""

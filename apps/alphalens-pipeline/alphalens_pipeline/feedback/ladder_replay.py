@@ -58,6 +58,10 @@ _TP = "TP"
 _SL = "SL"
 _TIME = "TIME_STOP"
 
+# Epsilon under which a residual fraction counts as economically zero (matches
+# the ``remaining > 1e-9`` guard inside the realized-R computation).
+_RESIDUAL_EPS = 1e-9
+
 
 @dataclass(frozen=True)
 class LevelCrossing:
@@ -101,6 +105,11 @@ class LadderOutcome:
     # deeper touched TPs sell nothing. ``captured_tp_count < touched_tp_count`` is the
     # signal that ``TP_FULL`` / the chart's green arrows overstate what was captured.
     realized_tp_ids: tuple[str, ...] = ()
+    # Un-sold share of the FILLED position at exit time (the ``remaining`` of
+    # the realized-R re-basing). 0.0 = TP tranches consumed everything before
+    # the exit; 1.0 = nothing sold before it. None when realized-R was never
+    # computed (the BAD_GEOMETRY early return, or nothing ever filled).
+    residual_fraction: float | None = None
 
     def sequence_str(self) -> str:
         """Compact human form, e.g. ``E1->E2->TP1->SL``."""
@@ -115,6 +124,20 @@ class LadderOutcome:
     def touched_tp_count(self) -> int:
         """Number of TP price levels the path crossed (``tps_hit``)."""
         return len(self.tps_hit)
+
+    @property
+    def sl_closed_nothing(self) -> bool:
+        """True when the stop was crossed but closed a ZERO economic remainder.
+
+        The chart maps this to the dimmed ``SL_TOUCHED`` marker: a solid red
+        arrow must not overstate a loss that never happened -- the exact
+        mirror of the TP / TP_TOUCHED sold-vs-touched honesty above.
+        """
+        return (
+            self.sl_hit
+            and self.residual_fraction is not None
+            and self.residual_fraction <= _RESIDUAL_EPS
+        )
 
 
 @dataclass
@@ -858,7 +881,7 @@ def _finalize(
             ratchet_realized_r=None,
         )
 
-    realized_r, horizon_open, realized_tp_ids = _realized_r_with_frac(
+    realized_r, horizon_open, realized_tp_ids, residual_fraction = _realized_r_with_frac(
         ladder, hit_tp_ids, blended, stop, risk, sl_hit, last_close, filled_frac, expiry_close
     )
     mfe, mae, mfe_pct, mae_pct = _excursions(blended, risk, in_trade_high, in_trade_low)
@@ -889,6 +912,7 @@ def _finalize(
         forward_return=forward_return,
         ratchet_realized_r=ratchet_r,
         realized_tp_ids=realized_tp_ids,
+        residual_fraction=residual_fraction,
     )
 
 
@@ -902,7 +926,7 @@ def _realized_r_with_frac(
     last_close: float | None,
     filled_frac: float,
     expiry_close: float | None = None,
-) -> tuple[float, bool, tuple[str, ...]]:
+) -> tuple[float, bool, tuple[str, ...], float]:
     """Realized R over the FILLED position with TP shares re-based to the fill.
 
     Bug #1: a TP tranche's ``tranche_pct`` is defined over the FULL intended
@@ -916,6 +940,7 @@ def _realized_r_with_frac(
     ALL tiers fill (``filled_frac == 1``) the re-based share reduces exactly to
     the old full-position weighting. ``stop`` is the disaster stop for the
     headline pass and the EFFECTIVE (ratcheted) stop for the what-if pass.
+    Also returns ``remaining`` -- the un-sold share at exit time.
     """
     tp_wsum = sum(t.weight for t in ladder.tps)
     contrib = 0.0
@@ -947,7 +972,7 @@ def _realized_r_with_frac(
         elif last_close is not None:
             contrib += remaining * (last_close - blended) / risk
             horizon_open = True
-    return contrib, horizon_open, tuple(realized_tp_ids)
+    return contrib, horizon_open, tuple(realized_tp_ids), remaining
 
 
 def _excursions(
@@ -1060,7 +1085,7 @@ def _replay_ratchet(
 
     filled_frac = _filled_frac(ladder, filled)
     # The remainder exits at the EFFECTIVE stop (not the disaster stop) on an SL.
-    contrib, _open, _tp_ids = _realized_r_with_frac(
+    contrib, _open, _tp_ids, _residual = _realized_r_with_frac(
         ladder, hit_tp_ids, blended, eff_stop, risk, sl_hit, last_close, filled_frac
     )
     return contrib
@@ -1174,7 +1199,7 @@ def _replay_breakeven(
             eff_stop = max(eff_stop, _breakeven_eff_stop(blended, peak_high, trail_frac))
         if len(hit_tp_ids) == len(ladder.tps):
             break  # fully scaled out
-    contrib, _open, _tp_ids = _realized_r_with_frac(
+    contrib, _open, _tp_ids, _residual = _realized_r_with_frac(
         ladder, hit_tp_ids, blended, eff_stop, risk, sl_hit, last_close, filled_frac
     )
     return contrib

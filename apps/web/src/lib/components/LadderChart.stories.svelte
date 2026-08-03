@@ -150,6 +150,38 @@
 		]
 	};
 
+	// PARTIAL CAPTURE THEN EMPTY STOP: a shallow fill let TP1 sell the WHOLE
+	// held position; the stop was crossed later on a crash bar but closed
+	// nothing (the PSN 2026-07-19 shape). Own bar series (same session dates
+	// as CLOSED_PAYLOAD): a pullback into the entry (113), a rally that
+	// clears TP1 (117) then TP2 (121), and a gap-down crash bar whose low
+	// (~99.96) sits well under the stop (110.5) with a low-100s close. The SL
+	// renders as a dimmed circle (SL_TOUCHED), not a solid red arrow — the
+	// loss never happened economically.
+	const EMPTY_STOP_PAYLOAD: ChartPayload = {
+		...CLOSED_PAYLOAD,
+		ticker: 'PSN',
+		realized_r: 0.4,
+		bars: [
+			bar('2026-06-10', 115.8),
+			bar('2026-06-11', 115.6),
+			bar('2026-06-12', 115.5),
+			bar('2026-06-13', 115.4),
+			bar('2026-06-16', 114.5), // low ~112.21 dips through the entry (113)
+			bar('2026-06-17', 115.0),
+			bar('2026-06-18', 115.5),
+			bar('2026-06-19', 118.0), // high ~119.18 clears TP1 (117)
+			bar('2026-06-20', 120.5), // high ~121.71 clears TP2 (121)
+			bar('2026-06-23', 102.0) // low ~99.96 crashes through the stop (110.5)
+		],
+		markers: [
+			marker('ENTRY', '2026-06-16', 'E1', 'e1'),
+			marker('TP', '2026-06-19', 'TP1', 'tp1'),
+			marker('TP_TOUCHED', '2026-06-20', 'TP2', 'tp2'),
+			marker('SL_TOUCHED', '2026-06-23', 'SL', 'sl')
+		]
+	};
+
 	// GAP-THROUGH (PEGA 2026-07-14 case): a fast gap-down open trades through all
 	// three entry rungs AND the stop in ONE session (2026-07-22). Every tier + the
 	// SL land on the same bar, so the entry markers collapse into one "E1·E2·E3"
@@ -259,6 +291,19 @@
 	{#snippet template()}
 		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
 			<LadderChart payload={PARTIAL_CAPTURE_PAYLOAD} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- EMPTY STOP: price pulls back into the entry, rallies through both TPs,
+     then gap-crashes through the stop on the final bar — but the stop closes
+     nothing, because TP1 already sold the whole held position. The SL
+     renders as a dimmed circle (SL_TOUCHED), not a solid red arrow that
+     would overstate a loss that never happened economically. -->
+<Story name="Empty Stop (SL touched, nothing closed)">
+	{#snippet template()}
+		<div style="width: 34rem; height: 18rem; padding: 2rem 3rem;">
+			<LadderChart payload={EMPTY_STOP_PAYLOAD} />
 		</div>
 	{/snippet}
 </Story>

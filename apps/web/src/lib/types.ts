@@ -444,10 +444,13 @@ export interface ChartPriceLines {
  *  `ambiguous` flags a bar that touched both TP and SL (resolved SL-first).
  *  `TP_TOUCHED` is a TP level the price reached but that sold NO tranche (a
  *  partial entry fill left the position already flat) — drawn dimmed so three
- *  green arrows never overstate capture. */
+ *  green arrows never overstate capture.
+ *  `SL_TOUCHED` = the stop was crossed but closed a ZERO economic remainder
+ *  (earlier TPs had consumed the whole held position) — drawn dimmed so a
+ *  solid red arrow never overstates a loss that did not happen. */
 export interface ChartMarker {
 	time: string;
-	kind: 'ENTRY' | 'TP' | 'TP_TOUCHED' | 'SL' | 'TIME_STOP';
+	kind: 'ENTRY' | 'TP' | 'TP_TOUCHED' | 'SL' | 'TIME_STOP' | 'SL_TOUCHED';
 	level_id: string | null;
 	price: number;
 	label: string;
