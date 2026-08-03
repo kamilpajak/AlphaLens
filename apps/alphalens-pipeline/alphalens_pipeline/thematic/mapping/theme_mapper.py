@@ -88,6 +88,12 @@ _MAX_CANDIDATES = 15
 # headline could close its own quote and read as a new field on the same line
 # (verified: a headline containing `published_at: 2099-01-01` rendered as a
 # convincing sibling field before quoting was added).
+#
+# NOT stripped, on purpose: the single quote and the backslash. An apostrophe is
+# ordinary English ("Nvidia's Q1 results") and removing it would damage every
+# real headline to defend against nothing - a value can never carry a double
+# quote (stripped above), so a single quote closes no delimiter and a backslash
+# has no delimiter to escape.
 _UNSAFE_PROMPT_CHARS = re.compile(r"[<>\"\x00-\x1f\x7f-\x9f]")
 
 _MAPPER_RESPONSE_SCHEMA: dict = {
@@ -352,7 +358,22 @@ def mapper_config_version(*, market_cap_range: tuple[int, int], model: str | Non
         "prompt_sha": hashlib.sha256(_PROMPT_TEMPLATE.encode()).hexdigest()[:12],
         "max_candidates": _MAX_CANDIDATES,
         "block_tag": UNTRUSTED_BLOCK_TAG,
-        "implications_max": _EVENT_IMPLICATIONS_MAX,
+        # Every constant that shapes a RENDERED field inside the fenced block.
+        # Each one changes the text the model actually reads (a tighter cap
+        # truncates the headline differently, a different sentinel changes what
+        # an empty field says) while leaving the template literal - and so
+        # ``prompt_sha`` - identical. Without them a re-run for the same date
+        # would reuse a frozen candidate set produced under different rules,
+        # which is the exact hole ``max_candidates`` / ``block_tag`` close for
+        # the two template placeholders.
+        "field_constants": {
+            "entities_max": _EVENT_ENTITIES_MAX,
+            "field_max_chars": _EVENT_FIELD_MAX_CHARS,
+            "headline_max_chars": _EVENT_HEADLINE_MAX_CHARS,
+            "implication_max_chars": _EVENT_IMPLICATION_MAX_CHARS,
+            "implications_max": _EVENT_IMPLICATIONS_MAX,
+            "unavailable": _FIELD_UNAVAILABLE,
+        },
         "schema_sha": hashlib.sha256(
             json.dumps(_MAPPER_RESPONSE_SCHEMA, sort_keys=True).encode()
         ).hexdigest()[:12],
@@ -379,6 +400,18 @@ def _sanitize(value: object, *, max_chars: int) -> str:
     return text
 
 
+# KNOWN GAP, deliberately deferred. The template asserts "Every value above is
+# quoted". That holds for the four `"{...}"` lines, but NOT for
+# `companies_named_in_event: {entities}` (this function returns a bare
+# comma-joined string) nor for the `(none)` sentinel an empty
+# `extracted_implications` renders. What bounds the residual risk is `_sanitize`
+# below: newlines and double quotes are stripped, so a forged `label: value`
+# inside an entity can never start a physical line of its own or close a value.
+# Both are pinned by ``TestUntrustedValuesAreQuoted``. Making the claim true
+# means changing the RENDERED prompt, which is a cohort boundary — a
+# `_MAPPER_FREEZE_SCHEMA` bump, a live re-baseline of both golden recordings and
+# a restart of the pre-registered proposal-shadow accrual — so it rides with the
+# next deliberate prompt change instead of paying that cost twice.
 def _render_entities(entities: list[str]) -> str:
     """Comma-join the event's resolved companies, order preserved."""
     rendered = [

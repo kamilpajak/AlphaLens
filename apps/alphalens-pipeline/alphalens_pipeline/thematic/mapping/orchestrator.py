@@ -288,7 +288,9 @@ def _build_row(
         # company's revenue / costs / cost of capital / competitive position.
         # Persisted so the (event, ticker) plausibility audit that diagnosed
         # the ungrounded-linkage defect can be re-run on the new output —
-        # without it the fix is unfalsifiable. Display-only downstream.
+        # without it the fix is unfalsifiable. Parquet-only telemetry: no
+        # downstream stage reads it (not score, not brief, not the Django
+        # model, not the SPA); the audit reads the parquet directly.
         "transmission_channel": cand.get("transmission_channel", ""),
         "llm_confidence": cand.get("confidence", 0.0),
         "market_cap": market_cap,
