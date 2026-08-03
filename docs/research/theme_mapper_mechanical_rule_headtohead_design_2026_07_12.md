@@ -160,3 +160,53 @@ The +7.4% (H=21) draws on only **4 ISO weeks (21-24, late-May → mid-June)**. S
 - Strictly display-only / in-sample-labelled / EDGE-telemetry lane; **not** a production `theme_mapper` change.
 
 **Plain headline:** picking stocks by what's actually in the theme's news beat the LLM's gut picks over the tested month — but almost all the winning came from two hot weeks in mid-June, so V-forward watches it live to see if it holds outside that patch.
+
+---
+
+## 13. AMENDMENT 2026-08-03 — proposal-prompt change breaks the pre-registered cohort
+
+**Written 2026-08-03, BEFORE the change reaches production. Deploy date: TBD** (fill in when the VPS pipeline image carrying the change is rebuilt).
+
+A pre-registration is amended by **addition, never by revision**. Sections 6, 8, 11 and 11.5 are left exactly as written on 2026-07-12 and remain authoritative for what was pre-registered; this section only records a treatment change that arrives after them and what it does to the cohort.
+
+### 13.1 What is about to change
+
+Epic #974 (event-grounding), stage 1 issue #975, branch `feature/mapper-event-conditioning` — **not merged and not deployed as of 2026-08-03**. It conditions the ticker-proposal prompt on the resolved catalyst event instead of passing only the bare theme slug, and rewrites the proposal task around that event. Concretely, in `alphalens_pipeline/thematic/mapping/theme_mapper.py`: `_PROMPT_TEMPLATE` is replaced; `_MAPPER_RESPONSE_SCHEMA` gains `event_read`, `no_candidates_reason` and a **required** per-candidate `transmission_channel`; `_normalize` **drops** any candidate with no stated channel; the prompt adds a long-only direction test (a company the event harms is not a candidate) and removes the 5-candidate minimum. `_MAPPER_FREEZE_SCHEMA` is bumped `mapper-freeze-v1` → `mapper-freeze-v2`. The inline candidate ceiling becomes `_MAX_CANDIDATES = 15`, which — with `block_tag` and `implications_max` — is added to the `mapper_config_version()` payload. Alongside: `CatalystPayload` gains `primary_entities`, and `orchestrator` persists a new `transmission_channel` column on the candidates parquet.
+
+### 13.2 Why it breaks the pre-registered cohort
+
+`mapper_config_version` is the poolability key stamped on every `proposal_shadow` row (§8). Its payload includes `prompt_sha = sha256(_PROMPT_TEMPLATE)[:12]`, so any prompt edit moves the token. Four further payload keys move with it: `schema` (`_MAPPER_FREEZE_SCHEMA`, bumped `mapper-freeze-v1` → `mapper-freeze-v2`), `schema_sha` (the response schema gained `event_read`, `transmission_channel`, `no_candidates_reason`), and the three added fields `max_candidates` / `block_tag` / `implications_max`. The `mapper-freeze-v2` tag is the human-readable cohort marker; use it when splitting, not the sha. Rows written to `proposal_shadow/{date}.parquet` **before** the deploy and rows written **after** it therefore carry different `mapper_config_version` values and come from **two different proposal-generating treatments**. Pooling them would mix treatments and make the pooled mean uninterpretable. The token is stamped on the mechanical rows too, so the split applies to both arms (§13.3).
+
+### 13.3 What is and is not affected
+
+Unchanged:
+
+- **The mechanical rule itself.** Equal-weight salience membership over `primary_entities` (`proposal_shadow.build_shadow_frame` via `_load_window_theme_index`; `mechanical_salience_candidates` is the equivalent per-theme entry point), `MECH_RULE_VERSION = "mech-salience-equalweight-v1"`. It reads the `thematic_events` parquets directly and never sees an LLM prompt. `proposal_shadow.py` is not touched by the branch.
+- **The mcap band.** `mcap_range` stays in the token payload with the same values, so the universe constraint (§6.3) is identical on both sides of the deploy.
+- **The shadow schema.** `PROPOSAL_SHADOW_VERSION` and the shadow columns are unchanged.
+- **The candidate ceiling.** Still 15 — the branch only gives the pre-existing inline value a name (`_MAX_CANDIDATES`).
+
+Changed:
+
+- **Proposal breadth — CHANGED, and expected to fall.** The old prompt demanded a *minimum* of 5 ("Output 5 to 15"); the new one asks for "between 0 and 15 ... There is no minimum" and tells the model to return an empty list when an event has no investable read. Two further code-level filters cut the set: `_normalize` drops any candidate with no `transmission_channel`, and prompt STEP 2(b) drops companies the event harms (long-only direction test). Fewer LLM rows per (theme, date) — and more (theme, date) cells with zero LLM rows — is the intended outcome, not a side effect.
+- **The mechanical arm's ACCRUAL — CHANGED, even though its rule is not.** `build_shadow_frame` emits mechanical rows only for themes present in `llm_proposals`, and `orchestrator._write_proposal_shadow_best_effort` writes no file at all when `llm_proposals` is empty. Because the new prompt is designed to decline on events with no investable read, themes that lose their LLM proposals lose their mechanical rows with them. The mechanical arm therefore also changes theme-population regime at the deploy. `build_shadow_frame` already stamps `mapper_config_version` on mechanical rows too, so the schema author treated this token as a whole-file poolability key.
+
+### 13.4 Decision
+
+1. **Segment on `mapper_config_version`.** Every V-forward analysis splits the rows by this token and never pools across it. The token is stamped on both arms, so this splits both arms.
+2. **Retain, do not delete, the pre-change rows.** They are analysed as their own cohort (the pre-event-conditioning cohort) and remain the reference point for any later before/after comparison.
+3. **Restart the fresh-week counter at the deploy date.** §11.5 requires ">=8-10 fresh ISO weeks spanning a different regime" before any verdict. That counter restarts at deploy, so the verdict slips from the ~2026-09 stated in §11.5 to roughly **deploy + 8-10 weeks**. With a deploy in August 2026 that puts the window around **mid-October to mid-November 2026**; the exact dates are fixed once the deploy date above is filled in.
+4. **BOTH arms restart, not only the LLM arm.** The mechanical *rule* is unchanged, but its *sampled theme population* is gated by the LLM arm's output (§13.3), so mechanical rows written before and after the deploy are not poolable either. The paired (theme, date) comparison restarts wholesale.
+5. **Endpoints and kill rules are unchanged** and apply per cohort: H=21 membership primary, recency7d confirmatory, H=10 logged with "H=10 keeps flipping positive" as the KILL signal (§11.5).
+
+### 13.5 Limitation — the count change is certain, the return change is unmeasured
+
+The **candidate count** will change: the 5-candidate minimum is gone, and `_normalize` hard-drops any candidate with no `transmission_channel`. Fewer LLM rows per (theme, date) and more empty cells follow from the code, not merely from model behaviour.
+
+What is **unmeasured** is whether the surviving candidates have a different forward `market_excess` distribution. No before/after return comparison has been run, and nothing here claims one would find a difference. The segmentation is required by the changed treatment; it does not presuppose a return effect. Should a later comparison find the two cohorts' returns indistinguishable, pooling them is a decision to take at that point, on that evidence, and to record as a further amendment — not an assumption available now.
+
+### 13.6 Pointers
+
+- **Epic #974** — event-grounding: the unit of analysis should be the event, not the article.
+- **Stage 1 #975** — `feature/mapper-event-conditioning`, the prompt change described above.
+- Pre-registered instrument: §8. Guardrails and verdict conditions: §11.5. Frozen mechanical rule: §6.
