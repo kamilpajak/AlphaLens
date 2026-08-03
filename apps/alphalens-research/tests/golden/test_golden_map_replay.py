@@ -136,6 +136,10 @@ class TestGoldenMapReplay(unittest.TestCase):
         # the insider gate, so n_gates_unknown == 0.)
         with tempfile.TemporaryDirectory() as td:
             df = _replay_map(Path(td))
+        # Without this the test is vacuous: a replay that returns no rows at all
+        # (e.g. a cassette key miss after a prompt change) iterates zero times
+        # and reports green while asserting nothing.
+        self.assertFalse(df.empty, "replay produced no rows - the loop below would assert nothing")
         for _, row in df.iterrows():
             self.assertEqual(row["n_gates_unknown"], 0)
             self.assertIn("insider", row["gates_failed"])
