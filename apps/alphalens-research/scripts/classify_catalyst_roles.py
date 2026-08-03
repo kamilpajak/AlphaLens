@@ -23,7 +23,8 @@ Design constraints, both test-enforced in
 
 The labels are themselves unvalidated LLM output, so the run is gated on
 known-answer anchors (``ANCHORS``); a single mismatch fails the gate and the
-aggregate is not to be trusted.
+aggregate is not to be trusted. A failed gate is also the process exit code, so
+a wrapper that only reads ``$?`` never mistakes an untrusted run for a good one.
 
 Usage::
 
@@ -36,6 +37,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import logging
 import sys
@@ -46,6 +48,11 @@ from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# A failed anchor gate is a failed run: the aggregate cannot be trusted, so the
+# exit code has to say so even though the CSV was written.
+_EXIT_OK = 0
+_EXIT_ANCHOR_GATE_FAILED = 1
 
 DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
 
@@ -92,6 +99,12 @@ _ROLE_GUIDE = """\
   lexical - the candidate merely operates in a business that shares vocabulary with the
   headline, or the theme keyword matches but the specific event names unrelated parties."""
 
+# The direction the event implies for the candidate. Validated exactly like the
+# role: an off-enum value is model misbehaviour, and letting it through as if it
+# were a real direction is the silent-degradation bug class this script exists
+# to avoid.
+DIRECTIONS: tuple[str, ...] = ("favorable", "adverse", "none")
+
 FRAMINGS: tuple[str, ...] = ("strict", "permissive")
 
 # The solution-provider / unaffected boundary is a judgement call, not a fact. A
@@ -127,7 +140,7 @@ _RESPONSE_SCHEMA: dict[str, Any] = {
             "type": "string",
             "description": "One clause naming the causal channel, or 'none' when there is no channel.",
         },
-        "direction": {"type": "string", "enum": ["favorable", "adverse", "none"]},
+        "direction": {"type": "string", "enum": list(DIRECTIONS)},
         "confidence": {"type": "number"},
     },
     "required": ["role", "channel", "direction", "confidence"],
@@ -152,11 +165,19 @@ ANCHORS: tuple[dict[str, str], ...] = (
 
 
 def _as_list(value: Any) -> list[str]:
-    """Normalise a numpy array / list / None / NaN into a list of strings."""
+    """Normalise a numpy array / list / string / None / NaN into a list of strings.
+
+    A string is one item, never an iterable of characters: a parquet column that
+    stores entities as ``"EBAY"`` instead of ``["EBAY"]`` would otherwise render
+    ``E, B, A, Y`` into the prompt and the instrument would judge the channel
+    from shredded nonsense, with nothing in the output saying so.
+    """
     if value is None:
         return []
     if isinstance(value, float):  # NaN
         return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
     try:
         return [str(v) for v in value]
     except TypeError:
@@ -266,6 +287,7 @@ def classify_role(
         sleep_fn = time.sleep
 
     text = ""
+    last_error: Exception | None = None
     for attempt in range(max_attempts):
         if attempt:
             # Endpoint rate-limits under load; back off rather than hammer.
@@ -273,17 +295,24 @@ def classify_role(
         try:
             response = client.generate_content(model=model, contents=prompt, config=config)
             text = getattr(response, "text", "") or ""
+            last_error = None
         except Exception as exc:
+            # A rate limit arrives as a raised exception, not an empty body, so
+            # returning here would skip the backoff the retry loop exists for
+            # and lose every throttled row permanently.
             logger.warning("role classification failed for %s: %s", row.get("ticker"), exc)
-            return {
-                "role": "ERROR",
-                "channel": "",
-                "direction": "",
-                "confidence": None,
-                "parse_status": "error",
-            }
+            last_error, text = exc, ""
         if text.strip():
             break
+
+    if last_error is not None:
+        return {
+            "role": "ERROR",
+            "channel": "",
+            "direction": "",
+            "confidence": None,
+            "parse_status": "error",
+        }
 
     if not text.strip():
         return {
@@ -325,10 +354,39 @@ def classify_role(
     return {
         "role": role,
         "channel": str(parsed.get("channel", "")),
-        "direction": str(parsed.get("direction", "")),
+        "direction": _validated_direction(parsed.get("direction")),
         "confidence": parsed.get("confidence"),
         "parse_status": "ok",
     }
+
+
+def _validated_direction(value: Any) -> str:
+    """Return the direction, or a sentinel outside ``DIRECTIONS`` when it is not one.
+
+    The role is still a usable answer when only the direction is malformed, so
+    the row stays ``ok`` - but the bad direction is marked rather than passed
+    through, so no later count of "adverse" quietly includes a hallucination.
+    """
+    direction = str(value or "").strip()
+    if not direction:
+        return "EMPTY"
+    return direction if direction in DIRECTIONS else f"INVALID:{direction}"
+
+
+def _date_key(value: Any) -> str:
+    """Normalise a brief date to ``YYYY-MM-DD`` whatever its type.
+
+    ``ANCHORS`` holds bare date strings while the labelled rows come out of a
+    parquet whose ``brief_date`` column may be a timestamp, and
+    ``str(Timestamp("2026-06-19"))`` is ``"2026-06-19 00:00:00"``. Keying on
+    ``str()`` alone would turn every anchor into MISSING and fail the gate for a
+    reason that has nothing to do with the instrument's judgement.
+    """
+    if isinstance(value, dt.datetime):
+        return value.date().isoformat()
+    if isinstance(value, dt.date):
+        return value.isoformat()
+    return str(value).split("T")[0].split(" ")[0]
 
 
 def anchor_report(labelled: Iterable[dict], anchors: Sequence[dict]) -> dict:
@@ -337,10 +395,10 @@ def anchor_report(labelled: Iterable[dict], anchors: Sequence[dict]) -> dict:
     Strict by design and pre-committed: loosening the gate after seeing the
     labels would turn the sanity check into a rubber stamp.
     """
-    index = {(str(r.get("ticker")), str(r.get("brief_date"))): r for r in labelled}
+    index = {(str(r.get("ticker")), _date_key(r.get("brief_date"))): r for r in labelled}
     mismatches = []
     for anchor in anchors:
-        key = (str(anchor["ticker"]), str(anchor["brief_date"]))
+        key = (str(anchor["ticker"]), _date_key(anchor["brief_date"]))
         got = index.get(key, {}).get("role", "MISSING")
         if got != anchor["expected_role"]:
             mismatches.append({**anchor, "got": got})
@@ -368,76 +426,25 @@ def _load_cache(path: Path) -> dict[tuple[str, str, str], dict]:
     return cached
 
 
-def main(argv: list[str] | None = None) -> int:
+def report_run(out) -> bool:
+    """Print the run summary; return True when EVERY framing's anchor gate passed.
+
+    Split out of ``main`` so the pass/fail decision is testable without a
+    parquet, a network call or a CSV - and so the caller can turn it into the
+    exit code. ``out`` is the full label frame; rows that failed to parse are
+    dropped here, so a failed row can never satisfy an anchor.
+    """
     import pandas as pd
 
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, type=Path)
-    parser.add_argument("--cache", required=True, type=Path)
-    parser.add_argument("--out", required=True, type=Path)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--workers", type=int, default=6)
-    parser.add_argument("--limit", type=int, default=None, help="classify only the first N rows")
-    args = parser.parse_args(argv)
-
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-
-    frame = pd.read_parquet(args.input)
-    frame = frame[frame["sentiment"].notna()].copy()
-    if args.limit:
-        frame = frame.head(args.limit)
-    rows = frame.to_dict("records")
-    logger.info("rows to classify: %d", len(rows))
-
-    cache = _load_cache(args.cache)
-    logger.info("cached labels: %d", len(cache))
-
-    from alphalens_pipeline.data.alt_data.openrouter_client import get_default_openrouter_client
-
-    client = get_default_openrouter_client()
-    lock = threading.Lock()
-    args.cache.parent.mkdir(parents=True, exist_ok=True)
-    handle = args.cache.open("a")
-
-    def work(task: tuple[dict, str]) -> dict:
-        row, framing = task
-        key = (str(row.get("ticker")), str(row.get("brief_date")), framing)
-        if key in cache:
-            return cache[key]
-        label = classify_role(row, client, model=args.model, framing=framing)
-        record = {
-            "ticker": row.get("ticker"),
-            "brief_date": row.get("brief_date"),
-            "framing": framing,
-            "theme": row.get("theme"),
-            "catalyst_event_type": row.get("catalyst_event_type"),
-            "sentiment": row.get("sentiment"),
-            "source_event_title": row.get("source_event_title"),
-            "layer4_weighted_score": row.get("layer4_weighted_score"),
-            "catalyst_strength": row.get("catalyst_strength"),
-            **label,
-        }
-        # Persist before anything downstream can fail - never re-pay for a call.
-        with lock:
-            handle.write(json.dumps(record, default=str) + "\n")
-            handle.flush()
-        return record
-
-    tasks = [(row, framing) for framing in FRAMINGS for row in rows]
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        results = list(pool.map(work, tasks))
-    handle.close()
-
-    out = pd.DataFrame(results)
-    out.to_csv(args.out, index=False)
-    print(f"\nclassified {len(results)} (row x framing) -> {args.out}")
     print("\nparse_status by framing:")
     print(pd.crosstab(out["framing"], out["parse_status"]).to_string())
 
     ok = out[out["parse_status"] == "ok"]
+    all_passed = True
     for framing in FRAMINGS:
         sub = ok[ok["framing"] == framing]
         gate = anchor_report(sub.to_dict("records"), ANCHORS)
+        all_passed = all_passed and gate["passed"]
         print(
             f"\nANCHOR GATE [{framing}]: {'PASS' if gate['passed'] else 'FAIL'} "
             f"({gate['n_anchors']} anchors, {len(sub)} labelled rows)"
@@ -477,7 +484,79 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  upper bound (strict framing alone):         {100 * upper:.1f}%")
         print("\nstrict x permissive:")
         print(pd.crosstab(both["strict"], both["permissive"]).to_string())
-    return 0
+
+    if not all_passed:
+        print("\nANCHOR GATE FAILED - the aggregate above is not to be trusted.")
+    return all_passed
+
+
+def main(argv: list[str] | None = None) -> int:
+    import pandas as pd
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", required=True, type=Path)
+    parser.add_argument("--cache", required=True, type=Path)
+    parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--limit", type=int, default=None, help="classify only the first N rows")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
+    frame = pd.read_parquet(args.input)
+    frame = frame[frame["sentiment"].notna()].copy()
+    if args.limit:
+        frame = frame.head(args.limit)
+    rows = frame.to_dict("records")
+    logger.info("rows to classify: %d", len(rows))
+
+    cache = _load_cache(args.cache)
+    logger.info("cached labels: %d", len(cache))
+
+    from alphalens_pipeline.data.alt_data.openrouter_client import get_default_openrouter_client
+
+    client = get_default_openrouter_client()
+    lock = threading.Lock()
+    args.cache.parent.mkdir(parents=True, exist_ok=True)
+
+    tasks = [(row, framing) for framing in FRAMINGS for row in rows]
+    # The cache handle is closed even if the pool raises - a half-written run
+    # that is already paid for must still land on disk.
+    with args.cache.open("a") as handle:
+
+        def work(task: tuple[dict, str]) -> dict:
+            row, framing = task
+            key = (str(row.get("ticker")), str(row.get("brief_date")), framing)
+            if key in cache:
+                return cache[key]
+            label = classify_role(row, client, model=args.model, framing=framing)
+            record = {
+                "ticker": row.get("ticker"),
+                "brief_date": row.get("brief_date"),
+                "framing": framing,
+                "theme": row.get("theme"),
+                "catalyst_event_type": row.get("catalyst_event_type"),
+                "sentiment": row.get("sentiment"),
+                "source_event_title": row.get("source_event_title"),
+                "layer4_weighted_score": row.get("layer4_weighted_score"),
+                "catalyst_strength": row.get("catalyst_strength"),
+                **label,
+            }
+            # Persist before anything downstream can fail - never re-pay for a call.
+            with lock:
+                handle.write(json.dumps(record, default=str) + "\n")
+                handle.flush()
+            return record
+
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            results = list(pool.map(work, tasks))
+
+    out = pd.DataFrame(results)
+    out.to_csv(args.out, index=False)
+    print(f"\nclassified {len(results)} (row x framing) -> {args.out}")
+
+    return _EXIT_OK if report_run(out) else _EXIT_ANCHOR_GATE_FAILED
 
 
 if __name__ == "__main__":

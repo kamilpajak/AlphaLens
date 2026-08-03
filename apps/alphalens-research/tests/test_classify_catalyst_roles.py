@@ -15,16 +15,22 @@ have to hold for the answer to mean anything:
 
 from __future__ import annotations
 
+import contextlib
+import datetime as dt
+import io
 import json
 import unittest
 from types import SimpleNamespace
 
 from scripts.classify_catalyst_roles import (
+    ANCHORS,
+    DIRECTIONS,
     FRAMINGS,
     ROLES,
     anchor_report,
     build_role_prompt,
     classify_role,
+    report_run,
 )
 
 
@@ -126,6 +132,40 @@ class TestClassifyRoleParsing(unittest.TestCase):
         result = classify_role(_row(), _FakeClient(json.dumps(payload)))
         self.assertEqual(result["parse_status"], "invalid_role")
         self.assertNotIn(result["role"], ROLES)
+
+
+class TestDirectionIsValidatedLikeTheRole(unittest.TestCase):
+    """``direction`` is declared as an enum in the response schema, so an
+    off-enum value is model misbehaviour. It must not fold into the record as if
+    it were a real direction - same rule the role already follows. The role
+    itself is still a usable answer, so the row stays ``ok``."""
+
+    def test_a_valid_direction_passes_through(self):
+        payload = {"role": "rival", "channel": "c", "direction": "adverse", "confidence": 0.5}
+        result = classify_role(_row(), _FakeClient(json.dumps(payload)))
+        self.assertEqual(result["direction"], "adverse")
+
+    def test_an_off_enum_direction_is_marked_not_accepted(self):
+        payload = {"role": "rival", "channel": "c", "direction": "bullish", "confidence": 0.5}
+        result = classify_role(_row(), _FakeClient(json.dumps(payload)))
+        self.assertEqual(result["parse_status"], "ok")
+        self.assertNotIn(result["direction"], DIRECTIONS)
+        self.assertIn("bullish", result["direction"])
+
+    def test_a_missing_direction_is_marked_not_left_blank_looking_valid(self):
+        payload = {"role": "rival", "channel": "c", "confidence": 0.5}
+        result = classify_role(_row(), _FakeClient(json.dumps(payload)))
+        self.assertNotIn(result["direction"], DIRECTIONS)
+
+
+class TestEntityRendering(unittest.TestCase):
+    def test_a_string_entity_field_is_not_shredded_into_characters(self):
+        """A parquet column that stores entities as one string instead of a list
+        would otherwise be iterated character by character, so the prompt reads
+        ``E, B, A, Y`` and the instrument judges a channel from nonsense."""
+        prompt = build_role_prompt(_row(primary_entities="EBAY"))
+        self.assertIn("EBAY", prompt)
+        self.assertNotIn("E, B, A, Y", prompt)
 
 
 class TestFramings(unittest.TestCase):
@@ -260,6 +300,60 @@ class TestEmptyContentRetry(unittest.TestCase):
         self.assertEqual(client.calls, 1)
 
 
+class _RaisingClient:
+    """Raises on the first ``n_failures`` calls, then returns ``text``.
+
+    Models the shape a 429 actually takes: the client raises, it does not
+    return an empty body.
+    """
+
+    def __init__(self, n_failures: int, text: str) -> None:
+        self._n_failures = n_failures
+        self._text = text
+        self.calls = 0
+
+    def build_config(self, **_kwargs):
+        return {}
+
+    def generate_content(self, *, model, contents, config):
+        _ = (model, contents, config)
+        self.calls += 1
+        if self.calls <= self._n_failures:
+            raise RuntimeError("429 Too Many Requests")
+        return SimpleNamespace(text=self._text)
+
+
+class TestTransportErrorsAreRetried(unittest.TestCase):
+    """The backoff exists as rate-limit insurance, and a rate limit surfaces as
+    a raised exception rather than an empty body. Returning the error sentinel
+    on the first exception would skip the backoff entirely and lose every
+    rate-limited row permanently."""
+
+    _PAYLOAD = json.dumps({"role": "rival", "channel": "competitor hit", "confidence": 0.6})
+    _LOGGER = "scripts.classify_catalyst_roles"
+
+    def test_a_rate_limited_call_is_retried_after_a_backoff(self):
+        client = _RaisingClient(2, self._PAYLOAD)
+        slept: list[float] = []
+        with self.assertLogs(self._LOGGER, level="WARNING"):
+            result = classify_role(_row(), client, max_attempts=5, sleep_fn=slept.append)
+        self.assertEqual(result["parse_status"], "ok")
+        self.assertEqual(result["role"], "rival")
+        self.assertEqual(client.calls, 3)
+        self.assertEqual(len(slept), 2)
+        self.assertGreater(slept[1], slept[0])
+
+    def test_a_persistent_transport_error_gives_up_with_the_error_sentinel(self):
+        client = _RaisingClient(99, self._PAYLOAD)
+        with self.assertLogs(self._LOGGER, level="WARNING") as logs:
+            result = classify_role(_row(), client, max_attempts=3, sleep_fn=lambda _: None)
+        self.assertEqual(result["parse_status"], "error")
+        self.assertNotIn(result["role"], ROLES)
+        self.assertEqual(client.calls, 3)
+        # Every lost attempt is visible to the operator, not just the last one.
+        self.assertEqual(len(logs.output), 3)
+
+
 class TestAnchorGate(unittest.TestCase):
     """The labels are themselves unvalidated LLM output — the run is only
     trustworthy if known-answer cases come back right."""
@@ -291,6 +385,82 @@ class TestAnchorGate(unittest.TestCase):
         report = anchor_report([], anchors)
         self.assertFalse(report["passed"])
         self.assertEqual(report["mismatches"][0]["got"], "MISSING")
+
+
+class TestAnchorGateKeysOnTheDateNotItsDtype(unittest.TestCase):
+    """``ANCHORS`` stores bare date strings, but the labelled rows come out of a
+    parquet whose ``brief_date`` column may be a timestamp. Keying on ``str()``
+    alone turns every anchor into MISSING and fails the gate for a reason that
+    has nothing to do with the instrument's judgement."""
+
+    _ANCHORS = ({"ticker": "VRNS", "brief_date": "2026-07-29", "expected_role": "rival"},)
+
+    def _report_for(self, brief_date):
+        labelled = [{"ticker": "VRNS", "brief_date": brief_date, "role": "rival"}]
+        return anchor_report(labelled, self._ANCHORS)
+
+    def test_a_datetime_brief_date_matches_the_anchor_date(self):
+        self.assertTrue(self._report_for(dt.datetime(2026, 7, 29, 0, 0))["passed"])
+
+    def test_a_date_brief_date_matches_the_anchor_date(self):
+        self.assertTrue(self._report_for(dt.date(2026, 7, 29))["passed"])
+
+    def test_a_different_date_still_mismatches(self):
+        self.assertFalse(self._report_for(dt.datetime(2026, 7, 30, 0, 0))["passed"])
+
+
+class TestAnchorGateDecidesTheExitCode(unittest.TestCase):
+    """A wrapper or CI job reads ``$?``. A failed anchor gate means the run's
+    aggregate is not to be trusted, so it must not look like success."""
+
+    @staticmethod
+    def _frame(roles_by_key: dict[tuple[str, str], str]):
+        import pandas as pd
+
+        return pd.DataFrame(
+            [
+                {
+                    "ticker": ticker,
+                    "brief_date": brief_date,
+                    "framing": framing,
+                    "role": role,
+                    "parse_status": "ok",
+                }
+                for (ticker, brief_date), role in roles_by_key.items()
+                for framing in FRAMINGS
+            ]
+        )
+
+    @staticmethod
+    def _gate(frame) -> bool:
+        """``report_run`` prints the run summary; only its verdict is asserted."""
+        with contextlib.redirect_stdout(io.StringIO()):
+            return report_run(frame)
+
+    @staticmethod
+    def _expected() -> dict[tuple[str, str], str]:
+        return {(a["ticker"], a["brief_date"]): a["expected_role"] for a in ANCHORS}
+
+    def test_every_anchor_matching_reports_a_passing_run(self):
+        self.assertTrue(self._gate(self._frame(self._expected())))
+
+    def test_one_wrong_anchor_role_reports_a_failing_run(self):
+        roles = self._expected()
+        roles[(ANCHORS[0]["ticker"], ANCHORS[0]["brief_date"])] = "rival"
+        self.assertFalse(self._gate(self._frame(roles)))
+
+    def test_a_missing_anchor_reports_a_failing_run(self):
+        roles = self._expected()
+        del roles[(ANCHORS[0]["ticker"], ANCHORS[0]["brief_date"])]
+        self.assertFalse(self._gate(self._frame(roles)))
+
+    def test_a_row_that_failed_to_parse_cannot_satisfy_an_anchor(self):
+        frame = self._frame(self._expected())
+        target = (frame["ticker"] == ANCHORS[0]["ticker"]) & (
+            frame["brief_date"] == ANCHORS[0]["brief_date"]
+        )
+        frame.loc[target, "parse_status"] = "unparseable"
+        self.assertFalse(self._gate(frame))
 
 
 if __name__ == "__main__":
