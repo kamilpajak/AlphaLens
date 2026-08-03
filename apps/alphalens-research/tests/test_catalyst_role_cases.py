@@ -144,6 +144,18 @@ class TestCaseSetSchema(unittest.TestCase):
             self.assertIn(key, case_set)
         self.assertTrue(case_set["sources"], "sources must name where the payloads came from")
 
+    def test_every_source_is_re_readable(self):
+        # A source named only in prose cannot be checked by anyone auditing the
+        # instrument later. Each entry must say WHERE the file is, and a source
+        # that is not a live production cache must also pin WHAT it contained -
+        # those caches get rewritten, an ad-hoc corpus does not.
+        for source in load_case_set()["sources"]:
+            with self.subTest(source=source.get("name")):
+                self.assertTrue(source.get("path"), "a source must name a readable path")
+                digest = source.get("sha256")
+                if digest is not None:
+                    self.assertRegex(digest, r"^[0-9a-f]{64}$")
+
     def test_every_case_carries_the_required_keys(self):
         for case in load_cases():
             with self.subTest(case=case.get("case_id")):

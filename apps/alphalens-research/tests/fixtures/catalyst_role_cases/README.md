@@ -46,8 +46,11 @@ quiet edit. Add new cases (including new contested ones) freely; changing an exi
 Every case names its `provenance`, and the top-level `sources` block records where each file
 came from. Nothing here is hand-written: all payloads were extracted from real recorded runs.
 
-One limit on how far that can be re-checked: the two `~/.alphalens/...` sources are production
-caches and can be read again, but `role_audit_input.parquet` - the source of all six anchor
-payloads - was an ad-hoc join that no script in the repo produces and that was not kept. The
-copies in `cases.json` are the surviving record of those six rows. Prefer a re-readable source
-when adding new cases.
+Every source names a `path`, and the one that is not a live cache also names a `sha256`.
+`role_audit_input.parquet` - the source of all six anchor payloads - is an ad-hoc join that no
+script in the repo produces, so it was moved into the runtime data tree at
+`~/.alphalens/role_audit/` and pinned by content hash. It is frozen, so the hash stays valid
+and the six payloads can be re-derived from it instead of taken on trust. The two
+`~/.alphalens/{thematic_scored,thematic_events}/...` sources are live production caches that
+the pipeline rewrites, so they carry no hash - a re-read confirms the payload only for as long
+as the cache holds that date.
