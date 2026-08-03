@@ -33,12 +33,20 @@ Two deliberate decisions about what "the gate passes" means here:
   "unaffected" is tolerated and reported. Every other mismatch fails, under
   either framing. Loosening this further after seeing a run would turn the gate
   into a rubber stamp - the script says as much - so it stays this narrow.
+
+* **The surviving subset must still span the roles.** Excluding transient
+  losses shrinks what the gate actually grades, and a count floor alone does
+  not stop it shrinking onto one role - lose both "unaffected" anchors and
+  tolerate both solution-provider ones and the gate has verified subject-adverse
+  only, while the number it licenses is a count of "unaffected". So
+  ``gate_shortfall`` requires both a count and a role spread.
 """
 
 from __future__ import annotations
 
 import os
 import unittest
+from collections.abc import Sequence
 
 from scripts.classify_catalyst_roles import ANCHORS, FRAMINGS, anchor_report, classify_role
 
@@ -57,8 +65,36 @@ _STRICT_BOUNDARY_ALLOWANCE: tuple[tuple[str, str], ...] = (("solution-provider",
 _TRANSIENT_STATUSES = frozenset({"empty_content", "error"})
 
 
+# How many distinct expected roles the surviving anchors must still cover. The
+# frozen anchor set spans three (subject-adverse, solution-provider,
+# unaffected) and the hermetic suite pins that, so three is "all of them", not
+# an arbitrary floor.
+_MIN_MEASURED_ROLES = 3
+
+
 def _is_documented_strict_boundary(framing: str, expected: str, got: str) -> bool:
     return framing == "strict" and (expected, got) in _STRICT_BOUNDARY_ALLOWANCE
+
+
+def gate_shortfall(measured: Sequence[dict], total: int) -> str | None:
+    """Why the measured anchor subset is too weak to gate on, or None if it holds.
+
+    Two ways a subset stops being a gate. Too FEW anchors survived, so almost
+    nothing was checked. Or enough survived but they no longer span the roles -
+    losing both "unaffected" anchors to transients, with both solution-provider
+    anchors answered "unaffected" and tolerated under the strict rubric, leaves
+    a gate that only ever verified subject-adverse while the aggregate it
+    licenses is a count of "unaffected".
+    """
+    if len(measured) < total // 2 + 1:
+        return f"only {len(measured)}/{total} anchors were labelled"
+    roles = sorted({anchor["expected_role"] for anchor in measured})
+    if len(roles) < _MIN_MEASURED_ROLES:
+        return (
+            f"the {len(measured)} labelled anchors cover only {len(roles)} expected "
+            f"role(s) {roles}, fewer than the {_MIN_MEASURED_ROLES} the aggregate rests on"
+        )
+    return None
 
 
 @unittest.skipUnless(_LIVE, "set CATALYST_ROLE_EVAL=1 to run the live catalyst-role evaluation")
@@ -112,15 +148,15 @@ class TestCatalystRoleAnchorsLive(unittest.TestCase):
         Anchors lost to a tolerated transient failure are excluded rather than
         counted as MISSING - otherwise one rate-limited call would fail the gate
         for a reason that has nothing to do with the instrument. The
-        non-vacuity assertion below stops that exclusion from emptying the gate.
+        ``gate_shortfall`` check below stops that exclusion from hollowing out
+        the gate, on count and on role coverage.
         """
         measured_keys = {(row["ticker"], row["brief_date"]) for row in rows}
         measured = [a for a in ANCHORS if (a["ticker"], a["brief_date"]) in measured_keys]
-        self.assertGreaterEqual(
-            len(measured),
-            len(ANCHORS) // 2 + 1,
-            f"only {len(measured)}/{len(ANCHORS)} anchors were labelled under {framing} - "
-            "too few to gate on; re-run after a cool-down",
+        shortfall = gate_shortfall(measured, len(ANCHORS))
+        self.assertIsNone(
+            shortfall,
+            f"{shortfall} under {framing} - too weak to gate on; re-run after a cool-down",
         )
 
         report = anchor_report(rows, measured)

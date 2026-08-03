@@ -463,5 +463,43 @@ class TestAnchorGateDecidesTheExitCode(unittest.TestCase):
         self.assertFalse(self._gate(frame))
 
 
+class TestLiveGateRefusesAWeakAnchorSubset(unittest.TestCase):
+    """The live evaluation drops anchors lost to a transient failure rather than
+    counting them MISSING, so the subset it grades can shrink. Counting the
+    survivors is not enough: the gate is only worth trusting if the anchors it
+    measured still span the roles the aggregate depends on.
+
+    Tested from here rather than next to the live module because that module
+    imports ``tests.test_catalyst_role_cases``, so the assertion cannot live
+    there without an import cycle. Importing the callable does not run any
+    probe - the live TestCase stays env-gated and skipped.
+    """
+
+    def _shortfall(self, measured):
+        from tests.live.test_catalyst_role_eval_live import gate_shortfall
+
+        return gate_shortfall(measured, len(ANCHORS))
+
+    def test_a_full_anchor_sweep_is_strong_enough_to_gate(self):
+        self.assertIsNone(self._shortfall(list(ANCHORS)))
+
+    def test_too_few_labelled_anchors_is_refused(self):
+        self.assertIsNotNone(self._shortfall(list(ANCHORS)[:2]))
+
+    def test_a_subset_that_lost_a_whole_role_is_refused_even_at_a_passing_count(self):
+        """The concrete hole: both "unaffected" anchors lost as transients and
+        both solution-provider anchors answered "unaffected" (tolerated under
+        the strict rubric) leaves a gate that only ever checked one role."""
+        measured = [a for a in ANCHORS if a["expected_role"] != "unaffected"]
+        self.assertGreaterEqual(len(measured), len(ANCHORS) // 2 + 1)
+        self.assertIsNotNone(self._shortfall(measured))
+
+    def test_the_frozen_anchors_can_satisfy_the_spread_the_gate_demands(self):
+        """Anti-rot: a spread floor above what ANCHORS can ever supply would
+        make the live gate impossible to pass rather than strict."""
+        self.assertIsNone(self._shortfall(list(ANCHORS)))
+        self.assertGreaterEqual(len({a["expected_role"] for a in ANCHORS}), 3)
+
+
 if __name__ == "__main__":
     unittest.main()
