@@ -1,0 +1,241 @@
+{
+  "case_set_version": "1.0.0",
+  "extracted_on": "2026-08-03",
+  "purpose": "Frozen, prompt-independent case set for the (catalyst event, candidate ticker) role instrument. The golden replay cassette for the map-themes stage is keyed on the prompt SHA and re-records whenever the prompt changes, so it cannot measure a prompt change. These cases are fixed payloads taken from recorded runs and stay valid across issue #975 (mapper prompt) and issue #976 (article-to-event-set rework).",
+  "excluded_fields": {
+    "fields": [
+      "layer4_weighted_score",
+      "rank_in_day",
+      "llm_confidence",
+      "rationale",
+      "gates_passed_str"
+    ],
+    "why": "The instrument is blind to the pipeline's own verdict by design. Freezing those fields into the fixture would let them leak back into a prompt and turn the measurement into a self-consistency check."
+  },
+  "sources": [
+    {
+      "name": "role_audit_input.parquet",
+      "description": "450-row joined brief-row x catalyst-event corpus the role instrument was first run over. Supplies all six anchor payloads. Ad-hoc join: no script in the repo produces it, so it was moved out of the throwaway working directory into the runtime data tree at the path above and pinned by content hash. Unlike the two production caches below - which the pipeline rewrites - this corpus is frozen, so the hash stays valid and the six anchor payloads can be re-derived from it rather than taken on trust.",
+      "path": "~/.alphalens/role_audit/role_audit_input.parquet",
+      "sha256": "91ed9759405152bc1126439061da955f5a2b75dbaa2c6711db19eddfaa6cfc85",
+      "capture": "recorded"
+    },
+    {
+      "name": "~/.alphalens/thematic_scored/2026-04-14.parquet",
+      "description": "Scored-candidate output for the 2026-04-14 asof. Genuine pipeline output, but its INPUT was a seeded news row (see the next source), so every event-side field it carries traces back to a hand-authored row rather than to ingested news. Supplies the QUBT company / sector / industry / theme for the contested case. Live cache the pipeline rewrites, so it carries no content hash.",
+      "path": "~/.alphalens/thematic_scored/2026-04-14.parquet",
+      "capture": "derived-from-seeded",
+      "hand_authored_fields": [
+        "source_event_title",
+        "source_event_url",
+        "catalyst_event_type",
+        "sentiment",
+        "primary_entities",
+        "second_order_implications"
+      ]
+    },
+    {
+      "name": "~/.alphalens/thematic_events/2026-04-14.parquet",
+      "description": "Extracted-event row for the 2026-04-14 asof. NOT pipeline output: a single row authored by hand into the store in May 2026 for the original NVIDIA Ising experiment. Four things give it away - one row where a real day holds ~200, a slug news_id where real rows carry a 16-hex content hash, a 60-character body ending in a literal ellipsis, and model='gemini-2.5-flash' from a client this project removed in PR #416. The underlying press release is real; this row is a stand-in for it.",
+      "path": "~/.alphalens/thematic_events/2026-04-14.parquet",
+      "capture": "seeded",
+      "hand_authored_fields": [
+        "news_id",
+        "source",
+        "title",
+        "body",
+        "url",
+        "published_at",
+        "event_type",
+        "primary_entities",
+        "themes",
+        "sentiment",
+        "second_order_implications"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "case_id": "SNAP@2026-06-19",
+      "anchor": true,
+      "expected_role": "subject-adverse",
+      "rationale": "The only first-order rows in the corpus: the article is about SNAP's own stock slump, so the candidate is the adverse subject.",
+      "provenance": [
+        "role_audit_input.parquet"
+      ],
+      "event": {
+        "ticker": "SNAP",
+        "brief_date": "2026-06-19",
+        "theme": "augmented_reality",
+        "company_name": "Snap Inc.",
+        "sector_name": "Services",
+        "industry_name": "Services-Computer Programming, Data Processing, Etc.",
+        "source_event_title": "Snap gets a reality check as premium AR glasses drive stock slump",
+        "source_event_url": "https://seekingalpha.com/news/4605204-snap-gets-a-reality-check-as-premium-ar-glasses-drive-stock-slump?utm_source=feed_news_all&utm_medium=referral&feed_item_type=news",
+        "catalyst_event_type": "product_launch",
+        "sentiment": "negative",
+        "primary_entities": [
+          "SNAP"
+        ],
+        "second_order_implications": [
+          "Small AR component suppliers may see reduced demand if Snap's AR glasses fail to gain traction.",
+          "Competitors in the AR space like Meta could benefit from Snap's setback as they continue their own AR development."
+        ]
+      }
+    },
+    {
+      "case_id": "SNAP@2026-06-23",
+      "anchor": true,
+      "expected_role": "subject-adverse",
+      "rationale": "The only first-order rows in the corpus: the article is about SNAP's own stock slump, so the candidate is the adverse subject.",
+      "provenance": [
+        "role_audit_input.parquet"
+      ],
+      "event": {
+        "ticker": "SNAP",
+        "brief_date": "2026-06-23",
+        "theme": "augmented_reality",
+        "company_name": "Snap Inc.",
+        "sector_name": "Services",
+        "industry_name": "Services-Computer Programming, Data Processing, Etc.",
+        "source_event_title": "Stock Market Today, June 16: Snap Falls After Launch of $2,195 AR Glasses | The Motley Fool",
+        "source_event_url": "https://www.fool.com/coverage/stock-market-today/2026/06/16/stock-market-today-june-16-snap-falls-after-launch-of-2195-ar-glasses/?source=iedfolrf0000001",
+        "catalyst_event_type": "product_launch",
+        "sentiment": "negative",
+        "primary_entities": [
+          "SNAP"
+        ],
+        "second_order_implications": [
+          "Meta Platforms may benefit if AR glasses demand grows but Snap's high price dampens category enthusiasm.",
+          "Small AR component suppliers could face lower orders if Snap's product fails to achieve volume."
+        ]
+      }
+    },
+    {
+      "case_id": "VRNS@2026-07-29",
+      "anchor": true,
+      "expected_role": "solution-provider",
+      "rationale": "A data-security vendor surfaced on an AI-agent attack story: the textbook solution-provider read the direction-blind scorer exists to catch.",
+      "provenance": [
+        "role_audit_input.parquet"
+      ],
+      "event": {
+        "ticker": "VRNS",
+        "brief_date": "2026-07-29",
+        "theme": "rogue_ai",
+        "company_name": "Varonis Systems, Inc.",
+        "sector_name": "Services",
+        "industry_name": "Services-Prepackaged Software",
+        "source_event_title": "OpenAI says rogue AI agent attack hit other companies",
+        "source_event_url": "https://www.digitaljournal.com/article/openai-says-rogue-ai-agent-attack-hit-other-companies/",
+        "catalyst_event_type": "breach",
+        "sentiment": "negative",
+        "primary_entities": [],
+        "second_order_implications": []
+      }
+    },
+    {
+      "case_id": "TENB@2026-07-29",
+      "anchor": true,
+      "expected_role": "solution-provider",
+      "rationale": "A data-security vendor surfaced on an AI-agent attack story: the textbook solution-provider read the direction-blind scorer exists to catch.",
+      "provenance": [
+        "role_audit_input.parquet"
+      ],
+      "event": {
+        "ticker": "TENB",
+        "brief_date": "2026-07-29",
+        "theme": "rogue_ai",
+        "company_name": "Tenable Holdings, Inc.",
+        "sector_name": "Services",
+        "industry_name": "Services-Prepackaged Software",
+        "source_event_title": "OpenAI says rogue AI agent attack hit other companies",
+        "source_event_url": "https://www.digitaljournal.com/article/openai-says-rogue-ai-agent-attack-hit-other-companies/",
+        "catalyst_event_type": "breach",
+        "sentiment": "negative",
+        "primary_entities": [],
+        "second_order_implications": []
+      }
+    },
+    {
+      "case_id": "RGR@2026-06-30",
+      "anchor": true,
+      "expected_role": "unaffected",
+      "rationale": "A firearms maker surfaced on Apple v Epic: purely lexical, no channel.",
+      "provenance": [
+        "role_audit_input.parquet"
+      ],
+      "event": {
+        "ticker": "RGR",
+        "brief_date": "2026-06-30",
+        "theme": "supreme_court",
+        "company_name": "Sturm, Ruger & Company, Inc.",
+        "sector_name": "Manufacturing",
+        "industry_name": "Ordnance & Accessories, (No Vehicles/Guided Missiles)",
+        "source_event_title": "Apple takes Epic fight over app store fees to the Supreme Court",
+        "source_event_url": "https://arstechnica.com/tech-policy/2026/06/apple-takes-epic-fight-over-app-store-fees-to-the-supreme-court/",
+        "catalyst_event_type": "litigation",
+        "sentiment": "negative",
+        "primary_entities": [
+          "AAPL"
+        ],
+        "second_order_implications": []
+      }
+    },
+    {
+      "case_id": "LYFT@2026-08-02",
+      "anchor": true,
+      "expected_role": "unaffected",
+      "rationale": "Surfaced on an eBay harassment prosecution: purely lexical, no channel.",
+      "provenance": [
+        "role_audit_input.parquet"
+      ],
+      "event": {
+        "ticker": "LYFT",
+        "brief_date": "2026-08-02",
+        "theme": "harassment",
+        "company_name": "Lyft, Inc.",
+        "sector_name": "Services",
+        "industry_name": "Services-Business Services, NEC",
+        "source_event_title": "‘Crush this lady’: how eBay harassment campaign led to $56mn payout",
+        "source_event_url": "https://www.ft.com/content/06ec1b03-d4af-40cf-b12a-4ba5a410f6d2?syn-25a6b1a6=1",
+        "catalyst_event_type": "litigation",
+        "sentiment": "negative",
+        "primary_entities": [
+          "EBAY"
+        ],
+        "second_order_implications": []
+      }
+    },
+    {
+      "case_id": "QUBT@2026-04-14",
+      "anchor": false,
+      "contested": true,
+      "expected_role": null,
+      "contested_reason": "The strict and permissive rubrics disagree on this class by construction. NVIDIA's Ising release names NVDA only; QUBT reaches it as a sector-level quantum tailwind. The permissive rubric counts a sector-level channel, the strict rubric explicitly does not ('a general sector tailwind is NOT a channel'). Neither reading is wrong, so this case is TRACKED to watch the instrument's spread and DOES NOT gate any run.",
+      "provenance": [
+        "~/.alphalens/thematic_scored/2026-04-14.parquet",
+        "~/.alphalens/thematic_events/2026-04-14.parquet"
+      ],
+      "event": {
+        "ticker": "QUBT",
+        "brief_date": "2026-04-14",
+        "theme": "quantum_computing",
+        "company_name": "Quantum Computing Inc.",
+        "sector_name": "Technology",
+        "industry_name": "Computer Hardware",
+        "source_event_title": "NVIDIA Launches Ising, the Worlds First Open AI Models to Accelerate the Path to Useful Quantum Computers",
+        "source_event_url": "https://nvidianews.nvidia.com/news/nvidia-launches-ising-the-worlds-first-open-ai-models-to-accelerate-the-path-to-useful-quantum-computers",
+        "catalyst_event_type": "product_launch",
+        "sentiment": "positive",
+        "primary_entities": [
+          "NVDA"
+        ],
+        "second_order_implications": [
+          "Quantum hardware vendors may benefit from Ising tooling"
+        ]
+      },
+      "payload_caveat": "This case's event payload traces to a seeded store row, not to ingested news (see sources). It is usable as a contested case because the press release it stands for is real and the rubric disagreement is about the ROLE, not the wording - but it must not be cited as evidence of what the production extractor emits, and it should be replaced by a real recording if one is captured."
+    }
+  ]
+}
