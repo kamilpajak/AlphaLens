@@ -125,7 +125,9 @@ class TestMapThemesFreeze(unittest.TestCase):
             with (
                 patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
                 patch.object(
-                    orchestrator, "_propose_and_filter_candidates", return_value=([], {}, [])
+                    orchestrator,
+                    "_propose_and_filter_candidates",
+                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -141,7 +143,9 @@ class TestMapThemesFreeze(unittest.TestCase):
             with (
                 patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
                 patch.object(
-                    orchestrator, "_propose_and_filter_candidates", return_value=([], {}, [])
+                    orchestrator,
+                    "_propose_and_filter_candidates",
+                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -161,7 +165,9 @@ class TestMapThemesFreeze(unittest.TestCase):
             with (
                 patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
                 patch.object(
-                    orchestrator, "_propose_and_filter_candidates", return_value=([], {}, [])
+                    orchestrator,
+                    "_propose_and_filter_candidates",
+                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -178,7 +184,9 @@ class TestMapThemesFreeze(unittest.TestCase):
             with (
                 patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
                 patch.object(
-                    orchestrator, "_propose_and_filter_candidates", return_value=([], {}, [])
+                    orchestrator,
+                    "_propose_and_filter_candidates",
+                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -193,7 +201,9 @@ class TestMapThemesFreeze(unittest.TestCase):
             with (
                 patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
                 patch.object(
-                    orchestrator, "_propose_and_filter_candidates", return_value=([], {}, [])
+                    orchestrator,
+                    "_propose_and_filter_candidates",
+                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -210,7 +220,12 @@ class TestMapThemesFreeze(unittest.TestCase):
                 patch.object(
                     orchestrator,
                     "_propose_and_filter_candidates",
-                    return_value=([{"ticker": "AAA"}], {"AAA": 1_000_000_000}, ["k"]),
+                    return_value=(
+                        [{"ticker": "AAA"}],
+                        {"AAA": 1_000_000_000},
+                        ["k"],
+                        theme_mapper.MapperOutcome.SUCCESS,
+                    ),
                 ),
                 patch.object(
                     orchestrator,

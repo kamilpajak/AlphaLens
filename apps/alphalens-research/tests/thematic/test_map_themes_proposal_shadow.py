@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import pandas as pd
 from alphalens_pipeline.thematic.mapping import orchestrator
+from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
 
 from .test_theme_mapping import _catalyst_payload
 
@@ -57,7 +58,12 @@ class TestMapThemesProposalShadow(unittest.TestCase):
                 patch.object(
                     orchestrator,
                     "_propose_and_filter_candidates",
-                    return_value=(proposed, {"KEEP": True, "DROP": True}, ["kw"]),
+                    return_value=(
+                        proposed,
+                        {"KEEP": True, "DROP": True},
+                        ["kw"],
+                        MapperOutcome.SUCCESS,
+                    ),
                 ),
                 patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
                 patch.object(orchestrator.proposal_shadow, "write_proposal_shadow") as shadow,
@@ -106,7 +112,7 @@ class TestMapThemesProposalShadow(unittest.TestCase):
                 patch.object(
                     orchestrator,
                     "_propose_and_filter_candidates",
-                    return_value=(proposed, {"KEEP": True}, ["kw"]),
+                    return_value=(proposed, {"KEEP": True}, ["kw"], MapperOutcome.SUCCESS),
                 ),
                 patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
                 patch.object(

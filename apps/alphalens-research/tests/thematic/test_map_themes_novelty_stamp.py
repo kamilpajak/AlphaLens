@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 import pandas as pd
 from alphalens_pipeline.thematic.mapping import orchestrator
+from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
 
 from .test_theme_mapping import _catalyst_payload
 
@@ -59,7 +60,12 @@ def _run_map_themes(
         patch.object(
             orchestrator,
             "_propose_and_filter_candidates",
-            return_value=([{"ticker": "TIC", "confidence": 0.8}], {"TIC": True}, ["kw"]),
+            return_value=(
+                [{"ticker": "TIC", "confidence": 0.8}],
+                {"TIC": True},
+                ["kw"],
+                MapperOutcome.SUCCESS,
+            ),
         ),
         patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
         # This suite pins the novelty stamp, not the V-forward proposal-shadow

@@ -7,7 +7,11 @@ candidates are then verified by the orchestrator (4 verification gates: ETF
 holdings, 10-K grep, recent press, Form-4 opportunistic-insider buys).
 
 Output is a list of dicts:
-``{ticker, company_name, rationale, transmission_channel, confidence}``.
+``{ticker, company_name, rationale, transmission_channel, confidence}``,
+returned alongside a :class:`MapperOutcome` that says WHY the list is the size
+it is. An empty list is no longer self-explaining — since the prompt grants an
+explicit licence to decline, "no candidate" is a legitimate answer, so the
+caller must be able to tell it apart from a lost call (issue #982).
 
 WHY THE EVENT IS AN INPUT
 -------------------------
@@ -30,6 +34,7 @@ these names unchanged.
 
 from __future__ import annotations
 
+import enum
 import hashlib
 import json
 import logging
@@ -45,6 +50,43 @@ from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayloa
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "deepseek/deepseek-v4-pro"
+
+
+class MapperOutcome(enum.Enum):
+    """How one theme's proposal ended (issue #982).
+
+    Four of these used to be one empty list, so the orchestrator's funnel line
+    read identically for a working refusal and for an outage. Since the
+    event-conditioned prompt gives the model an explicit licence to decline,
+    zero candidates is a legitimate answer and no longer stands out on its own —
+    the outcome has to be carried, not inferred from the list being empty.
+
+    ``DECLINED`` is an ANSWER; the rest of the non-success members are failures.
+    Only ``EMPTY_PAYLOAD`` is retryable — see :data:`_RETRYABLE_OUTCOMES`.
+    """
+
+    SUCCESS = "success"  # parsed, at least one usable candidate
+    DECLINED = "declined"  # parsed, the model returned an empty candidates array
+    EMPTY_PAYLOAD = "empty_payload"  # the response body was empty / whitespace-only
+    MALFORMED_PAYLOAD = "malformed_payload"  # non-empty body, unparseable or off-schema
+    CALL_FAILED = "call_failed"  # the client raised before producing a response
+
+
+# EMPTY_PAYLOAD only. DeepSeek v4-pro is a reasoning model: its reasoning trace
+# is charged against the output budget, so an exhausted budget returns
+# ``finish_reason='length'`` with EMPTY content — and it does so preferentially
+# on the inputs that needed the most reasoning, i.e. the hard themes. A fresh
+# identical call is the recovery (measured on the brief generator: a 400-token
+# budget produced 1963 characters of reasoning and empty content where 2000
+# tokens answered in 75). Mirrors ``BriefErrorKind.EMPTY`` in
+# ``argumentation/generator.py``.
+#
+# DECLINED is deliberately NOT here. A decline is the model's answer; re-asking
+# pays twice and nudges a stochastic generator toward a different answer, which
+# corrupts the pre-registered proposal-shadow measurement this call feeds.
+# MALFORMED_PAYLOAD and CALL_FAILED are not here either, matching the brief
+# generator: more calls do not fix bad JSON, a safety block or a dead socket.
+_RETRYABLE_OUTCOMES = frozenset({MapperOutcome.EMPTY_PAYLOAD})
 
 # Sampling parameters for the single per-theme proposal call. Pinned as module
 # constants (not inline literals) so ``mapper_config_version`` can fingerprint
@@ -568,6 +610,88 @@ def _normalize_keywords(items, *, theme: str) -> list[str]:
     return out
 
 
+_REASON_MAX_CHARS = 200
+
+
+def _proposal(
+    outcome: MapperOutcome,
+    *,
+    candidates: list[dict] | None = None,
+    search_keywords: list[str] | None = None,
+    no_candidates_reason: str = "",
+) -> dict:
+    """The one shape :func:`propose_candidates` returns, for every outcome."""
+    return {
+        "candidates": candidates or [],
+        "search_keywords": search_keywords or [],
+        "outcome": outcome,
+        "no_candidates_reason": no_candidates_reason,
+    }
+
+
+def _resolve_client(
+    *, api_key: str | None, llm_client: OpenRouterClient | None
+) -> OpenRouterClient:
+    """Return the client to call with, building a default when none was passed."""
+    if llm_client is not None:
+        return llm_client
+    return OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
+
+
+def _propose_once(*, llm_client: OpenRouterClient, prompt: str, theme: str, model: str) -> dict:
+    """One proposal call, classified into a :class:`MapperOutcome`.
+
+    Split out from :func:`propose_candidates` so the classification is testable
+    without the retry policy, and so the retry can re-issue the SAME prompt
+    object rather than re-rendering it.
+    """
+    try:
+        response = _call_llm(llm_client, prompt, model=model)
+    except Exception as exc:
+        logger.warning("LLM mapper failed for theme %r: %s", theme, exc, exc_info=True)
+        return _proposal(MapperOutcome.CALL_FAILED)
+
+    raw = getattr(response, "text", "") or ""
+    if raw.strip() == "":
+        # The model returned NO CONTENT — distinct from "bad content", which is
+        # why the two are not one "unparseable" branch any more. Observed on the
+        # first production run of the event-conditioned prompt (2026-08-03
+        # 21:04 UTC, asof=2026-08-02): theme `iphone_sales` came back as an empty
+        # string and was reported exactly like the five genuine declines beside
+        # it. This is the retryable one.
+        logger.warning("LLM mapper returned an empty payload for theme %r", theme)
+        return _proposal(MapperOutcome.EMPTY_PAYLOAD)
+
+    parsed = parse_extraction(raw)
+    if parsed is None or "candidates" not in parsed:
+        logger.warning("LLM mapper returned unparseable payload for %r: %r", theme, raw[:200])
+        return _proposal(MapperOutcome.MALFORMED_PAYLOAD)
+
+    keywords = _normalize_keywords(parsed.get("search_keywords"), theme=theme)
+    proposed = parsed["candidates"]
+    candidates = _normalize(proposed, theme=theme)
+    if candidates:
+        return _proposal(MapperOutcome.SUCCESS, candidates=candidates, search_keywords=keywords)
+
+    if isinstance(proposed, list) and not proposed:
+        # An empty ARRAY is the model exercising the licence to decline that
+        # STEP 3 of the prompt grants it. An answer, not a failure.
+        reason = str(parsed.get("no_candidates_reason") or "")[:_REASON_MAX_CHARS]
+        logger.info("LLM mapper declined theme %r (model reason: %r)", theme, reason)
+        return _proposal(
+            MapperOutcome.DECLINED, search_keywords=keywords, no_candidates_reason=reason
+        )
+
+    # The model DID propose, and ``_normalize`` dropped every entry (no
+    # transmission_channel, non-dict items, or a bare object where the schema
+    # requires an array). A response-shape defect, never a judgement — counting
+    # it as a decline would credit the model with a call it never made.
+    logger.warning(
+        "LLM mapper proposed candidates for theme %r but none survived normalization", theme
+    )
+    return _proposal(MapperOutcome.MALFORMED_PAYLOAD, search_keywords=keywords)
+
+
 def propose_candidates(
     *,
     theme: str,
@@ -583,7 +707,7 @@ def propose_candidates(
     is the article the model reasoned from. It is required, not optional: see
     :func:`build_prompt`.
 
-    Returns a dict with two keys:
+    Returns a dict with four keys:
 
     - ``candidates`` — size-unfiltered candidate list, each carrying a stated
       ``transmission_channel``. The orchestrator applies a real-time mcap
@@ -593,6 +717,17 @@ def propose_candidates(
       gates (press, 10-K). Falls back to a snake↔space swap of ``theme``
       when the model returns nothing usable, so gates always have
       *something* to substring-match against.
+    - ``outcome`` — the :class:`MapperOutcome`. An empty ``candidates`` list is
+      no longer self-explaining, so callers branch on this instead of on
+      emptiness.
+    - ``no_candidates_reason`` — the model's own words on ``DECLINED``, ``""``
+      otherwise.
+
+    An ``EMPTY_PAYLOAD`` is retried ONCE with the identical request (same
+    prompt, model and sampling config — the golden characterization cassette is
+    keyed on a sha256 of the request descriptor and ``mapper_config_version``
+    fingerprints the sampling, so a "smarter" retry would invalidate both). No
+    other outcome is retried; see :data:`_RETRYABLE_OUTCOMES`.
 
     Pass ``llm_client=`` for tests or to hoist one client across many
     themes. Pass ``api_key=`` for ad-hoc one-off use. Omit both to fall
@@ -602,35 +737,22 @@ def propose_candidates(
     try:
         # Client init inside try so missing-key failures degrade
         # per-theme rather than crashing the orchestrator's loop (zen
-        # pre-merge HIGH 2026-05-20; preserved across the LLM swap).
-        if llm_client is None:
-            llm_client = (
-                OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
-            )
-        response = _call_llm(llm_client, prompt, model=model)
+        # pre-merge HIGH 2026-05-20; preserved across the LLM swap). Resolved
+        # ONCE so the retry does not repeat the lazy-singleton lookup.
+        client = _resolve_client(api_key=api_key, llm_client=llm_client)
     except Exception as exc:
-        logger.warning("LLM mapper failed for theme %r: %s", theme, exc, exc_info=True)
-        return {"candidates": [], "search_keywords": []}
-    raw = getattr(response, "text", "") or ""
-    parsed = parse_extraction(raw)
-    if parsed is None or "candidates" not in parsed:
-        logger.warning("LLM mapper returned unparseable payload for %r: %r", theme, raw[:200])
-        return {"candidates": [], "search_keywords": []}
-    candidates = _normalize(parsed.get("candidates") or [], theme=theme)
-    if not candidates:
-        # Distinguish "the model declined" from "the call broke" / "the
-        # payload did not parse" — all three used to surface as the same
-        # empty list, making a working refusal indistinguishable from an
-        # outage in the logs.
-        logger.info(
-            "LLM mapper returned no candidate for theme %r (model reason: %r)",
-            theme,
-            str(parsed.get("no_candidates_reason") or "")[:200],
-        )
-    return {
-        "candidates": candidates,
-        "search_keywords": _normalize_keywords(parsed.get("search_keywords"), theme=theme),
-    }
+        logger.warning("LLM mapper client init failed for theme %r: %s", theme, exc, exc_info=True)
+        return _proposal(MapperOutcome.CALL_FAILED)
+
+    result = _propose_once(llm_client=client, prompt=prompt, theme=theme, model=model)
+    if result["outcome"] not in _RETRYABLE_OUTCOMES:
+        return result
+    logger.info(
+        "LLM mapper retry for theme %r (outcome=%s): re-issuing the identical request",
+        theme,
+        result["outcome"].value,
+    )
+    return _propose_once(llm_client=client, prompt=prompt, theme=theme, model=model)
 
 
-__all__ = ["DEFAULT_MODEL", "build_prompt", "propose_candidates"]
+__all__ = ["DEFAULT_MODEL", "MapperOutcome", "build_prompt", "propose_candidates"]

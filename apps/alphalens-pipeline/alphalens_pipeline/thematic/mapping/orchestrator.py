@@ -354,6 +354,24 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
 )
 
 
+def _outcome_counts(outcomes: Iterable[theme_mapper.MapperOutcome | None]) -> dict[str, int]:
+    """Split one run's per-theme mapper outcomes into declines vs failures.
+
+    Two counts, not five: the gauges answer "is the failure rate rising", and
+    the funnel log answers "which kind" (issue #982). ``None`` — the mapper was
+    never called because no catalyst resolved — counts as neither, so the
+    failure gauge tracks mapper health rather than catalyst-resolution quality.
+    """
+    declined = sum(1 for o in outcomes if o is theme_mapper.MapperOutcome.DECLINED)
+    failed = sum(
+        1
+        for o in outcomes
+        if o is not None
+        and o not in (theme_mapper.MapperOutcome.SUCCESS, theme_mapper.MapperOutcome.DECLINED)
+    )
+    return {"themes_declined": declined, "themes_failed": failed}
+
+
 def _load_frozen_candidates(out_path: Path, config_version: str) -> pd.DataFrame | None:
     """Return a reusable frozen candidates parquet for this date, else ``None``.
 
@@ -398,7 +416,7 @@ def _propose_and_filter_candidates(
     max_cap: int,
     asof: dt.date,
     model: str | None = None,
-) -> tuple[list[dict], dict[str, float], list[str]]:
+) -> tuple[list[dict], dict[str, float], list[str], theme_mapper.MapperOutcome]:
     """Pro proposal → real-time mcap filter → keyword harvest.
 
     ``catalyst`` is the theme's resolved trigger event and is REQUIRED — the
@@ -407,8 +425,10 @@ def _propose_and_filter_candidates(
     unrepresentable; :func:`_rows_for_theme` already hard-returns before this
     call when nothing resolved.
 
-    Returns (in-bracket candidate dicts, ticker→mcap map, search keywords).
-    Empty candidates list signals "nothing further to do for this theme".
+    Returns (in-bracket candidate dicts, ticker→mcap map, search keywords,
+    mapper outcome). Empty candidates list signals "nothing further to do for
+    this theme"; the outcome says WHETHER THAT WAS AN ANSWER OR A LOSS, which
+    the list itself cannot (issue #982).
     """
     proposal = theme_mapper.propose_candidates(
         theme=theme,
@@ -417,14 +437,30 @@ def _propose_and_filter_candidates(
         llm_client=pro_client,
         model=model or theme_mapper.DEFAULT_MODEL,
     )
+    outcome = proposal["outcome"]
     proposed = proposal.get("candidates") or []
     if not proposed:
-        logger.info(
-            "map_themes %s: theme %r funnel — proposed 0 (LLM returned no candidate)",
-            asof.isoformat(),
-            theme,
-        )
-        return [], {}, []
+        # One funnel line per theme, and it has to be self-contained: an
+        # operator reading `journalctl` must not have to cross-reference the
+        # mapper's own log line to tell a working refusal from a lost theme.
+        if outcome is theme_mapper.MapperOutcome.DECLINED:
+            logger.info(
+                "map_themes %s: theme %r funnel — proposed 0 (model declined: %r)",
+                asof.isoformat(),
+                theme,
+                proposal.get("no_candidates_reason") or "",
+            )
+        else:
+            # WARNING, not INFO: the theme was LOST. Since the event-conditioned
+            # prompt made "0 candidates" a legitimate answer, a failure no longer
+            # stands out by being unusual and needs the level to carry it.
+            logger.warning(
+                "map_themes %s: theme %r funnel — proposed 0 (MAPPER FAILED, outcome=%s)",
+                asof.isoformat(),
+                theme,
+                outcome.value,
+            )
+        return [], {}, [], outcome
     in_bracket = mcap_filter.filter_by_mcap(
         [c["ticker"] for c in proposed],
         min_cap=min_cap,
@@ -450,7 +486,7 @@ def _propose_and_filter_candidates(
         len(proposed) - len(candidates),
     )
     keywords = _theme_keywords(theme, pro_keywords=proposal.get("search_keywords") or [])
-    return candidates, in_bracket, keywords
+    return candidates, in_bracket, keywords, outcome
 
 
 def _verify_candidates_for_theme(
@@ -529,15 +565,18 @@ def _rows_for_theme(
     polygon_client: PolygonClient | None,
     press_df: pd.DataFrame | None,
     keep_unverified: bool,
-) -> tuple[list[dict], int, int, list[dict]]:
-    """Resolve → propose → verify one theme into ``(rows, dropped, dropped_unknown, proposals)``.
+) -> tuple[list[dict], int, int, list[dict], theme_mapper.MapperOutcome | None]:
+    """Resolve → propose → verify one theme.
+
+    Returns ``(rows, dropped, dropped_unknown, proposals, outcome)``.
 
     ``proposals`` is the LLM's **pre-gate** candidate set (post-mcap, before the
     verification gates that ``rows`` survives) — captured for the V-forward
-    proposal-shadow log. Returns ``([], 0, 0, [])`` when the theme is skipped (no
-    catalyst event in the window, or Pro proposed no candidates). Extracted from
-    :func:`map_themes`'s loop so the driver stays within the cognitive-complexity
-    budget.
+    proposal-shadow log. ``outcome`` is the mapper's :class:`MapperOutcome`, or
+    ``None`` when the mapper was never called because no catalyst event
+    resolved — a skip is neither a decline nor a mapper failure, so it must not
+    land in either counter. Extracted from :func:`map_themes`'s loop so the
+    driver stays within the cognitive-complexity budget.
     """
     catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
     if not catalyst:
@@ -550,8 +589,8 @@ def _rows_for_theme(
             asof.isoformat(),
             theme,
         )
-        return [], 0, 0, []
-    candidates, in_bracket, keywords = _propose_and_filter_candidates(
+        return [], 0, 0, [], None
+    candidates, in_bracket, keywords, outcome = _propose_and_filter_candidates(
         theme=theme,
         # The SAME payload the emitted rows are stamped with (see
         # ``_build_row``), so the article the card cites as provenance is the
@@ -565,7 +604,7 @@ def _rows_for_theme(
         model=model,
     )
     if not candidates:
-        return [], 0, 0, []
+        return [], 0, 0, [], outcome
     proposals = [
         {
             "theme": theme,
@@ -585,7 +624,7 @@ def _rows_for_theme(
         press_df=press_df,
         keep_unverified=keep_unverified,
     )
-    return rows, dropped, dropped_unknown, proposals
+    return rows, dropped, dropped_unknown, proposals, outcome
 
 
 def _write_proposal_shadow_best_effort(
@@ -677,6 +716,10 @@ def map_themes(
                 asof.isoformat(),
                 len(frozen),
             )
+            # No LLM call was made, so there is nothing to count — but the keys
+            # must exist: the CLI emits them on every run and a gauge that
+            # disappears on frozen days is itself an alertable condition.
+            frozen.attrs.update(_outcome_counts([]))
             return frozen
 
     pro_client = _init_pro_client(api_key)
@@ -688,8 +731,9 @@ def map_themes(
     dropped_all_unknown = 0
     catalyst_cache: dict[str, CatalystPayload | None] = {}
     llm_proposals: list[dict] = []
+    outcomes: list[theme_mapper.MapperOutcome | None] = []
     for theme in themes:
-        theme_rows, dropped, dropped_unknown, proposals = _rows_for_theme(
+        theme_rows, dropped, dropped_unknown, proposals, outcome = _rows_for_theme(
             theme,
             asof=asof,
             catalyst_cache=catalyst_cache,
@@ -706,6 +750,7 @@ def map_themes(
         llm_proposals.extend(proposals)
         dropped_total += dropped
         dropped_all_unknown += dropped_unknown
+        outcomes.append(outcome)
 
     if rows:
         df = (
@@ -740,6 +785,7 @@ def map_themes(
     df["mapper_config_version"] = config_version
     df.attrs["dropped_total"] = dropped_total
     df.attrs["dropped_all_unknown"] = dropped_all_unknown
+    df.attrs.update(_outcome_counts(outcomes))
     write_parquet_atomic(df, out_path, index=False)
     # V-forward telemetry: log BOTH ungated proposal sources (LLM pre-gate +
     # mechanical salience) for a clean forward head-to-head (design memo

@@ -52,6 +52,8 @@ class ProposalCallIsEventConditionedTests(unittest.TestCase):
         proposal = {
             "candidates": [{"ticker": "AAA", "confidence": 0.9, "transmission_channel": "a->b->c"}],
             "search_keywords": [],
+            "outcome": theme_mapper.MapperOutcome.SUCCESS,
+            "no_candidates_reason": "",
         }
         with (
             mock.patch.object(
@@ -97,7 +99,9 @@ class ProposalCallIsEventConditionedTests(unittest.TestCase):
         with (
             mock.patch.object(orchestrator, "_resolve_catalyst", return_value=catalyst) as resolve,
             mock.patch.object(
-                orchestrator, "_propose_and_filter_candidates", return_value=([], {}, [])
+                orchestrator,
+                "_propose_and_filter_candidates",
+                return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
             ) as propose,
         ):
             orchestrator._rows_for_theme(

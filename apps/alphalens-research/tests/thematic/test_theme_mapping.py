@@ -80,11 +80,26 @@ SAMPLE_MAPPER_RESPONSE = {
 def _mapper_result(
     candidates: list[dict] | None = None,
     search_keywords: list[str] | None = None,
+    outcome: theme_mapper.MapperOutcome | None = None,
+    no_candidates_reason: str = "",
 ) -> dict:
-    """Build the dict shape returned by ``theme_mapper.propose_candidates``."""
+    """Build the dict shape returned by ``theme_mapper.propose_candidates``.
+
+    ``outcome`` defaults to the one the candidate list implies — SUCCESS when
+    there are candidates, DECLINED when there are none. Pass it explicitly to
+    stub a mapper FAILURE, which since issue #982 is a different thing from an
+    empty list.
+    """
+    cands = list(candidates or [])
+    if outcome is None:
+        outcome = (
+            theme_mapper.MapperOutcome.SUCCESS if cands else theme_mapper.MapperOutcome.DECLINED
+        )
     return {
-        "candidates": list(candidates or []),
+        "candidates": cands,
         "search_keywords": list(search_keywords or []),
+        "outcome": outcome,
+        "no_candidates_reason": no_candidates_reason,
     }
 
 
