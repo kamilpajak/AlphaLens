@@ -231,6 +231,36 @@ def _score_core_numerics_metrics(enriched: pd.DataFrame) -> dict[str, float | in
     }
 
 
+def _map_themes_outcome_metrics(df: pd.DataFrame | None = None) -> dict[str, float | int]:
+    """Declines vs mapper failures for one map-themes run (issue #982).
+
+    ``output_rows == 0`` cannot separate "every theme was correctly declined"
+    from "every theme was lost to an empty LLM response": since the
+    event-conditioned prompt gives the model an explicit licence to decline,
+    zero candidates is a legitimate answer. These two gauges are what makes a
+    rising failure rate visible without reading the journal.
+
+    Always emitted, including as 0/0 on a quiet day and on a frozen-set reuse —
+    a series that disappears on healthy days is indistinguishable from an
+    exporter that stopped. ``df=None`` is the no-mapper-run case.
+
+    These are PER-RUN counts, not cumulative ones, and the textfile is
+    overwritten on every run. ``alphalens-thematic-build`` fires 6×/day against
+    the same asof date: the first slot computes and publishes the real counts,
+    the remaining five reuse the frozen parquet and publish 0/0, so the value on
+    disk returns to zero within a few hours of a bad slot. Prometheus scrapes far
+    more often than that, so nothing is lost from the time series — but any alert
+    rule MUST read a window, e.g.
+    ``max_over_time(alphalens_thematic_map_themes_failed_total[6h]) > N``, never
+    an instant vector and never ``last_over_time``.
+    """
+    attrs = df.attrs if df is not None else {}
+    return {
+        "alphalens_thematic_map_themes_declined_total": int(attrs.get("themes_declined", 0)),
+        "alphalens_thematic_map_themes_failed_total": int(attrs.get("themes_failed", 0)),
+    }
+
+
 def _emit_stage_volume(
     stage: str,
     *,
@@ -579,7 +609,12 @@ def map_themes_cmd(
         # the map-themes gauges reflect a quiet day instead of carrying stale
         # values from the previous (non-empty) run. input=0 means the
         # StageZeroOutput alert (output==0 AND input>0) correctly stays silent.
-        _emit_stage_volume("map-themes", output_rows=0, input_rows=0)
+        _emit_stage_volume(
+            "map-themes",
+            output_rows=0,
+            input_rows=0,
+            extra_metrics=_map_themes_outcome_metrics(),
+        )
         typer.echo(
             f"No novel themes above {novelty_threshold:.1f} in {window_days}d window — "
             f"wrote empty candidate set → {out_path}"
@@ -610,11 +645,19 @@ def map_themes_cmd(
         theme_novelty=theme_novelty,
         novelty_config_version=novelty_cfg,
     )
-    # input = novel themes fed to the mapper; output = verified candidate
-    # rows. 0 candidates from N novel themes = a DeepSeek Pro mapping /
-    # verification failure (the early `return` above handles the legitimate
-    # "no novel themes" case, which emits nothing — no false alert).
-    _emit_stage_volume("map-themes", output_rows=len(df), input_rows=len(novel))
+    # input = novel themes fed to the mapper; output = verified candidate rows.
+    # The early `return` above handles the legitimate "no novel themes" case, so
+    # 0 candidates from N novel themes means the themes were mapped and nothing
+    # survived — but that is NO LONGER on its own a mapping/verification
+    # failure: the event-conditioned prompt lets the model decline a theme with
+    # no transmission channel. The two outcome gauges below are what separates
+    # "correctly declined" from "lost" (issue #982).
+    _emit_stage_volume(
+        "map-themes",
+        output_rows=len(df),
+        input_rows=len(novel),
+        extra_metrics=_map_themes_outcome_metrics(df),
+    )
 
     out_path = output_dir / f"{target.isoformat()}.parquet"
     dropped = int(df.attrs.get("dropped_total", 0))

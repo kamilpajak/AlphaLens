@@ -16,6 +16,7 @@ from unittest import mock
 
 from alphalens_pipeline.thematic.mapping import orchestrator
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
+from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
 
 _LOGGER = "alphalens_pipeline.thematic.mapping.orchestrator"
 
@@ -39,12 +40,22 @@ def _catalyst() -> CatalystPayload:
     )
 
 
+def _proposal(
+    *,
+    tickers: list[str],
+    outcome: MapperOutcome,
+    no_candidates_reason: str = "",
+) -> dict:
+    return {
+        "candidates": [{"ticker": t, "confidence": 0.9} for t in tickers],
+        "search_keywords": [],
+        "outcome": outcome,
+        "no_candidates_reason": no_candidates_reason,
+    }
+
+
 class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
-    def _propose(self, *, proposed_tickers: list[str], in_bracket: list[str]):
-        proposal = {
-            "candidates": [{"ticker": t, "confidence": 0.9} for t in proposed_tickers],
-            "search_keywords": [],
-        }
+    def _run(self, proposal: dict, in_bracket: list[str], *, level: str = "INFO"):
         with (
             mock.patch.object(
                 orchestrator.theme_mapper, "propose_candidates", return_value=proposal
@@ -54,9 +65,9 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
                 "filter_by_mcap",
                 return_value=dict.fromkeys(in_bracket, 1_000_000_000.0),
             ),
-            self.assertLogs(_LOGGER, level="INFO") as cm,
+            self.assertLogs(_LOGGER, level=level) as cm,
         ):
-            candidates, _mcap, _keywords = orchestrator._propose_and_filter_candidates(
+            candidates, _mcap, _keywords, outcome = orchestrator._propose_and_filter_candidates(
                 theme="ai_defense",
                 catalyst=_catalyst(),
                 api_key="k",
@@ -65,7 +76,13 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
                 max_cap=10_000_000_000,
                 asof=dt.date(2026, 7, 25),
             )
-        return candidates, "\n".join(cm.output)
+        return candidates, outcome, "\n".join(cm.output)
+
+    def _propose(self, *, proposed_tickers: list[str], in_bracket: list[str]):
+        candidates, _outcome, logs = self._run(
+            _proposal(tickers=proposed_tickers, outcome=MapperOutcome.SUCCESS), in_bracket
+        )
+        return candidates, logs
 
     def test_logs_the_funnel_when_some_candidates_drop(self):
         candidates, logs = self._propose(proposed_tickers=["AAA", "BBB", "CCC"], in_bracket=["AAA"])
@@ -79,10 +96,60 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
         self.assertEqual(candidates, [])
         self.assertIn("proposed 2, in mcap bracket 0 (2 dropped", logs)
 
-    def test_logs_when_the_llm_proposes_nothing(self):
-        candidates, logs = self._propose(proposed_tickers=[], in_bracket=[])
+    def test_a_decline_names_the_model_reason_in_the_funnel_line(self):
+        # Issue #982. A decline is a judgement; the funnel must say so AND carry
+        # the model's own words, so no second log line has to be cross-referenced.
+        candidates, outcome, logs = self._run(
+            _proposal(
+                tickers=[],
+                outcome=MapperOutcome.DECLINED,
+                no_candidates_reason="a one-time litigation payout with no transmission channel",
+            ),
+            [],
+        )
         self.assertEqual(candidates, [])
-        self.assertIn("proposed 0 (LLM returned no candidate)", logs)
+        self.assertEqual(outcome, MapperOutcome.DECLINED)
+        self.assertIn("declined", logs.lower())
+        self.assertIn("one-time litigation payout", logs)
+
+    def test_a_failure_is_logged_at_warning_and_is_not_worded_as_a_decline(self):
+        # The theme was LOST, not judged. It must be greppable apart from a
+        # decline and must clear a WARNING-level journal filter.
+        candidates, outcome, logs = self._run(
+            _proposal(tickers=[], outcome=MapperOutcome.EMPTY_PAYLOAD), [], level="WARNING"
+        )
+        self.assertEqual(candidates, [])
+        self.assertEqual(outcome, MapperOutcome.EMPTY_PAYLOAD)
+        self.assertIn("WARNING", logs)
+        self.assertIn("empty_payload", logs)
+        self.assertNotIn("declined", logs.lower())
+
+    def test_a_decline_and_a_failure_do_not_produce_the_same_funnel_line(self):
+        # The whole point of #982: before the fix these two rendered identically.
+        _c, _o, declined_logs = self._run(
+            _proposal(
+                tickers=[], outcome=MapperOutcome.DECLINED, no_candidates_reason="no channel"
+            ),
+            [],
+        )
+        _c2, _o2, failed_logs = self._run(
+            _proposal(tickers=[], outcome=MapperOutcome.EMPTY_PAYLOAD), []
+        )
+        self.assertNotEqual(declined_logs, failed_logs)
+
+    def test_every_failure_outcome_is_logged_as_a_failure(self):
+        # Positive control against the guard rotting to "only EMPTY_PAYLOAD is a
+        # failure": a new member added to the failure side must be covered here.
+        for outcome in (
+            MapperOutcome.EMPTY_PAYLOAD,
+            MapperOutcome.MALFORMED_PAYLOAD,
+            MapperOutcome.CALL_FAILED,
+        ):
+            with self.subTest(outcome=outcome):
+                _c, _o, logs = self._run(
+                    _proposal(tickers=[], outcome=outcome), [], level="WARNING"
+                )
+                self.assertIn(outcome.value, logs)
 
     def test_returns_the_in_bracket_subset_sorted_by_confidence(self):
         # Behaviour-preservation lock: the log addition must not alter WHICH
@@ -95,6 +162,8 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
                 {"ticker": "MID", "confidence": 0.6},
             ],
             "search_keywords": [],
+            "outcome": MapperOutcome.SUCCESS,
+            "no_candidates_reason": "",
         }
         with (
             mock.patch.object(
@@ -110,14 +179,16 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
                 },
             ),
         ):
-            candidates, in_bracket, _keywords = orchestrator._propose_and_filter_candidates(
-                theme="ai_defense",
-                catalyst=_catalyst(),
-                api_key="k",
-                pro_client=None,
-                min_cap=500_000_000,
-                max_cap=10_000_000_000,
-                asof=dt.date(2026, 7, 25),
+            candidates, in_bracket, _keywords, _outcome = (
+                orchestrator._propose_and_filter_candidates(
+                    theme="ai_defense",
+                    catalyst=_catalyst(),
+                    api_key="k",
+                    pro_client=None,
+                    min_cap=500_000_000,
+                    max_cap=10_000_000_000,
+                    asof=dt.date(2026, 7, 25),
+                )
             )
         # OUT is filtered (not in bracket); the rest are sorted by confidence desc.
         self.assertEqual([c["ticker"] for c in candidates], ["HIGH", "MID", "LOW"])

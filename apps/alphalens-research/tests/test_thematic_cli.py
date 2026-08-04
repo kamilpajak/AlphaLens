@@ -117,6 +117,90 @@ class TestMapThemesCLI(unittest.TestCase):
         self.assertIn("QUBT", result.output)
         self.assertIn("tenk,press", result.output)
 
+    def _novel_frame(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {
+                    "theme": "quantum_computing",
+                    "novelty_score": 5.0,
+                    "count_recent": 3,
+                    "count_baseline": 0,
+                    "count_window": 3,
+                    "first_seen": dt.date(2026, 5, 1),
+                    "latest_seen": dt.date(2026, 5, 15),
+                }
+            ]
+        )
+
+    def test_map_themes_emits_the_decline_and_failure_gauges(self):
+        # Issue #982. output_rows==0 cannot tell "every theme was correctly
+        # declined" from "every theme was lost to an empty LLM response", so the
+        # two counts ride the same emit as the volume gauges (a second
+        # emit_domain_metrics call would overwrite the job's .prom file).
+        df = _FAKE_CANDIDATES.copy()
+        df.attrs["themes_declined"] = 4
+        df.attrs["themes_failed"] = 2
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, self._env(), clear=False),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.roll_up",
+                return_value=self._novel_frame(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel",
+                return_value=self._novel_frame(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.orchestrator.map_themes",
+                return_value=df,
+            ),
+            patch("alphalens_cli.commands.thematic._emit_stage_volume") as emit,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["thematic", "map-themes", "--date", "2026-05-15", "--output-dir", tmpdir],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        extra = emit.call_args.kwargs["extra_metrics"]
+        self.assertEqual(extra["alphalens_thematic_map_themes_declined_total"], 4)
+        self.assertEqual(extra["alphalens_thematic_map_themes_failed_total"], 2)
+
+    def test_map_themes_emits_zero_gauges_when_nothing_declined_or_failed(self):
+        # Positive control: the gauges must be able to read 0. Emitting them only
+        # when non-zero would leave the series absent on healthy days, so a drop
+        # back to healthy would look identical to the exporter going away.
+        df = _FAKE_CANDIDATES.copy()
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, self._env(), clear=False),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.roll_up",
+                return_value=self._novel_frame(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel",
+                return_value=self._novel_frame(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.orchestrator.map_themes",
+                return_value=df,
+            ),
+            patch("alphalens_cli.commands.thematic._emit_stage_volume") as emit,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["thematic", "map-themes", "--date", "2026-05-15", "--output-dir", tmpdir],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        extra = emit.call_args.kwargs["extra_metrics"]
+        self.assertEqual(extra["alphalens_thematic_map_themes_declined_total"], 0)
+        self.assertEqual(extra["alphalens_thematic_map_themes_failed_total"], 0)
+
     def test_map_themes_passes_theme_novelty_mapping_to_mapper(self):
         # The CLI ranks the rolled-up novel themes and truncates to
         # head(max_themes); that rank + novelty_score is the selection covariate
@@ -312,7 +396,17 @@ class TestMapThemesCLI(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, msg=result.output)
             # Observability contract stays uniform: the quiet-day path emits the
             # true 0/0 volume so the gauge does not carry stale values.
-            emit.assert_called_once_with("map-themes", output_rows=0, input_rows=0)
+            # The #982 gauges ride along even here: a quiet day must publish
+            # them as 0 rather than leaving the series absent.
+            emit.assert_called_once_with(
+                "map-themes",
+                output_rows=0,
+                input_rows=0,
+                extra_metrics={
+                    "alphalens_thematic_map_themes_declined_total": 0,
+                    "alphalens_thematic_map_themes_failed_total": 0,
+                },
+            )
             self.assertIn("No novel themes", result.output)
             out_path = Path(tmpdir) / "2026-05-15.parquet"
             self.assertTrue(

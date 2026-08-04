@@ -45,6 +45,7 @@ from unittest.mock import Mock, patch
 
 import pandas as pd
 from alphalens_pipeline.thematic.mapping import catalyst_resolver, orchestrator
+from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
 
 ASOF = dt.date(2026, 6, 12)
 
@@ -118,13 +119,16 @@ def _seed_two_themes(news_dir: Path, events_dir: Path) -> None:
     )
 
 
-def _propose_stub(*, theme: str, **_kwargs) -> tuple[list[dict], dict[str, float], list[str]]:
+def _propose_stub(
+    *, theme: str, **_kwargs
+) -> tuple[list[dict], dict[str, float], list[str], MapperOutcome]:
     """Deterministic stand-in for ``_propose_and_filter_candidates``.
 
-    Returns the real 3-tuple shape ``(candidates, in_bracket, keywords)`` with a
-    single in-bracket candidate per theme so ``_build_row`` emits exactly one
-    row. The real proposal (LLM + yfinance mcap filter) is what we are bypassing;
-    the gate that decides whether this stub is reached at all is what we test.
+    Returns the real 4-tuple shape ``(candidates, in_bracket, keywords,
+    outcome)`` with a single in-bracket candidate per theme so ``_build_row``
+    emits exactly one row. The real proposal (LLM + yfinance mcap filter) is
+    what we are bypassing; the gate that decides whether this stub is reached
+    at all is what we test.
     """
     ticker = STATE_MEDIA_TICKER if theme == STATE_MEDIA_THEME else LEGIT_TICKER
     candidate = {
@@ -133,7 +137,7 @@ def _propose_stub(*, theme: str, **_kwargs) -> tuple[list[dict], dict[str, float
         "rationale": "stub",
         "confidence": 0.9,
     }
-    return [candidate], {ticker: 2_000_000_000.0}, [theme]
+    return [candidate], {ticker: 2_000_000_000.0}, [theme], MapperOutcome.SUCCESS
 
 
 def _passing_verdict(*, ticker: str, **_kwargs) -> dict:
