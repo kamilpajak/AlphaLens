@@ -137,6 +137,19 @@ class ProposeOutcomeClassificationTests(unittest.TestCase):
             result = _propose()
         self.assertEqual(result["outcome"], theme_mapper.MapperOutcome.MALFORMED_PAYLOAD)
 
+    def test_a_top_level_json_array_is_malformed_not_a_crash(self):
+        # ``parse_extraction`` hands back whatever JSON the model emitted, and
+        # the model is untrusted input. A top-level ARRAY that happens to hold
+        # the string "candidates" satisfies the membership check and then breaks
+        # every dict access under it (``parsed.get`` on a list raises). Nothing
+        # catches that, so it escapes the orchestrator's per-theme loop and ends
+        # the whole run — one malformed theme losing every other theme's work.
+        body = json.dumps(["candidates", "search_keywords"])
+        with mock.patch.object(theme_mapper, "_call_llm", return_value=_response(body)):
+            result = _propose()
+        self.assertEqual(result["outcome"], theme_mapper.MapperOutcome.MALFORMED_PAYLOAD)
+        self.assertEqual(result["candidates"], [])
+
     def test_raising_call_is_reported_as_call_failed(self):
         with mock.patch.object(theme_mapper, "_call_llm", side_effect=RuntimeError("boom")):
             result = _propose()

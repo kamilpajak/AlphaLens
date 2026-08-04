@@ -673,7 +673,12 @@ def _propose_once(*, llm_client: OpenRouterClient, prompt: str, theme: str, mode
         return _proposal(MapperOutcome.EMPTY_PAYLOAD)
 
     parsed = parse_extraction(raw)
-    if parsed is None or "candidates" not in parsed:
+    # ``isinstance``, not ``is None``: the annotation says ``dict | None`` but
+    # the value is whatever JSON the model emitted. A top-level array holding
+    # the string "candidates" passes a bare membership check and then raises on
+    # the first dict access below — a raise that nothing catches, so it escapes
+    # the orchestrator's per-theme loop and loses every other theme's work.
+    if not isinstance(parsed, dict) or "candidates" not in parsed:
         logger.warning("LLM mapper returned unparseable payload for %r: %r", theme, raw[:200])
         return _proposal(MapperOutcome.MALFORMED_PAYLOAD)
 
