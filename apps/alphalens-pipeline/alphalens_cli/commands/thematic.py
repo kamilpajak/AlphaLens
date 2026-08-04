@@ -243,6 +243,16 @@ def _map_themes_outcome_metrics(df: pd.DataFrame | None = None) -> dict[str, flo
     Always emitted, including as 0/0 on a quiet day and on a frozen-set reuse —
     a series that disappears on healthy days is indistinguishable from an
     exporter that stopped. ``df=None`` is the no-mapper-run case.
+
+    These are PER-RUN counts, not cumulative ones, and the textfile is
+    overwritten on every run. ``alphalens-thematic-build`` fires 6×/day against
+    the same asof date: the first slot computes and publishes the real counts,
+    the remaining five reuse the frozen parquet and publish 0/0, so the value on
+    disk returns to zero within a few hours of a bad slot. Prometheus scrapes far
+    more often than that, so nothing is lost from the time series — but any alert
+    rule MUST read a window, e.g.
+    ``max_over_time(alphalens_thematic_map_themes_failed_total[6h]) > N``, never
+    an instant vector and never ``last_over_time``.
     """
     attrs = df.attrs if df is not None else {}
     return {

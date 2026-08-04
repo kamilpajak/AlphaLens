@@ -72,14 +72,24 @@ class MapperOutcome(enum.Enum):
     CALL_FAILED = "call_failed"  # the client raised before producing a response
 
 
-# EMPTY_PAYLOAD only. DeepSeek v4-pro is a reasoning model: its reasoning trace
-# is charged against the output budget, so an exhausted budget returns
-# ``finish_reason='length'`` with EMPTY content — and it does so preferentially
-# on the inputs that needed the most reasoning, i.e. the hard themes. A fresh
-# identical call is the recovery (measured on the brief generator: a 400-token
-# budget produced 1963 characters of reasoning and empty content where 2000
-# tokens answered in 75). Mirrors ``BriefErrorKind.EMPTY`` in
-# ``argumentation/generator.py``.
+# EMPTY_PAYLOAD only. The retry is a plain re-roll against server-side
+# non-determinism: DeepSeek v4-pro is a mixture-of-experts model, so the same
+# request can return content on one call and an empty body on the next. That is
+# the whole mechanism claimed here, and it is the same one behind
+# ``BriefErrorKind.EMPTY`` in ``argumentation/generator.py``.
+#
+# The suspected CAUSE of an empty body is that the reasoning trace is charged
+# against the output budget, so an exhausted budget returns empty content,
+# preferentially on the inputs that needed the most reasoning. That is a
+# HYPOTHESIS carried over from the brief generator, NOT measured on this call
+# site — nothing here reads ``finish_reason``, so an exhausted budget and a
+# STOP-with-empty-body are merged into one outcome. If it holds, the targeted
+# fix is a larger budget, which the brief generator does apply (it classifies
+# ``finish_reason`` first and routes ``'length'`` to ``BriefErrorKind.TRUNCATED``
+# and a cap-doubling ladder). That fix is deliberately unavailable here:
+# ``_MAPPER_MAX_OUTPUT_TOKENS`` feeds ``mapper_config_version``, so raising it
+# would move the config token and invalidate every frozen candidate set. A
+# re-roll is what is left, and it is enough to keep a theme from being lost.
 #
 # DECLINED is deliberately NOT here. A decline is the model's answer; re-asking
 # pays twice and nudges a stochastic generator toward a different answer, which
