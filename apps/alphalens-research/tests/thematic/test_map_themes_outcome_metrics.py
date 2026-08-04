@@ -142,7 +142,9 @@ class MapThemesOutcomeCountTests(unittest.TestCase):
                 patch.object(orchestrator, "_init_pro_client", return_value=object()),
                 patch.object(orchestrator, "_fetch_press_window", return_value=pd.DataFrame()),
                 patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst_payload()),
-                patch.object(orchestrator, "_propose_and_filter_candidates", side_effect=_propose),
+                patch.object(
+                    orchestrator, "_propose_and_filter_candidates", side_effect=_propose
+                ) as propose,
                 patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
                 patch.object(orchestrator.proposal_shadow, "write_proposal_shadow"),
             ):
@@ -150,9 +152,14 @@ class MapThemesOutcomeCountTests(unittest.TestCase):
                     themes=["good"], asof=ASOF, api_key="dummy", output_dir=out, rebuild=True
                 )
                 self.assertFalse(first.empty)
+                calls_after_build = propose.call_count
                 frozen = orchestrator.map_themes(
                     themes=["good"], asof=ASOF, api_key="dummy", output_dir=out
                 )
+                # Without this the 0/0 below proves nothing: a RECOMPUTE of a
+                # SUCCESS theme also reports 0 declines and 0 failures, so the
+                # counts alone cannot tell the frozen path from a rebuild.
+                self.assertEqual(propose.call_count, calls_after_build)
         self.assertEqual(frozen.attrs["themes_declined"], 0)
         self.assertEqual(frozen.attrs["themes_failed"], 0)
 
