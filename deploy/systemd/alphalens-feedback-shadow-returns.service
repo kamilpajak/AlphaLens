@@ -79,10 +79,22 @@ StandardError=journal
 # to complete. The edge Postgres mirror (alphalens-edge-mirror.service) is a
 # separate unit fired via OnSuccess= after a clean run; a timeout-kill is caught
 # by the mirror's own hourly self-heal timer within <=1h (see the OnSuccess=
-# note in [Unit] above). Memory-light (minute-bar dicts), 1G is
-# comfortable.
+# note in [Unit] above).
+#
+# Memory: the old "memory-light, 1G is comfortable" assumption was wrong. A
+# steady-state run peaks at 230-525 MB and that peak grows with the store, but
+# a run that has to REBUILD chart payloads (rather than reuse them) blows past
+# 1G and gets SIGKILLed at ~23s CPU instead of finishing in ~77s. Four nightly
+# runs died this way (2026-07-28, 08-02, 08-03, 08-04), each capped at exactly
+# 1.0G, so the real requirement is still unmeasured — every sample was
+# truncated by the limit. 4G removes the false ceiling while keeping a real
+# runaway guard (Postgres, Django and the broker daemon share this 20G host);
+# MemoryHigh=2G makes the kernel reclaim and throttle first instead of jumping
+# straight to a kill. Re-read the actual peak from journalctl ("memory peak")
+# after a few runs and tighten if it settles well under 2G.
 TimeoutStartSec=90min
-MemoryMax=1G
+MemoryHigh=2G
+MemoryMax=4G
 TasksMax=32
 
 [Install]
