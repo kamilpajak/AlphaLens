@@ -625,7 +625,10 @@ class TestExtractCLIModelEnvVar(unittest.TestCase):
         sentinel = "deepseek/deepseek-v4-flash-envtest"
         captured = {}
 
-        def fake_extract_daily(*, date, news_dir, events_dir, api_key, model):
+        # No ``api_key``: the CLI deliberately leaves client construction to the
+        # stage so it lands on the pinned default client (see
+        # tests/test_openrouter_provider_pin_reach.py).
+        def fake_extract_daily(*, date, news_dir, events_dir, model):
             captured["model"] = model
             return pd.DataFrame()
 

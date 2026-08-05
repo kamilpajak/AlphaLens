@@ -671,10 +671,11 @@ class TestRequireParametersRouting(unittest.TestCase):
 
     Measured cost of that default (live endpoint census, 2026-08-05):
     deepseek-v4-pro 18 eligible endpoints -> 17, deepseek-v4-flash
-    21 -> 20, and ZERO further loss on top of the live ``fp8``
-    quantization pin (every fp8 endpoint already declares
-    ``response_format``). The census is a moving target, so it is quoted
-    as rationale here and deliberately NOT asserted anywhere.
+    21 -> 20. That is the unconditional cost, and it is the one that
+    applies: no fp8 quantization pin is set anywhere in this repo, only
+    documented as an operator option. The census is a moving target, so
+    it is quoted as rationale here and deliberately NOT asserted
+    anywhere.
     """
 
     @staticmethod
@@ -738,22 +739,51 @@ class TestRequireParametersRouting(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, _orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV):
             self._routing_from(**{_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "disabled"})
 
+    def test_whitespace_only_value_counts_as_unset(self) -> None:
+        """Not cosmetic: without the strip, a stray trailing space in
+        ``/etc/alphalens/env`` would raise out of every client construction
+        and take the whole thematic run down."""
+        for blank in ("   ", "\t", " \n "):
+            with self.subTest(blank=blank):
+                self.assertIsNone(
+                    self._routing_from(**{_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: blank})
+                )
+
     def test_wire_spelling_is_snake_case(self) -> None:
         """``requireParameters`` is SDK syntax; the REST body wants
-        ``require_parameters``. Pinned at the wire, not just in the dict."""
+        ``require_parameters``.
+
+        Built through ``from_env`` on purpose: the key name is produced by
+        ``provider_routing_from_env``, so a test that hand-writes the dict
+        into the constructor only re-checks that ``json.dumps`` copies keys
+        verbatim and could never catch the camelCase spelling it names.
+        """
         captured: dict = {}
 
         def handler(request: httpx.Request) -> httpx.Response:
             captured.update(json.loads(request.content))
             return httpx.Response(200, json=_mock_chat_response("{}"))
 
-        client = OpenRouterClient(
-            api_key=_DUMMY_KEY,
-            _transport=httpx.MockTransport(handler),
-            provider_routing={"quantizations": ["fp8"], "require_parameters": True},
+        env = {
+            _orc_module.API_KEY_ENV: _DUMMY_KEY,
+            _orc_module.PROVIDER_ORDER_ENV: "",
+            _orc_module.PROVIDER_ALLOW_FALLBACKS_ENV: "",
+            _orc_module.PROVIDER_QUANTIZATIONS_ENV: "fp8",
+            _orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            client = OpenRouterClient.from_env()
+        # from_env owns the transport, so swap it for the capture after build:
+        # the routing block is already frozen on the instance by then.
+        client._http = httpx.Client(
+            base_url=_orc_module.OPENROUTER_BASE_URL,
+            transport=httpx.MockTransport(handler),
         )
         client.generate_content(model="deepseek/deepseek-v4-flash", contents="say json")
-        self.assertIs(captured["provider"]["require_parameters"], True)
+        self.assertEqual(
+            captured["provider"],
+            {"quantizations": ["fp8"], "require_parameters": True},
+        )
 
 
 class TestProviderRoutingIsolation(unittest.TestCase):

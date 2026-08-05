@@ -107,13 +107,18 @@ PROVIDER_REQUIRE_PARAMETERS_ENV = "ALPHALENS_OPENROUTER_REQUIRE_PARAMETERS"
 #
 # The default is cheap, not a guess. Live endpoint census (2026-08-05) for our
 # parameter set: deepseek-v4-pro 18 eligible endpoints → 17, deepseek-v4-flash
-# 21 → 20 (only ``response_format`` excludes anyone; every endpoint declares
-# ``temperature`` and ``max_tokens``), and ZERO further loss on top of the
-# live ``quantizations: ["fp8"]`` pin because every fp8 endpoint already
-# declares ``response_format``. So on the LIVE path it costs nothing, and on
-# a REPLAY path (one provider, ``allow_fallbacks: false``) a provider that
-# cannot honour the parameters turns into a loud non-2xx instead of a
-# measurement quietly served under different semantics.
+# 21 → 20. Only ``response_format`` excludes anyone; every endpoint declares
+# ``temperature`` and ``max_tokens``. That one-endpoint cost is the number
+# that applies unconditionally, i.e. whatever else the operator has set.
+# Should the fp8 pin documented in ``deploy/systemd/README.md`` be applied,
+# the marginal cost falls to zero — every fp8 endpoint in that census already
+# declares ``response_format`` — but nothing in this repo sets it, so do not
+# read the fp8 case as the operative one.
+#
+# On a REPLAY path (one provider, ``allow_fallbacks: false``) the flag earns
+# more than it costs: a provider that cannot honour the parameters turns into
+# a loud non-2xx instead of a measurement quietly served under different
+# semantics.
 #
 # It buys ELIGIBILITY filtering, not enforcement: OpenRouter warns that a
 # provider may advertise ``response_format`` and still treat it as a strong

@@ -173,8 +173,10 @@ channel that reaches it. The alternative — an inline `-e KEY=value` in the
 unit — would hardcode the production pin in git and need a unit reinstall plus
 `daemon-reload` to change it.
 
-They are all OPTIONAL. Absent, docker forwards nothing and the pipeline sends
-no `provider` block, which is byte-for-byte today's behaviour. The live shape:
+They are all OPTIONAL, and **nothing in the repo sets any of them** — the
+pin is not on until you put it in this file. Absent, docker forwards nothing
+and the pipeline sends no `provider` block, which is byte-for-byte today's
+behaviour. The intended live shape:
 
 ```bash
 # Remove the fp4/fp8 serving mixture without making one provider a single
@@ -191,13 +193,36 @@ a different backend is worthless, so failing closed is the point. Note an fp8
 pin excludes DeepSeek's own first-party endpoint, which reports its
 quantization as `unknown`.
 
-There is no runtime assertion that a pin took effect. Confirm from the
-journal — the client logs the serving provider on the first call per model and
-on every change:
+Only the four names above are accepted values. A typo in the value (`yes` and
+`no` are accepted, `y` and `n` are not) makes `alphalens` refuse to start, by
+design: the alternative was a whole day of prose-less briefs at exit 0.
+
+**Which calls the pin covers:** every OpenRouter call the pipeline makes. All
+of them build their client through `get_default_openrouter_client()`, which is
+the one constructor that reads these vars. Passing an API key explicitly
+bypasses the pin, so no pipeline stage does — see
+`apps/alphalens-research/tests/test_openrouter_provider_pin_reach.py`, which
+fails if a stage starts doing so again.
+
+**Confirming a pin took effect.** There is no runtime assertion, and the
+journal cannot fully answer it either. The client logs the serving provider on
+the first call per model and whenever it changes:
 
 ```bash
 journalctl --user -u alphalens-thematic-build.service --since today \
-    | grep 'served by provider'
+    | grep -E 'served by provider|provider CHANGED'
+```
+
+Read that as "who served us", NOT as "the pin is on" — those lines are emitted
+whether or not a `provider` block was sent, so a run with a forgotten
+`/etc/alphalens/env` edit looks identical. What it does tell you: with a pin
+that names one provider, any `provider CHANGED` line, or a provider you did
+not name, means the pin is not reaching the container. To check the config
+itself rather than its effect, read it back where the container sees it:
+
+```bash
+systemctl --user show alphalens-thematic-build.service \
+    --property=Environment | tr ' ' '\n' | grep ALPHALENS_OPENROUTER
 ```
 
 **Rotate a key:**

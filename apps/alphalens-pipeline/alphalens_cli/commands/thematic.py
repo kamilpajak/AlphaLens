@@ -481,15 +481,20 @@ def extract(
         if date
         else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
     )
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
+    # Checked here so a missing key fails the command instead of surfacing as
+    # one warning per row deep inside the extraction loop (a zero-event day at
+    # exit 0). Deliberately NOT passed down: `api_key=` selects a hand-built
+    # `OpenRouterClient`, which is the one construction path that never reads
+    # the operator's ALPHALENS_OPENROUTER_* provider pin. Leaving it unset
+    # routes the stage through `get_default_openrouter_client()`, which reads
+    # the SAME env var for the key and honours the pin.
+    if not os.environ.get("OPENROUTER_API_KEY"):
         raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
 
     events = event_extractor.extract_daily(
         date=target,
         news_dir=news_dir,
         events_dir=events_dir,
-        api_key=api_key,
         model=model,
     )
     typer.echo(f"Extracted {len(events)} events for {target.isoformat()}")
@@ -577,8 +582,11 @@ def map_themes_cmd(
         if date
         else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
     )
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
+    # Same split as `extract`: fail fast on the missing key here, but leave the
+    # client to the stage so it lands on `get_default_openrouter_client()` and
+    # inherits the operator's ALPHALENS_OPENROUTER_* provider pin. Threading
+    # `api_key=` down would pick the un-pinned constructor instead.
+    if not os.environ.get("OPENROUTER_API_KEY"):
         raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
     polygon_key = os.environ.get("POLYGON_API_KEY", "")
 
@@ -636,7 +644,6 @@ def map_themes_cmd(
     df = orchestrator.map_themes(
         themes=themes,
         asof=target,
-        api_key=api_key,
         polygon_api_key=polygon_key,
         output_dir=output_dir,
         keep_unverified=keep_unverified,
