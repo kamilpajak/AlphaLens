@@ -560,5 +560,162 @@ class TestDefaultSingletonThreadSafety(unittest.TestCase):
         )
 
 
+class TestProviderRouting(unittest.TestCase):
+    """OpenRouter load-balances across providers and enables fallbacks by
+    DEFAULT, so a stable model id does NOT imply the same provider,
+    weights or quantisation between two calls. Pinning makes the request
+    reproducible; leaving it unset must keep today's behaviour exactly.
+    """
+
+    def _capture_body(self, client: OpenRouterClient, captured: dict) -> None:
+        client.generate_content(model="deepseek/deepseek-v4-flash", contents="say json")
+
+    def _client_capturing(self, captured: dict, **kwargs) -> OpenRouterClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json=_mock_chat_response("{}"))
+
+        return OpenRouterClient(
+            api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler), **kwargs
+        )
+
+    def test_no_provider_block_when_unconfigured(self) -> None:
+        captured: dict = {}
+        client = self._client_capturing(captured, provider_routing=None)
+        self._capture_body(client, captured)
+        self.assertNotIn("provider", captured)
+
+    def test_pinned_order_lands_in_body_and_disables_fallbacks(self) -> None:
+        captured: dict = {}
+        client = self._client_capturing(
+            captured, provider_routing={"order": ["DeepInfra"], "allow_fallbacks": False}
+        )
+        self._capture_body(client, captured)
+        self.assertEqual(captured["provider"]["order"], ["DeepInfra"])
+        self.assertFalse(captured["provider"]["allow_fallbacks"])
+
+    def test_env_order_pins_and_fails_closed_by_default(self) -> None:
+        with mock.patch.dict(
+            os.environ, {_orc_module.PROVIDER_ORDER_ENV: "DeepInfra, Together"}, clear=False
+        ):
+            routing = _orc_module.provider_routing_from_env()
+        self.assertEqual(routing, {"order": ["DeepInfra", "Together"], "allow_fallbacks": False})
+
+    def test_env_can_re_enable_fallbacks(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                _orc_module.PROVIDER_ORDER_ENV: "DeepInfra",
+                _orc_module.PROVIDER_ALLOW_FALLBACKS_ENV: "1",
+            },
+            clear=False,
+        ):
+            routing = _orc_module.provider_routing_from_env()
+        self.assertTrue(routing["allow_fallbacks"])
+
+    def test_env_quantizations_pin_without_order(self) -> None:
+        with mock.patch.dict(
+            os.environ, {_orc_module.PROVIDER_QUANTIZATIONS_ENV: "fp16,bf16"}, clear=False
+        ):
+            routing = _orc_module.provider_routing_from_env()
+        self.assertEqual(routing["quantizations"], ["fp16", "bf16"])
+        # No order pinned → nothing to fail closed against, so the
+        # fallback switch must NOT be forced off.
+        self.assertNotIn("allow_fallbacks", routing)
+
+    def test_blank_env_yields_no_routing(self) -> None:
+        """A blank value must not become ``[""]`` — that would pin every
+        call to a provider named empty string and fail every request."""
+        for blank in ("", "   ", ",", " , "):
+            with self.subTest(blank=blank):
+                with mock.patch.dict(
+                    os.environ,
+                    {
+                        _orc_module.PROVIDER_ORDER_ENV: blank,
+                        _orc_module.PROVIDER_QUANTIZATIONS_ENV: blank,
+                    },
+                    clear=False,
+                ):
+                    self.assertIsNone(_orc_module.provider_routing_from_env())
+
+
+class TestServingProviderTelemetry(unittest.TestCase):
+    """Which provider actually served a call is the missing fact behind
+    "same prompt, different answer": without it a routing change and a
+    model non-determinism look identical in the logs.
+    """
+
+    @staticmethod
+    def _client_returning(payload: dict) -> OpenRouterClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=payload)
+
+        return OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
+
+    def test_response_exposes_serving_provider(self) -> None:
+        payload = _mock_chat_response("{}") | {"provider": "DeepInfra"}
+        response = self._client_returning(payload).generate_content(
+            model="deepseek/deepseek-v4-flash", contents="json"
+        )
+        self.assertEqual(response.provider, "DeepInfra")
+
+    def test_response_exposes_generation_id_and_served_model(self) -> None:
+        response = self._client_returning(_mock_chat_response("{}")).generate_content(
+            model="deepseek/deepseek-v4-flash", contents="json"
+        )
+        self.assertEqual(response.generation_id, "gen-test-123")
+        self.assertEqual(response.served_model, "deepseek/deepseek-v4-flash")
+
+    def test_missing_provider_is_none_not_an_error(self) -> None:
+        response = self._client_returning(_mock_chat_response("{}")).generate_content(
+            model="deepseek/deepseek-v4-flash", contents="json"
+        )
+        self.assertIsNone(response.provider)
+
+    def test_empty_choices_response_still_carries_provider(self) -> None:
+        payload = {"id": "gen-x", "model": "m", "choices": [], "provider": "Novita"}
+        response = self._client_returning(payload).generate_content(
+            model="deepseek/deepseek-v4-flash", contents="json"
+        )
+        self.assertEqual(response.text, "")
+        self.assertEqual(response.provider, "Novita")
+
+    def test_provider_change_is_logged(self) -> None:
+        providers = iter(["DeepInfra", "DeepInfra", "Novita"])
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200, json=_mock_chat_response("{}") | {"provider": next(providers)}
+            )
+
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
+        with self.assertLogs(_orc_module.logger, level="INFO") as captured:
+            for _ in range(3):
+                client.generate_content(model="deepseek/deepseek-v4-flash", contents="json")
+        # First sighting + the switch, but NOT the unchanged repeat.
+        self.assertEqual(len(captured.output), 2)
+        self.assertIn("DeepInfra", captured.output[0])
+        self.assertIn("Novita", captured.output[1])
+
+    def test_provider_tracked_per_model(self) -> None:
+        """Flash and Pro route independently — a Pro sighting must not
+        mask a Flash switch."""
+        by_model = {"a": "P1", "b": "P2"}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            model = json.loads(request.content)["model"]
+            return httpx.Response(
+                200, json=_mock_chat_response("{}") | {"provider": by_model[model]}
+            )
+
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
+        with self.assertLogs(_orc_module.logger, level="INFO") as captured:
+            client.generate_content(model="a", contents="json")
+            client.generate_content(model="b", contents="json")
+            client.generate_content(model="a", contents="json")
+        # One first-sighting line per model; the repeat of "a" is silent.
+        self.assertEqual(len(captured.output), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

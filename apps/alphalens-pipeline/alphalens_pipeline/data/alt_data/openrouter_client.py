@@ -75,6 +75,26 @@ logger = logging.getLogger(__name__)
 API_KEY_ENV = "OPENROUTER_API_KEY"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
+# Provider routing. OpenRouter load-balances a model id across several
+# upstream providers and enables fallbacks BY DEFAULT, so two calls with
+# a byte-identical body can be served by different providers, different
+# weights snapshots and different quantisations. That makes "same prompt,
+# different answer" ambiguous: it looks the same in the logs whether the
+# model was non-deterministic or the router simply sent us elsewhere.
+#
+# These env vars are the operator's pin. All three are OPTIONAL and
+# unset means "behave exactly as before" — no ``provider`` block is sent.
+# Pinning an order also fails CLOSED (``allow_fallbacks: false``): a
+# pinned run that cannot reach its provider must error loudly rather
+# than silently answer from a different backend, which is the whole
+# point of pinning. Set ALLOW_FALLBACKS=1 to keep the order as a
+# preference instead of a requirement.
+PROVIDER_ORDER_ENV = "ALPHALENS_OPENROUTER_PROVIDER_ORDER"
+PROVIDER_ALLOW_FALLBACKS_ENV = "ALPHALENS_OPENROUTER_ALLOW_FALLBACKS"
+PROVIDER_QUANTIZATIONS_ENV = "ALPHALENS_OPENROUTER_QUANTIZATIONS"
+
+_TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+
 # Attribution headers — OpenRouter's per-app dashboard groups requests
 # by HTTP-Referer + X-Title for cost attribution. Setting both helps
 # the operator see "AlphaLens spent $X today" without having to dig
@@ -120,6 +140,44 @@ _FINISH_REASON_MAP = {
 _UNKNOWN_FINISH_REASON = "UNKNOWN"
 
 
+def _split_env_list(raw: str | None) -> list[str]:
+    """Split a comma-separated env var, dropping blanks.
+
+    Guards the ``""`` case specifically: a naive ``"".split(",")`` yields
+    ``[""]``, which would pin every call to a provider named empty
+    string and fail the whole run. Blank in, empty list out.
+    """
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUTHY_ENV_VALUES
+
+
+def provider_routing_from_env() -> dict[str, Any] | None:
+    """Build the OpenRouter ``provider`` routing block from the environment.
+
+    Returns ``None`` when nothing is configured, so the request body is
+    byte-identical to the pre-pinning shape. See the env-var constants
+    above for why this exists.
+    """
+    order = _split_env_list(os.environ.get(PROVIDER_ORDER_ENV))
+    quantizations = _split_env_list(os.environ.get(PROVIDER_QUANTIZATIONS_ENV))
+    if not order and not quantizations:
+        return None
+    routing: dict[str, Any] = {}
+    if order:
+        routing["order"] = order
+        # Only meaningful alongside an order — with no order pinned there
+        # is nothing to fail closed against, so the switch stays absent.
+        routing["allow_fallbacks"] = _env_flag(PROVIDER_ALLOW_FALLBACKS_ENV)
+    if quantizations:
+        routing["quantizations"] = quantizations
+    return routing
+
+
 def _wrap_response(payload: dict[str, Any]) -> SimpleNamespace:
     """Wrap OpenRouter ``/chat/completions`` JSON into a Gemini-shaped
     response object.
@@ -148,10 +206,28 @@ def _wrap_response(payload: dict[str, Any]) -> SimpleNamespace:
     # real completion_tokens and a live probe can size the token cap from data
     # rather than a guess. ``None`` when absent (older shape / empty-choices).
     usage = payload.get("usage")
+    # Routing telemetry, promoted out of ``_raw`` to first-class fields.
+    # ``provider`` is the upstream that actually served this call and is
+    # the fact that separates "the model was non-deterministic" from
+    # "the router sent us to a different backend". ``served_model`` is
+    # what OpenRouter says it ran, which can differ from the requested id
+    # after a fallback. All three are ``None`` when absent rather than
+    # raising — telemetry must never break a working call.
+    provider = payload.get("provider")
+    generation_id = payload.get("id")
+    served_model = payload.get("model")
     choices = payload.get("choices") or []
     if not choices:
         empty_candidate = SimpleNamespace(finish_reason=SimpleNamespace(name="STOP"))
-        return SimpleNamespace(text="", candidates=[empty_candidate], usage=usage, _raw=payload)
+        return SimpleNamespace(
+            text="",
+            candidates=[empty_candidate],
+            usage=usage,
+            provider=provider,
+            generation_id=generation_id,
+            served_model=served_model,
+            _raw=payload,
+        )
     choice = choices[0]
     content = choice.get("message", {}).get("content", "") or ""
     raw_reason = choice.get("finish_reason")
@@ -159,7 +235,15 @@ def _wrap_response(payload: dict[str, Any]) -> SimpleNamespace:
     # land on ``"UNKNOWN"`` rather than silently degrading to ``"STOP"``.
     gemini_name = _FINISH_REASON_MAP.get(raw_reason, _UNKNOWN_FINISH_REASON)
     candidate = SimpleNamespace(finish_reason=SimpleNamespace(name=gemini_name))
-    return SimpleNamespace(text=content, candidates=[candidate], usage=usage, _raw=payload)
+    return SimpleNamespace(
+        text=content,
+        candidates=[candidate],
+        usage=usage,
+        provider=provider,
+        generation_id=generation_id,
+        served_model=served_model,
+        _raw=payload,
+    )
 
 
 @dataclass
@@ -222,11 +306,22 @@ class OpenRouterClient:
         *,
         _transport: httpx.BaseTransport | None = None,
         base_url: str = OPENROUTER_BASE_URL,
+        provider_routing: dict[str, Any] | None = None,
     ):
         if not api_key:
             raise ValueError(f"OpenRouter requires a non-empty API key (env {API_KEY_ENV})")
         self._api_key = api_key
         self._base_url = base_url
+        # Literal value, NOT read from the environment here: a constructor
+        # that silently picked up env vars would make a test's outcome
+        # depend on the developer's shell. ``from_env`` does the reading,
+        # which is the same split already used for the API key.
+        self._provider_routing = provider_routing
+        # Last provider seen per requested model, so a routing change gets
+        # one log line instead of one per call. Plain dict mutation is
+        # enough here — the worst a concurrent race can do is emit a
+        # duplicate log line, never corrupt a request.
+        self._serving_provider_by_model: dict[str, str] = {}
         self._http = httpx.Client(
             base_url=base_url,
             timeout=_DEFAULT_TIMEOUT,
@@ -250,7 +345,7 @@ class OpenRouterClient:
         api_key = os.environ.get(API_KEY_ENV)
         if not api_key:
             raise ValueError(f"{API_KEY_ENV} environment variable is not set.")
-        return cls(api_key=api_key)
+        return cls(api_key=api_key, provider_routing=provider_routing_from_env())
 
     def build_config(
         self,
@@ -320,11 +415,42 @@ class OpenRouterClient:
             if config.max_tokens is not None:
                 body["max_tokens"] = config.max_tokens
             body.update(config.extra)
+        if self._provider_routing is not None:
+            body["provider"] = self._provider_routing
 
         response = self._http.post("/chat/completions", json=body)
         response.raise_for_status()
         payload = response.json()
-        return _wrap_response(payload)
+        wrapped = _wrap_response(payload)
+        self._log_serving_provider(model, wrapped.provider)
+        return wrapped
+
+    def _log_serving_provider(self, model: str, provider: str | None) -> None:
+        """Log the first sighting of a serving provider, and every change.
+
+        Deliberately NOT one line per call: extraction alone makes
+        hundreds of calls per run and would drown the journal. Per model,
+        because Flash and Pro route independently — a Pro sighting must
+        not mask a Flash switch.
+        """
+        if provider is None:
+            return
+        previous = self._serving_provider_by_model.get(model)
+        if previous == provider:
+            return
+        self._serving_provider_by_model[model] = provider
+        if previous is None:
+            logger.info(
+                "OpenRouter: %s served by provider %r (first call this process)", model, provider
+            )
+        else:
+            logger.info(
+                "OpenRouter: %s provider CHANGED %r -> %r — the two answers came from "
+                "different backends, so a differing result is not necessarily model non-determinism",
+                model,
+                previous,
+                provider,
+            )
 
     @staticmethod
     def _build_messages(contents: str, config: OpenRouterConfig | None) -> list[dict[str, str]]:
