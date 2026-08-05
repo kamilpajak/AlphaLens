@@ -18,7 +18,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from broker_contract.contract import Broker, OrderState
+from broker_contract.price_feed import PriceFeed
 from broker_contract.sizing import TpTranchePlan
+
+from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
 
 logger = logging.getLogger(__name__)
 
@@ -132,3 +135,48 @@ def mark_tranche_fired(uic: int, tag: str) -> None:
     )
 
     _append_standalone_stop_journal({"kind": "tranche_fired", "uic": int(uic), "tag": str(tag)})
+
+
+@dataclass(frozen=True)
+class ManagedExit:
+    uic: int
+    tp_tranches: tuple[TpTranchePlan, ...]
+    reference_qty: float
+    stop_price: float
+    already_fired: frozenset[str]
+
+
+def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) -> int:
+    """One live-exit pass over managed positions. Stale/absent price -> veto (skip).
+    INERT: no daemon caller yet. Returns the number of tranches fired."""
+    fired = 0
+    for m in managed:
+        point = feed.latest(m.uic)
+        if point is None:
+            continue  # stream-health veto
+        live = broker.get_positions_by_uic(m.uic)
+        legs = tuple(broker.list_working_sell_orders())
+        legs = tuple(leg for leg in legs if leg.uic == m.uic)
+        sl = _sole_standalone_stop(legs)
+        if sl is None:
+            logger.info("uic %s: no sole standalone SL — skipping live exits this pass", m.uic)
+            continue
+        exits = plan_tranche_exits(
+            price=point.price,
+            tp_tranches=m.tp_tranches,
+            reference_qty=m.reference_qty,
+            owned=live.quantity,
+            already_fired=m.already_fired,
+        )
+        for ex in exits:
+            if execute_tranche_exit(
+                broker,
+                uic=m.uic,
+                exit=ex,
+                sl_leg=sl,
+                stop_price=m.stop_price,
+                request_ref=f"u{m.uic}",
+            ):
+                mark_tranche_fired(m.uic, ex.tag)
+                fired += 1
+    return fired
