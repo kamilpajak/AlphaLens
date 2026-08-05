@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from broker_contract.contract import Broker, OrderState
 from broker_contract.sizing import TpTranchePlan
 
 logger = logging.getLogger(__name__)
@@ -61,3 +62,47 @@ def plan_tranche_exits(
         out.append(TrancheExit(tag=tag, qty=qty, target_price=t.target_price))
         available -= qty
     return out
+
+
+def execute_tranche_exit(
+    broker: Broker,
+    *,
+    uic: int,
+    exit: TrancheExit,
+    sl_leg: OrderState,
+    stop_price: float,
+    request_ref: str,
+) -> bool:
+    """Realize ONE tranche: shrink the standalone SL by the tranche, THEN market
+    sell it. Re-snapshots live owned first (never sell more than owned → cannot
+    flip short). Returns True iff the sell was sent. Callers MUST hold a
+    per-uic lock so this never races the never-naked reconcile.
+    """
+    live = broker.get_positions_by_uic(uic)
+    owned = max(live.quantity, 0.0)
+    qty = min(exit.qty, round(owned))
+    if qty <= 0:
+        logger.info("tranche %s uic %s: position gone (owned=%.2f) — no sell", exit.tag, uic, owned)
+        return False
+    new_sl_qty = max(float(sl_leg.amount or 0.0) - qty, 0.0)
+    # 1) shrink the SL FIRST (a sell while the SL commits full owned is rejected).
+    broker.amend_stop_amount(
+        uic=uic,
+        order_id=sl_leg.order_id,
+        side=sl_leg.side or "SELL",
+        order_type=sl_leg.order_type or "StopIfTraded",
+        new_qty=new_sl_qty,
+        stop_price=stop_price,
+        request_id=f"{request_ref}-{exit.tag}-amend",
+    )
+    # 2) market-sell the freed tranche.
+    broker.place_market_order(uic, "SELL", qty, request_id=f"{request_ref}-{exit.tag}-sell")
+    logger.info(
+        "tranche %s uic %s: SL %.0f->%.0f, market-sold %d",
+        exit.tag,
+        uic,
+        sl_leg.amount or 0.0,
+        new_sl_qty,
+        qty,
+    )
+    return True
