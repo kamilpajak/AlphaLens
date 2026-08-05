@@ -60,6 +60,7 @@ full projection at 6× thematic cadence.
 from __future__ import annotations
 
 import atexit
+import copy
 import json
 import logging
 import os
@@ -214,6 +215,12 @@ def _wrap_response(payload: dict[str, Any]) -> SimpleNamespace:
     # after a fallback. All three are ``None`` when absent rather than
     # raising — telemetry must never break a working call.
     provider = payload.get("provider")
+    if provider is not None and not isinstance(provider, str):
+        # Documented as a string upstream. If that ever changes, suppress it
+        # here rather than leaking a dict to every consumer that annotates
+        # the field ``str | None`` — one warning beats N confusing TypeErrors.
+        logger.warning("OpenRouter returned a non-string provider %r; suppressing", provider)
+        provider = None
     generation_id = payload.get("id")
     served_model = payload.get("model")
     choices = payload.get("choices") or []
@@ -316,12 +323,21 @@ class OpenRouterClient:
         # that silently picked up env vars would make a test's outcome
         # depend on the developer's shell. ``from_env`` does the reading,
         # which is the same split already used for the API key.
-        self._provider_routing = provider_routing
+        #
+        # Deep-copied because the block goes on the wire on every call: a
+        # caller keeping a reference could otherwise re-route live traffic
+        # long after construction. A shallow copy would not do — ``order``
+        # and ``quantizations`` are lists.
+        self._provider_routing = copy.deepcopy(provider_routing)
         # Last provider seen per requested model, so a routing change gets
-        # one log line instead of one per call. Plain dict mutation is
-        # enough here — the worst a concurrent race can do is emit a
-        # duplicate log line, never corrupt a request.
+        # one log line instead of one per call. Lock-guarded because the
+        # default client is a process-wide singleton and several research
+        # scripts drive it from a thread pool: unsynchronised, two threads
+        # seeing alternating providers ping-pong the stored value and log a
+        # spurious change on every call. Nothing but log volume is at risk —
+        # requests and responses never touch this dict.
         self._serving_provider_by_model: dict[str, str] = {}
+        self._serving_provider_lock = threading.Lock()
         self._http = httpx.Client(
             base_url=base_url,
             timeout=_DEFAULT_TIMEOUT,
@@ -416,7 +432,18 @@ class OpenRouterClient:
                 body["max_tokens"] = config.max_tokens
             body.update(config.extra)
         if self._provider_routing is not None:
-            body["provider"] = self._provider_routing
+            if "provider" in body:
+                # ``build_config(**extra)`` is a documented forward-compat
+                # channel, so it can carry ``provider``. Two disagreeing
+                # sources of routing must fail loudly: silently preferring
+                # one of them produces a run whose actual routing does not
+                # match either the env or the call site.
+                raise ValueError(
+                    "provider routing set twice: the environment pins "
+                    f"{PROVIDER_ORDER_ENV} and the call passed provider=... to "
+                    "build_config. Unset one of them."
+                )
+            body["provider"] = copy.deepcopy(self._provider_routing)
 
         response = self._http.post("/chat/completions", json=body)
         response.raise_for_status()
@@ -435,10 +462,12 @@ class OpenRouterClient:
         """
         if provider is None:
             return
-        previous = self._serving_provider_by_model.get(model)
-        if previous == provider:
-            return
-        self._serving_provider_by_model[model] = provider
+        with self._serving_provider_lock:
+            previous = self._serving_provider_by_model.get(model)
+            if previous == provider:
+                return
+            self._serving_provider_by_model[model] = provider
+        # Logging happens outside the lock — no I/O while holding it.
         if previous is None:
             logger.info(
                 "OpenRouter: %s served by provider %r (first call this process)", model, provider

@@ -101,6 +101,16 @@ class TestOpenRouterLive(unittest.TestCase):
                     raise PermanentProbeError(
                         f"{model} JSON violates EVENT_RESPONSE_SCHEMA: {exc.message}"
                     ) from exc
+                # Routing telemetry, shape only. Every unit test for it feeds a
+                # hand-built payload, so they would all pass against an API that
+                # never sends this field and the telemetry would be silently
+                # dead. This is the only assertion that touches the real shape.
+                # NEVER assert WHICH provider — that legitimately varies.
+                if not isinstance(resp.provider, str) or not resp.provider:
+                    raise PermanentProbeError(
+                        f"{model} response carried no string `provider` field — the "
+                        "serving-provider telemetry in openrouter_client is dead"
+                    )
 
             return _probe
 

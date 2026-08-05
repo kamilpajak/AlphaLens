@@ -639,6 +639,66 @@ class TestProviderRouting(unittest.TestCase):
                     self.assertIsNone(_orc_module.provider_routing_from_env())
 
 
+class TestProviderRoutingIsolation(unittest.TestCase):
+    """The routing block is operator configuration, not caller-owned
+    mutable state: once a client is built, nothing outside it may change
+    what goes on the wire."""
+
+    @staticmethod
+    def _client_capturing(captured: dict, routing: dict) -> OpenRouterClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json=_mock_chat_response("{}"))
+
+        return OpenRouterClient(
+            api_key=_DUMMY_KEY,
+            _transport=httpx.MockTransport(handler),
+            provider_routing=routing,
+        )
+
+    def test_mutating_the_caller_dict_does_not_change_later_requests(self) -> None:
+        routing = {"order": ["DeepInfra"], "allow_fallbacks": False}
+        captured: dict = {}
+        client = self._client_capturing(captured, routing)
+        routing["allow_fallbacks"] = True
+        client.generate_content(model="m", contents="json")
+        self.assertFalse(captured["provider"]["allow_fallbacks"])
+
+    def test_mutating_the_nested_order_list_does_not_change_later_requests(self) -> None:
+        """A shallow copy would pass the test above and still fail here."""
+        routing = {"order": ["DeepInfra"], "allow_fallbacks": False}
+        captured: dict = {}
+        client = self._client_capturing(captured, routing)
+        routing["order"].append("SomewhereElse")
+        client.generate_content(model="m", contents="json")
+        self.assertEqual(captured["provider"]["order"], ["DeepInfra"])
+
+    def test_conflicting_provider_in_config_extra_is_refused(self) -> None:
+        """``build_config(**extra)`` is a documented forward-compat channel,
+        so it can carry ``provider``. Two disagreeing sources of routing must
+        fail loudly — silently preferring one is the hardest kind of bug to
+        find in a live pipeline."""
+        captured: dict = {}
+        client = self._client_capturing(captured, {"order": ["DeepInfra"]})
+        config = client.build_config(provider={"order": ["SomewhereElse"]})
+        with self.assertRaisesRegex(ValueError, "provider"):
+            client.generate_content(model="m", contents="json", config=config)
+
+    def test_provider_in_config_extra_passes_through_when_unpinned(self) -> None:
+        """With no pin configured there is no conflict — the forward-compat
+        channel keeps working."""
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json=_mock_chat_response("{}"))
+
+        client = OpenRouterClient(api_key=_DUMMY_KEY, _transport=httpx.MockTransport(handler))
+        config = client.build_config(provider={"order": ["CallerChoice"]})
+        client.generate_content(model="m", contents="json", config=config)
+        self.assertEqual(captured["provider"]["order"], ["CallerChoice"])
+
+
 class TestServingProviderTelemetry(unittest.TestCase):
     """Which provider actually served a call is the missing fact behind
     "same prompt, different answer": without it a routing change and a
@@ -679,6 +739,17 @@ class TestServingProviderTelemetry(unittest.TestCase):
         )
         self.assertEqual(response.text, "")
         self.assertEqual(response.provider, "Novita")
+
+    def test_non_string_provider_is_suppressed(self) -> None:
+        """``provider`` is documented as a string. If the upstream shape ever
+        changes, a dict must not silently reach consumers that annotate the
+        field ``str | None`` — suppress it and say so in the log."""
+        payload = _mock_chat_response("{}") | {"provider": {"name": "DeepInfra"}}
+        client = self._client_returning(payload)
+        with self.assertLogs(_orc_module.logger, level="WARNING") as captured:
+            response = client.generate_content(model="m", contents="json")
+        self.assertIsNone(response.provider)
+        self.assertIn("provider", captured.output[0])
 
     def test_provider_change_is_logged(self) -> None:
         providers = iter(["DeepInfra", "DeepInfra", "Novita"])
