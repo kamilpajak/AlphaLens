@@ -26,6 +26,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import _sole_standa
 logger = logging.getLogger(__name__)
 
 _PRICE_EPS = 1e-9  # a long tranche fires when price >= target (within eps)
+_QTY_EPS = 0.5  # share-qty tolerance (mirrors broker_contract.contract._QTY_EPS)
 
 
 def tranche_tag(index: int) -> str:
@@ -78,10 +79,18 @@ def execute_tranche_exit(
     stop_price: float,
     request_ref: str,
 ) -> bool:
-    """Realize ONE tranche: shrink the standalone SL by the tranche, THEN market
+    """Realize ONE tranche: free the tranche from the standalone SL, THEN market
     sell it. Re-snapshots live owned first (never sell more than owned → cannot
-    flip short). Returns True iff the sell was sent. Callers MUST hold a
-    per-uic lock so this never races the never-naked reconcile.
+    flip short). Returns True iff the sell was sent. Callers MUST hold a per-uic
+    lock so this never races the never-naked reconcile.
+
+    The target SL size is derived from the LIVE owned snapshot (``owned - qty`` =
+    remaining), NOT from ``sl_leg.amount`` — the latter is stale across a
+    multi-tranche batch. ``sl_leg`` supplies only the order id / side / type.
+    When nothing remains (a full close), the SL is CANCELLED, not amended to zero
+    (Saxo rejects a zero-qty amend). If the market sell fails AFTER the SL was
+    shrunk/cancelled, the position is briefly under-covered — the never-naked
+    reconcile pass re-covers it next tick (the wired caller's backstop).
     """
     live = broker.get_positions_by_uic(uic)
     owned = max(live.quantity, 0.0)
@@ -89,27 +98,24 @@ def execute_tranche_exit(
     if qty <= 0:
         logger.info("tranche %s uic %s: position gone (owned=%.2f) — no sell", exit.tag, uic, owned)
         return False
-    new_sl_qty = max(float(sl_leg.amount or 0.0) - qty, 0.0)
-    # 1) shrink the SL FIRST (a sell while the SL commits full owned is rejected).
-    broker.amend_stop_amount(
-        uic=uic,
-        order_id=sl_leg.order_id,
-        side=sl_leg.side or "SELL",
-        order_type=sl_leg.order_type or "StopIfTraded",
-        new_qty=new_sl_qty,
-        stop_price=stop_price,
-        request_id=f"{request_ref}-{exit.tag}-amend",
-    )
+    new_sl_qty = max(round(owned) - qty, 0.0)
+    # 1) free the tranche from the SL FIRST (a sell while the SL commits full
+    #    owned is rejected SellOrdersAlreadyExistForOwnedContracts).
+    if new_sl_qty <= _QTY_EPS:
+        broker.cancel_order(sl_leg.order_id)  # full close — cancel, don't amend-to-zero
+    else:
+        broker.amend_stop_amount(
+            uic=uic,
+            order_id=sl_leg.order_id,
+            side=sl_leg.side or "SELL",
+            order_type=sl_leg.order_type or "StopIfTraded",
+            new_qty=new_sl_qty,
+            stop_price=stop_price,
+            request_id=f"{request_ref}-{exit.tag}-amend",
+        )
     # 2) market-sell the freed tranche.
     broker.place_market_order(uic, "SELL", qty, request_id=f"{request_ref}-{exit.tag}-sell")
-    logger.info(
-        "tranche %s uic %s: SL %.0f->%.0f, market-sold %d",
-        exit.tag,
-        uic,
-        sl_leg.amount or 0.0,
-        new_sl_qty,
-        qty,
-    )
+    logger.info("tranche %s uic %s: SL qty -> %.0f, market-sold %d", exit.tag, uic, new_sl_qty, qty)
     return True
 
 

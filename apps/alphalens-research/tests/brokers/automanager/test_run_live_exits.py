@@ -63,6 +63,17 @@ class TestRunLiveExits(unittest.TestCase):
         self.assertEqual(n, 0)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 100.0)
 
+    def test_gap_through_fires_both_and_sl_tracks_remaining_owned(self):
+        # price crosses tp1(16, 50%) AND tp2(18, 30%) of ref 100 in ONE pass.
+        # Guards the batch bug: the 2nd amend must use LIVE owned, not a stale
+        # captured sl_leg.amount (which would set the SL to 100-30=70, over-hedged).
+        b, uic, feed, managed = self._mk(price=18.5)
+        n = run_live_exits(b, feed, managed)
+        self.assertEqual(n, 2)
+        self.assertEqual(b.get_positions_by_uic(uic).quantity, 20.0)  # sold 50 + 30
+        sl_now = next(o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded")
+        self.assertEqual(sl_now.amount, 20.0)  # SL tracks remaining owned, not stale 70
+
 
 if __name__ == "__main__":
     unittest.main()

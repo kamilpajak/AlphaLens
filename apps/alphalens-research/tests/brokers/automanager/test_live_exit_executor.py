@@ -62,6 +62,23 @@ class TestExecuteTrancheExit(unittest.TestCase):
         )
         self.assertFalse(ok)
 
+    def test_full_close_cancels_sl_not_amend_to_zero(self):
+        # The last tranche closes the position -> new_sl_qty == 0. Saxo rejects a
+        # zero-qty amend, so the SL is CANCELLED (the proven manual-close path).
+        b, uic, sl = self._setup(owned=50, sl_qty=50)
+        ok = execute_tranche_exit(
+            b,
+            uic=uic,
+            exit=TrancheExit("tp3", 50, 20.0),
+            sl_leg=sl,
+            stop_price=13.0,
+            request_ref="KO-g0",
+        )
+        self.assertTrue(ok)
+        self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)  # flat
+        remaining = [o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded"]
+        self.assertEqual(remaining, [], "full close cancels the SL (no zero-qty amend)")
+
 
 if __name__ == "__main__":
     unittest.main()
