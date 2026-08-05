@@ -13,7 +13,9 @@ owned so the position can never flip short.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 from broker_contract.contract import Broker, OrderState
 from broker_contract.sizing import TpTranchePlan
@@ -106,3 +108,27 @@ def execute_tranche_exit(
         qty,
     )
     return True
+
+
+def fold_fired_tranches(lines: Iterable[Mapping[str, Any]]) -> dict[int, frozenset[str]]:
+    """Fold append-only ``tranche_fired`` journal lines into per-uic tag sets.
+    Non-``tranche_fired`` and malformed (missing uic/tag) lines are ignored."""
+    acc: dict[int, set[str]] = {}
+    for line in lines:
+        if line.get("kind") != "tranche_fired":
+            continue
+        uic, tag = line.get("uic"), line.get("tag")
+        if uic is None or not tag:
+            continue
+        acc.setdefault(int(uic), set()).add(str(tag))
+    return {u: frozenset(t) for u, t in acc.items()}
+
+
+def mark_tranche_fired(uic: int, tag: str) -> None:
+    """Append one ``tranche_fired`` marker (idempotency: a fired tranche never
+    re-fires). Writes via the shared append-only standalone-stop journal seam."""
+    from alphalens_pipeline.brokers.automanager.control_loop import (
+        _append_standalone_stop_journal,
+    )
+
+    _append_standalone_stop_journal({"kind": "tranche_fired", "uic": int(uic), "tag": str(tag)})
