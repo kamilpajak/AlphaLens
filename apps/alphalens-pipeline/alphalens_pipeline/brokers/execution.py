@@ -189,6 +189,7 @@ def execution_config_version() -> str:
         "stop_order_type": _STOP_ORDER_TYPE,
         "max_child_distance_frac": _MAX_CHILD_DISTANCE_FRAC,
         "exit_duration": _EXIT_DURATION,
+        "market_order_duration": _MARKET_ORDER_DURATION,
         "entry_duration": _ENTRY_DURATION,
         "ttl_zero_sentinel_days": _TTL_ZERO_SENTINEL_DAYS,
         "precheck_required": _PRECHECK_REQUIRED,
