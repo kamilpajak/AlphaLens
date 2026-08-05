@@ -93,7 +93,9 @@ AlphaLens systemd units load secrets via
   `ALPHA_VANTAGE_API_KEY`, `SEC_EDGAR_USER_AGENT`, **plus `FRED_API_KEY`**
   (the `cache refresh-vix` step at the end of `run_thematic_day.sh` pulls
   VIXCLS so the feedback POST path can stamp a real market regime; the step
-  is best-effort, so a missing key only degrades regime stamps to "unknown")
+  is best-effort, so a missing key only degrades regime stamps to "unknown"),
+  **plus the optional `ALPHALENS_OPENROUTER_*` provider pin** — see
+  "OpenRouter provider pin" below
 - `alphalens-form4-backfill.service` — `SEC_EDGAR_USER_AGENT`
 - `alphalens-form4-incremental.service` — `SEC_EDGAR_USER_AGENT` (the
   residential-VPS IP must carry the operator contact UA; the canonical client
@@ -159,7 +161,69 @@ sudo chown "root:${OPERATOR_GROUP}" /etc/alphalens/env
 
 Only secrets needed by the units belong here. Knobs that change behaviour
 (log level, feature flags) stay in the repo `.env` files where they can be
-checked in via `.env.example`.
+checked in via `.env.example` — with one documented exception below.
+
+### OpenRouter provider pin (the one non-secret exception)
+
+`ALPHALENS_OPENROUTER_PROVIDER_ORDER`, `_ALLOW_FALLBACKS`, `_QUANTIZATIONS`
+and `_REQUIRE_PARAMETERS` are behaviour knobs, not secrets, but they still go
+in `/etc/alphalens/env`. The pipeline container gets its environment ONLY from
+the unit's process env (no `--env-file`, no compose), so this file is the only
+channel that reaches it. The alternative — an inline `-e KEY=value` in the
+unit — would hardcode the production pin in git and need a unit reinstall plus
+`daemon-reload` to change it.
+
+They are all OPTIONAL, and **nothing in the repo sets any of them** — the
+pin is not on until you put it in this file. Absent, docker forwards nothing
+and the pipeline sends no `provider` block, which is byte-for-byte today's
+behaviour. The intended live shape:
+
+```bash
+# Remove the fp4/fp8 serving mixture without making one provider a single
+# point of failure — fallbacks stay ENABLED (the var is simply absent).
+ALPHALENS_OPENROUTER_QUANTIZATIONS=fp8
+```
+
+`_REQUIRE_PARAMETERS` defaults to ON as soon as any other knob is set, so the
+line above also drops providers that do not declare `response_format` support
+(they would otherwise ignore it and answer in prose). Set it to `0` to opt out.
+A replay / measurement run pins `ALPHALENS_OPENROUTER_PROVIDER_ORDER=<slug>`
+with `ALPHALENS_OPENROUTER_ALLOW_FALLBACKS=0` instead — there, a run served by
+a different backend is worthless, so failing closed is the point. Note an fp8
+pin excludes DeepSeek's own first-party endpoint, which reports its
+quantization as `unknown`.
+
+Only the four names above are accepted values. A typo in the value (`yes` and
+`no` are accepted, `y` and `n` are not) makes `alphalens` refuse to start, by
+design: the alternative was a whole day of prose-less briefs at exit 0.
+
+**Which calls the pin covers:** every OpenRouter call the pipeline makes. All
+of them build their client through `get_default_openrouter_client()`, which is
+the one constructor that reads these vars. Passing an API key explicitly
+bypasses the pin, so no pipeline stage does — see
+`apps/alphalens-research/tests/test_openrouter_provider_pin_reach.py`, which
+fails if a stage starts doing so again.
+
+**Confirming a pin took effect.** There is no runtime assertion, and the
+journal cannot fully answer it either. The client logs the serving provider on
+the first call per model and whenever it changes:
+
+```bash
+journalctl --user -u alphalens-thematic-build.service --since today \
+    | grep -E 'served by provider|provider CHANGED'
+```
+
+Read that as "who served us", NOT as "the pin is on" — those lines are emitted
+whether or not a `provider` block was sent, so a run with a forgotten
+`/etc/alphalens/env` edit looks identical. What it does tell you: with a pin
+that names one provider, any `provider CHANGED` line, or a provider you did
+not name, means the pin is not reaching the container. To check the config
+itself rather than its effect, read it back where the container sees it:
+
+```bash
+systemctl --user show alphalens-thematic-build.service \
+    --property=Environment | tr ' ' '\n' | grep ALPHALENS_OPENROUTER
+```
 
 **Rotate a key:**
 

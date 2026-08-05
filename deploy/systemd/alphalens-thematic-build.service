@@ -50,6 +50,19 @@ EnvironmentFile=/etc/alphalens/env
 # textfile). The identity `-v` mount makes that container path the host's
 # real scrape dir; the explicit value (vs bare `-e KEY`) keeps the routing
 # correct even if /etc/alphalens/env never defines the var.
+#
+# The four ALPHALENS_OPENROUTER_* vars are not secrets but still use the
+# bare `-e KEY` form: they are the operator's provider pin, and the LIVE
+# pipeline wants different values from a REPLAY measurement run (the intended
+# live shape sets ALPHALENS_OPENROUTER_QUANTIZATIONS=fp8 and leaves fallbacks
+# ON so no single provider is a point of failure; a replay pins one provider
+# with ALPHALENS_OPENROUTER_ALLOW_FALLBACKS=0 so a run served by a different
+# backend fails instead of quietly becoming a worthless measurement). Keeping
+# the values in /etc/alphalens/env means changing the pin is one file edit,
+# not a unit reinstall. Nothing in the repo sets any of them; forwarding them
+# only makes /etc/alphalens/env able to. All four unset = today's unpinned
+# behaviour, byte for byte: docker forwards nothing and the client sends no
+# `provider` block.
 ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     --user %U:%G \
     -e HOME=/app/home \
@@ -61,6 +74,10 @@ ExecStart=/usr/bin/env UID=%U GID=%G /usr/bin/docker run --rm \
     -e TELEGRAM_CHAT_ID \
     -e SEC_EDGAR_USER_AGENT \
     -e FRED_API_KEY \
+    -e ALPHALENS_OPENROUTER_PROVIDER_ORDER \
+    -e ALPHALENS_OPENROUTER_ALLOW_FALLBACKS \
+    -e ALPHALENS_OPENROUTER_QUANTIZATIONS \
+    -e ALPHALENS_OPENROUTER_REQUIRE_PARAMETERS \
     -e ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile \
     -e ALPHALENS_CANONICAL_TITLE=1 \
     -e ALPHALENS_PERPLEXITY_SOURCE=1 \

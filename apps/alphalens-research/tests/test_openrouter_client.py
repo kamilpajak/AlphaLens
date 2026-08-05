@@ -596,10 +596,24 @@ class TestProviderRouting(unittest.TestCase):
 
     def test_env_order_pins_and_fails_closed_by_default(self) -> None:
         with mock.patch.dict(
-            os.environ, {_orc_module.PROVIDER_ORDER_ENV: "DeepInfra, Together"}, clear=False
+            os.environ,
+            {
+                _orc_module.PROVIDER_ORDER_ENV: "DeepInfra, Together",
+                # Blanked so a developer's own shell cannot flip the
+                # require_parameters half of this exact-equality assertion.
+                _orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "",
+            },
+            clear=False,
         ):
             routing = _orc_module.provider_routing_from_env()
-        self.assertEqual(routing, {"order": ["DeepInfra", "Together"], "allow_fallbacks": False})
+        self.assertEqual(
+            routing,
+            {
+                "order": ["DeepInfra", "Together"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+            },
+        )
 
     def test_env_can_re_enable_fallbacks(self) -> None:
         with mock.patch.dict(
@@ -633,10 +647,143 @@ class TestProviderRouting(unittest.TestCase):
                     {
                         _orc_module.PROVIDER_ORDER_ENV: blank,
                         _orc_module.PROVIDER_QUANTIZATIONS_ENV: blank,
+                        # Truly blank, not one of the list-blanks under test:
+                        # ``,`` is an empty comma-list but not a boolean, and
+                        # the boolean knob rejects garbage on purpose.
+                        _orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "",
                     },
                     clear=False,
                 ):
                     self.assertIsNone(_orc_module.provider_routing_from_env())
+
+
+class TestRequireParametersRouting(unittest.TestCase):
+    """``require_parameters`` restricts routing to providers that declare
+    support for every parameter the request actually sends — for us
+    ``response_format: json_object``, ``temperature`` and ``max_tokens``.
+
+    Without it a provider that does not implement ``response_format`` is
+    still eligible and simply IGNORES the field, so the model answers in
+    prose, the call site's ``json_repair`` fallback fires, and the row
+    degrades with nothing in the journal saying why. That is the exact
+    class of silent failure the provider pin exists to remove, which is
+    why the flag defaults ON whenever a routing block is emitted at all.
+
+    Measured cost of that default (live endpoint census, 2026-08-05):
+    deepseek-v4-pro 18 eligible endpoints -> 17, deepseek-v4-flash
+    21 -> 20. That is the unconditional cost, and it is the one that
+    applies: no fp8 quantization pin is set anywhere in this repo, only
+    documented as an operator option. The census is a moving target, so
+    it is quoted as rationale here and deliberately NOT asserted
+    anywhere.
+    """
+
+    @staticmethod
+    def _routing_from(**env: str) -> dict | None:
+        """Read routing with ALL four knobs pinned to explicit values.
+
+        Every routing env var is named, blank unless the case sets it, so
+        the outcome cannot depend on the developer's own shell.
+        """
+        pinned = {
+            _orc_module.PROVIDER_ORDER_ENV: "",
+            _orc_module.PROVIDER_QUANTIZATIONS_ENV: "",
+            _orc_module.PROVIDER_ALLOW_FALLBACKS_ENV: "",
+            _orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "",
+        }
+        pinned.update(env)
+        with mock.patch.dict(os.environ, pinned, clear=False):
+            return _orc_module.provider_routing_from_env()
+
+    def test_nothing_configured_still_sends_no_routing_at_all(self) -> None:
+        """The load-bearing invariant: a fourth knob must not turn the
+        default (unset) case into a request that carries a provider block."""
+        self.assertIsNone(self._routing_from())
+
+    def test_defaults_on_when_other_routing_is_configured(self) -> None:
+        routing = self._routing_from(**{_orc_module.PROVIDER_QUANTIZATIONS_ENV: "fp8"})
+        self.assertTrue(routing["require_parameters"])
+
+    def test_explicit_opt_out_omits_the_field(self) -> None:
+        """Omitted rather than sent as ``false``: ``false`` IS OpenRouter's
+        own default, so the two are equivalent on the wire and the shorter
+        body keeps "what did we actually pin" readable in a capture."""
+        routing = self._routing_from(
+            **{
+                _orc_module.PROVIDER_QUANTIZATIONS_ENV: "fp8",
+                _orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "0",
+            }
+        )
+        self.assertNotIn("require_parameters", routing)
+        self.assertEqual(routing["quantizations"], ["fp8"])
+
+    def test_enabled_alone_is_a_routing_block_of_its_own(self) -> None:
+        """Asking for providers that honour our parameters is a useful pin
+        on its own. Silently dropping an explicitly-set env var because no
+        order/quantization accompanies it would be worse than either
+        answer."""
+        self.assertEqual(
+            self._routing_from(**{_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "1"}),
+            {"require_parameters": True},
+        )
+
+    def test_disabled_alone_yields_no_routing(self) -> None:
+        """Opting OUT of a restriction is not a reason to start sending a
+        provider block — that would break the byte-identical invariant."""
+        self.assertIsNone(self._routing_from(**{_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "0"}))
+
+    def test_unrecognised_value_fails_loud(self) -> None:
+        """A tri-state knob cannot silently treat garbage as its default:
+        ``=disabled`` would then mean ENABLED, which is the reverse of what
+        the operator typed."""
+        with self.assertRaisesRegex(ValueError, _orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV):
+            self._routing_from(**{_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "disabled"})
+
+    def test_whitespace_only_value_counts_as_unset(self) -> None:
+        """Not cosmetic: without the strip, a stray trailing space in
+        ``/etc/alphalens/env`` would raise out of every client construction
+        and take the whole thematic run down."""
+        for blank in ("   ", "\t", " \n "):
+            with self.subTest(blank=blank):
+                self.assertIsNone(
+                    self._routing_from(**{_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: blank})
+                )
+
+    def test_wire_spelling_is_snake_case(self) -> None:
+        """``requireParameters`` is SDK syntax; the REST body wants
+        ``require_parameters``.
+
+        Built through ``from_env`` on purpose: the key name is produced by
+        ``provider_routing_from_env``, so a test that hand-writes the dict
+        into the constructor only re-checks that ``json.dumps`` copies keys
+        verbatim and could never catch the camelCase spelling it names.
+        """
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json=_mock_chat_response("{}"))
+
+        env = {
+            _orc_module.API_KEY_ENV: _DUMMY_KEY,
+            _orc_module.PROVIDER_ORDER_ENV: "",
+            _orc_module.PROVIDER_ALLOW_FALLBACKS_ENV: "",
+            _orc_module.PROVIDER_QUANTIZATIONS_ENV: "fp8",
+            _orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            client = OpenRouterClient.from_env()
+        # from_env owns the transport, so swap it for the capture after build:
+        # the routing block is already frozen on the instance by then.
+        client._http = httpx.Client(
+            base_url=_orc_module.OPENROUTER_BASE_URL,
+            transport=httpx.MockTransport(handler),
+        )
+        client.generate_content(model="deepseek/deepseek-v4-flash", contents="say json")
+        self.assertEqual(
+            captured["provider"],
+            {"quantizations": ["fp8"], "require_parameters": True},
+        )
 
 
 class TestProviderRoutingIsolation(unittest.TestCase):

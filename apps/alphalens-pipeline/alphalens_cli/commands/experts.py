@@ -17,6 +17,8 @@ from pathlib import Path
 
 import typer
 
+from alphalens_cli.commands import _openrouter_gate
+
 experts_app = typer.Typer(
     name="experts",
     help="Expert-panel enrichment over the thematic brief (Buffett value/quality; more to come).",
@@ -24,6 +26,17 @@ experts_app = typer.Typer(
 )
 
 _DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
+
+
+@experts_app.callback()
+def _experts_callback() -> None:
+    """Gate the OpenRouter routing knobs before any expert runs.
+
+    ``enrich`` builds an LLM client and its qualitative layer catches bare
+    ``Exception``, so a malformed knob would otherwise degrade silently to a
+    day with no qualitative layer instead of failing the run.
+    """
+    _openrouter_gate.validate_provider_routing_env()
 
 
 @experts_app.command(name="enrich")

@@ -231,17 +231,27 @@ def verify_candidate(
     }
 
 
-def _init_pro_client(api_key: str):
+def _init_pro_client(api_key: str | None):
     """Build the OpenRouter LLM client once for the whole batch; ``None`` if
     construction fails. The mapper will then lazy-init per call (falling
     back to the process-wide default client).
+
+    Without ``api_key`` this returns the process-wide default client rather
+    than ``None``. That default is the ONLY construction path that reads the
+    operator's ``ALPHALENS_OPENROUTER_*`` provider pin, so a caller that omits
+    the key (the CLI does) gets a pinned batch client instead of an unpinned
+    hand-built one. ``api_key`` stays supported for ad-hoc callers that need a
+    specific credential; it opts that call out of the pin by construction.
     """
-    if not api_key:
-        return None
-    from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
+    from alphalens_pipeline.data.alt_data.openrouter_client import (
+        OpenRouterClient,
+        get_default_openrouter_client,
+    )
 
     try:
-        return OpenRouterClient(api_key=api_key)
+        if api_key:
+            return OpenRouterClient(api_key=api_key)
+        return get_default_openrouter_client()
     except (RuntimeError, ValueError):
         logger.warning("OpenRouterClient construction failed; mapper will lazy-init per call")
         return None
@@ -410,7 +420,7 @@ def _propose_and_filter_candidates(
     *,
     theme: str,
     catalyst: CatalystPayload,
-    api_key: str,
+    api_key: str | None,
     pro_client,
     min_cap: int,
     max_cap: int,
@@ -557,7 +567,7 @@ def _rows_for_theme(
     *,
     asof: dt.date,
     catalyst_cache: dict[str, CatalystPayload | None],
-    api_key: str,
+    api_key: str | None,
     pro_client,
     min_cap: int,
     max_cap: int,
@@ -679,7 +689,13 @@ def map_themes(
     because its mcap snapshot is stuck at training-cutoff prices. Writes a
     unified parquet to ``output_dir / {asof}.parquet`` and returns it.
     """
-    api_key = api_key or os.environ.get("OPENROUTER_API_KEY") or ""
+    # NOT re-derived from OPENROUTER_API_KEY when omitted: that fallback made
+    # "caller passed no key" indistinguishable from "caller passed one", so
+    # every run built a hand-keyed client and silently opted out of the
+    # operator's ALPHALENS_OPENROUTER_* provider pin. Omitted now means
+    # "use the process-wide default client", which reads the same env var for
+    # the key AND applies the pin. See :func:`_init_pro_client`.
+    #
     # The legacy ``polygon_api_key`` parameter is preserved for source-compat
     # with call sites that still pass it (``alphalens_cli/commands/thematic.py``,
     # ``scripts/replay_nvda_qubt.py``, several unit tests). When provided
