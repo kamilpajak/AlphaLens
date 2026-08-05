@@ -353,6 +353,29 @@ class SupportsAmendStop(Protocol):
     ) -> PlacedOrder: ...
 
 
+@runtime_checkable
+class SupportsMarketOrders(Protocol):
+    """Extension capability: fire a MARKET order (BUY entry / SELL exit tranche).
+
+    The live-market execution model (docs/research/live_market_execution_model_
+    design_2026_08_05.md): entries and take-profit tranches are realized as market
+    orders off the price stream, not as resting Limit/OCO orders. Off the frozen
+    base :class:`Broker` Protocol (capability-protocol pattern, like
+    :class:`SupportsStandaloneStop`): a caller ``isinstance``-narrows a ``Broker``
+    to this Protocol; a broker without it runs the resting-order path unchanged.
+
+    ``side`` is canonical ``"BUY"``/``"SELL"``. ``request_id`` is the POST
+    x-request-id (Saxo 15 s dedup) and the per-order ``ExternalReference`` — pass a
+    DETERMINISTIC value so a crash-window re-POST does not double-fire; ``None``
+    mints a fresh uuid4. Returns ``PlacedOrder(entry_order_id=<order id>,
+    exit_order_ids=())``.
+    """
+
+    def place_market_order(
+        self, uic: int, side: str, qty: float, request_id: str | None = None
+    ) -> PlacedOrder: ...
+
+
 __all__ = [
     "AccountSnapshot",
     "BracketOrderRequest",
@@ -369,6 +392,7 @@ __all__ = [
     "PlacedOrder",
     "Position",
     "SupportsAmendStop",
+    "SupportsMarketOrders",
     "SupportsOcoExit",
     "SupportsStandaloneStop",
 ]

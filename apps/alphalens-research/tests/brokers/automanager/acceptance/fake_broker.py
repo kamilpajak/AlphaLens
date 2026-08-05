@@ -253,6 +253,35 @@ class FakeBroker:
             self._resize(sibling, new_qty)
         return PlacedOrder(entry_order_id="", exit_order_ids=(order_id,))
 
+    def place_market_order(
+        self, uic: int, side: str, qty: float, request_id: str | None = None
+    ) -> PlacedOrder:
+        """In-memory market fill: BUY grows the netted position, SELL reduces it
+        (clamped at flat — the netting account never flips short on an oversell).
+        Deterministic order id; no resting order is created (a market order fills)."""
+        self._guard_write(uic)
+        current = self._positions.get(uic)
+        held = current.quantity if current is not None else 0.0
+        delta = float(qty) if side == "BUY" else -float(qty)
+        new_qty = max(held + delta, 0.0)
+        self._seq += 1
+        order_id = f"mkt-{self._seq}"
+        if new_qty <= _QTY_EPS:
+            self._positions.pop(uic, None)
+        elif current is not None:
+            self._positions[uic] = dataclasses.replace(current, quantity=new_qty)
+        else:
+            ticker = self._ticker_by_uic.get(uic, f"UIC{uic}")
+            self._positions[uic] = Position(
+                instrument=self._instrument(ticker),
+                quantity=new_qty,
+                avg_price=0.0,
+                market_value=None,
+                unrealized_pnl=None,
+                position_id=f"pos-{uic}",
+            )
+        return PlacedOrder(entry_order_id=order_id, exit_order_ids=())
+
     # ----- internals -----------------------------------------------------------
 
     def _flat_instrument(self, uic: int) -> InstrumentRef:
