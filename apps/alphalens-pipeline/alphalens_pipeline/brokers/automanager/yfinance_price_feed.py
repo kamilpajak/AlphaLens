@@ -16,6 +16,8 @@ resolver from live positions and calls ``run_live_exits``).
 from __future__ import annotations
 
 import datetime as dt
+import logging
+import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -23,6 +25,8 @@ from broker_contract.price_feed import PricePoint
 
 if TYPE_CHECKING:
     from alphalens_pipeline.data.alt_data.yfinance_client import YFinanceClient
+
+_logger = logging.getLogger(__name__)
 
 
 class YfinancePriceFeed:
@@ -57,8 +61,18 @@ class YfinancePriceFeed:
         ticker = self._resolve_ticker(uic)
         if not ticker:
             return None
-        price = self._yf.last_price(ticker)
-        # last_price already maps NaN -> None; guard non-positive defensively.
-        if price is None or price <= 0.0:
+        try:
+            price = self._yf.last_price(ticker)
+        except Exception:
+            # Any fetch failure degrades to the veto (do-not-fire); a raising
+            # non-canonical client must never propagate into a market-order tick.
+            _logger.warning(
+                "yfinance last_price failed for %s (uic %s)", ticker, uic, exc_info=True
+            )
+            return None
+        # The canonical client maps NaN -> None; guard NaN / inf / non-positive
+        # defensively so a non-canonical injected client cannot produce a bad
+        # PricePoint that reaches a market-order decision.
+        if price is None or not math.isfinite(price) or price <= 0.0:
             return None
         return PricePoint(uic=uic, price=float(price), asof=self._clock())

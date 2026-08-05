@@ -21,6 +21,17 @@ class _FakeYf:
         return self._prices.get(ticker)
 
 
+class _RaisingYf:
+    """A non-canonical client whose ``last_price`` raises (no swallowing)."""
+
+    def __init__(self):
+        self.requested = []
+
+    def last_price(self, ticker):
+        self.requested.append(ticker)
+        raise RuntimeError("boom")
+
+
 def _feed(prices, uic_to_ticker):
     return YfinancePriceFeed(
         resolve_ticker=uic_to_ticker.get,
@@ -55,6 +66,33 @@ class TestYfinancePriceFeed(unittest.TestCase):
             with self.subTest(bad=bad):
                 feed = _feed({"AAPL": bad}, {211: "AAPL"})
                 self.assertIsNone(feed.latest(211))
+
+    def test_nan_price_returns_none(self):
+        # A non-canonical client may return NaN directly; the veto must not let
+        # a NaN PricePoint reach a market-order decision (NaN <= 0 is False).
+        feed = _feed({"AAPL": float("nan")}, {211: "AAPL"})
+        self.assertIsNone(feed.latest(211))
+
+    def test_inf_price_returns_none(self):
+        for bad in (float("inf"), float("-inf")):
+            with self.subTest(bad=bad):
+                feed = _feed({"AAPL": bad}, {211: "AAPL"})
+                self.assertIsNone(feed.latest(211))
+
+    def test_raising_client_returns_none(self):
+        # Any fetch exception degrades to the veto (do-not-fire), never propagates.
+        yf = _RaisingYf()
+        feed = YfinancePriceFeed(
+            resolve_ticker={211: "AAPL"}.get, yf_client=yf, clock=lambda: _FROZEN
+        )
+        self.assertIsNone(feed.latest(211))
+        self.assertEqual(yf.requested, ["AAPL"])  # it was called, the error was absorbed
+
+    def test_empty_ticker_returns_none_and_skips_fetch(self):
+        yf = _FakeYf({"AAPL": 306.49})
+        feed = YfinancePriceFeed(resolve_ticker={211: ""}.get, yf_client=yf, clock=lambda: _FROZEN)
+        self.assertIsNone(feed.latest(211))
+        self.assertEqual(yf.requested, [])  # empty ticker -> no network call
 
     def test_distinct_uics_resolve_to_distinct_tickers(self):
         yf = _FakeYf({"AAPL": 306.49, "KO": 86.64})
