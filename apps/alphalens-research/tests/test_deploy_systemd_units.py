@@ -212,6 +212,43 @@ class TestSystemdUnits(unittest.TestCase):
             "land on the host dir node_exporter scrapes.",
         )
 
+    def test_thematic_build_docker_run_passes_openrouter_provider_routing(self):
+        # The routing knobs only exist to be set by an operator, and the
+        # only place the live pipeline reads env is INSIDE this container.
+        # Ship them unforwarded and the whole feature is dead code on the
+        # VPS: the operator edits /etc/alphalens/env, the run behaves
+        # exactly as before, and nothing says why.
+        #
+        # Read from the client's own constants rather than hardcoded
+        # strings, so renaming a knob breaks this test instead of silently
+        # forwarding a name nothing reads any more.
+        #
+        # Bare `-e KEY` (no `=value`) on purpose: the LIVE pipeline and a
+        # REPLAY measurement run want DIFFERENT values (live pins
+        # quantizations with fallbacks on; replay pins one provider and
+        # fails closed), so the value belongs in /etc/alphalens/env, not
+        # baked into a versioned unit that needs a reinstall to change.
+        # Unset in the calling env forwards nothing, which is exactly the
+        # unpinned behaviour the client already treats as "no provider
+        # block at all".
+        from alphalens_pipeline.data.alt_data import openrouter_client
+
+        routing_env_vars = (
+            openrouter_client.PROVIDER_ORDER_ENV,
+            openrouter_client.PROVIDER_ALLOW_FALLBACKS_ENV,
+            openrouter_client.PROVIDER_QUANTIZATIONS_ENV,
+            openrouter_client.PROVIDER_REQUIRE_PARAMETERS_ENV,
+        )
+        for env_var in routing_env_vars:
+            with self.subTest(env_var=env_var):
+                self.assertRegex(
+                    self.unit_text,
+                    re.compile(rf"^\s+-e {re.escape(env_var)}\s*\\?\s*$", re.MULTILINE),
+                    f"ExecStart docker invocation MUST forward {env_var} via "
+                    f"`-e {env_var}`, otherwise the operator's provider pin "
+                    "never reaches the pipeline container.",
+                )
+
     def test_thematic_build_service_rebuilds_briefs_cache_post_run(self):
         # After a successful pipeline run the new parquet output must be
         # synced into the Django Postgres-backed cache. The unit invokes

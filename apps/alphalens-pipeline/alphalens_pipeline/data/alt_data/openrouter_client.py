@@ -83,7 +83,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # different answer" ambiguous: it looks the same in the logs whether the
 # model was non-deterministic or the router simply sent us elsewhere.
 #
-# These env vars are the operator's pin. All three are OPTIONAL and
+# These env vars are the operator's pin. All four are OPTIONAL and
 # unset means "behave exactly as before" — no ``provider`` block is sent.
 # Pinning an order also fails CLOSED (``allow_fallbacks: false``): a
 # pinned run that cannot reach its provider must error loudly rather
@@ -93,8 +93,35 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 PROVIDER_ORDER_ENV = "ALPHALENS_OPENROUTER_PROVIDER_ORDER"
 PROVIDER_ALLOW_FALLBACKS_ENV = "ALPHALENS_OPENROUTER_ALLOW_FALLBACKS"
 PROVIDER_QUANTIZATIONS_ENV = "ALPHALENS_OPENROUTER_QUANTIZATIONS"
+PROVIDER_REQUIRE_PARAMETERS_ENV = "ALPHALENS_OPENROUTER_REQUIRE_PARAMETERS"
+
+# ``require_parameters`` keeps routing to providers that DECLARE support for
+# every parameter the request actually sends — for us ``response_format:
+# json_object``, ``temperature`` and ``max_tokens``. OpenRouter's own default
+# is ``false``, i.e. a provider that does not implement ``response_format``
+# stays eligible and simply IGNORES the field: the model answers in prose,
+# the call site's ``json_repair`` fallback fires, and the row degrades with
+# nothing in the journal explaining why. That silent-degradation class is
+# exactly what the provider pin exists to remove, so we default the flag ON
+# whenever we emit a routing block at all, and require an explicit opt-out.
+#
+# The default is cheap, not a guess. Live endpoint census (2026-08-05) for our
+# parameter set: deepseek-v4-pro 18 eligible endpoints → 17, deepseek-v4-flash
+# 21 → 20 (only ``response_format`` excludes anyone; every endpoint declares
+# ``temperature`` and ``max_tokens``), and ZERO further loss on top of the
+# live ``quantizations: ["fp8"]`` pin because every fp8 endpoint already
+# declares ``response_format``. So on the LIVE path it costs nothing, and on
+# a REPLAY path (one provider, ``allow_fallbacks: false``) a provider that
+# cannot honour the parameters turns into a loud non-2xx instead of a
+# measurement quietly served under different semantics.
+#
+# It buys ELIGIBILITY filtering, not enforcement: OpenRouter warns that a
+# provider may advertise ``response_format`` and still treat it as a strong
+# hint, so call sites keep their own JSON repair.
+_REQUIRE_PARAMETERS_DEFAULT = True
 
 _TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 
 # Attribution headers — OpenRouter's per-app dashboard groups requests
 # by HTTP-Referer + X-Title for cost attribution. Setting both helps
@@ -157,6 +184,27 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUTHY_ENV_VALUES
 
 
+def _env_tristate(name: str) -> bool | None:
+    """Read a flag that has to tell "unset" apart from "explicitly off".
+
+    ``_env_flag`` cannot serve a knob whose default is True: there, an
+    unrecognised value silently collapsing to False would flip the
+    behaviour, and ``=disabled`` would end up meaning ENABLED. So blank
+    stays ``None`` (caller applies its own default) and garbage raises
+    rather than picking one side of a knob the operator clearly meant to
+    set.
+    """
+    raw = os.environ.get(name, "").strip().lower()
+    if not raw:
+        return None
+    if raw in _TRUTHY_ENV_VALUES:
+        return True
+    if raw in _FALSEY_ENV_VALUES:
+        return False
+    accepted = ", ".join(sorted(_TRUTHY_ENV_VALUES | _FALSEY_ENV_VALUES))
+    raise ValueError(f"{name}={raw!r} is not a boolean. Use one of: {accepted} (or leave unset).")
+
+
 def provider_routing_from_env() -> dict[str, Any] | None:
     """Build the OpenRouter ``provider`` routing block from the environment.
 
@@ -166,7 +214,14 @@ def provider_routing_from_env() -> dict[str, Any] | None:
     """
     order = _split_env_list(os.environ.get(PROVIDER_ORDER_ENV))
     quantizations = _split_env_list(os.environ.get(PROVIDER_QUANTIZATIONS_ENV))
-    if not order and not quantizations:
+    require_parameters = _env_tristate(PROVIDER_REQUIRE_PARAMETERS_ENV)
+    # ``require_parameters`` is normally a modifier on a block the other
+    # knobs trigger, but switching it ON alone is a meaningful pin of its
+    # own ("only providers that honour my parameters"), and silently
+    # dropping an env var the operator explicitly set is worse than either
+    # answer. Switching it OFF alone stays a no-op: opting out of a
+    # restriction is no reason to start sending a ``provider`` block.
+    if not order and not quantizations and require_parameters is not True:
         return None
     routing: dict[str, Any] = {}
     if order:
@@ -176,6 +231,14 @@ def provider_routing_from_env() -> dict[str, Any] | None:
         routing["allow_fallbacks"] = _env_flag(PROVIDER_ALLOW_FALLBACKS_ENV)
     if quantizations:
         routing["quantizations"] = quantizations
+    if require_parameters is None:
+        require_parameters = _REQUIRE_PARAMETERS_DEFAULT
+    if require_parameters:
+        # Omitted rather than sent as ``false`` when disabled: ``false`` is
+        # OpenRouter's own default, so the two are identical on the wire and
+        # the shorter body keeps "what did we actually pin" readable in a
+        # captured request.
+        routing["require_parameters"] = True
     return routing
 
 
