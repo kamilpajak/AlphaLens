@@ -99,6 +99,8 @@ _MAX_CHILD_DISTANCE_FRAC = 0.15
 # Exits outlive the entry's TTL — GoodTillCancel on both children.
 _EXIT_DURATION = "GoodTillCancel"
 
+_MARKET_ORDER_DURATION = "DayOrder"  # a market order fills immediately; GTC is nonsensical
+
 # Entry duration: GoodTillDate with a DATE-ONLY expiration (ExpirationDate-
 # ContainsTime=false), computed entry_ttl_days TRADING days ahead on the
 # venue's exchange calendar — exchange-local HH:mm rules avoided entirely.

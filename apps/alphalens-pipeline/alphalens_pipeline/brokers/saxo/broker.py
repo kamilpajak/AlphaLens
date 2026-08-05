@@ -544,6 +544,56 @@ class SaxoBroker:
             "ExternalReference": client_request_id,
         }
 
+    def place_market_order(
+        self, uic: int, side: str, qty: float, request_id: str | None = None
+    ) -> PlacedOrder:
+        """Fire ONE market order (BUY entry / SELL exit tranche) — live-market model.
+
+        Same safety order as :meth:`place_standalone_stop`: canonical-side check,
+        ALLOW_ORDERS gate, precheck, then ONE POST with x-request-id =
+        ``request_id``. No ``OrderPrice`` (market), ``DayOrder`` duration. Pass a
+        DETERMINISTIC ``request_id`` so a crash-window re-POST hits Saxo's 15 s
+        dedup instead of double-firing; ``None`` mints a fresh uuid4.
+        ``exit_order_ids`` is empty.
+        """
+        _require_order_side(side)
+        if os.environ.get(ALLOW_ORDERS_ENV) != "1":
+            raise BrokerCapabilityError(
+                f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
+                "SIM order submission (design memo §P2 safety rail). No order was sent."
+            )
+        client_request_id = request_id or str(uuid.uuid4())
+        with _translate_saxo_errors():
+            account_key = self._resolve_account_key()
+            body = self._build_market_order_body(uic, side, qty, client_request_id, account_key)
+            self._precheck_or_raise(body, label=f"market Uic {uic} {client_request_id}")
+            status, payload = self._client.place_order(body, request_id=client_request_id)
+            return self._handle_placement_response(status, payload, client_request_id, account_key)
+
+    def _build_market_order_body(
+        self, uic: int, side: str, qty: float, client_request_id: str, account_key: str
+    ) -> dict[str, Any]:
+        """Market order body — no Orders array, no OrderPrice, DayOrder duration."""
+        asset_type = "Stock"  # MVP scope: single-name equities only
+        details = self._client.get_instrument_details(uic, asset_type)
+        supported = details.get("SupportedOrderTypes") or []
+        if supported and "Market" not in supported:
+            raise OrderRejectedError(
+                f"instrument Uic {uic} does not support Market orders "
+                f"(SupportedOrderTypes={supported})"
+            )
+        return {
+            "Uic": int(uic),
+            "AssetType": asset_type,
+            "AccountKey": account_key,
+            "Amount": qty,
+            "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
+            "OrderType": "Market",
+            "OrderDuration": {"DurationType": execution_policy._MARKET_ORDER_DURATION},
+            "ManualOrder": execution_policy._MANUAL_ORDER,
+            "ExternalReference": client_request_id,
+        }
+
     def place_oco_exit(
         self,
         uic: int,
