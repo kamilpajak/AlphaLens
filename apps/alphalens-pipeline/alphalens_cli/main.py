@@ -48,7 +48,7 @@ app = typer.Typer(
 
 @app.callback()
 def _root_callback() -> None:
-    """Configure logging and validate operator env once, before any subcommand.
+    """Configure logging once before routing to any subcommand.
 
     basicConfig is a no-op if the root logger is already configured (e.g. by a
     parent Python process); in that case we inherit the parent's setup.
@@ -57,34 +57,6 @@ def _root_callback() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
-    _validate_provider_routing_env()
-
-
-def _validate_provider_routing_env() -> None:
-    """Reject a malformed ``ALPHALENS_OPENROUTER_*`` knob before work starts.
-
-    The knobs are normally read late — deep inside OpenRouter client
-    construction, once a stage first needs an LLM. That is far too late to
-    notice a typo: several stages catch ``ValueError`` there so a missing
-    ``OPENROUTER_API_KEY`` degrades gracefully rather than crashing a whole
-    day's run, and a malformed knob is indistinguishable from that at the
-    catch site. ``thematic brief`` is the worst case — it would stamp every
-    row ``brief_status='unavailable'``, write the parquet, and exit 0, so
-    ``run_thematic_day.sh``'s ``set -e`` never trips and ``rebuild-cache``
-    publishes a day of prose-less briefs to Postgres behind one warning line.
-
-    Reading the knobs here instead turns that into a startup failure, before
-    any stage writes anything, for every command uniformly. Checked at the
-    root callback rather than per-command because the same env reaches every
-    LLM stage. The import is local to keep the module off the CLI's cold-start
-    path in principle, though it is already loaded by the command tree.
-    """
-    from alphalens_pipeline.data.alt_data.openrouter_client import provider_routing_from_env
-
-    try:
-        provider_routing_from_env()
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
 
 
 app.add_typer(broker_app, name="broker")

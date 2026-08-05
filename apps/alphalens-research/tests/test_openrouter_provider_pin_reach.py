@@ -215,7 +215,7 @@ class TestMalformedRoutingKnobFailsTheRun(unittest.TestCase):
             {_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "y"},
             clear=False,
         ):
-            result = self.runner.invoke(app, ["thematic", "--help"])
+            result = self.runner.invoke(app, ["thematic", "map-themes", "--date", "2026-05-15"])
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn(_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV, result.output)
@@ -240,6 +240,38 @@ class TestMalformedRoutingKnobFailsTheRun(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn(_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV, result.output)
         self.assertNotIn("scored parquet missing", result.output)
+
+    def test_experts_is_gated_too(self) -> None:
+        """``experts enrich`` swallows client-construction errors the same way
+        ``brief`` does (buffett/qualitative.py catches bare ``Exception``), so it
+        needs the same upstream gate — otherwise a bad knob silently produces a
+        day with no qualitative layer."""
+        with mock.patch.dict(
+            os.environ,
+            {_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "y"},
+            clear=False,
+        ):
+            result = self.runner.invoke(app, ["experts", "enrich", "2026-05-15", "--all"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn(_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV, result.output)
+
+    def test_a_command_group_that_never_calls_an_llm_is_not_gated(self) -> None:
+        """Blast radius. ``/etc/alphalens/env`` is shared by every unit, so a
+        gate in the ROOT callback would take down `alphalens edgar detect` — a
+        15-minute poller that never reads an OpenRouter variable — over a typo
+        in an LLM routing knob. The gate belongs on the command groups that
+        actually construct an LLM client, not on the whole binary."""
+        with mock.patch.dict(
+            os.environ,
+            {_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV: "y"},
+            clear=False,
+        ):
+            result = self.runner.invoke(app, ["edgar", "detect", "--definitely-not-a-flag"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertNotIn(_orc_module.PROVIDER_REQUIRE_PARAMETERS_ENV, result.output)
+        self.assertIn("No such option", result.output)
 
 
 if __name__ == "__main__":

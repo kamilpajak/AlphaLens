@@ -23,6 +23,8 @@ from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
 from alphalens_pipeline.thematic.screening import scorer as screening_scorer
 from alphalens_pipeline.thematic.trade_setup import model as trade_setup_model
 
+from alphalens_cli.commands import _openrouter_gate
+
 thematic_app = typer.Typer(
     name="thematic",
     help="Thematic event-driven tool (parallel track to factor-paradigm-search).",
@@ -387,7 +389,12 @@ def _parquet_num_rows(path: Path) -> int:
 
 @thematic_app.callback()
 def _thematic_callback() -> None:
-    """Force multi-command behaviour even when only one command is registered."""
+    """Force multi-command behaviour even when only one command is registered.
+
+    Also gates the OpenRouter routing knobs: every stage under this group can
+    construct an LLM client, and several swallow the resulting error.
+    """
+    _openrouter_gate.validate_provider_routing_env()
 
 
 @thematic_app.command("ingest")
