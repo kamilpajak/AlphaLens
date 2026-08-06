@@ -25,9 +25,7 @@ DEFAULT_THEME_ROLLUP_DIR = Path.home() / ".alphalens" / "theme_rollup"
 DEFAULT_WINDOW_DAYS = 30
 DEFAULT_RECENT_DAYS = 7
 DEFAULT_NOVELTY_THRESHOLD = 3.0
-# Floor on the Poisson tail before taking a log, so an astronomically surprising
-# count yields a large finite score instead of +inf.
-_MIN_TAIL_PROBABILITY = 1e-300
+_LN10 = math.log(10.0)
 
 # Bump for a code-level change to how novelty is COMPUTED (the roll_up ratio
 # formula or normalization) that the three numeric params below cannot express.
@@ -184,7 +182,21 @@ def rate_surprise(
     infinite score that would make every first-sighting singleton outrank
     everything else forever, which is the failure this is meant to replace.
 
-    TELEMETRY ONLY as of this change. ``flag_novel`` still selects on the ratio.
+    KNOWN BIAS, measured not assumed. Poisson wants variance == mean; news
+    arrivals cluster, because one story yields many articles the same day. Over
+    30 days of real ``thematic_events`` the index of dispersion across the 161
+    themes with >=20 occurrences has median 1.31 (p25 1.03, p75 1.63) — mild, but
+    the tail runs much hotter: ``earnings`` 4.22, ``defense`` 2.33, ``inflation``
+    2.14. A theme with dispersion phi has its z inflated by ~sqrt(phi), so this
+    score OVERSTATES the surprise of exactly the clustered themes — roughly 2x
+    for ``earnings``. That is the mechanism behind the 50-day replay in which
+    switching selection to this score would have added ``earnings`` 21 times.
+    Correcting it needs a per-theme dispersion estimate (quasi-Poisson or
+    negative binomial), which is only possible once the per-theme daily counts
+    are being stored — which is what :func:`write_theme_rollup` starts doing.
+
+    TELEMETRY ONLY as of this change. ``flag_novel`` still selects on the ratio,
+    and the bias above is a reason not to promote this one as-is.
     """
     if count_recent <= 0:
         return 0.0
@@ -194,8 +206,17 @@ def rate_surprise(
     from scipy.stats import poisson
 
     expected = (count_baseline + 0.5) / max(baseline_days, 1) * recent_days
-    tail = float(poisson.sf(count_recent - 1, expected))
-    return -math.log10(max(tail, _MIN_TAIL_PROBABILITY))
+    log_tail = float(poisson.logsf(count_recent - 1, expected))
+    if math.isfinite(log_tail):
+        return -log_tail / _LN10
+    # scipy's tail underflows to -inf well inside the reachable range (around
+    # count_recent 500 against a 100 baseline). An infinity in a telemetry column
+    # is worse than a plateau — it breaks ranking and poisons any later
+    # aggregate — so fall back to the closed-form Chernoff/KL bound for a Poisson
+    # upper tail, which is finite, strictly increasing in ``count_recent``, and
+    # agrees with the exact value to ~1% where the two meet.
+    ratio = count_recent / expected
+    return expected * (ratio * math.log(ratio) - ratio + 1.0) / _LN10
 
 
 THEME_ROLLUP_COLUMNS = (

@@ -228,6 +228,15 @@ class TestRateSurprise(unittest.TestCase):
     def test_no_articles_at_all_scores_zero_not_nan(self):
         self.assertEqual(self._score(0, 0), 0.0)
 
+    def test_extreme_counts_stay_ordered_instead_of_flattening(self):
+        # Computed on the linear tail, these all underflow to p == 0 and collapse
+        # onto one plateau, so a 500-article week would rank equal to a 1000-article
+        # one. The log-space tail keeps them apart.
+        scores = [self._score(k, 100) for k in (300, 500, 800, 1200)]
+        self.assertEqual(scores, sorted(scores))
+        self.assertTrue(all(math.isfinite(s) for s in scores))
+        self.assertEqual(len(set(scores)), len(scores), "extreme counts must not tie")
+
     def test_roll_up_carries_the_score_for_every_theme(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             events_dir = Path(tmpdir)
