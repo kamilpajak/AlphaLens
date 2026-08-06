@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     import threading
 
     from broker_contract.contract import Broker
+    from broker_contract.sizing import TpTranchePlan
 
     from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
     from alphalens_pipeline.brokers.notifications import NotificationPort
@@ -1137,6 +1138,91 @@ def _reanchor_facts_from_governing(governing: Mapping[str, Any]) -> ReanchorFact
     return ReanchorFacts(k_atr=k_atr, atr=atr)
 
 
+# --- Live-exit TP-tranche ladder persistence (INC-5 Task 1) ------------------
+# The `planned` journal line above carries only a scalar `take_profit` -- not
+# enough for the live-exit engine (`live_exit_engine.ManagedExit`), which needs
+# the FULL tp_tranches tuple + the tranche-sizing base (`reference_qty`) to
+# rebuild a managed position from the journal alone. `_build_tranche_plan_line`
+# / `fold_tranche_plans` persist that ladder per uic, append-only, mirroring the
+# `_build_planned_line` / `_fold_planned_exits` pattern. INERT here: nothing
+# reads the fold until the live-exits tick phase (Task 2) is wired.
+
+
+def _build_tranche_plan_line(
+    *,
+    uic: int,
+    tp_tranches: tuple[TpTranchePlan, ...],
+    reference_qty: float,
+    stop_price: float,
+) -> dict[str, Any]:
+    """One append-only ``tranche_plan`` journal line -- the per-uic TP ladder the
+    live-exit engine needs (INC-5) but the ``planned`` line does not carry.
+    JSON-serializable (each ``TpTranchePlan`` is decomposed to a plain dict).
+    Confers no protection by itself -- only the tranche reference prices/pcts,
+    the sizing base, and the stop price the engine amends the standalone SL
+    around. Written ONCE per placement (never per tier); a same-uic re-arm
+    simply appends a newer line (append-only fold, last well-formed line wins,
+    exactly like ``_build_planned_line``)."""
+    return {
+        "kind": "tranche_plan",
+        "uic": int(uic),
+        "tp_tranches": [
+            {
+                "tranche_index": int(t.tranche_index),
+                "target_price": float(t.target_price),
+                "tranche_pct": float(t.tranche_pct),
+                "r_multiple": float(t.r_multiple),
+                "tag": str(t.tag),
+            }
+            for t in tp_tranches
+        ],
+        "reference_qty": float(reference_qty),
+        "stop_price": float(stop_price),
+    }
+
+
+def fold_tranche_plans(
+    lines: Iterable[Mapping[str, Any]],
+) -> dict[int, tuple[tuple[TpTranchePlan, ...], float, float]]:
+    """Fold the append-only ``tranche_plan`` journal lines into the newest ladder
+    per uic -- ``{uic: (tp_tranches, reference_qty, stop_price)}``.
+
+    Append-only: the LAST well-formed line for a uic wins (mirrors
+    ``_latest_planned_by_crid``'s "last wins" semantics, keyed per-uic since a
+    live position nets to one uic). Non-``tranche_plan`` lines and malformed
+    lines (missing/unparsable uic, non-list ``tp_tranches``, or a tranche
+    missing/mistyping any of its five fields) are skipped ENTIRELY -- a
+    malformed line contributes nothing, never a partial fold."""
+    from broker_contract.sizing import TpTranchePlan
+
+    out: dict[int, tuple[tuple[TpTranchePlan, ...], float, float]] = {}
+    for line in lines:
+        if line.get("kind") != "tranche_plan":
+            continue
+        raw_uic = line.get("uic")
+        raw_tranches = line.get("tp_tranches")
+        if raw_uic is None or not isinstance(raw_tranches, list):
+            continue
+        try:
+            uic = int(raw_uic)
+            reference_qty = float(line["reference_qty"])
+            stop_price = float(line["stop_price"])
+            tranches = tuple(
+                TpTranchePlan(
+                    tranche_index=int(t["tranche_index"]),
+                    target_price=float(t["target_price"]),
+                    tranche_pct=float(t["tranche_pct"]),
+                    r_multiple=float(t["r_multiple"]),
+                    tag=str(t["tag"]),
+                )
+                for t in raw_tranches
+            )
+        except (KeyError, TypeError, ValueError):
+            continue
+        out[uic] = (tranches, reference_qty, stop_price)
+    return out
+
+
 def _mark_oco_unsupported(uic: int) -> None:
     """Persist the per-instrument OCO-unsupported capability flag (saxo-oco memo §7).
 
@@ -1643,6 +1729,7 @@ def _place_tiers(
     spec: Any = None,
     exit_spec: Any = None,
     exit_policy: ExitPolicy | None = None,
+    plan: Any = None,
 ) -> int:
     """Place each entry tier's bracket, journaling IMMEDIATELY after each fill so a
     mid-loop crash leaves at most a partial ladder joined to submissions.jsonl (the
@@ -1671,7 +1758,15 @@ def _place_tiers(
     :class:`~broker_contract.trade_intent.schema.TradeSpec` off the drained
     ``TradeIntent`` — the geometry shadow stamp's ``planned_blend`` reads it
     via :func:`~alphalens_pipeline.paper.sizing.planned_blended_entry_from_spec`
-    (the daemon no longer has the raw brief dict at drain time)."""
+    (the daemon no longer has the raw brief dict at drain time).
+
+    ``plan`` (INC-5 Task 1) is the raw sized
+    :class:`~broker_contract.sizing.SetupPlan` off ``_resolve_and_size`` —
+    consulted ONLY to journal ONE ``tranche_plan`` line per uic (the per-uic TP
+    ladder the live-exit engine reads later, INC-5's persistence gap) when
+    ``plan.tp_tranches`` is non-empty. ``None`` (a caller with no sized plan in
+    scope, e.g. the direct-unit tests) journals nothing extra — INERT, byte-
+    identical to a caller that never passes it."""
     from broker_contract.contract import BrokerError
     from broker_contract.trade_intent.schema import ReanchorOnFill
 
@@ -1756,6 +1851,33 @@ def _place_tiers(
                 take_profit=take_profit,
                 tier_index=tier.tier_index,
                 geometry_stamp=_geometry_stamp(use_geometry=use_geometry),
+            )
+        )
+
+    # INC-5 Task 1: journal ONE tranche_plan line per uic (not per tier), so the
+    # live-exit engine can rebuild the full TP ladder from the journal alone
+    # later. Uses the SAME tier-invariant stop-price override as _journal_tier
+    # above (the geometry-override stop never varies by tier). Attempted once,
+    # unconditionally, ahead of the placement loop below — INERT telemetry, so
+    # journaling it regardless of whether any tier actually places is harmless
+    # (nothing reads the fold unless a live position later exists at this uic).
+    # ``getattr`` (not a bare attribute read): several direct-unit-test doubles
+    # pass a bare stub in place of a real SetupPlan (they exercise unrelated
+    # failure paths and never intended to touch the sizing plan at all) — a
+    # stub with no ``tp_tranches`` attribute must skip this block, not crash.
+    if plan is not None and getattr(plan, "tp_tranches", None):
+        use_geometry_for_plan = resolved_exit_policy.applies_geometry and exit_spec is not None
+        tranche_plan_stop_price = (
+            exit_spec.initial_levels.stop
+            if use_geometry_for_plan and exit_spec is not None
+            else placement.disaster_stop_price
+        )
+        _append_standalone_stop_journal(
+            _build_tranche_plan_line(
+                uic=int(instrument.broker_instrument_id),
+                tp_tranches=plan.tp_tranches,
+                reference_qty=sum(t.qty for t in plan.entry_tiers),
+                stop_price=tranche_plan_stop_price,
             )
         )
 
@@ -1893,6 +2015,7 @@ def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = No
             spec,
             exit_spec,
             exit_policy=exit_policy,
+            plan=plan,
         )
         > 0
     )
