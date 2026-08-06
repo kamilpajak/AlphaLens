@@ -170,6 +170,67 @@ class ProposalFunnelSinkTests(unittest.TestCase):
         self.assertIn("NVDA", logs)
         self.assertIn("too_big", logs)
 
+    def test_the_dropped_ticker_list_in_the_log_is_capped(self):
+        # The list is bounded today only because _MAX_CANDIDATES happens to be 15
+        # in another module. Cap it here so raising that constant cannot silently
+        # turn one INFO line into a wall of text.
+        n = orchestrator._MAX_LOGGED_DROPPED_TICKERS + 5
+        tickers = [f"T{i:02d}" for i in range(n)]
+        with self.assertLogs(
+            "alphalens_pipeline.thematic.mapping.orchestrator", level="INFO"
+        ) as cm:
+            self._run(
+                [{"ticker": t, "confidence": 0.5} for t in tickers],
+                dict.fromkeys(tickers, 4_000_000_000_000.0),
+            )
+        logs = "\n".join(cm.output)
+        self.assertIn(f"+{5} more", logs)
+        self.assertNotIn(tickers[-1], logs)
+
+    def test_a_ticker_proposed_twice_gets_its_own_verdict_per_row(self):
+        # Verdicts are attached POSITIONALLY. A dict keyed by ticker would collapse
+        # the two rows onto the last verdict, so a duplicate proposal whose two
+        # mcap lookups disagreed (cache write between calls, PIT->live fallback
+        # firing once) would write a verdict that never applied to the first row.
+        seen: list[str] = []
+
+        def _drifting_mcap(ticker, **_):
+            seen.append(ticker)
+            # Second lookup of DUP comes back out of bracket.
+            return 1_000_000_000.0 if seen.count(ticker) == 1 else 4_000_000_000_000.0
+
+        sink: list[dict] = []
+        with (
+            mock.patch.object(
+                orchestrator.theme_mapper,
+                "propose_candidates",
+                return_value=_proposal(
+                    [{"ticker": "DUP", "confidence": 0.7}, {"ticker": "DUP", "confidence": 0.6}]
+                ),
+            ),
+            mock.patch.object(orchestrator.mcap_filter, "fetch_mcap", side_effect=_drifting_mcap),
+        ):
+            orchestrator._propose_and_filter_candidates(
+                theme="quantum_computing",
+                catalyst=_catalyst(),
+                api_key="k",
+                pro_client=None,
+                min_cap=MIN_CAP,
+                max_cap=MAX_CAP,
+                asof=ASOF,
+                funnel_sink=sink,
+            )
+        self.assertEqual(len(sink), 2)
+        self.assertEqual(
+            [r["bracket_verdict"] for r in sink], [mcap_filter.IN_BRACKET, mcap_filter.TOO_BIG]
+        )
+
+    def test_missing_confidence_matches_the_candidates_parquet_default(self):
+        # _build_row uses cand.get("confidence", 0.0); the funnel must not report
+        # null for the same omission or the two files disagree on what happened.
+        _kept, sink = self._run([{"ticker": "QUBT"}], {"QUBT": 1_827_000_000})
+        self.assertEqual(sink[0]["llm_confidence"], 0.0)
+
 
 class ProposalFunnelParquetTests(unittest.TestCase):
     """``map_themes`` persists the funnel next to the candidates it explains."""
