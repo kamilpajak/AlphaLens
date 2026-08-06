@@ -1024,7 +1024,9 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
     when a sized ``SetupPlan`` with a non-empty ``tp_tranches`` is passed —
     ADDITIVE to (never replacing) the existing per-tier ``planned`` journaling."""
 
-    def _run(self, *, plan: Any) -> list[dict[str, Any]]:
+    def _run(
+        self, *, plan: Any, exit_spec: Any = None, exit_policy: Any = None
+    ) -> list[dict[str, Any]]:
         journaled: list[dict[str, Any]] = []
         pkg = "alphalens_pipeline.brokers"
         with contextlib.ExitStack() as stack:
@@ -1041,8 +1043,8 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
                 None,
                 _placement(),
                 None,
-                None,
-                exit_policy=SetupStaticPolicy(),
+                exit_spec,
+                exit_policy=exit_policy if exit_policy is not None else SetupStaticPolicy(),
                 plan=plan,
             )
         return journaled
@@ -1090,6 +1092,29 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
     def test_empty_tp_tranches_journals_nothing_extra(self) -> None:
         journaled = self._run(plan=self._plan(tp_tranches=()))
         self.assertEqual([line for line in journaled if line["kind"] == "tranche_plan"], [])
+
+    def test_geometry_policy_journals_one_tranche_plan_from_exit_spec_tp(self) -> None:
+        # INC-5 production bug: under the geometry policy (atr_bracket_1p5) the
+        # brief's static plan.tp_tranches is EMPTY -- the TP lives in exit_spec
+        # instead -- so real picks never got a tranche_plan line and the
+        # live-exit engine skipped every real position. The geometry TP must
+        # journal as a single 100% tranche, sourced from exit_spec, not from
+        # the (empty) static plan.tp_tranches.
+        spec = _exit_spec(stop=8.5, tp=13.0, atr=1.0)
+        journaled = self._run(
+            plan=self._plan(tp_tranches=()),
+            exit_spec=spec,
+            exit_policy=resolve_exit_policy("atr_bracket_1p5"),
+        )
+        tranche_plan_lines = [line for line in journaled if line["kind"] == "tranche_plan"]
+        self.assertEqual(len(tranche_plan_lines), 1)
+        line = tranche_plan_lines[0]
+        self.assertEqual(line["uic"], _instr().broker_instrument_id)
+        self.assertEqual(line["reference_qty"], 100.0)  # 60 + 40 entry-tier qty
+        self.assertAlmostEqual(line["stop_price"], 8.5)  # exit_spec.initial_levels.stop
+        self.assertEqual(len(line["tp_tranches"]), 1)
+        self.assertAlmostEqual(line["tp_tranches"][0]["target_price"], 13.0)
+        self.assertAlmostEqual(line["tp_tranches"][0]["tranche_pct"], 1.0)
 
 
 class TestBuildPlannedLineGeometryStamp(unittest.TestCase):
