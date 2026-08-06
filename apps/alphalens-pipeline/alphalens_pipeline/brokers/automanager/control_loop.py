@@ -2077,7 +2077,17 @@ def _place_tiers(
         if use_geometry_for_plan and exit_spec is not None:
             geo_tp = exit_spec.initial_levels.tp
             geo_stop = exit_spec.initial_levels.stop
-            if geo_tp is not None and math.isfinite(geo_tp) and geo_tp > 0:
+            # Guard BOTH levels finite/positive: geo_stop is written verbatim by
+            # _build_tranche_plan_line (float(stop_price)), so a None/NaN stop
+            # from a future geometry policy must skip, not crash or poison it.
+            if (
+                geo_tp is not None
+                and math.isfinite(geo_tp)
+                and geo_tp > 0
+                and geo_stop is not None
+                and math.isfinite(geo_stop)
+                and geo_stop > 0
+            ):
                 # Geometry yields ONE (stop, tp) level: a single-tranche ladder
                 # that exits 100% of the position at that take-profit.
                 tranche_ladder = (
