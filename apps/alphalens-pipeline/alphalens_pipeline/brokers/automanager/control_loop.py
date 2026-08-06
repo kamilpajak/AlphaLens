@@ -1971,6 +1971,7 @@ def _place_tiers(
     scope, e.g. the direct-unit tests) journals nothing extra — INERT, byte-
     identical to a caller that never passes it."""
     from broker_contract.contract import BrokerError
+    from broker_contract.sizing import TpTranchePlan
     from broker_contract.trade_intent.schema import ReanchorOnFill
 
     from alphalens_pipeline.brokers.submission_log import (
@@ -2057,29 +2058,48 @@ def _place_tiers(
             )
         )
 
-    # INC-5 Task 1: journal ONE tranche_plan line per uic (not per tier), so the
-    # live-exit engine can rebuild the full TP ladder from the journal alone
-    # later. Uses the SAME tier-invariant stop-price override as _journal_tier
-    # above (the geometry-override stop never varies by tier). Attempted once,
-    # unconditionally, ahead of the placement loop below — INERT telemetry, so
-    # journaling it regardless of whether any tier actually places is harmless
-    # (nothing reads the fold unless a live position later exists at this uic).
-    # ``getattr`` (not a bare attribute read): several direct-unit-test doubles
-    # pass a bare stub in place of a real SetupPlan (they exercise unrelated
-    # failure paths and never intended to touch the sizing plan at all) — a
-    # stub with no ``tp_tranches`` attribute must skip this block, not crash.
-    if plan is not None and getattr(plan, "tp_tranches", None):
-        use_geometry_for_plan = resolved_exit_policy.applies_geometry and exit_spec is not None
-        tranche_plan_stop_price = (
-            exit_spec.initial_levels.stop
-            if use_geometry_for_plan and exit_spec is not None
-            else placement.disaster_stop_price
-        )
+    # INC-5: journal ONE tranche_plan line per uic so the live-exit engine can
+    # rebuild the TP ladder from the journal alone. Source it from whatever the
+    # ACTIVE exit policy actually places the TP from: under the geometry policy
+    # (atr_bracket_1p5) that is the single ``exit_spec.initial_levels.tp`` level
+    # and ``plan.tp_tranches`` is EMPTY (the brief expresses its exit as
+    # geometry, not static tranches) — so gating on ``plan.tp_tranches`` alone
+    # silently dropped every geometry pick. Under the static policy the ladder
+    # IS ``plan.tp_tranches``. ``getattr`` keeps a bare-stub plan (unrelated
+    # failure-path unit doubles with no ``entry_tiers``/``tp_tranches``) from
+    # crashing — it simply journals nothing.
+    use_geometry_for_plan = resolved_exit_policy.applies_geometry and exit_spec is not None
+    plan_entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
+    static_tranches = getattr(plan, "tp_tranches", None) if plan is not None else None
+    tranche_ladder: tuple[TpTranchePlan, ...] = ()
+    tranche_plan_stop_price = placement.disaster_stop_price
+    if plan_entry_tiers:
+        if use_geometry_for_plan and exit_spec is not None:
+            geo_tp = exit_spec.initial_levels.tp
+            geo_stop = exit_spec.initial_levels.stop
+            if geo_tp is not None and math.isfinite(geo_tp) and geo_tp > 0:
+                # Geometry yields ONE (stop, tp) level: a single-tranche ladder
+                # that exits 100% of the position at that take-profit.
+                tranche_ladder = (
+                    TpTranchePlan(
+                        tranche_index=0,
+                        target_price=float(geo_tp),
+                        tranche_pct=1.0,
+                        r_multiple=0.0,
+                        tag="geometry",
+                    ),
+                )
+                tranche_plan_stop_price = geo_stop
+        elif static_tranches:
+            tranche_ladder = static_tranches
+    if (
+        tranche_ladder and plan_entry_tiers
+    ):  # tranche_ladder implies entry tiers; narrows for the type checker
         _append_standalone_stop_journal(
             _build_tranche_plan_line(
                 uic=int(instrument.broker_instrument_id),
-                tp_tranches=plan.tp_tranches,
-                reference_qty=sum(t.qty for t in plan.entry_tiers),
+                tp_tranches=tranche_ladder,
+                reference_qty=sum(t.qty for t in plan_entry_tiers),
                 stop_price=tranche_plan_stop_price,
             )
         )
