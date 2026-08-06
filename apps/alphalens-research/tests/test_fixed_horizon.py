@@ -130,5 +130,161 @@ class TestDayBlockBootstrapCi(unittest.TestCase):
         self.assertTrue(math.isclose(hi, 2.0))
 
 
+def _closes(returns, start=100.0):
+    """Chronological close series implied by ``returns`` (first close is ``start``)."""
+    out = [start]
+    for r in returns:
+        out.append(out[-1] * (1.0 + r))
+    return out
+
+
+# Deterministic, non-constant market path — 40 returns, so a default-window estimate is usable.
+_MARKET_RETURNS = [0.01, -0.005, 0.02, -0.015] * 10
+
+
+class TestEstimateBeta(unittest.TestCase):
+    def test_recovers_known_beta_from_a_pure_two_times_series(self):
+        market = _closes(_MARKET_RETURNS)
+        stock = _closes([2.0 * r for r in _MARKET_RETURNS])
+
+        est = fh.estimate_beta(stock, market)
+
+        self.assertAlmostEqual(est.beta, 2.0, places=6)
+        self.assertEqual(est.source, fh.BETA_ESTIMATED)
+        self.assertEqual(est.n_observations, len(_MARKET_RETURNS))
+
+    def test_falls_back_to_one_below_min_observations(self):
+        market = _closes(_MARKET_RETURNS[:5])
+        stock = _closes([2.0 * r for r in _MARKET_RETURNS[:5]])
+
+        est = fh.estimate_beta(stock, market)
+
+        self.assertEqual(est.beta, 1.0)
+        self.assertEqual(est.source, fh.BETA_FALLBACK_THIN)
+        self.assertEqual(est.n_observations, 5)
+
+    def test_falls_back_when_the_market_never_moves(self):
+        market = [100.0] * (len(_MARKET_RETURNS) + 1)
+        stock = _closes(_MARKET_RETURNS)
+
+        est = fh.estimate_beta(stock, market)
+
+        self.assertEqual(est.beta, 1.0)
+        self.assertEqual(est.source, fh.BETA_FALLBACK_DEGENERATE)
+
+    def test_falls_back_when_the_stock_never_moves(self):
+        # A stale ticker prints the same close every session. Regressing that on a moving
+        # market gives beta 0, which would strip the market adjustment out entirely --
+        # worse than the beta=1 baseline this variant exists to improve on.
+        market = _closes(_MARKET_RETURNS)
+        stock = [100.0] * len(market)
+
+        est = fh.estimate_beta(stock, market)
+
+        self.assertEqual(est.beta, 1.0)
+        self.assertEqual(est.source, fh.BETA_FALLBACK_DEGENERATE)
+
+    def test_a_thin_window_and_a_degenerate_one_are_tagged_differently(self):
+        market = _closes(_MARKET_RETURNS)
+
+        thin = fh.estimate_beta(_closes(_MARKET_RETURNS[:5]), _closes(_MARKET_RETURNS[:5]))
+        degenerate = fh.estimate_beta([100.0] * len(market), market)
+
+        self.assertNotEqual(thin.source, degenerate.source)
+
+    def test_zero_return_sessions_are_counted_so_partial_staleness_is_visible(self):
+        # The degeneracy guard only catches a perfectly flat stock. A half-stale one still
+        # estimates, so the count of flat sessions is reported instead of silently ignored.
+        returns = list(_MARKET_RETURNS)
+        stale = [0.0 if i % 2 else 2.0 * r for i, r in enumerate(returns)]
+        market = _closes(returns)
+
+        est = fh.estimate_beta(_closes(stale), market)
+
+        self.assertEqual(est.source, fh.BETA_ESTIMATED)
+        self.assertEqual(est.n_zero_returns, sum(1 for r in stale if r == 0.0))
+        self.assertGreater(est.n_zero_returns, 0)
+
+    def test_a_move_below_the_float_noise_floor_counts_as_flat(self):
+        returns = list(_MARKET_RETURNS)
+        # A move this small is a rounding artefact, not a session in which the stock traded.
+        stale = [fh.FLAT_RETURN_TOL / 2.0 if i % 2 else 2.0 * r for i, r in enumerate(returns)]
+        market = _closes(returns)
+
+        est = fh.estimate_beta(_closes(stale), market)
+
+        self.assertEqual(est.n_zero_returns, sum(1 for i in range(len(returns)) if i % 2))
+
+    def test_a_missing_close_drops_both_returns_that_span_it(self):
+        market = _closes(_MARKET_RETURNS)
+        stock = _closes([2.0 * r for r in _MARKET_RETURNS])
+        stock[20] = None  # neither r_20 nor r_21 spans a single session any more
+
+        est = fh.estimate_beta(stock, market)
+
+        self.assertEqual(est.n_observations, len(_MARKET_RETURNS) - 2)
+        self.assertAlmostEqual(est.beta, 2.0, places=6)
+        self.assertEqual(est.source, fh.BETA_ESTIMATED)
+
+    def test_non_positive_close_is_treated_as_missing(self):
+        market = _closes(_MARKET_RETURNS)
+        stock = _closes([2.0 * r for r in _MARKET_RETURNS])
+        stock[20] = 0.0
+
+        est = fh.estimate_beta(stock, market)
+
+        self.assertEqual(est.n_observations, len(_MARKET_RETURNS) - 2)
+
+    def test_mismatched_series_lengths_are_rejected(self):
+        with self.assertRaises(ValueError):
+            fh.estimate_beta([100.0, 101.0], [100.0])
+
+
+class TestCarForEventMarketModel(unittest.TestCase):
+    def test_high_beta_name_on_an_up_market_day_has_no_abnormal_return(self):
+        # A beta-2 name that returns exactly 2x a +4% market has earned nothing abnormal.
+        kwargs = {
+            "stock_anchor": 100.0,
+            "stock_horizon": 108.0,
+            "spy_anchor": 100.0,
+            "spy_horizon": 104.0,
+        }
+
+        self.assertAlmostEqual(fh.car_for_event_market_model(beta=2.0, **kwargs), 0.0)
+        # The beta=1 form calls the same move a +4% win — the bias this variant removes.
+        self.assertAlmostEqual(fh.car_for_event(**kwargs), 0.04)
+
+    def test_beta_one_reproduces_the_market_adjusted_form(self):
+        kwargs = {
+            "stock_anchor": 100.0,
+            "stock_horizon": 110.0,
+            "spy_anchor": 100.0,
+            "spy_horizon": 104.0,
+        }
+        self.assertAlmostEqual(
+            fh.car_for_event_market_model(beta=1.0, **kwargs), fh.car_for_event(**kwargs)
+        )
+
+    def test_none_on_missing_or_nonpositive(self):
+        self.assertIsNone(
+            fh.car_for_event_market_model(
+                beta=2.0,
+                stock_anchor=None,
+                stock_horizon=108.0,
+                spy_anchor=100.0,
+                spy_horizon=104.0,
+            )
+        )
+        self.assertIsNone(
+            fh.car_for_event_market_model(
+                beta=2.0,
+                stock_anchor=100.0,
+                stock_horizon=108.0,
+                spy_anchor=0.0,
+                spy_horizon=104.0,
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
