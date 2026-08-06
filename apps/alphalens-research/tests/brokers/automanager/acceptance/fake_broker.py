@@ -55,6 +55,11 @@ class FakeBroker:
         self.stop_place_error: Exception | None = None
         self.failing_uics: set[int] = set()
         self.cancel_errors: dict[str, Exception] = {}
+        # One-shot fault targeting ONLY place_market_order (INC-5 live-exits
+        # coordination proof): lets a scenario shrink the standalone SL via a
+        # SUCCESSFUL amend_stop_amount and then fail the very next market sell,
+        # without failing_uics/stop_place_error also failing the amend.
+        self.market_order_error: Exception | None = None
 
     # ----- instrument registry (ticker <-> uic) --------------------------------
 
@@ -259,6 +264,9 @@ class FakeBroker:
         """In-memory market fill: BUY grows the netted position, SELL reduces it
         (clamped at flat — the netting account never flips short on an oversell).
         Deterministic order id; no resting order is created (a market order fills)."""
+        if self.market_order_error is not None:
+            err, self.market_order_error = self.market_order_error, None  # one-shot
+            raise err
         self._guard_write(uic)
         current = self._positions.get(uic)
         held = current.quantity if current is not None else 0.0
