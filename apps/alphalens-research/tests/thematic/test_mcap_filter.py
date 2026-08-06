@@ -83,6 +83,91 @@ class TestFilterByMcap(unittest.TestCase):
         self.assertEqual(kept, {})
 
 
+class TestClassifyByMcap(unittest.TestCase):
+    """The bracket must say WHY it dropped a name, not just which ones survived.
+
+    ``filter_by_mcap`` answers "who is in bracket" and discards everything else,
+    so a day where 17 of 19 proposals died left no record of WHICH names died or
+    whether they were too big, too small, or simply had no mcap. Answering that
+    required re-running the whole funnel offline (2026-08-06). ``classify_by_mcap``
+    keeps the verdict per proposal so the funnel is readable from disk.
+    """
+
+    MIN_CAP = 500_000_000
+    MAX_CAP = 10_000_000_000
+
+    def _classify(self, mcaps: dict[str, float | None]):
+        with patch.object(mcap_filter, "fetch_mcap", side_effect=lambda t, **_: mcaps.get(t)):
+            return mcap_filter.classify_by_mcap(
+                list(mcaps), min_cap=self.MIN_CAP, max_cap=self.MAX_CAP
+            )
+
+    def test_classifies_every_ticker_and_preserves_input_order(self):
+        verdicts = self._classify(
+            {
+                "MEGA": 50_000_000_000,
+                "GOOD": 1_780_000_000,
+                "MICRO": 100_000_000,
+                "DEAD": None,
+            }
+        )
+        self.assertEqual([v.ticker for v in verdicts], ["MEGA", "GOOD", "MICRO", "DEAD"])
+        self.assertEqual(
+            [v.verdict for v in verdicts],
+            [
+                mcap_filter.TOO_BIG,
+                mcap_filter.IN_BRACKET,
+                mcap_filter.TOO_SMALL,
+                mcap_filter.NO_MCAP,
+            ],
+        )
+
+    def test_carries_the_fetched_mcap_so_a_boundary_miss_is_auditable(self):
+        # SSTK/GETY sat just under the floor on 2026-08-05. Knowing they were
+        # dropped is not enough; the distance from the boundary is the finding.
+        verdicts = self._classify({"SSTK": 229_000_000})
+        self.assertEqual(verdicts[0].market_cap, 229_000_000)
+
+    def test_no_mcap_carries_none_not_zero(self):
+        # Zero would silently read as TOO_SMALL in any downstream aggregate.
+        verdicts = self._classify({"DEAD": None})
+        self.assertIsNone(verdicts[0].market_cap)
+
+    def test_boundaries_are_inclusive_on_both_ends(self):
+        verdicts = self._classify({"FLOOR": 500_000_000, "CEILING": 10_000_000_000})
+        self.assertEqual(
+            [v.verdict for v in verdicts], [mcap_filter.IN_BRACKET, mcap_filter.IN_BRACKET]
+        )
+
+    def test_handles_empty_input(self):
+        self.assertEqual(
+            mcap_filter.classify_by_mcap([], min_cap=self.MIN_CAP, max_cap=self.MAX_CAP), []
+        )
+
+    def test_filter_by_mcap_agrees_with_classify(self):
+        # Behaviour lock: the wrapper must stay a pure projection of the verdicts,
+        # so adding telemetry can never drift from what the pipeline actually keeps.
+        mcaps: dict[str, float | None] = {
+            "MEGA": 50_000_000_000,
+            "GOOD": 1_780_000_000,
+            "ALSO": 2_000_000_000,
+            "MICRO": 100_000_000,
+            "DEAD": None,
+        }
+        with patch.object(mcap_filter, "fetch_mcap", side_effect=lambda t, **_: mcaps.get(t)):
+            kept = mcap_filter.filter_by_mcap(
+                list(mcaps), min_cap=self.MIN_CAP, max_cap=self.MAX_CAP
+            )
+            verdicts = mcap_filter.classify_by_mcap(
+                list(mcaps), min_cap=self.MIN_CAP, max_cap=self.MAX_CAP
+            )
+        in_bracket = {
+            v.ticker: v.market_cap for v in verdicts if v.verdict == mcap_filter.IN_BRACKET
+        }
+        self.assertEqual(kept, in_bracket)
+        self.assertEqual(set(kept), {"GOOD", "ALSO"})
+
+
 class TestFetchMcapErrorPaths(unittest.TestCase):
     def setUp(self):
         # Isolate the persistent mcap cache so these "→ None" assertions are

@@ -25,6 +25,18 @@ from unittest import mock
 from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
+
+def _mcap_from(mcaps):
+    """Stub the mcap LOOKUP, not the bracket.
+
+    Listed tickers come back with that market cap; everything else comes back
+    unknown, and the real bracket comparison decides. Patching this deeper seam
+    (rather than the bracket function itself) keeps these tests exercising the
+    filter they describe instead of replacing it with a hand-written answer.
+    """
+    return lambda ticker, **_: mcaps.get(ticker)
+
+
 _ASOF = dt.date(2026, 7, 25)
 
 
@@ -61,8 +73,8 @@ class ProposalCallIsEventConditionedTests(unittest.TestCase):
             ) as propose,
             mock.patch.object(
                 orchestrator.mcap_filter,
-                "filter_by_mcap",
-                return_value={"AAA": 1_000_000_000.0},
+                "fetch_mcap",
+                side_effect=_mcap_from({"AAA": 1_000_000_000.0}),
             ),
         ):
             orchestrator._propose_and_filter_candidates(

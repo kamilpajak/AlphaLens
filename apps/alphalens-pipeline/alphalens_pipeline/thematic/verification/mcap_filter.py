@@ -23,6 +23,7 @@ import logging
 import math
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 from alphalens_pipeline.data.alt_data.yfinance_client import get_default_yfinance_client
 
@@ -216,6 +217,60 @@ def _mcap_cache_get(ticker: str, *, now: dt.datetime | None = None) -> float | N
         return None
 
 
+IN_BRACKET = "in_bracket"
+TOO_SMALL = "too_small"
+TOO_BIG = "too_big"
+NO_MCAP = "no_mcap"
+
+
+class McapVerdict(NamedTuple):
+    """One proposal's bracket outcome, and the reason for it.
+
+    ``market_cap`` is ``None`` exactly when ``verdict`` is :data:`NO_MCAP` — never
+    ``0.0``, which would read as :data:`TOO_SMALL` in any downstream aggregate and
+    silently turn a data outage into a fleet of tiny companies.
+    """
+
+    ticker: str
+    market_cap: float | None
+    verdict: str
+
+
+def classify_by_mcap(
+    tickers: list[str],
+    *,
+    min_cap: int,
+    max_cap: int,
+    asof: dt.date | None = None,
+) -> list[McapVerdict]:
+    """Return one :class:`McapVerdict` per ticker, in input order.
+
+    The bracket is the single largest sink in the candidate funnel — on
+    2026-08-05 it dropped 17 of 19 proposals — and ``filter_by_mcap`` discards
+    everything it rejects, so answering "were the dropped names bad, or merely
+    the wrong size?" meant re-running the whole funnel offline. This function
+    keeps the verdict and the fetched mcap so the question is answerable from
+    disk, and so a mass drop can be told apart from a yfinance outage
+    (:data:`TOO_BIG` everywhere versus :data:`NO_MCAP` everywhere).
+
+    Pass ``asof`` for historical replay so the bracket is evaluated against PIT
+    mcap rather than today's mcap. Both bounds are inclusive.
+    """
+    verdicts: list[McapVerdict] = []
+    for t in tickers:
+        mc = fetch_mcap(t, asof=asof)
+        if mc is None:
+            verdict = NO_MCAP
+        elif mc < min_cap:
+            verdict = TOO_SMALL
+        elif mc > max_cap:
+            verdict = TOO_BIG
+        else:
+            verdict = IN_BRACKET
+        verdicts.append(McapVerdict(ticker=t, market_cap=mc, verdict=verdict))
+    return verdicts
+
+
 def filter_by_mcap(
     tickers: list[str],
     *,
@@ -225,21 +280,29 @@ def filter_by_mcap(
 ) -> dict[str, float]:
     """Return ``{ticker: mcap}`` for tickers whose mcap is in bracket.
 
-    Tickers with mcap below ``min_cap``, above ``max_cap``, or unavailable
-    are silently dropped — the gate's job is to enforce the bracket, not
-    signal why a candidate was excluded.
+    A pure projection of :func:`classify_by_mcap` — the gate's job is to enforce
+    the bracket, and callers that only need the survivors should not have to
+    filter verdicts themselves. Keeping it a projection (rather than a second
+    implementation of the same comparison) is what stops the telemetry from ever
+    disagreeing with what the pipeline actually keeps.
 
     Pass ``asof`` for historical replay so the bracket is evaluated against
     PIT mcap rather than today's mcap.
     """
     kept: dict[str, float] = {}
-    for t in tickers:
-        mc = fetch_mcap(t, asof=asof)
-        if mc is None:
-            continue
-        if min_cap <= mc <= max_cap:
-            kept[t] = mc
+    for v in classify_by_mcap(tickers, min_cap=min_cap, max_cap=max_cap, asof=asof):
+        if v.verdict == IN_BRACKET and v.market_cap is not None:
+            kept[v.ticker] = v.market_cap
     return kept
 
 
-__all__ = ["fetch_mcap", "filter_by_mcap"]
+__all__ = [
+    "IN_BRACKET",
+    "NO_MCAP",
+    "TOO_BIG",
+    "TOO_SMALL",
+    "McapVerdict",
+    "classify_by_mcap",
+    "fetch_mcap",
+    "filter_by_mcap",
+]

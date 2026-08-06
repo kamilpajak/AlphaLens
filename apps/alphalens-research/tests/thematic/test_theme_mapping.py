@@ -10,6 +10,17 @@ from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 
 
+def _mcap_from(mcaps):
+    """Stub the mcap LOOKUP, not the bracket.
+
+    Listed tickers come back with that market cap; everything else comes back
+    unknown, and the real bracket comparison decides. Patching this deeper seam
+    (rather than the bracket function itself) keeps these tests exercising the
+    filter they describe instead of replacing it with a hand-written answer.
+    """
+    return lambda ticker, **_: mcaps.get(ticker)
+
+
 def _catalyst_payload(
     *,
     url: str = "https://example.com/catalyst",
@@ -713,8 +724,8 @@ class TestMapThemes(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value={"QBTS": 1_000_000_000, "MADEUP": 1_000_000_000},
+                    "fetch_mcap",
+                    side_effect=_mcap_from({"QBTS": 1_000_000_000, "MADEUP": 1_000_000_000}),
                 ),
                 patch.object(orchestrator, "_gate_tenk", side_effect=[True, False]),
                 patch.object(orchestrator, "_gate_press", return_value=False),
@@ -756,8 +767,8 @@ class TestMapThemes(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value={"MADEUP": 1_000_000_000},
+                    "fetch_mcap",
+                    side_effect=_mcap_from({"MADEUP": 1_000_000_000}),
                 ),
                 patch.object(orchestrator, "_gate_tenk", return_value=False),
                 patch.object(orchestrator, "_gate_press", return_value=False),
@@ -793,8 +804,8 @@ class TestMapThemes(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value={"QUBT": 1_780_000_000},
+                    "fetch_mcap",
+                    side_effect=_mcap_from({"QUBT": 1_780_000_000}),
                 ),
                 patch.object(orchestrator, "_gate_tenk", return_value=True),
                 patch.object(orchestrator, "_gate_press", return_value=False),
@@ -833,8 +844,8 @@ class TestMapThemes(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value={"QBTS": 1e9, "MISS1": 1e9, "MISS2": 1e9},
+                    "fetch_mcap",
+                    side_effect=_mcap_from({"QBTS": 1e9, "MISS1": 1e9, "MISS2": 1e9}),
                 ),
                 # QBTS passes tenk; MISS1 fails all (real no); MISS2 unknown all.
                 patch.object(orchestrator, "_gate_tenk", side_effect=[True, False, None]),
@@ -875,8 +886,8 @@ class TestMapThemes(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value={"QBTS": 1_000_000_000},
+                    "fetch_mcap",
+                    side_effect=_mcap_from({"QBTS": 1_000_000_000}),
                 ),
                 patch.object(
                     orchestrator.recent_press,
@@ -952,8 +963,8 @@ class TestMapThemes(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value={"VRT": 1_000_000_000},
+                    "fetch_mcap",
+                    side_effect=_mcap_from({"VRT": 1_000_000_000}),
                 ),
                 patch.object(orchestrator, "_gate_tenk", side_effect=_capture_tenk),
                 patch.object(orchestrator, "_gate_press", side_effect=_capture_press),
@@ -998,8 +1009,8 @@ class TestMapThemes(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value={"QBTS": 1_000_000_000},
+                    "fetch_mcap",
+                    side_effect=_mcap_from({"QBTS": 1_000_000_000}),
                 ),
                 patch.object(orchestrator, "_gate_tenk", side_effect=_capture_tenk),
                 patch.object(orchestrator, "_gate_press", return_value=False),
@@ -1127,8 +1138,8 @@ class TestMapThemesWritesGatesPassedStr(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value={"QBTS": 1_000_000_000},
+                    "fetch_mcap",
+                    side_effect=_mcap_from({"QBTS": 1_000_000_000}),
                 ),
                 patch.object(orchestrator, "_gate_tenk", return_value=True),
                 patch.object(orchestrator, "_gate_press", return_value=True),
@@ -1226,8 +1237,8 @@ class TestDiversityGuardrail(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value=mcap,
+                    "fetch_mcap",
+                    side_effect=_mcap_from(mcap),
                 ),
                 patch.object(
                     orchestrator,
@@ -1264,8 +1275,8 @@ class TestDiversityGuardrail(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value=mcap,
+                    "fetch_mcap",
+                    side_effect=_mcap_from(mcap),
                 ),
                 patch.object(
                     orchestrator,
@@ -1297,8 +1308,8 @@ class TestDiversityGuardrail(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value=mcap,
+                    "fetch_mcap",
+                    side_effect=_mcap_from(mcap),
                 ),
                 patch.object(
                     orchestrator,
@@ -1345,8 +1356,8 @@ class TestDiversityGuardrail(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value=mcap,
+                    "fetch_mcap",
+                    side_effect=_mcap_from(mcap),
                 ),
                 patch.object(
                     orchestrator,
@@ -1413,8 +1424,8 @@ class TestSkipsThemesWithoutCatalyst(unittest.TestCase):
                 ),
                 patch.object(
                     orchestrator.mcap_filter,
-                    "filter_by_mcap",
-                    return_value={"FOO": 1_000_000_000},
+                    "fetch_mcap",
+                    side_effect=_mcap_from({"FOO": 1_000_000_000}),
                 ),
                 patch.object(orchestrator, "_gate_tenk", return_value=True),
                 patch.object(orchestrator, "_gate_press", return_value=False),
