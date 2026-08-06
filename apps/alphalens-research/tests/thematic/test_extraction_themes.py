@@ -280,6 +280,7 @@ class TestWriteThemeRollup(unittest.TestCase):
                     "count_baseline": 1,
                     "novelty_score": 9.86,
                     "rate_surprise": 1.95,
+                    "excess_activity": 2.7,
                     "first_seen": pd.Timestamp("2026-07-30", tz="UTC"),
                     "latest_seen": pd.Timestamp("2026-08-05", tz="UTC"),
                 },
@@ -290,6 +291,7 @@ class TestWriteThemeRollup(unittest.TestCase):
                     "count_baseline": 200,
                     "novelty_score": 1.97,
                     "rate_surprise": 13.7,
+                    "excess_activity": 59.1,
                     "first_seen": pd.Timestamp("2026-07-07", tz="UTC"),
                     "latest_seen": pd.Timestamp("2026-08-05", tz="UTC"),
                 },
@@ -328,6 +330,10 @@ class TestWriteThemeRollup(unittest.TestCase):
         self.assertEqual(by_theme.loc["quantum_computing", "novelty_rank"], 2)
         self.assertEqual(by_theme.loc["quantum_computing", "rate_surprise_rank"], 1)
         self.assertEqual(by_theme.loc["box_office", "rate_surprise_rank"], 2)
+        # Third score ranks independently of the other two, and disagrees with the ratio.
+        self.assertEqual(by_theme.loc["quantum_computing", "excess_activity_rank"], 1)
+        self.assertEqual(by_theme.loc["box_office", "excess_activity_rank"], 2)
+        self.assertEqual(by_theme.loc["box_office", "novelty_rank"], 1)
 
     def test_keeps_the_first_and_last_seen_dates_for_replay(self):
         # roll_up already computes them; dropping them at the write would cost a
@@ -355,6 +361,68 @@ class TestWriteThemeRollup(unittest.TestCase):
                 novelty_config_version="cfg-token",
             )
             self.assertEqual(list(out.glob("*.parquet")), [])
+
+
+class TestExcessActivity(unittest.TestCase):
+    """Third score beside the ratio and the Poisson tail. Telemetry only.
+
+    The ratio and the tail probability both measure RELATIVE acceleration, so both
+    rank a theme that went 0 -> 6 above a large theme running 1.5x its baseline.
+    Excess activity asks a different question on the count scale: how many more
+    recent articles than the baseline rate implies. Measured on one production day
+    it reorders the slate completely, which is exactly why nothing selects on it
+    until there is downstream yield data to choose between the three.
+    """
+
+    def _write(self, events_dir: Path, date: dt.date, rows: list[dict]):
+        pd.DataFrame(rows).to_parquet(events_dir / f"{date.isoformat()}.parquet", index=False)
+
+    def test_excess_is_recent_minus_the_baseline_rate_scaled_to_the_recent_window(self):
+        # 40 recent against 86 baseline over 23 days: expected 7/23*86 = 26.2, excess 13.8.
+        self.assertAlmostEqual(
+            themes.excess_activity(40, 86, recent_days=7, baseline_days=23), 13.8, places=1
+        )
+
+    def test_a_theme_below_its_baseline_rate_has_negative_excess(self):
+        self.assertLess(themes.excess_activity(48, 165, recent_days=7, baseline_days=23), 0.0)
+
+    def test_a_zero_baseline_makes_excess_the_recent_count(self):
+        self.assertAlmostEqual(
+            themes.excess_activity(6, 0, recent_days=7, baseline_days=23), 6.0, places=6
+        )
+
+    def test_it_ranks_a_large_mildly_elevated_theme_above_a_small_burst(self):
+        # The ordering the ratio and the tail probability both get the other way round.
+        big = themes.excess_activity(40, 86, recent_days=7, baseline_days=23)
+        small = themes.excess_activity(6, 0, recent_days=7, baseline_days=23)
+        self.assertGreater(big, small)
+
+    def test_roll_up_carries_excess_for_every_theme(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            events_dir = Path(tmpdir)
+            self._write(
+                events_dir,
+                dt.date(2026, 5, 15),
+                [_event_row("a", "2026-05-15", ["quantum_computing"])],
+            )
+
+            df = themes.roll_up(asof=dt.date(2026, 5, 15), events_dir=events_dir, window_days=30)
+
+            self.assertIn("excess_activity", df.columns)
+            self.assertTrue(df["excess_activity"].notna().all())
+
+    def test_selection_is_untouched_by_the_new_score(self):
+        # flag_novel still gates on the ratio: this PR adds a column, not a policy.
+        rollup = pd.DataFrame(
+            [
+                {"theme": "small_burst", "novelty_score": 9.9, "excess_activity": 3.0},
+                {"theme": "large_steady", "novelty_score": 1.5, "excess_activity": 99.0},
+            ]
+        )
+
+        novel = themes.flag_novel(rollup, threshold=3.0)
+
+        self.assertEqual(list(novel["theme"]), ["small_burst"])
 
 
 class TestNoveltyConfigVersion(unittest.TestCase):

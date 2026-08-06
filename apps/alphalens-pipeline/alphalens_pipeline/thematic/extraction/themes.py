@@ -59,6 +59,7 @@ _OUTPUT_COLUMNS = [
     "count_baseline",
     "novelty_score",
     "rate_surprise",
+    "excess_activity",
     "first_seen",
     "latest_seen",
 ]
@@ -148,12 +149,50 @@ def roll_up(
         )
         for recent, baseline in zip(grouped["count_recent"], grouped["count_baseline"], strict=True)
     ]
+    # Third score, same treatment: stored beside the other two, selecting on neither.
+    grouped["excess_activity"] = [
+        excess_activity(
+            int(recent), int(baseline), recent_days=recent_days, baseline_days=baseline_days
+        )
+        for recent, baseline in zip(grouped["count_recent"], grouped["count_baseline"], strict=True)
+    ]
 
     return (
         grouped[_OUTPUT_COLUMNS]
         .sort_values(["novelty_score", "count_window"], ascending=[False, False])
         .reset_index(drop=True)
     )
+
+
+def excess_activity(
+    count_recent: int,
+    count_baseline: int,
+    *,
+    recent_days: int,
+    baseline_days: int,
+) -> float:
+    """Recent articles above the volume the baseline rate implies, on the count scale.
+
+    ``count_recent - (recent_days / baseline_days) * count_baseline``.
+
+    The ratio and :func:`rate_surprise` both measure RELATIVE acceleration, so both
+    rank a theme that went 0 -> 6 above a large theme running 1.5x its baseline rate.
+    Measured on production, that ordering is why a 40/86 theme sat at rank 263 of
+    11005 under the most conservative ratio treatment available (the lower confidence
+    bound), while a 6/0 theme took first place. This score asks a different question --
+    how much ADDITIONAL coverage arrived -- and answers it in articles rather than in
+    multiples, so a large theme with a modest lift can outrank a small one that
+    tripled.
+
+    Negative when a theme is running BELOW its baseline rate, which is meaningful and
+    deliberately not clipped.
+
+    Telemetry only: nothing selects on it. Which of the three scores earns the
+    selection decision is a question for the downstream yield data the candidate
+    funnel is now collecting, not for whichever one flatters a favourite theme.
+    """
+    expected = (recent_days / max(baseline_days, 1)) * count_baseline
+    return float(count_recent) - expected
 
 
 def rate_surprise(
@@ -234,6 +273,8 @@ THEME_ROLLUP_COLUMNS = (
     "novelty_rank",
     "rate_surprise",
     "rate_surprise_rank",
+    "excess_activity",
+    "excess_activity_rank",
     # Kept, not dropped: "was this theme first seen yesterday?" is a question a
     # replay will want and the columns are already computed upstream.
     "first_seen",
@@ -278,6 +319,9 @@ def write_theme_rollup(
     frame["rate_surprise_rank"] = (
         frame["rate_surprise"].rank(ascending=False, method="min").astype("Int64")
     )
+    frame["excess_activity_rank"] = (
+        frame["excess_activity"].rank(ascending=False, method="min").astype("Int64")
+    )
     frame = frame.reindex(columns=list(THEME_ROLLUP_COLUMNS))
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -301,6 +345,7 @@ __all__ = [
     "DEFAULT_RECENT_DAYS",
     "DEFAULT_THEME_ROLLUP_DIR",
     "DEFAULT_WINDOW_DAYS",
+    "excess_activity",
     "flag_novel",
     "novelty_config_version",
     "rate_surprise",
