@@ -22,6 +22,7 @@ that the client<->manager boundary is real).
 
 from __future__ import annotations
 
+import datetime as dt
 import os
 import unittest
 from pathlib import Path
@@ -32,6 +33,7 @@ from unittest import mock
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import safety, service
 from broker_contract.contract import OrderStatus
+from broker_contract.price_feed import PricePoint
 
 from .fake_broker import FakeBroker
 
@@ -47,6 +49,23 @@ class _Chain:
     def __init__(self, *, alive: bool, reason: str = "") -> None:
         self.alive = alive
         self.reason = reason
+
+
+class _WorldPriceFeed:
+    """A ``PriceFeed`` reading the world's own ``price_is``-set prices, keyed by
+    uic (INC-5 live-exits scenarios). A uic with no price set reads as stale
+    (``None``) — the engine's stream-health veto."""
+
+    def __init__(self, prices: dict[int, float]) -> None:
+        self._prices = prices
+
+    def latest(self, uic: int) -> PricePoint | None:
+        price = self._prices.get(uic)
+        return (
+            None
+            if price is None
+            else PricePoint(uic=uic, price=price, asof=dt.datetime.now(dt.UTC))
+        )
 
 
 class ManagerWorld:
@@ -91,6 +110,11 @@ class ManagerWorld:
         self._working_children: dict[str, tuple[str, ...]] = {}
         self._oco_enabled = False
         self._amend_enabled = False
+        # INC-5 live-exits state: prices the world's _WorldPriceFeed serves,
+        # keyed by uic. Empty by default -> every uic reads stale (None), so a
+        # scenario that never calls price_is never fires a tranche even with
+        # the flag on.
+        self._live_exit_prices: dict[int, float] = {}
 
         # Orders are ON by default (the disaster-stop rail must always be able to
         # place); the exit mechanisms default OFF exactly like production.
@@ -130,6 +154,43 @@ class ManagerWorld:
         take-profit prices) is on record — the normal "a trade opened" setup."""
         self.broker.set_position(ticker, shares, avg_price=price)
         self._seed_plan(ticker, stop=stop, take_profit=take_profit)
+
+    def entry_fills_with_tranches(
+        self,
+        ticker: str,
+        *,
+        shares: float,
+        price: float = _DEFAULT_FILL,
+        stop: float = _DEFAULT_STOP,
+        tranches: tuple[Any, ...],
+    ) -> None:
+        """An entry fills AND carries a live-exit TP ladder on record (INC-5) —
+        the setup a position placed AFTER the tranche_plan journaling deploy
+        has. ``tranches`` is a tuple of ``broker_contract.sizing.TpTranchePlan``.
+        Distinct from ``entry_fills`` (which seeds only the legacy scalar
+        ``planned`` line) so pre-INC-5 scenarios are unaffected."""
+        self.broker.set_position(ticker, shares, avg_price=price)
+        self._seed_plan(ticker, stop=stop, take_profit=None)
+        uic = self.broker.uic_of(ticker)
+        cl._append_standalone_stop_journal(
+            cl._build_tranche_plan_line(
+                uic=uic, tp_tranches=tranches, reference_qty=shares, stop_price=stop
+            )
+        )
+
+    def live_exits_are_enabled(self) -> None:
+        """The live TP-tranche exit engine tick phase is armed (INC-5)."""
+        os.environ["ALPHALENS_LIVE_MARKET_EXITS"] = "1"
+
+    def price_is(self, ticker: str, price: float) -> None:
+        """The live price feed reads this price for ``ticker`` this tick."""
+        self._live_exit_prices[self.broker.uic_of(ticker)] = price
+
+    def market_sell_fails_once(self, error: Exception) -> None:
+        """The NEXT market sell (only) fails at the broker — used to prove the
+        SL, already shrunk by the preceding amend, is re-grown by the very next
+        protection pass in the SAME tick (the failed-sell re-cover proof)."""
+        self.broker.market_order_error = error
 
     def already_holds(self, ticker: str, *, shares: float, price: float = _DEFAULT_FILL) -> None:
         """The account already holds a position with NO plan on record — an
@@ -242,6 +303,23 @@ class ManagerWorld:
         after = len(self.broker.list_working_sell_orders())
         if after != before:
             raise AssertionError(f"expected no new orders, went from {before} to {after}")
+
+    def assert_exactly_covered(self, ticker: str) -> None:
+        """The resting protective stop qty is EXACTLY the owned qty — neither
+        naked (under) nor over-hedged (a stale, un-shrunk stop) — the shape a
+        correctly shrunk SL must have after a live-exit tranche fires."""
+        owned = self._owned(ticker)
+        stop_qty = self._resting_stop_qty(ticker)
+        if abs(stop_qty - owned) > _QTY_EPS:
+            raise AssertionError(
+                f"{ticker}: stop qty {stop_qty} != owned {owned} (expected an exact match)"
+            )
+
+    def owned(self, ticker: str) -> float:
+        return self._owned(ticker)
+
+    def resting_stop_qty(self, ticker: str) -> float:
+        return self._resting_stop_qty(ticker)
 
     def resting_order_count(self) -> int:
         return len(self.broker.list_working_sell_orders())
@@ -362,6 +440,11 @@ class ManagerWorld:
             alert_throttled=alert_throttled,
             place_oco_exit=oco_placer,
             amend_stop=amend_placer,
+            # INC-5: the world's own fake feed, reading whatever price_is() set.
+            # A uic price_is never touched reads stale (None) -> stream-health
+            # veto, so scenarios that never call price_is never fire a tranche
+            # even with live_exits_are_enabled() on.
+            live_exits_feed_factory=lambda _uic_to_ticker: _WorldPriceFeed(self._live_exit_prices),
         )
 
     def _place_pick(self, pick: Any) -> bool:

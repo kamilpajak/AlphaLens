@@ -51,6 +51,7 @@ from broker_contract.exit_geometry import (
     SetupStaticPolicy,
     resolve_exit_policy,
 )
+from broker_contract.sizing import SetupPlan, TierPlan, TpTranchePlan
 from broker_contract.trade_intent.schema import (
     EntryTierSpec,
     ExitGeometrySpec,
@@ -1016,6 +1017,79 @@ class TestPlaceTiersExitGeometryOverride(unittest.TestCase):
         stamp = journaled[0]["geometry"]
         self.assertAlmostEqual(stamp["geometry_stop"], 8.5)
         self.assertIsNone(stamp["k_atr"])
+
+
+class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
+    """``_place_tiers`` (INC-5 Task 1) journals ONE ``tranche_plan`` line per uic
+    when a sized ``SetupPlan`` with a non-empty ``tp_tranches`` is passed —
+    ADDITIVE to (never replacing) the existing per-tier ``planned`` journaling."""
+
+    def _run(self, *, plan: Any) -> list[dict[str, Any]]:
+        journaled: list[dict[str, Any]] = []
+        pkg = "alphalens_pipeline.brokers"
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch.object(cl, "_append_standalone_stop_journal", journaled.append))
+            cl._place_tiers(
+                _PlaceBroker(),
+                _pick("KO", "2026-07-20"),
+                "KO",
+                _instr(),
+                _acct(),
+                None,
+                _placement(),
+                None,
+                None,
+                exit_policy=SetupStaticPolicy(),
+                plan=plan,
+            )
+        return journaled
+
+    def _plan(self, *, tp_tranches: tuple[TpTranchePlan, ...] = ()) -> SetupPlan:
+        return SetupPlan(
+            suggested_size_pct=2.0,
+            scale_factor=1.0,
+            final_size_pct=2.0,
+            total_notional=1000.0,
+            paper_equity=100000.0,
+            disaster_stop=9.0,
+            order_ttl_days=5,
+            entry_tiers=(
+                TierPlan(tier_index=0, limit_price=10.0, qty=60, alloc_pct=60.0, tag="T1"),
+                TierPlan(tier_index=1, limit_price=9.5, qty=40, alloc_pct=40.0, tag="T2"),
+            ),
+            tp_tranches=tp_tranches,
+        )
+
+    def test_journals_one_tranche_plan_line_with_the_full_ladder(self) -> None:
+        tranches = (
+            TpTranchePlan(
+                tranche_index=0, target_price=11.0, tranche_pct=0.5, r_multiple=1.0, tag="tp1"
+            ),
+            TpTranchePlan(
+                tranche_index=1, target_price=12.0, tranche_pct=0.5, r_multiple=2.0, tag="tp2"
+            ),
+        )
+        journaled = self._run(plan=self._plan(tp_tranches=tranches))
+        tranche_plan_lines = [line for line in journaled if line["kind"] == "tranche_plan"]
+        self.assertEqual(len(tranche_plan_lines), 1)
+        line = tranche_plan_lines[0]
+        self.assertEqual(line["uic"], _instr().broker_instrument_id)
+        self.assertEqual(line["reference_qty"], 100.0)  # 60 + 40 entry-tier qty
+        self.assertAlmostEqual(line["stop_price"], 9.0)  # placement.disaster_stop_price
+        self.assertEqual(len(line["tp_tranches"]), 2)
+        # The existing per-tier `planned` journaling is UNCHANGED alongside it.
+        self.assertEqual(len([line for line in journaled if line["kind"] == "planned"]), 1)
+
+    def test_no_plan_journals_nothing_extra(self) -> None:
+        journaled = self._run(plan=None)
+        self.assertEqual([line for line in journaled if line["kind"] == "tranche_plan"], [])
+
+    def test_empty_tp_tranches_journals_nothing_extra(self) -> None:
+        journaled = self._run(plan=self._plan(tp_tranches=()))
+        self.assertEqual([line for line in journaled if line["kind"] == "tranche_plan"], [])
 
 
 class TestBuildPlannedLineGeometryStamp(unittest.TestCase):
