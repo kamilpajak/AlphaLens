@@ -416,6 +416,100 @@ def _load_frozen_candidates(out_path: Path, config_version: str) -> pd.DataFrame
     return df
 
 
+# Ceiling on how many dropped tickers the per-theme funnel line spells out. The
+# list is otherwise bounded only INCIDENTALLY, by ``theme_mapper._MAX_CANDIDATES``
+# in another module — raising that constant must not silently turn one INFO line
+# into a wall of text. The overflow count is still reported.
+_MAX_LOGGED_DROPPED_TICKERS = 10
+
+_PROPOSAL_FUNNEL_COLUMNS = (
+    "asof",
+    "theme",
+    "ticker",
+    "company_name",
+    "llm_confidence",
+    "transmission_channel",
+    "market_cap",
+    "bracket_verdict",
+    "catalyst_url",
+    "catalyst_event_type",
+    "mapper_config_version",
+)
+
+
+def _funnel_row(
+    *,
+    theme: str,
+    cand: dict,
+    verdict: mcap_filter.McapVerdict | None,
+    catalyst: CatalystPayload,
+) -> dict:
+    """One PRE-bracket proposal, with the verdict that decided its fate.
+
+    ``verdict`` is ``None`` only if the classifier somehow skipped the ticker;
+    that is recorded as :data:`~mcap_filter.NO_MCAP` rather than dropped, so the
+    row count always equals the proposal count and "how many did the model
+    actually propose" stays answerable from this file alone.
+    """
+    return {
+        "theme": theme,
+        "ticker": cand["ticker"],
+        "company_name": cand.get("company_name", ""),
+        # Same default as ``_build_row``: a model that omits confidence must not
+        # read as null here and 0.0 in the candidates parquet for the same name.
+        # (The proposal-shadow builder keeps its own None default on purpose —
+        # its rows feed a pre-registered measurement and must not shift.)
+        "llm_confidence": cand.get("confidence", 0.0),
+        "transmission_channel": cand.get("transmission_channel", ""),
+        "market_cap": verdict.market_cap if verdict is not None else None,
+        "bracket_verdict": verdict.verdict if verdict is not None else mcap_filter.NO_MCAP,
+        "catalyst_url": catalyst.url,
+        "catalyst_event_type": catalyst.event_type,
+    }
+
+
+def _write_proposal_funnel_best_effort(
+    asof: dt.date, funnel_rows: list[dict], config_version: str, out_dir: Path
+) -> None:
+    """Write the pre-bracket proposal funnel; swallow any failure.
+
+    Sibling of the candidates parquet, and DELIBERATELY not folded into
+    ``proposal_shadow``: that file feeds a pre-registered head-to-head whose rows
+    are post-mcap by definition, so widening it would corrupt the measurement.
+    Telemetry only — the daily thematic build must never abort because the funnel
+    could not be written.
+    """
+    if not funnel_rows:
+        return
+    try:
+        frame = pd.DataFrame(funnel_rows)
+        frame["asof"] = asof.isoformat()
+        frame["mapper_config_version"] = config_version
+        # ``reindex`` below fixes the schema, which also means a renamed or
+        # misspelled key in ``_funnel_row`` would ship as a silently all-null
+        # column instead of failing. Say so once, at WARNING, rather than
+        # raising — this is telemetry and must not abort the build.
+        missing = [c for c in _PROPOSAL_FUNNEL_COLUMNS if c not in frame.columns]
+        if missing:
+            logger.warning(
+                "map_themes %s: proposal-funnel rows are missing %s — the column(s) "
+                "will be written all-null; _funnel_row and _PROPOSAL_FUNNEL_COLUMNS "
+                "have drifted apart",
+                asof.isoformat(),
+                missing,
+            )
+        frame = frame.reindex(columns=list(_PROPOSAL_FUNNEL_COLUMNS))
+        funnel_dir = Path(out_dir) / "proposal_funnel"
+        funnel_dir.mkdir(parents=True, exist_ok=True)
+        write_parquet_atomic(frame, funnel_dir / f"{asof.isoformat()}.parquet", index=False)
+    except Exception:
+        logger.warning(
+            "map_themes %s: proposal-funnel write failed (telemetry only, ignored)",
+            asof.isoformat(),
+            exc_info=True,
+        )
+
+
 def _propose_and_filter_candidates(
     *,
     theme: str,
@@ -426,6 +520,7 @@ def _propose_and_filter_candidates(
     max_cap: int,
     asof: dt.date,
     model: str | None = None,
+    funnel_sink: list[dict] | None = None,
 ) -> tuple[list[dict], dict[str, float], list[str], theme_mapper.MapperOutcome]:
     """Pro proposal → real-time mcap filter → keyword harvest.
 
@@ -439,6 +534,11 @@ def _propose_and_filter_candidates(
     mapper outcome). Empty candidates list signals "nothing further to do for
     this theme"; the outcome says WHETHER THAT WAS AN ANSWER OR A LOSS, which
     the list itself cannot (issue #982).
+
+    ``funnel_sink``, when given, is appended with one dict per PRE-BRACKET
+    proposal (see :func:`_funnel_row`). It is an out-parameter rather than a
+    fifth return value so the existing four-tuple contract — and every test that
+    patches this function — stays intact. Telemetry only; nothing reads it back.
     """
     proposal = theme_mapper.propose_candidates(
         theme=theme,
@@ -471,29 +571,55 @@ def _propose_and_filter_candidates(
                 outcome.value,
             )
         return [], {}, [], outcome
-    in_bracket = mcap_filter.filter_by_mcap(
+    verdicts = mcap_filter.classify_by_mcap(
         [c["ticker"] for c in proposed],
         min_cap=min_cap,
         max_cap=max_cap,
         asof=asof,
     )
+    in_bracket = {
+        v.ticker: v.market_cap
+        for v in verdicts
+        if v.verdict == mcap_filter.IN_BRACKET and v.market_cap is not None
+    }
     candidates = sorted(
         [c for c in proposed if c["ticker"] in in_bracket],
         key=lambda c: c.get("confidence", 0.0),
         reverse=True,
     )
+    if funnel_sink is not None:
+        # Zip POSITIONALLY, not through a {ticker: verdict} dict. The model can
+        # propose the same ticker twice, and a dict would collapse both rows onto
+        # the LAST verdict — so a duplicate whose two mcap lookups disagreed (a
+        # cache write landing between them, or the PIT->live fallback firing on
+        # one call only) would record a verdict that never applied to the first
+        # row. ``classify_by_mcap`` returns one verdict per input position, so the
+        # zip is exact and a length mismatch would surface here rather than
+        # silently writing a plausible-looking NO_MCAP row.
+        funnel_sink.extend(
+            _funnel_row(theme=theme, cand=c, verdict=v, catalyst=catalyst)
+            for c, v in zip(proposed, verdicts, strict=True)
+        )
     # Funnel telemetry: the mcap stage is otherwise SILENT when it drops
     # everything (nothing reaches the later kept/dropped log), which is exactly
     # how a yfinance/mcap outage collapses the whole day's briefs to zero
     # candidates invisibly. Log proposed -> in-bracket per theme so a mass
-    # off-bracket / no-mcap drop is diagnosable at a glance.
+    # off-bracket / no-mcap drop is diagnosable at a glance. The dropped names
+    # are NAMED, not just counted: "17 dropped" cannot tell a mega-cap-only
+    # answer apart from a yfinance outage, but `NVDA=too_big` versus
+    # `NVDA=no_mcap` can, without re-running the funnel against live yfinance.
+    dropped = [f"{v.ticker}={v.verdict}" for v in verdicts if v.verdict != mcap_filter.IN_BRACKET]
+    shown = dropped[:_MAX_LOGGED_DROPPED_TICKERS]
+    overflow = len(dropped) - len(shown)
+    detail = f": {', '.join(shown)}" + (f" (+{overflow} more)" if overflow else "") if shown else ""
     logger.info(
-        "map_themes %s: theme %r funnel — proposed %d, in mcap bracket %d (%d dropped off-bracket / no mcap)",
+        "map_themes %s: theme %r funnel — proposed %d, in mcap bracket %d (%d dropped off-bracket / no mcap%s)",
         asof.isoformat(),
         theme,
         len(proposed),
         len(candidates),
         len(proposed) - len(candidates),
+        detail,
     )
     keywords = _theme_keywords(theme, pro_keywords=proposal.get("search_keywords") or [])
     return candidates, in_bracket, keywords, outcome
@@ -575,10 +701,15 @@ def _rows_for_theme(
     polygon_client: PolygonClient | None,
     press_df: pd.DataFrame | None,
     keep_unverified: bool,
+    funnel_sink: list[dict] | None = None,
 ) -> tuple[list[dict], int, int, list[dict], theme_mapper.MapperOutcome | None]:
     """Resolve → propose → verify one theme.
 
     Returns ``(rows, dropped, dropped_unknown, proposals, outcome)``.
+
+    ``funnel_sink`` is threaded straight through to
+    :func:`_propose_and_filter_candidates` — see its docstring for why the
+    pre-bracket funnel travels as an out-parameter rather than a return value.
 
     ``proposals`` is the LLM's **pre-gate** candidate set (post-mcap, before the
     verification gates that ``rows`` survives) — captured for the V-forward
@@ -612,6 +743,7 @@ def _rows_for_theme(
         max_cap=max_cap,
         asof=asof,
         model=model,
+        funnel_sink=funnel_sink,
     )
     if not candidates:
         return [], 0, 0, [], outcome
@@ -747,6 +879,7 @@ def map_themes(
     dropped_all_unknown = 0
     catalyst_cache: dict[str, CatalystPayload | None] = {}
     llm_proposals: list[dict] = []
+    funnel_rows: list[dict] = []
     outcomes: list[theme_mapper.MapperOutcome | None] = []
     for theme in themes:
         theme_rows, dropped, dropped_unknown, proposals, outcome = _rows_for_theme(
@@ -761,6 +894,7 @@ def map_themes(
             polygon_client=polygon_client,
             press_df=press_df,
             keep_unverified=keep_unverified,
+            funnel_sink=funnel_rows,
         )
         rows.extend(theme_rows)
         llm_proposals.extend(proposals)
@@ -809,6 +943,10 @@ def map_themes(
     # shadow-write failure must never abort the daily build. Only fires on a
     # fresh (non-frozen) run, alongside the candidates parquet it mirrors.
     _write_proposal_shadow_best_effort(asof, llm_proposals, config_version, output_dir)
+    # Pre-bracket funnel: one row per proposal WITH the reason it survived or
+    # died. The shadow above is post-mcap by design, so without this the names
+    # the bracket rejects leave no trace anywhere on disk.
+    _write_proposal_funnel_best_effort(asof, funnel_rows, config_version, output_dir)
     if dropped_total > 0:
         logger.info(
             "map_themes %s: kept %d / dropped %d (all-unknown %d)",

@@ -18,6 +18,18 @@ from alphalens_pipeline.thematic.mapping import orchestrator
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
 
+
+def _mcap_from(mcaps):
+    """Stub the mcap LOOKUP, not the bracket.
+
+    Listed tickers come back with that market cap; everything else comes back
+    unknown, and the real bracket comparison decides. Patching this deeper seam
+    (rather than the bracket function itself) keeps these tests exercising the
+    filter they describe instead of replacing it with a hand-written answer.
+    """
+    return lambda ticker, **_: mcaps.get(ticker)
+
+
 _LOGGER = "alphalens_pipeline.thematic.mapping.orchestrator"
 
 
@@ -62,8 +74,8 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
             ),
             mock.patch.object(
                 orchestrator.mcap_filter,
-                "filter_by_mcap",
-                return_value=dict.fromkeys(in_bracket, 1_000_000_000.0),
+                "fetch_mcap",
+                side_effect=_mcap_from(dict.fromkeys(in_bracket, 1_000_000_000.0)),
             ),
             self.assertLogs(_LOGGER, level=level) as cm,
         ):
@@ -171,12 +183,14 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
             ),
             mock.patch.object(
                 orchestrator.mcap_filter,
-                "filter_by_mcap",
-                return_value={
-                    "HIGH": 1_000_000_000.0,
-                    "MID": 2_000_000_000.0,
-                    "LOW": 3_000_000_000.0,
-                },
+                "fetch_mcap",
+                side_effect=_mcap_from(
+                    {
+                        "HIGH": 1_000_000_000.0,
+                        "MID": 2_000_000_000.0,
+                        "LOW": 3_000_000_000.0,
+                    }
+                ),
             ),
         ):
             candidates, in_bracket, _keywords, _outcome = (
