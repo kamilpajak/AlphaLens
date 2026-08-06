@@ -627,7 +627,11 @@ def map_themes_cmd(
             novelty_config_version=novelty_cfg,
         )
     except Exception:
-        logger.warning("theme-rollup write failed (telemetry only, ignored)", exc_info=True)
+        logger.warning(
+            "theme-rollup write failed for %s (telemetry only, ignored)",
+            target,
+            exc_info=True,
+        )
     if len(novel) == 0:
         # Quiet day: nothing to map, but still write a typed-empty candidates
         # parquet so `score` finds the file and the run_thematic_day.sh `set -e`

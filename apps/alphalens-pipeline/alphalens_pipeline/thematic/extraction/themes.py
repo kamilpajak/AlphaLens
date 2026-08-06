@@ -180,7 +180,9 @@ def rate_surprise(
     ``+0.5`` smoothing on the baseline is deliberate: a brand-new theme has no
     baseline at all, and the unsmoothed tail probability for it is 0 — an
     infinite score that would make every first-sighting singleton outrank
-    everything else forever, which is the failure this is meant to replace.
+    everything else forever, which is the failure this is meant to replace. It is
+    a choice, not a derivation: its effect on the ordering among the smallest
+    themes is unvalidated, and that is the regime this score exists to fix.
 
     KNOWN BIAS, measured not assumed. Poisson wants variance == mean; news
     arrivals cluster, because one story yields many articles the same day. Over
@@ -195,8 +197,9 @@ def rate_surprise(
     negative binomial), which is only possible once the per-theme daily counts
     are being stored — which is what :func:`write_theme_rollup` starts doing.
 
-    TELEMETRY ONLY as of this change. ``flag_novel`` still selects on the ratio,
-    and the bias above is a reason not to promote this one as-is.
+    TELEMETRY ONLY, and it MUST NOT drive selection until that dispersion estimate
+    exists — the bias above runs in the same direction as the themes a selector
+    would most over-pick. ``flag_novel`` still ranks on the ratio.
     """
     if count_recent <= 0:
         return 0.0
@@ -214,7 +217,9 @@ def rate_surprise(
     # is worse than a plateau — it breaks ranking and poisons any later
     # aggregate — so fall back to the closed-form Chernoff/KL bound for a Poisson
     # upper tail, which is finite, strictly increasing in ``count_recent``, and
-    # agrees with the exact value to ~1% where the two meet.
+    # agrees with the exact value to ~1% where the two meet. Above that crossover
+    # the stored score is therefore a conservative UPPER BOUND on the surprise,
+    # not the tail itself — close ranks up there are not meaningfully separated.
     ratio = count_recent / expected
     return expected * (ratio * math.log(ratio) - ratio + 1.0) / _LN10
 
@@ -229,6 +234,10 @@ THEME_ROLLUP_COLUMNS = (
     "novelty_rank",
     "rate_surprise",
     "rate_surprise_rank",
+    # Kept, not dropped: "was this theme first seen yesterday?" is a question a
+    # replay will want and the columns are already computed upstream.
+    "first_seen",
+    "latest_seen",
     "selected",
     "novelty_config_version",
 )

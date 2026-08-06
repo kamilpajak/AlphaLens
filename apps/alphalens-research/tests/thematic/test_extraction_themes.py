@@ -329,6 +329,15 @@ class TestWriteThemeRollup(unittest.TestCase):
         self.assertEqual(by_theme.loc["quantum_computing", "rate_surprise_rank"], 1)
         self.assertEqual(by_theme.loc["box_office", "rate_surprise_rank"], 2)
 
+    def test_keeps_the_first_and_last_seen_dates_for_replay(self):
+        # roll_up already computes them; dropping them at the write would cost a
+        # replay the ability to ask "was this theme first seen yesterday?".
+        with tempfile.TemporaryDirectory() as tmpdir:
+            df = self._write(Path(tmpdir), ["box_office"])
+        self.assertIn("first_seen", df.columns)
+        self.assertIn("latest_seen", df.columns)
+        self.assertTrue(df["first_seen"].notna().all())
+
     def test_stamps_the_asof_and_the_novelty_config(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             df = self._write(Path(tmpdir), [])
