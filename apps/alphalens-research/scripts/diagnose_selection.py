@@ -2,9 +2,19 @@
 """Fixed-horizon CAR (selection) + Kaplan-Meier survival-fill (entry) diagnostic.
 
 Read-only, research-side. Reads the same three ~/.alphalens parquet stores as
-diagnose_nofill.py. Selection = daily market-adjusted BHAR over fixed k-session
-windows from the event (complete-window-only) with bootstrap CIs; entry =
-time-to-touch-E1 survival with right-censoring at the entry TTL. Telemetry-only.
+diagnose_nofill.py. Selection = market-adjusted BHAR over fixed k-session
+windows from the event (complete-window-only); entry = time-to-touch-E1
+survival with right-censoring at the entry TTL. Telemetry-only.
+
+Every event is scored TWICE and both columns are written: ``car_<k>`` subtracts
+the market return one-for-one (beta = 1, the historical form) and
+``car_mm_<k>`` subtracts the event's own estimated beta times the market
+return. The per-event ``beta`` / ``beta_source`` / ``beta_n_obs`` columns say
+where that beta came from. Re-running this script over the stored parquets is
+the retrospective pass -- it re-scores history, it does not restart it.
+
+Confidence intervals resample WHOLE BRIEF DATES, because the events on one
+brief date share a market move and are not independent draws.
 
     .venv/bin/python apps/alphalens-research/scripts/diagnose_selection.py
 """
@@ -12,6 +22,8 @@ time-to-touch-E1 survival with right-censoring at the entry TTL. Telemetry-only.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
+import functools
 from pathlib import Path
 
 import pandas as pd
@@ -68,6 +80,44 @@ def _open(snapshot: dict | None, ticker: str) -> float | None:
     return o if o > 0.0 else None
 
 
+@functools.cache
+def _pre_event_sessions(anchor: dt.date, window: int, exchange: str) -> tuple[dt.date, ...]:
+    """The ``window`` sessions ending at (and including) ``anchor``, oldest first.
+
+    Memoized because every event on a given brief date shares one anchor, and
+    walking the exchange calendar back 60 sessions per event otherwise dominates
+    the run.
+    """
+    sessions = [anchor]
+    for _ in range(window - 1):
+        sessions.append(previous_trading_day(sessions[-1], exchange))
+    return tuple(reversed(sessions))
+
+
+def _pre_event_closes(
+    grouped,
+    anchor: dt.date,
+    ticker: str,
+    *,
+    window: int,
+    exchange: str,
+) -> tuple[list[float | None], list[float | None]]:
+    """Aligned ``(stock, market)`` close series over the pre-event window.
+
+    A session the store cannot price yields ``None`` in place rather than a
+    shorter list, so the two series stay index-aligned and the beta estimator
+    can drop exactly the returns that span the hole.
+    """
+    sessions = _pre_event_sessions(anchor, window, exchange)
+    stock: list[float | None] = []
+    market: list[float | None] = []
+    for s in sessions:
+        snapshot = grouped.get(s)
+        stock.append(_close(snapshot, ticker))
+        market.append(_close(snapshot, _SPY))
+    return stock, market
+
+
 def _e1(setup: dict | None) -> float | None:
     if not setup or setup.get("status") != "OK":
         return None
@@ -93,6 +143,12 @@ def main() -> None:
         choices=anchor_mod.ANCHOR_MODES,
         default=anchor_mod.ANCHOR_PRIOR_CLOSE,
         help="CAR anchor: prior_close (legacy) or arrival_vwap (price an arrival entry pays)",
+    )
+    ap.add_argument(
+        "--beta-window",
+        type=int,
+        default=fixed_horizon.DEFAULT_BETA_WINDOW,
+        help="pre-event sessions used to estimate each event's beta vs SPY",
     )
     ap.add_argument(
         "--out", type=Path, default=edge_stores.HOME / "diagnostics" / "selection.parquet"
@@ -141,17 +197,40 @@ def main() -> None:
             arrival_open_spy=arrival_open_spy,
         )
 
-        rec: dict = {"brief_date": brief_date, "ticker": ticker, "classification": classification}
+        # Beta over the pre-event window, ending the session before the event is priced in.
+        beta_est = fixed_horizon.estimate_beta(
+            *_pre_event_closes(
+                grouped,
+                anchor_session,
+                ticker,
+                window=args.beta_window,
+                exchange=args.exchange,
+            )
+        )
+
+        rec: dict = {
+            "brief_date": brief_date,
+            "ticker": ticker,
+            "classification": classification,
+            "beta": beta_est.beta,
+            "beta_source": beta_est.source,
+            "beta_n_obs": beta_est.n_observations,
+        }
         for k in fixed_horizon.K_WINDOWS:
             horizon = advance_trading_sessions(arrival, k - 1, args.exchange)
             if horizon > newest:
                 rec[f"car_{k}"] = None  # window not elapsed
+                rec[f"car_mm_{k}"] = None
                 continue
-            rec[f"car_{k}"] = fixed_horizon.car_for_event(
-                stock_anchor=a_stock,
-                stock_horizon=_close(grouped.get(horizon), ticker),
-                spy_anchor=a_spy,
-                spy_horizon=_close(grouped.get(horizon), _SPY),
+            window_kwargs = {
+                "stock_anchor": a_stock,
+                "stock_horizon": _close(grouped.get(horizon), ticker),
+                "spy_anchor": a_spy,
+                "spy_horizon": _close(grouped.get(horizon), _SPY),
+            }
+            rec[f"car_{k}"] = fixed_horizon.car_for_event(**window_kwargs)
+            rec[f"car_mm_{k}"] = fixed_horizon.car_for_event_market_model(
+                beta=beta_est.beta, **window_kwargs
             )
 
         # Survival: first session in [arrival, arrival+ttl) whose low touches E1.
@@ -183,28 +262,45 @@ def main() -> None:
     table.to_parquet(args.out, index=False)
     print(f"plannable: {len(plannable)}; wrote {args.out} rows: {len(table)}")
 
-    # ---- Selection: per-k CAR with bootstrap CI (all / filled / unfilled) ----
+    if table.empty:
+        return
+
+    # ---- Selection: per-k CAR with day-blocked bootstrap CI (all / filled / unfilled) ----
+    n_estimated = int((table["beta_source"] == fixed_horizon.BETA_ESTIMATED).sum())
     print(
-        f"\nfixed-horizon CAR (market-adjusted BHAR vs SPY, anchor={args.anchor}), "
-        "bootstrap 90% CI:"
+        f"\nbeta vs SPY over {args.beta_window} pre-event sessions: "
+        f"{n_estimated}/{len(table)} estimated, "
+        f"{len(table) - n_estimated} fell back to 1.0 "
+        f"(min {fixed_horizon.MIN_BETA_OBSERVATIONS} usable returns)"
+    )
+    print(
+        f"\nfixed-horizon CAR (BHAR vs SPY, anchor={args.anchor}), "
+        "day-blocked bootstrap 90% CI (events on one brief date resample together):"
     )
     for k in fixed_horizon.K_WINDOWS:
-        col = table.get(f"car_{k}", None)
-        if col is None:
-            continue
-        complete = table[col.notna()]
-        groups = {
-            "all": complete,
-            "filled": complete[complete["classification"].isin(_FILLED)],
-            "unfilled": complete[complete["classification"] == "NO_FILL"],
-        }
         print(f"  k={k}:")
-        for name, sub in groups.items():
-            lo, mean, hi = fixed_horizon.bootstrap_ci(sub[f"car_{k}"].tolist(), seed=args.seed)
-            warn = "  [low-N]" if len(sub) < fixed_horizon.LOW_N_WARN else ""
-            ms = f"{mean:+.4f}" if mean is not None else "n/a"
-            cis = f"[{lo:+.4f}, {hi:+.4f}]" if lo is not None else ""
-            print(f"    {name:9} n={len(sub):3} mean={ms} {cis}{warn}")
+        for label, prefix in (("beta=1", "car"), ("market-model", "car_mm")):
+            col = table.get(f"{prefix}_{k}", None)
+            if col is None:
+                continue
+            complete = table[col.notna()]
+            groups = {
+                "all": complete,
+                "filled": complete[complete["classification"].isin(_FILLED)],
+                "unfilled": complete[complete["classification"] == "NO_FILL"],
+            }
+            for name, sub in groups.items():
+                by_day: dict[object, list[float | None]] = {
+                    day: rows[f"{prefix}_{k}"].tolist() for day, rows in sub.groupby("brief_date")
+                }
+                lo, mean, hi = fixed_horizon.day_block_bootstrap_ci(by_day, seed=args.seed)
+                warn = "  [low-N]" if len(sub) < fixed_horizon.LOW_N_WARN else ""
+                ms = f"{mean:+.4f}" if mean is not None else "n/a"
+                cis = f"[{lo:+.4f}, {hi:+.4f}]" if lo is not None else ""
+                print(
+                    f"    {label:12} {name:9} n={len(sub):3} days={len(by_day):3} "
+                    f"mean={ms} {cis}{warn}"
+                )
 
     # ---- Entry: fill-rate + Kaplan-Meier survival ----
     fillable = table[table["fill_duration"].notna()]

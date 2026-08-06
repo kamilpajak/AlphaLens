@@ -1,17 +1,46 @@
 """Fixed-horizon market-adjusted CAR + percentile bootstrap (pure, no I/O).
 
 Selection-quality metric: per-event buy-and-hold abnormal return over a fixed
-k-session window from the event, market-adjusted (beta=1) against SPY. See
+k-session window from the event, market-adjusted against SPY. See
 docs/superpowers/specs/2026-06-16-fixed-horizon-car-survival-fill-design.md.
+
+Two adjustments live here side by side:
+
+* :func:`car_for_event` subtracts the market return one-for-one (beta = 1). It
+  is the historical form and is kept byte-identical so past analyses reproduce.
+* :func:`car_for_event_market_model` subtracts ``beta`` times the market return,
+  with ``beta`` estimated over a pre-event window by :func:`estimate_beta`. The
+  mapper proposes high-beta names, so under beta = 1 an up-market window leaves
+  a systematic positive residual that is exposure, not selection skill.
 """
 
 from __future__ import annotations
 
 import random
 from collections.abc import Mapping, Sequence
+from typing import NamedTuple
 
 K_WINDOWS: tuple[int, ...] = (5, 10, 20)
 LOW_N_WARN = 30  # below this, the CI is wide / estimate anecdotal (warning only, not a gate)
+
+BETA_ESTIMATED = "estimated"
+BETA_FALLBACK_ONE = "fallback_1.0"
+DEFAULT_BETA_WINDOW = 60  # pre-event sessions read to estimate beta
+MIN_BETA_OBSERVATIONS = 30  # fewer usable daily-return pairs than this -> fall back to beta = 1
+
+
+class BetaEstimate(NamedTuple):
+    """``beta`` with the provenance needed to filter on it later.
+
+    ``source`` is :data:`BETA_ESTIMATED` or :data:`BETA_FALLBACK_ONE`;
+    ``n_observations`` counts the usable daily-return pairs behind the estimate
+    (it is reported even when the estimate fell back, so a downstream analysis
+    can tell "thinly estimated" from "not estimated at all").
+    """
+
+    beta: float
+    source: str
+    n_observations: int
 
 
 def car_for_event(
@@ -39,6 +68,90 @@ def car_for_event(
     stock_bhar = stock_horizon / stock_anchor - 1.0
     spy_bhar = spy_horizon / spy_anchor - 1.0
     return stock_bhar - spy_bhar
+
+
+def _paired_daily_returns(
+    stock_closes: Sequence[float | None],
+    market_closes: Sequence[float | None],
+) -> list[tuple[float, float]]:
+    """``(stock_return, market_return)`` for every session both series can price.
+
+    A return is kept only when all four closes bracketing it are present and
+    positive, so a gap never turns into a multi-session return quietly priced
+    as a one-session one.
+    """
+    pairs: list[tuple[float, float]] = []
+    for i in range(1, len(stock_closes)):
+        s0, s1 = stock_closes[i - 1], stock_closes[i]
+        m0, m1 = market_closes[i - 1], market_closes[i]
+        if s0 is None or s1 is None or m0 is None or m1 is None:
+            continue
+        if s0 <= 0.0 or s1 <= 0.0 or m0 <= 0.0 or m1 <= 0.0:
+            continue
+        pairs.append((s1 / s0 - 1.0, m1 / m0 - 1.0))
+    return pairs
+
+
+def estimate_beta(
+    stock_closes: Sequence[float | None],
+    market_closes: Sequence[float | None],
+    *,
+    min_observations: int = MIN_BETA_OBSERVATIONS,
+) -> BetaEstimate:
+    """OLS beta of daily stock returns on daily market returns over a pre-event window.
+
+    Both series are chronological closes of the SAME sessions and must be the
+    same length -- a length mismatch means the caller aligned them wrong and
+    raises ``ValueError`` rather than silently regressing offset days.
+
+    Falls back to ``beta = 1`` (tagged :data:`BETA_FALLBACK_ONE`) when fewer
+    than ``min_observations`` usable return pairs survive, or when the market
+    leg has no variance. No shrinkage and no clamp: the raw estimate plus
+    ``n_observations`` lets a caller decide, and a silently clamped beta would
+    be indistinguishable from a real one.
+    """
+    if len(stock_closes) != len(market_closes):
+        raise ValueError(
+            f"close series must be aligned; got {len(stock_closes)} vs {len(market_closes)}"
+        )
+    pairs = _paired_daily_returns(stock_closes, market_closes)
+    n = len(pairs)
+    if n < min_observations:
+        return BetaEstimate(1.0, BETA_FALLBACK_ONE, n)
+
+    mean_s = sum(s for s, _ in pairs) / n
+    mean_m = sum(m for _, m in pairs) / n
+    covariance = sum((s - mean_s) * (m - mean_m) for s, m in pairs)
+    variance = sum((m - mean_m) ** 2 for _, m in pairs)
+    if variance <= 0.0:
+        return BetaEstimate(1.0, BETA_FALLBACK_ONE, n)
+    return BetaEstimate(covariance / variance, BETA_ESTIMATED, n)
+
+
+def car_for_event_market_model(
+    *,
+    stock_anchor: float | None,
+    stock_horizon: float | None,
+    spy_anchor: float | None,
+    spy_horizon: float | None,
+    beta: float,
+) -> float | None:
+    """BHAR net of ``beta`` times the market BHAR over the same window.
+
+    ``beta = 1`` reproduces :func:`car_for_event` exactly. ``None`` under the
+    same missing-or-non-positive-close rule.
+    """
+    market_adjusted = car_for_event(
+        stock_anchor=stock_anchor,
+        stock_horizon=stock_horizon,
+        spy_anchor=spy_anchor,
+        spy_horizon=spy_horizon,
+    )
+    if market_adjusted is None:
+        return None
+    # car_for_event already validated all four closes, so the market leg is computable here.
+    spy_bhar = spy_horizon / spy_anchor - 1.0  # type: ignore[operator]
+    return market_adjusted + (1.0 - beta) * spy_bhar
 
 
 def bootstrap_ci(
