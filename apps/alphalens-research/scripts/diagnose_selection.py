@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import functools
 from pathlib import Path
+from typing import NamedTuple
 
 import pandas as pd
 from alphalens_pipeline.data import rs_history
@@ -125,6 +126,46 @@ def _pre_event_closes(
         stock.append(_close(snapshot, ticker))
         market.append(_close(snapshot, _SPY))
     return stock, market
+
+
+_BETA_FALLBACK_SOURCES = (
+    fixed_horizon.BETA_FALLBACK_THIN,
+    fixed_horizon.BETA_FALLBACK_DEGENERATE,
+)
+
+
+class _BetaCounts(NamedTuple):
+    """How the per-event beta column came out, in buckets that partition it."""
+
+    estimated: int
+    fell_back: int
+    not_attempted: int
+    unexpected: int
+
+
+def _beta_counts(sources: pd.Series) -> _BetaCounts:
+    """Tally a ``beta_source`` column.
+
+    A null means the estimate was never attempted -- the event had no elapsed
+    CAR window, or no priceable anchor -- and its ``beta`` is ``None``, not 1.0.
+    That is a different statement from an attempt that fell back, so the two are
+    counted apart.
+
+    Fallbacks are counted by naming the tags rather than by subtraction, so a
+    ``beta_source`` value added later cannot quietly inflate them. Anything this
+    helper does not recognise lands in ``unexpected``, which the caller prints
+    when it is non-zero -- visible, without aborting a long diagnostic run at
+    its last line.
+    """
+    estimated = int((sources == fixed_horizon.BETA_ESTIMATED).sum())
+    fell_back = int(sources.isin(_BETA_FALLBACK_SOURCES).sum())
+    not_attempted = int(sources.isna().sum())
+    return _BetaCounts(
+        estimated=estimated,
+        fell_back=fell_back,
+        not_attempted=not_attempted,
+        unexpected=len(sources) - estimated - fell_back - not_attempted,
+    )
 
 
 def _e1(setup: dict | None) -> float | None:
@@ -286,14 +327,16 @@ def main() -> None:
         return
 
     # ---- Selection: per-k CAR with day-blocked bootstrap CI (all / filled / unfilled) ----
-    n_estimated = int((table["beta_source"] == fixed_horizon.BETA_ESTIMATED).sum())
+    counts = _beta_counts(table["beta_source"])
     stale_sessions = int(table["beta_n_zero_returns"].fillna(0).sum())
     print(
-        f"\nbeta vs SPY over {args.beta_window} pre-event sessions: "
-        f"{n_estimated}/{len(table)} estimated, "
-        f"{len(table) - n_estimated} fell back to {fixed_horizon.BETA_FALLBACK_VALUE} "
-        f"(min {fixed_horizon.MIN_BETA_OBSERVATIONS} usable returns); "
+        f"\nbeta vs SPY over {args.beta_window} pre-event sessions, {len(table)} events: "
+        f"{counts.estimated} estimated, "
+        f"{counts.fell_back} fell back to {fixed_horizon.BETA_FALLBACK_VALUE} "
+        f"(min {fixed_horizon.MIN_BETA_OBSERVATIONS} usable returns), "
+        f"{counts.not_attempted} not attempted (no elapsed window or no priceable anchor); "
         f"{stale_sessions} flat stock sessions inside the estimated windows"
+        + (f"; {counts.unexpected} with an unrecognised beta_source" if counts.unexpected else "")
     )
     print(
         f"\nfixed-horizon CAR (BHAR vs SPY, anchor={args.anchor}), "
