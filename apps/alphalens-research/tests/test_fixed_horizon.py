@@ -205,6 +205,16 @@ class TestEstimateBeta(unittest.TestCase):
         self.assertEqual(est.n_zero_returns, sum(1 for r in stale if r == 0.0))
         self.assertGreater(est.n_zero_returns, 0)
 
+    def test_a_move_below_the_float_noise_floor_counts_as_flat(self):
+        returns = list(_MARKET_RETURNS)
+        # A move this small is a rounding artefact, not a session in which the stock traded.
+        stale = [fh.FLAT_RETURN_TOL / 2.0 if i % 2 else 2.0 * r for i, r in enumerate(returns)]
+        market = _closes(returns)
+
+        est = fh.estimate_beta(_closes(stale), market)
+
+        self.assertEqual(est.n_zero_returns, sum(1 for i in range(len(returns)) if i % 2))
+
     def test_a_missing_close_drops_both_returns_that_span_it(self):
         market = _closes(_MARKET_RETURNS)
         stock = _closes([2.0 * r for r in _MARKET_RETURNS])

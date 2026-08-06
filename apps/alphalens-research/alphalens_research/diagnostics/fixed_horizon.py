@@ -29,6 +29,9 @@ BETA_FALLBACK_DEGENERATE = "fallback_degenerate"  # one leg never moved
 DEFAULT_BETA_WINDOW = 60  # pre-event sessions read to estimate beta
 MIN_BETA_OBSERVATIONS = 30  # fewer usable daily-return pairs than this -> fall back to beta = 1
 BETA_FALLBACK_VALUE = 1.0  # what a failed estimate reverts to: the historical beta=1 form
+# A daily return under this is a rounding artefact of dividing one close by an equal one,
+# not a session in which the ticker traded. Well below any real tick on a priced instrument.
+FLAT_RETURN_TOL = 1e-12
 
 
 class BetaEstimate(NamedTuple):
@@ -123,7 +126,7 @@ def estimate_beta(
         )
     pairs = _paired_daily_returns(stock_closes, market_closes)
     n = len(pairs)
-    n_zero = sum(1 for s, _ in pairs if s == 0.0)
+    n_zero = sum(1 for s, _ in pairs if abs(s) <= FLAT_RETURN_TOL)
     if n < min_observations:
         return BetaEstimate(BETA_FALLBACK_VALUE, BETA_FALLBACK_THIN, n, n_zero)
 
