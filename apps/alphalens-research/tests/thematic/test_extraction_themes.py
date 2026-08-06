@@ -397,6 +397,16 @@ class TestExcessActivity(unittest.TestCase):
         small = themes.excess_activity(6, 0, recent_days=7, baseline_days=23)
         self.assertGreater(big, small)
 
+    def test_a_zero_recent_window_clamps_instead_of_zeroing_the_expectation(self):
+        # Unguarded, recent_days=0 makes the expectation 0 and the excess equal to the
+        # raw recent count -- a plausible-looking number for an undefined quantity.
+        # Clamp to one day, matching the ratio's own max(recent_days, 1).
+        self.assertEqual(
+            themes.excess_activity(6, 10, recent_days=0, baseline_days=23),
+            themes.excess_activity(6, 10, recent_days=1, baseline_days=23),
+        )
+        self.assertNotEqual(themes.excess_activity(6, 10, recent_days=0, baseline_days=23), 6.0)
+
     def test_roll_up_carries_excess_for_every_theme(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             events_dir = Path(tmpdir)
@@ -410,6 +420,50 @@ class TestExcessActivity(unittest.TestCase):
 
             self.assertIn("excess_activity", df.columns)
             self.assertTrue(df["excess_activity"].notna().all())
+
+    def test_tied_excess_shares_a_rank_and_the_next_theme_skips(self):
+        # method="min" keeps "rank r means r-1 themes scored strictly higher". A switch
+        # to dense or first ranking would silently break that and go unnoticed, because
+        # a large share of themes tie at the same small excess.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out = Path(tmpdir)
+            themes.write_theme_rollup(
+                dt.date(2026, 8, 5),
+                pd.DataFrame(
+                    [
+                        {
+                            "theme": "a",
+                            "novelty_score": 1.0,
+                            "rate_surprise": 1.0,
+                            "excess_activity": 5.0,
+                        },
+                        {
+                            "theme": "b",
+                            "novelty_score": 1.0,
+                            "rate_surprise": 1.0,
+                            "excess_activity": 5.0,
+                        },
+                        {
+                            "theme": "c",
+                            "novelty_score": 1.0,
+                            "rate_surprise": 1.0,
+                            "excess_activity": 1.0,
+                        },
+                    ]
+                ),
+                selected=[],
+                out_dir=out,
+                novelty_config_version="cfg",
+            )
+            ranks = (
+                pd.read_parquet(out / "2026-08-05.parquet")
+                .set_index("theme")["excess_activity_rank"]
+                .to_dict()
+            )
+
+        self.assertEqual(ranks["a"], 1)
+        self.assertEqual(ranks["b"], 1)
+        self.assertEqual(ranks["c"], 3)
 
     def test_selection_is_untouched_by_the_new_score(self):
         # flag_novel still gates on the ratio: this PR adds a column, not a policy.

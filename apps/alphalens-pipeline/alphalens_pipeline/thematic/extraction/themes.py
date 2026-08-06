@@ -191,7 +191,10 @@ def excess_activity(
     selection decision is a question for the downstream yield data the candidate
     funnel is now collecting, not for whichever one flatters a favourite theme.
     """
-    expected = (recent_days / max(baseline_days, 1)) * count_baseline
+    # Both windows are clamped, matching the ratio's own max(recent_days, 1). Guarding
+    # only the denominator would let recent_days == 0 zero the expectation and return
+    # the raw recent count -- a plausible-looking number for an undefined quantity.
+    expected = (max(recent_days, 1) / max(baseline_days, 1)) * count_baseline
     return float(count_recent) - expected
 
 
