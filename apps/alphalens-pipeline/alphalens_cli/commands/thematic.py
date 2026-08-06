@@ -612,6 +612,26 @@ def map_themes_cmd(
     novelty_cfg = themes_mod.novelty_config_version(
         window_days=window_days, recent_days=recent_days, threshold=novelty_threshold
     )
+    # Persist the FULL ranking — every theme in the window, both scores, and which
+    # ones were actually mapped. Written here, after truncation, so the `selected`
+    # flag records what really happened rather than what a reader would have to
+    # reconstruct. This is what makes an alternative selection rule replayable
+    # offline against real days instead of requiring a live experiment. Telemetry
+    # only: nothing below reads it, and a failure must not cost the day's briefs.
+    try:
+        themes_mod.write_theme_rollup(
+            target,
+            rollup,
+            selected=list(novel["theme"]),
+            out_dir=themes_mod.DEFAULT_THEME_ROLLUP_DIR,
+            novelty_config_version=novelty_cfg,
+        )
+    except Exception:
+        logger.warning(
+            "theme-rollup write failed for %s (telemetry only, ignored)",
+            target,
+            exc_info=True,
+        )
     if len(novel) == 0:
         # Quiet day: nothing to map, but still write a typed-empty candidates
         # parquet so `score` finds the file and the run_thematic_day.sh `set -e`
