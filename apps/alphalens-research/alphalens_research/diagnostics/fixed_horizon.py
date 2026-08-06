@@ -24,23 +24,39 @@ K_WINDOWS: tuple[int, ...] = (5, 10, 20)
 LOW_N_WARN = 30  # below this, the CI is wide / estimate anecdotal (warning only, not a gate)
 
 BETA_ESTIMATED = "estimated"
-BETA_FALLBACK_ONE = "fallback_1.0"
+BETA_FALLBACK_THIN = "fallback_thin_window"  # too few usable return pairs
+BETA_FALLBACK_DEGENERATE = "fallback_degenerate"  # one leg never moved
 DEFAULT_BETA_WINDOW = 60  # pre-event sessions read to estimate beta
 MIN_BETA_OBSERVATIONS = 30  # fewer usable daily-return pairs than this -> fall back to beta = 1
+BETA_FALLBACK_VALUE = 1.0  # what a failed estimate reverts to: the historical beta=1 form
 
 
 class BetaEstimate(NamedTuple):
     """``beta`` with the provenance needed to filter on it later.
 
-    ``source`` is :data:`BETA_ESTIMATED` or :data:`BETA_FALLBACK_ONE`;
+    ``source`` is :data:`BETA_ESTIMATED`, :data:`BETA_FALLBACK_THIN` or
+    :data:`BETA_FALLBACK_DEGENERATE` -- the two failure modes are tagged apart
+    because they mean different things: a thin window may fill in later, a
+    degenerate one says the ticker or the market never moved.
+
     ``n_observations`` counts the usable daily-return pairs behind the estimate
-    (it is reported even when the estimate fell back, so a downstream analysis
-    can tell "thinly estimated" from "not estimated at all").
+    and is reported even when the estimate fell back. ``n_zero_returns`` counts
+    how many of those sessions the STOCK did not move at all: the degeneracy
+    guard only catches a perfectly flat series, so a partially stale ticker
+    still gets an estimate, and this is the number that exposes it.
     """
 
     beta: float
     source: str
     n_observations: int
+    n_zero_returns: int
+
+
+def _bhar(anchor: float | None, horizon: float | None) -> float | None:
+    """Buy-and-hold return, or ``None`` when either close is missing or non-positive."""
+    if anchor is None or anchor <= 0.0 or horizon is None or horizon <= 0.0:
+        return None
+    return horizon / anchor - 1.0
 
 
 def car_for_event(
@@ -54,19 +70,10 @@ def car_for_event(
 
     ``None`` when any of the four closes is missing or non-positive.
     """
-    if (
-        stock_anchor is None
-        or stock_anchor <= 0.0
-        or stock_horizon is None
-        or stock_horizon <= 0.0
-        or spy_anchor is None
-        or spy_anchor <= 0.0
-        or spy_horizon is None
-        or spy_horizon <= 0.0
-    ):
+    stock_bhar = _bhar(stock_anchor, stock_horizon)
+    spy_bhar = _bhar(spy_anchor, spy_horizon)
+    if stock_bhar is None or spy_bhar is None:
         return None
-    stock_bhar = stock_horizon / stock_anchor - 1.0
-    spy_bhar = spy_horizon / spy_anchor - 1.0
     return stock_bhar - spy_bhar
 
 
@@ -116,16 +123,20 @@ def estimate_beta(
         )
     pairs = _paired_daily_returns(stock_closes, market_closes)
     n = len(pairs)
+    n_zero = sum(1 for s, _ in pairs if s == 0.0)
     if n < min_observations:
-        return BetaEstimate(1.0, BETA_FALLBACK_ONE, n)
+        return BetaEstimate(BETA_FALLBACK_VALUE, BETA_FALLBACK_THIN, n, n_zero)
 
     mean_s = sum(s for s, _ in pairs) / n
     mean_m = sum(m for _, m in pairs) / n
     covariance = sum((s - mean_s) * (m - mean_m) for s, m in pairs)
-    variance = sum((m - mean_m) ** 2 for _, m in pairs)
-    if variance <= 0.0:
-        return BetaEstimate(1.0, BETA_FALLBACK_ONE, n)
-    return BetaEstimate(covariance / variance, BETA_ESTIMATED, n)
+    market_variance = sum((m - mean_m) ** 2 for _, m in pairs)
+    stock_variance = sum((s - mean_s) ** 2 for s, _ in pairs)
+    # A flat market makes the slope undefined; a flat STOCK makes it exactly zero, which
+    # would silently strip the market adjustment out and score raw exposure as skill.
+    if market_variance <= 0.0 or stock_variance <= 0.0:
+        return BetaEstimate(BETA_FALLBACK_VALUE, BETA_FALLBACK_DEGENERATE, n, n_zero)
+    return BetaEstimate(covariance / market_variance, BETA_ESTIMATED, n, n_zero)
 
 
 def car_for_event_market_model(
@@ -141,17 +152,11 @@ def car_for_event_market_model(
     ``beta = 1`` reproduces :func:`car_for_event` exactly. ``None`` under the
     same missing-or-non-positive-close rule.
     """
-    market_adjusted = car_for_event(
-        stock_anchor=stock_anchor,
-        stock_horizon=stock_horizon,
-        spy_anchor=spy_anchor,
-        spy_horizon=spy_horizon,
-    )
-    if market_adjusted is None:
+    stock_bhar = _bhar(stock_anchor, stock_horizon)
+    spy_bhar = _bhar(spy_anchor, spy_horizon)
+    if stock_bhar is None or spy_bhar is None:
         return None
-    # car_for_event already validated all four closes, so the market leg is computable here.
-    spy_bhar = spy_horizon / spy_anchor - 1.0  # type: ignore[operator]
-    return market_adjusted + (1.0 - beta) * spy_bhar
+    return stock_bhar - beta * spy_bhar
 
 
 def bootstrap_ci(

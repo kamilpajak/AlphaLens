@@ -160,17 +160,50 @@ class TestEstimateBeta(unittest.TestCase):
         est = fh.estimate_beta(stock, market)
 
         self.assertEqual(est.beta, 1.0)
-        self.assertEqual(est.source, fh.BETA_FALLBACK_ONE)
+        self.assertEqual(est.source, fh.BETA_FALLBACK_THIN)
         self.assertEqual(est.n_observations, 5)
 
-    def test_falls_back_to_one_when_the_market_never_moves(self):
+    def test_falls_back_when_the_market_never_moves(self):
         market = [100.0] * (len(_MARKET_RETURNS) + 1)
         stock = _closes(_MARKET_RETURNS)
 
         est = fh.estimate_beta(stock, market)
 
         self.assertEqual(est.beta, 1.0)
-        self.assertEqual(est.source, fh.BETA_FALLBACK_ONE)
+        self.assertEqual(est.source, fh.BETA_FALLBACK_DEGENERATE)
+
+    def test_falls_back_when_the_stock_never_moves(self):
+        # A stale ticker prints the same close every session. Regressing that on a moving
+        # market gives beta 0, which would strip the market adjustment out entirely --
+        # worse than the beta=1 baseline this variant exists to improve on.
+        market = _closes(_MARKET_RETURNS)
+        stock = [100.0] * len(market)
+
+        est = fh.estimate_beta(stock, market)
+
+        self.assertEqual(est.beta, 1.0)
+        self.assertEqual(est.source, fh.BETA_FALLBACK_DEGENERATE)
+
+    def test_a_thin_window_and_a_degenerate_one_are_tagged_differently(self):
+        market = _closes(_MARKET_RETURNS)
+
+        thin = fh.estimate_beta(_closes(_MARKET_RETURNS[:5]), _closes(_MARKET_RETURNS[:5]))
+        degenerate = fh.estimate_beta([100.0] * len(market), market)
+
+        self.assertNotEqual(thin.source, degenerate.source)
+
+    def test_zero_return_sessions_are_counted_so_partial_staleness_is_visible(self):
+        # The degeneracy guard only catches a perfectly flat stock. A half-stale one still
+        # estimates, so the count of flat sessions is reported instead of silently ignored.
+        returns = list(_MARKET_RETURNS)
+        stale = [0.0 if i % 2 else 2.0 * r for i, r in enumerate(returns)]
+        market = _closes(returns)
+
+        est = fh.estimate_beta(_closes(stale), market)
+
+        self.assertEqual(est.source, fh.BETA_ESTIMATED)
+        self.assertEqual(est.n_zero_returns, sum(1 for r in stale if r == 0.0))
+        self.assertGreater(est.n_zero_returns, 0)
 
     def test_a_missing_close_drops_both_returns_that_span_it(self):
         market = _closes(_MARKET_RETURNS)

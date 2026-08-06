@@ -40,6 +40,7 @@ from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 
 _SPY = "SPY"
 _FILLED = {"OPEN", "PARTIAL_TP_OPEN", "TP_FULL", "SL_HIT"}
+_SESSION_CACHE_ENTRIES = 4096  # one per distinct (anchor, window, exchange); ~1 per brief date
 
 
 def _close(snapshot: dict | None, ticker: str) -> float | None:
@@ -80,13 +81,21 @@ def _open(snapshot: dict | None, ticker: str) -> float | None:
     return o if o > 0.0 else None
 
 
-@functools.cache
+@functools.lru_cache(maxsize=_SESSION_CACHE_ENTRIES)
 def _pre_event_sessions(anchor: dt.date, window: int, exchange: str) -> tuple[dt.date, ...]:
     """The ``window`` sessions ending at (and including) ``anchor``, oldest first.
 
     Memoized because every event on a given brief date shares one anchor, and
     walking the exchange calendar back 60 sessions per event otherwise dominates
-    the run.
+    the run. One entry per distinct brief date, so the bound is generous.
+
+    The window ends at the anchor, which is the session BEFORE arrival, so it
+    never contains the arrival move. It can still contain earlier drift on the
+    same catalyst: briefs are dated T-1 and a news item may be older than the
+    brief that carries it. Event studies usually gap the estimation window for
+    this reason. No gap is applied here because its length would be an invented
+    constant -- ``beta_source`` and the CAR columns this script now stores are
+    what a later pass needs to choose one from data.
     """
     sessions = [anchor]
     for _ in range(window - 1):
@@ -197,29 +206,39 @@ def main() -> None:
             arrival_open_spy=arrival_open_spy,
         )
 
-        # Beta over the pre-event window, ending the session before the event is priced in.
-        beta_est = fixed_horizon.estimate_beta(
-            *_pre_event_closes(
-                grouped,
-                anchor_session,
-                ticker,
-                window=args.beta_window,
-                exchange=args.exchange,
+        horizons = {
+            k: advance_trading_sessions(arrival, k - 1, args.exchange)
+            for k in fixed_horizon.K_WINDOWS
+        }
+        # Estimating beta walks the grouped store back a whole window, so skip it entirely
+        # when no CAR is computable anyway (nothing elapsed, or the anchor cannot be priced).
+        elapsed = any(h <= newest for h in horizons.values())
+        beta_est = (
+            fixed_horizon.estimate_beta(
+                *_pre_event_closes(
+                    grouped,
+                    anchor_session,
+                    ticker,
+                    window=args.beta_window,
+                    exchange=args.exchange,
+                )
             )
+            if elapsed and a_stock is not None and a_spy is not None
+            else None
         )
 
         rec: dict = {
             "brief_date": brief_date,
             "ticker": ticker,
             "classification": classification,
-            "beta": beta_est.beta,
-            "beta_source": beta_est.source,
-            "beta_n_obs": beta_est.n_observations,
+            "beta": beta_est.beta if beta_est else None,
+            "beta_source": beta_est.source if beta_est else None,
+            "beta_n_obs": beta_est.n_observations if beta_est else None,
+            "beta_n_zero_returns": beta_est.n_zero_returns if beta_est else None,
         }
-        for k in fixed_horizon.K_WINDOWS:
-            horizon = advance_trading_sessions(arrival, k - 1, args.exchange)
-            if horizon > newest:
-                rec[f"car_{k}"] = None  # window not elapsed
+        for k, horizon in horizons.items():
+            if horizon > newest or beta_est is None:
+                rec[f"car_{k}"] = None  # window not elapsed, or nothing to price it against
                 rec[f"car_mm_{k}"] = None
                 continue
             window_kwargs = {
@@ -263,15 +282,18 @@ def main() -> None:
     print(f"plannable: {len(plannable)}; wrote {args.out} rows: {len(table)}")
 
     if table.empty:
+        print("no rows scored; nothing to report for selection or survival")
         return
 
     # ---- Selection: per-k CAR with day-blocked bootstrap CI (all / filled / unfilled) ----
     n_estimated = int((table["beta_source"] == fixed_horizon.BETA_ESTIMATED).sum())
+    stale_sessions = int(table["beta_n_zero_returns"].fillna(0).sum())
     print(
         f"\nbeta vs SPY over {args.beta_window} pre-event sessions: "
         f"{n_estimated}/{len(table)} estimated, "
-        f"{len(table) - n_estimated} fell back to 1.0 "
-        f"(min {fixed_horizon.MIN_BETA_OBSERVATIONS} usable returns)"
+        f"{len(table) - n_estimated} fell back to {fixed_horizon.BETA_FALLBACK_VALUE} "
+        f"(min {fixed_horizon.MIN_BETA_OBSERVATIONS} usable returns); "
+        f"{stale_sessions} flat stock sessions inside the estimated windows"
     )
     print(
         f"\nfixed-horizon CAR (BHAR vs SPY, anchor={args.anchor}), "
@@ -279,16 +301,17 @@ def main() -> None:
     )
     for k in fixed_horizon.K_WINDOWS:
         print(f"  k={k}:")
+        # car_mm_<k> is None exactly when car_<k> is, so one completeness mask serves both.
+        col = table.get(f"car_{k}", None)
+        if col is None:
+            continue
+        complete = table[col.notna()]
+        groups = {
+            "all": complete,
+            "filled": complete[complete["classification"].isin(_FILLED)],
+            "unfilled": complete[complete["classification"] == "NO_FILL"],
+        }
         for label, prefix in (("beta=1", "car"), ("market-model", "car_mm")):
-            col = table.get(f"{prefix}_{k}", None)
-            if col is None:
-                continue
-            complete = table[col.notna()]
-            groups = {
-                "all": complete,
-                "filled": complete[complete["classification"].isin(_FILLED)],
-                "unfilled": complete[complete["classification"] == "NO_FILL"],
-            }
             for name, sub in groups.items():
                 by_day: dict[object, list[float | None]] = {
                     day: rows[f"{prefix}_{k}"].tolist() for day, rows in sub.groupby("brief_date")
