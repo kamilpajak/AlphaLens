@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import logging
 import math
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -20,7 +22,10 @@ import pandas as pd
 from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.thematic.theme_text import slugify_theme
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_EVENTS_DIR = Path.home() / ".alphalens" / "thematic_events"
+DEFAULT_NEWS_DIR = Path.home() / ".alphalens" / "thematic_news"
 DEFAULT_THEME_ROLLUP_DIR = Path.home() / ".alphalens" / "theme_rollup"
 DEFAULT_WINDOW_DAYS = 30
 DEFAULT_RECENT_DAYS = 7
@@ -29,7 +34,8 @@ _LN10 = math.log(10.0)
 
 # Bump for a code-level change to how novelty is COMPUTED (the roll_up ratio
 # formula or normalization) that the three numeric params below cannot express.
-_NOVELTY_CONFIG_SCHEMA = 1
+# 2: counts are DISTINCT STORIES, not article rows (syndication dedup).
+_NOVELTY_CONFIG_SCHEMA = 2
 
 
 def novelty_config_version(*, window_days: int, recent_days: int, threshold: float) -> str:
@@ -57,11 +63,55 @@ _OUTPUT_COLUMNS = [
     "count_window",
     "count_recent",
     "count_baseline",
+    "article_count_window",
     "novelty_score",
     "rate_surprise",
     "first_seen",
     "latest_seen",
 ]
+
+_TITLE_NOISE_RE = re.compile(r"[^a-z0-9]+")
+
+
+def _story_key(news_id: object, title: object) -> str:
+    """Identity of the STORY an article carries, for counting distinct coverage.
+
+    Normalizes the headline to letters and digits so the same story republished by
+    several outlets -- differing only in case, punctuation or spacing -- collapses to
+    one key. An article the news store cannot title falls back to its own ``news_id``,
+    so unjoinable rows count as one story each rather than being dropped or silently
+    merged with every other untitled row.
+    """
+    text = "" if title is None else str(title)
+    normalized = _TITLE_NOISE_RE.sub(" ", text.lower()).strip()
+    return normalized or f"id:{news_id}"
+
+
+def _story_keys(news_dir: Path, asof: dt.date, window_days: int) -> dict[str, str]:
+    """``news_id -> story key`` for the articles in the window; empty when unreadable.
+
+    Best-effort by design: a missing or unreadable news store degrades to
+    article-level counting (the pre-dedup behaviour) rather than failing the run.
+    """
+    if not news_dir.exists():
+        return {}
+    lo = asof - dt.timedelta(days=window_days)
+    keys: dict[str, str] = {}
+    for path in sorted(news_dir.glob("*.parquet")):
+        try:
+            date = dt.date.fromisoformat(path.stem)
+        except ValueError:
+            continue
+        if date < lo or date > asof:
+            continue
+        try:
+            frame = pd.read_parquet(path, columns=["id", "title"])
+        except (OSError, ValueError, KeyError) as exc:
+            logger.warning("theme rollup: unreadable news parquet %s — %s", path, exc)
+            continue
+        for news_id, title in zip(frame["id"], frame["title"], strict=True):
+            keys[str(news_id)] = _story_key(news_id, title)
+    return keys
 
 
 def _empty_frame() -> pd.DataFrame:
@@ -92,6 +142,7 @@ def roll_up(
     *,
     asof: dt.date,
     events_dir: Path = DEFAULT_EVENTS_DIR,
+    news_dir: Path = DEFAULT_NEWS_DIR,
     window_days: int = DEFAULT_WINDOW_DAYS,
     recent_days: int = DEFAULT_RECENT_DAYS,
 ) -> pd.DataFrame:
@@ -100,6 +151,12 @@ def roll_up(
     ``novelty_score = count_recent / max(count_baseline, 1) * (baseline_days / recent_days)``
     so a theme appearing at the same DAILY rate in recent vs baseline scores 1.0;
     appearing 3× more frequently in the recent window scores 3.0.
+
+    The counts are DISTINCT STORIES, not article rows. Syndication republishes one
+    headline across many outlets, and counting rows let a single story look like a
+    burst -- measured on production, every theme on one day's slate came from one or
+    two outlets while the themes it crowded out spanned nineteen. ``article_count_window``
+    keeps the pre-dedup total so the collapse is auditable rather than invisible.
     """
     if not events_dir.exists():
         return _empty_frame()
@@ -108,7 +165,16 @@ def roll_up(
     if df.empty:
         return _empty_frame()
 
-    exploded = df[["_event_date", "themes"]].explode("themes").rename(columns={"themes": "theme"})
+    story_keys = _story_keys(news_dir, asof, window_days)
+    df["_story"] = [
+        story_keys.get(str(nid), f"id:{nid}") for nid in df.get("news_id", pd.Series(df.index))
+    ]
+
+    exploded = (
+        df[["_event_date", "_story", "themes"]]
+        .explode("themes")
+        .rename(columns={"themes": "theme"})
+    )
     exploded = exploded.dropna(subset=["theme"])
     # Slugify on read so format variants ("AI ethics" / "AI_ethics") collapse to
     # ONE theme across the rolling window — a write-format change can never
@@ -124,11 +190,24 @@ def roll_up(
     baseline_days = max(window_days - recent_days, 1)
     scale = baseline_days / max(recent_days, 1)
 
-    grouped = exploded.groupby("theme", as_index=False).agg(
+    # One row per (theme, story, half-window): the same story republished many times
+    # collapses here, BEFORE any counting. Keeping the recent/baseline half in the key
+    # lets a story that spans the boundary count once on each side, which is what the
+    # rate comparison means -- it was covered in both periods.
+    stories = exploded.drop_duplicates(subset=["theme", "_story", "is_recent"])
+
+    grouped = stories.groupby("theme", as_index=False).agg(
         count_window=("theme", "size"),
         count_recent=("is_recent", "sum"),
         first_seen=("_event_date", "min"),
         latest_seen=("_event_date", "max"),
+    )
+    grouped = grouped.merge(
+        exploded.groupby("theme", as_index=False)
+        .size()
+        .rename(columns={"size": "article_count_window"}),
+        on="theme",
+        how="left",
     )
     grouped["count_baseline"] = (grouped["count_window"] - grouped["count_recent"]).clip(lower=0)
     # ``clip(lower=1)`` absorbs the zero-baseline edge case natively:

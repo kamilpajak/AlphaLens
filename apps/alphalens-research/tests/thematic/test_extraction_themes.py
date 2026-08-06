@@ -357,6 +357,150 @@ class TestWriteThemeRollup(unittest.TestCase):
             self.assertEqual(list(out.glob("*.parquet")), [])
 
 
+def _news_row(news_id, title, asof):
+    return {
+        "id": news_id,
+        "source": "gdelt",
+        "timestamp": pd.Timestamp(asof, tz="UTC"),
+        "tickers": [],
+        "title": title,
+        "body": "",
+        "url": f"https://example.test/{news_id}",
+        "keywords": [],
+        "extra": "{}",
+        "ingested_at": pd.Timestamp(asof, tz="UTC"),
+    }
+
+
+class TestRollUpCountsStoriesNotArticles(unittest.TestCase):
+    """A theme's count is DISTINCT STORIES, not article rows.
+
+    Syndication republishes one headline across many outlets. Counting rows made a
+    single story look like a burst: on production data 'box_office' reached the
+    top-10 slate on 5 articles that were 1 distinct title.
+    """
+
+    def _write(self, d: Path, date: dt.date, rows: list[dict]):
+        pd.DataFrame(rows).to_parquet(d / f"{date.isoformat()}.parquet", index=False)
+
+    def _dirs(self, tmpdir):
+        ev, nw = Path(tmpdir) / "events", Path(tmpdir) / "news"
+        ev.mkdir()
+        nw.mkdir()
+        return ev, nw
+
+    def test_one_headline_republished_counts_once(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ev, nw = self._dirs(tmpdir)
+            day = dt.date(2026, 5, 15)
+            self._write(
+                ev, day, [_event_row(f"n{i}", "2026-05-15", ["box_office"]) for i in range(5)]
+            )
+            self._write(
+                nw,
+                day,
+                [_news_row(f"n{i}", "Studio tops weekend chart", "2026-05-15") for i in range(5)],
+            )
+
+            df = themes.roll_up(asof=day, events_dir=ev, news_dir=nw, window_days=30)
+
+            row = df[df["theme"] == "box_office"].iloc[0]
+            self.assertEqual(row["count_window"], 1)
+            self.assertEqual(row["article_count_window"], 5)
+
+    def test_titles_differing_only_in_case_or_punctuation_are_one_story(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ev, nw = self._dirs(tmpdir)
+            day = dt.date(2026, 5, 15)
+            self._write(
+                ev, day, [_event_row(f"n{i}", "2026-05-15", ["tech_rally"]) for i in range(3)]
+            )
+            self._write(
+                nw,
+                day,
+                [
+                    _news_row("n0", "Chips Rally On Demand", "2026-05-15"),
+                    _news_row("n1", "chips rally on demand", "2026-05-15"),
+                    _news_row("n2", "Chips rally  on demand!", "2026-05-15"),
+                ],
+            )
+
+            df = themes.roll_up(asof=day, events_dir=ev, news_dir=nw, window_days=30)
+
+            self.assertEqual(df[df["theme"] == "tech_rally"].iloc[0]["count_window"], 1)
+
+    def test_genuinely_distinct_headlines_still_count_separately(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ev, nw = self._dirs(tmpdir)
+            day = dt.date(2026, 5, 15)
+            self._write(
+                ev,
+                day,
+                [_event_row(f"n{i}", "2026-05-15", ["quantum_computing"]) for i in range(3)],
+            )
+            self._write(
+                nw,
+                day,
+                [
+                    _news_row("n0", "IBM ships a new qubit chip", "2026-05-15"),
+                    _news_row("n1", "Rigetti raises capital", "2026-05-15"),
+                    _news_row("n2", "Quantum error correction milestone", "2026-05-15"),
+                ],
+            )
+
+            df = themes.roll_up(asof=day, events_dir=ev, news_dir=nw, window_days=30)
+
+            row = df[df["theme"] == "quantum_computing"].iloc[0]
+            self.assertEqual(row["count_window"], 3)
+            self.assertEqual(row["article_count_window"], 3)
+
+    def test_an_article_with_no_title_in_the_store_still_counts_as_its_own_story(self):
+        # Missing evidence must never silently vanish: an unjoinable row counts as
+        # one story rather than being dropped or merged with other untitled rows.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ev, nw = self._dirs(tmpdir)
+            day = dt.date(2026, 5, 15)
+            self._write(ev, day, [_event_row(f"n{i}", "2026-05-15", ["biotech"]) for i in range(3)])
+            self._write(nw, day, [_news_row("n0", "Trial readout beats", "2026-05-15")])
+
+            df = themes.roll_up(asof=day, events_dir=ev, news_dir=nw, window_days=30)
+
+            self.assertEqual(df[df["theme"] == "biotech"].iloc[0]["count_window"], 3)
+
+    def test_dedup_applies_within_the_recent_window_too(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ev, nw = self._dirs(tmpdir)
+            recent, old = dt.date(2026, 5, 15), dt.date(2026, 5, 1)
+            self._write(
+                ev, recent, [_event_row(f"r{i}", "2026-05-15", ["box_office"]) for i in range(4)]
+            )
+            self._write(ev, old, [_event_row("o0", "2026-05-01", ["box_office"])])
+            self._write(
+                nw, recent, [_news_row(f"r{i}", "One headline", "2026-05-15") for i in range(4)]
+            )
+            self._write(nw, old, [_news_row("o0", "An older story", "2026-05-01")])
+
+            df = themes.roll_up(
+                asof=recent, events_dir=ev, news_dir=nw, window_days=30, recent_days=7
+            )
+
+            row = df[df["theme"] == "box_office"].iloc[0]
+            self.assertEqual(row["count_recent"], 1)
+            self.assertEqual(row["count_baseline"], 1)
+
+    def test_a_missing_news_store_leaves_counts_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            ev, nw = self._dirs(tmpdir)
+            day = dt.date(2026, 5, 15)
+            self._write(
+                ev, day, [_event_row(f"n{i}", "2026-05-15", ["box_office"]) for i in range(5)]
+            )
+
+            df = themes.roll_up(asof=day, events_dir=ev, news_dir=nw / "absent", window_days=30)
+
+            self.assertEqual(df[df["theme"] == "box_office"].iloc[0]["count_window"], 5)
+
+
 class TestNoveltyConfigVersion(unittest.TestCase):
     """The novelty config token pins window/recent/threshold so a future tune of
     those params makes pre- vs post-change novelty values non-poolable on purpose
@@ -382,6 +526,12 @@ class TestNoveltyConfigVersion(unittest.TestCase):
         a = themes.novelty_config_version(window_days=30, recent_days=7, threshold=3.0)
         b = themes.novelty_config_version(window_days=30, recent_days=7, threshold=2.5)
         self.assertNotEqual(a, b)
+
+    def test_schema_bumped_for_story_level_counting(self):
+        # Counting distinct stories instead of article rows changes which themes are
+        # selected, so novelty values from before and after must not pool. The params
+        # cannot express it, which is exactly what the schema field is for.
+        self.assertEqual(themes._NOVELTY_CONFIG_SCHEMA, 2)
 
     def test_is_canonical_json_with_schema_marker(self):
         import json
