@@ -77,6 +77,9 @@ class LiveExitsNeverBreakNeverNaked(unittest.TestCase):
         world.assert_protected("KO")
         world.assert_not_oversold("KO")
         world.assert_exactly_covered("KO")  # the SL is back to the full 100
+        # Explicit, not merely implied by assert_exactly_covered: the SL was
+        # actually RE-GROWN by the deficit arm, not left untouched by chance.
+        self.assertAlmostEqual(world.resting_stop_qty("KO"), 100.0)
 
     def test_flag_off_a_tranche_target_touch_never_fires(self) -> None:
         # live_exits_are_enabled() is deliberately never called -- the flag

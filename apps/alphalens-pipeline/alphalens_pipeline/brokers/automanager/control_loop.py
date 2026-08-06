@@ -42,7 +42,6 @@ from broker_contract.exit_geometry import (
 
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     ManagedExit,
-    fold_fired_tranches,
     run_live_exits,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
@@ -315,7 +314,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # never-naked backstop — protection stays the LAST pass every tick.
     # Internally gated on the flag (default OFF): a no-op when off, so this
     # call site is unconditional and the flag alone controls behaviour.
-    _run_live_exits_pass(deps, records, report)
+    _run_live_exits_pass(deps, report)
     _run_protection_pass(deps, records, kill, report)
     return report
 
@@ -466,6 +465,40 @@ def _live_exits_orders_allowed() -> bool:
     return os.environ.get(safety.ALLOW_ORDERS_ENV) == "1"
 
 
+def _fold_fired_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[int, frozenset[str]]:
+    """Fired-tranche tags per uic, RESET on each new ``tranche_plan`` line.
+
+    A uic is stable per instrument (Saxo nets by uic), and the standalone-stop
+    journal is append-only and NEVER cleared — so a position that fully exits
+    (every tranche fired) and is later RE-ENTERED on the same uic would, under
+    the engine's own ``fold_fired_tranches`` (which folds every
+    ``tranche_fired`` line ever written for the uic), inherit the PRIOR
+    trade's fired tags and silently suppress the new trade's whole TP ladder
+    forever. Processing the journal in write order (``_iter_standalone_stop_
+    journal`` already yields it that way), a new ``tranche_plan`` line for a
+    uic clears its accumulator — only ``tranche_fired`` lines AFTER the LATEST
+    plan for that uic count. The live-exit engine's own ``fold_fired_tranches``
+    is untouched (still used by its own tests) — this is a control_loop-side
+    wrapper around the same append-only journal, not an engine change."""
+    fired: dict[int, set[str]] = {}
+    for line in lines:
+        raw_uic = line.get("uic")
+        if raw_uic is None:
+            continue
+        try:
+            uic = int(raw_uic)
+        except (TypeError, ValueError):
+            continue
+        kind = line.get("kind")
+        if kind == "tranche_plan":
+            fired.pop(uic, None)
+        elif kind == "tranche_fired":
+            tag = line.get("tag")
+            if tag:
+                fired.setdefault(uic, set()).add(str(tag))
+    return {u: frozenset(t) for u, t in fired.items()}
+
+
 def _build_managed_exits(
     *,
     long_positions: Iterable[Position],
@@ -517,9 +550,7 @@ def _default_live_exits_feed_factory(uic_to_ticker: Mapping[int, str]) -> PriceF
     return YfinancePriceFeed(resolve_ticker=uic_to_ticker.get)
 
 
-def _run_live_exits_pass(
-    deps: LoopDeps, records: list[Mapping[str, Any]], report: TickReport
-) -> None:
+def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     """The live TP-tranche exit tick phase (INC-5), behind
     ``ALPHALENS_LIVE_MARKET_EXITS`` (default OFF) AND ``ALLOW_ORDERS``
     (``_live_exits_orders_allowed`` — see its docstring for why). Early-returns
@@ -532,10 +563,10 @@ def _run_live_exits_pass(
     live-exits failure alerts and returns rather than starving the protection
     pass that runs immediately after (``run_once``).
 
-    ``records`` (the submissions journal) is unused here — the tranche ladder
-    and fired markers come from the SEPARATE standalone-stop journal — kept on
-    the signature for symmetry with the other tick-phase helpers."""
-    del records
+    Unlike the other tick-phase helpers, this one has NO ``records`` parameter:
+    the tranche ladder and fired markers come from the SEPARATE standalone-stop
+    journal, never the submissions journal — a signature carrying an unused
+    param would be misleading, not merely symmetric."""
     if not _live_market_exits_enabled() or not _live_exits_orders_allowed():
         return
     try:
@@ -551,7 +582,7 @@ def _run_live_exits_pass(
     managed = _build_managed_exits(
         long_positions=long_positions,
         tranche_plans=fold_tranche_plans(journal_lines),
-        fired=fold_fired_tranches(journal_lines),
+        fired=_fold_fired_since_latest_plan(journal_lines),
     )
     if not managed:
         return

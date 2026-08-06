@@ -318,6 +318,9 @@ class ManagerWorld:
     def owned(self, ticker: str) -> float:
         return self._owned(ticker)
 
+    def resting_stop_qty(self, ticker: str) -> float:
+        return self._resting_stop_qty(ticker)
+
     def resting_order_count(self) -> int:
         return len(self.broker.list_working_sell_orders())
 

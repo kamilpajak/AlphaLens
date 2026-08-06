@@ -147,6 +147,64 @@ class TestBuildManagedExits(unittest.TestCase):
         self.assertEqual([m.uic for m in managed], [1])
 
 
+class TestFoldFiredSinceLatestPlan(unittest.TestCase):
+    """A uic is stable per instrument (Saxo nets by uic), and the standalone-stop
+    journal is append-only and never cleared. A re-entered position (a fresh
+    ``tranche_plan`` line for a uic that already fired tranches under a PRIOR
+    trade) must NOT inherit the old trade's fired tags -- that would silently
+    suppress the whole new ladder forever. ``_fold_fired_since_latest_plan``
+    resets a uic's accumulator on every new ``tranche_plan`` line, processing
+    the journal in write order."""
+
+    def test_fired_tags_after_the_latest_plan_are_kept(self) -> None:
+        lines = [
+            {"kind": "tranche_plan", "uic": 307},
+            {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
+        ]
+        out = cl._fold_fired_since_latest_plan(lines)
+        self.assertEqual(out[307], frozenset({"tp1"}))
+
+    def test_a_new_tranche_plan_line_resets_the_uics_fired_set(self) -> None:
+        lines = [
+            {"kind": "tranche_plan", "uic": 307},
+            {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
+            {"kind": "tranche_plan", "uic": 307},  # re-entry: the OLD trade's fired tags reset
+        ]
+        out = cl._fold_fired_since_latest_plan(lines)
+        self.assertNotIn(307, out)
+
+    def test_fired_tags_after_the_reset_still_accumulate(self) -> None:
+        lines = [
+            {"kind": "tranche_plan", "uic": 307},
+            {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
+            {"kind": "tranche_plan", "uic": 307},
+            {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
+        ]
+        out = cl._fold_fired_since_latest_plan(lines)
+        self.assertEqual(out[307], frozenset({"tp1"}))
+
+    def test_distinct_uics_reset_independently(self) -> None:
+        lines = [
+            {"kind": "tranche_plan", "uic": 1},
+            {"kind": "tranche_fired", "uic": 1, "tag": "tp1"},
+            {"kind": "tranche_plan", "uic": 2},
+            {"kind": "tranche_fired", "uic": 2, "tag": "tp1"},
+            {"kind": "tranche_plan", "uic": 1},  # only uic 1 resets
+        ]
+        out = cl._fold_fired_since_latest_plan(lines)
+        self.assertNotIn(1, out)
+        self.assertEqual(out[2], frozenset({"tp1"}))
+
+    def test_malformed_lines_are_skipped(self) -> None:
+        lines = [
+            {"kind": "tranche_fired", "tag": "tp1"},  # no uic
+            {"kind": "tranche_fired", "uic": 307},  # no tag
+            {"kind": "oco_placed", "uic": 307},  # unrelated kind
+        ]
+        out = cl._fold_fired_since_latest_plan(lines)
+        self.assertEqual(out, {})
+
+
 class _JournalCase(unittest.TestCase):
     """Base case wiring a temp STANDALONE_STOP_JOURNAL_PATH per test."""
 
@@ -190,7 +248,7 @@ class TestLiveExitsFlagOff(_JournalCase):
             os.environ.pop(_LIVE_EXITS_ENV, None)
             with mock.patch.object(cl, "run_live_exits") as spy:
                 report = cl.TickReport()
-                cl._run_live_exits_pass(deps, [], report)
+                cl._run_live_exits_pass(deps, report)
                 spy.assert_not_called()
                 self.assertEqual(report.exits_placed, 0)
         # No broker mutation at all: position + resting stop untouched.
@@ -218,7 +276,7 @@ class TestLiveExitsOrdersDisabledGate(_JournalCase):
         )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "0"}):
             with mock.patch.object(cl, "run_live_exits") as spy:
-                cl._run_live_exits_pass(deps, [], cl.TickReport())
+                cl._run_live_exits_pass(deps, cl.TickReport())
                 spy.assert_not_called()
         self.assertEqual(broker.get_positions_by_uic(uic).quantity, 100.0)
 
@@ -238,7 +296,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             report = cl.TickReport()
-            cl._run_live_exits_pass(deps, [], report)
+            cl._run_live_exits_pass(deps, report)
         self.assertEqual(broker.get_positions_by_uic(uic).quantity, 50.0)
         sl = next(o for o in broker.list_working_sell_orders() if o.order_type == "StopIfTraded")
         self.assertEqual(sl.amount, 50.0)
@@ -251,6 +309,39 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         self.assertEqual(len(fired), 1)
         self.assertEqual(fired[0]["uic"], uic)
         self.assertEqual(fired[0]["tag"], "tp1")
+
+    def test_a_gap_through_price_fires_two_tranches_in_one_pass(self) -> None:
+        # price crosses tp1 (16, 50%) AND tp2 (18, 30%) of a 100-share reference
+        # in ONE pass. Guards the engine's cumulative-clamp + SL stepping on a
+        # batch: the 2nd amend must land on LIVE owned, not a stale captured
+        # sl_leg.amount (which would over-hedge the SL at 100-30=70).
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic,
+            tranches=(_tr(0, 16.0, 0.5), _tr(1, 18.0, 0.3)),
+            reference_qty=100.0,
+            stop_price=13.0,
+        )
+        alerts: list[str] = []
+        deps = _deps(
+            broker, alerts=alerts, live_exits_feed_factory=lambda m: _FakeFeed({uic: 18.5})
+        )
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)
+        self.assertEqual(broker.get_positions_by_uic(uic).quantity, 20.0)  # sold 50 + 30
+        sl = next(o for o in broker.list_working_sell_orders() if o.order_type == "StopIfTraded")
+        self.assertEqual(sl.amount, 20.0)  # SL tracks the remaining owned, not a stale 70
+        self.assertEqual(report.exits_placed, 2)
+        fired_tags = {
+            line["tag"]
+            for line in cl._iter_standalone_stop_journal()
+            if line.get("kind") == "tranche_fired"
+        }
+        self.assertEqual(fired_tags, {"tp1", "tp2"})
 
     def test_stale_feed_vetoes_all_fires(self) -> None:
         broker = FakeBroker()
@@ -266,7 +357,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             report = cl.TickReport()
-            cl._run_live_exits_pass(deps, [], report)
+            cl._run_live_exits_pass(deps, report)
         self.assertEqual(broker.get_positions_by_uic(uic).quantity, 100.0)
         self.assertEqual(report.exits_placed, 0)
 
@@ -285,7 +376,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             report = cl.TickReport()
-            cl._run_live_exits_pass(deps, [], report)
+            cl._run_live_exits_pass(deps, report)
         self.assertEqual(broker.get_positions_by_uic(uic).quantity, 50.0)
         self.assertEqual(report.exits_placed, 0)
 
@@ -295,7 +386,7 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         deps = _deps(broker, alerts=alerts, live_exits_feed_factory=lambda m: _FakeFeed({}))
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             with mock.patch.object(cl, "run_live_exits") as spy:
-                cl._run_live_exits_pass(deps, [], cl.TickReport())
+                cl._run_live_exits_pass(deps, cl.TickReport())
                 spy.assert_not_called()
 
 
