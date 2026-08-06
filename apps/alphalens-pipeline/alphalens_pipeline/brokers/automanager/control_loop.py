@@ -40,6 +40,11 @@ from broker_contract.exit_geometry import (
     resolve_exit_policy,
 )
 
+from alphalens_pipeline.brokers.automanager.live_exit_engine import (
+    ManagedExit,
+    fold_fired_tranches,
+    run_live_exits,
+)
 from alphalens_pipeline.brokers.automanager.position_manager import (
     _OCO_LAG_HOLD_REASON,
     Action,
@@ -67,6 +72,7 @@ if TYPE_CHECKING:
     import threading
 
     from broker_contract.contract import Broker
+    from broker_contract.price_feed import PriceFeed
     from broker_contract.sizing import TpTranchePlan
 
     from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
@@ -211,6 +217,12 @@ class LoopDeps:
     # default is the inert setup_static policy so every test/second-broker LoopDeps
     # built without it behaves like today's dark path.
     exit_policy: ExitPolicy = field(default_factory=SetupStaticPolicy)
+    # Live TP-tranche exit price-feed factory (INC-5), or None -> the pass falls
+    # back to _default_live_exits_feed_factory (YfinancePriceFeed). Injected so
+    # tests can hand the pass a fake feed without touching yfinance; mirrors the
+    # place_oco_exit / amend_stop optional-capability pattern above. Only ever
+    # consulted when the live-exits pass is armed (flag ON, ALLOW_ORDERS ON).
+    live_exits_feed_factory: Callable[[Mapping[int, str]], PriceFeed] | None = None
 
 
 @dataclass
@@ -297,6 +309,13 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # safety-critical path). Each reads the journal fresh and owns its boundary.
     records = deps.read_records()
     _run_verdict_advance(deps, records, report)
+    # Live TP-tranche exits (INC-5) run IMMEDIATELY BEFORE protection so the
+    # engine's synchronous shrink-SL-then-market-sell fully settles on this
+    # thread before the protection pass re-asserts SL == owned as the
+    # never-naked backstop — protection stays the LAST pass every tick.
+    # Internally gated on the flag (default OFF): a no-op when off, so this
+    # call site is unconditional and the flag alone controls behaviour.
+    _run_live_exits_pass(deps, records, report)
     _run_protection_pass(deps, records, kill, report)
     return report
 
@@ -404,6 +423,155 @@ def _advance_and_execute(
             f"{verdict.ticker}: {type(action).__name__} failed (broker error) — skipped: {exc}"
         )
         report.alerts += 1
+
+
+# --- Live TP-tranche exits (INC-5) --------------------------------------------
+# The live-exit engine (live_exit_engine.py, INC-3) is complete and INERT: it has
+# no daemon caller. This tick phase is the caller — flag-gated, default OFF, so
+# merging it is behaviour-neutral. Runs IMMEDIATELY BEFORE _run_protection_pass
+# (see run_once): the engine's shrink-SL-then-market-sell is synchronous on the
+# main thread, so it fully settles before protection re-asserts SL == owned —
+# a tranche sell that fails after its SL shrink is re-covered by the SAME tick's
+# protection pass (the never-naked backstop), never left naked until the NEXT
+# poll. Only positions carrying a journaled tranche_plan (Task 1) are managed —
+# pre-INC-5 positions have none on record and stay stop-only, the deliberate
+# gradual-rollout boundary (§Non-negotiable design rules).
+
+_LIVE_MARKET_EXITS_ENV = "ALPHALENS_LIVE_MARKET_EXITS"
+
+
+def _live_market_exits_enabled() -> bool:
+    """Whether the live TP-tranche exit tick phase is armed (read at call time,
+    mirrors ``_streaming_enabled`` / ``_oco_enabled`` / ``_amend_enabled``).
+    Defaults OFF — unset (or any value other than ``"1"``) means the pass never
+    builds a ``ManagedExit`` and never calls ``run_live_exits``, byte-identical
+    to today's tick."""
+    return os.environ.get(_LIVE_MARKET_EXITS_ENV) == "1"
+
+
+def _live_exits_orders_allowed() -> bool:
+    """Whether ``ALPHALENS_BROKER_ALLOW_ORDERS`` is armed (read at call time).
+
+    The engine's full-close branch (``live_exit_engine.execute_tranche_exit``)
+    calls ``broker.cancel_order`` on the standalone SL — Saxo's ``cancel_order``
+    is DELIBERATELY not behind the ALLOW_ORDERS gate (cancelling is always
+    safe) — immediately followed by ``broker.place_market_order``, which IS
+    gated. With ALLOW_ORDERS off this would cancel the covering SL and then
+    raise before the sell ever reaches the wire, leaving the position naked
+    until the next protection pass re-covers it. Gating the WHOLE live-exits
+    pass on ALLOW_ORDERS turns a flag-ON-but-orders-disabled run into a clean
+    no-op instead of a transient naked window (self-review finding, INC-5)."""
+    from alphalens_pipeline.brokers.automanager import safety
+
+    return os.environ.get(safety.ALLOW_ORDERS_ENV) == "1"
+
+
+def _build_managed_exits(
+    *,
+    long_positions: Iterable[Position],
+    tranche_plans: Mapping[int, tuple[tuple[TpTranchePlan, ...], float, float]],
+    fired: Mapping[int, frozenset[str]],
+) -> list[ManagedExit]:
+    """Build this tick's managed-position list. Pure — no broker/journal I/O.
+
+    A live long position whose uic has a folded ``tranche_plan`` (Task 1)
+    becomes ONE ``ManagedExit``; a live long with NO ``tranche_plan`` on record
+    is SKIPPED — positions placed before this deploys carry no ladder and stay
+    stop-only forever (the deliberate gradual-rollout boundary)."""
+    managed: list[ManagedExit] = []
+    skipped = 0
+    for pos in long_positions:
+        uic = _position_uic(pos)
+        plan = None if uic is None else tranche_plans.get(uic)
+        if plan is None:
+            skipped += 1
+            continue
+        tp_tranches, reference_qty, stop_price = plan
+        managed.append(
+            ManagedExit(
+                uic=uic,
+                tp_tranches=tp_tranches,
+                reference_qty=reference_qty,
+                stop_price=stop_price,
+                already_fired=fired.get(uic, frozenset()),
+            )
+        )
+    logger.info(
+        "live-exits: %d position(s) managed, %d skipped (no tranche_plan on record)",
+        len(managed),
+        skipped,
+    )
+    return managed
+
+
+def _default_live_exits_feed_factory(uic_to_ticker: Mapping[int, str]) -> PriceFeed:
+    """The production price feed: yfinance, resolving uic -> ticker off the
+    live positions this tick already read. Imported lazily so a LoopDeps built
+    without wiring this factory (e.g. every hermetic test) never pays the
+    yfinance import cost unless the live-exits pass actually runs."""
+    from alphalens_pipeline.brokers.automanager.yfinance_price_feed import YfinancePriceFeed
+
+    return YfinancePriceFeed(resolve_ticker=uic_to_ticker.get)
+
+
+def _run_live_exits_pass(
+    deps: LoopDeps, records: list[Mapping[str, Any]], report: TickReport
+) -> None:
+    """The live TP-tranche exit tick phase (INC-5), behind
+    ``ALPHALENS_LIVE_MARKET_EXITS`` (default OFF) AND ``ALLOW_ORDERS``
+    (``_live_exits_orders_allowed`` — see its docstring for why). Early-returns
+    a no-op when either gate is closed: no ``ManagedExit`` is built and
+    ``run_live_exits`` is never called.
+
+    Reads live positions + the standalone-stop journal ONCE this tick, builds
+    the managed set, and delegates to the inert engine. Each broker-facing step
+    has its OWN ``BrokerError`` boundary (mirrors ``_run_protection_pass``) so a
+    live-exits failure alerts and returns rather than starving the protection
+    pass that runs immediately after (``run_once``).
+
+    ``records`` (the submissions journal) is unused here — the tranche ladder
+    and fired markers come from the SEPARATE standalone-stop journal — kept on
+    the signature for symmetry with the other tick-phase helpers."""
+    del records
+    if not _live_market_exits_enabled() or not _live_exits_orders_allowed():
+        return
+    try:
+        long_positions = deps.broker.get_long_positions()
+    except BrokerError as exc:
+        if deps.alert_throttled(
+            f"live-exits: position read failed (broker error) — skipped: {exc}",
+            "live-exits-posread-fail",
+        ):
+            report.alerts += 1
+        return
+    journal_lines = list(_iter_standalone_stop_journal())
+    managed = _build_managed_exits(
+        long_positions=long_positions,
+        tranche_plans=fold_tranche_plans(journal_lines),
+        fired=fold_fired_tranches(journal_lines),
+    )
+    if not managed:
+        return
+    # uic -> ticker straight off the live positions just read (no MIC strip).
+    uic_to_ticker = {
+        uic: pos.instrument.ticker
+        for pos in long_positions
+        if (uic := _position_uic(pos)) is not None
+    }
+    feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
+    feed = feed_factory(uic_to_ticker)
+    try:
+        fired_count = run_live_exits(deps.broker, feed, managed)
+    except BrokerError as exc:
+        if deps.alert_throttled(
+            f"live-exits: pass failed (broker error) — skipped: {exc}",
+            "live-exits-run-fail",
+        ):
+            report.alerts += 1
+        return
+    if fired_count:
+        report.exits_placed += fired_count
+        report.actions.append(("live-exits", f"fired={fired_count}"))
 
 
 def _run_protection_pass(
@@ -808,6 +976,7 @@ def build_default_deps(
         stream_tick=stream_tick,
         stream_trigger=stream_trigger,
         exit_policy=exit_policy,
+        live_exits_feed_factory=_default_live_exits_feed_factory,
     )
 
 
