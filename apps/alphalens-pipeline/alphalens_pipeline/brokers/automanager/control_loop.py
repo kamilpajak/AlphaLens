@@ -482,7 +482,10 @@ def _build_managed_exits(
     skipped = 0
     for pos in long_positions:
         uic = _position_uic(pos)
-        plan = None if uic is None else tranche_plans.get(uic)
+        if uic is None:
+            skipped += 1
+            continue
+        plan = tranche_plans.get(uic)
         if plan is None:
             skipped += 1
             continue
