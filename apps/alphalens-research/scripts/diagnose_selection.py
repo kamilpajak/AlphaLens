@@ -25,6 +25,7 @@ import argparse
 import datetime as dt
 import functools
 from pathlib import Path
+from typing import NamedTuple
 
 import pandas as pd
 from alphalens_pipeline.data import rs_history
@@ -125,6 +126,31 @@ def _pre_event_closes(
         stock.append(_close(snapshot, ticker))
         market.append(_close(snapshot, _SPY))
     return stock, market
+
+
+class _BetaCounts(NamedTuple):
+    """How the per-event beta column came out, in three buckets that partition it."""
+
+    estimated: int
+    fell_back: int
+    not_attempted: int
+
+
+def _beta_counts(sources) -> _BetaCounts:
+    """Tally a ``beta_source`` column.
+
+    A null means the estimate was never attempted -- the event had no elapsed
+    CAR window, or no priceable anchor -- and its ``beta`` is ``None``, not 1.0.
+    That is a different statement from an attempt that fell back, so the two are
+    counted apart.
+    """
+    estimated = int((sources == fixed_horizon.BETA_ESTIMATED).sum())
+    not_attempted = int(sources.isna().sum())
+    return _BetaCounts(
+        estimated=estimated,
+        fell_back=len(sources) - estimated - not_attempted,
+        not_attempted=not_attempted,
+    )
 
 
 def _e1(setup: dict | None) -> float | None:
@@ -286,13 +312,14 @@ def main() -> None:
         return
 
     # ---- Selection: per-k CAR with day-blocked bootstrap CI (all / filled / unfilled) ----
-    n_estimated = int((table["beta_source"] == fixed_horizon.BETA_ESTIMATED).sum())
+    counts = _beta_counts(table["beta_source"])
     stale_sessions = int(table["beta_n_zero_returns"].fillna(0).sum())
     print(
-        f"\nbeta vs SPY over {args.beta_window} pre-event sessions: "
-        f"{n_estimated}/{len(table)} estimated, "
-        f"{len(table) - n_estimated} fell back to {fixed_horizon.BETA_FALLBACK_VALUE} "
-        f"(min {fixed_horizon.MIN_BETA_OBSERVATIONS} usable returns); "
+        f"\nbeta vs SPY over {args.beta_window} pre-event sessions, {len(table)} events: "
+        f"{counts.estimated} estimated, "
+        f"{counts.fell_back} fell back to {fixed_horizon.BETA_FALLBACK_VALUE} "
+        f"(min {fixed_horizon.MIN_BETA_OBSERVATIONS} usable returns), "
+        f"{counts.not_attempted} not attempted (no elapsed window or no priceable anchor); "
         f"{stale_sessions} flat stock sessions inside the estimated windows"
     )
     print(
