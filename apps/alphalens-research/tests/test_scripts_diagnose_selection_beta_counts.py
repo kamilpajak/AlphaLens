@@ -41,7 +41,7 @@ class TestBetaCounts(unittest.TestCase):
         self.assertEqual(counts.estimated, 0)
         self.assertEqual(counts.not_attempted, 0)
 
-    def test_the_three_buckets_partition_every_row(self):
+    def test_the_buckets_partition_every_row(self):
         mod = _import_script()
         sources = pd.Series(
             [fh.BETA_ESTIMATED, fh.BETA_FALLBACK_DEGENERATE, None, fh.BETA_ESTIMATED]
@@ -49,7 +49,20 @@ class TestBetaCounts(unittest.TestCase):
 
         counts = mod._beta_counts(sources)
 
-        self.assertEqual(counts.estimated + counts.fell_back + counts.not_attempted, len(sources))
+        self.assertEqual(sum(counts), len(sources))
+        self.assertEqual(counts.unexpected, 0)
+
+    def test_a_tag_this_helper_does_not_know_lands_in_unexpected(self):
+        # A future beta_source value must not be absorbed into fell_back, which is the
+        # same conflation this helper exists to remove.
+        mod = _import_script()
+        sources = pd.Series([fh.BETA_ESTIMATED, "some_future_tag"])
+
+        counts = mod._beta_counts(sources)
+
+        self.assertEqual(counts.unexpected, 1)
+        self.assertEqual(counts.fell_back, 0)
+        self.assertEqual(sum(counts), len(sources))
 
     def test_an_all_none_column_is_all_not_attempted(self):
         mod = _import_script()
