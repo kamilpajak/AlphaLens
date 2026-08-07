@@ -1623,7 +1623,9 @@ class _NullPriceFeed:
         return None
 
 
-def _default_live_exits_feed_factory(uic_to_ticker: Mapping[int, str]) -> PriceFeed:
+def _default_live_exits_feed_factory(
+    uic_to_instrument: Mapping[int, tuple[str, str]],
+) -> PriceFeed:
     """The production price feed: Saxo LIVE streaming, or nothing.
 
     yfinance is NOT a fallback here. It remains in the tree, unwired, and its
@@ -1635,15 +1637,39 @@ def _default_live_exits_feed_factory(uic_to_ticker: Mapping[int, str]) -> PriceF
     from alphalens_pipeline.data.alt_data.saxo_price_stream import get_shared_price_stream
 
     stream = get_shared_price_stream()
-    live_uics = {sim_uic: stream.live_uic_for(ticker) for sim_uic, ticker in uic_to_ticker.items()}
+    live_uics = {
+        sim_uic: stream.live_uic_for(ticker, exchange_mic=mic)
+        for sim_uic, (ticker, mic) in uic_to_instrument.items()
+    }
     stream.ensure_subscribed([u for u in live_uics.values() if u is not None])
     return SaxoLivePriceFeed(stream=stream, resolve_live_uic=live_uics.get)
 ```
 
 Add `get_shared_price_stream()` to `saxo_price_stream.py`: a module-level
 singleton, started on first call, so the WebSocket outlives the per-tick factory
-call. Add `live_uic_for(ticker)` to the stream: cached ticker → LIVE uic through
-`SaxoMarketDataClient.resolve_uic`.
+call. Add `live_uic_for(ticker, *, exchange_mic)` to the stream: cached
+(ticker, venue) → LIVE uic through `SaxoMarketDataClient.resolve_uic`.
+
+**The venue is load-bearing, not decoration.** `resolve_uic` matches on the
+(ticker, venue) pair and returns `None` when the pair is still ambiguous,
+because a ticker listed on several venues would otherwise resolve to an
+arbitrary instrument and feed a real, fresh, healthy-looking price for the WRONG
+company into an order decision. No freshness gate catches that. This mirrors the
+SIM adapter, which refuses an ambiguous resolution rather than taking row zero.
+
+Change the existing map construction in `_run_live_exits_pass` accordingly — it
+currently drops the venue:
+
+```python
+    # uic -> (ticker, venue) off the live positions just read. The venue must
+    # survive: resolving a LIVE instrument by bare ticker is ambiguous for
+    # cross-listed names.
+    uic_to_instrument = {
+        uic: (pos.instrument.ticker, pos.instrument.exchange_mic)
+        for pos in long_positions
+        if (uic := _position_uic(pos)) is not None
+    }
+```
 
 - [ ] **Step 4: Run the test and the full suite**
 
@@ -1673,7 +1699,14 @@ per-tick factory call, which only reconciles the subscription set."
 - Modify: `deploy/systemd/README.md`
 - Modify: `.env.example`
 
-- [ ] **Step 1: Register the new canonical HTTP surfaces**
+- [x] **Step 1: Register the new canonical HTTP surfaces — ALREADY DONE in Task 3 (commit a5392542).**
+
+Deferring this to Task 8 was a sequencing defect: the first LIVE HTTP file lands
+in Task 2, so `tests/test_no_raw_saxo_http.py` went red at commit `2cf2fa03` and
+stayed red, which would have made "full suite green" a meaningless signal for six
+tasks. It was pulled forward into Task 3's fix round 1, together with two tests
+that pin the exemption itself so the allowlist cannot rot to a no-op. **Skip this
+step; verify it is green and move to Step 2.** Kept below for the record:
 
 In `test_no_raw_saxo_http.py`, extend `CANONICAL_CLIENT_RELS` and explain why:
 
