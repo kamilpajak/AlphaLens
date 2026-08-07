@@ -6,16 +6,26 @@ file in the tree holding the LIVE auth host, and it never places an order.
 
 The token store is a SEPARATE file from the SIM store. The refresh token is
 single-use and rotates on every refresh, so exactly one process may hold a given
-store; two holders invalidate each other.
+store; two holders invalidate each other. Persistence follows the same pattern
+as ``brokers/saxo/tokens.py::TokenStore``: atomic tmp-file + fsync +
+``os.replace`` (never a torn write), 0600 from creation (never a
+umask-derived-then-chmod window), and a sibling ``.lock`` file
+(``fcntl.flock``) serializing [read -> refresh -> persist] so two processes
+racing near expiry cannot both burn the same single-use refresh token.
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import fcntl
 import json
 import os
+import tempfile
+import time
 import urllib.parse
 from base64 import b64encode
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +42,8 @@ _STORE_ENV = "SAXO_LIVE_TOKEN_STORE_PATH"
 _DEFAULT_STORE = Path.home() / ".alphalens" / "saxo_auth_live" / "token_store.json"
 _REFRESH_MARGIN_S = 120.0
 _TIMEOUT_S = 30.0
+_LOCK_TIMEOUT_S = 60.0
+_LOCK_POLL_INTERVAL_S = 0.2
 
 
 @dataclass(frozen=True)
@@ -113,19 +125,67 @@ def refresh(cfg: LiveAuthConfig, *, refresh_token: str) -> dict[str, Any]:
 
 
 def _save(cfg: LiveAuthConfig, bundle: dict[str, Any]) -> None:
+    """Persist atomically: tmp-in-same-dir (0600 from creation) + fsync +
+    ``os.replace``. Readers never see a torn file, and there is no window
+    where the store is world/group readable — unlike a plain ``write_text``
+    followed by a later ``chmod``."""
     expires_at = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=int(bundle.get("expires_in", 1200)))
     cfg.store_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg.store_path.write_text(
-        json.dumps(
-            {
-                "access_token": bundle["access_token"],
-                "refresh_token": bundle["refresh_token"],
-                "expires_at": expires_at.isoformat(),
-            },
-            indent=2,
-        )
-    )
-    cfg.store_path.chmod(0o600)
+    payload = {
+        "access_token": bundle["access_token"],
+        "refresh_token": bundle["refresh_token"],
+        "expires_at": expires_at.isoformat(),
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        dir=cfg.store_path.parent,
+        suffix=".tmp",
+        delete=False,
+        encoding="utf-8",
+    ) as tmp:
+        json.dump(payload, tmp, indent=2)
+        tmp.flush()
+        os.fsync(tmp.fileno())
+        tmp_path = Path(tmp.name)
+    try:
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, cfg.store_path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+@contextlib.contextmanager
+def _exclusive_lock(store_path: Path) -> Iterator[None]:
+    """Per-host exclusive lock around [read -> refresh -> persist].
+
+    Non-blocking ``LOCK_EX|LOCK_NB`` poll loop with an acquire deadline — a
+    wedged sibling raises an actionable error instead of hanging. The lock
+    lives on a sibling ``.lock`` file (not the store itself) because
+    ``os.replace`` in :func:`_save` swaps the store's inode on every write.
+    """
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = store_path.with_name(store_path.stem + ".lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        deadline = time.monotonic() + _LOCK_TIMEOUT_S
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"could not acquire the Saxo LIVE token-store lock at {lock_path} "
+                        f"within {_LOCK_TIMEOUT_S:.0f}s - another process appears stuck"
+                    ) from None
+                time.sleep(_LOCK_POLL_INTERVAL_S)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 class LiveTokenProvider:
@@ -139,16 +199,29 @@ class LiveTokenProvider:
             raise RuntimeError(
                 f"no LIVE token store at {self._cfg.store_path} - run the market-data auth bootstrap"
             )
-        return json.loads(self._cfg.store_path.read_text())
+        try:
+            state = json.loads(self._cfg.store_path.read_text())
+            dt.datetime.fromisoformat(state["expires_at"])
+            str(state["access_token"])
+            str(state["refresh_token"])
+        except (ValueError, KeyError, TypeError) as exc:
+            # Never echo the file content — it may hold a live bearer token.
+            raise RuntimeError(
+                f"LIVE token store at {self._cfg.store_path} is corrupt - delete it and "
+                "re-run the market-data auth bootstrap"
+            ) from exc
+        return state
 
     def access_token(self) -> str:
-        state = self._load()
-        expires_at = dt.datetime.fromisoformat(state["expires_at"])
-        remaining = (expires_at - dt.datetime.now(dt.UTC)).total_seconds()
-        if remaining > _REFRESH_MARGIN_S:
-            return state["access_token"]
-        return refresh(self._cfg, refresh_token=state["refresh_token"])["access_token"]
+        with _exclusive_lock(self._cfg.store_path):
+            state = self._load()
+            expires_at = dt.datetime.fromisoformat(state["expires_at"])
+            remaining = (expires_at - dt.datetime.now(dt.UTC)).total_seconds()
+            if remaining > _REFRESH_MARGIN_S:
+                return state["access_token"]
+            return refresh(self._cfg, refresh_token=state["refresh_token"])["access_token"]
 
     def force_refresh(self) -> str:
-        state = self._load()
-        return refresh(self._cfg, refresh_token=state["refresh_token"])["access_token"]
+        with _exclusive_lock(self._cfg.store_path):
+            state = self._load()
+            return refresh(self._cfg, refresh_token=state["refresh_token"])["access_token"]
