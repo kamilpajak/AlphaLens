@@ -1116,6 +1116,35 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         self.assertAlmostEqual(line["tp_tranches"][0]["target_price"], 13.0)
         self.assertAlmostEqual(line["tp_tranches"][0]["tranche_pct"], 1.0)
 
+    def test_a_non_finite_geometry_level_journals_no_tranche_plan_line(self) -> None:
+        # _build_tranche_plan_line writes both levels verbatim (float(...)), so a
+        # NaN/zero level from a future geometry policy must skip the line rather
+        # than poison the journal the live-exit engine folds.
+        for stop, tp in ((float("nan"), 13.0), (8.5, float("nan")), (0.0, 13.0), (8.5, 0.0)):
+            with self.subTest(stop=stop, tp=tp):
+                journaled = self._run(
+                    plan=self._plan(tp_tranches=()),
+                    exit_spec=_exit_spec(stop=stop, tp=tp, atr=1.0),
+                    exit_policy=resolve_exit_policy("atr_bracket_1p5"),
+                )
+                self.assertEqual([ln for ln in journaled if ln["kind"] == "tranche_plan"], [])
+
+    def test_a_non_finite_geometry_level_does_not_fall_back_to_the_static_ladder(self) -> None:
+        # Under the geometry policy the static plan.tp_tranches is NOT the active
+        # ladder, so an unusable geometry level must journal nothing -- silently
+        # falling back would arm the engine on a ladder the policy never placed.
+        tranches = (
+            TpTranchePlan(
+                tranche_index=0, target_price=11.0, tranche_pct=1.0, r_multiple=1.0, tag="tp1"
+            ),
+        )
+        journaled = self._run(
+            plan=self._plan(tp_tranches=tranches),
+            exit_spec=_exit_spec(stop=float("nan"), tp=13.0, atr=1.0),
+            exit_policy=resolve_exit_policy("atr_bracket_1p5"),
+        )
+        self.assertEqual([ln for ln in journaled if ln["kind"] == "tranche_plan"], [])
+
 
 class TestBuildPlannedLineGeometryStamp(unittest.TestCase):
     """Direct unit coverage of ``_build_planned_line``'s ``geometry_stamp`` param
@@ -1233,7 +1262,7 @@ class TestFoldPlannedExitsBuildsReanchorFacts(unittest.TestCase):
         self.assertIsNone(planned.reanchor)
 
     def test_geometry_missing_k_atr_folds_reanchor_none(self) -> None:
-        # A stamp journaled before PR-6b added "k_atr" to _geometry_stamp: the
+        # A stamp journaled before PR-6b added "k_atr" to _geometry_shadow_stamp: the
         # key is absent -> the fold must never KeyError, just fold to None.
         stamped = cl._build_planned_line(
             entry_crid="crid-0",
