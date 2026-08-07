@@ -15,7 +15,7 @@ from typing import Any
 
 import requests
 
-from alphalens_pipeline.brokers.saxo.broker import _MIC_TO_SAXO_EXCHANGE_ID
+from alphalens_pipeline.data.alt_data.saxo_exchanges import MIC_TO_SAXO_EXCHANGE_ID
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveTokenProvider
 
 logger = logging.getLogger(__name__)
@@ -80,9 +80,9 @@ class SaxoMarketDataClient:
         ``brokers.saxo.broker.SaxoBroker.resolve_instrument`` — a ticker
         listed on more than one venue must resolve to the instrument on the
         REQUESTED venue, never whichever row Saxo happens to return first.
-        Reuses ``_MIC_TO_SAXO_EXCHANGE_ID`` (the same MIC -> Saxo venue map
-        the SIM resolution path uses) rather than hand-rolling a second one,
-        so adding a venue stays a one-place change.
+        Reuses ``saxo_exchanges.MIC_TO_SAXO_EXCHANGE_ID`` (the same MIC ->
+        Saxo venue map the SIM resolution path uses) rather than hand-rolling
+        a second one, so adding a venue stays a one-place change.
 
         Unlike the SIM path, this NEVER raises on an unknown venue or an
         ambiguous match — it returns ``None`` and logs a warning. This client
@@ -92,7 +92,7 @@ class SaxoMarketDataClient:
         """
         ticker = ticker.upper()
         exchange_mic = exchange_mic.upper()
-        if exchange_mic not in _MIC_TO_SAXO_EXCHANGE_ID:
+        if exchange_mic not in MIC_TO_SAXO_EXCHANGE_ID:
             logger.warning(
                 "Saxo LIVE uic resolution: unknown venue %s for ticker %s "
                 "(not in the shared MIC -> Saxo exchange map)",
