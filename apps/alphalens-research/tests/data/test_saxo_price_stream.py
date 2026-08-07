@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import unittest
 
-from alphalens_pipeline.data.alt_data.saxo_price_stream import QuoteCache
+from alphalens_pipeline.data.alt_data.saxo_price_stream import QuoteCache, SaxoPriceStream
 
 _T0 = dt.datetime(2026, 8, 7, 13, 48, 0, tzinfo=dt.UTC)
 
@@ -78,6 +79,116 @@ class TestQuoteCache(unittest.TestCase):
         c = QuoteCache()
         c.apply({"LastUpdated": "2026-08-07T13:48:00Z", "Quote": {"Bid": 1.0}}, received_at=_T0)
         self.assertIsNone(c.get(211))
+
+    def test_explicit_null_bid_propagates_as_unknown_not_preserved(self):
+        """A PRESENT-but-null Bid (a plausible one-sided-market / halt signal)
+        must BLANK the cached bid, unlike an OMITTED Bid key which preserves
+        it. The two are distinguished by KEY PRESENCE, not truthiness: an
+        explicit null means 'no bid right now' and must propagate so the
+        downstream freshness gate vetoes, rather than silently reusing a
+        stale price."""
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)
+        c.apply(
+            {"Uic": 211, "LastUpdated": "2026-08-07T13:48:01Z", "Quote": {"Bid": None}},
+            received_at=_T0 + dt.timedelta(seconds=2),
+        )
+        q = c.get(211)
+        self.assertIsNone(q.bid)
+        self.assertEqual(q.ask, 314.04)  # untouched (omitted) key still preserved
+
+    def test_identical_event_time_delta_is_still_applied(self):
+        """Saxo timestamps carry only second resolution in the observed
+        fixtures, so two updates sharing a LastUpdated during active trading
+        are common, not a corner case. The regression guard is strict '<':
+        an equal-timestamp update must still apply. Changing the guard to
+        '<=' would freeze the price for the rest of every second - this test
+        pins the current, correct, strict comparison."""
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)
+        c.apply(
+            {"Uic": 211, "LastUpdated": "2026-08-07T13:47:59Z", "Quote": {"Bid": 315.00}},
+            received_at=_T0 + dt.timedelta(milliseconds=500),
+        )
+        self.assertEqual(c.get(211).bid, 315.00)
+
+    def test_delta_before_any_snapshot_is_half_blank(self):
+        """A delta for a uic never seen before (no prior snapshot - the same
+        code path as a delta for an unknown uic) produces a Quote with the
+        untouched side still None. That half-blank shape is acceptable ONLY
+        because the downstream freshness gate must treat a missing side as
+        no-price, never as a stale-but-valid one."""
+        c = QuoteCache()
+        c.apply(
+            {"Uic": 900, "LastUpdated": "2026-08-07T13:48:00Z", "Quote": {"Bid": 100.0}},
+            received_at=_T0,
+        )
+        q = c.get(900)
+        self.assertEqual(q.bid, 100.0)
+        self.assertIsNone(q.ask)
+
+    def test_delayed_by_minutes_preserved_across_unrelated_bid_only_delta(self):
+        """DelayedByMinutes preservation across an unrelated (Bid-only) delta
+        is not covered by test_delta_with_one_side_keeps_the_other (which only
+        checks bid/ask) - pinned independently so reverting just this default
+        does not pass the whole suite."""
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)  # DelayedByMinutes=0
+        c.apply(
+            {"Uic": 211, "LastUpdated": "2026-08-07T13:48:01Z", "Quote": {"Bid": 314.10}},
+            received_at=_T0 + dt.timedelta(seconds=2),
+        )
+        self.assertEqual(c.get(211).delayed_by_minutes, 0)
+
+
+class _FakeMarketDataClient:
+    """Stand-in for SaxoMarketDataClient - _apply_frame never touches it."""
+
+
+class _FakeTokenProvider:
+    """Stand-in for LiveTokenProvider - _apply_frame never touches it."""
+
+
+def _build_frame(message_id: int, reference_id: str, payload: bytes, *, fmt: int = 0) -> bytes:
+    """Encode one Saxo streaming envelope message (same layout as the SIM
+    frame builder in test_saxo_streaming.py) so _apply_frame can be exercised
+    without a real WebSocket."""
+    ref = reference_id.encode("ascii")
+    return (
+        message_id.to_bytes(8, "little")
+        + b"\x00\x00"  # reserved
+        + bytes([len(ref)])
+        + ref
+        + bytes([fmt])
+        + len(payload).to_bytes(4, "little")
+        + payload
+    )
+
+
+class TestSaxoPriceStreamApplyFrame(unittest.TestCase):
+    """_apply_frame is synchronous decode-and-apply glue - testable directly,
+    without mocking a socket (only the async recv loop needs the live probe)."""
+
+    def test_malformed_non_dict_row_is_dropped_with_a_debug_log(self):
+        stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        payload = json.dumps(
+            [
+                {"Uic": 5, "LastUpdated": "2026-08-07T13:48:00Z", "Quote": {"Bid": 1.0}},
+                "garbage-not-a-row",
+                None,
+            ]
+        ).encode("utf-8")
+        frame = _build_frame(1, "px", payload)
+        with self.assertLogs(
+            "alphalens_pipeline.data.alt_data.saxo_price_stream", level="DEBUG"
+        ) as cm:
+            stream._apply_frame(frame)
+        self.assertTrue(
+            any("garbage-not-a-row" in line or "non-dict" in line.lower() for line in cm.output),
+            cm.output,
+        )
+        q = stream.get(5)
+        self.assertEqual(q.bid, 1.0)
 
 
 if __name__ == "__main__":

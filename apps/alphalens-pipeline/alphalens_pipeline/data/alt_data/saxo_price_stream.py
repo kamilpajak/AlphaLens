@@ -56,6 +56,14 @@ def _parse_utc(raw: object) -> dt.datetime | None:
 
 @dataclass(frozen=True)
 class Quote:
+    """``bid``/``ask`` may legitimately be ``None`` even after ``apply`` has
+    run: a delta for a uic that never received a full snapshot (first
+    contact, or any delta for a never-before-seen uic - the same code path)
+    produces a half-blank Quote with the untouched side still ``None``. That
+    is acceptable ONLY because every consumer MUST treat a missing side as
+    no-price, never as a stale-but-valid price - the freshness gate that
+    enforces this lives in the feed adapter, not here."""
+
     uic: int
     bid: float | None
     ask: float | None
@@ -80,8 +88,24 @@ class QuoteCache:
         quote_block = row.get("Quote") or {}
         with self._lock:
             prev = self._quotes.get(uic)
+            # Sequence regression: an older quote never overwrites a newer one.
+            # Strictly LESS-THAN is deliberate, not an oversight: Saxo's
+            # observed timestamps carry only second resolution, so two updates
+            # sharing a LastUpdated during active trading are common, not a
+            # corner case - using "<=" here would freeze the price for the
+            # rest of every second. Do not change this to "<=".
             if prev is not None and prev.event_time and event_time and event_time < prev.event_time:
-                return  # sequence regression: an older quote never overwrites a newer one
+                return
+            # Bid / Ask / DelayedByMinutes each apply the SAME distinction,
+            # by dict.get()'s own KEY-PRESENCE semantics (not value
+            # truthiness): a field OMITTED from Quote means "unchanged" and
+            # falls back to the previous value; a field PRESENT with value
+            # null means "reported unknown right now" (e.g. a one-sided
+            # market or a halt) and propagates as None, overwriting whatever
+            # was cached. This is why plain ``.get(key, default)`` is correct
+            # here and a `quote_block.get(key) or default`-style rewrite
+            # would be wrong: it would treat an explicit null the same as an
+            # omitted key.
             merged = Quote(
                 uic=uic,
                 bid=quote_block.get("Bid", prev.bid if prev else None),
@@ -268,3 +292,13 @@ class SaxoPriceStream:
             for row in rows:
                 if isinstance(row, dict):
                     self.cache.apply(row, received_at=now)
+                else:
+                    # A live shape mismatch (Saxo sending something other
+                    # than a row object) is dropped, never applied - DEBUG
+                    # only, so it leaves a trace without paging on a shape
+                    # that may be benign (e.g. a stray scalar).
+                    logger.debug(
+                        "saxo price stream: dropping non-dict row for refId %r: %r",
+                        msg.reference_id,
+                        row,
+                    )
