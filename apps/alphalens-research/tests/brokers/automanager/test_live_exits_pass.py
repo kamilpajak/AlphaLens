@@ -78,6 +78,7 @@ def _deps(
     *,
     alerts: list[str],
     live_exits_feed_factory: object = None,
+    alert_throttled: object = None,
 ) -> cl.LoopDeps:
     return cl.LoopDeps(
         broker=broker,  # type: ignore[arg-type]
@@ -92,7 +93,11 @@ def _deps(
         execute_protection=lambda action, kill, report: None,
         sweep_orphans_fn=lambda broker: [],
         alert=lambda msg: alerts.append(msg),  # noqa: PLW0108
-        alert_throttled=lambda msg, reason: alerts.append(msg) or True,
+        alert_throttled=(
+            alert_throttled
+            if alert_throttled is not None
+            else (lambda msg, reason: alerts.append(msg) or True)
+        ),
         live_exits_feed_factory=live_exits_feed_factory,  # type: ignore[arg-type]
     )
 
@@ -395,6 +400,89 @@ class TestLiveExitsFlagOnFires(_JournalCase):
             with mock.patch.object(cl, "run_live_exits") as spy:
                 cl._run_live_exits_pass(deps, cl.TickReport())
                 spy.assert_not_called()
+
+
+def _raising_factory(uic_to_instrument: object) -> object:
+    raise RuntimeError("boom: cannot reach Saxo LIVE auth")
+
+
+class TestLiveExitsFeedConstructionBoundary(unittest.TestCase):
+    """Fix round 1 (Task 7 review): the price-feed factory may reach out to
+    real Saxo LIVE auth/REST/streaming machinery this pass has no control
+    over -- a missing env var or an unbootstrapped token store is the single
+    most likely rollout mistake. A construction failure must degrade to a
+    vetoing feed, exactly like an OFF flag or a stale quote, never crash the
+    tick and starve the never-naked protection pass that runs right after
+    it."""
+
+    def test_construction_failure_degrades_to_a_vetoing_feed(self) -> None:
+        alerts: list[str] = []
+        deps = _deps(broker=object(), alerts=alerts, live_exits_feed_factory=_raising_factory)
+        report = cl.TickReport()
+        feed = cl._build_live_exits_feed(deps, {211: ("AAPL", "XNYS")}, report)
+        self.assertIsNone(feed.latest(211))
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("live-exits", alerts[0])
+        self.assertEqual(report.alerts, 1)
+
+    def test_construction_failure_alerts_once_not_once_per_tick(self) -> None:
+        alerts: list[str] = []
+        seen_reasons: set[str] = set()
+
+        def throttled(msg: str, reason: str) -> bool:
+            if reason in seen_reasons:
+                return False
+            seen_reasons.add(reason)
+            alerts.append(msg)
+            return True
+
+        deps = _deps(
+            broker=object(),
+            alerts=alerts,
+            live_exits_feed_factory=_raising_factory,
+            alert_throttled=throttled,
+        )
+        report = cl.TickReport()
+        cl._build_live_exits_feed(deps, {211: ("AAPL", "XNYS")}, report)  # tick 1
+        cl._build_live_exits_feed(deps, {211: ("AAPL", "XNYS")}, report)  # tick 2
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(report.alerts, 1)
+
+    def test_flag_off_builds_nothing_and_alerts_nothing(self) -> None:
+        """Guards the OFF path against this fix: no exception is ever raised
+        when the flag is off (the default factory returns _NullPriceFeed
+        directly), so the new boundary must stay silent -- not swallow a
+        real construction failure, but not manufacture a phantom one either."""
+        alerts: list[str] = []
+        deps = _deps(broker=object(), alerts=alerts)  # live_exits_feed_factory=None -> default
+        report = cl.TickReport()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            feed = cl._build_live_exits_feed(deps, {211: ("AAPL", "XNYS")}, report)
+        self.assertIsNone(feed.latest(211))
+        self.assertEqual(alerts, [])
+        self.assertEqual(report.alerts, 0)
+
+
+class TestLiveExitsFeedConstructionFailureEndToEnd(_JournalCase):
+    def test_the_tick_completes_normally_when_feed_construction_raises(self) -> None:
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
+        )
+        alerts: list[str] = []
+        deps = _deps(broker, alerts=alerts, live_exits_feed_factory=_raising_factory)
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)  # must not raise
+        # No broker mutation: the degraded feed vetoed every uic, same as a stale quote.
+        self.assertEqual(broker.get_positions_by_uic(uic).quantity, 100.0)
+        sl = next(o for o in broker.list_working_sell_orders() if o.order_type == "StopIfTraded")
+        self.assertEqual(sl.amount, 100.0)
+        self.assertEqual(report.exits_placed, 0)
+        self.assertEqual(len(alerts), 1)
 
 
 class TestLiveExitsRunsBeforeProtection(unittest.TestCase):

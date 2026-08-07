@@ -581,6 +581,43 @@ def _default_live_exits_feed_factory(
     return SaxoLivePriceFeed(stream=stream, resolve_live_uic=live_uics.get)
 
 
+def _build_live_exits_feed(
+    deps: LoopDeps,
+    uic_to_instrument: Mapping[int, tuple[str, str]],
+    report: TickReport,
+) -> PriceFeed:
+    """Builds this tick's price feed via the injected/default factory, with a
+    boundary around it whose entire job is that NOTHING that happens while
+    building the feed may reach the tick.
+
+    With ``ALPHALENS_SAXO_LIVE_PRICES`` on, the default factory reaches out to
+    real Saxo LIVE auth/REST/streaming machinery (env config, an OAuth token
+    store, a WebSocket) that this pass has no contract with — a missing env
+    var or an unbootstrapped token store is the single most likely rollout
+    mistake, and it must not be able to stop the never-naked protection pass
+    that runs immediately after this one. Deliberately catches ``Exception``,
+    not just ``BrokerError``: every doubt becomes a veto here, never a crash —
+    a construction failure degrades to a feed that vetoes every uic, exactly
+    like an OFF flag or a stale quote. The failure is still surfaced via the
+    same throttled-alert mechanism the surrounding pass already uses for its
+    ``BrokerError`` boundaries, so an operator sees "no exits ever fire"
+    explained rather than silently swallowed."""
+    feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
+    try:
+        return feed_factory(uic_to_instrument)
+    # Deliberately broad: nothing that happens while building the price feed
+    # may reach the tick. Do NOT narrow this to a specific exception type -
+    # the whole point of this boundary is that it does not need to know what
+    # can go wrong inside the factory, only that a doubt becomes a veto.
+    except Exception as exc:
+        if deps.alert_throttled(
+            f"live-exits: price feed construction failed — degrading to no-prices: {exc}",
+            "live-exits-feed-build-fail",
+        ):
+            report.alerts += 1
+        return _NullPriceFeed()
+
+
 def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     """The live TP-tranche exit tick phase (INC-5), behind
     ``ALPHALENS_LIVE_MARKET_EXITS`` (default OFF) AND ``ALLOW_ORDERS``
@@ -625,8 +662,7 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         for pos in long_positions
         if (uic := _position_uic(pos)) is not None
     }
-    feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
-    feed = feed_factory(uic_to_instrument)
+    feed = _build_live_exits_feed(deps, uic_to_instrument, report)
     try:
         fired_count = run_live_exits(deps.broker, feed, managed)
     except BrokerError as exc:
