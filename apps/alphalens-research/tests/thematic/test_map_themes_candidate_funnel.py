@@ -108,6 +108,23 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
         self.assertEqual(candidates, [])
         self.assertIn("proposed 2, in mcap bracket 0 (2 dropped", logs)
 
+    def test_the_dropped_names_are_listed_with_their_verdict(self):
+        # "17 dropped" cannot tell a mega-cap-only answer apart from a yfinance
+        # outage; the per-ticker verdict can. Pin the rendered detail suffix.
+        _candidates, logs = self._propose(proposed_tickers=["AAA", "BBB"], in_bracket=["AAA"])
+        self.assertIn("(1 dropped off-bracket / no mcap: BBB=no_mcap)", logs)
+
+    def test_nothing_dropped_renders_no_detail_suffix(self):
+        _candidates, logs = self._propose(proposed_tickers=["AAA"], in_bracket=["AAA"])
+        self.assertIn("(0 dropped off-bracket / no mcap)", logs)
+
+    def test_more_dropped_than_the_cap_are_summarised_with_an_overflow_count(self):
+        proposed = [f"T{i:02d}" for i in range(orchestrator._MAX_LOGGED_DROPPED_TICKERS + 3)]
+        _candidates, logs = self._propose(proposed_tickers=proposed, in_bracket=[])
+        self.assertIn(f"{proposed[orchestrator._MAX_LOGGED_DROPPED_TICKERS - 1]}=no_mcap", logs)
+        self.assertNotIn(f"{proposed[orchestrator._MAX_LOGGED_DROPPED_TICKERS]}=no_mcap", logs)
+        self.assertIn("(+3 more)", logs)
+
     def test_a_decline_names_the_model_reason_in_the_funnel_line(self):
         # Issue #982. A decline is a judgement; the funnel must say so AND carry
         # the model's own words, so no second log line has to be cross-referenced.

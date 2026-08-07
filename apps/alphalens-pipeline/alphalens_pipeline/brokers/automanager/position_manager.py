@@ -129,7 +129,7 @@ def _exit_amend_ref(entry_crid: str, seq: int) -> str:
 class ReanchorFacts:
     """The fill-complete STOP re-anchor facts (PR-6b, broker-manager extraction
     memo §4.3), folded from the geometry shadow stamp journaled at placement
-    (PR-6a's ``_geometry_stamp``). Minimal — TP reanchor is OUT OF SCOPE, only
+    (PR-6a's ``control_loop._geometry_shadow_stamp``). Minimal — TP reanchor is OUT OF SCOPE, only
     the disaster stop moves with the realized fill blend."""
 
     k_atr: float

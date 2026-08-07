@@ -611,7 +611,11 @@ def _propose_and_filter_candidates(
     dropped = [f"{v.ticker}={v.verdict}" for v in verdicts if v.verdict != mcap_filter.IN_BRACKET]
     shown = dropped[:_MAX_LOGGED_DROPPED_TICKERS]
     overflow = len(dropped) - len(shown)
-    detail = f": {', '.join(shown)}" + (f" (+{overflow} more)" if overflow else "") if shown else ""
+    if shown:
+        overflow_note = f" (+{overflow} more)" if overflow else ""
+        detail = f": {', '.join(shown)}{overflow_note}"
+    else:
+        detail = ""
     logger.info(
         "map_themes %s: theme %r funnel — proposed %d, in mcap bracket %d (%d dropped off-bracket / no mcap%s)",
         asof.isoformat(),

@@ -1324,7 +1324,7 @@ def _fold_planned_exits(lines: Iterable[Mapping[str, Any]]) -> dict[int, Planned
 
 def _reanchor_facts_from_governing(governing: Mapping[str, Any]) -> ReanchorFacts | None:
     """PR-6b: fold the governing planned line's ``"geometry"`` shadow stamp
-    (PR-6a's ``_geometry_stamp``) into ``ReanchorFacts(k_atr, atr)``, or
+    (PR-6a's ``_geometry_shadow_stamp``) into ``ReanchorFacts(k_atr, atr)``, or
     ``None`` when the blob is absent / malformed. ``None`` for every
     pre-PR-6a journal line (no ``"geometry"`` key) — so ``_fold_planned_exits``
     stays BYTE-IDENTICAL for the whole pre-PR-6a journal history."""
@@ -1921,6 +1921,129 @@ def _resolve_and_size(
     return instrument, fx, plan
 
 
+def _is_journalable_price(value: float | None) -> bool:
+    """A price the journal may carry verbatim: present, finite and strictly
+    positive. ``_build_tranche_plan_line`` writes ``float(...)`` straight through,
+    so a None/NaN/zero level from a future geometry policy must be caught HERE
+    rather than poisoning the ladder the live-exit engine folds back."""
+    return value is not None and math.isfinite(value) and value > 0
+
+
+def _geometry_shadow_stamp(
+    exit_spec: Any, spec: Any, *, use_geometry: bool
+) -> dict[str, Any] | None:
+    """The ``"geometry"`` stamp journaled alongside a ``planned`` line (memo §4.3).
+
+    Telemetry only — it rides along whenever an ``exit_spec`` is buildable,
+    whatever the active policy, so the dark shadow can measure anchor divergence
+    before any flip; ``use_geometry`` only records whether the stamped levels were
+    the ones actually placed. ``None`` when no ``exit_spec`` exists, which keeps
+    the journaled line byte-identical to pre-PR-6a.
+
+    PR-7 opened a decode boundary (iter_picks -> codec): the schema permits a
+    non-None exit whose reaction_plan is empty (reserved kind="levels", or a
+    future policy-only client) or whose first primitive is NOT a reanchor
+    (TrailingStop / ModelPush). Pre-PR-7 the exit was always built in-process with
+    a single ReanchorOnFill, so reaction_plan[0] was safe; now resolve the
+    reanchor BY TYPE and leave the reanchor-specific k_atr/atr/ceiling facts None
+    when absent — never index [0] / attribute-access blindly, or a
+    valid-but-reanchor-less intent would crash the unattended drain every tick."""
+    from broker_contract.trade_intent.schema import ReanchorOnFill
+
+    from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
+
+    if exit_spec is None:
+        return None
+    reanchor = next((p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill)), None)
+    blend = planned_blended_entry_from_spec(spec) if spec is not None else None
+    return {
+        "policy_name": "atr_bracket_1p5",
+        "policy_version": 1,
+        "planned_blend": blend,
+        "geometry_stop": exit_spec.initial_levels.stop,
+        "geometry_tp": exit_spec.initial_levels.tp,
+        "k_atr": reanchor.k_atr if reanchor is not None else None,
+        "atr": reanchor.atr if reanchor is not None else None,
+        "ceiling_price": reanchor.ceiling_price if reanchor is not None else None,
+        "applied": use_geometry,
+    }
+
+
+def _geometry_tranche_ladder(exit_spec: Any) -> tuple[tuple[TpTranchePlan, ...], float] | None:
+    """The (ladder, stop) pair the geometry policy implies: its ONE (stop, tp)
+    level becomes a single tranche that exits 100% of the position at that
+    take-profit. ``None`` when either level is not journalable — the caller then
+    journals NOTHING rather than falling back to the static ladder, which the
+    geometry policy never placed."""
+    from broker_contract.sizing import TpTranchePlan
+
+    geo_stop = exit_spec.initial_levels.stop
+    geo_tp = exit_spec.initial_levels.tp
+    if not (_is_journalable_price(geo_stop) and _is_journalable_price(geo_tp)):
+        return None
+    ladder = (
+        TpTranchePlan(
+            tranche_index=0,
+            target_price=float(geo_tp),
+            tranche_pct=1.0,
+            r_multiple=0.0,
+            tag="geometry",
+        ),
+    )
+    return ladder, geo_stop
+
+
+def _journal_tranche_plan(
+    *,
+    plan: Any,
+    exit_spec: Any,
+    placement: Any,
+    instrument: Any,
+    use_geometry: bool,
+) -> None:
+    """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
+    rebuild the TP ladder from the journal alone. Source it from whatever the
+    ACTIVE exit policy actually places the TP from: under the geometry policy
+    (atr_bracket_1p5) that is the single ``exit_spec.initial_levels.tp`` level and
+    ``plan.tp_tranches`` is EMPTY (the brief expresses its exit as geometry, not
+    static tranches) — so gating on ``plan.tp_tranches`` alone silently dropped
+    every geometry pick. Under the static policy the ladder IS
+    ``plan.tp_tranches``. ``getattr`` keeps a bare-stub plan (unrelated
+    failure-path unit doubles with no ``entry_tiers``/``tp_tranches``) from
+    crashing — it simply journals nothing."""
+    entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
+    if not entry_tiers:
+        return
+    stop_price = placement.disaster_stop_price
+    if use_geometry and exit_spec is not None:
+        geometry = _geometry_tranche_ladder(exit_spec)
+        if geometry is None:
+            # Otherwise this skip is invisible: the live-exit engine finds no
+            # ladder for the uic and the position sits stop-only, which reads in
+            # the journal exactly like a pre-INC-5 pick.
+            logger.warning(
+                "tranche_plan uic %d: geometry levels unusable (stop=%r, tp=%r) — "
+                "no TP ladder journaled, the position stays stop-only",
+                int(instrument.broker_instrument_id),
+                exit_spec.initial_levels.stop,
+                exit_spec.initial_levels.tp,
+            )
+            return
+        ladder, stop_price = geometry
+    else:
+        ladder = getattr(plan, "tp_tranches", None) or ()
+    if not ladder:
+        return
+    _append_standalone_stop_journal(
+        _build_tranche_plan_line(
+            uic=int(instrument.broker_instrument_id),
+            tp_tranches=ladder,
+            reference_qty=sum(t.qty for t in entry_tiers),
+            stop_price=stop_price,
+        )
+    )
+
+
 def _place_tiers(
     broker: Broker,
     intent: Any,
@@ -1966,19 +2089,17 @@ def _place_tiers(
     ``plan`` (INC-5 Task 1) is the raw sized
     :class:`~broker_contract.sizing.SetupPlan` off ``_resolve_and_size`` —
     consulted ONLY to journal ONE ``tranche_plan`` line per uic (the per-uic TP
-    ladder the live-exit engine reads later, INC-5's persistence gap) when
-    ``plan.tp_tranches`` is non-empty. ``None`` (a caller with no sized plan in
-    scope, e.g. the direct-unit tests) journals nothing extra — INERT, byte-
-    identical to a caller that never passes it."""
+    ladder the live-exit engine reads later, INC-5's persistence gap) — see
+    :func:`_journal_tranche_plan` for which ladder the ACTIVE policy sources it
+    from. ``None`` (a caller with no sized plan in scope, e.g. the direct-unit
+    tests) journals nothing extra — INERT, byte-identical to a caller that never
+    passes it."""
     from broker_contract.contract import BrokerError
-    from broker_contract.sizing import TpTranchePlan
-    from broker_contract.trade_intent.schema import ReanchorOnFill
 
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
         build_submission_record,
     )
-    from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
 
     # Normalize the resolved-once cached policy (Task 4): the geometry-override
     # gate below reads ``exit_policy.applies_geometry`` — the retired env-string
@@ -1986,31 +2107,6 @@ def _place_tiers(
     resolved_exit_policy: ExitPolicy = (
         exit_policy if exit_policy is not None else SetupStaticPolicy()
     )
-
-    def _geometry_stamp(*, use_geometry: bool) -> dict[str, Any] | None:
-        if exit_spec is None:
-            return None
-        # PR-7 opened a decode boundary (iter_picks -> codec): the schema permits a
-        # non-None exit whose reaction_plan is empty (reserved kind="levels", or a
-        # future policy-only client) or whose first primitive is NOT a reanchor
-        # (TrailingStop / ModelPush). Pre-PR-7 the exit was always built in-process
-        # with a single ReanchorOnFill, so reaction_plan[0] was safe; now resolve
-        # the reanchor BY TYPE and leave the reanchor-specific k_atr/atr/ceiling
-        # facts None when absent — never index [0] / attribute-access blindly, or a
-        # valid-but-reanchor-less intent would crash the unattended drain every tick.
-        reanchor = next((p for p in exit_spec.reaction_plan if isinstance(p, ReanchorOnFill)), None)
-        blend = planned_blended_entry_from_spec(spec) if spec is not None else None
-        return {
-            "policy_name": "atr_bracket_1p5",
-            "policy_version": 1,
-            "planned_blend": blend,
-            "geometry_stop": exit_spec.initial_levels.stop,
-            "geometry_tp": exit_spec.initial_levels.tp,
-            "k_atr": reanchor.k_atr if reanchor is not None else None,
-            "atr": reanchor.atr if reanchor is not None else None,
-            "ceiling_price": reanchor.ceiling_price if reanchor is not None else None,
-            "applied": use_geometry,
-        }
 
     def _journal_tier(tier: Any, placed: Any) -> None:
         bracket = tier.bracket
@@ -2054,65 +2150,17 @@ def _place_tiers(
                 stop_price=stop_price,
                 take_profit=take_profit,
                 tier_index=tier.tier_index,
-                geometry_stamp=_geometry_stamp(use_geometry=use_geometry),
+                geometry_stamp=_geometry_shadow_stamp(exit_spec, spec, use_geometry=use_geometry),
             )
         )
 
-    # INC-5: journal ONE tranche_plan line per uic so the live-exit engine can
-    # rebuild the TP ladder from the journal alone. Source it from whatever the
-    # ACTIVE exit policy actually places the TP from: under the geometry policy
-    # (atr_bracket_1p5) that is the single ``exit_spec.initial_levels.tp`` level
-    # and ``plan.tp_tranches`` is EMPTY (the brief expresses its exit as
-    # geometry, not static tranches) — so gating on ``plan.tp_tranches`` alone
-    # silently dropped every geometry pick. Under the static policy the ladder
-    # IS ``plan.tp_tranches``. ``getattr`` keeps a bare-stub plan (unrelated
-    # failure-path unit doubles with no ``entry_tiers``/``tp_tranches``) from
-    # crashing — it simply journals nothing.
-    use_geometry_for_plan = resolved_exit_policy.applies_geometry and exit_spec is not None
-    plan_entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
-    static_tranches = getattr(plan, "tp_tranches", None) if plan is not None else None
-    tranche_ladder: tuple[TpTranchePlan, ...] = ()
-    tranche_plan_stop_price = placement.disaster_stop_price
-    if plan_entry_tiers:
-        if use_geometry_for_plan and exit_spec is not None:
-            geo_tp = exit_spec.initial_levels.tp
-            geo_stop = exit_spec.initial_levels.stop
-            # Guard BOTH levels finite/positive: geo_stop is written verbatim by
-            # _build_tranche_plan_line (float(stop_price)), so a None/NaN stop
-            # from a future geometry policy must skip, not crash or poison it.
-            if (
-                geo_tp is not None
-                and math.isfinite(geo_tp)
-                and geo_tp > 0
-                and geo_stop is not None
-                and math.isfinite(geo_stop)
-                and geo_stop > 0
-            ):
-                # Geometry yields ONE (stop, tp) level: a single-tranche ladder
-                # that exits 100% of the position at that take-profit.
-                tranche_ladder = (
-                    TpTranchePlan(
-                        tranche_index=0,
-                        target_price=float(geo_tp),
-                        tranche_pct=1.0,
-                        r_multiple=0.0,
-                        tag="geometry",
-                    ),
-                )
-                tranche_plan_stop_price = geo_stop
-        elif static_tranches:
-            tranche_ladder = static_tranches
-    if (
-        tranche_ladder and plan_entry_tiers
-    ):  # tranche_ladder implies entry tiers; narrows for the type checker
-        _append_standalone_stop_journal(
-            _build_tranche_plan_line(
-                uic=int(instrument.broker_instrument_id),
-                tp_tranches=tranche_ladder,
-                reference_qty=sum(t.qty for t in plan_entry_tiers),
-                stop_price=tranche_plan_stop_price,
-            )
-        )
+    _journal_tranche_plan(
+        plan=plan,
+        exit_spec=exit_spec,
+        placement=placement,
+        instrument=instrument,
+        use_geometry=resolved_exit_policy.applies_geometry,
+    )
 
     placed_count = 0
     failure_note: str | None = None
