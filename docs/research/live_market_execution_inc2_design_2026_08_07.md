@@ -224,11 +224,17 @@ will demote production by the same mechanism the operator's platform login does.
   a defensible idea on its own merits and should earn its own PR. It is not a
   reason to keep a fallback in the decision path.
 
-## 11. Open question for review
+## 11. Decisions on record
 
-The reclaim policy in §7 (daemon takes real-time back from the operator's
-platform, rate-limited) reflects that the bot runs unattended while the operator
-watches the platform occasionally. If the operator is in SaxoTraderGO often, the
-opposite default — yield and veto until the capability returns naturally — is
-the better trade. This is the one decision in this memo made on the author's
-recommendation rather than an explicit operator choice.
+**Reclaim policy — CONFIRMED by the operator 2026-08-07.** The daemon reclaims
+the elevated session from the operator's platform, rate-limited per §7. The
+operator uses SaxoTraderGO only occasionally, so the unattended bot is the right
+default holder; SaxoTraderGO's banner tells the operator what happened, and the
+4/hour cap means that repeatedly pressing resume hands the capability back to the
+human. Revisit only if the operator's platform usage becomes routine.
+
+**No fallback in the decision path — operator decision (§4).** Saxo fresh, or
+veto.
+
+**yfinance kept but unused — operator decision (§4).** Updated to the new
+contract, wired to nothing.
