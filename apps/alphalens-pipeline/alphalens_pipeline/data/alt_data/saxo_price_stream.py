@@ -29,7 +29,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
-from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveTokenProvider
+from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveAuthConfig, LiveTokenProvider
 from alphalens_pipeline.data.alt_data.saxo_marketdata_client import SaxoMarketDataClient
 from alphalens_pipeline.data.alt_data.saxo_stream_envelope import parse_stream_frames
 from alphalens_pipeline.data.alt_data.session_reclaim import ReclaimLimiter
@@ -194,6 +194,7 @@ class SaxoPriceStream:
 
         self._subscribed_uics: set[int] = set()
         self._consecutive_failures = 0
+        self._live_uic_cache: dict[tuple[str, str], int] = {}
 
         self._stop = False
         self._thread: threading.Thread | None = None
@@ -202,6 +203,27 @@ class SaxoPriceStream:
 
     def get(self, uic: int) -> Quote | None:
         return self.cache.get(uic)
+
+    def live_uic_for(self, ticker: str, *, exchange_mic: str) -> int | None:
+        """(ticker, venue) -> LIVE uic, cached for the process lifetime.
+
+        Delegates to ``SaxoMarketDataClient.resolve_uic``, which refuses an
+        ambiguous match rather than guessing (see its docstring) - the venue is
+        load-bearing there too. Only a SUCCESSFUL resolution is cached: a
+        ``None`` (unknown venue, no match, ambiguous match, or a transient
+        REST failure) is retried on the next call instead of being vetoed for
+        the rest of the process, mirroring
+        ``brokers.saxo.broker.SaxoBroker.resolve_instrument``'s cache-on-
+        success-only pattern.
+        """
+        key = (ticker.upper(), exchange_mic.upper())
+        cached = self._live_uic_cache.get(key)
+        if cached is not None:
+            return cached
+        live_uic = self._client.resolve_uic(ticker, exchange_mic=exchange_mic)
+        if live_uic is not None:
+            self._live_uic_cache[key] = live_uic
+        return live_uic
 
     def ensure_subscribed(self, uics: set[int] | list[int]) -> None:
         """Diff the requested uic set against the subscribed one; no-op when
@@ -334,3 +356,31 @@ class SaxoPriceStream:
                     "quotes stay delayed until the budget refills"
                 )
         self._was_delayed = is_delayed
+
+
+_shared_stream: SaxoPriceStream | None = None
+_shared_stream_lock = threading.Lock()
+
+
+def get_shared_price_stream() -> SaxoPriceStream:
+    """Module-level singleton, started on first call.
+
+    A WebSocket must outlive a single daemon tick, but the feed factory that
+    wants one is called EVERY tick. Creating a fresh ``SaxoPriceStream`` per
+    call would open (and never close) a new connection every ~45s. Instead the
+    first caller in the process pays for construction + ``start()``; every
+    later call reuses the same stream and its live cache, and the caller is
+    expected to only call ``ensure_subscribed`` to reconcile the subscription
+    set for that tick.
+    """
+    global _shared_stream  # noqa: PLW0603 — lazy singleton is the documented pattern
+    if _shared_stream is None:
+        with _shared_stream_lock:
+            if _shared_stream is None:
+                cfg = LiveAuthConfig.from_env()
+                token_provider = LiveTokenProvider(cfg)
+                client = SaxoMarketDataClient(token_provider=token_provider)
+                stream = SaxoPriceStream(client, token_provider)
+                stream.start()
+                _shared_stream = stream
+    return _shared_stream

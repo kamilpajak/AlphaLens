@@ -217,11 +217,14 @@ class LoopDeps:
     # built without it behaves like today's dark path.
     exit_policy: ExitPolicy = field(default_factory=SetupStaticPolicy)
     # Live TP-tranche exit price-feed factory (INC-5), or None -> the pass falls
-    # back to _default_live_exits_feed_factory (YfinancePriceFeed). Injected so
-    # tests can hand the pass a fake feed without touching yfinance; mirrors the
-    # place_oco_exit / amend_stop optional-capability pattern above. Only ever
-    # consulted when the live-exits pass is armed (flag ON, ALLOW_ORDERS ON).
-    live_exits_feed_factory: Callable[[Mapping[int, str]], PriceFeed] | None = None
+    # back to _default_live_exits_feed_factory (Saxo LIVE streaming behind
+    # ALPHALENS_SAXO_LIVE_PRICES, else a vetoing feed). Injected so tests can
+    # hand the pass a fake feed without touching the Saxo LIVE stream; mirrors
+    # the place_oco_exit / amend_stop optional-capability pattern above. Only
+    # ever consulted when the live-exits pass is armed (flag ON, ALLOW_ORDERS
+    # ON). Keyed by uic -> (ticker, exchange_mic): the venue is load-bearing,
+    # see _default_live_exits_feed_factory's docstring.
+    live_exits_feed_factory: Callable[[Mapping[int, tuple[str, str]]], PriceFeed] | None = None
 
 
 @dataclass
@@ -540,14 +543,42 @@ def _build_managed_exits(
     return managed
 
 
-def _default_live_exits_feed_factory(uic_to_ticker: Mapping[int, str]) -> PriceFeed:
-    """The production price feed: yfinance, resolving uic -> ticker off the
-    live positions this tick already read. Imported lazily so a LoopDeps built
-    without wiring this factory (e.g. every hermetic test) never pays the
-    yfinance import cost unless the live-exits pass actually runs."""
-    from alphalens_pipeline.brokers.automanager.yfinance_price_feed import YfinancePriceFeed
+_SAXO_LIVE_PRICES_ENV = "ALPHALENS_SAXO_LIVE_PRICES"
 
-    return YfinancePriceFeed(resolve_ticker=uic_to_ticker.get)
+
+def _saxo_live_prices_enabled() -> bool:
+    return os.environ.get(_SAXO_LIVE_PRICES_ENV) == "1"
+
+
+class _NullPriceFeed:
+    """Vetoes everything. The OFF state of the Saxo feed is 'no prices', never a
+    quiet downgrade to a weaker source (see the INC-2 design memo)."""
+
+    def latest(self, uic: int) -> None:
+        return None
+
+
+def _default_live_exits_feed_factory(
+    uic_to_instrument: Mapping[int, tuple[str, str]],
+) -> PriceFeed:
+    """The production price feed: Saxo LIVE streaming, or nothing.
+
+    yfinance is NOT a fallback here. It remains in the tree, unwired, and its
+    PricePoint carries no event time so the freshness gate would veto it
+    anyway. Behind ``ALPHALENS_SAXO_LIVE_PRICES`` (default OFF); when off this
+    returns a feed that vetoes every uic rather than quietly downgrading."""
+    if not _saxo_live_prices_enabled():
+        return _NullPriceFeed()
+    from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import SaxoLivePriceFeed
+    from alphalens_pipeline.data.alt_data.saxo_price_stream import get_shared_price_stream
+
+    stream = get_shared_price_stream()
+    live_uics = {
+        sim_uic: stream.live_uic_for(ticker, exchange_mic=mic)
+        for sim_uic, (ticker, mic) in uic_to_instrument.items()
+    }
+    stream.ensure_subscribed([u for u in live_uics.values() if u is not None])
+    return SaxoLivePriceFeed(stream=stream, resolve_live_uic=live_uics.get)
 
 
 def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
@@ -586,14 +617,16 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     )
     if not managed:
         return
-    # uic -> ticker straight off the live positions just read (no MIC strip).
-    uic_to_ticker = {
-        uic: pos.instrument.ticker
+    # uic -> (ticker, venue) off the live positions just read. The venue must
+    # survive: resolving a LIVE instrument by bare ticker is ambiguous for
+    # cross-listed names.
+    uic_to_instrument = {
+        uic: (pos.instrument.ticker, pos.instrument.exchange_mic)
         for pos in long_positions
         if (uic := _position_uic(pos)) is not None
     }
     feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
-    feed = feed_factory(uic_to_ticker)
+    feed = feed_factory(uic_to_instrument)
     try:
         fired_count = run_live_exits(deps.broker, feed, managed)
     except BrokerError as exc:
