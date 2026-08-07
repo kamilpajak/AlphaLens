@@ -7,19 +7,42 @@ this cache MUST merge: a message carrying only a Bid must leave the Ask intact.
 
 The socket loop only decodes and applies. Every decision about whether a cached
 quote may drive an order lives in the feed adapter's freshness gate.
+
+:class:`SaxoPriceStream`'s socket loop is thin glue around
+:func:`alphalens_pipeline.data.alt_data.saxo_stream_envelope.parse_stream_frames`
+and the SIM streaming reader's reconnect tuning (``max_consecutive_failures=6``,
+exponential backoff 1s -> 30s ceiling, see
+``alphalens_pipeline.brokers.saxo.streaming.StreamTuning``) - reused as VALUES
+only, not by importing that module (this package must not import ``brokers/``).
+Its correctness is exercised by the Task 8 live probe, not by mocking a
+WebSocket here; only :class:`QuoteCache` above is unit-tested.
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+import json
 import logging
 import threading
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
+
+from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveTokenProvider
+from alphalens_pipeline.data.alt_data.saxo_marketdata_client import SaxoMarketDataClient
+from alphalens_pipeline.data.alt_data.saxo_stream_envelope import parse_stream_frames
 
 logger = logging.getLogger(__name__)
 
 LIVE_STREAM_URL = "wss://live-streaming.saxobank.com/oapi/streaming/ws/connect"
+
+# Reconnect / backoff policy - same VALUES as the SIM streaming reader's
+# StreamTuning defaults (design memo docs/research/saxo_streaming_design_2026_07_24.md),
+# not the same class: this module must not import brokers/.
+_MAX_CONSECUTIVE_FAILURES = 6
+_BACKOFF_FLOOR_S = 1.0
+_BACKOFF_CEILING_S = 30.0
 
 
 def _parse_utc(raw: object) -> dt.datetime | None:
@@ -78,3 +101,170 @@ class QuoteCache:
     def forget(self, uic: int) -> None:
         with self._lock:
             self._quotes.pop(uic, None)
+
+
+async def _default_ws_connect(url: str, headers: dict[str, str]) -> Any:
+    """Open a WS connection with the venv's ``websockets`` (asyncio), confined to
+    the stream thread. ``websockets>=12`` uses ``additional_headers=`` (older
+    ``extra_headers=``) - try both. Imported lazily so importing this module
+    never requires ``websockets`` at import time."""
+    from websockets.asyncio.client import connect
+
+    try:
+        return await connect(url, additional_headers=headers)
+    except TypeError:
+        return await connect(url, extra_headers=headers)
+
+
+class SaxoPriceStream:
+    """One long-lived WebSocket thread streaming Saxo LIVE prices into a
+    :class:`QuoteCache`.
+
+    Owns the cache, the read-only :class:`SaxoMarketDataClient`, the
+    ``contextId``/``referenceId`` pair the price subscription is created
+    under, and the subscribed uic set. ``ensure_subscribed`` is the only entry
+    point that talks REST; the daemon thread only decodes frames off the
+    socket and applies them to the cache - it never decides whether a quote is
+    fresh enough to drive an order (that lives in the feed adapter).
+    """
+
+    _CONTROL_REF_PREFIX = "_"
+
+    def __init__(
+        self,
+        client: SaxoMarketDataClient,
+        token_provider: LiveTokenProvider,
+        *,
+        context_id: str = "saxo-price-stream",
+        reference_id: str = "px",
+        refresh_rate_ms: int = 1000,
+        cache: QuoteCache | None = None,
+        ws_connect: Callable[[str, dict[str, str]], Awaitable[Any]] | None = None,
+        clock: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
+        async_sleep: Callable[[float], Awaitable[None]] | None = None,
+    ) -> None:
+        self._client = client
+        self._token_provider = token_provider
+        self._context_id = context_id
+        self._reference_id = reference_id
+        self._refresh_rate_ms = refresh_rate_ms
+        self.cache = cache or QuoteCache()
+        self._ws_connect = ws_connect or _default_ws_connect
+        self._clock = clock
+        self._async_sleep = async_sleep
+
+        self._subscribed_uics: set[int] = set()
+        self._consecutive_failures = 0
+
+        self._stop = False
+        self._thread: threading.Thread | None = None
+
+    # ----- public API (caller thread) -----
+
+    def get(self, uic: int) -> Quote | None:
+        return self.cache.get(uic)
+
+    def ensure_subscribed(self, uics: set[int] | list[int]) -> None:
+        """Diff the requested uic set against the subscribed one; no-op when
+        unchanged, otherwise DELETE + recreate the single price subscription
+        with the new set (Saxo has no partial-update verb for a subscription's
+        uic list)."""
+        requested = set(uics)
+        if requested == self._subscribed_uics:
+            return
+        if self._subscribed_uics:
+            with contextlib.suppress(Exception):
+                self._client.delete_price_subscription(self._context_id, self._reference_id)
+        if requested:
+            self._client.create_price_subscription(
+                context_id=self._context_id,
+                reference_id=self._reference_id,
+                uics=sorted(requested),
+                refresh_rate_ms=self._refresh_rate_ms,
+            )
+        self._subscribed_uics = requested
+
+    def start(self) -> None:
+        if self._thread is not None:
+            return
+        self._stop = False
+        self._thread = threading.Thread(
+            target=self._thread_main, name="saxo-price-stream", daemon=True
+        )
+        self._thread.start()
+
+    def stop(self, *, timeout: float = 5.0) -> None:
+        """Signal the reader to stop, best-effort DELETE the subscription, join."""
+        self._stop = True
+        if self._subscribed_uics:
+            with contextlib.suppress(Exception):
+                self._client.delete_price_subscription(self._context_id, self._reference_id)
+        thread = self._thread
+        if thread is not None:
+            thread.join(timeout)
+
+    # ----- socket loop (stream thread only; covered by the Task 8 live probe) -----
+
+    def _thread_main(self) -> None:
+        import asyncio
+
+        try:
+            asyncio.run(self._supervise())
+        except Exception:  # pragma: no cover - a reader crash must not touch the caller
+            logger.warning("saxo price stream reader thread crashed", exc_info=True)
+
+    async def _supervise(self) -> None:  # pragma: no cover - exercised by live probe
+        import asyncio
+
+        async_sleep = self._async_sleep or asyncio.sleep
+        while not self._stop:
+            try:
+                await self._run_one_connection()
+            except Exception:
+                logger.warning("saxo price stream session failed", exc_info=True)
+            if self._stop:
+                return
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                logger.warning(
+                    "saxo price stream circuit breaker tripped after %d consecutive "
+                    "failures - stopping the reader",
+                    self._consecutive_failures,
+                )
+                return
+            exponent = max(0, self._consecutive_failures - 1)
+            backoff = min(_BACKOFF_FLOOR_S * (2**exponent), _BACKOFF_CEILING_S)
+            await async_sleep(backoff)
+
+    async def _run_one_connection(self) -> None:  # pragma: no cover - exercised by live probe
+        token = self._token_provider.access_token()
+        url = f"{LIVE_STREAM_URL}?contextId={self._context_id}"
+        conn = await self._ws_connect(url, {"Authorization": f"Bearer {token}"})
+        try:
+            while not self._stop:
+                frame = await conn.recv()
+                self._apply_frame(frame)
+                self._consecutive_failures = 0  # a delivered frame proves the connection is live
+        finally:
+            with contextlib.suppress(Exception):
+                await conn.close()
+
+    def _apply_frame(self, frame: bytes | str) -> None:
+        if isinstance(frame, str):
+            frame = frame.encode("utf-8")
+        now = self._clock()
+        for msg in parse_stream_frames(frame):
+            if msg.reference_id.startswith(self._CONTROL_REF_PREFIX):
+                continue  # heartbeat / reset / disconnect: liveness only, never a quote row
+            try:
+                payload = json.loads(msg.payload)
+            except (UnicodeDecodeError, ValueError):
+                logger.warning(
+                    "saxo price stream: undecodable JSON payload for refId %r",
+                    msg.reference_id,
+                )
+                continue
+            rows = payload if isinstance(payload, list) else [payload]
+            for row in rows:
+                if isinstance(row, dict):
+                    self.cache.apply(row, received_at=now)
