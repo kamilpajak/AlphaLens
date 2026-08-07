@@ -74,11 +74,64 @@ class TestResolveUic(unittest.TestCase):
                 {"Symbol": "AAPL:xnas", "Identifier": 211},
             ]
         }
-        self.assertEqual(_client(_Session(_Resp(200, payload))).resolve_uic("AAPL"), 211)
+        self.assertEqual(
+            _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS"), 211
+        )
 
     def test_returns_none_when_no_exact_match(self):
         payload = {"Data": [{"Symbol": "AAPLX:xnas", "Identifier": 999}]}
-        self.assertIsNone(_client(_Session(_Resp(200, payload))).resolve_uic("AAPL"))
+        self.assertIsNone(
+            _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS")
+        )
+
+    def test_picks_the_row_for_the_requested_venue_not_the_first_row(self):
+        """A ticker listed on more than one venue must resolve to the
+        instrument on the REQUESTED venue, never whichever row Saxo happens
+        to list first. Fixture orders the WRONG-venue row first so the test
+        fails if resolution ever falls back to first-match."""
+        payload = {
+            "Data": [
+                {"Symbol": "AAPL:xnys", "Identifier": 111},
+                {"Symbol": "AAPL:xnas", "Identifier": 211},
+            ]
+        }
+        self.assertEqual(
+            _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS"), 211
+        )
+
+    def test_returns_none_and_warns_on_ambiguous_match_within_the_same_venue(self):
+        """Two rows sharing ticker AND venue is unresolvable ambiguity: fail
+        closed with None (never raise — this is called from a daemon tick)
+        and log a warning naming the ticker, the MIC and the match count."""
+        payload = {
+            "Data": [
+                {"Symbol": "AAPL:xnas", "Identifier": 211},
+                {"Symbol": "AAPL:xnas", "Identifier": 999},
+            ]
+        }
+        logger_name = "alphalens_pipeline.data.alt_data.saxo_marketdata_client"
+        with self.assertLogs(logger_name, level="WARNING") as cm:
+            got = _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS")
+        self.assertIsNone(got)
+        self.assertTrue(
+            any("AAPL" in line and "XNAS" in line and "2" in line for line in cm.output),
+            f"expected a warning naming ticker, MIC and match count; got {cm.output}",
+        )
+
+    def test_near_miss_symbol_is_not_matched(self):
+        """``AAPLX:xnas`` must never satisfy a request for ``AAPL`` on
+        ``XNAS`` — the match is on the full symbol, not a prefix."""
+        payload = {"Data": [{"Symbol": "AAPLX:xnas", "Identifier": 999}]}
+        self.assertIsNone(
+            _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS")
+        )
+
+    def test_unknown_venue_returns_none_without_raising(self):
+        """A MIC outside the shared Saxo venue map is refused up front —
+        None, no HTTP call, never a raise (unlike the SIM order-resolution
+        path, this client is called from a daemon tick, so 'ambiguous or
+        unsupported' must always degrade to 'do nothing')."""
+        self.assertIsNone(_client(_Session()).resolve_uic("AAPL", exchange_mic="ZZZZ"))
 
 
 class TestPriceSubscription(unittest.TestCase):

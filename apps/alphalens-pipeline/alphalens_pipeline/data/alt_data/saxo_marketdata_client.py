@@ -15,6 +15,7 @@ from typing import Any
 
 import requests
 
+from alphalens_pipeline.brokers.saxo.broker import _MIC_TO_SAXO_EXCHANGE_ID
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveTokenProvider
 
 logger = logging.getLogger(__name__)
@@ -72,8 +73,33 @@ class SaxoMarketDataClient:
 
     # ----- reference data -----
 
-    def resolve_uic(self, ticker: str) -> int | None:
-        """Ticker -> LIVE uic. Never assume the SIM uic is the LIVE uic."""
+    def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+        """(ticker, venue) -> LIVE uic. Never assume the SIM uic is the LIVE uic.
+
+        Matches on the (ticker, exchange_mic) PAIR, mirroring
+        ``brokers.saxo.broker.SaxoBroker.resolve_instrument`` — a ticker
+        listed on more than one venue must resolve to the instrument on the
+        REQUESTED venue, never whichever row Saxo happens to return first.
+        Reuses ``_MIC_TO_SAXO_EXCHANGE_ID`` (the same MIC -> Saxo venue map
+        the SIM resolution path uses) rather than hand-rolling a second one,
+        so adding a venue stays a one-place change.
+
+        Unlike the SIM path, this NEVER raises on an unknown venue or an
+        ambiguous match — it returns ``None`` and logs a warning. This client
+        is called from a daemon tick where the contract is "every doubt
+        becomes a veto": a raise would crash the tick, while ``None`` makes
+        the caller do nothing, which is always safe.
+        """
+        ticker = ticker.upper()
+        exchange_mic = exchange_mic.upper()
+        if exchange_mic not in _MIC_TO_SAXO_EXCHANGE_ID:
+            logger.warning(
+                "Saxo LIVE uic resolution: unknown venue %s for ticker %s "
+                "(not in the shared MIC -> Saxo exchange map)",
+                exchange_mic,
+                ticker,
+            )
+            return None
         resp = self._session.get(
             f"{LIVE_API_BASE_URL}/ref/v1/instruments",
             headers=self._headers(),
@@ -82,12 +108,25 @@ class SaxoMarketDataClient:
         )
         if resp.status_code != 200:
             return None
-        wanted = f"{ticker.upper()}:"
-        for row in resp.json().get("Data", []):
-            symbol = str(row.get("Symbol", "")).upper()
-            if symbol.startswith(wanted) and symbol.split(":")[0] == ticker.upper():
-                return int(row["Identifier"])
-        return None
+        expected_symbol = f"{ticker}:{exchange_mic}".lower()
+        matches = [
+            row
+            for row in resp.json().get("Data", [])
+            if str(row.get("Symbol", "")).lower() == expected_symbol
+        ]
+        if not matches:
+            return None
+        if len(matches) > 1:
+            logger.warning(
+                "Saxo LIVE uic resolution: ambiguous match for %s on %s - "
+                "%d rows share symbol %r; refusing to guess",
+                ticker,
+                exchange_mic,
+                len(matches),
+                expected_symbol,
+            )
+            return None
+        return int(matches[0]["Identifier"])
 
     # ----- subscriptions -----
 
