@@ -87,10 +87,13 @@ data-quality declaration, and would cost a second full streaming client. Rejecte
 on price type and provenance, not on latency.
 
 `YfinancePriceFeed` **stays in the tree, unused.** It must still be updated to
-the new `PricePoint` shape, and that update fixes its honesty: `event_time`
-takes the real 1-minute bar timestamp. It then becomes structurally incapable of
-firing, because a ~60 s age fails the freshness gate on its own — no special-case
-ban required, and it doubles as a live proof that the gate works.
+the new `PricePoint` shape, and that update fixes its honesty: `event_time` is
+typed `datetime | None`, and a source that publishes no tick time sets `None`.
+The shared freshness predicate treats `None` as an immediate veto, so
+`fast_info.last_price` becomes **structurally incapable of firing an order** —
+the false-freshness bug is not merely fixed, it becomes inexpressible. No
+special-case ban, no new client method, and the feed doubles as a live proof
+that the gate works.
 
 ## 5. Architecture
 
