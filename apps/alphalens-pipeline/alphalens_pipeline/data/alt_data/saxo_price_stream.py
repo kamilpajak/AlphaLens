@@ -32,6 +32,7 @@ from typing import Any
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveTokenProvider
 from alphalens_pipeline.data.alt_data.saxo_marketdata_client import SaxoMarketDataClient
 from alphalens_pipeline.data.alt_data.saxo_stream_envelope import parse_stream_frames
+from alphalens_pipeline.data.alt_data.session_reclaim import ReclaimLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +127,17 @@ class QuoteCache:
         with self._lock:
             self._quotes.pop(uic, None)
 
+    def any_delayed(self) -> bool:
+        """True once ANY cached quote reports a positive ``DelayedByMinutes``
+        - the only signal that the session was demoted, e.g. by an operator
+        logging into SaxoTraderGO and evicting the API session's elevated
+        capability."""
+        with self._lock:
+            return any(
+                q.delayed_by_minutes is not None and q.delayed_by_minutes > 0
+                for q in self._quotes.values()
+            )
+
 
 async def _default_ws_connect(url: str, headers: dict[str, str]) -> Any:
     """Open a WS connection with the venv's ``websockets`` (asyncio), confined to
@@ -166,6 +178,7 @@ class SaxoPriceStream:
         ws_connect: Callable[[str, dict[str, str]], Awaitable[Any]] | None = None,
         clock: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
         async_sleep: Callable[[float], Awaitable[None]] | None = None,
+        reclaim_limiter: ReclaimLimiter | None = None,
     ) -> None:
         self._client = client
         self._token_provider = token_provider
@@ -176,6 +189,8 @@ class SaxoPriceStream:
         self._ws_connect = ws_connect or _default_ws_connect
         self._clock = clock
         self._async_sleep = async_sleep
+        self._reclaim_limiter = reclaim_limiter or ReclaimLimiter(clock=self._clock)
+        self._was_delayed = False
 
         self._subscribed_uics: set[int] = set()
         self._consecutive_failures = 0
@@ -302,3 +317,20 @@ class SaxoPriceStream:
                         msg.reference_id,
                         row,
                     )
+        self._maybe_reclaim()
+
+    def _maybe_reclaim(self) -> None:
+        """Fire the reclaim on a TRANSITION into the delayed state, not once
+        per message - a 1 Hz stream would otherwise burn the whole hourly
+        budget in seconds. On ``"budget-exhausted"`` there is no bypass: the
+        feed adapter's freshness gate already vetoes delayed quotes, so doing
+        nothing and waiting for the budget to refill is the safe outcome."""
+        is_delayed = self.cache.any_delayed()
+        if is_delayed and not self._was_delayed:
+            outcome = self._reclaim_limiter.try_reclaim(self._client.elevate_session)
+            if outcome == "budget-exhausted":
+                logger.warning(
+                    "saxo price stream: session reclaim budget exhausted - "
+                    "quotes stay delayed until the budget refills"
+                )
+        self._was_delayed = is_delayed

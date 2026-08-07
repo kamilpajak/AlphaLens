@@ -5,6 +5,7 @@ import json
 import unittest
 
 from alphalens_pipeline.data.alt_data.saxo_price_stream import QuoteCache, SaxoPriceStream
+from alphalens_pipeline.data.alt_data.session_reclaim import ReclaimLimiter
 
 _T0 = dt.datetime(2026, 8, 7, 13, 48, 0, tzinfo=dt.UTC)
 
@@ -140,6 +141,23 @@ class TestQuoteCache(unittest.TestCase):
         )
         self.assertEqual(c.get(211).delayed_by_minutes, 0)
 
+    def test_any_delayed_is_false_on_an_empty_cache(self):
+        self.assertFalse(QuoteCache().any_delayed())
+
+    def test_any_delayed_is_false_while_every_quote_is_fresh(self):
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)  # DelayedByMinutes=0
+        self.assertFalse(c.any_delayed())
+
+    def test_any_delayed_is_true_once_any_quote_reports_a_delay(self):
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)
+        c.apply(
+            {"Uic": 211, "LastUpdated": "2026-08-07T13:48:02Z", "Quote": {"DelayedByMinutes": 15}},
+            received_at=_T0 + dt.timedelta(seconds=2),
+        )
+        self.assertTrue(c.any_delayed())
+
 
 class _FakeMarketDataClient:
     """Stand-in for SaxoMarketDataClient - _apply_frame never touches it."""
@@ -189,6 +207,83 @@ class TestSaxoPriceStreamApplyFrame(unittest.TestCase):
         )
         q = stream.get(5)
         self.assertEqual(q.bid, 1.0)
+
+
+class _ReclaimTrackingClient:
+    """Stand-in for SaxoMarketDataClient exposing only ``elevate_session``,
+    used to assert the reclaim wiring without a real HTTP call."""
+
+    def __init__(self, outcomes: list[bool]) -> None:
+        self._outcomes = iter(outcomes)
+        self.calls = 0
+
+    def elevate_session(self) -> bool:
+        self.calls += 1
+        return next(self._outcomes)
+
+
+def _delayed_frame(message_id: int, *, delayed_by_minutes: int) -> bytes:
+    payload = json.dumps(
+        [
+            {
+                "Uic": 5,
+                "LastUpdated": f"2026-08-07T13:48:{message_id:02d}Z",
+                "Quote": {"Bid": 1.0, "Ask": 1.1, "DelayedByMinutes": delayed_by_minutes},
+            }
+        ]
+    ).encode("utf-8")
+    return _build_frame(message_id, "px", payload)
+
+
+class TestSaxoPriceStreamReclaim(unittest.TestCase):
+    """The reclaim fires on a TRANSITION into the delayed state, not once per
+    message - a 1 Hz stream would otherwise burn the whole hourly budget in
+    seconds."""
+
+    def test_delayed_transition_triggers_one_reclaim_attempt(self):
+        client = _ReclaimTrackingClient([True])
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
+        self.assertEqual(client.calls, 1)
+
+    def test_reclaim_does_not_fire_again_while_still_delayed(self):
+        client = _ReclaimTrackingClient([True, True, True])
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
+        stream._apply_frame(_delayed_frame(2, delayed_by_minutes=15))
+        stream._apply_frame(_delayed_frame(3, delayed_by_minutes=15))
+        self.assertEqual(client.calls, 1)
+
+    def test_reclaim_fires_again_after_recovering_then_delaying_once_more(self):
+        client = _ReclaimTrackingClient([True, True])
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
+        stream._apply_frame(_delayed_frame(2, delayed_by_minutes=0))
+        stream._apply_frame(_delayed_frame(3, delayed_by_minutes=15))
+        self.assertEqual(client.calls, 2)
+
+    def test_healthy_stream_never_calls_elevate(self):
+        client = _ReclaimTrackingClient([])
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=0))
+        self.assertEqual(client.calls, 0)
+
+    def test_budget_exhausted_logs_a_warning_and_leaves_the_quote_delayed(self):
+        """No bypass: the freshness gate already vetoes delayed quotes, so the
+        safe outcome on exhaustion is automatic - do nothing and wait for the
+        budget to refill."""
+        exhausted_limiter = ReclaimLimiter(
+            max_per_hour=0, clock=lambda: dt.datetime(2026, 8, 7, 13, 48, tzinfo=dt.UTC)
+        )
+        client = _ReclaimTrackingClient([])
+        stream = SaxoPriceStream(client, _FakeTokenProvider(), reclaim_limiter=exhausted_limiter)
+        with self.assertLogs(
+            "alphalens_pipeline.data.alt_data.saxo_price_stream", level="WARNING"
+        ) as cm:
+            stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
+        self.assertTrue(any("budget" in line.lower() for line in cm.output), cm.output)
+        self.assertEqual(client.calls, 0)
+        self.assertEqual(stream.get(5).delayed_by_minutes, 15)
 
 
 if __name__ == "__main__":
