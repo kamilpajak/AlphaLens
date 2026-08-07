@@ -47,6 +47,9 @@ class SaxoLivePriceFeed:
             return None
         # Its OWN condition, not folded into age: a demoted session keeps
         # delivering plausible, moving, 15-minute-old quotes with no error.
+        # 0 means confirmed-undelayed; anything else, INCLUDING None (no
+        # DelayedByMinutes has ever arrived for this uic under delta-merge
+        # semantics), means we do not know and therefore do not act.
         if quote.delayed_by_minutes != 0:
             return None
         point = PricePoint(

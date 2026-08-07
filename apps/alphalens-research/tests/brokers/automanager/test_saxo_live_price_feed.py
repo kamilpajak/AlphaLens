@@ -62,6 +62,15 @@ class TestSaxoLivePriceFeed(unittest.TestCase):
     def test_missing_side_is_vetoed(self):
         self.assertIsNone(_feed(_quote(bid=None)).latest(211))
 
+    def test_missing_ask_is_vetoed(self):
+        self.assertIsNone(_feed(_quote(ask=None)).latest(211))
+
+    def test_unknown_delayed_flag_is_vetoed(self):
+        """First quote ever seen for a uic under delta-merge semantics leaves
+        DelayedByMinutes unset (None), not 0. Unknown must veto, same as a
+        confirmed delay - never read as "assume not delayed"."""
+        self.assertIsNone(_feed(_quote(delayed_by_minutes=None)).latest(211))
+
     def test_unknown_quote_is_vetoed(self):
         self.assertIsNone(_feed(None).latest(211))
 
