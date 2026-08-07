@@ -1118,3 +1118,193 @@ The daemon can early-wake on a Saxo WebSocket fill push instead of only on the ~
 ### 9. `$100` live escape — NOT in this runbook
 
 Requires: a new ADR lifting the structural rail, a separate `ALPHALENS_BROKER_LIVE=1` env (never a runtime flag), sizing equity `$1000` with `~$100` max per-pick loss, `MAX_OPEN=1`, and shrinking the unprotected window (the dark SIM streaming early-wake above must earn its own live re-validation first). Do NOT reuse the SIM env/units for live.
+
+## Saxo LIVE market data (INC-2 price feed)
+
+The broker-manager daemon above trades on **SIM only** (ADR 0014 — that stays
+unchanged). Separately, it can read **real-time** exit prices from a SECOND
+Saxo app registered on the **LIVE** environment (app `bracket-keeper`) — LIVE
+because SIM quotes are 15-minute-delayed. That app's trading permission is
+never used: `SaxoMarketDataClient`
+(`alphalens_pipeline/data/alt_data/saxo_marketdata_client.py`) only reads
+session capabilities, resolves tickers to uics, and manages one price
+subscription. Design memo: `docs/research/live_market_execution_inc2_design_2026_08_07.md`.
+
+**This is a DIFFERENT app, a DIFFERENT OAuth client, and a DIFFERENT token
+store from the SIM auto-manager above.** Do not reuse `SAXO_APP_KEY` /
+`SAXO_APP_SECRET` / the SIM token store for any of this.
+
+### 1. Env file — `/etc/alphalens/env`
+
+```bash
+sudo tee -a /etc/alphalens/env >/dev/null <<'EOF'
+# --- Saxo LIVE market data (INC-2, read-only) ---
+SAXO_LIVE_APP_KEY=<live app key>
+SAXO_LIVE_APP_SECRET=<live app secret>
+SAXO_LIVE_AUTH_REDIRECT_URL=http://localhost:8765/callback   # MUST byte-match the LIVE portal registration
+# ALPHALENS_SAXO_LIVE_PRICES=1   <-- add ONLY after §2 (bootstrap) is done
+EOF
+sudo chmod 600 /etc/alphalens/env
+```
+
+The redirect reuses the same `localhost:8765` port as the SIM `broker auth`
+flow — that is fine, they are never open at the same time — but it is a
+SEPARATE app registration on Saxo's LIVE portal, not the SIM one.
+
+### 2. One-time attended OAuth bootstrap — **on the VPS**, never on the laptop
+
+The token store must be written **on the VPS**
+(`~/.alphalens/saxo_auth_live/token_store.json` by default, overridable via
+`SAXO_LIVE_TOKEN_STORE_PATH`), so the OAuth redirect must land on the VPS too
+— run the bootstrap ON the VPS while forwarding port 8765 from your laptop,
+exactly like the SIM `broker auth` bootstrap in the previous section.
+
+**There is no `alphalens broker auth`-equivalent CLI for this app yet** — the
+bootstrap runs as a short attended script over the public primitives in
+`saxo_marketdata_auth.py` (`LiveAuthConfig.from_env`, `build_authorize_url`,
+`exchange_code`). It never prints a token.
+
+**Laptop terminal A** — open the tunnel (leave it running):
+```bash
+ssh -L 8765:localhost:8765 jacoren@vault
+```
+**In that same SSH session (on the VPS)** — start the one-shot listener:
+```bash
+cd ~/AlphaLens && set -a && source /etc/alphalens/env && set +a
+.venv/bin/python - <<'PY'
+import http.server
+import urllib.parse
+
+from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import (
+    LiveAuthConfig,
+    build_authorize_url,
+    exchange_code,
+)
+
+cfg = LiveAuthConfig.from_env()
+authorize_url = build_authorize_url(cfg, state="bootstrap")
+print("open this URL to authorize (LIVE credentials):")
+print(authorize_url)
+
+code_holder: dict[str, str | None] = {"code": None}
+
+
+class _Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802 - stdlib method name
+        query = urllib.parse.urlparse(self.path).query
+        code_holder["code"] = urllib.parse.parse_qs(query).get("code", [None])[0]
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"authorized - you can close this tab")
+
+    def log_message(self, *args: object) -> None:  # silence stdlib access log
+        pass
+
+
+print("waiting for the redirect on http://localhost:8765/callback ...")
+http.server.HTTPServer(("localhost", 8765), _Handler).handle_request()  # blocks for ONE request
+if not code_holder["code"]:
+    raise SystemExit("no ?code= on the redirect - check the LIVE portal redirect URL registration")
+
+exchange_code(cfg, code=code_holder["code"])
+print("authorized - LIVE token store written (tokens are never printed)")
+PY
+```
+**Laptop browser** — open the printed authorize URL, log in with **LIVE**
+credentials (not SIM). Saxo redirects to `http://localhost:8765/callback` →
+the SSH tunnel forwards it to the VPS listener → the script exchanges the
+code and writes the token store **on the VPS**.
+
+**The token store is NEVER copied between machines.** The refresh token is
+single-use and rotates on every refresh (same discipline as the SIM store,
+`saxo_marketdata_auth.py` module docstring) — it permits exactly ONE holder.
+Copying the file to a second machine (or re-running the bootstrap from a
+laptop against a synced copy) invalidates whichever side refreshes second the
+moment the other one also tries.
+
+### 3. Refresh cadence — separate mechanism from the SIM keep-alive timer
+
+The SIM auto-manager has a dedicated `alphalens-saxo-refresh.timer` (~every
+20 min) because its OAuth calls are otherwise infrequent enough for the
+refresh chain to go idle. The LIVE market-data token refreshes differently:
+`LiveTokenProvider.access_token()` (same 120 s-before-expiry margin as the
+SIM provider) is called on every REST call the daemon makes through
+`SaxoMarketDataClient` (session-capability reads, uic resolution, subscription
+create/delete) AND on every WebSocket (re)connect the price stream makes —
+so as long as `ALPHALENS_SAXO_LIVE_PRICES=1` and the daemon is running, the
+token stays fresh as a side effect of the feed being used, with no separate
+timer unit to install.
+
+**There is currently no dedicated LIVE keep-alive timer in this repo**
+(unlike `alphalens-saxo-refresh.timer` for SIM). If the flag stays OFF, or the
+daemon is down, for long enough that the refresh chain goes idle, the fix is
+the same as the SIM "OAuth outage" case: re-run §2's attended bootstrap.
+
+### 4. Turning it on
+
+```bash
+sudo sed -i 's/^# ALPHALENS_SAXO_LIVE_PRICES=1/ALPHALENS_SAXO_LIVE_PRICES=1/' /etc/alphalens/env
+#   (or add the line if not present)
+systemctl --user restart alphalens-broker-manager.service
+journalctl --user -u alphalens-broker-manager.service -f
+```
+
+### 5. Single-holder rule — exactly ONE elevated session
+
+Saxo permits exactly one elevated (`FullTradingAndChat`) session per LIVE
+login at a time (verified empirically 2026-08-07 — see
+`session_reclaim.py` module docstring). A default OAuth session is
+`OrdersOnly`, which silently serves 15-minute-delayed prices; elevating one
+holder demotes whichever session held it before, including:
+
+- the operator's own SaxoTraderGO session, and
+- the production daemon, if it is currently running with the flag on.
+
+**Before running the Task 8 live probe (or any other Mac-side attended check)
+against this app, stop the production daemon first** (or coordinate the
+timing with whoever is running it) — running both at once just makes them
+demote each other back and forth. The daemon's own reclaim logic
+(`ReclaimLimiter`, `session_reclaim.py`) automatically re-elevates itself up
+to 4 times/hour once it observes a delayed quote, so a human who keeps
+pressing "resume" in SaxoTraderGO eventually wins the ping-pong by
+persistence — by design, not a bug.
+
+### 6. Known issues
+
+- **No `stop()` on daemon shutdown.** `get_shared_price_stream()`
+  (`saxo_price_stream.py`) is a process-lifetime singleton; nothing in the
+  daemon's shutdown path calls `SaxoPriceStream.stop()`. The WebSocket thread
+  (and its price subscription) runs until the process exits, not until the
+  flag is turned off or the daemon is asked to stop gracefully. Not currently
+  a resource leak in practice (the process typically exits via
+  `systemctl stop`/restart, which tears down the whole process), but do not
+  expect toggling `ALPHALENS_SAXO_LIVE_PRICES` off at runtime to close the
+  subscription without a restart.
+- **An unbootstrapped LIVE token store looks like "nothing happens", not a
+  crash.** If `ALPHALENS_SAXO_LIVE_PRICES=1` is set before §2's bootstrap has
+  run (or the store is stale/corrupt), `LiveAuthConfig.from_env()` /
+  `LiveTokenProvider` raise inside the feed-factory construction. That
+  construction failure is caught deliberately broadly by
+  `_build_live_exits_feed` (`control_loop.py`) — "every doubt becomes a
+  veto" — and degrades to `_NullPriceFeed`, which vetoes every uic. The
+  daemon keeps running, keeps reconciling, keeps managing the standalone
+  disaster stop — it just never fires a live-market exit. The only trace is
+  ONE throttled alert (`live-exits-feed-build-fail`) the first time it
+  happens, then silence. If exits stop firing after enabling this flag, check
+  `journalctl --user -u alphalens-broker-manager.service | grep live-exits`
+  for that alert before assuming anything else is wrong.
+
+### 7. Attended shape probe (before flipping the gate live)
+
+```bash
+cd apps/alphalens-research && set -a && . /etc/alphalens/env && set +a && \
+SAXO_MARKETDATA_LIVE_TEST=1 \
+    ../../.venv/bin/python -m unittest tests.live.test_saxo_marketdata_live -v
+```
+
+SHAPE only, never values: elevates the session, resolves AAPL to a uic,
+opens and tears down one price subscription, asserts the quote row reports
+`DelayedByMinutes == 0`. **Elevates the single-holder session (§5)** — never
+run this while the production daemon holds it without coordinating first; a
+closed market (or an already-demoted session) reports as an inconclusive
+TRANSIENT result, not a shape failure.
