@@ -19,7 +19,14 @@ class _FakeFeed:
         return (
             None
             if px is None
-            else PricePoint(uic=uic, price=px, asof=dt.datetime(2026, 8, 5, tzinfo=dt.UTC))
+            else PricePoint(
+                uic=uic,
+                bid=px,
+                ask=px,
+                event_time=dt.datetime(2026, 8, 5, tzinfo=dt.UTC),
+                received_at=dt.datetime(2026, 8, 5, tzinfo=dt.UTC),
+                source="test",
+            )
         )
 
 

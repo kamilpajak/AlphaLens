@@ -168,7 +168,7 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
             logger.info("uic %s: no sole standalone SL — skipping live exits this pass", m.uic)
             continue
         exits = plan_tranche_exits(
-            price=point.price,
+            price=point.bid,  # selling a long: the executable side is the BID
             tp_tranches=m.tp_tranches,
             reference_qty=m.reference_qty,
             owned=live.quantity,
