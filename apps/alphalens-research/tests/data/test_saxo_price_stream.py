@@ -3,7 +3,9 @@ from __future__ import annotations
 import datetime as dt
 import json
 import unittest
+from unittest import mock
 
+import alphalens_pipeline.data.alt_data.saxo_price_stream as sps
 from alphalens_pipeline.data.alt_data.saxo_price_stream import QuoteCache, SaxoPriceStream
 from alphalens_pipeline.data.alt_data.session_reclaim import ReclaimLimiter
 
@@ -167,6 +169,51 @@ class _FakeTokenProvider:
     """Stand-in for LiveTokenProvider - _apply_frame never touches it."""
 
 
+class _ResolvingClient:
+    """Stand-in for SaxoMarketDataClient exposing only resolve_uic, records
+    every call so a test can assert on cache-hit vs cache-miss behavior.
+    Upper-cases like the real client does (see its docstring) so the fixture
+    matches production instead of asserting on a fake-only behavior."""
+
+    def __init__(self, responses: dict[tuple[str, str], int | None]) -> None:
+        self._responses = responses
+        self.calls: list[tuple[str, str]] = []
+
+    def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+        self.calls.append((ticker, exchange_mic))
+        return self._responses.get((ticker.upper(), exchange_mic.upper()))
+
+
+class TestLiveUicFor(unittest.TestCase):
+    """Fix round 2 (Task 7 review), finding 3: live_uic_for had zero hermetic
+    coverage. Pins the cache-on-success-only contract its own docstring
+    claims."""
+
+    def test_a_successful_resolution_is_cached_not_re_resolved(self):
+        client = _ResolvingClient({("AAPL", "XNYS"): 211})
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        self.assertEqual(stream.live_uic_for("AAPL", exchange_mic="XNYS"), 211)
+        self.assertEqual(stream.live_uic_for("AAPL", exchange_mic="XNYS"), 211)
+        self.assertEqual(client.calls, [("AAPL", "XNYS")])  # ONE REST call, not two
+
+    def test_a_failed_resolution_is_retried_not_cached(self):
+        """A None (unknown venue, no match, ambiguous match, or a transient
+        failure) must NOT be cached -- caching it would veto that ticker for
+        the rest of the process instead of retrying on the next tick."""
+        client = _ResolvingClient({})  # every lookup misses
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        self.assertIsNone(stream.live_uic_for("QUBT", exchange_mic="ZZZZ"))
+        self.assertIsNone(stream.live_uic_for("QUBT", exchange_mic="ZZZZ"))
+        self.assertEqual(client.calls, [("QUBT", "ZZZZ"), ("QUBT", "ZZZZ")])  # retried both times
+
+    def test_the_cache_key_is_upper_cased_ticker_and_venue(self):
+        client = _ResolvingClient({("AAPL", "XNAS"): 5})
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        self.assertEqual(stream.live_uic_for("aapl", exchange_mic="xnas"), 5)
+        self.assertEqual(stream.live_uic_for("AAPL", exchange_mic="XNAS"), 5)
+        self.assertEqual(client.calls, [("aapl", "xnas")])  # 2nd call hit the cache
+
+
 def _build_frame(message_id: int, reference_id: str, payload: bytes, *, fmt: int = 0) -> bytes:
     """Encode one Saxo streaming envelope message (same layout as the SIM
     frame builder in test_saxo_streaming.py) so _apply_frame can be exercised
@@ -284,6 +331,76 @@ class TestSaxoPriceStreamReclaim(unittest.TestCase):
         self.assertTrue(any("budget" in line.lower() for line in cm.output), cm.output)
         self.assertEqual(client.calls, 0)
         self.assertEqual(stream.get(5).delayed_by_minutes, 15)
+
+
+class _FakeSharedInstance:
+    """Stand-in for SaxoPriceStream at the get_shared_price_stream() level -
+    the getter only ever calls start() and is_running() on what it holds."""
+
+    def __init__(self, *, running: bool) -> None:
+        self._running = running
+        self.started = False
+
+    def start(self) -> None:
+        self.started = True
+
+    def is_running(self) -> bool:
+        return self._running
+
+
+class TestGetSharedPriceStream(unittest.TestCase):
+    """Fix round 2 (Task 7 review), finding 4: after the reconnect circuit
+    breaker trips, _supervise returns but self._thread stays non-None, so a
+    dead stream would sit in the module singleton silently for the rest of
+    the process. These patch the construction chain (LiveAuthConfig,
+    LiveTokenProvider, SaxoMarketDataClient, SaxoPriceStream) so no real
+    network/auth is touched."""
+
+    def setUp(self) -> None:
+        # The singleton is process-global state; reset it around each test.
+        patcher = mock.patch.object(sps, "_shared_stream", None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _patched_construction(self, *stream_instances):
+        return (
+            mock.patch.object(sps, "LiveAuthConfig"),
+            mock.patch.object(sps, "LiveTokenProvider"),
+            mock.patch.object(sps, "SaxoMarketDataClient"),
+            mock.patch.object(sps, "SaxoPriceStream", side_effect=list(stream_instances)),
+        )
+
+    def test_first_call_constructs_and_starts_the_stream(self):
+        instance = _FakeSharedInstance(running=True)
+        p1, p2, p3, p4 = self._patched_construction(instance)
+        with p1, p2, p3, p4:
+            stream = sps.get_shared_price_stream()
+        self.assertIs(stream, instance)
+        self.assertTrue(instance.started)
+
+    def test_a_running_stream_is_reused_not_rebuilt(self):
+        instance = _FakeSharedInstance(running=True)
+        # side_effect has exactly ONE instance -- a second construction
+        # attempt raises StopIteration, failing the test loudly.
+        p1, p2, p3, p4 = self._patched_construction(instance)
+        with p1, p2, p3, p4:
+            first = sps.get_shared_price_stream()
+            second = sps.get_shared_price_stream()
+        self.assertIs(first, second)
+
+    def test_a_dead_reader_thread_is_rebuilt_not_reused(self):
+        """The regression this finding is about: a stream whose reader thread
+        died (circuit breaker tripped) must be replaced, not handed back
+        forever with only a log warning as the trace."""
+        dead = _FakeSharedInstance(running=False)
+        alive = _FakeSharedInstance(running=True)
+        p1, p2, p3, p4 = self._patched_construction(dead, alive)
+        with p1, p2, p3, p4:
+            first = sps.get_shared_price_stream()
+            self.assertIs(first, dead)
+            second = sps.get_shared_price_stream()
+        self.assertIs(second, alive)
+        self.assertTrue(alive.started)
 
 
 if __name__ == "__main__":

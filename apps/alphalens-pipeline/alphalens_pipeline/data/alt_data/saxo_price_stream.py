@@ -204,17 +204,32 @@ class SaxoPriceStream:
     def get(self, uic: int) -> Quote | None:
         return self.cache.get(uic)
 
+    def is_running(self) -> bool:
+        """True once ``start()`` has launched the reader thread and it is
+        still alive. False before the first ``start()`` call, or after the
+        reconnect circuit breaker has tripped (``_MAX_CONSECUTIVE_FAILURES``)
+        and ``_supervise`` has returned, exiting the thread - the signal
+        ``get_shared_price_stream`` uses to know its singleton needs
+        rebuilding rather than being handed back dead."""
+        return self._thread is not None and self._thread.is_alive()
+
     def live_uic_for(self, ticker: str, *, exchange_mic: str) -> int | None:
         """(ticker, venue) -> LIVE uic, cached for the process lifetime.
 
         Delegates to ``SaxoMarketDataClient.resolve_uic``, which refuses an
         ambiguous match rather than guessing (see its docstring) - the venue is
-        load-bearing there too. Only a SUCCESSFUL resolution is cached: a
-        ``None`` (unknown venue, no match, ambiguous match, or a transient
-        REST failure) is retried on the next call instead of being vetoed for
-        the rest of the process, mirroring
+        load-bearing there too. ``resolve_uic`` returns ``None`` only for a
+        COMPLETED HTTP response that is a non-200, has no matching symbol, or
+        is ambiguous. Only a SUCCESSFUL resolution is cached: that ``None`` is
+        retried on the next call instead of being vetoed for the rest of the
+        process, mirroring
         ``brokers.saxo.broker.SaxoBroker.resolve_instrument``'s cache-on-
-        success-only pattern.
+        success-only pattern. A socket-level transport exception (DNS
+        failure, connection refused, timeout) is a DIFFERENT case: it is not
+        caught inside ``resolve_uic`` and propagates straight out of this
+        method too — the caller's construction boundary
+        (``_build_live_exits_feed`` in ``control_loop.py``) treats that as a
+        doubt over the WHOLE feed for that tick, not just this one ticker.
         """
         key = (ticker.upper(), exchange_mic.upper())
         cached = self._live_uic_cache.get(key)
@@ -372,11 +387,19 @@ def get_shared_price_stream() -> SaxoPriceStream:
     later call reuses the same stream and its live cache, and the caller is
     expected to only call ``ensure_subscribed`` to reconcile the subscription
     set for that tick.
+
+    Rebuilds the singleton when the existing stream's reader thread has died
+    (the reconnect circuit breaker tripped after
+    ``_MAX_CONSECUTIVE_FAILURES``) - otherwise a dead stream would sit here
+    silently serving no fresh quotes for the rest of the process, with only a
+    log warning as a trace. The construction-then-``start()``-then-assign
+    order is unchanged either way: ``_shared_stream`` is only ever rebound
+    AFTER ``start()`` returns.
     """
     global _shared_stream  # noqa: PLW0603 — lazy singleton is the documented pattern
-    if _shared_stream is None:
+    if _shared_stream is None or not _shared_stream.is_running():
         with _shared_stream_lock:
-            if _shared_stream is None:
+            if _shared_stream is None or not _shared_stream.is_running():
                 cfg = LiveAuthConfig.from_env()
                 token_provider = LiveTokenProvider(cfg)
                 client = SaxoMarketDataClient(token_provider=token_provider)

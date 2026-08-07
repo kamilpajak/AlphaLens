@@ -402,6 +402,35 @@ class TestLiveExitsFlagOnFires(_JournalCase):
                 spy.assert_not_called()
 
 
+class TestLiveExitsFeedFactoryReceivesTheVenue(_JournalCase):
+    """Fix round 2 (Task 7 review), finding 2: the venue is the entire reason
+    this task exists -- resolving a LIVE instrument by bare ticker is
+    ambiguous for a cross-listed name. Every other test in this module injects
+    a feed factory that ignores its argument; this is the only one that pins
+    the SHAPE _run_live_exits_pass hands to the factory."""
+
+    def test_the_factory_receives_uic_to_ticker_and_venue_tuples(self) -> None:
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
+        )
+        received: list[dict[int, tuple[str, str]]] = []
+
+        def capturing_factory(uic_to_instrument):
+            received.append(dict(uic_to_instrument))
+            return _FakeFeed({uic: 16.5})
+
+        alerts: list[str] = []
+        deps = _deps(broker, alerts=alerts, live_exits_feed_factory=capturing_factory)
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, cl.TickReport())
+        # FakeBroker's _instrument fixture sets exchange_mic="XNYS".
+        self.assertEqual(received, [{uic: ("KO", "XNYS")}])
+
+
 def _raising_factory(uic_to_instrument: object) -> object:
     raise RuntimeError("boom: cannot reach Saxo LIVE auth")
 
@@ -426,6 +455,12 @@ class TestLiveExitsFeedConstructionBoundary(unittest.TestCase):
         self.assertEqual(report.alerts, 1)
 
     def test_construction_failure_alerts_once_not_once_per_tick(self) -> None:
+        """The two ticks raise DIFFERENT exception messages (a stale token
+        one tick, a DNS failure the next -- both real, both possible from the
+        same misconfiguration). If the throttle key were built from the
+        exception message instead of a fixed reason string, this would still
+        alert twice -- in production that would page every ~45s instead of
+        once per re-alert interval."""
         alerts: list[str] = []
         seen_reasons: set[str] = set()
 
@@ -436,15 +471,27 @@ class TestLiveExitsFeedConstructionBoundary(unittest.TestCase):
             alerts.append(msg)
             return True
 
-        deps = _deps(
+        def raising_factory_tick_1(uic_to_instrument: object) -> object:
+            raise RuntimeError("boom: cannot reach Saxo LIVE auth")
+
+        def raising_factory_tick_2(uic_to_instrument: object) -> object:
+            raise RuntimeError("boom: token store corrupt")
+
+        report = cl.TickReport()
+        deps_1 = _deps(
             broker=object(),
             alerts=alerts,
-            live_exits_feed_factory=_raising_factory,
+            live_exits_feed_factory=raising_factory_tick_1,
             alert_throttled=throttled,
         )
-        report = cl.TickReport()
-        cl._build_live_exits_feed(deps, {211: ("AAPL", "XNYS")}, report)  # tick 1
-        cl._build_live_exits_feed(deps, {211: ("AAPL", "XNYS")}, report)  # tick 2
+        cl._build_live_exits_feed(deps_1, {211: ("AAPL", "XNYS")}, report)  # tick 1
+        deps_2 = _deps(
+            broker=object(),
+            alerts=alerts,
+            live_exits_feed_factory=raising_factory_tick_2,
+            alert_throttled=throttled,
+        )
+        cl._build_live_exits_feed(deps_2, {211: ("AAPL", "XNYS")}, report)  # tick 2
         self.assertEqual(len(alerts), 1)
         self.assertEqual(report.alerts, 1)
 

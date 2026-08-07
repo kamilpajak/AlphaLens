@@ -65,6 +65,17 @@ class TestSaxoLivePriceFeed(unittest.TestCase):
     def test_missing_ask_is_vetoed(self):
         self.assertIsNone(_feed(_quote(ask=None)).latest(211))
 
+    def test_non_numeric_bid_is_vetoed_not_raised(self):
+        """QuoteCache.apply stores whatever JSON value the socket delivered
+        without coercion (see its docstring). A Bid that arrives as a
+        non-numeric value must veto like any other doubt, not raise
+        ValueError/TypeError out of the read path and skip the tick that also
+        runs the never-naked protection pass right after it."""
+        self.assertIsNone(_feed(_quote(bid="not-a-number")).latest(211))
+
+    def test_non_numeric_ask_is_vetoed_not_raised(self):
+        self.assertIsNone(_feed(_quote(ask="not-a-number")).latest(211))
+
     def test_unknown_delayed_flag_is_vetoed(self):
         """First quote ever seen for a uic under delta-merge semantics leaves
         DelayedByMinutes unset (None), not 0. Unknown must veto, same as a

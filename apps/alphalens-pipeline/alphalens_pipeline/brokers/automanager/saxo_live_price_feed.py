@@ -52,10 +52,19 @@ class SaxoLivePriceFeed:
         # semantics), means we do not know and therefore do not act.
         if quote.delayed_by_minutes != 0:
             return None
+        # QuoteCache.apply stores whatever JSON value the socket delivered
+        # without coercion (see its docstring) - a non-numeric Bid/Ask is a
+        # doubt like any other and must veto here, not raise past this
+        # module's caller into the tick.
+        try:
+            bid = float(quote.bid)
+            ask = float(quote.ask)
+        except (TypeError, ValueError):
+            return None
         point = PricePoint(
             uic=uic,  # the CALLER's uic — the engine keys its state by it
-            bid=float(quote.bid),
-            ask=float(quote.ask),
+            bid=bid,
+            ask=ask,
             event_time=quote.event_time,
             received_at=quote.received_at,
             source=SOURCE,
