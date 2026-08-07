@@ -2018,6 +2018,16 @@ def _journal_tranche_plan(
     if use_geometry and exit_spec is not None:
         geometry = _geometry_tranche_ladder(exit_spec)
         if geometry is None:
+            # Otherwise this skip is invisible: the live-exit engine finds no
+            # ladder for the uic and the position sits stop-only, which reads in
+            # the journal exactly like a pre-INC-5 pick.
+            logger.warning(
+                "tranche_plan uic %d: geometry levels unusable (stop=%r, tp=%r) — "
+                "no TP ladder journaled, the position stays stop-only",
+                int(instrument.broker_instrument_id),
+                exit_spec.initial_levels.stop,
+                exit_spec.initial_levels.tp,
+            )
             return
         ladder, stop_price = geometry
     else:

@@ -29,7 +29,11 @@ import inspect
 import textwrap
 import unittest
 
-from alphalens_pipeline.brokers.automanager.control_loop import _place_tiers
+from alphalens_pipeline.brokers.automanager.control_loop import (
+    _geometry_shadow_stamp,
+    _journal_tranche_plan,
+    _place_tiers,
+)
 from alphalens_pipeline.brokers.automanager.position_manager import (
     _maybe_reanchor,
     _reconcile_long,
@@ -68,6 +72,12 @@ def _executable_source(fn) -> str:
 # function body, which is what we want to scan for it.
 _SENTINEL_TOKEN = "setup_static"
 
+# The placement-journal helpers ``_place_tiers`` delegates to. They live at module
+# level (not nested), so scanning ``_place_tiers`` alone would NOT see them —
+# scan each one too, or the guard silently shrinks every time a block is
+# extracted out of the placement path.
+_PLACEMENT_JOURNAL_HELPERS = (_geometry_shadow_stamp, _journal_tranche_plan)
+
 # The registry-resolve call sites. ``build_default_deps`` (startup, NOT
 # scanned here) is the one allowed resolve site.
 _HOT_PATH_RESOLVE_CALL = "resolve_exit_policy("
@@ -97,6 +107,20 @@ class NoExitPolicySentinelSurvivesTheRefactor(unittest.TestCase):
                 "guard, Task 6."
             ),
         )
+
+    def test_placement_journal_helpers_have_no_sentinel(self) -> None:
+        for helper in _PLACEMENT_JOURNAL_HELPERS:
+            with self.subTest(helper=helper.__name__):
+                self.assertNotIn(
+                    _SENTINEL_TOKEN,
+                    _executable_source(helper),
+                    msg=(
+                        f"control_loop.{helper.__name__} is on the placement path "
+                        "extracted out of _place_tiers; it must never compare a raw "
+                        '"setup_static" env sentinel — it takes the already-resolved '
+                        "decision as an argument."
+                    ),
+                )
 
     def test_maybe_reanchor_source_has_no_sentinel(self) -> None:
         source = _executable_source(_maybe_reanchor)
@@ -145,6 +169,21 @@ class NoHotPathExitPolicyResolveSurvivesTheRefactor(unittest.TestCase):
                 "resolve site."
             ),
         )
+
+    def test_placement_journal_helpers_never_resolve_on_the_hot_path(self) -> None:
+        for helper in _PLACEMENT_JOURNAL_HELPERS:
+            with self.subTest(helper=helper.__name__):
+                source = _executable_source(helper)
+                self.assertNotIn(_HOT_PATH_RESOLVE_CALL, source)
+                self.assertNotIn(
+                    _HOT_PATH_RAW_ENV_READ_CALL,
+                    source,
+                    msg=(
+                        f"control_loop.{helper.__name__} runs per placed pick; it "
+                        "must consume the decision passed down from the cached "
+                        "LoopDeps policy, never resolve or re-read it."
+                    ),
+                )
 
     def test_maybe_reanchor_never_resolves_on_the_hot_path(self) -> None:
         source = _executable_source(_maybe_reanchor)

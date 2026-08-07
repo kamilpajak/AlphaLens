@@ -1129,6 +1129,21 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
                 )
                 self.assertEqual([ln for ln in journaled if ln["kind"] == "tranche_plan"], [])
 
+    def test_a_non_finite_geometry_level_is_logged(self) -> None:
+        # The skip is silent otherwise: the live-exit engine then finds no ladder
+        # for that uic and the position sits stop-only, indistinguishable in the
+        # journal from a pre-INC-5 pick. Name both levels so the anomaly is
+        # diagnosable from journalctl alone.
+        with self.assertLogs(cl.logger, level="WARNING") as caught:
+            self._run(
+                plan=self._plan(tp_tranches=()),
+                exit_spec=_exit_spec(stop=float("nan"), tp=13.0, atr=1.0),
+                exit_policy=resolve_exit_policy("atr_bracket_1p5"),
+            )
+        logged = "\n".join(caught.output)
+        self.assertIn("tranche_plan", logged)
+        self.assertIn(str(_instr().broker_instrument_id), logged)
+
     def test_a_non_finite_geometry_level_does_not_fall_back_to_the_static_ladder(self) -> None:
         # Under the geometry policy the static plan.tp_tranches is NOT the active
         # ladder, so an unusable geometry level must journal nothing -- silently
