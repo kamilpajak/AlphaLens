@@ -75,6 +75,44 @@ class TestQuoteCache(unittest.TestCase):
         )
         self.assertEqual(c.get(211).bid, 314.01)  # regression ignored
 
+    def test_out_of_order_row_still_applies_a_carried_delayed_flag(self):
+        """A regressive row is dropped for price/event_time (conservative and
+        safe), but NOT for DelayedByMinutes: losing a newly-reported delay
+        would leave a demoted session looking healthy, serving 15-minute-old
+        prices to an order decision. The flag must apply even when the rest
+        of the row is rejected."""
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)  # DelayedByMinutes=0
+        c.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:47:50Z",  # regressive
+                "Quote": {"Bid": 1.0, "DelayedByMinutes": 15},
+            },
+            received_at=_T0 + dt.timedelta(seconds=3),
+        )
+        q = c.get(211)
+        self.assertEqual(q.delayed_by_minutes, 15)  # flag still applies
+        self.assertEqual(q.bid, 314.01)  # price untouched
+        self.assertEqual(q.ask, 314.04)
+        self.assertEqual(
+            q.event_time, dt.datetime(2026, 8, 7, 13, 47, 59, tzinfo=dt.UTC)
+        )  # event_time untouched
+
+    def test_out_of_order_row_without_the_delay_key_leaves_flag_untouched(self):
+        """The OMITTED-key semantics still hold on the regression path: a
+        regressive row that does not carry DelayedByMinutes must not disturb
+        the cached flag, and must not resurrect any stale price either."""
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)  # DelayedByMinutes=0
+        c.apply(
+            {"Uic": 211, "LastUpdated": "2026-08-07T13:47:50Z", "Quote": {"Bid": 1.0}},
+            received_at=_T0 + dt.timedelta(seconds=3),
+        )
+        q = c.get(211)
+        self.assertEqual(q.delayed_by_minutes, 0)  # unchanged
+        self.assertEqual(q.bid, 314.01)  # not resurrected to the regressive 1.0
+
     def test_naive_last_updated_yields_none_event_time(self):
         """A ``LastUpdated`` string carrying no offset (e.g. Saxo omitting the
         'Z'/offset suffix) must not silently become a naive datetime: that

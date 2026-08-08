@@ -28,7 +28,7 @@ import os
 import threading
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveAuthConfig, LiveTokenProvider
@@ -105,7 +105,20 @@ class QuoteCache:
             # sharing a LastUpdated during active trading are common, not a
             # corner case - using "<=" here would freeze the price for the
             # rest of every second. Do not change this to "<=".
+            #
+            # DelayedByMinutes is the ONE exception to "drop the whole row":
+            # dropping price/event_time on a regression is conservative (it
+            # never resurrects a stale price), but dropping a newly-reported
+            # delay is NOT conservative - it would leave a demoted session
+            # looking healthy and let the feed serve 15-minute-old prices to
+            # an order decision. So a regressive row still applies the flag
+            # (same key-presence semantics as below) while leaving bid / ask /
+            # event_time untouched.
             if prev is not None and prev.event_time and event_time and event_time < prev.event_time:
+                if "DelayedByMinutes" in quote_block:
+                    self._quotes[uic] = replace(
+                        prev, delayed_by_minutes=quote_block.get("DelayedByMinutes")
+                    )
                 return
             # Bid / Ask / DelayedByMinutes each apply the SAME distinction,
             # by dict.get()'s own KEY-PRESENCE semantics (not value
