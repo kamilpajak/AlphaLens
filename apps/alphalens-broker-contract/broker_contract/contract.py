@@ -198,6 +198,15 @@ class OrderState:
     # mis-read as 2*owned over-hedge. Mapped in ``_to_order_state`` from a field
     # Saxo already returns (no new HTTP surface); ``None`` when unmapped.
     order_relation: str | None = None  # row["OrderRelation"]
+    # Fill price for the offline execution-quality reconciler (build-seq 1b-ii).
+    # Additive, defaulted so existing constructions and a second broker stay
+    # source-compatible; the frozen base ``Broker`` Protocol is untouched. Mapped
+    # in ``_classify_activity_row`` on the "FinalFill" branch ONLY, from the
+    # audit row's ``ExecutionPrice`` (fallback ``AveragePrice``) — NO new HTTP
+    # surface. ``None`` when the row is not a fill or the price field is absent /
+    # unparseable (HONEST — never fabricated); it rides ALONGSIDE
+    # ``filled_quantity`` and never changes the FILLED / UNRESOLVED outcome.
+    avg_fill_price: float | None = None  # row["ExecutionPrice"] (fallback "AveragePrice")
 
 
 @dataclass(frozen=True)

@@ -1153,7 +1153,15 @@ class SaxoBroker:
                 return self._unresolved_state(
                     order_id, f"fill_fields_unverified ({pair} row={row!r})"
                 )
-            return self._terminal_state(order_id, OrderStatus.FILLED, diagnostics, filled_quantity)
+            # The SAME row carries the FILL PRICE (real SIM row: ExecutionPrice/
+            # AveragePrice==82.09). It rides ALONGSIDE the quantity for the
+            # offline reconciler (build-seq 1b-ii) — an absent / unparseable
+            # price yields None (HONEST, never fabricated) and NEVER changes the
+            # FILLED outcome above.
+            avg_fill_price = self._parse_fill_price(row)
+            return self._terminal_state(
+                order_id, OrderStatus.FILLED, diagnostics, filled_quantity, avg_fill_price
+            )
         # (3) Cancelled/Confirmed — live-verified terminal cancel row.
         if status == "Cancelled" and sub_status == "Confirmed":
             return self._terminal_state(order_id, OrderStatus.CANCELLED, diagnostics)
@@ -1165,6 +1173,21 @@ class SaxoBroker:
         if (status, sub_status) in self._NON_TERMINAL_PAIRS:
             return self._unresolved_state(order_id, f"inconsistent_state ({diagnostics})")
         return self._unresolved_state(order_id, f"unrecognized ({diagnostics})")
+
+    @staticmethod
+    def _parse_fill_price(row: dict[str, Any]) -> float | None:
+        """FILL PRICE from a FinalFill audit row, ``None`` when absent/unparseable.
+
+        ``ExecutionPrice`` (fallback ``AveragePrice``) coerced to float; a
+        missing or non-numeric value returns ``None`` (never fabricated). Pure
+        read; carries no side effect on the fill quantity or the terminal
+        classification.
+        """
+        price = row.get("ExecutionPrice", row.get("AveragePrice"))
+        try:
+            return float(price)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _activity_diagnostics(pair: str, row: dict[str, Any]) -> str:
@@ -1182,6 +1205,7 @@ class SaxoBroker:
         status: OrderStatus,
         diagnostics: str,
         filled_quantity: float = 0.0,
+        avg_fill_price: float | None = None,
     ) -> OrderState:
         return OrderState(
             order_id=order_id,
@@ -1189,6 +1213,7 @@ class SaxoBroker:
             instrument=None,
             filled_quantity=filled_quantity,
             raw_status=diagnostics,
+            avg_fill_price=avg_fill_price,
         )
 
     def get_open_position_references(self) -> list[str]:
