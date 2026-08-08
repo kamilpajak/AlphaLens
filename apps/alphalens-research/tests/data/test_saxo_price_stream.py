@@ -141,6 +141,37 @@ class TestQuoteCache(unittest.TestCase):
         c.apply({"LastUpdated": "2026-08-07T13:48:00Z", "Quote": {"Bid": 1.0}}, received_at=_T0)
         self.assertIsNone(c.get(211))
 
+    def test_non_numeric_uic_is_skipped_not_raised(self):
+        """A malformed Uic must degrade to 'skip this row', not raise
+        ValueError out of the WebSocket reader thread: a bare
+        int(raw_uic) would count as a connection failure and, after six
+        such frames, trip the reconnect circuit breaker and go permanently
+        dark over a payload-shape change."""
+        c = QuoteCache()
+        with self.assertLogs(
+            "alphalens_pipeline.data.alt_data.saxo_price_stream", level="WARNING"
+        ) as cm:
+            c.apply(
+                {
+                    "Uic": "not-a-number",
+                    "LastUpdated": "2026-08-07T13:48:00Z",
+                    "Quote": {"Bid": 1.0},
+                },
+                received_at=_T0,
+            )
+        self.assertTrue(any("uic" in line.lower() for line in cm.output), cm.output)
+        self.assertIsNone(c.get(211))
+
+    def test_non_numeric_uic_does_not_block_a_valid_row_in_the_same_frame(self):
+        c = QuoteCache()
+        c.apply(
+            {"Uic": "garbage", "LastUpdated": "2026-08-07T13:48:00Z", "Quote": {"Bid": 1.0}},
+            received_at=_T0,
+        )
+        c.apply(_row(), received_at=_T0)
+        q = c.get(211)
+        self.assertEqual(q.bid, 314.01)
+
     def test_explicit_null_bid_propagates_as_unknown_not_preserved(self):
         """A PRESENT-but-null Bid (a plausible one-sided-market / halt signal)
         must BLANK the cached bid, unlike an OMITTED Bid key which preserves

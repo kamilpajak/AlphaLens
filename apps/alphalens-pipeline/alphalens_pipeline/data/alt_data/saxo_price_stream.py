@@ -94,7 +94,17 @@ class QuoteCache:
         raw_uic = row.get("Uic")
         if raw_uic is None:
             return
-        uic = int(raw_uic)
+        try:
+            uic = int(raw_uic)
+        except (TypeError, ValueError):
+            # A malformed Uic must degrade to "skip this row", not raise out
+            # of the WebSocket reader thread: an uncaught exception here is
+            # counted as a connection failure by _supervise, and after
+            # _MAX_CONSECUTIVE_FAILURES such frames the reconnect circuit
+            # breaker trips and the stream goes permanently dark over what
+            # may just be a payload-shape change.
+            logger.warning("saxo price stream: dropping row with non-numeric Uic: %r", raw_uic)
+            return
         event_time = _parse_utc(row.get("LastUpdated"))
         quote_block = row.get("Quote") or {}
         with self._lock:
