@@ -227,6 +227,20 @@ RULES = (
         "exemptions": set(),
     },
     {
+        # Fix round 3 (Task 3, INC-2 LIVE market-data client): data/ hosts
+        # shared reference data (e.g. the MIC -> Saxo ExchangeId map both the
+        # SIM order-placement adapter and the LIVE read-only market-data
+        # client resolve instruments through). brokers/ consumes data/, the
+        # SAME direction brokers/automanager already uses for
+        # alphalens_pipeline.data.alt_data.yfinance_client. The reverse
+        # (data reaching into brokers) would drag order-placement machinery
+        # into read-only infrastructure and invert the established DAG.
+        "name": "data must not import brokers (data is infrastructure; brokers consumes it, never the reverse)",
+        "from_pkg": "alphalens_pipeline.data",
+        "forbidden_prefix": "alphalens_pipeline.brokers",
+        "exemptions": set(),
+    },
+    {
         # Broker-manager extraction 2A-2: broker_contract is the shared
         # A-tier leaf (exit_geometry, trade_intent) consumed by BOTH
         # alphalens_pipeline and alphalens_research. No `top_level_only` —
@@ -576,6 +590,48 @@ class TestModuleDependencies(unittest.TestCase):
             "the automanager -> saxo boundary rule must exist exactly once",
         )
         self.assertIn("streaming_trigger.py", automanager_rules[0]["exemptions"])
+
+    def test_data_must_not_import_brokers_positive_control(self):
+        """The data -> brokers direction rule (added fix round 3, Task 3:
+        ``saxo_marketdata_client.py`` had reached into
+        ``brokers.saxo.broker`` for a private MIC map) cannot rot silently.
+
+        Feeds the walker a synthetic module that hides a brokers import
+        inside a function body and asserts (1) the walker surfaces it and
+        (2) the rule's forbidden_prefix matches it — the sneakiest
+        allowed-elsewhere shape, same pattern as the other single-rule
+        tripwires above.
+        """
+        import tempfile
+
+        synthetic = (
+            "def sneaky():\n"
+            "    from alphalens_pipeline.brokers.saxo.broker import SaxoBroker\n"
+            "    return SaxoBroker\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "synthetic_data_violation.py"
+            path.write_text(synthetic)
+            modules = list(_iter_imports(path, include_function_scope=True))
+
+        self.assertIn("alphalens_pipeline.brokers.saxo.broker", modules)
+
+        data_rules = [
+            rule
+            for rule in RULES
+            if rule["from_pkg"] == "alphalens_pipeline.data"
+            and rule["forbidden_prefix"] == "alphalens_pipeline.brokers"
+        ]
+        self.assertEqual(len(data_rules), 1, "the data -> brokers rule must exist exactly once")
+        self.assertNotIn(
+            "top_level_only",
+            data_rules[0],
+            "the data -> brokers rule must catch function-scope (lazy) imports too",
+        )
+        self.assertTrue(
+            any(m.startswith(data_rules[0]["forbidden_prefix"]) for m in modules),
+            "rule would not catch the synthetic violation",
+        )
 
     def test_broker_contract_leaf_positive_control(self):
         """The broker_contract leaf rules cannot rot silently.

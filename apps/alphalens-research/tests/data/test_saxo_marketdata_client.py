@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import unittest
+
+from alphalens_pipeline.data.alt_data.saxo_marketdata_client import (
+    LIVE_API_BASE_URL,
+    SaxoMarketDataClient,
+)
+
+
+class _Resp:
+    def __init__(self, status: int, payload=None):
+        self.status_code = status
+        self._payload = payload if payload is not None else {}
+        self.text = str(self._payload)
+
+    def json(self):
+        return self._payload
+
+
+class _Session:
+    """Records calls so the test asserts on URL and body, not on transport."""
+
+    def __init__(self, *responses):
+        self._responses = list(responses)
+        self.calls = []
+
+    def _next(self, method, url, **kw):
+        self.calls.append((method, url, kw))
+        return self._responses.pop(0)
+
+    def get(self, url, **kw):
+        return self._next("GET", url, **kw)
+
+    def post(self, url, **kw):
+        return self._next("POST", url, **kw)
+
+    def patch(self, url, **kw):
+        return self._next("PATCH", url, **kw)
+
+    def delete(self, url, **kw):
+        return self._next("DELETE", url, **kw)
+
+
+class _Tokens:
+    def access_token(self):
+        return "tok"
+
+
+def _client(session):
+    return SaxoMarketDataClient(token_provider=_Tokens(), session=session)
+
+
+class TestElevateSession(unittest.TestCase):
+    def test_patches_trade_level_and_reports_success_on_202(self):
+        s = _Session(_Resp(202))
+        self.assertTrue(_client(s).elevate_session())
+        method, url, kw = s.calls[0]
+        self.assertEqual(method, "PATCH")
+        self.assertEqual(url, f"{LIVE_API_BASE_URL}/root/v1/sessions/capabilities")
+        self.assertEqual(kw["json"], {"TradeLevel": "FullTradingAndChat"})
+
+    def test_reports_failure_without_raising(self):
+        """A failed elevation must degrade to 'not elevated', never crash the
+        daemon tick."""
+        self.assertFalse(_client(_Session(_Resp(403))).elevate_session())
+
+
+class TestResolveUic(unittest.TestCase):
+    def test_picks_the_exact_symbol_match(self):
+        payload = {
+            "Data": [
+                {"Symbol": "AAPLX:xnas", "Identifier": 999},
+                {"Symbol": "AAPL:xnas", "Identifier": 211},
+            ]
+        }
+        self.assertEqual(
+            _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS"), 211
+        )
+
+    def test_returns_none_when_no_exact_match(self):
+        payload = {"Data": [{"Symbol": "AAPLX:xnas", "Identifier": 999}]}
+        self.assertIsNone(
+            _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS")
+        )
+
+    def test_picks_the_row_for_the_requested_venue_not_the_first_row(self):
+        """A ticker listed on more than one venue must resolve to the
+        instrument on the REQUESTED venue, never whichever row Saxo happens
+        to list first. Fixture orders the WRONG-venue row first so the test
+        fails if resolution ever falls back to first-match."""
+        payload = {
+            "Data": [
+                {"Symbol": "AAPL:xnys", "Identifier": 111},
+                {"Symbol": "AAPL:xnas", "Identifier": 211},
+            ]
+        }
+        self.assertEqual(
+            _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS"), 211
+        )
+
+    def test_returns_none_and_warns_on_ambiguous_match_within_the_same_venue(self):
+        """Two rows sharing ticker AND venue is unresolvable ambiguity: fail
+        closed with None (never raise — this is called from a daemon tick)
+        and log a warning naming the ticker, the MIC and the match count."""
+        payload = {
+            "Data": [
+                {"Symbol": "AAPL:xnas", "Identifier": 211},
+                {"Symbol": "AAPL:xnas", "Identifier": 999},
+            ]
+        }
+        logger_name = "alphalens_pipeline.data.alt_data.saxo_marketdata_client"
+        with self.assertLogs(logger_name, level="WARNING") as cm:
+            got = _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS")
+        self.assertIsNone(got)
+        self.assertTrue(
+            any("AAPL" in line and "XNAS" in line and "2" in line for line in cm.output),
+            f"expected a warning naming ticker, MIC and match count; got {cm.output}",
+        )
+
+    def test_near_miss_symbol_is_not_matched(self):
+        """``AAPLX:xnas`` must never satisfy a request for ``AAPL`` on
+        ``XNAS`` — the match is on the full symbol, not a prefix."""
+        payload = {"Data": [{"Symbol": "AAPLX:xnas", "Identifier": 999}]}
+        self.assertIsNone(
+            _client(_Session(_Resp(200, payload))).resolve_uic("AAPL", exchange_mic="XNAS")
+        )
+
+    def test_unknown_venue_returns_none_without_raising(self):
+        """A MIC outside the shared Saxo venue map is refused up front —
+        None, no HTTP call, never a raise (unlike the SIM order-resolution
+        path, this client is called from a daemon tick, so 'ambiguous or
+        unsupported' must always degrade to 'do nothing')."""
+        self.assertIsNone(_client(_Session()).resolve_uic("AAPL", exchange_mic="ZZZZ"))
+
+
+class TestPriceSubscription(unittest.TestCase):
+    def test_create_accepts_201_and_sends_the_measured_body(self):
+        snapshot = {"RefreshRate": 1000, "Snapshot": {"Data": []}}
+        s = _Session(_Resp(201, snapshot))
+        got = _client(s).create_price_subscription(
+            context_id="ctx", reference_id="px", uics=[211, 1249]
+        )
+        self.assertEqual(got["RefreshRate"], 1000)
+        method, url, kw = s.calls[0]
+        self.assertEqual(method, "POST")
+        self.assertEqual(url, f"{LIVE_API_BASE_URL}/trade/v1/infoprices/subscriptions")
+        body = kw["json"]
+        self.assertEqual(body["ContextId"], "ctx")
+        self.assertEqual(body["ReferenceId"], "px")
+        self.assertEqual(body["Format"], "application/json")
+        self.assertEqual(body["Arguments"]["Uics"], "211,1249")
+        self.assertEqual(body["Arguments"]["AssetType"], "Stock")
+
+    def test_delete_is_quiet_on_404(self):
+        """Deleting an already-gone subscription is not an error."""
+        _client(_Session(_Resp(404))).delete_price_subscription("ctx", "px")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -19,7 +19,14 @@ class _FakeFeed:
         return (
             None
             if px is None
-            else PricePoint(uic=uic, price=px, asof=dt.datetime(2026, 8, 5, tzinfo=dt.UTC))
+            else PricePoint(
+                uic=uic,
+                bid=px,
+                ask=px,
+                event_time=dt.datetime(2026, 8, 5, tzinfo=dt.UTC),
+                received_at=dt.datetime(2026, 8, 5, tzinfo=dt.UTC),
+                source="test",
+            )
         )
 
 
@@ -73,6 +80,30 @@ class TestRunLiveExits(unittest.TestCase):
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 20.0)  # sold 50 + 30
         sl_now = next(o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded")
         self.assertEqual(sl_now.amount, 20.0)  # SL tracks remaining owned, not stale 70
+
+    def test_broker_without_list_working_sell_orders_skips_the_uic_no_crash(self):
+        """list_working_sell_orders is NOT part of the Broker Protocol
+        (broker_contract/contract.py). Calling it unguarded would let an
+        AttributeError escape the `except BrokerError` boundary and kill the
+        whole tick -- one uic missing a capability must not do that. Mirrors
+        the getattr(broker, "list_working_sell_orders", None) convention
+        control_loop.py already uses at two sites."""
+        b, uic, feed, managed = self._mk(price=16.5)  # would otherwise fire tp1
+
+        class _BrokerWithoutListSells(FakeBroker):
+            list_working_sell_orders = None
+
+        no_cap = _BrokerWithoutListSells()
+        no_cap._positions = b._positions
+        no_cap._orders = b._orders
+
+        with self.assertLogs(
+            "alphalens_pipeline.brokers.automanager.live_exit_engine", level="WARNING"
+        ) as cm:
+            n = run_live_exits(no_cap, feed, managed)
+        self.assertEqual(n, 0)
+        self.assertEqual(no_cap.get_positions_by_uic(uic).quantity, 100.0)  # nothing sold
+        self.assertTrue(any(str(uic) in line for line in cm.output), cm.output)
 
 
 if __name__ == "__main__":

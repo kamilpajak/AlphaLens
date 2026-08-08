@@ -11,13 +11,15 @@ started, disconnected, silently dead, thread-crashed, circuit-broken) leaves the
 main loop's absolute-deadline poll backstop untouched — exactly today's
 behaviour.
 
-Two responsibilities live here:
+Two responsibilities used to live here; one has since moved:
 
-1. :func:`parse_stream_frames` — the PURE binary-envelope parser (confirmed on
-   real SIM frames): ``[0:8]`` msgId u64-LE, ``[8:10]`` reserved, ``[10]`` refId
-   size, refId ASCII, one payload-format byte (0=JSON asserted, 1=protobuf
-   rejected — we never opt in), ``[next 4]`` payload size u32-LE, then payload;
-   multiple messages may be packed in one WS frame, so it loops.
+1. The PURE binary-envelope parser (:func:`parse_stream_frames`,
+   :class:`StreamMessage`, :class:`SaxoStreamProtocolError`) relocated to
+   ``alphalens_pipeline.data.alt_data.saxo_stream_envelope`` (2026-08-07) — it
+   is a wire-protocol decoder, not broker logic, and the LIVE price stream
+   (which must live under ``data/alt_data/``, never ``brokers/``) needs the
+   same decoder. Re-imported here unchanged so every existing call site keeps
+   working through the same names.
 2. :class:`SaxoStreamingClient` — connect / subscribe / DUMB route / reconnect
    with ``&messageid`` replay / exponential backoff + circuit breaker / PUT
    token re-authorize on a MAIN-pushed token change. All the DECISION logic is
@@ -47,6 +49,11 @@ from alphalens_pipeline.brokers.saxo.errors import (
     SaxoLiveEnvironmentBlockedError,
 )
 from alphalens_pipeline.brokers.saxo.tokens import StaticTokenProvider, TokenProvider
+from alphalens_pipeline.data.alt_data.saxo_stream_envelope import (
+    SaxoStreamProtocolError,
+    StreamMessage,
+    parse_stream_frames,
+)
 
 if TYPE_CHECKING:
     from alphalens_pipeline.brokers.saxo.client import SaxoClient
@@ -69,87 +76,9 @@ _HEARTBEAT_REF = "_heartbeat"
 _RESET_REF = "_resetsubscriptions"
 _DISCONNECT_REF = "_disconnect"
 
-# Envelope layout constants (bytes).
-_MSG_ID_LEN = 8
-_RESERVED_LEN = 2
-_REF_SIZE_LEN = 1
-_FORMAT_LEN = 1
-_PAYLOAD_SIZE_LEN = 4
-_FORMAT_JSON = 0
-_FORMAT_PROTOBUF = 1
-# Bytes consumed before the refId (msgId + reserved + refId-size byte).
-_PREFIX_LEN = _MSG_ID_LEN + _RESERVED_LEN + _REF_SIZE_LEN
-
 
 class SaxoStreamError(SaxoError):
     """Non-transient streaming failure (bad host, no token, protocol violation)."""
-
-
-class SaxoStreamProtocolError(SaxoStreamError):
-    """The binary frame did not match the confirmed envelope (truncated buffer,
-    or the protobuf format byte we never opt into)."""
-
-
-@dataclass(frozen=True)
-class StreamMessage:
-    """One decoded Saxo streaming message. ``payload`` stays raw bytes — routing
-    keys off ``reference_id`` only and NEVER parses the payload into protection
-    state (the main-thread reconcile re-reads full REST state instead)."""
-
-    message_id: int
-    reference_id: str
-    payload: bytes
-
-
-def parse_stream_frames(buf: bytes) -> list[StreamMessage]:
-    """Decode every message packed into one WS frame (PURE — no I/O).
-
-    Raises :class:`SaxoStreamProtocolError` on a truncated buffer (never routes a
-    half-decoded frame) or on the protobuf format byte (we only ever opt into
-    JSON). An empty buffer yields an empty list.
-    """
-    messages: list[StreamMessage] = []
-    offset = 0
-    total = len(buf)
-    while offset < total:
-        # Need msgId(8) + reserved(2) + refId-size(1) to even read the refId len.
-        if offset + _PREFIX_LEN > total:
-            raise SaxoStreamProtocolError(
-                f"truncated frame header at offset {offset} (have {total - offset} bytes, "
-                f"need >= {_PREFIX_LEN})"
-            )
-        message_id = int.from_bytes(buf[offset : offset + _MSG_ID_LEN], "little")
-        ref_size = buf[offset + _MSG_ID_LEN + _RESERVED_LEN]
-        ref_start = offset + _PREFIX_LEN
-        ref_end = ref_start + ref_size
-        # refId + format(1) + payload-size(4) must all be present.
-        header_end = ref_end + _FORMAT_LEN + _PAYLOAD_SIZE_LEN
-        if header_end > total:
-            raise SaxoStreamProtocolError(
-                f"truncated frame at offset {offset}: refId/format/size run past the buffer"
-            )
-        reference_id = buf[ref_start:ref_end].decode("ascii")
-        fmt = buf[ref_end]
-        if fmt == _FORMAT_PROTOBUF:
-            raise SaxoStreamProtocolError(
-                f"protobuf payload for refId {reference_id!r} — never opted in; JSON only"
-            )
-        if fmt != _FORMAT_JSON:
-            raise SaxoStreamProtocolError(
-                f"unknown payload-format byte {fmt} for refId {reference_id!r}"
-            )
-        size_start = ref_end + _FORMAT_LEN
-        payload_size = int.from_bytes(buf[size_start : size_start + _PAYLOAD_SIZE_LEN], "little")
-        payload_start = size_start + _PAYLOAD_SIZE_LEN
-        payload_end = payload_start + payload_size
-        if payload_end > total:
-            raise SaxoStreamProtocolError(
-                f"truncated payload for refId {reference_id!r}: declared {payload_size} bytes, "
-                f"only {total - payload_start} available"
-            )
-        messages.append(StreamMessage(message_id, reference_id, buf[payload_start:payload_end]))
-        offset = payload_end
-    return messages
 
 
 class StreamAction(enum.Enum):

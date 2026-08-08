@@ -2,9 +2,10 @@
 
 Shape-only, NEVER values: builds a real ``YfinancePriceFeed`` over the default
 yfinance client (no fake), resolves uic 211 -> AAPL, and asserts ``latest(211)``
-returns a ``PricePoint`` with a positive price and a tz-aware UTC ``asof`` within
-the last few minutes. A ``None`` (market closed / Yahoo hiccup) is TRANSIENT
-(inconclusive, skipped by the >50% gate), not a shape break.
+returns a ``PricePoint`` with a positive bid/ask and a tz-aware UTC
+``received_at`` within the last few minutes. A ``None`` (market closed / Yahoo
+hiccup) is TRANSIENT (inconclusive, skipped by the >50% gate), not a shape
+break.
 
 Reuses the existing yfinance live flag + the ``tests.live`` probe harness, so a
 default ``unittest discover`` (no env flag) collects-but-skips it — NON-gating.
@@ -58,13 +59,15 @@ class TestYfinancePriceFeedLive(unittest.TestCase):
                 )
             if pt.uic != _UIC:
                 raise PermanentProbeError(f"PricePoint.uic {pt.uic!r} != requested {_UIC!r}")
-            if not isinstance(pt.price, float) or pt.price <= 0:
-                raise PermanentProbeError(f"PricePoint.price not a positive float: {pt.price!r}")
-            if pt.asof.tzinfo is None:
-                raise PermanentProbeError("PricePoint.asof is not tz-aware")
-            age = dt.datetime.now(dt.UTC) - pt.asof
+            if not isinstance(pt.bid, float) or pt.bid <= 0:
+                raise PermanentProbeError(f"PricePoint.bid not a positive float: {pt.bid!r}")
+            if not isinstance(pt.ask, float) or pt.ask <= 0:
+                raise PermanentProbeError(f"PricePoint.ask not a positive float: {pt.ask!r}")
+            if pt.received_at.tzinfo is None:
+                raise PermanentProbeError("PricePoint.received_at is not tz-aware")
+            age = dt.datetime.now(dt.UTC) - pt.received_at
             if age > _MAX_ASOF_AGE:
-                raise PermanentProbeError(f"PricePoint.asof is stale ({age})")
+                raise PermanentProbeError(f"PricePoint.received_at is stale ({age})")
 
         run_probes(self, {f"{_TICKER}/latest": _probe}, label="yfinance-price-feed")
 

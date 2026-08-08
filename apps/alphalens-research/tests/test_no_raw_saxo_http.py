@@ -40,6 +40,12 @@ SCAN_DIRS = (
 CANONICAL_CLIENT_RELS = (
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/client.py",
     "apps/alphalens-pipeline/alphalens_pipeline/brokers/saxo/oauth.py",
+    # LIVE market-data surfaces (INC-2). Registered EXPLICITLY rather than
+    # slipping past the check behind an injected session: they are read-only,
+    # never place an order, and live outside brokers/ because the SIM-only rail
+    # forbids LIVE URL strings in that package.
+    "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/saxo_marketdata_auth.py",
+    "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/saxo_marketdata_client.py",
 )
 
 # Path-prefix exemption (empty — no legacy Saxo code survives ADR 0012).
@@ -159,6 +165,51 @@ class TestNoRawSaxoHttp(unittest.TestCase):
                 "get_default_saxo_client() if you don't have one to inject).\n"
                 f"Offenders:\n{details}"
             )
+
+
+class TestLiveMarketDataExemptionIsLoadBearing(unittest.TestCase):
+    """Pins the two LIVE market-data entries in CANONICAL_CLIENT_RELS (INC-2).
+
+    An exemption nobody tests is exactly how this enforcement rots: someone
+    deletes an entry during a later refactor, the deletion looks harmless
+    because nothing else references the tuple by name, and the safety rail
+    silently narrows. These tests fail immediately if either entry disappears
+    while its file still makes a raw Saxo HTTP call.
+    """
+
+    LIVE_MARKETDATA_RELS = (
+        "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/saxo_marketdata_auth.py",
+        "apps/alphalens-pipeline/alphalens_pipeline/data/alt_data/saxo_marketdata_client.py",
+    )
+
+    def test_both_live_marketdata_files_are_registered_in_canonical_client_rels(self):
+        for rel in self.LIVE_MARKETDATA_RELS:
+            with self.subTest(rel=rel):
+                self.assertIn(
+                    rel,
+                    CANONICAL_CLIENT_RELS,
+                    f"{rel} must stay in CANONICAL_CLIENT_RELS: removing the entry "
+                    "re-triggers test_no_shadow_saxo_http_outside_canonical_client "
+                    "because the file still makes a raw Saxo HTTP call.",
+                )
+
+    def test_both_live_marketdata_files_would_be_flagged_without_the_exemption(self):
+        """Proves the exemption is load-bearing, not defensive dead code: each
+        file genuinely mentions a Saxo URL fragment AND makes a raw HTTP call,
+        so deleting its CANONICAL_CLIENT_RELS entry turns the full scan red."""
+        for rel in self.LIVE_MARKETDATA_RELS:
+            with self.subTest(rel=rel):
+                text = (WORKSPACE_ROOT / rel).read_text(encoding="utf-8")
+                self.assertTrue(
+                    _file_uses_saxo_url(text),
+                    f"{rel} no longer mentions a Saxo URL fragment - the exemption "
+                    "may no longer be needed, review before removing it.",
+                )
+                self.assertTrue(
+                    _find_raw_http_lines(text),
+                    f"{rel} no longer makes a raw HTTP call - the exemption may no "
+                    "longer be needed, review before removing it.",
+                )
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ import datetime as dt
 import unittest
 
 from alphalens_pipeline.brokers.automanager.yfinance_price_feed import YfinancePriceFeed
-from broker_contract.price_feed import PriceFeed, PricePoint
+from broker_contract.price_feed import PriceFeed, PricePoint, is_fresh
 
 _FROZEN = dt.datetime(2026, 8, 5, 14, 30, tzinfo=dt.UTC)
 
@@ -46,8 +46,18 @@ class TestYfinancePriceFeed(unittest.TestCase):
         pt = feed.latest(211)
         self.assertIsInstance(pt, PricePoint)
         self.assertEqual(pt.uic, 211)
-        self.assertAlmostEqual(pt.price, 306.49)
-        self.assertEqual(pt.asof, _FROZEN)
+        self.assertAlmostEqual(pt.bid, 306.49)
+        self.assertAlmostEqual(pt.ask, 306.49)
+        self.assertEqual(pt.received_at, _FROZEN)
+
+    def test_event_time_is_none_so_the_point_can_never_be_fresh(self):
+        feed = YfinancePriceFeed(
+            resolve_ticker={211: "AAPL"}.get, yf_client=_FakeYf({"AAPL": 314.0})
+        )
+        point = feed.latest(211)
+        self.assertIsNotNone(point)
+        self.assertIsNone(point.event_time)
+        self.assertFalse(is_fresh(point, now=dt.datetime.now(dt.UTC)))
 
     def test_unknown_uic_returns_none_and_skips_fetch(self):
         yf = _FakeYf({"AAPL": 306.49})
@@ -101,8 +111,8 @@ class TestYfinancePriceFeed(unittest.TestCase):
             yf_client=yf,
             clock=lambda: _FROZEN,
         )
-        self.assertAlmostEqual(feed.latest(211).price, 306.49)
-        self.assertAlmostEqual(feed.latest(307).price, 86.64)
+        self.assertAlmostEqual(feed.latest(211).bid, 306.49)
+        self.assertAlmostEqual(feed.latest(307).bid, 86.64)
         self.assertEqual(yf.requested, ["AAPL", "KO"])
 
     def test_satisfies_pricefeed_protocol(self):

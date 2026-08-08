@@ -56,6 +56,7 @@ from alphalens_pipeline.brokers.saxo.client import (
     SaxoRateLimitError,
     get_default_saxo_client,
 )
+from alphalens_pipeline.data.alt_data.saxo_exchanges import MIC_TO_SAXO_EXCHANGE_ID
 from alphalens_pipeline.paper.calendar import advance_trading_sessions
 
 logger = logging.getLogger(__name__)
@@ -70,17 +71,6 @@ ACCOUNT_KEY_ENV = "SAXO_ACCOUNT_KEY"
 # is deliberately NOT gated — remediation (cleaning a naked entry after a 202
 # or partial acceptance) must always work; reads stay ungated too.
 ALLOW_ORDERS_ENV = "ALPHALENS_BROKER_ALLOW_ORDERS"
-
-# ISO 10383 MIC -> Saxo ExchangeId. Seeded from Saxo's /ref/v1/exchanges
-# reference data; the SAXO_LIVE_TEST=1 probe (tests/live/test_saxo_live.py)
-# verifies the codes against the real SIM gateway. Saxo display symbols carry
-# the lowercase MIC as suffix ("KO:xnys"), which resolve exploits for the
-# exact-symbol match below. Adding a venue = one entry here.
-_MIC_TO_SAXO_EXCHANGE_ID: dict[str, str] = {
-    "XNYS": "NYSE",
-    "XNAS": "NASDAQ",
-    "XWAR": "WSE",
-}
 
 _DEFAULT_INSTRUMENT_CACHE_SIZE = 256
 
@@ -316,12 +306,12 @@ class SaxoBroker:
         if cached is not None:
             return cached
 
-        exchange_id = _MIC_TO_SAXO_EXCHANGE_ID.get(exchange_mic)
+        exchange_id = MIC_TO_SAXO_EXCHANGE_ID.get(exchange_mic)
         if exchange_id is None:
             raise InstrumentNotFoundError(
                 f"no Saxo ExchangeId mapping for MIC {exchange_mic!r}; supported: "
-                f"{sorted(_MIC_TO_SAXO_EXCHANGE_ID)} (add the venue to "
-                "_MIC_TO_SAXO_EXCHANGE_ID after verifying via /ref/v1/exchanges)"
+                f"{sorted(MIC_TO_SAXO_EXCHANGE_ID)} (add the venue to "
+                "MIC_TO_SAXO_EXCHANGE_ID after verifying via /ref/v1/exchanges)"
             )
 
         with _translate_saxo_errors():

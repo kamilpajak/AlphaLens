@@ -62,7 +62,14 @@ class _FakeFeed:
         return (
             None
             if px is None
-            else PricePoint(uic=uic, price=px, asof=dt.datetime(2026, 8, 5, tzinfo=dt.UTC))
+            else PricePoint(
+                uic=uic,
+                bid=px,
+                ask=px,
+                event_time=dt.datetime(2026, 8, 5, tzinfo=dt.UTC),
+                received_at=dt.datetime(2026, 8, 5, tzinfo=dt.UTC),
+                source="test",
+            )
         )
 
 
@@ -71,6 +78,7 @@ def _deps(
     *,
     alerts: list[str],
     live_exits_feed_factory: object = None,
+    alert_throttled: object = None,
 ) -> cl.LoopDeps:
     return cl.LoopDeps(
         broker=broker,  # type: ignore[arg-type]
@@ -85,7 +93,11 @@ def _deps(
         execute_protection=lambda action, kill, report: None,
         sweep_orphans_fn=lambda broker: [],
         alert=lambda msg: alerts.append(msg),  # noqa: PLW0108
-        alert_throttled=lambda msg, reason: alerts.append(msg) or True,
+        alert_throttled=(
+            alert_throttled
+            if alert_throttled is not None
+            else (lambda msg, reason: alerts.append(msg) or True)
+        ),
         live_exits_feed_factory=live_exits_feed_factory,  # type: ignore[arg-type]
     )
 
@@ -388,6 +400,136 @@ class TestLiveExitsFlagOnFires(_JournalCase):
             with mock.patch.object(cl, "run_live_exits") as spy:
                 cl._run_live_exits_pass(deps, cl.TickReport())
                 spy.assert_not_called()
+
+
+class TestLiveExitsFeedFactoryReceivesTheVenue(_JournalCase):
+    """Fix round 2 (Task 7 review), finding 2: the venue is the entire reason
+    this task exists -- resolving a LIVE instrument by bare ticker is
+    ambiguous for a cross-listed name. Every other test in this module injects
+    a feed factory that ignores its argument; this is the only one that pins
+    the SHAPE _run_live_exits_pass hands to the factory."""
+
+    def test_the_factory_receives_uic_to_ticker_and_venue_tuples(self) -> None:
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
+        )
+        received: list[dict[int, tuple[str, str]]] = []
+
+        def capturing_factory(uic_to_instrument):
+            received.append(dict(uic_to_instrument))
+            return _FakeFeed({uic: 16.5})
+
+        alerts: list[str] = []
+        deps = _deps(broker, alerts=alerts, live_exits_feed_factory=capturing_factory)
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, cl.TickReport())
+        # FakeBroker's _instrument fixture sets exchange_mic="XNYS".
+        self.assertEqual(received, [{uic: ("KO", "XNYS")}])
+
+
+def _raising_factory(uic_to_instrument: object) -> object:
+    raise RuntimeError("boom: cannot reach Saxo LIVE auth")
+
+
+class TestLiveExitsFeedConstructionBoundary(unittest.TestCase):
+    """Fix round 1 (Task 7 review): the price-feed factory may reach out to
+    real Saxo LIVE auth/REST/streaming machinery this pass has no control
+    over -- a missing env var or an unbootstrapped token store is the single
+    most likely rollout mistake. A construction failure must degrade to a
+    vetoing feed, exactly like an OFF flag or a stale quote, never crash the
+    tick and starve the never-naked protection pass that runs right after
+    it."""
+
+    def test_construction_failure_degrades_to_a_vetoing_feed(self) -> None:
+        alerts: list[str] = []
+        deps = _deps(broker=object(), alerts=alerts, live_exits_feed_factory=_raising_factory)
+        report = cl.TickReport()
+        feed = cl._build_live_exits_feed(deps, {211: ("AAPL", "XNYS")}, report)
+        self.assertIsNone(feed.latest(211))
+        self.assertEqual(len(alerts), 1)
+        self.assertIn("live-exits", alerts[0])
+        self.assertEqual(report.alerts, 1)
+
+    def test_construction_failure_alerts_once_not_once_per_tick(self) -> None:
+        """The two ticks raise DIFFERENT exception messages (a stale token
+        one tick, a DNS failure the next -- both real, both possible from the
+        same misconfiguration). If the throttle key were built from the
+        exception message instead of a fixed reason string, this would still
+        alert twice -- in production that would page every ~45s instead of
+        once per re-alert interval."""
+        alerts: list[str] = []
+        seen_reasons: set[str] = set()
+
+        def throttled(msg: str, reason: str) -> bool:
+            if reason in seen_reasons:
+                return False
+            seen_reasons.add(reason)
+            alerts.append(msg)
+            return True
+
+        def raising_factory_tick_1(uic_to_instrument: object) -> object:
+            raise RuntimeError("boom: cannot reach Saxo LIVE auth")
+
+        def raising_factory_tick_2(uic_to_instrument: object) -> object:
+            raise RuntimeError("boom: token store corrupt")
+
+        report = cl.TickReport()
+        deps_1 = _deps(
+            broker=object(),
+            alerts=alerts,
+            live_exits_feed_factory=raising_factory_tick_1,
+            alert_throttled=throttled,
+        )
+        cl._build_live_exits_feed(deps_1, {211: ("AAPL", "XNYS")}, report)  # tick 1
+        deps_2 = _deps(
+            broker=object(),
+            alerts=alerts,
+            live_exits_feed_factory=raising_factory_tick_2,
+            alert_throttled=throttled,
+        )
+        cl._build_live_exits_feed(deps_2, {211: ("AAPL", "XNYS")}, report)  # tick 2
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(report.alerts, 1)
+
+    def test_flag_off_builds_nothing_and_alerts_nothing(self) -> None:
+        """Guards the OFF path against this fix: no exception is ever raised
+        when the flag is off (the default factory returns _NullPriceFeed
+        directly), so the new boundary must stay silent -- not swallow a
+        real construction failure, but not manufacture a phantom one either."""
+        alerts: list[str] = []
+        deps = _deps(broker=object(), alerts=alerts)  # live_exits_feed_factory=None -> default
+        report = cl.TickReport()
+        with mock.patch.dict(os.environ, {}, clear=True):
+            feed = cl._build_live_exits_feed(deps, {211: ("AAPL", "XNYS")}, report)
+        self.assertIsNone(feed.latest(211))
+        self.assertEqual(alerts, [])
+        self.assertEqual(report.alerts, 0)
+
+
+class TestLiveExitsFeedConstructionFailureEndToEnd(_JournalCase):
+    def test_the_tick_completes_normally_when_feed_construction_raises(self) -> None:
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        broker.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        self._seed_tranche_plan(
+            uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
+        )
+        alerts: list[str] = []
+        deps = _deps(broker, alerts=alerts, live_exits_feed_factory=_raising_factory)
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            report = cl.TickReport()
+            cl._run_live_exits_pass(deps, report)  # must not raise
+        # No broker mutation: the degraded feed vetoed every uic, same as a stale quote.
+        self.assertEqual(broker.get_positions_by_uic(uic).quantity, 100.0)
+        sl = next(o for o in broker.list_working_sell_orders() if o.order_type == "StopIfTraded")
+        self.assertEqual(sl.amount, 100.0)
+        self.assertEqual(report.exits_placed, 0)
+        self.assertEqual(len(alerts), 1)
 
 
 class TestLiveExitsRunsBeforeProtection(unittest.TestCase):

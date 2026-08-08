@@ -66,7 +66,7 @@ SIM_AUTH_BASE_URL = "https://sim.logonvalidation.net"
 # test can scan for accidental reintroduction. This tuple is the single place
 # a LIVE URL string may appear in the brokers package (pinned by
 # tests/brokers/test_saxo_sim_only_rail.py).
-_LIVE_URL_MARKERS = ("gateway.saxobank.com/openapi", "live.logonvalidation.net")
+_LIVE_URL_MARKERS = ("gateway.saxobank.com/openapi", "live.logonvalidation.net", "live-streaming.saxobank.com")  # fmt: skip
 
 # Flipped ONLY by a future ADR lifting the SIM-only rail (see ADR 0014).
 LIVE_TRADING_ENABLED = False

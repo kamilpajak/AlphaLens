@@ -32,12 +32,16 @@ _logger = logging.getLogger(__name__)
 class YfinancePriceFeed:
     """A ``PriceFeed`` (structural) reading the latest trade price per uic.
 
+    UNWIRED: no daemon caller uses this feed (see module docstring — the Saxo
+    LIVE stream is the wired source). Kept as a fallback + test double.
+
     Fetch-on-``latest()`` — no cache — for a small managed set polled per ~45s
     tick. ``latest()`` returns ``None`` (the engine's stream-health veto) when
     the uic has no ticker, the fetch fails / returns NaN (halt / thin name), or
     the price is non-positive. ``fast_info.last_price`` exposes no tick
-    timestamp, so freshness is best-effort (~1 min observed); real
-    ``LastUpdated`` staleness gating arrives with the Saxo stream (INC-2b).
+    timestamp, so every ``PricePoint`` this feed produces carries
+    ``event_time=None`` and :func:`broker_contract.price_feed.is_fresh`
+    therefore ALWAYS vetoes it — this feed can never drive a live order.
     """
 
     def __init__(
@@ -75,4 +79,16 @@ class YfinancePriceFeed:
         # PricePoint that reaches a market-order decision.
         if price is None or not math.isfinite(price) or price <= 0.0:
             return None
-        return PricePoint(uic=uic, price=float(price), asof=self._clock())
+        now = self._clock()
+        return PricePoint(
+            uic=uic,
+            bid=float(price),
+            ask=float(price),
+            # fast_info.last_price publishes NO tick timestamp. Reporting None
+            # (rather than stamping `now`) makes this feed structurally unable
+            # to pass is_fresh, which is the correct outcome: it is a last trade
+            # of unverifiable age, not an executable quote.
+            event_time=None,
+            received_at=now,
+            source="yfinance-last",
+        )

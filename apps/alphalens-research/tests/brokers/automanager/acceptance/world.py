@@ -64,7 +64,14 @@ class _WorldPriceFeed:
         return (
             None
             if price is None
-            else PricePoint(uic=uic, price=price, asof=dt.datetime.now(dt.UTC))
+            else PricePoint(
+                uic=uic,
+                bid=price,
+                ask=price,
+                event_time=dt.datetime.now(dt.UTC),
+                received_at=dt.datetime.now(dt.UTC),
+                source="test",
+            )
         )
 
 
