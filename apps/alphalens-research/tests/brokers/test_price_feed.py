@@ -77,6 +77,16 @@ class TestIsFresh(unittest.TestCase):
         self.assertFalse(is_fresh(_point(ask=float("nan")), now=_NOW))
         self.assertFalse(is_fresh(_point(ask=float("inf")), now=_NOW))
 
+    def test_non_numeric_side_is_vetoed_not_raised(self):
+        """is_fresh's own docstring says this shared contract 'must not
+        trust' its callers. math.isfinite(point.bid) raises TypeError on a
+        non-numeric side, and PricePoint.mid would raise the same way. Today
+        the only caller coerces first, but a future/other feed could
+        construct a PricePoint straight from raw JSON -- a non-numeric side
+        must veto here, not crash the caller's tick."""
+        self.assertFalse(is_fresh(_point(bid="314.01"), now=_NOW))
+        self.assertFalse(is_fresh(_point(ask=None), now=_NOW))
+
     def test_absurd_relative_spread_is_vetoed(self):
         wide = _point(bid=100.0, ask=103.0)  # 3% > the 2% ceiling
         self.assertFalse(is_fresh(wide, now=_NOW))

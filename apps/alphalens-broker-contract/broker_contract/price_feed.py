@@ -28,6 +28,16 @@ broken quote without vetoing a normal one. Relative because this project has no
 per-instrument spread table and inventing one is not worth the upkeep."""
 
 
+def _is_finite_number(value: object) -> bool:
+    """math.isfinite(value) narrowed to "veto instead of raise" on a
+    non-numeric value. is_fresh must not trust that a bid/ask is actually a
+    number - see its docstring."""
+    try:
+        return math.isfinite(value)  # type: ignore[arg-type]
+    except TypeError:
+        return False
+
+
 @dataclass(frozen=True)
 class PricePoint:
     uic: int
@@ -64,7 +74,13 @@ def is_fresh(
         # naive datetime from an aware `now` raises TypeError in the stdlib -
         # a doubt about which instant this names must veto here, not crash.
         return False
-    if not (math.isfinite(point.bid) and math.isfinite(point.ask)):
+    # The same "must not trust the caller" reasoning applies to bid/ask: a
+    # non-numeric side should never reach here (today's only caller coerces
+    # first), but a future/other feed could construct a PricePoint straight
+    # from raw JSON - math.isfinite (and PricePoint.mid) would raise
+    # TypeError on that exactly like the naive datetime would above, so
+    # _is_finite_number vetoes instead of raising.
+    if not (_is_finite_number(point.bid) and _is_finite_number(point.ask)):
         return False
     if point.bid <= 0.0 or point.ask <= 0.0:
         return False
