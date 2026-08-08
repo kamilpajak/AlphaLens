@@ -94,10 +94,18 @@ class TestSimOnlyRail(unittest.TestCase):
         """The source-scan above passes vacuously if the marker tuple rots to
         empty — pin that it still names all three LIVE hosts, including the
         LIVE streaming host this branch introduced."""
+        # EXACT membership, deliberately not a substring scan. Two reasons:
+        # it is strictly stronger (a marker carrying extra text around the
+        # host, e.g. "xx-live-streaming.saxobank.com-yy", passes an `in`
+        # scan but fails here; a truncated marker fails either way), and
+        # substring-matching a hostname is the shape CodeQL flags as
+        # incomplete URL sanitization (py/incomplete-url-substring-
+        # sanitization) — harmless against our own constants, but not a
+        # pattern worth leaving in a security rail for the next reader.
         self.assertEqual(len(_LIVE_URL_MARKERS), 3)
-        self.assertTrue(any("openapi" in m for m in _LIVE_URL_MARKERS))
-        self.assertTrue(any("logonvalidation" in m for m in _LIVE_URL_MARKERS))
-        self.assertTrue(any("live-streaming.saxobank.com" in m for m in _LIVE_URL_MARKERS))
+        self.assertIn("gateway.saxobank.com/openapi", _LIVE_URL_MARKERS)
+        self.assertIn("live.logonvalidation.net", _LIVE_URL_MARKERS)
+        self.assertIn("live-streaming.saxobank.com", _LIVE_URL_MARKERS)
         for marker in _LIVE_URL_MARKERS:
             self.assertNotIn(marker, SIM_BASE_URL, "a LIVE marker must never match SIM")
 
