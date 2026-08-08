@@ -1142,27 +1142,60 @@ sudo tee -a /etc/alphalens/env >/dev/null <<'EOF'
 SAXO_LIVE_APP_KEY=<live app key>
 SAXO_LIVE_APP_SECRET=<live app secret>
 SAXO_LIVE_AUTH_REDIRECT_URL=http://localhost:8765/callback   # MUST byte-match the LIVE portal registration
-# ALPHALENS_SAXO_LIVE_PRICES=1   <-- add ONLY after §2 (bootstrap) is done
+# Add ONLY after §2a (VPS bootstrap) is done — see §4 to turn it on:
+# ALPHALENS_SAXO_LIVE_PRICES=1
 EOF
 sudo chmod 600 /etc/alphalens/env
 ```
+
+`/etc/alphalens/env` is loaded ONLY by the systemd units on the VPS (see
+"Environment file setup" at the top of this README) — it does not exist on a
+developer machine. A developer machine instead keeps the same four
+`SAXO_LIVE_*` keys in the repo-root `.env` (see the top-level `## Environment`
+section of `CLAUDE.md`), used by §2b below.
 
 The redirect reuses the same `localhost:8765` port as the SIM `broker auth`
 flow — that is fine, they are never open at the same time — but it is a
 SEPARATE app registration on Saxo's LIVE portal, not the SIM one.
 
-### 2. One-time attended OAuth bootstrap — **on the VPS**, never on the laptop
+### 2. One-time attended OAuth bootstrap — one procedure per machine, never shared
 
-The token store must be written **on the VPS**
-(`~/.alphalens/saxo_auth_live/token_store.json` by default, overridable via
-`SAXO_LIVE_TOKEN_STORE_PATH`), so the OAuth redirect must land on the VPS too
-— run the bootstrap ON the VPS while forwarding port 8765 from your laptop,
-exactly like the SIM `broker auth` bootstrap in the previous section.
+This app can be bootstrapped from more than one machine: the VPS (for the
+production daemon, §2a) and, separately, a developer machine (for ad-hoc
+attended checks such as §7's probe, §2b). Each bootstrap writes to **that
+machine's own** default token-store path
+(`~/.alphalens/saxo_auth_live/token_store.json`, overridable via
+`SAXO_LIVE_TOKEN_STORE_PATH`) using **that machine's own** env file — never
+the other machine's.
 
-**There is no `alphalens broker auth`-equivalent CLI for this app yet** — the
-bootstrap runs as a short attended script over the public primitives in
-`saxo_marketdata_auth.py` (`LiveAuthConfig.from_env`, `build_authorize_url`,
-`exchange_code`). It never prints a token.
+**These are two SEPARATE token stores for the same app — NOT
+interchangeable.** The refresh token is single-use and rotates on every
+refresh (`saxo_marketdata_auth.py` module docstring), so each machine must
+bootstrap and refresh its own. Copying either store to the other machine (or
+running a bootstrap against a synced copy) invalidates whichever side
+refreshes second the moment the other one also tries.
+
+**Separately from that — and this is the part that matters even when both
+stores are individually healthy — Saxo permits only ONE elevated session at a
+time, full stop, regardless of which token store holds it (§5).** Bootstrapping
+or using the store on a developer machine takes real-time data away from the
+VPS daemon (if it is running with the flag on) and from the operator's own
+SaxoTraderGO, for as long as that machine's session stays elevated. **That is
+the actual reason to prefer the VPS for routine checks and to keep any
+developer-machine run deliberate and short** — it is not a technical
+restriction on where bootstrap is allowed to happen.
+
+**There is no `alphalens broker auth`-equivalent CLI for this app yet** — both
+procedures below run the SAME short attended script over the public
+primitives in `saxo_marketdata_auth.py` (`LiveAuthConfig.from_env`,
+`build_authorize_url`, `exchange_code`). It never prints a token.
+
+#### 2a. Bootstrap on the VPS (for the production daemon)
+
+The token store must be written **on the VPS**, so the OAuth redirect must
+land on the VPS too — run the bootstrap ON the VPS while forwarding port 8765
+from your laptop, exactly like the SIM `broker auth` bootstrap in the
+previous section.
 
 **Laptop terminal A** — open the tunnel (leave it running):
 ```bash
@@ -1215,12 +1248,61 @@ credentials (not SIM). Saxo redirects to `http://localhost:8765/callback` →
 the SSH tunnel forwards it to the VPS listener → the script exchanges the
 code and writes the token store **on the VPS**.
 
-**The token store is NEVER copied between machines.** The refresh token is
-single-use and rotates on every refresh (same discipline as the SIM store,
-`saxo_marketdata_auth.py` module docstring) — it permits exactly ONE holder.
-Copying the file to a second machine (or re-running the bootstrap from a
-laptop against a synced copy) invalidates whichever side refreshes second the
-moment the other one also tries.
+#### 2b. Bootstrap (or re-bootstrap) on a developer machine
+
+No tunnel is needed here: the browser and the one-shot listener are the SAME
+machine, so the redirect goes straight to `localhost:8765` without leaving it.
+Credentials come from the repo-root `.env`, NOT `/etc/alphalens/env` — that
+file does not exist on a developer machine. The token store lands at this
+machine's own `~/.alphalens/saxo_auth_live/token_store.json` (same default
+path as the VPS — a different physical file, since `$HOME` differs per
+machine).
+
+```bash
+cd ~/Developer/Personal/AlphaLens/apps/alphalens-research && \
+set -a && . ../../.env && set +a && \
+../../.venv/bin/python - <<'PY'
+import http.server
+import urllib.parse
+
+from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import (
+    LiveAuthConfig,
+    build_authorize_url,
+    exchange_code,
+)
+
+cfg = LiveAuthConfig.from_env()
+authorize_url = build_authorize_url(cfg, state="bootstrap")
+print("open this URL to authorize (LIVE credentials):")
+print(authorize_url)
+
+code_holder: dict[str, str | None] = {"code": None}
+
+
+class _Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # noqa: N802 - stdlib method name
+        query = urllib.parse.urlparse(self.path).query
+        code_holder["code"] = urllib.parse.parse_qs(query).get("code", [None])[0]
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"authorized - you can close this tab")
+
+    def log_message(self, *args: object) -> None:  # silence stdlib access log
+        pass
+
+
+print("waiting for the redirect on http://localhost:8765/callback ...")
+http.server.HTTPServer(("localhost", 8765), _Handler).handle_request()  # blocks for ONE request
+if not code_holder["code"]:
+    raise SystemExit("no ?code= on the redirect - check the LIVE portal redirect URL registration")
+
+exchange_code(cfg, code=code_holder["code"])
+print("authorized - LIVE token store written (tokens are never printed)")
+PY
+```
+Open the printed URL directly in this machine's own browser (no SSH tunnel —
+you are already on `localhost`), log in with **LIVE** credentials. The script
+exchanges the code and writes the token store on THIS machine.
 
 ### 3. Refresh cadence — separate mechanism from the SIM keep-alive timer
 
@@ -1228,17 +1310,22 @@ The SIM auto-manager has a dedicated `alphalens-saxo-refresh.timer` (~every
 20 min) because its OAuth calls are otherwise infrequent enough for the
 refresh chain to go idle. The LIVE market-data token refreshes differently:
 `LiveTokenProvider.access_token()` (same 120 s-before-expiry margin as the
-SIM provider) is called on every REST call the daemon makes through
-`SaxoMarketDataClient` (session-capability reads, uic resolution, subscription
-create/delete) AND on every WebSocket (re)connect the price stream makes —
-so as long as `ALPHALENS_SAXO_LIVE_PRICES=1` and the daemon is running, the
-token stays fresh as a side effect of the feed being used, with no separate
-timer unit to install.
+SIM provider) is called on every REST call made through `SaxoMarketDataClient`
+(session-capability reads, uic resolution, subscription create/delete) AND on
+every WebSocket (re)connect the price stream makes — so on the VPS, as long as
+`ALPHALENS_SAXO_LIVE_PRICES=1` and the daemon is running, the token stays
+fresh as a side effect of the feed being used, with no separate timer unit to
+install.
 
 **There is currently no dedicated LIVE keep-alive timer in this repo**
-(unlike `alphalens-saxo-refresh.timer` for SIM). If the flag stays OFF, or the
-daemon is down, for long enough that the refresh chain goes idle, the fix is
-the same as the SIM "OAuth outage" case: re-run §2's attended bootstrap.
+(unlike `alphalens-saxo-refresh.timer` for SIM). If the VPS flag stays OFF, or
+the daemon is down, for long enough that the refresh chain goes idle, the fix
+is the same as the SIM "OAuth outage" case: re-run §2a's attended bootstrap.
+
+A developer machine's store has no continuous process refreshing it at all —
+only an attended run (§7) touches it, and only while that run is in progress.
+If it has been long enough since the last attended run that the refresh chain
+has gone idle, the fix is the same: re-run §2b.
 
 ### 4. Turning it on
 
@@ -1260,14 +1347,16 @@ holder demotes whichever session held it before, including:
 - the operator's own SaxoTraderGO session, and
 - the production daemon, if it is currently running with the flag on.
 
-**Before running the Task 8 live probe (or any other Mac-side attended check)
-against this app, stop the production daemon first** (or coordinate the
-timing with whoever is running it) — running both at once just makes them
-demote each other back and forth. The daemon's own reclaim logic
-(`ReclaimLimiter`, `session_reclaim.py`) automatically re-elevates itself up
-to 4 times/hour once it observes a delayed quote, so a human who keeps
-pressing "resume" in SaxoTraderGO eventually wins the ping-pong by
-persistence — by design, not a bug.
+**Before running the §7 live probe from EITHER machine (a developer machine's
+own attended run, or a VPS run made outside the daemon's own process) against
+this app, stop the production daemon first** (or coordinate the timing with
+whoever is running it) — running both at once just makes them demote each
+other back and forth, regardless of which machine's token store either side
+is using (§2). The daemon's own reclaim logic (`ReclaimLimiter`,
+`session_reclaim.py`) automatically re-elevates itself up to 4 times/hour once
+it observes a delayed quote, so a human who keeps pressing "resume" in
+SaxoTraderGO eventually wins the ping-pong by persistence — by design, not a
+bug.
 
 ### 6. Known issues
 
@@ -1281,8 +1370,8 @@ persistence — by design, not a bug.
   expect toggling `ALPHALENS_SAXO_LIVE_PRICES` off at runtime to close the
   subscription without a restart.
 - **An unbootstrapped LIVE token store looks like "nothing happens", not a
-  crash.** If `ALPHALENS_SAXO_LIVE_PRICES=1` is set before §2's bootstrap has
-  run (or the store is stale/corrupt), `LiveAuthConfig.from_env()` /
+  crash.** If `ALPHALENS_SAXO_LIVE_PRICES=1` is set before §2a's VPS bootstrap
+  has run (or the store is stale/corrupt), `LiveAuthConfig.from_env()` /
   `LiveTokenProvider` raise inside the feed-factory construction. That
   construction failure is caught deliberately broadly by
   `_build_live_exits_feed` (`control_loop.py`) — "every doubt becomes a
@@ -1296,8 +1385,22 @@ persistence — by design, not a bug.
 
 ### 7. Attended shape probe (before flipping the gate live)
 
+Run it from whichever machine has a bootstrapped token store (§2) — the
+credentials source and the token store used differ by machine; the test code
+and its assertions are identical either way.
+
+**On the VPS** (credentials from `/etc/alphalens/env`, store from §2a):
 ```bash
-cd apps/alphalens-research && set -a && . /etc/alphalens/env && set +a && \
+cd ~/AlphaLens/apps/alphalens-research && set -a && . /etc/alphalens/env && set +a && \
+SAXO_MARKETDATA_LIVE_TEST=1 \
+    ../../.venv/bin/python -m unittest tests.live.test_saxo_marketdata_live -v
+```
+
+**On a developer machine** (credentials from the repo-root `.env`, store from
+§2b):
+```bash
+cd ~/Developer/Personal/AlphaLens/apps/alphalens-research && \
+set -a && . ../../.env && set +a && \
 SAXO_MARKETDATA_LIVE_TEST=1 \
     ../../.venv/bin/python -m unittest tests.live.test_saxo_marketdata_live -v
 ```
@@ -1305,6 +1408,6 @@ SAXO_MARKETDATA_LIVE_TEST=1 \
 SHAPE only, never values: elevates the session, resolves AAPL to a uic,
 opens and tears down one price subscription, asserts the quote row reports
 `DelayedByMinutes == 0`. **Elevates the single-holder session (§5)** — never
-run this while the production daemon holds it without coordinating first; a
-closed market (or an already-demoted session) reports as an inconclusive
-TRANSIENT result, not a shape failure.
+run this from either machine while the production daemon holds it without
+coordinating first; a closed market (or an already-demoted session) reports
+as an inconclusive TRANSIENT result, not a shape failure.
