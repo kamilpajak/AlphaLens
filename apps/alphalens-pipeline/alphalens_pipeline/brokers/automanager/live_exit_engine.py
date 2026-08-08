@@ -154,14 +154,29 @@ class ManagedExit:
 
 def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) -> int:
     """One live-exit pass over managed positions. Stale/absent price -> veto (skip).
-    INERT: no daemon caller yet. Returns the number of tranches fired."""
+    INERT: no daemon caller yet. Returns the number of tranches fired.
+
+    ``list_working_sell_orders`` is NOT part of the ``Broker`` Protocol
+    (``broker_contract/contract.py``), so it is read via the same defensive
+    ``getattr(broker, "list_working_sell_orders", None)`` convention
+    ``control_loop.py`` already uses at two call sites -- an
+    ``AttributeError`` here would escape the ``except BrokerError`` boundary
+    and kill the whole tick.
+    """
     fired = 0
+    list_sells = getattr(broker, "list_working_sell_orders", None)
     for m in managed:
         point = feed.latest(m.uic)
         if point is None:
             continue  # stream-health veto
+        if list_sells is None:
+            logger.warning(
+                "uic %s: broker has no list_working_sell_orders - skipping live exits this pass",
+                m.uic,
+            )
+            continue
         live = broker.get_positions_by_uic(m.uic)
-        legs = tuple(broker.list_working_sell_orders())
+        legs = tuple(list_sells())
         legs = tuple(leg for leg in legs if leg.uic == m.uic)
         sl = _sole_standalone_stop(legs)
         if sl is None:
