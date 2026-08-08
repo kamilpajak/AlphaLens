@@ -92,10 +92,12 @@ class TestSimOnlyRail(unittest.TestCase):
 
     def test_marker_tuple_positive_control(self):
         """The source-scan above passes vacuously if the marker tuple rots to
-        empty — pin that it still names both LIVE hosts."""
-        self.assertEqual(len(_LIVE_URL_MARKERS), 2)
+        empty — pin that it still names all three LIVE hosts, including the
+        LIVE streaming host this branch introduced."""
+        self.assertEqual(len(_LIVE_URL_MARKERS), 3)
         self.assertTrue(any("openapi" in m for m in _LIVE_URL_MARKERS))
         self.assertTrue(any("logonvalidation" in m for m in _LIVE_URL_MARKERS))
+        self.assertTrue(any("live-streaming.saxobank.com" in m for m in _LIVE_URL_MARKERS))
         for marker in _LIVE_URL_MARKERS:
             self.assertNotIn(marker, SIM_BASE_URL, "a LIVE marker must never match SIM")
 
