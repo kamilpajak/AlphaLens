@@ -1,6 +1,6 @@
 # Live-Market Execution — INC-2: Saxo LIVE price feed — design
 
-**Status:** DRAFT (awaiting operator spec review → implementation plan)
+**Status:** LOCKED
 **Date:** 2026-08-07
 **Parent memo:** `live_market_execution_model_design_2026_08_05.md` §3.3 + §5 INC-2 (the "price streaming" gap).
 **Related:** [ADR 0014](../adr/0014-broker-agnostic-execution-layer.md) (broker-agnostic execution + the SIM-only rail), `live_market_execution_inc3_plan_2026_08_05.md` (the engine this feeds).
@@ -142,12 +142,19 @@ no compatibility shim, per project doctrine.
   has no per-instrument spread table and inventing one is not worth it. 2 % is
   far above the 1–8 c (≈0.003–0.03 %) measured on liquid names, so it catches
   broken quotes without vetoing normal ones;
-- no duplicate / sequence regression;
-- the instrument is in a live session.
+- no duplicate / sequence regression.
 
 3 s is roughly twice the measured worst lag (1.4 s) and, against a 1 Hz push,
-still detects a dead stream within seconds. Recovery requires **two consecutive
-healthy updates** before the feed reports live again.
+still detects a dead stream within seconds. `is_fresh` is a **stateless
+predicate** over the single latest cached quote — it decides fresh-or-not on
+every call from that one point, with no memory of prior calls. Recovery is
+therefore immediate on the next quote that passes the gate; there is no
+"two consecutive healthy updates" debounce (see "Deferred to rollout" below).
+
+There is no separate "instrument is in a live session" check either. The
+`DelayedByMinutes == 0` condition is what stands in for it: Saxo's own signal
+for "this session sees this instrument at full speed, not delayed" is that
+flag, not a session-state lookup this feed performs itself.
 
 The delayed-flag condition is not defensive padding. It is the only signal for
 the demotion failure below, where everything else looks perfectly healthy.
@@ -163,9 +170,13 @@ path in which this module guesses a price.
   alerts once, and stops hammering — reusing the existing streaming reader's
   tuning (`max_consecutive_failures=6`, backoff 1 s → 30 s) rather than
   inventing a second convention.
-- **Auth expiry** — token refreshed early; the stream is re-authorized in place
-  without dropping the socket. A failed refresh kills the stream, degrading to
-  the disconnect case: veto, not a bad price.
+- **Auth expiry** — each reconnect fetches a fresh token from the token
+  provider before opening the socket (`_run_one_connection`). There is no
+  in-place re-authorization of a live socket: at token expiry the connection
+  simply drops and the existing reconnect-with-backoff path picks it back up
+  with a fresh token on the next attempt (see "Deferred to rollout" below).
+  That is fail-safe, not merely acceptable — a dropped socket ages the cache
+  and the gate vetoes on its own, the same as any other disconnect.
 - **Session demotion (the dangerous one)** — verified 2026-08-07: when the
   operator logs into SaxoTraderGO, the API session drops to `OrdersOnly` and
   **prices keep flowing, keep moving, and are 15 minutes old**. No error, no
@@ -194,11 +205,39 @@ The daemon tick never sees an exception from the stream thread.
   structure and non-emptiness, never values, behind its own env flag so it never
   blocks CI. Without it we would ship green tests over a dead feed, which has
   happened in this project before.
-- **Acceptance** — the existing FakeBroker suite is unchanged; one scenario
-  added: the feed vetoes every tick → no tranche fires, the stop is untouched.
+- **Acceptance** — the `acceptance/` GWT suite is untouched (only the
+  `PricePoint` contract plumbing in `world.py` moved). The equivalent
+  coverage — the feed vetoes every tick, no tranche fires, the resting stop is
+  untouched — exists at unit level instead:
+  `test_live_exits_pass.py::TestLiveExitsFeedConstructionFailureEndToEnd
+  ::test_the_tick_completes_normally_when_feed_construction_raises` (see
+  "Deferred to rollout" below).
 - **Rail enforcement** — the new client is added explicitly to the canonical
   Saxo HTTP surfaces in `test_no_raw_saxo_http.py`, with its rationale. It is
   not smuggled past the check via an injected session.
+
+### 8.1 Deferred to rollout
+
+Four things this memo originally described as shipped are intended future
+work, not yet implemented. Each is safe to defer because the corresponding
+gap degrades to a veto (no price, wait) rather than to a bad price:
+
+- **Two-consecutive-healthy-updates recovery debounce (§6).** `is_fresh` is
+  stateless today; a single passing quote is enough to report fresh again. A
+  debounce would only make recovery from a flaky reconnect slightly more
+  conservative, at the cost of missing more exits during recovery.
+- **A live-session gate independent of the delayed flag (§6).** Today
+  `DelayedByMinutes == 0` is the only signal used. A dedicated session-state
+  check would be a second, independent confirmation of the same fact Saxo
+  already reports through that flag.
+- **In-place stream re-authorization at token expiry (§7).** The current
+  behaviour is drop-and-reconnect, reusing the existing backoff path — already
+  fail-safe, since the cache ages and the gate vetoes during the gap. An
+  in-place re-auth would only shorten that gap.
+- **A dedicated acceptance-suite scenario for "the feed vetoes every tick"
+  (§8).** The equivalent behaviour is proven at unit level
+  (`test_the_tick_completes_normally_when_feed_construction_raises`). Adding
+  the GWT-level scenario would raise the coverage tier, not close a gap.
 
 ## 9. Rollout
 
