@@ -250,6 +250,39 @@ def _build_frame(message_id: int, reference_id: str, payload: bytes, *, fmt: int
     )
 
 
+class TestDefaultContextId(unittest.TestCase):
+    """A fixed default context_id means a rebuild after a dead reader thread
+    (nothing calls stop()) re-POSTs the SAME ContextId+ReferenceId, and two
+    processes on the same LIVE login would collide too. The default must be
+    per-process unique, mirroring the SIM auto-manager's
+    f"almgr-{os.getpid()}-{int(time.time())}" convention (control_loop.py),
+    with a "px" marker distinguishing the two."""
+
+    def test_default_context_id_is_per_process_unique_with_px_marker(self):
+        with (
+            mock.patch.object(sps.os, "getpid", return_value=4242),
+            mock.patch.object(sps.time, "time", return_value=1754570000.0),
+        ):
+            stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        self.assertEqual(stream._context_id, "almgr-px-4242-1754570000")
+
+    def test_two_instances_in_the_same_process_get_different_context_ids(self):
+        """Constructed at different times (the getpid stays fixed, the clock
+        moves), so a rebuilt stream never reuses the dead stream's ContextId."""
+        with mock.patch.object(sps.os, "getpid", return_value=4242):
+            with mock.patch.object(sps.time, "time", return_value=1754570000.0):
+                first = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+            with mock.patch.object(sps.time, "time", return_value=1754570099.0):
+                second = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        self.assertNotEqual(first._context_id, second._context_id)
+
+    def test_context_id_stays_injectable_for_tests(self):
+        stream = SaxoPriceStream(
+            _FakeMarketDataClient(), _FakeTokenProvider(), context_id="custom-ctx"
+        )
+        self.assertEqual(stream._context_id, "custom-ctx")
+
+
 class TestSaxoPriceStreamApplyFrame(unittest.TestCase):
     """_apply_frame is synchronous decode-and-apply glue - testable directly,
     without mocking a socket (only the async recv loop needs the live probe)."""

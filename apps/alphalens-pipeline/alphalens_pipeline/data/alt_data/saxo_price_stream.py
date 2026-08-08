@@ -24,7 +24,9 @@ import contextlib
 import datetime as dt
 import json
 import logging
+import os
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -179,7 +181,7 @@ class SaxoPriceStream:
         client: SaxoMarketDataClient,
         token_provider: LiveTokenProvider,
         *,
-        context_id: str = "saxo-price-stream",
+        context_id: str | None = None,
         reference_id: str = "px",
         refresh_rate_ms: int = 1000,
         cache: QuoteCache | None = None,
@@ -190,7 +192,16 @@ class SaxoPriceStream:
     ) -> None:
         self._client = client
         self._token_provider = token_provider
-        self._context_id = context_id
+        # A fixed default would make a rebuild after a dead reader thread
+        # (nothing here calls stop()) re-POST the SAME ContextId+ReferenceId,
+        # and two processes on the same LIVE login would collide too. Mirror
+        # the SIM auto-manager's per-process-unique convention
+        # (control_loop.py's f"almgr-{os.getpid()}-{int(time.time())}"), with
+        # a "px" marker so the two are distinguishable. Still injectable for
+        # tests via the explicit context_id parameter.
+        self._context_id = (
+            context_id if context_id is not None else f"almgr-px-{os.getpid()}-{int(time.time())}"
+        )
         self._reference_id = reference_id
         self._refresh_rate_ms = refresh_rate_ms
         self.cache = cache or QuoteCache()
