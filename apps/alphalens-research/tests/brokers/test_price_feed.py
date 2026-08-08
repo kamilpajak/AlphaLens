@@ -9,14 +9,14 @@ _NOW = dt.datetime(2026, 8, 7, 14, 0, 0, tzinfo=dt.UTC)
 
 
 def _point(**over) -> PricePoint:
-    base = dict(
-        uic=211,
-        bid=314.01,
-        ask=314.04,
-        event_time=_NOW - dt.timedelta(seconds=1),
-        received_at=_NOW,
-        source="saxo-live-l1",
-    )
+    base = {
+        "uic": 211,
+        "bid": 314.01,
+        "ask": 314.04,
+        "event_time": _NOW - dt.timedelta(seconds=1),
+        "received_at": _NOW,
+        "source": "saxo-live-l1",
+    }
     base.update(over)
     return PricePoint(**base)
 

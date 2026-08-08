@@ -22,14 +22,14 @@ class _Stream:
 
 
 def _quote(**over) -> Quote:
-    base = dict(
-        uic=211,
-        bid=314.01,
-        ask=314.04,
-        event_time=_NOW - dt.timedelta(seconds=1),
-        delayed_by_minutes=0,
-        received_at=_NOW,
-    )
+    base = {
+        "uic": 211,
+        "bid": 314.01,
+        "ask": 314.04,
+        "event_time": _NOW - dt.timedelta(seconds=1),
+        "delayed_by_minutes": 0,
+        "received_at": _NOW,
+    }
     base.update(over)
     return Quote(**base)
 
