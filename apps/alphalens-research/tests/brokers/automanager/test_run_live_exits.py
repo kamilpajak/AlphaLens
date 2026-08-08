@@ -2,31 +2,36 @@ from __future__ import annotations
 
 import datetime as dt
 import unittest
+from unittest import mock
 
+from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager.live_exit_engine import ManagedExit, run_live_exits
 from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
 
 from tests.brokers.automanager.acceptance.fake_broker import FakeBroker
 
+_DECISION_EVENT_TIME = dt.datetime(2026, 8, 5, tzinfo=dt.UTC)
+
 
 class _FakeFeed:
-    def __init__(self, prices):
+    def __init__(self, prices, *, bid=None, ask=None, source="test"):
         self._p = prices  # {uic: price|None}
+        self._bid = bid
+        self._ask = ask
+        self._source = source
 
     def latest(self, uic):
         px = self._p.get(uic)
-        return (
-            None
-            if px is None
-            else PricePoint(
-                uic=uic,
-                bid=px,
-                ask=px,
-                event_time=dt.datetime(2026, 8, 5, tzinfo=dt.UTC),
-                received_at=dt.datetime(2026, 8, 5, tzinfo=dt.UTC),
-                source="test",
-            )
+        if px is None:
+            return None
+        return PricePoint(
+            uic=uic,
+            bid=self._bid if self._bid is not None else px,
+            ask=self._ask if self._ask is not None else px,
+            event_time=_DECISION_EVENT_TIME,
+            received_at=_DECISION_EVENT_TIME,
+            source=self._source,
         )
 
 
@@ -80,6 +85,46 @@ class TestRunLiveExits(unittest.TestCase):
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 20.0)  # sold 50 + 30
         sl_now = next(o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded")
         self.assertEqual(sl_now.amount, 20.0)  # SL tracks remaining owned, not stale 70
+
+    def test_fire_stamps_decision_telemetry_from_the_pricepoint(self):
+        # (test c) A fire journals decision-side telemetry sourced from the
+        # in-scope PricePoint (the BID drives the sell decision) and the
+        # TrancheExit. Capture the journal line via the shared append seam.
+        b = FakeBroker()
+        uic = b.uic_of("KO")
+        b.set_position("KO", 100, avg_price=15.0)
+        b.add_resting_sell("KO", 100, 13.0, order_type="StopIfTraded")
+        feed = _FakeFeed({uic: 16.5}, bid=16.5, ask=16.7, source="saxo-live-l1")
+        managed = [
+            ManagedExit(
+                uic=uic,
+                tp_tranches=(_tr(0, 16.0, 0.5),),
+                reference_qty=100,
+                stop_price=13.0,
+                already_fired=frozenset(),
+            )
+        ]
+        records: list[dict] = []
+        with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
+            n = run_live_exits(b, feed, managed)
+        self.assertEqual(n, 1)
+        fired = [r for r in records if r.get("kind") == "tranche_fired"]
+        self.assertEqual(len(fired), 1)
+        self.assertEqual(fired[0]["uic"], uic)
+        self.assertEqual(fired[0]["tag"], "tp1")
+        self.assertEqual(
+            fired[0]["telemetry"],
+            {
+                "decision_bid": 16.5,
+                "decision_ask": 16.7,
+                "decision_mid": 16.6,
+                "spread_abs": 16.7 - 16.5,
+                "target_price": 16.0,
+                "qty": 50,
+                "event_time": _DECISION_EVENT_TIME.isoformat(),
+                "source": "saxo-live-l1",
+            },
+        )
 
     def test_broker_without_list_working_sell_orders_skips_the_uic_no_crash(self):
         """list_working_sell_orders is NOT part of the Broker Protocol

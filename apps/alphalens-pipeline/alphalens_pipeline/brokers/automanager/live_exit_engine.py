@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from broker_contract.contract import Broker, OrderState
-from broker_contract.price_feed import PriceFeed
+from broker_contract.price_feed import PriceFeed, PricePoint
 from broker_contract.sizing import TpTranchePlan
 
 from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
@@ -133,14 +133,53 @@ def fold_fired_tranches(lines: Iterable[Mapping[str, Any]]) -> dict[int, frozens
     return {u: frozenset(t) for u, t in acc.items()}
 
 
-def mark_tranche_fired(uic: int, tag: str) -> None:
+def _fire_telemetry(point: PricePoint, exit: TrancheExit) -> dict[str, Any]:
+    """Map the decision-instant quote + the fired tranche to the decision-side
+    execution-quality telemetry dict. Pure — no I/O, no broker read.
+
+    ``decision_bid`` is the executable side for selling a long; keeping the full
+    bid/ask/mid/spread lets a downstream consumer compute implementation
+    shortfall against ANY decision convention once the FILL price is captured in
+    a later increment (see ``mark_tranche_fired``). Field names are a stable
+    contract — a downstream reader keys off them verbatim."""
+    return {
+        "decision_bid": point.bid,
+        "decision_ask": point.ask,
+        "decision_mid": point.mid,
+        "spread_abs": point.ask - point.bid,
+        "target_price": exit.target_price,
+        "qty": exit.qty,
+        "event_time": point.event_time.isoformat() if point.event_time is not None else None,
+        "source": point.source,
+    }
+
+
+def mark_tranche_fired(uic: int, tag: str, *, telemetry: Mapping[str, Any] | None = None) -> None:
     """Append one ``tranche_fired`` marker (idempotency: a fired tranche never
-    re-fires). Writes via the shared append-only standalone-stop journal seam."""
+    re-fires). Writes via the shared append-only standalone-stop journal seam.
+
+    ``kind``/``uic``/``tag`` stay at the TOP LEVEL because ``fold_fired_tranches``
+    keys idempotency off them; optional decision-side ``telemetry`` is nested
+    under its own key so it can never collide with those. When ``telemetry`` is
+    None the line is the historical bare 3-key shape (byte-identical for existing
+    callers/journals).
+
+    OUT OF SCOPE (decision-side only): the ACTUAL fill / execution price is NOT
+    captured here. ``Broker.place_market_order`` returns no fill price, so
+    implementation shortfall (fill − decision) is not yet computable; capturing
+    the fill needs a follow-up broker read (``get_order`` /
+    ``cs/v1/audit/orderactivities``) and is a SEPARATE increment. This function
+    persists the half that is irrecoverable if not stamped at the fire instant
+    (the provider bid/ask/mid at decision time); the fill side lives in the
+    broker's own audit trail."""
     from alphalens_pipeline.brokers.automanager.control_loop import (
         _append_standalone_stop_journal,
     )
 
-    _append_standalone_stop_journal({"kind": "tranche_fired", "uic": int(uic), "tag": str(tag)})
+    line: dict[str, Any] = {"kind": "tranche_fired", "uic": int(uic), "tag": str(tag)}
+    if telemetry is not None:
+        line["telemetry"] = dict(telemetry)
+    _append_standalone_stop_journal(line)
 
 
 @dataclass(frozen=True)
@@ -198,6 +237,6 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
                 stop_price=m.stop_price,
                 request_ref=f"u{m.uic}",
             ):
-                mark_tranche_fired(m.uic, ex.tag)
+                mark_tranche_fired(m.uic, ex.tag, telemetry=_fire_telemetry(point, ex))
                 fired += 1
     return fired
