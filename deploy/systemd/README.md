@@ -983,7 +983,8 @@ SAXO_APP_KEY=<sim app key>
 SAXO_APP_SECRET=<sim app secret>
 SAXO_AUTH_REDIRECT_URL=http://localhost:8765/callback   # MUST byte-match the SIM portal registration
 # TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID likely already present (literature scans) — verify
-# ALPHALENS_BROKER_ALLOW_ORDERS=1   <-- add ONLY at go-live (§6)
+# Add ONLY at go-live — see §6 to turn it on:
+# ALPHALENS_BROKER_ALLOW_ORDERS=1
 EOF
 sudo chmod 600 /etc/alphalens/env
 ```
