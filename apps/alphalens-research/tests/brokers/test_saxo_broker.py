@@ -710,6 +710,48 @@ class TestFinalFillRealFixture(unittest.TestCase):
         self.assertIn("FinalFill/Confirmed", state.raw_status)
         # LogId of the real row is surfaced in the diagnostics string.
         self.assertIn("249519481", state.raw_status)
+        # The FILL PRICE rides alongside the quantity (ExecutionPrice on the real row).
+        self.assertEqual(state.avg_fill_price, 82.09)
+
+    def test_real_final_fill_falls_back_to_average_price(self):
+        # When ExecutionPrice is absent, AveragePrice supplies the fill price.
+        row = dict(_ROW_FINAL_FILL_REAL)
+        del row["ExecutionPrice"]
+        state = self._resolve(row)
+        self.assertEqual(state.status, OrderStatus.FILLED)
+        self.assertEqual(state.filled_quantity, 2.0)
+        self.assertEqual(state.avg_fill_price, 82.09)
+
+    def test_final_fill_missing_price_fields_is_filled_with_none_price(self):
+        # HONEST: no price fields -> avg_fill_price is None, but the outcome is
+        # still FILLED with the right quantity (price rides ALONGSIDE quantity,
+        # never blocks or fabricates the fill classification).
+        row = dict(_ROW_FINAL_FILL_REAL)
+        del row["ExecutionPrice"]
+        del row["AveragePrice"]
+        state = self._resolve(row)
+        self.assertEqual(state.status, OrderStatus.FILLED)
+        self.assertEqual(state.filled_quantity, 2.0)
+        self.assertIsNone(state.avg_fill_price)
+
+    def test_final_fill_unparseable_price_is_filled_with_none_price(self):
+        # A non-numeric price string never fabricates a value: avg_fill_price is
+        # None, the fill classification is unaffected.
+        row = dict(_ROW_FINAL_FILL_REAL)
+        row["ExecutionPrice"] = "not-a-number"
+        del row["AveragePrice"]
+        state = self._resolve(row)
+        self.assertEqual(state.status, OrderStatus.FILLED)
+        self.assertEqual(state.filled_quantity, 2.0)
+        self.assertIsNone(state.avg_fill_price)
+
+    def test_real_final_fill_string_typed_price_still_parses(self):
+        # Defensive: a string-serialized ExecutionPrice still yields the float.
+        row = dict(_ROW_FINAL_FILL_REAL)
+        row["ExecutionPrice"] = "82.09"
+        state = self._resolve(row)
+        self.assertEqual(state.status, OrderStatus.FILLED)
+        self.assertEqual(state.avg_fill_price, 82.09)
 
     def test_real_final_fill_string_typed_fill_fields_still_parse(self):
         # Defensive: if Saxo ever serializes FilledAmount as a string, float()

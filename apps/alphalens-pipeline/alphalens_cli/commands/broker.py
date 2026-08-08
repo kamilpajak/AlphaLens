@@ -18,6 +18,10 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker reconcile [--json]      — READ-ONLY journal vs broker verdicts (P3):
         WORKING / PAST-TTL divergence / FILLED (+closed r) / CANCELLED / REJECTED /
         EXPIRED / UNRESOLVED(reason); exit 1 on any unresolved or divergent row
+    alphalens broker reconcile-fills [--out P] [--json]  — READ-ONLY offline fill
+        reconciler (build-seq 1b-ii): joins each fired TP tranche to its ACTUAL
+        broker fill by sell_order_id, computes implementation shortfall, writes
+        the exec-quality parquet (places/cancels/amends NOTHING)
 
 All ``brokers`` imports are lazy inside command bodies — the ``alphalens``
 binary's startup time is paid by the 15-min Layer-1 edgar-detect cron
@@ -1002,6 +1006,93 @@ def reconcile_command(
     )
     if has_failures(verdicts):
         raise _fail("reconciliation found unresolved or divergent bracket(s) — see rows above")
+
+
+@broker_app.command(name="reconcile-fills")
+def reconcile_fills_command(
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help="Parquet output path (default: ~/.alphalens/exec_quality/tranche_fills.parquet).",
+    ),
+    as_json: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit the reconciled records as JSON (one dict per fire) for scripting.",
+    ),
+) -> None:
+    """Join each fired TP tranche to its ACTUAL broker fill (OFFLINE) — READ-ONLY.
+
+    Reads the ``tranche_fired`` decision-side telemetry lines from the
+    standalone-stop journal, resolves each ``sell_order_id`` through the
+    broker's audit-log capability, computes the implementation shortfall, and
+    (over)writes the execution-quality parquet. Places / cancels / amends
+    NOTHING — the only side effect is the parquet write.
+    """
+    from dataclasses import asdict
+
+    from alphalens_pipeline.brokers.automanager import control_loop
+    from alphalens_pipeline.brokers.automanager.exec_quality import (
+        EXEC_QUALITY_PARQUET,
+        FILL_STATUS_FILLED,
+        FILL_STATUS_PENDING,
+        FILL_STATUS_UNRESOLVED,
+        reconcile_fills,
+        write_exec_quality_parquet,
+    )
+    from alphalens_pipeline.brokers.reconcile import SupportsOrderResolution
+    from alphalens_pipeline.brokers.registry import get_default_broker
+    from broker_contract.contract import BrokerError
+
+    out_path = out or EXEC_QUALITY_PARQUET
+    lines = list(control_loop._iter_standalone_stop_journal())
+
+    broker = get_default_broker()
+    if not isinstance(broker, SupportsOrderResolution):
+        raise _fail(
+            "the configured broker does not support order-outcome resolution "
+            "(reconcile-fills needs the audit-log capability)"
+        )
+    try:
+        records = reconcile_fills(lines, broker)
+    except BrokerError as exc:
+        raise _fail(f"broker reconcile-fills failed: {exc}") from exc
+
+    written = write_exec_quality_parquet(records, out_path)
+
+    if as_json:
+        # stdout stays exactly one JSON value for scripting (sibling `reconcile`
+        # pattern) — the parquet is still written above regardless of format.
+        typer.echo(json.dumps([asdict(r) for r in records], indent=2, default=str))
+        return
+
+    total = len(records)
+    filled = sum(1 for r in records if r.fill_status == FILL_STATUS_FILLED)
+    pending = sum(1 for r in records if r.fill_status == FILL_STATUS_PENDING)
+    unresolved = sum(1 for r in records if r.fill_status == FILL_STATUS_UNRESOLVED)
+    priced_bps = [
+        r.slippage_bps
+        for r in records
+        if r.fill_status == FILL_STATUS_FILLED and r.slippage_bps is not None
+    ]
+    mean_bps = sum(priced_bps) / len(priced_bps) if priced_bps else None
+
+    typer.echo(
+        f"{'uic':>8s}  {'tag':6s}  {'sell_order_id':16s}  {'status':10s}  "
+        f"{'fill_price':>10s}  {'slippage_bps':>12s}"
+    )
+    for record in records:
+        fill_price = "-" if record.fill_price is None else f"{record.fill_price:.4f}"
+        slippage = "-" if record.slippage_bps is None else f"{record.slippage_bps:.2f}"
+        typer.echo(
+            f"{record.uic:>8d}  {record.tag:6s}  {record.sell_order_id:16s}  "
+            f"{record.fill_status:10s}  {fill_price:>10s}  {slippage:>12s}"
+        )
+
+    mean_str = "n/a" if mean_bps is None else f"{mean_bps:.2f} bps"
+    typer.echo(f"{total} fire(s): {filled} filled, {pending} pending, {unresolved} unresolved")
+    typer.echo(f"mean slippage over filled: {mean_str}")
+    typer.echo(f"wrote {written}")
 
 
 @broker_app.command(name="cancel")
