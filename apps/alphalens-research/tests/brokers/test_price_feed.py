@@ -59,6 +59,16 @@ class TestIsFresh(unittest.TestCase):
         future = _point(event_time=_NOW + dt.timedelta(seconds=5))
         self.assertFalse(is_fresh(future, now=_NOW))
 
+    def test_naive_event_time_is_vetoed(self):
+        """An ``event_time`` with no ``tzinfo`` is a doubt about which instant
+        it names, not a usable timestamp. Subtracting it from an aware ``now``
+        raises ``TypeError`` in the stdlib, which would escape this predicate
+        and crash the caller's tick. A doubt is a veto, not a crash: this must
+        return False, belt-and-braces alongside the upstream parser fix that
+        should stop a naive value from ever reaching here."""
+        naive = _point(event_time=dt.datetime(2026, 8, 7, 13, 59, 59))  # no tzinfo
+        self.assertFalse(is_fresh(naive, now=_NOW))
+
     def test_crossed_market_is_vetoed(self):
         self.assertFalse(is_fresh(_point(bid=314.10, ask=314.00), now=_NOW))
 

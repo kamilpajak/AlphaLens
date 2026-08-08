@@ -57,6 +57,13 @@ def is_fresh(
     """
     if point.event_time is None:
         return False
+    if point.event_time.tzinfo is None:
+        # Belt-and-braces: a naive event_time should never reach this shared
+        # predicate (the Saxo parser vetoes it upstream), but is_fresh is the
+        # contract every feed uses, so it must not trust that. Subtracting a
+        # naive datetime from an aware `now` raises TypeError in the stdlib -
+        # a doubt about which instant this names must veto here, not crash.
+        return False
     if not (math.isfinite(point.bid) and math.isfinite(point.ask)):
         return False
     if point.bid <= 0.0 or point.ask <= 0.0:

@@ -75,6 +75,26 @@ class TestQuoteCache(unittest.TestCase):
         )
         self.assertEqual(c.get(211).bid, 314.01)  # regression ignored
 
+    def test_naive_last_updated_yields_none_event_time(self):
+        """A ``LastUpdated`` string carrying no offset (e.g. Saxo omitting the
+        'Z'/offset suffix) must not silently become a naive datetime: that
+        value would flow into ``PricePoint.event_time`` and later blow up
+        ``is_fresh``'s ``(now - event_time)`` subtraction against an aware
+        ``now`` with a ``TypeError`` that would crash the daemon tick. A
+        timestamp whose timezone we cannot determine is a doubt, and a doubt
+        is a veto: ``_parse_utc`` must return None instead."""
+        c = QuoteCache()
+        c.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:47:59",  # no trailing Z / offset
+                "Quote": {"Bid": 314.01, "Ask": 314.04, "DelayedByMinutes": 0},
+            },
+            received_at=_T0,
+        )
+        q = c.get(211)
+        self.assertIsNone(q.event_time)
+
     def test_unknown_uic_returns_none(self):
         self.assertIsNone(QuoteCache().get(999))
 

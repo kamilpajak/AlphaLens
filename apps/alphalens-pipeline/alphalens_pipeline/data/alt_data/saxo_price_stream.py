@@ -50,9 +50,17 @@ def _parse_utc(raw: object) -> dt.datetime | None:
     if not isinstance(raw, str) or not raw:
         return None
     try:
-        return dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        # A timestamp string with no offset (e.g. Saxo omitting the "Z") parses
+        # to a NAIVE datetime. Letting that flow into Quote.event_time would
+        # later crash is_fresh's (now - event_time) subtraction against an
+        # aware `now` with a TypeError - a doubt about which instant this
+        # names must be a veto here, not a crash three modules downstream.
+        return None
+    return parsed
 
 
 @dataclass(frozen=True)
