@@ -80,11 +80,21 @@ class TestRunLiveExits(unittest.TestCase):
         # Guards the batch bug: the 2nd amend must use LIVE owned, not a stale
         # captured sl_leg.amount (which would set the SL to 100-30=70, over-hedged).
         b, uic, feed, managed = self._mk(price=18.5)
-        n = run_live_exits(b, feed, managed)
+        records: list[dict] = []
+        with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
+            n = run_live_exits(b, feed, managed)
         self.assertEqual(n, 2)
         self.assertEqual(b.get_positions_by_uic(uic).quantity, 20.0)  # sold 50 + 30
         sl_now = next(o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded")
         self.assertEqual(sl_now.amount, 20.0)  # SL tracks remaining owned, not stale 70
+        # Each tranche carries its OWN market-SELL join key (non-None, distinct) —
+        # guards against a shared/stale sell_order_id leaking across the batch.
+        sell_ids = [
+            r["telemetry"]["sell_order_id"] for r in records if r.get("kind") == "tranche_fired"
+        ]
+        self.assertEqual(len(sell_ids), 2)
+        self.assertTrue(all(sell_ids))
+        self.assertEqual(len(set(sell_ids)), 2)
 
     def test_fire_stamps_decision_telemetry_from_the_pricepoint(self):
         # (test c) A fire journals decision-side telemetry sourced from the
@@ -112,6 +122,8 @@ class TestRunLiveExits(unittest.TestCase):
         self.assertEqual(len(fired), 1)
         self.assertEqual(fired[0]["uic"], uic)
         self.assertEqual(fired[0]["tag"], "tp1")
+        # (test d) the market-SELL order id FakeBroker.place_market_order returns
+        # (add_resting_sell bumps seq to 1 -> "resting-1"; the sell is seq 2).
         self.assertEqual(
             fired[0]["telemetry"],
             {
@@ -123,6 +135,7 @@ class TestRunLiveExits(unittest.TestCase):
                 "qty": 50,
                 "event_time": _DECISION_EVENT_TIME.isoformat(),
                 "source": "saxo-live-l1",
+                "sell_order_id": "mkt-2",
             },
         )
 

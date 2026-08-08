@@ -40,6 +40,18 @@ class TrancheExit:
     target_price: float
 
 
+@dataclass(frozen=True)
+class TrancheExitResult:
+    """Outcome of one ``execute_tranche_exit`` call. ``sell_order_id`` is the
+    market-SELL order id ``Broker.place_market_order`` returned (None when
+    ``sold`` is False). Captured so a LATER offline reconciler can join the
+    broker's actual fill by order id -- see ``mark_tranche_fired``'s "OUT OF
+    SCOPE" note; this type carries the join key, not the fill itself."""
+
+    sold: bool
+    sell_order_id: str | None
+
+
 def plan_tranche_exits(
     *,
     price: float,
@@ -78,11 +90,12 @@ def execute_tranche_exit(
     sl_leg: OrderState,
     stop_price: float,
     request_ref: str,
-) -> bool:
+) -> TrancheExitResult:
     """Realize ONE tranche: free the tranche from the standalone SL, THEN market
     sell it. Re-snapshots live owned first (never sell more than owned → cannot
-    flip short). Returns True iff the sell was sent. Callers MUST hold a per-uic
-    lock so this never races the never-naked reconcile.
+    flip short). Returns a ``TrancheExitResult`` (``sold`` True iff the sell was
+    sent, carrying the SELL order id for later fill-joining). Callers MUST hold
+    a per-uic lock so this never races the never-naked reconcile.
 
     The target SL size is derived from the LIVE owned snapshot (``owned - qty`` =
     remaining), NOT from ``sl_leg.amount`` — the latter is stale across a
@@ -97,7 +110,7 @@ def execute_tranche_exit(
     qty = min(exit.qty, round(owned))
     if qty <= 0:
         logger.info("tranche %s uic %s: position gone (owned=%.2f) — no sell", exit.tag, uic, owned)
-        return False
+        return TrancheExitResult(sold=False, sell_order_id=None)
     new_sl_qty = max(round(owned) - qty, 0.0)
     # 1) free the tranche from the SL FIRST (a sell while the SL commits full
     #    owned is rejected SellOrdersAlreadyExistForOwnedContracts).
@@ -114,9 +127,12 @@ def execute_tranche_exit(
             request_id=f"{request_ref}-{exit.tag}-amend",
         )
     # 2) market-sell the freed tranche.
-    broker.place_market_order(uic, "SELL", qty, request_id=f"{request_ref}-{exit.tag}-sell")
+    placed = broker.place_market_order(
+        uic, "SELL", qty, request_id=f"{request_ref}-{exit.tag}-sell"
+    )
+    sell_order_id = placed.entry_order_id or None
     logger.info("tranche %s uic %s: SL qty -> %.0f, market-sold %d", exit.tag, uic, new_sl_qty, qty)
-    return True
+    return TrancheExitResult(sold=True, sell_order_id=sell_order_id)
 
 
 def fold_fired_tranches(lines: Iterable[Mapping[str, Any]]) -> dict[int, frozenset[str]]:
@@ -133,15 +149,20 @@ def fold_fired_tranches(lines: Iterable[Mapping[str, Any]]) -> dict[int, frozens
     return {u: frozenset(t) for u, t in acc.items()}
 
 
-def _fire_telemetry(point: PricePoint, exit: TrancheExit) -> dict[str, Any]:
+def _fire_telemetry(
+    point: PricePoint, exit: TrancheExit, *, sell_order_id: str | None
+) -> dict[str, Any]:
     """Map the decision-instant quote + the fired tranche to the decision-side
     execution-quality telemetry dict. Pure — no I/O, no broker read.
 
     ``decision_bid`` is the executable side for selling a long; keeping the full
     bid/ask/mid/spread lets a downstream consumer compute implementation
     shortfall against ANY decision convention once the FILL price is captured in
-    a later increment (see ``mark_tranche_fired``). Field names are a stable
-    contract — a downstream reader keys off them verbatim."""
+    a later increment (see ``mark_tranche_fired``). ``sell_order_id`` is the join
+    key a later offline reconciler uses against the broker's own fill audit
+    trail (``cs/v1/audit/orderactivities``) — NOT the fill price itself, which is
+    still a separate increment. Field names are a stable contract — a downstream
+    reader keys off them verbatim."""
     return {
         "decision_bid": point.bid,
         "decision_ask": point.ask,
@@ -151,6 +172,7 @@ def _fire_telemetry(point: PricePoint, exit: TrancheExit) -> dict[str, Any]:
         "qty": exit.qty,
         "event_time": point.event_time.isoformat() if point.event_time is not None else None,
         "source": point.source,
+        "sell_order_id": sell_order_id,
     }
 
 
@@ -229,14 +251,16 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
             already_fired=m.already_fired,
         )
         for ex in exits:
-            if execute_tranche_exit(
+            result = execute_tranche_exit(
                 broker,
                 uic=m.uic,
                 exit=ex,
                 sl_leg=sl,
                 stop_price=m.stop_price,
                 request_ref=f"u{m.uic}",
-            ):
-                mark_tranche_fired(m.uic, ex.tag, telemetry=_fire_telemetry(point, ex))
+            )
+            if result.sold:
+                telemetry = _fire_telemetry(point, ex, sell_order_id=result.sell_order_id)
+                mark_tranche_fired(m.uic, ex.tag, telemetry=telemetry)
                 fired += 1
     return fired

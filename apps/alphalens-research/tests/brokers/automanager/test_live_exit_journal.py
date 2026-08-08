@@ -94,7 +94,7 @@ class TestFireTelemetry(unittest.TestCase):
         point = self._point(et)
         ex = TrancheExit(tag="tp1", qty=50, target_price=16.0)
         self.assertEqual(
-            _fire_telemetry(point, ex),
+            _fire_telemetry(point, ex, sell_order_id="mkt-2"),
             {
                 "decision_bid": 16.5,
                 "decision_ask": 16.7,
@@ -104,6 +104,7 @@ class TestFireTelemetry(unittest.TestCase):
                 "qty": 50,
                 "event_time": et.isoformat(),
                 "source": "saxo-live-l1",
+                "sell_order_id": "mkt-2",
             },
         )
 
@@ -111,7 +112,25 @@ class TestFireTelemetry(unittest.TestCase):
         # (test d, edge) an unpublished provider tick stays honestly None.
         point = self._point(None)
         ex = TrancheExit(tag="tp1", qty=50, target_price=16.0)
-        self.assertIsNone(_fire_telemetry(point, ex)["event_time"])
+        self.assertIsNone(_fire_telemetry(point, ex, sell_order_id="mkt-2")["event_time"])
+
+    def test_sell_order_id_is_verbatim_alongside_the_other_eight_fields(self):
+        # (test c) sell_order_id is the 9th field; the other 8 stay untouched.
+        point = self._point(dt.datetime(2026, 8, 8, 13, 30, tzinfo=dt.UTC))
+        ex = TrancheExit(tag="tp1", qty=50, target_price=16.0)
+        out = _fire_telemetry(point, ex, sell_order_id="mkt-7")
+        self.assertEqual(out["sell_order_id"], "mkt-7")
+        for field in (
+            "decision_bid",
+            "decision_ask",
+            "decision_mid",
+            "spread_abs",
+            "target_price",
+            "qty",
+            "event_time",
+            "source",
+        ):
+            self.assertIn(field, out)
 
 
 if __name__ == "__main__":
