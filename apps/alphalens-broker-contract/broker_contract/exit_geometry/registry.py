@@ -69,11 +69,18 @@ def resolve_exit_policy(name: str) -> ExitPolicy:
     would starve the unconditional protection). Lazy import of ``policy`` avoids
     a module import cycle (policy.py imports ExitGeometryPolicy from this module).
     """
-    from broker_contract.exit_geometry.policy import AtrBracketPolicy, SetupStaticPolicy
+    from broker_contract.exit_geometry.policy import (
+        AtrBracketPolicy,
+        SetupStaticPolicy,
+        TrailingAtrPolicy,
+    )
 
     registry: dict[str, ExitPolicy] = {
         "setup_static": SetupStaticPolicy(),
         "atr_bracket_1p5": AtrBracketPolicy(resolve_policy("atr_bracket_1p5")),
+        "trailing_atr": TrailingAtrPolicy(
+            resolve_policy("atr_bracket_1p5"), activation_r=0.5, k_atr=0.6
+        ),
     }
     try:
         return registry[name]

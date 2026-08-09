@@ -16,6 +16,7 @@ import math
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
+from broker_contract.exit_geometry.levels import chandelier_target
 from broker_contract.exit_geometry.registry import ExitGeometryPolicy
 
 
@@ -26,12 +27,20 @@ class ExitPolicy(Protocol):
     applies_geometry: bool
     requires_amend_stop: bool
     min_stop_distance_frac: float
+    trails: bool
 
     def decide_placement_geometry(
         self, blended: float, atr: float, *, ceiling_price: float | None
     ) -> tuple[float, float] | None: ...
 
-    def decide_reanchor(self, avg_price: float, atr: float) -> float | None: ...
+    def decide_reanchor(
+        self,
+        avg_price: float,
+        atr: float,
+        *,
+        peak: float | None = None,
+        last_price: float | None = None,
+    ) -> float | None: ...
 
 
 @dataclass(frozen=True)
@@ -41,13 +50,21 @@ class SetupStaticPolicy:
     applies_geometry: bool = False
     requires_amend_stop: bool = False
     min_stop_distance_frac: float = 0.0
+    trails: bool = False
 
     def decide_placement_geometry(
         self, blended: float, atr: float, *, ceiling_price: float | None
     ) -> tuple[float, float] | None:
         return None
 
-    def decide_reanchor(self, avg_price: float, atr: float) -> float | None:
+    def decide_reanchor(
+        self,
+        avg_price: float,
+        atr: float,
+        *,
+        peak: float | None = None,
+        last_price: float | None = None,
+    ) -> float | None:
         return None
 
 
@@ -57,6 +74,7 @@ class AtrBracketPolicy:
     applies_geometry: bool = True
     requires_amend_stop: bool = True
     min_stop_distance_frac: float = 0.002  # hair-trigger floor; never binds 1.5x ATR
+    trails: bool = False
 
     @property
     def name(self) -> str:
@@ -71,7 +89,14 @@ class AtrBracketPolicy:
     ) -> tuple[float, float] | None:
         return self.geom.levels(blended, atr, ceiling_price=ceiling_price)
 
-    def decide_reanchor(self, avg_price: float, atr: float) -> float | None:
+    def decide_reanchor(
+        self,
+        avg_price: float,
+        atr: float,
+        *,
+        peak: float | None = None,
+        last_price: float | None = None,
+    ) -> float | None:
         if not math.isfinite(avg_price) or avg_price <= 0:
             return None
         if not math.isfinite(atr) or atr <= 0:
@@ -80,3 +105,53 @@ class AtrBracketPolicy:
         if not math.isfinite(target) or target <= 0:
             return None
         return target
+
+
+@dataclass(frozen=True)
+class TrailingAtrPolicy:
+    """Bot-amend Chandelier trailing stop: ``peak - k_atr*atr``, armed only
+    once the position is ``activation_r`` R-multiples in profit (R = the
+    wrapped geometry's ``stop_atr_mult * atr`` initial risk distance).
+    Placement geometry (initial disaster stop + TP) is delegated to the
+    wrapped ``ExitGeometryPolicy``, identical to ``AtrBracketPolicy`` — the
+    two differ ONLY in ``decide_reanchor``."""
+
+    geom: ExitGeometryPolicy
+    activation_r: float
+    k_atr: float
+    applies_geometry: bool = True
+    requires_amend_stop: bool = True
+    min_stop_distance_frac: float = 0.002  # hair-trigger floor; never binds 1.5x ATR
+    trails: bool = True
+
+    @property
+    def name(self) -> str:
+        return self.geom.name
+
+    @property
+    def version(self) -> int:
+        return self.geom.version
+
+    def decide_placement_geometry(
+        self, blended: float, atr: float, *, ceiling_price: float | None
+    ) -> tuple[float, float] | None:
+        return self.geom.levels(blended, atr, ceiling_price=ceiling_price)
+
+    def decide_reanchor(
+        self,
+        avg_price: float,
+        atr: float,
+        *,
+        peak: float | None = None,
+        last_price: float | None = None,
+    ) -> float | None:
+        if not math.isfinite(avg_price) or avg_price <= 0:
+            return None
+        if not math.isfinite(atr) or atr <= 0:
+            return None
+        if peak is None or not math.isfinite(peak) or peak <= 0:
+            return None
+        risk = self.geom.stop_atr_mult * atr
+        if peak < avg_price + self.activation_r * risk:
+            return None
+        return chandelier_target(peak, atr, k=self.k_atr)
