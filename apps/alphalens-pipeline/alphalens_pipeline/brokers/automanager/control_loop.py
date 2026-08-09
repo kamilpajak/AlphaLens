@@ -643,7 +643,10 @@ def _update_peaks(
     uses, so trailing and TP-fire read prices from the identical source.
 
     For each long uic: ``point = feed.latest(uic)``. A ``None`` point (stream-
-    health veto) or a non-finite/non-positive price leaves ``deps.peak_tracker``
+    health veto), a ``None`` bid (``PricePoint.bid`` is typed ``float`` but
+    nothing at runtime stops a feed from constructing one with ``bid=None`` —
+    the same "must not trust the caller" doubt ``is_fresh`` already guards
+    against), or a non-finite/non-positive price leaves ``deps.peak_tracker``
     untouched and OMITS the uic from both returned maps — the pure
     ``_maybe_trail`` arm then sees no peak/last_price this tick and makes no
     move on a stale feed. Otherwise ``price = point.bid`` (mirrors
@@ -674,9 +677,10 @@ def _update_peaks(
         if point is None:
             continue  # stream-health veto — leave peak_tracker untouched
         price = point.bid
-        if not math.isfinite(price) or price <= 0.0:
+        if price is None or not math.isfinite(price) or price <= 0.0:
             continue  # a doubt about the price becomes a veto, never a crash
-        deps.peak_tracker[uic] = max(deps.peak_tracker.get(uic, price), price)
+        existing_peak = deps.peak_tracker.get(uic)
+        deps.peak_tracker[uic] = price if existing_peak is None else max(existing_peak, price)
         peak_by_uic[uic] = deps.peak_tracker[uic]
         last_price_by_uic[uic] = price
     for stale_uic in set(deps.peak_tracker) - set(uic_to_instrument):

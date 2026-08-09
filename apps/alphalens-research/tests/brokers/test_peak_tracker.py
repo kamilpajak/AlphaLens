@@ -127,6 +127,40 @@ class TestUpdatePeaksNonePoint(unittest.TestCase):
         self.assertEqual(deps.peak_tracker[200], 15.0)  # untouched
 
 
+class TestUpdatePeaksNoneBid(unittest.TestCase):
+    def test_none_bid_is_vetoed_not_raised(self) -> None:
+        """``PricePoint.bid`` is annotated ``float``, but nothing at runtime
+        stops a feed from constructing one with ``bid=None`` (the same "must
+        not trust the caller" doubt ``is_fresh`` already guards against, and
+        the exact pattern ``test_saxo_live_price_feed.py`` exercises for the
+        wired feed's own upstream quote). Before the fix, ``math.isfinite(None)``
+        raised ``TypeError`` here instead of vetoing -- a crash on a feed
+        producing a naked position, rather than the intended "doubt becomes a
+        veto" contract this helper documents for non-finite/non-positive
+        prices."""
+        pos = _mk_pos(uic=500)
+        bad_point = PricePoint(
+            uic=500,
+            bid=None,  # type: ignore[arg-type]
+            ask=25.0,
+            event_time=dt.datetime(2026, 8, 9, tzinfo=dt.UTC),
+            received_at=dt.datetime(2026, 8, 9, tzinfo=dt.UTC),
+            source="test",
+        )
+
+        class _NoneBidFeed:
+            def latest(self, uic: int) -> PricePoint | None:
+                return bad_point if uic == 500 else None
+
+        deps = _deps(live_exits_feed_factory=lambda _uic_to_instrument: _NoneBidFeed())
+
+        peak, last = cl._update_peaks(deps, [pos])  # must not raise
+
+        self.assertNotIn(500, peak)
+        self.assertNotIn(500, last)
+        self.assertEqual(deps.peak_tracker, {})
+
+
 class TestUpdatePeaksNonPositivePrice(unittest.TestCase):
     def test_non_finite_or_non_positive_price_is_also_a_veto(self) -> None:
         pos = _mk_pos(uic=300)
