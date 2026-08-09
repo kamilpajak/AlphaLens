@@ -349,6 +349,167 @@ def auth_command(
     )
 
 
+def _marketdata_auth_status() -> None:
+    """Offline LIVE market-data store inspection — zero network, no token
+    values surface, and NO app credentials. Exit 0 iff the refresh chain is
+    alive.
+
+    Mirrors the SIM rail's ``broker auth --status``: reads only the token-store
+    path (``SAXO_LIVE_TOKEN_STORE_PATH`` or the default), never the app
+    key/secret/redirect — so a monitoring probe on a host that carries only the
+    store path can still report the store state instead of failing on missing
+    LIVE env."""
+    from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import inspect_store
+
+    try:
+        state = inspect_store()
+    except RuntimeError as exc:
+        raise _fail(str(exc)) from exc
+    typer.echo(f"store        {state.store_path}")
+    if not state.present:
+        typer.echo("refresh      ABSENT — no LIVE market-data OAuth session yet")
+        raise _fail(
+            "no token store — run `alphalens broker marketdata-auth` to bootstrap the "
+            "LIVE market-data OAuth session"
+        )
+    if state.access_valid and state.access_expires_at is not None:
+        left = (state.access_expires_at - dt.datetime.now(dt.UTC)).total_seconds() / 60
+        typer.echo(f"access       valid, ~{left:.0f} min remaining")
+    else:
+        typer.echo("access       expired")
+    if state.refresh_present:
+        typer.echo("refresh      ALIVE — single-use rotating token present")
+        return
+    typer.echo("refresh      DEAD")
+    raise _fail("refresh chain is dead — re-run `alphalens broker marketdata-auth`")
+
+
+def _marketdata_auth_refresh(cfg: object) -> None:
+    """One silent LIVE market-data refresh cycle (keep-alive primitive)."""
+    from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveTokenProvider
+
+    try:
+        LiveTokenProvider(cfg).force_refresh()  # type: ignore[arg-type]
+    except RuntimeError as exc:
+        raise _fail(f"refresh failed: {exc}") from exc
+    typer.echo("refreshed — the rotated LIVE market-data pair was persisted to the token store")
+
+
+@broker_app.command(name="marketdata-auth")
+def marketdata_auth_command(
+    status: bool = typer.Option(
+        False,
+        "--status",
+        help="Offline: print the LIVE market-data token-store state (zero network); "
+        "exit 0 iff the refresh chain is alive.",
+    ),
+    refresh: bool = typer.Option(
+        False,
+        "--refresh",
+        help="One silent refresh cycle via the LIVE market-data token provider "
+        "(keep-alive primitive for a systemd timer). No browser.",
+    ),
+    timeout: int = typer.Option(
+        300, "--timeout", help="Seconds to wait for the browser redirect (attended flow)."
+    ),
+    no_browser: bool = typer.Option(
+        False, "--no-browser", help="Print the authorize URL only (headless / SSH)."
+    ),
+) -> None:
+    """Bootstrap or inspect the Saxo LIVE MARKET-DATA OAuth session.
+
+    App ``bracket-keeper``, MARKET-DATA ONLY — this session is never used to
+    place an order. It mirrors ``alphalens broker auth`` but targets the LIVE
+    auth path: a SEPARATE token store (``~/.alphalens/saxo_auth_live/``), a
+    SEPARATE app registration, and the LIVE logon host. The SIM-only order rail
+    under ``brokers/saxo/`` is never touched. Tokens are never printed or
+    logged.
+    """
+    import contextlib
+    import hmac
+    import secrets
+    import webbrowser
+
+    from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import (
+        LiveAuthConfig,
+        build_authorize_url,
+        exchange_code,
+    )
+
+    # --status is offline store inspection: it needs only the token-store path,
+    # NOT the app creds, so resolve it BEFORE from_env (SIM `--status` parity).
+    if status:
+        _marketdata_auth_status()
+        return
+
+    # --refresh and the attended flow both hit the LIVE token endpoint, so they
+    # do require the full app config.
+    try:
+        cfg = LiveAuthConfig.from_env()
+    except RuntimeError as exc:
+        raise _fail(str(exc)) from exc
+
+    if refresh:
+        _marketdata_auth_refresh(cfg)
+        return
+
+    port, callback_path = _parse_redirect_url(cfg.redirect_url)
+    typer.echo(
+        "note: the redirect URL must byte-match the portal registration "
+        "(Code-grant matching is port- AND path-exact)"
+    )
+
+    state = secrets.token_urlsafe(32)
+    authorize_url = build_authorize_url(cfg, state)
+    typer.echo("open this URL to authorize (LIVE market-data credentials):")
+    typer.echo(authorize_url)
+    if not no_browser:
+        with contextlib.suppress(Exception):
+            webbrowser.open(authorize_url)
+
+    typer.echo(f"waiting up to {timeout}s for the redirect on {cfg.redirect_url} ...")
+    try:
+        code, received_state = _wait_for_oauth_callback(port, callback_path, timeout)
+    except TimeoutError as exc:  # BEFORE OSError — TimeoutError is its subclass
+        raise _fail(
+            f"{exc} — check that the registered redirect URL matches "
+            f"{cfg.redirect_url!r} exactly, then retry"
+        ) from exc
+    except OSError as exc:
+        raise _fail(
+            f"could not listen on localhost:{port} ({exc}) — free the port or "
+            "change the registered redirect URL (and the env var) to another one"
+        ) from exc
+
+    if not hmac.compare_digest(state.encode("utf-8"), received_state.encode("utf-8")):
+        raise _fail(
+            "state parameter mismatch on the OAuth redirect (possible CSRF or "
+            "a stale browser tab) — nothing was exchanged; retry "
+            "`alphalens broker marketdata-auth`"
+        )
+
+    try:
+        bundle = exchange_code(cfg, code=code)
+    except RuntimeError as exc:
+        raise _fail(
+            f"token exchange failed: {exc} — check SAXO_LIVE_APP_KEY / "
+            "SAXO_LIVE_APP_SECRET / the registered redirect URL"
+        ) from exc
+
+    # exchange_code persists via the public save_bundle; report from the bundle
+    # WITHOUT echoing any token value.
+    typer.echo(
+        "authorized — LIVE market-data OAuth session established (tokens are never displayed)"
+    )
+    typer.echo(f"store           {cfg.store_path}")
+    typer.echo(f"access expires  ~{int(bundle.get('expires_in', 0)) // 60} min")
+    refresh_expires_in = bundle.get("refresh_token_expires_in")
+    if refresh_expires_in:
+        typer.echo(f"refresh expires ~{int(refresh_expires_in) // 60} min")
+    else:
+        typer.echo("refresh         stored (single-use, rotates on every refresh)")
+
+
 @broker_app.command(name="account")
 def account_command() -> None:
     """Print the broker account snapshot (cash, total value, margin)."""
