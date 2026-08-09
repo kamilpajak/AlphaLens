@@ -503,6 +503,14 @@ class ProtectionView:
     # the level the stop was last CONFIRMED trailed to (folded from the ``trailed``
     # journal marker, latest-by-ts), the live-history floor a new proposal must
     # clear by ``_TRAIL_STEP_EPS``. Default empty = no prior trail on record.
+    # Like ``reanchored_by_uic`` above, the fold is JOURNAL-lifetime, not
+    # position-lifetime (latest-by-ts per uic across all history): if a uic
+    # trails to level X, fully exits, and a brand-new position on the same uic
+    # is later re-picked, the stale ``trailed`` marker still folds in as that
+    # uic's floor. This is benign — the ratchet in ``_maybe_trail`` only ever
+    # gates a NEW proposal against the inherited floor, so the worst case is
+    # the placed stop simply stays at its placement-time planned distance
+    # (never loosened relative to the stale floor, never left naked).
     peak_by_uic: Mapping[int, float] = field(default_factory=dict)
     last_price_by_uic: Mapping[int, float] = field(default_factory=dict)
     trailed_stop_by_uic: Mapping[int, float] = field(default_factory=dict)

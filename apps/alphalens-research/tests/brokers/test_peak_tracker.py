@@ -196,6 +196,40 @@ class TestUpdatePeaksRestartReset(unittest.TestCase):
         self.assertEqual(deps.peak_tracker[400], 7.5)
 
 
+class TestUpdatePeaksPerUicFaultIsolation(unittest.TestCase):
+    def test_one_raising_uic_does_not_abort_the_others_or_leak_a_partial_state(
+        self,
+    ) -> None:
+        """A ``feed.latest(uic)`` that raises mid-loop for uic 2 must not
+        propagate (the caller, ``_fetch_protection_peaks``, has its own
+        broader boundary, but ``_update_peaks`` itself must be per-uic
+        fault-isolated so ONE bad uic degrades only that uic, not the whole
+        tick) and must not leave ``deps.peak_tracker`` mutated for uic 2 --
+        the fix builds into a local ``new_peaks`` copy and only commits after
+        the loop completes."""
+        pos1 = _mk_pos(uic=1, ticker="AAA")
+        pos2 = _mk_pos(uic=2, ticker="BBB")
+        pos3 = _mk_pos(uic=3, ticker="CCC")
+
+        class _RaisingOnUic2Feed:
+            def latest(self, uic: int) -> PricePoint | None:
+                if uic == 2:
+                    raise RuntimeError("feed blew up for uic 2")
+                return _point(uic, {1: 10.0, 3: 30.0}[uic])
+
+        deps = _deps(live_exits_feed_factory=lambda _uic_to_instrument: _RaisingOnUic2Feed())
+
+        peak, last = cl._update_peaks(deps, [pos1, pos2, pos3])  # must not raise
+
+        self.assertEqual(peak[1], 10.0)
+        self.assertEqual(last[1], 10.0)
+        self.assertEqual(peak[3], 30.0)
+        self.assertEqual(last[3], 30.0)
+        self.assertNotIn(2, peak)
+        self.assertNotIn(2, last)
+        self.assertEqual(dict(deps.peak_tracker), {1: 10.0, 3: 30.0})
+
+
 class TestUpdatePeaksPruning(unittest.TestCase):
     def test_a_uic_no_longer_in_long_positions_is_pruned(self) -> None:
         pos1 = _mk_pos(uic=1, ticker="AAA")

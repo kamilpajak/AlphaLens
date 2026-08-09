@@ -666,7 +666,16 @@ def _update_peaks(
 
     Prunes ``peak_tracker`` keys that are no longer in this tick's
     ``long_positions`` at the end, so a closed position can never resurrect a
-    stale peak if the uic is re-picked later."""
+    stale peak if the uic is re-picked later.
+
+    Transactional + per-uic fault-isolated: the loop accumulates into a LOCAL
+    ``new_peaks`` copy of ``deps.peak_tracker`` and only commits it back once
+    the loop has finished, so a ``feed.latest(uic)`` that raises mid-loop
+    cannot leave ``deps.peak_tracker`` half-updated relative to the raised
+    exception. Each uic's ``feed.latest(uic)`` call is wrapped in its own
+    ``try/except Exception: continue`` — one bad uic is skipped exactly like a
+    ``None`` point (a doubt becomes a veto), and does not abort the other
+    uics still to be processed this tick."""
     uic_to_instrument = {
         uic: (pos.instrument.ticker, pos.instrument.exchange_mic)
         for pos in long_positions
@@ -676,19 +685,25 @@ def _update_peaks(
     feed = feed_factory(uic_to_instrument)
     peak_by_uic: dict[int, float] = {}
     last_price_by_uic: dict[int, float] = {}
+    new_peaks = dict(deps.peak_tracker)
     for uic in uic_to_instrument:
-        point = feed.latest(uic)
+        try:
+            point = feed.latest(uic)
+        except Exception:  # broad on purpose: one bad uic must not abort the others
+            continue  # per-uic feed fault — leave that uic's peak untouched
         if point is None:
             continue  # stream-health veto — leave peak_tracker untouched
         price = point.bid
         if price is None or not math.isfinite(price) or price <= 0.0:
             continue  # a doubt about the price becomes a veto, never a crash
-        existing_peak = deps.peak_tracker.get(uic)
-        deps.peak_tracker[uic] = price if existing_peak is None else max(existing_peak, price)
-        peak_by_uic[uic] = deps.peak_tracker[uic]
+        existing_peak = new_peaks.get(uic)
+        new_peaks[uic] = price if existing_peak is None else max(existing_peak, price)
+        peak_by_uic[uic] = new_peaks[uic]
         last_price_by_uic[uic] = price
-    for stale_uic in set(deps.peak_tracker) - set(uic_to_instrument):
-        del deps.peak_tracker[stale_uic]
+    for stale_uic in set(new_peaks) - set(uic_to_instrument):
+        del new_peaks[stale_uic]
+    deps.peak_tracker.clear()
+    deps.peak_tracker.update(new_peaks)
     return peak_by_uic, last_price_by_uic
 
 
@@ -779,6 +794,7 @@ def _fetch_protection_peaks(
     # must not propagate into the protection pass. Trailing goes dark, protection
     # runs unchanged.
     except Exception as exc:
+        logger.exception("trailing: peak fetch failed — trailing dark this tick")
         if deps.alert_throttled(
             f"trailing: peak fetch failed — trailing dark this tick: {exc}",
             "trail-peak-fetch-fail",
