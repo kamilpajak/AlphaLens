@@ -225,6 +225,16 @@ class LoopDeps:
     # ON). Keyed by uic -> (ticker, exchange_mic): the venue is load-bearing,
     # see _default_live_exits_feed_factory's docstring.
     live_exits_feed_factory: Callable[[Mapping[int, tuple[str, str]]], PriceFeed] | None = None
+    # Daemon-lifetime per-uic high-water mark for the trailing_atr policy (Task
+    # 2's pure _maybe_trail reconcile arm reads peak/last_price off the
+    # ProtectionView this feeds — wiring lands in Task 4, NOT here). A MUTABLE
+    # dict on the (frozen) deps — built once in build_default_deps, carried
+    # across ticks — mirrors oco_lag_counts/kill_state above. Restart reset is
+    # automatic: a fresh daemon starts with an empty dict, so the first
+    # observed price seeds peak = price rather than inventing a higher past
+    # peak (see _update_peaks). Frozen forbids REBINDING the field, not
+    # mutating the dict it points at.
+    peak_tracker: dict[int, float] = field(default_factory=dict)
 
 
 @dataclass
@@ -616,6 +626,62 @@ def _build_live_exits_feed(
         ):
             report.alerts += 1
         return _NullPriceFeed()
+
+
+def _update_peaks(
+    deps: LoopDeps, long_positions: Iterable[Position]
+) -> tuple[dict[int, float], dict[int, float]]:
+    """Per-tick high-water peak update for the ``trailing_atr`` policy (Task 2's
+    pure ``_maybe_trail`` reconcile arm reads ``peak``/``last_price`` off the
+    ``ProtectionView`` this is meant to feed). NOT wired into the protection
+    pass here — Task 4 does that; this helper only maintains the daemon-lifetime
+    high-water state and hands back this tick's snapshot of it.
+
+    Builds ``uic_to_instrument`` from the live long positions (mirrors
+    ``_run_live_exits_pass``'s ``uic_to_ticker`` construction) and fetches ONE
+    feed for the tick via the same injected/default factory the live-exits pass
+    uses, so trailing and TP-fire read prices from the identical source.
+
+    For each long uic: ``point = feed.latest(uic)``. A ``None`` point (stream-
+    health veto) or a non-finite/non-positive price leaves ``deps.peak_tracker``
+    untouched and OMITS the uic from both returned maps — the pure
+    ``_maybe_trail`` arm then sees no peak/last_price this tick and makes no
+    move on a stale feed. Otherwise ``price = point.bid`` (mirrors
+    ``run_live_exits``: selling a long executes at the bid, so trailing and
+    TP-fire must agree on "the price"), and ``deps.peak_tracker[uic]`` ratchets
+    to ``max(existing, price)`` — monotone non-decreasing for the daemon's
+    lifetime.
+
+    Restart reset is automatic: a fresh daemon starts with an empty
+    ``peak_tracker``, so the first observed price after restart seeds
+    ``peak = price`` rather than inventing a higher past peak (the ratchet
+    floor persisted in the journal-folded stop can therefore never loosen).
+
+    Prunes ``peak_tracker`` keys that are no longer in this tick's
+    ``long_positions`` at the end, so a closed position can never resurrect a
+    stale peak if the uic is re-picked later."""
+    uic_to_instrument = {
+        uic: (pos.instrument.ticker, pos.instrument.exchange_mic)
+        for pos in long_positions
+        if (uic := _position_uic(pos)) is not None
+    }
+    feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
+    feed = feed_factory(uic_to_instrument)
+    peak_by_uic: dict[int, float] = {}
+    last_price_by_uic: dict[int, float] = {}
+    for uic in uic_to_instrument:
+        point = feed.latest(uic)
+        if point is None:
+            continue  # stream-health veto — leave peak_tracker untouched
+        price = point.bid
+        if not math.isfinite(price) or price <= 0.0:
+            continue  # a doubt about the price becomes a veto, never a crash
+        deps.peak_tracker[uic] = max(deps.peak_tracker.get(uic, price), price)
+        peak_by_uic[uic] = deps.peak_tracker[uic]
+        last_price_by_uic[uic] = price
+    for stale_uic in set(deps.peak_tracker) - set(uic_to_instrument):
+        del deps.peak_tracker[stale_uic]
+    return peak_by_uic, last_price_by_uic
 
 
 def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
