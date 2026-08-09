@@ -292,6 +292,15 @@ class AmendStop:
     # ``None`` for every non-reanchor AmendStop (over-hedge downsize / plain grow)
     # — additive, so every existing construction stays byte-identical.
     reanchor_avg_price: float | None = None
+    # Task 4: the high-water ``peak`` / live ``last_price`` this TRAIL amend was
+    # computed from, carried on the action so the executor can stamp them on the
+    # confirmed ``trailed`` journal marker (the telemetry substrate for the future
+    # /edge trailing lens — the placed ``level`` alone cannot show how far the stop
+    # trailed the market). ``None`` for every non-trail AmendStop — additive, so
+    # every existing construction (over-hedge downsize / plain grow / reanchor)
+    # stays byte-identical.
+    trail_peak: float | None = None
+    trail_last_price: float | None = None
 
 
 Action = PlaceStop | UpgradeToOco | AmendStop | CancelSellLegs | CancelRemaining | AlertOnly | NoOp
@@ -793,8 +802,11 @@ def _maybe_trail(
         anchor; a missing / degenerate live price is a feed veto (``None``), same
         discipline as the peak veto.
       - the policy returns a non-None target — dark before activation.
-      - the RATCHET clears ``_TRAIL_STEP_EPS`` above the last trailed level.
       - the never-below-brief-floor clamp allows the tighten.
+      - the CLAMPED level (the level actually placed) clears ``_TRAIL_STEP_EPS``
+        above the last trailed level — the ratchet gates on the post-clamp level,
+        not the raw proposal, so a pullback can never place a stop below the trail
+        history (Task 4 CARRYOVER-1).
 
     Returns ``None`` (never a bad stop) whenever any guard, the ratchet, or the
     envelope refuses."""
@@ -823,12 +835,6 @@ def _maybe_trail(
     proposed = policy.decide_reanchor(avg_price, atr, peak=peak, last_price=last_price)
     if proposed is None:
         return None  # dark before activation (or a degenerate the policy refuses)
-    # RATCHET (never-DOWN vs the live trail history): a new target must clear a
-    # coarse _TRAIL_STEP_EPS step above the last CONFIRMED trailed level, else the
-    # resting stop stays put (bounds re-PATCH chatter on a sub-step peak wiggle).
-    floor = view.trailed_stop_by_uic.get(uic)
-    if floor is not None and proposed <= floor + _TRAIL_STEP_EPS:
-        return None
     # Anchor the min-distance floor to the LIVE PRICE, not the entry: for a
     # trailing stop the floor caps how close the stop may sit to the current
     # MARKET (never at/above market -> OnWrongSideOfMarket), while
@@ -851,6 +857,19 @@ def _maybe_trail(
             avg_price,
         )
         return None  # never-below-brief-floor or degenerate -> keep the resting stop
+    # RATCHET (never-DOWN vs the live trail history) — gate on the CLAMPED level,
+    # NOT the raw ``proposed`` (Task 4 CARRYOVER-1). Once ``trailed_stop_by_uic``
+    # is non-empty (the marker writer landed in Task 4), gating the pre-clamp
+    # proposal would be a reachable loosen: on a pullback ``proposed`` can clear
+    # the floor while the live-price clamp pulls the PLACED level BELOW the prior
+    # trailed level. Gating the post-clamp ``clamped`` keeps the level actually
+    # placed strictly monotone-up vs the trail history — a new placed level must
+    # clear a coarse _TRAIL_STEP_EPS step above the last CONFIRMED trailed level,
+    # else the resting stop stays put (also bounds re-PATCH chatter on a sub-step
+    # peak wiggle).
+    floor = view.trailed_stop_by_uic.get(uic)
+    if floor is not None and clamped <= floor + _TRAIL_STEP_EPS:
+        return None
     target = clamped
     owned = pos.quantity
     return AmendStop(
@@ -863,6 +882,8 @@ def _maybe_trail(
         _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
         reason="trail",
         reanchor_avg_price=avg_price,
+        trail_peak=peak,
+        trail_last_price=last_price,
     )
 
 

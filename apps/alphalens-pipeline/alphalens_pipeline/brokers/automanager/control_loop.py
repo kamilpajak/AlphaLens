@@ -158,7 +158,11 @@ class LoopDeps:
     # then a pure reconcile_protection diff executed action-by-action. The
     # executor closes over the broker + the alert throttle; run_once wires the
     # per-action BrokerError boundary around each call.
-    build_protection_view: Callable[[Broker, list[Mapping[str, Any]]], ProtectionView]
+    # ``Callable[..., ProtectionView]`` (not a fixed 2-arg signature): the wired
+    # partial binds ``exit_policy`` and the trailing path passes ``peak_by_uic`` /
+    # ``last_price_by_uic`` keyword args through (Task 4). Non-trailing callers /
+    # tests still call it with just ``(broker, records)``.
+    build_protection_view: Callable[..., ProtectionView]
     execute_protection: Callable[[Action, bool, TickReport], None]
     sweep_orphans_fn: Callable[[Broker], list[Any]]
     alert: Callable[[str], None]
@@ -747,6 +751,42 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         report.actions.append(("live-exits", f"fired={fired_count}"))
 
 
+def _fetch_protection_peaks(
+    deps: LoopDeps, report: TickReport
+) -> tuple[dict[int, float], dict[int, float]]:
+    """Task 4: fetch this tick's high-water peaks for the trailing arm, behind a
+    boundary whose ENTIRE job is that NOTHING here can starve the never-naked
+    protection pass that runs immediately after.
+
+    Called ONLY when ``deps.exit_policy.trails``. Reads the live long positions
+    (an EXTRA ``get_long_positions`` beyond the one ``build_protection_view`` does
+    internally — a known minor inefficiency on the trailing path only, acceptable
+    for this cut; fold into a shared per-tick read later) and hands them to
+    ``_update_peaks``, which builds its own price feed via the injected/default
+    factory (CARRYOVER-2: that helper has no boundary of its own).
+
+    Deliberately catches ``Exception``, not just ``BrokerError``: the feed factory
+    reaches real Saxo LIVE auth/REST/streaming machinery whose failures are not
+    all ``BrokerError``, and the whole point of this boundary is that a doubt
+    becomes trailing-dark-this-tick (empty peak maps), never a crash. On failure
+    the caller still runs ``build_protection_view`` + ``reconcile_protection`` with
+    empty maps, so trailing simply goes dark this tick while never-naked holds. The
+    failure is surfaced via the shared throttled-alert sink the pass already uses."""
+    try:
+        long_positions = deps.broker.get_long_positions()
+        return _update_peaks(deps, long_positions)
+    # Broad on purpose (mirrors _build_live_exits_feed): a feed/network/auth error
+    # must not propagate into the protection pass. Trailing goes dark, protection
+    # runs unchanged.
+    except Exception as exc:
+        if deps.alert_throttled(
+            f"trailing: peak fetch failed — trailing dark this tick: {exc}",
+            "trail-peak-fetch-fail",
+        ):
+            report.alerts += 1
+        return {}, {}
+
+
 def _run_protection_pass(
     deps: LoopDeps, records: list[Mapping[str, Any]], kill: bool, report: TickReport
 ) -> None:
@@ -754,9 +794,27 @@ def _run_protection_pass(
     pure desired-vs-actual diff over live positions + live SELL legs, each action
     executed inside its OWN per-action BrokerError boundary so one uic's failure
     never aborts the tick or the other uics. This is the ONLY path that places /
-    resizes protective stops now (advance no longer does)."""
+    resizes protective stops now (advance no longer does).
+
+    On the trailing path only (``deps.exit_policy.trails`` — ``trailing_atr``) this
+    first fetches the per-uic high-water peaks and threads them into the view so the
+    pure ``_maybe_trail`` arm can ratchet the stop UP. The peak fetch is behind its
+    OWN boundary (``_fetch_protection_peaks``): a fetch failure degrades trailing to
+    dark (empty maps) but the view build + reconcile ALWAYS run, so the never-naked
+    backstop can never be starved. Every non-trailing policy takes the exact call
+    ``deps.build_protection_view(deps.broker, records)`` with no peak fetch — zero
+    new behaviour, byte-identical to today."""
     try:
-        protection_view = deps.build_protection_view(deps.broker, records)
+        if deps.exit_policy.trails:
+            peak_by_uic, last_price_by_uic = _fetch_protection_peaks(deps, report)
+            protection_view = deps.build_protection_view(
+                deps.broker,
+                records,
+                peak_by_uic=peak_by_uic,
+                last_price_by_uic=last_price_by_uic,
+            )
+        else:
+            protection_view = deps.build_protection_view(deps.broker, records)
     except BrokerError as exc:
         if deps.alert_throttled(
             f"protection-view build failed (broker error) — protection skipped: {exc}",
@@ -1697,6 +1755,38 @@ def _journal_reanchored(
     )
 
 
+def _journal_trailed(
+    uic: int,
+    level: float,
+    *,
+    peak: float | None = None,
+    last_price: float | None = None,
+    clock: Callable[[], float] = time.time,
+) -> None:
+    """Persist a timestamped ``trailed`` marker (Task 4). Written by the executor
+    ONLY on a CONFIRMED trail AmendStop PATCH success (never on a failed attempt —
+    a failed amend journals ``amend_failed`` like any other amend and simply
+    retries). Mirrors ``_journal_reanchored``: ``_fold_trailed_markers`` folds
+    these into ``ProtectionView.trailed_stop_by_uic``, the never-DOWN ratchet floor
+    a new trail proposal must clear by ``_TRAIL_STEP_EPS``.
+
+    ``level`` is the stop price actually placed (the ratchet floor, read by the
+    fold). ``peak`` / ``last_price`` are the high-water mark and live price the
+    trail was computed from — telemetry substrate for the future /edge trailing
+    lens; the fold ignores them, so a missing one is harmless (omitted here)."""
+    marker: dict[str, Any] = {
+        "kind": "trailed",
+        "uic": int(uic),
+        "level": float(level),
+        "ts": float(clock()),
+    }
+    if peak is not None:
+        marker["peak"] = float(peak)
+    if last_price is not None:
+        marker["last_price"] = float(last_price)
+    _append_standalone_stop_journal(marker)
+
+
 def _fold_reanchored_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
     """Fold the append-only ``reanchored`` journal markers into the LATEST
     (by ``ts``) ``avg_price`` per uic (PR-6b). A DICT, not a TTL frozenset —
@@ -2521,6 +2611,8 @@ def build_protection_view(
     _records: list[Mapping[str, Any]],
     *,
     exit_policy: ExitPolicy | None = None,
+    peak_by_uic: Mapping[int, float] | None = None,
+    last_price_by_uic: Mapping[int, float] | None = None,
     clock: Callable[[], float] = time.time,
 ) -> ProtectionView:
     """Assemble the ONE per-tick protection snapshot (saxo-oco memo §6): live
@@ -2583,10 +2675,14 @@ def build_protection_view(
         ),
         reanchored_by_uic=_fold_reanchored_markers(journal_lines),
         # Task 2 trailing ratchet floor: uic -> the last CONFIRMED trailed level.
-        # ``peak_by_uic`` / ``last_price_by_uic`` default empty here (a LATER task
-        # injects real feed values through a new param) so the trailing arm stays
-        # dark until the peak feed is wired.
         trailed_stop_by_uic=_fold_trailed_markers(journal_lines),
+        # Task 4: this tick's high-water peaks / live prices, fetched ONLY on the
+        # trailing path (``_run_protection_pass`` passes them when the cached policy
+        # trails, else omits them). Default empty -> the trailing arm stays dark (a
+        # missing peak is a feed veto), so every non-trailing caller / pure test /
+        # second broker keeps today's byte-identical dark path.
+        peak_by_uic=peak_by_uic if peak_by_uic is not None else {},
+        last_price_by_uic=last_price_by_uic if last_price_by_uic is not None else {},
         # The startup wiring (build_default_deps) binds the real cached policy via
         # functools.partial; the None default only guards direct test calls, where
         # the inert setup_static policy keeps the view byte-identical to today.
@@ -3076,14 +3172,29 @@ def _execute_amend_stop(
         uic=action.uic,
         kind="amend_ok",
     )
-    # PR-6b: latch the reanchor ONLY on this confirmed success — a failed
-    # amend never reaches here (it returned above on the BrokerError branch,
-    # having journaled amend_failed like any other amend arm). The marker write
-    # is best-effort (like amend_ok): if it is dropped, the NEXT tick simply
-    # re-emits the SAME reanchor (absolute target price + qty, idempotent-in-
-    # effect) and re-journals — at worst one redundant, harmless PATCH, never a
-    # wrong or naked stop. No in-memory secondary latch is warranted for that.
-    if action.reanchor_avg_price is not None:
+    # Latch the post-fill move ONLY on this confirmed success — a failed amend
+    # never reaches here (it returned above on the BrokerError branch, having
+    # journaled amend_failed like any other amend arm). Both markers are
+    # best-effort (like amend_ok): a dropped marker only costs one redundant,
+    # harmless re-PATCH next tick (absolute target price + qty, idempotent-in-
+    # effect), never a wrong or naked stop. Both a trail and a reanchor AmendStop
+    # carry ``reanchor_avg_price``, so the write is keyed on ``reason`` FIRST — a
+    # trail must journal ``trailed`` (its ratchet floor + telemetry), NOT
+    # ``reanchored`` (the per-blend reanchor latch).
+    if action.reason == "trail":
+        trail_level = action.stop_price  # the clamped level actually placed
+        trail_peak = action.trail_peak
+        trail_last_price = action.trail_last_price
+        _journal_outcome_best_effort(
+            lambda: _journal_trailed(
+                action.uic, trail_level, peak=trail_peak, last_price=trail_last_price
+            ),
+            throttle,
+            report,
+            uic=action.uic,
+            kind="trailed",
+        )
+    elif action.reanchor_avg_price is not None:
         reanchor_avg_price = action.reanchor_avg_price
         _journal_outcome_best_effort(
             lambda: _journal_reanchored(action.uic, reanchor_avg_price),
