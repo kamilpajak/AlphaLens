@@ -15,6 +15,8 @@ from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import (
     LiveTokenProvider,
     build_authorize_url,
     exchange_code,
+    inspect_store,
+    save_bundle,
 )
 
 
@@ -211,6 +213,116 @@ class TestExclusiveLock(unittest.TestCase):
             cfg = _cfg(Path(d))
             lock_path = cfg.store_path.with_name(cfg.store_path.stem + ".lock")
             self.assertEqual(lock_path, cfg.store_path.parent / "token_store.lock")
+
+
+class TestRefreshExpiryPersistence(unittest.TestCase):
+    """The LIVE store must record the refresh token's own expiry so ``--status``
+    can tell a live refresh chain from a dead one (a bare refresh-token STRING
+    is present in both cases)."""
+
+    def test_save_bundle_persists_refresh_expiry_when_claim_present(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(Path(d))
+            save_bundle(
+                cfg,
+                {
+                    "access_token": "at",
+                    "refresh_token": "rt",
+                    "expires_in": 1200,
+                    "refresh_token_expires_in": 3600,
+                },
+            )
+            on_disk = json.loads(cfg.store_path.read_text())
+            self.assertIn("refresh_token_expires_at", on_disk)
+            parsed = dt.datetime.fromisoformat(on_disk["refresh_token_expires_at"])
+            self.assertIsNotNone(parsed.tzinfo, "refresh expiry must be tz-aware")
+            self.assertGreater(parsed, dt.datetime.now(dt.UTC))
+
+    def test_save_bundle_omits_refresh_expiry_when_claim_absent(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(Path(d))
+            save_bundle(cfg, {"access_token": "at", "refresh_token": "rt", "expires_in": 1200})
+            on_disk = json.loads(cfg.store_path.read_text())
+            self.assertNotIn("refresh_token_expires_at", on_disk)
+            # A store without the field must still load and inspect cleanly.
+            status = inspect_store(cfg.store_path)
+            self.assertTrue(status.present)
+            self.assertIsNone(status.refresh_expires_at)
+            self.assertTrue(status.alive, "unknown refresh expiry falls back to alive")
+
+    def test_inspect_reads_future_refresh_expiry_alive(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(Path(d))
+            future = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=3600)
+            access = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=900)
+            cfg.store_path.write_text(
+                json.dumps(
+                    {
+                        "access_token": "at",
+                        "refresh_token": "rt",
+                        "expires_at": access.isoformat(),
+                        "refresh_token_expires_at": future.isoformat(),
+                    }
+                )
+            )
+            status = inspect_store(cfg.store_path)
+            self.assertEqual(status.refresh_expires_at, future)
+            self.assertTrue(status.alive)
+
+    def test_inspect_reads_past_refresh_expiry_not_alive(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(Path(d))
+            past = dt.datetime.now(dt.UTC) - dt.timedelta(seconds=60)
+            access = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=900)
+            cfg.store_path.write_text(
+                json.dumps(
+                    {
+                        "access_token": "at",
+                        "refresh_token": "rt",
+                        "expires_at": access.isoformat(),
+                        "refresh_token_expires_at": past.isoformat(),
+                    }
+                )
+            )
+            status = inspect_store(cfg.store_path)
+            self.assertEqual(status.refresh_expires_at, past)
+            self.assertFalse(status.alive, "a past refresh expiry means the chain is dead")
+
+
+class TestNaiveDatetimeIsCorrupt(unittest.TestCase):
+    """A tz-naive ``expires_at`` currently slips past ``_load_store`` and later
+    crashes with a naive-vs-aware ``TypeError``; it must be rejected up front as
+    a corrupt store."""
+
+    def test_naive_access_expiry_is_corrupt(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(Path(d))
+            naive = dt.datetime.now() + dt.timedelta(seconds=900)  # tz-naive on purpose
+            cfg.store_path.write_text(
+                json.dumps(
+                    {"access_token": "at", "refresh_token": "rt", "expires_at": naive.isoformat()}
+                )
+            )
+            with self.assertRaises(RuntimeError):
+                inspect_store(cfg.store_path)
+
+    def test_naive_refresh_expiry_is_corrupt(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = _cfg(Path(d))
+            access = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=900)
+            naive = dt.datetime.now() + dt.timedelta(seconds=3600)  # tz-naive on purpose
+            cfg.store_path.write_text(
+                json.dumps(
+                    {
+                        "access_token": "at",
+                        "refresh_token": "rt",
+                        "expires_at": access.isoformat(),
+                        "refresh_token_expires_at": naive.isoformat(),
+                    }
+                )
+            )
+            with self.assertRaises(RuntimeError):
+                inspect_store(cfg.store_path)
 
 
 class TestCorruptStore(unittest.TestCase):

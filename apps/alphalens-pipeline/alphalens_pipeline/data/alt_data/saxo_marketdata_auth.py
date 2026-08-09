@@ -46,6 +46,18 @@ _LOCK_TIMEOUT_S = 60.0
 _LOCK_POLL_INTERVAL_S = 0.2
 
 
+def resolve_live_store_path() -> Path:
+    """Resolve the LIVE market-data token-store path from env (or the default),
+    needing NO app credentials.
+
+    This is the offline-``--status`` seam: store inspection reads only this
+    path, mirroring the SIM rail's ``resolve_token_store_path``. A monitoring
+    probe that carries only ``SAXO_LIVE_TOKEN_STORE_PATH`` (not the app
+    key/secret/redirect) can still report the store state."""
+    store = os.environ.get(_STORE_ENV)
+    return Path(store) if store else _DEFAULT_STORE
+
+
 @dataclass(frozen=True)
 class LiveAuthConfig:
     app_key: str
@@ -60,12 +72,11 @@ class LiveAuthConfig:
         ]
         if missing:
             raise RuntimeError(f"missing LIVE market-data env: {', '.join(missing)}")
-        store = os.environ.get(_STORE_ENV)
         return cls(
             app_key=os.environ[_APP_KEY_ENV],
             app_secret=os.environ[_APP_SECRET_ENV],
             redirect_url=os.environ[_REDIRECT_ENV],
-            store_path=Path(store) if store else _DEFAULT_STORE,
+            store_path=resolve_live_store_path(),
         )
 
 
@@ -100,9 +111,11 @@ def _post_token(cfg: LiveAuthConfig, data: dict[str, str]) -> dict[str, Any]:
             detail = payload.get("error_description") or payload.get("error") or "(no error field)"
         except ValueError:
             detail = "(non-JSON body, redacted)"
+        # Cap a pathologically long error_description so it cannot bloat logs.
+        detail = detail if len(detail) <= 200 else detail[:200] + "…"
         raise RuntimeError(f"Saxo LIVE token endpoint failed: HTTP {resp.status_code} - {detail}")
     bundle = resp.json()
-    _save(cfg, bundle)
+    save_bundle(cfg, bundle)
     return bundle
 
 
@@ -124,18 +137,31 @@ def refresh(cfg: LiveAuthConfig, *, refresh_token: str) -> dict[str, Any]:
     )
 
 
-def _save(cfg: LiveAuthConfig, bundle: dict[str, Any]) -> None:
-    """Persist atomically: tmp-in-same-dir (0600 from creation) + fsync +
+def save_bundle(cfg: LiveAuthConfig, bundle: dict[str, Any]) -> None:
+    """Persist a token bundle to the LIVE market-data store — PUBLIC entry.
+
+    Persists atomically: tmp-in-same-dir (0600 from creation) + fsync +
     ``os.replace``. Readers never see a torn file, and there is no window
     where the store is world/group readable — unlike a plain ``write_text``
-    followed by a later ``chmod``."""
-    expires_at = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=int(bundle.get("expires_in", 1200)))
+    followed by a later ``chmod``. ``exchange_code`` / ``refresh`` route
+    through here, and the ``marketdata-auth`` CLI relies on that persist —
+    so no caller reaches a leading-underscore private name."""
+    now = dt.datetime.now(dt.UTC)
+    expires_at = now + dt.timedelta(seconds=int(bundle.get("expires_in", 1200)))
     cfg.store_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "access_token": bundle["access_token"],
         "refresh_token": bundle["refresh_token"],
         "expires_at": expires_at.isoformat(),
     }
+    # ADDITIVELY record the refresh token's own expiry (mirrors the SIM rail's
+    # TokenStore.save_bundle) so `--status` can distinguish a live refresh chain
+    # from a dead one. Omit the key when the endpoint sent no such claim rather
+    # than fabricate an expiry.
+    refresh_expires_in = bundle.get("refresh_token_expires_in")
+    if refresh_expires_in is not None:
+        refresh_expires_at = now + dt.timedelta(seconds=int(refresh_expires_in))
+        payload["refresh_token_expires_at"] = refresh_expires_at.isoformat()
     with tempfile.NamedTemporaryFile(
         mode="w",
         dir=cfg.store_path.parent,
@@ -162,7 +188,7 @@ def _exclusive_lock(store_path: Path) -> Iterator[None]:
     Non-blocking ``LOCK_EX|LOCK_NB`` poll loop with an acquire deadline — a
     wedged sibling raises an actionable error instead of hanging. The lock
     lives on a sibling ``.lock`` file (not the store itself) because
-    ``os.replace`` in :func:`_save` swaps the store's inode on every write.
+    ``os.replace`` in :func:`save_bundle` swaps the store's inode on every write.
     """
     store_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = store_path.with_name(store_path.stem + ".lock")
@@ -188,29 +214,114 @@ def _exclusive_lock(store_path: Path) -> Iterator[None]:
         os.close(fd)
 
 
+@dataclass(frozen=True)
+class LiveTokenStatus:
+    """Offline snapshot of the LIVE market-data store — NEVER carries token
+    values, so an inspector cannot leak a bearer token by printing it.
+
+    ``refresh_expires_at`` is the refresh token's own expiry when the store
+    records it (stores written after the refresh-expiry fix). When it is known
+    and in the PAST the chain is dead — a bare refresh-token STRING alone is NOT
+    proof the chain is alive. A store missing the field (written before the fix)
+    falls back to the older behaviour: present + a refresh-token key -> alive,
+    with an unknown expiry. ``access_valid`` reports the access token's own
+    window."""
+
+    store_path: Path
+    present: bool
+    access_expires_at: dt.datetime | None
+    access_valid: bool
+    refresh_present: bool
+    refresh_expires_at: dt.datetime | None = None
+
+    @property
+    def alive(self) -> bool:
+        if not (self.present and self.refresh_present):
+            return False
+        if self.refresh_expires_at is not None:
+            return self.refresh_expires_at > dt.datetime.now(dt.UTC)
+        return True
+
+
+def _load_store(store_path: Path) -> dict[str, Any]:
+    """Read + shape-validate the LIVE token store; NO app credentials, NO
+    network. Raises ``RuntimeError`` for an absent or corrupt store, never
+    echoing the file content (it may hold a live bearer token)."""
+    if not store_path.is_file():
+        raise RuntimeError(
+            f"no LIVE token store at {store_path} - run the market-data auth bootstrap"
+        )
+    try:
+        state = json.loads(store_path.read_text())
+        access_expiry = dt.datetime.fromisoformat(state["expires_at"])
+        if access_expiry.tzinfo is None:
+            # A naive expires_at parses here but later crashes access_token() /
+            # inspect_store() with a naive-vs-aware TypeError; reject it up front
+            # as a corrupt store with a clear message.
+            raise ValueError("naive expires_at")
+        raw_refresh_expiry = state.get("refresh_token_expires_at")
+        if raw_refresh_expiry is not None and (
+            dt.datetime.fromisoformat(str(raw_refresh_expiry)).tzinfo is None
+        ):
+            raise ValueError("naive refresh_token_expires_at")
+        str(state["access_token"])
+        str(state["refresh_token"])
+    except (ValueError, KeyError, TypeError) as exc:
+        # Never echo the file content — it may hold a live bearer token.
+        raise RuntimeError(
+            f"LIVE token store at {store_path} is corrupt - delete it and "
+            "re-run the market-data auth bootstrap"
+        ) from exc
+    return state
+
+
+def inspect_store(store_path: Path | None = None) -> LiveTokenStatus:
+    """Inspect the LIVE market-data store OFFLINE — zero network, no side
+    effects, no token values, and NO app credentials.
+
+    Mirrors the SIM rail's store-only ``--status``: needs only the token-store
+    path (resolved from env or the default when not given), never the app
+    key/secret/redirect. An absent store yields ``present=False``; a corrupt
+    one raises ``RuntimeError`` (never echoing the file content)."""
+    path = store_path if store_path is not None else resolve_live_store_path()
+    if not path.is_file():
+        return LiveTokenStatus(
+            store_path=path,
+            present=False,
+            access_expires_at=None,
+            access_valid=False,
+            refresh_present=False,
+        )
+    state = _load_store(path)
+    expires_at = dt.datetime.fromisoformat(state["expires_at"])
+    raw_refresh_expiry = state.get("refresh_token_expires_at")
+    refresh_expires_at = (
+        dt.datetime.fromisoformat(str(raw_refresh_expiry)) if raw_refresh_expiry else None
+    )
+    return LiveTokenStatus(
+        store_path=path,
+        present=True,
+        access_expires_at=expires_at,
+        access_valid=expires_at > dt.datetime.now(dt.UTC),
+        refresh_present=bool(state.get("refresh_token")),
+        refresh_expires_at=refresh_expires_at,
+    )
+
+
 class LiveTokenProvider:
     """Reads the store, refreshing when the access token is near expiry."""
 
     def __init__(self, cfg: LiveAuthConfig):
         self._cfg = cfg
 
+    def status(self) -> LiveTokenStatus:
+        """Inspect the store OFFLINE — zero network, no side effects, and no
+        token values returned. Thin wrapper over :func:`inspect_store` bound to
+        this provider's store path."""
+        return inspect_store(self._cfg.store_path)
+
     def _load(self) -> dict[str, Any]:
-        if not self._cfg.store_path.is_file():
-            raise RuntimeError(
-                f"no LIVE token store at {self._cfg.store_path} - run the market-data auth bootstrap"
-            )
-        try:
-            state = json.loads(self._cfg.store_path.read_text())
-            dt.datetime.fromisoformat(state["expires_at"])
-            str(state["access_token"])
-            str(state["refresh_token"])
-        except (ValueError, KeyError, TypeError) as exc:
-            # Never echo the file content — it may hold a live bearer token.
-            raise RuntimeError(
-                f"LIVE token store at {self._cfg.store_path} is corrupt - delete it and "
-                "re-run the market-data auth bootstrap"
-            ) from exc
-        return state
+        return _load_store(self._cfg.store_path)
 
     def access_token(self) -> str:
         with _exclusive_lock(self._cfg.store_path):
