@@ -73,6 +73,19 @@ def atr_bracket_levels(
     return bracket_stop, tp
 
 
+def chandelier_target(peak: float, atr: float, *, k: float) -> float | None:
+    """Trailing-stop level for a long: ``peak - k*atr`` (ratchets up via the
+    caller's peak). Returns ``None`` on any degenerate input or a non-positive
+    target — never a bad stop."""
+    for value in (peak, atr):
+        if not math.isfinite(value) or value <= 0:
+            return None
+    target = peak - k * atr
+    if not math.isfinite(target) or target <= 0:
+        return None
+    return target
+
+
 def clamp_reanchor_target(
     prior_stop: float,
     proposed_target: float,
