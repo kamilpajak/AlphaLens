@@ -1650,6 +1650,31 @@ def _fold_reanchored_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, fl
     return latest_avg_price
 
 
+def _fold_trailed_markers(lines: Iterable[Mapping[str, Any]]) -> dict[int, float]:
+    """Fold the append-only ``trailed`` journal markers into the LATEST (by ``ts``)
+    trailed ``level`` per uic (Task 2). Mirrors ``_fold_reanchored_markers`` — a
+    DICT, not a TTL frozenset — but reads ``line["level"]`` (the price the stop was
+    confirmed trailed to) instead of the reanchor avg_price. Feeds
+    ``ProtectionView.trailed_stop_by_uic``, the never-DOWN ratchet floor
+    ``_maybe_trail`` requires a new proposal to clear by ``_TRAIL_STEP_EPS``.
+    Malformed (missing / unparsable uic, level, or ts) lines are skipped."""
+    latest_ts: dict[int, float] = {}
+    latest_level: dict[int, float] = {}
+    for line in lines:
+        if line.get("kind") != "trailed":
+            continue
+        try:
+            uic = int(line["uic"])
+            level = float(line["level"])
+            ts = float(line["ts"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if uic not in latest_ts or ts >= latest_ts[uic]:
+            latest_ts[uic] = ts
+            latest_level[uic] = level
+    return latest_level
+
+
 def _fold_ttl_markers(
     lines: Iterable[Mapping[str, Any]], kind: str, now: float, ttl_s: float
 ) -> frozenset[int]:
@@ -2487,6 +2512,11 @@ def build_protection_view(
             journal_lines, "amend_failed", now, _AMEND_FAILED_TTL_S
         ),
         reanchored_by_uic=_fold_reanchored_markers(journal_lines),
+        # Task 2 trailing ratchet floor: uic -> the last CONFIRMED trailed level.
+        # ``peak_by_uic`` / ``last_price_by_uic`` default empty here (a LATER task
+        # injects real feed values through a new param) so the trailing arm stays
+        # dark until the peak feed is wired.
+        trailed_stop_by_uic=_fold_trailed_markers(journal_lines),
         # The startup wiring (build_default_deps) binds the real cached policy via
         # functools.partial; the None default only guards direct test calls, where
         # the inert setup_static policy keeps the view byte-identical to today.

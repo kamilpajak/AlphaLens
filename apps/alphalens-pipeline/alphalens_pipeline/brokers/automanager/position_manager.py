@@ -431,6 +431,14 @@ def _exit_policy() -> str:
 # genuine drift worth re-firing over. Same order of magnitude as _QTY_EPS.
 _REANCHOR_AVG_PRICE_EPS = 1e-6
 
+# Task 2 trailing-stop ratchet step [in_sample]: the coarse price increment a new
+# trailing target must clear ABOVE the last live trailed level before ``_maybe_trail``
+# re-fires. Sized well above tick noise so a resting stop is not re-PATCHed every
+# tick for a sub-cent peak wiggle (each amend is a request-id + a broker round-trip);
+# it bounds trail chatter, NOT correctness (the never-below-brief-floor clamp is the
+# capital guard). Deliberately much coarser than _REANCHOR_AVG_PRICE_EPS.
+_TRAIL_STEP_EPS = 0.02
+
 
 @dataclass(frozen=True)
 class ProtectionView:
@@ -476,6 +484,19 @@ class ProtectionView:
     # the inert ``setup_static`` so any ProtectionView built without it behaves like
     # today's dark path (pure tests + a second broker stay source-compatible).
     exit_policy: ExitPolicy = field(default_factory=SetupStaticPolicy)
+    # Task 2 trailing-stop inputs, read ONLY by ``_maybe_trail`` (the trailing arm).
+    # ``peak_by_uic`` is the high-water mark since entry (the Chandelier anchor);
+    # ``last_price_by_uic`` the latest observed price (a future policy may use it).
+    # Both are populated by ``control_loop.build_protection_view`` from a real
+    # price feed in a LATER task; the empty defaults keep the arm dark (a missing
+    # peak is a feed veto -> None), so pure tests + a second broker stay
+    # source-compatible. ``trailed_stop_by_uic`` is the never-DOWN ratchet: uic ->
+    # the level the stop was last CONFIRMED trailed to (folded from the ``trailed``
+    # journal marker, latest-by-ts), the live-history floor a new proposal must
+    # clear by ``_TRAIL_STEP_EPS``. Default empty = no prior trail on record.
+    peak_by_uic: Mapping[int, float] = field(default_factory=dict)
+    last_price_by_uic: Mapping[int, float] = field(default_factory=dict)
+    trailed_stop_by_uic: Mapping[int, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -729,6 +750,107 @@ def _maybe_reanchor(
     )
 
 
+def _maybe_trail(
+    uic: int,
+    pos: Position,
+    plan: PlannedExit,
+    legs: tuple[OrderState, ...],
+    view: ProtectionView,
+) -> AmendStop | None:
+    """Task 2: the bot-amend trailing-stop arm (sibling of ``_maybe_reanchor``). A
+    covered position's resting standalone stop is PATCHed UP to the Chandelier
+    target ``peak - k_atr * atr`` as the injected high-water mark rises, once the
+    ``trailing_atr`` policy is armed (``activation_r`` R-multiples in profit). The
+    stop moves UP ONLY — two independent guards enforce it: (1) the RATCHET vs the
+    last CONFIRMED live trailed level (``view.trailed_stop_by_uic``) — a new
+    proposal must clear a coarse ``_TRAIL_STEP_EPS`` step above it, so a peak
+    wiggle never re-PATCHes and the level never drops vs the live trail history;
+    (2) the never-below-brief-floor ``clamp_reanchor_target`` vs ``plan.stop_price``
+    (the brief disaster floor), identical to ``_maybe_reanchor``.
+
+    PURE oracle: reads the peak from the ``ProtectionView`` snapshot only — never
+    fetches a feed, never holds state. Fires ONLY when ALL hold (same guard order
+    as ``_maybe_reanchor`` for the shared preconditions):
+      - ``view.exit_policy.trails`` — a trailing policy is cached (resolved ONCE
+        at startup). ``setup_static`` / ``atr_bracket_1p5`` have ``trails=False``
+        and are routed to ``_maybe_reanchor`` by ``_reconcile_long`` instead, so
+        this arm never touches them.
+      - ``plan.reanchor is not None`` — the governing planned line carried the
+        geometry shadow stamp (its ``atr``); a pre-stamp plan never trails.
+      - ``pos.avg_price`` finite and > 0 — never anchor on the SIM NoAccess
+        ``<= 0`` sentinel or a NaN/inf blend.
+      - ``plan.reanchor.atr`` finite and > 0 — never a degenerate ATR.
+      - ``_sole_standalone_stop(legs)`` is not ``None`` — a clean resting
+        standalone stop only; an OCO pair / multi-stop shape is left to its arms.
+      - ``uic`` not in ``view.amend_recently_failed`` — the shared amend backoff.
+      - a finite, ``> 0`` ``view.peak_by_uic[uic]`` exists — a missing / degenerate
+        peak is a feed veto (``None``), never a trail on a bad high-water mark.
+      - the policy returns a non-None target — dark before activation.
+      - the RATCHET clears ``_TRAIL_STEP_EPS`` above the last trailed level.
+      - the never-below-brief-floor clamp allows the tighten.
+
+    Returns ``None`` (never a bad stop) whenever any guard, the ratchet, or the
+    envelope refuses."""
+    policy = view.exit_policy
+    if not policy.trails:
+        return None
+    if plan.reanchor is None:
+        return None
+    avg_price = pos.avg_price
+    if not math.isfinite(avg_price) or avg_price <= 0:
+        return None
+    atr = plan.reanchor.atr
+    if not math.isfinite(atr) or atr <= 0:
+        return None
+    sole = _sole_standalone_stop(legs)
+    if sole is None:
+        return None
+    if uic in view.amend_recently_failed:
+        return None
+    peak = view.peak_by_uic.get(uic)
+    if peak is None or not math.isfinite(peak) or peak <= 0:
+        return None  # feed veto / no peak yet
+    proposed = policy.decide_reanchor(
+        avg_price, atr, peak=peak, last_price=view.last_price_by_uic.get(uic)
+    )
+    if proposed is None:
+        return None  # dark before activation (or a degenerate the policy refuses)
+    # RATCHET (never-DOWN vs the live trail history): a new target must clear a
+    # coarse _TRAIL_STEP_EPS step above the last CONFIRMED trailed level, else the
+    # resting stop stays put (bounds re-PATCH chatter on a sub-step peak wiggle).
+    floor = view.trailed_stop_by_uic.get(uic)
+    if floor is not None and proposed <= floor + _TRAIL_STEP_EPS:
+        return None
+    clamped = clamp_reanchor_target(
+        plan.stop_price,
+        proposed,
+        anchor_price=avg_price,
+        min_distance_frac=policy.min_stop_distance_frac,
+    )
+    if clamped is None:
+        logger.info(
+            "trail refused (below brief floor): policy=%s proposed=%.4f prior_stop=%.4f avg_price=%.4f",
+            policy.name,
+            proposed,
+            plan.stop_price,
+            avg_price,
+        )
+        return None  # never-below-brief-floor or degenerate -> keep the resting stop
+    target = clamped
+    owned = pos.quantity
+    return AmendStop(
+        uic,
+        _SIDE,
+        sole.order_id,
+        sole.order_type or "StopIfTraded",
+        owned,
+        target,
+        _exit_amend_ref(plan.entry_crid, plan.next_amend_seq()),
+        reason="trail",
+        reanchor_avg_price=avg_price,
+    )
+
+
 def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Action]:
     """The downside-cover arm for ONE netted long (memo §6). Sizes every stop to
     ``pos.quantity`` (netted realized owned) — never a planned tier qty."""
@@ -775,11 +897,17 @@ def _reconcile_long(uic: int, pos: Position, view: ProtectionView) -> list[Actio
     # on a fresh naked fill. A position that already has a resting rung-1 stop (or a
     # covering OCO stop leg without a full TP) therefore stays stop-only for its whole
     # life; the system converges to full OCO coverage purely by turnover.
-    # (PR-6b) FILL-COMPLETE REANCHOR: a covered standalone stop was sized to the
-    # planned blend at placement; PATCH it back onto the realized avg_price once
-    # the fill is complete (dark by default — see _maybe_reanchor). Never fires
-    # on the OCO-healthy branch above (standalone stop only, by construction).
-    action = _maybe_reanchor(uic, pos, plan, legs, view)
+    # (PR-6b / Task 2) POST-FILL STOP MOVE on a covered standalone stop. The two
+    # arms are MUTUALLY EXCLUSIVE by the cached policy's ``trails`` flag so they
+    # never both fire: a trailing policy (``trailing_atr``) trails the stop UP to
+    # ``peak - k*atr`` (``_maybe_trail``); every other policy reanchors the stop
+    # onto the realized fill blend (``_maybe_reanchor``). Both are dark by default
+    # (the inert ``setup_static`` returns None) and never fire on the OCO-healthy
+    # branch above (standalone stop only, by construction).
+    if view.exit_policy.trails:
+        action = _maybe_trail(uic, pos, plan, legs, view)
+    else:
+        action = _maybe_reanchor(uic, pos, plan, legs, view)
     if action is not None:
         return [action]
     return [NoOp()]
