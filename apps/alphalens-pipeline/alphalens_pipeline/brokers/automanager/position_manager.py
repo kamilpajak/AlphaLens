@@ -766,7 +766,11 @@ def _maybe_trail(
     proposal must clear a coarse ``_TRAIL_STEP_EPS`` step above it, so a peak
     wiggle never re-PATCHes and the level never drops vs the live trail history;
     (2) the never-below-brief-floor ``clamp_reanchor_target`` vs ``plan.stop_price``
-    (the brief disaster floor), identical to ``_maybe_reanchor``.
+    (the brief disaster floor), anchored on the LIVE PRICE
+    (``view.last_price_by_uic``) so the min-distance floor caps the stop just below
+    the current MARKET and the stop CAN ratchet above entry to lock profit — unlike
+    ``_maybe_reanchor``, which anchors on ``avg_price`` for its one-shot fill
+    reanchor (correct there, wrong here — an avg_price anchor forbids locking profit).
 
     PURE oracle: reads the peak from the ``ProtectionView`` snapshot only — never
     fetches a feed, never holds state. Fires ONLY when ALL hold (same guard order
@@ -785,6 +789,9 @@ def _maybe_trail(
       - ``uic`` not in ``view.amend_recently_failed`` — the shared amend backoff.
       - a finite, ``> 0`` ``view.peak_by_uic[uic]`` exists — a missing / degenerate
         peak is a feed veto (``None``), never a trail on a bad high-water mark.
+      - a finite, ``> 0`` ``view.last_price_by_uic[uic]`` exists — the clamp
+        anchor; a missing / degenerate live price is a feed veto (``None``), same
+        discipline as the peak veto.
       - the policy returns a non-None target — dark before activation.
       - the RATCHET clears ``_TRAIL_STEP_EPS`` above the last trailed level.
       - the never-below-brief-floor clamp allows the tighten.
@@ -810,9 +817,10 @@ def _maybe_trail(
     peak = view.peak_by_uic.get(uic)
     if peak is None or not math.isfinite(peak) or peak <= 0:
         return None  # feed veto / no peak yet
-    proposed = policy.decide_reanchor(
-        avg_price, atr, peak=peak, last_price=view.last_price_by_uic.get(uic)
-    )
+    last_price = view.last_price_by_uic.get(uic)
+    if last_price is None or not math.isfinite(last_price) or last_price <= 0:
+        return None  # feed veto / no live price yet (same discipline as the peak veto)
+    proposed = policy.decide_reanchor(avg_price, atr, peak=peak, last_price=last_price)
     if proposed is None:
         return None  # dark before activation (or a degenerate the policy refuses)
     # RATCHET (never-DOWN vs the live trail history): a new target must clear a
@@ -821,10 +829,17 @@ def _maybe_trail(
     floor = view.trailed_stop_by_uic.get(uic)
     if floor is not None and proposed <= floor + _TRAIL_STEP_EPS:
         return None
+    # Anchor the min-distance floor to the LIVE PRICE, not the entry: for a
+    # trailing stop the floor caps how close the stop may sit to the current
+    # MARKET (never at/above market -> OnWrongSideOfMarket), while
+    # ``prior_stop=plan.stop_price`` still enforces never-below-brief-floor.
+    # Anchoring on ``avg_price`` (as the one-shot ``_maybe_reanchor`` correctly
+    # does) would be wrong here: it caps the stop at ~0.998*avg_price, so an armed
+    # trailing stop could never ratchet above breakeven to lock in profit.
     clamped = clamp_reanchor_target(
         plan.stop_price,
         proposed,
-        anchor_price=avg_price,
+        anchor_price=last_price,
         min_distance_frac=policy.min_stop_distance_frac,
     )
     if clamped is None:

@@ -128,8 +128,16 @@ class TestMaybeTrailArmed(unittest.TestCase):
         pos = _pos()  # avg_price 100.0, qty 7.0
         plan = _plan(stop_price=90.0)  # brief floor well below the 96.0 target
         legs = (_stop_leg(),)
-        # peak 104.0 >= activation 100 + 0.5*1.5*4 = 103.0; target 104 - 2*4 = 96.0
-        view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 104.0})
+        # peak 104.0 >= activation 100 + 0.5*1.5*4 = 103.0; target 104 - 2*4 = 96.0.
+        # last_price 104 -> the live-price clamp floor (103.79) is above the 96.0
+        # target, so the raw Chandelier level is emitted unclamped.
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            peak_by_uic={_UIC: 104.0},
+            last_price_by_uic={_UIC: 104.0},
+        )
         action = _maybe_trail(_UIC, pos, plan, legs, view)
         self.assertIsInstance(action, AmendStop)
         assert isinstance(action, AmendStop)
@@ -140,11 +148,62 @@ class TestMaybeTrailArmed(unittest.TestCase):
         self.assertEqual(action.reanchor_avg_price, 100.0)
         self.assertIn("-amend-", action.request_id)
 
+    def test_armed_ratchets_stop_above_entry_to_lock_profit(self) -> None:
+        # THE FIX: with the min-distance floor anchored on the LIVE PRICE (not
+        # avg_price), an armed trail CAN ratchet the stop ABOVE entry to lock in
+        # profit. peak 112 -> target 112 - 2*4 = 104.0 > avg_price 100.0; live
+        # price 112 -> clamp floor 111.78 does not bind, so 104.0 is emitted.
+        # Under the old avg_price anchor the clamp capped at ~99.8 (< entry).
+        pos = _pos(avg_price=100.0)  # qty 7.0
+        plan = _plan(stop_price=90.0)
+        legs = (_stop_leg(),)
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            peak_by_uic={_UIC: 112.0},
+            last_price_by_uic={_UIC: 112.0},
+        )
+        action = _maybe_trail(_UIC, pos, plan, legs, view)
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertGreater(action.stop_price, pos.avg_price)  # profit locked
+        self.assertAlmostEqual(action.stop_price, 104.0)
+
+    def test_clamp_caps_target_just_below_live_price(self) -> None:
+        # When the raw Chandelier target sits ABOVE the current market (price
+        # pulled back from the peak), the live-price clamp pulls it down to just
+        # below the market (never at/above -> OnWrongSideOfMarket). peak 120 ->
+        # raw target 120 - 2*4 = 112.0, but last_price 108 -> floor 108*0.998 =
+        # 107.784, so the emitted stop is 107.784 (< market 108, still > entry).
+        pos = _pos(avg_price=100.0)
+        plan = _plan(stop_price=90.0)
+        legs = (_stop_leg(),)
+        last_price = 108.0
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            peak_by_uic={_UIC: 120.0},
+            last_price_by_uic={_UIC: last_price},
+        )
+        action = _maybe_trail(_UIC, pos, plan, legs, view)
+        self.assertIsInstance(action, AmendStop)
+        assert isinstance(action, AmendStop)
+        self.assertLess(action.stop_price, last_price)  # never at/above market
+        self.assertAlmostEqual(action.stop_price, last_price * (1.0 - 0.002))
+
     def test_reconcile_long_routes_trailing_policy_to_maybe_trail(self) -> None:
         pos = _pos()
         plan = _plan(stop_price=90.0)
         legs = (_stop_leg(),)
-        view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 104.0})
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            peak_by_uic={_UIC: 104.0},
+            last_price_by_uic={_UIC: 104.0},
+        )
         actions = _reconcile_long(_UIC, pos, view)
         self.assertEqual(len(actions), 1)
         self.assertIsInstance(actions[0], AmendStop)
@@ -160,7 +219,13 @@ class TestMaybeTrailDark(unittest.TestCase):
         plan = _plan(stop_price=90.0)
         legs = (_stop_leg(),)
         # peak 102.0 < activation 103.0 -> policy returns None (not yet armed)
-        view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 102.0})
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            peak_by_uic={_UIC: 102.0},
+            last_price_by_uic={_UIC: 102.0},
+        )
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
 
     def test_no_peak_is_veto(self) -> None:
@@ -177,6 +242,27 @@ class TestMaybeTrailDark(unittest.TestCase):
         view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 0.0})
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
 
+    def test_no_last_price_is_veto(self) -> None:
+        # peak present but NO live price -> feed veto (the clamp anchor is missing)
+        pos = _pos()
+        plan = _plan(stop_price=90.0)
+        legs = (_stop_leg(),)
+        view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 104.0}, last_price_by_uic={})
+        self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
+
+    def test_non_finite_last_price_is_veto(self) -> None:
+        pos = _pos()
+        plan = _plan(stop_price=90.0)
+        legs = (_stop_leg(),)
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            peak_by_uic={_UIC: 104.0},
+            last_price_by_uic={_UIC: 0.0},
+        )
+        self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
+
     def test_ratchet_drops_proposal_at_or_below_floor_plus_eps(self) -> None:
         pos = _pos()
         plan = _plan(stop_price=90.0)
@@ -187,6 +273,7 @@ class TestMaybeTrailDark(unittest.TestCase):
             plan=plan,
             legs=legs,
             peak_by_uic={_UIC: 104.0},
+            last_price_by_uic={_UIC: 104.0},
             trailed_stop_by_uic={_UIC: 96.0 - pm._TRAIL_STEP_EPS / 2.0},
         )
         self.assertIsNone(_maybe_trail(_UIC, pos, plan, legs, view))
@@ -201,6 +288,7 @@ class TestMaybeTrailDark(unittest.TestCase):
             plan=plan,
             legs=legs,
             peak_by_uic={_UIC: 104.0},
+            last_price_by_uic={_UIC: 104.0},
             trailed_stop_by_uic={_UIC: 94.0},
         )
         action = _maybe_trail(_UIC, pos, plan, legs, view)
@@ -210,7 +298,15 @@ class TestMaybeTrailDark(unittest.TestCase):
         pos = _pos()
         plan = _plan(stop_price=98.0)  # brief floor ABOVE the 96.0 proposal
         legs = (_stop_leg(),)
-        view = _view(pos=pos, plan=plan, legs=legs, peak_by_uic={_UIC: 104.0})
+        # live price 104 -> clamp target is the raw 96.0, which sits below the
+        # 98.0 brief floor -> never-below-brief-floor refusal (returns None + logs)
+        view = _view(
+            pos=pos,
+            plan=plan,
+            legs=legs,
+            peak_by_uic={_UIC: 104.0},
+            last_price_by_uic={_UIC: 104.0},
+        )
         with self.assertLogs(pm.__name__, level="INFO") as cm:
             action = _maybe_trail(_UIC, pos, plan, legs, view)
         self.assertIsNone(action)
