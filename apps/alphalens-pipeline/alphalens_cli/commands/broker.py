@@ -372,12 +372,27 @@ def _marketdata_auth_status() -> None:
             "no token store — run `alphalens broker marketdata-auth` to bootstrap the "
             "LIVE market-data OAuth session"
         )
-    if state.access_valid and state.access_expires_at is not None:
-        left = (state.access_expires_at - dt.datetime.now(dt.UTC)).total_seconds() / 60
-        typer.echo(f"access       valid, ~{left:.0f} min remaining")
+    now = dt.datetime.now(dt.UTC)
+    if state.access_expires_at is not None:
+        access_left = (state.access_expires_at - now).total_seconds() / 60
+        label = "valid" if state.access_valid else "expired"
+        # Echo the remaining minutes even when expired (SIM `broker auth`
+        # parity) — a negative value reads as `~-N min`.
+        typer.echo(f"access       {label}, ~{access_left:.0f} min remaining")
     else:
         typer.echo("access       expired")
+    if state.refresh_expires_at is not None:
+        # The store records the refresh token's own expiry: report TRUE liveness
+        # instead of trusting that a bare refresh-token string is still valid.
+        refresh_left = (state.refresh_expires_at - now).total_seconds() / 60
+        if refresh_left > 0:
+            typer.echo(f"refresh      ALIVE, ~{refresh_left:.0f} min remaining")
+            return
+        typer.echo("refresh      DEAD")
+        raise _fail("refresh chain is dead — re-run `alphalens broker marketdata-auth`")
     if state.refresh_present:
+        # Legacy store without a recorded refresh expiry: unknown window, fall
+        # back to reporting the present single-use rotating token as alive.
         typer.echo("refresh      ALIVE — single-use rotating token present")
         return
     typer.echo("refresh      DEAD")

@@ -62,18 +62,24 @@ class TestMarketDataAuthCommand(unittest.TestCase):
 
         return self.runner.invoke(broker_app, ["marketdata-auth", *args])
 
-    def _seed_store(self, *, access_ttl_s: int = 900, refresh_token: str = "rt-seed") -> None:
+    def _seed_store(
+        self,
+        *,
+        access_ttl_s: int = 900,
+        refresh_token: str = "rt-seed",
+        refresh_ttl_s: int | None = None,
+    ) -> None:
         expiry = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=access_ttl_s)
+        payload = {
+            "access_token": "acc-seed-token",
+            "refresh_token": refresh_token,
+            "expires_at": expiry.isoformat(),
+        }
+        if refresh_ttl_s is not None:
+            refresh_exp = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=refresh_ttl_s)
+            payload["refresh_token_expires_at"] = refresh_exp.isoformat()
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
-        self.store_path.write_text(
-            json.dumps(
-                {
-                    "access_token": "acc-seed-token",
-                    "refresh_token": refresh_token,
-                    "expires_at": expiry.isoformat(),
-                }
-            )
-        )
+        self.store_path.write_text(json.dumps(payload))
 
     # -- attended flow ----------------------------------------------------
 
@@ -198,6 +204,46 @@ class TestMarketDataAuthCommand(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.output)
         self.assertIn("ALIVE", result.output)
         self.assertIn(str(self.store_path), result.output)
+
+    def test_status_dead_refresh_expiry_exits_one(self):
+        """A store whose refresh token EXPIRED on Saxo's side must report DEAD and
+        exit non-zero, even though a refresh-token STRING is still present."""
+        self._seed_store(refresh_ttl_s=-60)
+        with (
+            mock.patch.dict("os.environ", self.env, clear=True),
+            mock.patch(_POST_TARGET, side_effect=AssertionError("--status must be offline")),
+        ):
+            result = self._invoke("--status")
+        self.assertEqual(result.exit_code, 1, result.output)
+        self.assertIn("DEAD", result.output)
+        self.assertNotIn("rt-seed", result.output)
+
+    def test_status_future_refresh_expiry_reports_alive_with_minutes(self):
+        self._seed_store(refresh_ttl_s=1800)
+        with (
+            mock.patch.dict("os.environ", self.env, clear=True),
+            mock.patch(_POST_TARGET, side_effect=AssertionError("--status must be offline")),
+        ):
+            result = self._invoke("--status")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("ALIVE", result.output)
+        self.assertIn("min remaining", result.output)
+        self.assertNotIn("rt-seed", result.output)
+
+    def test_status_backward_compat_store_without_refresh_expiry_is_alive(self):
+        """A store written before refresh-expiry tracking (no
+        ``refresh_token_expires_at``) must still load and report the chain alive
+        (unknown expiry falls back to today's present-token behaviour)."""
+        self._seed_store()  # no refresh_ttl_s -> field omitted
+        with (
+            mock.patch.dict("os.environ", self.env, clear=True),
+            mock.patch(_POST_TARGET, side_effect=AssertionError("--status must be offline")),
+        ):
+            result = self._invoke("--status")
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("ALIVE", result.output)
+        self.assertNotIn("acc-seed-token", result.output)
+        self.assertNotIn("rt-seed", result.output)
 
     def test_status_absent_store_exits_one(self):
         with mock.patch.dict("os.environ", self.env, clear=True):

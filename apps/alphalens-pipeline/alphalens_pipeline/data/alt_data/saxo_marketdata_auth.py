@@ -111,6 +111,8 @@ def _post_token(cfg: LiveAuthConfig, data: dict[str, str]) -> dict[str, Any]:
             detail = payload.get("error_description") or payload.get("error") or "(no error field)"
         except ValueError:
             detail = "(non-JSON body, redacted)"
+        # Cap a pathologically long error_description so it cannot bloat logs.
+        detail = detail if len(detail) <= 200 else detail[:200] + "…"
         raise RuntimeError(f"Saxo LIVE token endpoint failed: HTTP {resp.status_code} - {detail}")
     bundle = resp.json()
     save_bundle(cfg, bundle)
@@ -144,13 +146,22 @@ def save_bundle(cfg: LiveAuthConfig, bundle: dict[str, Any]) -> None:
     followed by a later ``chmod``. ``exchange_code`` / ``refresh`` route
     through here, and the ``marketdata-auth`` CLI relies on that persist —
     so no caller reaches a leading-underscore private name."""
-    expires_at = dt.datetime.now(dt.UTC) + dt.timedelta(seconds=int(bundle.get("expires_in", 1200)))
+    now = dt.datetime.now(dt.UTC)
+    expires_at = now + dt.timedelta(seconds=int(bundle.get("expires_in", 1200)))
     cfg.store_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "access_token": bundle["access_token"],
         "refresh_token": bundle["refresh_token"],
         "expires_at": expires_at.isoformat(),
     }
+    # ADDITIVELY record the refresh token's own expiry (mirrors the SIM rail's
+    # TokenStore.save_bundle) so `--status` can distinguish a live refresh chain
+    # from a dead one. Omit the key when the endpoint sent no such claim rather
+    # than fabricate an expiry.
+    refresh_expires_in = bundle.get("refresh_token_expires_in")
+    if refresh_expires_in is not None:
+        refresh_expires_at = now + dt.timedelta(seconds=int(refresh_expires_in))
+        payload["refresh_token_expires_at"] = refresh_expires_at.isoformat()
     with tempfile.NamedTemporaryFile(
         mode="w",
         dir=cfg.store_path.parent,
@@ -206,20 +217,30 @@ def _exclusive_lock(store_path: Path) -> Iterator[None]:
 @dataclass(frozen=True)
 class LiveTokenStatus:
     """Offline snapshot of the LIVE market-data store — NEVER carries token
-    values, so an inspector cannot leak a bearer token by printing it. The
-    LIVE store persists no refresh-token expiry, so ``alive`` reflects only
-    whether a well-formed store with a refresh token is present (a refresh can
-    be attempted); ``access_valid`` reports the access token's own window."""
+    values, so an inspector cannot leak a bearer token by printing it.
+
+    ``refresh_expires_at`` is the refresh token's own expiry when the store
+    records it (stores written after the refresh-expiry fix). When it is known
+    and in the PAST the chain is dead — a bare refresh-token STRING alone is NOT
+    proof the chain is alive. A store missing the field (written before the fix)
+    falls back to the older behaviour: present + a refresh-token key -> alive,
+    with an unknown expiry. ``access_valid`` reports the access token's own
+    window."""
 
     store_path: Path
     present: bool
     access_expires_at: dt.datetime | None
     access_valid: bool
     refresh_present: bool
+    refresh_expires_at: dt.datetime | None = None
 
     @property
     def alive(self) -> bool:
-        return self.present and self.refresh_present
+        if not (self.present and self.refresh_present):
+            return False
+        if self.refresh_expires_at is not None:
+            return self.refresh_expires_at > dt.datetime.now(dt.UTC)
+        return True
 
 
 def _load_store(store_path: Path) -> dict[str, Any]:
@@ -232,7 +253,17 @@ def _load_store(store_path: Path) -> dict[str, Any]:
         )
     try:
         state = json.loads(store_path.read_text())
-        dt.datetime.fromisoformat(state["expires_at"])
+        access_expiry = dt.datetime.fromisoformat(state["expires_at"])
+        if access_expiry.tzinfo is None:
+            # A naive expires_at parses here but later crashes access_token() /
+            # inspect_store() with a naive-vs-aware TypeError; reject it up front
+            # as a corrupt store with a clear message.
+            raise ValueError("naive expires_at")
+        raw_refresh_expiry = state.get("refresh_token_expires_at")
+        if raw_refresh_expiry is not None and (
+            dt.datetime.fromisoformat(str(raw_refresh_expiry)).tzinfo is None
+        ):
+            raise ValueError("naive refresh_token_expires_at")
         str(state["access_token"])
         str(state["refresh_token"])
     except (ValueError, KeyError, TypeError) as exc:
@@ -263,12 +294,17 @@ def inspect_store(store_path: Path | None = None) -> LiveTokenStatus:
         )
     state = _load_store(path)
     expires_at = dt.datetime.fromisoformat(state["expires_at"])
+    raw_refresh_expiry = state.get("refresh_token_expires_at")
+    refresh_expires_at = (
+        dt.datetime.fromisoformat(str(raw_refresh_expiry)) if raw_refresh_expiry else None
+    )
     return LiveTokenStatus(
         store_path=path,
         present=True,
         access_expires_at=expires_at,
         access_valid=expires_at > dt.datetime.now(dt.UTC),
         refresh_present=bool(state.get("refresh_token")),
+        refresh_expires_at=refresh_expires_at,
     )
 
 
