@@ -18,7 +18,8 @@ Pure module — no vendor imports, no I/O. Two exports:
   quantity — economically equivalent to the replay's single shared stop).
 
 - :func:`execution_config_version` — the ADR 0013 R3 poolability key stamped
-  on every submission record (``~/.alphalens/broker_orders/submissions.jsonl``)
+  on every submission record
+  (``~/.alphalens/broker_orders/<env>/submissions.jsonl``)
   and echoed by the CLI. A bump is a cohort boundary: forward-only, existing
   records are never restamped, analyses never pool across tokens. Live fills
   are a NEW measurement source (T8) — never pooled with broker-free replays.

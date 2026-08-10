@@ -17,7 +17,7 @@ Harness mirrors ``tests/brokers/test_trail_wiring.py`` (Task 4): a fake broker
 exposing the protection reads + place/amend rails, a scripted ``PriceFeed``
 factory injected via ``LoopDeps.live_exits_feed_factory``, and a real temp-file
 standalone-stop journal read/written through the real
-``STANDALONE_STOP_JOURNAL_PATH`` module attribute (patched per-test). The
+``_standalone_stop_journal_path`` module function (patched per-test). The
 ``TestBuildDefaultDepsFlagPath`` class additionally mirrors
 ``tests/brokers/automanager/test_control_loop.py::TestBuildDefaultDepsExitPolicyCapabilityGate``
 for the ``build_default_deps`` seam (mocking ``get_default_broker`` +
@@ -199,7 +199,7 @@ def _seed_planned(journal: Path) -> None:
     """A ``planned`` line WITH the geometry shadow stamp so ``plan.reanchor`` is
     non-None (the trail arm requires it) — avg_price 100, atr 4 (matches _TRAIL's
     pinned constants above), brief disaster floor 90."""
-    with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+    with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
         cl._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid="crid-0",
@@ -277,7 +277,7 @@ class TestRisingPathStepsUpTheStopThroughRunOnce(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, exit_policy=_TRAIL, feed_factory=feed, sink=sink)
                 reports = [cl.run_once(deps) for _ in range(3)]
                 trailed = _markers(journal, "trailed")
@@ -320,7 +320,7 @@ class TestFallingPathEmitsNoFurtherAmends(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, exit_policy=_TRAIL, feed_factory=feed, sink=sink)
                 cl.run_once(deps)  # arm: amend to 122.0
                 amends_after_arm = len(broker.amended)
@@ -348,7 +348,7 @@ class TestRestartDoesNotLoosenTheStop(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 # Session 1 (pre-restart): one tick at 130.0 -> target 122.0, armed
                 # + journaled.
                 feed1 = _ScriptedFeedFactory([{_UIC: 130.0}])
@@ -396,7 +396,7 @@ class TestDefaultPolicyIsByteIdenticalThroughRunOnce(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             _seed_planned(journal)
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 deps = _deps(broker, exit_policy=_ATR_BRACKET, feed_factory=feed, sink=sink)
                 for _ in range(3):
                     cl.run_once(deps)
@@ -422,6 +422,8 @@ class TestBuildDefaultDepsFlagPath(unittest.TestCase):
     def test_capable_broker_resolves_a_trailing_policy_onto_deps(self) -> None:
         capable = _Broker(positions=[], sells=[], by_uic={})
         with (
+            TemporaryDirectory() as home_dir,
+            mock.patch("pathlib.Path.home", return_value=Path(home_dir)),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=capable,
@@ -439,6 +441,8 @@ class TestBuildDefaultDepsFlagPath(unittest.TestCase):
     def test_incapable_broker_fails_fast(self) -> None:
         incapable = _StopOnlyBroker()
         with (
+            TemporaryDirectory() as home_dir,
+            mock.patch("pathlib.Path.home", return_value=Path(home_dir)),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=incapable,

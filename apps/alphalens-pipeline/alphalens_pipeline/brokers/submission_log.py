@@ -1,8 +1,9 @@
 """Append-only submission journal for broker order placement (P2).
 
 One JSON line per ``broker submit --execute`` run under
-``~/.alphalens/broker_orders/submissions.jsonl`` — the FIRST execution
-output, and the P3 reconciler's input. Every record is stamped with
+``~/.alphalens/broker_orders/<env>/submissions.jsonl`` (per-environment path,
+``state_paths.submissions_path``, ADR 0016) — the FIRST execution output, and
+the P3 reconciler's input. Every record is stamped with
 :func:`~alphalens_pipeline.brokers.execution.execution_config_version`
 (ADR 0013 R3): a policy bump is a cohort boundary, existing lines are never
 restamped, and analyses never pool across tokens (T8 — live fills are a new
@@ -56,9 +57,8 @@ from typing import Any
 
 from broker_contract.fx import FxConversion
 
+from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.execution import execution_config_version
-
-DEFAULT_SUBMISSIONS_PATH = Path.home() / ".alphalens" / "broker_orders" / "submissions.jsonl"
 
 
 def build_submission_record(
@@ -112,7 +112,7 @@ def build_submission_record(
 
 def append_submission_record(record: dict[str, Any], *, path: Path | None = None) -> Path:
     """Append ``record`` as one JSON line (append-only journal; never rewrites)."""
-    target = path or DEFAULT_SUBMISSIONS_PATH
+    target = path or state_paths.submissions_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, sort_keys=True, default=str)
     with target.open("a", encoding="utf-8") as fh:
@@ -135,7 +135,7 @@ def iter_submission_records(
     lines so the caller can report the count. A missing journal yields
     nothing (no submissions is a valid, honest state).
     """
-    target = path or DEFAULT_SUBMISSIONS_PATH
+    target = path or state_paths.submissions_path()
     if not target.exists():
         return
     with target.open("r", encoding="utf-8") as fh:
@@ -155,7 +155,6 @@ def iter_submission_records(
 
 
 __all__ = [
-    "DEFAULT_SUBMISSIONS_PATH",
     "append_submission_record",
     "build_submission_record",
     "iter_submission_records",

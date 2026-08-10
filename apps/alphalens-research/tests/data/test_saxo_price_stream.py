@@ -525,6 +525,26 @@ class TestGetSharedPriceStream(unittest.TestCase):
         self.assertIs(second, alive)
         self.assertTrue(alive.started)
 
+    def test_default_metrics_job_is_forwarded_to_construction(self) -> None:
+        """ADR 0016 D5: with no override the singleton keeps the standalone/
+        test default ``"live-price-stream"`` — unchanged behavior for a caller
+        that never resolves a broker instance."""
+        instance = _FakeSharedInstance(running=True)
+        p1, p2, p3, p4 = self._patched_construction(instance)
+        with p1, p2, p3, p4 as mock_cls:
+            sps.get_shared_price_stream()
+        self.assertEqual(mock_cls.call_args.kwargs["metrics_job"], "live-price-stream")
+
+    def test_explicit_metrics_job_is_forwarded_to_construction(self) -> None:
+        """The composition root (control_loop._default_live_exits_feed_factory)
+        injects ``state_paths.price_stream_metrics_job()`` here every tick — it
+        must reach the SaxoPriceStream constructor unchanged."""
+        instance = _FakeSharedInstance(running=True)
+        p1, p2, p3, p4 = self._patched_construction(instance)
+        with p1, p2, p3, p4 as mock_cls:
+            sps.get_shared_price_stream(metrics_job="live-price-stream-sim")
+        self.assertEqual(mock_cls.call_args.kwargs["metrics_job"], "live-price-stream-sim")
+
 
 class _ScriptedConn:
     """Fake WebSocket connection driven by a script of items: a bytes frame is
@@ -780,6 +800,49 @@ class TestStreamGauges(unittest.TestCase):
         final = emitted[-1]
         self.assertEqual(self._value(final, "reader_up"), 0)
         self.assertEqual(self._value(final, "consecutive_failures"), 6)
+
+
+class TestStreamGaugeJobLabel(unittest.TestCase):
+    """ADR 0016 D5: the gauge job label is a constructor parameter, injected
+    by the composition root (``state_paths.price_stream_metrics_job()``) at
+    ``get_shared_price_stream`` call time — never a fixed module constant, so
+    a future LIVE instance's price stream never shares a Prometheus job (and
+    thus textfile) with the SIM instance's."""
+
+    def _run_and_capture(self, harness: _SupervisedHarness) -> list[tuple[str, dict]]:
+        captured: list[tuple[str, dict]] = []
+        with mock.patch(
+            "alphalens_pipeline.observability.textfile.emit_domain_metrics",
+            side_effect=lambda job, metrics: captured.append((job, dict(metrics))),
+        ):
+            harness.run()
+        return captured
+
+    def test_default_job_is_the_standalone_default(self) -> None:
+        h = _SupervisedHarness()
+        stream = h.stream
+        conn1 = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn1)
+        stream.ensure_subscribed({5})
+        captured = self._run_and_capture(h)
+        self.assertTrue(captured)
+        for job, metrics in captured:
+            self.assertEqual(job, "live-price-stream")
+            for name in metrics:
+                self.assertIn('job="live-price-stream"', name)
+
+    def test_injected_job_reaches_the_emitted_domain_and_labels(self) -> None:
+        h = _SupervisedHarness(stream_kwargs={"metrics_job": "live-price-stream-sim"})
+        stream = h.stream
+        conn1 = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn1)
+        stream.ensure_subscribed({5})
+        captured = self._run_and_capture(h)
+        self.assertTrue(captured)
+        for job, metrics in captured:
+            self.assertEqual(job, "live-price-stream-sim")
+            for name in metrics:
+                self.assertIn('job="live-price-stream-sim"', name)
 
 
 if __name__ == "__main__":

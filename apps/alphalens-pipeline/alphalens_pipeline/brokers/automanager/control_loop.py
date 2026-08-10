@@ -40,6 +40,7 @@ from broker_contract.exit_geometry import (
     resolve_exit_policy,
 )
 
+from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     ManagedExit,
     run_live_exits,
@@ -88,25 +89,36 @@ OcoPlacer = Callable[[int, str, float, float, float, str, "str | None"], PlacedO
 # (uic, order_id, side, order_type, new_qty, stop_price, request_id) -> PlacedOrder.
 AmendStopPlacer = Callable[[int, str, str, str, float, float, str], PlacedOrder]
 
-# The runtime data root ($HOME/.alphalens) and its broker-orders subtree have ONE
-# home here so the literal is not duplicated across the kill-file + journal +
-# briefs paths below.
-_ALPHALENS_HOME = Path.home() / ".alphalens"
-_BROKER_ORDERS_DIR = _ALPHALENS_HOME / "broker_orders"
+# The runtime data root, the broker-orders subtree, and the KILL/journal paths
+# below it are NOT defined here any more — every broker-state path funnels
+# through the ONE seam (state_paths.py, ADR 0016 / design memo D2) and is
+# resolved at call/deps-build time, never as an import-time Path constant.
 
-KILL_FILE_PATH = _BROKER_ORDERS_DIR / "KILL"
+# Prometheus heartbeat + KILL-active gauge NAMES (Task 13 wires
+# _default_emit_heartbeat as the run_daemon default; the metric name has one
+# home here). The gauge NAMES are fixed; only the ``{job=...}`` label varies
+# per broker instance (ADR 0016 D5), so these are builder functions taking
+# the resolved job label (``state_paths.metrics_job()``) rather than
+# import-time string constants — a second SIM/LIVE instance on the same host
+# must never share a job label.
+_HEARTBEAT_METRIC_NAME = "alphalens_broker_manager_last_tick_timestamp_seconds"
+_KILL_ACTIVE_METRIC_NAME = "alphalens_broker_manager_kill_active"
 
-# Prometheus heartbeat gauge (Task 13 wires _default_emit_heartbeat as the
-# run_daemon default; the metric name has one home here).
-HEARTBEAT_METRIC = 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"}'
 
-# Prometheus KILL-active gauge (level, 0/1): 1 while the KILL file is present, 0 when
-# absent, so Prometheus can alert on an active emergency stop (KILL was journald-only
-# before, invisible to monitoring — the heartbeat kept ticking under KILL). It is
-# CO-EMITTED with HEARTBEAT_METRIC in the SAME emit_domain_metrics("broker-manager",
-# {...}) call: that write atomically OVERWRITES the whole broker-manager textfile, so
-# a separate call to this domain would clobber the heartbeat gauge and vice-versa.
-KILL_ACTIVE_METRIC = 'alphalens_broker_manager_kill_active{job="broker-manager"}'
+def heartbeat_metric(job: str) -> str:
+    """The per-tick heartbeat gauge, labeled with the resolved instance job."""
+    return f'{_HEARTBEAT_METRIC_NAME}{{job="{job}"}}'
+
+
+def kill_active_metric(job: str) -> str:
+    """The KILL-active gauge (level, 0/1): 1 while the KILL file is present, 0 when
+    absent, so Prometheus can alert on an active emergency stop (KILL was journald-only
+    before, invisible to monitoring — the heartbeat kept ticking under KILL). It is
+    CO-EMITTED with ``heartbeat_metric`` in the SAME ``emit_domain_metrics(job, {...})``
+    call: that write atomically OVERWRITES the whole per-instance textfile, so a
+    separate call to this domain would clobber the heartbeat gauge and vice-versa."""
+    return f'{_KILL_ACTIVE_METRIC_NAME}{{job="{job}"}}'
+
 
 # --- Streaming (dark, SIM-only) env gates + liveness metric --------------------
 # Master gate for the Saxo WebSocket early-wake reader (design memo
@@ -124,17 +136,24 @@ _DEFAULT_STREAM_STALE_S = 45.0
 # Prometheus liveness gauge: seconds since the last streamed message (age). Watched
 # by an AlphalensBrokerStreamStale rule, distinct from the per-poll heartbeat gauge
 # (a dead stream still emits heartbeats — the poll backstop keeps running).
-STREAM_LAST_MESSAGE_METRIC = (
-    'alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager"}'
-)
-# The stream gauge writes to its OWN domain textfile, NOT "broker-manager". Both
-# emit_domain_metrics(...) writes atomically OVERWRITE alphalens_domain_<job>.prom,
-# and _emit_stream_gauge runs AFTER heartbeat_fn every tick — sharing the
-# "broker-manager" job would clobber the heartbeat gauge and break the liveness
-# alert while streaming is on. node_exporter merges every *.prom in the dir, so a
-# distinct file keeps BOTH series scraped (the metric name + {job} label are
-# unchanged — only the containing file differs).
-_STREAM_GAUGE_DOMAIN_JOB = "broker-manager-stream"
+_STREAM_LAST_MESSAGE_METRIC_NAME = "alphalens_broker_manager_stream_last_message_age_seconds"
+
+
+def stream_last_message_metric(job: str) -> str:
+    """The stream-liveness gauge, labeled with the SAME job as the heartbeat
+    (``state_paths.metrics_job()``) — it is the same daemon instance, only
+    written to a distinct domain textfile (see ``_emit_stream_gauge``)."""
+    return f'{_STREAM_LAST_MESSAGE_METRIC_NAME}{{job="{job}"}}'
+
+
+# The stream gauge writes to its OWN domain textfile, NOT the heartbeat's domain
+# (``state_paths.stream_metrics_job()``, e.g. "broker-manager-sim-stream"). Both
+# emit_domain_metrics(...) writes atomically OVERWRITE alphalens_domain_<domain>.prom,
+# and _emit_stream_gauge runs AFTER heartbeat_fn every tick — sharing the heartbeat's
+# domain would clobber the heartbeat gauge and break the liveness alert while
+# streaming is on. node_exporter merges every *.prom in the dir, so a distinct file
+# keeps BOTH series scraped (the metric name + {job} label are the SAME job as the
+# heartbeat's — only the containing file differs).
 
 # Consecutive-tick threshold for the persistent OCO-lag monitor (issue #5). The M1
 # guard NoOp'ing a clean over-covered OCO pair is SAFE for a tick or two (a TP-read
@@ -185,6 +204,16 @@ class LoopDeps:
     # flag is on but the capability is absent) and injected into the protection
     # executor closure; kept here for symmetry / introspection.
     amend_stop: AmendStopPlacer | None = None
+    # GLOBAL kill (D3, ADR 0016): the legacy parent-level
+    # broker_orders/KILL (state_paths.global_kill_file_path()), honored by
+    # EVERY instance IN ADDITION to this instance's own kill_file — defense
+    # in depth, so the operator's memorized `touch
+    # ~/.alphalens/broker_orders/KILL` keeps meaning "stop everything" once a
+    # second (LIVE) instance exists. Optional (default None) so a LoopDeps
+    # built without it — every pre-ADR-0016 test/harness — behaves exactly as
+    # before (the global check is simply skipped); build_default_deps always
+    # supplies the real seam path.
+    global_kill_file: Path | None = None
     # Daemon-lifetime per-uic consecutive-count of M1 oco-lag-hold NoOps (issue #5).
     # A MUTABLE dict on the (frozen) deps — built once in build_default_deps and
     # carried across every tick — so the pure reconcile module stays stateless. The
@@ -284,17 +313,38 @@ def _default_emit_heartbeat(kill: bool = False) -> None:
     AlphalensBrokerManagerHeartbeatStale) is. The KILL-active gauge co-emits here (1
     when the KILL file is present, 0 when absent) so an emergency stop is visible to
     Prometheus. BOTH gauges MUST go in ONE emit call: the write atomically overwrites
-    the whole broker-manager textfile, so a separate call would clobber the other
-    gauge. Best-effort: a textfile-dir hiccup must never crash the loop."""
+    the whole per-instance textfile, so a separate call would clobber the other
+    gauge. The job label (``state_paths.metrics_job()``) is resolved HERE, at call
+    time, not at import — so the textfile domain and the ``{job=...}`` label always
+    reflect the CURRENT ``$ALPHALENS_BROKER_ENVIRONMENT`` rather than a value frozen
+    at process start (ADR 0016 D5). Best-effort: a textfile-dir hiccup must never
+    crash the loop."""
     from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
+    job = state_paths.metrics_job()
     try:
         emit_domain_metrics(
-            "broker-manager",
-            {HEARTBEAT_METRIC: int(time.time()), KILL_ACTIVE_METRIC: int(kill)},
+            job,
+            {heartbeat_metric(job): int(time.time()), kill_active_metric(job): int(kill)},
         )
     except OSError:
         logger.warning("broker-manager heartbeat emit failed", exc_info=True)
+
+
+def _kill_active(deps: LoopDeps) -> bool:
+    """D3 (ADR 0016): True when EITHER the per-instance ``kill_file`` OR the
+    GLOBAL kill (when wired) is present — defense in depth. ``global_kill_file``
+    is None for any LoopDeps built without it (pre-ADR-0016 tests/harnesses),
+    so the OR degrades to exactly the instance-only check.
+
+    This is the SINGLE source of truth for kill-state observability
+    (``run_daemon``'s heartbeat gauge, ``InProcessManagerService``'s
+    ``LivenessEvent``) as well as placement gating (``run_once``) — reading
+    ``deps.kill_file.exists()`` directly at any of those sites would silently
+    make a GLOBAL-only KILL invisible there."""
+    return deps.kill_file.exists() or (
+        deps.global_kill_file is not None and deps.global_kill_file.exists()
+    )
 
 
 def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
@@ -304,7 +354,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     phases (each with its OWN BrokerError boundary in its helper) so one phase
     failing never starves the safety-critical protection pass."""
     report = TickReport()
-    kill = deps.kill_file.exists()
+    kill = _kill_active(deps)
     _alert_kill_transition(deps, kill)
     chain = deps.ensure_alive()
     alive = bool(getattr(chain, "alive", False))
@@ -589,7 +639,11 @@ def _default_live_exits_feed_factory(
     from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import SaxoLivePriceFeed
     from alphalens_pipeline.data.alt_data.saxo_price_stream import get_shared_price_stream
 
-    stream = get_shared_price_stream()
+    # ADR 0016 D5: the stream's gauges must carry a per-instance job label so a
+    # future LIVE daemon's price stream never shares a Prometheus job (and thus
+    # textfile) with the SIM instance's. Only takes effect on the FIRST call
+    # that actually constructs the singleton — see get_shared_price_stream.
+    stream = get_shared_price_stream(metrics_job=state_paths.price_stream_metrics_job())
     live_uics = {
         sim_uic: stream.live_uic_for(ticker, exchange_mic=mic)
         for sim_uic, (ticker, mic) in uic_to_instrument.items()
@@ -978,7 +1032,7 @@ def run_daemon(
         pass_end = monotonic() if wake_event is not None else 0.0
         # Task 13: writes the Prometheus heartbeat gauge + the KILL-active gauge
         # (co-emitted so an emergency stop is visible to Prometheus, not just journald).
-        heartbeat_fn(deps.kill_file.exists())
+        heartbeat_fn(_kill_active(deps))
         if on_tick is not None:
             on_tick()  # push_token + stream stale/breaker alert + liveness gauge (main thread)
         first = False
@@ -1025,11 +1079,17 @@ def _stream_stale_s() -> float:
 def _emit_stream_gauge(age_seconds: float) -> None:
     """Best-effort Prometheus liveness gauge (seconds since the last streamed
     message). A textfile-dir hiccup must never crash the loop — the poll backstop
-    covers protection regardless of observability."""
+    covers protection regardless of observability. The gauge's {job=...} label is the
+    SAME job as the heartbeat's (``state_paths.metrics_job()``) — it is the same
+    daemon instance — but it writes to the stream's OWN domain textfile
+    (``state_paths.stream_metrics_job()``) so it never clobbers the heartbeat."""
     from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
+    job = state_paths.metrics_job()
     try:
-        emit_domain_metrics(_STREAM_GAUGE_DOMAIN_JOB, {STREAM_LAST_MESSAGE_METRIC: age_seconds})
+        emit_domain_metrics(
+            state_paths.stream_metrics_job(), {stream_last_message_metric(job): age_seconds}
+        )
     except OSError:
         logger.warning("broker-manager stream-liveness gauge emit failed", exc_info=True)
 
@@ -1110,7 +1170,25 @@ def build_default_deps(
     import telegram. ``notify`` is the raw daemon alert sink (wrapped here in
     ``_journaled_alert`` so journald always gets the line first);
     ``chain_loss_notify`` is threaded into the OAuth provider for the
-    refresh-chain-lost alert. This module never imports telegram itself."""
+    refresh-chain-lost alert. This module never imports telegram itself.
+
+    Two state-safety guards (ADR 0016) run FIRST, before any broker/journal
+    I/O: D7 refuses to boot a LIVE instance (the only client path today is
+    unconditionally SIM — ADR 0015 lock — so a "live" instance would trade
+    SIM while journaling/alerting under LIVE labels, a mislabeled-state
+    hazard); D4 refuses to start against a pre-migration flat state layout
+    (an empty per-env root while the broker still holds positions would
+    reconcile against nothing and silently degrade protection)."""
+    if state_paths.broker_environment() == state_paths.ENV_LIVE:
+        raise BrokerCapabilityError(
+            f"{state_paths.BROKER_ENVIRONMENT_ENV}=live cannot boot yet (ADR 0016 "
+            "front 3 / ADR 0017 standing-LIVE authorization model): the daemon's "
+            "only client path is unconditionally SIM (ADR 0015 lock), so booting "
+            "now would trade SIM while journaling/alerting under LIVE labels — "
+            "wire the LIVE client-construction path before starting a live instance."
+        )
+    state_paths.assert_no_legacy_flat_state()
+
     from alphalens_pipeline.brokers.automanager import (  # noqa: F401 (planner/safety used by _make_place_pick)
         orphan_sweeper,
         picks,
@@ -1120,10 +1198,7 @@ def build_default_deps(
         session_keeper,
     )
     from alphalens_pipeline.brokers.registry import get_default_broker
-    from alphalens_pipeline.brokers.submission_log import (
-        DEFAULT_SUBMISSIONS_PATH,
-        iter_submission_records,
-    )
+    from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
     # One-shot bounded-growth maintenance: fold the append-only standalone-stop
     # journal down to its minimal fold-equivalent set (issue #895). Runs here —
@@ -1186,7 +1261,7 @@ def build_default_deps(
     keeper = session_keeper.SessionKeeper(provider)
 
     def _read_records() -> list[Mapping[str, Any]]:
-        return list(iter_submission_records(DEFAULT_SUBMISSIONS_PATH))
+        return list(iter_submission_records(state_paths.submissions_path()))
 
     # One throttle instance lives for the daemon's lifetime so the re-alert
     # interval + per-uic failure escalation persist across ticks; it wraps the
@@ -1206,7 +1281,8 @@ def build_default_deps(
 
     return LoopDeps(
         broker=broker,
-        kill_file=KILL_FILE_PATH,
+        kill_file=state_paths.kill_file_path(),
+        global_kill_file=state_paths.global_kill_file_path(),
         ensure_alive=keeper.ensure_alive,
         iter_picks=picks.iter_picks,
         place_pick=_make_place_pick(broker, exit_policy),
@@ -1322,13 +1398,22 @@ def _build_stream_handles(
 # cycle (test_control_loop.py injects LoopDeps as stubs; build_default_deps and
 # everything it wires is exercised end-to-end only by the deferred
 # SAXO_LIVE_TEST=1 SIM live probe). _make_place_pick writes the append-only
-# STANDALONE_STOP_JOURNAL_PATH `planned` lines — the plan PRICES the broker
-# cannot know (disaster stop + in-band TP), keyed to the entry client_request_id
-# and tier_index. NO journal line confers protection (saxo-oco memo §7): the
-# protection pass (build_protection_view + reconcile_protection) derives it from
-# live broker state. `_fold_planned_exits` folds the `planned` lines per-uic.
+# standalone-stop journal (_standalone_stop_journal_path()) `planned` lines —
+# the plan PRICES the broker cannot know (disaster stop + in-band TP), keyed to
+# the entry client_request_id and tier_index. NO journal line confers
+# protection (saxo-oco memo §7): the protection pass (build_protection_view +
+# reconcile_protection) derives it from live broker state. `_fold_planned_exits`
+# folds the `planned` lines per-uic.
 
-STANDALONE_STOP_JOURNAL_PATH = _BROKER_ORDERS_DIR / "standalone_stops.jsonl"
+
+def _standalone_stop_journal_path() -> Path:
+    """The out-of-band standalone-stop journal path — funnels through the ONE
+    broker-state path seam (state_paths.standalone_stops_path(), ADR 0016 /
+    design memo D2), resolved fresh on EVERY call, never cached at import
+    time. A thin named wrapper (rather than calling the seam directly at each
+    of the three call sites below) so tests monkeypatch ONE attribute."""
+    return state_paths.standalone_stops_path()
+
 
 _ENTRY_SIDE = "BUY"  # MVP scope: long entries only (design memo, single-name equities)
 _DISASTER_STOP_SIDE = "SELL"  # protective exit of a long entry
@@ -1354,8 +1439,9 @@ def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
     import json
     import os
 
-    STANDALONE_STOP_JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with STANDALONE_STOP_JOURNAL_PATH.open("a", encoding="utf-8") as fh:
+    path = _standalone_stop_journal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
@@ -1406,9 +1492,10 @@ def _iter_standalone_stop_journal() -> Iterator[dict[str, Any]]:
     """Yield parsed lines from the standalone-stop journal; malformed lines skipped."""
     import json
 
-    if not STANDALONE_STOP_JOURNAL_PATH.exists():
+    path = _standalone_stop_journal_path()
+    if not path.exists():
         return
-    with STANDALONE_STOP_JOURNAL_PATH.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8") as fh:
         for raw_line in fh:
             line = raw_line.strip()
             if not line:
@@ -2024,7 +2111,7 @@ def _compact_standalone_stop_journal() -> None:
     import os
     import tempfile
 
-    path = STANDALONE_STOP_JOURNAL_PATH
+    path = _standalone_stop_journal_path()
     if not path.exists():
         return
     lines = list(_iter_standalone_stop_journal())
@@ -2491,10 +2578,7 @@ def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = No
     from alphalens_pipeline.brokers.automanager.reconcile_bridge import (
         verdicts as reconcile_verdicts,
     )
-    from alphalens_pipeline.brokers.submission_log import (
-        DEFAULT_SUBMISSIONS_PATH,
-        iter_submission_records,
-    )
+    from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
     ticker = intent.instrument.ticker.upper()
     brief_date = _dt.date.fromisoformat(intent.meta.brief_date)
@@ -2504,7 +2588,7 @@ def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = No
     try:
         account = broker.get_account()
         positions = broker.get_positions()
-        records = list(iter_submission_records(DEFAULT_SUBMISSIONS_PATH))
+        records = list(iter_submission_records(state_paths.submissions_path()))
         open_verdicts = reconcile_verdicts(records, broker)
     except BrokerError as exc:
         logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
@@ -3302,12 +3386,11 @@ def _execute_place_stop(
 
 
 __all__ = [
-    "HEARTBEAT_METRIC",
-    "KILL_ACTIVE_METRIC",
-    "KILL_FILE_PATH",
     "LoopDeps",
     "TickReport",
     "build_default_deps",
+    "heartbeat_metric",
+    "kill_active_metric",
     "run_daemon",
     "run_once",
 ]

@@ -20,6 +20,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
+from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     BrokerView,
@@ -136,6 +137,7 @@ def _deps(
     build_protection_view: Any = None,
     execute_protection: Any = None,
     alert_throttled: Any = None,
+    global_kill_file: Path | None = None,
 ) -> cl.LoopDeps:
     # Default: un-throttled passthrough (records the alert, always "sent") so
     # existing tests keep asserting on `alerts`. The throttle test injects a real
@@ -147,6 +149,7 @@ def _deps(
     return cl.LoopDeps(
         broker=broker,
         kill_file=kill_file,
+        global_kill_file=global_kill_file,
         ensure_alive=lambda: type("C", (), {"alive": chain_alive, "reason": None})(),  # noqa: PLW0108
         iter_picks=lambda: iter(picks or []),
         place_pick=lambda pick: place_calls.append(pick) or True,
@@ -159,6 +162,25 @@ def _deps(
         alert=lambda msg: alerts.append(msg),  # noqa: PLW0108
         alert_throttled=alert_throttled or _default_throttled,
     )
+
+
+@contextlib.contextmanager
+def _isolated_home():
+    """Patch ``Path.home()`` to a fresh, empty temp directory for the
+    duration of the block.
+
+    ``build_default_deps`` now resolves its state paths (kill_file,
+    global_kill_file, the D4 legacy-layout guard) through the state_paths
+    seam at call time (ADR 0016 D2-D4) — every test that calls it must be
+    isolated from the REAL ``~/.alphalens/broker_orders/`` tree, which on a
+    developer machine running the live SIM daemon genuinely holds journal
+    files (a pre-ADR-0016 flat layout) that would otherwise make these
+    hermetic tests fail non-deterministically depending on host state."""
+    with (
+        TemporaryDirectory() as home_dir,
+        mock.patch("pathlib.Path.home", return_value=Path(home_dir)),
+    ):
+        yield Path(home_dir)
 
 
 # --------------------------------------------------------------------------
@@ -282,7 +304,7 @@ class _ProtBroker:
 
 
 def _seed_planned(journal: Path, uic: int = _UIC, crid: str = "crid-0") -> None:
-    with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+    with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
         cl._append_standalone_stop_journal(
             cl._build_planned_line(
                 entry_crid=crid,
@@ -307,7 +329,7 @@ class TestStandaloneStopJournalDurability(unittest.TestCase):
     def test_append_flushes_and_fsyncs(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 with mock.patch("os.fsync") as fsync:
                     cl._append_standalone_stop_journal({"kind": "gen", "uic": 1, "gen": 0})
                 fsync.assert_called_once()
@@ -1459,7 +1481,7 @@ class TestExecuteB0Success(unittest.TestCase):
                 broker, _throttle_to([]), place_oco_exit=_oco_placer(calls)
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)
                 markers = [
                     line
@@ -1502,7 +1524,7 @@ class TestRung1RefuseViaLoopStaysStopOnly(unittest.TestCase):
                     broker, throttle, place_oco_exit=placer
                 ),
             )
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)  # planned line carries take_profit=306.72
                 r1 = cl.run_once(deps)
                 r2 = cl.run_once(deps)
@@ -1535,7 +1557,7 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
                 folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
                 markers = [
@@ -1567,7 +1589,7 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
                 folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
         self.assertEqual(len(calls), 1)
@@ -1594,7 +1616,7 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
                 folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
         self.assertEqual(len(calls), 1)
@@ -1621,7 +1643,7 @@ class TestExecuteB0FailureTaxonomy(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
                 folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
                 markers = [
@@ -1662,7 +1684,7 @@ class TestExecuteB0TooFarFromMarketTransient(unittest.TestCase):
                 broker, _throttle_to(alerts), place_oco_exit=placer
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, report)  # must NOT raise
                 lines = list(cl._iter_standalone_stop_journal())
         self.assertEqual(len(calls), 1)
@@ -1690,7 +1712,7 @@ class TestExecuteB0TooFarFromMarketTransient(unittest.TestCase):
                 [], error=OrderRejectedError("bad OCO", error_code="OrderRelationInvalid")
             )
             executor = cl._make_protection_executor(broker, _throttle_to([]), place_oco_exit=placer)
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_b0_action(), False, cl.TickReport())
                 lines = list(cl._iter_standalone_stop_journal())
         self.assertIn(_UIC, cl._fold_oco_unsupported(lines), "structural reject stays permanent")
@@ -1713,7 +1735,7 @@ class TestBuildProtectionViewOcoTooFarTtl(unittest.TestCase):
     def test_fresh_too_far_marker_degrades_transiently(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - 30.0)  # 30s ago
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
@@ -1722,7 +1744,7 @@ class TestBuildProtectionViewOcoTooFarTtl(unittest.TestCase):
     def test_expired_too_far_marker_re_enables_oco(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_oco_too_far(_UIC, clock=lambda: 1000.0 - cl._OCO_TOO_FAR_TTL_S - 1.0)
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 1000.0)
@@ -1733,7 +1755,7 @@ class TestBuildProtectionViewOcoTooFarTtl(unittest.TestCase):
     def test_permanent_marker_never_expires(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._mark_oco_unsupported(_UIC)
                 # A clock arbitrarily far in the future — the permanent marker
@@ -1875,7 +1897,7 @@ class TestBrokerErrorBoundary(unittest.TestCase):
                 execute_protection=cl._make_protection_executor(broker, throttle),
             )
             deps = cl.LoopDeps(**{**deps.__dict__, "verdicts_fn": _raise_broker_error})
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 report = cl.run_once(deps)  # must NOT propagate
             self.assertEqual(len(broker.placed), 1, "protection runs despite the reconcile failure")
@@ -1942,6 +1964,135 @@ class TestKillFileGate(unittest.TestCase):
             # stop would also be allowed (it only reduces exposure), but this
             # tick's empty protection view yields none.
             self.assertEqual(broker.cancelled, ["T-1"])
+
+
+class TestGlobalKillFileGate(unittest.TestCase):
+    """D3 (ADR 0016): the GLOBAL kill (deps.global_kill_file) gates placement
+    IN ADDITION to the per-instance kill_file — defense in depth. Same
+    suppress-but-still-cancel semantics as the instance KILL
+    (TestKillFileGate); the instance-only case (global_kill_file left at its
+    None default) is already covered there and elsewhere in this module."""
+
+    def test_global_kill_alone_suppresses_placement_but_still_cancels(self) -> None:
+        with TemporaryDirectory() as d:
+            instance_kill = Path(d) / "KILL"  # absent -> instance rail clear
+            global_kill = Path(d) / "GLOBAL_KILL"
+            global_kill.write_text("halt everything")
+            broker = _StubBroker()
+            place_calls: list = []
+            alerts: list = []
+            terminal = _verdict(status="CANCELLED", verdict="CANCELLED")
+            deps = _deps(
+                broker,
+                kill_file=instance_kill,
+                verdicts=[terminal],
+                place_calls=place_calls,
+                alerts=alerts,
+                picks=["pick-KO"],
+                global_kill_file=global_kill,
+            )
+            cl.run_once(deps)
+            self.assertEqual(
+                place_calls, [], "GLOBAL KILL alone suppresses placement, even absent instance KILL"
+            )
+            self.assertEqual(broker.cancelled, ["T-1"])
+
+    def test_neither_kill_present_allows_placement(self) -> None:
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            pick = _pick("KO")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=place_calls,
+                alerts=[],
+                picks=[pick],
+                global_kill_file=Path(d) / "GLOBAL_KILL",
+            )
+            cl.run_once(deps)
+            self.assertEqual(place_calls, [pick], "neither KILL present -> placement proceeds")
+
+    def test_global_kill_file_none_never_touches_the_filesystem(self) -> None:
+        """The default LoopDeps.global_kill_file=None must never resolve a
+        real path — this is what keeps every pre-ADR-0016 caller of _deps/
+        LoopDeps (the vast majority of this module) behaviorally unchanged."""
+        with TemporaryDirectory() as d:
+            place_calls: list = []
+            pick = _pick("KO")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=place_calls,
+                alerts=[],
+                picks=[pick],
+            )
+            self.assertIsNone(deps.global_kill_file)
+            cl.run_once(deps)
+            self.assertEqual(place_calls, [pick])
+
+
+class TestKillActiveObservability(unittest.TestCase):
+    """The kill-active OBSERVABILITY sites (the heartbeat gauge's ``kill``
+    argument in ``run_daemon``, and ``InProcessManagerService``'s
+    ``LivenessEvent.kill_active`` in service.py) must report the SAME
+    kill-active verdict as the placement-gating computation in ``run_once``
+    (D3, ADR 0016): per-instance KILL OR the GLOBAL KILL. A GLOBAL-only KILL
+    (the documented emergency-stop muscle-memory command) must not go
+    invisible to Prometheus just because the per-instance kill_file is
+    absent."""
+
+    def test_kill_active_helper_true_on_global_only(self) -> None:
+        with TemporaryDirectory() as d:
+            global_kill = Path(d) / "GLOBAL_KILL"
+            global_kill.write_text("halt everything")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",  # absent -> instance rail clear
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                global_kill_file=global_kill,
+            )
+            self.assertTrue(cl._kill_active(deps))
+
+    def test_kill_active_helper_false_when_neither_present(self) -> None:
+        with TemporaryDirectory() as d:
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                global_kill_file=Path(d) / "GLOBAL_KILL",
+            )
+            self.assertFalse(cl._kill_active(deps))
+
+    def test_run_daemon_heartbeat_reports_global_only_kill(self) -> None:
+        """Regression: pre-fix, run_daemon's heartbeat_fn read only
+        deps.kill_file.exists(), so a GLOBAL-only KILL never lit the
+        Prometheus KILL_ACTIVE gauge."""
+        with TemporaryDirectory() as d:
+            global_kill = Path(d) / "GLOBAL_KILL"
+            global_kill.write_text("halt everything")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",  # absent -> instance rail clear
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                global_kill_file=global_kill,
+            )
+            beats: list[bool] = []
+            cl.run_daemon(
+                deps,
+                once=True,
+                poll_seconds=45,
+                sleep_fn=lambda s: None,
+                heartbeat_fn=beats.append,
+            )
+            self.assertEqual(beats, [True], "GLOBAL-only KILL must still light the heartbeat gauge")
 
 
 class TestCrashRecovery(unittest.TestCase):
@@ -2023,7 +2174,7 @@ class TestFailedPostLeavesNoProtectionAndRetries(unittest.TestCase):
                 build_protection_view=cl.build_protection_view,
                 execute_protection=cl._make_protection_executor(broker, throttle),
             )
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 r1 = cl.run_once(deps)
                 self.assertEqual(broker.placed, [], "tick 1 POST failed — nothing placed")
@@ -2055,7 +2206,7 @@ class TestLoopIteratesPositionsNotVerdicts(unittest.TestCase):
                 build_protection_view=cl.build_protection_view,
                 execute_protection=cl._make_protection_executor(broker, throttle),
             )
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 report = cl.run_once(deps)
             self.assertEqual(len(broker.placed), 1)
@@ -2172,7 +2323,7 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
     def test_journal_stop_placed_record_shape_with_injected_clock(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 cl._journal_stop_placed(_UIC, 46.0, clock=lambda: 1234.5)
                 lines = self._stop_placed_lines()
         self.assertEqual(lines, [{"kind": "stop_placed", "uic": _UIC, "qty": 46.0, "ts": 1234.5}])
@@ -2184,7 +2335,7 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
             executor = cl._make_protection_executor(broker, _throttle_to([]))
             action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(action, False, report)
                 lines = self._stop_placed_lines()
         self.assertEqual(report.exits_placed, 1)
@@ -2202,7 +2353,7 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
             executor = cl._make_protection_executor(broker, _throttle_to([]))
             action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(action, False, report)
                 lines = self._stop_placed_lines()
         self.assertEqual(broker.placed[0][2], 20.0)
@@ -2228,7 +2379,9 @@ class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
                 executor = cl._make_protection_executor(broker, _throttle_to([]))
                 action = PlaceStop(_UIC, "SELL", 46.0, 216.48, _exit_stop_ref("crid-0", 0))
                 report = cl.TickReport()
-                with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+                with mock.patch.object(
+                    cl, "_standalone_stop_journal_path", lambda journal=journal: journal
+                ):
                     executor(action, False, report)
                     lines = self._stop_placed_lines()
                 self.assertEqual(report.exits_placed, 0)
@@ -2496,7 +2649,7 @@ class TestPerCallBrokerErrorBoundary(unittest.TestCase):
                 build_protection_view=cl.build_protection_view,
                 execute_protection=cl._make_protection_executor(broker, throttle),
             )
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 report = cl.run_once(deps)
             self.assertIn("B-1", broker.cancelled, "the second orphan uic is still swept")
             self.assertTrue(alerts, "the failed cancel alerts")
@@ -2647,7 +2800,7 @@ class TestFoldPlannedExitsPricesOnly(unittest.TestCase):
         # it (memo §7) and the fold reads it back into PlannedExit.tp_price.
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 cl._append_standalone_stop_journal(
                     cl._build_planned_line(
                         entry_crid="crid-0",
@@ -2687,7 +2840,7 @@ class TestFoldOcoUnsupported(unittest.TestCase):
         # mark -> a FRESH read of the journal (a restart) still carries the flag.
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 cl._mark_oco_unsupported(_UIC)
                 folded = cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
         self.assertIn(_UIC, folded)
@@ -2696,7 +2849,7 @@ class TestFoldOcoUnsupported(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._mark_oco_unsupported(_UIC)
                 view = cl.build_protection_view(broker, [])  # type: ignore[arg-type]
@@ -2708,7 +2861,7 @@ class TestFoldOcoUnsupported(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 view = cl.build_protection_view(broker, [])  # type: ignore[arg-type]
         self.assertEqual(view.oco_unsupported, frozenset())
@@ -2729,7 +2882,7 @@ class TestGenStampedRefChangesOnResize(unittest.TestCase):
     def test_resize_increments_gen_same_size_retry_keeps_it(self) -> None:
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 next_gen = cl._make_next_gen(43070)
                 self.assertEqual(next_gen(46.0), 0)
                 self.assertEqual(next_gen(46.0), 0)
@@ -2740,7 +2893,7 @@ class TestGenStampedRefChangesOnResize(unittest.TestCase):
     def test_float_tolerance_no_gen_flicker(self) -> None:
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 next_gen = cl._make_next_gen(43070)
                 self.assertEqual(next_gen(46.0), 0)
                 self.assertEqual(next_gen(45.9999999), 0)
@@ -2748,7 +2901,7 @@ class TestGenStampedRefChangesOnResize(unittest.TestCase):
     def test_gen_persists_append_only_across_fresh_callables(self) -> None:
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 cl._make_next_gen(43070)(46.0)
                 cl._make_next_gen(43070)(30.0)
                 self.assertEqual(cl._make_next_gen(43070)(30.0), 1)
@@ -2839,7 +2992,7 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, throttle, amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)  # must NOT raise
                 markers = [
                     line
@@ -2871,7 +3024,7 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, throttle, amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)  # must NOT raise
                 markers = [
                     line
@@ -2883,7 +3036,7 @@ class TestExecuteAmendStop(unittest.TestCase):
         # record_place_failure emitted the routine place-failure alert (below threshold).
         self.assertTrue(sent, "the amend failure escalates via record_place_failure")
         # No permanent latch: the uic is NOT marked oco_unsupported by an amend failure.
-        with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+        with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
             self.assertNotIn(
                 _UIC, cl._fold_oco_unsupported(list(cl._iter_standalone_stop_journal()))
             )
@@ -2927,7 +3080,7 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)
                 markers = [
                     line
@@ -2956,7 +3109,7 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, _throttle_to(alerts), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)
                 markers = [
                     line
@@ -2981,7 +3134,7 @@ class TestExecuteAmendStop(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(target_qty=4.0), False, report)
                 markers = [
                     line
@@ -3008,7 +3161,7 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
     def test_journal_amend_ok_record_shape_with_injected_clock(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 cl._journal_amend_ok(_UIC, 6.0, clock=lambda: 1234.5)
                 lines = self._amend_ok_lines()
         self.assertEqual(lines, [{"kind": "amend_ok", "uic": _UIC, "qty": 6.0, "ts": 1234.5}])
@@ -3025,7 +3178,7 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(target_qty=4.0), False, report)
                 lines = self._amend_ok_lines()
         self.assertEqual(report.exits_placed, 1)
@@ -3046,7 +3199,7 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)
                 lines = self._amend_ok_lines()
         self.assertEqual(lines, [], "no amend_ok on a provably-unsent capability error")
@@ -3065,7 +3218,7 @@ class TestExecuteAmendStopJournalsAmendOk(unittest.TestCase):
                 broker, throttle, amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)
                 ok_lines = self._amend_ok_lines()
                 failed_lines = [
@@ -3094,7 +3247,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
     def test_journal_reanchored_record_shape_with_injected_clock(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 cl._journal_reanchored(_UIC, 95.0, clock=lambda: 1234.5)
                 lines = self._reanchored_lines()
         self.assertEqual(
@@ -3111,7 +3264,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(reason="reanchor-on-fill", reanchor_avg_price=95.0),
                     False,
@@ -3136,7 +3289,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(_amend_action(), False, report)  # reanchor_avg_price defaults None
                 lines = self._reanchored_lines()
         self.assertEqual(report.exits_placed, 1)
@@ -3155,7 +3308,7 @@ class TestExecuteAmendStopJournalsReanchored(unittest.TestCase):
                 broker, throttle, amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(reason="reanchor-on-fill", reanchor_avg_price=95.0),
                     False,
@@ -3258,7 +3411,7 @@ class TestOcoAmendExecutorReuse(unittest.TestCase):
                 broker, _throttle_to([]), amend_stop=broker.amend_stop_amount
             )
             report = cl.TickReport()
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 executor(
                     _amend_action(
                         order_id="oco-stop-1",
@@ -3330,7 +3483,7 @@ class TestBuildProtectionViewTtlFolds(unittest.TestCase):
         fresh_uic, stale_uic = _UIC, 99999
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_oco_placed(fresh_uic, clock=lambda: 1000.0 - 30.0)  # 30s ago
                 cl._journal_oco_placed(stale_uic, clock=lambda: 1000.0 - 300.0)  # 300s ago
@@ -3342,7 +3495,7 @@ class TestBuildProtectionViewTtlFolds(unittest.TestCase):
         fresh_uic, stale_uic = _UIC, 99999
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_amend_failed(fresh_uic, clock=lambda: 1000.0 - 30.0)
                 cl._journal_amend_failed(stale_uic, clock=lambda: 1000.0 - 300.0)
@@ -3353,7 +3506,7 @@ class TestBuildProtectionViewTtlFolds(unittest.TestCase):
     def test_ttl_folds_default_empty_without_markers(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 view = cl.build_protection_view(self._broker(), [])
         self.assertEqual(view.oco_recently_placed, frozenset())
@@ -3395,7 +3548,7 @@ class TestBuildProtectionViewWiresReanchoredByUic(unittest.TestCase):
     def test_wires_the_latched_avg_price(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_reanchored(_UIC, 95.0, clock=lambda: 1000.0)
                 view = cl.build_protection_view(self._broker(), [], clock=lambda: 2000.0)
@@ -3404,7 +3557,7 @@ class TestBuildProtectionViewWiresReanchoredByUic(unittest.TestCase):
     def test_empty_without_markers(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 view = cl.build_protection_view(self._broker(), [])
         self.assertEqual(view.reanchored_by_uic, {})
@@ -3429,7 +3582,7 @@ class TestProtectionViewIgnoresOutcomeRecords(unittest.TestCase):
     def test_view_identical_with_and_without_outcome_records(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl._journal_oco_placed(_UIC, clock=lambda: 1000.0 - 30.0)
                 cl._journal_amend_failed(_UIC, clock=lambda: 1000.0 - 30.0)
@@ -3452,7 +3605,7 @@ class TestAmendSeqMonotonicJournalBacked(unittest.TestCase):
     def test_amend_seq_is_monotonic_and_persists(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 self.assertEqual(cl._make_next_amend_seq(_UIC)(), 0)
                 self.assertEqual(cl._make_next_amend_seq(_UIC)(), 1)
                 self.assertEqual(cl._make_next_amend_seq(_UIC)(), 2)
@@ -3461,7 +3614,7 @@ class TestAmendSeqMonotonicJournalBacked(unittest.TestCase):
     def test_fold_planned_exits_wires_journal_backed_amend_seq(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 planned = cl._fold_planned_exits(list(cl._iter_standalone_stop_journal()))[_UIC]
                 s0 = planned.next_amend_seq()
@@ -3487,6 +3640,7 @@ class TestBuildDefaultDepsAmendFailFast(unittest.TestCase):
 
     def test_fail_fast_when_amend_enabled_but_no_capability(self) -> None:
         with (
+            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_StopOnlyBroker(),
@@ -3507,6 +3661,7 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
 
     def test_does_not_raise_when_flag_flipped_and_broker_can_amend(self) -> None:
         with (
+            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_ProtBroker(),  # SupportsStandaloneStop + SupportsAmendStop
@@ -3525,6 +3680,7 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
 
     def test_fail_fasts_when_flag_flipped_but_broker_cannot_amend(self) -> None:
         with (
+            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_StopOnlyBroker(),  # no SupportsAmendStop -> no reanchor rail
@@ -3538,6 +3694,7 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
     def test_does_not_raise_when_exit_policy_left_at_default(self) -> None:
         env = {k: v for k, v in os.environ.items() if k != "ALPHALENS_BROKER_EXIT_POLICY"}
         with (
+            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_StopOnlyBroker(),
@@ -3557,6 +3714,7 @@ class TestBuildDefaultDepsExitPolicyCapabilityGate(unittest.TestCase):
         # An unknown env name FAILS FAST at startup (build_default_deps), never
         # deferred into a tick where a ValueError would starve the protection pass.
         with (
+            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_ProtBroker(),  # capable broker: the name, not capability, fails
@@ -3578,6 +3736,7 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
     def test_notify_is_wrapped_in_journaled_alert(self) -> None:
         sent: list[str] = []
         with (
+            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_StopOnlyBroker(),
@@ -3595,6 +3754,7 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
     def test_chain_loss_notify_is_threaded_into_the_oauth_provider(self) -> None:
         chain_loss_sink = mock.Mock()
         with (
+            _isolated_home(),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
                 return_value=_StopOnlyBroker(),
@@ -3605,6 +3765,52 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
         ):
             cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=chain_loss_sink)
         oauth_factory.assert_called_once_with(alert=chain_loss_sink)
+
+
+class TestBuildDefaultDepsStateGuards(unittest.TestCase):
+    """D4 (legacy-layout guard) + D7 (LIVE-boot block), ADR 0016. Both checks
+    run FIRST in build_default_deps, before any broker/journal I/O — a
+    live-boot or legacy-layout mistake must never reach a partially-wired
+    daemon (fail-loud, not fail-empty)."""
+
+    def test_refuses_to_boot_a_live_instance(self) -> None:
+        with (
+            _isolated_home(),
+            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ENVIRONMENT": "live"}),
+        ):
+            with self.assertRaises(BrokerCapabilityError) as ctx:
+                cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
+        message = str(ctx.exception)
+        self.assertIn("0016", message)
+        self.assertIn("live", message.lower())
+
+    def test_refuses_a_pre_migration_flat_layout(self) -> None:
+        with TemporaryDirectory() as d:
+            home = Path(d)
+            root = home / ".alphalens" / "broker_orders"
+            root.mkdir(parents=True)
+            (root / "submissions.jsonl").write_text("{}\n")
+            with mock.patch("pathlib.Path.home", return_value=home):
+                with self.assertRaises(state_paths.BrokerStateLayoutError) as ctx:
+                    cl.build_default_deps(
+                        notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+                    )
+        self.assertIn("submissions.jsonl", str(ctx.exception))
+
+    def test_clean_sim_layout_boots_and_wires_both_kill_paths_via_the_seam(self) -> None:
+        with (
+            _isolated_home() as home,
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+        ):
+            deps = cl.build_default_deps(
+                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+            )
+        self.assertEqual(deps.kill_file, home / ".alphalens" / "broker_orders" / "sim" / "KILL")
+        self.assertEqual(deps.global_kill_file, home / ".alphalens" / "broker_orders" / "KILL")
 
 
 class TestManageCommandRegistered(unittest.TestCase):
@@ -3632,11 +3838,13 @@ class TestHeartbeatEmitter(unittest.TestCase):
                     os.environ.pop("ALPHALENS_TEXTFILE_DIR", None)
                 else:
                     os.environ["ALPHALENS_TEXTFILE_DIR"] = old
-            written = Path(d) / "alphalens_domain_broker-manager.prom"
+            # Default $ALPHALENS_BROKER_ENVIRONMENT is "sim" (ADR 0016 D1/D5) -
+            # the domain file and the {job=...} label both carry the "-sim" suffix.
+            written = Path(d) / "alphalens_domain_broker-manager-sim.prom"
             self.assertTrue(written.is_file())
             body = written.read_text()
             self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", body)
-            self.assertIn('job="broker-manager"', body)
+            self.assertIn('job="broker-manager-sim"', body)
 
     def test_run_daemon_uses_default_heartbeat_signature(self) -> None:
         import inspect
@@ -3645,6 +3853,28 @@ class TestHeartbeatEmitter(unittest.TestCase):
 
         sig = inspect.signature(cl.run_daemon)
         self.assertIs(sig.parameters["heartbeat_fn"].default, cl._default_emit_heartbeat)
+
+    def test_live_instance_emits_under_its_own_job_and_domain(self) -> None:
+        """ADR 0016 D5: the job label + textfile domain track the resolved
+        instance, not a fixed constant — a SIM and a LIVE daemon on the same
+        host must never write to the same file."""
+        import os
+        from tempfile import TemporaryDirectory
+
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        with (
+            TemporaryDirectory() as d,
+            mock.patch.dict(
+                os.environ, {"ALPHALENS_TEXTFILE_DIR": d, "ALPHALENS_BROKER_ENVIRONMENT": "live"}
+            ),
+        ):
+            cl._default_emit_heartbeat()
+            written = Path(d) / "alphalens_domain_broker-manager-live.prom"
+            self.assertTrue(written.is_file())
+            body = written.read_text()
+            self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", body)
+            self.assertIn('job="broker-manager-live"', body)
 
 
 def _rich_standalone_stop_journal() -> list[dict[str, Any]]:
@@ -3821,7 +4051,7 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
     def test_absent_file_is_noop(self) -> None:
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 cl._compact_standalone_stop_journal()
             self.assertFalse(journal.exists())
 
@@ -3829,7 +4059,7 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
         with TemporaryDirectory() as d:
             journal = Path(d) / "standalone_stops.jsonl"
             journal.write_text("", encoding="utf-8")
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 cl._compact_standalone_stop_journal()
             self.assertTrue(journal.exists())
             self.assertEqual(journal.read_text(encoding="utf-8"), "")
@@ -3846,7 +4076,7 @@ class TestCompactStandaloneStopJournalFile(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 before_lines = list(cl._iter_standalone_stop_journal())
                 planned_before = _planned_fold_data(cl._fold_planned_exits(before_lines))
                 oco_before = cl._fold_oco_unsupported(before_lines)
@@ -4381,7 +4611,7 @@ class TestStreamRestBudget(unittest.TestCase):
                 clock,
                 [("wake", 0.01)] * 5 + [("timeout",)],
             )
-            with mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal):
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
                 _seed_planned(journal)
                 cl.run_daemon(
                     base,
@@ -4673,10 +4903,10 @@ class TestStreamingEnabledGate(unittest.TestCase):
 
 class TestKillActiveMetric(unittest.TestCase):
     """The KILL-active gauge (level 0/1) MUST co-emit with the per-tick heartbeat in
-    ONE emit_domain_metrics("broker-manager", {...}) call — a second call to the same
-    domain would atomically OVERWRITE (clobber) the heartbeat gauge, and vice-versa.
-    Value is 1 when the KILL file is present, 0 when absent, so Prometheus can alert
-    on an active emergency stop (previously journald-only, invisible to monitoring)."""
+    ONE emit_domain_metrics(job, {...}) call — a second call to the same domain would
+    atomically OVERWRITE (clobber) the heartbeat gauge, and vice-versa. Value is 1
+    when the KILL file is present, 0 when absent, so Prometheus can alert on an
+    active emergency stop (previously journald-only, invisible to monitoring)."""
 
     def _emitted(self, kill: bool) -> dict[str, Any]:
         captured: dict[str, Any] = {}
@@ -4691,14 +4921,19 @@ class TestKillActiveMetric(unittest.TestCase):
 
     def test_kill_present_co_emits_kill_active_1_and_heartbeat(self) -> None:
         cap = self._emitted(True)
-        self.assertEqual(cap["job"], "broker-manager")
-        self.assertEqual(cap["metrics"][cl.KILL_ACTIVE_METRIC], 1)
-        self.assertIn(cl.HEARTBEAT_METRIC, cap["metrics"], "heartbeat co-emitted, not clobbered")
+        # Default $ALPHALENS_BROKER_ENVIRONMENT is "sim" (ADR 0016 D1/D5).
+        self.assertEqual(cap["job"], "broker-manager-sim")
+        self.assertEqual(cap["metrics"][cl.kill_active_metric(cap["job"])], 1)
+        self.assertIn(
+            cl.heartbeat_metric(cap["job"]), cap["metrics"], "heartbeat co-emitted, not clobbered"
+        )
 
     def test_kill_absent_co_emits_kill_active_0_and_heartbeat(self) -> None:
         cap = self._emitted(False)
-        self.assertEqual(cap["metrics"][cl.KILL_ACTIVE_METRIC], 0)
-        self.assertIn(cl.HEARTBEAT_METRIC, cap["metrics"], "heartbeat co-emitted, not clobbered")
+        self.assertEqual(cap["metrics"][cl.kill_active_metric(cap["job"])], 0)
+        self.assertIn(
+            cl.heartbeat_metric(cap["job"]), cap["metrics"], "heartbeat co-emitted, not clobbered"
+        )
 
 
 class TestKillEdgeAlert(unittest.TestCase):

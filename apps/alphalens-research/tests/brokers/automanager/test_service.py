@@ -92,10 +92,15 @@ class _ServiceHarness:
         root = Path(self._tmp.name)
         self.journal = root / "standalone_stops.jsonl"
         self.kill_file = root / "KILL"
+        # Never resolved unless a test explicitly points it at a real file —
+        # mirrors LoopDeps.global_kill_file's None default (D3, ADR 0016).
+        self.global_kill_file: Path | None = None
 
         self._env = mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=False)
         self._env.start()
-        self._journal_patch = mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", self.journal)
+        self._journal_patch = mock.patch.object(
+            cl, "_standalone_stop_journal_path", lambda: self.journal
+        )
         self._journal_patch.start()
         test.addCleanup(self._close)
 
@@ -133,6 +138,7 @@ class _ServiceHarness:
         return cl.LoopDeps(
             broker=self.broker,
             kill_file=self.kill_file,
+            global_kill_file=self.global_kill_file,
             ensure_alive=lambda: _Chain(alive=True),
             iter_picks=lambda: iter(picks),
             place_pick=self._place_pick,
@@ -196,6 +202,33 @@ class TestRunCycle(unittest.TestCase):
         self.assertEqual(report.picks_placed, 1)
         self.assertEqual(len(harness.placed), 1)
         self.assertEqual(harness.placed[0].instrument.ticker, "KO")
+
+
+class TestLivenessEventKillActive(unittest.TestCase):
+    """D3 (ADR 0016) observability: LivenessEvent.kill_active must reflect the
+    per-instance KILL OR the GLOBAL KILL — same verdict run_once uses to gate
+    placement. A GLOBAL-only KILL must not report kill_active=False."""
+
+    def test_kill_active_true_on_global_only_kill(self) -> None:
+        harness = _ServiceHarness(self)
+        global_kill = Path(harness._tmp.name) / "GLOBAL_KILL"
+        global_kill.write_text("halt everything")
+        harness.global_kill_file = global_kill
+
+        harness.service.run_cycle()
+        events = list(harness.service.stream_events())
+
+        liveness = next(e for e in events if isinstance(e, LivenessEvent))
+        self.assertTrue(liveness.kill_active, "GLOBAL-only KILL must surface as kill_active")
+
+    def test_kill_active_false_when_neither_kill_present(self) -> None:
+        harness = _ServiceHarness(self)
+
+        harness.service.run_cycle()
+        events = list(harness.service.stream_events())
+
+        liveness = next(e for e in events if isinstance(e, LivenessEvent))
+        self.assertFalse(liveness.kill_active)
 
 
 class TestStreamEvents(unittest.TestCase):

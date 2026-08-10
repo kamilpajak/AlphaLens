@@ -11,8 +11,9 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker submit KO --date 2026-07-16   — DRY-RUN by default: bracket
         table + precheck; sending needs --execute AND an interactive confirm
         (--yes skips the prompt) AND ALPHALENS_BROKER_ALLOW_ORDERS=1 in the env
-    alphalens broker arm KO --date 2026-07-20   — validate against the brief,
-        append an "armed" pick to picks.jsonl (the auto-manager hand-off seam)
+    alphalens broker arm KO --date 2026-07-20 [--env sim|live]   — validate
+        against the brief, append an "armed" pick to <env>/picks.jsonl (the
+        auto-manager hand-off seam; --env selects the instance, default sim)
     alphalens broker orders                  — open orders
     alphalens broker cancel <order_id>       — cancel (entry cancel cascades the bracket)
     alphalens broker reconcile [--json]      — READ-ONLY journal vs broker verdicts (P3):
@@ -68,10 +69,39 @@ _REFRESH_DEAD_LINE = "refresh      DEAD"
 # for routing.
 _ARM_INSTRUMENT_MIC = "XNYS"
 
+# `arm --env` default — mirrors state_paths.ENV_SIM, kept as a literal so the
+# option default is available without importing `state_paths` at module scope
+# (lazy-CLI doctrine, module docstring above). The real validation (and the
+# full sim/live vocabulary) is owned by the seam at call time, not here.
+_DEFAULT_ARM_ENV = "sim"
+
 
 def _fail(message: str) -> typer.Exit:
     typer.secho(message, fg=typer.colors.RED, err=True)
     return typer.Exit(code=1)
+
+
+def _guard_state_layout() -> None:
+    """Fail loud before any journal-touching command runs if durable broker
+    state is still in the pre-migration flat layout (ADR 0016 D4).
+
+    Lazy-imports the seam (lazy-CLI doctrine, module docstring above) and
+    converts a :class:`BrokerStateLayoutError` into the standard ``_fail``
+    pattern used by every other refusal in this module. Called once per
+    command, before that command reads or writes any per-env journal — a
+    daemon or CLI command started against a flat legacy tree would silently
+    treat itself as having no prior state, which is worse than refusing to
+    run (see ``state_paths.assert_no_legacy_flat_state`` docstring).
+    """
+    from alphalens_pipeline.brokers.automanager.state_paths import (
+        BrokerStateLayoutError,
+        assert_no_legacy_flat_state,
+    )
+
+    try:
+        assert_no_legacy_flat_state()
+    except BrokerStateLayoutError as exc:
+        raise _fail(str(exc)) from exc
 
 
 def _wait_for_oauth_callback(port: int, path: str, timeout_s: int) -> tuple[str, str]:
@@ -820,7 +850,16 @@ def _place_and_record(
     Extracted from ``submit_command``. The submission record is written in a
     ``finally`` so a mid-run BrokerError still journals the already-placed
     entries; the command then exits non-zero with the reconcile hint.
+
+    Only ever reached on ``--execute`` (dry-run returns before this is
+    called), so the legacy-layout guard belongs HERE rather than earlier in
+    ``submit_command`` — a dry-run must never refuse on stale local state it
+    is not about to touch. The guard runs before the first
+    ``broker.place_bracket_order`` call: placing orders and then failing to
+    journal them would be the worst outcome (ADR 0016 D4).
     """
+    _guard_state_layout()
+
     from alphalens_pipeline.brokers.execution import execution_config_version
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
@@ -1022,6 +1061,11 @@ def arm_command(
     briefs_dir: Path = typer.Option(
         _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
     ),
+    env: str = typer.Option(
+        _DEFAULT_ARM_ENV,
+        "--env",
+        help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim.",
+    ),
 ) -> None:
     """Arm a picked candidate — parse the brief into a TradeIntent client-side
     and append it to the picks queue.
@@ -1039,8 +1083,14 @@ def arm_command(
     at brief-creation (the selection tier), so a filtered-out candidate never
     reaches the brief. The client invoking arm is responsible for knowing what
     it arms; the command never second-guesses it.
+
+    A pick belongs to exactly one instance (ADR 0016 D6): ``--env`` selects
+    which instance's inbox (``<env>/picks.jsonl``) the armed intent lands in,
+    via the ``state_paths`` seam — the daemon drains only its own inbox, so
+    cross-instance placement is impossible by construction.
     """
-    from alphalens_pipeline.brokers.automanager.picks import DEFAULT_PICKS_PATH, arm_pick
+    from alphalens_pipeline.brokers.automanager import state_paths
+    from alphalens_pipeline.brokers.automanager.picks import arm_pick
     from alphalens_pipeline.paper.brief_loader import load_brief
     from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, parse_brief_to_spec
     from broker_contract.sizing import TradeSetupNotPlannableError
@@ -1050,6 +1100,13 @@ def arm_command(
         brief_date = dt.date.fromisoformat(date)
     except ValueError as exc:
         raise _fail(f"invalid --date {date!r}: {exc}") from exc
+
+    try:
+        picks_target = state_paths.picks_path(env=env)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+    _guard_state_layout()
 
     try:
         candidates = load_brief(brief_date, briefs_dir)
@@ -1082,8 +1139,8 @@ def arm_command(
             brief_date=brief_date.isoformat(),
         ),
     )
-    arm_pick(intent)
-    typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {DEFAULT_PICKS_PATH}")
+    arm_pick(intent, path=picks_target)
+    typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {picks_target}")
 
 
 @broker_app.command(name="orders")
@@ -1113,7 +1170,8 @@ def reconcile_command(
     journal: Path | None = typer.Option(
         None,
         "--journal",
-        help="Submission journal path (default: ~/.alphalens/broker_orders/submissions.jsonl).",
+        help="Submission journal path (default: "
+        "~/.alphalens/broker_orders/<env>/submissions.jsonl).",
     ),
     as_json: bool = typer.Option(
         False,
@@ -1130,19 +1188,22 @@ def reconcile_command(
     Exit code 0 when clean, 1 when any UNRESOLVED or divergent row exists
     (scriptable; a still-working entry PAST its TTL is a divergence).
     """
+    from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.brokers.reconcile import (
         has_failures,
         reconcile_brackets,
         summarize,
     )
     from alphalens_pipeline.brokers.registry import get_default_broker
-    from alphalens_pipeline.brokers.submission_log import (
-        DEFAULT_SUBMISSIONS_PATH,
-        iter_submission_records,
-    )
+    from alphalens_pipeline.brokers.submission_log import iter_submission_records
     from broker_contract.contract import BrokerError
 
-    path = journal or DEFAULT_SUBMISSIONS_PATH
+    if journal is None:
+        # An explicit --journal is user-directed and skips the guard — the
+        # operator is pointing at a specific file on purpose, not relying on
+        # the seam's default per-env resolution.
+        _guard_state_layout()
+    path = journal or state_paths.submissions_path()
     malformed: list[str] = []
     records = list(iter_submission_records(path, malformed=malformed))
     if malformed:
@@ -1193,7 +1254,8 @@ def reconcile_fills_command(
     out: Path | None = typer.Option(
         None,
         "--out",
-        help="Parquet output path (default: ~/.alphalens/exec_quality/tranche_fills.parquet).",
+        help="Parquet output path (default: "
+        "~/.alphalens/exec_quality/<env>/tranche_fills.parquet).",
     ),
     as_json: bool = typer.Option(
         False,
@@ -1211,9 +1273,8 @@ def reconcile_fills_command(
     """
     from dataclasses import asdict
 
-    from alphalens_pipeline.brokers.automanager import control_loop
+    from alphalens_pipeline.brokers.automanager import control_loop, state_paths
     from alphalens_pipeline.brokers.automanager.exec_quality import (
-        EXEC_QUALITY_PARQUET,
         FILL_STATUS_FILLED,
         FILL_STATUS_PENDING,
         FILL_STATUS_UNRESOLVED,
@@ -1224,7 +1285,9 @@ def reconcile_fills_command(
     from alphalens_pipeline.brokers.registry import get_default_broker
     from broker_contract.contract import BrokerError
 
-    out_path = out or EXEC_QUALITY_PARQUET
+    _guard_state_layout()
+
+    out_path = out or state_paths.exec_quality_parquet()
     lines = list(control_loop._iter_standalone_stop_journal())
 
     broker = get_default_broker()

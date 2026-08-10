@@ -83,8 +83,15 @@ _RESET_SUBSCRIPTIONS_REF = "_resetsubscriptions"
 
 # Prometheus textfile gauges (emit_domain_metrics job + throttle). Emitted
 # best-effort from the reader thread: on supervise start/stop, on every
-# counted failure, and throttled on the frame path.
-_GAUGE_JOB = "live-price-stream"
+# counted failure, and throttled on the frame path. The job label is a
+# constructor parameter (ADR 0016 D5), not a module constant: a future LIVE
+# broker-manager instance runs its OWN price stream and must not share a
+# Prometheus job (and thus textfile) with the SIM instance's stream. This
+# module must not import brokers/ (dependency direction) — the composition
+# root (control_loop.py's default price-feed factory) injects the resolved
+# ``state_paths.price_stream_metrics_job()`` value; the default below keeps
+# standalone/test construction working unchanged.
+_DEFAULT_GAUGE_JOB = "live-price-stream"
 _GAUGE_MIN_INTERVAL_S = 15.0
 
 
@@ -252,9 +259,14 @@ class SaxoPriceStream:
         clock: Callable[[], dt.datetime] = lambda: dt.datetime.now(dt.UTC),
         async_sleep: Callable[[float], Awaitable[None]] | None = None,
         reclaim_limiter: ReclaimLimiter | None = None,
+        metrics_job: str = _DEFAULT_GAUGE_JOB,
     ) -> None:
         self._client = client
         self._token_provider = token_provider
+        # The Prometheus job label for every gauge this reader emits (ADR 0016
+        # D5). Injected by the composition root so a future LIVE instance's
+        # stream never shares a job/textfile with the SIM instance's.
+        self._gauge_job = metrics_job
         # A fixed default would make a rebuild after a dead reader thread
         # (nothing here calls stop()) re-POST the SAME ContextId+ReferenceId,
         # and two processes on the same LIVE login would collide too. Mirror
@@ -482,10 +494,10 @@ class SaxoPriceStream:
         self._last_gauge_emit = now
         from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
-        label = f'{{job="{_GAUGE_JOB}"}}'
+        label = f'{{job="{self._gauge_job}"}}'
         try:
             emit_domain_metrics(
-                _GAUGE_JOB,
+                self._gauge_job,
                 {
                     f"alphalens_live_price_stream_reader_up{label}": int(reader_up),
                     f"alphalens_live_price_stream_last_frame_timestamp_seconds{label}": (
@@ -563,7 +575,7 @@ _shared_stream: SaxoPriceStream | None = None
 _shared_stream_lock = threading.Lock()
 
 
-def get_shared_price_stream() -> SaxoPriceStream:
+def get_shared_price_stream(*, metrics_job: str = _DEFAULT_GAUGE_JOB) -> SaxoPriceStream:
     """Module-level singleton, started on first call.
 
     A WebSocket must outlive a single daemon tick, but the feed factory that
@@ -581,6 +593,14 @@ def get_shared_price_stream() -> SaxoPriceStream:
     log warning as a trace. The construction-then-``start()``-then-assign
     order is unchanged either way: ``_shared_stream`` is only ever rebound
     AFTER ``start()`` returns.
+
+    ``metrics_job`` (ADR 0016 D5) is threaded into the constructed stream ONLY
+    on the FIRST call that actually builds it (or a rebuild after the reader
+    died) — a call that reuses the still-live singleton keeps that stream's
+    already-resolved job label. The composition root
+    (``control_loop._default_live_exits_feed_factory``) passes
+    ``state_paths.price_stream_metrics_job()`` every tick; the default here
+    keeps standalone/test construction unchanged.
     """
     global _shared_stream  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _shared_stream is None or not _shared_stream.is_running():
@@ -589,7 +609,7 @@ def get_shared_price_stream() -> SaxoPriceStream:
                 cfg = LiveAuthConfig.from_env()
                 token_provider = LiveTokenProvider(cfg)
                 client = SaxoMarketDataClient(token_provider=token_provider)
-                stream = SaxoPriceStream(client, token_provider)
+                stream = SaxoPriceStream(client, token_provider, metrics_job=metrics_job)
                 stream.start()
                 _shared_stream = stream
     return _shared_stream

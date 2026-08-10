@@ -10,7 +10,10 @@
 #   cp deploy/systemd/alphalens-broker-manager.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now alphalens-broker-manager.service
-# Emergency stop (instant): touch ~/.alphalens/broker_orders/KILL
+# Emergency stop (instant, GLOBAL — halts placement in EVERY instance on this
+#   host, ADR 0016 D3): touch ~/.alphalens/broker_orders/KILL
+# Per-instance stop (this SIM instance only): touch
+#   ~/.alphalens/broker_orders/sim/KILL
 # Disarm placement (needs restart): unset ALPHALENS_BROKER_ALLOW_ORDERS in
 #   /etc/alphalens/env, then `systemctl --user restart ...`.
 # Inspect: journalctl --user -u alphalens-broker-manager.service -f
@@ -33,6 +36,12 @@ WorkingDirectory=%h/AlphaLens
 # ALPHALENS_BROKER_ALLOW_ORDERS=1. No leading `-`: fail loud on a missing env
 # file. UNSET the arm + restart to run inert (reconcile + read only).
 EnvironmentFile=/etc/alphalens/env
+
+# Instance identity (ADR 0016 D1/D8) — pinned IN THE UNIT, not in
+# /etc/alphalens/env: EnvironmentFile overrides drop-ins but NOT an in-unit
+# Environment= line, so this is the one place the pin cannot be silently lost.
+# NEVER set ALPHALENS_BROKER_ENVIRONMENT in /etc/alphalens/env.
+Environment=ALPHALENS_BROKER_ENVIRONMENT=sim
 
 # Node_exporter textfile dir for the per-tick heartbeat gauge (Task 13).
 Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile

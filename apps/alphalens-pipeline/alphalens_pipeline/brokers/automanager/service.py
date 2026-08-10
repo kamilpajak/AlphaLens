@@ -324,7 +324,11 @@ class InProcessManagerService:
         self._events.append(
             LivenessEvent(
                 heartbeat_ts=time.time(),
-                kill_active=deps.kill_file.exists(),
+                # D3 (ADR 0016): the per-instance KILL OR the GLOBAL kill —
+                # same verdict run_once uses to gate placement (control_loop.
+                # _kill_active is the single source of truth so this cannot
+                # drift from the gating/heartbeat sites).
+                kill_active=control_loop._kill_active(deps),
                 chain_alive=bool(getattr(chain, "alive", False)),
             )
         )

@@ -1113,12 +1113,41 @@ The daemon can early-wake on a Saxo WebSocket fill push instead of only on the ~
 - **Pure latency win, never-worse-than-poll.** The stream thread's ONLY cross-thread action is waking the existing loop early; it never places, never reconciles, never touches the journals. A total streaming failure (never started / disconnected / silently dead / thread-crashed / circuit-broken) degrades to EXACTLY the poll-only behaviour — the ~45 s absolute-deadline backstop still runs every cycle regardless of stream health. Protection can never be worse than with streaming off.
 - **SIM-only + OAuth-only.** The streaming host is a structural SIM rail (live unreachable in code). It requires the OAuth provider — under a static `SAXO_SIM_TOKEN` it cannot re-authorize in place, so it refuses to start, logs once, and runs poll-only. Placement stays gated on `ALPHALENS_BROKER_ALLOW_ORDERS=1` (unchanged — streaming never places).
 - **Env knobs** (all optional, in `/etc/alphalens/env`): `ALPHALENS_BROKER_STREAMING_ENABLED=1` (master gate), `ALPHALENS_BROKER_STREAM_STALE_S` (default 45, must be `<=` poll and `>=` the ~20-30 s heartbeat cadence), `ALPHALENS_BROKER_STREAM_DEBOUNCE_S` (default 1.0). See `.env.example`.
-- **Observability.** When no streamed frame arrives for `STREAM_STALE_S`, the main thread raises a throttled `stream silent — on poll backstop` alert and emits the `alphalens_broker_manager_stream_last_message_age_seconds` gauge (seconds since the last frame). This gauge is written to its OWN textfile `alphalens_domain_broker-manager-stream.prom` — NOT the `alphalens_domain_broker-manager.prom` heartbeat file — because `emit_domain_metrics` overwrites a job's file atomically and the two gauges would otherwise clobber each other every tick (node_exporter merges all `*.prom`, so both series scrape normally). Add the `AlphalensBrokerStreamStale` Prometheus alert (stream-liveness, distinct from the per-poll `AlphalensBrokerManagerHeartbeatStale`) — a stale stream is a latency regression back to the 45 s poll, NOT a protection outage. **The Prometheus rules are hand-synced, not repo-mounted** (see memory `reference_prometheus_live_rules_not_repo_mounted`): edit the live rules file on the monitoring host and `kill -HUP` the Prometheus process; the repo copy under `deploy/` is documentation only.
+- **Observability.** When no streamed frame arrives for `STREAM_STALE_S`, the main thread raises a throttled `stream silent — on poll backstop` alert and emits the `alphalens_broker_manager_stream_last_message_age_seconds` gauge (seconds since the last frame). This gauge is written to its OWN textfile, now per-instance since ADR 0016 D5 — `alphalens_domain_broker-manager-<env>-stream.prom` (SIM: `alphalens_domain_broker-manager-sim-stream.prom`) — NOT the `alphalens_domain_broker-manager-<env>.prom` heartbeat file (SIM: `alphalens_domain_broker-manager-sim.prom`) — because `emit_domain_metrics` overwrites a job's file atomically and the two gauges would otherwise clobber each other every tick (node_exporter merges all `*.prom`, so both series scrape normally). Add the `AlphalensBrokerStreamStale` Prometheus alert (stream-liveness, distinct from the per-poll `AlphalensBrokerManagerHeartbeatStale`) — a stale stream is a latency regression back to the 45 s poll, NOT a protection outage. **The Prometheus rules are hand-synced, not repo-mounted** (see memory `reference_prometheus_live_rules_not_repo_mounted`): edit the live rules file on the monitoring host and `kill -HUP` the Prometheus process; the repo copy under `deploy/` is documentation only.
 - **Attended shape probe (before flipping the gate live):** `SAXO_STREAM_LIVE_TEST=1 .venv/bin/python -m unittest tests.live.test_saxo_stream_live -v` (needs the OAuth env sourced) validates connect + snapshot + heartbeat + PUT-reauthorize 202 + DELETE cleanup against the live SIM host — SHAPE only, places nothing.
 
 ### 9. `$100` live escape — NOT in this runbook
 
 Requires: a new ADR lifting the structural rail, a separate `ALPHALENS_BROKER_LIVE=1` env (never a runtime flag), sizing equity `$1000` with `~$100` max per-pick loss, `MAX_OPEN=1`, and shrinking the unprotected window (the dark SIM streaming early-wake above must earn its own live re-validation first). Do NOT reuse the SIM env/units for live.
+
+### 10. Per-environment state separation (ADR 0016) — one-time VPS migration
+
+ADR 0016 (design memo `docs/research/broker_env_state_separation_design_2026_08_10.md`) moves every mutable broker-state path from one flat `~/.alphalens/broker_orders/` tree into a per-instance layout, `~/.alphalens/broker_orders/<env>/`, so a future LIVE instance cannot corrupt the SIM instance's journals. This is a preparatory move only — there is still no LIVE instance (`broker manage` structurally refuses to boot with `ALPHALENS_BROKER_ENVIRONMENT=live`, ADR 0016 D7).
+
+**`ALPHALENS_BROKER_ENVIRONMENT` doctrine — pin it in the unit, never in `/etc/alphalens/env`.** The SIM daemon needs `ALPHALENS_BROKER_ENVIRONMENT=sim` set somewhere. It is pinned as an `Environment=` line inside `alphalens-broker-manager.service` itself (see the `[Service]` section), NOT in `/etc/alphalens/env`. Reason: `EnvironmentFile=` (which loads `/etc/alphalens/env`) overrides a systemd drop-in, but it does NOT override an in-unit `Environment=` line that appears after it — this ordering was verified against a real incident on 2026-08-10. Putting the pin in the unit file means it cannot be silently lost or overridden by an operator edit to the shared env file. **Never set `ALPHALENS_BROKER_ENVIRONMENT` in `/etc/alphalens/env`** — that file is shared across future instances and setting the var there defeats the whole point of the in-unit pin.
+
+**KILL is layered — global vs per-instance (ADR 0016 D3).** `touch ~/.alphalens/broker_orders/KILL` (the parent-level path, unchanged from before this migration) is now the **GLOBAL** kill: it halts placement in every instance on this host, not just SIM. The operator's existing muscle-memory command keeps working and gains scope rather than losing it. A NEW per-instance kill also exists: `touch ~/.alphalens/broker_orders/sim/KILL` stops only the SIM instance. Both are checked on every tick; reconcile and protective actions continue under either.
+
+One-time migration on the VPS, run right after the code deploy that carries ADR 0016 (stop the daemon first — the daemon fail-loud refuses to start against the old flat layout, ADR 0016 D4):
+
+```bash
+systemctl --user stop alphalens-broker-manager
+mkdir -p ~/.alphalens/broker_orders/sim ~/.alphalens/exec_quality/sim
+mv ~/.alphalens/broker_orders/*.jsonl ~/.alphalens/broker_orders/sim/
+[ -f ~/.alphalens/exec_quality/tranche_fills.parquet ] && \
+  mv ~/.alphalens/exec_quality/tranche_fills.parquet ~/.alphalens/exec_quality/sim/
+sudo rm -f /var/lib/node_exporter/textfile/alphalens_domain_broker-manager.prom \
+           /var/lib/node_exporter/textfile/alphalens_domain_broker-manager-stream.prom \
+           /var/lib/node_exporter/textfile/alphalens_domain_live-price-stream.prom
+cp deploy/monitoring/prometheus/rules/alphalens.yaml ~/monitoring/prometheus/alphalens.rules
+docker exec prometheus promtool check rules /etc/prometheus/alphalens.rules
+docker exec prometheus kill -HUP 1
+git -C ~/AlphaLens pull && ~/.local/bin/uv sync
+systemctl --user daemon-reload && systemctl --user start alphalens-broker-manager
+# verify: new .prom files carry job="broker-manager-sim"; heartbeat fresh
+```
+
+A leftover `broker_orders/KILL` at the parent level is now the GLOBAL kill — do not move it; its absence is the normal state.
 
 ## Saxo LIVE market data (INC-2 price feed)
 

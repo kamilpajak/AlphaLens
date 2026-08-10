@@ -110,6 +110,11 @@ class ManagerWorld:
         root = Path(self._tmp.name)
         self.journal = root / "standalone_stops.jsonl"
         self.kill_file = root / "KILL"
+        # A GLOBAL kill path that is never written to by default (D3, ADR
+        # 0016) — kept distinct from self.kill_file (the per-instance kill)
+        # and pinned to this test's own temp dir so the world never probes
+        # the real ~/.alphalens/broker_orders/KILL default.
+        self.global_kill_file = root / "GLOBAL_KILL"
 
         self._chain = _Chain(alive=True)
         self.picks_placed: list[Any] = []
@@ -127,7 +132,9 @@ class ManagerWorld:
         # place); the exit mechanisms default OFF exactly like production.
         self._env = mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=False)
         self._env.start()
-        self._journal_patch = mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", self.journal)
+        self._journal_patch = mock.patch.object(
+            cl, "_standalone_stop_journal_path", lambda: self.journal
+        )
         self._journal_patch.start()
 
         # PR-8: the world drives the manager THROUGH the ManagerService
@@ -372,6 +379,7 @@ class ManagerWorld:
             safety.BrokerView(open_position_count=open_positions, equity=equity),
             self._chain,
             kill_path=self.kill_file,
+            global_kill_path=self.global_kill_file,
         )
         return isinstance(decision, safety.Allow)
 
@@ -389,6 +397,7 @@ class ManagerWorld:
             ),
             self._chain,
             kill_path=self.kill_file,
+            global_kill_path=self.global_kill_file,
         )
         return getattr(decision, "reason", "")
 
@@ -430,6 +439,7 @@ class ManagerWorld:
         return cl.LoopDeps(
             broker=self.broker,
             kill_file=self.kill_file,
+            global_kill_file=self.global_kill_file,
             ensure_alive=lambda: self._chain,
             iter_picks=lambda: iter(picks),
             place_pick=self._place_pick,
