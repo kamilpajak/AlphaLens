@@ -305,6 +305,22 @@ def _default_emit_heartbeat(kill: bool = False) -> None:
         logger.warning("broker-manager heartbeat emit failed", exc_info=True)
 
 
+def _kill_active(deps: LoopDeps) -> bool:
+    """D3 (ADR 0016): True when EITHER the per-instance ``kill_file`` OR the
+    GLOBAL kill (when wired) is present — defense in depth. ``global_kill_file``
+    is None for any LoopDeps built without it (pre-ADR-0016 tests/harnesses),
+    so the OR degrades to exactly the instance-only check.
+
+    This is the SINGLE source of truth for kill-state observability
+    (``run_daemon``'s heartbeat gauge, ``InProcessManagerService``'s
+    ``LivenessEvent``) as well as placement gating (``run_once``) — reading
+    ``deps.kill_file.exists()`` directly at any of those sites would silently
+    make a GLOBAL-only KILL invisible there."""
+    return deps.kill_file.exists() or (
+        deps.global_kill_file is not None and deps.global_kill_file.exists()
+    )
+
+
 def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     """One control-loop tick. Placement is gated on (no KILL) AND (chain alive);
     reconcile + Action execution ALWAYS run so a KILL still cancels and a dead
@@ -312,13 +328,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     phases (each with its OWN BrokerError boundary in its helper) so one phase
     failing never starves the safety-critical protection pass."""
     report = TickReport()
-    # D3 (ADR 0016): the per-instance kill_file OR the GLOBAL kill (when wired)
-    # gates placement — defense in depth. global_kill_file is None for any
-    # LoopDeps built without it (pre-ADR-0016 tests/harnesses), so the OR
-    # degrades to exactly today's instance-only check.
-    kill = deps.kill_file.exists() or (
-        deps.global_kill_file is not None and deps.global_kill_file.exists()
-    )
+    kill = _kill_active(deps)
     _alert_kill_transition(deps, kill)
     chain = deps.ensure_alive()
     alive = bool(getattr(chain, "alive", False))
@@ -992,7 +1002,7 @@ def run_daemon(
         pass_end = monotonic() if wake_event is not None else 0.0
         # Task 13: writes the Prometheus heartbeat gauge + the KILL-active gauge
         # (co-emitted so an emergency stop is visible to Prometheus, not just journald).
-        heartbeat_fn(deps.kill_file.exists())
+        heartbeat_fn(_kill_active(deps))
         if on_tick is not None:
             on_tick()  # push_token + stream stale/breaker alert + liveness gauge (main thread)
         first = False

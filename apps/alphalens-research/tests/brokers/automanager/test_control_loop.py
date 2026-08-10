@@ -2033,6 +2033,68 @@ class TestGlobalKillFileGate(unittest.TestCase):
             self.assertEqual(place_calls, [pick])
 
 
+class TestKillActiveObservability(unittest.TestCase):
+    """The kill-active OBSERVABILITY sites (the heartbeat gauge's ``kill``
+    argument in ``run_daemon``, and ``InProcessManagerService``'s
+    ``LivenessEvent.kill_active`` in service.py) must report the SAME
+    kill-active verdict as the placement-gating computation in ``run_once``
+    (D3, ADR 0016): per-instance KILL OR the GLOBAL KILL. A GLOBAL-only KILL
+    (the documented emergency-stop muscle-memory command) must not go
+    invisible to Prometheus just because the per-instance kill_file is
+    absent."""
+
+    def test_kill_active_helper_true_on_global_only(self) -> None:
+        with TemporaryDirectory() as d:
+            global_kill = Path(d) / "GLOBAL_KILL"
+            global_kill.write_text("halt everything")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",  # absent -> instance rail clear
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                global_kill_file=global_kill,
+            )
+            self.assertTrue(cl._kill_active(deps))
+
+    def test_kill_active_helper_false_when_neither_present(self) -> None:
+        with TemporaryDirectory() as d:
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                global_kill_file=Path(d) / "GLOBAL_KILL",
+            )
+            self.assertFalse(cl._kill_active(deps))
+
+    def test_run_daemon_heartbeat_reports_global_only_kill(self) -> None:
+        """Regression: pre-fix, run_daemon's heartbeat_fn read only
+        deps.kill_file.exists(), so a GLOBAL-only KILL never lit the
+        Prometheus KILL_ACTIVE gauge."""
+        with TemporaryDirectory() as d:
+            global_kill = Path(d) / "GLOBAL_KILL"
+            global_kill.write_text("halt everything")
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",  # absent -> instance rail clear
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+                global_kill_file=global_kill,
+            )
+            beats: list[bool] = []
+            cl.run_daemon(
+                deps,
+                once=True,
+                poll_seconds=45,
+                sleep_fn=lambda s: None,
+                heartbeat_fn=beats.append,
+            )
+            self.assertEqual(beats, [True], "GLOBAL-only KILL must still light the heartbeat gauge")
+
+
 class TestCrashRecovery(unittest.TestCase):
     def test_restart_re_derives_identical_classification(self) -> None:
         with TemporaryDirectory() as d:
