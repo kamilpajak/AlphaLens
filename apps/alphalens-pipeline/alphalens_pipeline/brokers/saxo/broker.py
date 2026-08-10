@@ -49,14 +49,20 @@ from broker_contract.contract import (
 from broker_contract.fx import FxRateQuote
 
 from alphalens_pipeline.brokers import execution as execution_policy
+from alphalens_pipeline.brokers.automanager import live_rails
 from alphalens_pipeline.brokers.saxo.client import (
+    LIVE_ACCOUNT_KEY_ENV,
+    LIVE_STANDING_ENV,
     SaxoAuthError,
     SaxoClient,
     SaxoError,
+    SaxoLiveEnvironmentBlockedError,
     SaxoRateLimitError,
     get_default_saxo_client,
 )
+from alphalens_pipeline.brokers.saxo.live_tokens import LiveOrderTokenProvider
 from alphalens_pipeline.data.alt_data.saxo_exchanges import MIC_TO_SAXO_EXCHANGE_ID
+from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveAuthConfig, LiveTokenProvider
 from alphalens_pipeline.paper.calendar import advance_trading_sessions
 
 logger = logging.getLogger(__name__)
@@ -1600,9 +1606,66 @@ def create_saxo_broker_from_env() -> SaxoBroker:
     return SaxoBroker(client, account_key=os.environ.get(ACCOUNT_KEY_ENV) or None)
 
 
+def create_saxo_broker_live_from_env() -> SaxoBroker:
+    """LIVE factory (ADR 0017; design memo §2) — PARALLEL to, not inside,
+    :func:`create_saxo_broker_from_env`. The registry ``"saxo"`` path and
+    :func:`get_default_saxo_client` never call this function, so the
+    default/SIM construction path keeps zero LIVE capability; only the
+    ``env=live`` branch of the composition root (PR-B) calls it.
+
+    Refusal order — every check below runs BEFORE any network call, and the
+    grant check (2) runs BEFORE :class:`SaxoClient` is even constructed:
+
+    1. :func:`~alphalens_pipeline.brokers.automanager.live_rails.assert_live_rails`
+       — the six safety-rail env vars (design memo §3), explicit-set and
+       within the live-soak bounds.
+    2. ``SAXO_LIVE_ACCOUNT_KEY`` resolution — read via ``os.environ[...]``:
+       missing is a loud ``KeyError``, never a silent fallback onto the SIM
+       ``SAXO_ACCOUNT_KEY`` (a forgotten in-unit override would otherwise
+       point LIVE at the SIM account). The §1 account-bound grant
+       (``ALPHALENS_SAXO_LIVE_STANDING == SAXO_LIVE_ACCOUNT_KEY``) is then
+       checked HERE, before constructing anything — :class:`SaxoClient`'s
+       constructor independently re-verifies the identical grant (ADR 0017
+       point 1: the check must live IN the client too, because Python cannot
+       stop a future caller from passing ``standing_live_authorized=True``
+       directly), so this is deliberately redundant, not the only gate.
+
+    Token provider: the ``saxo_auth_live`` chain
+    (:class:`~alphalens_pipeline.data.alt_data.saxo_marketdata_auth.LiveTokenProvider`)
+    wrapped in :class:`~alphalens_pipeline.brokers.saxo.live_tokens.LiveOrderTokenProvider`
+    for the invalidate/dead-latch semantics a LIVE order rail needs over a
+    provider built for market-data reads (``live_tokens.py`` module
+    docstring). ``alert=None`` here — this factory has no
+    :data:`~alphalens_pipeline.brokers.notifications.NotificationPort` to
+    inject; PR-B's composition root wires the concrete Telegram sink at the
+    one call site allowed to import it, exactly like ``chain_loss_notify``
+    does for the SIM ``OAuthTokenProvider`` today.
+    """
+    live_rails.assert_live_rails()
+    account_key = os.environ[LIVE_ACCOUNT_KEY_ENV]
+    if os.environ.get(LIVE_STANDING_ENV) != account_key:
+        raise SaxoLiveEnvironmentBlockedError(
+            f"LIVE broker construction refused: {LIVE_STANDING_ENV} does not equal "
+            f"the resolved {LIVE_ACCOUNT_KEY_ENV} (ADR 0017 §1 account-bound "
+            "standing grant — the grant must name the specific account it "
+            "authorizes, never a bare truthy flag). No client was constructed."
+        )
+    # Lazy import (design memo §2 "by import, never literal"): keeps the LIVE
+    # gateway URL literal out of every module-level import statement under
+    # brokers/ (the ADR 0014 lock (d) source scan), and keeps this module's
+    # import graph light for the common SIM-only path.
+    from alphalens_pipeline.data.alt_data.saxo_marketdata_client import LIVE_API_BASE_URL
+
+    underlying = LiveTokenProvider(LiveAuthConfig.from_env())
+    provider = LiveOrderTokenProvider(underlying, alert=None)
+    client = SaxoClient(provider, base_url=LIVE_API_BASE_URL, standing_live_authorized=True)
+    return SaxoBroker(client, account_key=account_key)
+
+
 __all__ = [
     "ACCOUNT_KEY_ENV",
     "ALLOW_ORDERS_ENV",
     "SaxoBroker",
     "create_saxo_broker_from_env",
+    "create_saxo_broker_live_from_env",
 ]

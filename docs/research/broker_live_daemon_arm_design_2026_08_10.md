@@ -1,6 +1,12 @@
 # LIVE broker-manager instance + standing-LIVE authorization — design (Track B front 3)
 
-- **Status:** DRAFT — pending the §8 operator decisions; locks on their approval
+- **Status:** LOCKED (2026-08-10) — all ten §8 operator decisions taken PER
+  RECOMMENDATION (operator, 2026-08-10): 10k zł frame · 100 zł/pick ·
+  MAX_OPEN=1 · 1.0R daily · fee floor 100 bps at the 10k frame ·
+  trailing_atr attended → native before first unattended night ·
+  LIVE sole elevated holder (SIM yields prices for the soak) · `[live]`
+  prefix in the shared chat · soak ≥3 clean attended round-trips + drills ·
+  grant decommission stays procedural (runbook note)
 - **Date:** 2026-08-10
 - **ADR:** [ADR 0017 (Proposed)](../adr/0017-standing-live-authorization.md)
 - **Predecessors:** ADR 0014 (SIM-only rail), ADR 0015 (attended day-bound
