@@ -44,6 +44,7 @@ composition root wires the concrete alert sink).
 from __future__ import annotations
 
 import logging
+import threading
 from typing import NoReturn, Protocol, runtime_checkable
 
 from alphalens_pipeline.brokers.notifications import NotificationPort
@@ -92,6 +93,12 @@ class LiveOrderTokenProvider:
     ):
         self._underlying = underlying
         self._alert = alert if alert is not None else _log_chain_loss
+        # Serializes the mutable latch/rejected-token state — the SIM
+        # OAuthTokenProvider it mirrors guards invalidate/get the same way;
+        # PR-B may share this provider with the streaming thread (the SIM
+        # "shared provider, separate session" precedent), so the adapter
+        # must not rely on the single-threaded tick assumption.
+        self._lock = threading.Lock()
         self._rejected_token: str | None = None
         self._last_token: str | None = None
         self._dead = False
@@ -102,19 +109,20 @@ class LiveOrderTokenProvider:
         the disk store still holds the last ``invalidate()``-rejected token,
         forces exactly one ``force_refresh()`` under the underlying's own
         flock and returns the fresh token."""
-        if self._dead:
-            raise SaxoAuthError(_LIVE_CHAIN_LOST_MESSAGE)
-        try:
-            token = self._underlying.access_token()
-        except Exception as exc:
-            self._chain_lost(cause=exc)
-        if token == self._rejected_token:
+        with self._lock:
+            if self._dead:
+                raise SaxoAuthError(_LIVE_CHAIN_LOST_MESSAGE)
             try:
-                token = self._underlying.force_refresh()
+                token = self._underlying.access_token()
             except Exception as exc:
                 self._chain_lost(cause=exc)
-        self._last_token = token
-        return token
+            if token == self._rejected_token:
+                try:
+                    token = self._underlying.force_refresh()
+                except Exception as exc:
+                    self._chain_lost(cause=exc)
+            self._last_token = token
+            return token
 
     def invalidate(self) -> None:
         """401 hint from a LIVE order call: remember the last-returned token
@@ -122,22 +130,24 @@ class LiveOrderTokenProvider:
         dead disk token. No network here — mirrors the SIM contract
         (invalidate-then-retry; the retry's ``get_access_token()`` refreshes
         synchronously)."""
-        if self._dead:
-            return
-        self._rejected_token = self._last_token
+        with self._lock:
+            if self._dead:
+                return
+            self._rejected_token = self._last_token
 
     def refresh_now(self) -> str:
         """Unconditional rotation — the ``SessionKeeper.keep_alive``
         idle-timer primitive. Same dead-latch semantics as
         :meth:`get_access_token`."""
-        if self._dead:
-            raise SaxoAuthError(_LIVE_CHAIN_LOST_MESSAGE)
-        try:
-            token = self._underlying.force_refresh()
-        except Exception as exc:
-            self._chain_lost(cause=exc)
-        self._last_token = token
-        return token
+        with self._lock:
+            if self._dead:
+                raise SaxoAuthError(_LIVE_CHAIN_LOST_MESSAGE)
+            try:
+                token = self._underlying.force_refresh()
+            except Exception as exc:
+                self._chain_lost(cause=exc)
+            self._last_token = token
+            return token
 
     def _chain_lost(self, *, cause: Exception | None) -> NoReturn:
         if not self._alerted:

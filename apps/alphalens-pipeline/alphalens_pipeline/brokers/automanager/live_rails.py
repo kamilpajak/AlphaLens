@@ -37,6 +37,7 @@ consumer reads sizing equity or the fee floor yet — PR-B wires them).
 
 from __future__ import annotations
 
+import math
 import os
 
 from broker_contract.contract import BrokerCapabilityError
@@ -106,8 +107,10 @@ def _check_float_positive(var: str) -> str | None:
         value = float(raw)  # type: ignore[arg-type]  # raw is non-None past the blank check
     except ValueError:
         return f"{var}: must be a number, got {raw!r}"
-    if value <= 0:
-        return f"{var}: must be > 0, got {value}"
+    # math.isfinite: inf > 0 and nan fails every comparison, so a bare
+    # `<= 0` check would boot a live daemon with an unbounded frame/floor.
+    if not math.isfinite(value) or value <= 0:
+        return f"{var}: must be a finite number > 0, got {value}"
     return None
 
 

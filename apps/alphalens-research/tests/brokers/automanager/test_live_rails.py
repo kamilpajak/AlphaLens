@@ -197,6 +197,19 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
                 assert_live_rails()
         self.assertIn(MAX_FEE_BPS_ENV, str(captured.exception))
 
+    def test_non_finite_positive_floats_rejected(self):
+        # float("inf") > 0 and float("nan") <= 0 is False — a bare `<= 0`
+        # check would let both BOOT a live daemon with an unbounded sizing
+        # frame / fee floor. The rails must require finite values.
+        for bad in ("inf", "nan", "-inf"):
+            for var in (SIZING_EQUITY_ENV, MAX_FEE_BPS_ENV):
+                with self.subTest(var=var, value=bad):
+                    env = dict(_VALID_ENV, **{var: bad})
+                    with mock.patch.dict("os.environ", env, clear=True):
+                        with self.assertRaises(BrokerCapabilityError) as captured:
+                            assert_live_rails()
+                    self.assertIn(var, str(captured.exception))
+
 
 class TestUnknownExitPolicyFailsAtBoot(unittest.TestCase):
     def test_unknown_exit_policy_rejected(self):
