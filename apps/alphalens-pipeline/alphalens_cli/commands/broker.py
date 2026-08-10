@@ -237,13 +237,42 @@ def _telegram_daemon_notify() -> NotificationPort:
     return _notify
 
 
+def _environment_labeled_notify(sink: NotificationPort) -> NotificationPort:
+    """Wrap a ``NotificationPort`` sink with an ``[env]`` label (ADR 0017 §5,
+    memo "Telegram").
+
+    This is the ONE composition-root wrapper: applied to both the daemon
+    alert sink and the chain-loss sink, at the one site that resolves
+    ``ALPHALENS_BROKER_ENVIRONMENT`` (``state_paths.broker_environment``,
+    lazy-imported per house doctrine). Without it, a SIM and a LIVE daemon
+    sharing one Telegram chat produce indistinguishable alert streams. The
+    label is resolved ONCE at wrap time (the environment is fixed for the
+    process lifetime) and the wrapped sink is a pure pass-through — the
+    message is preserved verbatim after the prefix, and no other delivery
+    behavior (parse_mode, throttling, ``_journaled_alert`` mirroring in
+    ``control_loop``) changes. Deliberately NOT baked into
+    ``_telegram_daemon_notify`` / ``_telegram_chain_loss_notify`` themselves,
+    so those factories — and their existing tests — stay label-free and
+    reusable outside a labeled context."""
+    from alphalens_pipeline.brokers.automanager import state_paths
+
+    prefix = f"[{state_paths.broker_environment()}] "
+
+    def _notify(message: str) -> None:
+        sink(prefix + message)
+
+    return _notify
+
+
 def _auth_refresh() -> None:
     """One silent refresh cycle — the future keep-alive timer's primitive."""
     from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError
     from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
 
     try:
-        OAuthTokenProvider.from_env(alert=_telegram_chain_loss_notify()).refresh_now()
+        OAuthTokenProvider.from_env(
+            alert=_environment_labeled_notify(_telegram_chain_loss_notify())
+        ).refresh_now()
     except SaxoAuthError as exc:
         raise _fail(f"refresh failed: {exc}") from exc
     typer.echo("refreshed — the rotated pair was persisted to the token store")
@@ -1370,8 +1399,8 @@ def manage_command(
 
     try:
         deps = build_default_deps(
-            notify=_telegram_daemon_notify(),
-            chain_loss_notify=_telegram_chain_loss_notify(),
+            notify=_environment_labeled_notify(_telegram_daemon_notify()),
+            chain_loss_notify=_environment_labeled_notify(_telegram_chain_loss_notify()),
         )
         # Dark streaming early-wake: build_default_deps returns wake_event/stream_tick
         # only when ALPHALENS_BROKER_STREAMING_ENABLED=1 and the reader started; both
