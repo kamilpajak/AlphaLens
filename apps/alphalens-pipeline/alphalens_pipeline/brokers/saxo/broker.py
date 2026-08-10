@@ -50,6 +50,7 @@ from broker_contract.fx import FxRateQuote
 
 from alphalens_pipeline.brokers import execution as execution_policy
 from alphalens_pipeline.brokers.automanager import live_rails
+from alphalens_pipeline.brokers.notifications import NotificationPort
 from alphalens_pipeline.brokers.saxo.client import (
     LIVE_ACCOUNT_KEY_ENV,
     LIVE_STANDING_ENV,
@@ -1606,7 +1607,9 @@ def create_saxo_broker_from_env() -> SaxoBroker:
     return SaxoBroker(client, account_key=os.environ.get(ACCOUNT_KEY_ENV) or None)
 
 
-def create_saxo_broker_live_from_env() -> SaxoBroker:
+def create_saxo_broker_live_from_env(
+    *, alert: NotificationPort | None = None
+) -> tuple[SaxoBroker, LiveOrderTokenProvider]:
     """LIVE factory (ADR 0017; design memo §2) — PARALLEL to, not inside,
     :func:`create_saxo_broker_from_env`. The registry ``"saxo"`` path and
     :func:`get_default_saxo_client` never call this function, so the
@@ -1635,11 +1638,22 @@ def create_saxo_broker_live_from_env() -> SaxoBroker:
     wrapped in :class:`~alphalens_pipeline.brokers.saxo.live_tokens.LiveOrderTokenProvider`
     for the invalidate/dead-latch semantics a LIVE order rail needs over a
     provider built for market-data reads (``live_tokens.py`` module
-    docstring). ``alert=None`` here — this factory has no
-    :data:`~alphalens_pipeline.brokers.notifications.NotificationPort` to
-    inject; PR-B's composition root wires the concrete Telegram sink at the
-    one call site allowed to import it, exactly like ``chain_loss_notify``
-    does for the SIM ``OAuthTokenProvider`` today.
+    docstring). ``alert`` is the chain-loss
+    :data:`~alphalens_pipeline.brokers.notifications.NotificationPort`,
+    injected by PR-B's composition root (``control_loop.build_default_deps``)
+    from the same ``chain_loss_notify`` it already threads into the SIM
+    ``OAuthTokenProvider`` — this factory has no concrete Telegram import of
+    its own, only the keyword.
+
+    Returns ``(broker, token_provider)`` rather than the bare
+    :class:`SaxoBroker` returned by :func:`create_saxo_broker_from_env`: the
+    composition root's ``SessionKeeper`` must be built over this EXACT
+    adapter instance (design memo §2 — a second
+    :class:`~alphalens_pipeline.brokers.saxo.live_tokens.LiveOrderTokenProvider`
+    over the same underlying chain would be two independent dead-latches
+    that could disagree about whether the chain is alive), and the adapter
+    is not otherwise reachable from ``SaxoBroker`` without piercing its
+    private ``_client._token_provider`` chain.
     """
     live_rails.assert_live_rails()
     account_key = os.environ[LIVE_ACCOUNT_KEY_ENV]
@@ -1657,9 +1671,9 @@ def create_saxo_broker_live_from_env() -> SaxoBroker:
     from alphalens_pipeline.data.alt_data.saxo_marketdata_client import LIVE_API_BASE_URL
 
     underlying = LiveTokenProvider(LiveAuthConfig.from_env())
-    provider = LiveOrderTokenProvider(underlying, alert=None)
+    provider = LiveOrderTokenProvider(underlying, alert=alert)
     client = SaxoClient(provider, base_url=LIVE_API_BASE_URL, standing_live_authorized=True)
-    return SaxoBroker(client, account_key=account_key)
+    return SaxoBroker(client, account_key=account_key), provider
 
 
 __all__ = [

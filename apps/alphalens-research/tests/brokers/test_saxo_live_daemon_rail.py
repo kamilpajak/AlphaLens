@@ -264,7 +264,9 @@ class TestCreateSaxoBrokerLiveFromEnvSuccess(unittest.TestCase):
     """The happy path — every constructor mocked, exact kwargs asserted, no
     network call and no real credential anywhere in this test."""
 
-    def test_full_valid_env_wires_exact_kwargs(self):
+    def test_full_valid_env_wires_exact_kwargs_default_alert(self):
+        """No ``alert`` passed by the caller -> the adapter gets ``alert=None``
+        (its own journald-only default), exactly like the pre-PR-B factory."""
         from alphalens_pipeline.brokers.saxo import broker as broker_mod
 
         env = dict(
@@ -301,7 +303,33 @@ class TestCreateSaxoBrokerLiveFromEnvSuccess(unittest.TestCase):
             standing_live_authorized=True,
         )
         mock_broker_cls.assert_called_once_with(client_sentinel, account_key=LIVE_ACCOUNT_KEY)
-        self.assertIs(result, broker_sentinel)
+        self.assertEqual(result, (broker_sentinel, provider_sentinel))
+
+    def test_injected_alert_threads_into_the_adapter(self):
+        """The composition root's ``chain_loss_notify`` reaches the adapter
+        verbatim (design memo §2) — the factory never builds its own sink."""
+        from alphalens_pipeline.brokers.saxo import broker as broker_mod
+
+        env = dict(
+            _VALID_RAIL_ENV,
+            **{LIVE_ACCOUNT_KEY_ENV: LIVE_ACCOUNT_KEY, LIVE_STANDING_ENV: LIVE_ACCOUNT_KEY},
+        )
+        underlying_sentinel = object()
+        alert_sentinel = mock.Mock()
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(broker_mod, "SaxoClient"),
+            mock.patch.object(broker_mod, "SaxoBroker"),
+            mock.patch.object(broker_mod, "LiveAuthConfig") as mock_cfg_cls,
+            mock.patch.object(broker_mod, "LiveTokenProvider") as mock_provider_cls,
+            mock.patch.object(broker_mod, "LiveOrderTokenProvider") as mock_adapter_cls,
+        ):
+            mock_cfg_cls.from_env.return_value = object()
+            mock_provider_cls.return_value = underlying_sentinel
+
+            broker_mod.create_saxo_broker_live_from_env(alert=alert_sentinel)
+
+        mock_adapter_cls.assert_called_once_with(underlying_sentinel, alert=alert_sentinel)
 
 
 if __name__ == "__main__":

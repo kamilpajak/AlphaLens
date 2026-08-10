@@ -1173,20 +1173,20 @@ def build_default_deps(
     refresh-chain-lost alert. This module never imports telegram itself.
 
     Two state-safety guards (ADR 0016) run FIRST, before any broker/journal
-    I/O: D7 refuses to boot a LIVE instance (the only client path today is
+    I/O: D7 used to hard-block a LIVE boot outright (the only client path was
     unconditionally SIM — ADR 0015 lock — so a "live" instance would trade
     SIM while journaling/alerting under LIVE labels, a mislabeled-state
-    hazard); D4 refuses to start against a pre-migration flat state layout
-    (an empty per-env root while the broker still holds positions would
-    reconcile against nothing and silently degrade protection)."""
-    if state_paths.broker_environment() == state_paths.ENV_LIVE:
-        raise BrokerCapabilityError(
-            f"{state_paths.BROKER_ENVIRONMENT_ENV}=live cannot boot yet (ADR 0016 "
-            "front 3 / ADR 0017 standing-LIVE authorization model): the daemon's "
-            "only client path is unconditionally SIM (ADR 0015 lock), so booting "
-            "now would trade SIM while journaling/alerting under LIVE labels — "
-            "wire the LIVE client-construction path before starting a live instance."
-        )
+    hazard); it is now the ``env == live`` branch below that routes into
+    :func:`~alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env`
+    (ADR 0017) instead of the SIM registry — that factory itself refuses to
+    construct anything until
+    :func:`~alphalens_pipeline.brokers.automanager.live_rails.assert_live_rails`
+    and the §1 account-bound grant both pass, so a mis-pinned LIVE unit still
+    fails loud at boot, before any network call. D4 refuses to start against
+    a pre-migration flat state layout (an empty per-env root while the broker
+    still holds positions would reconcile against nothing and silently
+    degrade protection)."""
+    broker_environment = state_paths.broker_environment()
     state_paths.assert_no_legacy_flat_state()
 
     from alphalens_pipeline.brokers.automanager import (  # noqa: F401 (planner/safety used by _make_place_pick)
@@ -1197,7 +1197,6 @@ def build_default_deps(
         safety,
         session_keeper,
     )
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
     # One-shot bounded-growth maintenance: fold the append-only standalone-stop
@@ -1205,7 +1204,21 @@ def build_default_deps(
     # at startup, before the tick loop — so no concurrent tick races the rewrite.
     _compact_standalone_stop_journal()
 
-    broker = get_default_broker()
+    # ADR 0017 composition root: env == live routes into the LIVE factory (which
+    # itself refuses to construct anything until assert_live_rails + the §1
+    # account-bound grant both pass — a mis-pinned LIVE unit still fails loud at
+    # boot, before any network call) instead of the SIM registry path, so
+    # env == live can NEVER reach get_default_broker. Both imports stay local so
+    # the common SIM-only path never pulls in the LIVE factory's import graph.
+    live_token_provider: Any = None
+    if broker_environment == state_paths.ENV_LIVE:
+        from alphalens_pipeline.brokers.saxo.broker import create_saxo_broker_live_from_env
+
+        broker, live_token_provider = create_saxo_broker_live_from_env(alert=chain_loss_notify)
+    else:
+        from alphalens_pipeline.brokers.registry import get_default_broker
+
+        broker = get_default_broker()
     # Resolve the behavioral exit policy ONCE, at startup — fail fast on a bad env
     # name here (a ValueError inside the per-tick protection pass would starve every
     # position that tick). The resolved instance is cached on LoopDeps + threaded
@@ -1254,10 +1267,20 @@ def build_default_deps(
             "amend_stop_amount (SupportsAmendStop) — geometry-live would leave a wrong-distance "
             "stop. Wire an amend-capable broker or unset the flag (setup_static)."
         )
-    # ONE OAuth provider instance is shared by the SessionKeeper AND the streaming
-    # reader, so there is a single OAuth chain / one flock owner and the reader can
-    # re-authorize in place off the same bearer the main loop pushes.
-    provider = _default_oauth_provider(alert=chain_loss_notify)
+    # ONE token-provider instance is shared by the SessionKeeper AND the (SIM-only)
+    # streaming reader, so there is a single OAuth chain / one flock owner and the
+    # reader can re-authorize in place off the same bearer the main loop pushes.
+    # LIVE reuses the SAME LiveOrderTokenProvider the factory built above —
+    # constructing a second adapter over the same underlying LiveTokenProvider
+    # would be two independent dead-latches that could disagree about whether the
+    # chain is alive (design memo §2). Streaming is structurally skipped for LIVE
+    # regardless of the flag (_build_stream_handles), so only SIM ever shares this
+    # instance with a reader thread.
+    provider = (
+        live_token_provider
+        if broker_environment == state_paths.ENV_LIVE
+        else _default_oauth_provider(alert=chain_loss_notify)
+    )
     keeper = session_keeper.SessionKeeper(provider)
 
     def _read_records() -> list[Mapping[str, Any]]:
@@ -1333,6 +1356,14 @@ def _build_stream_handles(
     precondition holds, else return the poll-only ``(None, None, None)``.
 
     Preconditions (each a fail-safe-to-poll gate, design memo §Env gates):
+      0. ``env != live`` — the order-WS subscriber
+         (:func:`_build_streaming_subscriber`) is a SIM-rail ``SaxoClient``
+         (no ``standing_live_authorized``); a LIVE instance is structurally
+         refused this reader regardless of the flag below (design memo §3:
+         "order-WS early-wake needs its own LIVE re-validation" — a separate,
+         not-yet-built follow-up), so the pin recommending
+         ``STREAMING_ENABLED=0`` for the LIVE unit is defense-in-depth, not
+         the only guard;
       1. ``ALPHALENS_BROKER_STREAMING_ENABLED=1`` (master dark gate);
       2. the broker is Saxo (the streaming REST + SIM rail live on ``SaxoClient``);
       3. the provider is OAuth — a static 24h token cannot be PUT-reauthorized in
@@ -1343,6 +1374,15 @@ def _build_stream_handles(
     unit-tested against stubs). A construction / start failure logs once and falls
     back to poll-only rather than raising — streaming is a pure latency win and its
     absence must never block the protective loop."""
+    if state_paths.broker_environment() == state_paths.ENV_LIVE:
+        logger.info(
+            "streaming early-wake reader structurally skipped for the LIVE broker "
+            "instance regardless of %s (design memo §3 — the order-WS subscriber "
+            "is a SIM-rail SaxoClient; LIVE re-validation of the reader is a "
+            "separate, not-yet-built follow-up)",
+            _STREAMING_ENABLED_ENV,
+        )
+        return None, None, None
     if not _streaming_enabled():
         return None, None, None
 

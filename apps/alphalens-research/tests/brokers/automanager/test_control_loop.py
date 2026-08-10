@@ -3768,21 +3768,32 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
 
 
 class TestBuildDefaultDepsStateGuards(unittest.TestCase):
-    """D4 (legacy-layout guard) + D7 (LIVE-boot block), ADR 0016. Both checks
-    run FIRST in build_default_deps, before any broker/journal I/O — a
-    live-boot or legacy-layout mistake must never reach a partially-wired
-    daemon (fail-loud, not fail-empty)."""
+    """D4 (legacy-layout guard, ADR 0016) + the ``env == live`` branch, ADR
+    0017. D4 still runs FIRST, before any broker/journal I/O — a legacy-layout
+    mistake must never reach a partially-wired daemon (fail-loud, not
+    fail-empty). The old D7 hard-raise (ADR 0016, "LIVE cannot boot yet") is
+    GONE: env=live now routes into the LIVE factory
+    (``create_saxo_broker_live_from_env``), which itself refuses to construct
+    anything until ``assert_live_rails`` passes — so a rails-unset LIVE boot
+    fails via THAT message, and the SIM registry path
+    (``get_default_broker``) is never reached. Composition-root-specific
+    coverage (patched-factory happy path, SessionKeeper identity, streaming
+    skip) lives in ``test_live_composition.py``."""
 
-    def test_refuses_to_boot_a_live_instance(self) -> None:
+    def test_refuses_to_boot_a_live_instance_with_rails_unset(self) -> None:
         with (
             _isolated_home(),
-            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ENVIRONMENT": "live"}),
+            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ENVIRONMENT": "live"}, clear=True),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker"
+            ) as mock_get_default_broker,
         ):
             with self.assertRaises(BrokerCapabilityError) as ctx:
                 cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
         message = str(ctx.exception)
-        self.assertIn("0016", message)
-        self.assertIn("live", message.lower())
+        self.assertIn("ADR 0017", message)
+        self.assertIn("ALPHALENS_BROKER_MAX_OPEN", message, "the missing rail must be named")
+        mock_get_default_broker.assert_not_called()
 
     def test_refuses_a_pre_migration_flat_layout(self) -> None:
         with TemporaryDirectory() as d:
