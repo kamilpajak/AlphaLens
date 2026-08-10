@@ -16,6 +16,7 @@ import json
 import unittest
 import uuid
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.paper.brief_loader import CandidateBrief
@@ -123,6 +124,38 @@ class _CliFakeBroker:
         self.cancel_calls.append(order_id)
 
 
+def _isolate_home(case: unittest.TestCase) -> Path:
+    """Patch ``Path.home()`` to a fresh, empty temp directory for ``case``.
+
+    The legacy-layout guard (``state_paths.assert_no_legacy_flat_state``,
+    ADR 0016 D4) now runs inside ``arm``/``reconcile``/``reconcile-fills``
+    and the submit ``--execute`` path — every command test that reaches one
+    of those must be isolated from the REAL ``~/.alphalens/broker_orders/``
+    tree, which on a developer machine running the live SIM daemon genuinely
+    holds a pre-ADR-0016 flat layout and would otherwise make these hermetic
+    tests fail non-deterministically depending on host state (mirrors
+    ``test_control_loop._isolated_home``)."""
+    tmp = TemporaryDirectory()
+    case.addCleanup(tmp.cleanup)
+    home = Path(tmp.name)
+    patcher = mock.patch("pathlib.Path.home", return_value=home)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    return home
+
+
+def _seed_legacy_flat_state(home: Path) -> Path:
+    """Write ONE pre-migration flat legacy journal file under ``home`` and
+    return its path — enough to trip ``assert_no_legacy_flat_state`` (ADR
+    0016 D4): any of the three legacy filenames sitting directly under
+    ``broker_orders/`` (no per-env subdirectory)."""
+    legacy_dir = home / ".alphalens" / "broker_orders"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    legacy_file = legacy_dir / "submissions.jsonl"
+    legacy_file.write_text("", encoding="utf-8")
+    return legacy_file
+
+
 class _SubmitHarness:
     """Patches registry/brief-loader/submission-log at their source modules."""
 
@@ -133,6 +166,7 @@ class _SubmitHarness:
         candidates: list[CandidateBrief] | None = None,
         broker: _CliFakeBroker | None = None,
     ):
+        self.home = _isolate_home(case)
         self.broker = broker if broker is not None else _CliFakeBroker()
         self.appended: list[dict] = []
 
@@ -241,6 +275,34 @@ class TestSubmitExecute(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         (record,) = harness.appended
         self.assertIn("placement stopped after 0/1", record["note"])
+
+    def test_execute_on_legacy_layout_refuses_before_placing_anything(self):
+        # The guard lives at the top of `_place_and_record` (only reached on
+        # --execute) — it must refuse BEFORE the first
+        # broker.place_bracket_order call (ADR 0016 D4): placing an order and
+        # then failing to journal it would be the worst outcome.
+        harness = _SubmitHarness(self)
+        _seed_legacy_flat_state(harness.home)
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, [*_SUBMIT_ARGS, "--execute", "--yes"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("legacy flat broker state", result.output)
+        self.assertEqual(harness.broker.place_calls, [], "must place nothing on refusal")
+        self.assertEqual(harness.appended, [], "must journal nothing on refusal")
+
+    def test_dry_run_on_legacy_layout_is_not_guarded(self):
+        # Dry-run never reaches `_place_and_record` — it must NOT refuse on
+        # stale local state it is not about to touch.
+        harness = _SubmitHarness(self)
+        _seed_legacy_flat_state(harness.home)
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, _SUBMIT_ARGS)
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(harness.broker.place_calls, [])
 
 
 def _fx_quote(**overrides):
@@ -495,6 +557,7 @@ class _ReconcileHarness:
         verdicts: list | None = None,
         records: list | None = None,
     ):
+        self.home = _isolate_home(case)
         self.broker = _CliFakeBroker()
         rows = records if records is not None else [{"brackets": [{"entry_order_id": "E-1"}]}]
 
@@ -586,6 +649,33 @@ class TestReconcileCommand(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertIn("nothing to reconcile", result.output)
+
+    def test_default_journal_on_legacy_layout_refuses(self):
+        # No --journal: the guard reads the default per-env path, so a
+        # pre-ADR-0016 flat legacy tree must refuse before touching anything
+        # (ADR 0016 D4).
+        harness = _ReconcileHarness(self)
+        _seed_legacy_flat_state(harness.home)
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["reconcile"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("legacy flat broker state", result.output)
+
+    def test_explicit_journal_on_legacy_layout_skips_the_guard(self):
+        # --journal is user-directed — it must skip the legacy-layout guard
+        # entirely and proceed to the normal (mocked) reconcile flow.
+        harness = _ReconcileHarness(self, verdicts=list(_CLEAN_KINDS))
+        _seed_legacy_flat_state(harness.home)
+        journal = harness.home / "explicit-submissions.jsonl"
+        journal.write_text("", encoding="utf-8")
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["reconcile", "--journal", str(journal)])
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertNotIn("legacy flat broker state", result.output)
 
     def test_reconcile_command_is_read_only_by_construction(self):
         """Pin: the command body references no placement/cancel/journal-write

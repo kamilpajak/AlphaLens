@@ -70,9 +70,39 @@ def _candidate(ticker: str = "KO", *, trade_setup: dict | None = "__default__") 
     )
 
 
+def _isolate_home(case: unittest.TestCase) -> Path:
+    """Patch ``Path.home()`` to a fresh, empty temp directory for ``case``.
+
+    ``arm`` now runs the legacy-layout guard (``state_paths.
+    assert_no_legacy_flat_state``, ADR 0016 D4) before persisting a pick —
+    every test that invokes ``arm`` must be isolated from the REAL
+    ``~/.alphalens/broker_orders/`` tree, which on a developer machine
+    running the live SIM daemon genuinely holds a pre-ADR-0016 flat layout
+    and would otherwise make these hermetic tests fail non-deterministically
+    depending on host state."""
+    tmp = TemporaryDirectory()
+    case.addCleanup(tmp.cleanup)
+    home = Path(tmp.name)
+    patcher = mock.patch("pathlib.Path.home", return_value=home)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    return home
+
+
+def _seed_legacy_flat_state(home: Path) -> Path:
+    """Write ONE pre-migration flat legacy journal file under ``home`` —
+    enough to trip ``assert_no_legacy_flat_state`` (ADR 0016 D4)."""
+    legacy_dir = home / ".alphalens" / "broker_orders"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    legacy_file = legacy_dir / "submissions.jsonl"
+    legacy_file.write_text("", encoding="utf-8")
+    return legacy_file
+
+
 class ArmCommandTest(unittest.TestCase):
     def setUp(self) -> None:
         self.runner = CliRunner()
+        self.home = _isolate_home(self)
 
     def test_arm_valid_pick_appends_and_exits_zero(self) -> None:
         from alphalens_cli.commands.broker import broker_app
@@ -219,6 +249,7 @@ class ArmEnvOptionTest(unittest.TestCase):
 
     def setUp(self) -> None:
         self.runner = CliRunner()
+        self.home = _isolate_home(self)
 
     def test_arm_default_env_passes_sim_picks_path(self) -> None:
         from alphalens_cli.commands.broker import broker_app
@@ -328,6 +359,53 @@ class ArmEnvIsolationTest(unittest.TestCase):
         live_picks = list(iter_picks(path=state_paths.picks_path(env="live")))
         self.assertEqual([i.instrument.ticker for i in sim_picks], ["KO"])
         self.assertEqual(live_picks, [])
+
+
+class ArmLegacyLayoutGuardTest(unittest.TestCase):
+    """`arm` refuses on a pre-ADR-0016 flat legacy layout (D4), before
+    persisting anything to picks.jsonl."""
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        self.home = _isolate_home(self)
+
+    def test_arm_on_legacy_layout_refuses_and_creates_no_picks_file(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.automanager import state_paths
+
+        _seed_legacy_flat_state(self.home)
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.paper.brief_loader.load_brief",
+                return_value=[_candidate("KO")],
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
+        ):
+            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("legacy flat broker state", result.output)
+        self.assertIn(
+            "Migrate into the per-environment layout", result.output, "migration hint expected"
+        )
+        arm.assert_not_called()
+        self.assertFalse(
+            state_paths.picks_path(env="sim").exists(), "no pick must be persisted on refusal"
+        )
+
+
+class ArmDefaultEnvParityTest(unittest.TestCase):
+    """`_DEFAULT_ARM_ENV` is a literal duplicating `state_paths.ENV_SIM`
+    (kept literal so the option default is available without importing
+    state_paths at module scope, lazy-CLI doctrine). Pin the two together so
+    a future rename of either cannot silently drift them apart."""
+
+    def test_default_arm_env_matches_the_seam_sim_constant(self) -> None:
+        from alphalens_cli.commands import broker
+        from alphalens_pipeline.brokers.automanager import state_paths
+
+        self.assertEqual(broker._DEFAULT_ARM_ENV, state_paths.ENV_SIM)
 
 
 if __name__ == "__main__":

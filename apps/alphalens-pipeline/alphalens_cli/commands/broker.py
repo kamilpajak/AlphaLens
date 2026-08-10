@@ -81,6 +81,29 @@ def _fail(message: str) -> typer.Exit:
     return typer.Exit(code=1)
 
 
+def _guard_state_layout() -> None:
+    """Fail loud before any journal-touching command runs if durable broker
+    state is still in the pre-migration flat layout (ADR 0016 D4).
+
+    Lazy-imports the seam (lazy-CLI doctrine, module docstring above) and
+    converts a :class:`BrokerStateLayoutError` into the standard ``_fail``
+    pattern used by every other refusal in this module. Called once per
+    command, before that command reads or writes any per-env journal — a
+    daemon or CLI command started against a flat legacy tree would silently
+    treat itself as having no prior state, which is worse than refusing to
+    run (see ``state_paths.assert_no_legacy_flat_state`` docstring).
+    """
+    from alphalens_pipeline.brokers.automanager.state_paths import (
+        BrokerStateLayoutError,
+        assert_no_legacy_flat_state,
+    )
+
+    try:
+        assert_no_legacy_flat_state()
+    except BrokerStateLayoutError as exc:
+        raise _fail(str(exc)) from exc
+
+
 def _wait_for_oauth_callback(port: int, path: str, timeout_s: int) -> tuple[str, str]:
     """One-shot localhost listener for the OAuth redirect; returns (code, state).
 
@@ -827,7 +850,16 @@ def _place_and_record(
     Extracted from ``submit_command``. The submission record is written in a
     ``finally`` so a mid-run BrokerError still journals the already-placed
     entries; the command then exits non-zero with the reconcile hint.
+
+    Only ever reached on ``--execute`` (dry-run returns before this is
+    called), so the legacy-layout guard belongs HERE rather than earlier in
+    ``submit_command`` — a dry-run must never refuse on stale local state it
+    is not about to touch. The guard runs before the first
+    ``broker.place_bracket_order`` call: placing orders and then failing to
+    journal them would be the worst outcome (ADR 0016 D4).
     """
+    _guard_state_layout()
+
     from alphalens_pipeline.brokers.execution import execution_config_version
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
@@ -1074,6 +1106,8 @@ def arm_command(
     except ValueError as exc:
         raise _fail(str(exc)) from exc
 
+    _guard_state_layout()
+
     try:
         candidates = load_brief(brief_date, briefs_dir)
     except (FileNotFoundError, ValueError) as exc:
@@ -1164,6 +1198,11 @@ def reconcile_command(
     from alphalens_pipeline.brokers.submission_log import iter_submission_records
     from broker_contract.contract import BrokerError
 
+    if journal is None:
+        # An explicit --journal is user-directed and skips the guard — the
+        # operator is pointing at a specific file on purpose, not relying on
+        # the seam's default per-env resolution.
+        _guard_state_layout()
     path = journal or state_paths.submissions_path()
     malformed: list[str] = []
     records = list(iter_submission_records(path, malformed=malformed))
@@ -1245,6 +1284,8 @@ def reconcile_fills_command(
     from alphalens_pipeline.brokers.reconcile import SupportsOrderResolution
     from alphalens_pipeline.brokers.registry import get_default_broker
     from broker_contract.contract import BrokerError
+
+    _guard_state_layout()
 
     out_path = out or state_paths.exec_quality_parquet()
     lines = list(control_loop._iter_standalone_stop_journal())

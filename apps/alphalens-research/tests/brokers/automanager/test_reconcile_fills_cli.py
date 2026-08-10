@@ -26,6 +26,35 @@ from broker_contract.contract import OrderState, OrderStatus
 from typer.testing import CliRunner
 
 
+def _isolate_home(case: unittest.TestCase) -> Path:
+    """Patch ``Path.home()`` to a fresh, empty temp directory for ``case``.
+
+    ``reconcile-fills`` now runs the legacy-layout guard (``state_paths.
+    assert_no_legacy_flat_state``, ADR 0016 D4) before reading the standalone
+    journal — every test that invokes it must be isolated from the REAL
+    ``~/.alphalens/broker_orders/`` tree, which on a developer machine
+    running the live SIM daemon genuinely holds a pre-ADR-0016 flat layout
+    and would otherwise make these hermetic tests fail non-deterministically
+    depending on host state."""
+    tmp = TemporaryDirectory()
+    case.addCleanup(tmp.cleanup)
+    home = Path(tmp.name)
+    patcher = mock.patch("pathlib.Path.home", return_value=home)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+    return home
+
+
+def _seed_legacy_flat_state(home: Path) -> Path:
+    """Write ONE pre-migration flat legacy journal file under ``home`` —
+    enough to trip ``assert_no_legacy_flat_state`` (ADR 0016 D4)."""
+    legacy_dir = home / ".alphalens" / "broker_orders"
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    legacy_file = legacy_dir / "submissions.jsonl"
+    legacy_file.write_text("", encoding="utf-8")
+    return legacy_file
+
+
 class _FakeResolverBroker:
     """Maps ``sell_order_id`` to a canned :class:`OrderState`; READ-ONLY.
 
@@ -99,6 +128,7 @@ class _Harness:
     """Writes a real temp journal + points the reader at it; injects the broker."""
 
     def __init__(self, case: unittest.TestCase, *, lines: list[dict] | None = None):
+        self.home = _isolate_home(case)
         self._tmp = TemporaryDirectory()
         case.addCleanup(self._tmp.cleanup)
         self.tmp_dir = Path(self._tmp.name)
@@ -132,6 +162,7 @@ class TestReconcileFillsCommand(unittest.TestCase):
     def test_broker_without_resolution_capability_fails_cleanly(self):
         # A broker lacking resolve_order_outcome must yield a clean _fail (not a
         # raw AttributeError) and write NO parquet — the guard runs before it.
+        _isolate_home(self)
         with TemporaryDirectory() as tmp:
             journal = Path(tmp) / "standalone_stops.jsonl"
             journal.write_text("", encoding="utf-8")
@@ -217,6 +248,20 @@ class TestReconcileFillsCommand(unittest.TestCase):
 
         # Exactly the three join-key-bearing fired lines, nothing else.
         self.assertEqual(sorted(harness.broker.resolved), ["S-FILL", "S-PEND", "S-UNK"])
+
+    def test_legacy_layout_refuses_before_reading_the_journal(self):
+        # The guard (ADR 0016 D4) must fire before `_iter_standalone_stop_
+        # journal()` is read and before the parquet is written.
+        harness = _Harness(self)
+        _seed_legacy_flat_state(harness.home)
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, ["reconcile-fills", "--out", str(harness.out_path)])
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("legacy flat broker state", result.output)
+        self.assertFalse(harness.out_path.exists(), "no parquet written on refusal")
+        self.assertEqual(harness.broker.resolved, [], "resolver must not be called on refusal")
 
 
 class TestReconcileFillsIsReadOnly(unittest.TestCase):
