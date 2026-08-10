@@ -1308,7 +1308,7 @@ def build_default_deps(
         global_kill_file=state_paths.global_kill_file_path(),
         ensure_alive=keeper.ensure_alive,
         iter_picks=picks.iter_picks,
-        place_pick=_make_place_pick(broker, exit_policy),
+        place_pick=_make_place_pick(broker, exit_policy, alert_throttled=_throttled),
         read_records=_read_records,
         verdicts_fn=reconcile_bridge.verdicts,
         build_position_view=_make_position_view_builder(broker),
@@ -2207,7 +2207,10 @@ def _journaled_alert(send: Callable[[str], None]) -> Callable[[str], None]:
 
 
 def _make_place_pick(
-    broker: Broker, exit_policy: ExitPolicy | None = None
+    broker: Broker,
+    exit_policy: ExitPolicy | None = None,
+    *,
+    alert_throttled: Callable[[str, str], bool] | None = None,
 ) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
@@ -2223,10 +2226,17 @@ def _make_place_pick(
     down to ``_place_tiers`` because that gate lives in the nested
     ``_journal_tier``, which has no LoopDeps in scope. Defaults to the inert
     ``SetupStaticPolicy`` (dark) so non-geometry call sites/tests keep the
-    pre-Task-4 behavior."""
+    pre-Task-4 behavior.
+
+    ``alert_throttled`` (design memo §4 fee floor) is the same throttled-alert
+    sink ``LoopDeps.alert_throttled`` wraps — the composition root threads its
+    ONE daemon-lifetime ``_AlertThrottle`` in here so a fee-floor refusal pages
+    the operator via the usual channel. ``None`` (every pre-existing call site
+    /test) is tolerated — the fee floor still refuses + journals, it just does
+    not page."""
 
     def _place(pick: Any) -> bool:
-        return _place_pick(broker, pick, exit_policy)
+        return _place_pick(broker, pick, exit_policy, alert_throttled=alert_throttled)
 
     return _place
 
@@ -2264,6 +2274,27 @@ def _summarize_open_verdicts(
             if bracket and bracket.get("entry") is not None and bracket.get("qty") is not None:
                 gross_committed += float(bracket["entry"]) * float(bracket["qty"])
     return open_bracket_count, gross_committed, realized_r_today
+
+
+def _resolve_sizing_equity(account_equity: float) -> float:
+    """Effective sizing equity for ``compute_setup_plan`` (design memo §4):
+    ``min(pinned, snapshot)`` when ``ALPHALENS_BROKER_SIZING_EQUITY`` is
+    explicitly set, else ``account_equity`` unchanged — SIM never sets the
+    pin, so this stays byte-identical to the raw account snapshot on the SIM
+    path. Resolved at CALL TIME (no caching) so an operator edit to the pin
+    takes effect on the daemon's next restart without any other change.
+
+    ``min`` (never the pin alone) survives BOTH failure directions: a pin set
+    too high above the real balance stays capped at the snapshot, and a
+    balance that has dropped below the frame stays capped at the snapshot
+    too — raw-snapshot sizing (scaling picks to the FULL real balance) is the
+    one thing this must never fall back to."""
+    from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
+
+    pinned_raw = os.environ.get(SIZING_EQUITY_ENV)
+    if pinned_raw is None or not pinned_raw.strip():
+        return account_equity
+    return min(float(pinned_raw), account_equity)
 
 
 def _resolve_and_size(
@@ -2310,7 +2341,7 @@ def _resolve_and_size(
             fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
         plan = compute_setup_plan(
             spec,
-            paper_equity=account.total_value,
+            paper_equity=_resolve_sizing_equity(account.total_value),
             scale_factor=1.0,
             fx=fx,
         )
@@ -2319,6 +2350,72 @@ def _resolve_and_size(
         return None
 
     return instrument, fx, plan
+
+
+# --- Fee floor (design memo §4 round-trip fee equation) ----------------------
+#
+# Saxo LIVE PL: commission 0.08% per fill, $1 minimum, applied on BOTH the
+# entry and the exit fill (round trip); a PLN account additionally converts
+# on BOTH legs of a cross-currency trade (0.25% x 2 = 0.50%). Names cite the
+# memo equation so a future edit stays traceable to it rather than a bare
+# magic number:
+#
+#   fee_rt(N) = 2 x max(_FEE_FLOOR_MIN_COMMISSION_USD,
+#                        _FEE_FLOOR_COMMISSION_RATE x N)
+#               + (_FEE_FLOOR_FX_ROUND_TRIP_RATE x N if an FX conversion applies else 0)
+_FEE_FLOOR_MIN_COMMISSION_USD = 1.0
+_FEE_FLOOR_COMMISSION_RATE = 0.0008
+_FEE_FLOOR_FX_ROUND_TRIP_RATE = 0.0050
+
+
+def _round_trip_fee_bps(notional: float, *, fx_applies: bool) -> float:
+    """The estimated round-trip fee for ``notional`` (instrument currency),
+    expressed in bps of that notional — design memo §4. ``fx_applies`` is
+    ``True`` iff the pick's ``fx`` conversion is not ``None`` (account
+    currency != instrument currency), which adds the FX round-trip leg.
+
+    A non-positive ``notional`` (an unplannable/zero-tier pick) returns
+    ``0.0`` — the caller's cap comparison then stays inert rather than
+    dividing by zero; the zero-tiers check downstream already refuses such a
+    pick on its own terms."""
+    if notional <= 0:
+        return 0.0
+    commission_round_trip = 2.0 * max(
+        _FEE_FLOOR_MIN_COMMISSION_USD, _FEE_FLOOR_COMMISSION_RATE * notional
+    )
+    fx_round_trip = _FEE_FLOOR_FX_ROUND_TRIP_RATE * notional if fx_applies else 0.0
+    return (commission_round_trip + fx_round_trip) / notional * 10000.0
+
+
+def _check_fee_floor(plan: Any, fx: Any, *, ticker: str) -> str | None:
+    """``None`` iff the pick clears the round-trip fee floor OR
+    ``ALPHALENS_BROKER_MAX_FEE_BPS`` is unset (SIM — no fee floor, byte-
+    identical to pre-fee-floor behavior). Else a refusal message naming the
+    ticker, the estimated fee, and the cap (design memo §4) — never feeds
+    back into selection (R2), just a fee fact reported to the operator.
+
+    Reads the TOTAL planned notional in instrument currency off
+    ``setup_plan_gross_notional`` (the gross a planner would commit if every
+    tier filled) — the same figure the existing gross-guard uses, so the fee
+    floor and the safety gross guard never disagree on what "the notional"
+    means."""
+    from alphalens_pipeline.brokers.automanager.live_rails import MAX_FEE_BPS_ENV
+
+    max_fee_bps_raw = os.environ.get(MAX_FEE_BPS_ENV)
+    if max_fee_bps_raw is None or not max_fee_bps_raw.strip():
+        return None
+    max_fee_bps = float(max_fee_bps_raw)
+
+    from broker_contract.sizing import setup_plan_gross_notional
+
+    notional = setup_plan_gross_notional(plan)
+    fee_bps = _round_trip_fee_bps(notional, fx_applies=fx is not None)
+    if fee_bps <= max_fee_bps:
+        return None
+    return (
+        f"fee floor: {ticker} round-trip {fee_bps:.1f} bps > cap {max_fee_bps:.1f} bps "
+        f"(notional {notional:,.2f}) — pick refused"
+    )
 
 
 def _is_journalable_price(value: float | None) -> bool:
@@ -2595,7 +2692,13 @@ def _place_tiers(
     return placed_count
 
 
-def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = None) -> bool:
+def _place_pick(
+    broker: Broker,
+    intent: Any,
+    exit_policy: ExitPolicy | None = None,
+    *,
+    alert_throttled: Callable[[str, str], bool] | None = None,
+) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
     keep the tick logic flat; every failure path logs and returns False
@@ -2604,6 +2707,9 @@ def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = No
     ``exit_policy`` (Task 4) is the resolved-once cached policy passed straight
     through to ``_place_tiers`` (whose nested ``_journal_tier`` owns the
     geometry-override gate).
+
+    ``alert_throttled`` (design memo §4 fee floor) pages the operator when the
+    fee floor refuses a pick; ``None`` is tolerated (refuse + journal, no page).
 
     PR-7 (broker-manager extraction memo §5): the daemon never touches a
     brief any more — ``ticker``/``brief_date``/``spec``/``exit_spec`` are all
@@ -2675,6 +2781,25 @@ def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = No
     if resolved is None:
         return False
     instrument, fx, plan = resolved
+
+    # Fee floor (design memo §4) — computed AFTER the setup plan + fx are
+    # known, BEFORE any bracket construction/placement. A pick below the
+    # floor is refused terminal (never re-tried every tick) and NEVER placed;
+    # ALPHALENS_BROKER_MAX_FEE_BPS unset (SIM) skips the check entirely.
+    fee_violation = _check_fee_floor(plan, fx, ticker=ticker)
+    if fee_violation is not None:
+        logger.warning("place_pick %s: %s", ticker, fee_violation)
+        if alert_throttled is not None:
+            alert_throttled(fee_violation, f"fee-floor:{ticker}")
+        from alphalens_pipeline.brokers.automanager import picks
+
+        try:
+            picks.mark_refused(ticker, brief_date, fee_violation)
+        except OSError as exc:
+            logger.warning(
+                "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
+            )
+        return False
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:
