@@ -81,6 +81,15 @@ EXEMPT_JOBS: dict[str, str] = {
         "form4-backfill above; mirrors the ACTIVE_SERVICES exclusion in "
         "test_deploy_systemd_units.py."
     ),
+    "broker-manager-live": (
+        "Long-running LIVE auto-manager daemon (Type=simple + Restart=on-failure), "
+        "same shape as broker-manager above. It emits a per-tick heartbeat gauge "
+        "monitored by its own AlphalensBrokerManagerLiveHeartbeatStale rule, NOT a "
+        "per-run ExecStopPost metric — a single point at process exit does not "
+        "match the per-tick cadence the textfile metrics + staleness alerts are "
+        "built around. Same rationale as broker-manager and form4-backfill above; "
+        "mirrors the ACTIVE_SERVICES exclusion in test_deploy_systemd_units.py."
+    ),
 }
 
 
