@@ -1,7 +1,7 @@
 # ADR 0017 — Standing-LIVE authorization for the unattended broker-manager daemon
 
-- **Status:** Proposed — pending the operator decisions in design memo §8;
-  becomes Accepted with the front-3 implementation PRs
+- **Status:** Accepted (2026-08-10 — operator decisions taken per
+  recommendation; implementation PRs #1021/#1022/#1023 merged)
 - **Date:** 2026-08-10
 - **Supersedes:** — (extends ADR 0015; the attended day-bound unlock
   survives verbatim for probes)
