@@ -1,0 +1,151 @@
+[Unit]
+# LIVE auto-manager daemon — REAL-MONEY orders (ADR 0017 standing-LIVE
+# authorization; design memo
+# docs/research/broker_live_daemon_arm_design_2026_08_10.md). A SECOND,
+# ADDITIVE instance next to alphalens-broker-manager.service (SIM) — same
+# poll loop, same manage command, different ALPHALENS_BROKER_ENVIRONMENT
+# (ADR 0016 per-instance state separation). Always-on polling loop:
+# kill-gate -> session-keeper -> orphan sweep (start) -> drain armed picks
+# -> place in-band subset + standalone disaster stop -> reconcile -> manage
+# each base position to terminal.
+#
+# DEPLOY INERT FIRST (design memo §7 step 1): install with
+# ALPHALENS_BROKER_ALLOW_ORDERS=0 below. Inert boot still constructs the
+# LIVE Saxo client, keeps the LIVE OAuth chain alive, reads the account,
+# and reconciles/journals under ~/.alphalens/broker_orders/live/ — it places
+# NOTHING. Only flip ALLOW_ORDERS to 1 (in this unit, then restart) after
+# the §7 fire drills pass, operator PRESENT (§7 step 3).
+#
+# Install as a user unit:
+#   cp deploy/systemd/alphalens-broker-manager-live.service ~/.config/systemd/user/
+#   # then fill in the two ACCOUNT-BOUND Environment= lines below (see the
+#   # comment above them) — the unit refuses to boot a real LIVE client
+#   # without them.
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-broker-manager-live.service
+#
+# Layered KILL (ADR 0016 D3):
+#   GLOBAL — halts placement in EVERY instance on this host (SIM and LIVE):
+#     touch ~/.alphalens/broker_orders/KILL
+#   Per-instance — halts LIVE placement only, SIM keeps trading:
+#     touch ~/.alphalens/broker_orders/live/KILL
+#   Either KILL leaves reconcile + protection (disaster-stop management)
+#   running — it stops NEW placement, it does not abandon open positions.
+#   Rollback ladder beyond KILL (least -> most drastic) is design memo §7.5:
+#   manual flatten still needs cancel-stop-first, then market-sell, then
+#   cancel entry buys (see deploy/systemd/README.md "manual flatten").
+#
+# Disarm placement only (needs restart, keeps protection running): flip
+#   ALPHALENS_BROKER_ALLOW_ORDERS=0 in THIS unit file (never in
+#   /etc/alphalens/env — see the env-var doctrine below), then
+#   `systemctl --user restart alphalens-broker-manager-live.service`.
+#
+# Env-var doctrine (ADR 0016 D8, extended by ADR 0017 for LIVE): every
+# ALPHALENS_BROKER_* rail, the account-bound grant pair, and the placement
+# arm are pinned IN THIS UNIT via Environment=, placed AFTER
+# EnvironmentFile= — EnvironmentFile overrides drop-ins but NEVER an
+# in-unit Environment= line, so this is the one place these pins cannot be
+# silently lost or cross-contaminated from the SIM instance. NEVER add any
+# ALPHALENS_BROKER_*, ALPHALENS_SAXO_LIVE_STANDING, or SAXO_LIVE_ACCOUNT_KEY
+# line to the shared /etc/alphalens/env — the design memo §3 strips the
+# rails from that file entirely for exactly this reason (a shared-file edit
+# must never be able to arm or resize the LIVE instance).
+#
+# Inspect: journalctl --user -u alphalens-broker-manager-live.service -f
+# Persistence: sudo loginctl enable-linger "$USER"
+Description=AlphaLens LIVE auto-manager (poll + reconcile + exit management) -- REAL MONEY
+After=network-online.target
+Wants=network-online.target
+
+# Cap crash loops. [Unit]-section keys — under [Service] modern systemd
+# silently ignores them (TestStartLimitInUnitSection).
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+WorkingDirectory=%h/AlphaLens
+
+# Shared secrets ONLY (SAXO_LIVE_APP_KEY/SAXO_LIVE_APP_SECRET/
+# SAXO_LIVE_AUTH_REDIRECT_URL for the LIVE OAuth chain, TELEGRAM_* for alerts).
+# Per the design memo §3, the ALPHALENS_BROKER_* risk rails, the
+# account-bound grant, and the placement arm are NOT in this file — they
+# are pinned below, in-unit. No leading `-`: fail loud on a missing env
+# file.
+EnvironmentFile=/etc/alphalens/env
+
+# Instance identity (ADR 0016 D1/D8) — pinned IN THE UNIT, not in
+# /etc/alphalens/env. The SIM unit pins `sim` the same way; the shared
+# EnvironmentFile cannot override either in-unit pin, so no shared-file
+# edit can flip which instance this daemon believes it is.
+Environment=ALPHALENS_BROKER_ENVIRONMENT=live
+
+# --- Account-bound standing grant (ADR 0017 §1.3) --------------------------
+# COMMENTED OUT on purpose. Fill in the REAL live account key on the VPS
+# copy of this unit, in BOTH lines below (uncomment + replace the
+# placeholder) — never commit real values to this repo file. These two
+# values are account identifiers, not a bearer credential, but together
+# they are the one resource-bound grant that lets
+# `create_saxo_broker_live_from_env` construct a non-SIM SaxoClient at all
+# (ADR 0017 §1: `ALPHALENS_SAXO_LIVE_STANDING` must equal the resolved
+# `SAXO_LIVE_ACCOUNT_KEY`, checked IN the constructor). Left unset (as
+# shipped here), the LIVE boot-assert / grant check refuses to construct —
+# the daemon fails loud at startup rather than silently staying SIM-only.
+#Environment=ALPHALENS_SAXO_LIVE_STANDING=<live account key>
+#Environment=SAXO_LIVE_ACCOUNT_KEY=<live account key>
+
+# --- Placement arm (design memo §7 rollout) ---------------------------------
+# 0 = inert at first deploy: constructs the LIVE client, keeps the chain
+# alive, reads the account, reconciles, journals under
+# ~/.alphalens/broker_orders/live/ — places NOTHING. Flip to 1 IN THIS UNIT
+# (never in /etc/alphalens/env) + restart, operator PRESENT, only after the
+# §7 fire drills pass (chain-loss, both KILL layers, manual-flatten
+# rehearsal, fee-floor rejection visible).
+Environment=ALPHALENS_BROKER_ALLOW_ORDERS=0
+
+# --- LIVE boot-assert rails (design memo §3 table) --------------------------
+# The code defaults for these are PERMISSIVE (MAX_OPEN=3,
+# PORTFOLIO_GROSS_FRAC=1.0, DAILY_LOSS_LIMIT_R=3.0, raw-snapshot sizing, an
+# inert exit policy, no fee floor) — `assert_live_rails()` REFUSES to boot
+# an env=live instance unless ALL SIX of these are explicitly set AND
+# within the live-soak bounds, before any broker I/O. Values below are the
+# operator-locked §8 soak decisions, not defaults to widen casually —
+# widening risk later is a design-memo decision, not a silent unit edit.
+Environment=ALPHALENS_BROKER_MAX_OPEN=1
+Environment=ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC=0.25
+Environment=ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=1.0
+Environment=ALPHALENS_BROKER_SIZING_EQUITY=10000
+Environment=ALPHALENS_BROKER_EXIT_POLICY=trailing_atr
+Environment=ALPHALENS_BROKER_MAX_FEE_BPS=100
+
+# --- Streaming + price-feed topology (design memo §6) -----------------------
+# Order-WS early-wake stays OFF for the soak — it needs its own LIVE
+# re-validation before it is wired to real-money placement.
+Environment=ALPHALENS_BROKER_STREAMING_ENABLED=0
+# The LIVE daemon is the SOLE elevated (FullTradingAndChat) holder for the
+# duration of the soak — a second elevated consumer on the same Saxo login
+# ping-pong-demotes both to 15min-delayed prices, silently. The SIM
+# instance sets this to 0 for the soak (design memo §6).
+Environment=ALPHALENS_SAXO_LIVE_PRICES=1
+
+# Node_exporter textfile dir for the per-tick heartbeat gauge — same
+# mechanism as the SIM unit, distinguished by the `broker-manager-live`
+# job label (ADR 0016 metrics_job(env)).
+Environment=ALPHALENS_TEXTFILE_DIR=/var/lib/node_exporter/textfile
+
+# Daemon: no single-shot flag here (a clean exit would not be relaunched by
+# Restart=on-failure). Same poll cadence as SIM — the manager loop code is
+# shared; only the composition root branches on ALPHALENS_BROKER_ENVIRONMENT.
+ExecStart=%h/AlphaLens/.venv/bin/alphalens broker manage --poll-seconds 45
+
+Restart=on-failure
+RestartSec=30
+
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=1G
+TasksMax=32
+
+[Install]
+WantedBy=default.target

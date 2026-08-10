@@ -1,0 +1,51 @@
+[Unit]
+# LIVE market-data OAuth idle keep-alive. Versions the currently-unversioned
+# hand-written VPS unit under its PRODUCTION name so the repo matches what
+# actually runs (design memo §5). Mirrors alphalens-saxo-refresh.service
+# (the SIM/order-chain idle keep-alive) but drives the SEPARATE
+# `saxo_auth_live` chain (app `bracket-keeper`) that feeds real-time LIVE
+# prices via `alphalens_pipeline/data/alt_data/saxo_marketdata_client.py`.
+#
+#   cp deploy/systemd/alphalens-saxo-marketdata-refresh.{service,timer} \
+#     ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alphalens-saxo-marketdata-refresh.timer
+#
+# Single-refresher invariant: run this ONLY on the VPS running the LIVE
+# broker-manager daemon (alphalens-broker-manager-live.service) — two hosts
+# sharing the token store burn each other's rotation chains (the TokenStore
+# flock is per-host). Per-tick consumers (the LIVE daemon's order client and
+# price stream, which share one login/session per the design memo §6
+# sole-elevated-holder topology) ADOPT the rotation under the flock; this
+# timer is only the keep-alive FLOOR for idle stretches where nothing else
+# touches the chain.
+Description=AlphaLens Saxo LIVE market-data OAuth idle keep-alive (refresh_now)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+
+# Needs the LIVE market-data OAuth env (SAXO_LIVE_APP_KEY/SAXO_LIVE_APP_SECRET/
+# SAXO_LIVE_AUTH_REDIRECT_URL) + TELEGRAM_* for the chain-lost alert. Fail
+# loud on a missing env file.
+EnvironmentFile=/etc/alphalens/env
+
+ExecStart=%h/AlphaLens/.venv/bin/alphalens broker marketdata-auth --refresh
+
+# Cron-health metrics (last_success refreshes each ~20min fire -> the
+# AlphalensJobStale{job=saxo-marketdata-refresh} rule catches "keep-alive
+# stopped"). This was the one gap versus alphalens-saxo-refresh.service:
+# the unversioned hand-written VPS copy emitted nothing, so its own
+# staleness was invisible to Prometheus.
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics saxo-marketdata-refresh
+
+StandardOutput=journal
+StandardError=journal
+
+MemoryMax=512M
+TasksMax=16
+
+[Install]
+WantedBy=default.target

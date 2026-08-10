@@ -20,6 +20,8 @@ import stat
 import unittest
 from pathlib import Path
 
+import yaml
+
 # Test file lives at apps/alphalens-research/tests/<name>.py; the repo root
 # is three parents up. deploy/ stays at the repo root, not under the app.
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -70,6 +72,20 @@ BROKER_MANAGER_SERVICE = SYSTEMD_DIR / "alphalens-broker-manager.service"
 SAXO_REFRESH_SERVICE = SYSTEMD_DIR / "alphalens-saxo-refresh.service"
 SAXO_REFRESH_TIMER = SYSTEMD_DIR / "alphalens-saxo-refresh.timer"
 
+# LIVE broker-manager instance (ADR 0017 standing-LIVE authorization; design
+# memo docs/research/broker_live_daemon_arm_design_2026_08_10.md §5) — a
+# SECOND, ADDITIVE daemon next to BROKER_MANAGER_SERVICE (SIM). Excluded from
+# the emit-hook glob like its SIM sibling (Type=simple daemon, own heartbeat
+# alert family).
+LIVE_BROKER_MANAGER_SERVICE = SYSTEMD_DIR / "alphalens-broker-manager-live.service"
+
+# LIVE market-data OAuth idle keep-alive (design memo §5) — versions the
+# previously-unversioned VPS unit under its PRODUCTION name. Same
+# timer-driven-oneshot shape as SAXO_REFRESH_SERVICE, distinct chain
+# (saxo_auth_live).
+SAXO_MARKETDATA_REFRESH_SERVICE = SYSTEMD_DIR / "alphalens-saxo-marketdata-refresh.service"
+SAXO_MARKETDATA_REFRESH_TIMER = SYSTEMD_DIR / "alphalens-saxo-marketdata-refresh.timer"
+
 ACTIVE_SERVICES = (
     EDGAR_SERVICE,
     LIT_WEEKLY_SERVICE,
@@ -79,6 +95,7 @@ ACTIVE_SERVICES = (
     SYSTEMD_DIR / "alphalens-form4-incremental.service",
     EDGE_MIRROR_SERVICE,
     SAXO_REFRESH_SERVICE,
+    SAXO_MARKETDATA_REFRESH_SERVICE,
 )
 
 
@@ -1307,6 +1324,338 @@ class TestBrokerManagerHealthRules(unittest.TestCase):
                 r"absent\(alphalens_job_last_success_timestamp_seconds\{job=\"saxo-refresh\"\}\)"
             ),
         )
+
+
+class TestLiveBrokerManagerUnit(unittest.TestCase):
+    """LIVE broker-manager instance — REAL-MONEY orders (ADR 0017
+    standing-LIVE authorization; design memo
+    docs/research/broker_live_daemon_arm_design_2026_08_10.md §5). A
+    SECOND, ADDITIVE daemon next to the SIM unit — same manager loop, its
+    own ``ALPHALENS_BROKER_ENVIRONMENT`` pin. These tests pin the
+    deploy-time half of the safety contract: every risk rail the runtime
+    boot-assert (``live_rails.assert_live_rails``) requires is ALSO pinned
+    in-unit so a reviewer sees it in the diff, the placement arm starts
+    inert, and the account-bound standing grant (ADR 0017 §1.3) is never
+    committed with a real value.
+    """
+
+    def setUp(self) -> None:
+        self.text = LIVE_BROKER_MANAGER_SERVICE.read_text()
+
+    def test_service_exists(self) -> None:
+        self.assertTrue(
+            LIVE_BROKER_MANAGER_SERVICE.is_file(),
+            f"missing at {LIVE_BROKER_MANAGER_SERVICE}",
+        )
+
+    def test_pins_live_broker_environment_in_service_section(self) -> None:
+        # ADR 0016 D8, same as the SIM unit: EnvironmentFile overrides
+        # drop-ins but NOT in-unit Environment= lines.
+        self.assertRegex(
+            self.text,
+            re.compile(r"^Environment=ALPHALENS_BROKER_ENVIRONMENT=live\s*$", re.MULTILINE),
+            "the unit must pin ALPHALENS_BROKER_ENVIRONMENT=live in-unit (ADR 0016 D8).",
+        )
+        service_body = self.text.split("[Service]", 1)[1].split("[Install]", 1)[0]
+        self.assertIn(
+            "ALPHALENS_BROKER_ENVIRONMENT=live",
+            service_body,
+            "the pin must sit in [Service] — systemd silently ignores "
+            "Environment= directives placed in any other section.",
+        )
+
+    def test_pins_all_six_boot_assert_rails_in_unit(self) -> None:
+        # design memo §3 table / live_rails.assert_live_rails: the LIVE
+        # boot-assert refuses to start unless ALL SIX of these are
+        # explicitly set AND within the live-soak bounds. Pinning the exact
+        # values here means a copy-paste mistake is visible in code review,
+        # not only at the next restart's crash-loop.
+        expected = {
+            "ALPHALENS_BROKER_MAX_OPEN": "1",
+            "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC": "0.25",
+            "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R": "1.0",
+            "ALPHALENS_BROKER_SIZING_EQUITY": "10000",
+            "ALPHALENS_BROKER_EXIT_POLICY": "trailing_atr",
+            "ALPHALENS_BROKER_MAX_FEE_BPS": "100",
+        }
+        for var, value in expected.items():
+            with self.subTest(var=var):
+                self.assertRegex(
+                    self.text,
+                    re.compile(rf"^Environment={var}={re.escape(value)}\s*$", re.MULTILINE),
+                    f"LIVE unit must pin {var}={value} in-unit (design memo §3 table).",
+                )
+
+    def test_pins_allow_orders_zero_at_first_deploy(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(r"^Environment=ALPHALENS_BROKER_ALLOW_ORDERS=0\s*$", re.MULTILINE),
+            "LIVE unit must ship with ALLOW_ORDERS=0 (inert-first rollout, design memo §7 step 1).",
+        )
+        self.assertIn(
+            "flip to 1",
+            self.text.lower(),
+            "unit must document the attended arm-time flip to "
+            "ALLOW_ORDERS=1 (design memo §7 step 3).",
+        )
+
+    def test_all_seven_safety_vars_pinned_in_unit(self) -> None:
+        # "ALL SEVEN safety vars" = the six boot-assert rails +
+        # ALLOW_ORDERS. Independent re-derivation of the count so this test
+        # fails if either of the two tests above is ever deleted without
+        # the other.
+        safety_vars = (
+            "ALPHALENS_BROKER_MAX_OPEN",
+            "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC",
+            "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R",
+            "ALPHALENS_BROKER_SIZING_EQUITY",
+            "ALPHALENS_BROKER_EXIT_POLICY",
+            "ALPHALENS_BROKER_MAX_FEE_BPS",
+            "ALPHALENS_BROKER_ALLOW_ORDERS",
+        )
+        for var in safety_vars:
+            with self.subTest(var=var):
+                self.assertRegex(
+                    self.text,
+                    re.compile(rf"^Environment={var}=", re.MULTILINE),
+                    f"missing in-unit pin for {var}.",
+                )
+
+    def test_account_bound_grant_lines_are_commented_out_placeholders(self) -> None:
+        # ADR 0017 §1.3: ALPHALENS_SAXO_LIVE_STANDING and
+        # SAXO_LIVE_ACCOUNT_KEY are account identifiers that must NEVER be
+        # committed with a real value — the repo copy ships them as
+        # commented-out placeholders; the operator fills the VPS copy in by
+        # hand.
+        self.assertRegex(
+            self.text,
+            re.compile(r"^#Environment=ALPHALENS_SAXO_LIVE_STANDING=", re.MULTILINE),
+            "the standing-grant line must be present but COMMENTED OUT.",
+        )
+        self.assertRegex(
+            self.text,
+            re.compile(r"^#Environment=SAXO_LIVE_ACCOUNT_KEY=", re.MULTILINE),
+            "the live account-key line must be present but COMMENTED OUT.",
+        )
+        # No UNCOMMENTED occurrence of either var anywhere in the file — a
+        # real value must never reach this repo.
+        self.assertNotRegex(
+            self.text,
+            re.compile(r"^Environment=ALPHALENS_SAXO_LIVE_STANDING=", re.MULTILINE),
+            "ALPHALENS_SAXO_LIVE_STANDING must never be committed uncommented.",
+        )
+        self.assertNotRegex(
+            self.text,
+            re.compile(r"^Environment=SAXO_LIVE_ACCOUNT_KEY=", re.MULTILINE),
+            "SAXO_LIVE_ACCOUNT_KEY must never be committed uncommented.",
+        )
+
+    def test_daemon_shape_matches_sim_unit(self) -> None:
+        # Same Type=simple / Restart=on-failure / --poll-seconds shape as
+        # the SIM unit — the manager loop code is shared; only the
+        # composition root branches on ALPHALENS_BROKER_ENVIRONMENT.
+        self.assertIn("Type=simple", self.text)
+        self.assertRegex(self.text, re.compile(r"^Restart=on-failure\s*$", re.MULTILINE))
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens\s+broker\s+manage\b"
+                r"[^\n]*--poll-seconds\s+\d+",
+                re.MULTILINE,
+            ),
+            "ExecStart must run host-venv `broker manage --poll-seconds N` (no --once).",
+        )
+        self.assertNotIn("--once", self.text)
+
+    def test_env_file_fail_loud(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE),
+        )
+
+    def test_header_documents_layered_kill(self) -> None:
+        # ADR 0016 D3: broker_orders/KILL (parent) halts EVERY instance;
+        # broker_orders/<env>/KILL halts one.
+        self.assertIn("GLOBAL", self.text, "header must call out the global kill scope")
+        self.assertIn(
+            "broker_orders/live/KILL",
+            self.text,
+            "header must name the per-instance kill path for the LIVE instance",
+        )
+
+    def test_streaming_and_live_prices_pinned(self) -> None:
+        # design memo §6 sole-elevated-holder topology.
+        self.assertRegex(
+            self.text,
+            re.compile(r"^Environment=ALPHALENS_BROKER_STREAMING_ENABLED=0\s*$", re.MULTILINE),
+        )
+        self.assertRegex(
+            self.text,
+            re.compile(r"^Environment=ALPHALENS_SAXO_LIVE_PRICES=1\s*$", re.MULTILINE),
+        )
+
+    def test_resource_caps_present(self) -> None:
+        self.assertRegex(self.text, re.compile(r"^MemoryMax=\S+\s*$", re.MULTILINE))
+        self.assertRegex(self.text, re.compile(r"^TasksMax=\d+\s*$", re.MULTILINE))
+
+    def test_working_dir_and_install(self) -> None:
+        self.assertIn("WorkingDirectory=%h/AlphaLens", self.text)
+        self.assertRegex(self.text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+
+    def test_daemon_excluded_from_emit_hook_glob(self) -> None:
+        self.assertNotIn(LIVE_BROKER_MANAGER_SERVICE, ACTIVE_SERVICES)
+
+
+class TestSaxoMarketdataRefreshUnit(unittest.TestCase):
+    """LIVE market-data OAuth idle keep-alive (design memo §5) — versions
+    the previously-unversioned hand-written VPS unit under its production
+    name, adding the ExecStopPost job-metrics hook it never had.
+    """
+
+    def test_service_is_oneshot_refresh(self) -> None:
+        text = SAXO_MARKETDATA_REFRESH_SERVICE.read_text()
+        self.assertIn("Type=oneshot", text)
+        self.assertRegex(
+            text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/alphalens\s+broker\s+"
+                r"marketdata-auth\s+--refresh\s*$",
+                re.MULTILINE,
+            ),
+            "ExecStart must run `broker marketdata-auth --refresh`.",
+        )
+
+    def test_service_env_fail_loud_and_working_dir(self) -> None:
+        text = SAXO_MARKETDATA_REFRESH_SERVICE.read_text()
+        self.assertRegex(text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE))
+        self.assertIn("WorkingDirectory=%h/AlphaLens", text)
+
+    def test_service_wires_emit_hook_with_own_job_name(self) -> None:
+        # The one improvement the design memo requires over the
+        # unversioned hand-written VPS copy: it emitted nothing, so its
+        # own staleness was invisible to Prometheus.
+        self.assertRegex(
+            SAXO_MARKETDATA_REFRESH_SERVICE.read_text(),
+            re.compile(
+                r"^ExecStopPost=%h/AlphaLens/deploy/systemd/bin/"
+                r"alphalens-emit-job-metrics\s+saxo-marketdata-refresh\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_timer_fires_inside_40min_window_persistent(self) -> None:
+        text = SAXO_MARKETDATA_REFRESH_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^OnUnitActiveSec=20min\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+
+    def test_timer_carries_install_section(self) -> None:
+        text = SAXO_MARKETDATA_REFRESH_TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
+
+
+class TestLiveBrokerManagerHealthRules(unittest.TestCase):
+    """LIVE twins of :class:`TestBrokerManagerHealthRules` (design memo §5)."""
+
+    RULES = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
+
+    def setUp(self) -> None:
+        self.text = self.RULES.read_text()
+
+    def test_live_broker_manager_heartbeat_stale_rule(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"time\(\)\s*-\s*alphalens_broker_manager_last_tick_timestamp_seconds"
+                r"\{job=\"broker-manager-live\"\}\s*>\s*300\b"
+            ),
+            "Missing AlphalensBrokerManagerLiveHeartbeatStale (>300s).",
+        )
+
+    def test_no_absent_based_missing_rule_for_live_heartbeat_yet(self) -> None:
+        # Design memo §5: an absent() rule pages the instant the rules
+        # reload, before the LIVE unit is even installed. It must land in
+        # the SAME commit that installs+enables
+        # alphalens-broker-manager-live.service on the VPS, not ahead of
+        # it — this test pins that the rule does NOT exist yet.
+        self.assertNotRegex(
+            self.text,
+            re.compile(
+                r"absent\(alphalens_broker_manager_last_tick_timestamp_seconds"
+                r"\{job=\"broker-manager-live\"\}\)"
+            ),
+            "No absent()-based Missing rule for the LIVE heartbeat should "
+            "exist yet (design memo §5) — add it in the same commit that "
+            "installs+enables alphalens-broker-manager-live.service.",
+        )
+
+    def test_live_price_stream_reader_down_rule(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r'alphalens_live_price_stream_reader_up\{job="live-price-stream-live"\}\s*==\s*0'
+                r".*?"
+                r'alphalens_live_price_stream_subscribed_uics\{job="live-price-stream-live"\}\s*>\s*0',
+                re.DOTALL,
+            ),
+            "Missing AlphalensLivePriceStreamReaderDown for live-price-stream-live "
+            "with the subscribed_uics>0 anti-false-positive gate.",
+        )
+
+    def test_live_price_stream_stale_rule(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"time\(\)\s*-\s*alphalens_live_price_stream_last_frame_timestamp_seconds"
+                r'\{job="live-price-stream-live"\}\)\s*>\s*300'
+                r".*?"
+                r'alphalens_live_price_stream_subscribed_uics\{job="live-price-stream-live"\}\s*>\s*0'
+                r".*?"
+                r'alphalens_live_price_stream_reader_up\{job="live-price-stream-live"\}\s*==\s*1',
+                re.DOTALL,
+            ),
+            "Missing AlphalensLivePriceStreamStale for live-price-stream-live "
+            "with the subscribed_uics>0 / reader_up==1 anti-false-positive gates.",
+        )
+
+    def test_saxo_marketdata_refresh_job_stale_and_missing_rules(self) -> None:
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"time\(\)\s*-\s*alphalens_job_last_success_timestamp_seconds"
+                r"\{job=\"saxo-marketdata-refresh\"\}\s*>\s*3600\b"
+            ),
+        )
+        self.assertRegex(
+            self.text,
+            re.compile(
+                r"absent\(alphalens_job_last_success_timestamp_seconds"
+                r"\{job=\"saxo-marketdata-refresh\"\}\)"
+            ),
+        )
+
+    def test_live_rules_carry_distinct_static_labels_from_sim_twins(self) -> None:
+        # promtool rejects two rules sharing BOTH an alertname AND an
+        # identical static-label set. AlphalensLivePriceStreamReaderDown/
+        # Stale reuse the SIM alertnames (same shape, different job), so the
+        # `unit` label MUST differ (broker-manager-live vs broker-manager)
+        # or the two collide.
+        data = yaml.safe_load(self.text)
+        rules = data["groups"][0]["rules"]
+        by_alert: dict[str, list[frozenset]] = {}
+        for rule in rules:
+            alert = rule.get("alert")
+            if alert not in ("AlphalensLivePriceStreamReaderDown", "AlphalensLivePriceStreamStale"):
+                continue
+            by_alert.setdefault(alert, []).append(frozenset(rule.get("labels", {}).items()))
+        for alert, label_sets in by_alert.items():
+            with self.subTest(alert=alert):
+                self.assertEqual(
+                    len(label_sets),
+                    len(set(label_sets)),
+                    f"{alert}: SIM and LIVE rules share an identical static "
+                    "label set — promtool would reject this as a duplicate rule.",
+                )
 
 
 if __name__ == "__main__":
