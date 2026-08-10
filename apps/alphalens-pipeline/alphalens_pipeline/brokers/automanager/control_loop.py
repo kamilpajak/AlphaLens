@@ -2368,11 +2368,17 @@ _FEE_FLOOR_COMMISSION_RATE = 0.0008
 _FEE_FLOOR_FX_ROUND_TRIP_RATE = 0.0050
 
 
-def _round_trip_fee_bps(notional: float, *, fx_applies: bool) -> float:
+def _round_trip_fee_bps(
+    notional: float, *, fx_applies: bool, min_commission_applies: bool = True
+) -> float:
     """The estimated round-trip fee for ``notional`` (instrument currency),
     expressed in bps of that notional — design memo §4. ``fx_applies`` is
     ``True`` iff the pick's ``fx`` conversion is not ``None`` (account
     currency != instrument currency), which adds the FX round-trip leg.
+    ``min_commission_applies`` gates the $1-per-fill clamp: that figure is
+    denominated in USD, so it is only meaningful when ``notional`` is too —
+    a non-USD instrument gets the ad-valorem rate alone (the memo §4
+    equation is calibrated for the first-cohort US venue).
 
     A non-positive ``notional`` (an unplannable/zero-tier pick) returns
     ``0.0`` — the caller's cap comparison then stays inert rather than
@@ -2380,14 +2386,18 @@ def _round_trip_fee_bps(notional: float, *, fx_applies: bool) -> float:
     pick on its own terms."""
     if notional <= 0:
         return 0.0
-    commission_round_trip = 2.0 * max(
-        _FEE_FLOOR_MIN_COMMISSION_USD, _FEE_FLOOR_COMMISSION_RATE * notional
+    ad_valorem = _FEE_FLOOR_COMMISSION_RATE * notional
+    per_fill = (
+        max(_FEE_FLOOR_MIN_COMMISSION_USD, ad_valorem) if min_commission_applies else ad_valorem
     )
+    commission_round_trip = 2.0 * per_fill
     fx_round_trip = _FEE_FLOOR_FX_ROUND_TRIP_RATE * notional if fx_applies else 0.0
     return (commission_round_trip + fx_round_trip) / notional * 10000.0
 
 
-def _check_fee_floor(plan: Any, fx: Any, *, ticker: str) -> str | None:
+def _check_fee_floor(
+    plan: Any, fx: Any, *, ticker: str, instrument_currency: str = "USD"
+) -> str | None:
     """``None`` iff the pick clears the round-trip fee floor OR
     ``ALPHALENS_BROKER_MAX_FEE_BPS`` is unset (SIM — no fee floor, byte-
     identical to pre-fee-floor behavior). Else a refusal message naming the
@@ -2409,7 +2419,11 @@ def _check_fee_floor(plan: Any, fx: Any, *, ticker: str) -> str | None:
     from broker_contract.sizing import setup_plan_gross_notional
 
     notional = setup_plan_gross_notional(plan)
-    fee_bps = _round_trip_fee_bps(notional, fx_applies=fx is not None)
+    fee_bps = _round_trip_fee_bps(
+        notional,
+        fx_applies=fx is not None,
+        min_commission_applies=instrument_currency == "USD",
+    )
     if fee_bps <= max_fee_bps:
         return None
     return (
@@ -2628,7 +2642,7 @@ def _place_tiers(
                 note=None,
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
-                sizing_equity=account.total_value,
+                sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
             )
         )
@@ -2682,7 +2696,7 @@ def _place_tiers(
                 note=failure_note,
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
-                sizing_equity=account.total_value,
+                sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
             )
         )
@@ -2786,7 +2800,9 @@ def _place_pick(
     # known, BEFORE any bracket construction/placement. A pick below the
     # floor is refused terminal (never re-tried every tick) and NEVER placed;
     # ALPHALENS_BROKER_MAX_FEE_BPS unset (SIM) skips the check entirely.
-    fee_violation = _check_fee_floor(plan, fx, ticker=ticker)
+    fee_violation = _check_fee_floor(
+        plan, fx, ticker=ticker, instrument_currency=instrument.currency
+    )
     if fee_violation is not None:
         logger.warning("place_pick %s: %s", ticker, fee_violation)
         if alert_throttled is not None:

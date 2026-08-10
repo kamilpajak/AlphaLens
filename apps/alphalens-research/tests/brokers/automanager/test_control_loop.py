@@ -1055,6 +1055,19 @@ class TestCheckFeeFloor(unittest.TestCase):
             self.assertIsNone(cl._check_fee_floor(_fee_plan(1000.0), None, ticker="KO"))
             self.assertIsNotNone(cl._check_fee_floor(_fee_plan(1000.0), object(), ticker="KO"))
 
+    def test_non_usd_instrument_skips_the_min_commission_clamp(self) -> None:
+        # The $1-min commission is a USD-venue figure; comparing it against a
+        # notional denominated in another currency mixes units (a 50-PLN
+        # notional is NOT $50). Non-USD instruments get the ad-valorem rate
+        # only — memo §4's clamp is calibrated for the first-cohort US venue.
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
+            self.assertIsNotNone(
+                cl._check_fee_floor(_fee_plan(50.0), None, ticker="KO", instrument_currency="USD")
+            )
+            self.assertIsNone(
+                cl._check_fee_floor(_fee_plan(50.0), None, ticker="CDR", instrument_currency="PLN")
+            )
+
 
 class _RecordingBroker(_PlaceBroker):
     """``_PlaceBroker`` that records every ``place_bracket_order`` call, so a
@@ -1113,6 +1126,24 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
         placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
         return placer, alerts, refusals
+
+    def test_journal_records_the_effective_sizing_equity_not_the_snapshot(self) -> None:
+        # Audit fidelity (T8): the plan is sized off min(pin, snapshot); the
+        # submission record must carry that SAME figure — a record stamped
+        # with the raw balance would misdescribe every quantity in it.
+        appended: list[dict] = []
+        broker = _RecordingBroker()
+        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
+            placer, _alerts, _refusals = self._placer(
+                broker, notional=10_000.0, append=lambda r: appended.append(r)
+            )
+            self.assertTrue(placer(_pick()))
+        self.assertEqual(len(appended), 1)
+        self.assertEqual(
+            appended[0]["sizing_equity"],
+            10_000.0,
+            "journal must record the effective (pinned) equity, not total_value=100000",
+        )
 
     def test_small_notional_over_cap_is_refused_terminal_never_placed(self) -> None:
         broker = _RecordingBroker()
