@@ -11,8 +11,9 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
     alphalens broker submit KO --date 2026-07-16   — DRY-RUN by default: bracket
         table + precheck; sending needs --execute AND an interactive confirm
         (--yes skips the prompt) AND ALPHALENS_BROKER_ALLOW_ORDERS=1 in the env
-    alphalens broker arm KO --date 2026-07-20   — validate against the brief,
-        append an "armed" pick to picks.jsonl (the auto-manager hand-off seam)
+    alphalens broker arm KO --date 2026-07-20 [--env sim|live]   — validate
+        against the brief, append an "armed" pick to <env>/picks.jsonl (the
+        auto-manager hand-off seam; --env selects the instance, default sim)
     alphalens broker orders                  — open orders
     alphalens broker cancel <order_id>       — cancel (entry cancel cascades the bracket)
     alphalens broker reconcile [--json]      — READ-ONLY journal vs broker verdicts (P3):
@@ -67,6 +68,12 @@ _REFRESH_DEAD_LINE = "refresh      DEAD"
 # informational metadata for a human/future multi-exchange client, never used
 # for routing.
 _ARM_INSTRUMENT_MIC = "XNYS"
+
+# `arm --env` default — mirrors state_paths.ENV_SIM, kept as a literal so the
+# option default is available without importing `state_paths` at module scope
+# (lazy-CLI doctrine, module docstring above). The real validation (and the
+# full sim/live vocabulary) is owned by the seam at call time, not here.
+_DEFAULT_ARM_ENV = "sim"
 
 
 def _fail(message: str) -> typer.Exit:
@@ -1022,6 +1029,11 @@ def arm_command(
     briefs_dir: Path = typer.Option(
         _DEFAULT_BRIEFS_DIR, "--briefs-dir", help="Thematic briefs parquet directory."
     ),
+    env: str = typer.Option(
+        _DEFAULT_ARM_ENV,
+        "--env",
+        help="Broker instance inbox to arm into: 'sim' or 'live' (ADR 0016). Default: sim.",
+    ),
 ) -> None:
     """Arm a picked candidate — parse the brief into a TradeIntent client-side
     and append it to the picks queue.
@@ -1039,6 +1051,11 @@ def arm_command(
     at brief-creation (the selection tier), so a filtered-out candidate never
     reaches the brief. The client invoking arm is responsible for knowing what
     it arms; the command never second-guesses it.
+
+    A pick belongs to exactly one instance (ADR 0016 D6): ``--env`` selects
+    which instance's inbox (``<env>/picks.jsonl``) the armed intent lands in,
+    via the ``state_paths`` seam — the daemon drains only its own inbox, so
+    cross-instance placement is impossible by construction.
     """
     from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.brokers.automanager.picks import arm_pick
@@ -1051,6 +1068,11 @@ def arm_command(
         brief_date = dt.date.fromisoformat(date)
     except ValueError as exc:
         raise _fail(f"invalid --date {date!r}: {exc}") from exc
+
+    try:
+        picks_target = state_paths.picks_path(env=env)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
 
     try:
         candidates = load_brief(brief_date, briefs_dir)
@@ -1083,8 +1105,8 @@ def arm_command(
             brief_date=brief_date.isoformat(),
         ),
     )
-    arm_pick(intent)
-    typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {state_paths.picks_path()}")
+    arm_pick(intent, path=picks_target)
+    typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {picks_target}")
 
 
 @broker_app.command(name="orders")

@@ -13,6 +13,10 @@ was removed: selection-policy filters (earnings-window avoidance included)
 belong at brief-creation (the selection tier), so a filtered-out candidate
 never reaches the brief in the first place. The client invoking arm is
 responsible for knowing what it arms; the command never second-guesses it.
+
+ADR 0016 / design memo D6 (2026-08-10): arm gains ``--env {sim,live}``
+(default sim) choosing which instance inbox (``<env>/picks.jsonl``) the
+armed intent is persisted into, via the ``state_paths`` seam.
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ import ast
 import datetime as dt
 import inspect
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 from alphalens_pipeline.paper.brief_loader import CandidateBrief
@@ -201,6 +207,127 @@ class ArmCommandTest(unittest.TestCase):
             result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
         self.assertEqual(result.exit_code, 0, result.output)
         arm.assert_called_once()
+
+
+class ArmEnvOptionTest(unittest.TestCase):
+    """Thin CLI-option test: `--env` targets the right instance inbox path.
+
+    ``arm_pick`` stays mocked here — these tests only pin the ``path`` kwarg
+    it is called with, not the actual file write (covered end-to-end by
+    ``ArmEnvIsolationTest`` below).
+    """
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+
+    def test_arm_default_env_passes_sim_picks_path(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.automanager import state_paths
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.paper.brief_loader.load_brief",
+                return_value=[_candidate("KO")],
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
+        ):
+            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        _args, kwargs = arm.call_args
+        self.assertEqual(kwargs["path"], state_paths.picks_path(env="sim"))
+
+    def test_arm_env_live_passes_live_picks_path(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.automanager import state_paths
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.paper.brief_loader.load_brief",
+                return_value=[_candidate("KO")],
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
+        ):
+            result = self.runner.invoke(
+                broker_app, ["arm", "KO", "--date", "2026-07-20", "--env", "live"]
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+        _args, kwargs = arm.call_args
+        self.assertEqual(kwargs["path"], state_paths.picks_path(env="live"))
+
+    def test_arm_invalid_env_fails_loud_via_the_seam(self) -> None:
+        # `--env prod` must fail with the SAME ValueError the state_paths seam
+        # raises for any other invalid environment value (D1) — never a
+        # bespoke CLI-side error string.
+        from alphalens_cli.commands.broker import broker_app
+
+        with (
+            mock.patch(
+                "alphalens_pipeline.paper.brief_loader.load_brief",
+                return_value=[_candidate("KO")],
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.picks.arm_pick") as arm,
+        ):
+            result = self.runner.invoke(
+                broker_app, ["arm", "KO", "--date", "2026-07-20", "--env", "prod"]
+            )
+        self.assertEqual(result.exit_code, 1)
+        self.assertIn("ALPHALENS_BROKER_ENVIRONMENT", result.output)
+        self.assertIn("prod", result.output)
+        arm.assert_not_called()
+
+
+class ArmEnvIsolationTest(unittest.TestCase):
+    """End-to-end (real arm_pick/iter_picks): sim and live inboxes never cross.
+
+    Mirrors ``test_state_paths.HomeDirTestCase`` — patches ``Path.home()`` to
+    an isolated temp directory so the write actually lands under
+    ``<home>/.alphalens/broker_orders/<env>/picks.jsonl``.
+    """
+
+    def setUp(self) -> None:
+        self.runner = CliRunner()
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.home = Path(self._tmp.name)
+        patcher = mock.patch("pathlib.Path.home", return_value=self.home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_arm_env_live_writes_only_to_the_live_inbox(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.automanager import state_paths
+        from alphalens_pipeline.brokers.automanager.picks import iter_picks
+
+        with mock.patch(
+            "alphalens_pipeline.paper.brief_loader.load_brief",
+            return_value=[_candidate("KO")],
+        ):
+            result = self.runner.invoke(
+                broker_app, ["arm", "KO", "--date", "2026-07-20", "--env", "live"]
+            )
+        self.assertEqual(result.exit_code, 0, result.output)
+
+        live_picks = list(iter_picks(path=state_paths.picks_path(env="live")))
+        sim_picks = list(iter_picks(path=state_paths.picks_path(env="sim")))
+        self.assertEqual([i.instrument.ticker for i in live_picks], ["KO"])
+        self.assertEqual(sim_picks, [])
+
+    def test_arm_default_env_writes_only_to_the_sim_inbox(self) -> None:
+        from alphalens_cli.commands.broker import broker_app
+        from alphalens_pipeline.brokers.automanager import state_paths
+        from alphalens_pipeline.brokers.automanager.picks import iter_picks
+
+        with mock.patch(
+            "alphalens_pipeline.paper.brief_loader.load_brief",
+            return_value=[_candidate("KO")],
+        ):
+            result = self.runner.invoke(broker_app, ["arm", "KO", "--date", "2026-07-20"])
+        self.assertEqual(result.exit_code, 0, result.output)
+
+        sim_picks = list(iter_picks(path=state_paths.picks_path(env="sim")))
+        live_picks = list(iter_picks(path=state_paths.picks_path(env="live")))
+        self.assertEqual([i.instrument.ticker for i in sim_picks], ["KO"])
+        self.assertEqual(live_picks, [])
 
 
 if __name__ == "__main__":
