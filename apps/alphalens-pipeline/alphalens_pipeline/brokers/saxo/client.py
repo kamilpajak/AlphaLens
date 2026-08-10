@@ -7,17 +7,23 @@ Mirrors :mod:`alphalens_pipeline.data.alt_data.polygon_client` structurally
 ManualOrder-era drift risk). Enforced as the only Saxo HTTP surface by
 ``tests/test_no_raw_saxo_http.py``.
 
-**SIM-only structural rail (ADR 0014, narrowed by ADR 0015):** the
-constructor accepts ONLY :data:`SIM_BASE_URL`; there is deliberately no
-``environment=`` switch and no env var that reaches LIVE — with ONE
-exception: the ADR 0015 attended keyed unlock
-(:data:`LIVE_ORDERS_UNLOCK_ENV` equal to today's UTC date) widens the
-CONSTRUCTOR guard alone, per process, self-expiring at UTC midnight.
-``from_env`` and every factory path remain unconditionally SIM-only, so the
-daemon has no code path to LIVE regardless of environment contents.
-``LIVE_TRADING_ENABLED`` stays ``False`` (mirrors the research-side
-``capital_deploy_clause`` — two independent gates, deliberately not
-collapsed). Pinned by ``tests/brokers/test_saxo_sim_only_rail.py``.
+**SIM-only structural rail (ADR 0014, narrowed by ADR 0015 and ADR 0017):**
+the constructor accepts ONLY :data:`SIM_BASE_URL`; there is deliberately no
+``environment=`` switch and no env var that reaches LIVE — with TWO
+exceptions, both widening the CONSTRUCTOR guard alone, per process: (1) the
+ADR 0015 attended keyed unlock (:data:`LIVE_ORDERS_UNLOCK_ENV` equal to
+today's UTC date), self-expiring at UTC midnight; (2) the ADR 0017 standing
+grant for the unattended daemon arm — the keyword-only
+``standing_live_authorized=True`` PLUS :data:`LIVE_STANDING_ENV` equal to
+:data:`LIVE_ACCOUNT_KEY_ENV`, both required simultaneously (the keyword alone
+or the grant alone is not a capability). ``from_env`` and every factory path
+remain unconditionally SIM-only — neither the keyword nor the grant is ever
+read by them — so the daemon's default construction path has no code path to
+LIVE regardless of environment contents. ``LIVE_TRADING_ENABLED`` stays
+``False`` (mirrors the research-side ``capital_deploy_clause`` — two
+independent gates, deliberately not collapsed). Pinned by
+``tests/brokers/test_saxo_sim_only_rail.py`` (ADR 0015) and
+``tests/brokers/test_saxo_live_daemon_rail.py`` (ADR 0017).
 
 Auth: Bearer token from a pluggable :class:`~.tokens.TokenProvider` — the
 token travels ONLY in the ``Authorization`` header, never in URLs, logs, or
@@ -103,6 +109,30 @@ def _live_orders_unlocked() -> bool:
     return value == today
 
 
+# ADR 0017: the standing (non-expiring) LIVE authorization for the unattended
+# daemon arm. Deliberately NOT a bare truthy flag — the grant must equal the
+# distinct LIVE account-key env var, so a leaked truthy value or a
+# partially-copied unit file is structurally inert (the grant names the
+# specific resource it authorizes). Both names are env-var NAMES only; the
+# LIVE gateway URL itself is never a literal in this module (§2 of the design
+# memo — it is imported by the LIVE factory from outside ``brokers/``).
+LIVE_STANDING_ENV = "ALPHALENS_SAXO_LIVE_STANDING"
+LIVE_ACCOUNT_KEY_ENV = "SAXO_LIVE_ACCOUNT_KEY"
+
+
+def _standing_grant_valid() -> bool:
+    """ADR 0017: True iff the standing grant equals the LIVE account key.
+
+    Both env vars must be present AND non-empty AND equal — an absent,
+    empty, or mismatched pair refuses, same as no grant at all.
+    """
+    standing = os.environ.get(LIVE_STANDING_ENV)
+    account_key = os.environ.get(LIVE_ACCOUNT_KEY_ENV)
+    if not standing or not account_key:
+        return False
+    return standing == account_key
+
+
 class SaxoClient:
     """Canonical HTTP client for the Saxo OpenAPI SIM gateway.
 
@@ -127,22 +157,35 @@ class SaxoClient:
         timeout: float = 30.0,
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        standing_live_authorized: bool = False,
     ):
         if base_url != SIM_BASE_URL:
-            if not _live_orders_unlocked():
+            attended_unlocked = _live_orders_unlocked()
+            standing_unlocked = standing_live_authorized and _standing_grant_valid()
+            if not (attended_unlocked or standing_unlocked):
                 raise SaxoLiveEnvironmentBlockedError(
                     f"SaxoClient is SIM-only: base_url must be {SIM_BASE_URL!r}, got "
                     f"{base_url!r}. The LIVE gateway is structurally unreachable "
                     "except via the attended keyed day-bound unlock "
-                    f"(ADR 0015, {LIVE_ORDERS_UNLOCK_ENV})."
+                    f"(ADR 0015, {LIVE_ORDERS_UNLOCK_ENV}) or the ADR 0017 "
+                    f"account-bound standing grant ({LIVE_STANDING_ENV} == "
+                    f"{LIVE_ACCOUNT_KEY_ENV}), which is absent, empty, or mismatched."
                 )
-            logger.warning(
-                "SAXO LIVE ORDER RAIL UNLOCKED for %r — %s matches today's UTC "
-                "date (ADR 0015 attended keyed unlock; self-expires at UTC "
-                "midnight; real-money orders are now possible in THIS process)",
-                base_url,
-                LIVE_ORDERS_UNLOCK_ENV,
-            )
+            if attended_unlocked:
+                logger.warning(
+                    "SAXO LIVE ORDER RAIL UNLOCKED for %r — %s matches today's UTC "
+                    "date (ADR 0015 attended keyed unlock; self-expires at UTC "
+                    "midnight; real-money orders are now possible in THIS process)",
+                    base_url,
+                    LIVE_ORDERS_UNLOCK_ENV,
+                )
+            else:
+                logger.warning(
+                    "SAXO LIVE ORDER RAIL UNLOCKED for %r — standing (ADR 0017) "
+                    "account-bound grant verified; real-money orders are now "
+                    "possible in THIS process",
+                    base_url,
+                )
         self._token_provider = token_provider
         self._base_url = base_url
         self._timeout = timeout
@@ -1000,7 +1043,9 @@ def _reset_default_client_for_tests() -> None:
 
 
 __all__ = [
+    "LIVE_ACCOUNT_KEY_ENV",
     "LIVE_ORDERS_UNLOCK_ENV",
+    "LIVE_STANDING_ENV",
     "LIVE_TRADING_ENABLED",
     "SIM_AUTH_BASE_URL",
     "SIM_BASE_URL",
