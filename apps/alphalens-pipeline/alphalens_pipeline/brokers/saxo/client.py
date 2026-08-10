@@ -7,10 +7,15 @@ Mirrors :mod:`alphalens_pipeline.data.alt_data.polygon_client` structurally
 ManualOrder-era drift risk). Enforced as the only Saxo HTTP surface by
 ``tests/test_no_raw_saxo_http.py``.
 
-**SIM-only structural rail (ADR 0014):** the constructor accepts ONLY
-:data:`SIM_BASE_URL`; there is deliberately no ``environment=`` switch and no
-env var that reaches LIVE. ``LIVE_TRADING_ENABLED`` is flipped ONLY by a
-future ADR lifting the rail (mirrors the research-side
+**SIM-only structural rail (ADR 0014, narrowed by ADR 0015):** the
+constructor accepts ONLY :data:`SIM_BASE_URL`; there is deliberately no
+``environment=`` switch and no env var that reaches LIVE — with ONE
+exception: the ADR 0015 attended keyed unlock
+(:data:`LIVE_ORDERS_UNLOCK_ENV` equal to today's UTC date) widens the
+CONSTRUCTOR guard alone, per process, self-expiring at UTC midnight.
+``from_env`` and every factory path remain unconditionally SIM-only, so the
+daemon has no code path to LIVE regardless of environment contents.
+``LIVE_TRADING_ENABLED`` stays ``False`` (mirrors the research-side
 ``capital_deploy_clause`` — two independent gates, deliberately not
 collapsed). Pinned by ``tests/brokers/test_saxo_sim_only_rail.py``.
 
@@ -32,6 +37,7 @@ and never-blind-retry-a-POST rule inherit the header for free.
 
 from __future__ import annotations
 
+import datetime
 import logging
 import os
 import threading
@@ -68,19 +74,41 @@ SIM_AUTH_BASE_URL = "https://sim.logonvalidation.net"
 # tests/brokers/test_saxo_sim_only_rail.py).
 _LIVE_URL_MARKERS = ("gateway.saxobank.com/openapi", "live.logonvalidation.net", "live-streaming.saxobank.com")  # fmt: skip
 
-# Flipped ONLY by a future ADR lifting the SIM-only rail (see ADR 0014).
+# Structural default: stays False. ADR 0015 (the "future ADR" ADR 0014 named)
+# deliberately chose NOT to flip this — LIVE is reachable only via the keyed
+# per-process unlock below, never as a global default.
 LIVE_TRADING_ENABLED = False
 
 # Env var that must never be used to reach LIVE; from_env fails loudly on any
 # value other than "sim" to catch operator .env confusion.
 _SAXO_ENV_VAR = "SAXO_ENV"
 
+# ADR 0015: the keyed day-bound unlock — the ONLY exception to the SIM-only
+# constructor guard. A non-SIM base URL is accepted iff this env var equals
+# the CURRENT UTC date (YYYY-MM-DD), set per-process by an ATTENDED probe;
+# any other value (absent, stale, future, malformed) refuses exactly as
+# before. Deliberately NOT read by ``from_env``, so no factory/default path
+# can ever return a LIVE-capable client (the daemon constructs solely via
+# ``from_env``). Day-bound = self-expiring: a value forgotten in a shell
+# profile or unit file cannot re-arm LIVE on a later day.
+LIVE_ORDERS_UNLOCK_ENV = "ALPHALENS_SAXO_LIVE_ORDERS_UNLOCK"
+
+
+def _live_orders_unlocked() -> bool:
+    """ADR 0015: True iff the unlock env equals today's UTC date, exactly."""
+    value = os.environ.get(LIVE_ORDERS_UNLOCK_ENV)
+    if value is None:
+        return False
+    today = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+    return value == today
+
 
 class SaxoClient:
     """Canonical HTTP client for the Saxo OpenAPI SIM gateway.
 
     Single shared throttle + retry across every consumer; construction is
-    refused for any base URL other than :data:`SIM_BASE_URL`.
+    refused for any base URL other than :data:`SIM_BASE_URL` unless the
+    ADR 0015 keyed day-bound unlock is active (attended probes only).
     """
 
     _MIN_REQUEST_INTERVAL_S = 0.5  # 120 req/min ceiling per session per service group
@@ -101,10 +129,19 @@ class SaxoClient:
         sleep: Callable[[float], None] = time.sleep,
     ):
         if base_url != SIM_BASE_URL:
-            raise SaxoLiveEnvironmentBlockedError(
-                f"SaxoClient is SIM-only: base_url must be {SIM_BASE_URL!r}, got "
-                f"{base_url!r}. The LIVE gateway is structurally unreachable; "
-                "lifting the rail requires its own future ADR (see ADR 0014)."
+            if not _live_orders_unlocked():
+                raise SaxoLiveEnvironmentBlockedError(
+                    f"SaxoClient is SIM-only: base_url must be {SIM_BASE_URL!r}, got "
+                    f"{base_url!r}. The LIVE gateway is structurally unreachable "
+                    "except via the attended keyed day-bound unlock "
+                    f"(ADR 0015, {LIVE_ORDERS_UNLOCK_ENV})."
+                )
+            logger.warning(
+                "SAXO LIVE ORDER RAIL UNLOCKED for %r — %s matches today's UTC "
+                "date (ADR 0015 attended keyed unlock; self-expires at UTC "
+                "midnight; real-money orders are now possible in THIS process)",
+                base_url,
+                LIVE_ORDERS_UNLOCK_ENV,
             )
         self._token_provider = token_provider
         self._base_url = base_url
@@ -963,6 +1000,7 @@ def _reset_default_client_for_tests() -> None:
 
 
 __all__ = [
+    "LIVE_ORDERS_UNLOCK_ENV",
     "LIVE_TRADING_ENABLED",
     "SIM_AUTH_BASE_URL",
     "SIM_BASE_URL",

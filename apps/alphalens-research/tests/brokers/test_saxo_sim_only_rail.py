@@ -12,12 +12,15 @@ Four independent locks, so no single edit can quietly open a LIVE path:
 
 from __future__ import annotations
 
+import datetime
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from alphalens_pipeline.brokers.saxo.client import (
     _LIVE_URL_MARKERS,
+    LIVE_ORDERS_UNLOCK_ENV,
     LIVE_TRADING_ENABLED,
     SIM_BASE_URL,
     SaxoClient,
@@ -108,6 +111,100 @@ class TestSimOnlyRail(unittest.TestCase):
         self.assertIn("live-streaming.saxobank.com", _LIVE_URL_MARKERS)
         for marker in _LIVE_URL_MARKERS:
             self.assertNotIn(marker, SIM_BASE_URL, "a LIVE marker must never match SIM")
+
+
+class _SentinelTokenProvider:
+    """Provider whose token value must NEVER appear in any log output."""
+
+    TOKEN = "SECRET-LIVE-TOKEN-SENTINEL-9f3a"
+
+    def get_access_token(self) -> str:
+        return self.TOKEN
+
+    def invalidate(self) -> None:
+        pass
+
+
+class TestKeyedDayBoundUnlock(unittest.TestCase):
+    """ADR 0015 — the keyed day-bound unlock: the ONLY exception to lock (a).
+
+    The unlock widens the CONSTRUCTOR guard alone. Locks (b)-(d) are
+    untouched, and — the load-bearing pin — the unlock has NO effect on
+    ``from_env``: the daemon constructs solely through ``from_env``, so it
+    has no code path to LIVE regardless of environment contents.
+    """
+
+    LIVE_URL = f"https://{_LIVE_URL_MARKERS[0]}"
+
+    @staticmethod
+    def _utc_date(offset_days: int = 0) -> str:
+        now = datetime.datetime.now(datetime.UTC)
+        return (now + datetime.timedelta(days=offset_days)).strftime("%Y-%m-%d")
+
+    def test_unlock_absent_refuses_live_url(self):
+        with mock.patch.dict("os.environ"):
+            os.environ.pop(LIVE_ORDERS_UNLOCK_ENV, None)
+            with self.assertRaises(SaxoLiveEnvironmentBlockedError):
+                SaxoClient(_AnyTokenProvider(), base_url=self.LIVE_URL)
+
+    def test_unlock_with_stale_future_or_garbage_value_refuses(self):
+        """Yesterday, tomorrow, and non-date values all refuse — the unlock is
+        an exact-match against TODAY's UTC date, computed at construction."""
+        for value in (self._utc_date(-1), self._utc_date(+1), "1", "true", ""):
+            with self.subTest(value=value):
+                with mock.patch.dict("os.environ", {LIVE_ORDERS_UNLOCK_ENV: value}):
+                    with self.assertRaises(SaxoLiveEnvironmentBlockedError):
+                        SaxoClient(_AnyTokenProvider(), base_url=self.LIVE_URL)
+
+    def test_unlock_with_today_utc_date_accepts_and_warns_loudly(self):
+        provider = _SentinelTokenProvider()
+        with mock.patch.dict("os.environ", {LIVE_ORDERS_UNLOCK_ENV: self._utc_date()}):
+            with self.assertLogs(
+                "alphalens_pipeline.brokers.saxo.client", level="WARNING"
+            ) as captured:
+                client = SaxoClient(provider, base_url=self.LIVE_URL)
+        self.assertEqual(client._base_url, self.LIVE_URL)
+        joined = "\n".join(captured.output)
+        self.assertIn(self.LIVE_URL, joined, "the unlock warning must name the base URL")
+        self.assertNotIn(
+            _SentinelTokenProvider.TOKEN, joined, "token material must never be logged"
+        )
+
+    def test_sim_construction_needs_no_unlock(self):
+        with mock.patch.dict("os.environ"):
+            os.environ.pop(LIVE_ORDERS_UNLOCK_ENV, None)
+            client = SaxoClient(_AnyTokenProvider(), base_url=SIM_BASE_URL)
+            self.assertIsInstance(client, SaxoClient)
+
+    def test_from_env_ignores_unlock_still_sim_only(self):
+        """THE daemon-isolation pin: ``from_env`` with the unlock set still
+        returns a SIM client — no factory path can ever produce LIVE."""
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {TOKEN_ENV: "tok", LIVE_ORDERS_UNLOCK_ENV: self._utc_date()},
+            ),
+            mock.patch(
+                "alphalens_pipeline.brokers.saxo.client.resolve_token_store_path",
+                return_value=Path("/nonexistent/token_store.json"),
+            ),
+        ):
+            client = SaxoClient.from_env()
+            self.assertEqual(client._base_url, SIM_BASE_URL)
+
+    def test_from_env_saxo_env_live_still_raises_with_unlock_set(self):
+        """Lock (c) survives the unlock: SAXO_ENV=live fails loudly even with
+        a valid unlock in the environment."""
+        with mock.patch.dict(
+            "os.environ",
+            {
+                TOKEN_ENV: "tok",
+                "SAXO_ENV": "live",
+                LIVE_ORDERS_UNLOCK_ENV: self._utc_date(),
+            },
+        ):
+            with self.assertRaises(SaxoLiveEnvironmentBlockedError):
+                SaxoClient.from_env()
 
 
 if __name__ == "__main__":
