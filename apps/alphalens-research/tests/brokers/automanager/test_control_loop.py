@@ -1135,7 +1135,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         broker = _RecordingBroker()
         with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
             placer, _alerts, _refusals = self._placer(
-                broker, notional=10_000.0, append=lambda r: appended.append(r)
+                broker, notional=10_000.0, append=appended.append
             )
             self.assertTrue(placer(_pick()))
         self.assertEqual(len(appended), 1)
