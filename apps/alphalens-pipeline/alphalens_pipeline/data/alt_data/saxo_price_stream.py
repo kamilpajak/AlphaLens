@@ -376,7 +376,9 @@ class SaxoPriceStream:
                 continue  # heartbeat / reset / disconnect: liveness only, never a quote row
             try:
                 payload = json.loads(msg.payload)
-            except (UnicodeDecodeError, ValueError):
+            except ValueError:
+                # Covers json.JSONDecodeError AND UnicodeDecodeError — both
+                # derive from ValueError.
                 logger.warning(
                     "saxo price stream: undecodable JSON payload for refId %r",
                     msg.reference_id,

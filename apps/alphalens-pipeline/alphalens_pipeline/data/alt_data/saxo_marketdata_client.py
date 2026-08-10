@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 LIVE_API_BASE_URL = "https://gateway.saxobank.com/openapi"
 
 _TIMEOUT_S = 30.0
+_APPLICATION_JSON = "application/json"
 _ELEVATED_TRADE_LEVEL = "FullTradingAndChat"
 # Saxo clamps anything lower to 1000 ms (probed 2026-08-07: 0/100/500 all
 # came back assigned 1000), so asking for less is noise.
@@ -62,7 +63,7 @@ class SaxoMarketDataClient:
         """
         resp = self._session.patch(
             f"{LIVE_API_BASE_URL}/root/v1/sessions/capabilities",
-            headers={**self._headers(), "Content-Type": "application/json"},
+            headers={**self._headers(), "Content-Type": _APPLICATION_JSON},
             json={"TradeLevel": _ELEVATED_TRADE_LEVEL},
             timeout=_TIMEOUT_S,
         )
@@ -140,12 +141,12 @@ class SaxoMarketDataClient:
     ) -> dict[str, Any]:
         resp = self._session.post(
             f"{LIVE_API_BASE_URL}/trade/v1/infoprices/subscriptions",
-            headers={**self._headers(), "Content-Type": "application/json"},
+            headers={**self._headers(), "Content-Type": _APPLICATION_JSON},
             json={
                 "ContextId": context_id,
                 "ReferenceId": reference_id,
                 "RefreshRate": max(refresh_rate_ms, _MIN_REFRESH_RATE_MS),
-                "Format": "application/json",
+                "Format": _APPLICATION_JSON,
                 "Arguments": {
                     "AssetType": "Stock",
                     "Uics": ",".join(str(u) for u in uics),

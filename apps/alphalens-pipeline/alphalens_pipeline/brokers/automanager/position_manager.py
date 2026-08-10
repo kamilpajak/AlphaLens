@@ -581,6 +581,14 @@ def _sole_standalone_stop(legs: tuple[OrderState, ...]) -> OrderState | None:
     return stop
 
 
+def _finite_positive(value: float | None) -> bool:
+    """Shared amend-arm guard: a usable price/ATR/peak — present, finite, > 0.
+
+    ``None``, NaN, ±inf and the SIM NoAccess ``<= 0`` sentinel all read as
+    "veto" (the caller returns ``None`` and the resting stop stays put)."""
+    return value is not None and math.isfinite(value) and value > 0
+
+
 def _oco_stop_leg(legs: tuple[OrderState, ...]) -> OrderState | None:
     """The child ``StopIfTraded`` leg of a CLEAN unfilled resting OCO pair, or
     ``None`` (saxo Stage-3.5 memo). The OCO-REQUIRING inverse of
@@ -711,10 +719,10 @@ def _maybe_reanchor(
     if plan.reanchor is None:
         return None
     avg_price = pos.avg_price
-    if not math.isfinite(avg_price) or avg_price <= 0:
+    if not _finite_positive(avg_price):
         return None
     atr = plan.reanchor.atr
-    if not math.isfinite(atr) or atr <= 0:
+    if not _finite_positive(atr):
         return None
     sole = _sole_standalone_stop(legs)
     if sole is None:
@@ -750,8 +758,8 @@ def _maybe_reanchor(
             clamped,
             plan.stop_price,
         )
-        # TODO(INC-2): persist this divergence to the append-only journal (memo section 7),
-        # not log-only.
+        # Deferred (#1015): persist this divergence to the append-only journal
+        # (INC-2 memo section 7), not log-only.
     target = clamped
     owned = pos.quantity
     return AmendStop(
@@ -824,10 +832,10 @@ def _maybe_trail(
     if plan.reanchor is None:
         return None
     avg_price = pos.avg_price
-    if not math.isfinite(avg_price) or avg_price <= 0:
+    if not _finite_positive(avg_price):
         return None
     atr = plan.reanchor.atr
-    if not math.isfinite(atr) or atr <= 0:
+    if not _finite_positive(atr):
         return None
     sole = _sole_standalone_stop(legs)
     if sole is None:
@@ -835,10 +843,10 @@ def _maybe_trail(
     if uic in view.amend_recently_failed:
         return None
     peak = view.peak_by_uic.get(uic)
-    if peak is None or not math.isfinite(peak) or peak <= 0:
+    if not _finite_positive(peak):
         return None  # feed veto / no peak yet
     last_price = view.last_price_by_uic.get(uic)
-    if last_price is None or not math.isfinite(last_price) or last_price <= 0:
+    if not _finite_positive(last_price):
         return None  # feed veto / no live price yet (same discipline as the peak veto)
     proposed = policy.decide_reanchor(avg_price, atr, peak=peak, last_price=last_price)
     if proposed is None:
