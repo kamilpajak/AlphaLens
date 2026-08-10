@@ -1,7 +1,8 @@
 """Append-only pick queue for the Saxo auto-manager.
 
 One JSON line per `alphalens broker arm` under
-~/.alphalens/broker_orders/picks.jsonl — the durable human-intent inbox the
+~/.alphalens/broker_orders/<env>/picks.jsonl (per-environment path,
+state_paths.picks_path, ADR 0016) — the durable human-intent inbox the
 control loop drains. Mirrors submission_log.py: the file is NEVER rewritten;
 status is a recorded fact per line (T8 cohort discipline). Malformed/undated
 lines are skipped; a missing file yields nothing.
@@ -37,9 +38,9 @@ from broker_contract.trade_intent.codec import (
 )
 from broker_contract.trade_intent.schema import TradeIntent
 
-logger = logging.getLogger(__name__)
+from alphalens_pipeline.brokers.automanager import state_paths
 
-DEFAULT_PICKS_PATH = Path.home() / ".alphalens" / "broker_orders" / "picks.jsonl"
+logger = logging.getLogger(__name__)
 
 STATUS_ARMED = "armed"
 STATUS_REFUSED = "refused"
@@ -47,7 +48,7 @@ STATUS_REFUSED = "refused"
 
 def _append_record(record: dict, path: Path | None) -> None:
     """Append one JSON line (append-only; never rewrites)."""
-    target = path or DEFAULT_PICKS_PATH
+    target = path or state_paths.picks_path()
     target.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, sort_keys=True)
     with target.open("a", encoding="utf-8") as fh:
@@ -121,7 +122,7 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
     with no ``"intent"`` key (the pre-PR-7 bare shape) or an undecodable one
     is skipped with a warning — no back-compat, re-arm is the human path
     back."""
-    target = path or DEFAULT_PICKS_PATH
+    target = path or state_paths.picks_path()
     if not target.exists():
         return
     latest: dict[tuple[str, dt.date], dict] = {}
@@ -162,7 +163,6 @@ def iter_picks(*, path: Path | None = None) -> Iterator[TradeIntent]:
 
 
 __all__ = [
-    "DEFAULT_PICKS_PATH",
     "STATUS_ARMED",
     "STATUS_REFUSED",
     "arm_pick",

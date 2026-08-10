@@ -15,11 +15,12 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pandas as pd
+from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.automanager.exec_quality import (
     EXEC_QUALITY_COLUMNS,
-    EXEC_QUALITY_PARQUET,
     ExecQualityRecord,
     reconcile_fills,
     write_exec_quality_parquet,
@@ -310,9 +311,16 @@ class TestWriteExecQualityParquet(unittest.TestCase):
             self.assertTrue(pd.isna(df.iloc[0]["slippage_abs"]))
 
     def test_default_path_under_alphalens_home(self):
-        self.assertEqual(EXEC_QUALITY_PARQUET.name, "tranche_fills.parquet")
-        self.assertIn("exec_quality", EXEC_QUALITY_PARQUET.parts)
-        self.assertIn(".alphalens", EXEC_QUALITY_PARQUET.parts)
+        # The operator default now funnels through the ONE state-path seam
+        # (state_paths.exec_quality_parquet, ADR 0016 D2) — isolated against a
+        # fresh temp home so this pins the SHAPE, never a real machine path.
+        with tempfile.TemporaryDirectory() as home_dir:
+            with mock.patch("pathlib.Path.home", return_value=Path(home_dir)):
+                default_path = state_paths.exec_quality_parquet()
+        self.assertEqual(default_path.name, "tranche_fills.parquet")
+        self.assertIn("exec_quality", default_path.parts)
+        self.assertIn(".alphalens", default_path.parts)
+        self.assertIn("sim", default_path.parts)
 
     def test_empty_and_populated_parquets_share_identical_dtypes(self):
         # The schema must NOT vary by batch: an empty file, a fully-priced file,

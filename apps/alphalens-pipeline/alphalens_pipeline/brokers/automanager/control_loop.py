@@ -40,6 +40,7 @@ from broker_contract.exit_geometry import (
     resolve_exit_policy,
 )
 
+from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     ManagedExit,
     run_live_exits,
@@ -88,13 +89,10 @@ OcoPlacer = Callable[[int, str, float, float, float, str, "str | None"], PlacedO
 # (uic, order_id, side, order_type, new_qty, stop_price, request_id) -> PlacedOrder.
 AmendStopPlacer = Callable[[int, str, str, str, float, float, str], PlacedOrder]
 
-# The runtime data root ($HOME/.alphalens) and its broker-orders subtree have ONE
-# home here so the literal is not duplicated across the kill-file + journal +
-# briefs paths below.
-_ALPHALENS_HOME = Path.home() / ".alphalens"
-_BROKER_ORDERS_DIR = _ALPHALENS_HOME / "broker_orders"
-
-KILL_FILE_PATH = _BROKER_ORDERS_DIR / "KILL"
+# The runtime data root, the broker-orders subtree, and the KILL/journal paths
+# below it are NOT defined here any more — every broker-state path funnels
+# through the ONE seam (state_paths.py, ADR 0016 / design memo D2) and is
+# resolved at call/deps-build time, never as an import-time Path constant.
 
 # Prometheus heartbeat gauge (Task 13 wires _default_emit_heartbeat as the
 # run_daemon default; the metric name has one home here).
@@ -185,6 +183,16 @@ class LoopDeps:
     # flag is on but the capability is absent) and injected into the protection
     # executor closure; kept here for symmetry / introspection.
     amend_stop: AmendStopPlacer | None = None
+    # GLOBAL kill (D3, ADR 0016): the legacy parent-level
+    # broker_orders/KILL (state_paths.global_kill_file_path()), honored by
+    # EVERY instance IN ADDITION to this instance's own kill_file — defense
+    # in depth, so the operator's memorized `touch
+    # ~/.alphalens/broker_orders/KILL` keeps meaning "stop everything" once a
+    # second (LIVE) instance exists. Optional (default None) so a LoopDeps
+    # built without it — every pre-ADR-0016 test/harness — behaves exactly as
+    # before (the global check is simply skipped); build_default_deps always
+    # supplies the real seam path.
+    global_kill_file: Path | None = None
     # Daemon-lifetime per-uic consecutive-count of M1 oco-lag-hold NoOps (issue #5).
     # A MUTABLE dict on the (frozen) deps — built once in build_default_deps and
     # carried across every tick — so the pure reconcile module stays stateless. The
@@ -304,7 +312,13 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     phases (each with its OWN BrokerError boundary in its helper) so one phase
     failing never starves the safety-critical protection pass."""
     report = TickReport()
-    kill = deps.kill_file.exists()
+    # D3 (ADR 0016): the per-instance kill_file OR the GLOBAL kill (when wired)
+    # gates placement — defense in depth. global_kill_file is None for any
+    # LoopDeps built without it (pre-ADR-0016 tests/harnesses), so the OR
+    # degrades to exactly today's instance-only check.
+    kill = deps.kill_file.exists() or (
+        deps.global_kill_file is not None and deps.global_kill_file.exists()
+    )
     _alert_kill_transition(deps, kill)
     chain = deps.ensure_alive()
     alive = bool(getattr(chain, "alive", False))
@@ -1110,7 +1124,25 @@ def build_default_deps(
     import telegram. ``notify`` is the raw daemon alert sink (wrapped here in
     ``_journaled_alert`` so journald always gets the line first);
     ``chain_loss_notify`` is threaded into the OAuth provider for the
-    refresh-chain-lost alert. This module never imports telegram itself."""
+    refresh-chain-lost alert. This module never imports telegram itself.
+
+    Two state-safety guards (ADR 0016) run FIRST, before any broker/journal
+    I/O: D7 refuses to boot a LIVE instance (the only client path today is
+    unconditionally SIM — ADR 0015 lock — so a "live" instance would trade
+    SIM while journaling/alerting under LIVE labels, a mislabeled-state
+    hazard); D4 refuses to start against a pre-migration flat state layout
+    (an empty per-env root while the broker still holds positions would
+    reconcile against nothing and silently degrade protection)."""
+    if state_paths.broker_environment() == state_paths.ENV_LIVE:
+        raise BrokerCapabilityError(
+            f"{state_paths.BROKER_ENVIRONMENT_ENV}=live cannot boot yet (ADR 0016 "
+            "front 3 / ADR 0017 standing-LIVE authorization model): the daemon's "
+            "only client path is unconditionally SIM (ADR 0015 lock), so booting "
+            "now would trade SIM while journaling/alerting under LIVE labels — "
+            "wire the LIVE client-construction path before starting a live instance."
+        )
+    state_paths.assert_no_legacy_flat_state()
+
     from alphalens_pipeline.brokers.automanager import (  # noqa: F401 (planner/safety used by _make_place_pick)
         orphan_sweeper,
         picks,
@@ -1120,10 +1152,7 @@ def build_default_deps(
         session_keeper,
     )
     from alphalens_pipeline.brokers.registry import get_default_broker
-    from alphalens_pipeline.brokers.submission_log import (
-        DEFAULT_SUBMISSIONS_PATH,
-        iter_submission_records,
-    )
+    from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
     # One-shot bounded-growth maintenance: fold the append-only standalone-stop
     # journal down to its minimal fold-equivalent set (issue #895). Runs here —
@@ -1186,7 +1215,7 @@ def build_default_deps(
     keeper = session_keeper.SessionKeeper(provider)
 
     def _read_records() -> list[Mapping[str, Any]]:
-        return list(iter_submission_records(DEFAULT_SUBMISSIONS_PATH))
+        return list(iter_submission_records(state_paths.submissions_path()))
 
     # One throttle instance lives for the daemon's lifetime so the re-alert
     # interval + per-uic failure escalation persist across ticks; it wraps the
@@ -1206,7 +1235,8 @@ def build_default_deps(
 
     return LoopDeps(
         broker=broker,
-        kill_file=KILL_FILE_PATH,
+        kill_file=state_paths.kill_file_path(),
+        global_kill_file=state_paths.global_kill_file_path(),
         ensure_alive=keeper.ensure_alive,
         iter_picks=picks.iter_picks,
         place_pick=_make_place_pick(broker, exit_policy),
@@ -1322,13 +1352,22 @@ def _build_stream_handles(
 # cycle (test_control_loop.py injects LoopDeps as stubs; build_default_deps and
 # everything it wires is exercised end-to-end only by the deferred
 # SAXO_LIVE_TEST=1 SIM live probe). _make_place_pick writes the append-only
-# STANDALONE_STOP_JOURNAL_PATH `planned` lines — the plan PRICES the broker
-# cannot know (disaster stop + in-band TP), keyed to the entry client_request_id
-# and tier_index. NO journal line confers protection (saxo-oco memo §7): the
-# protection pass (build_protection_view + reconcile_protection) derives it from
-# live broker state. `_fold_planned_exits` folds the `planned` lines per-uic.
+# standalone-stop journal (_standalone_stop_journal_path()) `planned` lines —
+# the plan PRICES the broker cannot know (disaster stop + in-band TP), keyed to
+# the entry client_request_id and tier_index. NO journal line confers
+# protection (saxo-oco memo §7): the protection pass (build_protection_view +
+# reconcile_protection) derives it from live broker state. `_fold_planned_exits`
+# folds the `planned` lines per-uic.
 
-STANDALONE_STOP_JOURNAL_PATH = _BROKER_ORDERS_DIR / "standalone_stops.jsonl"
+
+def _standalone_stop_journal_path() -> Path:
+    """The out-of-band standalone-stop journal path — funnels through the ONE
+    broker-state path seam (state_paths.standalone_stops_path(), ADR 0016 /
+    design memo D2), resolved fresh on EVERY call, never cached at import
+    time. A thin named wrapper (rather than calling the seam directly at each
+    of the three call sites below) so tests monkeypatch ONE attribute."""
+    return state_paths.standalone_stops_path()
+
 
 _ENTRY_SIDE = "BUY"  # MVP scope: long entries only (design memo, single-name equities)
 _DISASTER_STOP_SIDE = "SELL"  # protective exit of a long entry
@@ -1354,8 +1393,9 @@ def _append_standalone_stop_journal(record: Mapping[str, Any]) -> None:
     import json
     import os
 
-    STANDALONE_STOP_JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with STANDALONE_STOP_JOURNAL_PATH.open("a", encoding="utf-8") as fh:
+    path = _standalone_stop_journal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
         fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
@@ -1406,9 +1446,10 @@ def _iter_standalone_stop_journal() -> Iterator[dict[str, Any]]:
     """Yield parsed lines from the standalone-stop journal; malformed lines skipped."""
     import json
 
-    if not STANDALONE_STOP_JOURNAL_PATH.exists():
+    path = _standalone_stop_journal_path()
+    if not path.exists():
         return
-    with STANDALONE_STOP_JOURNAL_PATH.open("r", encoding="utf-8") as fh:
+    with path.open("r", encoding="utf-8") as fh:
         for raw_line in fh:
             line = raw_line.strip()
             if not line:
@@ -2024,7 +2065,7 @@ def _compact_standalone_stop_journal() -> None:
     import os
     import tempfile
 
-    path = STANDALONE_STOP_JOURNAL_PATH
+    path = _standalone_stop_journal_path()
     if not path.exists():
         return
     lines = list(_iter_standalone_stop_journal())
@@ -2491,10 +2532,7 @@ def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = No
     from alphalens_pipeline.brokers.automanager.reconcile_bridge import (
         verdicts as reconcile_verdicts,
     )
-    from alphalens_pipeline.brokers.submission_log import (
-        DEFAULT_SUBMISSIONS_PATH,
-        iter_submission_records,
-    )
+    from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
     ticker = intent.instrument.ticker.upper()
     brief_date = _dt.date.fromisoformat(intent.meta.brief_date)
@@ -2504,7 +2542,7 @@ def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = No
     try:
         account = broker.get_account()
         positions = broker.get_positions()
-        records = list(iter_submission_records(DEFAULT_SUBMISSIONS_PATH))
+        records = list(iter_submission_records(state_paths.submissions_path()))
         open_verdicts = reconcile_verdicts(records, broker)
     except BrokerError as exc:
         logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
@@ -3304,7 +3342,6 @@ def _execute_place_stop(
 __all__ = [
     "HEARTBEAT_METRIC",
     "KILL_ACTIVE_METRIC",
-    "KILL_FILE_PATH",
     "LoopDeps",
     "TickReport",
     "build_default_deps",

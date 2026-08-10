@@ -1040,7 +1040,8 @@ def arm_command(
     reaches the brief. The client invoking arm is responsible for knowing what
     it arms; the command never second-guesses it.
     """
-    from alphalens_pipeline.brokers.automanager.picks import DEFAULT_PICKS_PATH, arm_pick
+    from alphalens_pipeline.brokers.automanager import state_paths
+    from alphalens_pipeline.brokers.automanager.picks import arm_pick
     from alphalens_pipeline.paper.brief_loader import load_brief
     from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, parse_brief_to_spec
     from broker_contract.sizing import TradeSetupNotPlannableError
@@ -1083,7 +1084,7 @@ def arm_command(
         ),
     )
     arm_pick(intent)
-    typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {DEFAULT_PICKS_PATH}")
+    typer.echo(f"armed {wanted} @ {brief_date.isoformat()} -> {state_paths.picks_path()}")
 
 
 @broker_app.command(name="orders")
@@ -1113,7 +1114,8 @@ def reconcile_command(
     journal: Path | None = typer.Option(
         None,
         "--journal",
-        help="Submission journal path (default: ~/.alphalens/broker_orders/submissions.jsonl).",
+        help="Submission journal path (default: "
+        "~/.alphalens/broker_orders/<env>/submissions.jsonl).",
     ),
     as_json: bool = typer.Option(
         False,
@@ -1130,19 +1132,17 @@ def reconcile_command(
     Exit code 0 when clean, 1 when any UNRESOLVED or divergent row exists
     (scriptable; a still-working entry PAST its TTL is a divergence).
     """
+    from alphalens_pipeline.brokers.automanager import state_paths
     from alphalens_pipeline.brokers.reconcile import (
         has_failures,
         reconcile_brackets,
         summarize,
     )
     from alphalens_pipeline.brokers.registry import get_default_broker
-    from alphalens_pipeline.brokers.submission_log import (
-        DEFAULT_SUBMISSIONS_PATH,
-        iter_submission_records,
-    )
+    from alphalens_pipeline.brokers.submission_log import iter_submission_records
     from broker_contract.contract import BrokerError
 
-    path = journal or DEFAULT_SUBMISSIONS_PATH
+    path = journal or state_paths.submissions_path()
     malformed: list[str] = []
     records = list(iter_submission_records(path, malformed=malformed))
     if malformed:
@@ -1193,7 +1193,8 @@ def reconcile_fills_command(
     out: Path | None = typer.Option(
         None,
         "--out",
-        help="Parquet output path (default: ~/.alphalens/exec_quality/tranche_fills.parquet).",
+        help="Parquet output path (default: "
+        "~/.alphalens/exec_quality/<env>/tranche_fills.parquet).",
     ),
     as_json: bool = typer.Option(
         False,
@@ -1211,9 +1212,8 @@ def reconcile_fills_command(
     """
     from dataclasses import asdict
 
-    from alphalens_pipeline.brokers.automanager import control_loop
+    from alphalens_pipeline.brokers.automanager import control_loop, state_paths
     from alphalens_pipeline.brokers.automanager.exec_quality import (
-        EXEC_QUALITY_PARQUET,
         FILL_STATUS_FILLED,
         FILL_STATUS_PENDING,
         FILL_STATUS_UNRESOLVED,
@@ -1224,7 +1224,7 @@ def reconcile_fills_command(
     from alphalens_pipeline.brokers.registry import get_default_broker
     from broker_contract.contract import BrokerError
 
-    out_path = out or EXEC_QUALITY_PARQUET
+    out_path = out or state_paths.exec_quality_parquet()
     lines = list(control_loop._iter_standalone_stop_journal())
 
     broker = get_default_broker()

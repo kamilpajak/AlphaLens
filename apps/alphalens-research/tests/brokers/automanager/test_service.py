@@ -95,7 +95,9 @@ class _ServiceHarness:
 
         self._env = mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=False)
         self._env.start()
-        self._journal_patch = mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", self.journal)
+        self._journal_patch = mock.patch.object(
+            cl, "_standalone_stop_journal_path", lambda: self.journal
+        )
         self._journal_patch.start()
         test.addCleanup(self._close)
 

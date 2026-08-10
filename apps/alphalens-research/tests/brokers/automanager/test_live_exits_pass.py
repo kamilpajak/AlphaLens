@@ -218,13 +218,13 @@ class TestFoldFiredSinceLatestPlan(unittest.TestCase):
 
 
 class _JournalCase(unittest.TestCase):
-    """Base case wiring a temp STANDALONE_STOP_JOURNAL_PATH per test."""
+    """Base case wiring a temp standalone-stop journal path per test."""
 
     def setUp(self) -> None:
         self._tmp = TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         journal = Path(self._tmp.name) / "standalone_stops.jsonl"
-        patch = mock.patch.object(cl, "STANDALONE_STOP_JOURNAL_PATH", journal)
+        patch = mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal)
         patch.start()
         self.addCleanup(patch.stop)
 

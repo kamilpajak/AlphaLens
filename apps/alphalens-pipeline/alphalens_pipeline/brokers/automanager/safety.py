@@ -1,12 +1,19 @@
 """Pure-predicate portfolio safety gate for the Saxo auto-manager.
 
 check(...) runs for every armed pick BEFORE any placement. Pure function of
-inputs + two process rails read at call time (KILL file, ALLOW_ORDERS). Places,
-cancels, and writes nothing: the daily-loss branch RETURNS Refuse; tripping the
-KILL file is the control loop's job. Refusal order (first failing rail wins):
-KILL file -> chain dead -> ALLOW_ORDERS != '1' -> MAX_OPEN cap -> portfolio
-gross cap -> daily-loss limit. The cap numbers are operator policy with no
+inputs + three process rails read at call time (instance KILL file, GLOBAL
+KILL file, ALLOW_ORDERS). Places, cancels, and writes nothing: the daily-loss
+branch RETURNS Refuse; tripping a KILL file is the control loop's job.
+Refusal order (first failing rail wins): instance KILL file -> GLOBAL KILL
+file -> chain dead -> ALLOW_ORDERS != '1' -> MAX_OPEN cap -> portfolio gross
+cap -> daily-loss limit. The cap numbers are operator policy with no
 validated basis (memo risk 7) — set conservatively.
+
+Both KILL paths default through the ONE broker-state path seam
+(``state_paths.kill_file_path`` / ``state_paths.global_kill_file_path``,
+ADR 0016 D3): the per-instance kill stops only this instance, the GLOBAL kill
+(the legacy parent-level ``broker_orders/KILL``) stops every instance —
+defense in depth.
 """
 
 from __future__ import annotations
@@ -16,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-DEFAULT_KILL_PATH = Path.home() / ".alphalens" / "broker_orders" / "KILL"
+from alphalens_pipeline.brokers.automanager import state_paths
 
 ALLOW_ORDERS_ENV = "ALPHALENS_BROKER_ALLOW_ORDERS"
 MAX_OPEN_ENV = "ALPHALENS_BROKER_MAX_OPEN"
@@ -105,11 +112,17 @@ def check(
     session_state: SessionState,
     *,
     kill_path: Path | None = None,
+    global_kill_path: Path | None = None,
 ) -> Decision:
     """Return Allow iff every rail clears; else the first Refuse. Pure predicate."""
-    kill = kill_path or DEFAULT_KILL_PATH
+    kill = kill_path or state_paths.kill_file_path()
     if kill.exists():
         return Refuse(f"KILL file present at {kill} — emergency stop, placement halted")
+    global_kill = global_kill_path or state_paths.global_kill_file_path()
+    if global_kill.exists():
+        return Refuse(
+            f"GLOBAL KILL file present at {global_kill} — emergency stop, placement halted"
+        )
     if not session_state.alive:
         return Refuse("OAuth chain is dead — cannot place; re-run `alphalens broker auth`")
     if os.environ.get(ALLOW_ORDERS_ENV) != "1":
@@ -146,7 +159,6 @@ __all__ = [
     "ALLOW_ORDERS_ENV",
     "DAILY_LOSS_LIMIT_R_ENV",
     "DEFAULT_DAILY_LOSS_LIMIT_R",
-    "DEFAULT_KILL_PATH",
     "DEFAULT_MAX_OPEN",
     "DEFAULT_PORTFOLIO_GROSS_FRAC",
     "MAX_OPEN_ENV",

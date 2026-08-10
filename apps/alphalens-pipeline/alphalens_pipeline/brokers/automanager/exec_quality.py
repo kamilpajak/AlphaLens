@@ -41,12 +41,11 @@ FILL_STATUS_UNRESOLVED = "unresolved"
 # Basis-points scale for the slippage-in-bps conversion.
 _BPS_SCALE = 1e4
 
-# The runtime data root ($HOME/.alphalens) — same base the automanager / broker
-# paths use (see ``control_loop._ALPHALENS_HOME``). The write function ALWAYS
-# takes an explicit ``out_path``, so this constant is only the operator default
-# and is never read implicitly by the tests.
-_ALPHALENS_HOME = Path.home() / ".alphalens"
-EXEC_QUALITY_PARQUET = _ALPHALENS_HOME / "exec_quality" / "tranche_fills.parquet"
+# The per-environment execution-quality parquet path
+# (state_paths.exec_quality_parquet(), ADR 0016 D2) is NOT defined here — the
+# write function ALWAYS takes an explicit ``out_path``, so callers (the CLI's
+# ``reconcile-fills`` command) resolve the operator default through the ONE
+# broker-state path seam instead of a module-level constant here.
 
 
 @dataclass(frozen=True)
@@ -235,7 +234,6 @@ def write_exec_quality_parquet(records: list[ExecQualityRecord], out_path: Path)
 
 __all__ = [
     "EXEC_QUALITY_COLUMNS",
-    "EXEC_QUALITY_PARQUET",
     "FILL_STATUS_FILLED",
     "FILL_STATUS_PENDING",
     "FILL_STATUS_UNRESOLVED",

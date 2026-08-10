@@ -7,8 +7,9 @@ place/cancel/amend).
 
 The broker is injected by patching ``get_default_broker`` at its source module
 (the CLI lazy-imports inside the command body). The journal is a REAL temp
-JSONL file that ``control_loop.STANDALONE_STOP_JOURNAL_PATH`` is pointed at, so
-the actual ``_iter_standalone_stop_journal`` reader is exercised end-to-end.
+JSONL file that ``control_loop._standalone_stop_journal_path`` is pointed at,
+so the actual ``_iter_standalone_stop_journal`` reader is exercised
+end-to-end.
 """
 
 from __future__ import annotations
@@ -111,8 +112,8 @@ class _Harness:
 
         patches = [
             mock.patch(
-                "alphalens_pipeline.brokers.automanager.control_loop.STANDALONE_STOP_JOURNAL_PATH",
-                self.journal_path,
+                "alphalens_pipeline.brokers.automanager.control_loop._standalone_stop_journal_path",
+                lambda: self.journal_path,
             ),
             mock.patch(
                 "alphalens_pipeline.brokers.registry.get_default_broker",
@@ -142,8 +143,8 @@ class TestReconcileFillsCommand(unittest.TestCase):
             with (
                 mock.patch(
                     "alphalens_pipeline.brokers.automanager.control_loop."
-                    "STANDALONE_STOP_JOURNAL_PATH",
-                    journal,
+                    "_standalone_stop_journal_path",
+                    lambda: journal,
                 ),
                 mock.patch(
                     "alphalens_pipeline.brokers.registry.get_default_broker",
