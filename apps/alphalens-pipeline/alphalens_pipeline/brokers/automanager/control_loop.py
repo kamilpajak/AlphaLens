@@ -568,7 +568,10 @@ class _NullPriceFeed:
     """Vetoes everything. The OFF state of the Saxo feed is 'no prices', never a
     quiet downgrade to a weaker source (see the INC-2 design memo)."""
 
-    def latest(self, uic: int) -> None:
+    # The parameter name is pinned by the structural ``PriceFeed`` Protocol
+    # (pyright matches names on non-positional-only params), so it cannot be
+    # underscored away even though this null feed ignores it.
+    def latest(self, uic: int) -> None:  # NOSONAR
         return None
 
 

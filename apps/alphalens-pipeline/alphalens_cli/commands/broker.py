@@ -57,6 +57,10 @@ broker_app = typer.Typer(
 
 _DEFAULT_BRIEFS_DIR = Path.home() / ".alphalens" / "thematic_briefs"
 
+# Status line shared by `broker auth --status` and `broker marketdata-auth
+# --status` — the column padding aligns with the sibling `access`/`store` rows.
+_REFRESH_DEAD_LINE = "refresh      DEAD"
+
 # Advisory-only instrument hint MIC stamped on every armed TradeIntent (PR-7,
 # broker-manager extraction memo section 5). The daemon resolves the REAL
 # instrument via resolve_us_instrument at drain time — this hint is
@@ -147,7 +151,7 @@ def _auth_status() -> None:
     if refresh_left > 0:
         typer.echo(f"refresh      ALIVE, ~{refresh_left:.0f} min remaining")
         return
-    typer.echo("refresh      DEAD")
+    typer.echo(_REFRESH_DEAD_LINE)
     raise _fail("refresh chain is dead — re-run `alphalens broker auth`")
 
 
@@ -388,14 +392,14 @@ def _marketdata_auth_status() -> None:
         if refresh_left > 0:
             typer.echo(f"refresh      ALIVE, ~{refresh_left:.0f} min remaining")
             return
-        typer.echo("refresh      DEAD")
+        typer.echo(_REFRESH_DEAD_LINE)
         raise _fail("refresh chain is dead — re-run `alphalens broker marketdata-auth`")
     if state.refresh_present:
         # Legacy store without a recorded refresh expiry: unknown window, fall
         # back to reporting the present single-use rotating token as alive.
         typer.echo("refresh      ALIVE — single-use rotating token present")
         return
-    typer.echo("refresh      DEAD")
+    typer.echo(_REFRESH_DEAD_LINE)
     raise _fail("refresh chain is dead — re-run `alphalens broker marketdata-auth`")
 
 
