@@ -3838,11 +3838,13 @@ class TestHeartbeatEmitter(unittest.TestCase):
                     os.environ.pop("ALPHALENS_TEXTFILE_DIR", None)
                 else:
                     os.environ["ALPHALENS_TEXTFILE_DIR"] = old
-            written = Path(d) / "alphalens_domain_broker-manager.prom"
+            # Default $ALPHALENS_BROKER_ENVIRONMENT is "sim" (ADR 0016 D1/D5) -
+            # the domain file and the {job=...} label both carry the "-sim" suffix.
+            written = Path(d) / "alphalens_domain_broker-manager-sim.prom"
             self.assertTrue(written.is_file())
             body = written.read_text()
             self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", body)
-            self.assertIn('job="broker-manager"', body)
+            self.assertIn('job="broker-manager-sim"', body)
 
     def test_run_daemon_uses_default_heartbeat_signature(self) -> None:
         import inspect
@@ -3851,6 +3853,28 @@ class TestHeartbeatEmitter(unittest.TestCase):
 
         sig = inspect.signature(cl.run_daemon)
         self.assertIs(sig.parameters["heartbeat_fn"].default, cl._default_emit_heartbeat)
+
+    def test_live_instance_emits_under_its_own_job_and_domain(self) -> None:
+        """ADR 0016 D5: the job label + textfile domain track the resolved
+        instance, not a fixed constant — a SIM and a LIVE daemon on the same
+        host must never write to the same file."""
+        import os
+        from tempfile import TemporaryDirectory
+
+        from alphalens_pipeline.brokers.automanager import control_loop as cl
+
+        with (
+            TemporaryDirectory() as d,
+            mock.patch.dict(
+                os.environ, {"ALPHALENS_TEXTFILE_DIR": d, "ALPHALENS_BROKER_ENVIRONMENT": "live"}
+            ),
+        ):
+            cl._default_emit_heartbeat()
+            written = Path(d) / "alphalens_domain_broker-manager-live.prom"
+            self.assertTrue(written.is_file())
+            body = written.read_text()
+            self.assertIn("alphalens_broker_manager_last_tick_timestamp_seconds", body)
+            self.assertIn('job="broker-manager-live"', body)
 
 
 def _rich_standalone_stop_journal() -> list[dict[str, Any]]:
@@ -4879,10 +4903,10 @@ class TestStreamingEnabledGate(unittest.TestCase):
 
 class TestKillActiveMetric(unittest.TestCase):
     """The KILL-active gauge (level 0/1) MUST co-emit with the per-tick heartbeat in
-    ONE emit_domain_metrics("broker-manager", {...}) call — a second call to the same
-    domain would atomically OVERWRITE (clobber) the heartbeat gauge, and vice-versa.
-    Value is 1 when the KILL file is present, 0 when absent, so Prometheus can alert
-    on an active emergency stop (previously journald-only, invisible to monitoring)."""
+    ONE emit_domain_metrics(job, {...}) call — a second call to the same domain would
+    atomically OVERWRITE (clobber) the heartbeat gauge, and vice-versa. Value is 1
+    when the KILL file is present, 0 when absent, so Prometheus can alert on an
+    active emergency stop (previously journald-only, invisible to monitoring)."""
 
     def _emitted(self, kill: bool) -> dict[str, Any]:
         captured: dict[str, Any] = {}
@@ -4897,14 +4921,19 @@ class TestKillActiveMetric(unittest.TestCase):
 
     def test_kill_present_co_emits_kill_active_1_and_heartbeat(self) -> None:
         cap = self._emitted(True)
-        self.assertEqual(cap["job"], "broker-manager")
-        self.assertEqual(cap["metrics"][cl.KILL_ACTIVE_METRIC], 1)
-        self.assertIn(cl.HEARTBEAT_METRIC, cap["metrics"], "heartbeat co-emitted, not clobbered")
+        # Default $ALPHALENS_BROKER_ENVIRONMENT is "sim" (ADR 0016 D1/D5).
+        self.assertEqual(cap["job"], "broker-manager-sim")
+        self.assertEqual(cap["metrics"][cl.kill_active_metric(cap["job"])], 1)
+        self.assertIn(
+            cl.heartbeat_metric(cap["job"]), cap["metrics"], "heartbeat co-emitted, not clobbered"
+        )
 
     def test_kill_absent_co_emits_kill_active_0_and_heartbeat(self) -> None:
         cap = self._emitted(False)
-        self.assertEqual(cap["metrics"][cl.KILL_ACTIVE_METRIC], 0)
-        self.assertIn(cl.HEARTBEAT_METRIC, cap["metrics"], "heartbeat co-emitted, not clobbered")
+        self.assertEqual(cap["metrics"][cl.kill_active_metric(cap["job"])], 0)
+        self.assertIn(
+            cl.heartbeat_metric(cap["job"]), cap["metrics"], "heartbeat co-emitted, not clobbered"
+        )
 
 
 class TestKillEdgeAlert(unittest.TestCase):

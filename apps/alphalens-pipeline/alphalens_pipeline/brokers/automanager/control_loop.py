@@ -94,17 +94,31 @@ AmendStopPlacer = Callable[[int, str, str, str, float, float, str], PlacedOrder]
 # through the ONE seam (state_paths.py, ADR 0016 / design memo D2) and is
 # resolved at call/deps-build time, never as an import-time Path constant.
 
-# Prometheus heartbeat gauge (Task 13 wires _default_emit_heartbeat as the
-# run_daemon default; the metric name has one home here).
-HEARTBEAT_METRIC = 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"}'
+# Prometheus heartbeat + KILL-active gauge NAMES (Task 13 wires
+# _default_emit_heartbeat as the run_daemon default; the metric name has one
+# home here). The gauge NAMES are fixed; only the ``{job=...}`` label varies
+# per broker instance (ADR 0016 D5), so these are builder functions taking
+# the resolved job label (``state_paths.metrics_job()``) rather than
+# import-time string constants — a second SIM/LIVE instance on the same host
+# must never share a job label.
+_HEARTBEAT_METRIC_NAME = "alphalens_broker_manager_last_tick_timestamp_seconds"
+_KILL_ACTIVE_METRIC_NAME = "alphalens_broker_manager_kill_active"
 
-# Prometheus KILL-active gauge (level, 0/1): 1 while the KILL file is present, 0 when
-# absent, so Prometheus can alert on an active emergency stop (KILL was journald-only
-# before, invisible to monitoring — the heartbeat kept ticking under KILL). It is
-# CO-EMITTED with HEARTBEAT_METRIC in the SAME emit_domain_metrics("broker-manager",
-# {...}) call: that write atomically OVERWRITES the whole broker-manager textfile, so
-# a separate call to this domain would clobber the heartbeat gauge and vice-versa.
-KILL_ACTIVE_METRIC = 'alphalens_broker_manager_kill_active{job="broker-manager"}'
+
+def heartbeat_metric(job: str) -> str:
+    """The per-tick heartbeat gauge, labeled with the resolved instance job."""
+    return f'{_HEARTBEAT_METRIC_NAME}{{job="{job}"}}'
+
+
+def kill_active_metric(job: str) -> str:
+    """The KILL-active gauge (level, 0/1): 1 while the KILL file is present, 0 when
+    absent, so Prometheus can alert on an active emergency stop (KILL was journald-only
+    before, invisible to monitoring — the heartbeat kept ticking under KILL). It is
+    CO-EMITTED with ``heartbeat_metric`` in the SAME ``emit_domain_metrics(job, {...})``
+    call: that write atomically OVERWRITES the whole per-instance textfile, so a
+    separate call to this domain would clobber the heartbeat gauge and vice-versa."""
+    return f'{_KILL_ACTIVE_METRIC_NAME}{{job="{job}"}}'
+
 
 # --- Streaming (dark, SIM-only) env gates + liveness metric --------------------
 # Master gate for the Saxo WebSocket early-wake reader (design memo
@@ -122,17 +136,24 @@ _DEFAULT_STREAM_STALE_S = 45.0
 # Prometheus liveness gauge: seconds since the last streamed message (age). Watched
 # by an AlphalensBrokerStreamStale rule, distinct from the per-poll heartbeat gauge
 # (a dead stream still emits heartbeats — the poll backstop keeps running).
-STREAM_LAST_MESSAGE_METRIC = (
-    'alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager"}'
-)
-# The stream gauge writes to its OWN domain textfile, NOT "broker-manager". Both
-# emit_domain_metrics(...) writes atomically OVERWRITE alphalens_domain_<job>.prom,
-# and _emit_stream_gauge runs AFTER heartbeat_fn every tick — sharing the
-# "broker-manager" job would clobber the heartbeat gauge and break the liveness
-# alert while streaming is on. node_exporter merges every *.prom in the dir, so a
-# distinct file keeps BOTH series scraped (the metric name + {job} label are
-# unchanged — only the containing file differs).
-_STREAM_GAUGE_DOMAIN_JOB = "broker-manager-stream"
+_STREAM_LAST_MESSAGE_METRIC_NAME = "alphalens_broker_manager_stream_last_message_age_seconds"
+
+
+def stream_last_message_metric(job: str) -> str:
+    """The stream-liveness gauge, labeled with the SAME job as the heartbeat
+    (``state_paths.metrics_job()``) — it is the same daemon instance, only
+    written to a distinct domain textfile (see ``_emit_stream_gauge``)."""
+    return f'{_STREAM_LAST_MESSAGE_METRIC_NAME}{{job="{job}"}}'
+
+
+# The stream gauge writes to its OWN domain textfile, NOT the heartbeat's domain
+# (``state_paths.stream_metrics_job()``, e.g. "broker-manager-sim-stream"). Both
+# emit_domain_metrics(...) writes atomically OVERWRITE alphalens_domain_<domain>.prom,
+# and _emit_stream_gauge runs AFTER heartbeat_fn every tick — sharing the heartbeat's
+# domain would clobber the heartbeat gauge and break the liveness alert while
+# streaming is on. node_exporter merges every *.prom in the dir, so a distinct file
+# keeps BOTH series scraped (the metric name + {job} label are the SAME job as the
+# heartbeat's — only the containing file differs).
 
 # Consecutive-tick threshold for the persistent OCO-lag monitor (issue #5). The M1
 # guard NoOp'ing a clean over-covered OCO pair is SAFE for a tick or two (a TP-read
@@ -292,14 +313,19 @@ def _default_emit_heartbeat(kill: bool = False) -> None:
     AlphalensBrokerManagerHeartbeatStale) is. The KILL-active gauge co-emits here (1
     when the KILL file is present, 0 when absent) so an emergency stop is visible to
     Prometheus. BOTH gauges MUST go in ONE emit call: the write atomically overwrites
-    the whole broker-manager textfile, so a separate call would clobber the other
-    gauge. Best-effort: a textfile-dir hiccup must never crash the loop."""
+    the whole per-instance textfile, so a separate call would clobber the other
+    gauge. The job label (``state_paths.metrics_job()``) is resolved HERE, at call
+    time, not at import — so the textfile domain and the ``{job=...}`` label always
+    reflect the CURRENT ``$ALPHALENS_BROKER_ENVIRONMENT`` rather than a value frozen
+    at process start (ADR 0016 D5). Best-effort: a textfile-dir hiccup must never
+    crash the loop."""
     from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
+    job = state_paths.metrics_job()
     try:
         emit_domain_metrics(
-            "broker-manager",
-            {HEARTBEAT_METRIC: int(time.time()), KILL_ACTIVE_METRIC: int(kill)},
+            job,
+            {heartbeat_metric(job): int(time.time()), kill_active_metric(job): int(kill)},
         )
     except OSError:
         logger.warning("broker-manager heartbeat emit failed", exc_info=True)
@@ -613,7 +639,11 @@ def _default_live_exits_feed_factory(
     from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import SaxoLivePriceFeed
     from alphalens_pipeline.data.alt_data.saxo_price_stream import get_shared_price_stream
 
-    stream = get_shared_price_stream()
+    # ADR 0016 D5: the stream's gauges must carry a per-instance job label so a
+    # future LIVE daemon's price stream never shares a Prometheus job (and thus
+    # textfile) with the SIM instance's. Only takes effect on the FIRST call
+    # that actually constructs the singleton — see get_shared_price_stream.
+    stream = get_shared_price_stream(metrics_job=state_paths.price_stream_metrics_job())
     live_uics = {
         sim_uic: stream.live_uic_for(ticker, exchange_mic=mic)
         for sim_uic, (ticker, mic) in uic_to_instrument.items()
@@ -1049,11 +1079,17 @@ def _stream_stale_s() -> float:
 def _emit_stream_gauge(age_seconds: float) -> None:
     """Best-effort Prometheus liveness gauge (seconds since the last streamed
     message). A textfile-dir hiccup must never crash the loop — the poll backstop
-    covers protection regardless of observability."""
+    covers protection regardless of observability. The gauge's {job=...} label is the
+    SAME job as the heartbeat's (``state_paths.metrics_job()``) — it is the same
+    daemon instance — but it writes to the stream's OWN domain textfile
+    (``state_paths.stream_metrics_job()``) so it never clobbers the heartbeat."""
     from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
+    job = state_paths.metrics_job()
     try:
-        emit_domain_metrics(_STREAM_GAUGE_DOMAIN_JOB, {STREAM_LAST_MESSAGE_METRIC: age_seconds})
+        emit_domain_metrics(
+            state_paths.stream_metrics_job(), {stream_last_message_metric(job): age_seconds}
+        )
     except OSError:
         logger.warning("broker-manager stream-liveness gauge emit failed", exc_info=True)
 
@@ -3350,11 +3386,11 @@ def _execute_place_stop(
 
 
 __all__ = [
-    "HEARTBEAT_METRIC",
-    "KILL_ACTIVE_METRIC",
     "LoopDeps",
     "TickReport",
     "build_default_deps",
+    "heartbeat_metric",
+    "kill_active_metric",
     "run_daemon",
     "run_once",
 ]

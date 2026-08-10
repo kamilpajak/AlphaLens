@@ -7,8 +7,10 @@ targets a non-existent metric and silently never fires — defeating the memo's
 "latency regression is OBSERVABLE, not silent" requirement.
 
 This pins the documented gauge name to the base metric the code actually emits
-(``STREAM_LAST_MESSAGE_METRIC`` in ``control_loop.py``), so a rename of the
-gauge cannot drift the runbook out of sync unnoticed.
+(``stream_last_message_metric()`` in ``control_loop.py``), so a rename of the
+gauge cannot drift the runbook out of sync unnoticed. The ``{job=...}`` label is
+per-instance since ADR 0016 D5, but the bare gauge name below it is fixed
+regardless of job, which is all the runbook needs to name.
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ import unittest
 from pathlib import Path
 
 from alphalens_pipeline.brokers.automanager.control_loop import (
-    STREAM_LAST_MESSAGE_METRIC,
+    stream_last_message_metric,
 )
 
 # tests/brokers/automanager/ is two levels deeper than tests/, so the repo root
@@ -27,9 +29,10 @@ WORKSPACE_ROOT = Path(__file__).resolve().parents[5]
 README = WORKSPACE_ROOT / "deploy" / "systemd" / "README.md"
 ENV_EXAMPLE = WORKSPACE_ROOT / ".env.example"
 
-# The emitted constant carries a ``{job="..."}`` label selector; the bare gauge
+# The emitted metric carries a ``{job="..."}`` label selector; the bare gauge
 # name the operator writes into the alert rule is everything before the brace.
-_GAUGE_BASE = STREAM_LAST_MESSAGE_METRIC.split("{", 1)[0]
+# The job value used here (a placeholder) is irrelevant to the base-name check.
+_GAUGE_BASE = stream_last_message_metric("broker-manager-sim").split("{", 1)[0]
 
 
 class TestStreamMetricDocsMatchCode(unittest.TestCase):

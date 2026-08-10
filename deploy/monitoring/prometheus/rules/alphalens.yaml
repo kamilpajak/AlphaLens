@@ -801,7 +801,7 @@ groups:
       # crash/restart, so health = the per-tick heartbeat gauge the control loop
       # writes each ~45s tick. 300s = 5min ~ 6-7 missed ticks.
       - alert: AlphalensBrokerManagerHeartbeatStale
-        expr: time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"} > 300
+        expr: time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"} > 300
         for: 2m
         labels:
           severity: warning
@@ -812,7 +812,7 @@ groups:
           description: "Last control-loop tick was {{ $value | humanizeDuration }} ago — the SIM auto-manager may be wedged or stopped."
 
       - alert: AlphalensBrokerManagerHeartbeatMissing
-        expr: absent(alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager"})
+        expr: absent(alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"})
         for: 5m
         labels:
           severity: warning
@@ -828,8 +828,8 @@ groups:
         # uics are subscribed = the circuit breaker tripped (or the reader
         # crashed) with live-market exits depending on the feed.
         expr: >-
-          alphalens_live_price_stream_reader_up{job="live-price-stream"} == 0
-          and alphalens_live_price_stream_subscribed_uics{job="live-price-stream"} > 0
+          alphalens_live_price_stream_reader_up{job="live-price-stream-sim"} == 0
+          and alphalens_live_price_stream_subscribed_uics{job="live-price-stream-sim"} > 0
         for: 10m
         labels:
           severity: warning
@@ -843,9 +843,9 @@ groups:
         # No frame for 5m while subscribed and the reader claims to be up:
         # the dark-but-connected case observability exists to catch.
         expr: >-
-          (time() - alphalens_live_price_stream_last_frame_timestamp_seconds{job="live-price-stream"}) > 300
-          and alphalens_live_price_stream_subscribed_uics{job="live-price-stream"} > 0
-          and alphalens_live_price_stream_reader_up{job="live-price-stream"} == 1
+          (time() - alphalens_live_price_stream_last_frame_timestamp_seconds{job="live-price-stream-sim"}) > 300
+          and alphalens_live_price_stream_subscribed_uics{job="live-price-stream-sim"} > 0
+          and alphalens_live_price_stream_reader_up{job="live-price-stream-sim"} == 1
         for: 5m
         labels:
           severity: warning

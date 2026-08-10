@@ -1240,11 +1240,13 @@ class TestBrokerManagerHealthRules(unittest.TestCase):
         self.text = self.RULES.read_text()
 
     def test_broker_manager_heartbeat_stale_rule(self) -> None:
+        # ADR 0016 D5: the SIM instance's job label carries the "-sim" suffix
+        # (no LIVE alert rules yet — those land with front 3).
         self.assertRegex(
             self.text,
             re.compile(
                 r"time\(\)\s*-\s*alphalens_broker_manager_last_tick_timestamp_seconds"
-                r"\{job=\"broker-manager\"\}\s*>\s*300\b"
+                r"\{job=\"broker-manager-sim\"\}\s*>\s*300\b"
             ),
             "Missing AlphalensBrokerManagerHeartbeatStale (>300s).",
         )
@@ -1253,7 +1255,8 @@ class TestBrokerManagerHealthRules(unittest.TestCase):
         self.assertRegex(
             self.text,
             re.compile(
-                r"absent\(alphalens_broker_manager_last_tick_timestamp_seconds\{job=\"broker-manager\"\}\)"
+                r"absent\(alphalens_broker_manager_last_tick_timestamp_seconds"
+                r"\{job=\"broker-manager-sim\"\}\)"
             ),
         )
 
