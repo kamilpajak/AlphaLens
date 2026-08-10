@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import json
 import unittest
@@ -523,6 +524,262 @@ class TestGetSharedPriceStream(unittest.TestCase):
             second = sps.get_shared_price_stream()
         self.assertIs(second, alive)
         self.assertTrue(alive.started)
+
+
+class _ScriptedConn:
+    """Fake WebSocket connection driven by a script of items: a bytes frame is
+    delivered, an exception instance is raised, a callable is invoked (its
+    return delivered — used to flip ``stream._stop`` mid-scenario). An
+    exhausted script hangs forever, mirroring a healthy-but-quiet socket."""
+
+    def __init__(self, script: list) -> None:
+        self._script = list(script)
+        self.closed = False
+
+    async def recv(self):
+        if not self._script:
+            await asyncio.sleep(3600)
+        item = self._script.pop(0)
+        if callable(item):
+            item = item()
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _SubTrackingClient:
+    """Stand-in for SaxoMarketDataClient recording subscription REST calls."""
+
+    def __init__(self) -> None:
+        self.creates: list[tuple[str, str, tuple[int, ...]]] = []
+        self.deletes: list[tuple[str, str]] = []
+
+    def create_price_subscription(self, *, context_id, reference_id, uics, refresh_rate_ms):
+        self.creates.append((context_id, reference_id, tuple(uics)))
+        return {}
+
+    def delete_price_subscription(self, context_id, reference_id):
+        self.deletes.append((context_id, reference_id))
+
+
+def _px_frame(message_id: int, uic: int = 5) -> bytes:
+    payload = json.dumps(
+        [
+            {
+                "Uic": uic,
+                "LastUpdated": f"2026-08-10T14:48:{message_id % 60:02d}Z",
+                "Quote": {"Bid": 1.0, "Ask": 1.1, "DelayedByMinutes": 0},
+            }
+        ]
+    ).encode("utf-8")
+    return _build_frame(message_id, "px", payload)
+
+
+class _StaticTokenProvider:
+    """Token provider for connection scenarios — ``_run_one_connection`` reads
+    ``access_token()`` when building the WS auth header."""
+
+    def access_token(self) -> str:
+        return "tok"
+
+
+class _SupervisedHarness:
+    """Drive ``stream._supervise()`` hermetically: scripted connections, an
+    instant fake ``async_sleep`` that can stop the loop after N idle sleeps,
+    and a recorded ``ws_connect``."""
+
+    def __init__(self, stream_kwargs=None, conns=None, stop_after_sleeps=None):
+        self.client = _SubTrackingClient()
+        self.ws_calls: list[str] = []
+        self.sleeps: list[float] = []
+        self._conns = list(conns or [])
+        self._stop_after_sleeps = stop_after_sleeps
+
+        async def ws_connect(url: str, headers: dict) -> _ScriptedConn:
+            self.ws_calls.append(url)
+            if not self._conns:
+                raise AssertionError("ws_connect called with no scripted connection left")
+            return self._conns.pop(0)
+
+        async def async_sleep(delay: float) -> None:
+            self.sleeps.append(delay)
+            if self._stop_after_sleeps is not None and len(self.sleeps) >= self._stop_after_sleeps:
+                self.stream._stop = True
+
+        self.stream = SaxoPriceStream(
+            self.client,
+            _StaticTokenProvider(),
+            ws_connect=ws_connect,
+            async_sleep=async_sleep,
+            **(stream_kwargs or {}),
+        )
+
+    def run(self) -> None:
+        asyncio.run(self.stream._supervise())
+
+
+class TestEnsureSubscribedOwnership(unittest.TestCase):
+    """R3 + the reworked ownership: ``ensure_subscribed`` only mutates the
+    DESIRED set (caller thread) and forgets removed uics; ALL subscription
+    REST traffic belongs to the reader thread, which recreates on every new
+    connection. This kills both the caller/reader REST race and the
+    stale-delayed-quote pin on ``any_delayed``."""
+
+    def test_removed_uic_is_forgotten_from_the_cache(self):
+        stream = SaxoPriceStream(_SubTrackingClient(), _FakeTokenProvider())
+        stream.cache.apply(_row(Uic=7), received_at=_T0)
+        stream.ensure_subscribed({7, 8})
+        stream.ensure_subscribed({8})
+        self.assertIsNone(stream.get(7), "an unsubscribed uic's quote must be forgotten")
+
+    def test_caller_thread_never_talks_subscription_rest(self):
+        client = _SubTrackingClient()
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5})
+        stream.ensure_subscribed({5, 6})
+        stream.ensure_subscribed(set())
+        self.assertEqual(client.creates, [])
+        self.assertEqual(client.deletes, [])
+
+
+class TestSuperviseIdleWithoutSubscriptions(unittest.TestCase):
+    """R4: a WS held open with ZERO subscriptions is exactly what an idle-kill
+    turns into a failure storm — with nothing subscribed the reader must not
+    connect at all."""
+
+    def test_empty_desired_set_never_connects(self):
+        h = _SupervisedHarness(stop_after_sleeps=3)
+        h.run()
+        self.assertEqual(h.ws_calls, [])
+        self.assertEqual(h.stream._consecutive_failures, 0)
+
+
+class TestReconnectRecreatesSubscription(unittest.TestCase):
+    """R1: every connection attempt gets a FRESH contextId and re-creates the
+    price subscription server-side — a reconnect can never resume into a
+    context whose subscription Saxo already dropped."""
+
+    def test_each_connection_rotates_context_and_recreates(self):
+        h = _SupervisedHarness()
+        stream = h.stream
+        conn1 = _ScriptedConn([_px_frame(1), ConnectionError("dropped")])
+        conn2 = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(2))[1]])
+        h._conns.extend([conn1, conn2])
+        stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(len(h.ws_calls), 2)
+        ctx1 = h.ws_calls[0].split("contextId=")[1]
+        ctx2 = h.ws_calls[1].split("contextId=")[1]
+        self.assertNotEqual(ctx1, ctx2, "each connection must use a fresh contextId")
+        self.assertEqual(len(h.client.creates), 2, "subscription recreated per connection")
+        self.assertEqual(h.client.creates[0][0], ctx1)
+        self.assertEqual(h.client.creates[1][0], ctx2)
+        self.assertEqual(h.client.creates[0][2], (5,))
+
+    def test_a_delivered_frame_resets_the_failure_counter(self):
+        h = _SupervisedHarness()
+        stream = h.stream
+        conn1 = _ScriptedConn([ConnectionError("dead on arrival")])
+        conn2 = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(2))[1]])
+        h._conns.extend([conn1, conn2])
+        stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(stream._consecutive_failures, 0)
+
+
+class TestRecvTimeoutReconnects(unittest.TestCase):
+    """R2: a half-open socket must not wedge the reader forever — recv is
+    bounded and a timeout counts as a connection failure (then reconnects)."""
+
+    def test_hung_recv_times_out_and_reconnects(self):
+        with mock.patch.object(sps, "_RECV_TIMEOUT_S", 0.01):
+            h = _SupervisedHarness()
+            stream = h.stream
+            conn1 = _ScriptedConn([])  # hangs forever
+            conn2 = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(2))[1]])
+            h._conns.extend([conn1, conn2])
+            stream.ensure_subscribed({5})
+            h.run()
+        self.assertEqual(len(h.ws_calls), 2, "timeout must trigger a reconnect")
+        self.assertTrue(conn1.closed, "the hung connection must be closed")
+
+
+class TestResetSubscriptionsControlFrame(unittest.TestCase):
+    """Saxo's ``_resetsubscriptions`` control frame means the server dropped
+    the subscription — the reader must recreate it on the SAME connection,
+    not wait for a 45s recv-timeout to force a full reconnect."""
+
+    def test_reset_frame_recreates_on_the_same_connection(self):
+        h = _SupervisedHarness()
+        stream = h.stream
+        conn1 = _ScriptedConn(
+            [
+                _px_frame(1),
+                _build_frame(2, "_resetsubscriptions", b"{}"),
+                lambda: (setattr(stream, "_stop", True), _px_frame(3))[1],
+            ]
+        )
+        h._conns.append(conn1)
+        stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(len(h.ws_calls), 1)
+        self.assertEqual(
+            len(h.client.creates), 2, "reset frame must recreate the subscription in-place"
+        )
+        self.assertEqual(h.client.creates[0][0], h.client.creates[1][0])
+
+
+class TestStreamGauges(unittest.TestCase):
+    """O1: the stream must be observable from Prometheus — reader up/down,
+    last-frame timestamp, consecutive failures, subscribed-uic count. Without
+    these a dark feed is indistinguishable from a quiet one (the exact
+    blindness of the 2026-08-10 incident)."""
+
+    def _run_and_capture(self, harness: _SupervisedHarness) -> list[dict]:
+        emitted: list[dict] = []
+        with mock.patch(
+            "alphalens_pipeline.observability.textfile.emit_domain_metrics",
+            side_effect=lambda job, metrics: emitted.append(dict(metrics)),
+        ):
+            harness.run()
+        return emitted
+
+    @staticmethod
+    def _value(metrics: dict, name_fragment: str):
+        for key, value in metrics.items():
+            if name_fragment in key:
+                return value
+        raise AssertionError(f"{name_fragment} not in {sorted(metrics)}")
+
+    def test_reader_up_transitions_and_last_frame_stamp(self):
+        h = _SupervisedHarness()
+        stream = h.stream
+        conn1 = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn1)
+        stream.ensure_subscribed({5})
+        emitted = self._run_and_capture(h)
+        self.assertGreaterEqual(len(emitted), 2)
+        self.assertEqual(self._value(emitted[0], "reader_up"), 1)
+        self.assertEqual(self._value(emitted[-1], "reader_up"), 0)
+        self.assertGreater(
+            self._value(emitted[-1], "last_frame_timestamp_seconds"),
+            0,
+            "a delivered frame must stamp last_frame",
+        )
+        self.assertEqual(self._value(emitted[-1], "subscribed_uics"), 1)
+
+    def test_breaker_trip_emits_reader_down_with_failure_count(self):
+        h = _SupervisedHarness()
+        stream = h.stream
+        h._conns.extend(_ScriptedConn([ConnectionError(f"fail {i}")]) for i in range(6))
+        stream.ensure_subscribed({5})
+        emitted = self._run_and_capture(h)
+        final = emitted[-1]
+        self.assertEqual(self._value(final, "reader_up"), 0)
+        self.assertEqual(self._value(final, "consecutive_failures"), 6)
 
 
 if __name__ == "__main__":

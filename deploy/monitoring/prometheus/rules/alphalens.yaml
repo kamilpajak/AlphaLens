@@ -822,6 +822,39 @@ groups:
           summary: "broker-manager heartbeat metric missing"
           description: "No heartbeat gauge for broker-manager. The daemon has not ticked since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Clears after the first tick."
 
+      - alert: AlphalensLivePriceStreamReaderDown
+        # Gated on subscribed_uics > 0: an idle reader (nothing subscribed)
+        # holds no WebSocket BY DESIGN and must not page. reader_up=0 while
+        # uics are subscribed = the circuit breaker tripped (or the reader
+        # crashed) with live-market exits depending on the feed.
+        expr: >-
+          alphalens_live_price_stream_reader_up{job="live-price-stream"} == 0
+          and alphalens_live_price_stream_subscribed_uics{job="live-price-stream"} > 0
+        for: 10m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "LIVE price stream reader down while uics are subscribed"
+          description: "The Saxo LIVE price feed reader is not running but positions still want live prices — trailing/live exits are dark (protection pass unaffected). The daemon rebuilds the reader on demand; sustained reader_up=0 means the rebuild loop itself is failing."
+
+      - alert: AlphalensLivePriceStreamStale
+        # No frame for 5m while subscribed and the reader claims to be up:
+        # the dark-but-connected case observability exists to catch.
+        expr: >-
+          (time() - alphalens_live_price_stream_last_frame_timestamp_seconds{job="live-price-stream"}) > 300
+          and alphalens_live_price_stream_subscribed_uics{job="live-price-stream"} > 0
+          and alphalens_live_price_stream_reader_up{job="live-price-stream"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "LIVE price stream silent > 5m with subscriptions active"
+          description: "The reader is up and uics are subscribed but no frame has arrived for {{ $value | humanizeDuration }} — the feed is dark-but-connected. Recv timeout + resubscribe should self-heal; sustained staleness means they are not."
+
       # saxo-refresh is a timer-driven oneshot (~20min keep-alive), so the
       # standard last_success clock applies. 3600s = 1h = 3x the 20min cadence.
       - alert: AlphalensJobStale
