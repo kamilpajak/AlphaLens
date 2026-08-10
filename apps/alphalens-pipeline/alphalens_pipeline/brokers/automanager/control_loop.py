@@ -2294,7 +2294,21 @@ def _resolve_sizing_equity(account_equity: float) -> float:
     pinned_raw = os.environ.get(SIZING_EQUITY_ENV)
     if pinned_raw is None or not pinned_raw.strip():
         return account_equity
-    return min(float(pinned_raw), account_equity)
+    try:
+        pinned = float(pinned_raw)
+    except ValueError:
+        # FAIL-CLOSED: a typo'd pin must never crash the tick, and it must
+        # never fall back to the raw snapshot either (sizing off the FULL
+        # real balance is the exact outcome the pin exists to prevent).
+        # Zero equity sizes nothing; the unplannable/zero-tiers refusal
+        # path downstream handles the pick, and the operator fixes the pin.
+        logger.warning(
+            "%s=%r is not a number — failing CLOSED to zero sizing equity",
+            SIZING_EQUITY_ENV,
+            pinned_raw,
+        )
+        return 0.0
+    return min(pinned, account_equity)
 
 
 def _resolve_and_size(
@@ -2414,7 +2428,16 @@ def _check_fee_floor(
     max_fee_bps_raw = os.environ.get(MAX_FEE_BPS_ENV)
     if max_fee_bps_raw is None or not max_fee_bps_raw.strip():
         return None
-    max_fee_bps = float(max_fee_bps_raw)
+    try:
+        max_fee_bps = float(max_fee_bps_raw)
+    except ValueError:
+        # FAIL-CLOSED: a typo'd cap must never crash the tick and must never
+        # silently disable the floor (fail-open). Refuse the pick with a
+        # message naming the env var — the operator fixes the unit.
+        return (
+            f"fee floor: {MAX_FEE_BPS_ENV}={max_fee_bps_raw!r} is not a number — "
+            f"{ticker} refused (fail-closed until the cap is fixed)"
+        )
 
     from broker_contract.sizing import setup_plan_gross_notional
 

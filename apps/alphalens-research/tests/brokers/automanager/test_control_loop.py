@@ -950,6 +950,17 @@ class TestResolveSizingEquity(unittest.TestCase):
         with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
             self.assertEqual(cl._resolve_sizing_equity(5_000.0), 5_000.0)
 
+    def test_malformed_pin_fails_closed_to_zero_equity(self) -> None:
+        # A typo'd pin must NEVER crash the tick (drain resilience) and must
+        # NEVER silently fall back to the raw snapshot (that would size off
+        # the FULL real balance — the exact thing the pin exists to prevent).
+        # Fail-closed: effective equity 0.0 -> nothing sizes -> the existing
+        # unplannable/zero-tiers refusal path handles the pick.
+        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10OOO"}, clear=True):
+            with self.assertLogs(cl.logger, level="WARNING") as logs:
+                self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
+        self.assertTrue(any(SIZING_EQUITY_ENV in line for line in logs.output))
+
 
 class TestResolveAndSizeUsesEffectiveSizingEquity(unittest.TestCase):
     """``_resolve_and_size`` feeds ``compute_setup_plan(paper_equity=...)``
@@ -1054,6 +1065,16 @@ class TestCheckFeeFloor(unittest.TestCase):
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "50"}, clear=True):
             self.assertIsNone(cl._check_fee_floor(_fee_plan(1000.0), None, ticker="KO"))
             self.assertIsNotNone(cl._check_fee_floor(_fee_plan(1000.0), object(), ticker="KO"))
+
+    def test_malformed_cap_fails_closed_to_a_refusal(self) -> None:
+        # A typo'd fee cap must NEVER crash the tick and must NEVER silently
+        # disable the floor (fail-open) — the pick is refused with a message
+        # naming the env var so the operator fixes the unit, not the pick.
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "1O0"}, clear=True):
+            message = cl._check_fee_floor(_fee_plan(10_000.0), None, ticker="KO")
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn(MAX_FEE_BPS_ENV, message)
 
     def test_non_usd_instrument_skips_the_min_commission_clamp(self) -> None:
         # The $1-min commission is a USD-venue figure; comparing it against a
