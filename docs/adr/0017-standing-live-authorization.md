@@ -39,9 +39,13 @@ never by a single flag, never by the attended unlock:**
 
 1. **Constructor capability (the one ADR 0015 modification, named):**
    `SaxoClient.__init__` accepts a non-SIM base URL also when the new
-   keyword-only `standing_live_authorized=True` is passed. `from_env` and
-   `get_default_saxo_client` never pass it and remain unconditionally SIM;
-   the attended day-bound unlock path is untouched.
+   keyword-only `standing_live_authorized=True` is passed — and in that
+   case the constructor ITSELF verifies the account-bound grant (3), so a
+   caller bypassing the factory still needs the environment grant (Python
+   cannot restrict who passes a keyword; the check therefore lives in the
+   client). `from_env` and `get_default_saxo_client` never pass it and
+   remain unconditionally SIM; the attended day-bound unlock path is
+   untouched.
 2. **A separate LIVE factory** (`create_saxo_broker_live_from_env`) is the
    only caller of that keyword, invoked only by the `env=live` branch of
    the composition root (which replaces the ADR 0016 D7 boot block). The
@@ -52,11 +56,12 @@ never by a single flag, never by the attended unlock:**
    equal the resolved `SAXO_LIVE_ACCOUNT_KEY` (a distinct, LIVE-only env
    name). A bare boolean arm is rejected: a leaked truthy value or a
    partially copied unit file must be structurally inert.
-4. **Safety-rail boot-assert:** `env=live` refuses to boot unless
-   `MAX_OPEN`, `PORTFOLIO_GROSS_FRAC`, `DAILY_LOSS_LIMIT_R`, and
-   `SIZING_EQUITY` are all explicitly set within live bounds — because the
-   code defaults are permissive (gross 1.0, sized off the raw account
-   snapshot), "forgot one pin" must fail loud, not trade big.
+4. **Safety-rail boot-assert:** `env=live` refuses to boot unless all six
+   of `MAX_OPEN`, `PORTFOLIO_GROSS_FRAC`, `DAILY_LOSS_LIMIT_R`,
+   `SIZING_EQUITY`, `EXIT_POLICY`, and `MAX_FEE_BPS` are explicitly set
+   within live bounds — because the code defaults are permissive (gross
+   1.0, sized off the raw account snapshot, exit policy silently
+   `setup_static`), "forgot one pin" must fail loud, not trade wrong.
    Correspondingly, `ALPHALENS_BROKER_*` rails leave the shared
    `/etc/alphalens/env` and are pinned per-unit on BOTH instances.
 5. **Existing arms unchanged and still required:** `ALLOW_ORDERS=1` per

@@ -43,7 +43,13 @@ grant.** A LIVE order requires ALL of, simultaneously:
    `SaxoClient.__init__` gains a keyword-only `standing_live_authorized:
    bool = False`; the guard becomes: refuse any `base_url != SIM_BASE_URL`
    unless `_live_orders_unlocked()` (attended probe path, unchanged) **or**
-   `standing_live_authorized is True`. `from_env` /
+   `standing_live_authorized is True` **and the constructor itself
+   verifies the §1.3 account-bound grant** (`ALPHALENS_SAXO_LIVE_STANDING`
+   present and equal to `SAXO_LIVE_ACCOUNT_KEY`). The grant check lives IN
+   the constructor, not only in the factory, because Python cannot stop an
+   arbitrary caller from passing the keyword — with the in-constructor
+   check, bypassing the factory still requires the environment grant (the
+   rail test pins direct-construction refusal without it). `from_env` /
    `get_default_saxo_client` NEVER pass it — they stay unconditionally SIM,
    byte-identical, and `test_from_env_ignores_unlock_still_sim_only` holds
    untouched. Without this widening no factory can construct a LIVE client
@@ -72,10 +78,16 @@ is preserved by IMPORTING the URL (§2).
 identity, the constructor capability (code path, not env), the account-bound
 grant, and allow-orders are four independent conditions, three of them
 in-unit pins. The dangerous single mistakes are of the OTHER kind — a LIVE
-unit missing a RISK pin — and are closed by the §3 boot-assert. Residual
-(honest): the standing grant does not self-expire; a decommissioned LIVE
-unit left enabled retains authority until disabled — mitigated by KILL and
-`systemctl disable`, procedurally.
+unit missing a RISK pin — and are closed by the §3 boot-assert. Residuals
+(honest): (a) the standing grant does not self-expire; a decommissioned
+LIVE unit left enabled retains authority until disabled — mitigated by
+KILL and `systemctl disable`, procedurally; (b) the constructor keyword is
+reachable by any future caller (Python cannot restrict callers) — mitigated
+structurally by the in-constructor grant check above and by the rail test,
+procedurally by review; (c) LIVE-path tests must NEVER construct against
+real credentials — the rail test exercises refusal paths with sentinel
+providers only (ADR 0015 test pattern), and no test may set the grant pair
+to real values.
 
 ## 2. LIVE client construction
 
@@ -117,7 +129,13 @@ building (narrow — two of three previously-assumed gaps already exist):
   The adapter must implement SIM-style rejected-token memory
   (`tokens.py:397-404` pattern): after `invalidate()`, `get_access_token`
   must not return the rejected token — re-read the store; if the store still
-  holds the rejected token, refresh under the flock.
+  holds the rejected token, refresh under the flock. **And the revoked-chain
+  case must terminate, not storm:** a refresh that itself fails with
+  `invalid_grant`/401 (refresh token revoked — password reset, permission
+  withdrawal) latches the chain DEAD (SIM `_chain_lost` pattern: alert
+  once, raise, never auto-retry the token endpoint) — one failed refresh is
+  the terminal signal, so a revoked chain can never produce a refresh storm
+  against Saxo.
 - **NOT built (already exists, verified):** adopt-before-refresh.
   `LiveTokenProvider.access_token()` already runs under the per-host flock,
   re-reads the store every call, adopts a sibling's rotation when margin
@@ -145,11 +163,19 @@ insufficient:
    the strip does not silently disarm SIM). No silent cross-instance
    inheritance. (Stripping ALONE would make the permissive code defaults
    apply — hence:)
-2. **LIVE boot-assert:** `env=live` REFUSES to boot unless ALL FOUR of
+2. **LIVE boot-assert:** `env=live` REFUSES to boot unless ALL SIX of
    `ALPHALENS_BROKER_MAX_OPEN`, `ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC`,
-   `ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R`, `ALPHALENS_BROKER_SIZING_EQUITY`
-   are explicitly set AND within live bounds (caps table below). Unset and
+   `ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R`, `ALPHALENS_BROKER_SIZING_EQUITY`,
+   `ALPHALENS_BROKER_EXIT_POLICY`, and `ALPHALENS_BROKER_MAX_FEE_BPS` are
+   explicitly set AND within live bounds (caps table below). Unset and
    set-to-dangerous both fail loud at boot, before any broker I/O.
+   `EXIT_POLICY` is asserted explicit-set (not defaulted) because a
+   copy-paste unit missing the pin would silently run `setup_static` —
+   positions stay protected (never-naked is policy-independent: the
+   disaster stop and planned exits do not depend on the policy), but the
+   soak would silently validate the wrong exit mechanism. `MAX_FEE_BPS`
+   must be set and positive — an unset fee floor is a permissive default
+   exactly like the rails.
 
 **In-unit pins for the LIVE unit (initial values; operator finalizes §8):**
 
@@ -163,7 +189,8 @@ insufficient:
 | `ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC` | `0.25` | NOT 0.03 — a 100 zł-risk pick at a ~5% stop is ~2 000 zł notional ≈ 0.20 of the 10k frame; 0.03 would CAPACITY-refuse every pick. Bound: ≤ 0.5 |
 | `ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R` | `1.0` | bound: ≤ 2.0 |
 | `ALPHALENS_BROKER_SIZING_EQUITY` | `10000` (zł frame) | §4; bound: > 0 |
-| `ALPHALENS_BROKER_EXIT_POLICY` | `trailing_atr` (§6) | startup-once |
+| `ALPHALENS_BROKER_EXIT_POLICY` | `trailing_atr` (§6) | startup-once; boot-assert: explicit-set |
+| `ALPHALENS_BROKER_MAX_FEE_BPS` | `100` (§4 — NOT 50) | boot-assert: set and > 0 |
 | `ALPHALENS_BROKER_STREAMING_ENABLED` | `0` | order-WS early-wake needs its own LIVE re-validation |
 | `ALPHALENS_SAXO_LIVE_PRICES` | `1` | LIVE daemon = sole elevated holder (§6) |
 | `ALPHALENS_TEXTFILE_DIR` | `/var/lib/node_exporter/textfile` | per-instance `.prom` via job label |
@@ -181,19 +208,38 @@ the shared env (only the LIVE factory and marketdata auth read them).
 - **Per-pick risk:** ≈ 100 zł (1% of the 10k zł frame) via the brief's
   `suggested_size_pct` against the pinned equity; `MAX_OPEN=1` bounds the
   book to one such position.
-- **Fee floor (structural gap today):** `compute_setup_plan` floors qty
-  with no notional check, and Saxo LIVE PL is 0.08% min **$1/fill** +
-  0.25% FX — at small notionals the minimum fee dominates. Add an
-  executor-owned mechanical floor expressed as **max round-trip fee in
-  bps** (`ALPHALENS_BROKER_MAX_FEE_BPS`, initial ~50 bps ≈ min notional
-  ~$400-500 incl. FX): a pick below the floor is SKIPPED-AND-ALERTED,
-  never silently sized UP (sizing up would breach the risk budget), and
-  the refusal is a fee fact — it never feeds back into selection (R2).
-- **Known tension (go/no-go input, §7):** 100 zł risk with a wide stop can
-  produce notionals below the fee floor — the soak could fee-reject every
-  pick and validate nothing. Tripwire: if the first N armed picks are all
-  fee-rejected, the frame is too small — operator raises the frame or
-  aborts; the daemon must alert on each fee-rejection so this is visible.
+- **Fee floor (structural gap today) — with the honest fee equation:**
+  `compute_setup_plan` floors qty with no notional check. Saxo LIVE PL:
+  commission 0.08% min **$1 per fill** + 0.25% FX **per conversion** (a
+  PLN account converts on the buy AND on the sell). Round-trip cost at
+  notional N (USD):
+
+  `fee_rt(N) ≈ 50 bps (FX, size-independent) + 2 × max($1, 0.0008·N) / N`
+
+  Anchor points: N=$500 → 50 + 40 = **~90 bps**; N=$1000 → 50 + 20 =
+  ~70 bps; N=$1250+ → ~66 bps asymptote (commission ad-valorem from
+  ~$1250). **Consequence (adversarial-review catch): a 50 bps floor is
+  UNSATISFIABLE — 50 bps is already the FX base alone**, so the flagship
+  configuration (100 zł risk, ~5% stop → ~$500 notional, ~90 bps) would
+  fee-reject every pick and deadlock the soak. The floor and the frame
+  must be chosen jointly (operator decision §8.5):
+  - **(a) recommended for the soak:** `MAX_FEE_BPS=100` at the 10k zł
+    frame — accepts ~0.9% round-trip cost drag as the price of
+    execution-fidelity validation at the intended 100 zł risk (the soak
+    validates EXECUTION, not P&L; the drag is measured and reported in
+    `exec_quality/live/`);
+  - **(b) cost-optimal:** keep a tighter ~70 bps floor by requiring
+    N ≥ ~$1000 — reachable only with tighter stops (≤2.5% at 100 zł risk)
+    or a bigger risk/frame, which changes the operator's stated budget.
+
+  Mechanics regardless of the number: a pick below the floor is
+  SKIPPED-AND-ALERTED, never silently sized UP (sizing up would breach
+  the risk budget); the refusal is a fee fact — it never feeds back into
+  selection (R2).
+- **Deadlock tripwire (go/no-go input, §7):** if the first N armed picks
+  are all fee-rejected, the floor/frame pair is inconsistent with the
+  brief's stop widths — operator adjusts per §8.5 or aborts; the per-pick
+  fee-rejection alert makes this visible from pick one.
 - **FX:** PLN account, USD instruments — the existing
   `build_fx_conversion` + `sizing_buffer_pct` path fires as-is; the fee
   floor is computed AFTER the FX buffer, on the real filled notional.
@@ -291,10 +337,13 @@ so silent demotion pages.
 5. **Rollback ladder (least → most drastic; ordering is load-bearing):**
    `touch broker_orders/live/KILL` (instance placement stop; reconcile +
    protection continue) → global KILL → `ALLOW_ORDERS=0` + restart
-   (disarm, keep protection) → manual flatten → `systemctl --user stop`
-   LAST — stopping the daemon while positions are open removes exit
-   management (the resting disaster stop remains, exits do not); never the
-   first move.
+   (disarm, keep protection) → **manual flatten — CANCEL the resting
+   stop/OCO orders FIRST, then market-sell, then cancel entry buys**
+   (the §7.2 recipe; selling with a live stop still resting risks the
+   stop firing after the flatten and double-selling into an unintended
+   SHORT) → `systemctl --user stop` LAST — stopping the daemon while
+   positions are open removes exit management (the resting disaster stop
+   remains, exits do not); never the first move.
 
 ## 8. Operator decisions (recommendation each)
 
@@ -303,8 +352,11 @@ so silent demotion pages.
 2. **Per-pick risk** — ~100 zł (1%). *(rec: as stated)*
 3. **MAX_OPEN** — 1 for the whole soak. *(rec: 1)*
 4. **DAILY_LOSS_LIMIT_R** — *(rec: 1.0R)*
-5. **Fee floor** — `ALPHALENS_BROKER_MAX_FEE_BPS` ≈ 50 bps round-trip
-   (≈ min notional $400-500). *(rec: 50)*
+5. **Fee floor × frame (joint decision — §4 equation):** (a) 100 bps at
+   the 10k zł frame (accept ~0.9% measured drag, soak validates
+   execution); or (b) ~70 bps requiring notional ≥ ~$1000 (tighter stops
+   or bigger budget). *(rec: (a) for the soak — 50 bps is unsatisfiable,
+   it is the FX base alone)*
 6. **Exit sequencing** — trailing_atr attended → native before first
    unattended night. *(rec: as stated)*
 7. **Price-feed topology** — LIVE daemon sole elevated holder; SIM
