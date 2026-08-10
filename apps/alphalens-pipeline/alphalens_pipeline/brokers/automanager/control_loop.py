@@ -1173,20 +1173,20 @@ def build_default_deps(
     refresh-chain-lost alert. This module never imports telegram itself.
 
     Two state-safety guards (ADR 0016) run FIRST, before any broker/journal
-    I/O: D7 refuses to boot a LIVE instance (the only client path today is
+    I/O: D7 used to hard-block a LIVE boot outright (the only client path was
     unconditionally SIM — ADR 0015 lock — so a "live" instance would trade
     SIM while journaling/alerting under LIVE labels, a mislabeled-state
-    hazard); D4 refuses to start against a pre-migration flat state layout
-    (an empty per-env root while the broker still holds positions would
-    reconcile against nothing and silently degrade protection)."""
-    if state_paths.broker_environment() == state_paths.ENV_LIVE:
-        raise BrokerCapabilityError(
-            f"{state_paths.BROKER_ENVIRONMENT_ENV}=live cannot boot yet (ADR 0016 "
-            "front 3 / ADR 0017 standing-LIVE authorization model): the daemon's "
-            "only client path is unconditionally SIM (ADR 0015 lock), so booting "
-            "now would trade SIM while journaling/alerting under LIVE labels — "
-            "wire the LIVE client-construction path before starting a live instance."
-        )
+    hazard); it is now the ``env == live`` branch below that routes into
+    :func:`~alphalens_pipeline.brokers.saxo.broker.create_saxo_broker_live_from_env`
+    (ADR 0017) instead of the SIM registry — that factory itself refuses to
+    construct anything until
+    :func:`~alphalens_pipeline.brokers.automanager.live_rails.assert_live_rails`
+    and the §1 account-bound grant both pass, so a mis-pinned LIVE unit still
+    fails loud at boot, before any network call. D4 refuses to start against
+    a pre-migration flat state layout (an empty per-env root while the broker
+    still holds positions would reconcile against nothing and silently
+    degrade protection)."""
+    broker_environment = state_paths.broker_environment()
     state_paths.assert_no_legacy_flat_state()
 
     from alphalens_pipeline.brokers.automanager import (  # noqa: F401 (planner/safety used by _make_place_pick)
@@ -1197,7 +1197,6 @@ def build_default_deps(
         safety,
         session_keeper,
     )
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
     # One-shot bounded-growth maintenance: fold the append-only standalone-stop
@@ -1205,7 +1204,21 @@ def build_default_deps(
     # at startup, before the tick loop — so no concurrent tick races the rewrite.
     _compact_standalone_stop_journal()
 
-    broker = get_default_broker()
+    # ADR 0017 composition root: env == live routes into the LIVE factory (which
+    # itself refuses to construct anything until assert_live_rails + the §1
+    # account-bound grant both pass — a mis-pinned LIVE unit still fails loud at
+    # boot, before any network call) instead of the SIM registry path, so
+    # env == live can NEVER reach get_default_broker. Both imports stay local so
+    # the common SIM-only path never pulls in the LIVE factory's import graph.
+    live_token_provider: Any = None
+    if broker_environment == state_paths.ENV_LIVE:
+        from alphalens_pipeline.brokers.saxo.broker import create_saxo_broker_live_from_env
+
+        broker, live_token_provider = create_saxo_broker_live_from_env(alert=chain_loss_notify)
+    else:
+        from alphalens_pipeline.brokers.registry import get_default_broker
+
+        broker = get_default_broker()
     # Resolve the behavioral exit policy ONCE, at startup — fail fast on a bad env
     # name here (a ValueError inside the per-tick protection pass would starve every
     # position that tick). The resolved instance is cached on LoopDeps + threaded
@@ -1254,10 +1267,20 @@ def build_default_deps(
             "amend_stop_amount (SupportsAmendStop) — geometry-live would leave a wrong-distance "
             "stop. Wire an amend-capable broker or unset the flag (setup_static)."
         )
-    # ONE OAuth provider instance is shared by the SessionKeeper AND the streaming
-    # reader, so there is a single OAuth chain / one flock owner and the reader can
-    # re-authorize in place off the same bearer the main loop pushes.
-    provider = _default_oauth_provider(alert=chain_loss_notify)
+    # ONE token-provider instance is shared by the SessionKeeper AND the (SIM-only)
+    # streaming reader, so there is a single OAuth chain / one flock owner and the
+    # reader can re-authorize in place off the same bearer the main loop pushes.
+    # LIVE reuses the SAME LiveOrderTokenProvider the factory built above —
+    # constructing a second adapter over the same underlying LiveTokenProvider
+    # would be two independent dead-latches that could disagree about whether the
+    # chain is alive (design memo §2). Streaming is structurally skipped for LIVE
+    # regardless of the flag (_build_stream_handles), so only SIM ever shares this
+    # instance with a reader thread.
+    provider = (
+        live_token_provider
+        if broker_environment == state_paths.ENV_LIVE
+        else _default_oauth_provider(alert=chain_loss_notify)
+    )
     keeper = session_keeper.SessionKeeper(provider)
 
     def _read_records() -> list[Mapping[str, Any]]:
@@ -1285,7 +1308,7 @@ def build_default_deps(
         global_kill_file=state_paths.global_kill_file_path(),
         ensure_alive=keeper.ensure_alive,
         iter_picks=picks.iter_picks,
-        place_pick=_make_place_pick(broker, exit_policy),
+        place_pick=_make_place_pick(broker, exit_policy, alert_throttled=_throttled),
         read_records=_read_records,
         verdicts_fn=reconcile_bridge.verdicts,
         build_position_view=_make_position_view_builder(broker),
@@ -1333,6 +1356,14 @@ def _build_stream_handles(
     precondition holds, else return the poll-only ``(None, None, None)``.
 
     Preconditions (each a fail-safe-to-poll gate, design memo §Env gates):
+      0. ``env != live`` — the order-WS subscriber
+         (:func:`_build_streaming_subscriber`) is a SIM-rail ``SaxoClient``
+         (no ``standing_live_authorized``); a LIVE instance is structurally
+         refused this reader regardless of the flag below (design memo §3:
+         "order-WS early-wake needs its own LIVE re-validation" — a separate,
+         not-yet-built follow-up), so the pin recommending
+         ``STREAMING_ENABLED=0`` for the LIVE unit is defense-in-depth, not
+         the only guard;
       1. ``ALPHALENS_BROKER_STREAMING_ENABLED=1`` (master dark gate);
       2. the broker is Saxo (the streaming REST + SIM rail live on ``SaxoClient``);
       3. the provider is OAuth — a static 24h token cannot be PUT-reauthorized in
@@ -1343,6 +1374,15 @@ def _build_stream_handles(
     unit-tested against stubs). A construction / start failure logs once and falls
     back to poll-only rather than raising — streaming is a pure latency win and its
     absence must never block the protective loop."""
+    if state_paths.broker_environment() == state_paths.ENV_LIVE:
+        logger.info(
+            "streaming early-wake reader structurally skipped for the LIVE broker "
+            "instance regardless of %s (design memo §3 — the order-WS subscriber "
+            "is a SIM-rail SaxoClient; LIVE re-validation of the reader is a "
+            "separate, not-yet-built follow-up)",
+            _STREAMING_ENABLED_ENV,
+        )
+        return None, None, None
     if not _streaming_enabled():
         return None, None, None
 
@@ -2167,7 +2207,10 @@ def _journaled_alert(send: Callable[[str], None]) -> Callable[[str], None]:
 
 
 def _make_place_pick(
-    broker: Broker, exit_policy: ExitPolicy | None = None
+    broker: Broker,
+    exit_policy: ExitPolicy | None = None,
+    *,
+    alert_throttled: Callable[[str, str], bool] | None = None,
 ) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
@@ -2183,10 +2226,17 @@ def _make_place_pick(
     down to ``_place_tiers`` because that gate lives in the nested
     ``_journal_tier``, which has no LoopDeps in scope. Defaults to the inert
     ``SetupStaticPolicy`` (dark) so non-geometry call sites/tests keep the
-    pre-Task-4 behavior."""
+    pre-Task-4 behavior.
+
+    ``alert_throttled`` (design memo §4 fee floor) is the same throttled-alert
+    sink ``LoopDeps.alert_throttled`` wraps — the composition root threads its
+    ONE daemon-lifetime ``_AlertThrottle`` in here so a fee-floor refusal pages
+    the operator via the usual channel. ``None`` (every pre-existing call site
+    /test) is tolerated — the fee floor still refuses + journals, it just does
+    not page."""
 
     def _place(pick: Any) -> bool:
-        return _place_pick(broker, pick, exit_policy)
+        return _place_pick(broker, pick, exit_policy, alert_throttled=alert_throttled)
 
     return _place
 
@@ -2224,6 +2274,41 @@ def _summarize_open_verdicts(
             if bracket and bracket.get("entry") is not None and bracket.get("qty") is not None:
                 gross_committed += float(bracket["entry"]) * float(bracket["qty"])
     return open_bracket_count, gross_committed, realized_r_today
+
+
+def _resolve_sizing_equity(account_equity: float) -> float:
+    """Effective sizing equity for ``compute_setup_plan`` (design memo §4):
+    ``min(pinned, snapshot)`` when ``ALPHALENS_BROKER_SIZING_EQUITY`` is
+    explicitly set, else ``account_equity`` unchanged — SIM never sets the
+    pin, so this stays byte-identical to the raw account snapshot on the SIM
+    path. Resolved at CALL TIME (no caching) so an operator edit to the pin
+    takes effect on the daemon's next restart without any other change.
+
+    ``min`` (never the pin alone) survives BOTH failure directions: a pin set
+    too high above the real balance stays capped at the snapshot, and a
+    balance that has dropped below the frame stays capped at the snapshot
+    too — raw-snapshot sizing (scaling picks to the FULL real balance) is the
+    one thing this must never fall back to."""
+    from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
+
+    pinned_raw = os.environ.get(SIZING_EQUITY_ENV)
+    if pinned_raw is None or not pinned_raw.strip():
+        return account_equity
+    try:
+        pinned = float(pinned_raw)
+    except ValueError:
+        # FAIL-CLOSED: a typo'd pin must never crash the tick, and it must
+        # never fall back to the raw snapshot either (sizing off the FULL
+        # real balance is the exact outcome the pin exists to prevent).
+        # Zero equity sizes nothing; the unplannable/zero-tiers refusal
+        # path downstream handles the pick, and the operator fixes the pin.
+        logger.warning(
+            "%s=%r is not a number — failing CLOSED to zero sizing equity",
+            SIZING_EQUITY_ENV,
+            pinned_raw,
+        )
+        return 0.0
+    return min(pinned, account_equity)
 
 
 def _resolve_and_size(
@@ -2270,7 +2355,7 @@ def _resolve_and_size(
             fx = build_fx_conversion(get_fx_rate(account.currency, instrument.currency))
         plan = compute_setup_plan(
             spec,
-            paper_equity=account.total_value,
+            paper_equity=_resolve_sizing_equity(account.total_value),
             scale_factor=1.0,
             fx=fx,
         )
@@ -2279,6 +2364,95 @@ def _resolve_and_size(
         return None
 
     return instrument, fx, plan
+
+
+# --- Fee floor (design memo §4 round-trip fee equation) ----------------------
+#
+# Saxo LIVE PL: commission 0.08% per fill, $1 minimum, applied on BOTH the
+# entry and the exit fill (round trip); a PLN account additionally converts
+# on BOTH legs of a cross-currency trade (0.25% x 2 = 0.50%). Names cite the
+# memo equation so a future edit stays traceable to it rather than a bare
+# magic number:
+#
+#   fee_rt(N) = 2 x max(_FEE_FLOOR_MIN_COMMISSION_USD,
+#                        _FEE_FLOOR_COMMISSION_RATE x N)
+#               + (_FEE_FLOOR_FX_ROUND_TRIP_RATE x N if an FX conversion applies else 0)
+_FEE_FLOOR_MIN_COMMISSION_USD = 1.0
+_FEE_FLOOR_COMMISSION_RATE = 0.0008
+_FEE_FLOOR_FX_ROUND_TRIP_RATE = 0.0050
+
+
+def _round_trip_fee_bps(
+    notional: float, *, fx_applies: bool, min_commission_applies: bool = True
+) -> float:
+    """The estimated round-trip fee for ``notional`` (instrument currency),
+    expressed in bps of that notional — design memo §4. ``fx_applies`` is
+    ``True`` iff the pick's ``fx`` conversion is not ``None`` (account
+    currency != instrument currency), which adds the FX round-trip leg.
+    ``min_commission_applies`` gates the $1-per-fill clamp: that figure is
+    denominated in USD, so it is only meaningful when ``notional`` is too —
+    a non-USD instrument gets the ad-valorem rate alone (the memo §4
+    equation is calibrated for the first-cohort US venue).
+
+    A non-positive ``notional`` (an unplannable/zero-tier pick) returns
+    ``0.0`` — the caller's cap comparison then stays inert rather than
+    dividing by zero; the zero-tiers check downstream already refuses such a
+    pick on its own terms."""
+    if notional <= 0:
+        return 0.0
+    ad_valorem = _FEE_FLOOR_COMMISSION_RATE * notional
+    per_fill = (
+        max(_FEE_FLOOR_MIN_COMMISSION_USD, ad_valorem) if min_commission_applies else ad_valorem
+    )
+    commission_round_trip = 2.0 * per_fill
+    fx_round_trip = _FEE_FLOOR_FX_ROUND_TRIP_RATE * notional if fx_applies else 0.0
+    return (commission_round_trip + fx_round_trip) / notional * 10000.0
+
+
+def _check_fee_floor(
+    plan: Any, fx: Any, *, ticker: str, instrument_currency: str = "USD"
+) -> str | None:
+    """``None`` iff the pick clears the round-trip fee floor OR
+    ``ALPHALENS_BROKER_MAX_FEE_BPS`` is unset (SIM — no fee floor, byte-
+    identical to pre-fee-floor behavior). Else a refusal message naming the
+    ticker, the estimated fee, and the cap (design memo §4) — never feeds
+    back into selection (R2), just a fee fact reported to the operator.
+
+    Reads the TOTAL planned notional in instrument currency off
+    ``setup_plan_gross_notional`` (the gross a planner would commit if every
+    tier filled) — the same figure the existing gross-guard uses, so the fee
+    floor and the safety gross guard never disagree on what "the notional"
+    means."""
+    from alphalens_pipeline.brokers.automanager.live_rails import MAX_FEE_BPS_ENV
+
+    max_fee_bps_raw = os.environ.get(MAX_FEE_BPS_ENV)
+    if max_fee_bps_raw is None or not max_fee_bps_raw.strip():
+        return None
+    try:
+        max_fee_bps = float(max_fee_bps_raw)
+    except ValueError:
+        # FAIL-CLOSED: a typo'd cap must never crash the tick and must never
+        # silently disable the floor (fail-open). Refuse the pick with a
+        # message naming the env var — the operator fixes the unit.
+        return (
+            f"fee floor: {MAX_FEE_BPS_ENV}={max_fee_bps_raw!r} is not a number — "
+            f"{ticker} refused (fail-closed until the cap is fixed)"
+        )
+
+    from broker_contract.sizing import setup_plan_gross_notional
+
+    notional = setup_plan_gross_notional(plan)
+    fee_bps = _round_trip_fee_bps(
+        notional,
+        fx_applies=fx is not None,
+        min_commission_applies=instrument_currency == "USD",
+    )
+    if fee_bps <= max_fee_bps:
+        return None
+    return (
+        f"fee floor: {ticker} round-trip {fee_bps:.1f} bps > cap {max_fee_bps:.1f} bps "
+        f"(notional {notional:,.2f}) — pick refused"
+    )
 
 
 def _is_journalable_price(value: float | None) -> bool:
@@ -2491,7 +2665,7 @@ def _place_tiers(
                 note=None,
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
-                sizing_equity=account.total_value,
+                sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
             )
         )
@@ -2545,7 +2719,7 @@ def _place_tiers(
                 note=failure_note,
                 sizing_currency=account.currency,
                 instrument_currency=instrument.currency,
-                sizing_equity=account.total_value,
+                sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
             )
         )
@@ -2555,7 +2729,13 @@ def _place_tiers(
     return placed_count
 
 
-def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = None) -> bool:
+def _place_pick(
+    broker: Broker,
+    intent: Any,
+    exit_policy: ExitPolicy | None = None,
+    *,
+    alert_throttled: Callable[[str, str], bool] | None = None,
+) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
     keep the tick logic flat; every failure path logs and returns False
@@ -2564,6 +2744,9 @@ def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = No
     ``exit_policy`` (Task 4) is the resolved-once cached policy passed straight
     through to ``_place_tiers`` (whose nested ``_journal_tier`` owns the
     geometry-override gate).
+
+    ``alert_throttled`` (design memo §4 fee floor) pages the operator when the
+    fee floor refuses a pick; ``None`` is tolerated (refuse + journal, no page).
 
     PR-7 (broker-manager extraction memo §5): the daemon never touches a
     brief any more — ``ticker``/``brief_date``/``spec``/``exit_spec`` are all
@@ -2635,6 +2818,27 @@ def _place_pick(broker: Broker, intent: Any, exit_policy: ExitPolicy | None = No
     if resolved is None:
         return False
     instrument, fx, plan = resolved
+
+    # Fee floor (design memo §4) — computed AFTER the setup plan + fx are
+    # known, BEFORE any bracket construction/placement. A pick below the
+    # floor is refused terminal (never re-tried every tick) and NEVER placed;
+    # ALPHALENS_BROKER_MAX_FEE_BPS unset (SIM) skips the check entirely.
+    fee_violation = _check_fee_floor(
+        plan, fx, ticker=ticker, instrument_currency=instrument.currency
+    )
+    if fee_violation is not None:
+        logger.warning("place_pick %s: %s", ticker, fee_violation)
+        if alert_throttled is not None:
+            alert_throttled(fee_violation, f"fee-floor:{ticker}")
+        from alphalens_pipeline.brokers.automanager import picks
+
+        try:
+            picks.mark_refused(ticker, brief_date, fee_violation)
+        except OSError as exc:
+            logger.warning(
+                "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
+            )
+        return False
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:

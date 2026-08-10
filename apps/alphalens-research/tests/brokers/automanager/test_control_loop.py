@@ -21,6 +21,10 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import state_paths
+from alphalens_pipeline.brokers.automanager.live_rails import (
+    MAX_FEE_BPS_ENV,
+    SIZING_EQUITY_ENV,
+)
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
     BrokerView,
@@ -920,6 +924,321 @@ class TestPlacePickBranches(unittest.TestCase):
         self.assertEqual(captured["jv"].open_bracket_count, 1)
         self.assertEqual(captured["jv"].gross_committed, 50.0)
         self.assertEqual(captured["jv"].realized_r_today, 1.5)
+
+
+# --- Sizing cap + fee floor (design memo §4) ---------------------------------
+
+
+class TestResolveSizingEquity(unittest.TestCase):
+    """``_resolve_sizing_equity`` — ``min(pinned, snapshot)`` when
+    ``ALPHALENS_BROKER_SIZING_EQUITY`` is explicitly set, else the raw
+    account snapshot unchanged (SIM never sets the pin -> byte-identical)."""
+
+    def test_unset_returns_snapshot_unchanged(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 100_000.0)
+
+    def test_blank_pin_treated_as_unset(self) -> None:
+        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "   "}, clear=True):
+            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 100_000.0)
+
+    def test_pinned_below_snapshot_wins(self) -> None:
+        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
+            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 10_000.0)
+
+    def test_snapshot_below_pinned_wins(self) -> None:
+        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
+            self.assertEqual(cl._resolve_sizing_equity(5_000.0), 5_000.0)
+
+    def test_malformed_pin_fails_closed_to_zero_equity(self) -> None:
+        # A typo'd pin must NEVER crash the tick (drain resilience) and must
+        # NEVER silently fall back to the raw snapshot (that would size off
+        # the FULL real balance — the exact thing the pin exists to prevent).
+        # Fail-closed: effective equity 0.0 -> nothing sizes -> the existing
+        # unplannable/zero-tiers refusal path handles the pick.
+        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10OOO"}, clear=True):
+            with self.assertLogs(cl.logger, level="WARNING") as logs:
+                self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
+        self.assertTrue(any(SIZING_EQUITY_ENV in line for line in logs.output))
+
+
+class TestResolveAndSizeUsesEffectiveSizingEquity(unittest.TestCase):
+    """``_resolve_and_size`` feeds ``compute_setup_plan(paper_equity=...)``
+    the EFFECTIVE (min-pinned-snapshot) equity, not the raw account
+    snapshot."""
+
+    def _paper_equity(self, *, account_equity: float, env: dict[str, str]) -> Any:
+        pkg = "alphalens_pipeline.brokers"
+        captured: dict[str, Any] = {}
+
+        def _capture_plan(_spec: Any, **kw: Any) -> Any:
+            captured.update(kw)
+            return object()
+
+        account = _acct()
+        account.total_value = account_equity  # type: ignore[attr-defined]
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: _instr()))
+            p(mock.patch("broker_contract.sizing.compute_setup_plan", _capture_plan))
+            p(mock.patch.dict("os.environ", env, clear=True))
+            cl._resolve_and_size(_PlaceBroker(), "KO", account, object())
+        return captured["paper_equity"]
+
+    def test_pinned_below_snapshot_sizes_off_the_pin(self) -> None:
+        equity = self._paper_equity(account_equity=100_000.0, env={SIZING_EQUITY_ENV: "10000"})
+        self.assertEqual(equity, 10_000.0)
+
+    def test_pinned_above_snapshot_sizes_off_the_snapshot(self) -> None:
+        equity = self._paper_equity(account_equity=5_000.0, env={SIZING_EQUITY_ENV: "10000"})
+        self.assertEqual(equity, 5_000.0)
+
+    def test_env_unset_sizes_off_the_raw_snapshot(self) -> None:
+        equity = self._paper_equity(account_equity=100_000.0, env={})
+        self.assertEqual(equity, 100_000.0)
+
+
+def _fee_plan(notional: float) -> SetupPlan:
+    """A minimal ``SetupPlan`` whose ``setup_plan_gross_notional`` is exactly
+    ``notional`` (a single fully-filled tier at a $10 limit)."""
+    qty = int(notional // 10.0)
+    return SetupPlan(
+        suggested_size_pct=1.0,
+        scale_factor=1.0,
+        final_size_pct=1.0,
+        total_notional=notional,
+        paper_equity=100_000.0,
+        disaster_stop=90.0,
+        order_ttl_days=1,
+        entry_tiers=(TierPlan(tier_index=0, limit_price=10.0, qty=qty, alloc_pct=100.0, tag="T1"),),
+        tp_tranches=(),
+    )
+
+
+class TestRoundTripFeeBps(unittest.TestCase):
+    """``_round_trip_fee_bps`` — design memo §4:
+    ``fee_rt(N) = 2 x max($1, 0.08% x N) + (0.50% x N if FX applies else 0)``,
+    reported as bps of ``N``."""
+
+    def test_ad_valorem_commission_dominates_above_the_min_fee_crossover(self) -> None:
+        # 0.0008 x 10_000 = $8 > $1 floor -> commission = 2 x $8 = $16 -> 16 bps.
+        self.assertAlmostEqual(cl._round_trip_fee_bps(10_000.0, fx_applies=False), 16.0)
+
+    def test_min_fee_floor_dominates_below_the_crossover(self) -> None:
+        # 0.0008 x 100 = $0.08 < $1 floor -> commission = 2 x $1 = $2 -> 200 bps.
+        self.assertAlmostEqual(cl._round_trip_fee_bps(100.0, fx_applies=False), 200.0)
+
+    def test_fx_round_trip_adds_fifty_bps(self) -> None:
+        # N=1000: commission = 2 x max(1, 0.8) = $2 -> 20 bps; + 0.005*1000 = $5 -> +50 bps.
+        no_fx = cl._round_trip_fee_bps(1000.0, fx_applies=False)
+        with_fx = cl._round_trip_fee_bps(1000.0, fx_applies=True)
+        self.assertAlmostEqual(no_fx, 20.0)
+        self.assertAlmostEqual(with_fx, 70.0)
+
+    def test_zero_notional_returns_zero_never_divides(self) -> None:
+        self.assertEqual(cl._round_trip_fee_bps(0.0, fx_applies=False), 0.0)
+
+
+class TestCheckFeeFloor(unittest.TestCase):
+    """``_check_fee_floor`` — the env gate + refusal-message assembly around
+    ``_round_trip_fee_bps``."""
+
+    def test_env_unset_returns_none_even_at_tiny_notional(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(cl._check_fee_floor(_fee_plan(50.0), None, ticker="KO"))
+
+    def test_under_cap_returns_none(self) -> None:
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
+            self.assertIsNone(cl._check_fee_floor(_fee_plan(10_000.0), None, ticker="KO"))
+
+    def test_over_cap_names_ticker_and_fee_in_the_message(self) -> None:
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
+            message = cl._check_fee_floor(_fee_plan(50.0), None, ticker="KO")
+        self.assertIsNotNone(message)
+        assert message is not None  # narrows for the type checker
+        self.assertIn("KO", message)
+        self.assertIn("fee", message.lower())
+
+    def test_fx_conversion_can_flip_a_pass_into_a_refusal(self) -> None:
+        # Same notional, same cap: the FX leg alone tips a pass into a refusal
+        # (pins the fx-applies branch distinctly from the same-currency path).
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "50"}, clear=True):
+            self.assertIsNone(cl._check_fee_floor(_fee_plan(1000.0), None, ticker="KO"))
+            self.assertIsNotNone(cl._check_fee_floor(_fee_plan(1000.0), object(), ticker="KO"))
+
+    def test_malformed_cap_fails_closed_to_a_refusal(self) -> None:
+        # A typo'd fee cap must NEVER crash the tick and must NEVER silently
+        # disable the floor (fail-open) — the pick is refused with a message
+        # naming the env var so the operator fixes the unit, not the pick.
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "1O0"}, clear=True):
+            message = cl._check_fee_floor(_fee_plan(10_000.0), None, ticker="KO")
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn(MAX_FEE_BPS_ENV, message)
+
+    def test_non_usd_instrument_skips_the_min_commission_clamp(self) -> None:
+        # The $1-min commission is a USD-venue figure; comparing it against a
+        # notional denominated in another currency mixes units (a 50-PLN
+        # notional is NOT $50). Non-USD instruments get the ad-valorem rate
+        # only — memo §4's clamp is calibrated for the first-cohort US venue.
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
+            self.assertIsNotNone(
+                cl._check_fee_floor(_fee_plan(50.0), None, ticker="KO", instrument_currency="USD")
+            )
+            self.assertIsNone(
+                cl._check_fee_floor(_fee_plan(50.0), None, ticker="CDR", instrument_currency="PLN")
+            )
+
+
+class _RecordingBroker(_PlaceBroker):
+    """``_PlaceBroker`` that records every ``place_bracket_order`` call, so a
+    fee-floor test can assert the broker was NEVER reached."""
+
+    def __init__(self, **kw: Any) -> None:
+        super().__init__(**kw)
+        self.placed: list[Any] = []
+
+    def place_bracket_order(self, bracket: Any) -> Any:
+        self.placed.append(bracket)
+        return super().place_bracket_order(bracket)
+
+
+class TestPlacePickFeeFloorIntegration(unittest.TestCase):
+    """The fee floor gate inside ``_place_pick`` (design memo §4): computed
+    AFTER the setup plan + fx are known, BEFORE any bracket construction or
+    placement. Mirrors the existing terminal safety-refusal flow (mark_refused
+    + throttled alert), never a bare skip."""
+
+    def _placer(
+        self, broker: Any, *, notional: float, resolve: Any = None, **over: Any
+    ) -> tuple[Any, list[tuple[str, str]], list[tuple[Any, ...]]]:
+        pkg = "alphalens_pipeline.brokers"
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        alerts: list[tuple[str, str]] = []
+        refusals: list[tuple[Any, ...]] = []
+
+        def _alert_throttled(message: str, reason: str) -> bool:
+            alerts.append((message, reason))
+            return True
+
+        m: dict[str, Any] = {
+            "verdicts": lambda _r, _b: [],
+            "safety_check": lambda *_a, **_k: object(),
+            "resolve": resolve if resolve is not None else (lambda _b, _t: _instr()),
+            "classify": lambda *_a, **_k: _placement(),
+            "compute_plan": lambda _spec, **_k: _fee_plan(notional),
+            "iter_records": lambda _p: [],
+            "append": lambda _r: None,
+            "build_record": lambda **kw: dict(kw),
+            "mark_refused": lambda *a: refusals.append(a),
+            **over,
+        }
+        p = stack.enter_context
+        p(mock.patch(f"{pkg}.automanager.picks.mark_refused", m["mark_refused"]))
+        p(mock.patch(f"{pkg}.submission_log.build_submission_record", m["build_record"]))
+        p(mock.patch(f"{pkg}.submission_log.append_submission_record", m["append"]))
+        p(mock.patch(f"{pkg}.submission_log.iter_submission_records", m["iter_records"]))
+        p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", m["verdicts"]))
+        p(mock.patch(f"{pkg}.automanager.safety.check", m["safety_check"]))
+        p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
+        p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
+        p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
+        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
+        return placer, alerts, refusals
+
+    def test_journal_records_the_effective_sizing_equity_not_the_snapshot(self) -> None:
+        # Audit fidelity (T8): the plan is sized off min(pin, snapshot); the
+        # submission record must carry that SAME figure — a record stamped
+        # with the raw balance would misdescribe every quantity in it.
+        appended: list[dict] = []
+        broker = _RecordingBroker()
+        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
+            placer, _alerts, _refusals = self._placer(
+                broker, notional=10_000.0, append=appended.append
+            )
+            self.assertTrue(placer(_pick()))
+        self.assertEqual(len(appended), 1)
+        self.assertEqual(
+            appended[0]["sizing_equity"],
+            10_000.0,
+            "journal must record the effective (pinned) equity, not total_value=100000",
+        )
+
+    def test_small_notional_over_cap_is_refused_terminal_never_placed(self) -> None:
+        broker = _RecordingBroker()
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
+            placer, alerts, refusals = self._placer(broker, notional=50.0)
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(broker.placed, [], "the fee floor must refuse BEFORE any bracket places")
+        self.assertEqual(len(refusals), 1)
+        ticker, brief_date, reason = refusals[0]
+        self.assertEqual(ticker, "KO")
+        self.assertEqual(brief_date, dt.date(2026, 7, 20))
+        self.assertIn("fee", reason.lower())
+        self.assertEqual(len(alerts), 1)
+        message, reason_key = alerts[0]
+        self.assertIn("fee", message.lower())
+        self.assertIn("KO", reason_key)
+
+    def test_large_notional_under_cap_places(self) -> None:
+        broker = _RecordingBroker()
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
+            placer, alerts, refusals = self._placer(broker, notional=10_000.0)
+            self.assertTrue(placer(_pick()))
+        self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    def test_env_unset_skips_fee_check_even_at_tiny_notional(self) -> None:
+        broker = _RecordingBroker()
+        with mock.patch.dict("os.environ", {}, clear=True):
+            placer, alerts, refusals = self._placer(broker, notional=1.0)
+            self.assertTrue(placer(_pick()))
+        self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    def test_alert_throttled_none_is_tolerated(self) -> None:
+        # Every pre-existing call site / test builds the placer without an
+        # alert sink at all — the fee floor must still refuse + journal.
+        pkg = "alphalens_pipeline.brokers"
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        refusals: list[tuple[Any, ...]] = []
+        p = stack.enter_context
+        p(mock.patch(f"{pkg}.automanager.picks.mark_refused", lambda *a: refusals.append(a)))
+        p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+        p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
+        p(mock.patch(f"{pkg}.submission_log.iter_submission_records", lambda _p: []))
+        p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b: []))
+        p(mock.patch(f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()))
+        p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: _instr()))
+        p(mock.patch("broker_contract.sizing.compute_setup_plan", lambda _s, **_k: _fee_plan(50.0)))
+        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "100"}, clear=True):
+            placer = cl._make_place_pick(_PlaceBroker())
+            self.assertFalse(placer(_pick()))  # must not raise despite no alert sink
+        self.assertEqual(len(refusals), 1)
+
+    def test_fx_conversion_increases_the_fee_and_can_flip_a_refusal(self) -> None:
+        # EUR instrument vs USD account -> fx builds; the FX round-trip leg
+        # alone can push a pick that would otherwise pass into a refusal.
+        fx_obj = type("FX", (), {"rate": 1.1})()
+        broker = _RecordingBroker(get_fx_rate=lambda _base, _quote: 1.1)
+        with (
+            mock.patch(
+                "alphalens_pipeline.brokers.execution.build_fx_conversion", lambda _r: fx_obj
+            ),
+            mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "50"}, clear=True),
+        ):
+            placer, _alerts, refusals = self._placer(
+                broker, notional=1000.0, resolve=lambda _b, _t: _instr(currency="EUR")
+            )
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(broker.placed, [])
+        self.assertEqual(len(refusals), 1)
 
 
 def _exit_spec(*, stop: float, tp: float, atr: float, ceiling: float | None = None) -> Any:
@@ -3768,21 +4087,32 @@ class TestBuildDefaultDepsWiresNotificationPorts(unittest.TestCase):
 
 
 class TestBuildDefaultDepsStateGuards(unittest.TestCase):
-    """D4 (legacy-layout guard) + D7 (LIVE-boot block), ADR 0016. Both checks
-    run FIRST in build_default_deps, before any broker/journal I/O — a
-    live-boot or legacy-layout mistake must never reach a partially-wired
-    daemon (fail-loud, not fail-empty)."""
+    """D4 (legacy-layout guard, ADR 0016) + the ``env == live`` branch, ADR
+    0017. D4 still runs FIRST, before any broker/journal I/O — a legacy-layout
+    mistake must never reach a partially-wired daemon (fail-loud, not
+    fail-empty). The old D7 hard-raise (ADR 0016, "LIVE cannot boot yet") is
+    GONE: env=live now routes into the LIVE factory
+    (``create_saxo_broker_live_from_env``), which itself refuses to construct
+    anything until ``assert_live_rails`` passes — so a rails-unset LIVE boot
+    fails via THAT message, and the SIM registry path
+    (``get_default_broker``) is never reached. Composition-root-specific
+    coverage (patched-factory happy path, SessionKeeper identity, streaming
+    skip) lives in ``test_live_composition.py``."""
 
-    def test_refuses_to_boot_a_live_instance(self) -> None:
+    def test_refuses_to_boot_a_live_instance_with_rails_unset(self) -> None:
         with (
             _isolated_home(),
-            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ENVIRONMENT": "live"}),
+            mock.patch.dict(os.environ, {"ALPHALENS_BROKER_ENVIRONMENT": "live"}, clear=True),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker"
+            ) as mock_get_default_broker,
         ):
             with self.assertRaises(BrokerCapabilityError) as ctx:
                 cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
         message = str(ctx.exception)
-        self.assertIn("0016", message)
-        self.assertIn("live", message.lower())
+        self.assertIn("ADR 0017", message)
+        self.assertIn("ALPHALENS_BROKER_MAX_OPEN", message, "the missing rail must be named")
+        mock_get_default_broker.assert_not_called()
 
     def test_refuses_a_pre_migration_flat_layout(self) -> None:
         with TemporaryDirectory() as d:

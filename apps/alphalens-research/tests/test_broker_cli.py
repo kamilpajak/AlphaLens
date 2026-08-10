@@ -957,8 +957,8 @@ class TestManageCommandWiresNotificationPorts(unittest.TestCase):
     def test_manage_wires_the_telegram_factories_into_build_default_deps(self):
         from alphalens_cli.commands.broker import broker_app
 
-        sentinel_notify = object()
-        sentinel_chain_loss = object()
+        sentinel_notify = mock.Mock()
+        sentinel_chain_loss = mock.Mock()
         captured: dict[str, object] = {}
 
         def _fake_build_default_deps(*, notify, chain_loss_notify):
@@ -984,20 +984,69 @@ class TestManageCommandWiresNotificationPorts(unittest.TestCase):
                 side_effect=_fake_build_default_deps,
             ),
             mock.patch("alphalens_pipeline.brokers.automanager.control_loop.run_daemon"),
+            mock.patch.dict("os.environ", {}, clear=True),
         ):
             runner = CliRunner()
             result = runner.invoke(broker_app, ["manage", "--once"])
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIs(captured["notify"], sentinel_notify)
-        self.assertIs(captured["chain_loss_notify"], sentinel_chain_loss)
+        # ADR 0017 §5: the raw factories are wrapped with an `[env]` label at
+        # this composition root before reaching build_default_deps — default
+        # (unset) environment resolves to `[sim]`.
+        self.assertIsNot(captured["notify"], sentinel_notify)
+        self.assertIsNot(captured["chain_loss_notify"], sentinel_chain_loss)
+        captured["notify"]("tick alert")
+        captured["chain_loss_notify"]("chain lost")
+        sentinel_notify.assert_called_once_with("[sim] tick alert")
+        sentinel_chain_loss.assert_called_once_with("[sim] chain lost")
+
+    def test_manage_labels_alerts_live_under_the_live_environment(self):
+        from alphalens_cli.commands.broker import broker_app
+
+        sentinel_notify = mock.Mock()
+        sentinel_chain_loss = mock.Mock()
+        captured: dict[str, object] = {}
+
+        def _fake_build_default_deps(*, notify, chain_loss_notify):
+            captured["notify"] = notify
+            captured["chain_loss_notify"] = chain_loss_notify
+            deps = mock.Mock()
+            deps.wake_event = None
+            deps.stream_tick = None
+            deps.stream_trigger = None
+            return deps
+
+        with (
+            mock.patch(
+                "alphalens_cli.commands.broker._telegram_daemon_notify",
+                return_value=sentinel_notify,
+            ),
+            mock.patch(
+                "alphalens_cli.commands.broker._telegram_chain_loss_notify",
+                return_value=sentinel_chain_loss,
+            ),
+            mock.patch(
+                "alphalens_pipeline.brokers.automanager.control_loop.build_default_deps",
+                side_effect=_fake_build_default_deps,
+            ),
+            mock.patch("alphalens_pipeline.brokers.automanager.control_loop.run_daemon"),
+            mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}, clear=True),
+        ):
+            runner = CliRunner()
+            result = runner.invoke(broker_app, ["manage", "--once"])
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        captured["notify"]("tick alert")
+        captured["chain_loss_notify"]("chain lost")
+        sentinel_notify.assert_called_once_with("[live] tick alert")
+        sentinel_chain_loss.assert_called_once_with("[live] chain lost")
 
 
 class TestAuthRefreshWiresChainLossNotify(unittest.TestCase):
     def test_refresh_passes_the_telegram_chain_loss_sink(self):
         from alphalens_cli.commands.broker import broker_app
 
-        sentinel = object()
+        sentinel = mock.Mock()
         captured: dict[str, object] = {}
 
         class _StubProvider:
@@ -1017,12 +1066,68 @@ class TestAuthRefreshWiresChainLossNotify(unittest.TestCase):
                 "alphalens_pipeline.brokers.saxo.tokens.OAuthTokenProvider.from_env",
                 side_effect=_fake_from_env,
             ),
+            mock.patch.dict("os.environ", {}, clear=True),
         ):
             runner = CliRunner()
             result = runner.invoke(broker_app, ["auth", "--refresh"])
 
         self.assertEqual(result.exit_code, 0, result.output)
-        self.assertIs(captured["alert"], sentinel)
+        # ADR 0017 §5: the SIM `auth --refresh` chain-loss sink is labeled too
+        # — the wrapper is applied once and shared with `manage`.
+        self.assertIsNot(captured["alert"], sentinel)
+        captured["alert"]("chain lost")
+        sentinel.assert_called_once_with("[sim] chain lost")
+
+
+class TestEnvironmentLabeledNotify(unittest.TestCase):
+    """ADR 0017 §5 — the one shared wrapper applied to both alert sinks at the
+    CLI composition root: an `[env]` prefix so a SIM and a LIVE daemon sharing
+    one Telegram chat produce distinguishable alert streams."""
+
+    def test_default_environment_labels_sim(self):
+        from alphalens_cli.commands.broker import _environment_labeled_notify
+
+        sink = mock.Mock()
+        with mock.patch.dict("os.environ", {}, clear=True):
+            wrapped = _environment_labeled_notify(sink)
+        wrapped("orphan (placed but never journaled): X")
+        sink.assert_called_once_with("[sim] orphan (placed but never journaled): X")
+
+    def test_live_environment_labels_live(self):
+        from alphalens_cli.commands.broker import _environment_labeled_notify
+
+        sink = mock.Mock()
+        with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ENVIRONMENT": "live"}, clear=True):
+            wrapped = _environment_labeled_notify(sink)
+        wrapped("chain lost")
+        sink.assert_called_once_with("[live] chain lost")
+
+    def test_message_preserved_verbatim_after_the_prefix(self):
+        from alphalens_cli.commands.broker import _environment_labeled_notify
+
+        sink = mock.Mock()
+        message = "precheck 0: fx cross-check ok — saxo rate 1.234500"
+        with mock.patch.dict("os.environ", {}, clear=True):
+            wrapped = _environment_labeled_notify(sink)
+        wrapped(message)
+        (sent_message,), sent_kwargs = sink.call_args
+        self.assertTrue(sent_message.endswith(message))
+        self.assertEqual(sent_kwargs, {})
+
+    def test_wraps_each_sink_independently(self):
+        """Two calls to the wrapper produce two independent closures — wrapping
+        the daemon sink must not leak state into the chain-loss sink."""
+        from alphalens_cli.commands.broker import _environment_labeled_notify
+
+        daemon_sink = mock.Mock()
+        chain_loss_sink = mock.Mock()
+        with mock.patch.dict("os.environ", {}, clear=True):
+            wrapped_daemon = _environment_labeled_notify(daemon_sink)
+            wrapped_chain_loss = _environment_labeled_notify(chain_loss_sink)
+        wrapped_daemon("a")
+        wrapped_chain_loss("b")
+        daemon_sink.assert_called_once_with("[sim] a")
+        chain_loss_sink.assert_called_once_with("[sim] b")
 
 
 class TestCliImportsStayLazy(unittest.TestCase):
