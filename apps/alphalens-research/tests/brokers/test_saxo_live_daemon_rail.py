@@ -18,6 +18,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from alphalens_pipeline.brokers.automanager.live_rails import (
+    DAILY_LOSS_LIMIT_R_ENV,
+    EXIT_POLICY_ENV,
+    MAX_FEE_BPS_ENV,
+    MAX_OPEN_ENV,
+    PORTFOLIO_GROSS_FRAC_ENV,
+    SIZING_EQUITY_ENV,
+)
 from alphalens_pipeline.brokers.saxo.client import (
     _LIVE_URL_MARKERS,
     LIVE_ACCOUNT_KEY_ENV,
@@ -28,9 +36,22 @@ from alphalens_pipeline.brokers.saxo.client import (
     SaxoLiveEnvironmentBlockedError,
 )
 from alphalens_pipeline.brokers.saxo.tokens import TOKEN_ENV
+from alphalens_pipeline.data.alt_data.saxo_marketdata_client import LIVE_API_BASE_URL
 
 LIVE_URL = f"https://{_LIVE_URL_MARKERS[0]}"
 LIVE_ACCOUNT_KEY = "STANDING-GRANT-SENTINEL-ACCOUNT-7c2e"
+
+# A fully in-bounds §3 boot-assert env — the factory tests below layer the
+# grant pair (LIVE_STANDING_ENV / LIVE_ACCOUNT_KEY_ENV) on top of this so
+# rail failures never mask what each test is actually pinning.
+_VALID_RAIL_ENV: dict[str, str] = {
+    MAX_OPEN_ENV: "1",
+    PORTFOLIO_GROSS_FRAC_ENV: "0.25",
+    DAILY_LOSS_LIMIT_R_ENV: "1.0",
+    SIZING_EQUITY_ENV: "10000",
+    EXIT_POLICY_ENV: "trailing_atr",
+    MAX_FEE_BPS_ENV: "100",
+}
 
 
 class _AnyTokenProvider:
@@ -183,6 +204,104 @@ class TestStandingEnvConstantsExist(unittest.TestCase):
         self.assertEqual(LIVE_STANDING_ENV, "ALPHALENS_SAXO_LIVE_STANDING")
         self.assertEqual(LIVE_ACCOUNT_KEY_ENV, "SAXO_LIVE_ACCOUNT_KEY")
         self.assertNotEqual(LIVE_STANDING_ENV, LIVE_ACCOUNT_KEY_ENV)
+
+
+class TestCreateSaxoBrokerLiveFromEnvRefusals(unittest.TestCase):
+    """``create_saxo_broker_live_from_env`` (design memo §2) refusal paths —
+    every case below raises BEFORE any network call, and the grant-mismatch
+    case raises before :class:`SaxoClient` is even constructed."""
+
+    def test_missing_account_key_raises_keyerror(self):
+        """§3 rails pass; SAXO_LIVE_ACCOUNT_KEY absent — a loud KeyError,
+        never a silent fallback onto the SIM account key."""
+        from alphalens_pipeline.brokers.saxo import broker as broker_mod
+
+        env = dict(_VALID_RAIL_ENV)
+        env.pop(LIVE_ACCOUNT_KEY_ENV, None)
+        env.pop(LIVE_STANDING_ENV, None)
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(KeyError):
+                broker_mod.create_saxo_broker_live_from_env()
+
+    def test_grant_mismatch_raises_before_client_construction(self):
+        """§3 rails pass; the grant pair is set but MISMATCHED — refused
+        before SaxoClient is constructed at all."""
+        from alphalens_pipeline.brokers.saxo import broker as broker_mod
+
+        env = dict(
+            _VALID_RAIL_ENV,
+            **{LIVE_ACCOUNT_KEY_ENV: LIVE_ACCOUNT_KEY, LIVE_STANDING_ENV: "wrong-value"},
+        )
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(broker_mod, "SaxoClient") as mock_client_cls,
+        ):
+            with self.assertRaises(SaxoLiveEnvironmentBlockedError):
+                broker_mod.create_saxo_broker_live_from_env()
+        mock_client_cls.assert_not_called()
+
+    def test_rail_violation_raises_before_account_key_is_even_read(self):
+        """§3 rails fail (e.g. MAX_OPEN unset) — refused by assert_live_rails
+        even though the grant pair itself is a perfect match, and before
+        SaxoClient is constructed."""
+        from alphalens_pipeline.brokers.saxo import broker as broker_mod
+        from broker_contract.contract import BrokerCapabilityError
+
+        env = dict(_VALID_RAIL_ENV)
+        env.pop(MAX_OPEN_ENV, None)
+        env[LIVE_ACCOUNT_KEY_ENV] = LIVE_ACCOUNT_KEY
+        env[LIVE_STANDING_ENV] = LIVE_ACCOUNT_KEY
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(broker_mod, "SaxoClient") as mock_client_cls,
+        ):
+            with self.assertRaises(BrokerCapabilityError):
+                broker_mod.create_saxo_broker_live_from_env()
+        mock_client_cls.assert_not_called()
+
+
+class TestCreateSaxoBrokerLiveFromEnvSuccess(unittest.TestCase):
+    """The happy path — every constructor mocked, exact kwargs asserted, no
+    network call and no real credential anywhere in this test."""
+
+    def test_full_valid_env_wires_exact_kwargs(self):
+        from alphalens_pipeline.brokers.saxo import broker as broker_mod
+
+        env = dict(
+            _VALID_RAIL_ENV,
+            **{LIVE_ACCOUNT_KEY_ENV: LIVE_ACCOUNT_KEY, LIVE_STANDING_ENV: LIVE_ACCOUNT_KEY},
+        )
+        underlying_sentinel = object()
+        provider_sentinel = object()
+        cfg_sentinel = object()
+        broker_sentinel = object()
+        client_sentinel = object()
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(broker_mod, "SaxoClient") as mock_client_cls,
+            mock.patch.object(broker_mod, "SaxoBroker") as mock_broker_cls,
+            mock.patch.object(broker_mod, "LiveAuthConfig") as mock_cfg_cls,
+            mock.patch.object(broker_mod, "LiveTokenProvider") as mock_provider_cls,
+            mock.patch.object(broker_mod, "LiveOrderTokenProvider") as mock_adapter_cls,
+        ):
+            mock_cfg_cls.from_env.return_value = cfg_sentinel
+            mock_provider_cls.return_value = underlying_sentinel
+            mock_adapter_cls.return_value = provider_sentinel
+            mock_client_cls.return_value = client_sentinel
+            mock_broker_cls.return_value = broker_sentinel
+
+            result = broker_mod.create_saxo_broker_live_from_env()
+
+        mock_cfg_cls.from_env.assert_called_once_with()
+        mock_provider_cls.assert_called_once_with(cfg_sentinel)
+        mock_adapter_cls.assert_called_once_with(underlying_sentinel, alert=None)
+        mock_client_cls.assert_called_once_with(
+            provider_sentinel,
+            base_url=LIVE_API_BASE_URL,
+            standing_live_authorized=True,
+        )
+        mock_broker_cls.assert_called_once_with(client_sentinel, account_key=LIVE_ACCOUNT_KEY)
+        self.assertIs(result, broker_sentinel)
 
 
 if __name__ == "__main__":
