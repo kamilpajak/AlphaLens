@@ -59,6 +59,13 @@ ACTIVE_JOBS = (
     # (AlphalensBrokerManagerHeartbeatStale/Missing), not the shared
     # alphalens_job_* last_success pattern.
     "saxo-refresh",
+    # LIVE market-data OAuth idle keep-alive (ADR 0017 / design memo
+    # broker_live_daemon_arm_design_2026_08_10.md §5) — the same
+    # timer-driven-oneshot shape as saxo-refresh above, just for the
+    # separate saxo_auth_live chain. The LIVE broker-manager daemon itself
+    # stays OUT of this enum for the same reason SIM's does (its own
+    # AlphalensBrokerManagerLiveHeartbeatStale family, not this pattern).
+    "saxo-marketdata-refresh",
 )
 
 

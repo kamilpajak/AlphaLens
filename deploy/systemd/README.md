@@ -950,9 +950,20 @@ This section complements the inline install comments already in
 `alphalens-broker-manager.service`.
 
 **Target:** the always-on SIM auto-manager (`alphalens broker manage`) + the OAuth keep-alive timer, on the VPS (`jacoren@vault`, host-venv systemd-user — same pattern as `alphalens-edgar-detect`).
-**Scope:** SIM only. The `$100` live escape is **out of scope** (needs a separate ADR + `ALPHALENS_BROKER_LIVE=1` + `$100` caps; the structural SIM rail stays untouched).
+**Scope:** this section covers the SIM daemon only. The LIVE daemon
+(REAL-MONEY orders, ADR 0017 standing-LIVE authorization) has its own
+runbook — see "LIVE instance runbook (ADR 0017 standing-LIVE
+authorization)" below (§9).
 **Merged:** PR #876 (`9005b5eb`). Design: [`docs/research/saxo_automanager_mvp_design_2026_07_21.md`](../../docs/research/saxo_automanager_mvp_design_2026_07_21.md).
 **Golden rule:** deploy INERT first (no `ALLOW_ORDERS`) → smoke → arm ONE SIM test pick → only then go live.
+**KILL layering applies across BOTH units (ADR 0016 D3):**
+`~/.alphalens/broker_orders/KILL` is the GLOBAL kill — once the LIVE unit
+(§9) exists, it halts placement in EVERY instance on this host, SIM and
+LIVE together, not just this one. `~/.alphalens/broker_orders/sim/KILL`
+halts only this SIM instance; the LIVE twin is
+`~/.alphalens/broker_orders/live/KILL`. Both scopes keep reconciling and
+managing exits — KILL stops new placement, it never abandons an open
+position.
 
 ### 0. Prereqs (on the VPS)
 
@@ -1116,9 +1127,258 @@ The daemon can early-wake on a Saxo WebSocket fill push instead of only on the ~
 - **Observability.** When no streamed frame arrives for `STREAM_STALE_S`, the main thread raises a throttled `stream silent — on poll backstop` alert and emits the `alphalens_broker_manager_stream_last_message_age_seconds` gauge (seconds since the last frame). This gauge is written to its OWN textfile, now per-instance since ADR 0016 D5 — `alphalens_domain_broker-manager-<env>-stream.prom` (SIM: `alphalens_domain_broker-manager-sim-stream.prom`) — NOT the `alphalens_domain_broker-manager-<env>.prom` heartbeat file (SIM: `alphalens_domain_broker-manager-sim.prom`) — because `emit_domain_metrics` overwrites a job's file atomically and the two gauges would otherwise clobber each other every tick (node_exporter merges all `*.prom`, so both series scrape normally). Add the `AlphalensBrokerStreamStale` Prometheus alert (stream-liveness, distinct from the per-poll `AlphalensBrokerManagerHeartbeatStale`) — a stale stream is a latency regression back to the 45 s poll, NOT a protection outage. **The Prometheus rules are hand-synced, not repo-mounted** (see memory `reference_prometheus_live_rules_not_repo_mounted`): edit the live rules file on the monitoring host and `kill -HUP` the Prometheus process; the repo copy under `deploy/` is documentation only.
 - **Attended shape probe (before flipping the gate live):** `SAXO_STREAM_LIVE_TEST=1 .venv/bin/python -m unittest tests.live.test_saxo_stream_live -v` (needs the OAuth env sourced) validates connect + snapshot + heartbeat + PUT-reauthorize 202 + DELETE cleanup against the live SIM host — SHAPE only, places nothing.
 
-### 9. `$100` live escape — NOT in this runbook
+### 9. LIVE instance runbook (ADR 0017 standing-LIVE authorization)
 
-Requires: a new ADR lifting the structural rail, a separate `ALPHALENS_BROKER_LIVE=1` env (never a runtime flag), sizing equity `$1000` with `~$100` max per-pick loss, `MAX_OPEN=1`, and shrinking the unprotected window (the dark SIM streaming early-wake above must earn its own live re-validation first). Do NOT reuse the SIM env/units for live.
+`alphalens-broker-manager-live.service` is a SECOND, ADDITIVE daemon next
+to the SIM unit above — same manager loop, same `alphalens broker manage`
+command, but it places **REAL-MONEY** orders on Saxo LIVE. Locked design:
+[`docs/research/broker_live_daemon_arm_design_2026_08_10.md`](../../docs/research/broker_live_daemon_arm_design_2026_08_10.md).
+ADR: [`docs/adr/0017-standing-live-authorization.md`](../../docs/adr/0017-standing-live-authorization.md).
+
+**Golden rule — same shape as SIM, higher stakes:** deploy INERT
+(`ALLOW_ORDERS=0`, the unit's shipped default) → verify while inert → run
+every fire drill → arm ONE pick, attended → only then consider leaving it
+running unattended, and only after the §9.4 go/no-go bar is met.
+
+#### 9.0 Prerequisites
+
+- **LIVE OAuth chain bootstrapped.** The LIVE order client reuses the
+  SEPARATE `saxo_auth_live` market-data chain (app `bracket-keeper`)
+  documented in the "Saxo LIVE market data (INC-2 price feed)" section
+  below — bootstrap it there first (§2a), there is no separate OAuth app
+  for order placement. Confirm the chain is alive before going further:
+  ```bash
+  .venv/bin/alphalens broker marketdata-auth --status
+  # expect: refresh ALIVE
+  ```
+- **`alphalens-saxo-marketdata-refresh.timer` enabled** — the keep-alive
+  floor for that same chain; install it per "Saxo LIVE market data" §3
+  below.
+- **Prometheus rules hand-synced.** The LIVE rule blocks
+  (`AlphalensBrokerManagerLiveHeartbeatStale`,
+  `AlphalensLivePriceStreamReaderDown` / `AlphalensLivePriceStreamStale`
+  for `job="live-price-stream-live"`,
+  `AlphalensJobStale{job="saxo-marketdata-refresh"}`) ship in
+  `deploy/monitoring/prometheus/rules/alphalens.yaml`, but — same as every
+  other alert in this repo — the live Prometheus rules are NOT
+  repo-mounted:
+  ```bash
+  # copy the new blocks into the live rules file, then:
+  sudo promtool check rules /path/to/live/alphalens.rules.yml
+  sudo kill -HUP "$(pgrep -x prometheus)"     # or systemctl reload prometheus
+  ```
+  Deploy this BEFORE enabling the unit. The LIVE heartbeat rule is
+  value-based only for now — deliberately NO `absent()`-based Missing rule
+  yet (design memo §5): an absent-rule for a not-yet-running instance would
+  page the instant the rules reload (ADR 0016 D5 precedent). Add it in the
+  SAME change that installs+enables the unit below, not ahead of it.
+
+#### 9.1 Install
+
+```bash
+cd ~/AlphaLens
+cp deploy/systemd/alphalens-broker-manager-live.service ~/.config/systemd/user/
+```
+
+Fill in the TWO account-bound lines on the **VPS copy only** — the repo
+copy ships them commented out on purpose (ADR 0017 §1.3: together they are
+the one grant that lets the LIVE factory construct a non-SIM `SaxoClient`
+at all; the constructor itself checks
+`ALPHALENS_SAXO_LIVE_STANDING == SAXO_LIVE_ACCOUNT_KEY`):
+
+```bash
+$EDITOR ~/.config/systemd/user/alphalens-broker-manager-live.service
+# uncomment BOTH lines, fill BOTH with the SAME real live account key:
+#   Environment=ALPHALENS_SAXO_LIVE_STANDING=<live account key>
+#   Environment=SAXO_LIVE_ACCOUNT_KEY=<live account key>
+```
+
+Never commit the filled-in unit back to the repo — the account key is not
+a secret value in the credential sense, but it is still account-identifying
+and must never leave this one VPS file.
+
+```bash
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-broker-manager-live.service
+```
+
+#### 9.2 Verify INERT (`ALLOW_ORDERS=0`, the shipped default)
+
+The unit ships with `ALPHALENS_BROKER_ALLOW_ORDERS=0` — it constructs the
+LIVE client, keeps the OAuth chain alive, reads the account, reconciles,
+and journals under `~/.alphalens/broker_orders/live/`, but places NOTHING
+(design memo §7 step 1). Verify:
+
+```bash
+journalctl --user -u alphalens-broker-manager-live.service -f
+# expect at boot: "SAXO LIVE ORDER RAIL UNLOCKED for ... standing (ADR
+# 0017) account-bound grant verified" (loud on purpose, no secret values),
+# then a clean steady-state loop — no tracebacks, no crash-restart loop
+
+curl -s localhost:9100/metrics | grep 'job="broker-manager-live"'
+# heartbeat gauge present and advancing every ~45s
+
+ls ~/.alphalens/broker_orders/live/
+# journals exist, empty of placements
+```
+
+**`DelayedByMinutes==0`** confirms the elevated (`FullTradingAndChat`)
+session is genuinely real-time, not silently demoted (§5 "Single-holder
+rule" of "Saxo LIVE market data" below). Confirm the app/chain CAN reach
+it before handing the session to the daemon — run the attended shape
+probe (§7 of that section) during a window when nothing else holds the
+session, e.g. before this unit is enabled:
+```bash
+SAXO_MARKETDATA_LIVE_TEST=1 \
+    ../../.venv/bin/python -m unittest tests.live.test_saxo_marketdata_live -v
+```
+Once the LIVE unit is running it becomes the sole elevated holder (§9.6
+below) — do **not** re-run that probe against a live daemon without
+stopping it first, or the two demote each other. **Known gap:** there is
+currently no per-tick gauge reporting the daemon's own live
+`DelayedByMinutes` (design memo §6 names this as a follow-up); the
+`live-exits-feed-build-fail` throttled alert catches a total feed
+construction failure, not a silent 15-minute delay on an otherwise-healthy
+session — see "Saxo LIVE market data" §6 "Known issues" below.
+
+**Dry pick evaluation.** Arm one test pick (`arm --env live`, §9.4 below)
+while `ALLOW_ORDERS=0` and confirm the tick reaches and refuses it —
+proof the daemon reads the picks queue, resolves the instrument, and
+evaluates the master-arm gate cleanly before any money math runs:
+```bash
+journalctl --user -u alphalens-broker-manager-live.service -f | grep place_pick
+# expect: "place_pick TICKER: refused — ALPHALENS_BROKER_ALLOW_ORDERS != '1'
+# — master arm not set, placement inert"
+```
+The master-arm refusal fires BEFORE sizing (`safety.check` short-circuits
+first), so no sizing-plan log line appears at this stage — that is
+expected, not a sign of a missing wire-up.
+
+#### 9.3 Fire drills — BEFORE arming, not after
+
+Rehearse every one of these with the daemon still inert (design memo §7
+step 2). An unrehearsed drill during a real incident is the wrong time to
+discover a gap.
+
+- **Chain-loss drill.** Invalidate the LIVE token store (or let it idle
+  past its window with the refresh timer stopped) and confirm a
+  `[live] chain lost` Telegram alert fires and the daemon stops placing
+  without breaking reconcile or exit management.
+- **Both KILL layers:**
+  ```bash
+  touch ~/.alphalens/broker_orders/live/KILL   # per-instance: LIVE only
+  # confirm: LIVE stops placing; SIM (if running) keeps trading; both
+  # instances keep reconciling
+  rm ~/.alphalens/broker_orders/live/KILL
+
+  touch ~/.alphalens/broker_orders/KILL        # GLOBAL: halts every instance
+  # confirm: LIVE and SIM both stop placing; both keep reconciling
+  rm ~/.alphalens/broker_orders/KILL
+  ```
+- **Manual-flatten rehearsal.** Practice the §9.5 rollback recipe below
+  against a SIM position first, so the CANCEL-stops-FIRST ordering is
+  muscle memory before it is ever needed with real money.
+- **Fee-floor rejection visibility.** Arm a pick sized so the round-trip
+  fee floor rejects it (design memo §4) and confirm the
+  SKIPPED-AND-ALERTED path shows up in the journal / Telegram — never a
+  silent drop.
+
+#### 9.4 Attended arm
+
+Operator present, one liquid US name, `MAX_OPEN=1`:
+
+```bash
+$EDITOR ~/.config/systemd/user/alphalens-broker-manager-live.service
+# flip: Environment=ALPHALENS_BROKER_ALLOW_ORDERS=1
+systemctl --user daemon-reload
+systemctl --user restart alphalens-broker-manager-live.service
+
+.venv/bin/alphalens broker arm TICKER --date YYYY-MM-DD --env live
+journalctl --user -u alphalens-broker-manager-live.service -f
+```
+
+Watch it on saxotrader.com (LIVE, not SIM). Confirm the entry + standalone
+disaster stop appear and match the brief geometry before walking away.
+
+**Go/no-go for the first UNATTENDED night** (design memo §7 step 4, do not
+skip): ≥3 clean attended round-trips spanning entry→OCO exit, ≥1 trail
+event, native `TrailingStopIfTraded` exercised inside the manager loop
+(not just probed standalone), every §9.0 telemetry item green, the
+daily-loss breaker verified against LIVE P&L (not SIM's), and no
+fee-rejection deadlock across the armed picks so far.
+
+#### 9.5 Rollback ladder — least to most drastic, ORDER IS LOAD-BEARING
+
+Go no further down this list than the situation requires; never skip
+upward past where you already are.
+
+1. **`touch ~/.alphalens/broker_orders/live/KILL`** — instance placement
+   stop. Reconcile and protection (disaster-stop management) keep running.
+2. **`touch ~/.alphalens/broker_orders/KILL`** — global kill, halts every
+   instance on the host (SIM too). Same continue-reconciling guarantee.
+3. **Disarm placement, keep protection:** flip
+   `ALPHALENS_BROKER_ALLOW_ORDERS=0` in the unit + restart. The daemon
+   returns to the INERT shape from §9.2 — reads, reconciles, manages
+   exits, places nothing.
+   ```bash
+   $EDITOR ~/.config/systemd/user/alphalens-broker-manager-live.service
+   # Environment=ALPHALENS_BROKER_ALLOW_ORDERS=0
+   systemctl --user daemon-reload
+   systemctl --user restart alphalens-broker-manager-live.service
+   ```
+4. **Manual flatten — CANCEL the resting stop/OCO orders FIRST, then
+   market-sell, then cancel entry buys.** Selling with a live stop still
+   resting risks the stop firing AFTER the flatten and double-selling into
+   an unintended SHORT. Do the three steps in this exact order:
+   ```bash
+   # 1. cancel every resting StopIfTraded / OCO leg FIRST — check
+   #    saxotrader.com or the daemon's own journal for the resting order
+   #    IDs; there is no LIVE-targeted `broker orders` CLI yet, so this
+   #    step is done on the Saxo web UI or via the daemon's own logs.
+   # 2. market SELL the position, summed per-lot owned.
+   # 3. cancel any still-resting entry buys.
+   ```
+5. **`systemctl --user stop alphalens-broker-manager-live.service` LAST —
+   never the first move.** Stopping the daemon while positions are open
+   removes exit management: the resting disaster stop remains (Saxo holds
+   it independently of the daemon process), but planned exits (trail
+   updates, OCO upgrades) stop happening without the daemon running. Only
+   stop the unit once the account is flat (step 4) or once a human has
+   deliberately taken over exit management.
+
+#### 9.6 Sole elevated holder — coordinate with SIM before enabling
+
+The LIVE daemon is the SOLE elevated (`FullTradingAndChat`) holder for the
+duration of the soak (design memo §6) — Saxo allows exactly one elevated
+session per login, and a second elevated consumer silently demotes both
+sides to 15-minute-delayed prices. **Before enabling
+`alphalens-broker-manager-live.service`, turn LIVE prices OFF on the SIM
+instance:**
+
+```bash
+sudo sed -i 's/^ALPHALENS_SAXO_LIVE_PRICES=1/ALPHALENS_SAXO_LIVE_PRICES=0/' /etc/alphalens/env
+systemctl --user restart alphalens-broker-manager.service
+```
+
+SIM's cost is stale prices on virtual money — zero. Revisit when SIM needs
+its LIVE prices back (a cross-process shared price reader is a deferred
+standing need, design memo §6, not YAGNI-never).
+
+#### 9.7 Standing-grant decommission
+
+The account-bound grant (`ALPHALENS_SAXO_LIVE_STANDING` /
+`SAXO_LIVE_ACCOUNT_KEY`) does not self-expire — a disabled-but-not-cleaned
+unit retains authority until the grant is actually removed. No extra
+mechanism beyond this note (design memo §8.10 — the operator decision was
+"note in runbook; no extra mechanism"); KILL and `systemctl disable` are
+the mitigation in the meantime:
+
+```bash
+systemctl --user disable --now alphalens-broker-manager-live.service
+$EDITOR ~/.config/systemd/user/alphalens-broker-manager-live.service
+# delete both account-bound Environment= lines
+systemctl --user daemon-reload
+```
 
 ### 10. Per-environment state separation (ADR 0016) — one-time VPS migration
 
@@ -1151,11 +1411,17 @@ A leftover `broker_orders/KILL` at the parent level is now the GLOBAL kill — d
 
 ## Saxo LIVE market data (INC-2 price feed)
 
-The broker-manager daemon above trades on **SIM only** (ADR 0014 — that stays
-unchanged). Separately, it can read **real-time** exit prices from a SECOND
-Saxo app registered on the **LIVE** environment (app `bracket-keeper`) — LIVE
-because SIM quotes are 15-minute-delayed. That app's trading permission is
-never used: `SaxoMarketDataClient`
+The SIM broker-manager daemon (`alphalens-broker-manager.service`, above)
+trades on **SIM only** (ADR 0014 — that stays unchanged). The LIVE daemon
+(`alphalens-broker-manager-live.service`, §9 above) is the one exception —
+it places real orders on Saxo LIVE under the ADR 0017 standing grant — but
+it too consumes THIS market-data app only for prices, never for order
+placement; its order client is a completely separate rail (`brokers/saxo/`,
+still SIM-structural except for the ADR 0017 widening). Any daemon that
+reads exit prices from Saxo reads them from a SECOND app registered on the
+**LIVE** environment (app `bracket-keeper`) — LIVE because SIM quotes are
+15-minute-delayed. That app's trading permission is never used:
+`SaxoMarketDataClient`
 (`alphalens_pipeline/data/alt_data/saxo_marketdata_client.py`) only reads
 session capabilities, resolves tickers to uics, and manages one price
 subscription. Design memo: `docs/research/live_market_execution_inc2_design_2026_08_07.md`.
@@ -1334,28 +1600,44 @@ Open the printed URL directly in this machine's own browser (no SSH tunnel —
 you are already on `localhost`), log in with **LIVE** credentials. The script
 exchanges the code and writes the token store on THIS machine.
 
-### 3. Refresh cadence — separate mechanism from the SIM keep-alive timer
+### 3. Refresh cadence — versioned keep-alive timer + per-call adoption
 
-The SIM auto-manager has a dedicated `alphalens-saxo-refresh.timer` (~every
-20 min) because its OAuth calls are otherwise infrequent enough for the
-refresh chain to go idle. The LIVE market-data token refreshes differently:
-`LiveTokenProvider.access_token()` (same 120 s-before-expiry margin as the
-SIM provider) is called on every REST call made through `SaxoMarketDataClient`
-(session-capability reads, uic resolution, subscription create/delete) AND on
-every WebSocket (re)connect the price stream makes — so on the VPS, as long as
-`ALPHALENS_SAXO_LIVE_PRICES=1` and the daemon is running, the token stays
-fresh as a side effect of the feed being used, with no separate timer unit to
-install.
+The LIVE market-data token refreshes two ways, and on the VPS both matter:
 
-**There is currently no dedicated LIVE keep-alive timer in this repo**
-(unlike `alphalens-saxo-refresh.timer` for SIM). If the VPS flag stays OFF, or
-the daemon is down, for long enough that the refresh chain goes idle, the fix
-is the same as the SIM "OAuth outage" case: re-run §2a's attended bootstrap.
+- **Per-call adoption.** `LiveTokenProvider.access_token()` (same 120 s-
+  before-expiry margin as the SIM provider) is called on every REST call
+  made through `SaxoMarketDataClient` (session-capability reads, uic
+  resolution, subscription create/delete) AND on every WebSocket
+  (re)connect the price stream makes — so as long as
+  `ALPHALENS_SAXO_LIVE_PRICES=1` and a consumer is actually using the feed
+  (the LIVE broker-manager daemon, §9 above), the token
+  stays fresh as a side effect of the feed being used.
+- **`alphalens-saxo-marketdata-refresh.{service,timer}`** (~every 20 min)
+  is the keep-alive FLOOR for idle stretches where nothing else touches
+  the chain — the exact role `alphalens-saxo-refresh.timer` plays for the
+  SIM order chain. Install it once, on the VPS, alongside the LIVE daemon
+  unit (§9 install step):
+  ```bash
+  cp deploy/systemd/alphalens-saxo-marketdata-refresh.{service,timer} ~/.config/systemd/user/
+  systemctl --user daemon-reload
+  systemctl --user enable --now alphalens-saxo-marketdata-refresh.timer
+  systemctl --user list-timers | grep saxo-marketdata-refresh
+  ```
+  **Single-refresher invariant** — same rule as the SIM timer: run this
+  unit ONLY on the VPS that also runs the LIVE broker-manager daemon. Two
+  hosts refreshing the same token store burn each other's rotation chains
+  (the flock is per-host, not per-store).
 
-A developer machine's store has no continuous process refreshing it at all —
-only an attended run (§7) touches it, and only while that run is in progress.
-If it has been long enough since the last attended run that the refresh chain
-has gone idle, the fix is the same: re-run §2b.
+If `ALPHALENS_SAXO_LIVE_PRICES` stays OFF, or both the timer and the daemon
+are down for long enough that the refresh chain goes idle anyway, the fix
+is the same as the SIM "OAuth outage" case: re-run §2a's attended
+bootstrap.
+
+A developer machine's store has no continuous process refreshing it at
+all — the timer above is a VPS-only unit — only an attended run (§7)
+touches a developer-machine store, and only while that run is in progress.
+If it has been long enough since the last attended run that the refresh
+chain has gone idle, the fix is the same: re-run §2b.
 
 ### 4. Turning it on
 

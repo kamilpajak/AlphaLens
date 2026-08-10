@@ -878,3 +878,96 @@ groups:
         annotations:
           summary: "saxo-refresh success metric missing"
           description: "No success metric for saxo-refresh. The keep-alive timer has not fired since metrics were enabled, or the scrape is broken. Clears after the first refresh."
+
+      # -----------------------------------------------------------------
+      # LIVE broker-manager instance (ADR 0017 standing-LIVE authorization;
+      # design memo docs/research/broker_live_daemon_arm_design_2026_08_10.md
+      # §5). A SECOND, ADDITIVE alphalens-broker-manager-live.service next to
+      # the SIM instance above — same daemon code, distinct job labels
+      # (metrics_job(env) / price_stream_metrics_job(env), ADR 0016) so the
+      # two instances' health is never conflated.
+      #
+      # Value-based heartbeat ONLY for now — deliberately NO absent()-based
+      # AlphalensBrokerManagerLiveHeartbeatMissing rule yet. The LIVE unit is
+      # not enabled on the VPS until the design memo §7 rollout reaches step
+      # 1 ("deploy inert"); an absent() rule pages the instant the rules file
+      # reloads, before the unit exists (ADR 0016 D5 precedent — same reason
+      # the SIM Missing rule was NOT backfilled ahead of the SIM unit's
+      # install). ADD the paired AlphalensJobMetricMissing-style absent()
+      # rule (mirroring the SIM AlphalensBrokerManagerHeartbeatMissing rule
+      # above) IN THE SAME PR/commit that installs+enables
+      # alphalens-broker-manager-live.service on the VPS — not before.
+      # -----------------------------------------------------------------
+      - alert: AlphalensBrokerManagerLiveHeartbeatStale
+        expr: time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"} > 300
+        for: 2m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE broker-manager heartbeat stale > 5m (expected ~45s ticks)"
+          description: "Last control-loop tick was {{ $value | humanizeDuration }} ago — the LIVE auto-manager (REAL MONEY) may be wedged or stopped. Existing positions keep their disaster-stop protection independent of the daemon's own liveness; this alert is about placement/exit-management coverage going dark."
+
+      - alert: AlphalensLivePriceStreamReaderDown
+        # Same anti-false-positive gate as the SIM version: an idle reader
+        # (nothing subscribed) holds no WebSocket BY DESIGN and must not
+        # page. Distinguishing `unit: broker-manager-live` label keeps this
+        # rule's static label set distinct from the SIM twin above (same
+        # alertname, different job+unit) so promtool does not see a
+        # duplicate rule.
+        expr: >-
+          alphalens_live_price_stream_reader_up{job="live-price-stream-live"} == 0
+          and alphalens_live_price_stream_subscribed_uics{job="live-price-stream-live"} > 0
+        for: 10m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE price stream reader down while uics are subscribed (REAL MONEY)"
+          description: "The Saxo LIVE price feed reader is not running but positions still want live prices — trailing/live exits are dark (protection pass unaffected). The daemon rebuilds the reader on demand; sustained reader_up=0 means the rebuild loop itself is failing. This is the daemon's own order/price session (design memo §6 sole-elevated-holder topology) — no shared reader to fail over to."
+
+      - alert: AlphalensLivePriceStreamStale
+        # No frame for 5m while subscribed and the reader claims to be up:
+        # the dark-but-connected case observability exists to catch.
+        expr: >-
+          (time() - alphalens_live_price_stream_last_frame_timestamp_seconds{job="live-price-stream-live"}) > 300
+          and alphalens_live_price_stream_subscribed_uics{job="live-price-stream-live"} > 0
+          and alphalens_live_price_stream_reader_up{job="live-price-stream-live"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE price stream silent > 5m with subscriptions active (REAL MONEY)"
+          description: "The reader is up and uics are subscribed but no frame has arrived for {{ $value | humanizeDuration }} — the feed is dark-but-connected. Recv timeout + resubscribe should self-heal; sustained staleness means they are not. Verify DelayedByMinutes==0 separately — a silent demotion to delayed data would NOT trip this rule (frames keep arriving, just stale-priced)."
+
+      # LIVE market-data OAuth idle keep-alive (alphalens-saxo-marketdata-
+      # refresh.{service,timer}, design memo §5) — same job-metrics shape as
+      # saxo-refresh above (timer-driven oneshot, ~20min cadence), distinct
+      # job label so a dead LIVE chain never hides behind the SIM/order-chain
+      # refresh's own last_success. 3600s = 1h = 3x the 20min cadence
+      # (same threshold class as saxo-refresh).
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="saxo-marketdata-refresh"} > 3600
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: saxo-marketdata-refresh
+        annotations:
+          summary: "saxo-marketdata-refresh stale > 1h (expected 20min cadence)"
+          description: "Last successful LIVE market-data OAuth keep-alive was {{ $value | humanizeDuration }} ago — the saxo_auth_live refresh chain will die at the 40min window, degrading the LIVE daemon's real-time price feed to 15min-delayed (or dead). Re-run `alphalens broker marketdata-auth --refresh`."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="saxo-marketdata-refresh"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: saxo-marketdata-refresh
+        annotations:
+          summary: "saxo-marketdata-refresh success metric missing"
+          description: "No success metric for saxo-marketdata-refresh. The keep-alive timer has not fired since metrics were enabled, or the scrape is broken. Clears after the first refresh."
