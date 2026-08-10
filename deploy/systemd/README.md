@@ -1120,6 +1120,35 @@ The daemon can early-wake on a Saxo WebSocket fill push instead of only on the ~
 
 Requires: a new ADR lifting the structural rail, a separate `ALPHALENS_BROKER_LIVE=1` env (never a runtime flag), sizing equity `$1000` with `~$100` max per-pick loss, `MAX_OPEN=1`, and shrinking the unprotected window (the dark SIM streaming early-wake above must earn its own live re-validation first). Do NOT reuse the SIM env/units for live.
 
+### 10. Per-environment state separation (ADR 0016) — one-time VPS migration
+
+ADR 0016 (design memo `docs/research/broker_env_state_separation_design_2026_08_10.md`) moves every mutable broker-state path from one flat `~/.alphalens/broker_orders/` tree into a per-instance layout, `~/.alphalens/broker_orders/<env>/`, so a future LIVE instance cannot corrupt the SIM instance's journals. This is a preparatory move only — there is still no LIVE instance (`broker manage` structurally refuses to boot with `ALPHALENS_BROKER_ENVIRONMENT=live`, ADR 0016 D7).
+
+**`ALPHALENS_BROKER_ENVIRONMENT` doctrine — pin it in the unit, never in `/etc/alphalens/env`.** The SIM daemon needs `ALPHALENS_BROKER_ENVIRONMENT=sim` set somewhere. It is pinned as an `Environment=` line inside `alphalens-broker-manager.service` itself (see the `[Service]` section), NOT in `/etc/alphalens/env`. Reason: `EnvironmentFile=` (which loads `/etc/alphalens/env`) overrides a systemd drop-in, but it does NOT override an in-unit `Environment=` line that appears after it — this ordering was verified against a real incident on 2026-08-10. Putting the pin in the unit file means it cannot be silently lost or overridden by an operator edit to the shared env file. **Never set `ALPHALENS_BROKER_ENVIRONMENT` in `/etc/alphalens/env`** — that file is shared across future instances and setting the var there defeats the whole point of the in-unit pin.
+
+**KILL is layered — global vs per-instance (ADR 0016 D3).** `touch ~/.alphalens/broker_orders/KILL` (the parent-level path, unchanged from before this migration) is now the **GLOBAL** kill: it halts placement in every instance on this host, not just SIM. The operator's existing muscle-memory command keeps working and gains scope rather than losing it. A NEW per-instance kill also exists: `touch ~/.alphalens/broker_orders/sim/KILL` stops only the SIM instance. Both are checked on every tick; reconcile and protective actions continue under either.
+
+One-time migration on the VPS, run right after the code deploy that carries ADR 0016 (stop the daemon first — the daemon fail-loud refuses to start against the old flat layout, ADR 0016 D4):
+
+```bash
+systemctl --user stop alphalens-broker-manager
+mkdir -p ~/.alphalens/broker_orders/sim ~/.alphalens/exec_quality/sim
+mv ~/.alphalens/broker_orders/*.jsonl ~/.alphalens/broker_orders/sim/
+[ -f ~/.alphalens/exec_quality/tranche_fills.parquet ] && \
+  mv ~/.alphalens/exec_quality/tranche_fills.parquet ~/.alphalens/exec_quality/sim/
+sudo rm -f /var/lib/node_exporter/textfile/alphalens_domain_broker-manager.prom \
+           /var/lib/node_exporter/textfile/alphalens_domain_broker-manager-stream.prom \
+           /var/lib/node_exporter/textfile/alphalens_domain_live-price-stream.prom
+cp deploy/monitoring/prometheus/rules/alphalens.yaml ~/monitoring/prometheus/alphalens.rules
+docker exec prometheus promtool check rules /etc/prometheus/alphalens.rules
+docker exec prometheus kill -HUP 1
+git -C ~/AlphaLens pull && ~/.local/bin/uv sync
+systemctl --user daemon-reload && systemctl --user start alphalens-broker-manager
+# verify: new .prom files carry job="broker-manager-sim"; heartbeat fresh
+```
+
+A leftover `broker_orders/KILL` at the parent level is now the GLOBAL kill — do not move it; its absence is the normal state.
+
 ## Saxo LIVE market data (INC-2 price feed)
 
 The broker-manager daemon above trades on **SIM only** (ADR 0014 — that stays

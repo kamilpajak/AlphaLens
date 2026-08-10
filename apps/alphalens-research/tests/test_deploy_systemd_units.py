@@ -1203,6 +1203,39 @@ class TestBrokerManagerUnit(unittest.TestCase):
     def test_daemon_excluded_from_emit_hook_glob(self) -> None:
         self.assertNotIn(BROKER_MANAGER_SERVICE, ACTIVE_SERVICES)
 
+    def test_pins_sim_broker_environment_in_service_section(self) -> None:
+        # ADR 0016 D8: EnvironmentFile overrides drop-ins but NOT in-unit
+        # Environment= lines, so the canonical instance pin lives here and
+        # the runbook forbids setting it in /etc/alphalens/env.
+        text = BROKER_MANAGER_SERVICE.read_text()
+        self.assertRegex(
+            text,
+            re.compile(r"^Environment=ALPHALENS_BROKER_ENVIRONMENT=sim\s*$", re.MULTILINE),
+            "the unit must pin ALPHALENS_BROKER_ENVIRONMENT=sim in-unit (ADR "
+            "0016 D8), self-documenting the instance identity independent of "
+            "/etc/alphalens/env.",
+        )
+        service_body = text.split("[Service]", 1)[1].split("[Install]", 1)[0]
+        self.assertIn(
+            "ALPHALENS_BROKER_ENVIRONMENT=sim",
+            service_body,
+            "the pin must sit in [Service] — systemd silently ignores "
+            "Environment= directives placed in any other section.",
+        )
+
+    def test_header_documents_global_vs_per_instance_kill(self) -> None:
+        # ADR 0016 D3: broker_orders/KILL (parent level) is now the GLOBAL
+        # kill honored by every instance; broker_orders/<env>/KILL stops one.
+        # The install-comment header is the operator's first read — it must
+        # not still describe the old single-instance KILL semantics only.
+        text = BROKER_MANAGER_SERVICE.read_text()
+        self.assertIn("GLOBAL", text, "header must call out the global kill scope")
+        self.assertIn(
+            "broker_orders/sim/KILL",
+            text,
+            "header must name the per-instance kill path for the SIM instance",
+        )
+
 
 class TestSaxoRefreshUnit(unittest.TestCase):
     def test_service_is_oneshot_refresh(self) -> None:
