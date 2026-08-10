@@ -11,11 +11,31 @@ quote may drive an order lives in the feed adapter's freshness gate.
 :class:`SaxoPriceStream`'s socket loop is thin glue around
 :func:`alphalens_pipeline.data.alt_data.saxo_stream_envelope.parse_stream_frames`
 and the SIM streaming reader's reconnect tuning (``max_consecutive_failures=6``,
-exponential backoff 1s -> 30s ceiling, see
-``alphalens_pipeline.brokers.saxo.streaming.StreamTuning``) - reused as VALUES
-only, not by importing that module (this package must not import ``brokers/``).
-Its correctness is exercised by the Task 8 live probe, not by mocking a
-WebSocket here; only :class:`QuoteCache` above is unit-tested.
+exponential backoff 1s -> 30s ceiling, bounded ``recv`` per the SIM stale
+pattern, see ``alphalens_pipeline.brokers.saxo.streaming.StreamTuning``) -
+reused as VALUES only, not by importing that module (this package must not
+import ``brokers/``).
+
+Reliability contract (2026-08-10 incident — idle WS killed by Saxo, reconnects
+died into a subscription-less context, breaker tripped):
+
+* the reader owns ALL subscription REST traffic: every connection gets a
+  FRESH ``contextId`` and re-creates the price subscription server-side, so a
+  reconnect can never resume into a context whose subscription Saxo dropped;
+  ``ensure_subscribed`` (caller thread) only mutates the DESIRED set;
+* with ZERO desired uics the reader holds NO WebSocket open (an idle
+  connection is exactly what the venue kills);
+* ``recv`` is bounded (``_RECV_TIMEOUT_S``) so a half-open socket becomes a
+  counted failure + reconnect, never a permanent wedge;
+* the ``_resetsubscriptions`` control frame recreates the subscription on the
+  same connection;
+* lifecycle + freshness are exported as Prometheus textfile gauges
+  (``alphalens_live_price_stream_*``) so a dark feed is distinguishable from
+  a quiet one.
+
+The socket loop is unit-tested hermetically via the injected ``ws_connect`` /
+``async_sleep`` seams (tests/data/test_saxo_price_stream.py); the Task 8 live
+probe remains the end-to-end check against the real venue.
 """
 
 from __future__ import annotations
@@ -46,6 +66,26 @@ LIVE_STREAM_URL = "wss://live-streaming.saxobank.com/oapi/streaming/ws/connect"
 _MAX_CONSECUTIVE_FAILURES = 6
 _BACKOFF_FLOOR_S = 1.0
 _BACKOFF_CEILING_S = 30.0
+
+# Bounded recv (SIM stale pattern, stale_s=45): Saxo heartbeats every ~20-30s,
+# so 45s of TOTAL silence on an open socket means half-open — reconnect.
+_RECV_TIMEOUT_S = 45.0
+
+# With zero desired uics the reader holds no WebSocket (idle connections get
+# killed by the venue and turn into failure storms); poll the desired set at
+# this cadence instead.
+_IDLE_POLL_S = 1.0
+
+# Saxo control frame announcing the server dropped this context's
+# subscriptions — the one control ref that demands ACTION (recreate), not
+# just liveness bookkeeping.
+_RESET_SUBSCRIPTIONS_REF = "_resetsubscriptions"
+
+# Prometheus textfile gauges (emit_domain_metrics job + throttle). Emitted
+# best-effort from the reader thread: on supervise start/stop, on every
+# counted failure, and throttled on the frame path.
+_GAUGE_JOB = "live-price-stream"
+_GAUGE_MIN_INTERVAL_S = 15.0
 
 
 def _parse_utc(raw: object) -> dt.datetime | None:
@@ -234,9 +274,18 @@ class SaxoPriceStream:
         self._reclaim_limiter = reclaim_limiter or ReclaimLimiter(clock=self._clock)
         self._was_delayed = False
 
+        # DESIRED uic set (caller thread writes via ensure_subscribed, reader
+        # snapshots) + the dirty flag telling the reader to (re)create the
+        # server-side subscription. The reader owns ALL subscription REST.
         self._subscribed_uics: set[int] = set()
+        self._sub_lock = threading.Lock()
+        self._sub_dirty = threading.Event()
+        self._ctx_seq = 0
+
         self._consecutive_failures = 0
         self._live_uic_cache: dict[tuple[str, str], int] = {}
+        self._last_frame_ts = 0
+        self._last_gauge_emit = 0.0
 
         self._stop = False
         self._thread: threading.Thread | None = None
@@ -283,24 +332,54 @@ class SaxoPriceStream:
         return live_uic
 
     def ensure_subscribed(self, uics: set[int] | list[int]) -> None:
-        """Diff the requested uic set against the subscribed one; no-op when
-        unchanged, otherwise DELETE + recreate the single price subscription
-        with the new set (Saxo has no partial-update verb for a subscription's
-        uic list)."""
+        """Record the DESIRED uic set; the reader thread owns the REST.
+
+        No-op when unchanged. On change: quotes for removed uics are forgotten
+        (a stale delayed quote must not pin ``any_delayed`` — and thus disable
+        session reclaim — forever) and the dirty flag tells the reader to
+        (re)create the single server-side subscription (Saxo has no
+        partial-update verb for a subscription's uic list). This method never
+        talks REST itself: subscription create/delete happens ONLY on the
+        reader thread (per connection, and on the dirty flag), which kills the
+        caller/reader race on the shared HTTP session."""
         requested = set(uics)
-        if requested == self._subscribed_uics:
-            return
-        if self._subscribed_uics:
-            with contextlib.suppress(Exception):
-                self._client.delete_price_subscription(self._context_id, self._reference_id)
-        if requested:
+        with self._sub_lock:
+            if requested == self._subscribed_uics:
+                return
+            removed = self._subscribed_uics - requested
+            self._subscribed_uics = requested
+        for uic in removed:
+            self.cache.forget(uic)
+        self._sub_dirty.set()
+
+    def _desired_uics(self) -> set[int]:
+        with self._sub_lock:
+            return set(self._subscribed_uics)
+
+    def _rotate_context(self) -> None:
+        """Fresh ``contextId`` for every connection attempt: a reconnect must
+        never resume into a context whose subscription the server already
+        dropped (the 2026-08-10 failure loop). Keeps the per-process-unique
+        ``almgr-px-`` convention; the sequence suffix disambiguates rotations
+        within one second."""
+        self._ctx_seq += 1
+        self._context_id = f"almgr-px-{os.getpid()}-{int(time.time())}-{self._ctx_seq}"
+
+    def _recreate_subscription(self) -> None:
+        """(Reader thread) DELETE best-effort + CREATE for the current desired
+        set on the CURRENT context. Clears the dirty flag first so a
+        concurrent ``ensure_subscribed`` re-arms it rather than being lost."""
+        self._sub_dirty.clear()
+        desired = self._desired_uics()
+        with contextlib.suppress(Exception):
+            self._client.delete_price_subscription(self._context_id, self._reference_id)
+        if desired:
             self._client.create_price_subscription(
                 context_id=self._context_id,
                 reference_id=self._reference_id,
-                uics=sorted(requested),
+                uics=sorted(desired),
                 refresh_rate_ms=self._refresh_rate_ms,
             )
-        self._subscribed_uics = requested
 
     def start(self) -> None:
         if self._thread is not None:
@@ -331,49 +410,112 @@ class SaxoPriceStream:
         except Exception:  # pragma: no cover - a reader crash must not touch the caller
             logger.warning("saxo price stream reader thread crashed", exc_info=True)
 
-    async def _supervise(self) -> None:  # pragma: no cover - exercised by live probe
+    async def _supervise(self) -> None:
         import asyncio
 
         async_sleep = self._async_sleep or asyncio.sleep
-        while not self._stop:
-            try:
-                await self._run_one_connection()
-            except Exception:
-                logger.warning("saxo price stream session failed", exc_info=True)
-            if self._stop:
-                return
-            self._consecutive_failures += 1
-            if self._consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
-                logger.warning(
-                    "saxo price stream circuit breaker tripped after %d consecutive "
-                    "failures - stopping the reader",
-                    self._consecutive_failures,
-                )
-                return
-            exponent = max(0, self._consecutive_failures - 1)
-            backoff = min(_BACKOFF_FLOOR_S * (2**exponent), _BACKOFF_CEILING_S)
-            await async_sleep(backoff)
+        self._emit_stream_gauge(reader_up=True, force=True)
+        try:
+            while not self._stop:
+                if not self._desired_uics():
+                    # Zero desired uics -> hold NO WebSocket: an idle,
+                    # subscription-less connection is exactly what the venue
+                    # kills, and each kill would burn the failure budget.
+                    await async_sleep(_IDLE_POLL_S)
+                    continue
+                try:
+                    await self._run_one_connection()
+                except Exception:
+                    logger.warning("saxo price stream session failed", exc_info=True)
+                if self._stop:
+                    return
+                self._consecutive_failures += 1
+                self._emit_stream_gauge(reader_up=True, force=True)
+                if self._consecutive_failures >= _MAX_CONSECUTIVE_FAILURES:
+                    logger.warning(
+                        "saxo price stream circuit breaker tripped after %d consecutive "
+                        "failures - stopping the reader",
+                        self._consecutive_failures,
+                    )
+                    return
+                exponent = max(0, self._consecutive_failures - 1)
+                backoff = min(_BACKOFF_FLOOR_S * (2**exponent), _BACKOFF_CEILING_S)
+                await async_sleep(backoff)
+        finally:
+            # The reader is down from here — on clean stop, breaker trip, or
+            # crash alike. reader_up=0 with subscribed_uics>0 is the
+            # Prometheus-visible "dark feed" signature.
+            self._emit_stream_gauge(reader_up=False, force=True)
 
-    async def _run_one_connection(self) -> None:  # pragma: no cover - exercised by live probe
+    async def _run_one_connection(self) -> None:
+        import asyncio
+
         token = self._token_provider.access_token()
+        self._rotate_context()
         url = f"{LIVE_STREAM_URL}?contextId={self._context_id}"
         conn = await self._ws_connect(url, {"Authorization": f"Bearer {token}"})
         try:
+            # Fresh context -> the subscription MUST be (re)created before any
+            # delta can flow. Runs on the reader thread by design (single
+            # owner of subscription REST).
+            self._recreate_subscription()
             while not self._stop:
-                frame = await conn.recv()
+                frame = await asyncio.wait_for(conn.recv(), timeout=_RECV_TIMEOUT_S)
                 self._apply_frame(frame)
                 self._consecutive_failures = 0  # a delivered frame proves the connection is live
+                self._last_frame_ts = int(time.time())
+                self._emit_stream_gauge(reader_up=True)
+                if self._sub_dirty.is_set():
+                    # ensure_subscribed changed the desired set, or the server
+                    # sent _resetsubscriptions — recreate on THIS connection.
+                    self._recreate_subscription()
         finally:
             with contextlib.suppress(Exception):
                 await conn.close()
+
+    def _emit_stream_gauge(self, *, reader_up: bool, force: bool = False) -> None:
+        """Best-effort Prometheus textfile emit — a textfile-dir hiccup must
+        never crash the reader (same doctrine as the daemon heartbeat)."""
+        now = time.monotonic()
+        if not force and now - self._last_gauge_emit < _GAUGE_MIN_INTERVAL_S:
+            return
+        self._last_gauge_emit = now
+        from alphalens_pipeline.observability.textfile import emit_domain_metrics
+
+        label = f'{{job="{_GAUGE_JOB}"}}'
+        try:
+            emit_domain_metrics(
+                _GAUGE_JOB,
+                {
+                    f"alphalens_live_price_stream_reader_up{label}": int(reader_up),
+                    f"alphalens_live_price_stream_last_frame_timestamp_seconds{label}": (
+                        self._last_frame_ts
+                    ),
+                    f"alphalens_live_price_stream_consecutive_failures{label}": (
+                        self._consecutive_failures
+                    ),
+                    f"alphalens_live_price_stream_subscribed_uics{label}": len(
+                        self._desired_uics()
+                    ),
+                },
+            )
+        except OSError:
+            logger.warning("live price stream gauge emit failed", exc_info=True)
 
     def _apply_frame(self, frame: bytes | str) -> None:
         if isinstance(frame, str):
             frame = frame.encode("utf-8")
         now = self._clock()
         for msg in parse_stream_frames(frame):
+            if msg.reference_id == _RESET_SUBSCRIPTIONS_REF:
+                # The server dropped this context's subscriptions — arm the
+                # dirty flag so the connection loop recreates in-place instead
+                # of waiting for the recv timeout to force a full reconnect.
+                logger.warning("saxo price stream: server reset subscriptions — recreating")
+                self._sub_dirty.set()
+                continue
             if msg.reference_id.startswith(self._CONTROL_REF_PREFIX):
-                continue  # heartbeat / reset / disconnect: liveness only, never a quote row
+                continue  # heartbeat / disconnect: liveness only, never a quote row
             try:
                 payload = json.loads(msg.payload)
             except ValueError:
