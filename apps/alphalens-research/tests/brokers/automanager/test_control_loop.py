@@ -5510,45 +5510,35 @@ class TestDay1GapGateEnabledFlag(unittest.TestCase):
             self.assertFalse(cl._day1_gap_gate_enabled())
 
 
-class TestDay1GapSnapshotPriceExtraction(unittest.TestCase):
-    """``_extract_day1_gap_snapshot_price`` — Bid-first, LastTraded fallback,
-    any missing/malformed field is a veto (``None``), never a crash."""
+class TestDay1SessionOpenExtraction(unittest.TestCase):
+    """``_extract_day1_session_open`` — PriceInfoDetails.Open only; any
+    missing/malformed/non-positive value is a veto (``None``), never a crash.
+    The gate decides on the day-1 OPENING PRINT (stable all session), not the
+    instantaneous price — an intraday dip below E1 after a healthy open is
+    the normal pullback fill the ladder wants."""
 
-    def test_bid_present_wins(self) -> None:
-        snapshot = {"Snapshot": {"Data": [{"Uic": 123, "Quote": {"Bid": 45.6, "Ask": 45.7}}]}}
-        self.assertEqual(cl._extract_day1_gap_snapshot_price(snapshot, 123), 45.6)
+    def test_open_present_wins(self) -> None:
+        payload = {"PriceInfoDetails": {"Open": 7.92, "LastTraded": 8.0}}
+        self.assertEqual(cl._extract_day1_session_open(payload), 7.92)
 
-    def test_falls_back_to_last_traded_when_bid_absent(self) -> None:
-        snapshot = {"Snapshot": {"Data": [{"Uic": 123, "Quote": {"LastTraded": 12.3}}]}}
-        self.assertEqual(cl._extract_day1_gap_snapshot_price(snapshot, 123), 12.3)
+    def test_missing_details_returns_none(self) -> None:
+        self.assertIsNone(cl._extract_day1_session_open({"Quote": {"Bid": 7.99}}))
 
-    def test_no_matching_uic_returns_none(self) -> None:
-        snapshot = {"Snapshot": {"Data": [{"Uic": 999, "Quote": {"Bid": 1.0}}]}}
-        self.assertIsNone(cl._extract_day1_gap_snapshot_price(snapshot, 123))
+    def test_missing_open_returns_none(self) -> None:
+        self.assertIsNone(cl._extract_day1_session_open({"PriceInfoDetails": {"LastTraded": 8.0}}))
 
-    def test_empty_snapshot_returns_none(self) -> None:
-        self.assertIsNone(cl._extract_day1_gap_snapshot_price({}, 123))
+    def test_none_payload_returns_none(self) -> None:
+        self.assertIsNone(cl._extract_day1_session_open(None))  # type: ignore[arg-type]
 
-    def test_none_snapshot_returns_none(self) -> None:
-        self.assertIsNone(cl._extract_day1_gap_snapshot_price(None, 123))  # type: ignore[arg-type]
+    def test_malformed_open_returns_none(self) -> None:
+        self.assertIsNone(cl._extract_day1_session_open({"PriceInfoDetails": {"Open": "n/a"}}))
 
-    def test_malformed_bid_returns_none(self) -> None:
-        snapshot = {"Snapshot": {"Data": [{"Uic": 123, "Quote": {"Bid": "n/a"}}]}}
-        self.assertIsNone(cl._extract_day1_gap_snapshot_price(snapshot, 123))
-
-    def test_row_without_uic_is_skipped(self) -> None:
-        # A row carrying no Uic (absent or explicit null) is skipped, and a
-        # later matching row still wins — pins the None-narrowing branch.
-        snapshot = {
-            "Snapshot": {
-                "Data": [
-                    {"Quote": {"Bid": 1.0}},
-                    {"Uic": None, "Quote": {"Bid": 2.0}},
-                    {"Uic": 123, "Quote": {"Bid": 3.0}},
-                ]
-            }
-        }
-        self.assertEqual(cl._extract_day1_gap_snapshot_price(snapshot, 123), 3.0)
+    def test_zero_or_nonfinite_open_is_a_veto(self) -> None:
+        for bad in (0, -1, float("nan"), float("inf")):
+            with self.subTest(open=bad):
+                self.assertIsNone(
+                    cl._extract_day1_session_open({"PriceInfoDetails": {"Open": bad}})
+                )
 
 
 class TestDay1GapProbeVenueFallback(unittest.TestCase):
@@ -5562,18 +5552,15 @@ class TestDay1GapProbeVenueFallback(unittest.TestCase):
     class _FakeClient:
         def __init__(self, *, token_provider: object = None) -> None:
             self.resolved: list[str] = []
-            self.deleted: list[tuple[str, str]] = []
+            self._session = mock.Mock()
 
         def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
             self.resolved.append(exchange_mic)
             return 6820 if exchange_mic == "XNAS" else None
 
-        def create_price_subscription(self, *, context_id, reference_id, uics, **_kw):
-            assert uics == [6820]
-            return {"Snapshot": {"Data": [{"Uic": 6820, "Quote": {"Bid": 7.88}}]}}
-
-        def delete_price_subscription(self, context_id: str, reference_id: str) -> None:
-            self.deleted.append((context_id, reference_id))
+        def get_stock_infoprice(self, uic: int, **_kw) -> dict[str, Any]:
+            assert uic == 6820
+            return {"PriceInfoDetails": {"Open": 7.92}}
 
     def _probe_with(self, fake_cls: type) -> tuple[Any, Any]:
         holder: dict[str, Any] = {}
@@ -5606,9 +5593,9 @@ class TestDay1GapProbeVenueFallback(unittest.TestCase):
 
     def test_hinted_xnys_falls_back_to_xnas(self) -> None:
         probe, holder = self._probe_with(self._FakeClient)
-        self.assertEqual(probe("NVAX", "XNYS"), 7.88)
+        self.assertEqual(probe("NVAX", "XNYS"), 7.92)
         self.assertEqual(holder["client"].resolved, ["XNYS", "XNAS"])
-        self.assertEqual(len(holder["client"].deleted), 1, "snapshot subscription cleaned up")
+        holder["client"]._session.close.assert_called_once()
 
     def test_unresolvable_on_every_venue_returns_none(self) -> None:
         class _NeverResolves(self._FakeClient):
