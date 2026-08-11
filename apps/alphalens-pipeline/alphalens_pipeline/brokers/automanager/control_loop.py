@@ -2996,28 +2996,60 @@ def _extract_day1_gap_snapshot_price(snapshot: Mapping[str, Any], uic: int) -> f
     becomes a veto here, never a crash."""
     rows = (snapshot or {}).get("Snapshot", {}).get("Data") or []
     for row in rows:
-        if not isinstance(row, Mapping):
-            continue
-        raw_uic = row.get("Uic")
-        if raw_uic is None:
-            continue
-        try:
-            row_uic = int(raw_uic)
-        except (TypeError, ValueError):
-            continue
-        if row_uic != uic:
-            continue
-        quote = row.get("Quote") or {}
-        price = quote.get("Bid")
-        if price is None:
-            price = quote.get("LastTraded")
-        if price is None:
-            return None
-        try:
-            return float(price)
-        except (TypeError, ValueError):
-            return None
+        if isinstance(row, Mapping) and _snapshot_row_matches_uic(row, uic):
+            return _quote_indicative_price(row.get("Quote") or {})
     return None
+
+
+def _snapshot_row_matches_uic(row: Mapping[str, Any], uic: int) -> bool:
+    """True iff the snapshot row carries a parseable ``Uic`` equal to ``uic``."""
+    raw_uic = row.get("Uic")
+    if raw_uic is None:
+        return False
+    try:
+        return int(raw_uic) == uic
+    except (TypeError, ValueError):
+        return False
+
+
+def _quote_indicative_price(quote: Mapping[str, Any]) -> float | None:
+    """Bid-first indicative price off a snapshot ``Quote`` block; ``LastTraded``
+    fallback; any missing/malformed field is a veto (``None``), never a crash."""
+    price = quote.get("Bid")
+    if price is None:
+        price = quote.get("LastTraded")
+    if price is None:
+        return None
+    try:
+        return float(price)
+    except (TypeError, ValueError):
+        return None
+
+
+def _day1_gap_gate_defers(
+    ticker: str,
+    brief_date: dt.date,
+    spec: Any,
+    exchange_mic: str,
+    probe: Callable[[str, str], float | None] | None,
+    alert_throttled: Callable[[str, str], bool] | None,
+) -> bool:
+    """True iff the day-1 gap gate is enabled AND defers this pick (the
+    ``_place_pick`` early-return). Pages the operator (throttled) only for
+    the actionable below-E1 verdict; every other deferral is a DEBUG line."""
+    if not _day1_gap_gate_enabled():
+        return False
+    gate_verdict = _evaluate_day1_gap_gate(ticker, brief_date, spec, exchange_mic, probe)
+    if gate_verdict == "pass":
+        return False
+    logger.debug("place_pick %s: day1 gap gate deferred (%s)", ticker, gate_verdict)
+    if gate_verdict == "defer_below_e1" and alert_throttled is not None:
+        alert_throttled(
+            f"day1 gap gate: {ticker} trading below E1 at the day-1 open — "
+            "entry deferred to day 2+",
+            f"day1-gap:{ticker}",
+        )
+    return True
 
 
 def _place_pick(
@@ -3067,19 +3099,10 @@ def _place_pick(
     # before any broker/safety/sizing I/O — a deferral must be cheap. Never
     # journals a refusal (queue-semantics stays unchanged): a deferred pick
     # stays armed and is re-evaluated next tick.
-    if _day1_gap_gate_enabled():
-        gate_verdict = _evaluate_day1_gap_gate(
-            ticker, brief_date, spec, intent.instrument.mic, day1_gap_price_probe
-        )
-        if gate_verdict != "pass":
-            logger.debug("place_pick %s: day1 gap gate deferred (%s)", ticker, gate_verdict)
-            if gate_verdict == "defer_below_e1" and alert_throttled is not None:
-                alert_throttled(
-                    f"day1 gap gate: {ticker} trading below E1 at the day-1 open — "
-                    "entry deferred to day 2+",
-                    f"day1-gap:{ticker}",
-                )
-            return False
+    if _day1_gap_gate_defers(
+        ticker, brief_date, spec, intent.instrument.mic, day1_gap_price_probe, alert_throttled
+    ):
+        return False
 
     try:
         account = broker.get_account()
