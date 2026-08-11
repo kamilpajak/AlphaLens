@@ -5330,5 +5330,410 @@ class TestKillEdgeAlert(unittest.TestCase):
             )
 
 
+# --- Day-1 gap gate (execution-quality placement discipline) -----------------
+
+
+@contextlib.contextmanager
+def _frozen_now(fixed: dt.datetime):
+    """Freeze ``control_loop.dt.datetime.now()`` to ``fixed`` for the block.
+
+    ``control_loop`` does ``import datetime as dt`` at module scope, so ``dt``
+    IS the real stdlib ``datetime`` module — patching its ``datetime`` class
+    attribute for the duration of a ``with`` block is the same precedented
+    pattern ``_isolated_home`` above uses for ``pathlib.Path.home`` (scoped,
+    restored after)."""
+
+    class _Frozen(dt.datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:
+            return fixed if tz is None else fixed.astimezone(tz)
+
+    with mock.patch.object(cl.dt, "datetime", _Frozen):
+        yield
+
+
+def _day1_spec(limit_price: float = 100.0) -> TradeSpec:
+    return TradeSpec(
+        entry_tiers=(EntryTierSpec(limit_price=limit_price, alloc_pct=100.0, tag="T1"),),
+        disaster_stop=90.0,
+        tp_tranches=(),
+        suggested_size_pct=2.0,
+    )
+
+
+class _RaisingProbe:
+    """A ``day1_gap_price_probe`` stub that raises if ever called — proves the
+    gate-off / non-day1-window call sites never reach the probe (a real
+    network round-trip in production)."""
+
+    def __call__(self, ticker: str, exchange_mic: str) -> float | None:
+        raise AssertionError(f"probe must not be called for {ticker}/{exchange_mic}")
+
+
+class TestDay1GapGateSessionInfo(unittest.TestCase):
+    """``_day1_gap_gate_session_info`` — pure calendar math, no I/O."""
+
+    def test_monday_brief_day1_is_tuesday(self) -> None:
+        day1, day1_open = cl._day1_gap_gate_session_info(dt.date(2026, 8, 10), "XNYS")
+        self.assertEqual(day1, dt.date(2026, 8, 11))
+        self.assertEqual(day1_open, dt.datetime(2026, 8, 11, 13, 30, tzinfo=dt.UTC))
+
+    def test_friday_brief_day1_is_the_following_monday(self) -> None:
+        day1, _day1_open = cl._day1_gap_gate_session_info(dt.date(2026, 8, 14), "XNYS")
+        self.assertEqual(day1, dt.date(2026, 8, 17))
+
+    def test_unresolvable_exchange_returns_none(self) -> None:
+        with self.assertLogs("alphalens_pipeline.brokers.automanager.control_loop", "WARNING"):
+            result = cl._day1_gap_gate_session_info(dt.date(2026, 8, 10), "ZZZZ")
+        self.assertIsNone(result)
+
+
+class TestDay1GapGateDecision(unittest.TestCase):
+    """``_day1_gap_gate_decision`` — pure, total, no I/O (design memo: N=30/588
+    population analysis, day-1 gap-through-E1 fills carry median -1R vs
+    +0.21R baseline; later-day gaps are benign)."""
+
+    _BRIEF = dt.date(2026, 8, 10)  # Monday
+    _DAY1 = dt.date(2026, 8, 11)  # Tuesday (strictly after the Monday brief)
+    _DAY1_OPEN = dt.datetime(2026, 8, 11, 13, 30, tzinfo=dt.UTC)
+    _E1 = 100.0
+
+    def test_e1_limit_none_passes_with_warning(self) -> None:
+        with self.assertLogs("alphalens_pipeline.brokers.automanager.control_loop", "WARNING"):
+            verdict = cl._day1_gap_gate_decision(self._DAY1_OPEN, self._BRIEF, None, 50.0, "XNYS")
+        self.assertEqual(verdict, "pass")
+
+    def test_before_day1_defers_preopen(self) -> None:
+        now = dt.datetime(2026, 8, 10, 14, 0, tzinfo=dt.UTC)  # brief day itself
+        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, None, "XNYS")
+        self.assertEqual(verdict, "defer_preopen")
+
+    def test_day1_before_open_defers_preopen(self) -> None:
+        now = self._DAY1_OPEN - dt.timedelta(minutes=1)
+        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 200.0, "XNYS")
+        self.assertEqual(verdict, "defer_preopen")
+
+    def test_day1_within_grace_window_defers_preopen(self) -> None:
+        now = self._DAY1_OPEN + dt.timedelta(seconds=cl._DAY1_GAP_GATE_OPEN_GRACE_S - 1)
+        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 200.0, "XNYS")
+        self.assertEqual(verdict, "defer_preopen")
+
+    def test_day1_at_grace_boundary_with_no_price_defers_no_price(self) -> None:
+        now = self._DAY1_OPEN + dt.timedelta(seconds=cl._DAY1_GAP_GATE_OPEN_GRACE_S)
+        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, None, "XNYS")
+        self.assertEqual(verdict, "defer_no_price")
+
+    def test_day1_after_grace_price_below_e1_defers_below_e1(self) -> None:
+        now = self._DAY1_OPEN + dt.timedelta(minutes=30)
+        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 99.99, "XNYS")
+        self.assertEqual(verdict, "defer_below_e1")
+
+    def test_day1_after_grace_price_at_e1_passes(self) -> None:
+        now = self._DAY1_OPEN + dt.timedelta(minutes=30)
+        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, self._E1, "XNYS")
+        self.assertEqual(verdict, "pass")
+
+    def test_day1_after_grace_price_above_e1_passes(self) -> None:
+        now = self._DAY1_OPEN + dt.timedelta(minutes=30)
+        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 101.0, "XNYS")
+        self.assertEqual(verdict, "pass")
+
+    def test_day_after_day1_passes_regardless_of_price(self) -> None:
+        now = dt.datetime(2026, 8, 12, 12, 0, tzinfo=dt.UTC)  # Wednesday, day1 + 1
+        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 1.0, "XNYS")
+        self.assertEqual(verdict, "pass")
+
+    def test_unresolvable_exchange_passes(self) -> None:
+        now = self._DAY1_OPEN + dt.timedelta(minutes=30)
+        verdict = cl._day1_gap_gate_decision(now, self._BRIEF, self._E1, 1.0, "ZZZZ")
+        self.assertEqual(verdict, "pass")
+
+
+class TestEvaluateDay1GapGate(unittest.TestCase):
+    """``_evaluate_day1_gap_gate`` — resolves E1, calls the probe ONLY when the
+    pick is within its day1 session at/after the open+grace window, then
+    delegates to the pure decision helper."""
+
+    _BRIEF = dt.date(2026, 8, 10)  # Monday
+    _DAY1_OPEN = dt.datetime(2026, 8, 11, 13, 30, tzinfo=dt.UTC)
+
+    def test_probe_not_called_before_day1(self) -> None:
+        with _frozen_now(dt.datetime(2026, 8, 10, 20, 0, tzinfo=dt.UTC)):
+            verdict = cl._evaluate_day1_gap_gate(
+                "KO", self._BRIEF, _day1_spec(), "XNYS", _RaisingProbe()
+            )
+        self.assertEqual(verdict, "defer_preopen")
+
+    def test_probe_not_called_within_open_grace(self) -> None:
+        with _frozen_now(self._DAY1_OPEN + dt.timedelta(seconds=1)):
+            verdict = cl._evaluate_day1_gap_gate(
+                "KO", self._BRIEF, _day1_spec(), "XNYS", _RaisingProbe()
+            )
+        self.assertEqual(verdict, "defer_preopen")
+
+    def test_probe_not_called_on_day_after(self) -> None:
+        with _frozen_now(dt.datetime(2026, 8, 12, 12, 0, tzinfo=dt.UTC)):
+            verdict = cl._evaluate_day1_gap_gate(
+                "KO", self._BRIEF, _day1_spec(), "XNYS", _RaisingProbe()
+            )
+        self.assertEqual(verdict, "pass")
+
+    def test_probe_called_exactly_once_within_day1_after_grace(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def _probe(ticker: str, exchange_mic: str) -> float | None:
+            calls.append((ticker, exchange_mic))
+            return 99.0
+
+        with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
+            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, _day1_spec(), "XNYS", _probe)
+        self.assertEqual(calls, [("KO", "XNYS")])
+        self.assertEqual(verdict, "defer_below_e1")
+
+    def test_none_probe_within_day1_after_grace_defers_without_crash(self) -> None:
+        with _frozen_now(self._DAY1_OPEN + dt.timedelta(minutes=30)):
+            verdict = cl._evaluate_day1_gap_gate("KO", self._BRIEF, _day1_spec(), "XNYS", None)
+        self.assertEqual(verdict, "defer_no_price")
+
+
+class TestDay1GapGateEnabledFlag(unittest.TestCase):
+    def test_unset_is_disabled(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertFalse(cl._day1_gap_gate_enabled())
+
+    def test_one_is_enabled(self) -> None:
+        with mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True):
+            self.assertTrue(cl._day1_gap_gate_enabled())
+
+    def test_other_value_is_disabled(self) -> None:
+        with mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "true"}, clear=True):
+            self.assertFalse(cl._day1_gap_gate_enabled())
+
+
+class TestDay1GapSnapshotPriceExtraction(unittest.TestCase):
+    """``_extract_day1_gap_snapshot_price`` — Bid-first, LastTraded fallback,
+    any missing/malformed field is a veto (``None``), never a crash."""
+
+    def test_bid_present_wins(self) -> None:
+        snapshot = {"Snapshot": {"Data": [{"Uic": 123, "Quote": {"Bid": 45.6, "Ask": 45.7}}]}}
+        self.assertEqual(cl._extract_day1_gap_snapshot_price(snapshot, 123), 45.6)
+
+    def test_falls_back_to_last_traded_when_bid_absent(self) -> None:
+        snapshot = {"Snapshot": {"Data": [{"Uic": 123, "Quote": {"LastTraded": 12.3}}]}}
+        self.assertEqual(cl._extract_day1_gap_snapshot_price(snapshot, 123), 12.3)
+
+    def test_no_matching_uic_returns_none(self) -> None:
+        snapshot = {"Snapshot": {"Data": [{"Uic": 999, "Quote": {"Bid": 1.0}}]}}
+        self.assertIsNone(cl._extract_day1_gap_snapshot_price(snapshot, 123))
+
+    def test_empty_snapshot_returns_none(self) -> None:
+        self.assertIsNone(cl._extract_day1_gap_snapshot_price({}, 123))
+
+    def test_none_snapshot_returns_none(self) -> None:
+        self.assertIsNone(cl._extract_day1_gap_snapshot_price(None, 123))  # type: ignore[arg-type]
+
+    def test_malformed_bid_returns_none(self) -> None:
+        snapshot = {"Snapshot": {"Data": [{"Uic": 123, "Quote": {"Bid": "n/a"}}]}}
+        self.assertIsNone(cl._extract_day1_gap_snapshot_price(snapshot, 123))
+
+
+class TestDay1GapProbeVenueFallback(unittest.TestCase):
+    """The probe must PROBE US venues like placement routing does (XNYS then
+    XNAS) instead of trusting the advisory ``InstrumentHint.mic``: every
+    armed intent carries the hardcoded advisory "XNYS", so a NASDAQ name
+    (live-verified 2026-08-11: NVAX resolves only on XNAS, uic 6820) would
+    otherwise resolve to None and the gate would silently defer its entire
+    day 1 — a false veto."""
+
+    class _FakeClient:
+        def __init__(self, *, token_provider: object = None) -> None:
+            self.resolved: list[str] = []
+            self.deleted: list[tuple[str, str]] = []
+
+        def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+            self.resolved.append(exchange_mic)
+            return 6820 if exchange_mic == "XNAS" else None
+
+        def create_price_subscription(self, *, context_id, reference_id, uics, **_kw):
+            assert uics == [6820]
+            return {"Snapshot": {"Data": [{"Uic": 6820, "Quote": {"Bid": 7.88}}]}}
+
+        def delete_price_subscription(self, context_id: str, reference_id: str) -> None:
+            self.deleted.append((context_id, reference_id))
+
+    def _probe_with(self, fake_cls: type) -> tuple[Any, Any]:
+        holder: dict[str, Any] = {}
+
+        def _ctor(*, token_provider: object = None) -> Any:
+            holder["client"] = fake_cls(token_provider=token_provider)
+            return holder["client"]
+
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_marketdata_client.SaxoMarketDataClient",
+                side_effect=_ctor,
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_marketdata_auth.LiveAuthConfig.from_env",
+                return_value=object(),
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_marketdata_auth.LiveTokenProvider",
+                return_value=object(),
+            )
+        )
+        return cl._build_day1_gap_price_probe(), holder
+
+    def test_hinted_xnys_falls_back_to_xnas(self) -> None:
+        probe, holder = self._probe_with(self._FakeClient)
+        self.assertEqual(probe("NVAX", "XNYS"), 7.88)
+        self.assertEqual(holder["client"].resolved, ["XNYS", "XNAS"])
+        self.assertEqual(len(holder["client"].deleted), 1, "snapshot subscription cleaned up")
+
+    def test_unresolvable_on_every_venue_returns_none(self) -> None:
+        class _NeverResolves(self._FakeClient):
+            def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+                self.resolved.append(exchange_mic)
+                return None
+
+        probe, holder = self._probe_with(_NeverResolves)
+        self.assertIsNone(probe("ZZZZ", "XNYS"))
+        self.assertEqual(holder["client"].resolved, ["XNYS", "XNAS"])
+
+
+class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
+    """The day-1 gap gate wired into ``_place_pick`` (deliverable 1d): the gate
+    is evaluated at the TOP, before any broker/safety/sizing I/O, so a
+    deferral never journals a refusal (the pick stays armed) and never
+    touches the broker."""
+
+    _BRIEF = "2026-08-10"  # Monday
+    _DAY1_OPEN = dt.datetime(2026, 8, 11, 13, 30, tzinfo=dt.UTC)
+    _WITHIN_DAY1 = _DAY1_OPEN + dt.timedelta(minutes=30)
+    _DAY_AFTER = dt.datetime(2026, 8, 12, 12, 0, tzinfo=dt.UTC)
+
+    def _placer(
+        self, broker: Any, *, day1_gap_price_probe: Any = None, **over: Any
+    ) -> tuple[Any, list[tuple[str, str]], list[tuple[Any, ...]]]:
+        pkg = "alphalens_pipeline.brokers"
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        alerts: list[tuple[str, str]] = []
+        refusals: list[tuple[Any, ...]] = []
+
+        def _alert_throttled(message: str, reason: str) -> bool:
+            alerts.append((message, reason))
+            return True
+
+        m: dict[str, Any] = {
+            "verdicts": lambda _r, _b: [],
+            "safety_check": lambda *_a, **_k: object(),
+            "resolve": lambda _b, _t: _instr(),
+            "classify": lambda *_a, **_k: _placement(),
+            "compute_plan": lambda _spec, **_k: object(),
+            "iter_records": lambda _p: [],
+            "append": lambda _r: None,
+            "build_record": lambda **kw: dict(kw),
+            "mark_refused": lambda *a: refusals.append(a),
+            **over,
+        }
+        p = stack.enter_context
+        p(mock.patch(f"{pkg}.automanager.picks.mark_refused", m["mark_refused"]))
+        p(mock.patch(f"{pkg}.submission_log.build_submission_record", m["build_record"]))
+        p(mock.patch(f"{pkg}.submission_log.append_submission_record", m["append"]))
+        p(mock.patch(f"{pkg}.submission_log.iter_submission_records", m["iter_records"]))
+        p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", m["verdicts"]))
+        p(mock.patch(f"{pkg}.automanager.safety.check", m["safety_check"]))
+        p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
+        p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
+        p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
+        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        placer = cl._make_place_pick(
+            broker, alert_throttled=_alert_throttled, day1_gap_price_probe=day1_gap_price_probe
+        )
+        return placer, alerts, refusals
+
+    def test_flag_off_places_even_when_probe_would_defer(self) -> None:
+        # The gate is completely inert with the flag unset — _place_pick must
+        # never even build the calendar/probe path, so a probe stub that
+        # raises if called proves it.
+        broker = _RecordingBroker()
+        with mock.patch.dict("os.environ", {}, clear=True):
+            placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=_RaisingProbe())
+            self.assertTrue(placer(_pick("KO", self._BRIEF)))
+        self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    def test_probe_below_e1_defers_never_places_never_marks_refused_alerts_once(self) -> None:
+        broker = _RecordingBroker()
+        with (
+            _frozen_now(self._WITHIN_DAY1),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=lambda *_a: 99.0)
+            self.assertFalse(placer(_pick("KO", self._BRIEF)))
+        self.assertEqual(broker.placed, [], "the gate must defer BEFORE any bracket places")
+        self.assertEqual(refusals, [], "a day1-gap deferral must NEVER journal a refused line")
+        self.assertEqual(len(alerts), 1)
+        message, reason_key = alerts[0]
+        self.assertIn("day1 gap gate", message.lower())
+        self.assertIn("KO", message)
+        self.assertEqual(reason_key, "day1-gap:KO")
+
+    def test_probe_at_or_above_e1_places(self) -> None:
+        broker = _RecordingBroker()
+        with (
+            _frozen_now(self._WITHIN_DAY1),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=lambda *_a: 100.0)
+            self.assertTrue(placer(_pick("KO", self._BRIEF)))
+        self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    def test_day_after_places_even_with_probe_below_e1(self) -> None:
+        broker = _RecordingBroker()
+        with (
+            _frozen_now(self._DAY_AFTER),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=_RaisingProbe())
+            self.assertTrue(placer(_pick("KO", self._BRIEF)))
+        self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    def test_default_none_probe_flag_on_during_day1_defers_without_crash(self) -> None:
+        broker = _RecordingBroker()
+        with (
+            _frozen_now(self._WITHIN_DAY1),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            placer, _alerts, refusals = self._placer(broker)  # day1_gap_price_probe defaults None
+            self.assertFalse(placer(_pick("KO", self._BRIEF)))
+        self.assertEqual(broker.placed, [])
+        self.assertEqual(refusals, [])
+
+    def test_preopen_defers_without_probe_or_placement(self) -> None:
+        broker = _RecordingBroker()
+        with (
+            _frozen_now(self._DAY1_OPEN - dt.timedelta(minutes=1)),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            placer, alerts, refusals = self._placer(broker, day1_gap_price_probe=_RaisingProbe())
+            self.assertFalse(placer(_pick("KO", self._BRIEF)))
+        self.assertEqual(broker.placed, [])
+        self.assertEqual(refusals, [])
+        self.assertEqual(alerts, [], "a pre-open defer is DEBUG-only, never an alert")
+
+
 if __name__ == "__main__":
     unittest.main()

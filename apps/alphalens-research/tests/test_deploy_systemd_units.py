@@ -1493,6 +1493,13 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
             self.text,
             re.compile(r"^Environment=ALPHALENS_SAXO_LIVE_PRICES=1\s*$", re.MULTILINE),
         )
+        # Day-1 gap gate (execution-quality placement discipline, N=30/588
+        # population analysis 2026-08-11): day-1 gap-through-E1 fills carry a
+        # median -1R vs a +0.21R baseline.
+        self.assertRegex(
+            self.text,
+            re.compile(r"^Environment=ALPHALENS_BROKER_DAY1_GAP_GATE=1\s*$", re.MULTILINE),
+        )
 
     def test_resource_caps_present(self) -> None:
         self.assertRegex(self.text, re.compile(r"^MemoryMax=\S+\s*$", re.MULTILINE))

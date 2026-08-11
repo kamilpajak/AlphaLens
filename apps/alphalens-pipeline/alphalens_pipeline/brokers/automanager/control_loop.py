@@ -11,6 +11,7 @@ real modules.
 
 from __future__ import annotations
 
+import datetime as dt
 import functools
 import logging
 import math
@@ -19,7 +20,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from broker_contract.contract import (
     _QTY_EPS,
@@ -268,6 +269,17 @@ class LoopDeps:
     # peak (see _update_peaks). Frozen forbids REBINDING the field, not
     # mutating the dict it points at.
     peak_tracker: dict[int, float] = field(default_factory=dict)
+    # Day-1 gap gate (execution-quality placement discipline — see the
+    # "Day-1 gap gate" section below): ``(ticker, exchange_mic) -> an
+    # indicative CURRENT price (bid or last), or None when unavailable``.
+    # Baked into the ``place_pick`` closure at build time
+    # (``_make_place_pick``'s ``day1_gap_price_probe`` kwarg) — kept here for
+    # symmetry / introspection, mirroring ``place_oco_exit`` / ``amend_stop``
+    # above. ``None`` (default) is what every pre-day1-gap LoopDeps
+    # test/harness gets; the gate itself only runs when
+    # ``ALPHALENS_BROKER_DAY1_GAP_GATE=1``, so a ``None`` probe with the flag
+    # off is completely inert.
+    day1_gap_price_probe: Callable[[str, str], float | None] | None = None
 
 
 @dataclass
@@ -1302,13 +1314,28 @@ def build_default_deps(
     # never races the compaction rewrite (thread-model §Startup ordering).
     wake_event, stream_tick, stream_trigger = _build_stream_handles(broker, provider, _throttled)
 
+    # Day-1 gap gate price probe (built once, shared by both LoopDeps sites it
+    # is wired into below — the closure captured by ``place_pick`` and the
+    # bare field kept for symmetry/introspection, mirroring place_oco_exit /
+    # amend_stop). Constructing it does no I/O; the Saxo LIVE marketdata
+    # chain is only ever reached lazily, per call, inside the probe itself —
+    # this is the SAME factory for both the SIM and LIVE daemon instances
+    # (both call build_default_deps), and it self-degrades to always
+    # returning None when the LIVE chain/env is absent (SIM).
+    day1_gap_probe = _build_day1_gap_price_probe()
+
     return LoopDeps(
         broker=broker,
         kill_file=state_paths.kill_file_path(),
         global_kill_file=state_paths.global_kill_file_path(),
         ensure_alive=keeper.ensure_alive,
         iter_picks=picks.iter_picks,
-        place_pick=_make_place_pick(broker, exit_policy, alert_throttled=_throttled),
+        place_pick=_make_place_pick(
+            broker,
+            exit_policy,
+            alert_throttled=_throttled,
+            day1_gap_price_probe=day1_gap_probe,
+        ),
         read_records=_read_records,
         verdicts_fn=reconcile_bridge.verdicts,
         build_position_view=_make_position_view_builder(broker),
@@ -1326,6 +1353,7 @@ def build_default_deps(
         stream_trigger=stream_trigger,
         exit_policy=exit_policy,
         live_exits_feed_factory=_default_live_exits_feed_factory,
+        day1_gap_price_probe=day1_gap_probe,
     )
 
 
@@ -2211,6 +2239,7 @@ def _make_place_pick(
     exit_policy: ExitPolicy | None = None,
     *,
     alert_throttled: Callable[[str, str], bool] | None = None,
+    day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
 ) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
@@ -2233,10 +2262,22 @@ def _make_place_pick(
     ONE daemon-lifetime ``_AlertThrottle`` in here so a fee-floor refusal pages
     the operator via the usual channel. ``None`` (every pre-existing call site
     /test) is tolerated — the fee floor still refuses + journals, it just does
-    not page."""
+    not page.
+
+    ``day1_gap_price_probe`` (execution-quality placement discipline) is the
+    same probe ``LoopDeps.day1_gap_price_probe`` carries — see the "Day-1 gap
+    gate" section above. ``None`` (every pre-day1-gap call site/test) is
+    tolerated: the gate only calls it when ``ALPHALENS_BROKER_DAY1_GAP_GATE``
+    is armed, and a ``None`` probe there simply defers every day-1 pick."""
 
     def _place(pick: Any) -> bool:
-        return _place_pick(broker, pick, exit_policy, alert_throttled=alert_throttled)
+        return _place_pick(
+            broker,
+            pick,
+            exit_policy,
+            alert_throttled=alert_throttled,
+            day1_gap_price_probe=day1_gap_price_probe,
+        )
 
     return _place
 
@@ -2729,12 +2770,260 @@ def _place_tiers(
     return placed_count
 
 
+# --- Day-1 gap gate (execution-quality placement discipline) -----------------
+#
+# Empirical finding (population-ladder analysis, N=30/588, 2026-08-11): picks
+# whose FIRST post-brief session opens BELOW the tier-1 (E1) entry limit — an
+# overnight gap through the limit — carry a median terminal outcome of -1R
+# (64% losers) vs +0.21R baseline. Gaps on later sessions are benign (+0.23R)
+# — classic limit-order adverse selection at the opening print. The gate only
+# DEFERS a day-1 placement (never refuses it): a deferred pick stays armed and
+# is re-evaluated next tick, so it never feeds back into WHICH ticker is
+# selected (ADR 0013 R2) — only WHEN, on day 1, the entry is allowed to fill.
+_DAY1_GAP_GATE_ENV = "ALPHALENS_BROKER_DAY1_GAP_GATE"
+
+# The opening auction print needs a few minutes to settle before an
+# indicative quote is trustworthy enough to gate a placement on.
+_DAY1_GAP_GATE_OPEN_GRACE_S = 300
+
+Day1GapGateVerdict = Literal["pass", "defer_preopen", "defer_no_price", "defer_below_e1"]
+
+
+def _day1_gap_gate_enabled() -> bool:
+    """Whether the day-1 gap gate is armed (read at call time, mirrors
+    ``_live_market_exits_enabled`` / ``_saxo_live_prices_enabled`` above).
+    Defaults OFF — unset means ``_place_pick`` never evaluates the gate,
+    byte-identical to today."""
+    return os.environ.get(_DAY1_GAP_GATE_ENV) == "1"
+
+
+def _day1_gap_gate_session_info(
+    brief_date: dt.date, exchange_mic: str
+) -> tuple[dt.date, dt.datetime] | None:
+    """``(day1 session date, day1 session open UTC)`` for ``brief_date`` on
+    ``exchange_mic``, or ``None`` when the calendar cannot resolve it (e.g. an
+    unrecognised exchange MIC) — never raises.
+
+    ``day1`` is the first trading session STRICTLY AFTER ``brief_date``:
+    ``paper.calendar.advance_trading_sessions(brief_date, 1, exchange=...)``
+    is "the session immediately after the session on-or-after ``brief_date``"
+    — for a session ``brief_date`` that lands on the VERY NEXT session (a
+    Monday brief's day1 is Tuesday, a Friday brief's day1 is the following
+    Monday); for a weekend/holiday ``brief_date`` it lands one session past
+    the weekend's first session.
+
+    Pure calendar math, no I/O — shared by ``_day1_gap_gate_decision`` and the
+    placer's probe-gating check (``_evaluate_day1_gap_gate``) so the two never
+    disagree on what "day1" means."""
+    try:
+        from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_open_utc
+
+        day1 = advance_trading_sessions(brief_date, 1, exchange=exchange_mic)
+        return day1, session_open_utc(day1, exchange=exchange_mic)
+    except Exception:
+        logger.warning(
+            "day1 gap gate: calendar resolution failed for brief_date=%s exchange_mic=%s",
+            brief_date,
+            exchange_mic,
+            exc_info=True,
+        )
+        return None
+
+
+def _day1_gap_gate_decision(
+    now_utc: dt.datetime,
+    brief_date: dt.date,
+    e1_limit: float | None,
+    probe_price: float | None,
+    exchange_mic: str,
+) -> Day1GapGateVerdict:
+    """Pure day-1 gap gate verdict — no I/O, total (never raises on weird
+    inputs).
+
+    - ``e1_limit is None`` (a pick the gate cannot evaluate) -> "pass" with a
+      WARNING log — a doubt about GATING must never itself become a
+      placement refusal.
+    - A calendar resolution failure (see ``_day1_gap_gate_session_info``) ->
+      "pass" — same reasoning, already logged there.
+    - ``now_utc`` on a date AFTER day1 -> "pass" (later-day gaps are benign
+      by the population data, so the gate is inert from day 2 on).
+    - Before day1's open + ``_DAY1_GAP_GATE_OPEN_GRACE_S`` -> "defer_preopen"
+      (covers every pre-day1 tick too — day1's open is always in the future
+      then).
+    - Within day1, at/after the grace window, and ``probe_price is None`` ->
+      "defer_no_price" (fail-safe: no price, no day-1 placement).
+    - Within day1, at/after the grace window, and ``probe_price < e1_limit``
+      -> "defer_below_e1".
+    - Otherwise -> "pass"."""
+    if e1_limit is None:
+        logger.warning("day1 gap gate: pick carries no E1 limit — gate cannot evaluate, passing")
+        return "pass"
+    info = _day1_gap_gate_session_info(brief_date, exchange_mic)
+    if info is None:
+        return "pass"
+    day1, day1_open = info
+    if now_utc.date() > day1:
+        return "pass"
+    if now_utc < day1_open + dt.timedelta(seconds=_DAY1_GAP_GATE_OPEN_GRACE_S):
+        return "defer_preopen"
+    if probe_price is None:
+        return "defer_no_price"
+    if probe_price < e1_limit:
+        return "defer_below_e1"
+    return "pass"
+
+
+def _evaluate_day1_gap_gate(
+    ticker: str,
+    brief_date: dt.date,
+    spec: Any,
+    exchange_mic: str,
+    probe: Callable[[str, str], float | None] | None,
+) -> Day1GapGateVerdict:
+    """Orchestrates the gate for one pick: resolves E1 (the highest/first
+    entry tier — ``ladder.build_entry_tiers`` returns tiers strictly
+    descending, so ``spec.entry_tiers[0]`` is always the shallowest/highest
+    limit), calls the price probe ONLY when the pick is within its day1
+    session at/after the open+grace window — every other phase (pre-day1,
+    pre-open, day 2+) needs no price at all, and the probe is a real network
+    round-trip — then delegates the full verdict to the pure
+    ``_day1_gap_gate_decision``."""
+    e1_limit = spec.entry_tiers[0].limit_price if spec.entry_tiers else None
+    now_utc = dt.datetime.now(dt.UTC)
+    probe_price: float | None = None
+    if e1_limit is not None and probe is not None:
+        info = _day1_gap_gate_session_info(brief_date, exchange_mic)
+        if info is not None:
+            day1, day1_open = info
+            grace_open = day1_open + dt.timedelta(seconds=_DAY1_GAP_GATE_OPEN_GRACE_S)
+            if now_utc.date() <= day1 and now_utc >= grace_open:
+                probe_price = probe(ticker, exchange_mic)
+    return _day1_gap_gate_decision(now_utc, brief_date, e1_limit, probe_price, exchange_mic)
+
+
+# US venue probe order for the day-1 gap gate price probe — mirrors
+# routing.resolve_us_instrument's placement-side probe order.
+_DAY1_GAP_US_VENUE_PROBE_ORDER = ("XNYS", "XNAS")
+
+
+def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
+    """The production day-1 gap gate price probe: a ONE-SHOT Saxo LIVE
+    indicative-quote snapshot, mirroring ``_default_live_exits_feed_factory``'s
+    lazy-import style. Unlike the persistent streaming feed (INC-2), this
+    opens a throwaway infoprices subscription, reads its initial snapshot,
+    and best-effort deletes it — the gate needs at most a handful of quotes
+    per pick (day1 open+grace onward, once per tick until it clears), never a
+    standing WebSocket.
+
+    ANY exception (missing LIVE auth env, an unresolvable uic, a non-2xx
+    subscription response, a malformed snapshot body) degrades to ``None`` —
+    the gate's own fail-safe (``_day1_gap_gate_decision``: no price, no day-1
+    placement) already treats ``None`` as a defer, so this probe never needs
+    to distinguish WHY it could not get a price. This is also why the SIM
+    instance (which has no LIVE marketdata chain configured) self-degrades to
+    always deferring day-1 placements rather than crashing, on the rare
+    occasion the flag is ever turned on there."""
+
+    def _probe(ticker: str, exchange_mic: str) -> float | None:
+        import contextlib
+
+        try:
+            from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import (
+                LiveAuthConfig,
+                LiveTokenProvider,
+            )
+            from alphalens_pipeline.data.alt_data.saxo_marketdata_client import (
+                SaxoMarketDataClient,
+            )
+
+            client = SaxoMarketDataClient(
+                token_provider=LiveTokenProvider(LiveAuthConfig.from_env())
+            )
+            # PROBE US venues like placement routing does (XNYS then XNAS)
+            # instead of trusting the hint: every armed intent carries the
+            # advisory InstrumentHint.mic="XNYS", so a NASDAQ name would
+            # otherwise resolve to None here and the gate would silently
+            # defer its entire day 1 (false veto; live-verified with NVAX,
+            # XNAS uic 6820, 2026-08-11). Hinted venue first, then the rest.
+            candidate_mics = [exchange_mic] + [
+                m for m in _DAY1_GAP_US_VENUE_PROBE_ORDER if m != exchange_mic
+            ]
+            uic = None
+            for mic in candidate_mics:
+                uic = client.resolve_uic(ticker, exchange_mic=mic)
+                if uic is not None:
+                    break
+            if uic is None:
+                return None
+            import secrets
+
+            context_id = f"almgr-gap-{os.getpid()}-{int(time.time())}-{secrets.token_hex(4)}"
+            reference_id = "gap"
+            try:
+                snapshot = client.create_price_subscription(
+                    context_id=context_id, reference_id=reference_id, uics=[uic]
+                )
+                return _extract_day1_gap_snapshot_price(snapshot, uic)
+            finally:
+                with contextlib.suppress(Exception):
+                    client.delete_price_subscription(context_id, reference_id)
+                # One-shot client: release the connection pool explicitly
+                # rather than waiting for GC (zen review polish).
+                with contextlib.suppress(Exception):
+                    client._session.close()
+        except Exception:
+            logger.debug(
+                "day1 gap gate: price probe failed for %s/%s",
+                ticker,
+                exchange_mic,
+                exc_info=True,
+            )
+            return None
+
+    return _probe
+
+
+def _extract_day1_gap_snapshot_price(snapshot: Mapping[str, Any], uic: int) -> float | None:
+    """The indicative price off a Saxo infoprices subscription snapshot body
+    (``{"Snapshot": {"Data": [{"Uic": ..., "Quote": {"Bid": ...,
+    "LastTraded": ...}}]}}``) — this shape is not parsed anywhere else in the
+    codebase (the streaming reader only consumes WebSocket deltas via
+    ``QuoteCache.apply``, never the subscription POST's own response body),
+    so this reads it directly. Bid-first, mirroring ``QuoteCache``'s Bid/Ask
+    convention; falls back to ``LastTraded`` when Bid is absent (an illiquid
+    name, or a pre-open snapshot with no resting bid yet). Any
+    missing/malformed field returns ``None`` — a doubt about the price
+    becomes a veto here, never a crash."""
+    rows = (snapshot or {}).get("Snapshot", {}).get("Data") or []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        try:
+            row_uic = int(row.get("Uic"))
+        except (TypeError, ValueError):
+            continue
+        if row_uic != uic:
+            continue
+        quote = row.get("Quote") or {}
+        price = quote.get("Bid")
+        if price is None:
+            price = quote.get("LastTraded")
+        if price is None:
+            return None
+        try:
+            return float(price)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def _place_pick(
     broker: Broker,
     intent: Any,
     exit_policy: ExitPolicy | None = None,
     *,
     alert_throttled: Callable[[str, str], bool] | None = None,
+    day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
 ) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
@@ -2748,12 +3037,15 @@ def _place_pick(
     ``alert_throttled`` (design memo §4 fee floor) pages the operator when the
     fee floor refuses a pick; ``None`` is tolerated (refuse + journal, no page).
 
+    ``day1_gap_price_probe`` (execution-quality placement discipline) is
+    consulted ONLY when ``ALPHALENS_BROKER_DAY1_GAP_GATE=1`` — see the "Day-1
+    gap gate" section above; ``None`` (every pre-day1-gap call site/test) is
+    tolerated exactly like ``alert_throttled=None``.
+
     PR-7 (broker-manager extraction memo §5): the daemon never touches a
     brief any more — ``ticker``/``brief_date``/``spec``/``exit_spec`` are all
     read directly off the drained ``intent`` (the client already parsed +
     validated the brief at arm time, in ``arm_command``)."""
-    import datetime as _dt
-
     from broker_contract.contract import BrokerError
 
     from alphalens_pipeline.brokers.automanager import safety
@@ -2764,9 +3056,27 @@ def _place_pick(
     from alphalens_pipeline.brokers.submission_log import iter_submission_records
 
     ticker = intent.instrument.ticker.upper()
-    brief_date = _dt.date.fromisoformat(intent.meta.brief_date)
+    brief_date = dt.date.fromisoformat(intent.meta.brief_date)
     spec = intent.spec
     exit_spec = intent.exit
+
+    # Day-1 gap gate (execution-quality placement discipline): evaluated FIRST,
+    # before any broker/safety/sizing I/O — a deferral must be cheap. Never
+    # journals a refusal (queue-semantics stays unchanged): a deferred pick
+    # stays armed and is re-evaluated next tick.
+    if _day1_gap_gate_enabled():
+        gate_verdict = _evaluate_day1_gap_gate(
+            ticker, brief_date, spec, intent.instrument.mic, day1_gap_price_probe
+        )
+        if gate_verdict != "pass":
+            logger.debug("place_pick %s: day1 gap gate deferred (%s)", ticker, gate_verdict)
+            if gate_verdict == "defer_below_e1" and alert_throttled is not None:
+                alert_throttled(
+                    f"day1 gap gate: {ticker} trading below E1 at the day-1 open — "
+                    "entry deferred to day 2+",
+                    f"day1-gap:{ticker}",
+                )
+            return False
 
     try:
         account = broker.get_account()
@@ -2778,7 +3088,7 @@ def _place_pick(
         return False
 
     open_bracket_count, gross_committed, realized_r_today = _summarize_open_verdicts(
-        open_verdicts, records, _dt.date.today().isoformat()
+        open_verdicts, records, dt.date.today().isoformat()
     )
     decision = safety.check(
         intent,
