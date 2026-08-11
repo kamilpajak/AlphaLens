@@ -2955,7 +2955,9 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
                     break
             if uic is None:
                 return None
-            context_id = f"almgr-gap-{os.getpid()}-{int(time.time())}"
+            import secrets
+
+            context_id = f"almgr-gap-{os.getpid()}-{int(time.time())}-{secrets.token_hex(4)}"
             reference_id = "gap"
             try:
                 snapshot = client.create_price_subscription(
@@ -2965,6 +2967,10 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
             finally:
                 with contextlib.suppress(Exception):
                     client.delete_price_subscription(context_id, reference_id)
+                # One-shot client: release the connection pool explicitly
+                # rather than waiting for GC (zen review polish).
+                with contextlib.suppress(Exception):
+                    client._session.close()
         except Exception:
             logger.debug(
                 "day1 gap gate: price probe failed for %s/%s",
