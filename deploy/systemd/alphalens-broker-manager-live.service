@@ -131,6 +131,12 @@ Environment=ALPHALENS_BROKER_STREAMING_ENABLED=0
 # instance sets this to 0 for the soak (design memo §6).
 Environment=ALPHALENS_SAXO_LIVE_PRICES=1
 
+# Day-1 gap gate (execution-quality placement discipline): defers a pick's
+# day-1 entry until the market confirms price >= E1 after the open. Empirical
+# finding, N=30/588 population-ladder analysis 2026-08-11: a day-1 gap-through
+# -E1 fill carries a median terminal outcome of -1R vs a +0.21R baseline.
+Environment=ALPHALENS_BROKER_DAY1_GAP_GATE=1
+
 # Node_exporter textfile dir for the per-tick heartbeat gauge — same
 # mechanism as the SIM unit, distinguished by the `broker-manager-live`
 # job label (ADR 0016 metrics_job(env)).
