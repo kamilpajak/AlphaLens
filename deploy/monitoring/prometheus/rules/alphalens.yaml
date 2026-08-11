@@ -887,16 +887,11 @@ groups:
       # (metrics_job(env) / price_stream_metrics_job(env), ADR 0016) so the
       # two instances' health is never conflated.
       #
-      # Value-based heartbeat ONLY for now — deliberately NO absent()-based
-      # AlphalensBrokerManagerLiveHeartbeatMissing rule yet. The LIVE unit is
-      # not enabled on the VPS until the design memo §7 rollout reaches step
-      # 1 ("deploy inert"); an absent() rule pages the instant the rules file
-      # reloads, before the unit exists (ADR 0016 D5 precedent — same reason
-      # the SIM Missing rule was NOT backfilled ahead of the SIM unit's
-      # install). ADD the paired AlphalensJobMetricMissing-style absent()
-      # rule (mirroring the SIM AlphalensBrokerManagerHeartbeatMissing rule
-      # above) IN THE SAME PR/commit that installs+enables
-      # alphalens-broker-manager-live.service on the VPS — not before.
+      # The absent()-based Missing rule below landed WITH the unit's VPS
+      # enable (2026-08-11, design memo §7 step 1 "deploy inert") — it was
+      # deliberately withheld until then because an absent() rule pages the
+      # instant the rules file reloads when the instance does not exist yet
+      # (ADR 0016 D5 precedent).
       # -----------------------------------------------------------------
       - alert: AlphalensBrokerManagerLiveHeartbeatStale
         expr: time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"} > 300
@@ -908,6 +903,17 @@ groups:
         annotations:
           summary: "LIVE broker-manager heartbeat stale > 5m (expected ~45s ticks)"
           description: "Last control-loop tick was {{ $value | humanizeDuration }} ago — the LIVE auto-manager (REAL MONEY) may be wedged or stopped. Existing positions keep their disaster-stop protection independent of the daemon's own liveness; this alert is about placement/exit-management coverage going dark."
+
+      - alert: AlphalensBrokerManagerLiveHeartbeatMissing
+        expr: absent(alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-live"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager-live
+        annotations:
+          summary: "LIVE broker-manager heartbeat metric missing"
+          description: "No heartbeat gauge for the LIVE auto-manager (REAL MONEY). The daemon has not ticked since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Clears after the first tick."
 
       - alert: AlphalensLivePriceStreamReaderDown
         # Same anti-false-positive gate as the SIM version: an idle reader

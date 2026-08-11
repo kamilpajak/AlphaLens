@@ -1572,21 +1572,20 @@ class TestLiveBrokerManagerHealthRules(unittest.TestCase):
             "Missing AlphalensBrokerManagerLiveHeartbeatStale (>300s).",
         )
 
-    def test_no_absent_based_missing_rule_for_live_heartbeat_yet(self) -> None:
-        # Design memo §5: an absent() rule pages the instant the rules
-        # reload, before the LIVE unit is even installed. It must land in
-        # the SAME commit that installs+enables
-        # alphalens-broker-manager-live.service on the VPS, not ahead of
-        # it — this test pins that the rule does NOT exist yet.
-        self.assertNotRegex(
+    def test_absent_based_missing_rule_for_live_heartbeat_exists(self) -> None:
+        # The LIVE unit was installed+enabled on the VPS 2026-08-11 (design
+        # memo §7 step 1 "deploy inert"), so the absent()-based Missing rule
+        # that was deliberately withheld until then (an absent() rule pages
+        # the instant the rules reload when the instance does not exist)
+        # now MUST exist, mirroring the SIM HeartbeatMissing rule.
+        self.assertRegex(
             self.text,
             re.compile(
                 r"absent\(alphalens_broker_manager_last_tick_timestamp_seconds"
                 r"\{job=\"broker-manager-live\"\}\)"
             ),
-            "No absent()-based Missing rule for the LIVE heartbeat should "
-            "exist yet (design memo §5) — add it in the same commit that "
-            "installs+enables alphalens-broker-manager-live.service.",
+            "The LIVE unit is enabled on the VPS — the absent()-based "
+            "AlphalensBrokerManagerLiveHeartbeatMissing rule must exist.",
         )
 
     def test_live_price_stream_reader_down_rule(self) -> None:

@@ -38,9 +38,12 @@ WorkingDirectory=%h/AlphaLens
 EnvironmentFile=/etc/alphalens/env
 
 # Instance identity (ADR 0016 D1/D8) — pinned IN THE UNIT, not in
-# /etc/alphalens/env: EnvironmentFile overrides drop-ins but NOT an in-unit
-# Environment= line, so this is the one place the pin cannot be silently lost.
-# NEVER set ALPHALENS_BROKER_ENVIRONMENT in /etc/alphalens/env.
+# /etc/alphalens/env. CAUTION (verified 2026-08-11): EnvironmentFile=
+# overrides ALL Environment= lines — in-unit AND drop-in, regardless of
+# order. This pin holds ONLY because the var is banned from
+# /etc/alphalens/env; a conflicting entry there WOULD win. NEVER set
+# ALPHALENS_BROKER_ENVIRONMENT (or any ALPHALENS_BROKER_* rail) in
+# /etc/alphalens/env.
 Environment=ALPHALENS_BROKER_ENVIRONMENT=sim
 
 # Node_exporter textfile dir for the per-tick heartbeat gauge (Task 13).
