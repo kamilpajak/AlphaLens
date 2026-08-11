@@ -159,3 +159,25 @@ class TestPriceSubscription(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGetStockInfoprice(unittest.TestCase):
+    """One-shot GET /trade/v1/infoprices snapshot (the day-1 gap gate's
+    session-open source)."""
+
+    def test_requests_the_uic_with_price_info_details(self):
+        session = _Session(_Resp(200, {"PriceInfoDetails": {"Open": 7.92}}))
+        payload = _client(session).get_stock_infoprice(6820)
+
+        self.assertEqual(payload["PriceInfoDetails"]["Open"], 7.92)
+        method, url, kw = session.calls[0]
+        self.assertEqual(method, "GET")
+        self.assertEqual(url, f"{LIVE_API_BASE_URL}/trade/v1/infoprices")
+        self.assertEqual(kw["params"]["Uic"], 6820)
+        self.assertEqual(kw["params"]["AssetType"], "Stock")
+        self.assertIn("PriceInfoDetails", kw["params"]["FieldGroups"])
+
+    def test_non_2xx_raises(self):
+        session = _Session(_Resp(400))
+        with self.assertRaises(RuntimeError):
+            _client(session).get_stock_infoprice(6820)
