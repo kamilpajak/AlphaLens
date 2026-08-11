@@ -174,6 +174,29 @@ class _StubSaxoClient:
         self.search_calls.append((keywords, exchange_id))
         return _SEARCH_RESULTS.get(keywords.upper(), {"Data": []})
 
+    # ----- FX spot surface (get_fx_rate resolution + inversion) -----
+
+    fx_pairs: dict[str, str] = {"USDPLN": "47"}  # symbol -> uic; default: NO PLNUSD
+    fx_quote: dict[str, Any] = {
+        "Quote": {
+            "Mid": 3.73,
+            "Bid": 3.72,
+            "Ask": 3.74,
+            "PriceTypeBid": "Indicative",
+            "PriceTypeAsk": "Indicative",
+            "MarketState": "Open",
+        }
+    }
+
+    def get_currency_pairs(self) -> dict[str, Any]:
+        self._maybe_fail()
+        return {"Data": [{"CurrencyPair": s, "Uic": u} for s, u in self.fx_pairs.items()]}
+
+    def get_fx_infoprice(self, uic: str) -> dict[str, Any]:
+        self._maybe_fail()
+        assert str(uic) in set(self.fx_pairs.values()), uic
+        return dict(self.fx_quote)
+
     # ----- minimal stateful order surface (conformance-mixin lifecycle) -----
 
     _DETAILS = {
@@ -861,6 +884,52 @@ def _position_row(
         },
         "DisplayAndFormat": {"Symbol": symbol},
     }
+
+
+class TestGetFxRateInversion(unittest.TestCase):
+    """``get_fx_rate`` must resolve the INVERTED vendor pair when the direct
+    one is not quoted (front-4 finding 2026-08-11: the real PLN account asks
+    for PLN->USD but Saxo lists only USDPLN — the SIM account was USD, so
+    the fx path never ran there and the deliberate no-inversion refusal was
+    never exercised against reality)."""
+
+    def _broker(self) -> SaxoBroker:
+        client = _StubSaxoClient()
+        client.search_calls = []
+        return SaxoBroker(client)  # type: ignore[arg-type]
+
+    def test_direct_pair_still_verbatim(self) -> None:
+        broker = self._broker()
+        q = broker.get_fx_rate("USD", "PLN")
+        self.assertEqual((q.base_currency, q.quote_currency), ("USD", "PLN"))
+        self.assertEqual((q.mid, q.bid, q.ask), (3.73, 3.72, 3.74))
+        self.assertNotIn("inverted", q.source)
+
+    def test_inverted_fallback_flips_quote_and_sides(self) -> None:
+        broker = self._broker()
+        q = broker.get_fx_rate("PLN", "USD")
+        self.assertEqual((q.base_currency, q.quote_currency), ("PLN", "USD"))
+        assert q.mid and q.bid and q.ask
+        self.assertAlmostEqual(q.mid, 1 / 3.73)
+        # Direction flips under inversion: PLNUSD bid = 1/ask(USDPLN).
+        self.assertAlmostEqual(q.bid, 1 / 3.74)
+        self.assertAlmostEqual(q.ask, 1 / 3.72)
+        self.assertLess(q.bid, q.ask)
+        self.assertIn("inverted", q.source)
+
+    def test_both_directions_missing_still_refuses(self) -> None:
+        broker = self._broker()
+        with self.assertRaises(BrokerError):
+            broker.get_fx_rate("PLN", "CHF")
+
+    def test_inverted_none_mid_stays_none(self) -> None:
+        client = _StubSaxoClient()
+        client.fx_quote = {"Quote": {"Mid": None, "Bid": None, "Ask": None}}
+        broker = SaxoBroker(client)  # type: ignore[arg-type]
+        q = broker.get_fx_rate("PLN", "USD")
+        self.assertIsNone(q.mid)
+        self.assertIsNone(q.bid)
+        self.assertIsNone(q.ask)
 
 
 class TestToOrderStateSurfacesFields(unittest.TestCase):
