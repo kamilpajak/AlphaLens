@@ -5536,6 +5536,20 @@ class TestDay1GapSnapshotPriceExtraction(unittest.TestCase):
         snapshot = {"Snapshot": {"Data": [{"Uic": 123, "Quote": {"Bid": "n/a"}}]}}
         self.assertIsNone(cl._extract_day1_gap_snapshot_price(snapshot, 123))
 
+    def test_row_without_uic_is_skipped(self) -> None:
+        # A row carrying no Uic (absent or explicit null) is skipped, and a
+        # later matching row still wins — pins the None-narrowing branch.
+        snapshot = {
+            "Snapshot": {
+                "Data": [
+                    {"Quote": {"Bid": 1.0}},
+                    {"Uic": None, "Quote": {"Bid": 2.0}},
+                    {"Uic": 123, "Quote": {"Bid": 3.0}},
+                ]
+            }
+        }
+        self.assertEqual(cl._extract_day1_gap_snapshot_price(snapshot, 123), 3.0)
+
 
 class TestDay1GapProbeVenueFallback(unittest.TestCase):
     """The probe must PROBE US venues like placement routing does (XNYS then
