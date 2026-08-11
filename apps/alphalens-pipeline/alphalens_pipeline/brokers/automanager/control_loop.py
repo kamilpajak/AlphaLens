@@ -2901,6 +2901,11 @@ def _evaluate_day1_gap_gate(
     return _day1_gap_gate_decision(now_utc, brief_date, e1_limit, probe_price, exchange_mic)
 
 
+# US venue probe order for the day-1 gap gate price probe — mirrors
+# routing.resolve_us_instrument's placement-side probe order.
+_DAY1_GAP_US_VENUE_PROBE_ORDER = ("XNYS", "XNAS")
+
+
 def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
     """The production day-1 gap gate price probe: a ONE-SHOT Saxo LIVE
     indicative-quote snapshot, mirroring ``_default_live_exits_feed_factory``'s
@@ -2934,7 +2939,20 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
             client = SaxoMarketDataClient(
                 token_provider=LiveTokenProvider(LiveAuthConfig.from_env())
             )
-            uic = client.resolve_uic(ticker, exchange_mic=exchange_mic)
+            # PROBE US venues like placement routing does (XNYS then XNAS)
+            # instead of trusting the hint: every armed intent carries the
+            # advisory InstrumentHint.mic="XNYS", so a NASDAQ name would
+            # otherwise resolve to None here and the gate would silently
+            # defer its entire day 1 (false veto; live-verified with NVAX,
+            # XNAS uic 6820, 2026-08-11). Hinted venue first, then the rest.
+            candidate_mics = [exchange_mic] + [
+                m for m in _DAY1_GAP_US_VENUE_PROBE_ORDER if m != exchange_mic
+            ]
+            uic = None
+            for mic in candidate_mics:
+                uic = client.resolve_uic(ticker, exchange_mic=mic)
+                if uic is not None:
+                    break
             if uic is None:
                 return None
             context_id = f"almgr-gap-{os.getpid()}-{int(time.time())}"

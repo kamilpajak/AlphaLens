@@ -5537,6 +5537,76 @@ class TestDay1GapSnapshotPriceExtraction(unittest.TestCase):
         self.assertIsNone(cl._extract_day1_gap_snapshot_price(snapshot, 123))
 
 
+class TestDay1GapProbeVenueFallback(unittest.TestCase):
+    """The probe must PROBE US venues like placement routing does (XNYS then
+    XNAS) instead of trusting the advisory ``InstrumentHint.mic``: every
+    armed intent carries the hardcoded advisory "XNYS", so a NASDAQ name
+    (live-verified 2026-08-11: NVAX resolves only on XNAS, uic 6820) would
+    otherwise resolve to None and the gate would silently defer its entire
+    day 1 — a false veto."""
+
+    class _FakeClient:
+        def __init__(self, *, token_provider: object = None) -> None:
+            self.resolved: list[str] = []
+            self.deleted: list[tuple[str, str]] = []
+
+        def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+            self.resolved.append(exchange_mic)
+            return 6820 if exchange_mic == "XNAS" else None
+
+        def create_price_subscription(self, *, context_id, reference_id, uics, **_kw):
+            assert uics == [6820]
+            return {"Snapshot": {"Data": [{"Uic": 6820, "Quote": {"Bid": 7.88}}]}}
+
+        def delete_price_subscription(self, context_id: str, reference_id: str) -> None:
+            self.deleted.append((context_id, reference_id))
+
+    def _probe_with(self, fake_cls: type) -> tuple[Any, Any]:
+        holder: dict[str, Any] = {}
+
+        def _ctor(*, token_provider: object = None) -> Any:
+            holder["client"] = fake_cls(token_provider=token_provider)
+            return holder["client"]
+
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_marketdata_client.SaxoMarketDataClient",
+                side_effect=_ctor,
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_marketdata_auth.LiveAuthConfig.from_env",
+                return_value=object(),
+            )
+        )
+        stack.enter_context(
+            mock.patch(
+                "alphalens_pipeline.data.alt_data.saxo_marketdata_auth.LiveTokenProvider",
+                return_value=object(),
+            )
+        )
+        return cl._build_day1_gap_price_probe(), holder
+
+    def test_hinted_xnys_falls_back_to_xnas(self) -> None:
+        probe, holder = self._probe_with(self._FakeClient)
+        self.assertEqual(probe("NVAX", "XNYS"), 7.88)
+        self.assertEqual(holder["client"].resolved, ["XNYS", "XNAS"])
+        self.assertEqual(len(holder["client"].deleted), 1, "snapshot subscription cleaned up")
+
+    def test_unresolvable_on_every_venue_returns_none(self) -> None:
+        class _NeverResolves(self._FakeClient):
+            def resolve_uic(self, ticker: str, *, exchange_mic: str) -> int | None:
+                self.resolved.append(exchange_mic)
+                return None
+
+        probe, holder = self._probe_with(_NeverResolves)
+        self.assertIsNone(probe("ZZZZ", "XNYS"))
+        self.assertEqual(holder["client"].resolved, ["XNYS", "XNAS"])
+
+
 class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
     """The day-1 gap gate wired into ``_place_pick`` (deliverable 1d): the gate
     is evaluated at the TOP, before any broker/safety/sizing I/O, so a
