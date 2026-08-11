@@ -147,13 +147,16 @@ a unit file is a doctrine violation per ADR 0015 §5).
 ### D8 — systemd
 
 - `alphalens-broker-manager.service`: add explicit
-  `Environment=ALPHALENS_BROKER_ENVIRONMENT=sim` (self-documenting; also
-  survives an `/etc/alphalens/env` mistake because EnvironmentFile
-  overrides drop-ins but NOT in-unit `Environment=` lines that come after —
-  ordering verified during the 08-10 incident: **EnvironmentFile wins over
-  drop-ins**, so the canonical sim pin lives in the unit file itself and
-  the runbook forbids setting `ALPHALENS_BROKER_ENVIRONMENT` in
-  `/etc/alphalens/env`).
+  `Environment=ALPHALENS_BROKER_ENVIRONMENT=sim`. CORRECTED 2026-08-11
+  (front-4 stage-1 finding): systemd's `EnvironmentFile=` overrides ALL
+  `Environment=` lines — in-unit AND drop-in, regardless of order — so an
+  in-unit pin does NOT survive a conflicting shared-file entry. The pins
+  hold ONLY because the rails are stripped from `/etc/alphalens/env` (the
+  strip is load-bearing, not hygiene) and the LIVE boot-assert is the
+  tripwire — it caught exactly this: leaked `MAX_OPEN=10` /
+  `ALLOW_ORDERS=1` in the shared file overrode the LIVE unit's in-unit
+  pins on first boot. The runbook therefore FORBIDS every
+  `ALPHALENS_BROKER_*` var in `/etc/alphalens/env`.
 - NO `alphalens-broker-manager-live.service` yet (front 3, once boot is
   actually possible).
 - `deploy/systemd/README.md`: migration runbook (§6) + the env-var

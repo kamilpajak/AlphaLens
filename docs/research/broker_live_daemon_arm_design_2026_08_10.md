@@ -42,9 +42,11 @@ verbatim for probes and is not reused, widened, or made non-expiring.
 grant.** A LIVE order requires ALL of, simultaneously:
 
 1. `ALPHALENS_BROKER_ENVIRONMENT=live` — instance identity (ADR 0016),
-   pinned in-unit; the SIM unit pins `sim` in-unit, and the shared
-   `EnvironmentFile` cannot override in-unit `Environment=` lines, so no
-   shared-file edit can flip an instance.
+   pinned in-unit; the SIM unit pins `sim` in-unit. CORRECTED 2026-08-11:
+   `EnvironmentFile=` overrides ALL `Environment=` lines (in-unit
+   included), so the pins hold only because the var is BANNED from the
+   shared file — the §3 strip is load-bearing and the boot-assert is the
+   tripwire (it caught leaked `MAX_OPEN`/`ALLOW_ORDERS` on first boot).
 2. **Constructor widening (the one named ADR 0015 modification):**
    `SaxoClient.__init__` gains a keyword-only `standing_live_authorized:
    bool = False`; the guard becomes: refuse any `base_url != SIM_BASE_URL`

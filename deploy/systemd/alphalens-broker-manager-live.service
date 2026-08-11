@@ -42,10 +42,10 @@
 #
 # Env-var doctrine (ADR 0016 D8, extended by ADR 0017 for LIVE): every
 # ALPHALENS_BROKER_* rail, the account-bound grant pair, and the placement
-# arm are pinned IN THIS UNIT via Environment=, placed AFTER
-# EnvironmentFile= — EnvironmentFile overrides drop-ins but NEVER an
-# in-unit Environment= line, so this is the one place these pins cannot be
-# silently lost or cross-contaminated from the SIM instance. NEVER add any
+# arm are pinned IN THIS UNIT via Environment=. CAUTION (verified
+# 2026-08-11): EnvironmentFile= overrides ALL Environment= lines — in-unit
+# AND drop-in — so these pins hold ONLY because the rails are banned from
+# the shared file; the boot-assert below is the tripwire for a leak. NEVER add any
 # ALPHALENS_BROKER_*, ALPHALENS_SAXO_LIVE_STANDING, or SAXO_LIVE_ACCOUNT_KEY
 # line to the shared /etc/alphalens/env — the design memo §3 strips the
 # rails from that file entirely for exactly this reason (a shared-file edit
@@ -75,9 +75,12 @@ WorkingDirectory=%h/AlphaLens
 EnvironmentFile=/etc/alphalens/env
 
 # Instance identity (ADR 0016 D1/D8) — pinned IN THE UNIT, not in
-# /etc/alphalens/env. The SIM unit pins `sim` the same way; the shared
-# EnvironmentFile cannot override either in-unit pin, so no shared-file
-# edit can flip which instance this daemon believes it is.
+# /etc/alphalens/env. The SIM unit pins `sim` the same way. CAUTION
+# (verified 2026-08-11): EnvironmentFile= overrides ALL Environment=
+# lines — in-unit AND drop-in — so these pins hold ONLY because every
+# ALPHALENS_BROKER_* var is banned from /etc/alphalens/env; the LIVE
+# boot-assert is the tripwire that catches a leak (it did, on first
+# boot: MAX_OPEN=10 / ALLOW_ORDERS=1 from the shared file).
 Environment=ALPHALENS_BROKER_ENVIRONMENT=live
 
 # --- Account-bound standing grant (ADR 0017 §1.3) --------------------------
