@@ -201,6 +201,7 @@ insufficient:
 | `ALPHALENS_BROKER_MAX_FEE_BPS` | `100` (§4 — NOT 50) | boot-assert: set and > 0 |
 | `ALPHALENS_BROKER_STREAMING_ENABLED` | `0` | order-WS early-wake needs its own LIVE re-validation |
 | `ALPHALENS_SAXO_LIVE_PRICES` | `1` | LIVE daemon = sole elevated holder (§6) |
+| `ALPHALENS_LIVE_MARKET_EXITS` | `1` (CORRECTION 2026-08-11 — omitted from the original table; without it no TP tranche fires while the trailed stop works) | TP tranches are live-market sells off the feed (broker holds only the disaster stop) |
 | `ALPHALENS_TEXTFILE_DIR` | `/var/lib/node_exporter/textfile` | per-instance `.prom` via job label |
 
 `SAXO_LIVE_APP_KEY/SECRET/REDIRECT_URL` keep their LIVE-specific names in

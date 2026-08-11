@@ -130,6 +130,12 @@ Environment=ALPHALENS_BROKER_STREAMING_ENABLED=0
 # ping-pong-demotes both to 15min-delayed prices, silently. The SIM
 # instance sets this to 0 for the soak (design memo §6).
 Environment=ALPHALENS_SAXO_LIVE_PRICES=1
+# Live-market exits engine (execution model 2026-08-05): the broker holds
+# ONLY the disaster stop, so TP tranches fire as live-market sells off the
+# price feed — WITHOUT this pin no TP would ever fire on this instance
+# while the trailed stop still works (silent exit-side asymmetry; caught
+# pre-arm 2026-08-11 — the design memo §3 pin table had omitted it).
+Environment=ALPHALENS_LIVE_MARKET_EXITS=1
 
 # Day-1 gap gate (execution-quality placement discipline): defers a pick's
 # day-1 entry until the market confirms price >= E1 after the open. Empirical

@@ -1493,6 +1493,16 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
             self.text,
             re.compile(r"^Environment=ALPHALENS_SAXO_LIVE_PRICES=1\s*$", re.MULTILINE),
         )
+        # Live-market exits engine (execution model 2026-08-05: the broker
+        # holds ONLY the disaster stop — TP tranches fire as live-market
+        # sells off the price feed). Without this pin the flag is unset and
+        # NO TP tranche would ever fire on the LIVE instance while the
+        # trailed stop still works — a silent exit-side asymmetry (caught
+        # pre-arm on 2026-08-11; the memo §3 pin table had omitted it).
+        self.assertRegex(
+            self.text,
+            re.compile(r"^Environment=ALPHALENS_LIVE_MARKET_EXITS=1\s*$", re.MULTILINE),
+        )
         # Day-1 gap gate (execution-quality placement discipline, N=30/588
         # population analysis 2026-08-11): day-1 gap-through-E1 fills carry a
         # median -1R vs a +0.21R baseline.
