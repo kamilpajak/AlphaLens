@@ -807,6 +807,40 @@ class TestFillCrossCheckCapability(unittest.TestCase):
         rows = broker.get_closed_position_rows()
         self.assertEqual([row["OpeningExternalReferenceId"] for row in rows], ["rid-1", "rid-2"])
 
+    def test_eod_netting_account_degrades_to_no_closed_rows(self):
+        # Real LIVE PL accounts run EndOfDay netting, where Saxo refuses the
+        # /closedpositions read outright (400 ClosedPositionNotAccessible...).
+        # That must NOT abort reconcile every tick — it degrades to "no closed
+        # rows visible" (the presumed-closed arm, #956, covers the matching),
+        # logged once, not per tick.
+        client = _StubSaxoClient()
+
+        def _raise_eod(_client_key: str) -> dict[str, Any]:
+            raise SaxoError(
+                'Saxo 400: {"ErrorCode":"ClosedPositionNotAccessibleInEndOfDayNettingMode",'
+                '"Message":"ClosedPosition is not accessible in EndOfDay netting mode"}'
+            )
+
+        client.get_closed_positions = _raise_eod  # type: ignore[method-assign]
+        broker = SaxoBroker(client)  # type: ignore[arg-type]
+        with self.assertLogs("alphalens_pipeline.brokers.saxo.broker", level="INFO") as logs:
+            self.assertEqual(broker.get_closed_position_rows(), [])
+        self.assertTrue(any("EndOfDay" in line for line in logs.output))
+        # Second call: still empty, but the notice does NOT repeat (log-once).
+        with self.assertNoLogs("alphalens_pipeline.brokers.saxo.broker", level="INFO"):
+            self.assertEqual(broker.get_closed_position_rows(), [])
+
+    def test_other_closed_positions_errors_still_raise(self):
+        client = _StubSaxoClient()
+
+        def _raise_other(_client_key: str) -> dict[str, Any]:
+            raise SaxoError("Saxo 500: upstream exploded")
+
+        client.get_closed_positions = _raise_other  # type: ignore[method-assign]
+        broker = SaxoBroker(client)  # type: ignore[arg-type]
+        with self.assertRaises(BrokerError):
+            broker.get_closed_position_rows()
+
 
 # ---------------------------------------------------------------------------
 # Stage-1 adapter enrichment: OrderState +5 fields, error_code, read filters.

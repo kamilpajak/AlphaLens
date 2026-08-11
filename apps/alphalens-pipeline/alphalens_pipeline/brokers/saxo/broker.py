@@ -100,6 +100,12 @@ def _today() -> dt.date:
     return dt.datetime.now(dt.UTC).date()
 
 
+# Saxo refuses /port/v1/closedpositions outright on EndOfDay-netting accounts
+# (the real LIVE PL account); detected by ErrorCode substring because SaxoError
+# carries the body only as message text.
+_EOD_NETTING_CLOSED_POSITIONS_MARKER = "ClosedPositionNotAccessibleInEndOfDayNettingMode"
+
+
 @contextlib.contextmanager
 def _translate_saxo_errors() -> Iterator[None]:
     """Adapter boundary: map the vendor taxonomy onto the contract taxonomy."""
@@ -265,6 +271,8 @@ class SaxoBroker:
     ):
         self._client = client
         self._account_key = account_key
+        # Log-once latch for the EndOfDay-netting closed-positions degrade.
+        self._eod_netting_noticed = False
         self._cache_size = max(cache_size, 1)
         # FIFO-bounded (ticker, mic) -> InstrumentRef cache: Uics are stable,
         # the working set is small (daily brief candidates), and FIFO keeps
@@ -1247,10 +1255,30 @@ class SaxoBroker:
         Accepts BOTH live body shapes via the client wrapper; each returned
         row is the inner ``ClosedPosition`` dict when the envelope form is
         present, the raw row otherwise.
+
+        EndOfDay-netting accounts (the real LIVE PL account — SIM runs
+        Intraday netting, so this never showed there) refuse the read
+        outright with a 400. That degrades to "no closed rows visible"
+        rather than aborting reconcile every tick: the presumed-closed arm
+        (#956) exists precisely for closed-not-visible matching. Logged
+        once per broker instance, not per tick.
         """
         with _translate_saxo_errors():
             client_key = str(self._client.get_client_info()["ClientKey"])
-            payload = self._client.get_closed_positions(client_key)
+            try:
+                payload = self._client.get_closed_positions(client_key)
+            except SaxoError as exc:
+                if _EOD_NETTING_CLOSED_POSITIONS_MARKER not in str(exc):
+                    raise
+                if not self._eod_netting_noticed:
+                    self._eod_netting_noticed = True
+                    logger.info(
+                        "closed-positions read refused — the account runs EndOfDay "
+                        "netting (%s); degrading to an empty closed-rows view, the "
+                        "reconcile presumed-closed arm covers round-trip matching",
+                        _EOD_NETTING_CLOSED_POSITIONS_MARKER,
+                    )
+                return []
         rows: list[dict[str, Any]] = []
         for row in payload.get("Data") or []:
             inner = row.get("ClosedPosition") if isinstance(row, dict) else None
