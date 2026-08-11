@@ -383,20 +383,52 @@ class SaxoBroker:
         base = base.upper()
         quote = quote.upper()
         with _translate_saxo_errors():
-            uic = self._resolve_fx_pair_uic(base, quote)
+            inverted = False
+            try:
+                uic = self._resolve_fx_pair_uic(base, quote)
+            except InstrumentNotFoundError:
+                # Saxo's currencypairs listing quotes each pair in ONE
+                # direction (USDPLN exists, PLNUSD does not). A PLN-denominated
+                # account sizing a USD instrument asks for PLN->USD — resolve
+                # the vendor's direction and invert the quote (front-4 finding
+                # 2026-08-11; the SIM account was USD so this path never ran
+                # there). Both directions missing still refuses.
+                try:
+                    uic = self._resolve_fx_pair_uic(quote, base)
+                except InstrumentNotFoundError:
+                    raise InstrumentNotFoundError(
+                        f"FX pair {base}->{quote} unresolvable in EITHER direction: "
+                        f"neither {base}{quote} nor {quote}{base} is listed in "
+                        "/ref/v1/currencypairs or found by the FxSpot keyword "
+                        "search — refusing to size (no fallback rate, no guessed "
+                        "pair)"
+                    ) from None
+                inverted = True
             payload = self._client.get_fx_infoprice(uic)
         quote_block: dict[str, Any] = payload.get("Quote") or {}
         market_state = quote_block.get("MarketState") or payload.get("MarketState")
+        mid = _opt_float(quote_block.get("Mid"))
+        bid = _opt_float(quote_block.get("Bid"))
+        ask = _opt_float(quote_block.get("Ask"))
+        price_type_bid = _opt_str(quote_block.get("PriceTypeBid"))
+        price_type_ask = _opt_str(quote_block.get("PriceTypeAsk"))
+        if inverted:
+            # Inversion flips the trade direction, so the sides swap:
+            # bid(BASE->QUOTE) = 1/ask(QUOTE->BASE) and vice versa; the
+            # per-side PriceTypes travel with their source side.
+            mid = 1.0 / mid if mid else None
+            bid, ask = (1.0 / ask if ask else None), (1.0 / bid if bid else None)
+            price_type_bid, price_type_ask = price_type_ask, price_type_bid
         return FxRateQuote(
             base_currency=base,
             quote_currency=quote,
-            mid=_opt_float(quote_block.get("Mid")),
-            bid=_opt_float(quote_block.get("Bid")),
-            ask=_opt_float(quote_block.get("Ask")),
-            price_type_bid=_opt_str(quote_block.get("PriceTypeBid")),
-            price_type_ask=_opt_str(quote_block.get("PriceTypeAsk")),
+            mid=mid,
+            bid=bid,
+            ask=ask,
+            price_type_bid=price_type_bid,
+            price_type_ask=price_type_ask,
             market_state=_opt_str(market_state),
-            source=f"saxo-fxspot-uic-{uic}-mid",
+            source=f"saxo-fxspot-uic-{uic}-mid" + ("-inverted" if inverted else ""),
             asof=dt.datetime.now(dt.UTC),
         )
 
@@ -406,8 +438,8 @@ class SaxoBroker:
         The currencypairs listing is one-directional — always looked up from
         the base side. A pair absent there falls back to an exact-symbol
         FxSpot Keywords search; anything else raises
-        :class:`InstrumentNotFoundError` (never a guessed pair, never an
-        inverted rate).
+        :class:`InstrumentNotFoundError` (never a guessed pair; the caller
+        ``get_fx_rate`` owns direction inversion).
         """
         pair_symbol = f"{base}{quote}"
         listing = self._client.get_currency_pairs()
@@ -429,7 +461,7 @@ class SaxoBroker:
             f"FX pair {base}->{quote} unresolvable: not listed under the base side in "
             f"/ref/v1/currencypairs and the FxSpot keyword search returned "
             f"{len(matches)} exact matches for {pair_symbol!r} — refusing to size "
-            "(no fallback rate, no inverted lookup)"
+            "(no fallback rate, no guessed pair; get_fx_rate handles inversion)"
         )
 
     # ----- orders (P2) -----
