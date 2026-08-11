@@ -2998,8 +2998,11 @@ def _extract_day1_gap_snapshot_price(snapshot: Mapping[str, Any], uic: int) -> f
     for row in rows:
         if not isinstance(row, Mapping):
             continue
+        raw_uic = row.get("Uic")
+        if raw_uic is None:
+            continue
         try:
-            row_uic = int(row.get("Uic"))
+            row_uic = int(raw_uic)
         except (TypeError, ValueError):
             continue
         if row_uic != uic:
