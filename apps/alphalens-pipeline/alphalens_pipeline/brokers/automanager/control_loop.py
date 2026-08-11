@@ -2955,18 +2955,10 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
                     break
             if uic is None:
                 return None
-            import secrets
-
-            context_id = f"almgr-gap-{os.getpid()}-{int(time.time())}-{secrets.token_hex(4)}"
-            reference_id = "gap"
             try:
-                snapshot = client.create_price_subscription(
-                    context_id=context_id, reference_id=reference_id, uics=[uic]
-                )
-                return _extract_day1_gap_snapshot_price(snapshot, uic)
+                payload = client.get_stock_infoprice(uic)
+                return _extract_day1_session_open(payload)
             finally:
-                with contextlib.suppress(Exception):
-                    client.delete_price_subscription(context_id, reference_id)
                 # One-shot client: release the connection pool explicitly
                 # rather than waiting for GC (zen review polish).
                 with contextlib.suppress(Exception):
@@ -2983,47 +2975,25 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
     return _probe
 
 
-def _extract_day1_gap_snapshot_price(snapshot: Mapping[str, Any], uic: int) -> float | None:
-    """The indicative price off a Saxo infoprices subscription snapshot body
-    (``{"Snapshot": {"Data": [{"Uic": ..., "Quote": {"Bid": ...,
-    "LastTraded": ...}}]}}``) — this shape is not parsed anywhere else in the
-    codebase (the streaming reader only consumes WebSocket deltas via
-    ``QuoteCache.apply``, never the subscription POST's own response body),
-    so this reads it directly. Bid-first, mirroring ``QuoteCache``'s Bid/Ask
-    convention; falls back to ``LastTraded`` when Bid is absent (an illiquid
-    name, or a pre-open snapshot with no resting bid yet). Any
-    missing/malformed field returns ``None`` — a doubt about the price
-    becomes a veto here, never a crash."""
-    rows = (snapshot or {}).get("Snapshot", {}).get("Data") or []
-    for row in rows:
-        if isinstance(row, Mapping) and _snapshot_row_matches_uic(row, uic):
-            return _quote_indicative_price(row.get("Quote") or {})
-    return None
-
-
-def _snapshot_row_matches_uic(row: Mapping[str, Any], uic: int) -> bool:
-    """True iff the snapshot row carries a parseable ``Uic`` equal to ``uic``."""
-    raw_uic = row.get("Uic")
-    if raw_uic is None:
-        return False
-    try:
-        return int(raw_uic) == uic
-    except (TypeError, ValueError):
-        return False
-
-
-def _quote_indicative_price(quote: Mapping[str, Any]) -> float | None:
-    """Bid-first indicative price off a snapshot ``Quote`` block; ``LastTraded``
-    fallback; any missing/malformed field is a veto (``None``), never a crash."""
-    price = quote.get("Bid")
-    if price is None:
-        price = quote.get("LastTraded")
-    if price is None:
+def _extract_day1_session_open(payload: Mapping[str, Any]) -> float | None:
+    """The session OPEN off a ``GET /trade/v1/infoprices`` snapshot
+    (``PriceInfoDetails.Open`` — live-verified 2026-08-11, NVAX uic 6820,
+    Open=7.92). The gate's decision input is the day-1 OPENING PRINT, not
+    the instantaneous price: the validated discriminator is "did day-1 OPEN
+    gap through E1" (population analysis 2026-08-11) — an intraday dip
+    below E1 AFTER a healthy open is the normal pullback fill the ladder
+    WANTS, so the verdict is stable for the whole session by construction
+    (the open never changes). Any missing/malformed/non-positive field is a
+    veto (``None``), never a crash."""
+    details = (payload or {}).get("PriceInfoDetails") or {}
+    raw = details.get("Open")
+    if raw is None:
         return None
     try:
-        return float(price)
+        value = float(raw)
     except (TypeError, ValueError):
         return None
+    return value if math.isfinite(value) and value > 0 else None
 
 
 def _day1_gap_gate_defers(

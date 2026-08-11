@@ -131,6 +131,28 @@ class SaxoMarketDataClient:
 
     # ----- subscriptions -----
 
+    def get_stock_infoprice(
+        self,
+        uic: int,
+        *,
+        field_groups: str = "Quote,PriceInfoDetails",
+    ) -> dict[str, Any]:
+        """One-shot ``GET /trade/v1/infoprices`` snapshot for a Stock uic.
+
+        Carries ``PriceInfoDetails`` (incl. the session ``Open`` — the day-1
+        gap gate's decision input, live-verified 2026-08-11: NVAX uic 6820
+        returned Open=7.92 during the session) without the subscription
+        create/delete lifecycle the streaming path needs. Read-only."""
+        resp = self._session.get(
+            f"{LIVE_API_BASE_URL}/trade/v1/infoprices",
+            headers=self._headers(),
+            params={"Uic": uic, "AssetType": "Stock", "FieldGroups": field_groups},
+            timeout=_TIMEOUT_S,
+        )
+        if not (200 <= resp.status_code < 300):
+            raise RuntimeError(f"infoprice snapshot failed: HTTP {resp.status_code}")
+        return resp.json()
+
     def create_price_subscription(
         self,
         *,
