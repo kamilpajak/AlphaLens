@@ -36,6 +36,16 @@ Full grids incl. d = 1.5/2%, medians, win rates, own-denominator view: rerun log
 - 197 candidates had entry windows truncated by the data horizon; 4,937 tier-entries were still horizon-open and marked at last close — identical treatment for A and B, so comparisons stand, but absolute R levels are conservative.
 - Implementing trailing ENTRIES live was previously REJECTED (INC-4) on execution-complexity grounds (bot-managed stop-buys trailed per tick, restart-safety, off-tick amend limits — see `trailing_execution_design_2026_08_07.md`). This result is evidence to REOPEN that decision with a concrete payoff estimate (~+0.02R/entry), not a green light to build.
 
+## Addendum (same day): ATR-normalized trail distance + volatility-heterogeneity diagnostic
+
+Operator follow-up question: should d be volatility-normalized (d_i = k × ATR/price), and is there per-condition structure an ML model could learn? Extended replay (`/tmp/whatif_trailing_entry_atr.py` on the VPS; fixed-d rows reproduced digit-for-digit vs the base run, 11,292 records aligned; 0 touches excluded for bad ATR, 1 capped case at the 5% guard):
+
+- **ATR normalization adds nothing**: best k (0.05; median effective d_i ≈ 0.25%) → ALL-cohort policy meanR 0.235/0.232 (none/adverse) vs fixed d=0.5% 0.233/0.230. A +0.002R non-difference, same near-tie in both day cohorts. Not worth the added atr dependency + cap guard.
+- **No heterogeneity for ML to learn**: ATR/price terciles (~315 touches each; boundaries 4.33% / 6.02%) ALL monotonically prefer the tightest trail. Mid-vol earns more at EVERY setting (a level effect on outcomes, not a slope crossover in optimal d) — there is no low-vol-wants-tight / high-vol-wants-wide pattern, so a learned per-touch d has no conditional signal to exploit at this N.
+- Caveat: k=0.05's median effective d (~0.25%) hints the optimum may sit tighter than 0.5%, but at these distances the replay's intra-bar sequencing assumptions start to dominate (+ multiplicity) — not pursued.
+
+**ML verdict recorded for the ~2026-08-21/28 ML data-readiness re-run:** training a per-entry trail-distance model is premature at N≈946 correlated touches AND currently unmotivated — the counterfactual grid shows near-zero conditional structure. Revisit only if future data (N in the thousands) shows tercile slope crossovers.
+
 ## Follow-ups (not scheduled)
 
 1. Reopen the trailing-entry execution design (V-variant selection) with this payoff estimate; weigh against the amend-rate limits and restart-safety cost.
