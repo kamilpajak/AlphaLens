@@ -1362,6 +1362,14 @@ class TestCheckGrossCap(unittest.TestCase):
     mismatch (journal gross is instrument-ccy), candidate exclusion (first
     pick of any size always passed), and filled-position blindness."""
 
+    def setUp(self) -> None:
+        # Isolate the entry-trails seam: without this the class would
+        # implicitly depend on the developer's real
+        # ~/.alphalens/broker_orders/<env>/entry_trails.jsonl being absent —
+        # green today (nothing writes it yet), a latent cross-test flake once
+        # PR-T1 starts journaling on a machine that also runs tests.
+        _entry_trail_journal(self, None)
+
     def _check(
         self,
         *,
@@ -1561,6 +1569,10 @@ class TestPlacePickGrossCapIntegration(unittest.TestCase):
     (same post-sizing inputs), BEFORE any bracket construction or placement.
     Violation mirrors the fee floor's terminal refusal flow verbatim
     (mark_refused + throttled alert, NO submission record)."""
+
+    def setUp(self) -> None:
+        # See TestCheckGrossCap.setUp — isolate the entry-trails seam.
+        _entry_trail_journal(self, None)
 
     def _placer(
         self, broker: Any, *, notional: float, **over: Any
@@ -1814,6 +1826,10 @@ class TestPlacePickCashFloorIntegration(unittest.TestCase):
     post-sizing inputs), BEFORE classify. Violation mirrors the fee-floor /
     gross-cap terminal refusal flow verbatim (mark_refused + throttled alert,
     NO submission record)."""
+
+    def setUp(self) -> None:
+        # See TestCheckGrossCap.setUp — isolate the entry-trails seam.
+        _entry_trail_journal(self, None)
 
     def _placer(
         self, broker: Any, *, notional: float, **over: Any
