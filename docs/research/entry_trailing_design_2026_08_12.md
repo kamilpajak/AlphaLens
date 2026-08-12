@@ -83,6 +83,25 @@ Probes run OUTSIDE the daemon (ad-hoc scripts → the daemon's fee floor/MAX_OPE
 | 5 | Sequencing | step-0 offline 45s-resample study FIRST (touch-miss + d_eff, data already on disk) → PR-T0 → SIM probes → LIVE probes only under §4a preconditions (never beside resting production orders) |
 | 6 | Dry-run phase (PR-T1 alert-only) length | ≥5 sessions; validates state machine ONLY — fill-quality evidence requires the concurrent V0 control in the armed phase |
 
+## 4b. Probe + step-0 results (2026-08-12 evening — same day as the LOCK)
+
+**SIM battery (in-session, account flat after, zero leftovers):**
+- **P1 PASS** — standalone BUY `TrailingStopIfTraded` while flat: 200, rests Working, cancels clean. Wire facts: distance field `TrailingStopDistanceToMarket` (case-insensitive binding, CamelCase canonical in the echo), **`TrailingStopStep` REQUIRED**, **`OrderDuration` MANDATORY** (its omission — not the trailing fields — caused every first-round 400).
+- **P7 PASS** — `StopLimit` BUY accepted; limit field `StopLimitPrice`. G1's ceiling clamp is implementable.
+- **P2/P6** — wrong-side placement AND wrong-side amend both classify as `OnWrongSideOfMarket`; 5 amend-downs at ~1/s all 200, no rate-limiting. **Precheck LIES about price/type semantics** (passes wrong-side and trigger bodies the real POST rejects) — the state machine classifies on POST errors only.
+- **P3 PASS** — GTD (repo date-only shape) and DayOrder both accepted on trailing orders.
+- **P4 PASS** — BUY trailing stop coexists with the standalone SELL disaster stop (netting bites sells only, as predicted).
+- **P5 FAIL on SIM** — Trigger family (`TriggerStop`/`TriggerBreakout`) rejected at POST (`InvalidTriggerPriceType`) despite precheck Ok. One LIVE re-check warranted (entitlements may differ) before final burial.
+
+**LIVE mini-battery (operator-approved probe window; LAC ladder cancelled for it and re-armed after; 1-share RIVN uic 25791518, DayOrder, cancelled clean):**
+- Standalone BUY `TrailingStopIfTraded` **ACCEPTED on LIVE** (200, rested Working ~4 min).
+- **L3 PASS on LIVE**: distance amend 0.08→0.05 repositioned the trigger 16.03→16.00 (HTTP 200, same OrderId) — repositioning works for the BUY side on LIVE, mirroring the Tor-B SELL finding.
+- **L1 STILL OPEN**: the market did not make a new low during the observation window, so downward ratcheting remains unobserved — re-run during a real decline (the V1 decider).
+
+**Step-0 offline study (cross-checked 100% against the verified replay; hand-verified cases):**
+- **Touch-miss at 45s sampling: 2.9% overall (LOWER bound on live), day-2+ 3.9%, E2 4.5%, E3 6.7%** — material exactly where the ladder builds (conditional fills run 2-3 tiers deep). **P5 promoted to enabler — but P5 is dead on SIM**, so the mitigation path is the 1 Hz running-low accumulator hook in the shared stream reader (`QuoteCache.apply` — touch-latching is pure state, no orders, no new decision loop) unless the LIVE Trigger re-check surprises.
+- **V3′ stale-trigger d_eff: median 1.26× (d=0.5%) / 1.13× (d=1%) of configured d — inside the validated zone and below the 1.5× auto-suspend**; dead-zone tail (d_eff>2%) 6-9% of fires with mean extra concession ~0.05% of limit (~0.003R) across all fires; staleness fill-rate cost ≈ zero; the extreme tail is the opening-auction-wick artifact class the §5 open-check re-arm already neutralizes. **V3′ stays a legitimate fallback with its guards; the data does not force "only V1".**
+
 ## 9. Corrections to prior docs
 
 - `docs/research/trailing_execution_design_2026_08_07.md` is cited by the whatif memo but ABSENT from the repo (survivors: `trailing_sl_exit_policy_bot_amend_{design,plan}_2026_08_09.md`); the INC-4 rejection rationale is memory-sourced — restated self-contained here (§2 V2 row + the 45s-cadence facts).
