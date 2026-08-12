@@ -2318,22 +2318,55 @@ def _summarize_open_verdicts(
 
 
 def _resolve_sizing_equity(account_equity: float) -> float:
-    """Effective sizing equity for ``compute_setup_plan`` (design memo §4):
-    ``min(pinned, snapshot)`` when ``ALPHALENS_BROKER_SIZING_EQUITY`` is
-    explicitly set, else ``account_equity`` unchanged — SIM never sets the
-    pin, so this stays byte-identical to the raw account snapshot on the SIM
-    path. Resolved at CALL TIME (no caching) so an operator edit to the pin
-    takes effect on the daemon's next restart without any other change.
+    """Effective sizing equity for ``compute_setup_plan`` (design memo §4 +
+    the declared-frame memo §4.1). Two modes, selected by
+    ``ALPHALENS_BROKER_SIZING_EQUITY_MODE`` (read at CALL TIME, like the pin,
+    so an operator edit takes effect on the daemon's next restart):
 
-    ``min`` (never the pin alone) survives BOTH failure directions: a pin set
-    too high above the real balance stays capped at the snapshot, and a
-    balance that has dropped below the frame stays capped at the snapshot
-    too — raw-snapshot sizing (scaling picks to the FULL real balance) is the
-    one thing this must never fall back to."""
-    from alphalens_pipeline.brokers.automanager.live_rails import SIZING_EQUITY_ENV
+    - ``clamped`` (or unset — today's behavior): ``min(pinned, snapshot)``
+      when ``ALPHALENS_BROKER_SIZING_EQUITY`` is explicitly set, else
+      ``account_equity`` unchanged — SIM never sets the pin, so this stays
+      byte-identical to the raw account snapshot on the SIM path. ``min``
+      survives BOTH failure directions: a pin set too high above the real
+      balance stays capped at the snapshot, and a balance that has dropped
+      below the frame stays capped at the snapshot too.
+    - ``declared``: the pin IS the frame — no ``min()``; the cash floor
+      (PR-2) guards the real balance. A declared mode with NO pin fails
+      CLOSED to zero equity (critic B8) — never the raw snapshot.
 
+    Every malformed/unknown value fails CLOSED to zero sizing equity:
+    raw-snapshot sizing (scaling picks to the FULL real balance) is the one
+    thing this must never fall back to."""
+    from alphalens_pipeline.brokers.automanager.live_rails import (
+        _VALID_SIZING_MODES,
+        SIZING_EQUITY_ENV,
+        SIZING_EQUITY_MODE_ENV,
+        SIZING_MODE_CLAMPED,
+        SIZING_MODE_DECLARED,
+    )
+
+    mode_raw = os.environ.get(SIZING_EQUITY_MODE_ENV)
+    mode = (mode_raw or "").strip().lower() or SIZING_MODE_CLAMPED
+    if mode not in _VALID_SIZING_MODES:
+        logger.warning(
+            "%s=%r is not a valid sizing mode (valid: %s) — failing CLOSED to zero sizing equity",
+            SIZING_EQUITY_MODE_ENV,
+            mode_raw,
+            ", ".join(_VALID_SIZING_MODES),
+        )
+        return 0.0
     pinned_raw = os.environ.get(SIZING_EQUITY_ENV)
     if pinned_raw is None or not pinned_raw.strip():
+        if mode == SIZING_MODE_DECLARED:
+            # FAIL-CLOSED (critic B8): declared mode without a pin has no
+            # frame to size against — the raw snapshot is exactly the
+            # fallback the declared frame exists to prevent.
+            logger.warning(
+                "%s=declared but %s is unset/blank — failing CLOSED to zero sizing equity",
+                SIZING_EQUITY_MODE_ENV,
+                SIZING_EQUITY_ENV,
+            )
+            return 0.0
         return account_equity
     try:
         pinned = float(pinned_raw)
@@ -2349,6 +2382,8 @@ def _resolve_sizing_equity(account_equity: float) -> float:
             pinned_raw,
         )
         return 0.0
+    if mode == SIZING_MODE_DECLARED:
+        return pinned
     return min(pinned, account_equity)
 
 
