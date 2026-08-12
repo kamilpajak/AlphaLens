@@ -24,6 +24,7 @@ from alphalens_pipeline.brokers.automanager import state_paths
 from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_FEE_BPS_ENV,
     SIZING_EQUITY_ENV,
+    SIZING_EQUITY_MODE_ENV,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
     AmendStop,
@@ -974,6 +975,60 @@ class TestResolveSizingEquity(unittest.TestCase):
                 self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
         self.assertTrue(any(SIZING_EQUITY_ENV in line for line in logs.output))
 
+    # --- declared sizing mode (memo §4.1 broker_sizing_declared_frame) ------
+
+    def test_declared_mode_returns_pin_above_snapshot(self) -> None:
+        env = {SIZING_EQUITY_ENV: "16000", SIZING_EQUITY_MODE_ENV: "declared"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertEqual(cl._resolve_sizing_equity(1_984.0), 16_000.0)
+
+    def test_declared_mode_returns_pin_below_snapshot(self) -> None:
+        # Declared means the pin IS the frame — not max(pin, snapshot).
+        env = {SIZING_EQUITY_ENV: "1000", SIZING_EQUITY_MODE_ENV: "declared"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertEqual(cl._resolve_sizing_equity(5_000.0), 1_000.0)
+
+    def test_mode_env_unset_keeps_min_clamp(self) -> None:
+        with mock.patch.dict("os.environ", {SIZING_EQUITY_ENV: "10000"}, clear=True):
+            self.assertEqual(cl._resolve_sizing_equity(5_000.0), 5_000.0)
+            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 10_000.0)
+
+    def test_clamped_mode_keeps_min_clamp(self) -> None:
+        env = {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "clamped"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertEqual(cl._resolve_sizing_equity(5_000.0), 5_000.0)
+            self.assertEqual(cl._resolve_sizing_equity(100_000.0), 10_000.0)
+
+    def test_unknown_mode_fails_closed_to_zero_equity(self) -> None:
+        env = {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "snapshot"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertLogs(cl.logger, level="WARNING") as logs:
+                self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
+        self.assertTrue(any(SIZING_EQUITY_MODE_ENV in line for line in logs.output))
+
+    def test_declared_mode_with_blank_pin_fails_closed_to_zero(self) -> None:
+        # Critic B8: declared mode with no pin must NEVER fall back to the
+        # raw snapshot — that is exactly the raw-balance sizing the declared
+        # frame exists to prevent.
+        env = {SIZING_EQUITY_ENV: "   ", SIZING_EQUITY_MODE_ENV: "declared"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertLogs(cl.logger, level="WARNING") as logs:
+                self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
+        self.assertTrue(any(SIZING_EQUITY_ENV in line for line in logs.output))
+        self.assertTrue(any(SIZING_EQUITY_MODE_ENV in line for line in logs.output))
+
+    def test_declared_mode_with_malformed_pin_still_fails_closed(self) -> None:
+        env = {SIZING_EQUITY_ENV: "16OOO", SIZING_EQUITY_MODE_ENV: "declared"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertLogs(cl.logger, level="WARNING") as logs:
+                self.assertEqual(cl._resolve_sizing_equity(100_000.0), 0.0)
+        self.assertTrue(any(SIZING_EQUITY_ENV in line for line in logs.output))
+
+    def test_mode_value_is_case_and_whitespace_insensitive(self) -> None:
+        env = {SIZING_EQUITY_ENV: "16000", SIZING_EQUITY_MODE_ENV: " Declared "}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertEqual(cl._resolve_sizing_equity(1_984.0), 16_000.0)
+
 
 class TestResolveAndSizeUsesEffectiveSizingEquity(unittest.TestCase):
     """``_resolve_and_size`` feeds ``compute_setup_plan(paper_equity=...)``
@@ -1009,6 +1064,13 @@ class TestResolveAndSizeUsesEffectiveSizingEquity(unittest.TestCase):
     def test_env_unset_sizes_off_the_raw_snapshot(self) -> None:
         equity = self._paper_equity(account_equity=100_000.0, env={})
         self.assertEqual(equity, 100_000.0)
+
+    def test_declared_mode_sizes_off_the_pin_above_snapshot(self) -> None:
+        equity = self._paper_equity(
+            account_equity=1_984.0,
+            env={SIZING_EQUITY_ENV: "16000", SIZING_EQUITY_MODE_ENV: "declared"},
+        )
+        self.assertEqual(equity, 16_000.0)
 
 
 def _fee_plan(notional: float) -> SetupPlan:

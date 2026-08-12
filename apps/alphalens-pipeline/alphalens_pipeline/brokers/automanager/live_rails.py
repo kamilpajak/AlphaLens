@@ -9,10 +9,11 @@ snapshot sizing, the silently-inert ``setup_static`` exit geometry, and an
 unset fee floor respectively). A LIVE unit missing one pin would trade 100%
 gross of the real balance instead of failing to boot.
 
-``assert_live_rails`` refuses to let a LIVE instance start unless ALL SIX of
+``assert_live_rails`` refuses to let a LIVE instance start unless ALL SEVEN of
 ``ALPHALENS_BROKER_MAX_OPEN``, ``ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC``,
 ``ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R``, ``ALPHALENS_BROKER_SIZING_EQUITY``,
-``ALPHALENS_BROKER_EXIT_POLICY``, and ``ALPHALENS_BROKER_MAX_FEE_BPS`` are
+``ALPHALENS_BROKER_SIZING_EQUITY_MODE``, ``ALPHALENS_BROKER_EXIT_POLICY``,
+and ``ALPHALENS_BROKER_MAX_FEE_BPS`` are
 EXPLICITLY set AND within the live bounds table below. Every violation is
 collected and reported TOGETHER (not fail-fast on the first one) so an
 operator with a unit file missing several pins fixes it in one edit instead
@@ -56,6 +57,14 @@ EXIT_POLICY_ENV = _EXIT_POLICY_ENV
 # min(pinned, snapshot) sizing and the round-trip fee floor).
 SIZING_EQUITY_ENV = "ALPHALENS_BROKER_SIZING_EQUITY"
 MAX_FEE_BPS_ENV = "ALPHALENS_BROKER_MAX_FEE_BPS"
+
+# Declared-frame sizing mode (memo broker_sizing_declared_frame_design §4.1).
+# Names live ONLY here — every consumer (control_loop's sizing resolver, the
+# tests) imports them, mirroring the module-ownership doctrine above.
+SIZING_EQUITY_MODE_ENV = "ALPHALENS_BROKER_SIZING_EQUITY_MODE"
+SIZING_MODE_CLAMPED = "clamped"  # min(pin, snapshot) — today's behavior
+SIZING_MODE_DECLARED = "declared"  # the pin IS the frame; the cash floor (PR-2) guards it
+_VALID_SIZING_MODES = (SIZING_MODE_CLAMPED, SIZING_MODE_DECLARED)
 
 # Operator-decided §8 soak bounds (design memo §3 table). Widening risk later
 # is a design-memo decision, not a silent constant edit here.
@@ -131,8 +140,23 @@ def _check_exit_policy(var: str) -> str | None:
     return None
 
 
+def _check_sizing_mode(var: str) -> str | None:
+    """``None`` iff ``var`` is explicitly set AND (case-insensitively) one of
+    ``_VALID_SIZING_MODES``. A blank value fails the explicit-set check — the
+    operator must state whether the frame is clamped to the snapshot or
+    declared outright, never inherit a silent default."""
+    raw = os.environ.get(var)
+    if _missing_or_blank(raw):
+        return f"{var}: must be explicitly set (unset — the sizing mode must be declared)"
+    mode = raw.strip().lower()  # type: ignore[union-attr]  # raw is non-None past the blank check
+    if mode not in _VALID_SIZING_MODES:
+        valid = ", ".join(_VALID_SIZING_MODES)
+        return f"{var}: must be one of ({valid}), got {raw!r}"
+    return None
+
+
 def assert_live_rails() -> None:
-    """Refuse to let a LIVE instance boot unless all six safety-rail env vars
+    """Refuse to let a LIVE instance boot unless all seven safety-rail env vars
     are explicitly set and within the live-soak bounds (design memo §3 point
     2 / ADR 0017 point 4).
 
@@ -158,6 +182,7 @@ def assert_live_rails() -> None:
                 inclusive_hi=_DAILY_LOSS_LIMIT_R_UPPER,
             ),
             _check_float_positive(SIZING_EQUITY_ENV),
+            _check_sizing_mode(SIZING_EQUITY_MODE_ENV),
             _check_exit_policy(EXIT_POLICY_ENV),
             _check_float_positive(MAX_FEE_BPS_ENV),
         )
@@ -178,5 +203,8 @@ __all__ = [
     "MAX_OPEN_ENV",
     "PORTFOLIO_GROSS_FRAC_ENV",
     "SIZING_EQUITY_ENV",
+    "SIZING_EQUITY_MODE_ENV",
+    "SIZING_MODE_CLAMPED",
+    "SIZING_MODE_DECLARED",
     "assert_live_rails",
 ]

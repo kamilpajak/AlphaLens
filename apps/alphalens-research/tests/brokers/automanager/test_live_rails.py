@@ -1,4 +1,4 @@
-"""LIVE boot-assert (design memo §3 / ADR 0017 point 4) — the six safety-rail
+"""LIVE boot-assert (design memo §3 / ADR 0017 point 4) — the seven safety-rail
 env vars a ``env=live`` instance must set explicitly, within bounds, before
 it may boot.
 
@@ -25,6 +25,9 @@ from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_OPEN_ENV,
     PORTFOLIO_GROSS_FRAC_ENV,
     SIZING_EQUITY_ENV,
+    SIZING_EQUITY_MODE_ENV,
+    SIZING_MODE_CLAMPED,
+    SIZING_MODE_DECLARED,
     assert_live_rails,
 )
 from broker_contract.contract import BrokerCapabilityError
@@ -36,6 +39,7 @@ _VALID_ENV: dict[str, str] = {
     PORTFOLIO_GROSS_FRAC_ENV: "0.25",
     DAILY_LOSS_LIMIT_R_ENV: "1.0",
     SIZING_EQUITY_ENV: "10000",
+    SIZING_EQUITY_MODE_ENV: "clamped",
     EXIT_POLICY_ENV: "trailing_atr",
     MAX_FEE_BPS_ENV: "100",
 }
@@ -45,6 +49,7 @@ _ALL_RAIL_VARS = (
     PORTFOLIO_GROSS_FRAC_ENV,
     DAILY_LOSS_LIMIT_R_ENV,
     SIZING_EQUITY_ENV,
+    SIZING_EQUITY_MODE_ENV,
     EXIT_POLICY_ENV,
     MAX_FEE_BPS_ENV,
 )
@@ -54,21 +59,29 @@ def _env_without(*names: str) -> dict[str, str]:
     return {k: v for k, v in _VALID_ENV.items() if k not in names}
 
 
-class TestAllSixConstantsAreDistinctNames(unittest.TestCase):
+class TestAllSevenConstantsAreDistinctNames(unittest.TestCase):
     def test_env_var_names(self):
         self.assertEqual(MAX_OPEN_ENV, "ALPHALENS_BROKER_MAX_OPEN")
         self.assertEqual(PORTFOLIO_GROSS_FRAC_ENV, "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC")
         self.assertEqual(DAILY_LOSS_LIMIT_R_ENV, "ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R")
         self.assertEqual(SIZING_EQUITY_ENV, "ALPHALENS_BROKER_SIZING_EQUITY")
+        self.assertEqual(SIZING_EQUITY_MODE_ENV, "ALPHALENS_BROKER_SIZING_EQUITY_MODE")
         self.assertEqual(EXIT_POLICY_ENV, "ALPHALENS_BROKER_EXIT_POLICY")
         self.assertEqual(MAX_FEE_BPS_ENV, "ALPHALENS_BROKER_MAX_FEE_BPS")
-        self.assertEqual(len(set(_ALL_RAIL_VARS)), 6, "all six env-var names must be distinct")
+        self.assertEqual(len(set(_ALL_RAIL_VARS)), 7, "all seven env-var names must be distinct")
 
 
 class TestValidEnvPasses(unittest.TestCase):
-    def test_all_six_set_in_bounds_passes(self):
+    def test_all_seven_set_in_bounds_passes(self):
         with mock.patch.dict("os.environ", _VALID_ENV, clear=True):
             assert_live_rails()  # must not raise
+
+    def test_both_sizing_modes_pass(self):
+        for mode in (SIZING_MODE_CLAMPED, SIZING_MODE_DECLARED):
+            with self.subTest(sizing_mode=mode):
+                env = dict(_VALID_ENV, **{SIZING_EQUITY_MODE_ENV: mode})
+                with mock.patch.dict("os.environ", env, clear=True):
+                    assert_live_rails()  # must not raise
 
     def test_bound_edges_pass(self):
         """The bounds are inclusive at the documented edges."""
@@ -104,6 +117,12 @@ class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
         self.assertIn(SIZING_EQUITY_ENV, str(captured.exception))
+
+    def test_sizing_equity_mode_unset(self):
+        with mock.patch.dict("os.environ", _env_without(SIZING_EQUITY_MODE_ENV), clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        self.assertIn(SIZING_EQUITY_MODE_ENV, str(captured.exception))
 
     def test_exit_policy_unset(self):
         with mock.patch.dict("os.environ", _env_without(EXIT_POLICY_ENV), clear=True):
@@ -197,6 +216,16 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
                 assert_live_rails()
         self.assertIn(MAX_FEE_BPS_ENV, str(captured.exception))
 
+    def test_unknown_sizing_mode_rejected_and_error_names_valid_values(self):
+        env = dict(_VALID_ENV, **{SIZING_EQUITY_MODE_ENV: "snapshot"})
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        message = str(captured.exception)
+        self.assertIn(SIZING_EQUITY_MODE_ENV, message)
+        self.assertIn(SIZING_MODE_CLAMPED, message)
+        self.assertIn(SIZING_MODE_DECLARED, message)
+
     def test_non_finite_positive_floats_rejected(self):
         # float("inf") > 0 and float("nan") <= 0 is False — a bare `<= 0`
         # check would let both BOOT a live daemon with an unbounded sizing
@@ -240,7 +269,7 @@ class TestViolationsAreCollectedTogether(unittest.TestCase):
     """Every failing rail is named in ONE raise — an operator fixes the unit
     file once instead of one restart per missing pin."""
 
-    def test_all_six_missing_names_all_six(self):
+    def test_all_missing_names_every_rail(self):
         with mock.patch.dict("os.environ", {}, clear=True):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
@@ -256,11 +285,12 @@ class TestViolationsAreCollectedTogether(unittest.TestCase):
         message = str(captured.exception)
         self.assertIn(MAX_OPEN_ENV, message)
         self.assertIn(MAX_FEE_BPS_ENV, message)
-        # The four still-valid vars must NOT be flagged.
+        # The five still-valid vars must NOT be flagged.
         for var in (
             PORTFOLIO_GROSS_FRAC_ENV,
             DAILY_LOSS_LIMIT_R_ENV,
             SIZING_EQUITY_ENV,
+            SIZING_EQUITY_MODE_ENV,
             EXIT_POLICY_ENV,
         ):
             self.assertNotIn(f"{var}:", message)
