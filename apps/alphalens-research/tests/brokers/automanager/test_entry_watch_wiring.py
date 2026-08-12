@@ -263,6 +263,55 @@ class TestDrainInterceptRoutesToWatch(unittest.TestCase):
         ]
         self.assertEqual(opens_for_ko, [])
 
+    def test_own_open_watch_is_exempt_from_capacity_and_retires(self) -> None:
+        # Crash recovery: KO's watch_open was journaled but the pick was never
+        # retired (crash between the journal-FIRST watch_open and the note-only
+        # submission record). On restart the still-armed pick re-runs
+        # _place_pick; it must NOT self-block on its OWN reservation (capacity
+        # counting its own watch) — it re-opens idempotently and retires.
+        path = _journal(self)
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_WATCH_OPEN,
+                "crid": "KO-2026-07-20-entry-t0",
+                "limit": 10.0,
+                "qty": 100.0,
+                "pick_key": "KO:2026-07-20",
+            }
+        )
+        broker = _RecordingBroker()
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))  # NOT blocked — re-opens + retires
+        self.assertEqual(broker.brackets, [])  # still DRY-RUN
+        # Retired from the drain (note-only submission record) ...
+        self.assertEqual(len(submissions), 1)
+        self.assertIn("watch", submissions[0]["note"])
+        # ... and the reservation stays a SINGLE watch (deterministic crid,
+        # fold latest-wins — no double-count from the re-append).
+        total, bad = entry_trails.watching_virtual_gross_acct(entry_trails.read_entry_trail_fold())
+        self.assertEqual(bad, 0)
+        self.assertEqual(total, 1_000.0)  # 10.0 x 100 once, not doubled
+
+    def test_second_pick_still_blocked_while_first_pick_watches(self) -> None:
+        # The capacity gate must still block a DIFFERENT new pick when one pick
+        # already watches — the exemption is only for a pick's OWN watch.
+        _journal(self)
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_WATCH_OPEN,
+                "crid": "OTHER-2026-07-19-entry-t0",
+                "limit": 5.0,
+                "qty": 10.0,
+                "pick_key": "OTHER:2026-07-19",
+            }
+        )
+        broker = _RecordingBroker()
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertFalse(placer(_pick()))  # a NEW pick stays blocked
+        self.assertEqual(submissions, [])
+
 
 # --------------------------------------------------------------------------
 # The per-tick watcher pass
@@ -348,6 +397,30 @@ class TestEntryWatchPassStateMachine(unittest.TestCase):
         fired = [line for line in _lines(path) if line["kind"] == entry_trails.KIND_FIRED]
         self.assertEqual(len(fired), 1)
         self.assertIsNone(fired[0]["entry_order_id"])  # DRY-RUN: no order
+
+    def test_resumed_would_fire_writes_exactly_one_fired_line(self) -> None:
+        # Regression guard (crash between the trail_armed line and the
+        # synthesized fired line): a watcher RESUMED in WOULD_FIRE writes the
+        # terminal fired line EXACTLY ONCE — after it the tier carries a
+        # terminal marker and leaves the active set, so no later tick can
+        # re-persist it. Critical for T2: a resumed WOULD_FIRE must never
+        # re-emit a fire.
+        path = _journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        # A trail_armed line with NO following fired line == the crash window.
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_TRAIL_ARMED,
+                "crid": "KO-2026-07-20-entry-t0",
+                "trigger": 9.95,
+            }
+        )
+        prices: dict[int, float | None] = {}
+        deps = _watch_deps(_FakeFeed(prices), [])
+        self._run(deps, 9.95, prices)  # resume tick: one fired line written
+        self._run(deps, 9.96, prices)  # tier now terminal -> not re-persisted
+        fired = [line for line in _lines(path) if line["kind"] == entry_trails.KIND_FIRED]
+        self.assertEqual(len(fired), 1)
 
     def test_deep_decline_suspends_below_next_tier(self) -> None:
         path = _journal(self)

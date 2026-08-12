@@ -248,8 +248,15 @@ class EntryTierWatcher:
         gap-through-open (``day1_gap_clear=False``) opens NO watch on day 1 (no
         trough tracked through a falling-knife day), returning ``(None, ())``.
         Otherwise returns the watcher + its ``watch_open`` journal-intent. The
-        caller computes ``day1_gap_clear`` from ``_day1_gap_gate_decision`` —
-        the engine never re-gates the fire."""
+        engine never re-gates the fire.
+
+        NOTE (PR-T1): the production wiring does NOT call this method — day-1
+        gap composition happens UPSTREAM via ``control_loop._day1_gap_gate_defers``
+        (it defers the whole pick before the entry-trail intercept ever runs),
+        so a gap-through pick opens no watch without the engine needing the
+        verdict. This constructor-with-gate stays as the tested single-source
+        engine API for the T2 executor; the wiring opens watches through
+        ``control_loop._open_entry_watches`` (direct per-tier append)."""
         if not day1_gap_clear:
             return None, ()
         watcher = cls(config)

@@ -1052,17 +1052,22 @@ def _entry_trail_eligible(plan: Any) -> bool:
     return any(getattr(tier, "qty", 0) > 0 for tier in getattr(plan, "entry_tiers", ()) or ())
 
 
-def _entry_watch_capacity_reached(fold: entry_trails.EntryTrailFold) -> bool:
-    """True iff opening another watch would exceed :data:`_ENTRY_WATCH_MAX_PICKS`
-    DISTINCT watching picks. Counts distinct ``pick_key`` across every
-    non-terminal watch_open tier in the fold (falling back to the crid when a
-    record predates the pick_key field)."""
+def _open_watch_pick_keys(fold: entry_trails.EntryTrailFold) -> set[str]:
+    """The distinct ``pick_key`` of every NON-terminal watch_open tier in the
+    fold (falling back to the crid when a record predates the pick_key field)
+    — the set of picks that currently hold an open watch."""
     pick_keys: set[str] = set()
     for state in fold.tiers.values():
         if state.terminal_kind is not None or state.watch_open is None:
             continue
         pick_keys.add(str(state.watch_open.get("pick_key") or state.crid))
-    return len(pick_keys) >= _ENTRY_WATCH_MAX_PICKS
+    return pick_keys
+
+
+def _entry_watch_capacity_reached(fold: entry_trails.EntryTrailFold) -> bool:
+    """True iff opening another watch would exceed :data:`_ENTRY_WATCH_MAX_PICKS`
+    DISTINCT watching picks."""
+    return len(_open_watch_pick_keys(fold)) >= _ENTRY_WATCH_MAX_PICKS
 
 
 def _open_entry_watches(
@@ -4225,7 +4230,19 @@ def _place_pick(
     # watch only opens once the pick has cleared every money gate.
     d_bps = entry_trails.entry_trail_bps()
     if d_bps > 0 and _entry_trail_eligible(plan):
-        if _entry_watch_capacity_reached(entry_trail_fold):
+        # Crash-recovery exemption: a pick that ALREADY holds an open watch
+        # (its watch_open was journaled but it was never retired — a crash
+        # between the journal-FIRST watch_open and the note-only submission
+        # record) owns its capacity slot. It must NOT be counted against
+        # capacity — that would make it self-block on its OWN reservation and
+        # re-drive every tick. It re-opens idempotently (deterministic crid,
+        # fold latest-wins) and finally writes the retiring submission record.
+        # Match _open_entry_watches' pick_key byte-for-byte: the string
+        # brief_date, not the parsed date above (str(date) happens to agree,
+        # but pin the exact form the watch_open records actually carry).
+        pick_key = f"{ticker}:{intent.meta.brief_date}"
+        already_watching = pick_key in _open_watch_pick_keys(entry_trail_fold)
+        if not already_watching and _entry_watch_capacity_reached(entry_trail_fold):
             # Pick-denominated capacity (memo decision #4): stay ARMED (not a
             # terminal refusal) so it opens once an earlier watch clears.
             logger.debug(
