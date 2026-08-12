@@ -85,11 +85,23 @@ def _missing_or_blank(raw: str | None) -> bool:
     return raw is None or not raw.strip()
 
 
-def _check_int_bounded(var: str, *, lo: int, hi: int) -> str | None:
-    """``None`` if ``var`` is set to an int in ``[lo, hi]``, else a violation."""
+def _check_int_bounded(
+    var: str,
+    *,
+    lo: int,
+    hi: int,
+    unset_reason: str = "the code default is permissive",
+) -> str | None:
+    """``None`` if ``var`` is set to an int in ``[lo, hi]``, else a violation.
+
+    ``unset_reason`` tailors the unset-violation wording: the default fits
+    the rails whose code default is dangerous (MAX_OPEN=3 etc.); a pin whose
+    unset default is SAFE (entry trailing: unset = off) must say so instead —
+    the generic wording would nudge an operator toward a nonzero value for
+    the wrong reason."""
     raw = os.environ.get(var)
     if _missing_or_blank(raw):
-        return f"{var}: must be explicitly set (unset — the code default is permissive)"
+        return f"{var}: must be explicitly set (unset — {unset_reason})"
     try:
         value = int(raw)  # type: ignore[arg-type]  # raw is non-None past the blank check
     except ValueError:
@@ -195,8 +207,15 @@ def assert_live_rails() -> None:
             _check_float_positive(MAX_FEE_BPS_ENV),
             # Entry-trailing distance (memo §6): [0, 150] — the bound and the
             # env-var name are OWNED by entry_trails.py; explicit "0" (feature
-            # off) is valid, unset fails like every other pin.
-            _check_int_bounded(ENTRY_TRAIL_BPS_ENV, lo=0, hi=ENTRY_TRAIL_BPS_MAX),
+            # off) is valid, unset fails like every other pin. Custom unset
+            # wording: unlike the seven rails above, this pin's unset code
+            # default is SAFE (off) — the operator states a value, not a fix.
+            _check_int_bounded(
+                ENTRY_TRAIL_BPS_ENV,
+                lo=0,
+                hi=ENTRY_TRAIL_BPS_MAX,
+                unset_reason="explicit 0 = trailing off; the pin must still be stated",
+            ),
         )
         if v is not None
     ]

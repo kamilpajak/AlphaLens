@@ -38,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import tempfile
 from collections.abc import Iterable, Mapping
@@ -161,11 +162,25 @@ def _record_crid(record: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _coerce_float(value: Any) -> float | None:
+def _finite_positive_float(value: Any) -> float | None:
+    """``float(value)`` iff it is a real, finite, strictly-positive number;
+    ``None`` otherwise.
+
+    SEMANTIC validation, not mere castability: a zero/negative/non-finite
+    limit, qty, fx_rate or trough is journal corruption — ``fx_rate=0.0``
+    would divide by zero on a money gate, a negative limit would silently
+    SHRINK the virtual reservation, and a NaN trough freezes every later
+    min-comparison. ``bool`` is rejected explicitly (JSON ``true`` must not
+    coerce to ``1.0``)."""
+    if isinstance(value, bool):
+        return None
     try:
-        return float(value)
+        result = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(result) or result <= 0.0:
+        return None
+    return result
 
 
 def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
@@ -204,7 +219,7 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
         if kind == KIND_WATCH_OPEN:
             state["watch_open"] = dict(record)
         elif kind == KIND_TROUGH:
-            trough = _coerce_float(record.get(KIND_TROUGH))
+            trough = _finite_positive_float(record.get(KIND_TROUGH))
             if trough is not None and (state["min_trough"] is None or trough < state["min_trough"]):
                 state["min_trough"] = trough
     tiers = {crid: EntryTrailTierState(crid=crid, **state) for crid, state in trackers.items()}
@@ -238,15 +253,15 @@ def watching_virtual_gross_acct(fold: EntryTrailFold) -> tuple[float, int]:
         if record is None:
             bad += 1
             continue
-        limit = _coerce_float(record.get("limit"))
-        qty = _coerce_float(record.get("qty"))
+        limit = _finite_positive_float(record.get("limit"))
+        qty = _finite_positive_float(record.get("qty"))
         if limit is None or qty is None:
             bad += 1
             continue
         notional = limit * qty
         fx_rate = record.get("fx_rate")
         if fx_rate is not None:
-            rate = _coerce_float(fx_rate)
+            rate = _finite_positive_float(fx_rate)
             if rate is None:
                 bad += 1
                 continue
@@ -269,12 +284,22 @@ def _entry_trail_journal_path() -> Path:
 
 def read_entry_trail_fold() -> EntryTrailFold:
     """The fold of the current journal; a missing file folds empty (PR-T0
-    inertness: no journal -> zero watching reservation, zero malformed)."""
+    inertness: no journal -> zero watching reservation, zero malformed).
+
+    An UNREADABLE journal (a directory at the path, permissions, I/O error)
+    is contained as a fail-closed ``malformed=1`` fold rather than raised:
+    the gross-cap/cash-floor callers run inside ``_place_pick``, which only
+    catches ``BrokerError`` — an escaping ``OSError`` would abort the whole
+    tick BEFORE the protection pass instead of merely refusing the pick."""
     path = _entry_trail_journal_path()
     if not path.exists():
         return EntryTrailFold(tiers={}, malformed=0)
-    with path.open("r", encoding="utf-8") as fh:
-        return fold_entry_trail_lines(fh)
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return fold_entry_trail_lines(fh)
+    except OSError as exc:
+        logger.warning("entry-trails journal unreadable — failing closed: %s", exc)
+        return EntryTrailFold(tiers={}, malformed=1)
 
 
 # --- Compaction (memo G4) ----------------------------------------------------
@@ -321,7 +346,7 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
         if kind == KIND_WATCH_OPEN:
             latest_watch_open[crid] = index
         elif kind == KIND_TROUGH:
-            trough = _coerce_float(record.get(KIND_TROUGH))
+            trough = _finite_positive_float(record.get(KIND_TROUGH))
             if trough is not None:
                 prior = min_trough.get(crid)
                 if prior is None or trough <= prior[0]:

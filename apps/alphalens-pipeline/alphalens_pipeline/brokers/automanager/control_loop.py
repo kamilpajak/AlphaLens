@@ -2825,12 +2825,14 @@ def _check_cash_floor(
     would double-spend the same cash. The watching virtual reservation
     (entry-trailing memo G5) joins the same sum: a watching trail tier has NO
     broker order at all, so its future fire is cash the floor must reserve;
-    no/empty journal adds exactly 0.0 (PR-T0 inertness). The fold's
-    ``unjoined`` count is deliberately ignored HERE: the gross cap (which
-    runs FIRST in ``_place_pick``, same verdicts+records) already fails
-    closed on any unjoined working verdict, so this code path only ever sees
-    ``unjoined`` when called outside that ordering (direct unit tests) — the
-    watching fold's unvaluable count is ignored for the same reason.
+    no/empty journal adds exactly 0.0 (PR-T0 inertness), and an unvaluable
+    watching record fails CLOSED here too — independent of the gross cap
+    running first, so no caller ordering can silently under-reserve. The
+    committed fold's ``unjoined`` count is deliberately ignored HERE: the
+    gross cap (which runs FIRST in ``_place_pick``, same verdicts+records)
+    already fails closed on any unjoined working verdict, so this code path
+    only ever sees ``unjoined`` when called outside that ordering (direct
+    unit tests).
 
     ``available`` is ``margin_available`` — never ``cash``, which ignores
     margin impact and lags under EOD netting; ``None`` (SIM NoAccess or an
@@ -2857,9 +2859,23 @@ def _check_cash_floor(
     candidate_buffered = candidate_acct * (1.0 + _CASH_FLOOR_BUFFER_PCT / 100.0)
 
     reserved_resting, _unjoined = _committed_working_gross_acct(open_verdicts, records)
-    watching_acct, _unvaluable = entry_trails.watching_virtual_gross_acct(
+    # NOTE: the journal is read here AND in _check_gross_cap (one placement
+    # attempt = two reads). Valid ONLY because PR-T0 has no writer and both
+    # gates run in the single-threaded tick — PR-T1 must read the fold once
+    # in _place_pick and pass it into both gates, or a mid-attempt append
+    # becomes a torn read between them.
+    watching_acct, unvaluable = entry_trails.watching_virtual_gross_acct(
         entry_trails.read_entry_trail_fold()
     )
+    if unvaluable:
+        # Fail CLOSED independent of the gross cap running first: a direct or
+        # future caller outside the _place_pick ordering must never silently
+        # under-reserve on a watching record it cannot value.
+        return (
+            f"cash floor: {ticker} refused — {unvaluable} entry-trail record(s) could not "
+            "be valued (malformed or missing watch_open); the watching reservation "
+            "cannot be valued, failing closed"
+        )
     reserved_resting += watching_acct
 
     available = getattr(account, "margin_available", None)

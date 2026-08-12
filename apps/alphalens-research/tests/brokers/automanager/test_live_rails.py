@@ -150,6 +150,20 @@ class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
                 assert_live_rails()
         self.assertIn(ENTRY_TRAIL_BPS_ENV, str(captured.exception))
 
+    def test_entry_trail_bps_unset_message_names_explicit_zero(self):
+        # The generic unset wording ("the code default is permissive") is
+        # WRONG for this pin — the unset code default is OFF (safe) — and
+        # could nudge an operator toward a nonzero value for the wrong
+        # reason. The violation must say explicit 0 = trailing off.
+        with mock.patch.dict("os.environ", _env_without(ENTRY_TRAIL_BPS_ENV), clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        violation = next(
+            line for line in str(captured.exception).splitlines() if ENTRY_TRAIL_BPS_ENV in line
+        )
+        self.assertIn("explicit 0 = trailing off", violation)
+        self.assertNotIn("permissive", violation)
+
     def test_entry_trail_bps_blank(self):
         env = dict(_VALID_ENV, **{ENTRY_TRAIL_BPS_ENV: "  "})
         with mock.patch.dict("os.environ", env, clear=True):

@@ -168,6 +168,20 @@ class TestFoldEntryTrailLines(unittest.TestCase):
         )
         self.assertEqual(fold.tiers[_CRID].min_trough, 9.2)
 
+    def test_non_finite_or_non_positive_trough_never_folds(self) -> None:
+        # A price must be finite and strictly positive; NaN/-inf/-1 troughs
+        # are journal corruption and must not poison the running minimum
+        # (NaN would freeze every later comparison, -inf would win it).
+        fold = et.fold_entry_trail_lines(
+            [
+                _line(et.KIND_TROUGH, trough=float("nan")),
+                _line(et.KIND_TROUGH, trough=float("-inf")),
+                _line(et.KIND_TROUGH, trough=-1.0),
+                _line(et.KIND_TROUGH, trough=9.5),
+            ]
+        )
+        self.assertEqual(fold.tiers[_CRID].min_trough, 9.5)
+
     def test_latest_watch_open_record_wins(self) -> None:
         fold = et.fold_entry_trail_lines([_watch_open(qty=100), _watch_open(qty=40)])
         watch = fold.tiers[_CRID].watch_open
@@ -255,6 +269,29 @@ class TestWatchingVirtualGrossAcct(unittest.TestCase):
         total, bad = self._value(["{not json", _watch_open(limit=10.0, qty=10)])
         self.assertAlmostEqual(total, 100.0)
         self.assertEqual(bad, 1)
+
+    def test_semantically_invalid_values_fail_closed_never_crash(self) -> None:
+        # Castable but semantically invalid values are UNVALUABLE, never
+        # summed and never a crash: fx_rate=0.0 would divide by zero (a
+        # ZeroDivisionError here escapes _place_pick and aborts the tick
+        # before protection runs); negative limit/qty/fx_rate would SHRINK
+        # the reservation on a money gate; JSON true coerces to 1.0.
+        cases = {
+            "limit=-1": _watch_open(limit=-1.0),
+            "limit=0": _watch_open(limit=0.0),
+            "limit=inf": _watch_open(limit=float("inf")),
+            "limit=true": _watch_open(limit=True),
+            "qty=0": _watch_open(qty=0),
+            "qty=-5": _watch_open(qty=-5),
+            "fx_rate=0": _watch_open(fx_rate=0.0),
+            "fx_rate=-2": _watch_open(fx_rate=-2.0),
+            "fx_rate=nan": _watch_open(fx_rate=float("nan")),
+        }
+        for label, line in cases.items():
+            with self.subTest(case=label):
+                total, bad = self._value([line])
+                self.assertEqual(total, 0.0)
+                self.assertEqual(bad, 1)
 
 
 def _rich_entry_trail_journal() -> list[str]:
@@ -345,6 +382,23 @@ class TestCompactEntryTrailLines(unittest.TestCase):
         compacted = et.compact_entry_trail_lines(lines)
         self.assertEqual(et.fold_entry_trail_lines(compacted).tiers[_CRID].min_trough, 9.2)
 
+    def test_non_finite_trough_lines_do_not_displace_the_real_min(self) -> None:
+        # A NaN trough seen FIRST must not become the compactor's "min"
+        # choice (NaN freezes every later <= comparison) and silently drop
+        # the record holding the real minimum — fold-equivalence must hold
+        # under corrupted trough values too.
+        lines = [
+            _line(et.KIND_TROUGH, trough=float("nan")),
+            _line(et.KIND_TROUGH, trough=9.5),
+            _line(et.KIND_TROUGH, trough=11.0),
+        ]
+        compacted = et.compact_entry_trail_lines(lines)
+        self.assertEqual(
+            _fold_data(et.fold_entry_trail_lines(compacted)),
+            _fold_data(et.fold_entry_trail_lines(lines)),
+        )
+        self.assertEqual(et.fold_entry_trail_lines(compacted).tiers[_CRID].min_trough, 9.5)
+
     def test_relative_order_is_preserved(self) -> None:
         # The fold's latest-kind semantics are FILE-ORDER based; compaction
         # must emit kept lines in their original relative order.
@@ -391,6 +445,19 @@ class TestCompactEntryTrailJournalFile(unittest.TestCase):
                 fold = et.read_entry_trail_fold()
         self.assertEqual(fold.tiers, {})
         self.assertEqual(fold.malformed, 0)
+
+    def test_read_entry_trail_fold_unreadable_fails_closed_not_raise(self) -> None:
+        # A DIRECTORY at the journal path: .exists() is True, .open() raises
+        # IsADirectoryError. _place_pick only catches BrokerError, so an
+        # escaping OSError would abort the whole tick BEFORE the protection
+        # pass — contain it as a fail-closed malformed=1 fold instead.
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "entry_trails.jsonl"
+            journal.mkdir()
+            with mock.patch.object(et, "_entry_trail_journal_path", lambda: journal):
+                fold = et.read_entry_trail_fold()
+        self.assertEqual(fold.tiers, {})
+        self.assertEqual(fold.malformed, 1)
 
 
 if __name__ == "__main__":

@@ -2086,6 +2086,22 @@ class TestCheckCashFloorWatchingReservation(unittest.TestCase):
         with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
             self.assertIsNone(self._check(notional=10_000.0, margin_available=12_000.0))
 
+    def test_unvaluable_watching_record_fails_closed(self) -> None:
+        # Independent of the _place_pick gate ordering (the gross cap fails
+        # closed first in production): a direct/future caller must never
+        # silently under-reserve on an unvaluable watching record.
+        import json
+
+        _entry_trail_journal(
+            self,
+            [json.dumps({"kind": "watch_open", "crid": "crid-w0", "limit": None, "qty": 5})],
+        )
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            message = self._check(notional=100.0, margin_available=1_000_000.0)
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("failing closed", message)
+
     def test_clamped_mode_stays_inert_even_with_a_watching_tier(self) -> None:
         # The cash floor is inert outside declared mode (memo G5) — the
         # watching term must not change that; the GROSS cap carries it there.
