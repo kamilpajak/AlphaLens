@@ -2496,6 +2496,32 @@ def _check_fee_floor(
     )
 
 
+def _refuse_pick_terminal(
+    ticker: str,
+    brief_date: dt.date,
+    violation: str,
+    alert_key: str,
+    alert_throttled: Callable[[str, str], bool] | None,
+) -> None:
+    """The shared terminal-refusal tail for the post-sizing ``_place_pick``
+    gates (fee floor, gross cap): warn, page the operator (throttled, only
+    when a sink exists), and retire the pick with a refused line so it never
+    retries every tick. The ``mark_refused`` append is fallible I/O and must
+    never crash the drain: on OSError the pick stays armed and the refusal
+    re-fires next tick (re-attempting the append)."""
+    logger.warning("place_pick %s: %s", ticker, violation)
+    if alert_throttled is not None:
+        alert_throttled(violation, alert_key)
+    from alphalens_pipeline.brokers.automanager import picks
+
+    try:
+        picks.mark_refused(ticker, brief_date, violation)
+    except OSError as exc:
+        logger.warning(
+            "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
+        )
+
+
 def _is_journalable_price(value: float | None) -> bool:
     """A price the journal may carry verbatim: present, finite and strictly
     positive. ``_build_tranche_plan_line`` writes ``float(...)`` straight through,
@@ -3133,17 +3159,9 @@ def _place_pick(
         plan, fx, ticker=ticker, instrument_currency=instrument.currency
     )
     if fee_violation is not None:
-        logger.warning("place_pick %s: %s", ticker, fee_violation)
-        if alert_throttled is not None:
-            alert_throttled(fee_violation, f"fee-floor:{ticker}")
-        from alphalens_pipeline.brokers.automanager import picks
-
-        try:
-            picks.mark_refused(ticker, brief_date, fee_violation)
-        except OSError as exc:
-            logger.warning(
-                "place_pick %s: refused-line append failed (pick stays armed): %s", ticker, exc
-            )
+        _refuse_pick_terminal(
+            ticker, brief_date, fee_violation, f"fee-floor:{ticker}", alert_throttled
+        )
         return False
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
