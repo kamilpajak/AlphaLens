@@ -27,7 +27,7 @@ Under Path A the gross rail becomes the only notional-vs-real-equity link. Verif
 2. **Candidate excluded** — `safety.check` runs pre-sizing (`control_loop.py:3089` before `:3123`) and compares only already-committed gross (`safety.py:141`); the first pick of ANY size always passes.
 3. **Filled positions vanish** — only WORKING/PARTIALLY_FILLED verdicts are counted (`control_loop.py:2312`); a filled position's exposure drops out of gross entirely.
 
-**Fix (PR-0):** candidate-inclusive, account-currency gross check at the post-sizing site: `(Σ committed WORKING gross converted via each record's journaled fx [:2710, :2764] + required_pln(candidate) + filled-position value marked-to-market) ≤ GROSS_FRAC × total_value`. No `safety.py` reshape needed; the existing pre-sizing check stays as the cheap early exit. Zen finding applied: the FILLED leg must be valued at CURRENT price × qty × CURRENT fx (or Saxo's own account-ccy exposure field from the `get_positions()` payload [:3079] if present) — journaled placement-time fx is correct only for the resting WORKING leg; using it for filled positions understates exposure whenever USDPLN has risen since fill.
+**Fix (PR-0):** candidate-inclusive, account-currency gross check at the post-sizing site: `(Σ committed WORKING gross converted via each record's journaled fx [:2710, :2764] + candidate_gross_pln + filled-position value marked-to-market) ≤ GROSS_FRAC × total_value`, where `candidate_gross_pln = setup_plan_gross_notional(plan) / fx.rate` — the RAW entry notional, explicitly WITHOUT the §4.2 cash buffer. The gross rail measures exposure (entry × qty); the buffer covers funding frictions (fees, FX markup, settlement-window drift) and belongs only to the cash floor. Using the buffered figure here would double-count funding as exposure and tighten the cap ~4% for no risk reason. No `safety.py` reshape needed; the existing pre-sizing check stays as the cheap early exit. Zen finding applied: the FILLED leg must be valued at CURRENT price × qty × CURRENT fx (or Saxo's own account-ccy exposure field from the `get_positions()` payload [:3079] if present) — journaled placement-time fx is correct only for the resting WORKING leg; using it for filled positions understates exposure whenever USDPLN has risen since fill.
 
 ## 4. Path A — declared frame + cash floor (ship now)
 
@@ -66,7 +66,7 @@ Follows the repo's own split (`risk-ops` F5): fee floor is terminal because retr
 
 ### 4.5 Fee floor under multi-tier fills (critic B5)
 
-`_round_trip_fee_bps` (`control_loop.py:2426-2450`) models ONE entry + ONE exit fill on the aggregate. Reality: 3 GTD tiers each pay `max($1, 0.08%×tier)` on entry, plus up to 3 TP-tranche sells + stop on exit. At frame 16k, NVAX computes ≈119 bps < 150 → passes, while a realistic multi-tier round trip is ~220-290 bps — the declared cap silently violated. Under the min-clamp the same pick refused at >1000 bps, so this leak is Path-A-opened. Fix in the same PR: per-tier entry commissions `Σ max($1, rate×qty×limit)` from `plan.entry_tiers` + symmetric per-tranche exit estimate.
+`_round_trip_fee_bps` (`control_loop.py:2426-2450`) models ONE entry + ONE exit fill on the aggregate. Reality: 3 GTD tiers each pay `max($1, 0.08%×tier)` on entry, plus up to 3 TP-tranche sells + stop on exit. At frame 16k, NVAX computes ≈119 bps < 150 → passes, while a realistic multi-tier round trip is ~220-290 bps — the declared cap silently violated. Under the min-clamp the same pick refused at >1000 bps, so this leak is Path-A-opened. Fix in the same PR: per-tier entry commissions `Σ max($1, rate×qty×limit)` from `plan.entry_tiers` + symmetric per-tranche exit estimate. The per-tier model ships in PR-2 even with the cap at backstop level (§7 decision 3): journal the honest round-trip estimate (`est_round_trip_fee_bps`) on EVERY placement record, not only on refusals — this is the calibration series for path B's 150 bps target.
 
 ### 4.6 Daily-loss breaker denomination note (critic B7 — memo'd, small guard)
 
@@ -107,21 +107,24 @@ Full lens output preserved in the workflow transcript; the locked shape:
 
 ## 7. Operator decisions
 
-The frame, the repaired gross cap, and the fee cap interlock (zen finding applied): the repaired cap limits candidate gross to `GROSS_FRAC × real equity` = 992 PLN at today's balance, so a pick passes only when `suggested_size_pct ≤ 992/frame`. A larger frame buys bigger positions for LOW-size_pct picks but gross-refuses everything above the ratio; a smaller frame passes more picks at smaller notionals, where the honest per-tier fee model (§4.5) charges more bps. Typical brief size_pct runs ~7-15% (T5: ≈ risk 1% / stop-distance fraction). Two coherent soak configs at the current balance:
+The frame, the repaired gross cap, and the fee cap interlock (zen finding applied): the repaired cap limits candidate gross to `GROSS_FRAC × real equity` = 992 PLN at today's balance, so a pick passes only when `suggested_size_pct ≤ 992/frame`. A larger frame buys bigger positions for LOW-size_pct picks but gross-refuses everything above the ratio; a smaller frame passes more picks at smaller notionals, where the honest per-tier fee model (§4.5) charges more bps. Historical brief distribution (554 OK setups, 2026-06-13→08-11): size_pct median 4.62%, p75 7.75%, p90 11.74%, max 25%. Soak configs at the current balance (pass rate = fraction of historical candidates clearing the repaired gross cap on RAW gross):
 
-| | Frame (X) | Passes size_pct ≤ | NVAX position | Honest round-trip fee | `MAX_FEE_BPS` needed |
-|---|---|---|---|---|---|
-| **Config 1 (rec.)** | 14 000 (X=140) | ~7.1% | ~940 zł | ~290-330 bps | 350 |
-| Config 2 | 8 000 (X=80) | ~12.4% | ~540 zł | ~420-470 bps | 500 |
+| | Frame (X) | Passes size_pct ≤ | Historical pass rate | NVAX (6.7%) |
+|---|---|---|---|---|
+| **Config 3 (operator, LOCKED)** | 15 000 (X=150) | ~6.6% | ~70% | raw gross ~1 005 zł planned (957 zł after qty-flooring) vs 992 zł budget — sub-4% margin, pass/refuse decided by rounding luck; treat as **refused** under the headroom rule below |
+| Config 1 | 14 000 (X=140) | ~7.1% | ~73% | ~957 zł, 3.6% headroom — also below the rule |
+| Config 2 | 8 000 (X=80) | ~12.4% | ~94% | ~540 zł |
 
-| # | Decision | Recommendation |
+Standing rule adopted with the frame choice: demand **≥5% headroom** between candidate gross and the gross budget — the budget is 0.5 × mark-to-market `total_value`, which drifts daily (EOD netting, FX, open-position marks); a sub-2% margin makes pass/refuse a coin flip decided by the fx sizing buffer and per-tier qty flooring, and a refuse at drain time is terminal (§4.3).
+
+| # | Decision | Operator verdict (2026-08-12) |
 |---|---|---|
-| 1 | Frame value X ("1% = X PLN") for the soak | Config 1: X = 140 zł — NVAX (6.7%) is the test vehicle and gets the biggest position; accept that picks with size_pct > ~7.1% gross-refuse until a deposit raises real equity |
-| 2 | `GROSS_FRAC` pin | 0.25 → 0.5 (boot-assert max; the repaired cap makes 0.5 mean a REAL 50%) |
-| 3 | `MAX_FEE_BPS` for the soak | 150 → 350 (validation-goal override, operator-accepted fee drag; restore ≤150 after funding to a full frame) |
-| 4 | Refuse semantics | terminal + re-arm (§4.3) |
+| 1 | Frame value X ("1% = X PLN") | **X = 150 zł, fixed regardless of candidate** (operator). Consequence at today's balance: NVAX-class (~6.7%) picks are knife-edge/refused; ~70% of historical candidates pass — the natural path is arming the next fresh pick (median size_pct 4.6% clears with wide margin) or a small deposit (`total_value` ≥ ~2 110 PLN restores 5% headroom for NVAX-class) |
+| 2 | `GROSS_FRAC` pin | 0.25 → 0.5 (boot-assert max; the repaired cap makes 0.5 mean a REAL 50%). Mode-independent: `safety.check` runs before sizing for every armed pick (`control_loop.py:3089`) with no knowledge of the sizing mode — binds identically in `clamped` and `declared`, and survives into Path B as gate 3 of the §5 stack, always denominated against REAL equity, never the frame |
+| 3 | `MAX_FEE_BPS` for the soak | 150 → **1000** — re-labeled from cost cap to DEGENERATE-CLASS BACKSTOP: mode-A soak accepts realistic fees (~290-470 bps honest per-tier estimate, §4.5) as validation cost, but the fee floor stays the ONLY rail catching the tiny-notional class (the original 1037 bps $20 fiasco; the cash floor and gross cap pass tiny notionals trivially, the zero-qty check misses low-priced stocks). Never unset on LIVE (boot-assert requires explicit finite > 0, `live_rails.py:101-114`); no 'off' token is added to the boot-assert (a permanent off-switch to serve a temporary soak preference contradicts the pins doctrine). Restore ≤150 (path-B target, operator-confirmed) after funding to a full frame |
+| 4 | Refuse semantics | terminal + re-arm (§4.3) — operator confirmed |
 | 5 | Cash-floor buffer | 4% (§4.2) |
-| 6 | Path B start | after ≥1 clean LIVE round-trip on Path A |
+| 6 | Path B start | after ≥1 clean LIVE round-trip on Path A; path-B fee cap target = 150 bps (operator) |
 
 ## 8. Ship order
 
@@ -129,7 +132,7 @@ The frame, the repaired gross cap, and the fee cap interlock (zen finding applie
 2. **P1/P2 probes** on SIM (§6) — parallel with PR-0 review.
 3. **PR-1** — mode env + `_resolve_sizing_equity` branch + 7-pin boot-assert + fail-closed paths (§4.1).
 4. **PR-2** — cash floor + ladder rollback + write-ahead line + per-tier fee model + observability line (§4.2-4.6).
-5. Unit pins: LIVE `SIZING_EQUITY=14000`, `SIZING_EQUITY_MODE=declared`, `GROSS_FRAC=0.5`, `MAX_FEE_BPS=350`; SIM gets `declared` with a SIM frame (§4.7). Re-arm NVAX (day-2+, gap gate inert).
+5. Unit pins: LIVE `SIZING_EQUITY=15000`, `SIZING_EQUITY_MODE=declared`, `GROSS_FRAC=0.5`, `MAX_FEE_BPS=1000`; SIM gets `declared` with a SIM frame (§4.7). Arm the next fresh pick with size_pct clearing the ≥5% headroom rule (NVAX at 6.7% is knife-edge at X=150 — §7).
 
 Each PR: TDD (unittest.TestCase — pytest silently skipped), zen `deepseek/deepseek-v4-pro` pre-merge, DCO sign-off, S3776 ≤15 (extract `_refuse_terminal` helper shared with the fee floor), diff-coverage 80% (test list per branch in the code-fit lens output).
 
