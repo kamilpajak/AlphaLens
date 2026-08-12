@@ -133,6 +133,99 @@ class TestResolveUic(unittest.TestCase):
         unsupported' must always degrade to 'do nothing')."""
         self.assertIsNone(_client(_Session()).resolve_uic("AAPL", exchange_mic="ZZZZ"))
 
+    def test_non_200_search_returns_none_without_alias_retry(self):
+        """A failed HTTP search is transport doubt, not 'not listed' — None
+        immediately, no alias re-search (the alias step only interprets a
+        SUCCESSFUL search)."""
+        session = _Session(_Resp(500))
+        self.assertIsNone(_client(session).resolve_uic("LAC", exchange_mic="XNYS"))
+        self.assertEqual(len(session.calls), 1)
+
+
+class TestResolveUicTickerAlias(unittest.TestCase):
+    """``SAXO_TICKER_ALIASES`` consulted AFTER the exact ticker match fails —
+    the LAC -> LAC_NEW case (Saxo renamed the listing post-2023 corporate
+    split; live-verified 2026-08-12, uic 38022146). The (symbol, venue)
+    pair-matching strictness is unchanged."""
+
+    def test_exact_ticker_match_wins_over_alias(self):
+        """A row matching the market ticker itself must win — the alias is a
+        fallback, never a preference."""
+        payload = {
+            "Data": [
+                {"Symbol": "LAC:xnys", "Identifier": 111},
+                {"Symbol": "LAC_NEW:xnys", "Identifier": 38022146},
+            ]
+        }
+        self.assertEqual(
+            _client(_Session(_Resp(200, payload))).resolve_uic("LAC", exchange_mic="XNYS"), 111
+        )
+
+    def test_alias_row_resolves_when_exact_match_fails(self):
+        """Saxo's fuzzy Keywords search DOES return the LAC_NEW row for
+        Keywords=LAC — only the exact symbol match rejects it, so the alias
+        retry must find it without a second HTTP call."""
+        payload = {"Data": [{"Symbol": "LAC_NEW:xnys", "Identifier": 38022146}]}
+        session = _Session(_Resp(200, payload))
+        self.assertEqual(_client(session).resolve_uic("LAC", exchange_mic="XNYS"), 38022146)
+        self.assertEqual(len(session.calls), 1)
+
+    def test_alias_researches_when_primary_search_returns_no_rows(self):
+        """An EMPTY primary keyword search re-searches with the alias keyword
+        (the aliased symbol may not surface for the market-ticker keyword at
+        all)."""
+        empty = _Resp(200, {"Data": []})
+        alias_hit = _Resp(200, {"Data": [{"Symbol": "LAC_NEW:xnys", "Identifier": 38022146}]})
+        session = _Session(empty, alias_hit)
+        self.assertEqual(_client(session).resolve_uic("LAC", exchange_mic="XNYS"), 38022146)
+        self.assertEqual(len(session.calls), 2)
+        _method, _url, kw = session.calls[1]
+        self.assertEqual(kw["params"]["Keywords"], "LAC_NEW")
+
+    def test_no_alias_no_match_stays_none_without_second_search(self):
+        """A ticker with no alias entry keeps today's single-search contract:
+        no match -> None, never a second HTTP round-trip."""
+        session = _Session(_Resp(200, {"Data": []}))
+        self.assertIsNone(_client(session).resolve_uic("MP", exchange_mic="XNYS"))
+        self.assertEqual(len(session.calls), 1)
+
+    def test_alias_uic_pin_disambiguates_duplicate_symbol_rows(self):
+        """Two rows sharing the ALIASED symbol resolve to the PINNED uic —
+        the curated pin is the disambiguator (zen pre-merge finding: the pin
+        exists precisely so the alias can never trade an unverified row)."""
+        payload = {
+            "Data": [
+                {"Symbol": "LAC_NEW:xnys", "Identifier": 38022146},
+                {"Symbol": "LAC_NEW:xnys", "Identifier": 999},
+            ]
+        }
+        got = _client(_Session(_Resp(200, payload))).resolve_uic("LAC", exchange_mic="XNYS")
+        self.assertEqual(got, 38022146)
+
+    def test_stale_alias_uic_mismatch_fails_closed(self):
+        """A matched alias row whose Identifier differs from the curated pin
+        resolves to None — a stale entry (Saxo renamed again / reused the
+        symbol root for another company) must fail to resolve, never trade
+        the wrong listing."""
+        payload = {"Data": [{"Symbol": "LAC_NEW:xnys", "Identifier": 999}]}
+        got = _client(_Session(_Resp(200, payload))).resolve_uic("LAC", exchange_mic="XNYS")
+        self.assertIsNone(got)
+
+    def test_true_duplicate_pinned_rows_still_refuse_as_ambiguous(self):
+        """Two rows with the SAME pinned uic (a genuinely duplicated listing
+        row) keep the fail-closed ambiguity contract: None + warning."""
+        payload = {
+            "Data": [
+                {"Symbol": "LAC_NEW:xnys", "Identifier": 38022146},
+                {"Symbol": "LAC_NEW:xnys", "Identifier": 38022146},
+            ]
+        }
+        logger_name = "alphalens_pipeline.data.alt_data.saxo_marketdata_client"
+        with self.assertLogs(logger_name, level="WARNING") as cm:
+            got = _client(_Session(_Resp(200, payload))).resolve_uic("LAC", exchange_mic="XNYS")
+        self.assertIsNone(got)
+        self.assertTrue(any("LAC" in line and "2" in line for line in cm.output))
+
 
 class TestPriceSubscription(unittest.TestCase):
     def test_create_accepts_201_and_sends_the_measured_body(self):

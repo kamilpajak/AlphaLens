@@ -126,6 +126,30 @@ _SEARCH_RESULTS: dict[str, dict[str, Any]] = {
     },
     # Defect fixture: a search row WITHOUT CurrencyCode must be refused.
     "NOCCY": {"Data": [{"Symbol": "NOCCY:xnys", "Identifier": 777, "AssetType": "Stock"}]},
+    # Saxo lists Lithium Americas (market ticker LAC) as LAC_NEW:xnys
+    # (live-verified 2026-08-12, uic 38022146, post-2023 corporate split
+    # leftover). The fuzzy Keywords=LAC search DOES return the LAC_NEW row —
+    # only the exact ticker==symbol match rejects it, hence the alias retry.
+    "LAC": {
+        "Data": [
+            {
+                "Symbol": "LAC_NEW:xnys",
+                "Identifier": 38022146,
+                "AssetType": "Stock",
+                "CurrencyCode": "USD",
+            }
+        ]
+    },
+    "LAC_NEW": {
+        "Data": [
+            {
+                "Symbol": "LAC_NEW:xnys",
+                "Identifier": 38022146,
+                "AssetType": "Stock",
+                "CurrencyCode": "USD",
+            }
+        ]
+    },
 }
 
 
@@ -348,6 +372,72 @@ class TestInstrumentResolution(unittest.TestCase):
         client = _StubSaxoClient()
         SaxoBroker(client).resolve_instrument("AAPL", "XNAS")  # type: ignore[arg-type]
         self.assertEqual(client.search_calls, [("AAPL", "NASDAQ")])
+
+    def test_alias_resolves_market_ticker_keeping_market_ticker_on_the_ref(self):
+        """LAC resolves via the LAC -> LAC_NEW alias; the returned ref keeps
+        the MARKET ticker (journals/picks/alerts speak the market ticker —
+        the alias is a Saxo-side lookup detail) while uic / broker symbol /
+        currency come from the LAC_NEW row."""
+        ref = _make_broker().resolve_instrument("LAC", "XNYS")
+        self.assertEqual(ref.ticker, "LAC")
+        self.assertEqual(ref.broker_instrument_id, "38022146")
+        self.assertEqual(ref.broker_symbol, "LAC_NEW:xnys")
+        self.assertEqual(ref.currency, "USD")
+
+    def test_stale_alias_uic_mismatch_fails_closed(self):
+        """A matched alias row whose Uic differs from the curated pin must
+        NOT resolve (zen pre-merge finding): a stale alias entry — Saxo
+        renamed again, or reused the symbol root for another company — fails
+        to resolve instead of silently trading the wrong listing."""
+
+        class _StaleAlias(_StubSaxoClient):
+            def search_instruments(
+                self,
+                keywords: str,
+                *,
+                asset_types: str = "Stock",
+                exchange_id: str | None = None,
+            ) -> dict[str, Any]:
+                self.search_calls.append((keywords, exchange_id))
+                return {
+                    "Data": [
+                        {
+                            "Symbol": "LAC_NEW:xnys",
+                            "Uic": 999,
+                            "Identifier": 999,
+                            "ExchangeId": "NYSE",
+                            "CurrencyCode": "USD",
+                            "AssetType": "Stock",
+                        }
+                    ]
+                }
+
+        broker = SaxoBroker(_StaleAlias())  # type: ignore[arg-type]
+        with self.assertRaises(InstrumentNotFoundError):
+            broker.resolve_instrument("LAC", "XNYS")
+
+    def test_alias_researches_when_primary_search_returns_no_rows(self):
+        """An EMPTY primary keyword search re-searches with the alias keyword
+        before giving up."""
+
+        class _EmptyPrimary(_StubSaxoClient):
+            def search_instruments(
+                self,
+                keywords: str,
+                *,
+                asset_types: str = "Stock",
+                exchange_id: str | None = None,
+            ) -> dict[str, Any]:
+                self.search_calls.append((keywords, exchange_id))
+                if keywords.upper() == "LAC":
+                    return {"Data": []}
+                return _SEARCH_RESULTS.get(keywords.upper(), {"Data": []})
+
+        client = _EmptyPrimary()
+        ref = SaxoBroker(client).resolve_instrument("LAC", "XNYS")  # type: ignore[arg-type]
+        self.assertEqual(ref.ticker, "LAC")
+        self.assertEqual(ref.broker_instrument_id, "38022146")
+        self.assertEqual(client.search_calls, [("LAC", "NYSE"), ("LAC_NEW", "NYSE")])
 
     def test_zero_match_raises_instrument_not_found(self):
         with self.assertRaises(InstrumentNotFoundError):

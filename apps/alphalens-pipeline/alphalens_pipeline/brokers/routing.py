@@ -3,11 +3,11 @@
 The thematic candidate parquet carries no exchange stamp, and MIC is an
 execution concern (ADR 0013 R2 — no execution data flows upstream), so the
 routing decision lives HERE, not in the pipeline schema: explicit MIC wins;
-otherwise probe the ordered US venue list (XNYS, then XNAS) through the
-broker's exact-symbol resolve (2 throttled, cached lookups worst case) and
-require EXACTLY ONE match — zero matches and both-venue matches both raise
-:class:`InstrumentNotFoundError` (never guess; house doctrine). The RESOLVED
-MIC is stamped on the submission record for P3 reconciliation.
+otherwise probe the ordered US venue list (XNYS, then XNAS, then XASE)
+through the broker's exact-symbol resolve (3 throttled, cached lookups worst
+case) and require EXACTLY ONE match — zero matches and multi-venue matches
+both raise :class:`InstrumentNotFoundError` (never guess; house doctrine).
+The RESOLVED MIC is stamped on the submission record for P3 reconciliation.
 
 XWAR stays EXPLICIT-ONLY (``exchange_mic="XWAR"``) — deliberately absent
 from the probe order. The PLN/FX-leg sizing question that used to block it
@@ -25,9 +25,13 @@ from broker_contract.contract import (
     InstrumentRef,
 )
 
-# Ordered US probe list. Adding a venue here widens the AMBIGUITY surface for
-# every un-suffixed ticker — extend deliberately, never for convenience.
-US_MIC_PROBE_ORDER: tuple[str, ...] = ("XNYS", "XNAS")
+# Ordered US probe list — the SHARED constant lives in
+# ``data/alt_data/saxo_exchanges.py`` (re-exported here for the
+# placement-side callers) and is also consumed by the day-1 gap gate price
+# probe, so the two probe orders can never diverge. Adding a venue widens the
+# AMBIGUITY surface for every un-suffixed ticker — extend deliberately, never
+# for convenience.
+from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 
 
 def resolve_us_instrument(

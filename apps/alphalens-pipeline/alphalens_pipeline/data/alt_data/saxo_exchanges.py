@@ -19,8 +19,49 @@ Adding a venue = one entry here, after verifying it via ``/ref/v1/exchanges``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 MIC_TO_SAXO_EXCHANGE_ID: dict[str, str] = {
     "XNYS": "NYSE",
     "XNAS": "NASDAQ",
+    "XASE": "AMEX",  # NYSE American — live-verified UUUU:xase / uic 549463 (2026-08-12)
     "XWAR": "WSE",
 }
+
+# Market ticker -> Saxo symbol root, consulted by BOTH resolvers AFTER the
+# exact ticker==symbol match fails (the alias is a Saxo-side lookup detail:
+# journals, picks and alerts keep speaking the MARKET ticker). Saxo sometimes
+# lists a name under a renamed symbol after a corporate action; the fuzzy
+# Keywords search usually still returns the renamed row, so the alias only
+# redirects the exact-symbol match (and the keyword itself when the primary
+# search comes back empty). When Saxo renames a listing back (or again), the
+# stale alias is REMOVED and replaced, never stacked — one market ticker maps
+# to at most one current Saxo symbol.
+# Every alias PINS the expected Saxo uic (zen pre-merge finding): the alias
+# match is accepted ONLY when the matched row's Identifier equals the pinned
+# uic, so a stale entry (Saxo renames again, or reuses the symbol root for a
+# DIFFERENT company) fails to resolve instead of silently trading the wrong
+# listing. Both resolvers enforce it via ``alias_expected_for``.
+SAXO_TICKER_ALIASES: Mapping[str, tuple[str, int]] = {
+    # Lithium Americas, NYSE — Saxo symbol "LAC_NEW:xnys", uic 38022146
+    # (post-2023 corporate-split leftover; live-verified 2026-08-12).
+    "LAC": ("LAC_NEW", 38022146),
+}
+
+
+def alias_expected_for(ticker: str) -> tuple[str, int] | None:
+    """``(saxo_symbol_root, expected_uic)`` for a market ticker, else ``None``.
+
+    The ONE accessor both resolvers use (zen finding: the exact-then-alias
+    logic lives in two modules; sharing the accessor keeps the alias RULE
+    single-sourced), so an alias can never be consulted without its uic pin."""
+    return SAXO_TICKER_ALIASES.get(ticker.upper())
+
+
+# Ordered US venue probe list, shared by placement routing
+# (``brokers.routing.resolve_us_instrument``) and the day-1 gap gate price
+# probe (``brokers.automanager.control_loop``) so the two can never diverge
+# on which names are resolvable. Adding a venue here widens the AMBIGUITY
+# surface for every un-suffixed ticker — extend deliberately, never for
+# convenience. XWAR stays EXPLICIT-ONLY (see ``brokers/routing.py``).
+US_MIC_PROBE_ORDER: tuple[str, ...] = ("XNYS", "XNAS", "XASE")

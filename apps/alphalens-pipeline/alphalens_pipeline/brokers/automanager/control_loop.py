@@ -69,6 +69,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     advance,
     reconcile_protection,
 )
+from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 
 if TYPE_CHECKING:
     import threading
@@ -3340,9 +3341,11 @@ def _evaluate_day1_gap_gate(
     return _day1_gap_gate_decision(now_utc, brief_date, e1_limit, probe_price, exchange_mic)
 
 
-# US venue probe order for the day-1 gap gate price probe — mirrors
-# routing.resolve_us_instrument's placement-side probe order.
-_DAY1_GAP_US_VENUE_PROBE_ORDER = ("XNYS", "XNAS")
+# US venue probe order for the day-1 gap gate price probe — the SAME shared
+# constant routing.resolve_us_instrument's placement-side probe uses
+# (``data/alt_data/saxo_exchanges.US_MIC_PROBE_ORDER``), imported rather than
+# copied so the two orders can never diverge.
+_DAY1_GAP_US_VENUE_PROBE_ORDER = US_MIC_PROBE_ORDER
 
 
 def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
@@ -3378,28 +3381,30 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
             client = SaxoMarketDataClient(
                 token_provider=LiveTokenProvider(LiveAuthConfig.from_env())
             )
-            # PROBE US venues like placement routing does (XNYS then XNAS)
+            # PROBE US venues like placement routing does (XNYS, XNAS, XASE)
             # instead of trusting the hint: every armed intent carries the
             # advisory InstrumentHint.mic="XNYS", so a NASDAQ name would
             # otherwise resolve to None here and the gate would silently
             # defer its entire day 1 (false veto; live-verified with NVAX,
             # XNAS uic 6820, 2026-08-11). Hinted venue first, then the rest.
-            candidate_mics = [exchange_mic] + [
-                m for m in _DAY1_GAP_US_VENUE_PROBE_ORDER if m != exchange_mic
-            ]
-            uic = None
-            for mic in candidate_mics:
-                uic = client.resolve_uic(ticker, exchange_mic=mic)
-                if uic is not None:
-                    break
-            if uic is None:
-                return None
+            # One-shot client: the outer finally releases the connection
+            # pool on EVERY return path — the unresolvable-uic early return
+            # used to leak the session once per tick, all day, on exactly
+            # the failing-probe scenario this gate surfaces (zen finding).
             try:
+                candidate_mics = [exchange_mic] + [
+                    m for m in _DAY1_GAP_US_VENUE_PROBE_ORDER if m != exchange_mic
+                ]
+                uic = None
+                for mic in candidate_mics:
+                    uic = client.resolve_uic(ticker, exchange_mic=mic)
+                    if uic is not None:
+                        break
+                if uic is None:
+                    return None
                 payload = client.get_stock_infoprice(uic)
                 return _extract_day1_session_open(payload)
             finally:
-                # One-shot client: release the connection pool explicitly
-                # rather than waiting for GC (zen review polish).
                 with contextlib.suppress(Exception):
                     client._session.close()
         except Exception:
@@ -3444,13 +3449,38 @@ def _day1_gap_gate_defers(
     alert_throttled: Callable[[str, str], bool] | None,
 ) -> bool:
     """True iff the day-1 gap gate is enabled AND defers this pick (the
-    ``_place_pick`` early-return). Pages the operator (throttled) only for
-    the actionable below-E1 verdict; every other deferral is a DEBUG line."""
+    ``_place_pick`` early-return). Pages the operator (throttled) for the
+    actionable below-E1 verdict AND for the no-price verdict (an
+    INFRASTRUCTURE failure — the probe could not produce a price at all;
+    real incident 2026-08-12: LAC's resolve failure silently deferred its
+    whole day 1 at DEBUG); "defer_preopen" stays a DEBUG line (expected,
+    high-frequency)."""
     if not _day1_gap_gate_enabled():
         return False
     gate_verdict = _evaluate_day1_gap_gate(ticker, brief_date, spec, exchange_mic, probe)
     if gate_verdict == "pass":
         return False
+    if gate_verdict == "defer_no_price":
+        # Ride the alert throttle for the WARNING too (zen pre-merge finding):
+        # the probe can fail every ~45s tick all day, and hundreds of
+        # identical journald WARNINGs would crowd out real signals. One
+        # WARNING per throttle window (or per tick when no alert sink is
+        # wired — unit tests, ad-hoc runs); suppressed repeats log at DEBUG.
+        sent = alert_throttled is None or alert_throttled(
+            f"day1 gap gate: {ticker} day-1 PRICE PROBE failed — an "
+            "infrastructure problem, not a market condition; check "
+            "instrument resolution / marketdata chain (the pick stays "
+            "deferred all of day 1 until a price arrives)",
+            f"day1-gap-noprice:{ticker}",
+        )
+        log = logger.warning if sent else logger.debug
+        log(
+            "place_pick %s: day1 gap gate deferred (defer_no_price) — the PRICE "
+            "PROBE returned no price (infrastructure problem, not a market "
+            "condition); check instrument resolution / marketdata chain",
+            ticker,
+        )
+        return True
     logger.debug("place_pick %s: day1 gap gate deferred (%s)", ticker, gate_verdict)
     if gate_verdict == "defer_below_e1" and alert_throttled is not None:
         alert_throttled(

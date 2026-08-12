@@ -15,7 +15,10 @@ from typing import Any
 
 import requests
 
-from alphalens_pipeline.data.alt_data.saxo_exchanges import MIC_TO_SAXO_EXCHANGE_ID
+from alphalens_pipeline.data.alt_data.saxo_exchanges import (
+    MIC_TO_SAXO_EXCHANGE_ID,
+    alias_expected_for,
+)
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveTokenProvider
 
 logger = logging.getLogger(__name__)
@@ -28,6 +31,16 @@ _ELEVATED_TRADE_LEVEL = "FullTradingAndChat"
 # Saxo clamps anything lower to 1000 ms (probed 2026-08-07: 0/100/500 all
 # came back assigned 1000), so asking for less is noise.
 _MIN_REFRESH_RATE_MS = 1000
+
+
+def _exact_symbol_matches(
+    rows: list[dict[str, Any]], symbol_root: str, exchange_mic: str
+) -> list[dict[str, Any]]:
+    """Rows whose Saxo display symbol is EXACTLY ``symbol_root:mic`` (Saxo
+    suffixes the lowercase MIC, e.g. ``"KO:xnys"``) — the (symbol, venue)
+    pair match both resolvers share."""
+    expected_symbol = f"{symbol_root}:{exchange_mic}".lower()
+    return [row for row in rows if str(row.get("Symbol", "")).lower() == expected_symbol]
 
 
 class SaxoMarketDataClient:
@@ -83,7 +96,10 @@ class SaxoMarketDataClient:
         REQUESTED venue, never whichever row Saxo happens to return first.
         Reuses ``saxo_exchanges.MIC_TO_SAXO_EXCHANGE_ID`` (the same MIC ->
         Saxo venue map the SIM resolution path uses) rather than hand-rolling
-        a second one, so adding a venue stays a one-place change.
+        a second one, so adding a venue stays a one-place change. When the
+        exact match fails, ``saxo_exchanges.SAXO_TICKER_ALIASES`` is consulted
+        (same two-step the SIM path uses) — Saxo sometimes lists a name under
+        a renamed symbol (LAC -> LAC_NEW) that the exact match would reject.
 
         Unlike the SIM path, this NEVER raises on an unknown venue or an
         ambiguous match — it returns ``None`` and logs a warning. This client
@@ -101,20 +117,30 @@ class SaxoMarketDataClient:
                 ticker,
             )
             return None
-        resp = self._session.get(
-            f"{LIVE_API_BASE_URL}/ref/v1/instruments",
-            headers=self._headers(),
-            params={"Keywords": ticker, "AssetTypes": "Stock"},
-            timeout=_TIMEOUT_S,
-        )
-        if resp.status_code != 200:
+        rows = self._search_instrument_rows(ticker)
+        if rows is None:
             return None
-        expected_symbol = f"{ticker}:{exchange_mic}".lower()
-        matches = [
-            row
-            for row in resp.json().get("Data", [])
-            if str(row.get("Symbol", "")).lower() == expected_symbol
-        ]
+        matches = _exact_symbol_matches(rows, ticker, exchange_mic)
+        matched_symbol_root = ticker
+        if not matches:
+            aliased = alias_expected_for(ticker)
+            if aliased is not None:
+                alias, expected_uic = aliased
+                # Saxo lists this name under a renamed symbol (e.g.
+                # LAC -> LAC_NEW). The fuzzy Keywords search usually already
+                # returned the aliased row; only an EMPTY primary search
+                # warrants a second round-trip with the alias keyword. The
+                # uic PIN makes a stale alias fail closed: a matched row
+                # whose Identifier differs from the curated uic is dropped
+                # (Saxo renamed again / reused the root for another company).
+                if not rows:
+                    rows = self._search_instrument_rows(alias) or []
+                matches = [
+                    row
+                    for row in _exact_symbol_matches(rows, alias, exchange_mic)
+                    if int(row.get("Identifier", -1)) == expected_uic
+                ]
+                matched_symbol_root = alias
         if not matches:
             return None
         if len(matches) > 1:
@@ -124,10 +150,23 @@ class SaxoMarketDataClient:
                 ticker,
                 exchange_mic,
                 len(matches),
-                expected_symbol,
+                f"{matched_symbol_root}:{exchange_mic}".lower(),
             )
             return None
         return int(matches[0]["Identifier"])
+
+    def _search_instrument_rows(self, keywords: str) -> list[dict[str, Any]] | None:
+        """One ``/ref/v1/instruments`` keyword search; ``None`` on a non-200
+        (transport doubt, distinct from an empty-but-successful search)."""
+        resp = self._session.get(
+            f"{LIVE_API_BASE_URL}/ref/v1/instruments",
+            headers=self._headers(),
+            params={"Keywords": keywords, "AssetTypes": "Stock"},
+            timeout=_TIMEOUT_S,
+        )
+        if resp.status_code != 200:
+            return None
+        return list(resp.json().get("Data", []))
 
     # ----- subscriptions -----
 
