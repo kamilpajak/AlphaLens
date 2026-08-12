@@ -46,12 +46,15 @@ _KILL_FILENAME = "KILL"
 _SUBMISSIONS_FILENAME = "submissions.jsonl"
 _PICKS_FILENAME = "picks.jsonl"
 _STANDALONE_STOPS_FILENAME = "standalone_stops.jsonl"
+_ENTRY_TRAILS_FILENAME = "entry_trails.jsonl"
 _TRANCHE_FILLS_FILENAME = "tranche_fills.parquet"
 
 # The pre-migration flat layout (D4): these three journals used to live
 # directly under broker_orders/ with no per-env subdirectory. A KILL file at
 # that same flat level is NOT legacy — it is the current, still-valid GLOBAL
-# kill (D3) — so it is deliberately excluded from this tuple.
+# kill (D3) — so it is deliberately excluded from this tuple. The entry-trails
+# journal (PR-T0) was born INTO the per-env layout and never existed flat, so
+# it is deliberately excluded too.
 LEGACY_FLAT_STATE_FILENAMES = (
     _SUBMISSIONS_FILENAME,
     _PICKS_FILENAME,
@@ -136,6 +139,15 @@ def picks_path(env: str | None = None) -> Path:
 def standalone_stops_path(env: str | None = None) -> Path:
     """``<broker_orders_root>/standalone_stops.jsonl`` for the resolved instance."""
     return broker_orders_root(env) / _STANDALONE_STOPS_FILENAME
+
+
+def entry_trails_path(env: str | None = None) -> Path:
+    """``<broker_orders_root>/entry_trails.jsonl`` for the resolved instance.
+
+    Per-tier entry-trailing state journal (entry-trailing design memo §5,
+    PR-T0 scaffolding) — sibling of ``standalone_stops.jsonl``, per-env from
+    day one (never part of the legacy flat layout)."""
+    return broker_orders_root(env) / _ENTRY_TRAILS_FILENAME
 
 
 def kill_file_path(env: str | None = None) -> Path:
