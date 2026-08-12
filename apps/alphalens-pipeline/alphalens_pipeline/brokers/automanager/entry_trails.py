@@ -302,6 +302,34 @@ def read_entry_trail_fold() -> EntryTrailFold:
         return EntryTrailFold(tiers={}, malformed=1)
 
 
+# --- Journal append (PR-T1 writer) -------------------------------------------
+
+
+def append_entry_trail_line(record: Mapping[str, Any]) -> None:
+    """Append one line to the entry-trails journal (never rewrites).
+
+    The WIRE-phase counterpart of the read/fold primitives above: the watcher
+    (PR-T1) persists one ``{"kind": ..., "crid": ..., **payload}`` line per
+    state transition through here. Mirrors
+    ``control_loop._append_standalone_stop_journal`` (a DISTINCT seam — this
+    one funnels through :func:`_entry_trail_journal_path`, never the
+    standalone-stop path): create the parent dir, append, then flush + fsync
+    so a watch_open reservation / terminal measurement line is durable the
+    instant it is written — a buffered write lost to a crash (or systemd
+    SIGKILL) would silently drop a virtual reservation the gross cap can no
+    longer see, or re-fire a watch the journal no longer records as terminal.
+
+    ``sort_keys`` keeps the on-disk form stable across runs (the compaction
+    round-trip test relies on it); ``default=str`` lets a stray
+    ``datetime``/``Path`` in a payload serialize rather than crash the append."""
+    path = _entry_trail_journal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, sort_keys=True, default=str) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+
+
 # --- Compaction (memo G4) ----------------------------------------------------
 
 

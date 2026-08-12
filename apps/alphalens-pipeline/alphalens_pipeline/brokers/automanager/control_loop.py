@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.contract import (
     _QTY_EPS,
     BrokerCapabilityError,
@@ -42,7 +43,11 @@ from broker_contract.exit_geometry import (
     resolve_exit_policy,
 )
 
-from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
+from alphalens_pipeline.brokers.automanager import (
+    entry_trail_watcher,
+    entry_trails,
+    state_paths,
+)
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     ManagedExit,
     run_live_exits,
@@ -282,6 +287,16 @@ class LoopDeps:
     # ``ALPHALENS_BROKER_DAY1_GAP_GATE=1``, so a ``None`` probe with the flag
     # off is completely inert.
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None
+    # Entry-trailing watcher runtimes (PR-T1, DRY-RUN): crid -> the daemon-
+    # lifetime state for ONE open entry-tier watch (the stateful engine watcher
+    # + its measurement marks). A MUTABLE dict on the (frozen-field) deps — built
+    # once, carried across ticks — mirroring peak_tracker/oco_lag_counts above.
+    # The engine watcher's transient staleness-gap / open-check fields must
+    # persist across ticks within a lifetime; on first sight (fresh watch OR
+    # post-restart) the runtime is reconstructed from the journal fold so the
+    # trough never reseeds upward (memo §5). Empty until a watch opens; with the
+    # ENTRY_TRAIL_BPS flag off it stays empty, byte-identical to today.
+    entry_watchers: dict[str, _EntryWatchRuntime] = field(default_factory=dict)
 
 
 @dataclass
@@ -382,6 +397,16 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
 
     if not kill and alive:
         _run_placement_drain(deps, report)
+
+    # Entry-trailing watcher pass (PR-T1, DRY-RUN): advance each open watch's
+    # state machine off the shared INC-2 price stream. KILL-GATED internally
+    # (memo §3 G2 — no open-watch/touch/would-fire/journal under KILL) and a
+    # no-op when ALPHALENS_BROKER_ENTRY_TRAIL_BPS is unset/0, so this call site
+    # is unconditional and the flag alone controls behaviour. Runs every tick
+    # regardless of chain-alive (like the exit/protection passes) so time-based
+    # expiry + measurement never stall on a dead session. STILL DRY-RUN: the
+    # fire path only alerts "would fire" — no broker order is ever placed.
+    _run_entry_watch_pass(deps, kill, report)
 
     # The verdict-level advance loop (terminal / round-trip CancelRemaining +
     # divergence alerts) and the broker-state protection pass are INDEPENDENT: a
@@ -952,6 +977,421 @@ def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) ->
             f"oco-lag-persistent:{uic}",
         ):
             report.alerts += 1
+
+
+# --- Entry-trailing watcher pass (PR-T1, DRY-RUN) ----------------------------
+#
+# The WIRE half of ALPHALENS_BROKER_ENTRY_TRAIL_BPS. When the flag is armed,
+# _place_pick routes an eligible pick into a WATCH (per-tier watch_open lines on
+# entry_trails.jsonl) INSTEAD of resting the three server-side limit-entry
+# orders; this per-tick pass then drives each open watch's WATCHING -> TOUCHED
+# -> (WOULD_FIRE | SUSPENDED | EXPIRED | CANCELLED) state machine off the shared
+# INC-2 price stream. STRICTLY DRY-RUN: the pass NEVER places, amends, or
+# cancels a broker order — the "fire" is an alert-only "would fire @ trigger X"
+# plus a journal marker (memo §7 PR-T1). Flag unset/0 => nothing here runs and
+# the daemon is byte-identical to today (PR-T0 inertness).
+
+_ENTRY_WATCH_MAX_PICKS = 1
+"""Watch capacity (memo decision #4 / G5 CRITICAL-1): at most this many DISTINCT
+picks may hold open watches at once — a PICK-denominated limit, deliberately NOT
+folded into MAX_OPEN (which counts per tier and would make a 3-tier trailing
+pick un-armable at MAX_OPEN=1). The account is protected by the virtual
+gross/cash reservation fold (entry_trails.watching_virtual_gross_acct), not by
+this capacity number."""
+
+
+@dataclass
+class _EntryWatchRuntime:
+    """Daemon-lifetime scratch for ONE open entry-tier watch (one ``crid``).
+
+    Holds the stateful engine watcher (whose transient staleness-gap /
+    open-check fields must persist across ticks within a lifetime) plus the
+    measurement marks the terminal journal line stamps (memo §5 Measurement,
+    filled by T1d): the running ``trough`` (mirrored from each ``trough`` intent,
+    seeded from the fold on reconstruct so a restart never forgets the low
+    upward) and the touch price/timestamp captured when the tier is first
+    touched."""
+
+    watcher: entry_trail_watcher.EntryTierWatcher
+    trough: float | None = None
+    touch_price: float | None = None
+    touch_ts: str | None = None
+
+
+def _entry_watch_crid(ticker: str, brief_date: str, tier_index: int) -> str:
+    """Deterministic per-tier watch id in the ``-entry-`` request-id family
+    (memo §5 — parallel to the exit ids so entry/exit ids can never collide on
+    one uic). DETERMINISTIC, not a uuid: a crash between the journal-first
+    watch_open and the note-only pick retirement re-opens the SAME crid on the
+    next drain, and the fold's latest-watch_open-wins semantics make that
+    re-open idempotent (no double reservation) where a fresh uuid would leak a
+    second watch."""
+    return f"{ticker}-{brief_date}-entry-t{tier_index}"
+
+
+def _entry_trail_mode_tag(d_bps: int) -> str:
+    """The measurement ``entry_mode`` cohort tag (memo §5 / T8): the dry-run
+    trailing mode + configured distance + the execution-config version, so
+    fills measured under different execution policies never pool in the offline
+    analysis join."""
+    from alphalens_pipeline.brokers.execution import execution_config_version
+
+    return f"entry-trail-dryrun-d{d_bps}-{execution_config_version()}"
+
+
+def _entry_trail_eligible(plan: Any) -> bool:
+    """Whether a sized pick can be routed into an entry-trail watch: it has at
+    least one positive-quantity entry tier (an all-zero-tier plan is handled by
+    the normal zero-tiers refusal downstream). MVP scope is long single-name
+    equities, which every drained pick already is."""
+    return any(getattr(tier, "qty", 0) > 0 for tier in getattr(plan, "entry_tiers", ()) or ())
+
+
+def _entry_watch_capacity_reached(fold: entry_trails.EntryTrailFold) -> bool:
+    """True iff opening another watch would exceed :data:`_ENTRY_WATCH_MAX_PICKS`
+    DISTINCT watching picks. Counts distinct ``pick_key`` across every
+    non-terminal watch_open tier in the fold (falling back to the crid when a
+    record predates the pick_key field)."""
+    pick_keys: set[str] = set()
+    for state in fold.tiers.values():
+        if state.terminal_kind is not None or state.watch_open is None:
+            continue
+        pick_keys.add(str(state.watch_open.get("pick_key") or state.crid))
+    return len(pick_keys) >= _ENTRY_WATCH_MAX_PICKS
+
+
+def _open_entry_watches(
+    intent: Any, ticker: str, instrument: Any, plan: Any, fx: Any, *, d_bps: int
+) -> int:
+    """Journal one ``watch_open`` line per positive-quantity entry tier (memo
+    §5, G3 journal-FIRST) and return the count opened.
+
+    The shared TTL ``window_end`` is resolved ONCE (memo §5 "one rule":
+    ``advance_trading_sessions(brief_date, DEFAULT_ORDER_TTL_DAYS)`` -> that
+    session's close in UTC, never "+7d from each order"). Each watch_open
+    carries BOTH the reservation-critical fields the gross/cash fold values
+    (``limit``/``qty``/``fx_rate``) AND the WIRE context the per-tick pass needs
+    to reconstruct the watcher and resolve the price feed
+    (``uic``/``ticker``/``exchange_mic``/``next_tier_limit``/``d_bps``/
+    ``window_end``/``pick_key``/``entry_mode``). Tiers are strictly descending,
+    so ``next_tier_limit`` is the deeper tier's limit for the G9 depth suspend;
+    ``None`` on the deepest tier."""
+    from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_close_utc
+
+    brief_date = intent.meta.brief_date
+    mic = instrument.exchange_mic
+    uic = int(instrument.broker_instrument_id)
+    ttl_date = advance_trading_sessions(
+        dt.date.fromisoformat(brief_date), DEFAULT_ORDER_TTL_DAYS, exchange=mic
+    )
+    window_end = session_close_utc(ttl_date, exchange=mic).isoformat()
+    fx_rate = float(fx.rate) if fx is not None else None
+    mode_tag = _entry_trail_mode_tag(d_bps)
+    pick_key = f"{ticker}:{brief_date}"
+
+    tiers = tuple(plan.entry_tiers)
+    opened = 0
+    for index, tier in enumerate(tiers):
+        if tier.qty <= 0:
+            continue  # a zero-sized tier has nothing to watch (mirrors classify)
+        next_limit = tiers[index + 1].limit_price if index + 1 < len(tiers) else None
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_WATCH_OPEN,
+                "crid": _entry_watch_crid(ticker, brief_date, tier.tier_index),
+                "limit": float(tier.limit_price),
+                "qty": float(tier.qty),
+                "d_bps": int(d_bps),
+                "window_end": window_end,
+                "fx_rate": fx_rate,
+                "uic": uic,
+                "ticker": ticker,
+                "exchange_mic": mic,
+                "next_tier_limit": None if next_limit is None else float(next_limit),
+                "pick_key": pick_key,
+                "entry_mode": mode_tag,
+            }
+        )
+        opened += 1
+    return opened
+
+
+def _route_pick_to_entry_watch(
+    broker: Broker,
+    intent: Any,
+    ticker: str,
+    instrument: Any,
+    account: Any,
+    plan: Any,
+    fx: Any,
+    *,
+    d_bps: int,
+) -> bool:
+    """The flag-ON drain tail: journal the per-tier watches (G3 journal-FIRST),
+    then RETIRE the pick from the drain with the SAME note-only submission
+    record ``_place_tiers`` uses (``_submitted_pick_keys`` treats a note-only
+    record as submitted, so the drain never re-drives this pick). Returns True
+    when at least one watch opened. No broker order is placed — DRY-RUN.
+
+    A calendar/journal failure inside :func:`_open_entry_watches` must never
+    crash the drain: it is contained to a logged False (the pick stays armed and
+    is re-attempted next tick; the deterministic crid makes any partial
+    watch_open idempotent on retry)."""
+    from alphalens_pipeline.brokers.submission_log import (
+        append_submission_record,
+        build_submission_record,
+    )
+
+    try:
+        opened = _open_entry_watches(intent, ticker, instrument, plan, fx, d_bps=d_bps)
+    # Broad on purpose: an unrecognised MIC (calendar ValueError) or a journal
+    # I/O error must degrade to "pick stays armed", never abort the tick before
+    # the protection pass (_place_pick's own try only catches BrokerError).
+    except Exception:
+        logger.warning(
+            "place_pick %s: entry-trail watch-open failed — pick stays armed", ticker, exc_info=True
+        )
+        return False
+    if opened == 0:
+        logger.warning(
+            "place_pick %s: every entry tier sized to zero shares — no watch opened", ticker
+        )
+        return False
+    append_submission_record(
+        build_submission_record(
+            brief_date=intent.meta.brief_date,
+            ticker=ticker,
+            mic=instrument.exchange_mic,
+            uic=instrument.broker_instrument_id,
+            brackets=[],
+            note="entry-trail watch opened",
+            sizing_currency=account.currency,
+            instrument_currency=instrument.currency,
+            sizing_equity=_resolve_sizing_equity(account.total_value),
+            fx=fx,
+            est_round_trip_fee_bps=_estimate_round_trip_fee_bps(
+                plan, fx, instrument_currency=instrument.currency
+            ),
+        )
+    )
+    logger.info(
+        "place_pick %s: routed into entry-trail watch (%d tier(s), d=%dbps)", ticker, opened, d_bps
+    )
+    return True
+
+
+def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> None:
+    """Advance every open entry-trail watch by one decision tick (memo §5).
+
+    KILL-GATED (memo §3 G2, CRITICAL): under KILL the pass opens no watch,
+    advances no state, writes no journal line and sends no alert — mirroring the
+    drain's ``if not kill`` gate (:func:`run_once`), NOT the ungated live-exits
+    pass (copying that would let entries progress under an emergency stop).
+    Working ``-entry-`` order cancellation on the KILL edge is a T2 concern — no
+    order exists in the dry run.
+
+    Unlike the protection pass this takes NO ``records`` parameter: the watch
+    state lives in the SEPARATE ``entry_trails.jsonl`` journal, never the
+    submissions journal (the same reason :func:`_run_live_exits_pass` omits it).
+    A no-op when the flag is unset/0."""
+    if kill:
+        return
+    d_bps = entry_trails.entry_trail_bps()
+    if d_bps <= 0:
+        return
+    fold = entry_trails.read_entry_trail_fold()
+    active = _active_entry_watches(fold)
+    if not active:
+        deps.entry_watchers.clear()  # every watch went terminal — drop stale runtimes
+        return
+    # Prune runtimes whose crid terminated last tick (no longer in the fold's
+    # active set) so a re-picked crid can never resurrect a stale watcher.
+    for stale_crid in set(deps.entry_watchers) - set(active):
+        deps.entry_watchers.pop(stale_crid, None)
+
+    uic_to_instrument = {
+        int(record["uic"]): (str(record["ticker"]), str(record["exchange_mic"]))
+        for record in active.values()
+        if _has_feed_context(record)
+    }
+    feed = _build_entry_watch_feed(deps, uic_to_instrument, report)
+    now = dt.datetime.now(dt.UTC)
+    for crid, record in active.items():
+        _advance_one_entry_watch(deps, crid, record, fold.tiers.get(crid), feed, now, report)
+
+
+def _active_entry_watches(
+    fold: entry_trails.EntryTrailFold,
+) -> dict[str, Mapping[str, Any]]:
+    """The non-terminal watch_open record per crid — the watches to advance this
+    tick. A tier with a terminal marker or no watch_open is excluded."""
+    active: dict[str, Mapping[str, Any]] = {}
+    for crid, state in fold.tiers.items():
+        if state.terminal_kind is None and state.watch_open is not None:
+            active[crid] = state.watch_open
+    return active
+
+
+def _has_feed_context(record: Mapping[str, Any]) -> bool:
+    """Whether a watch_open record carries the uic/ticker/mic the price feed
+    needs. A pre-WIRE record (reservation-only fields) is simply not fed a price
+    — the watcher then vetoes every tick, never crashes."""
+    return all(record.get(key) is not None for key in ("uic", "ticker", "exchange_mic"))
+
+
+def _build_entry_watch_feed(
+    deps: LoopDeps, uic_to_instrument: Mapping[int, tuple[str, str]], report: TickReport
+) -> PriceFeed:
+    """Build this tick's price feed for the watching uics via the injected/
+    default factory (the SAME source the exit pass uses, so entry and exit read
+    identical prices), behind a boundary whose entire job is that NOTHING here
+    can reach the tick. A construction failure degrades to a feed that vetoes
+    every uic (no watch progress), exactly like an OFF flag or a stale quote —
+    mirrors :func:`_build_live_exits_feed`."""
+    feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
+    try:
+        return feed_factory(uic_to_instrument)
+    # Broad on purpose (mirrors _build_live_exits_feed): a feed/network/auth
+    # error becomes a veto, never a crash — the watches simply make no progress.
+    except Exception as exc:
+        if deps.alert_throttled(
+            f"entry-watch: price feed construction failed — degrading to no-prices: {exc}",
+            "entry-watch-feed-build-fail",
+        ):
+            report.alerts += 1
+        return _NullPriceFeed()
+
+
+def _advance_one_entry_watch(
+    deps: LoopDeps,
+    crid: str,
+    record: Mapping[str, Any],
+    tier_state: entry_trails.EntryTrailTierState | None,
+    feed: PriceFeed,
+    now: dt.datetime,
+    report: TickReport,
+) -> None:
+    """Advance ONE watch: reconstruct-or-fetch its runtime, read the fresh
+    reference price, ``process`` one tick, persist the journal intents, route the
+    alerts, and drop the runtime once terminal. Per-watch fault isolation: an
+    unreconstructable record is skipped."""
+    runtime = _get_or_create_entry_runtime(deps, crid, record, tier_state)
+    if runtime is None:
+        return
+    price = _entry_watch_reference_price(feed, record)
+    result = runtime.watcher.process(entry_trail_watcher.TickInput(now=now, price=price))
+    _persist_entry_watch_result(crid, result)
+    for alert in result.alerts:
+        if deps.alert_throttled(alert.message, alert.throttle_key):
+            report.alerts += 1
+    if runtime.watcher.is_terminal:
+        deps.entry_watchers.pop(crid, None)
+
+
+def _entry_watch_reference_price(feed: PriceFeed, record: Mapping[str, Any]) -> float | None:
+    """The fresh reference scalar for one watch (memo trap #8: detection is
+    bid-referenced, matching the LIVE V1 probe). ``None`` on any doubt — no feed
+    context, a vetoed/None point, or a non-finite/non-positive bid — which the
+    engine treats as the freshness/trust veto (no watch progress this tick)."""
+    if not _has_feed_context(record):
+        return None
+    try:
+        point = feed.latest(int(record["uic"]))
+    except Exception:  # broad: one bad uic must not abort the other watches
+        return None
+    if point is None:
+        return None
+    price = point.bid
+    if price is None or not math.isfinite(price) or price <= 0.0:
+        return None
+    return price
+
+
+def _get_or_create_entry_runtime(
+    deps: LoopDeps,
+    crid: str,
+    record: Mapping[str, Any],
+    tier_state: entry_trails.EntryTrailTierState | None,
+) -> _EntryWatchRuntime | None:
+    """The daemon-lifetime runtime for ``crid``, reconstructing it from the
+    journal fold on first sight (fresh watch OR post-restart). The trough is
+    seeded from the fold's ``min_trough`` and the state from the latest
+    non-terminal kind, so a restart never reseeds the trough upward (memo §5
+    restart rule). ``None`` when the watch_open record is unreconstructable
+    (logged once)."""
+    existing = deps.entry_watchers.get(crid)
+    if existing is not None:
+        return existing
+    config = _entry_watch_config_from_record(record)
+    if config is None:
+        return None
+    seeded_trough = tier_state.min_trough if tier_state is not None else None
+    initial_state = _entry_watch_state_from_kind(
+        tier_state.latest_kind if tier_state is not None else None
+    )
+    runtime = _EntryWatchRuntime(
+        watcher=entry_trail_watcher.EntryTierWatcher(
+            config, seeded_trough=seeded_trough, initial_state=initial_state
+        ),
+        trough=seeded_trough,
+    )
+    deps.entry_watchers[crid] = runtime
+    return runtime
+
+
+def _entry_watch_config_from_record(
+    record: Mapping[str, Any],
+) -> entry_trail_watcher.TierWatchConfig | None:
+    """Rebuild the immutable :class:`~entry_trail_watcher.TierWatchConfig` from a
+    watch_open journal record. ``None`` (logged) on any missing/malformed field
+    — a doubt about a watch's parameters skips it, never crashes the pass."""
+    try:
+        return entry_trail_watcher.TierWatchConfig(
+            crid=str(record["crid"]),
+            tier_limit=float(record["limit"]),
+            d_bps=int(record["d_bps"]),
+            window_end=dt.datetime.fromisoformat(str(record["window_end"])),
+            qty=float(record["qty"]),
+            fx_rate=None if record.get("fx_rate") is None else float(record["fx_rate"]),
+            next_tier_limit=(
+                None if record.get("next_tier_limit") is None else float(record["next_tier_limit"])
+            ),
+        )
+    except (KeyError, TypeError, ValueError):
+        logger.warning(
+            "entry-watch: watch_open record for crid=%s is unreconstructable — skipping",
+            record.get("crid"),
+        )
+        return None
+
+
+def _entry_watch_state_from_kind(kind: str | None) -> entry_trail_watcher.WatchState:
+    """Map the fold's latest non-terminal kind back to a resumable watch state
+    (memo §5 restart). ``touched``/``trough`` resume TOUCHED; ``trail_armed``
+    resumes WOULD_FIRE (terminal — a would-fired tier must never re-fire on
+    restart); anything else (``watch_open``/unknown) resumes WATCHING."""
+    if kind in (entry_trails.KIND_TOUCHED, entry_trails.KIND_TROUGH):
+        return entry_trail_watcher.WatchState.TOUCHED
+    if kind == entry_trails.KIND_TRAIL_ARMED:
+        return entry_trail_watcher.WatchState.WOULD_FIRE
+    return entry_trail_watcher.WatchState.WATCHING
+
+
+def _persist_entry_watch_result(crid: str, result: entry_trail_watcher.TickResult) -> None:
+    """Persist one tick's journal intents (memo §5 journals). The dry-run
+    WOULD_FIRE additionally gets a terminal ``fired`` line (``entry_order_id=
+    null`` — no order placed) so the fold marks the tier terminal: its virtual
+    reservation releases and it can never re-fire on restart (the engine emits
+    only the non-terminal ``trail_armed`` marker for the alert-only would-fire).
+    T1d enriches every terminal line with the measurement blob."""
+    for intent in result.journal_intents:
+        entry_trails.append_entry_trail_line(
+            {"kind": intent.kind, "crid": intent.crid, **dict(intent.payload)}
+        )
+    if result.state is entry_trail_watcher.WatchState.WOULD_FIRE:
+        entry_trails.append_entry_trail_line(
+            {"kind": entry_trails.KIND_FIRED, "crid": crid, "entry_order_id": None}
+        )
 
 
 def _execute_action(
@@ -2712,6 +3152,7 @@ def _check_gross_cap(
     records: Iterable[Mapping[str, Any]],
     positions: Iterable[Any],
     ticker: str,
+    entry_trail_fold: entry_trails.EntryTrailFold | None = None,
 ) -> str | None:
     """``None`` iff the pick keeps total gross exposure — still-working
     journaled entries + THIS candidate + filled positions + WATCHING trail
@@ -2759,9 +3200,14 @@ def _check_gross_cap(
     if mark_failure is not None:
         return f"gross cap: {ticker} refused — {mark_failure}"
 
-    watching_acct, unvaluable = entry_trails.watching_virtual_gross_acct(
-        entry_trails.read_entry_trail_fold()
+    # PR-T1: read the fold ONCE in _place_pick and thread it into BOTH money
+    # gates so a mid-attempt append (a watch opening on another pick this tick)
+    # can never tear the read between them. A None fold (direct unit tests) reads
+    # its own snapshot, as before.
+    fold = (
+        entry_trail_fold if entry_trail_fold is not None else entry_trails.read_entry_trail_fold()
     )
+    watching_acct, unvaluable = entry_trails.watching_virtual_gross_acct(fold)
     if unvaluable:
         # Fail CLOSED exactly like the unjoined-working-orders path above: a
         # malformed/unvaluable entry-trail record may be a virtual reservation
@@ -2807,6 +3253,7 @@ def _check_cash_floor(
     open_verdicts: Iterable[Any],
     records: Iterable[Mapping[str, Any]],
     ticker: str,
+    entry_trail_fold: entry_trails.EntryTrailFold | None = None,
 ) -> str | None:
     """``None`` iff the pick's buffered funding need fits the account's real
     ``margin_available`` (or the sizing mode is not ``declared`` — clamped /
@@ -2859,14 +3306,14 @@ def _check_cash_floor(
     candidate_buffered = candidate_acct * (1.0 + _CASH_FLOOR_BUFFER_PCT / 100.0)
 
     reserved_resting, _unjoined = _committed_working_gross_acct(open_verdicts, records)
-    # NOTE: the journal is read here AND in _check_gross_cap (one placement
-    # attempt = two reads). Valid ONLY because PR-T0 has no writer and both
-    # gates run in the single-threaded tick — PR-T1 must read the fold once
-    # in _place_pick and pass it into both gates, or a mid-attempt append
-    # becomes a torn read between them.
-    watching_acct, unvaluable = entry_trails.watching_virtual_gross_acct(
-        entry_trails.read_entry_trail_fold()
+    # PR-T1 torn-read fix: _place_pick reads the fold ONCE and threads the SAME
+    # snapshot into this gate and _check_gross_cap, so a mid-attempt watch_open
+    # append on another pick this tick can never tear the read between the two
+    # money gates. A None fold (direct unit tests) reads its own snapshot.
+    fold = (
+        entry_trail_fold if entry_trail_fold is not None else entry_trails.read_entry_trail_fold()
     )
+    watching_acct, unvaluable = entry_trails.watching_virtual_gross_acct(fold)
     if unvaluable:
         # Fail CLOSED independent of the gross cap running first: a direct or
         # future caller outside the _place_pick ordering must never silently
@@ -3659,6 +4106,13 @@ def _place_pick(
         )
         return False
 
+    # Entry-trailing reservation fold (memo G5) — read ONCE here and threaded
+    # into BOTH money gates below (torn-read fix) AND the watch-capacity /
+    # drain-intercept check further down. A single snapshot per placement
+    # attempt. Empty/absent journal (flag off) folds to zero, so this is inert
+    # until a watch is open (PR-T0 inertness).
+    entry_trail_fold = entry_trails.read_entry_trail_fold()
+
     # Post-sizing portfolio gross cap (broker sizing memo §3) — the pre-sizing
     # safety.check gross rail stays as a cheap early exit, but it is currency-
     # mismatched, candidate-blind and filled-blind; THIS is the authoritative
@@ -3676,6 +4130,7 @@ def _place_pick(
         records=records,
         positions=positions,
         ticker=ticker,
+        entry_trail_fold=entry_trail_fold,
     )
     if gross_violation is not None:
         _refuse_pick_terminal(
@@ -3694,12 +4149,36 @@ def _place_pick(
         open_verdicts=open_verdicts,
         records=records,
         ticker=ticker,
+        entry_trail_fold=entry_trail_fold,
     )
     if cash_violation is not None:
         _refuse_pick_terminal(
             ticker, brief_date, cash_violation, f"cash-floor:{ticker}", alert_throttled
         )
         return False
+
+    # Entry-trailing intercept (memo §5 / drain_intercept): with the flag armed
+    # AND the pick trailing-eligible, route it into a WATCH (per-tier watch_open
+    # lines, journal-FIRST) INSTEAD of resting the three server-side limit-entry
+    # orders — no broker order is placed in PR-T1 (DRY-RUN). Flag OFF (bps == 0)
+    # falls straight through to classify + _place_tiers, BYTE-IDENTICAL to today
+    # (PR-T0 inertness proof). The intercept lands AFTER the cash floor so a
+    # watch only opens once the pick has cleared every money gate.
+    d_bps = entry_trails.entry_trail_bps()
+    if d_bps > 0 and _entry_trail_eligible(plan):
+        if _entry_watch_capacity_reached(entry_trail_fold):
+            # Pick-denominated capacity (memo decision #4): stay ARMED (not a
+            # terminal refusal) so it opens once an earlier watch clears.
+            logger.debug(
+                "place_pick %s: entry-trail watch capacity reached (>= %d picks) — "
+                "pick stays armed",
+                ticker,
+                _ENTRY_WATCH_MAX_PICKS,
+            )
+            return False
+        return _route_pick_to_entry_watch(
+            broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps
+        )
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:

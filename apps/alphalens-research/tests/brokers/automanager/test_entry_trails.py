@@ -460,5 +460,44 @@ class TestCompactEntryTrailJournalFile(unittest.TestCase):
         self.assertEqual(fold.malformed, 1)
 
 
+class TestAppendEntryTrailLine(unittest.TestCase):
+    """The PR-T1 writer: append-only, round-trips through the fold, and shares
+    the ONE journal-path seam the read/fold/compaction primitives use."""
+
+    def test_append_then_fold_round_trips(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "entry_trails.jsonl"
+            with mock.patch.object(et, "_entry_trail_journal_path", lambda: journal):
+                et.append_entry_trail_line(
+                    {"kind": et.KIND_WATCH_OPEN, "crid": _CRID, "limit": 10.0, "qty": 5}
+                )
+                et.append_entry_trail_line({"kind": et.KIND_TOUCHED, "crid": _CRID})
+                fold = et.read_entry_trail_fold()
+        self.assertIn(_CRID, fold.tiers)
+        self.assertEqual(fold.tiers[_CRID].latest_kind, et.KIND_TOUCHED)
+        self.assertIsNotNone(fold.tiers[_CRID].watch_open)
+
+    def test_appends_never_rewrite_prior_lines(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "entry_trails.jsonl"
+            with mock.patch.object(et, "_entry_trail_journal_path", lambda: journal):
+                et.append_entry_trail_line({"kind": et.KIND_WATCH_OPEN, "crid": _CRID})
+                et.append_entry_trail_line({"kind": et.KIND_EXPIRED, "crid": _CRID})
+            lines = [line for line in journal.read_text(encoding="utf-8").splitlines() if line]
+        self.assertEqual(len(lines), 2)
+
+    def test_non_json_native_payload_serializes_via_default_str(self) -> None:
+        import datetime as dt
+
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "entry_trails.jsonl"
+            with mock.patch.object(et, "_entry_trail_journal_path", lambda: journal):
+                # A stray datetime must serialize (default=str), never crash the append.
+                et.append_entry_trail_line(
+                    {"kind": et.KIND_TROUGH, "crid": _CRID, "at": dt.datetime(2026, 8, 12)}
+                )
+            self.assertIn("2026-08-12", journal.read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
