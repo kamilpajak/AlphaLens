@@ -1681,6 +1681,228 @@ class TestPlacePickGrossCapIntegration(unittest.TestCase):
         self.assertEqual(alerts[0][1], "fee-floor:KO")
 
 
+# --- Cash floor (broker sizing declared-frame memo §4.2) ---------------------
+
+
+def _cash_acct(margin_available: Any, currency: str = "USD") -> Any:
+    """An account double carrying ``margin_available`` (the cash floor's
+    ``available`` input — P1 probe: a resting Saxo buy reserves NOTHING in
+    ANY balance field, so the floor folds its own reservation ledger)."""
+    return type(
+        "A",
+        (),
+        {"total_value": 100_000.0, "currency": currency, "margin_available": margin_available},
+    )()
+
+
+_DECLARED_ENV = {SIZING_EQUITY_ENV: "16000", SIZING_EQUITY_MODE_ENV: "declared"}
+
+
+class TestCheckCashFloor(unittest.TestCase):
+    """``_check_cash_floor`` — sibling of ``_check_fee_floor``, active ONLY in
+    declared sizing mode (memo §4.2):
+
+        candidate_buffered + reserved_resting > margin_available -> refuse
+
+    where ``candidate_buffered`` is the whole-ladder gross in ACCOUNT currency
+    x (1 + 4% buffer) and ``reserved_resting`` is the committed-working entry
+    gross folded from the journal (P1: the broker reserves nothing for a
+    resting buy, so the floor must carry its own reservation ledger)."""
+
+    def _check(
+        self,
+        *,
+        notional: float = 10_000.0,
+        fx: Any = None,
+        verdicts: Any = (),
+        records: Any = (),
+        margin_available: Any = 50_000.0,
+    ) -> str | None:
+        return cl._check_cash_floor(
+            _fee_plan(notional),
+            fx,
+            account=_cash_acct(margin_available),
+            open_verdicts=list(verdicts),
+            records=list(records),
+            ticker="KO",
+        )
+
+    def test_clamped_or_unset_mode_returns_none_even_when_broke(self) -> None:
+        # Byte-identical inertness outside declared mode: SIM (unset) and an
+        # explicit clamped unit never consult the floor, however broke.
+        for env in ({}, {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "clamped"}):
+            with self.subTest(env=env), mock.patch.dict("os.environ", env, clear=True):
+                self.assertIsNone(self._check(notional=10_000.0, margin_available=1.0))
+
+    def test_declared_and_sufficient_returns_none(self) -> None:
+        # 10_000 x 1.04 = 10_400 <= 20_000.
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            self.assertIsNone(self._check(notional=10_000.0, margin_available=20_000.0))
+
+    def test_declared_candidate_alone_over_names_amounts_and_currency(self) -> None:
+        # 10_000 x 1.04 = 10_400 > 5_000 — the message must name the buffered
+        # candidate, the (empty) resting reservation, the available figure and
+        # the account currency, so the operator can size the deposit.
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            message = self._check(notional=10_000.0, margin_available=5_000.0)
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("KO", message)
+        self.assertIn("10,400.00", message)  # candidate_buffered
+        self.assertIn("0.00", message)  # reserved_resting (empty journal)
+        self.assertIn("5,000.00", message)  # available
+        self.assertIn("USD", message)  # account currency
+
+    def test_reserved_resting_tips_it_over_the_p1_regression(self) -> None:
+        # THE P1 regression: the candidate alone fits (10_400 <= 12_000) but a
+        # resting journaled buy (10.0 x 200 = 2_000) the broker does NOT
+        # reserve for pushes the total to 12_400 > 12_000. Without the folded
+        # reservation ledger this pick would double-spend the same cash.
+        working = _verdict(status="WORKING", details={"client_request_id": "rid-a"})
+        records = [{"brackets": [{"client_request_id": "rid-a", "entry": 10.0, "qty": 200}]}]
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            self.assertIsNone(self._check(notional=10_000.0, margin_available=12_000.0))
+            message = self._check(
+                notional=10_000.0,
+                margin_available=12_000.0,
+                verdicts=[working],
+                records=records,
+            )
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("2,000.00", message)  # reserved_resting
+
+    def test_margin_available_none_fails_closed(self) -> None:
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            message = self._check(notional=10_000.0, margin_available=None)
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("KO", message)
+        self.assertIn("margin_available", message)
+
+    def test_fx_notional_divides_into_account_currency(self) -> None:
+        # fx.rate is instrument-ccy per 1 account-ccy: 10_000 USD at rate 0.25
+        # is 40_000 acct-ccy, buffered 41_600 > 41_000 (a multiplication bug
+        # would yield 2_600 and pass). Same-currency folds raw and passes.
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            message = self._check(notional=10_000.0, fx=_fx(0.25), margin_available=41_000.0)
+            self.assertIsNotNone(message)
+            assert message is not None
+            self.assertIn("41,600.00", message)
+            self.assertIsNone(self._check(notional=10_000.0, fx=None, margin_available=41_000.0))
+
+    def test_buffer_tips_a_borderline_candidate(self) -> None:
+        # Unbuffered 10_000 fits 10_200; the 4% funding buffer (10_400) must
+        # tip it — entry commissions + one-way FX markup + drift over GTD-7d
+        # + T+2 are real cash the entry fill will need.
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            self.assertIsNotNone(self._check(notional=10_000.0, margin_available=10_200.0))
+
+    def test_zero_gross_returns_none_before_the_margin_read(self) -> None:
+        # An unplannable/zero-tier pick funds nothing — inert even when the
+        # margin field is unusable (the zero-tiers refusal downstream owns it).
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            self.assertIsNone(self._check(notional=0.0, margin_available=None))
+
+
+class TestPlacePickCashFloorIntegration(unittest.TestCase):
+    """The cash floor gate inside ``_place_pick``: AFTER the gross cap (same
+    post-sizing inputs), BEFORE classify. Violation mirrors the fee-floor /
+    gross-cap terminal refusal flow verbatim (mark_refused + throttled alert,
+    NO submission record)."""
+
+    def _placer(
+        self, broker: Any, *, notional: float, **over: Any
+    ) -> tuple[Any, list[tuple[str, str]], list[tuple[Any, ...]], list[Any]]:
+        pkg = "alphalens_pipeline.brokers"
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        alerts: list[tuple[str, str]] = []
+        refusals: list[tuple[Any, ...]] = []
+        appended: list[Any] = []
+
+        def _alert_throttled(message: str, reason: str) -> bool:
+            alerts.append((message, reason))
+            return True
+
+        m: dict[str, Any] = {
+            "verdicts": lambda _r, _b: [],
+            "safety_check": lambda *_a, **_k: object(),
+            "resolve": lambda _b, _t: _instr(),
+            "classify": lambda *_a, **_k: _placement(),
+            "compute_plan": lambda _spec, **_k: _fee_plan(notional),
+            "iter_records": lambda _p: [],
+            "append": appended.append,
+            "build_record": lambda **kw: dict(kw),
+            "mark_refused": lambda *a: refusals.append(a),
+            **over,
+        }
+        p = stack.enter_context
+        p(mock.patch(f"{pkg}.automanager.picks.mark_refused", m["mark_refused"]))
+        p(mock.patch(f"{pkg}.submission_log.build_submission_record", m["build_record"]))
+        p(mock.patch(f"{pkg}.submission_log.append_submission_record", m["append"]))
+        p(mock.patch(f"{pkg}.submission_log.iter_submission_records", m["iter_records"]))
+        p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", m["verdicts"]))
+        p(mock.patch(f"{pkg}.automanager.safety.check", m["safety_check"]))
+        p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
+        p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
+        p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
+        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
+        return placer, alerts, refusals, appended
+
+    def test_declared_refusal_terminal_alerted_nothing_placed_no_record(self) -> None:
+        broker = _RecordingBroker(on_account=lambda: _cash_acct(5_000.0))
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            placer, alerts, refusals, appended = self._placer(broker, notional=10_000.0)
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(broker.placed, [], "the cash floor must refuse BEFORE any bracket places")
+        self.assertEqual(appended, [], "a refused pick must never journal a submission record")
+        self.assertEqual(len(refusals), 1)
+        ticker, brief_date, reason = refusals[0]
+        self.assertEqual(ticker, "KO")
+        self.assertEqual(brief_date, dt.date(2026, 7, 20))
+        self.assertIn("cash", reason.lower())
+        self.assertEqual(len(alerts), 1)
+        message, reason_key = alerts[0]
+        self.assertIn("cash", message.lower())
+        self.assertEqual(reason_key, "cash-floor:KO")
+
+    def test_clamped_mode_places_as_today(self) -> None:
+        # Same broke account, mode clamped: the floor never consults the
+        # balance — byte-identical to pre-cash-floor behavior.
+        broker = _RecordingBroker(on_account=lambda: _cash_acct(5_000.0))
+        env = {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "clamped"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            placer, alerts, refusals, _appended = self._placer(broker, notional=10_000.0)
+            self.assertTrue(placer(_pick()))
+        self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    def test_declared_and_funded_places(self) -> None:
+        broker = _RecordingBroker(on_account=lambda: _cash_acct(50_000.0))
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            placer, alerts, refusals, _appended = self._placer(broker, notional=10_000.0)
+            self.assertTrue(placer(_pick()))
+        self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    def test_gross_cap_fires_before_cash_floor_when_both_trip(self) -> None:
+        # Sibling ordering: fee floor -> gross cap -> cash floor. A pick
+        # violating both later gates is refused with the GROSS message/key
+        # (one page, not two).
+        broker = _RecordingBroker(on_account=lambda: _cash_acct(5_000.0))
+        env = {**_DECLARED_ENV, PORTFOLIO_GROSS_FRAC_ENV: "0.0001"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            placer, alerts, refusals, _appended = self._placer(broker, notional=10_000.0)
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(len(refusals), 1)
+        self.assertIn("gross", refusals[0][2].lower())
+        self.assertEqual(alerts[0][1], "gross-cap:KO")
+
+
 def _exit_spec(*, stop: float, tp: float, atr: float, ceiling: float | None = None) -> Any:
     return ExitGeometrySpec(
         initial_levels=InitialLevels(stop=stop, tp=tp),

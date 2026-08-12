@@ -2699,6 +2699,89 @@ def _check_gross_cap(
     )
 
 
+# --- Cash floor (broker sizing declared-frame memo §4.2) ---------------------
+#
+# Funding-friction buffer on the candidate's account-currency gross. Covers
+# entry commissions (0.08% min $1 per tier), the one-way FX conversion markup
+# (<= 0.25%), and USDPLN drift over the full GTD-7d entry window + T+2
+# settlement. NOT a percentile-calibrated figure: the consequence of an
+# underfunded fill (reject vs forced action) is un-probeable on SIM (P2), so
+# the first LIVE weeks are the observation; the buffer is sized to make that
+# event rare, not impossible (memo §4.2, zen finding applied).
+_CASH_FLOOR_BUFFER_PCT = 4.0
+
+
+def _check_cash_floor(
+    plan: Any,
+    fx: Any,
+    *,
+    account: Any,
+    open_verdicts: Iterable[Any],
+    records: Iterable[Mapping[str, Any]],
+    ticker: str,
+) -> str | None:
+    """``None`` iff the pick's buffered funding need fits the account's real
+    ``margin_available`` (or the sizing mode is not ``declared`` — clamped /
+    unset stays byte-identical to pre-cash-floor behavior; the min-clamp
+    already bounds sizing by the snapshot there). Else a terminal refusal
+    message naming the buffered candidate, the resting reservation, the
+    available figure and the account currency (memo §4.2/§4.3):
+
+        candidate_buffered + reserved_resting > available -> refuse
+
+    ``reserved_resting`` folds the committed-working entry gross from the
+    journal via the PR-0 ``_committed_working_gross_acct`` fold because the
+    broker reserves NOTHING for a resting buy limit (P1 probe, 2026-08-12
+    SIM: CashBalance, MarginAvailableForTrading and TotalValue all UNCHANGED
+    after placement and after cancel) — without this ledger two armed picks
+    would double-spend the same cash. The fold's ``unjoined`` count is
+    deliberately ignored HERE: the gross cap (which runs FIRST in
+    ``_place_pick``, same verdicts+records) already fails closed on any
+    unjoined working verdict, so this code path only ever sees ``unjoined``
+    when called outside that ordering (direct unit tests).
+
+    ``available`` is ``margin_available`` — never ``cash``, which ignores
+    margin impact and lags under EOD netting; ``None`` (SIM NoAccess or an
+    account double without the field) fails CLOSED."""
+    from alphalens_pipeline.brokers.automanager.live_rails import (
+        SIZING_EQUITY_MODE_ENV,
+        SIZING_MODE_DECLARED,
+    )
+
+    mode = (os.environ.get(SIZING_EQUITY_MODE_ENV) or "").strip().lower()
+    if mode != SIZING_MODE_DECLARED:
+        return None
+
+    from broker_contract.sizing import setup_plan_gross_notional
+
+    candidate_acct = setup_plan_gross_notional(plan)
+    if candidate_acct <= 0:
+        # An unplannable/zero-tier pick funds nothing — stay inert (before the
+        # margin read); the zero-tiers refusal downstream owns such a pick.
+        return None
+    if fx is not None:
+        # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
+        candidate_acct /= float(fx.rate)
+    candidate_buffered = candidate_acct * (1.0 + _CASH_FLOOR_BUFFER_PCT / 100.0)
+
+    reserved_resting, _unjoined = _committed_working_gross_acct(open_verdicts, records)
+
+    available = getattr(account, "margin_available", None)
+    if available is None:
+        return (
+            f"cash floor: {ticker} refused — account margin_available is None, the "
+            "real balance cannot be read; failing closed"
+        )
+    if candidate_buffered + reserved_resting <= available:
+        return None
+    return (
+        f"cash floor: {ticker} needs {candidate_buffered:,.2f} {account.currency} "
+        f"(incl. {_CASH_FLOOR_BUFFER_PCT:g}% buffer) + {reserved_resting:,.2f} already "
+        f"reserved by resting entries, but only {available:,.2f} {account.currency} is "
+        "available — deposit and re-arm"
+    )
+
+
 def _refuse_pick_terminal(
     ticker: str,
     brief_date: dt.date,
@@ -3388,6 +3471,24 @@ def _place_pick(
     if gross_violation is not None:
         _refuse_pick_terminal(
             ticker, brief_date, gross_violation, f"gross-cap:{ticker}", alert_throttled
+        )
+        return False
+
+    # Cash floor (broker sizing declared-frame memo §4.2) — declared mode
+    # only; runs AFTER the gross cap (exposure first, funding second — and the
+    # gross cap's fail-closed unjoined check must win, see _check_cash_floor)
+    # and BEFORE classify, on the same post-sizing inputs. Zero new broker I/O.
+    cash_violation = _check_cash_floor(
+        plan,
+        fx,
+        account=account,
+        open_verdicts=open_verdicts,
+        records=records,
+        ticker=ticker,
+    )
+    if cash_violation is not None:
+        _refuse_pick_terminal(
+            ticker, brief_date, cash_violation, f"cash-floor:{ticker}", alert_throttled
         )
         return False
 
