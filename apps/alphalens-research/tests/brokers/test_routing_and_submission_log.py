@@ -74,8 +74,19 @@ class _RoutingStubBroker:
 
 
 class TestResolveUsInstrument(unittest.TestCase):
-    def test_probe_order_is_xnys_then_xnas(self):
-        self.assertEqual(US_MIC_PROBE_ORDER, ("XNYS", "XNAS"))
+    def test_probe_order_is_xnys_then_xnas_then_xase(self):
+        self.assertEqual(US_MIC_PROBE_ORDER, ("XNYS", "XNAS", "XASE"))
+
+    def test_xase_only_listing_resolves_via_probe(self):
+        # NYSE American — live-verified UUUU:xase / uic 549463 (2026-08-12).
+        broker = _RoutingStubBroker({("UUUU", "XASE"): _ref("UUUU", "XASE")})
+
+        ref = resolve_us_instrument(broker, "UUUU")  # type: ignore[arg-type]
+
+        self.assertEqual(ref.exchange_mic, "XASE")
+        self.assertEqual(
+            broker.resolve_calls, [("UUUU", "XNYS"), ("UUUU", "XNAS"), ("UUUU", "XASE")]
+        )
 
     def test_probe_xnys_then_xnas_exactly_one_match(self):
         broker = _RoutingStubBroker({("NVDA", "XNAS"): _ref("NVDA", "XNAS")})
@@ -83,7 +94,9 @@ class TestResolveUsInstrument(unittest.TestCase):
         ref = resolve_us_instrument(broker, "NVDA")  # type: ignore[arg-type]
 
         self.assertEqual(ref.exchange_mic, "XNAS")
-        self.assertEqual(broker.resolve_calls, [("NVDA", "XNYS"), ("NVDA", "XNAS")])
+        self.assertEqual(
+            broker.resolve_calls, [("NVDA", "XNYS"), ("NVDA", "XNAS"), ("NVDA", "XASE")]
+        )
 
     def test_no_match_raises_instrument_not_found(self):
         broker = _RoutingStubBroker({})

@@ -62,7 +62,10 @@ from alphalens_pipeline.brokers.saxo.client import (
     get_default_saxo_client,
 )
 from alphalens_pipeline.brokers.saxo.live_tokens import LiveOrderTokenProvider
-from alphalens_pipeline.data.alt_data.saxo_exchanges import MIC_TO_SAXO_EXCHANGE_ID
+from alphalens_pipeline.data.alt_data.saxo_exchanges import (
+    MIC_TO_SAXO_EXCHANGE_ID,
+    SAXO_TICKER_ALIASES,
+)
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveAuthConfig, LiveTokenProvider
 from alphalens_pipeline.paper.calendar import advance_trading_sessions
 
@@ -335,6 +338,10 @@ class SaxoBroker:
         expected_symbol = f"{ticker}:{exchange_mic}".lower()
         matches = [row for row in rows if str(row.get("Symbol", "")).lower() == expected_symbol]
         if not matches:
+            matches, expected_symbol = self._alias_matches(
+                ticker, exchange_mic, exchange_id, rows, expected_symbol
+            )
+        if not matches:
             raise InstrumentNotFoundError(
                 f"no Saxo instrument with symbol {expected_symbol!r} for "
                 f"({ticker}, {exchange_mic}); search returned "
@@ -357,6 +364,9 @@ class SaxoBroker:
                 "(currency is never inferred from the MIC)"
             )
         ref = InstrumentRef(
+            # ALWAYS the MARKET ticker, even on an alias-matched row — the
+            # alias is a Saxo-side lookup detail; journals, picks and alerts
+            # keep speaking the market ticker.
             ticker=ticker,
             exchange_mic=exchange_mic,
             asset_type=str(row.get("AssetType", "Stock")),
@@ -366,6 +376,38 @@ class SaxoBroker:
         )
         self._cache_instrument(cache_key, ref)
         return ref
+
+    def _alias_matches(
+        self,
+        ticker: str,
+        exchange_mic: str,
+        exchange_id: str,
+        rows: list[dict[str, Any]],
+        expected_symbol: str,
+    ) -> tuple[list[dict[str, Any]], str]:
+        """Second step of the shared two-step resolve: after the exact
+        ticker==symbol match fails, retry with the
+        ``saxo_exchanges.SAXO_TICKER_ALIASES`` symbol — Saxo sometimes lists
+        a name under a renamed symbol (LAC -> LAC_NEW) that the fuzzy
+        Keywords search still returns but the exact match rejects. Only an
+        EMPTY primary search warrants a second round-trip with the alias
+        keyword. Returns the (possibly empty) alias matches plus the symbol
+        the not-found/ambiguity messages should name; a ticker without an
+        alias returns ``([], expected_symbol)`` unchanged. Match strictness
+        (exact (symbol, venue) pair; ambiguity is the caller's raise) is
+        identical to the primary step."""
+        alias = SAXO_TICKER_ALIASES.get(ticker)
+        if alias is None:
+            return [], expected_symbol
+        if not rows:
+            with _translate_saxo_errors():
+                payload = self._client.search_instruments(alias, exchange_id=exchange_id)
+            rows = payload.get("Data") or []
+        alias_symbol = f"{alias}:{exchange_mic}".lower()
+        return (
+            [row for row in rows if str(row.get("Symbol", "")).lower() == alias_symbol],
+            alias_symbol,
+        )
 
     def get_fx_rate(self, base: str, quote: str) -> FxRateQuote:
         """One FX spot snapshot for sizing (vendor CAPABILITY, not Protocol).

@@ -6607,7 +6607,22 @@ class TestDay1GapProbeVenueFallback(unittest.TestCase):
 
         probe, holder = self._probe_with(_NeverResolves)
         self.assertIsNone(probe("ZZZZ", "XNYS"))
-        self.assertEqual(holder["client"].resolved, ["XNYS", "XNAS"])
+        self.assertEqual(holder["client"].resolved, ["XNYS", "XNAS", "XASE"])
+
+
+class TestDay1GapProbeOrder(unittest.TestCase):
+    """The gate's US venue probe order — includes XASE (NYSE American,
+    live-verified UUUU:xase / uic 549463, 2026-08-12) and must never diverge
+    from placement routing's probe order (the two would otherwise disagree on
+    which names are resolvable)."""
+
+    def test_probe_order_is_xnys_xnas_xase(self) -> None:
+        self.assertEqual(cl._DAY1_GAP_US_VENUE_PROBE_ORDER, ("XNYS", "XNAS", "XASE"))
+
+    def test_probe_order_matches_placement_routing_order(self) -> None:
+        from alphalens_pipeline.brokers import routing
+
+        self.assertEqual(cl._DAY1_GAP_US_VENUE_PROBE_ORDER, routing.US_MIC_PROBE_ORDER)
 
 
 class TestPlacePickDay1GapGateIntegration(unittest.TestCase):

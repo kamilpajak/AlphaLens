@@ -69,6 +69,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     advance,
     reconcile_protection,
 )
+from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 
 if TYPE_CHECKING:
     import threading
@@ -3340,9 +3341,11 @@ def _evaluate_day1_gap_gate(
     return _day1_gap_gate_decision(now_utc, brief_date, e1_limit, probe_price, exchange_mic)
 
 
-# US venue probe order for the day-1 gap gate price probe — mirrors
-# routing.resolve_us_instrument's placement-side probe order.
-_DAY1_GAP_US_VENUE_PROBE_ORDER = ("XNYS", "XNAS")
+# US venue probe order for the day-1 gap gate price probe — the SAME shared
+# constant routing.resolve_us_instrument's placement-side probe uses
+# (``data/alt_data/saxo_exchanges.US_MIC_PROBE_ORDER``), imported rather than
+# copied so the two orders can never diverge.
+_DAY1_GAP_US_VENUE_PROBE_ORDER = US_MIC_PROBE_ORDER
 
 
 def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
@@ -3378,7 +3381,7 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
             client = SaxoMarketDataClient(
                 token_provider=LiveTokenProvider(LiveAuthConfig.from_env())
             )
-            # PROBE US venues like placement routing does (XNYS then XNAS)
+            # PROBE US venues like placement routing does (XNYS, XNAS, XASE)
             # instead of trusting the hint: every armed intent carries the
             # advisory InstrumentHint.mic="XNYS", so a NASDAQ name would
             # otherwise resolve to None here and the gate would silently
