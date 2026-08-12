@@ -42,7 +42,7 @@ from broker_contract.exit_geometry import (
     resolve_exit_policy,
 )
 
-from alphalens_pipeline.brokers.automanager import state_paths
+from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     ManagedExit,
     run_live_exits,
@@ -1217,6 +1217,10 @@ def build_default_deps(
     # journal down to its minimal fold-equivalent set (issue #895). Runs here —
     # at startup, before the tick loop — so no concurrent tick races the rewrite.
     _compact_standalone_stop_journal()
+    # Same maintenance for the entry-trails journal (entry-trailing PR-T0):
+    # startup, before the tick loop, no concurrent tick — a missing/empty
+    # journal is a no-op, so this is inert until a watcher writes records.
+    entry_trails.compact_entry_trail_journal()
 
     # ADR 0017 composition root: env == live routes into the LIVE factory (which
     # itself refuses to construct anything until assert_live_rails + the §1
@@ -2710,16 +2714,24 @@ def _check_gross_cap(
     ticker: str,
 ) -> str | None:
     """``None`` iff the pick keeps total gross exposure — still-working
-    journaled entries + THIS candidate + filled positions, all in ACCOUNT
-    currency — within ``GROSS_FRAC x account.total_value``; else a terminal
-    refusal message naming the total, its three components, the limit,
-    GROSS_FRAC and total_value.
+    journaled entries + THIS candidate + filled positions + WATCHING trail
+    tiers, all in ACCOUNT currency — within ``GROSS_FRAC x
+    account.total_value``; else a terminal refusal message naming the total,
+    its components, the limit, GROSS_FRAC and total_value.
 
     ``GROSS_FRAC`` is read exactly like ``safety.check`` reads it (same env
     var, same default, same malformed-value fallback via ``_float_env``), so
     the pre- and post-sizing rails never disagree on the limit. The candidate
     folds its RAW planned gross (``setup_plan_gross_notional``) — explicitly
-    NO cash/fee buffer: the cap measures EXPOSURE, not funding."""
+    NO cash/fee buffer: the cap measures EXPOSURE, not funding.
+
+    The watching term (entry-trailing memo G5) folds the limit-valued virtual
+    reservation of NON-terminal entry-trail tiers from ``entry_trails.jsonl``
+    — those tiers have NO broker order yet, so they are invisible to the
+    committed-working fold. It applies in BOTH sizing modes (the cash floor
+    is inert outside declared mode, so THIS rail must carry the virtual fold
+    everywhere); no/empty journal folds to exactly 0.0, and the refusal text
+    only names the component when it is non-zero (PR-T0 inertness)."""
     from broker_contract.sizing import setup_plan_gross_notional
 
     from alphalens_pipeline.brokers.automanager import safety
@@ -2747,14 +2759,30 @@ def _check_gross_cap(
     if mark_failure is not None:
         return f"gross cap: {ticker} refused — {mark_failure}"
 
-    total_acct = committed_acct + candidate_acct + filled_acct
+    watching_acct, unvaluable = entry_trails.watching_virtual_gross_acct(
+        entry_trails.read_entry_trail_fold()
+    )
+    if unvaluable:
+        # Fail CLOSED exactly like the unjoined-working-orders path above: a
+        # malformed/unvaluable entry-trail record may be a virtual reservation
+        # the cap cannot see — refusing beats silently under-counting.
+        return (
+            f"gross cap: {ticker} refused — {unvaluable} entry-trail record(s) could not "
+            "be valued (malformed or missing watch_open); the watching reservation "
+            "cannot be valued, failing closed"
+        )
+
+    total_acct = committed_acct + candidate_acct + filled_acct + watching_acct
     limit_acct = gross_frac * account.total_value
     if total_acct <= limit_acct:
         return None
+    # Named only when non-zero so the pre-trailing refusal text stays
+    # byte-identical while no watch is open (PR-T0 inertness proof).
+    watching_component = f" + watching {watching_acct:,.2f}" if watching_acct else ""
     return (
         f"gross cap: {ticker} total gross {total_acct:,.2f} {account.currency} "
         f"(working {committed_acct:,.2f} + candidate {candidate_acct:,.2f} "
-        f"+ filled {filled_acct:,.2f}) exceeds limit {limit_acct:,.2f} "
+        f"+ filled {filled_acct:,.2f}{watching_component}) exceeds limit {limit_acct:,.2f} "
         f"({gross_frac:g} x total_value {account.total_value:,.2f}) — pick refused"
     )
 
@@ -2794,11 +2822,17 @@ def _check_cash_floor(
     broker reserves NOTHING for a resting buy limit (P1 probe, 2026-08-12
     SIM: CashBalance, MarginAvailableForTrading and TotalValue all UNCHANGED
     after placement and after cancel) — without this ledger two armed picks
-    would double-spend the same cash. The fold's ``unjoined`` count is
-    deliberately ignored HERE: the gross cap (which runs FIRST in
-    ``_place_pick``, same verdicts+records) already fails closed on any
-    unjoined working verdict, so this code path only ever sees ``unjoined``
-    when called outside that ordering (direct unit tests).
+    would double-spend the same cash. The watching virtual reservation
+    (entry-trailing memo G5) joins the same sum: a watching trail tier has NO
+    broker order at all, so its future fire is cash the floor must reserve;
+    no/empty journal adds exactly 0.0 (PR-T0 inertness), and an unvaluable
+    watching record fails CLOSED here too — independent of the gross cap
+    running first, so no caller ordering can silently under-reserve. The
+    committed fold's ``unjoined`` count is deliberately ignored HERE: the
+    gross cap (which runs FIRST in ``_place_pick``, same verdicts+records)
+    already fails closed on any unjoined working verdict, so this code path
+    only ever sees ``unjoined`` when called outside that ordering (direct
+    unit tests).
 
     ``available`` is ``margin_available`` — never ``cash``, which ignores
     margin impact and lags under EOD netting; ``None`` (SIM NoAccess or an
@@ -2825,6 +2859,24 @@ def _check_cash_floor(
     candidate_buffered = candidate_acct * (1.0 + _CASH_FLOOR_BUFFER_PCT / 100.0)
 
     reserved_resting, _unjoined = _committed_working_gross_acct(open_verdicts, records)
+    # NOTE: the journal is read here AND in _check_gross_cap (one placement
+    # attempt = two reads). Valid ONLY because PR-T0 has no writer and both
+    # gates run in the single-threaded tick — PR-T1 must read the fold once
+    # in _place_pick and pass it into both gates, or a mid-attempt append
+    # becomes a torn read between them.
+    watching_acct, unvaluable = entry_trails.watching_virtual_gross_acct(
+        entry_trails.read_entry_trail_fold()
+    )
+    if unvaluable:
+        # Fail CLOSED independent of the gross cap running first: a direct or
+        # future caller outside the _place_pick ordering must never silently
+        # under-reserve on a watching record it cannot value.
+        return (
+            f"cash floor: {ticker} refused — {unvaluable} entry-trail record(s) could not "
+            "be valued (malformed or missing watch_open); the watching reservation "
+            "cannot be valued, failing closed"
+        )
+    reserved_resting += watching_acct
 
     available = getattr(account, "margin_available", None)
     if available is None:

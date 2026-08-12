@@ -110,7 +110,7 @@ Environment=ALPHALENS_BROKER_ALLOW_ORDERS=0
 # The code defaults for these are PERMISSIVE (MAX_OPEN=3,
 # PORTFOLIO_GROSS_FRAC=1.0, DAILY_LOSS_LIMIT_R=3.0, raw-snapshot sizing, an
 # inert exit policy, no fee floor) — `assert_live_rails()` REFUSES to boot
-# an env=live instance unless ALL SIX of these are explicitly set AND
+# an env=live instance unless ALL EIGHT of these are explicitly set AND
 # within the live-soak bounds, before any broker I/O. Values below are the
 # operator-locked §8 soak decisions, not defaults to widen casually —
 # widening risk later is a design-memo decision, not a silent unit edit.
@@ -118,8 +118,15 @@ Environment=ALPHALENS_BROKER_MAX_OPEN=1
 Environment=ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC=0.25
 Environment=ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R=1.0
 Environment=ALPHALENS_BROKER_SIZING_EQUITY=10000
+# Declared-frame sizing (path-A memo §4.1): the pin above IS the frame; the
+# cash floor + gross cap guard it. Required by the boot-assert — a template
+# missing this pin cannot boot (matches the deployed LIVE unit).
+Environment=ALPHALENS_BROKER_SIZING_EQUITY_MODE=declared
 Environment=ALPHALENS_BROKER_EXIT_POLICY=trailing_atr
 Environment=ALPHALENS_BROKER_MAX_FEE_BPS=100
+# 8th pin (entry-trailing memo §6): trail distance in bps, 0 = feature OFF
+# (today's limit-at-touch entries). Bound [0, 150]; widen only per memo.
+Environment=ALPHALENS_BROKER_ENTRY_TRAIL_BPS=0
 
 # --- Streaming + price-feed topology (design memo §6) -----------------------
 # Order-WS early-wake stays OFF for the soak — it needs its own LIVE

@@ -23,6 +23,7 @@ from alphalens_pipeline.brokers.automanager.state_paths import (
     assert_no_legacy_flat_state,
     broker_environment,
     broker_orders_root,
+    entry_trails_path,
     exec_quality_parquet,
     global_kill_file_path,
     kill_file_path,
@@ -115,6 +116,21 @@ class PerEnvRootsAndFilesTest(HomeDirTestCase):
             standalone_stops_path(env=ENV_LIVE),
             broker_orders_root(env=ENV_LIVE) / "standalone_stops.jsonl",
         )
+
+    def test_entry_trails_path_per_env(self) -> None:
+        self.assertEqual(
+            entry_trails_path(env=ENV_SIM),
+            broker_orders_root(env=ENV_SIM) / "entry_trails.jsonl",
+        )
+        self.assertEqual(
+            entry_trails_path(env=ENV_LIVE),
+            broker_orders_root(env=ENV_LIVE) / "entry_trails.jsonl",
+        )
+
+    def test_entry_trails_is_not_a_legacy_flat_filename(self) -> None:
+        # The entry-trails journal never existed in the pre-ADR-0016 flat
+        # layout — the D4 legacy guard must not learn it.
+        self.assertNotIn("entry_trails.jsonl", LEGACY_FLAT_STATE_FILENAMES)
 
     def test_exec_quality_parquet_per_env(self) -> None:
         self.assertEqual(
