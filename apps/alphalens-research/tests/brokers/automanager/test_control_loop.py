@@ -1257,13 +1257,15 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
 # --- Post-sizing portfolio gross cap (broker sizing memo §3) -----------------
 
 
-def _fx(rate: float) -> Any:
+def _fx(rate: float, instrument_currency: str = "") -> Any:
     """A minimal FxConversion double — ``rate`` is instrument-ccy per 1
-    account-ccy (broker_contract.fx.FxConversion direction)."""
-    return type("FX", (), {"rate": rate})()
+    account-ccy (broker_contract.fx.FxConversion direction). An empty
+    ``instrument_currency`` (the default) leaves the currency guard inert,
+    mirroring doubles that predate the guard."""
+    return type("FX", (), {"rate": rate, "instrument_currency": instrument_currency})()
 
 
-def _position(market_value: float | None, ticker: str = "NVAX") -> Position:
+def _position(market_value: float | None, ticker: str = "NVAX", currency: str = "USD") -> Position:
     """A broker Position whose mark-to-market is exactly ``market_value``
     (INSTRUMENT currency; ``None`` = broker quote unavailable, SIM NoAccess)."""
     return Position(
@@ -1273,7 +1275,7 @@ def _position(market_value: float | None, ticker: str = "NVAX") -> Position:
             asset_type="Stock",
             broker_instrument_id="6820",
             broker_symbol=f"{ticker}:xnas",
-            currency="USD",
+            currency=currency,
         ),
         quantity=100.0,
         avg_price=10.0,
@@ -1387,17 +1389,75 @@ class TestCheckGrossCap(unittest.TestCase):
         with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
             self.assertIsNone(self._check(notional=100.0, verdicts=[filled], records=records))
 
-    def test_working_verdict_without_a_joinable_bracket_folds_zero(self) -> None:
-        # A working verdict whose request id is not in the journal, and one
-        # whose bracket lacks entry/qty, both fold zero (same tolerance the
-        # pre-existing _summarize_open_verdicts shows for partial journals) —
-        # only the candidate remains, and it passes.
+    def test_working_verdict_without_a_joinable_bracket_fails_closed(self) -> None:
+        # A working verdict we cannot join to a journaled entry bracket is
+        # real broker exposure the cap cannot value — refusing beats silently
+        # under-counting on a money rail (zen pre-merge finding; contrast the
+        # pre-sizing _summarize_open_verdicts, which tolerates the same skew
+        # because its rail is only the cheap early exit).
         orphan = _verdict(status="WORKING", details={"client_request_id": "rid-unknown"})
         no_entry = _verdict(status="WORKING", details={"client_request_id": "rid-b"})
         records = [{"brackets": [{"client_request_id": "rid-b", "entry": None, "qty": 5}]}]
         with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
+            violation = self._check(notional=100.0, verdicts=[orphan, no_entry], records=records)
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertIn("2 working order(s)", violation)
+        self.assertIn("failing closed", violation)
+
+    def test_duplicate_request_ids_across_records_fold_the_last_journaled_bracket(self) -> None:
+        # The join index is a dict comprehension — a client_request_id
+        # journaled twice (e.g. a re-journaled record) resolves to the LAST
+        # record's bracket + fx_rate. Pin that last-wins semantics so a future
+        # refactor to first-wins is a deliberate choice, not an accident.
+        verdict = _verdict(status="WORKING", details={"client_request_id": "rid-dup"})
+        records = [
+            {"brackets": [{"client_request_id": "rid-dup", "entry": 10.0, "qty": 100}]},
+            {
+                "fx_rate": 0.5,
+                "brackets": [{"client_request_id": "rid-dup", "entry": 8.0, "qty": 100}],
+            },
+        ]
+        # Last record wins: 8.0 x 100 / 0.5 = 1_600 acct-ccy committed; with
+        # the candidate 100 the total 1_700 exceeds the 1_000 limit. First-
+        # wins (10.0 x 100 raw = 1_000 committed + 100) would ALSO refuse, so
+        # pin via the message's committed component instead of the verdict.
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.01"}, clear=True):
+            violation = self._check(notional=100.0, verdicts=[verdict], records=records)
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertIn("working 1,600.00", violation)
+
+    def test_position_in_a_foreign_currency_fails_closed(self) -> None:
+        # The single candidate fx rate can only convert positions trading in
+        # the SAME instrument currency — a stamped mismatching currency must
+        # refuse, never mis-value through a foreign rate (zen pre-merge
+        # finding).
+        eur_position = _position(1_000.0, ticker="SAP", currency="EUR")
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=True):
+            violation = self._check(
+                notional=100.0,
+                fx=_fx(0.25, instrument_currency="USD"),
+                positions=[eur_position],
+            )
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertIn("SAP", violation)
+        self.assertIn("EUR", violation)
+        self.assertIn("failing closed", violation)
+
+    def test_position_with_unstamped_currency_is_tolerated(self) -> None:
+        # InstrumentRef.currency is "" on best-effort reverse-lookup position
+        # rows (contract docstring) — absent is not wrong; the guard fires
+        # only on a STAMPED mismatch.
+        unstamped = _position(1_000.0, currency="")
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=True):
             self.assertIsNone(
-                self._check(notional=100.0, verdicts=[orphan, no_entry], records=records)
+                self._check(
+                    notional=100.0,
+                    fx=_fx(1.0, instrument_currency="USD"),
+                    positions=[unstamped],
+                )
             )
 
     def test_filled_positions_convert_via_the_candidates_fx(self) -> None:

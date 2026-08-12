@@ -2513,8 +2513,10 @@ def _check_fee_floor(
 
 def _committed_working_gross_acct(
     open_verdicts: Iterable[Any], records: Iterable[Mapping[str, Any]]
-) -> float:
-    """The still-working journaled entry gross folded into ACCOUNT currency.
+) -> tuple[float, int]:
+    """``(total, unjoined)`` — the still-working journaled entry gross folded
+    into ACCOUNT currency, plus the count of working verdicts that could NOT
+    be joined back to a journaled entry bracket.
 
     Same record set as ``_summarize_open_verdicts``'s ``gross_committed``
     (WORKING/PARTIALLY_FILLED verdicts joined back to their journaled entry
@@ -2522,34 +2524,45 @@ def _committed_working_gross_acct(
     converted through that record's OWN journaled ``fx_rate`` (submission_log
     schema 2: the account-ccy -> instrument-ccy Mid the sizing used), so
     mixed-vintage rates never revalue each other. ``fx_rate`` null
-    (same-currency / schema-1 era) folds as-is."""
+    (same-currency / schema-1 era) folds as-is.
+
+    ``unjoined`` counts working verdicts whose ``client_request_id`` matches
+    no journaled bracket (or a bracket missing entry/qty) — exposure that
+    EXISTS at the broker but cannot be valued from the journal. The caller
+    fails CLOSED on it (zen pre-merge finding): silently skipping would
+    understate committed gross and let a pick through over the true cap.
+    ``_summarize_open_verdicts`` tolerates the same skew because its rail is
+    the cheap pre-sizing early exit; THIS fold is the authoritative one."""
     entry_fx_by_request_id: dict[str, tuple[Mapping[str, Any], Any]] = {
         str(bracket.get("client_request_id")): (bracket, record.get("fx_rate"))
         for record in records
         for bracket in record.get("brackets") or []
     }
     total = 0.0
+    unjoined = 0
     for verdict in open_verdicts:
         if verdict.status not in {"WORKING", "PARTIALLY_FILLED"}:
             continue
         joined = entry_fx_by_request_id.get(str(verdict.details.get("client_request_id") or ""))
         if joined is None:
+            unjoined += 1
             continue
         bracket, fx_rate = joined
         if bracket.get("entry") is None or bracket.get("qty") is None:
+            unjoined += 1
             continue
         notional = float(bracket["entry"]) * float(bracket["qty"])
         if fx_rate is not None:
             # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
             notional /= float(fx_rate)
         total += notional
-    return total
+    return total, unjoined
 
 
 def _filled_positions_gross_acct(positions: Iterable[Any], fx: Any) -> tuple[float, str | None]:
     """``(total, None)`` — the broker positions' mark-to-market gross in
     ACCOUNT currency — or ``(0.0, failure)`` when any position carries no
-    usable mark.
+    usable mark or a currency the candidate's fx cannot convert.
 
     Valuation choice: ``Position.market_value`` (Saxo
     ``PositionView.MarketValue`` — qty x current market price, INSTRUMENT
@@ -2560,9 +2573,25 @@ def _filled_positions_gross_acct(positions: Iterable[Any], fx: Any) -> tuple[flo
     A ``None`` mark (SIM NoAccess) cannot be valued conservatively HIGH
     without a price, so it FAILS CLOSED — the caller refuses the pick with an
     alert rather than silently skipping the position. ``abs`` because gross
-    exposure ignores position sign."""
+    exposure ignores position sign.
+
+    Currency guard (zen pre-merge finding): the single candidate ``fx`` rate
+    is only valid for positions trading in the SAME instrument currency. A
+    position whose ``instrument.currency`` is stamped AND differs from the
+    conversion's instrument currency fails CLOSED rather than being mis-valued
+    through a foreign rate. ``""`` (not stamped — best-effort reverse lookup
+    rows, ``InstrumentRef`` docstring) is tolerated: today's cohort is
+    single-currency and the stamp is absent, not wrong."""
+    expected_ccy = getattr(fx, "instrument_currency", "") if fx is not None else ""
     total = 0.0
     for position in positions:
+        position_ccy = getattr(position.instrument, "currency", "") or ""
+        if expected_ccy and position_ccy and position_ccy != expected_ccy:
+            return 0.0, (
+                f"position {position.instrument.ticker} trades in {position_ccy} but the "
+                f"candidate's fx converts {expected_ccy} — cannot value gross exposure "
+                "through a foreign rate, failing closed"
+            )
         if position.market_value is None:
             return 0.0, (
                 f"position {position.instrument.ticker} has no broker mark "
@@ -2609,7 +2638,16 @@ def _check_gross_cap(
         # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
         candidate_acct /= float(fx.rate)
 
-    committed_acct = _committed_working_gross_acct(open_verdicts, records)
+    committed_acct, unjoined = _committed_working_gross_acct(open_verdicts, records)
+    if unjoined:
+        # Fail CLOSED on journal join-skew (zen pre-merge finding): a working
+        # verdict we cannot value means real broker exposure the cap cannot
+        # see — refusing beats silently under-counting on a money rail.
+        return (
+            f"gross cap: {ticker} refused — {unjoined} working order(s) could not be "
+            "joined to a journaled entry bracket; committed gross cannot be valued, "
+            "failing closed"
+        )
     filled_acct, mark_failure = _filled_positions_gross_acct(positions, fx)
     if mark_failure is not None:
         return f"gross cap: {ticker} refused — {mark_failure}"
@@ -3299,6 +3337,10 @@ def _place_pick(
     # mismatched, candidate-blind and filled-blind; THIS is the authoritative
     # account-currency check, candidate included (see the section comment above
     # _check_gross_cap). Same inputs already in scope — zero new broker I/O.
+    # Staleness bound: `positions`/`account` were snapshotted a few synchronous
+    # (non-network) steps above; at the 45s poll cadence that skew is benign.
+    # If a future change inserts broker I/O between the snapshot and this
+    # check, or drops the cadence to sub-second streaming, re-snapshot here.
     gross_violation = _check_gross_cap(
         plan,
         fx,
