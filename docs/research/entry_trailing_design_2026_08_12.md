@@ -1,7 +1,7 @@
 # Trailing entries (`ALPHALENS_BROKER_ENTRY_TRAIL_BPS`) — design memo
 
 **Date:** 2026-08-12
-**Status:** DRAFT — awaiting operator decisions (§8) and the probe battery (§4)
+**Status:** LOCKED 2026-08-12 — operator approved §8 per recommendation; probe battery §4 pending (SIM battery launched same evening; LIVE battery deferred per §4a while LAC rests)
 **Method:** 3-lens workflow (reuse-inventory/code-fit, execution-mechanics, risk/state) + 2 code-verifying critics (facts; adversarial "what breaks money" — 10 findings, 4 CRITICAL); every claim carries a `file:line` anchor or is marked probe-pending. Zen adversarial pass recorded in §10.
 **Evidence base:** `trailing_entry_whatif_2026_08_12.md` (#1037) — bounce-confirmed entries at d=0.5-1% beat limit-at-touch in every cohort under both slippage assumptions (+0.018R ALL, +0.025R day-1; negative average concession; ≤1.5% fill-rate cost; edge dead by d≈2-3%). Direction-level; live rollout must MEASURE realized-vs-replay before widening.
 
