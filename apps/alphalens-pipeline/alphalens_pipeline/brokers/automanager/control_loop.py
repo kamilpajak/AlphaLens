@@ -999,6 +999,11 @@ pick un-armable at MAX_OPEN=1). The account is protected by the virtual
 gross/cash reservation fold (entry_trails.watching_virtual_gross_acct), not by
 this capacity number."""
 
+_ENTRY_BPS_DENOMINATOR = 10_000
+"""``d = d_bps / 10_000`` — the would-be-trigger basis-point divisor for the
+measurement stamp (mirrors ``entry_trail_watcher._BPS_DENOMINATOR``; a local
+copy keeps this module from importing a private engine constant)."""
+
 
 @dataclass
 class _EntryWatchRuntime:
@@ -1217,7 +1222,7 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
     feed = _build_entry_watch_feed(deps, uic_to_instrument, report)
     now = dt.datetime.now(dt.UTC)
     for crid, record in active.items():
-        _advance_one_entry_watch(deps, crid, record, fold.tiers.get(crid), feed, now, report)
+        _advance_one_entry_watch(deps, crid, record, fold.tiers.get(crid), feed, now, d_bps, report)
 
 
 def _active_entry_watches(
@@ -1269,18 +1274,19 @@ def _advance_one_entry_watch(
     tier_state: entry_trails.EntryTrailTierState | None,
     feed: PriceFeed,
     now: dt.datetime,
+    d_bps: int,
     report: TickReport,
 ) -> None:
     """Advance ONE watch: reconstruct-or-fetch its runtime, read the fresh
-    reference price, ``process`` one tick, persist the journal intents, route the
-    alerts, and drop the runtime once terminal. Per-watch fault isolation: an
-    unreconstructable record is skipped."""
+    reference price, ``process`` one tick, persist the journal intents + terminal
+    measurement, route the alerts, and drop the runtime once terminal. Per-watch
+    fault isolation: an unreconstructable record is skipped."""
     runtime = _get_or_create_entry_runtime(deps, crid, record, tier_state)
     if runtime is None:
         return
     price = _entry_watch_reference_price(feed, record)
     result = runtime.watcher.process(entry_trail_watcher.TickInput(now=now, price=price))
-    _persist_entry_watch_result(crid, result)
+    _persist_entry_watch_result(crid, record, runtime, result, now, price, d_bps)
     for alert in result.alerts:
         if deps.alert_throttled(alert.message, alert.throttle_key):
             report.alerts += 1
@@ -1377,21 +1383,74 @@ def _entry_watch_state_from_kind(kind: str | None) -> entry_trail_watcher.WatchS
     return entry_trail_watcher.WatchState.WATCHING
 
 
-def _persist_entry_watch_result(crid: str, result: entry_trail_watcher.TickResult) -> None:
-    """Persist one tick's journal intents (memo §5 journals). The dry-run
-    WOULD_FIRE additionally gets a terminal ``fired`` line (``entry_order_id=
-    null`` — no order placed) so the fold marks the tier terminal: its virtual
-    reservation releases and it can never re-fire on restart (the engine emits
-    only the non-terminal ``trail_armed`` marker for the alert-only would-fire).
-    T1d enriches every terminal line with the measurement blob."""
+def _persist_entry_watch_result(
+    crid: str,
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    result: entry_trail_watcher.TickResult,
+    now: dt.datetime,
+    price: float | None,
+    d_bps: int,
+) -> None:
+    """Persist one tick's journal intents (memo §5 journals) plus, at a terminal,
+    the measurement blob (memo §5 Measurement / T1d). The running trough + touch
+    marks are mirrored into the runtime as they pass, so a later-tick terminal
+    can stamp them; the ``touched`` line ALSO carries the touch price/ts inline
+    (offline-join durability). The dry-run WOULD_FIRE additionally gets a
+    terminal ``fired`` line (``entry_order_id=null`` — no order placed) so the
+    fold marks the tier terminal: its virtual reservation releases and it can
+    never re-fire on restart (the engine emits only the non-terminal
+    ``trail_armed`` marker for the alert-only would-fire), and the offline
+    exec_quality join has a terminal stamp to match a real fill against once T2
+    arms."""
     for intent in result.journal_intents:
-        entry_trails.append_entry_trail_line(
-            {"kind": intent.kind, "crid": intent.crid, **dict(intent.payload)}
-        )
+        payload = dict(intent.payload)
+        if intent.kind == entry_trails.KIND_TROUGH:
+            trough_value = payload.get("trough")
+            if isinstance(trough_value, (int, float)):
+                runtime.trough = float(trough_value)
+        elif intent.kind == entry_trails.KIND_TOUCHED:
+            runtime.touch_price = price
+            runtime.touch_ts = now.isoformat()
+            payload["touch_price"] = price
+            payload["touch_ts"] = runtime.touch_ts
+        line: dict[str, Any] = {"kind": intent.kind, "crid": intent.crid, **payload}
+        if intent.kind in entry_trails.ENTRY_TRAIL_TERMINAL_KINDS:
+            line["measurement"] = _entry_measurement_blob(record, runtime, d_bps)
+        entry_trails.append_entry_trail_line(line)
     if result.state is entry_trail_watcher.WatchState.WOULD_FIRE:
         entry_trails.append_entry_trail_line(
-            {"kind": entry_trails.KIND_FIRED, "crid": crid, "entry_order_id": None}
+            {
+                "kind": entry_trails.KIND_FIRED,
+                "crid": crid,
+                "entry_order_id": None,
+                "measurement": _entry_measurement_blob(record, runtime, d_bps),
+            }
         )
+
+
+def _entry_measurement_blob(
+    record: Mapping[str, Any], runtime: _EntryWatchRuntime, d_bps: int
+) -> dict[str, Any]:
+    """The per-tier terminal measurement stamp (memo §5 / T1d): the variant-A
+    entry (``tier_limit``), the touch price/ts, the final trough, the would-be
+    trigger ``trough*(1+d)``, the order id (NULL in the dry run — filled offline
+    from reconcile once T2 places a real order), and the ``entry_mode`` cohort
+    tag (T8 poolability). Follows the ``tranche_fired`` telemetry-blob shape so
+    the offline exec_quality join can compute concession / implied ΔR / fill-
+    rate loss later."""
+    trough = runtime.trough
+    trigger = None if trough is None else trough * (1.0 + d_bps / _ENTRY_BPS_DENOMINATOR)
+    limit = record.get("limit")
+    return {
+        "tier_limit": None if limit is None else float(limit),
+        "touch_price": runtime.touch_price,
+        "touch_ts": runtime.touch_ts,
+        "final_trough": trough,
+        "would_be_trigger": trigger,
+        "order_id": None,
+        "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
+    }
 
 
 def _execute_action(
