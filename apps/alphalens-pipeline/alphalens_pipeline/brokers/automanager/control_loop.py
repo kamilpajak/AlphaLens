@@ -3447,13 +3447,33 @@ def _day1_gap_gate_defers(
     alert_throttled: Callable[[str, str], bool] | None,
 ) -> bool:
     """True iff the day-1 gap gate is enabled AND defers this pick (the
-    ``_place_pick`` early-return). Pages the operator (throttled) only for
-    the actionable below-E1 verdict; every other deferral is a DEBUG line."""
+    ``_place_pick`` early-return). Pages the operator (throttled) for the
+    actionable below-E1 verdict AND for the no-price verdict (an
+    INFRASTRUCTURE failure — the probe could not produce a price at all;
+    real incident 2026-08-12: LAC's resolve failure silently deferred its
+    whole day 1 at DEBUG); "defer_preopen" stays a DEBUG line (expected,
+    high-frequency)."""
     if not _day1_gap_gate_enabled():
         return False
     gate_verdict = _evaluate_day1_gap_gate(ticker, brief_date, spec, exchange_mic, probe)
     if gate_verdict == "pass":
         return False
+    if gate_verdict == "defer_no_price":
+        logger.warning(
+            "place_pick %s: day1 gap gate deferred (defer_no_price) — the PRICE "
+            "PROBE returned no price (infrastructure problem, not a market "
+            "condition); check instrument resolution / marketdata chain",
+            ticker,
+        )
+        if alert_throttled is not None:
+            alert_throttled(
+                f"day1 gap gate: {ticker} day-1 PRICE PROBE failed — an "
+                "infrastructure problem, not a market condition; check "
+                "instrument resolution / marketdata chain (the pick stays "
+                "deferred all of day 1 until a price arrives)",
+                f"day1-gap-noprice:{ticker}",
+            )
+        return True
     logger.debug("place_pick %s: day1 gap gate deferred (%s)", ticker, gate_verdict)
     if gate_verdict == "defer_below_e1" and alert_throttled is not None:
         alert_throttled(

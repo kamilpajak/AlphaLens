@@ -6625,6 +6625,56 @@ class TestDay1GapProbeOrder(unittest.TestCase):
         self.assertEqual(cl._DAY1_GAP_US_VENUE_PROBE_ORDER, routing.US_MIC_PROBE_ORDER)
 
 
+class TestDay1GapGateDefersObservability(unittest.TestCase):
+    """``_day1_gap_gate_defers`` observability: "defer_no_price" is an
+    INFRASTRUCTURE failure (the probe could not produce a price at all —
+    real incident 2026-08-12: LAC's resolve failure silently deferred its
+    whole day 1 at DEBUG), so it must WARN + page (throttled) under its own
+    ``day1-gap-noprice:`` key; "defer_preopen" stays DEBUG-quiet (expected,
+    high-frequency)."""
+
+    _BRIEF = dt.date(2026, 8, 10)  # Monday
+    _WITHIN_DAY1 = dt.datetime(2026, 8, 11, 14, 30, tzinfo=dt.UTC)
+    _PREOPEN = dt.datetime(2026, 8, 11, 13, 0, tzinfo=dt.UTC)
+    _LOGGER = "alphalens_pipeline.brokers.automanager.control_loop"
+
+    def _defers(self, *, now: dt.datetime, probe: Any) -> tuple[bool, list[tuple[str, str]]]:
+        alerts: list[tuple[str, str]] = []
+
+        def _alert(message: str, key: str) -> bool:
+            alerts.append((message, key))
+            return True
+
+        with (
+            _frozen_now(now),
+            mock.patch.dict("os.environ", {cl._DAY1_GAP_GATE_ENV: "1"}, clear=True),
+        ):
+            deferred = cl._day1_gap_gate_defers(
+                "KO", self._BRIEF, _day1_spec(), "XNYS", probe, _alert
+            )
+        return deferred, alerts
+
+    def test_defer_no_price_warns_and_alerts_with_noprice_key(self) -> None:
+        with self.assertLogs(self._LOGGER, level="WARNING") as cm:
+            deferred, alerts = self._defers(now=self._WITHIN_DAY1, probe=lambda *_a: None)
+        self.assertTrue(deferred)
+        self.assertTrue(
+            any("KO" in line for line in cm.output),
+            f"the no-price warning must name the ticker; got {cm.output}",
+        )
+        self.assertEqual(len(alerts), 1)
+        message, key = alerts[0]
+        self.assertEqual(key, "day1-gap-noprice:KO")
+        self.assertIn("KO", message)
+        self.assertIn("price probe", message.lower())
+
+    def test_defer_preopen_stays_quiet(self) -> None:
+        with self.assertNoLogs(self._LOGGER, level="WARNING"):
+            deferred, alerts = self._defers(now=self._PREOPEN, probe=_RaisingProbe())
+        self.assertTrue(deferred)
+        self.assertEqual(alerts, [], "a pre-open defer is DEBUG-only, never an alert")
+
+
 class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
     """The day-1 gap gate wired into ``_place_pick`` (deliverable 1d): the gate
     is evaluated at the TOP, before any broker/safety/sizing I/O, so a
