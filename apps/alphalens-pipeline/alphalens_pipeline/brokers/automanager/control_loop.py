@@ -2532,6 +2532,64 @@ def _check_fee_floor(
     )
 
 
+def _estimate_round_trip_fee_bps(
+    plan: Any, fx: Any, *, instrument_currency: str = "USD"
+) -> float | None:
+    """The HONEST per-tier round-trip fee estimate in bps of the plan's gross
+    (broker sizing memo §4.5, amended by operator decision §7.3) — journaled
+    on every placement as the calibration series for path B's 150 bps target.
+    The fee FLOOR check (``_check_fee_floor``) is deliberately UNCHANGED: the
+    cap stays a degenerate-class backstop on the aggregate model.
+
+    - ``entry_fees``: each non-zero tier pays its own commission
+      ``max($1, 0.08% x qty x limit)`` — zero-qty tiers are never POSTed
+      (``_ZERO_QTY_TIER_POLICY``), so they pay nothing. The $1 minimum is a
+      USD figure, gated on ``instrument_currency`` exactly like
+      ``_round_trip_fee_bps``.
+    - ``exit_fees``: the same shape over the TP tranches, with tranche qtys
+      derived at placement as ``tranche_pct/100 x total entry qty``
+      (``TpTrancheSpec`` doctrine: tranche_pct is a PERCENTAGE 0-100, copied
+      verbatim into ``TpTranchePlan`` by ``compute_setup_plan``). When the
+      plan carries NO tranches (geometry-policy picks express the exit in
+      ``exit_spec``, not static tranches) the estimate MIRRORS the entry fees
+      — a symmetric single-exit assumption, deliberately simple over falsely
+      precise.
+    - ``fx_cost``: the 0.50% FX round trip on the gross when a conversion
+      applies.
+
+    ``None`` (an honest "not estimable", journaled as a real null) when there
+    is no sized plan / no tiers / zero gross — mirrors the inert stance of
+    ``_round_trip_fee_bps`` on a non-positive notional."""
+    entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
+    if not entry_tiers:
+        return None
+
+    from broker_contract.sizing import setup_plan_gross_notional
+
+    gross = setup_plan_gross_notional(plan)
+    if gross <= 0:
+        return None
+    min_commission_applies = instrument_currency == "USD"
+
+    def _fill_fee(qty: float, price: float) -> float:
+        ad_valorem = _FEE_FLOOR_COMMISSION_RATE * qty * price
+        if min_commission_applies:
+            return max(_FEE_FLOOR_MIN_COMMISSION_USD, ad_valorem)
+        return ad_valorem
+
+    entry_fees = sum(_fill_fee(t.qty, t.limit_price) for t in entry_tiers if t.qty > 0)
+    tranches = getattr(plan, "tp_tranches", None) or ()
+    if tranches:
+        total_qty = sum(t.qty for t in entry_tiers)
+        exit_fees = sum(
+            _fill_fee(total_qty * t.tranche_pct / 100.0, t.target_price) for t in tranches
+        )
+    else:
+        exit_fees = entry_fees
+    fx_cost = _FEE_FLOOR_FX_ROUND_TRIP_RATE * gross if fx is not None else 0.0
+    return (entry_fees + exit_fees + fx_cost) / gross * 10000.0
+
+
 # --- Post-sizing portfolio gross cap (broker sizing memo §3) -----------------
 #
 # The pre-sizing safety.check gross rail is broken three ways: (1) currency
@@ -3016,6 +3074,12 @@ def _place_tiers(
         exit_policy if exit_policy is not None else SetupStaticPolicy()
     )
 
+    # Honest per-tier round-trip fee estimate (memo §4.5) — computed ONCE and
+    # stamped on EVERY record this placement journals (write-ahead, per-tier,
+    # failure note), so the calibration series survives whatever the ladder
+    # outcome was. None (a real null) when no sized plan is in scope.
+    est_fee_bps = _estimate_round_trip_fee_bps(plan, fx, instrument_currency=instrument.currency)
+
     def _journal_tier(tier: Any, placed: Any) -> None:
         bracket = tier.bracket
         append_submission_record(
@@ -3041,6 +3105,7 @@ def _place_tiers(
                 instrument_currency=instrument.currency,
                 sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
+                est_round_trip_fee_bps=est_fee_bps,
             )
         )
         use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
@@ -3091,6 +3156,7 @@ def _place_tiers(
             instrument_currency=instrument.currency,
             sizing_equity=_resolve_sizing_equity(account.total_value),
             fx=fx,
+            est_round_trip_fee_bps=est_fee_bps,
         )
     )
 
@@ -3134,6 +3200,7 @@ def _place_tiers(
                 instrument_currency=instrument.currency,
                 sizing_equity=_resolve_sizing_equity(account.total_value),
                 fx=fx,
+                est_round_trip_fee_bps=est_fee_bps,
             )
         )
 

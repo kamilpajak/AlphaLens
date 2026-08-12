@@ -2201,6 +2201,136 @@ class _LadderBroker:
         self.cancelled.append(order_id)
 
 
+def _tiered_plan(
+    *,
+    tiers: tuple[TierPlan, ...],
+    tp_tranches: tuple[TpTranchePlan, ...] = (),
+) -> SetupPlan:
+    """A SetupPlan with explicit tiers/tranches for the honest fee estimate."""
+    return SetupPlan(
+        suggested_size_pct=1.0,
+        scale_factor=1.0,
+        final_size_pct=1.0,
+        total_notional=sum(t.qty * t.limit_price for t in tiers),
+        paper_equity=100_000.0,
+        disaster_stop=9.0,
+        order_ttl_days=1,
+        entry_tiers=tiers,
+        tp_tranches=tp_tranches,
+    )
+
+
+class TestEstimateRoundTripFeeBps(unittest.TestCase):
+    """``_estimate_round_trip_fee_bps`` — the HONEST per-tier round-trip
+    estimate (memo §4.5): each entry tier pays ``max($1, 0.08% x qty x
+    limit)``; the exit side sums the same shape over the TP tranches (qtys
+    derived as ``tranche_pct/100 x total entry qty``) or mirrors the entry
+    fees when no tranches are derivable; + 0.50% FX round trip when fx
+    applies. The fee FLOOR check is UNCHANGED — this only journals."""
+
+    def test_single_tier_mirror_exit_matches_the_aggregate_model(self) -> None:
+        # 1 tier, qty 1000 @ $10: entry max(1, 8) = 8; no tranches -> exit
+        # mirrors 8; no fx. (8 + 8) / 10_000 x 10^4 = 16 bps.
+        estimate = cl._estimate_round_trip_fee_bps(_fee_plan(10_000.0), None)
+        self.assertIsNotNone(estimate)
+        assert estimate is not None
+        self.assertAlmostEqual(estimate, 16.0)
+
+    def test_per_tier_min_commission_tranches_and_fx_hand_computed(self) -> None:
+        # 2 tiers of $1000 each pay the $1 MINIMUM twice (the aggregate model
+        # would charge max(1, 0.0008 x 2000) = $1.60 ONCE — the leak §4.5
+        # closes). Exit: total qty 150, two 50% tranches of 75 sh @ 12/14 ->
+        # $1 min each. FX: 0.005 x 2000 = $10.
+        # (2 + 2 + 10) / 2000 x 10^4 = 70 bps.
+        plan = _tiered_plan(
+            tiers=(
+                TierPlan(tier_index=0, limit_price=10.0, qty=100, alloc_pct=50.0, tag="T1"),
+                TierPlan(tier_index=1, limit_price=20.0, qty=50, alloc_pct=50.0, tag="T2"),
+            ),
+            tp_tranches=(
+                TpTranchePlan(
+                    tranche_index=0, target_price=12.0, tranche_pct=50.0, r_multiple=1.0, tag="tp1"
+                ),
+                TpTranchePlan(
+                    tranche_index=1, target_price=14.0, tranche_pct=50.0, r_multiple=2.0, tag="tp2"
+                ),
+            ),
+        )
+        estimate = cl._estimate_round_trip_fee_bps(plan, _fx(1.0))
+        assert estimate is not None
+        self.assertAlmostEqual(estimate, 70.0)
+
+    def test_non_usd_instrument_skips_the_min_commission_clamp(self) -> None:
+        # The $1 clamp is a USD figure (mirrors _round_trip_fee_bps): a
+        # 1000-unit non-USD notional pays ad-valorem only.
+        plan = _tiered_plan(
+            tiers=(TierPlan(tier_index=0, limit_price=10.0, qty=100, alloc_pct=100.0, tag="T1"),),
+        )
+        usd = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="USD")
+        pln = cl._estimate_round_trip_fee_bps(plan, None, instrument_currency="PLN")
+        assert usd is not None and pln is not None
+        self.assertAlmostEqual(usd, 20.0)  # 2 x $1 min / 1000 x 10^4
+        self.assertAlmostEqual(pln, 16.0)  # 2 x 0.8 ad-valorem / 1000 x 10^4
+
+    def test_zero_qty_tiers_pay_no_commission(self) -> None:
+        # A zero-qty tier is never POSTed (_ZERO_QTY_TIER_POLICY = skip-log),
+        # so it must not add a phantom $1 minimum.
+        plan = _tiered_plan(
+            tiers=(
+                TierPlan(tier_index=0, limit_price=10.0, qty=1000, alloc_pct=50.0, tag="T1"),
+                TierPlan(tier_index=1, limit_price=9.0, qty=0, alloc_pct=50.0, tag="T2"),
+            ),
+        )
+        estimate = cl._estimate_round_trip_fee_bps(plan, None)
+        assert estimate is not None
+        self.assertAlmostEqual(estimate, 16.0)
+
+    def test_no_plan_or_zero_gross_returns_none(self) -> None:
+        self.assertIsNone(cl._estimate_round_trip_fee_bps(None, None))
+        self.assertIsNone(cl._estimate_round_trip_fee_bps(object(), None))  # bare stub, no tiers
+        self.assertIsNone(cl._estimate_round_trip_fee_bps(_fee_plan(0.0), None))
+
+
+class TestPlaceTiersFeeEstimateStamp(unittest.TestCase):
+    """Memo §4.5 (operator decision §7.3): the honest per-tier round-trip
+    estimate is stamped on EVERY record ``_place_tiers`` journals — the
+    calibration series for path B's 150 bps target — while the fee FLOOR
+    check itself is unchanged (MAX_FEE_BPS stays the degenerate-class
+    backstop)."""
+
+    def _run(self, *, plan: Any, fx: Any = None) -> list[dict[str, Any]]:
+        appended: list[dict[str, Any]] = []
+        pkg = "alphalens_pipeline.brokers"
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            cl._place_tiers(
+                _LadderBroker(),
+                _pick("KO", "2026-07-20"),
+                "KO",
+                _instr(),
+                _acct(),
+                fx,
+                _placement(n_tiers=2),
+                plan=plan,
+            )
+        return appended
+
+    def test_estimate_stamped_on_every_record_and_matches_hand_computed(self) -> None:
+        appended = self._run(plan=_fee_plan(10_000.0))
+        self.assertEqual(len(appended), 3)  # write-ahead + 2 tier records
+        for record in appended:
+            self.assertAlmostEqual(record["est_round_trip_fee_bps"], 16.0)
+
+    def test_no_plan_stamps_a_real_null(self) -> None:
+        appended = self._run(plan=None)
+        self.assertTrue(appended)
+        for record in appended:
+            self.assertIsNone(record["est_round_trip_fee_bps"])
+
+
 def _failure_notes(appended: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The FAILURE note records journaled by ``_place_tiers`` — excludes the
     write-ahead "placement attempt" dedup line (memo §4.4 B2), which also
