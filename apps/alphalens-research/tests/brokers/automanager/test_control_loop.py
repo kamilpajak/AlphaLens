@@ -2164,6 +2164,117 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         self.assertEqual([ln for ln in journaled if ln["kind"] == "tranche_plan"], [])
 
 
+class _LadderBroker:
+    """A broker double for the ``_place_tiers`` ladder paths: places tiers
+    E-1, E-2, ... until ``fail_at`` (1-based), where it raises ``error``;
+    records cancels, with optional per-order cancel failures."""
+
+    name = "ladder"
+
+    def __init__(
+        self,
+        *,
+        fail_at: int | None = None,
+        error: BrokerError | None = None,
+        cancel_errors: dict[str, BrokerError] | None = None,
+    ) -> None:
+        self.calls = 0
+        self.cancelled: list[str] = []
+        self._fail_at = fail_at
+        self._error = error
+        self._cancel_errors = cancel_errors or {}
+
+    def place_bracket_order(self, _bracket: Any) -> Any:
+        self.calls += 1
+        if self._fail_at is not None and self.calls == self._fail_at:
+            raise self._error or BrokerError("boom")
+        return type("Placed", (), {"entry_order_id": f"E-{self.calls}", "exit_order_ids": ()})()
+
+    def cancel_order(self, order_id: str) -> None:
+        err = self._cancel_errors.get(order_id)
+        if err is not None:
+            raise err
+        self.cancelled.append(order_id)
+
+
+class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
+    """Memo §4.4 B1: a mid-ladder insufficient-funds reject (classified on the
+    STRUCTURED Saxo error code, never the message string) must CANCEL this
+    pick's just-placed unfilled entry tiers before journaling the note record
+    — converting the dangerous partial ladder into the promised nothing. Any
+    OTHER BrokerError keeps today's behavior (tiers left resting)."""
+
+    def _run(self, broker: _LadderBroker, *, n_tiers: int = 3) -> tuple[int, list[Any]]:
+        appended: list[Any] = []
+        pkg = "alphalens_pipeline.brokers"
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            count = cl._place_tiers(
+                broker,
+                _pick("KO", "2026-07-20"),
+                "KO",
+                _instr(),
+                _acct(),
+                None,
+                _placement(n_tiers=n_tiers),
+            )
+        return count, appended
+
+    def test_insufficient_funds_mid_ladder_cancels_earlier_tiers_and_journals_note(self) -> None:
+        broker = _LadderBroker(
+            fail_at=2, error=OrderRejectedError("no cash", error_code="InsufficentCash")
+        )
+        with self.assertLogs(cl.logger, level="WARNING") as caught:
+            count, appended = self._run(broker)
+        self.assertEqual(count, 1)
+        self.assertEqual(broker.cancelled, ["E-1"], "the placed tier-1 entry must be cancelled")
+        notes = [r for r in appended if r.get("note")]
+        self.assertEqual(len(notes), 1, "the failure note record must still be journaled")
+        self.assertIn("insufficient funds", notes[0]["note"])
+        self.assertIn("cancelled 1/1", notes[0]["note"])
+        self.assertTrue(any("insufficient funds" in line for line in caught.output))
+
+    def test_non_funds_broker_error_leaves_placed_tiers_resting(self) -> None:
+        # Today's behavior for every other BrokerError — including an
+        # unstructured error_code=None rejection (no message parsing): tiers
+        # stay resting, only the note record retires the pick.
+        for error in (
+            BrokerError("exchange rejected"),
+            OrderRejectedError("rejected", error_code="TooFarFromMarket"),
+            OrderRejectedError("insufficient cash in message only"),
+        ):
+            with self.subTest(error=error):
+                broker = _LadderBroker(fail_at=2, error=error)
+                count, appended = self._run(broker)
+                self.assertEqual(count, 1)
+                self.assertEqual(broker.cancelled, [], "non-funds errors must NOT roll back")
+                self.assertTrue([r for r in appended if r.get("note")])
+
+    def test_one_cancel_failure_does_not_abort_the_remaining_cancels(self) -> None:
+        broker = _LadderBroker(
+            fail_at=3,
+            error=OrderRejectedError("no cash", error_code="InsufficentCash"),
+            cancel_errors={"E-1": BrokerError("cancel rejected")},
+        )
+        count, appended = self._run(broker)
+        self.assertEqual(count, 2)
+        self.assertEqual(broker.cancelled, ["E-2"], "the E-1 failure must not stop E-2's cancel")
+        notes = [r for r in appended if r.get("note")]
+        self.assertIn("cancelled 1/2", notes[0]["note"])
+
+    def test_insufficient_funds_on_the_first_tier_cancels_nothing(self) -> None:
+        broker = _LadderBroker(
+            fail_at=1, error=OrderRejectedError("no cash", error_code="InsufficentCash")
+        )
+        count, appended = self._run(broker)
+        self.assertEqual(count, 0)
+        self.assertEqual(broker.cancelled, [])
+        self.assertTrue([r for r in appended if r.get("note")])
+
+
 class TestBuildPlannedLineGeometryStamp(unittest.TestCase):
     """Direct unit coverage of ``_build_planned_line``'s ``geometry_stamp`` param
     (PR-6a) -- the namespacing + byte-identical-when-omitted contract."""

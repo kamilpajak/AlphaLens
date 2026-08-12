@@ -101,6 +101,30 @@ def _is_too_far_from_entry(e: BrokerError) -> bool:
     return isinstance(e, OrderRejectedError) and e.error_code == "TooFarFromEntryOrder"
 
 
+# Saxo error codes classified as "the account cannot fund this order".
+# BEST-EFFORT pending LIVE observation: "InsufficentCash" is the code Saxo's
+# TradingErrorCode reference documents (with exactly that spelling —
+# "Insufficient cash for trade."); the correctly-spelled sibling is included
+# defensively in case a newer gateway fixes the typo. Never a message-string
+# discriminator (see :class:`OrderRejectedError`); grow this set from the
+# journaled error codes when a LIVE reject surfaces a new one.
+_INSUFFICIENT_FUNDS_ERROR_CODES = frozenset({"InsufficentCash", "InsufficientCash"})
+
+
+def _is_insufficient_funds(e: BrokerError) -> bool:
+    """True iff ``e`` is a Saxo insufficient-cash/funds rejection.
+
+    The structured discriminator for the mid-ladder rollback (broker sizing
+    memo §4.4 B1): a tier rejected for lack of cash means the whole pick is
+    unaffordable, so the caller cancels this pick's just-placed resting entry
+    tiers instead of leaving a partial ladder live. Classified on the attached
+    ``error_code`` against :data:`_INSUFFICIENT_FUNDS_ERROR_CODES`, never on
+    the message string; ``error_code=None`` (an unstructured rejection) does
+    NOT classify — rollback stays code-gated.
+    """
+    return isinstance(e, OrderRejectedError) and e.error_code in _INSUFFICIENT_FUNDS_ERROR_CODES
+
+
 def _is_too_far_from_market(e: BrokerError) -> bool:
     """True iff ``e`` is Saxo's ``TooFarFromMarket`` rejection.
 

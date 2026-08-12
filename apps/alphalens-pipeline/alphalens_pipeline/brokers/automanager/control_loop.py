@@ -32,6 +32,7 @@ from broker_contract.contract import (
     SupportsAmendStop,
     SupportsOcoExit,
     SupportsStandaloneStop,
+    _is_insufficient_funds,
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
 )
@@ -2931,6 +2932,26 @@ def _journal_tranche_plan(
     )
 
 
+def _cancel_orders_best_effort(broker: Broker, order_ids: Iterable[str], *, ticker: str) -> int:
+    """Cancel each order id, best-effort: one cancel failure (log + continue)
+    must never abort the remaining cancels — every order we CAN take off the
+    book during an insufficient-funds rollback reduces the partial-ladder
+    exposure. Returns the count actually cancelled."""
+    cancelled = 0
+    for order_id in order_ids:
+        try:
+            broker.cancel_order(order_id)
+            cancelled += 1
+        except BrokerError as exc:
+            logger.warning(
+                "place_pick %s: rollback cancel of entry %s failed (continuing): %s",
+                ticker,
+                order_id,
+                exc,
+            )
+    return cancelled
+
+
 def _place_tiers(
     broker: Broker,
     intent: Any,
@@ -3050,16 +3071,31 @@ def _place_tiers(
     )
 
     placed_count = 0
+    placed_entry_ids: list[str] = []
     failure_note: str | None = None
     try:
         for tier in placement.tiers:
             placed = broker.place_bracket_order(tier.bracket)
             _journal_tier(tier, placed)
+            placed_entry_ids.append(str(placed.entry_order_id))
             placed_count += 1
     except BrokerError as exc:
         failure_note = (
             f"placement stopped after {placed_count}/{len(placement.tiers)} bracket(s): {exc}"
         )
+        # Memo §4.4 B1 — insufficient-funds rollback: a tier rejected for lack
+        # of cash means the WHOLE pick is unaffordable; leaving the earlier
+        # tiers resting would keep a partial frame-sized ladder live at a
+        # near-boundary account. Cancel the just-placed unfilled entries
+        # (cancel_order is deliberately ungated) BEFORE journaling the note.
+        # Classified on the structured Saxo error code only — any other
+        # BrokerError (including error_code=None) keeps today's behavior.
+        if _is_insufficient_funds(exc) and placed_entry_ids:
+            cancelled = _cancel_orders_best_effort(broker, placed_entry_ids, ticker=ticker)
+            failure_note += (
+                f"; insufficient funds — cancelled {cancelled}/{len(placed_entry_ids)} "
+                "placed entry tier(s)"
+            )
         # Journal a note-only record so the failure is traced (and, when nothing
         # placed, the pick is not silently retried forever).
         append_submission_record(
