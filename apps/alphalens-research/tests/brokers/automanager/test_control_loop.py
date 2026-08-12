@@ -20,7 +20,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
-from alphalens_pipeline.brokers.automanager import state_paths
+from alphalens_pipeline.brokers.automanager import entry_trails, state_paths
 from alphalens_pipeline.brokers.automanager.live_rails import (
     MAX_FEE_BPS_ENV,
     SIZING_EQUITY_ENV,
@@ -1905,6 +1905,201 @@ class TestPlacePickCashFloorIntegration(unittest.TestCase):
         self.assertEqual(len(refusals), 1)
         self.assertIn("gross", refusals[0][2].lower())
         self.assertEqual(alerts[0][1], "gross-cap:KO")
+
+
+def _entry_trail_journal(test: unittest.TestCase, lines: list[str] | None) -> None:
+    """Point the entry-trails journal seam at a temp file holding ``lines``
+    (``None`` = no journal at all) for the duration of the test."""
+    d = TemporaryDirectory()
+    test.addCleanup(d.cleanup)
+    journal = Path(d.name) / "entry_trails.jsonl"
+    if lines is not None:
+        journal.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
+    patcher = mock.patch.object(entry_trails, "_entry_trail_journal_path", lambda: journal)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
+def _watch_open_line(crid: str = "crid-w0", *, limit: float = 10.0, qty: float = 450.0) -> str:
+    import json
+
+    return json.dumps(
+        {
+            "kind": "watch_open",
+            "crid": crid,
+            "limit": limit,
+            "qty": qty,
+            "d_bps": 50,
+            "window_end": "2026-08-21",
+            "fx_rate": None,
+        },
+        sort_keys=True,
+    )
+
+
+class TestCheckGrossCapWatchingReservation(unittest.TestCase):
+    """The G5 watching-reservation term inside ``_check_gross_cap``
+    (entry-trailing PR-T0): watching tiers have NO broker order, so the cap
+    folds their limit-valued reservation from ``entry_trails.jsonl``. With no
+    journal the verdicts AND the message text are byte-identical to the
+    pre-trailing gate (inertness proof)."""
+
+    def _check(self, *, notional: float = 10_000.0) -> str | None:
+        return cl._check_gross_cap(
+            _fee_plan(notional),
+            None,
+            account=_acct(),
+            open_verdicts=[],
+            records=[],
+            positions=[],
+            ticker="KO",
+        )
+
+    def test_no_journal_accept_and_refusal_message_are_byte_identical(self) -> None:
+        _entry_trail_journal(self, None)
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.2"}, clear=True):
+            self.assertIsNone(self._check(notional=10_000.0))
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
+            message = self._check(notional=10_000.0)
+        self.assertEqual(
+            message,
+            "gross cap: KO total gross 10,000.00 USD (working 0.00 + candidate 10,000.00 "
+            "+ filled 0.00) exceeds limit 5,000.00 (0.05 x total_value 100,000.00) "
+            "— pick refused",
+            "with no entry-trails journal the refusal text must not change",
+        )
+
+    def test_watching_reservation_tips_the_pick_over_and_is_named(self) -> None:
+        # Candidate 1_000 alone fits the 5_000 limit; a non-terminal watching
+        # tier reserving 10.0 x 450 = 4_500 pushes the total to 5_500.
+        _entry_trail_journal(self, [_watch_open_line(limit=10.0, qty=450.0)])
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
+            message = self._check(notional=1_000.0)
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("watching 4,500.00", message)
+        self.assertIn("5,500.00", message)
+
+    def test_terminal_tier_releases_its_reservation(self) -> None:
+        import json
+
+        _entry_trail_journal(
+            self,
+            [
+                _watch_open_line(limit=10.0, qty=450.0),
+                json.dumps({"kind": "expired", "crid": "crid-w0"}),
+            ],
+        )
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
+            self.assertIsNone(self._check(notional=1_000.0))
+
+    def test_malformed_entry_trail_record_fails_closed(self) -> None:
+        # Exactly like the unjoined-working-orders path: a record the fold
+        # cannot value may be a reservation the cap cannot see — refuse.
+        _entry_trail_journal(self, ["{not json"])
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=True):
+            message = self._check(notional=100.0)
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("KO", message)
+        self.assertIn("1 entry-trail", message)
+        self.assertIn("failing closed", message)
+
+    def test_unvaluable_watch_open_fails_closed(self) -> None:
+        import json
+
+        _entry_trail_journal(
+            self,
+            [json.dumps({"kind": "watch_open", "crid": "crid-w0", "limit": None, "qty": 5})],
+        )
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=True):
+            message = self._check(notional=100.0)
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("failing closed", message)
+
+
+class TestCheckCashFloorWatchingReservation(unittest.TestCase):
+    """The same G5 watching term inside ``_check_cash_floor`` (declared mode):
+    the watching reservation joins the resting reservation in the funding
+    check. With no journal the arithmetic and message are unchanged."""
+
+    def _check(self, *, notional: float = 10_000.0, margin_available: Any = 12_000.0) -> str | None:
+        return cl._check_cash_floor(
+            _fee_plan(notional),
+            None,
+            account=_cash_acct(margin_available),
+            open_verdicts=[],
+            records=[],
+            ticker="KO",
+        )
+
+    def test_no_journal_verdict_and_message_are_byte_identical(self) -> None:
+        _entry_trail_journal(self, None)
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            self.assertIsNone(self._check(notional=10_000.0, margin_available=12_000.0))
+            message = self._check(notional=10_000.0, margin_available=5_000.0)
+        self.assertEqual(
+            message,
+            "cash floor: KO needs 10,400.00 USD (incl. 4% buffer) + 0.00 already "
+            "reserved by resting entries, but only 5,000.00 USD is available — "
+            "deposit and re-arm",
+            "with no entry-trails journal the refusal text must not change",
+        )
+
+    def test_watching_reservation_tips_it_over(self) -> None:
+        # Candidate buffered 10_400 fits 12_000; a watching tier reserving
+        # 10.0 x 200 = 2_000 pushes the reserved total to 12_400.
+        _entry_trail_journal(self, [_watch_open_line(limit=10.0, qty=200.0)])
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            message = self._check(notional=10_000.0, margin_available=12_000.0)
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("2,000.00", message)
+
+    def test_terminal_tier_does_not_reserve(self) -> None:
+        import json
+
+        _entry_trail_journal(
+            self,
+            [
+                _watch_open_line(limit=10.0, qty=200.0),
+                json.dumps({"kind": "cancelled", "crid": "crid-w0"}),
+            ],
+        )
+        with mock.patch.dict("os.environ", _DECLARED_ENV, clear=True):
+            self.assertIsNone(self._check(notional=10_000.0, margin_available=12_000.0))
+
+    def test_clamped_mode_stays_inert_even_with_a_watching_tier(self) -> None:
+        # The cash floor is inert outside declared mode (memo G5) — the
+        # watching term must not change that; the GROSS cap carries it there.
+        _entry_trail_journal(self, [_watch_open_line(limit=10.0, qty=200.0)])
+        env = {SIZING_EQUITY_ENV: "10000", SIZING_EQUITY_MODE_ENV: "clamped"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertIsNone(self._check(notional=10_000.0, margin_available=1.0))
+
+
+class TestBuildDefaultDepsBootCompactsJournals(unittest.TestCase):
+    """Startup maintenance: build_default_deps compacts BOTH append-only
+    journals (standalone stops #895, entry trails PR-T0) before the tick loop
+    — at boot, so no concurrent tick can race a rewrite against an append."""
+
+    def test_clean_sim_boot_compacts_both_journals(self) -> None:
+        standalone = mock.Mock()
+        trails = mock.Mock()
+        with (
+            _isolated_home(),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+            mock.patch.object(cl, "_compact_standalone_stop_journal", standalone),
+            mock.patch.object(entry_trails, "compact_entry_trail_journal", trails),
+        ):
+            cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
+        standalone.assert_called_once_with()
+        trails.assert_called_once_with()
 
 
 def _exit_spec(*, stop: float, tp: float, atr: float, ceiling: float | None = None) -> Any:
