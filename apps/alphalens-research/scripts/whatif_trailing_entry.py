@@ -245,6 +245,17 @@ def main() -> int:
                     filled: bool,
                     entry: float | None,
                     fill_idx: int | None,
+                    *,
+                    # Early-bind the per-tier loop state (ruff B023): emit is
+                    # only ever called within the same iteration, so late
+                    # binding was harmless — but explicit binding proves it.
+                    base=base,
+                    bars=bars,
+                    setup=setup,
+                    stop=stop,
+                    limit=limit,
+                    risk_a=risk_a,
+                    position_expiry_ms=position_expiry_ms,
                 ) -> None:
                     rec = {
                         **base,
