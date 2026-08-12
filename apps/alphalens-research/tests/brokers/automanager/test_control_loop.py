@@ -41,6 +41,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     _exit_tp_ref,
     _reconcile_long,
 )
+from alphalens_pipeline.brokers.automanager.safety import PORTFOLIO_GROSS_FRAC_ENV
 from alphalens_pipeline.brokers.reconcile import ReconcileVerdict
 from broker_contract.contract import (
     BrokerCapabilityError,
@@ -652,7 +653,9 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
             p(
                 mock.patch(
                     "broker_contract.sizing.compute_setup_plan",
-                    lambda _spec, **_k: object(),
+                    # A REAL (inert, well-under-cap) plan: the post-sizing gross
+                    # cap reads plan.entry_tiers, so a bare object() would crash.
+                    lambda _spec, **_k: _fee_plan(10_000.0),
                 )
             )
             p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
@@ -711,9 +714,17 @@ def _placement(n_tiers: int = 1) -> Any:
 class _PlaceBroker:
     """Stub broker for _make_place_pick: happy account/place unless overridden."""
 
-    def __init__(self, *, on_account: Any = None, on_place: Any = None, get_fx_rate: Any = None):
+    def __init__(
+        self,
+        *,
+        on_account: Any = None,
+        on_place: Any = None,
+        get_fx_rate: Any = None,
+        on_positions: Any = None,
+    ):
         self._on_account = on_account
         self._on_place = on_place
+        self._on_positions = on_positions
         if get_fx_rate is not None:
             self.get_fx_rate = get_fx_rate  # optional capability probed via getattr
 
@@ -721,7 +732,7 @@ class _PlaceBroker:
         return self._on_account() if self._on_account is not None else _acct()
 
     def get_positions(self) -> list:
-        return []
+        return list(self._on_positions) if self._on_positions is not None else []
 
     def place_bracket_order(self, bracket: Any) -> Any:
         if self._on_place is not None:
@@ -742,7 +753,9 @@ class TestPlacePickBranches(unittest.TestCase):
             "safety_check": lambda *_a, **_k: object(),
             "resolve": lambda _b, _t: _instr(),
             "classify": lambda *_a, **_k: _placement(),
-            "compute_plan": lambda _spec, **_k: object(),
+            # A REAL (inert, well-under-cap) plan: the post-sizing gross cap
+            # reads plan.entry_tiers, so a bare object() would crash.
+            "compute_plan": lambda _spec, **_k: _fee_plan(10_000.0),
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
             "build_record": lambda **kw: dict(kw),
@@ -1239,6 +1252,371 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
             self.assertFalse(placer(_pick()))
         self.assertEqual(broker.placed, [])
         self.assertEqual(len(refusals), 1)
+
+
+# --- Post-sizing portfolio gross cap (broker sizing memo §3) -----------------
+
+
+def _fx(rate: float, instrument_currency: str = "") -> Any:
+    """A minimal FxConversion double — ``rate`` is instrument-ccy per 1
+    account-ccy (broker_contract.fx.FxConversion direction). An empty
+    ``instrument_currency`` (the default) leaves the currency guard inert,
+    mirroring doubles that predate the guard."""
+    return type("FX", (), {"rate": rate, "instrument_currency": instrument_currency})()
+
+
+def _position(market_value: float | None, ticker: str = "NVAX", currency: str = "USD") -> Position:
+    """A broker Position whose mark-to-market is exactly ``market_value``
+    (INSTRUMENT currency; ``None`` = broker quote unavailable, SIM NoAccess)."""
+    return Position(
+        instrument=InstrumentRef(
+            ticker=ticker,
+            exchange_mic="XNAS",
+            asset_type="Stock",
+            broker_instrument_id="6820",
+            broker_symbol=f"{ticker}:xnas",
+            currency=currency,
+        ),
+        quantity=100.0,
+        avg_price=10.0,
+        market_value=market_value,
+        unrealized_pnl=None,
+        position_id="P-1",
+    )
+
+
+class TestCheckGrossCap(unittest.TestCase):
+    """``_check_gross_cap`` — the POST-sizing, candidate-inclusive,
+    ACCOUNT-currency gross check (sibling of ``_check_fee_floor``):
+
+        committed_working_acct + candidate_gross_acct + filled_positions_acct
+            <= GROSS_FRAC x account.total_value
+
+    Repairs the three pre-sizing ``safety.check`` gross-rail defects: currency
+    mismatch (journal gross is instrument-ccy), candidate exclusion (first
+    pick of any size always passed), and filled-position blindness."""
+
+    def _check(
+        self,
+        *,
+        notional: float = 10_000.0,
+        fx: Any = None,
+        verdicts: Any = (),
+        records: Any = (),
+        positions: Any = (),
+    ) -> str | None:
+        return cl._check_gross_cap(
+            _fee_plan(notional),
+            fx,
+            account=_acct(),
+            open_verdicts=list(verdicts),
+            records=list(records),
+            positions=list(positions),
+            ticker="KO",
+        )
+
+    def test_candidate_alone_under_limit_passes(self) -> None:
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.2"}, clear=True):
+            self.assertIsNone(self._check(notional=10_000.0))
+
+    def test_env_unset_uses_the_default_gross_frac(self) -> None:
+        # safety.DEFAULT_PORTFOLIO_GROSS_FRAC = 1.0 -> limit = total_value.
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(self._check(notional=10_000.0))
+
+    def test_candidate_tips_over_limit_names_all_components(self) -> None:
+        # The pre-sizing safety.check runs BEFORE sizing, so the candidate
+        # itself never counted — the first pick of any size always passed.
+        # Here the candidate ALONE must tip the total over the limit, and the
+        # message must name the total, all three components, the limit,
+        # GROSS_FRAC and total_value.
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
+            message = self._check(notional=10_000.0)
+        self.assertIsNotNone(message)
+        assert message is not None  # narrows for the type checker
+        self.assertIn("KO", message)
+        self.assertIn("10,000.00", message)  # total (== candidate here)
+        self.assertIn("5,000.00", message)  # limit
+        self.assertIn("0.05", message)  # GROSS_FRAC
+        self.assertIn("100,000.00", message)  # account total_value
+        self.assertIn("0.00", message)  # the empty working/filled components
+
+    def test_candidate_fx_notional_divides_into_account_currency(self) -> None:
+        # fx.rate is instrument-ccy per 1 account-ccy: 10_000 USD at rate 0.25
+        # is 40_000 in account currency (division — a multiplication bug would
+        # yield 2_500 and pass). Same-currency (fx=None) folds raw and passes.
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.3"}, clear=True):
+            self.assertIsNotNone(self._check(notional=10_000.0, fx=_fx(0.25)))
+            self.assertIsNone(self._check(notional=10_000.0, fx=None))
+
+    def test_committed_working_converts_via_the_records_own_journaled_rate(self) -> None:
+        # Journaled entry x qty is INSTRUMENT currency; each record folds
+        # through its OWN journaled fx_rate (acct->instr Mid): 1_600 USD at
+        # rate 0.4 is 4_000 in account currency. Unconverted (the pre-sizing
+        # defect) it would be 1_600 and the total would pass the 4_000 limit.
+        working = _verdict(status="WORKING", details={"client_request_id": "rid-a"})
+        records = [
+            {
+                "brackets": [{"client_request_id": "rid-a", "entry": 10.0, "qty": 160}],
+                "fx_rate": 0.4,
+            }
+        ]
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.04"}, clear=True):
+            message = self._check(notional=100.0, verdicts=[working], records=records)
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("4,000.00", message)
+
+    def test_committed_record_without_fx_rate_folds_raw(self) -> None:
+        # Schema-1 / same-currency records carry fx_rate null — fold as-is.
+        working = _verdict(status="WORKING", details={"client_request_id": "rid-a"})
+        records = [{"brackets": [{"client_request_id": "rid-a", "entry": 10.0, "qty": 95}]}]
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.01"}, clear=True):
+            message = self._check(notional=100.0, verdicts=[working], records=records)
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("950.00", message)
+
+    def test_exactly_at_the_limit_passes(self) -> None:
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.01"}, clear=True):
+            self.assertIsNone(self._check(notional=1_000.0))
+
+    def test_non_working_verdicts_do_not_count_toward_committed(self) -> None:
+        # A FILLED verdict's exposure enters via broker positions, never via
+        # the journal (that would double-count once the position exists).
+        filled = _verdict(status="FILLED", details={"client_request_id": "rid-a"})
+        records = [{"brackets": [{"client_request_id": "rid-a", "entry": 10.0, "qty": 1000}]}]
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
+            self.assertIsNone(self._check(notional=100.0, verdicts=[filled], records=records))
+
+    def test_working_verdict_without_a_joinable_bracket_fails_closed(self) -> None:
+        # A working verdict we cannot join to a journaled entry bracket is
+        # real broker exposure the cap cannot value — refusing beats silently
+        # under-counting on a money rail (zen pre-merge finding; contrast the
+        # pre-sizing _summarize_open_verdicts, which tolerates the same skew
+        # because its rail is only the cheap early exit).
+        orphan = _verdict(status="WORKING", details={"client_request_id": "rid-unknown"})
+        no_entry = _verdict(status="WORKING", details={"client_request_id": "rid-b"})
+        records = [{"brackets": [{"client_request_id": "rid-b", "entry": None, "qty": 5}]}]
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
+            violation = self._check(notional=100.0, verdicts=[orphan, no_entry], records=records)
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertIn("2 working order(s)", violation)
+        self.assertIn("failing closed", violation)
+
+    def test_duplicate_request_ids_across_records_fold_the_last_journaled_bracket(self) -> None:
+        # The join index is a dict comprehension — a client_request_id
+        # journaled twice (e.g. a re-journaled record) resolves to the LAST
+        # record's bracket + fx_rate. Pin that last-wins semantics so a future
+        # refactor to first-wins is a deliberate choice, not an accident.
+        verdict = _verdict(status="WORKING", details={"client_request_id": "rid-dup"})
+        records = [
+            {"brackets": [{"client_request_id": "rid-dup", "entry": 10.0, "qty": 100}]},
+            {
+                "fx_rate": 0.5,
+                "brackets": [{"client_request_id": "rid-dup", "entry": 8.0, "qty": 100}],
+            },
+        ]
+        # Last record wins: 8.0 x 100 / 0.5 = 1_600 acct-ccy committed; with
+        # the candidate 100 the total 1_700 exceeds the 1_000 limit. First-
+        # wins (10.0 x 100 raw = 1_000 committed + 100) would ALSO refuse, so
+        # pin via the message's committed component instead of the verdict.
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.01"}, clear=True):
+            violation = self._check(notional=100.0, verdicts=[verdict], records=records)
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertIn("working 1,600.00", violation)
+
+    def test_position_in_a_foreign_currency_fails_closed(self) -> None:
+        # The single candidate fx rate can only convert positions trading in
+        # the SAME instrument currency — a stamped mismatching currency must
+        # refuse, never mis-value through a foreign rate (zen pre-merge
+        # finding).
+        eur_position = _position(1_000.0, ticker="SAP", currency="EUR")
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=True):
+            violation = self._check(
+                notional=100.0,
+                fx=_fx(0.25, instrument_currency="USD"),
+                positions=[eur_position],
+            )
+        self.assertIsNotNone(violation)
+        assert violation is not None
+        self.assertIn("SAP", violation)
+        self.assertIn("EUR", violation)
+        self.assertIn("failing closed", violation)
+
+    def test_position_with_unstamped_currency_is_tolerated(self) -> None:
+        # InstrumentRef.currency is "" on best-effort reverse-lookup position
+        # rows (contract docstring) — absent is not wrong; the guard fires
+        # only on a STAMPED mismatch.
+        unstamped = _position(1_000.0, currency="")
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=True):
+            self.assertIsNone(
+                self._check(
+                    notional=100.0,
+                    fx=_fx(1.0, instrument_currency="USD"),
+                    positions=[unstamped],
+                )
+            )
+
+    def test_filled_positions_convert_via_the_candidates_fx(self) -> None:
+        # market_value is INSTRUMENT currency: 7_000 USD at rate 0.25 is
+        # 28_000 in account currency (+ candidate 4_000 = 32_000 > 30_000).
+        # Same-currency (fx=None): 7_000 + 1_000 = 8_000 passes.
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.3"}, clear=True):
+            message = self._check(notional=1_000.0, fx=_fx(0.25), positions=[_position(7_000.0)])
+            self.assertIsNotNone(message)
+            assert message is not None
+            self.assertIn("28,000.00", message)
+            self.assertIsNone(self._check(notional=1_000.0, positions=[_position(7_000.0)]))
+
+    def test_position_with_no_mark_fails_closed(self) -> None:
+        # A None mark (SIM NoAccess) cannot be valued conservatively HIGH
+        # without a price — refuse rather than silently skip the position,
+        # even when the limit is nowhere near.
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=True):
+            message = self._check(notional=100.0, positions=[_position(None)])
+        self.assertIsNotNone(message)
+        assert message is not None
+        self.assertIn("NVAX", message)
+        self.assertIn("KO", message)
+
+    def test_malformed_gross_frac_env_falls_back_to_default(self) -> None:
+        # Mirrors safety._float_env: a typo'd fraction falls back to the
+        # DEFAULT (1.0) — exactly how safety.check reads the same env var, so
+        # the pre- and post-sizing rails never disagree on the limit.
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.O"}, clear=True):
+            self.assertIsNone(self._check(notional=10_000.0))
+
+
+class TestPlacePickGrossCapIntegration(unittest.TestCase):
+    """The gross cap gate inside ``_place_pick``: computed AFTER the fee floor
+    (same post-sizing inputs), BEFORE any bracket construction or placement.
+    Violation mirrors the fee floor's terminal refusal flow verbatim
+    (mark_refused + throttled alert, NO submission record)."""
+
+    def _placer(
+        self, broker: Any, *, notional: float, **over: Any
+    ) -> tuple[Any, list[tuple[str, str]], list[tuple[Any, ...]], list[Any]]:
+        pkg = "alphalens_pipeline.brokers"
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        alerts: list[tuple[str, str]] = []
+        refusals: list[tuple[Any, ...]] = []
+        appended: list[Any] = []
+
+        def _alert_throttled(message: str, reason: str) -> bool:
+            alerts.append((message, reason))
+            return True
+
+        m: dict[str, Any] = {
+            "verdicts": lambda _r, _b: [],
+            "safety_check": lambda *_a, **_k: object(),
+            "resolve": lambda _b, _t: _instr(),
+            "classify": lambda *_a, **_k: _placement(),
+            "compute_plan": lambda _spec, **_k: _fee_plan(notional),
+            "iter_records": lambda _p: [],
+            "append": appended.append,
+            "build_record": lambda **kw: dict(kw),
+            "mark_refused": lambda *a: refusals.append(a),
+            **over,
+        }
+        p = stack.enter_context
+        p(mock.patch(f"{pkg}.automanager.picks.mark_refused", m["mark_refused"]))
+        p(mock.patch(f"{pkg}.submission_log.build_submission_record", m["build_record"]))
+        p(mock.patch(f"{pkg}.submission_log.append_submission_record", m["append"]))
+        p(mock.patch(f"{pkg}.submission_log.iter_submission_records", m["iter_records"]))
+        p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", m["verdicts"]))
+        p(mock.patch(f"{pkg}.automanager.safety.check", m["safety_check"]))
+        p(mock.patch(f"{pkg}.routing.resolve_us_instrument", m["resolve"]))
+        p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
+        p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
+        p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+        placer = cl._make_place_pick(broker, alert_throttled=_alert_throttled)
+        return placer, alerts, refusals, appended
+
+    def test_over_cap_refused_terminal_never_placed_no_submission_record(self) -> None:
+        broker = _RecordingBroker()
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
+            placer, alerts, refusals, appended = self._placer(broker, notional=10_000.0)
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(broker.placed, [], "the gross cap must refuse BEFORE any bracket places")
+        self.assertEqual(appended, [], "a refused pick must never journal a submission record")
+        self.assertEqual(len(refusals), 1)
+        ticker, brief_date, reason = refusals[0]
+        self.assertEqual(ticker, "KO")
+        self.assertEqual(brief_date, dt.date(2026, 7, 20))
+        self.assertIn("gross", reason.lower())
+        self.assertEqual(len(alerts), 1)
+        message, reason_key = alerts[0]
+        self.assertIn("gross", message.lower())
+        self.assertEqual(reason_key, "gross-cap:KO")
+
+    def test_under_cap_places(self) -> None:
+        broker = _RecordingBroker()
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.5"}, clear=True):
+            placer, alerts, refusals, _appended = self._placer(broker, notional=10_000.0)
+            self.assertTrue(placer(_pick()))
+        self.assertTrue(broker.placed)
+        self.assertEqual(alerts, [])
+        self.assertEqual(refusals, [])
+
+    def test_committed_working_exposure_counts_toward_the_cap(self) -> None:
+        # The wiring half of the committed-working component: the SAME
+        # verdicts + records _place_pick already fetched for safety.check
+        # feed the post-sizing check (45_000 working + 10_000 candidate
+        # > 0.5 x 100_000).
+        broker = _RecordingBroker()
+        working = _verdict(status="WORKING", details={"client_request_id": "rid-x"})
+        records = [{"brackets": [{"client_request_id": "rid-x", "entry": 10.0, "qty": 4500}]}]
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.5"}, clear=True):
+            placer, _alerts, refusals, _appended = self._placer(
+                broker,
+                notional=10_000.0,
+                verdicts=lambda _r, _b: [working],
+                iter_records=lambda _p: records,
+            )
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(broker.placed, [])
+        self.assertEqual(len(refusals), 1)
+
+    def test_position_mark_missing_fails_closed_never_placed(self) -> None:
+        broker = _RecordingBroker(on_positions=[_position(None)])
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "1.0"}, clear=True):
+            placer, alerts, refusals, _appended = self._placer(broker, notional=100.0)
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(broker.placed, [])
+        self.assertEqual(len(refusals), 1)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0][1], "gross-cap:KO")
+
+    def test_refused_line_append_oserror_never_crashes_the_drain(self) -> None:
+        # _refuse_pick_terminal contains the fallible mark_refused I/O: on
+        # OSError the drain must survive (return False), the pick stays armed
+        # and the refusal re-fires next tick.
+        def _disk_full(*_a: Any, **_k: Any) -> None:
+            raise OSError("disk full")
+
+        broker = _RecordingBroker()
+        with mock.patch.dict("os.environ", {PORTFOLIO_GROSS_FRAC_ENV: "0.05"}, clear=True):
+            placer, _alerts, _refusals, _appended = self._placer(
+                broker, notional=10_000.0, mark_refused=_disk_full
+            )
+            self.assertFalse(placer(_pick()))  # must not raise
+        self.assertEqual(broker.placed, [])
+
+    def test_fee_floor_violation_wins_when_both_gates_trip(self) -> None:
+        # Sibling ordering: the fee floor runs first, so a pick violating both
+        # gates is refused with the FEE message/key (one page, not two).
+        broker = _RecordingBroker()
+        env = {MAX_FEE_BPS_ENV: "100", PORTFOLIO_GROSS_FRAC_ENV: "0.0001"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            placer, alerts, refusals, _appended = self._placer(broker, notional=50.0)
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(len(refusals), 1)
+        self.assertIn("fee", refusals[0][2].lower())
+        self.assertEqual(alerts[0][1], "fee-floor:KO")
 
 
 def _exit_spec(*, stop: float, tp: float, atr: float, ceiling: float | None = None) -> Any:
@@ -5637,7 +6015,9 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
             "safety_check": lambda *_a, **_k: object(),
             "resolve": lambda _b, _t: _instr(),
             "classify": lambda *_a, **_k: _placement(),
-            "compute_plan": lambda _spec, **_k: object(),
+            # A REAL (inert, well-under-cap) plan: the post-sizing gross cap
+            # reads plan.entry_tiers, so a bare object() would crash.
+            "compute_plan": lambda _spec, **_k: _fee_plan(10_000.0),
             "iter_records": lambda _p: [],
             "append": lambda _r: None,
             "build_record": lambda **kw: dict(kw),
