@@ -1202,6 +1202,21 @@ systemctl --user daemon-reload
 systemctl --user enable --now alphalens-broker-manager-live.service
 ```
 
+**Deploy coupling — entry-trailing 8th pin (PR-T0).** A build containing
+the entry-trailing scaffolding extends the LIVE boot-assert from seven to
+EIGHT pins. Before restarting the daemon onto such a build, add the new
+pin to the VPS copy of the LIVE unit (beside the other rails):
+
+```ini
+Environment=ALPHALENS_BROKER_ENTRY_TRAIL_BPS=0
+```
+
+`0` = feature off (today's limit-at-touch entries; bound `[0, 150]` per
+the entry-trailing design memo §6). A LIVE unit missing the pin fails at
+`assert_live_rails()` on boot — that failure is the DESIGNED behavior
+(fail loud, never inherit a default), not a bug; add the pin,
+`daemon-reload`, restart.
+
 #### 9.2 Verify INERT (`ALLOW_ORDERS=0`, the shipped default)
 
 The unit ships with `ALPHALENS_BROKER_ALLOW_ORDERS=0` — it constructs the
