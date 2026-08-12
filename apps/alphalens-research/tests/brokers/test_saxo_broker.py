@@ -384,6 +384,38 @@ class TestInstrumentResolution(unittest.TestCase):
         self.assertEqual(ref.broker_symbol, "LAC_NEW:xnys")
         self.assertEqual(ref.currency, "USD")
 
+    def test_stale_alias_uic_mismatch_fails_closed(self):
+        """A matched alias row whose Uic differs from the curated pin must
+        NOT resolve (zen pre-merge finding): a stale alias entry — Saxo
+        renamed again, or reused the symbol root for another company — fails
+        to resolve instead of silently trading the wrong listing."""
+
+        class _StaleAlias(_StubSaxoClient):
+            def search_instruments(
+                self,
+                keywords: str,
+                *,
+                asset_types: str = "Stock",
+                exchange_id: str | None = None,
+            ) -> dict[str, Any]:
+                self.search_calls.append((keywords, exchange_id))
+                return {
+                    "Data": [
+                        {
+                            "Symbol": "LAC_NEW:xnys",
+                            "Uic": 999,
+                            "Identifier": 999,
+                            "ExchangeId": "NYSE",
+                            "CurrencyCode": "USD",
+                            "AssetType": "Stock",
+                        }
+                    ]
+                }
+
+        broker = SaxoBroker(_StaleAlias())  # type: ignore[arg-type]
+        with self.assertRaises(InstrumentNotFoundError):
+            broker.resolve_instrument("LAC", "XNYS")
+
     def test_alias_researches_when_primary_search_returns_no_rows(self):
         """An EMPTY primary keyword search re-searches with the alias keyword
         before giving up."""

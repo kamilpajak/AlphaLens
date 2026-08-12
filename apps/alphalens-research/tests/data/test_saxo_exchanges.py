@@ -16,6 +16,7 @@ from alphalens_pipeline.data.alt_data.saxo_exchanges import (
     MIC_TO_SAXO_EXCHANGE_ID,
     SAXO_TICKER_ALIASES,
     US_MIC_PROBE_ORDER,
+    alias_expected_for,
 )
 
 
@@ -28,20 +29,28 @@ class TestMicToSaxoExchangeId(unittest.TestCase):
 class TestSaxoTickerAliases(unittest.TestCase):
     def test_map_is_well_formed(self) -> None:
         """Every entry maps a non-empty UPPER market ticker to a DIFFERENT
-        non-empty UPPER Saxo symbol root — a same-as-key or empty entry would
-        be a silent no-op alias."""
-        for market_ticker, saxo_symbol in SAXO_TICKER_ALIASES.items():
+        non-empty UPPER Saxo symbol root plus a positive uic pin — a
+        same-as-key, empty, or unpinned entry would be a silent no-op or a
+        wrong-instrument hazard (the pin is what makes a stale alias fail
+        closed)."""
+        for market_ticker, (saxo_symbol, expected_uic) in SAXO_TICKER_ALIASES.items():
             with self.subTest(market_ticker=market_ticker):
                 self.assertTrue(market_ticker)
                 self.assertTrue(saxo_symbol)
                 self.assertEqual(market_ticker, market_ticker.upper())
                 self.assertEqual(saxo_symbol, saxo_symbol.upper())
                 self.assertNotEqual(market_ticker, saxo_symbol)
+                self.assertIsInstance(expected_uic, int)
+                self.assertGreater(expected_uic, 0)
 
-    def test_positive_control_lac_maps_to_lac_new(self) -> None:
-        """LAC -> LAC_NEW (live-verified 2026-08-12, uic 38022146) — a
-        positive control so the alias map cannot rot to empty silently."""
-        self.assertEqual(SAXO_TICKER_ALIASES["LAC"], "LAC_NEW")
+    def test_positive_control_lac_maps_to_lac_new_with_uic_pin(self) -> None:
+        """LAC -> (LAC_NEW, 38022146) (live-verified 2026-08-12) — a positive
+        control so the alias map cannot rot to empty silently."""
+        self.assertEqual(SAXO_TICKER_ALIASES["LAC"], ("LAC_NEW", 38022146))
+
+    def test_accessor_upper_cases_and_returns_the_pinned_pair(self) -> None:
+        self.assertEqual(alias_expected_for("lac"), ("LAC_NEW", 38022146))
+        self.assertIsNone(alias_expected_for("MP"))
 
 
 class TestUsMicProbeOrder(unittest.TestCase):

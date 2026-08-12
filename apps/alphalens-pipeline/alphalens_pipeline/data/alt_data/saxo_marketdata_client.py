@@ -17,7 +17,7 @@ import requests
 
 from alphalens_pipeline.data.alt_data.saxo_exchanges import (
     MIC_TO_SAXO_EXCHANGE_ID,
-    SAXO_TICKER_ALIASES,
+    alias_expected_for,
 )
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveTokenProvider
 
@@ -123,15 +123,23 @@ class SaxoMarketDataClient:
         matches = _exact_symbol_matches(rows, ticker, exchange_mic)
         matched_symbol_root = ticker
         if not matches:
-            alias = SAXO_TICKER_ALIASES.get(ticker)
-            if alias is not None:
+            aliased = alias_expected_for(ticker)
+            if aliased is not None:
+                alias, expected_uic = aliased
                 # Saxo lists this name under a renamed symbol (e.g.
                 # LAC -> LAC_NEW). The fuzzy Keywords search usually already
                 # returned the aliased row; only an EMPTY primary search
-                # warrants a second round-trip with the alias keyword.
+                # warrants a second round-trip with the alias keyword. The
+                # uic PIN makes a stale alias fail closed: a matched row
+                # whose Identifier differs from the curated uic is dropped
+                # (Saxo renamed again / reused the root for another company).
                 if not rows:
                     rows = self._search_instrument_rows(alias) or []
-                matches = _exact_symbol_matches(rows, alias, exchange_mic)
+                matches = [
+                    row
+                    for row in _exact_symbol_matches(rows, alias, exchange_mic)
+                    if int(row.get("Identifier", -1)) == expected_uic
+                ]
                 matched_symbol_root = alias
         if not matches:
             return None

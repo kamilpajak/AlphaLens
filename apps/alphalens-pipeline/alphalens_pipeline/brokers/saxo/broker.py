@@ -64,7 +64,7 @@ from alphalens_pipeline.brokers.saxo.client import (
 from alphalens_pipeline.brokers.saxo.live_tokens import LiveOrderTokenProvider
 from alphalens_pipeline.data.alt_data.saxo_exchanges import (
     MIC_TO_SAXO_EXCHANGE_ID,
-    SAXO_TICKER_ALIASES,
+    alias_expected_for,
 )
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveAuthConfig, LiveTokenProvider
 from alphalens_pipeline.paper.calendar import advance_trading_sessions
@@ -396,16 +396,25 @@ class SaxoBroker:
         alias returns ``([], expected_symbol)`` unchanged. Match strictness
         (exact (symbol, venue) pair; ambiguity is the caller's raise) is
         identical to the primary step."""
-        alias = SAXO_TICKER_ALIASES.get(ticker)
-        if alias is None:
+        aliased = alias_expected_for(ticker)
+        if aliased is None:
             return [], expected_symbol
+        alias, expected_uic = aliased
         if not rows:
             with _translate_saxo_errors():
                 payload = self._client.search_instruments(alias, exchange_id=exchange_id)
             rows = payload.get("Data") or []
         alias_symbol = f"{alias}:{exchange_mic}".lower()
+        # The uic PIN makes a stale alias fail closed (zen pre-merge finding):
+        # a matched row whose Identifier differs from the curated uic is
+        # dropped rather than traded (Saxo renamed again / reused the root).
         return (
-            [row for row in rows if str(row.get("Symbol", "")).lower() == alias_symbol],
+            [
+                row
+                for row in rows
+                if str(row.get("Symbol", "")).lower() == alias_symbol
+                and int(row.get("Identifier", row.get("Uic", -1)) or -1) == expected_uic
+            ],
             alias_symbol,
         )
 
@@ -1381,6 +1390,14 @@ class SaxoBroker:
         )
 
     def _to_position(self, row: dict[str, Any]) -> Position:
+        """Broker-state position ref — ``ticker`` is the SAXO DISPLAY root.
+
+        For an aliased listing (``SAXO_TICKER_ALIASES``) this is the Saxo
+        symbol root (``LAC_NEW``), NOT the market ticker — the inverse alias
+        mapping is deliberately not applied here (a reverse map can be
+        ambiguous). Every position join therefore keys on ``uic`` /
+        ``broker_instrument_id`` or ``client_request_id``, never on the
+        position ref's ticker (zen pre-merge note, PR #1036)."""
         base: dict[str, Any] = row.get("PositionBase") or {}
         view: dict[str, Any] = row.get("PositionView") or {}
         display: dict[str, Any] = row.get("DisplayAndFormat") or {}

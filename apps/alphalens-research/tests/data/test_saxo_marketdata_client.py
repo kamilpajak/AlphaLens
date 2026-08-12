@@ -189,14 +189,35 @@ class TestResolveUicTickerAlias(unittest.TestCase):
         self.assertIsNone(_client(session).resolve_uic("MP", exchange_mic="XNYS"))
         self.assertEqual(len(session.calls), 1)
 
-    def test_alias_ambiguity_still_refuses(self):
-        """Two rows sharing the ALIASED symbol on the requested venue keep the
-        fail-closed contract: None + warning, exactly like a direct-match
-        ambiguity."""
+    def test_alias_uic_pin_disambiguates_duplicate_symbol_rows(self):
+        """Two rows sharing the ALIASED symbol resolve to the PINNED uic —
+        the curated pin is the disambiguator (zen pre-merge finding: the pin
+        exists precisely so the alias can never trade an unverified row)."""
         payload = {
             "Data": [
                 {"Symbol": "LAC_NEW:xnys", "Identifier": 38022146},
                 {"Symbol": "LAC_NEW:xnys", "Identifier": 999},
+            ]
+        }
+        got = _client(_Session(_Resp(200, payload))).resolve_uic("LAC", exchange_mic="XNYS")
+        self.assertEqual(got, 38022146)
+
+    def test_stale_alias_uic_mismatch_fails_closed(self):
+        """A matched alias row whose Identifier differs from the curated pin
+        resolves to None — a stale entry (Saxo renamed again / reused the
+        symbol root for another company) must fail to resolve, never trade
+        the wrong listing."""
+        payload = {"Data": [{"Symbol": "LAC_NEW:xnys", "Identifier": 999}]}
+        got = _client(_Session(_Resp(200, payload))).resolve_uic("LAC", exchange_mic="XNYS")
+        self.assertIsNone(got)
+
+    def test_true_duplicate_pinned_rows_still_refuse_as_ambiguous(self):
+        """Two rows with the SAME pinned uic (a genuinely duplicated listing
+        row) keep the fail-closed ambiguity contract: None + warning."""
+        payload = {
+            "Data": [
+                {"Symbol": "LAC_NEW:xnys", "Identifier": 38022146},
+                {"Symbol": "LAC_NEW:xnys", "Identifier": 38022146},
             ]
         }
         logger_name = "alphalens_pipeline.data.alt_data.saxo_marketdata_client"

@@ -37,11 +37,26 @@ MIC_TO_SAXO_EXCHANGE_ID: dict[str, str] = {
 # search comes back empty). When Saxo renames a listing back (or again), the
 # stale alias is REMOVED and replaced, never stacked — one market ticker maps
 # to at most one current Saxo symbol.
-SAXO_TICKER_ALIASES: Mapping[str, str] = {
+# Every alias PINS the expected Saxo uic (zen pre-merge finding): the alias
+# match is accepted ONLY when the matched row's Identifier equals the pinned
+# uic, so a stale entry (Saxo renames again, or reuses the symbol root for a
+# DIFFERENT company) fails to resolve instead of silently trading the wrong
+# listing. Both resolvers enforce it via ``alias_expected_for``.
+SAXO_TICKER_ALIASES: Mapping[str, tuple[str, int]] = {
     # Lithium Americas, NYSE — Saxo symbol "LAC_NEW:xnys", uic 38022146
     # (post-2023 corporate-split leftover; live-verified 2026-08-12).
-    "LAC": "LAC_NEW",
+    "LAC": ("LAC_NEW", 38022146),
 }
+
+
+def alias_expected_for(ticker: str) -> tuple[str, int] | None:
+    """``(saxo_symbol_root, expected_uic)`` for a market ticker, else ``None``.
+
+    The ONE accessor both resolvers use (zen finding: the exact-then-alias
+    logic lives in two modules; sharing the accessor keeps the alias RULE
+    single-sourced), so an alias can never be consulted without its uic pin."""
+    return SAXO_TICKER_ALIASES.get(ticker.upper())
+
 
 # Ordered US venue probe list, shared by placement routing
 # (``brokers.routing.resolve_us_instrument``) and the day-1 gap gate price

@@ -3387,22 +3387,24 @@ def _build_day1_gap_price_probe() -> Callable[[str, str], float | None]:
             # otherwise resolve to None here and the gate would silently
             # defer its entire day 1 (false veto; live-verified with NVAX,
             # XNAS uic 6820, 2026-08-11). Hinted venue first, then the rest.
-            candidate_mics = [exchange_mic] + [
-                m for m in _DAY1_GAP_US_VENUE_PROBE_ORDER if m != exchange_mic
-            ]
-            uic = None
-            for mic in candidate_mics:
-                uic = client.resolve_uic(ticker, exchange_mic=mic)
-                if uic is not None:
-                    break
-            if uic is None:
-                return None
+            # One-shot client: the outer finally releases the connection
+            # pool on EVERY return path — the unresolvable-uic early return
+            # used to leak the session once per tick, all day, on exactly
+            # the failing-probe scenario this gate surfaces (zen finding).
             try:
+                candidate_mics = [exchange_mic] + [
+                    m for m in _DAY1_GAP_US_VENUE_PROBE_ORDER if m != exchange_mic
+                ]
+                uic = None
+                for mic in candidate_mics:
+                    uic = client.resolve_uic(ticker, exchange_mic=mic)
+                    if uic is not None:
+                        break
+                if uic is None:
+                    return None
                 payload = client.get_stock_infoprice(uic)
                 return _extract_day1_session_open(payload)
             finally:
-                # One-shot client: release the connection pool explicitly
-                # rather than waiting for GC (zen review polish).
                 with contextlib.suppress(Exception):
                     client._session.close()
         except Exception:
@@ -3459,20 +3461,25 @@ def _day1_gap_gate_defers(
     if gate_verdict == "pass":
         return False
     if gate_verdict == "defer_no_price":
-        logger.warning(
+        # Ride the alert throttle for the WARNING too (zen pre-merge finding):
+        # the probe can fail every ~45s tick all day, and hundreds of
+        # identical journald WARNINGs would crowd out real signals. One
+        # WARNING per throttle window (or per tick when no alert sink is
+        # wired — unit tests, ad-hoc runs); suppressed repeats log at DEBUG.
+        sent = alert_throttled is None or alert_throttled(
+            f"day1 gap gate: {ticker} day-1 PRICE PROBE failed — an "
+            "infrastructure problem, not a market condition; check "
+            "instrument resolution / marketdata chain (the pick stays "
+            "deferred all of day 1 until a price arrives)",
+            f"day1-gap-noprice:{ticker}",
+        )
+        log = logger.warning if sent else logger.debug
+        log(
             "place_pick %s: day1 gap gate deferred (defer_no_price) — the PRICE "
             "PROBE returned no price (infrastructure problem, not a market "
             "condition); check instrument resolution / marketdata chain",
             ticker,
         )
-        if alert_throttled is not None:
-            alert_throttled(
-                f"day1 gap gate: {ticker} day-1 PRICE PROBE failed — an "
-                "infrastructure problem, not a market condition; check "
-                "instrument resolution / marketdata chain (the pick stays "
-                "deferred all of day 1 until a price arrives)",
-                f"day1-gap-noprice:{ticker}",
-            )
         return True
     logger.debug("place_pick %s: day1 gap gate deferred (%s)", ticker, gate_verdict)
     if gate_verdict == "defer_below_e1" and alert_throttled is not None:
