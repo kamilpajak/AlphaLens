@@ -1,4 +1,4 @@
-"""LIVE boot-assert (design memo §3 / ADR 0017 point 4) — the seven safety-rail
+"""LIVE boot-assert (design memo §3 / ADR 0017 point 4) — the eight safety-rail
 env vars a ``env=live`` instance must set explicitly, within bounds, before
 it may boot.
 
@@ -18,8 +18,10 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+from alphalens_pipeline.brokers.automanager.entry_trails import ENTRY_TRAIL_BPS_MAX
 from alphalens_pipeline.brokers.automanager.live_rails import (
     DAILY_LOSS_LIMIT_R_ENV,
+    ENTRY_TRAIL_BPS_ENV,
     EXIT_POLICY_ENV,
     MAX_FEE_BPS_ENV,
     MAX_OPEN_ENV,
@@ -42,6 +44,7 @@ _VALID_ENV: dict[str, str] = {
     SIZING_EQUITY_MODE_ENV: "clamped",
     EXIT_POLICY_ENV: "trailing_atr",
     MAX_FEE_BPS_ENV: "100",
+    ENTRY_TRAIL_BPS_ENV: "0",
 }
 
 _ALL_RAIL_VARS = (
@@ -52,6 +55,7 @@ _ALL_RAIL_VARS = (
     SIZING_EQUITY_MODE_ENV,
     EXIT_POLICY_ENV,
     MAX_FEE_BPS_ENV,
+    ENTRY_TRAIL_BPS_ENV,
 )
 
 
@@ -59,7 +63,7 @@ def _env_without(*names: str) -> dict[str, str]:
     return {k: v for k, v in _VALID_ENV.items() if k not in names}
 
 
-class TestAllSevenConstantsAreDistinctNames(unittest.TestCase):
+class TestAllEightConstantsAreDistinctNames(unittest.TestCase):
     def test_env_var_names(self):
         self.assertEqual(MAX_OPEN_ENV, "ALPHALENS_BROKER_MAX_OPEN")
         self.assertEqual(PORTFOLIO_GROSS_FRAC_ENV, "ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC")
@@ -68,7 +72,8 @@ class TestAllSevenConstantsAreDistinctNames(unittest.TestCase):
         self.assertEqual(SIZING_EQUITY_MODE_ENV, "ALPHALENS_BROKER_SIZING_EQUITY_MODE")
         self.assertEqual(EXIT_POLICY_ENV, "ALPHALENS_BROKER_EXIT_POLICY")
         self.assertEqual(MAX_FEE_BPS_ENV, "ALPHALENS_BROKER_MAX_FEE_BPS")
-        self.assertEqual(len(set(_ALL_RAIL_VARS)), 7, "all seven env-var names must be distinct")
+        self.assertEqual(ENTRY_TRAIL_BPS_ENV, "ALPHALENS_BROKER_ENTRY_TRAIL_BPS")
+        self.assertEqual(len(set(_ALL_RAIL_VARS)), 8, "all eight env-var names must be distinct")
 
 
 class TestValidEnvPasses(unittest.TestCase):
@@ -135,6 +140,22 @@ class TestEachVarUnsetIsNamedInTheError(unittest.TestCase):
             with self.assertRaises(BrokerCapabilityError) as captured:
                 assert_live_rails()
         self.assertIn(MAX_FEE_BPS_ENV, str(captured.exception))
+
+    def test_entry_trail_bps_unset(self):
+        # Unlike the lenient runtime reader (entry_trails.entry_trail_bps,
+        # unset -> feature OFF), the LIVE boot-assert requires an EXPLICIT
+        # value — consistent with the seven existing pins.
+        with mock.patch.dict("os.environ", _env_without(ENTRY_TRAIL_BPS_ENV), clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        self.assertIn(ENTRY_TRAIL_BPS_ENV, str(captured.exception))
+
+    def test_entry_trail_bps_blank(self):
+        env = dict(_VALID_ENV, **{ENTRY_TRAIL_BPS_ENV: "  "})
+        with mock.patch.dict("os.environ", env, clear=True):
+            with self.assertRaises(BrokerCapabilityError) as captured:
+                assert_live_rails()
+        self.assertIn(ENTRY_TRAIL_BPS_ENV, str(captured.exception))
 
 
 class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
@@ -226,6 +247,25 @@ class TestOutOfBoundsIsNamedInTheError(unittest.TestCase):
         self.assertIn(SIZING_MODE_CLAMPED, message)
         self.assertIn(SIZING_MODE_DECLARED, message)
 
+    def test_entry_trail_bps_zero_and_bound_edge_pass(self):
+        # "0" (feature OFF) and the memo §6 upper bound are both valid pins.
+        for value in ("0", str(ENTRY_TRAIL_BPS_MAX)):
+            with self.subTest(value=value):
+                env = dict(_VALID_ENV, **{ENTRY_TRAIL_BPS_ENV: value})
+                with mock.patch.dict("os.environ", env, clear=True):
+                    assert_live_rails()  # must not raise
+
+    def test_entry_trail_bps_out_of_bounds_or_malformed_rejected(self):
+        # 151 is the first value past the memo §6 bound (150, NOT 300 — the
+        # replay's edge is dead by d≈2-3%).
+        for value in (str(ENTRY_TRAIL_BPS_MAX + 1), "-1", "abc"):
+            with self.subTest(value=value):
+                env = dict(_VALID_ENV, **{ENTRY_TRAIL_BPS_ENV: value})
+                with mock.patch.dict("os.environ", env, clear=True):
+                    with self.assertRaises(BrokerCapabilityError) as captured:
+                        assert_live_rails()
+                self.assertIn(ENTRY_TRAIL_BPS_ENV, str(captured.exception))
+
     def test_non_finite_positive_floats_rejected(self):
         # float("inf") > 0 and float("nan") <= 0 is False — a bare `<= 0`
         # check would let both BOOT a live daemon with an unbounded sizing
@@ -285,13 +325,14 @@ class TestViolationsAreCollectedTogether(unittest.TestCase):
         message = str(captured.exception)
         self.assertIn(MAX_OPEN_ENV, message)
         self.assertIn(MAX_FEE_BPS_ENV, message)
-        # The five still-valid vars must NOT be flagged.
+        # The six still-valid vars must NOT be flagged.
         for var in (
             PORTFOLIO_GROSS_FRAC_ENV,
             DAILY_LOSS_LIMIT_R_ENV,
             SIZING_EQUITY_ENV,
             SIZING_EQUITY_MODE_ENV,
             EXIT_POLICY_ENV,
+            ENTRY_TRAIL_BPS_ENV,
         ):
             self.assertNotIn(f"{var}:", message)
 

@@ -9,11 +9,14 @@ snapshot sizing, the silently-inert ``setup_static`` exit geometry, and an
 unset fee floor respectively). A LIVE unit missing one pin would trade 100%
 gross of the real balance instead of failing to boot.
 
-``assert_live_rails`` refuses to let a LIVE instance start unless ALL SEVEN of
+``assert_live_rails`` refuses to let a LIVE instance start unless ALL EIGHT of
 ``ALPHALENS_BROKER_MAX_OPEN``, ``ALPHALENS_BROKER_PORTFOLIO_GROSS_FRAC``,
 ``ALPHALENS_BROKER_DAILY_LOSS_LIMIT_R``, ``ALPHALENS_BROKER_SIZING_EQUITY``,
 ``ALPHALENS_BROKER_SIZING_EQUITY_MODE``, ``ALPHALENS_BROKER_EXIT_POLICY``,
-and ``ALPHALENS_BROKER_MAX_FEE_BPS`` are
+``ALPHALENS_BROKER_MAX_FEE_BPS``, and ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS``
+(the entry-trailing distance, memo
+``docs/research/entry_trailing_design_2026_08_12.md`` §6 — an operator must
+explicitly state ``0`` = trailing off rather than inherit it) are
 EXPLICITLY set AND within the live bounds table below. Every violation is
 collected and reported TOGETHER (not fail-fast on the first one) so an
 operator with a unit file missing several pins fixes it in one edit instead
@@ -44,6 +47,10 @@ import os
 from broker_contract.contract import BrokerCapabilityError
 from broker_contract.exit_geometry.registry import resolve_exit_policy
 
+from alphalens_pipeline.brokers.automanager.entry_trails import (
+    ENTRY_TRAIL_BPS_ENV,
+    ENTRY_TRAIL_BPS_MAX,
+)
 from alphalens_pipeline.brokers.automanager.position_manager import _EXIT_POLICY_ENV
 from alphalens_pipeline.brokers.automanager.safety import (
     DAILY_LOSS_LIMIT_R_ENV,
@@ -156,9 +163,10 @@ def _check_sizing_mode(var: str) -> str | None:
 
 
 def assert_live_rails() -> None:
-    """Refuse to let a LIVE instance boot unless all seven safety-rail env vars
+    """Refuse to let a LIVE instance boot unless all eight safety-rail env vars
     are explicitly set and within the live-soak bounds (design memo §3 point
-    2 / ADR 0017 point 4).
+    2 / ADR 0017 point 4; the 8th pin is the entry-trailing distance per the
+    entry-trailing design memo §6 — explicit ``"0"`` = trailing off).
 
     Call ONCE, at LIVE composition-root time, BEFORE any broker/network I/O —
     mirrors the two ADR 0016 state-safety guards already run first in
@@ -185,6 +193,10 @@ def assert_live_rails() -> None:
             _check_sizing_mode(SIZING_EQUITY_MODE_ENV),
             _check_exit_policy(EXIT_POLICY_ENV),
             _check_float_positive(MAX_FEE_BPS_ENV),
+            # Entry-trailing distance (memo §6): [0, 150] — the bound and the
+            # env-var name are OWNED by entry_trails.py; explicit "0" (feature
+            # off) is valid, unset fails like every other pin.
+            _check_int_bounded(ENTRY_TRAIL_BPS_ENV, lo=0, hi=ENTRY_TRAIL_BPS_MAX),
         )
         if v is not None
     ]
@@ -198,6 +210,7 @@ def assert_live_rails() -> None:
 
 __all__ = [
     "DAILY_LOSS_LIMIT_R_ENV",
+    "ENTRY_TRAIL_BPS_ENV",
     "EXIT_POLICY_ENV",
     "MAX_FEE_BPS_ENV",
     "MAX_OPEN_ENV",
