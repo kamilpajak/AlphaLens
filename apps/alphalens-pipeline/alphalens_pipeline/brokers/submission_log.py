@@ -11,10 +11,11 @@ measurement source, never merged with broker-free replays).
 
 Record shape (frozen with the token's ``_STAMP_SCHEMA``; changing it costs a
 schema bump — schema "2" ADDED the FX provenance keys, FX-leg design memo
-§4.3 item 8)::
+§4.3 item 8; schema "3" ADDED ``est_round_trip_fee_bps``, broker sizing
+declared-frame memo §4.5)::
 
     {
-        "execution_config_version": "execution-v2-...",
+        "execution_config_version": "execution-v3-...",
         "ts": "<UTC ISO-8601>",
         "brief_date": "YYYY-MM-DD",
         "ticker": "KO",
@@ -39,6 +40,9 @@ schema bump — schema "2" ADDED the FX provenance keys, FX-leg design memo
         "fx_rate_asof": "<UTC ISO-8601>" | null,
         "precheck_conversion_rate": 0.2304 | null,  # Saxo's independent
                                   # InstrumentToAccountConversionRate
+        "est_round_trip_fee_bps": 291.7 | null,  # honest per-tier round-trip
+                                  # fee estimate (memo §4.5 calibration
+                                  # series); null when no sized plan exists
         "note": "...",           # optional (e.g. partial-run failure note)
     }
 
@@ -75,6 +79,7 @@ def build_submission_record(
     sizing_equity: float | None = None,
     fx: FxConversion | None = None,
     precheck_conversion_rate: float | None = None,
+    est_round_trip_fee_bps: float | None = None,
 ) -> dict[str, Any]:
     """Assemble one journal record, stamping the token + a UTC timestamp.
 
@@ -84,6 +89,11 @@ def build_submission_record(
     :class:`FxConversion` their sizing used; the journal is the only place
     the sizing rate survives (ClosedPosition does not expose the settlement
     rate), so the fields are stamped verbatim.
+
+    Schema-3: ``est_round_trip_fee_bps`` (broker sizing memo §4.5) is ALWAYS
+    present — the honest per-tier round-trip fee estimate the placer
+    computed, or a REAL null when the caller has no sized plan (explicit-qty
+    CLI submits, note records built outside ``_place_tiers``).
     """
     record: dict[str, Any] = {
         "execution_config_version": execution_config_version(),
@@ -104,6 +114,7 @@ def build_submission_record(
         "fx_rate_source": fx.source if fx is not None else None,
         "fx_rate_asof": fx.asof.isoformat(timespec="seconds") if fx is not None else None,
         "precheck_conversion_rate": precheck_conversion_rate,
+        "est_round_trip_fee_bps": est_round_trip_fee_bps,
     }
     if note:
         record["note"] = note

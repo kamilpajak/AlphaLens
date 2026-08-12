@@ -298,6 +298,28 @@ class TestErrorClassifiersPositiveControl(unittest.TestCase):
         self.assertFalse(_is_too_far_from_entry(BrokerError("boom")))
         self.assertFalse(_is_too_far_from_entry(OrderRejectedError("x", error_code="OtherCode")))
 
+    def test_insufficient_funds_matches_only_its_codes(self):
+        from broker_contract.contract import (
+            _INSUFFICIENT_FUNDS_ERROR_CODES,
+            _is_insufficient_funds,
+        )
+
+        for code in _INSUFFICIENT_FUNDS_ERROR_CODES:
+            with self.subTest(code=code):
+                self.assertTrue(_is_insufficient_funds(OrderRejectedError("x", error_code=code)))
+        self.assertFalse(_is_insufficient_funds(BrokerError("boom")))
+        self.assertFalse(_is_insufficient_funds(OrderRejectedError("x", error_code="OtherCode")))
+        # error_code=None (an unstructured rejection) must NOT classify as an
+        # insufficient-funds signal — the ladder rollback stays code-gated.
+        self.assertFalse(_is_insufficient_funds(OrderRejectedError("insufficient cash")))
+
+    def test_insufficient_funds_covers_saxo_documented_spelling(self):
+        # Saxo's TradingErrorCode enum documents the code with this exact
+        # (misspelled) token: "InsufficentCash — Insufficient cash for trade."
+        from broker_contract.contract import _INSUFFICIENT_FUNDS_ERROR_CODES
+
+        self.assertIn("InsufficentCash", _INSUFFICIENT_FUNDS_ERROR_CODES)
+
     def test_too_far_from_market_matches_only_its_code(self):
         matching = OrderRejectedError("rejected", error_code="TooFarFromMarket")
         self.assertTrue(_is_too_far_from_market(matching))

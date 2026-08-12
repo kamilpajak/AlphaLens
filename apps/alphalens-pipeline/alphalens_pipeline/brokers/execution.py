@@ -59,7 +59,10 @@ logger = logging.getLogger(__name__)
 # different digest, not a schema bump. "1"->"2": the submission record gained
 # the FX provenance keys (sizing_currency / instrument_currency / fx_rate* /
 # sizing_equity / precheck_conversion_rate — FX-leg design memo §4.3 item 8).
-_STAMP_SCHEMA = "2"
+# "2"->"3": the record gained ``est_round_trip_fee_bps`` (the honest per-tier
+# round-trip fee estimate, broker sizing declared-frame memo §4.5 — the
+# calibration series for path B's 150 bps fee-cap target).
+_STAMP_SCHEMA = "3"
 
 # One 3-way bracket (entry Limit + TP Limit child + StopIfTraded child) per
 # NON-ZERO entry tier, placed as a single POST each.

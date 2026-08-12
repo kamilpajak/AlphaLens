@@ -2,8 +2,8 @@
 
 Mirrors ``test_catalyst_config_version``-style pins:
 
-- deterministic + non-empty; shape ``execution-v2-<12 hex>`` (v2 = the
-  FX-leg journal-shape bump);
+- deterministic + non-empty; shape ``execution-v3-<12 hex>`` (v3 = the
+  est_round_trip_fee_bps journal-shape bump);
 - the token DRIFTS when any covered policy constant changes
   (``mock.patch.object`` + ``subTest`` over the full covered list);
 - a module-level policy constant cannot be added without joining the token
@@ -65,9 +65,10 @@ class TestExecutionConfigVersion(unittest.TestCase):
         self.assertEqual(first, second)
 
     def test_token_shape_prefix_and_12_hex_digest(self):
-        # v2 = the FX-leg journal-shape bump (fx provenance keys ADDED).
+        # v3 = the est_round_trip_fee_bps journal-shape bump (sizing PR-2;
+        # v2 was the FX-leg fx-provenance-keys bump).
         token = execution.execution_config_version()
-        self.assertRegex(token, r"^execution-v2-[0-9a-f]{12}$")
+        self.assertRegex(token, r"^execution-v3-[0-9a-f]{12}$")
 
     def test_token_changes_on_every_covered_constant(self):
         baseline = execution.execution_config_version()
@@ -87,9 +88,9 @@ class TestExecutionConfigVersion(unittest.TestCase):
         )
 
     def test_stamp_schema_bumps_only_shape_never_values(self):
-        with mock.patch.object(execution, "_STAMP_SCHEMA", "3"):
+        with mock.patch.object(execution, "_STAMP_SCHEMA", "4"):
             token = execution.execution_config_version()
-        self.assertTrue(token.startswith("execution-v3-"))
+        self.assertTrue(token.startswith("execution-v4-"))
 
     def test_no_uncovered_policy_constant_in_module_namespace(self):
         """A new ``_UPPER_CASE`` module constant must join the token.

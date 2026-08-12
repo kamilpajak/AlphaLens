@@ -246,13 +246,13 @@ class TestSubmitExecute(unittest.TestCase):
         self.assertEqual(len(harness.broker.place_calls), 1)
         self.assertIn("placed entry=E-1", result.output)
         self.assertIn("T-1", result.output)
-        self.assertIn("execution_config_version execution-v2-", result.output)
+        self.assertIn("execution_config_version execution-v3-", result.output)
 
         (record,) = harness.appended
         self.assertEqual(record["ticker"], "KO")
         self.assertEqual(record["mic"], "XNYS")
         self.assertEqual(record["uic"], "307")
-        self.assertTrue(record["execution_config_version"].startswith("execution-v2-"))
+        self.assertTrue(record["execution_config_version"].startswith("execution-v3-"))
         # Same-currency journal: REAL nulls on the fx keys, currencies stamped.
         self.assertEqual(record["sizing_currency"], "USD")
         self.assertEqual(record["instrument_currency"], "USD")

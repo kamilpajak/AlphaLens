@@ -144,10 +144,20 @@ class TestSubmissionLog(unittest.TestCase):
     def test_record_stamps_execution_config_version_and_utc_ts(self):
         record = self._record()
         self.assertEqual(record["execution_config_version"], execution_config_version())
-        self.assertTrue(record["execution_config_version"].startswith("execution-v2-"))
+        # v3 = the est_round_trip_fee_bps journal-shape bump (sizing PR-2).
+        self.assertTrue(record["execution_config_version"].startswith("execution-v3-"))
         self.assertIn("+00:00", record["ts"])
         self.assertEqual(record["mic"], "XNYS")
         self.assertEqual(record["uic"], "307")
+
+    def test_schema_3_est_round_trip_fee_bps_always_present(self):
+        # Schema-3 shape (broker sizing memo §4.5): the honest per-tier
+        # round-trip estimate key is ALWAYS present — a REAL null when the
+        # caller has no sized plan (explicit-qty CLI submits, note records
+        # built outside _place_tiers), the verbatim figure otherwise.
+        self.assertIsNone(self._record()["est_round_trip_fee_bps"])
+        stamped = self._record(est_round_trip_fee_bps=291.7)
+        self.assertEqual(stamped["est_round_trip_fee_bps"], 291.7)
 
     def test_schema_2_same_currency_writes_real_nulls_never_a_fake_rate(self):
         # The fx keys are ALWAYS present in a v2 record; same-currency (and
