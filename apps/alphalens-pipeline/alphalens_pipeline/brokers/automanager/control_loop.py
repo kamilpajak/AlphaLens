@@ -2496,6 +2496,136 @@ def _check_fee_floor(
     )
 
 
+# --- Post-sizing portfolio gross cap (broker sizing memo §3) -----------------
+#
+# The pre-sizing safety.check gross rail is broken three ways: (1) currency
+# mismatch — the journal's gross_committed sums entry x qty in INSTRUMENT
+# currency (USD) against a limit in ACCOUNT currency (PLN), ~3.7x looser than
+# intended; (2) candidate exclusion — it runs BEFORE _resolve_and_size, so the
+# first pick of any size always passes; (3) filled-position blindness — only
+# WORKING/PARTIALLY_FILLED verdicts count, filled exposure drops out. It stays
+# as a cheap early exit; THIS post-sizing check (a sibling of the fee floor,
+# same inputs, zero new broker I/O) is the authoritative one:
+#
+#   committed_working_acct + candidate_gross_acct + filled_positions_acct
+#       <= GROSS_FRAC x account.total_value
+
+
+def _committed_working_gross_acct(
+    open_verdicts: Iterable[Any], records: Iterable[Mapping[str, Any]]
+) -> float:
+    """The still-working journaled entry gross folded into ACCOUNT currency.
+
+    Same record set as ``_summarize_open_verdicts``'s ``gross_committed``
+    (WORKING/PARTIALLY_FILLED verdicts joined back to their journaled entry
+    bracket), but each bracket's ``entry x qty`` — INSTRUMENT currency — is
+    converted through that record's OWN journaled ``fx_rate`` (submission_log
+    schema 2: the account-ccy -> instrument-ccy Mid the sizing used), so
+    mixed-vintage rates never revalue each other. ``fx_rate`` null
+    (same-currency / schema-1 era) folds as-is."""
+    entry_fx_by_request_id: dict[str, tuple[Mapping[str, Any], Any]] = {
+        str(bracket.get("client_request_id")): (bracket, record.get("fx_rate"))
+        for record in records
+        for bracket in record.get("brackets") or []
+    }
+    total = 0.0
+    for verdict in open_verdicts:
+        if verdict.status not in {"WORKING", "PARTIALLY_FILLED"}:
+            continue
+        joined = entry_fx_by_request_id.get(str(verdict.details.get("client_request_id") or ""))
+        if joined is None:
+            continue
+        bracket, fx_rate = joined
+        if bracket.get("entry") is None or bracket.get("qty") is None:
+            continue
+        notional = float(bracket["entry"]) * float(bracket["qty"])
+        if fx_rate is not None:
+            # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
+            notional /= float(fx_rate)
+        total += notional
+    return total
+
+
+def _filled_positions_gross_acct(positions: Iterable[Any], fx: Any) -> tuple[float, str | None]:
+    """``(total, None)`` — the broker positions' mark-to-market gross in
+    ACCOUNT currency — or ``(0.0, failure)`` when any position carries no
+    usable mark.
+
+    Valuation choice: ``Position.market_value`` (Saxo
+    ``PositionView.MarketValue`` — qty x current market price, INSTRUMENT
+    currency) is the one current-price field the position row carries;
+    ``avg_price`` is the stale open price and would mis-state exposure after
+    any move. Converted through the CANDIDATE's current ``fx.rate`` (every
+    first-cohort instrument is USD; ``fx=None`` is the same-currency no-op).
+    A ``None`` mark (SIM NoAccess) cannot be valued conservatively HIGH
+    without a price, so it FAILS CLOSED — the caller refuses the pick with an
+    alert rather than silently skipping the position. ``abs`` because gross
+    exposure ignores position sign."""
+    total = 0.0
+    for position in positions:
+        if position.market_value is None:
+            return 0.0, (
+                f"position {position.instrument.ticker} has no broker mark "
+                "(market_value=None) — cannot value gross exposure, failing closed"
+            )
+        value_acct = abs(float(position.market_value))
+        if fx is not None:
+            value_acct /= float(fx.rate)
+        total += value_acct
+    return total, None
+
+
+def _check_gross_cap(
+    plan: Any,
+    fx: Any,
+    *,
+    account: Any,
+    open_verdicts: Iterable[Any],
+    records: Iterable[Mapping[str, Any]],
+    positions: Iterable[Any],
+    ticker: str,
+) -> str | None:
+    """``None`` iff the pick keeps total gross exposure — still-working
+    journaled entries + THIS candidate + filled positions, all in ACCOUNT
+    currency — within ``GROSS_FRAC x account.total_value``; else a terminal
+    refusal message naming the total, its three components, the limit,
+    GROSS_FRAC and total_value.
+
+    ``GROSS_FRAC`` is read exactly like ``safety.check`` reads it (same env
+    var, same default, same malformed-value fallback via ``_float_env``), so
+    the pre- and post-sizing rails never disagree on the limit. The candidate
+    folds its RAW planned gross (``setup_plan_gross_notional``) — explicitly
+    NO cash/fee buffer: the cap measures EXPOSURE, not funding."""
+    from broker_contract.sizing import setup_plan_gross_notional
+
+    from alphalens_pipeline.brokers.automanager import safety
+
+    gross_frac = safety._float_env(
+        safety.PORTFOLIO_GROSS_FRAC_ENV, safety.DEFAULT_PORTFOLIO_GROSS_FRAC
+    )
+
+    candidate_acct = setup_plan_gross_notional(plan)
+    if fx is not None:
+        # rate is instrument-ccy per 1 account-ccy -> acct = instr / rate.
+        candidate_acct /= float(fx.rate)
+
+    committed_acct = _committed_working_gross_acct(open_verdicts, records)
+    filled_acct, mark_failure = _filled_positions_gross_acct(positions, fx)
+    if mark_failure is not None:
+        return f"gross cap: {ticker} refused — {mark_failure}"
+
+    total_acct = committed_acct + candidate_acct + filled_acct
+    limit_acct = gross_frac * account.total_value
+    if total_acct <= limit_acct:
+        return None
+    return (
+        f"gross cap: {ticker} total gross {total_acct:,.2f} {account.currency} "
+        f"(working {committed_acct:,.2f} + candidate {candidate_acct:,.2f} "
+        f"+ filled {filled_acct:,.2f}) exceeds limit {limit_acct:,.2f} "
+        f"({gross_frac:g} x total_value {account.total_value:,.2f}) — pick refused"
+    )
+
+
 def _refuse_pick_terminal(
     ticker: str,
     brief_date: dt.date,
@@ -3161,6 +3291,26 @@ def _place_pick(
     if fee_violation is not None:
         _refuse_pick_terminal(
             ticker, brief_date, fee_violation, f"fee-floor:{ticker}", alert_throttled
+        )
+        return False
+
+    # Post-sizing portfolio gross cap (broker sizing memo §3) — the pre-sizing
+    # safety.check gross rail stays as a cheap early exit, but it is currency-
+    # mismatched, candidate-blind and filled-blind; THIS is the authoritative
+    # account-currency check, candidate included (see the section comment above
+    # _check_gross_cap). Same inputs already in scope — zero new broker I/O.
+    gross_violation = _check_gross_cap(
+        plan,
+        fx,
+        account=account,
+        open_verdicts=open_verdicts,
+        records=records,
+        positions=positions,
+        ticker=ticker,
+    )
+    if gross_violation is not None:
+        _refuse_pick_terminal(
+            ticker, brief_date, gross_violation, f"gross-cap:{ticker}", alert_throttled
         )
         return False
 
