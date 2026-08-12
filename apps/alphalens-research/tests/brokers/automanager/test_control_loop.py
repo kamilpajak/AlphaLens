@@ -1234,12 +1234,16 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
                 broker, notional=10_000.0, append=appended.append
             )
             self.assertTrue(placer(_pick()))
-        self.assertEqual(len(appended), 1)
-        self.assertEqual(
-            appended[0]["sizing_equity"],
-            10_000.0,
-            "journal must record the effective (pinned) equity, not total_value=100000",
-        )
+        # Two records per placement since the write-ahead dedup line (memo
+        # §4.4 B2): the note-only "placement attempt" + the real bracket
+        # record — BOTH must carry the effective equity.
+        self.assertEqual(len(appended), 2)
+        for record in appended:
+            self.assertEqual(
+                record["sizing_equity"],
+                10_000.0,
+                "journal must record the effective (pinned) equity, not total_value=100000",
+            )
 
     def test_small_notional_over_cap_is_refused_terminal_never_placed(self) -> None:
         broker = _RecordingBroker()
@@ -2197,6 +2201,13 @@ class _LadderBroker:
         self.cancelled.append(order_id)
 
 
+def _failure_notes(appended: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The FAILURE note records journaled by ``_place_tiers`` — excludes the
+    write-ahead "placement attempt" dedup line (memo §4.4 B2), which also
+    carries a note."""
+    return [r for r in appended if r.get("note") and r["note"] != "placement attempt"]
+
+
 class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
     """Memo §4.4 B1: a mid-ladder insufficient-funds reject (classified on the
     STRUCTURED Saxo error code, never the message string) must CANCEL this
@@ -2231,7 +2242,7 @@ class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
             count, appended = self._run(broker)
         self.assertEqual(count, 1)
         self.assertEqual(broker.cancelled, ["E-1"], "the placed tier-1 entry must be cancelled")
-        notes = [r for r in appended if r.get("note")]
+        notes = _failure_notes(appended)
         self.assertEqual(len(notes), 1, "the failure note record must still be journaled")
         self.assertIn("insufficient funds", notes[0]["note"])
         self.assertIn("cancelled 1/1", notes[0]["note"])
@@ -2251,7 +2262,7 @@ class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
                 count, appended = self._run(broker)
                 self.assertEqual(count, 1)
                 self.assertEqual(broker.cancelled, [], "non-funds errors must NOT roll back")
-                self.assertTrue([r for r in appended if r.get("note")])
+                self.assertTrue(_failure_notes(appended))
 
     def test_one_cancel_failure_does_not_abort_the_remaining_cancels(self) -> None:
         broker = _LadderBroker(
@@ -2262,8 +2273,7 @@ class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
         count, appended = self._run(broker)
         self.assertEqual(count, 2)
         self.assertEqual(broker.cancelled, ["E-2"], "the E-1 failure must not stop E-2's cancel")
-        notes = [r for r in appended if r.get("note")]
-        self.assertIn("cancelled 1/2", notes[0]["note"])
+        self.assertIn("cancelled 1/2", _failure_notes(appended)[0]["note"])
 
     def test_insufficient_funds_on_the_first_tier_cancels_nothing(self) -> None:
         broker = _LadderBroker(
@@ -2272,7 +2282,96 @@ class TestPlaceTiersInsufficientFundsRollback(unittest.TestCase):
         count, appended = self._run(broker)
         self.assertEqual(count, 0)
         self.assertEqual(broker.cancelled, [])
-        self.assertTrue([r for r in appended if r.get("note")])
+        self.assertTrue(_failure_notes(appended))
+
+
+class TestPlaceTiersWriteAheadDedup(unittest.TestCase):
+    """Memo §4.4 B2: ``_place_tiers`` appends a note-only record (brackets=[],
+    note="placement attempt") BEFORE the first broker POST, so a crash between
+    the POST and the per-tier journal append can no longer re-place the whole
+    (frame-sized, no longer balance-bounded) ladder on restart —
+    ``_submitted_pick_keys`` already treats note-only records as submitted."""
+
+    def _run_crashing(self) -> list[dict[str, Any]]:
+        class _CrashBroker:
+            def place_bracket_order(self, _bracket: Any) -> Any:
+                raise _CrashError("process dies between POST and journal")
+
+        appended: list[dict[str, Any]] = []
+        pkg = "alphalens_pipeline.brokers"
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            with self.assertRaises(_CrashError):
+                cl._place_tiers(
+                    _CrashBroker(),
+                    _pick("KO", "2026-07-20"),
+                    "KO",
+                    _instr(),
+                    _acct(),
+                    None,
+                    _placement(),
+                )
+        return appended
+
+    def test_crash_between_post_and_journal_still_retires_the_pick_key(self) -> None:
+        appended = self._run_crashing()
+        self.assertTrue(appended, "the write-ahead record must land BEFORE the first POST")
+        self.assertIn(
+            ("KO", "2026-07-20"),
+            cl._submitted_pick_keys(appended),
+            "the restart drain must see the pick as submitted and never re-place it",
+        )
+
+    def test_write_ahead_record_is_note_only(self) -> None:
+        record = self._run_crashing()[0]
+        self.assertEqual(record["brackets"], [])
+        self.assertEqual(record["note"], "placement attempt")
+
+    def test_successful_placement_keeps_the_real_bracket_record_too(self) -> None:
+        appended: list[dict[str, Any]] = []
+        pkg = "alphalens_pipeline.brokers"
+        with contextlib.ExitStack() as stack:
+            p = stack.enter_context
+            p(mock.patch(f"{pkg}.submission_log.append_submission_record", appended.append))
+            p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
+            p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
+            count = cl._place_tiers(
+                _LadderBroker(),
+                _pick("KO", "2026-07-20"),
+                "KO",
+                _instr(),
+                _acct(),
+                None,
+                _placement(),
+            )
+        self.assertEqual(count, 1)
+        # Write-ahead first, then the post-placement record with the REAL
+        # brackets (the existing append stays — it carries the order ids).
+        self.assertEqual(len(appended), 2)
+        self.assertEqual(appended[0]["brackets"], [])
+        self.assertEqual(len(appended[1]["brackets"]), 1)
+        self.assertEqual(appended[1]["brackets"][0]["entry_order_id"], "E-1")
+
+    def test_note_only_record_folds_zero_in_summarize_open_verdicts(self) -> None:
+        # The extra record must be INERT everywhere brackets are folded: no
+        # brackets -> zero committed gross, zero open brackets.
+        from alphalens_pipeline.brokers.submission_log import build_submission_record
+
+        note_record = build_submission_record(
+            brief_date="2026-07-20",
+            ticker="KO",
+            mic="XNYS",
+            uic="307",
+            brackets=[],
+            note="placement attempt",
+        )
+        summary = cl._summarize_open_verdicts([], [note_record], "2026-07-20")
+        self.assertEqual(summary, (0, 0.0, 0.0))
+        total, unjoined = cl._committed_working_gross_acct([], [note_record])
+        self.assertEqual((total, unjoined), (0.0, 0))
 
 
 class TestBuildPlannedLineGeometryStamp(unittest.TestCase):

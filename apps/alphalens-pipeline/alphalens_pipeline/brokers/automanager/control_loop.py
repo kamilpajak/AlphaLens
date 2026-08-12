@@ -3070,6 +3070,30 @@ def _place_tiers(
         use_geometry=resolved_exit_policy.applies_geometry,
     )
 
+    # Write-ahead dedup line (memo §4.4 B2): register the (ticker, brief_date)
+    # dedup key BEFORE the first broker POST — _submitted_pick_keys already
+    # treats note-only records as submitted, so a crash between the POST and
+    # the per-tier journal append strands an alertable non-retried attempt
+    # instead of re-placing the whole frame-sized ladder on restart. The
+    # record is INERT everywhere brackets are folded (reconcile,
+    # _summarize_open_verdicts, _committed_working_gross_acct: brackets=[]
+    # folds zero). The post-placement per-tier append below stays — it
+    # carries the real brackets.
+    append_submission_record(
+        build_submission_record(
+            brief_date=intent.meta.brief_date,
+            ticker=ticker,
+            mic=instrument.exchange_mic,
+            uic=instrument.broker_instrument_id,
+            brackets=[],
+            note="placement attempt",
+            sizing_currency=account.currency,
+            instrument_currency=instrument.currency,
+            sizing_equity=_resolve_sizing_equity(account.total_value),
+            fx=fx,
+        )
+    )
+
     placed_count = 0
     placed_entry_ids: list[str] = []
     failure_note: str | None = None
