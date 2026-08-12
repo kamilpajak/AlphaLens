@@ -1,7 +1,7 @@
 # Broker sizing — two paths: declared frame (A, now) and risk-unit re-denomination (B, target)
 
 **Date:** 2026-08-12
-**Status:** DRAFT — awaiting operator decisions (§7)
+**Status:** LOCKED 2026-08-12 — operator accepted §7 verdicts incl. both amendments (MAX_FEE_BPS=1000 backstop semantics; NVAX knife-edge consequence at X=150)
 **Method:** 3-lens design workflow (risk/ops, product/target, code-fit) + 2 code-verifying critics (facts, adversarial "what breaks money") + zen `deepseek/deepseek-v4-pro` adversarial pass (9 findings; 6 applied, 1 rejected as false positive — see §9); every claim below carries a verified `file:line` anchor or is marked as requiring a probe.
 **Supersedes:** the `min(pin, snapshot)` sizing doctrine of `broker_live_daemon_arm_design_2026_08_10.md` §3 (PR-B #1022) once Path A ships.
 
