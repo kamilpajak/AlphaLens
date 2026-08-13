@@ -97,6 +97,31 @@ _TERMINAL_OUTCOME_STATUSES = frozenset(
     }
 )
 
+# Native trailing-entry-stop + ceiling-clamp wire spellings (SupportsTrailingStop
+# capability, entry_trailing_design_2026_08_12.md §4b P1/P7 probe facts). Kept
+# LOCAL to this adapter — deliberately NOT in execution.py — because that
+# module's namespace feeds execution_config_version(), the poolability token
+# stamped on every LIVE bracket submission; adding an INERT capability's
+# spellings there would drift the bracket cohort token even though bracket
+# execution is byte-identical. These join the token when PR-T2b wires the
+# executor and entry_mode becomes a real stamp (memo §5 / T8).
+_TRAILING_STOP_ORDER_TYPE = "TrailingStopIfTraded"
+# REQUIRED fields — their OMISSION (not the trailing fields) caused every P1
+# first-round 400. ``TrailingStopDistanceToMarket`` is the absolute price
+# distance to the market; ``TrailingStopStep`` is the tick step the server
+# ratchets by.
+_TRAILING_STOP_DISTANCE_FIELD = "TrailingStopDistanceToMarket"
+_TRAILING_STOP_STEP_FIELD = "TrailingStopStep"
+# G1 gap-through ceiling clamp: a StopLimit BUY whose ``StopLimitPrice`` caps
+# the fill so an overnight gap / halt-reopen cannot fill at any price.
+_STOP_LIMIT_ORDER_TYPE = "StopLimit"
+_STOP_LIMIT_PRICE_FIELD = "StopLimitPrice"
+# MANDATORY DayOrder on both (memo G1): a stop-family BUY that survived into an
+# overnight/auction gap would become an unbounded market buy at the open, so no
+# trailing/clamp order is allowed to live past the session — cancel at close,
+# re-arm the watch next session. NOT the exit path's GoodTillCancel.
+_ENTRY_TRAIL_DURATION = "DayOrder"
+
 
 def _today() -> dt.date:
     """UTC today — module-level so tests can pin the GTD calendar math."""
@@ -678,6 +703,157 @@ class SaxoBroker:
             "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
             "OrderType": "Market",
             "OrderDuration": {"DurationType": execution_policy._MARKET_ORDER_DURATION},
+            "ManualOrder": execution_policy._MANUAL_ORDER,
+            "ExternalReference": client_request_id,
+        }
+
+    def place_trailing_stop(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        trailing_distance: float,
+        trailing_step: float,
+        request_id: str | None = None,
+    ) -> PlacedOrder:
+        """Place ONE native trailing entry stop (Saxo ``TrailingStopIfTraded``).
+
+        The V1 entry-trailing executor (entry_trailing_design_2026_08_12.md §2
+        verdict, §4b P1). Saxo ratchets the trigger DOWN following new lows and
+        fires on the d-bounce with ZERO client amends — that server-side ratchet
+        is what makes V1 primary. Same safety order as
+        :meth:`place_standalone_stop`: canonical-side check, ALLOW_ORDERS gate,
+        precheck, then ONE POST with x-request-id = ``request_id``. No parent /
+        no ``Orders`` array => relation=StandAlone; ``exit_order_ids`` is empty.
+
+        ``trailing_distance`` is the absolute price distance to the market and
+        ``trailing_step`` the tick step the server ratchets by — BOTH REQUIRED
+        (their omission, not the trailing fields, caused every P1 first-round
+        400). They pass through verbatim: the tick-floor at placement (memo §6)
+        needs the live market price and is the executor's job (PR-T2b), NOT the
+        adapter's. ``OrderDuration`` is MANDATORY DayOrder (G1). Pass a
+        DETERMINISTIC ``request_id`` so a crash-window re-POST hits Saxo's 15 s
+        dedup instead of resting a second trail; ``None`` mints a fresh uuid4.
+        """
+        _require_order_side(side)
+        if os.environ.get(ALLOW_ORDERS_ENV) != "1":
+            raise BrokerCapabilityError(
+                f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
+                "SIM order submission (design memo §P2 safety rail). No order was sent."
+            )
+        client_request_id = request_id or str(uuid.uuid4())
+        with _translate_saxo_errors():
+            account_key = self._resolve_account_key()
+            body = self._build_trailing_stop_body(
+                uic, side, qty, trailing_distance, trailing_step, client_request_id, account_key
+            )
+            self._precheck_or_raise(body, label=f"trailing-stop Uic {uic} {client_request_id}")
+            status, payload = self._client.place_order(body, request_id=client_request_id)
+            return self._handle_placement_response(status, payload, client_request_id, account_key)
+
+    def _build_trailing_stop_body(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        trailing_distance: float,
+        trailing_step: float,
+        client_request_id: str,
+        account_key: str,
+    ) -> dict[str, Any]:
+        """Native ``TrailingStopIfTraded`` body — no Orders array, DayOrder (G1)."""
+        asset_type = "Stock"  # MVP scope: single-name equities only
+        details = self._client.get_instrument_details(uic, asset_type)
+        supported = details.get("SupportedOrderTypes") or []
+        if supported and _TRAILING_STOP_ORDER_TYPE not in supported:
+            raise OrderRejectedError(
+                f"instrument Uic {uic} does not support {_TRAILING_STOP_ORDER_TYPE} orders "
+                f"(SupportedOrderTypes={supported})"
+            )
+        for label, value in (
+            (_TRAILING_STOP_DISTANCE_FIELD, trailing_distance),
+            (_TRAILING_STOP_STEP_FIELD, trailing_step),
+        ):
+            if not math.isfinite(value) or value <= 0:
+                raise OrderRejectedError(f"{label} must be a finite number > 0, got {value}")
+        return {
+            "Uic": int(uic),
+            "AssetType": asset_type,
+            "AccountKey": account_key,
+            "Amount": qty,
+            "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
+            "OrderType": _TRAILING_STOP_ORDER_TYPE,
+            _TRAILING_STOP_DISTANCE_FIELD: trailing_distance,
+            _TRAILING_STOP_STEP_FIELD: trailing_step,
+            "OrderDuration": {"DurationType": _ENTRY_TRAIL_DURATION},
+            "ManualOrder": execution_policy._MANUAL_ORDER,
+            "ExternalReference": client_request_id,
+        }
+
+    def place_stop_limit(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        stop_price: float,
+        limit_price: float,
+        request_id: str | None = None,
+    ) -> PlacedOrder:
+        """Place ONE ``StopLimit`` order — the G1 gap-through ceiling clamp.
+
+        A stop-family BUY becomes a MARKET order on trigger, so an overnight gap
+        / halt-reopen could fill with no ceiling (memo §3 G1); the StopLimit
+        caps the fill at ``limit_price`` (§4b P7, limit field ``StopLimitPrice``).
+        ``stop_price`` is the trigger. Same safety order + DayOrder duration
+        (G1) as :meth:`place_trailing_stop`; ``exit_order_ids`` is empty.
+        """
+        _require_order_side(side)
+        if os.environ.get(ALLOW_ORDERS_ENV) != "1":
+            raise BrokerCapabilityError(
+                f"order placement is disabled: set {ALLOW_ORDERS_ENV}=1 to allow "
+                "SIM order submission (design memo §P2 safety rail). No order was sent."
+            )
+        client_request_id = request_id or str(uuid.uuid4())
+        with _translate_saxo_errors():
+            account_key = self._resolve_account_key()
+            body = self._build_stop_limit_body(
+                uic, side, qty, stop_price, limit_price, client_request_id, account_key
+            )
+            self._precheck_or_raise(body, label=f"stop-limit Uic {uic} {client_request_id}")
+            status, payload = self._client.place_order(body, request_id=client_request_id)
+            return self._handle_placement_response(status, payload, client_request_id, account_key)
+
+    def _build_stop_limit_body(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        stop_price: float,
+        limit_price: float,
+        client_request_id: str,
+        account_key: str,
+    ) -> dict[str, Any]:
+        """``StopLimit`` body — trigger ``OrderPrice`` + capped ``StopLimitPrice``."""
+        asset_type = "Stock"  # MVP scope: single-name equities only
+        details = self._client.get_instrument_details(uic, asset_type)
+        supported = details.get("SupportedOrderTypes") or []
+        if supported and _STOP_LIMIT_ORDER_TYPE not in supported:
+            raise OrderRejectedError(
+                f"instrument Uic {uic} does not support {_STOP_LIMIT_ORDER_TYPE} orders "
+                f"(SupportedOrderTypes={supported})"
+            )
+        stop_q = self._quantize_price(stop_price, details, label="stop_price")
+        limit_q = self._quantize_price(limit_price, details, label="limit_price")
+        return {
+            "Uic": int(uic),
+            "AssetType": asset_type,
+            "AccountKey": account_key,
+            "Amount": qty,
+            "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
+            "OrderType": _STOP_LIMIT_ORDER_TYPE,
+            "OrderPrice": stop_q,
+            _STOP_LIMIT_PRICE_FIELD: limit_q,
+            "OrderDuration": {"DurationType": _ENTRY_TRAIL_DURATION},
             "ManualOrder": execution_policy._MANUAL_ORDER,
             "ExternalReference": client_request_id,
         }

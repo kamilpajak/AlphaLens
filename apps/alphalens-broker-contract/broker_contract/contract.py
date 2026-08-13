@@ -409,6 +409,68 @@ class SupportsMarketOrders(Protocol):
     ) -> PlacedOrder: ...
 
 
+@runtime_checkable
+class SupportsTrailingStop(Protocol):
+    """Extension capability: a native trailing entry stop + its StopLimit clamp.
+
+    The V1 entry-trailing executor (docs/research/entry_trailing_design_2026_08_12.md
+    §2 verdict, §4b probe facts). Two BUY-side entry primitives:
+
+    - :meth:`place_trailing_stop` — a standalone native trailing BUY stop
+      (Saxo ``TrailingStopIfTraded``) whose trigger the BROKER ratchets DOWN
+      following new lows and fires on the d-bounce, with ZERO client amends
+      (SIM+LIVE-probed, §4b P1). ``trailing_distance`` is the absolute price
+      distance to the market and ``trailing_step`` the tick step the server
+      ratchets by — BOTH are REQUIRED on the wire (their omission, not the
+      trailing fields, caused every first-round 400).
+    - :meth:`place_stop_limit` — the G1 gap-through ceiling clamp (§3 G1): a
+      stop-family BUY becomes a MARKET order on trigger, so an overnight gap /
+      halt-reopen could fill with no ceiling; a ``StopLimit`` BUY (§4b P7,
+      limit field ``StopLimitPrice``) caps the fill price.
+
+    Both are trailing-ENTRY primitives (the SELL disaster stop is
+    :class:`SupportsStandaloneStop`); Saxo netting bites SELLS only, so the BUY
+    trail coexists with the standalone SELL stop (§4b P4). Grouped on ONE
+    Protocol because the feature needs both: G1 makes the ceiling clamp
+    mandatory alongside the native trail, and both go through the identical
+    order-POST path — a broker that can place one can place the other.
+
+    Off the frozen base :class:`Broker` Protocol (capability-protocol pattern,
+    like :class:`SupportsStandaloneStop` / :class:`SupportsMarketOrders`): a
+    caller ``isinstance``-narrows a ``Broker`` to this Protocol; a broker
+    without it (or with the entry-trail env flag off) runs the resting-limit
+    entry path unchanged. NOTHING calls these methods yet — the executor wiring
+    is a later increment (PR-T2b), so this capability is inert on its own.
+
+    ``request_id`` is the POST x-request-id (Saxo 15 s dedup) and the
+    ``ExternalReference`` — pass a DETERMINISTIC value (the ``-entry-`` request-id
+    family) so a crash-window re-POST hits dedup instead of resting a second
+    order; ``None`` mints a fresh uuid4. Each returns
+    ``PlacedOrder(entry_order_id=<order id>, exit_order_ids=())`` — a standalone
+    entry order has no children.
+    """
+
+    def place_trailing_stop(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        trailing_distance: float,
+        trailing_step: float,
+        request_id: str | None = None,
+    ) -> PlacedOrder: ...
+
+    def place_stop_limit(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        stop_price: float,
+        limit_price: float,
+        request_id: str | None = None,
+    ) -> PlacedOrder: ...
+
+
 __all__ = [
     "AccountSnapshot",
     "BracketOrderRequest",
@@ -428,4 +490,5 @@ __all__ = [
     "SupportsMarketOrders",
     "SupportsOcoExit",
     "SupportsStandaloneStop",
+    "SupportsTrailingStop",
 ]

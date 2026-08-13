@@ -12,7 +12,8 @@ Sub-packages / modules:
         (the exception hierarchy, ``InstrumentRef``/``OrderState``/``Position``/
         ``AccountSnapshot``/``BracketOrderRequest``/``PlacedOrder``, the
         ``Broker`` Protocol, and the ``SupportsAmendStop``/``SupportsOcoExit``/
-        ``SupportsStandaloneStop`` capability Protocols)
+        ``SupportsStandaloneStop``/``SupportsMarketOrders``/
+        ``SupportsTrailingStop`` capability Protocols)
     broker_contract.exit_geometry — pure ATR-bracket exit-geometry leaf (§4)
     broker_contract.fx — pure FX data types (``FxRateQuote``, ``FxConversion``)
     broker_contract.price_feed — the live-market price feed seam (``PricePoint``,
