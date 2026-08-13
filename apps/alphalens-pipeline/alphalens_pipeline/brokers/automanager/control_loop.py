@@ -33,6 +33,7 @@ from broker_contract.contract import (
     SupportsAmendStop,
     SupportsOcoExit,
     SupportsStandaloneStop,
+    SupportsTrailingStop,
     _is_insufficient_funds,
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
@@ -44,6 +45,7 @@ from broker_contract.exit_geometry import (
 )
 
 from alphalens_pipeline.brokers.automanager import (
+    entry_trail_geometry,
     entry_trail_watcher,
     entry_trails,
     state_paths,
@@ -1035,13 +1037,15 @@ def _entry_watch_crid(ticker: str, brief_date: str, tier_index: int) -> str:
 
 
 def _entry_trail_mode_tag(d_bps: int) -> str:
-    """The measurement ``entry_mode`` cohort tag (memo §5 / T8): the dry-run
-    trailing mode + configured distance + the execution-config version, so
-    fills measured under different execution policies never pool in the offline
-    analysis join."""
+    """The measurement ``entry_mode`` cohort tag (memo §5 / T8): the native
+    trailing mode + configured distance + the execution-config version, so fills
+    measured under different execution policies never pool in the offline
+    analysis join. PR-T2b drops the ``dryrun`` token — a real native order rests
+    now — and the local trailing wire spellings join
+    ``execution_config_version()`` (broker.py comment §100-107)."""
     from alphalens_pipeline.brokers.execution import execution_config_version
 
-    return f"entry-trail-dryrun-d{d_bps}-{execution_config_version()}"
+    return f"entry-trail-native-d{d_bps}-{execution_config_version()}"
 
 
 def _entry_trail_eligible(plan: Any) -> bool:
@@ -1120,6 +1124,12 @@ def _open_entry_watches(
                 "next_tier_limit": None if next_limit is None else float(next_limit),
                 "pick_key": pick_key,
                 "entry_mode": mode_tag,
+                # PR-T2b never-naked (memo §5): the brief disaster-stop floor +
+                # the original tier_index, carried so the fire-arm executor can
+                # journal the `planned` disaster-SL line at placement (the plan
+                # PRICE the broker cannot know) WITHOUT re-running classify.
+                "disaster_stop": float(plan.disaster_stop),
+                "tier_index": int(tier.tier_index),
             }
         )
         opened += 1
@@ -1234,11 +1244,20 @@ def _active_entry_watches(
     fold: entry_trails.EntryTrailFold,
 ) -> dict[str, Mapping[str, Any]]:
     """The non-terminal watch_open record per crid — the watches to advance this
-    tick. A tier with a terminal marker or no watch_open is excluded."""
+    tick. A tier with a terminal marker or no watch_open is excluded, and so is a
+    RESTING native order (PR-T2b): a ``trail_armed`` tier whose ``armed_order_id``
+    is set is owned by the broker (the server ratchets + fires; the fill is
+    monitored by reconcile), so the watch pass no longer drives it. An
+    arm-in-progress tier (``trail_armed`` with a NULL id — the G3 write-ahead
+    line before an unconfirmed POST) STAYS active so the executor re-drives it to
+    completion."""
     active: dict[str, Mapping[str, Any]] = {}
     for crid, state in fold.tiers.items():
-        if state.terminal_kind is None and state.watch_open is not None:
-            active[crid] = state.watch_open
+        if state.terminal_kind is not None or state.watch_open is None:
+            continue
+        if state.latest_kind == entry_trails.KIND_TRAIL_ARMED and state.armed_order_id is not None:
+            continue
+        active[crid] = state.watch_open
     return active
 
 
@@ -1292,6 +1311,12 @@ def _advance_one_entry_watch(
     price = _entry_watch_reference_price(feed, record)
     result = runtime.watcher.process(entry_trail_watcher.TickInput(now=now, price=price))
     _persist_entry_watch_result(crid, record, runtime, result, now, price, d_bps)
+    # PR-T2b native arm: once TOUCHED (with a trustworthy price) PLACE the resting
+    # Saxo trailing-LIMIT order out-of-band — the server ratchets + fires from
+    # there. Re-attempted every TOUCHED tick until it arms (idempotent, dedup on
+    # the -entry- family per G3) or is terminal-refused (insufficient funds, G7).
+    if result.state is entry_trail_watcher.WatchState.TOUCHED and price is not None:
+        _arm_native_trail(deps, crid, record, runtime, price, d_bps, report)
     for alert in result.alerts:
         if deps.alert_throttled(alert.message, alert.throttle_key):
             report.alerts += 1
@@ -1337,17 +1362,40 @@ def _get_or_create_entry_runtime(
     if config is None:
         return None
     seeded_trough = tier_state.min_trough if tier_state is not None else None
-    initial_state = _entry_watch_state_from_kind(
-        tier_state.latest_kind if tier_state is not None else None
-    )
+    initial_state = _entry_watch_initial_state(tier_state)
     runtime = _EntryWatchRuntime(
         watcher=entry_trail_watcher.EntryTierWatcher(
-            config, seeded_trough=seeded_trough, initial_state=initial_state
+            config,
+            seeded_trough=seeded_trough,
+            initial_state=initial_state,
+            # PR-T2b: the server ratchets + fires; the engine must not self-fire.
+            native_trail=True,
         ),
         trough=seeded_trough,
     )
     deps.entry_watchers[crid] = runtime
     return runtime
+
+
+def _entry_watch_initial_state(
+    tier_state: entry_trails.EntryTrailTierState | None,
+) -> entry_trail_watcher.WatchState:
+    """Resolve the resumable watch state on reconstruction (PR-T2b restart).
+
+    A ``trail_armed`` tier resumes to a state that depends on whether its POST
+    was confirmed: a REAL ``armed_order_id`` -> TRAIL_ARMED (terminal, the broker
+    owns the resting order; a resting tier is already excluded from the active
+    set, but this is defensive if one is ever reconstructed); a NULL id (the G3
+    write-ahead line before an unconfirmed POST) -> TOUCHED, so the executor
+    re-drives the arm to completion. Any other kind resolves via
+    :func:`_entry_watch_state_from_kind`."""
+    if tier_state is None:
+        return entry_trail_watcher.WatchState.WATCHING
+    if tier_state.latest_kind == entry_trails.KIND_TRAIL_ARMED:
+        if tier_state.armed_order_id is not None:
+            return entry_trail_watcher.WatchState.TRAIL_ARMED
+        return entry_trail_watcher.WatchState.TOUCHED
+    return _entry_watch_state_from_kind(tier_state.latest_kind)
 
 
 def _entry_watch_config_from_record(
@@ -1401,13 +1449,13 @@ def _persist_entry_watch_result(
     the measurement blob (memo §5 Measurement / T1d). The running trough + touch
     marks are mirrored into the runtime as they pass, so a later-tick terminal
     can stamp them; the ``touched`` line ALSO carries the touch price/ts inline
-    (offline-join durability). The dry-run WOULD_FIRE additionally gets a
-    terminal ``fired`` line (``entry_order_id=null`` — no order placed) so the
-    fold marks the tier terminal: its virtual reservation releases and it can
-    never re-fire on restart (the engine emits only the non-terminal
-    ``trail_armed`` marker for the alert-only would-fire), and the offline
-    exec_quality join has a terminal stamp to match a real fill against once T2
-    arms."""
+    (offline-join durability).
+
+    PR-T2b: the engine never reaches WOULD_FIRE (native mode — the SERVER fires),
+    so there is no fabricated ``fired`` line here. The real ``trail_armed`` (with
+    the order id) and, on a fill, ``fired`` lines are written by the executor /
+    reconcile out of band; this function only persists the engine's own
+    touch/trough/suspend/expire/cancel intents."""
     for intent in result.journal_intents:
         payload = dict(intent.payload)
         if intent.kind == entry_trails.KIND_TROUGH:
@@ -1423,15 +1471,6 @@ def _persist_entry_watch_result(
         if intent.kind in entry_trails.ENTRY_TRAIL_TERMINAL_KINDS:
             line["measurement"] = _entry_measurement_blob(record, runtime, d_bps)
         entry_trails.append_entry_trail_line(line)
-    if result.state is entry_trail_watcher.WatchState.WOULD_FIRE:
-        entry_trails.append_entry_trail_line(
-            {
-                "kind": entry_trails.KIND_FIRED,
-                "crid": crid,
-                "entry_order_id": None,
-                "measurement": _entry_measurement_blob(record, runtime, d_bps),
-            }
-        )
 
 
 def _entry_measurement_blob(
@@ -1456,6 +1495,216 @@ def _entry_measurement_blob(
         "order_id": None,
         "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
     }
+
+
+# --- PR-T2b native trailing-limit executor -----------------------------------
+
+
+def _entry_trail_orders_allowed() -> bool:
+    """Whether ``ALPHALENS_BROKER_ALLOW_ORDERS`` is armed (read at call time —
+    mirrors :func:`_live_exits_orders_allowed`).
+
+    The SIM/LIVE safety rail: with ALLOW_ORDERS off the executor places NOTHING
+    (no write-ahead, no POST), so a flag-ON-but-orders-disabled run is a clean
+    no-op — the tier simply stays TOUCHED and re-attempts once orders are
+    re-enabled. Defense in depth: :meth:`SaxoBroker.place_trailing_stop` ALSO
+    raises ``BrokerCapabilityError`` when the flag is off; gating here first just
+    avoids journalling a write-ahead line that could never be completed."""
+    from alphalens_pipeline.brokers.automanager import safety
+
+    return os.environ.get(safety.ALLOW_ORDERS_ENV) == "1"
+
+
+def _entry_fire_request_id(crid: str) -> str:
+    """The deterministic ``ExternalReference`` for a tier's native trailing order
+    (memo §5 ``-entry-fire`` family). Deterministic so a crash-window re-POST hits
+    Saxo's 15 s x-request-id dedup instead of resting a second trail; the ``crid``
+    already encodes ``ticker-briefdate-entry-t<i>``, so the suffix keeps the whole
+    id inside the ``-entry-`` family the KILL cancel + orphan sweep recognise."""
+    return f"{crid}-fire"
+
+
+def _journal_trail_armed(crid: str, *, order_id: str | None, trigger: float) -> None:
+    """Append one ``trail_armed`` line (the G3 write-ahead uses ``order_id=None``
+    before the POST; the post-POST line fills the real id in — the fold's
+    latest-wins semantics adopt it)."""
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_TRAIL_ARMED,
+            "crid": crid,
+            "order_id": order_id,
+            "trigger": float(trigger),
+        }
+    )
+
+
+def _journal_entry_planned_disaster(record: Mapping[str, Any], uic: int, entry_crid: str) -> None:
+    """Journal the ``planned`` disaster-SL line at FIRE-ARM (memo §5 never-naked):
+    the brief disaster-stop PRICE the broker cannot know, keyed to the resting
+    order's ``ExternalReference`` so that when the trail fills into a Position the
+    UNCHANGED protection pass (``build_protection_view`` + ``reconcile_protection``)
+    places the covering SELL disaster stop with ZERO new protection code — a fill
+    during daemon downtime is naked for at most one tick. ``take_profit`` is left
+    ``None`` (stop-only disaster protection; the in-band OCO upgrade is a later
+    increment) — a null TP still confers the disaster stop, which is the
+    never-naked guarantee."""
+    disaster_stop = record.get("disaster_stop")
+    if disaster_stop is None:
+        logger.warning(
+            "entry-trail arm: crid=%s watch_open carries no disaster_stop — "
+            "SKIPPING the trailing order so a fill can never go uncovered",
+            entry_crid,
+        )
+        raise _EntryArmAbortError  # never place a trail we cannot cover (never-naked)
+    tier_index = record.get("tier_index")
+    _append_standalone_stop_journal(
+        _build_planned_line(
+            entry_crid=entry_crid,
+            uic=int(uic),
+            side=_DISASTER_STOP_SIDE,
+            stop_price=float(disaster_stop),
+            take_profit=None,
+            tier_index=int(tier_index) if tier_index is not None else 0,
+        )
+    )
+
+
+class _EntryArmAbortError(Exception):
+    """Internal control-flow signal: abort arming this tick WITHOUT placing an
+    order (a missing never-naked plan price). Caught inside :func:`_arm_native_trail`
+    — never escapes to the tick loop."""
+
+
+def _find_working_entry_order(broker: Broker, external_reference: str) -> str | None:
+    """The order id of a WORKING order whose ``ExternalReference`` matches
+    (idempotent re-arm, memo §3 G3): a crash between the POST and the id-journal
+    leaves a native order at Saxo the journal recorded only with a null id — on
+    the next TOUCHED tick, adopt it rather than resting a second trail. A
+    ``BrokerError`` reading the book returns ``None`` (treat as not-found): the
+    deterministic ``request_id`` + Saxo's 15 s dedup still guard the short
+    re-POST window."""
+    try:
+        for state in broker.list_open_orders():
+            if state.external_reference == external_reference:
+                return str(state.order_id)
+    except BrokerError as exc:
+        logger.warning(
+            "entry-trail arm: list_open_orders failed for dedup check (%s) — "
+            "relying on request-id dedup",
+            exc,
+        )
+    return None
+
+
+def _arm_native_trail(
+    deps: LoopDeps,
+    crid: str,
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    reference: float,
+    d_bps: int,
+    report: TickReport,
+) -> None:
+    """Place ONE native Saxo trailing-LIMIT order at the TOUCH (memo §2 V1, §5).
+
+    Sequence (money-critical ORDER):
+      1. capability + ALLOW_ORDERS gates -> place nothing when disabled;
+      2. compute the tick-agnostic geometry (the broker tick-aligns at placement);
+      3. idempotent re-arm: adopt an already-resting ``-entry-`` order (G3);
+      4. G3 write-ahead: ``trail_armed`` (null id) BEFORE the POST;
+      5. never-naked: the ``planned`` disaster-SL line at FIRE-ARM;
+      6. the POST (ALLOW_ORDERS-gated at the broker too);
+      7. fill the real order id into a second ``trail_armed`` line, mark armed.
+
+    A rejected POST leaves the tier TOUCHED (retry next tick) unless it is
+    insufficient funds (G7 -> terminal-refuse so it never spams retries)."""
+    broker = deps.broker
+    if not isinstance(broker, SupportsTrailingStop) or not _entry_trail_orders_allowed():
+        return
+    trough = runtime.trough if runtime.trough is not None else reference
+    geo = entry_trail_geometry.compute_trailing_order_geometry(
+        reference=reference, trough=trough, d_bps=d_bps
+    )
+    if geo is None:
+        return  # degenerate geometry — retry next tick
+    try:
+        uic = int(record["uic"])
+        qty = float(record["qty"])
+    except (KeyError, TypeError, ValueError):
+        logger.warning("entry-trail arm: crid=%s record missing uic/qty — skipped", crid)
+        return
+    fire_rid = _entry_fire_request_id(crid)
+
+    existing = _find_working_entry_order(broker, fire_rid)
+    if existing is not None:
+        _journal_trail_armed(crid, order_id=existing, trigger=geo.order_price)
+        runtime.watcher.mark_armed()
+        return
+
+    try:
+        _journal_trail_armed(crid, order_id=None, trigger=geo.order_price)  # G3 write-ahead
+        _journal_entry_planned_disaster(record, uic, fire_rid)  # never-naked
+    except _EntryArmAbortError:
+        return
+    try:
+        placed = broker.place_trailing_stop(
+            uic,
+            _ENTRY_SIDE,
+            qty,
+            order_price=geo.order_price,
+            trailing_distance=geo.trailing_distance,
+            trailing_step=geo.trailing_step,
+            ceiling_price=geo.ceiling_price,
+            request_id=fire_rid,
+        )
+    except BrokerError as exc:
+        _handle_arm_failure(deps, crid, record, runtime, d_bps, exc, report)
+        return
+    _journal_trail_armed(crid, order_id=placed.entry_order_id, trigger=geo.order_price)
+    runtime.watcher.mark_armed()
+    logger.info(
+        "entry-trail %s: armed native trailing order %s @ trigger %.4f (ceiling %.4f)",
+        crid,
+        placed.entry_order_id,
+        geo.order_price,
+        geo.ceiling_price,
+    )
+
+
+def _handle_arm_failure(
+    deps: LoopDeps,
+    crid: str,
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    d_bps: int,
+    exc: BrokerError,
+    report: TickReport,
+) -> None:
+    """A rejected trailing-order POST: insufficient funds (memo §3 G7) is
+    TERMINAL — refuse the tier so it never re-arms to spam retries, releasing its
+    virtual reservation; any other error keeps the tier TOUCHED (arm-in-progress
+    write-ahead already journaled) to retry next tick."""
+    if _is_insufficient_funds(exc):
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_CANCELLED,
+                "crid": crid,
+                "note": f"insufficient funds at fire-arm: {exc}",
+                "measurement": _entry_measurement_blob(record, runtime, d_bps),
+            }
+        )
+        runtime.watcher.cancel()
+        if deps.alert_throttled(
+            f"entry-trail {crid}: insufficient funds at fire-arm — tier refused",
+            f"entry-trail:nofunds:{crid}",
+        ):
+            report.alerts += 1
+        return
+    if deps.alert_throttled(
+        f"entry-trail {crid}: trailing-order POST failed — will retry: {exc}",
+        f"entry-trail:arm-fail:{crid}",
+    ):
+        report.alerts += 1
 
 
 def _execute_action(
@@ -4229,7 +4478,11 @@ def _place_pick(
     # (PR-T0 inertness proof). The intercept lands AFTER the cash floor so a
     # watch only opens once the pick has cleared every money gate.
     d_bps = entry_trails.entry_trail_bps()
-    if d_bps > 0 and _entry_trail_eligible(plan):
+    if d_bps > 0 and _entry_trail_eligible(plan) and isinstance(broker, SupportsTrailingStop):
+        # PR-T2b: the whole feature needs the native trailing-stop capability; a
+        # broker lacking it falls through to classify + _place_tiers (the
+        # resting-limit entry path, BYTE-IDENTICAL to today) — never a watch it
+        # could not later arm with a real order.
         # Crash-recovery exemption: a pick that ALREADY holds an open watch
         # (its watch_open was journaled but it was never retired — a crash
         # between the journal-FIRST watch_open and the note-only submission

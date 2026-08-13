@@ -96,7 +96,7 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
             live_exits_feed_factory=lambda _u2i: feed,
         )
 
-    def test_flag_on_drives_would_fire_without_any_broker_order(self) -> None:
+    def test_flag_on_end_to_end_arms_one_native_trailing_order(self) -> None:
         path = _journal(self)
         broker = _RecordingBroker()
         prices: dict[int, float | None] = {}
@@ -106,27 +106,25 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
         picks = [_pick(date=dt.date.today().isoformat())]
         deps = self._deps(broker, _plan((0, 10.0, 100)), picks, _FakeFeed(prices), alerts)
 
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+        with mock.patch.dict(
+            "os.environ", {_ENV: "50", "ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=True
+        ):
             prices[307] = 10.0
-            cl.run_once(deps)  # tick 1: drain opens watch, pass touches
+            cl.run_once(deps)  # tick 1: drain opens watch, pass touches -> ARM
             picks.clear()  # pick retired from the drain
-            prices[307] = 9.90
-            cl.run_once(deps)  # tick 2: new low
-            prices[307] = 9.95
-            cl.run_once(deps)  # tick 3: bounce -> would fire
 
-        self.assertEqual(broker.brackets, [], "DRY-RUN: no bracket order may be placed")
-        self.assertEqual(broker.stops, [])
-        self.assertEqual(broker.amends, [])
-        self.assertEqual(broker.cancels, [])
+        # PR-T2b: a native trailing-LIMIT order was placed at TOUCH — and NO
+        # resting-limit bracket (the whole point of the feature).
+        self.assertEqual(len(broker.trailing_orders), 1)
+        self.assertEqual(broker.brackets, [], "no resting-limit entry order under the trail")
         kinds = [line["kind"] for line in _lines(path)]
         self.assertEqual(kinds.count(entry_trails.KIND_WATCH_OPEN), 1)
         self.assertIn(entry_trails.KIND_TOUCHED, kinds)
         self.assertIn(entry_trails.KIND_TRAIL_ARMED, kinds)
-        self.assertIn(entry_trails.KIND_FIRED, kinds)
-        self.assertTrue(any("would fire" in m for m, _k in alerts))
+        # Native mode: no fabricated dry-run fired line (the server is the fire).
+        self.assertNotIn(entry_trails.KIND_FIRED, kinds)
 
-    def test_flag_on_suspend_path_places_no_order(self) -> None:
+    def test_flag_on_suspended_tier_places_no_order(self) -> None:
         path = _journal(self)
         broker = _RecordingBroker()
         prices: dict[int, float | None] = {}
@@ -134,15 +132,20 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
         deps = self._deps(
             broker, _plan((0, 10.0, 100), (1, 9.5, 100)), picks, _FakeFeed(prices), []
         )
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            prices[307] = 10.0
-            cl.run_once(deps)  # touches tier-0
-            picks.clear()
-            prices[307] = 9.40  # below tier-1 limit 9.5 -> tier-0 suspends
+        with mock.patch.dict(
+            "os.environ", {_ENV: "50", "ALPHALENS_BROKER_ALLOW_ORDERS": "1"}, clear=True
+        ):
+            # A single gap-down tick to 9.40: tier-0 (next-tier 9.5) suspends ON
+            # the touch tick before any arm; the DEEPEST tier-1 (limit 9.5, no
+            # next tier) legitimately touches + arms — that decline is its job.
+            prices[307] = 9.40
             cl.run_once(deps)
         self.assertEqual(broker.brackets, [])
         kinds = [line["kind"] for line in _lines(path)]
         self.assertIn(entry_trails.KIND_SUSPENDED, kinds)
+        # The SUSPENDED tier (t0) never placed an order; only the deepest tier armed.
+        t0_orders = [o for o in broker.trailing_orders if "entry-t0-fire" in o["request_id"]]
+        self.assertEqual(t0_orders, [])
 
     def test_flag_off_is_byte_identical_places_bracket_writes_no_watch(self) -> None:
         path = _journal(self)

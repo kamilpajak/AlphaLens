@@ -370,6 +370,15 @@ class EntryTierWatcher:
 
         return TickResult(tuple(intents), (), self._state)
 
+    def mark_armed(self) -> None:
+        """Transition to TRAIL_ARMED after the wire places the native trailing
+        order (PR-T2b). Terminal for the engine — the resting order is the
+        broker's; the bot stops driving touch/trough/fire. A no-op once terminal
+        (a CANCELLED/SUSPENDED/EXPIRED tier must never be resurrected to armed)."""
+        if self.is_terminal:
+            return
+        self._state = WatchState.TRAIL_ARMED
+
     def cancel(self) -> TickResult:
         """Terminate the watch with a ``cancelled`` intent (KILL transition /
         pick pulled). A no-op once terminal. Cancel only removes intent — it

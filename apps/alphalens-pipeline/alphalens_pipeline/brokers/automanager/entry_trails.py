@@ -131,6 +131,13 @@ class EntryTrailTierState:
     latest_kind: str | None  # latest NON-terminal kind, file order
     min_trough: float | None  # the minimum trough ever journaled (memo §5 restart rule)
     terminal_kind: str | None  # a terminal marker, if any
+    # PR-T2b: the order id from the LATEST ``trail_armed`` line (``None`` while a
+    # tier is arm-in-progress — the G3 write-ahead line is journaled with a null
+    # id BEFORE the POST and filled in after). ``None`` when no trail_armed line
+    # exists at all. The wire distinguishes a RESTING native order (real id ->
+    # the broker owns it, excluded from the watch pass) from an unconfirmed POST
+    # (null id -> re-drive to complete the arm) on this field.
+    armed_order_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -210,7 +217,13 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
             continue
         state = trackers.setdefault(
             crid,
-            {"watch_open": None, "latest_kind": None, "min_trough": None, "terminal_kind": None},
+            {
+                "watch_open": None,
+                "latest_kind": None,
+                "min_trough": None,
+                "terminal_kind": None,
+                "armed_order_id": None,
+            },
         )
         if kind in ENTRY_TRAIL_TERMINAL_KINDS:
             state["terminal_kind"] = kind
@@ -218,6 +231,11 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
         state["latest_kind"] = kind
         if kind == KIND_WATCH_OPEN:
             state["watch_open"] = dict(record)
+        elif kind == KIND_TRAIL_ARMED:
+            # The LATEST trail_armed wins (a real-id line overrides the earlier
+            # null-id write-ahead); a missing/blank order id folds back to None.
+            order_id = record.get("order_id")
+            state["armed_order_id"] = str(order_id) if order_id else None
         elif kind == KIND_TROUGH:
             trough = _finite_positive_float(record.get(KIND_TROUGH))
             if trough is not None and (state["min_trough"] is None or trough < state["min_trough"]):
