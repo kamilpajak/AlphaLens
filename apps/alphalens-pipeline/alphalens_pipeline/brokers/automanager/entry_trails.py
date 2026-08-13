@@ -231,6 +231,12 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
         state["latest_kind"] = kind
         if kind == KIND_WATCH_OPEN:
             state["watch_open"] = dict(record)
+            # A (re-)opened watch has no armed order yet. The memo §5 CRITICAL-2
+            # re-arm re-appends watch_open to reset a DayOrder-cancelled tier back
+            # to WATCHING, so the arm state must clear too — else the stale
+            # resting-order id lingers past the re-arm (harmless to the current
+            # latest_kind-gated readers, but the fold must state the arm truth).
+            state["armed_order_id"] = None
         elif kind == KIND_TRAIL_ARMED:
             # The LATEST trail_armed wins (a real-id line overrides the earlier
             # null-id write-ahead); a missing/blank order id folds back to None.
