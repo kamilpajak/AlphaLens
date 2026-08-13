@@ -1687,10 +1687,14 @@ def _arm_native_trail(
         return
 
     try:
-        _journal_trail_armed(crid, order_id=None, trigger=geo.order_price)  # G3 write-ahead
-        _journal_entry_planned_disaster(record, uic, fire_rid)  # never-naked
+        # NEVER-NAKED first: journal the planned disaster-SL line BEFORE the
+        # write-ahead + POST, so a malformed record (no disaster price -> abort)
+        # never strands the tier as arm-in-progress, and the covering plan is on
+        # disk before any order can exist.
+        _journal_entry_planned_disaster(record, uic, fire_rid)
     except _EntryArmAbortError:
         return
+    _journal_trail_armed(crid, order_id=None, trigger=geo.order_price)  # G3 write-ahead, pre-POST
     try:
         placed = broker.place_trailing_stop(
             uic,
