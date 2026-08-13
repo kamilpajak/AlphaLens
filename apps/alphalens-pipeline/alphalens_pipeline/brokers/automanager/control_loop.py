@@ -1860,7 +1860,11 @@ def _entry_terminal_rewritten_as_fired(
 ) -> entry_trail_watcher.TickResult:
     """Swap the SUSPENDED/EXPIRED terminal intent for a ``fired`` one carrying the
     real order id + realized qty (memo §5 ``fired{realized_qty}`` / G6). Any
-    non-terminal intent this tick (e.g. the suspend tick's ``trough``) is kept."""
+    non-terminal intent this tick (e.g. the suspend tick's ``trough``) is kept.
+
+    The engine's own alert is DROPPED: a filled tier did not suspend/expire, so
+    the stale "suspended below next tier" alert would contradict the ``fired``
+    journal line — the fill surfaces through never-naked + reconcile instead."""
     rewritten = tuple(
         entry_trail_watcher.JournalIntent(
             crid=crid,
@@ -1871,7 +1875,7 @@ def _entry_terminal_rewritten_as_fired(
         else intent
         for intent in result.journal_intents
     )
-    return entry_trail_watcher.TickResult(rewritten, result.alerts, result.state)
+    return entry_trail_watcher.TickResult(rewritten, (), result.state)
 
 
 def _execute_action(
