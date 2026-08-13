@@ -233,6 +233,37 @@ class TestStopLimitBody(unittest.TestCase):
         self.assertEqual(request_id, "rid-RIVN-entry-clamp-1")
         self.assertEqual(body["ExternalReference"], "rid-RIVN-entry-clamp-1")
 
+    def test_buy_clamp_with_limit_below_trigger_rejected_pre_post(self):
+        # A BUY ceiling clamp (memo G1) caps the fill AT or ABOVE the trigger
+        # (limit >= stop); a limit BELOW the trigger is a malformed clamp that
+        # fills adversely or never. Reject at build — before wasting a POST on
+        # a server 400 with a weaker diagnostic.
+        broker, stub = _make(_StubTrailingClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_stop_limit(
+                    uic=307, side="BUY", qty=2, stop_price=16.05, limit_price=16.00
+                )
+        self.assertIn("clamp", str(ctx.exception).lower())
+        self.assertEqual(stub.place_calls, [], "an inverted clamp must never POST")
+
+    def test_buy_clamp_with_limit_equal_to_trigger_is_allowed(self):
+        # Equal is a valid (very tight) clamp: fill only at the trigger.
+        broker, stub = _make(_StubTrailingClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            broker.place_stop_limit(uic=307, side="BUY", qty=2, stop_price=16.00, limit_price=16.00)
+        self.assertEqual(len(stub.place_calls), 1)
+
+    def test_sell_clamp_with_limit_above_trigger_rejected_pre_post(self):
+        # The guard is directional: a SELL floor clamp needs limit <= stop.
+        broker, stub = _make(_StubTrailingClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError):
+                broker.place_stop_limit(
+                    uic=307, side="SELL", qty=2, stop_price=16.00, limit_price=16.05
+                )
+        self.assertEqual(stub.place_calls, [], "an inverted clamp must never POST")
+
 
 class TestTrailingStopSafety(unittest.TestCase):
     def test_allow_orders_gate_blocks_before_any_client_call(self):

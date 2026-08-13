@@ -844,6 +844,18 @@ class SaxoBroker:
             )
         stop_q = self._quantize_price(stop_price, details, label="stop_price")
         limit_q = self._quantize_price(limit_price, details, label="limit_price")
+        # Directional clamp sanity (memo G1): a BUY ceiling clamp caps the fill
+        # AT or ABOVE the trigger (limit >= stop); a SELL floor clamp caps AT or
+        # BELOW it (limit <= stop). An inverted pair is a malformed clamp (fills
+        # adversely or never) — reject at build so a caller bug never wastes a
+        # POST on a server 400 with a weaker diagnostic (mirrors the bracket
+        # child ordering guard, _validate_price_relations).
+        if (side == "BUY" and limit_q < stop_q) or (side == "SELL" and limit_q > stop_q):
+            direction = ">=" if side == "BUY" else "<="
+            raise OrderRejectedError(
+                f"inverted StopLimit clamp for {side}: trigger {stop_q}, ceiling {limit_q} "
+                f"(a {side} clamp needs the ceiling {direction} the trigger)"
+            )
         return {
             "Uic": int(uic),
             "AssetType": asset_type,
