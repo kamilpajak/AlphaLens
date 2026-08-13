@@ -306,5 +306,73 @@ class TestFlagOffAndNoResolverAreNoops(unittest.TestCase):
         self.assertEqual([ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED], [])
 
 
+class TestReconcileRunsBeforePlacementDrain(unittest.TestCase):
+    """The fill-reconcile pass MUST run BEFORE the placement drain in ``run_once``
+    (zen pre-merge HIGH — 1-tick gross double-count).
+
+    A native trail that filled appears in the broker positions immediately, but
+    its tier stays NON-terminal in the fold until this pass writes the ``fired``
+    line. If the drain's gross-cap / cash-floor check ran FIRST, the just-filled
+    tier would be counted TWICE — once as a filled position
+    (``_filled_positions_gross_acct``) and once as its still-live virtual
+    reservation (``watching_virtual_gross_acct``) — which can spuriously breach
+    the cap and PERMANENTLY refuse (``mark_refused``) another valid pick drained
+    the same tick. Running reconcile first releases the reservation so the drain
+    sees the tier already terminal."""
+
+    def test_drain_sees_a_just_filled_tier_already_released(self) -> None:
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0)  # a resting armed tier
+        broker = _ResolvingBroker()  # its order is gone from the book...
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=10.05
+        )  # ...because it FILLED
+
+        # A candidate pick drained the SAME tick. ``place_pick`` snapshots the
+        # fold's terminal state for the just-filled tier at the instant the drain
+        # places — if reconcile ran first, the tier is already ``fired`` (its
+        # reservation released), so the drain never double-counts it.
+        pick = type(
+            "Pick",
+            (),
+            {
+                "instrument": type("I", (), {"ticker": "AAPL"})(),
+                "meta": type("M", (), {"brief_date": "2026-07-20"})(),
+            },
+        )()
+        seen: list[str | None] = []
+
+        def _snapshotting_place(_p: Any) -> bool:
+            tier = entry_trails.read_entry_trail_fold().tiers.get(_CRID)
+            seen.append(tier.terminal_kind if tier is not None else None)
+            return True
+
+        # An empty protection view so the (unrelated) protection pass in run_once
+        # is a clean no-op — this test exercises the drain/reconcile ordering only.
+        from tests.brokers.automanager.test_control_loop import _empty_pview
+
+        base = _watch_deps(None, [], broker=broker)
+        deps = cl.LoopDeps(
+            **{
+                **base.__dict__,
+                "iter_picks": lambda: iter([pick]),
+                "place_pick": _snapshotting_place,
+                "build_protection_view": lambda _b, _r: _empty_pview(),
+            }
+        )
+
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            cl.run_once(deps)
+
+        self.assertEqual(len(seen), 1, "the drain placed the candidate exactly once")
+        self.assertEqual(
+            seen[0],
+            entry_trails.KIND_FIRED,
+            "the fill-reconcile must release the just-filled tier's reservation "
+            "BEFORE the drain checks capacity — else the tier double-counts and "
+            "can spuriously refuse this valid pick",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

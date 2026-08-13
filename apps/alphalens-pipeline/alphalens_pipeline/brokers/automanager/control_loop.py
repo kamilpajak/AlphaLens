@@ -398,6 +398,23 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     if sweep_orphans:
         _run_orphan_sweep(deps, report)
 
+    # PR-T2b fill-reconcile (Finding 1) MUST run BEFORE the placement drain: a
+    # native trail that filled appears in the broker positions immediately, but its
+    # tier stays NON-terminal in the fold until this pass writes the terminal
+    # `fired` line that releases the virtual gross reservation + un-jams watch
+    # capacity. If the drain's gross-cap / cash-floor check ran FIRST, the filled
+    # tier would be counted TWICE (once as a filled position, once as its still-live
+    # virtual reservation) — spuriously breaching the cap and PERMANENTLY refusing
+    # (`mark_refused`) another valid pick drained the same tick. Reconciling first
+    # releases the reservation so the drain counts it once. UNGATED by KILL (a fill
+    # during an emergency stop must still release + is covered by the fire-arm
+    # planned disaster line) and a no-op when the flag is unset/0; it writes ONLY
+    # terminals — never places — so this call site is unconditional (ahead of the
+    # placement gate). Running before the watch pass is safe: a tier armed THIS tick
+    # just placed a WORKING order (reconcile no-ops on it), so it only reconciles
+    # prior-tick resting orders.
+    _run_entry_trail_reconcile_pass(deps, report)
+
     if not kill and alive:
         _run_placement_drain(deps, report)
 
@@ -410,15 +427,6 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # expiry + measurement never stall on a dead session. STILL DRY-RUN: the
     # fire path only alerts "would fire" — no broker order is ever placed.
     _run_entry_watch_pass(deps, kill, report)
-
-    # PR-T2b fill-reconcile (Finding 1): a RESTING armed trail is EXCLUDED from the
-    # watch pass (the broker owns the resting native order), so this sibling pass
-    # observes its fill / DayOrder-expiry and writes the terminal `fired` line that
-    # releases the virtual gross reservation + un-jams watch capacity. UNGATED by
-    # KILL (a fill during an emergency stop must still release + be covered by the
-    # fire-arm planned disaster line) and a no-op when the flag is unset/0; it
-    # writes ONLY terminals — never places — so this call site is unconditional.
-    _run_entry_trail_reconcile_pass(deps, report)
 
     # The verdict-level advance loop (terminal / round-trip CancelRemaining +
     # divergence alerts) and the broker-state protection pass are INDEPENDENT: a
