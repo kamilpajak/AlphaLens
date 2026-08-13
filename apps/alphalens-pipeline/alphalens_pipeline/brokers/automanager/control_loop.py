@@ -76,6 +76,7 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     advance,
     reconcile_protection,
 )
+from alphalens_pipeline.brokers.reconcile import SupportsOrderResolution
 from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 
 if TYPE_CHECKING:
@@ -409,6 +410,15 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # expiry + measurement never stall on a dead session. STILL DRY-RUN: the
     # fire path only alerts "would fire" — no broker order is ever placed.
     _run_entry_watch_pass(deps, kill, report)
+
+    # PR-T2b fill-reconcile (Finding 1): a RESTING armed trail is EXCLUDED from the
+    # watch pass (the broker owns the resting native order), so this sibling pass
+    # observes its fill / DayOrder-expiry and writes the terminal `fired` line that
+    # releases the virtual gross reservation + un-jams watch capacity. UNGATED by
+    # KILL (a fill during an emergency stop must still release + be covered by the
+    # fire-arm planned disaster line) and a no-op when the flag is unset/0; it
+    # writes ONLY terminals — never places — so this call site is unconditional.
+    _run_entry_trail_reconcile_pass(deps, report)
 
     # The verdict-level advance loop (terminal / round-trip CancelRemaining +
     # divergence alerts) and the broker-state protection pass are INDEPENDENT: a
@@ -1876,6 +1886,211 @@ def _entry_terminal_rewritten_as_fired(
         for intent in result.journal_intents
     )
     return entry_trail_watcher.TickResult(rewritten, (), result.state)
+
+
+# --- PR-T2b fill-reconcile of a resting armed trail (Finding 1) --------------
+#
+# Once a tier reaches TRAIL_ARMED with a real order id the watch pass drops it
+# (_active_entry_watches :1261 — the broker owns the resting native order), so
+# nothing else ever observes its fill / DayOrder-expiry. Without a terminal
+# `entry_trails` line watching_virtual_gross_acct keeps reserving limit*qty
+# FOREVER (it skips only terminal_kind) AND _open_watch_pick_keys keeps the tier
+# occupying capacity forever — the feature arms one pick then jams. This sibling
+# pass writes the terminal `fired` line when the order fills, releasing both in
+# ONE write. It NEVER places / amends / arms (safe under KILL); a GONE-but-
+# UNFILLED order (DayOrder expiry / raced cancel) is LEFT for the Rearm phase.
+
+
+def _resting_armed_tiers(
+    fold: entry_trails.EntryTrailFold,
+) -> dict[str, entry_trails.EntryTrailTierState]:
+    """The tiers this reconcile pass owns: NON-terminal, latest kind
+    ``trail_armed``, with a REAL ``armed_order_id`` — the exact complement of the
+    resting-order exclusion in :func:`_active_entry_watches` (the watch pass drops
+    these because the broker owns the resting order, so nothing else observes their
+    fill / DayOrder-expiry). The Rearm phase (Finding 2) consumes the SAME set to
+    find a gone-but-unfilled (DayOrder-cancelled) tier to re-admit."""
+    return {
+        crid: state
+        for crid, state in fold.tiers.items()
+        if state.terminal_kind is None
+        and state.latest_kind == entry_trails.KIND_TRAIL_ARMED
+        and state.armed_order_id is not None
+    }
+
+
+def _run_entry_trail_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
+    """Reconcile every resting armed ``-entry-`` trailing order against the broker
+    (memo §5 Finding 1 — the gross-reservation leak fix).
+
+    Runs UNGATED by KILL (like the live-exits pass): a fill that lands during an
+    emergency stop must still release its virtual reservation + be covered by the
+    fire-arm planned disaster line, not freeze until KILL clears. The pass writes
+    ONLY terminals — it NEVER places, amends, or arms an order — so it is safe
+    under KILL. A no-op when the flag is unset/0 (byte-identical to today) or when
+    the broker cannot classify a disappeared order (no ``SupportsOrderResolution``
+    — the audit-log read is the ONLY fill-vs-expiry disambiguator, memo trap #4).
+
+    THIS phase handles ONLY the FILLED -> ``fired`` transition and the
+    still-working no-op; a GONE-but-UNFILLED order (a DayOrder expiry or a raced
+    cancel) is LEFT for the Rearm phase (Finding 2) — never terminated here, so no
+    terminal is ever written against a re-armable tier (memo §5 CRITICAL-2)."""
+    d_bps = entry_trails.entry_trail_bps()
+    if d_bps <= 0:
+        return
+    broker = deps.broker
+    if not isinstance(broker, SupportsOrderResolution):
+        return
+    fold = entry_trails.read_entry_trail_fold()
+    now = dt.datetime.now(dt.UTC)
+    for crid, tier_state in _resting_armed_tiers(fold).items():
+        _reconcile_one_armed_tier(deps, crid, tier_state, d_bps, now, report)
+
+
+def _reconcile_one_armed_tier(
+    deps: LoopDeps,
+    crid: str,
+    tier_state: entry_trails.EntryTrailTierState,
+    d_bps: int,
+    now: dt.datetime,
+    report: TickReport,
+) -> None:
+    """Resolve ONE resting armed tier's order and, on a FILL, write its terminal
+    ``fired`` line. Per-tier fault isolation: an order id that cannot be re-read /
+    resolved is a no-op this tick (retry next tick — never a fabricated
+    terminal)."""
+    order_id = tier_state.armed_order_id
+    if order_id is None:  # defensive — _resting_armed_tiers already filtered
+        return
+    broker = deps.broker
+    # Still resting on the open-orders book -> nothing to reconcile (the server is
+    # ratcheting / waiting for the bounce). get_order answers WORKING while it
+    # rests and UNKNOWN once it DISAPPEARS (Saxo drops filled/expired/cancelled
+    # from the open-orders view) — the disappearance is the only trigger to
+    # disambiguate via the audit log.
+    if not _armed_order_is_gone(_read_entry_order(broker, order_id)):
+        return
+    # GONE from the book — one audit-log read disambiguates fill vs expiry/cancel
+    # (memo trap #4: get_order alone reads UNKNOWN for ALL of them).
+    outcome = _resolve_entry_order_outcome(broker, order_id)
+    filled_qty = _entry_order_filled_qty(outcome)
+    if filled_qty is None:
+        # EXPIRED / CANCELLED / still-unresolved UNKNOWN -> the Rearm phase
+        # (Finding 2) owns this tier; NEVER write a terminal against a re-armable /
+        # ambiguous order id (memo §3 G6 / §5 CRITICAL-2).
+        return
+    _journal_entry_fired(
+        crid,
+        tier_state,
+        d_bps,
+        now,
+        order_id=order_id,
+        realized_qty=filled_qty,
+        avg_price=outcome.avg_fill_price if outcome is not None else None,
+    )
+    if deps.alert_throttled(
+        f"entry-trail {crid}: native trail {order_id} filled {filled_qty:g} shares -> fired",
+        f"entry-trail:fired:{crid}",
+    ):
+        report.alerts += 1
+
+
+def _armed_order_is_gone(state: OrderState | None) -> bool:
+    """Whether a re-read armed order has LEFT the open-orders book (memo trap #4).
+
+    ``None`` (a ``BrokerError`` re-reading) -> NOT gone: a read we cannot complete
+    must not trigger the audit-log disambiguation (retry next tick). A
+    ``WORKING``/``PARTIALLY_FILLED`` status means it still rests — the residual of
+    a partial keeps its FULL virtual reservation this phase (G8 residual-cancel is
+    a later increment). Any other status (``UNKNOWN`` once Saxo drops it, or a
+    terminal a non-Saxo broker surfaces on ``get_order``) means gone -> resolve."""
+    from broker_contract.contract import OrderStatus
+
+    if state is None:
+        return False
+    return state.status not in (OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED)
+
+
+def _resolve_entry_order_outcome(
+    broker: SupportsOrderResolution, order_id: str
+) -> OrderState | None:
+    """One audit-log terminal resolution for a disappeared armed order (memo §5 /
+    trap #4). ``None`` on a ``BrokerError`` (retry next tick — never a fabricated
+    fill)."""
+    try:
+        return broker.resolve_order_outcome(order_id)
+    except BrokerError as exc:
+        logger.warning(
+            "entry-trail reconcile: resolve_order_outcome(%s) failed (%s)", order_id, exc
+        )
+        return None
+
+
+def _journal_entry_fired(
+    crid: str,
+    tier_state: entry_trails.EntryTrailTierState,
+    d_bps: int,
+    now: dt.datetime,
+    *,
+    order_id: str,
+    realized_qty: float,
+    avg_price: float | None,
+) -> None:
+    """Append the terminal ``fired`` line for a reconciled fill (memo §5
+    ``fired{realized_qty}`` + measurement).
+
+    Top-level ``order_id`` + ``realized_qty`` release the virtual reservation (the
+    fold's ``terminal_kind`` -> ``watching_virtual_gross_acct`` skips the tier) and
+    un-jam capacity (``_open_watch_pick_keys`` skips it) in ONE write; ``avg_price``
+    + ``ts`` carry the realized entry-side fill the offline exec_quality join needs.
+    Idempotent by construction: once written the tier is terminal in the fold, so
+    the next reconcile pass excludes it (``_resting_armed_tiers``)."""
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_FIRED,
+            "crid": crid,
+            "order_id": order_id,
+            "realized_qty": realized_qty,
+            "avg_price": avg_price,
+            "ts": now.isoformat(),
+            "measurement": _entry_reconcile_measurement(
+                tier_state, d_bps, order_id=order_id, realized_qty=realized_qty, avg_price=avg_price
+            ),
+        }
+    )
+
+
+def _entry_reconcile_measurement(
+    tier_state: entry_trails.EntryTrailTierState,
+    d_bps: int,
+    *,
+    order_id: str,
+    realized_qty: float,
+    avg_price: float | None,
+) -> dict[str, Any]:
+    """The terminal measurement stamp for a RECONCILED fill (memo §5 / T1d),
+    mirroring :func:`_entry_measurement_blob` but sourced from the FOLD (the
+    watcher runtime is gone once a tier is resting) + the resolved fill: the
+    variant-A entry ``tier_limit``, the final trough + its ``would_be_trigger``,
+    the join ``order_id``, the realized ``avg_price``/``realized_qty`` (the
+    entry-side concession the offline join computes vs the limit), and the
+    ``entry_mode`` cohort tag (T8). Touch marks are the ``touched`` line's job (the
+    offline join reads them there), so they are ``None`` here."""
+    record = tier_state.watch_open or {}
+    trough = tier_state.min_trough
+    trigger = None if trough is None else trough * (1.0 + d_bps / _ENTRY_BPS_DENOMINATOR)
+    limit = record.get("limit")
+    return {
+        "tier_limit": None if limit is None else float(limit),
+        "touch_price": None,
+        "touch_ts": None,
+        "final_trough": trough,
+        "would_be_trigger": trigger,
+        "order_id": order_id,
+        "avg_price": avg_price,
+        "realized_qty": realized_qty,
+        "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
+    }
 
 
 def _execute_action(
