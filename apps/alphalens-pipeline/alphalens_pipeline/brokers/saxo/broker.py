@@ -712,8 +712,10 @@ class SaxoBroker:
         uic: int,
         side: str,
         qty: float,
+        order_price: float,
         trailing_distance: float,
         trailing_step: float,
+        ceiling_price: float | None = None,
         request_id: str | None = None,
     ) -> PlacedOrder:
         """Place ONE native trailing entry stop (Saxo ``TrailingStopIfTraded``).
@@ -726,14 +728,21 @@ class SaxoBroker:
         precheck, then ONE POST with x-request-id = ``request_id``. No parent /
         no ``Orders`` array => relation=StandAlone; ``exit_order_ids`` is empty.
 
-        ``trailing_distance`` is the absolute price distance to the market and
-        ``trailing_step`` the tick step the server ratchets by — BOTH REQUIRED
-        (their omission, not the trailing fields, caused every P1 first-round
-        400). They pass through verbatim: the tick-floor at placement (memo §6)
-        needs the live market price and is the executor's job (PR-T2b), NOT the
-        adapter's. ``OrderDuration`` is MANDATORY DayOrder (G1). Pass a
-        DETERMINISTIC ``request_id`` so a crash-window re-POST hits Saxo's 15 s
-        dedup instead of resting a second trail; ``None`` mints a fresh uuid4.
+        ``order_price`` is the INITIAL trigger — REQUIRED (probe fact 2: its
+        omission returns 400 "OrderPrice must be set for orders that are not of
+        type Market"). ``trailing_distance`` is the absolute price distance to
+        the market and ``trailing_step`` the tick step the server ratchets by —
+        BOTH REQUIRED. ``ceiling_price`` is the OPTIONAL G1 gap-through clamp:
+        probe fact 1 proved the SAME native order retains a ``StopLimitPrice``
+        field, so passing it makes ONE combined trailing-LIMIT (the executor
+        always passes it; ``None`` leaves a plain trailing stop with no ceiling).
+        Every price is tick-aligned here (probe fact 3): ``order_price`` /
+        ``ceiling_price`` quantize to the nearest tick, ``trailing_distance`` /
+        ``trailing_step`` round to whole ticks flooring at >= 1 tick so a small
+        d never rounds to zero (memo §6). ``OrderDuration`` is MANDATORY DayOrder
+        (G1). Pass a DETERMINISTIC ``request_id`` so a crash-window re-POST hits
+        Saxo's 15 s dedup instead of resting a second trail; ``None`` mints a
+        fresh uuid4.
         """
         _require_order_side(side)
         if os.environ.get(ALLOW_ORDERS_ENV) != "1":
@@ -745,7 +754,15 @@ class SaxoBroker:
         with _translate_saxo_errors():
             account_key = self._resolve_account_key()
             body = self._build_trailing_stop_body(
-                uic, side, qty, trailing_distance, trailing_step, client_request_id, account_key
+                uic,
+                side,
+                qty,
+                order_price,
+                trailing_distance,
+                trailing_step,
+                ceiling_price,
+                client_request_id,
+                account_key,
             )
             self._precheck_or_raise(body, label=f"trailing-stop Uic {uic} {client_request_id}")
             status, payload = self._client.place_order(body, request_id=client_request_id)
@@ -756,12 +773,20 @@ class SaxoBroker:
         uic: int,
         side: str,
         qty: float,
+        order_price: float,
         trailing_distance: float,
         trailing_step: float,
+        ceiling_price: float | None,
         client_request_id: str,
         account_key: str,
     ) -> dict[str, Any]:
-        """Native ``TrailingStopIfTraded`` body — no Orders array, DayOrder (G1)."""
+        """Native ``TrailingStopIfTraded`` body — no Orders array, DayOrder (G1).
+
+        All prices are tick-aligned here (probe fact 3, matching
+        :meth:`_build_stop_limit_body`'s quantize idiom): the trigger and the
+        optional ceiling quantize to the nearest tick, distance/step round to
+        whole ticks flooring at >= 1 tick.
+        """
         asset_type = "Stock"  # MVP scope: single-name equities only
         details = self._client.get_instrument_details(uic, asset_type)
         supported = details.get("SupportedOrderTypes") or []
@@ -776,19 +801,49 @@ class SaxoBroker:
         ):
             if not math.isfinite(value) or value <= 0:
                 raise OrderRejectedError(f"{label} must be a finite number > 0, got {value}")
-        return {
+        trigger_q = self._quantize_price(order_price, details, label="order_price")
+        tick = self._tick_size_for(trigger_q, details)
+        distance_q = self._floor_to_whole_ticks(trailing_distance, tick)
+        step_q = self._floor_to_whole_ticks(trailing_step, tick)
+        body: dict[str, Any] = {
             "Uic": int(uic),
             "AssetType": asset_type,
             "AccountKey": account_key,
             "Amount": qty,
             "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
             "OrderType": _TRAILING_STOP_ORDER_TYPE,
-            _TRAILING_STOP_DISTANCE_FIELD: trailing_distance,
-            _TRAILING_STOP_STEP_FIELD: trailing_step,
+            "OrderPrice": trigger_q,
+            _TRAILING_STOP_DISTANCE_FIELD: distance_q,
+            _TRAILING_STOP_STEP_FIELD: step_q,
             "OrderDuration": {"DurationType": _ENTRY_TRAIL_DURATION},
             "ManualOrder": execution_policy._MANUAL_ORDER,
             "ExternalReference": client_request_id,
         }
+        if ceiling_price is not None:
+            ceiling_q = self._quantize_price(ceiling_price, details, label="ceiling_price")
+            # Directional clamp sanity (memo G1), same rule as _build_stop_limit_body:
+            # a BUY ceiling caps the fill AT or ABOVE the trigger (ceiling >= trigger).
+            if (side == "BUY" and ceiling_q < trigger_q) or (
+                side == "SELL" and ceiling_q > trigger_q
+            ):
+                direction = ">=" if side == "BUY" else "<="
+                raise OrderRejectedError(
+                    f"inverted trailing-limit clamp for {side}: trigger {trigger_q}, "
+                    f"ceiling {ceiling_q} (a {side} clamp needs the ceiling {direction} "
+                    "the trigger)"
+                )
+            body[_STOP_LIMIT_PRICE_FIELD] = ceiling_q
+        return body
+
+    @staticmethod
+    def _floor_to_whole_ticks(value: float, tick: float) -> float:
+        """Round ``value`` to a whole number of ticks, flooring at >= 1 tick.
+
+        The trailing distance/step must be tick multiples (probe fact 3) but a
+        distance below one tick would round to zero and invalidate the trail
+        (memo §6) — so the result is never smaller than a single tick."""
+        rounded = round(round(value / tick) * tick, 10)
+        return max(tick, rounded)
 
     def place_stop_limit(
         self,

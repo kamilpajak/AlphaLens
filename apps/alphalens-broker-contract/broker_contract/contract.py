@@ -419,10 +419,14 @@ class SupportsTrailingStop(Protocol):
     - :meth:`place_trailing_stop` — a standalone native trailing BUY stop
       (Saxo ``TrailingStopIfTraded``) whose trigger the BROKER ratchets DOWN
       following new lows and fires on the d-bounce, with ZERO client amends
-      (SIM+LIVE-probed, §4b P1). ``trailing_distance`` is the absolute price
-      distance to the market and ``trailing_step`` the tick step the server
-      ratchets by — BOTH are REQUIRED on the wire (their omission, not the
-      trailing fields, caused every first-round 400).
+      (SIM+LIVE-probed, §4b P1). ``order_price`` is the initial trigger and is
+      REQUIRED (probe fact 2: its omission returns 400). ``trailing_distance``
+      is the absolute price distance to the market and ``trailing_step`` the
+      tick step the server ratchets by — BOTH REQUIRED. ``ceiling_price`` is
+      the OPTIONAL G1 gap-clamp: probe fact 1 proved the SAME native order
+      retains a ``StopLimitPrice`` field, so ONE combined trailing-LIMIT order
+      carries both the trail fields and the ceiling (``None`` = a plain trail).
+      The adapter tick-aligns every price (probe fact 3).
     - :meth:`place_stop_limit` — the G1 gap-through ceiling clamp (§3 G1): a
       stop-family BUY becomes a MARKET order on trigger, so an overnight gap /
       halt-reopen could fill with no ceiling; a ``StopLimit`` BUY (§4b P7,
@@ -455,8 +459,10 @@ class SupportsTrailingStop(Protocol):
         uic: int,
         side: str,
         qty: float,
+        order_price: float,
         trailing_distance: float,
         trailing_step: float,
+        ceiling_price: float | None = None,
         request_id: str | None = None,
     ) -> PlacedOrder: ...
 
