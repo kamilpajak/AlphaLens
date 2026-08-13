@@ -138,13 +138,23 @@ class WatchState(enum.Enum):
     WATCHING = "watching"
     TOUCHED = "touched"
     WOULD_FIRE = "would_fire"
+    # PR-T2b: the native Saxo trailing order is RESTING at the broker — the
+    # server owns the ratchet + fire. Terminal for the pure engine (the bot no
+    # longer drives touch/trough/fire); the wire monitors the fill via reconcile.
+    TRAIL_ARMED = "trail_armed"
     SUSPENDED = "suspended"
     EXPIRED = "expired"
     CANCELLED = "cancelled"
 
 
 _TERMINAL_STATES = frozenset(
-    {WatchState.WOULD_FIRE, WatchState.SUSPENDED, WatchState.EXPIRED, WatchState.CANCELLED}
+    {
+        WatchState.WOULD_FIRE,
+        WatchState.TRAIL_ARMED,
+        WatchState.SUSPENDED,
+        WatchState.EXPIRED,
+        WatchState.CANCELLED,
+    }
 )
 
 
@@ -229,9 +239,16 @@ class EntryTierWatcher:
         *,
         seeded_trough: float | None = None,
         initial_state: WatchState = WatchState.WATCHING,
+        native_trail: bool = False,
     ) -> None:
         self._config = config
         self._state = initial_state
+        # PR-T2b: in native mode a real Saxo trailing order is placed by the wire
+        # at TOUCH and the SERVER ratchets + fires — so the engine must NOT
+        # self-fire (the would-fire branch is suppressed; the watch waits in
+        # TOUCHED for the wire to arm the order out-of-band). Default False keeps
+        # the PR-T1 dry-run self-fire the engine unit tests exercise directly.
+        self._native_trail = native_trail
         self._trough = EntryTroughTracker(seeded_trough=seeded_trough)
         # Wall-clock of the last FRESH reading — the staleness-gap reference.
         self._last_fresh_now: dt.datetime | None = None
@@ -336,6 +353,13 @@ class EntryTierWatcher:
                 )
             )
             return TickResult(tuple(intents), (self._suspend_alert(),), self._state)
+
+        if self._native_trail:
+            # Native executor (PR-T2b): the resting Saxo trailing order is the
+            # fire event, not the bot. Stay in TOUCHED tracking the trough (for
+            # measurement + the wire's touch reference) — the wire places the
+            # order and transitions the tier to TRAIL_ARMED out-of-band.
+            return TickResult(tuple(intents), (), self._state)
 
         trigger = self._trigger()
         fire_blocked = stale_gap or self._awaiting_fresh_low
