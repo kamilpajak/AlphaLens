@@ -1016,6 +1016,13 @@ _ENTRY_BPS_DENOMINATOR = 10_000
 measurement stamp (mirrors ``entry_trail_watcher._BPS_DENOMINATOR``; a local
 copy keeps this module from importing a private engine constant)."""
 
+_ENTRY_REARM_MARKER = "awaiting_fresh_low"
+"""The truthy flag the reconcile pass stamps on a RE-ARM ``watch_open`` line
+(memo §5 CRITICAL-2): the reconstructed watcher seeds ``awaiting_fresh_low`` from
+it so the open-check blocks the fresh arm until a NEW post-open low forms. Absent
+on a first-time watch_open (a fresh watch tracks its trough in-session, no stale
+carried trigger to guard)."""
+
 
 @dataclass
 class _EntryWatchRuntime:
@@ -1389,6 +1396,10 @@ def _get_or_create_entry_runtime(
             initial_state=initial_state,
             # PR-T2b: the server ratchets + fires; the engine must not self-fire.
             native_trail=True,
+            # memo §5 CRITICAL-2: a re-armed tier carries the open-check marker on
+            # its re-appended watch_open, so it resumes with the arm BLOCKED until
+            # a fresh post-open low re-anchors the stale carried trigger.
+            awaiting_fresh_low=bool(record.get(_ENTRY_REARM_MARKER)),
         ),
         trough=seeded_trough,
     )
@@ -1691,6 +1702,13 @@ def _arm_native_trail(
     insufficient funds (G7 -> terminal-refuse so it never spams retries)."""
     broker = deps.broker
     if not isinstance(broker, SupportsTrailingStop) or not _entry_trail_orders_allowed():
+        return
+    # memo §5 CRITICAL-2 open-check: a re-armed tier (a DayOrder cancelled at the
+    # prior session close) carries a STALE overnight trough — block the fresh arm
+    # until a NEW post-open low re-anchors the trigger, so the stale trigger is
+    # never handed to the broker into a gap. The tier stays TOUCHED and re-attempts
+    # every tick; the engine clears the flag the tick a fresh low forms.
+    if runtime.watcher.awaiting_fresh_low:
         return
     trough = runtime.trough if runtime.trough is not None else reference
     geo = entry_trail_geometry.compute_trailing_order_geometry(

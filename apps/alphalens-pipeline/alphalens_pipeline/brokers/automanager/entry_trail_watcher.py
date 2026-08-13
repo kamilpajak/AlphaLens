@@ -240,6 +240,7 @@ class EntryTierWatcher:
         seeded_trough: float | None = None,
         initial_state: WatchState = WatchState.WATCHING,
         native_trail: bool = False,
+        awaiting_fresh_low: bool = False,
     ) -> None:
         self._config = config
         self._state = initial_state
@@ -252,10 +253,13 @@ class EntryTierWatcher:
         self._trough = EntryTroughTracker(seeded_trough=seeded_trough)
         # Wall-clock of the last FRESH reading — the staleness-gap reference.
         self._last_fresh_now: dt.datetime | None = None
-        # memo §5 CRITICAL-2: after a session boundary, block the would-fire
-        # until a NEW post-open low forms (a fresh bounce reference), so the
-        # stale carried trigger is never handed to the market into a gap.
-        self._awaiting_fresh_low = False
+        # memo §5 CRITICAL-2: after a session boundary, block the would-fire /
+        # native arm until a NEW post-open low forms (a fresh bounce reference),
+        # so the stale carried trigger is never handed to the market into a gap.
+        # A re-armed tier is RECONSTRUCTED with this seeded True (the wire reads
+        # :attr:`awaiting_fresh_low` before it places the native order), which is
+        # equivalent to a ``session_boundary`` tick with no live-boundary plumbing.
+        self._awaiting_fresh_low = awaiting_fresh_low
 
     @classmethod
     def open_watch(
@@ -297,6 +301,15 @@ class EntryTierWatcher:
     @property
     def is_terminal(self) -> bool:
         return self._state in _TERMINAL_STATES
+
+    @property
+    def awaiting_fresh_low(self) -> bool:
+        """True while the open-check blocks the native arm (memo §5 CRITICAL-2):
+        a re-armed tier carries a stale overnight trough, so the wire places no
+        order until a FRESH post-open low re-anchors the trigger. Cleared the tick
+        a new running low forms (the clear runs before the native-mode return, so
+        it fires even when the engine never reaches the would-fire branch)."""
+        return self._awaiting_fresh_low
 
     def process(self, tick: TickInput) -> TickResult:
         """Advance the watch by one decision tick and return the intents.
