@@ -81,7 +81,7 @@ from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 if TYPE_CHECKING:
     import threading
 
-    from broker_contract.contract import Broker
+    from broker_contract.contract import Broker, OrderState
     from broker_contract.price_feed import PriceFeed
     from broker_contract.sizing import TpTranchePlan
 
@@ -1313,6 +1313,12 @@ def _advance_one_entry_watch(
         return
     price = _entry_watch_reference_price(feed, record)
     result = runtime.watcher.process(entry_trail_watcher.TickInput(now=now, price=price))
+    # G6/G9 (memo §3): a SUSPENDED/EXPIRED terminal must never leave a resting
+    # -entry- order alive on the book. Cancel-then-verify it BEFORE the terminal
+    # is persisted — a fill that raced the cancel becomes `fired`, not the clock/
+    # depth terminal (the fill is already covered by the fire-arm planned line).
+    if _terminal_leaves_a_resting_order(result):
+        result = _finalize_entry_terminal_vs_broker(deps, crid, result, report)
     _persist_entry_watch_result(crid, record, runtime, result, now, price, d_bps)
     # PR-T2b native arm: once TOUCHED (with a trustworthy price) PLACE the resting
     # Saxo trailing-LIMIT order out-of-band — the server ratchets + fires from
@@ -1472,20 +1478,30 @@ def _persist_entry_watch_result(
             payload["touch_ts"] = runtime.touch_ts
         line: dict[str, Any] = {"kind": intent.kind, "crid": intent.crid, **payload}
         if intent.kind in entry_trails.ENTRY_TRAIL_TERMINAL_KINDS:
-            line["measurement"] = _entry_measurement_blob(record, runtime, d_bps)
+            # A `fired` line (the G6 cancel-then-verify rewrite) carries the real
+            # order id; every other terminal leaves it null (the offline reconcile
+            # join fills it — memo §5 / T1d "join by order id").
+            line["measurement"] = _entry_measurement_blob(
+                record, runtime, d_bps, order_id=payload.get("order_id")
+            )
         entry_trails.append_entry_trail_line(line)
 
 
 def _entry_measurement_blob(
-    record: Mapping[str, Any], runtime: _EntryWatchRuntime, d_bps: int
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    d_bps: int,
+    *,
+    order_id: str | None = None,
 ) -> dict[str, Any]:
     """The per-tier terminal measurement stamp (memo §5 / T1d): the variant-A
     entry (``tier_limit``), the touch price/ts, the final trough, the would-be
-    trigger ``trough*(1+d)``, the order id (NULL in the dry run — filled offline
-    from reconcile once T2 places a real order), and the ``entry_mode`` cohort
-    tag (T8 poolability). Follows the ``tranche_fired`` telemetry-blob shape so
-    the offline exec_quality join can compute concession / implied ΔR / fill-
-    rate loss later."""
+    trigger ``trough*(1+d)``, the order id (the REAL id on a ``fired`` line the
+    G6 cancel-then-verify wrote; NULL on the other terminals — the offline
+    reconcile join fills those by order id), and the ``entry_mode`` cohort tag
+    (T8 poolability). Follows the ``tranche_fired`` telemetry-blob shape so the
+    offline exec_quality join can compute concession / implied ΔR / fill-rate
+    loss later."""
     trough = runtime.trough
     trigger = None if trough is None else trough * (1.0 + d_bps / _ENTRY_BPS_DENOMINATOR)
     limit = record.get("limit")
@@ -1495,7 +1511,7 @@ def _entry_measurement_blob(
         "touch_ts": runtime.touch_ts,
         "final_trough": trough,
         "would_be_trigger": trigger,
-        "order_id": None,
+        "order_id": order_id,
         "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
     }
 
@@ -1754,6 +1770,108 @@ def _handle_arm_failure(
         f"entry-trail:arm-fail:{crid}",
     ):
         report.alerts += 1
+
+
+# The engine terminals that can strand a resting native order at the broker: a
+# tier that hit a G9 deep-decline (SUSPENDED) or its TTL window (EXPIRED) while
+# still arm-in-progress (a G3 null-id write-ahead whose POST rested at the broker
+# but whose id-journal was lost). WOULD_FIRE never occurs in native mode and
+# CANCELLED is only reached through the KILL / insufficient-funds paths, which do
+# their own broker cancel — so neither needs the cancel-then-verify here.
+_RESTING_BEARING_TERMINALS = frozenset(
+    {entry_trail_watcher.WatchState.SUSPENDED, entry_trail_watcher.WatchState.EXPIRED}
+)
+
+
+def _terminal_leaves_a_resting_order(result: entry_trail_watcher.TickResult) -> bool:
+    """Whether this tick's engine terminal (SUSPENDED/EXPIRED) could have left a
+    native ``-entry-`` order resting at the broker (memo §3 G6/G9)."""
+    return result.state in _RESTING_BEARING_TERMINALS
+
+
+def _read_entry_order(broker: Broker, order_id: str) -> OrderState | None:
+    """Re-read one order for the cancel-then-verify (memo §3 G6). ``None`` on any
+    doubt (a ``BrokerError`` reading the book) — a verify we cannot complete must
+    not manufacture a phantom ``fired``; the cancel already reduced exposure."""
+    try:
+        return broker.get_order(order_id)
+    except BrokerError as exc:
+        logger.warning(
+            "entry-trail terminal: get_order(%s) failed for the fill re-read (%s)", order_id, exc
+        )
+        return None
+
+
+def _entry_order_filled_qty(state: OrderState | None) -> float | None:
+    """The FILLED quantity of a re-read order, or ``None`` when it is not (yet)
+    filled. A ``FILLED``/``PARTIALLY_FILLED`` status means the cancel raced a
+    fill (memo §3 G6/G8): the tier is a ``fired`` fill, not the clock/depth
+    terminal it became in the engine."""
+    from broker_contract.contract import OrderStatus
+
+    if state is None:
+        return None
+    if state.status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+        return None
+    filled = state.filled_quantity
+    return float(filled) if isinstance(filled, (int, float)) and filled > 0 else None
+
+
+def _finalize_entry_terminal_vs_broker(
+    deps: LoopDeps,
+    crid: str,
+    result: entry_trail_watcher.TickResult,
+    report: TickReport,
+) -> entry_trail_watcher.TickResult:
+    """Cancel-then-verify a resting ``-entry-`` order before its SUSPENDED/EXPIRED
+    terminal is journaled (memo §3 G6/G9).
+
+    Returns the (possibly rewritten) tick result: unchanged when no order rests
+    (the common path), or with the terminal intent REWRITTEN to ``fired`` when the
+    re-read shows the cancel raced a fill (the fill is already covered by the
+    fire-arm planned disaster line — journalling ``suspended``/``expired`` against
+    a live fill would be the G6 violation). The cancel itself is best-effort +
+    risk-reducing (ungated by ALLOW_ORDERS, like the KILL cancel)."""
+    broker = deps.broker
+    if not isinstance(broker, SupportsTrailingStop):
+        return result  # a non-trailing broker never armed — nothing can rest
+    fire_rid = _entry_fire_request_id(crid)
+    existing = _find_working_entry_order(broker, fire_rid)
+    if existing is None:
+        return result  # nothing resting — the terminal stands as the engine set it
+    # Cancel FIRST, then re-read (memo §3 G6 cancel-then-verify).
+    _cancel_orders_best_effort(broker, [existing], ticker=f"entry-trail:{result.state.value}")
+    filled_qty = _entry_order_filled_qty(_read_entry_order(broker, existing))
+    if filled_qty is not None:
+        return _entry_terminal_rewritten_as_fired(crid, result, existing, filled_qty)
+    if deps.alert_throttled(
+        f"entry-trail {crid}: cancelled resting trail {existing} on {result.state.value}",
+        f"entry-trail:terminal-cancel:{crid}",
+    ):
+        report.alerts += 1
+    return result
+
+
+def _entry_terminal_rewritten_as_fired(
+    crid: str,
+    result: entry_trail_watcher.TickResult,
+    order_id: str,
+    filled_qty: float,
+) -> entry_trail_watcher.TickResult:
+    """Swap the SUSPENDED/EXPIRED terminal intent for a ``fired`` one carrying the
+    real order id + realized qty (memo §5 ``fired{realized_qty}`` / G6). Any
+    non-terminal intent this tick (e.g. the suspend tick's ``trough``) is kept."""
+    rewritten = tuple(
+        entry_trail_watcher.JournalIntent(
+            crid=crid,
+            kind=entry_trails.KIND_FIRED,
+            payload={"order_id": order_id, "realized_qty": filled_qty},
+        )
+        if intent.kind in entry_trails.ENTRY_TRAIL_TERMINAL_KINDS
+        else intent
+        for intent in result.journal_intents
+    )
+    return entry_trail_watcher.TickResult(rewritten, result.alerts, result.state)
 
 
 def _execute_action(

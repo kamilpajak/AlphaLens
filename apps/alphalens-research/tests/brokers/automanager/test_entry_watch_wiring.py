@@ -94,6 +94,7 @@ class _RecordingBroker:
         self.trailing_orders: list[dict[str, Any]] = []
         self.stop_limits: list[tuple] = []
         self.open_orders: list[Any] = []  # OrderState-like, for list_open_orders
+        self.order_states: dict[str, Any] = {}  # order_id -> OrderState-like, for get_order
         self._next_id = 0
 
     def get_account(self) -> Any:
@@ -151,6 +152,14 @@ class _RecordingBroker:
 
     def list_open_orders(self) -> list[Any]:
         return self.open_orders
+
+    def get_order(self, order_id: str) -> Any:
+        from broker_contract.contract import BrokerError
+
+        state = self.order_states.get(order_id)
+        if state is None:
+            raise BrokerError(f"unknown order {order_id}")
+        return state
 
 
 class _FakeFeed:
