@@ -3857,6 +3857,35 @@ class TestSellOrdersAlreadyExistDefersNotCrashes(unittest.TestCase):
         self.assertEqual(broker.cancelled, [], "old stop NOT cancelled when the new place fails")
 
 
+class TestEntryTrailNeverNaked(unittest.TestCase):
+    """PR-T2b never-naked: the planned disaster-SL line the entry-trail executor
+    writes at FIRE-ARM is the SAME shape the normal path writes, so when the
+    resting native trailing order FILLS into a Position the UNCHANGED protection
+    pass (build_protection_view + reconcile_protection) places the covering SELL
+    disaster stop — zero new protection code."""
+
+    def test_fill_of_an_armed_trail_yields_a_disaster_stop(self) -> None:
+        with TemporaryDirectory() as d:
+            journal = Path(d) / "standalone_stops.jsonl"
+            with mock.patch.object(cl, "_standalone_stop_journal_path", lambda: journal):
+                # 1) fire-arm writes the planned disaster-SL line (never-naked).
+                cl._journal_entry_planned_disaster(
+                    {"disaster_stop": 216.48, "tier_index": 0},
+                    _UIC,
+                    "KO-2026-07-20-entry-t0-fire",
+                )
+                # 2) the trail fills -> a naked long Position at the uic, no sell leg.
+                broker = _ProtBroker(positions=[_pos(46.0)], by_uic={_UIC: _pos(46.0)})
+                # 3) the UNCHANGED protection pass derives the covering stop.
+                view = cl.build_protection_view(broker, [])
+                actions = cl.reconcile_protection(view)
+        places = [a for a in actions if isinstance(a, PlaceStop)]
+        self.assertEqual(len(places), 1, "the filled trail is covered by a disaster stop")
+        self.assertEqual(places[0].uic, _UIC)
+        self.assertEqual(places[0].side, "SELL")
+        self.assertEqual(places[0].stop_price, 216.48, "the brief disaster floor from fire-arm")
+
+
 class TestExecutePlaceStopJournalsStopPlaced(unittest.TestCase):
     """A successful standalone-stop placement journals a timestamped ``stop_placed``
     outcome record (observability-only: fill-to-protection latency for the non-OCO
