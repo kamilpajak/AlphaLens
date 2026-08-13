@@ -117,6 +117,16 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
         # resting-limit bracket (the whole point of the feature).
         self.assertEqual(len(broker.trailing_orders), 1)
         self.assertEqual(broker.brackets, [], "no resting-limit entry order under the trail")
+        # The ONE combined trailing-LIMIT carries the G1 ceiling (StopLimitPrice),
+        # an initial trigger above the touch bid, and non-zero trail fields — the
+        # whole native V1 shape, end to end through run_once.
+        order = broker.trailing_orders[0]
+        self.assertEqual(order["side"], "BUY")
+        self.assertGreater(order["order_price"], 10.0, "the trigger sits above the touch bid")
+        self.assertIsNotNone(order["ceiling_price"], "G1: the gap-through ceiling is set")
+        self.assertGreaterEqual(order["ceiling_price"], order["order_price"])
+        self.assertGreater(order["trailing_distance"], 0.0)
+        self.assertGreater(order["trailing_step"], 0.0)
         kinds = [line["kind"] for line in _lines(path)]
         self.assertEqual(kinds.count(entry_trails.KIND_WATCH_OPEN), 1)
         self.assertIn(entry_trails.KIND_TOUCHED, kinds)
