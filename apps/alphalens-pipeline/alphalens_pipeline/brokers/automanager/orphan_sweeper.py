@@ -64,8 +64,22 @@ def _journal_index(journal: Iterable[Mapping[str, Any]]) -> tuple[set[str], set[
     return known_order_ids, known_refs
 
 
-def sweep(broker: Broker, journal: Iterable[Mapping[str, Any]]) -> list[Orphan]:
-    """Flag open orders/positions at the broker that the journal never recorded."""
+def sweep(
+    broker: Broker,
+    journal: Iterable[Mapping[str, Any]],
+    *,
+    entry_trail_ref_marker: str | None = None,
+) -> list[Orphan]:
+    """Flag open orders/positions at the broker that the journal never recorded.
+
+    ``entry_trail_ref_marker`` (PR-T2b): a resting native trailing ENTRY order is
+    journaled to ``entry_trails.jsonl`` (NOT this submission journal), so its id
+    is absent from ``known_order_ids`` and it would raise a FALSE orphan alert on
+    every restart. Its ``ExternalReference`` carries this marker (the ``-entry-``
+    family), so a BUY order whose reference contains it is a KNOWN entry-trail
+    order — recognised by the deterministic reference even inside the G3
+    write-ahead window before its id is journaled. ``None`` keeps the old
+    behaviour (no entry-trail feature)."""
     known_order_ids, known_refs = _journal_index(journal)
     orphans: list[Orphan] = []
     for state in broker.list_open_orders():
@@ -81,6 +95,12 @@ def sweep(broker: Broker, journal: Iterable[Mapping[str, Any]]) -> list[Orphan]:
             # reverts to the OLD false positive (a noisy but harmless alert) — never
             # a missed genuine orphan.
             continue
+        if (
+            entry_trail_ref_marker
+            and state.external_reference
+            and entry_trail_ref_marker in state.external_reference
+        ):
+            continue  # a known resting native trailing ENTRY order (PR-T2b)
         if str(state.order_id) not in known_order_ids:
             orphans.append(
                 Orphan(order_id=str(state.order_id), external_reference="", kind="order")

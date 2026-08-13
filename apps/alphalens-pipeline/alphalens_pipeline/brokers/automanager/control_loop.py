@@ -1207,14 +1207,17 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
     advances no state, writes no journal line and sends no alert — mirroring the
     drain's ``if not kill`` gate (:func:`run_once`), NOT the ungated live-exits
     pass (copying that would let entries progress under an emergency stop).
-    Working ``-entry-`` order cancellation on the KILL edge is a T2 concern — no
-    order exists in the dry run.
+    Under KILL the pass ALSO cancels every working ``-entry-`` family order
+    (memo §3 G2): cancelling is risk-reducing so it is UNGATED by ALLOW_ORDERS
+    (only PLACEMENT is gated), and it runs BEFORE the no-op return so an
+    emergency stop takes the resting native trails off the book.
 
     Unlike the protection pass this takes NO ``records`` parameter: the watch
     state lives in the SEPARATE ``entry_trails.jsonl`` journal, never the
     submissions journal (the same reason :func:`_run_live_exits_pass` omits it).
     A no-op when the flag is unset/0."""
     if kill:
+        _cancel_working_entry_orders(deps, report)
         return
     d_bps = entry_trails.entry_trail_bps()
     if d_bps <= 0:
@@ -1515,6 +1518,13 @@ def _entry_trail_orders_allowed() -> bool:
     return os.environ.get(safety.ALLOW_ORDERS_ENV) == "1"
 
 
+_ENTRY_ORDER_REF_MARKER = "-entry-t"
+"""The substring every entry-trail order ``ExternalReference`` carries (the crid
+is ``<ticker>-<briefdate>-entry-t<i>`` and the fire id appends ``-fire``). The
+KILL cancel + orphan sweep recognise a resting native ENTRY order by it (memo §3
+G2 / §5 -entry- family) — distinct from the exit-leg ``-stop`` / ``-tp`` refs."""
+
+
 def _entry_fire_request_id(crid: str) -> str:
     """The deterministic ``ExternalReference`` for a tier's native trailing order
     (memo §5 ``-entry-fire`` family). Deterministic so a crash-window re-POST hits
@@ -1522,6 +1532,41 @@ def _entry_fire_request_id(crid: str) -> str:
     already encodes ``ticker-briefdate-entry-t<i>``, so the suffix keeps the whole
     id inside the ``-entry-`` family the KILL cancel + orphan sweep recognise."""
     return f"{crid}-fire"
+
+
+def _cancel_working_entry_orders(deps: LoopDeps, report: TickReport) -> None:
+    """KILL cleanup (memo §3 G2): cancel every working ``-entry-`` family order.
+
+    Cancelling is risk-reducing, so it runs UNGATED by ALLOW_ORDERS (only
+    PLACEMENT is gated) and independent of the flag. Best-effort + BROADLY
+    guarded: a broker that cannot list its open orders — or the bare ``object()``
+    broker some tests wire — is a silent no-op, never a crash that would starve
+    the rest of the KILL tick. Only entry-side (BUY / unknown) orders qualify;
+    the protective SELL disaster stop is left in place under KILL."""
+    broker = deps.broker
+    try:
+        working = [
+            state
+            for state in broker.list_open_orders()
+            if state.external_reference
+            and _ENTRY_ORDER_REF_MARKER in state.external_reference
+            and state.side != _DISASTER_STOP_SIDE
+        ]
+    # Broad on purpose (mirrors the orphan sweep / feed-build boundaries): a
+    # list failure or a broker without the method must degrade to no-op.
+    except Exception as exc:
+        logger.debug("KILL entry-trail cancel: could not list open orders (%s)", exc)
+        return
+    if not working:
+        return
+    cancelled = _cancel_orders_best_effort(
+        broker, [state.order_id for state in working], ticker="KILL:entry-trail"
+    )
+    if cancelled and deps.alert_throttled(
+        f"KILL — cancelled {cancelled} working entry-trail order(s)",
+        "entry-trail:kill-cancel",
+    ):
+        report.alerts += 1
 
 
 def _journal_trail_armed(crid: str, *, order_id: str | None, trigger: float) -> None:
@@ -2102,7 +2147,9 @@ def build_default_deps(
         execute_protection=_make_protection_executor(
             broker, throttle, place_oco_exit=oco_placer, amend_stop=amend_placer
         ),
-        sweep_orphans_fn=lambda b: orphan_sweeper.sweep(b, _read_records()),
+        sweep_orphans_fn=lambda b: orphan_sweeper.sweep(
+            b, _read_records(), entry_trail_ref_marker=_ENTRY_ORDER_REF_MARKER
+        ),
         alert=base_alert,
         alert_throttled=_throttled,
         place_oco_exit=oco_placer,

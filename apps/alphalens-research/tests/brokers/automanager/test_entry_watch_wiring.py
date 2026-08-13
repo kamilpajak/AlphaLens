@@ -637,6 +637,33 @@ class TestEntryWatchPassKillGate(unittest.TestCase):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
         self.assertEqual(_lines(path), before)
 
+    def test_kill_cancels_working_entry_family_orders(self) -> None:
+        # Memo §3 G2: under KILL the pass cancels every working -entry- family
+        # order (cancelling is risk-reducing, ungated by ALLOW_ORDERS) — but
+        # leaves the protective SELL disaster stop in place.
+        prices: dict[int, float | None] = {307: 10.0}
+        broker = _RecordingBroker()
+        broker.open_orders = [
+            type(
+                "OS",
+                (),
+                {
+                    "order_id": "TR-1",
+                    "external_reference": "KO-2026-07-20-entry-t0-fire",
+                    "side": "BUY",
+                },
+            )(),
+            type(
+                "OS",
+                (),
+                {"order_id": "SELL-STOP", "external_reference": "rid-0-stop", "side": "SELL"},
+            )(),
+        ]
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=True, report=cl.TickReport())
+        self.assertEqual(broker.cancels, ["TR-1"], "only the -entry- BUY order is cancelled")
+
 
 if __name__ == "__main__":
     unittest.main()

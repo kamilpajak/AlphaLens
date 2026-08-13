@@ -15,7 +15,9 @@ from alphalens_pipeline.brokers.automanager.orphan_sweeper import Orphan, sweep
 from broker_contract.contract import OrderState, OrderStatus
 
 
-def _order_state(order_id: str, *, side: str | None = None) -> OrderState:
+def _order_state(
+    order_id: str, *, side: str | None = None, external_reference: str | None = None
+) -> OrderState:
     return OrderState(
         order_id=order_id,
         status=OrderStatus.WORKING,
@@ -23,6 +25,7 @@ def _order_state(order_id: str, *, side: str | None = None) -> OrderState:
         filled_quantity=0.0,
         raw_status="",
         side=side,
+        external_reference=external_reference,
     )
 
 
@@ -109,6 +112,35 @@ class OrphanSweeperTests(unittest.TestCase):
         self.assertEqual(
             sweep(broker, [_record()]),
             [Orphan(order_id="BUY-ENTRY-9", external_reference="", kind="order")],
+        )
+
+    def test_resting_entry_trail_order_is_not_an_orphan_with_marker(self) -> None:
+        # PR-T2b: a resting native trailing ENTRY order is journaled to
+        # entry_trails.jsonl (NOT this submission journal), so its id is unknown
+        # here. Its ExternalReference carries the -entry- marker, so passing the
+        # marker recognises it and suppresses the false orphan alert on restart.
+        broker = _OrdersOnlyStubBroker(
+            open_orders=[
+                _order_state("TR-1", side="BUY", external_reference="KO-2026-07-20-entry-t0-fire"),
+                _order_state("BUY-ENTRY-9", side="BUY"),  # a genuine unjournaled entry
+            ]
+        )
+        self.assertEqual(
+            sweep(broker, [_record()], entry_trail_ref_marker="-entry-t"),
+            [Orphan(order_id="BUY-ENTRY-9", external_reference="", kind="order")],
+        )
+
+    def test_entry_trail_order_still_flagged_without_marker(self) -> None:
+        # Without the marker (feature off) the old behaviour holds — the
+        # unknown-id order is flagged. Proves the recognition is opt-in.
+        broker = _OrdersOnlyStubBroker(
+            open_orders=[
+                _order_state("TR-1", side="BUY", external_reference="KO-2026-07-20-entry-t0-fire"),
+            ]
+        )
+        self.assertEqual(
+            sweep(broker, [_record()]),
+            [Orphan(order_id="TR-1", external_reference="", kind="order")],
         )
 
 
