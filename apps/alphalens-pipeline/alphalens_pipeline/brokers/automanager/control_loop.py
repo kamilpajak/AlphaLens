@@ -1973,10 +1973,16 @@ def _reconcile_one_armed_tier(
     now: dt.datetime,
     report: TickReport,
 ) -> None:
-    """Resolve ONE resting armed tier's order and, on a FILL, write its terminal
-    ``fired`` line. Per-tier fault isolation: an order id that cannot be re-read /
-    resolved is a no-op this tick (retry next tick — never a fabricated
-    terminal)."""
+    """Resolve ONE resting armed tier's order and act on its outcome:
+
+    - a FILL -> the terminal ``fired`` line (releasing the reservation + un-jamming
+      capacity, Finding 1);
+    - a DayOrder gone UNFILLED (resolve -> EXPIRED / CANCELLED at the session
+      close) -> RE-ARM within the ORIGINAL TTL, or terminal ``expired`` past it
+      (Finding 2 / memo §5 CRITICAL-2, delegated to
+      :func:`_rearm_or_expire_gone_tier`);
+    - still resting, or an ambiguous / unreadable order -> a no-op this tick (retry
+      next tick — never a fabricated terminal, memo §3 G6)."""
     order_id = tier_state.armed_order_id
     if order_id is None:  # defensive — _resting_armed_tiers already filtered
         return
@@ -1993,9 +1999,11 @@ def _reconcile_one_armed_tier(
     outcome = _resolve_entry_order_outcome(broker, order_id)
     filled_qty = _entry_order_filled_qty(outcome)
     if filled_qty is None:
-        # EXPIRED / CANCELLED / still-unresolved UNKNOWN -> the Rearm phase
-        # (Finding 2) owns this tier; NEVER write a terminal against a re-armable /
-        # ambiguous order id (memo §3 G6 / §5 CRITICAL-2).
+        # A GONE-but-UNFILLED order: the DayOrder cancelled at the session close.
+        # The Rearm path (Finding 2 / memo §5 CRITICAL-2) re-admits it within the
+        # ORIGINAL TTL or expires it past window_end — NEVER a fabricated fill; a
+        # still-unresolved UNKNOWN defers (verify-before-terminal, memo §3 G6).
+        _rearm_or_expire_gone_tier(deps, crid, tier_state, outcome, d_bps, now, report)
         return
     _journal_entry_fired(
         crid,
@@ -2082,8 +2090,8 @@ def _entry_reconcile_measurement(
     tier_state: entry_trails.EntryTrailTierState,
     d_bps: int,
     *,
-    order_id: str,
-    realized_qty: float,
+    order_id: str | None,
+    realized_qty: float | None,
     avg_price: float | None,
 ) -> dict[str, Any]:
     """The terminal measurement stamp for a RECONCILED fill (memo §5 / T1d),
@@ -2109,6 +2117,132 @@ def _entry_reconcile_measurement(
         "realized_qty": realized_qty,
         "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
     }
+
+
+# --- PR-T2b overnight DayOrder-cancel -> next-session re-arm (Finding 2) ------
+#
+# A native trailing entry is a DayOrder — it cancels at the session close. Left
+# frozen, a 7-day-TTL trailing entry silently degrades to a single-session order.
+# When the fill-reconcile above sees a resting armed order GONE-but-UNFILLED it
+# hands the tier here: within the ORIGINAL TTL window re-arm it (re-admit to the
+# watch pass with the trough carried + the open-check armed), past window_end
+# expire it (release the reservation). NEVER a fabricated fill, never a window
+# extension (memo §5 CRITICAL-2 + TTL "one rule").
+
+
+def _rearm_or_expire_gone_tier(
+    deps: LoopDeps,
+    crid: str,
+    tier_state: entry_trails.EntryTrailTierState,
+    outcome: OrderState | None,
+    d_bps: int,
+    now: dt.datetime,
+    report: TickReport,
+) -> None:
+    """A resting armed DayOrder that DISAPPEARED unfilled (memo §5 CRITICAL-2).
+
+    Only a DEFINITIVE non-fill terminal (resolve -> EXPIRED / CANCELLED = the
+    DayOrder cancelled at the session close) drives the transition; an UNKNOWN /
+    unresolved outcome is a no-op this tick (retry) — never presume expiry over a
+    still-materialising fill from an ambiguous audit read (memo §3 G6 / trap #5).
+
+    Within the ORIGINAL TTL window the tier RE-ARMS (re-append watch_open — arm
+    state reset, trough carried, open-check armed — so the next session re-admits
+    it); PAST ``window_end`` it is terminal ``expired`` (the re-arm NEVER extends
+    the window, memo §5 TTL "one rule"), which releases the virtual reservation."""
+    if not _gone_order_is_definitely_unfilled(outcome):
+        return  # UNKNOWN / unresolved -> defer, never fabricate a re-arm or expiry
+    window_end = _entry_window_end(tier_state)
+    if window_end is None:
+        return  # corrupt/absent TTL -> cannot re-arm or expire safely (alarm state)
+    if now >= window_end:
+        _journal_entry_expired(crid, tier_state, d_bps, now)
+        if deps.alert_throttled(
+            f"entry-trail {crid}: TTL window closed with no fill -> expired",
+            f"entry-trail:expired:{crid}",
+        ):
+            report.alerts += 1
+        return
+    _journal_entry_rearm(crid, tier_state)
+    if deps.alert_throttled(
+        f"entry-trail {crid}: DayOrder cancelled at close -> re-armed (trough carried)",
+        f"entry-trail:rearm:{crid}",
+    ):
+        report.alerts += 1
+
+
+def _gone_order_is_definitely_unfilled(outcome: OrderState | None) -> bool:
+    """A DEFINITIVE non-fill terminal for a DISAPPEARED armed order (memo §5): the
+    DayOrder cancelled/expired at the session close. ``UNKNOWN`` / ``None`` (an
+    audit row not-in-retention, or a ``BrokerError`` on resolve) is NOT definitive
+    — the caller defers rather than presume expiry over a still-materialising fill
+    (memo §3 G6 / trap #5). A ``FILLED``/``PARTIALLY_FILLED`` outcome never reaches
+    here (the fill path handled it)."""
+    from broker_contract.contract import OrderStatus
+
+    return outcome is not None and outcome.status in (OrderStatus.EXPIRED, OrderStatus.CANCELLED)
+
+
+def _entry_window_end(tier_state: entry_trails.EntryTrailTierState) -> dt.datetime | None:
+    """The ORIGINAL TTL ``window_end`` from the tier's carried watch_open (memo §5
+    "one rule"), or ``None`` when it is missing / unparseable — the tier is then
+    unreconstructable, so the caller neither re-arms nor expires it (an alarm state
+    surfaced by the watch pass / monitoring, never a fabricated terminal)."""
+    raw = (tier_state.watch_open or {}).get("window_end")
+    if raw is None:
+        return None
+    try:
+        return dt.datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "entry-trail rearm: crid=%s has an unparseable window_end %r — deferring",
+            tier_state.crid,
+            raw,
+        )
+        return None
+
+
+def _journal_entry_rearm(crid: str, tier_state: entry_trails.EntryTrailTierState) -> None:
+    """Re-admit a DayOrder-cancelled tier to the watch pass (memo §5 CRITICAL-2):
+    re-append its carried ``watch_open`` (the SAME reservation + wire fields) with
+    the open-check marker set.
+
+    The fold then resets ``latest_kind`` -> ``watch_open`` (re-admitted to
+    :func:`_active_entry_watches`, dropped from :func:`_resting_armed_tiers`) AND
+    ``armed_order_id`` -> ``None`` (a re-opened watch owns no resting order);
+    ``min_trough`` is preserved automatically (it is the historical minimum over
+    the whole crid). NON-terminal by construction — the virtual reservation keeps
+    counting (the tier is watching again) and it re-occupies watch capacity. The
+    deterministic crid + the fold's latest-watch_open-wins make the re-append
+    idempotent (a repeated re-arm never double-reserves)."""
+    record = dict(tier_state.watch_open or {})
+    record["kind"] = entry_trails.KIND_WATCH_OPEN
+    record["crid"] = crid
+    record[_ENTRY_REARM_MARKER] = True
+    entry_trails.append_entry_trail_line(record)
+
+
+def _journal_entry_expired(
+    crid: str, tier_state: entry_trails.EntryTrailTierState, d_bps: int, now: dt.datetime
+) -> None:
+    """Terminal ``expired`` for a DayOrder gone unfilled PAST the ORIGINAL
+    ``window_end`` (memo §5 TTL "one rule" — the re-arm never extends the window).
+
+    Releases the virtual reservation (the fold's ``terminal_kind`` ->
+    ``watching_virtual_gross_acct`` skips the tier) and un-jams capacity in ONE
+    write; carries the reconcile measurement with a null fill (no order id, no
+    realized qty). Idempotent: once terminal the tier is excluded from
+    :func:`_resting_armed_tiers` next pass."""
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_EXPIRED,
+            "crid": crid,
+            "ts": now.isoformat(),
+            "measurement": _entry_reconcile_measurement(
+                tier_state, d_bps, order_id=None, realized_qty=None, avg_price=None
+            ),
+        }
+    )
 
 
 def _execute_action(
