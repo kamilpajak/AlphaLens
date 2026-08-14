@@ -50,7 +50,7 @@ def _seed_watch(
             "exchange_mic": "XNYS",
             "next_tier_limit": next_tier_limit,
             "pick_key": "KO:2026-07-20",
-            "entry_mode": "entry-trail-dryrun-d50-testcfg",
+            "entry_mode": "entry-trail-native-d50-testcfg",
         }
     )
 
@@ -67,24 +67,25 @@ def _terminal(path: Path, kind: str) -> dict:
     return matches[0]
 
 
-class TestFiredMeasurementBlob(unittest.TestCase):
-    def test_would_fire_stamps_full_measurement(self) -> None:
+class TestNativeModeNoFabricatedFire(unittest.TestCase):
+    def test_native_touch_tracking_writes_no_fired_line(self) -> None:
+        # PR-T2b: with an object() broker the arm is a no-op (not trailing-
+        # capable), so a bounce that WOULD have fired in the dry run leaves NO
+        # fabricated `fired` line — the server, not the bot, is the fire event.
+        # The touch/trough are still journaled (measurement source).
         path = _journal(self)
         _seed_watch(path)
         prices: dict[int, float | None] = {}
         deps = _watch_deps(_FakeFeed(prices), [])
         _run(deps, 10.0, prices)  # touch @ limit, trough=10.0
         _run(deps, 9.90, prices)  # new low, trough=9.90
-        _run(deps, 9.95, prices)  # bounce -> would fire
+        _run(deps, 9.95, prices)  # bounce — would have fired in dry run
 
-        blob = _terminal(path, entry_trails.KIND_FIRED)["measurement"]
-        self.assertEqual(blob["tier_limit"], 10.0)
-        self.assertEqual(blob["final_trough"], 9.90)
-        self.assertAlmostEqual(blob["would_be_trigger"], 9.90 * 1.005)
-        self.assertEqual(blob["touch_price"], 10.0)
-        self.assertIsNotNone(blob["touch_ts"])
-        self.assertIsNone(blob["order_id"], "DRY-RUN: no order id — filled offline once T2 arms")
-        self.assertEqual(blob["entry_mode"], "entry-trail-dryrun-d50-testcfg")
+        kinds = [line["kind"] for line in _lines(path)]
+        self.assertIn(entry_trails.KIND_TOUCHED, kinds)
+        self.assertIn(entry_trails.KIND_TROUGH, kinds)
+        self.assertNotIn(entry_trails.KIND_FIRED, kinds)
+        self.assertNotIn(entry_trails.KIND_TRAIL_ARMED, kinds)
 
 
 class TestTouchedLineCarriesTouchPrice(unittest.TestCase):
@@ -124,7 +125,7 @@ class TestExpiredMeasurementBlob(unittest.TestCase):
         blob = _terminal(path, entry_trails.KIND_EXPIRED)["measurement"]
         self.assertEqual(blob["tier_limit"], 10.0)
         self.assertIsNone(blob["order_id"])
-        self.assertEqual(blob["entry_mode"], "entry-trail-dryrun-d50-testcfg")
+        self.assertEqual(blob["entry_mode"], "entry-trail-native-d50-testcfg")
 
 
 if __name__ == "__main__":

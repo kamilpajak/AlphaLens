@@ -77,15 +77,25 @@ def _acct() -> Any:
     return type("A", (), {"total_value": 100_000.0, "currency": "USD"})()
 
 
+def _placed(order_id: str) -> Any:
+    return type("Placed", (), {"entry_order_id": order_id, "exit_order_ids": ()})()
+
+
 class _RecordingBroker:
-    """Records every order-facing call so a test can assert NONE happened on the
-    flag-ON dry-run path."""
+    """Records every order-facing call. A SupportsTrailingStop (PR-T2b): it can
+    place the native trailing-LIMIT entry order the executor arms at TOUCH, so a
+    test can assert exactly one trailing order + NO resting-limit bracket."""
 
     def __init__(self) -> None:
         self.brackets: list[Any] = []
         self.stops: list[Any] = []
         self.amends: list[Any] = []
         self.cancels: list[str] = []
+        self.trailing_orders: list[dict[str, Any]] = []
+        self.stop_limits: list[tuple] = []
+        self.open_orders: list[Any] = []  # OrderState-like, for list_open_orders
+        self.order_states: dict[str, Any] = {}  # order_id -> OrderState-like, for get_order
+        self._next_id = 0
 
     def get_account(self) -> Any:
         return _acct()
@@ -95,11 +105,11 @@ class _RecordingBroker:
 
     def place_bracket_order(self, bracket: Any) -> Any:
         self.brackets.append(bracket)
-        return type("Placed", (), {"entry_order_id": "E-1", "exit_order_ids": ()})()
+        return _placed("E-1")
 
     def place_standalone_stop(self, *a: Any, **k: Any) -> Any:
         self.stops.append((a, k))
-        return type("Placed", (), {"entry_order_id": "S-1", "exit_order_ids": ()})()
+        return _placed("S-1")
 
     def amend_stop_amount(self, *a: Any, **k: Any) -> Any:
         self.amends.append((a, k))
@@ -107,6 +117,49 @@ class _RecordingBroker:
 
     def cancel_order(self, order_id: str) -> None:
         self.cancels.append(order_id)
+
+    def place_trailing_stop(
+        self,
+        uic: int,
+        side: str,
+        qty: float,
+        order_price: float,
+        trailing_distance: float,
+        trailing_step: float,
+        ceiling_price: float | None = None,
+        request_id: str | None = None,
+    ) -> Any:
+        self._next_id += 1
+        order_id = f"TR-{self._next_id}"
+        self.trailing_orders.append(
+            {
+                "uic": uic,
+                "side": side,
+                "qty": qty,
+                "order_price": order_price,
+                "trailing_distance": trailing_distance,
+                "trailing_step": trailing_step,
+                "ceiling_price": ceiling_price,
+                "request_id": request_id,
+                "order_id": order_id,
+            }
+        )
+        return _placed(order_id)
+
+    def place_stop_limit(self, *a: Any, **k: Any) -> Any:
+        self.stop_limits.append((a, k))
+        return _placed("SL-1")
+
+    def list_open_orders(self) -> list[Any]:
+        return self.open_orders
+
+    def get_order(self, order_id: str) -> Any:
+        from broker_contract.contract import BrokerError
+
+        state = self.order_states.get(order_id)
+        if state is None:
+            raise BrokerError(f"unknown order {order_id}")
+        return state
 
 
 class _FakeFeed:
@@ -127,6 +180,19 @@ def _journal(test: unittest.TestCase) -> Path:
     test.addCleanup(d.cleanup)
     path = Path(d.name) / "entry_trails.jsonl"
     patcher = mock.patch.object(entry_trails, "_entry_trail_journal_path", lambda: path)
+    patcher.start()
+    test.addCleanup(patcher.stop)
+    return path
+
+
+def _planned_journal(test: unittest.TestCase) -> Path:
+    """Point the standalone-stop journal (where the never-naked ``planned``
+    disaster-SL line is written at fire-arm) at a temp file so an arming test can
+    inspect it AND nothing touches the real ~/.alphalens state."""
+    d = TemporaryDirectory()
+    test.addCleanup(d.cleanup)
+    path = Path(d.name) / "standalone_stops.jsonl"
+    patcher = mock.patch.object(cl, "_standalone_stop_journal_path", lambda: path)
     patcher.start()
     test.addCleanup(patcher.stop)
     return path
@@ -318,13 +384,13 @@ class TestDrainInterceptRoutesToWatch(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 
-def _watch_deps(feed: Any, alerts: list[tuple[str, str]]) -> cl.LoopDeps:
+def _watch_deps(feed: Any, alerts: list[tuple[str, str]], broker: Any = None) -> cl.LoopDeps:
     def _throttled(message: str, reason: str) -> bool:
         alerts.append((message, reason))
         return True
 
     return cl.LoopDeps(
-        broker=object(),
+        broker=object() if broker is None else broker,
         kill_file=Path("/nonexistent/KILL"),
         ensure_alive=lambda: type("C", (), {"alive": True, "reason": None})(),  # noqa: PLW0108
         iter_picks=lambda: iter([]),
@@ -364,75 +430,162 @@ def _seed_watch(
             "exchange_mic": "XNYS",
             "next_tier_limit": next_tier_limit,
             "pick_key": "KO:2026-07-20",
-            "entry_mode": "entry-trail-dryrun-d50-testcfg",
+            "entry_mode": "entry-trail-native-d50-testcfg",
+            "disaster_stop": 8.0,
+            "tier_index": 0,
         }
     )
 
 
-class TestEntryWatchPassStateMachine(unittest.TestCase):
-    def _run(self, deps: cl.LoopDeps, price: float | None, feed: dict[int, float | None]) -> None:
+_ALLOW = {_ENV: "50", entry_trails.ENTRY_TRAIL_BPS_ENV: "50", "ALPHALENS_BROKER_ALLOW_ORDERS": "1"}
+
+
+class TestEntryWatchPassNativeArm(unittest.TestCase):
+    """PR-T2b: the executor PLACES one native trailing-LIMIT order at TOUCH (the
+    server ratchets + fires) instead of the dry-run would-fire. No resting-limit
+    bracket, no fabricated fired line."""
+
+    def _run(
+        self,
+        deps: cl.LoopDeps,
+        price: float | None,
+        feed: dict[int, float | None],
+        env: dict[str, str] | None = None,
+    ) -> None:
         feed[307] = price
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+        with mock.patch.dict("os.environ", env or _ALLOW, clear=True):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
 
-    def test_watching_to_touched_to_would_fire(self) -> None:
+    def test_touch_places_exactly_one_native_trailing_order_no_resting_limit(self) -> None:
         path = _journal(self)
+        planned_path = _planned_journal(self)
         _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
         prices: dict[int, float | None] = {}
-        alerts: list[tuple[str, str]] = []
-        deps = _watch_deps(_FakeFeed(prices), alerts)
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
 
-        self._run(deps, 10.0, prices)  # touch @ limit, trough=10.0
-        self._run(deps, 9.90, prices)  # new low, trough=9.90
-        self._run(deps, 9.95, prices)  # bounce >= 9.90*1.005=9.9495 -> would fire
+        self._run(deps, 10.0, prices)  # touch @ limit -> ARM
 
-        kinds = [line["kind"] for line in _lines(path)]
-        self.assertIn(entry_trails.KIND_TOUCHED, kinds)
-        self.assertIn(entry_trails.KIND_TROUGH, kinds)
-        self.assertIn(entry_trails.KIND_TRAIL_ARMED, kinds)
-        # The dry-run would-fire alert fired ...
-        self.assertTrue(any("would fire" in m for m, _k in alerts))
-        # ... and a terminal `fired` line (entry_order_id=null — no order)
-        # closes the tier so it releases its reservation and never re-fires.
-        fired = [line for line in _lines(path) if line["kind"] == entry_trails.KIND_FIRED]
-        self.assertEqual(len(fired), 1)
-        self.assertIsNone(fired[0]["entry_order_id"])  # DRY-RUN: no order
+        # Exactly ONE native trailing order — and NO resting-limit / bracket /
+        # standalone-stop entry order.
+        self.assertEqual(len(broker.trailing_orders), 1)
+        self.assertEqual(broker.brackets, [])
+        self.assertEqual(broker.stops, [])
+        order = broker.trailing_orders[0]
+        self.assertEqual(order["side"], "BUY")
+        self.assertEqual(order["qty"], 100.0)
+        self.assertEqual(order["request_id"], "KO-2026-07-20-entry-t0-fire")
+        # The combined trailing-LIMIT carries the G1 ceiling and an initial trigger.
+        self.assertIsNotNone(order["ceiling_price"])
+        self.assertGreaterEqual(order["ceiling_price"], order["order_price"])
+        self.assertGreater(order["order_price"], 10.0)  # trigger sits above the bid
 
-    def test_resumed_would_fire_writes_exactly_one_fired_line(self) -> None:
-        # Regression guard (crash between the trail_armed line and the
-        # synthesized fired line): a watcher RESUMED in WOULD_FIRE writes the
-        # terminal fired line EXACTLY ONCE — after it the tier carries a
-        # terminal marker and leaves the active set, so no later tick can
-        # re-persist it. Critical for T2: a resumed WOULD_FIRE must never
-        # re-emit a fire.
+        # trail_armed line filled with the REAL order id (G3: null write-ahead
+        # first, then the real-id line — the fold's latest wins).
+        armed = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED]
+        self.assertEqual(armed[-1]["order_id"], "TR-1")
+        # NO fabricated fired line (native mode: the server is the fire event).
+        self.assertEqual([ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED], [])
+
+        # NEVER-NAKED: the planned disaster-SL line was written at FIRE-ARM, keyed
+        # to the resting order's ExternalReference, so a fill is covered by the
+        # existing protection pass.
+        planned = [json.loads(x) for x in planned_path.read_text().splitlines() if x]
+        planned = [p for p in planned if p.get("kind") == "planned"]
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(planned[0]["side"], "SELL")
+        self.assertEqual(planned[0]["stop_price"], 8.0)
+        self.assertEqual(planned[0]["client_request_id"], "KO-2026-07-20-entry-t0-fire")
+
+    def test_armed_tier_is_excluded_next_tick_and_never_re_places(self) -> None:
         path = _journal(self)
+        _planned_journal(self)
         _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
-        # A trail_armed line with NO following fired line == the crash window.
+        prices: dict[int, float | None] = {}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        self._run(deps, 10.0, prices)  # touch -> arm (order TR-1)
+        self._run(deps, 9.80, prices)  # armed tier is resting -> no re-arm
+        self._run(deps, 9.95, prices)  # still resting
+        self.assertEqual(len(broker.trailing_orders), 1, "the resting order is armed exactly once")
+
+    def test_arm_in_progress_null_id_adopts_the_working_order_no_double_place(self) -> None:
+        # G3 crash recovery: a trail_armed write-ahead line with a NULL id (POST
+        # done, id-journal lost) + the real order still resting at the broker.
+        # On the next TOUCHED tick the executor ADOPTS it (by ExternalReference),
+        # never resting a second trail.
+        path = _journal(self)
+        _planned_journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
         entry_trails.append_entry_trail_line(
             {
                 "kind": entry_trails.KIND_TRAIL_ARMED,
                 "crid": "KO-2026-07-20-entry-t0",
-                "trigger": 9.95,
+                "order_id": None,
             }
         )
+        broker = _RecordingBroker()
+        broker.open_orders = [
+            type(
+                "OS",
+                (),
+                {"order_id": "TR-EXISTING", "external_reference": "KO-2026-07-20-entry-t0-fire"},
+            )()
+        ]
         prices: dict[int, float | None] = {}
-        deps = _watch_deps(_FakeFeed(prices), [])
-        self._run(deps, 9.95, prices)  # resume tick: one fired line written
-        self._run(deps, 9.96, prices)  # tier now terminal -> not re-persisted
-        fired = [line for line in _lines(path) if line["kind"] == entry_trails.KIND_FIRED]
-        self.assertEqual(len(fired), 1)
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        self._run(deps, 9.95, prices)  # resume arm-in-progress -> adopt, no POST
+        self.assertEqual(broker.trailing_orders, [], "adopting must not POST a second order")
+        armed = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED]
+        self.assertEqual(armed[-1]["order_id"], "TR-EXISTING")
 
-    def test_deep_decline_suspends_below_next_tier(self) -> None:
+    def test_allow_orders_off_places_nothing_and_writes_no_write_ahead(self) -> None:
         path = _journal(self)
+        _planned_journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        prices: dict[int, float | None] = {}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        # Flag ON but ALLOW_ORDERS off: no POST, no write-ahead trail_armed line.
+        self._run(deps, 10.0, prices, env={_ENV: "50"})
+        self.assertEqual(broker.trailing_orders, [])
+        self.assertEqual(
+            [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED], []
+        )
+
+    def test_insufficient_funds_at_arm_refuses_the_tier_terminal(self) -> None:
+        from broker_contract.contract import OrderRejectedError
+
+        path = _journal(self)
+        _planned_journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        prices: dict[int, float | None] = {}
+        broker = _RecordingBroker()
+
+        def _reject(*_a: Any, **_k: Any) -> Any:
+            raise OrderRejectedError("no cash", error_code="InsufficientCash")
+
+        broker.place_trailing_stop = _reject  # type: ignore[method-assign]
+        alerts: list[tuple[str, str]] = []
+        deps = _watch_deps(_FakeFeed(prices), alerts, broker=broker)
+        self._run(deps, 10.0, prices)
+        cancelled = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED]
+        self.assertEqual(len(cancelled), 1, "insufficient funds terminal-refuses the tier (G7)")
+
+    def test_deep_decline_suspends_on_a_single_gap_down_tick_no_order(self) -> None:
+        # A gap-down tick that touches AND is already below the next tier suspends
+        # ON the touch tick (state=SUSPENDED, not TOUCHED) — so the executor never
+        # arms. No order placed.
+        path = _journal(self)
+        _planned_journal(self)
         _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=9.5)
         prices: dict[int, float | None] = {}
-        alerts: list[tuple[str, str]] = []
-        deps = _watch_deps(_FakeFeed(prices), alerts)
-        self._run(deps, 10.0, prices)  # touched
-        self._run(deps, 9.40, prices)  # below next tier 9.5 -> suspended
-        suspended = [line for line in _lines(path) if line["kind"] == entry_trails.KIND_SUSPENDED]
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        self._run(deps, 9.40, prices)  # touch + below next tier 9.5 -> suspend
+        self.assertEqual(broker.trailing_orders, [])
+        suspended = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_SUSPENDED]
         self.assertEqual(len(suspended), 1)
-        self.assertTrue(any("suspended" in m for m, _k in alerts))
 
     def test_ttl_expiry_terminates_even_without_a_fresh_price(self) -> None:
         path = _journal(self)
@@ -444,21 +597,29 @@ class TestEntryWatchPassStateMachine(unittest.TestCase):
             window_end="2000-01-01T00:00:00+00:00",  # already past
         )
         prices: dict[int, float | None] = {307: None}  # no price this tick
-        deps = _watch_deps(_FakeFeed(prices), [])
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
-        expired = [line for line in _lines(path) if line["kind"] == entry_trails.KIND_EXPIRED]
+        expired = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_EXPIRED]
         self.assertEqual(len(expired), 1)
+        self.assertEqual(broker.trailing_orders, [])
 
-    def test_no_broker_field_is_ever_touched_by_the_pass(self) -> None:
-        # The pass takes a bare object() broker in _watch_deps; if it tried any
-        # order call it would AttributeError. Drive a full would-fire.
+    def test_non_trailing_broker_never_gets_an_order_call(self) -> None:
+        # A broker without SupportsTrailingStop degrades safely: the arm is a
+        # no-op (the drain intercept would not have routed to a watch either).
         path = _journal(self)
         _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
         prices: dict[int, float | None] = {}
-        deps = _watch_deps(_FakeFeed(prices), [])
-        for price in (10.0, 9.90, 9.95):
-            self._run(deps, price, prices)  # no exception == no broker call
+        deps = _watch_deps(_FakeFeed(prices), [])  # broker=object()
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            for price in (10.0, 9.90, 9.95):
+                prices[307] = price
+                cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        # No exception (no order method called) and no trail_armed line.
+        self.assertEqual(
+            [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED], []
+        )
 
 
 class TestEntryWatchPassKillGate(unittest.TestCase):
@@ -484,6 +645,33 @@ class TestEntryWatchPassKillGate(unittest.TestCase):
         with mock.patch.dict("os.environ", {}, clear=True):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
         self.assertEqual(_lines(path), before)
+
+    def test_kill_cancels_working_entry_family_orders(self) -> None:
+        # Memo §3 G2: under KILL the pass cancels every working -entry- family
+        # order (cancelling is risk-reducing, ungated by ALLOW_ORDERS) — but
+        # leaves the protective SELL disaster stop in place.
+        prices: dict[int, float | None] = {307: 10.0}
+        broker = _RecordingBroker()
+        broker.open_orders = [
+            type(
+                "OS",
+                (),
+                {
+                    "order_id": "TR-1",
+                    "external_reference": "KO-2026-07-20-entry-t0-fire",
+                    "side": "BUY",
+                },
+            )(),
+            type(
+                "OS",
+                (),
+                {"order_id": "SELL-STOP", "external_reference": "rid-0-stop", "side": "SELL"},
+            )(),
+        ]
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=True, report=cl.TickReport())
+        self.assertEqual(broker.cancels, ["TR-1"], "only the -entry- BUY order is cancelled")
 
 
 if __name__ == "__main__":

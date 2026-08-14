@@ -138,13 +138,23 @@ class WatchState(enum.Enum):
     WATCHING = "watching"
     TOUCHED = "touched"
     WOULD_FIRE = "would_fire"
+    # PR-T2b: the native Saxo trailing order is RESTING at the broker — the
+    # server owns the ratchet + fire. Terminal for the pure engine (the bot no
+    # longer drives touch/trough/fire); the wire monitors the fill via reconcile.
+    TRAIL_ARMED = "trail_armed"
     SUSPENDED = "suspended"
     EXPIRED = "expired"
     CANCELLED = "cancelled"
 
 
 _TERMINAL_STATES = frozenset(
-    {WatchState.WOULD_FIRE, WatchState.SUSPENDED, WatchState.EXPIRED, WatchState.CANCELLED}
+    {
+        WatchState.WOULD_FIRE,
+        WatchState.TRAIL_ARMED,
+        WatchState.SUSPENDED,
+        WatchState.EXPIRED,
+        WatchState.CANCELLED,
+    }
 )
 
 
@@ -229,16 +239,27 @@ class EntryTierWatcher:
         *,
         seeded_trough: float | None = None,
         initial_state: WatchState = WatchState.WATCHING,
+        native_trail: bool = False,
+        awaiting_fresh_low: bool = False,
     ) -> None:
         self._config = config
         self._state = initial_state
+        # PR-T2b: in native mode a real Saxo trailing order is placed by the wire
+        # at TOUCH and the SERVER ratchets + fires — so the engine must NOT
+        # self-fire (the would-fire branch is suppressed; the watch waits in
+        # TOUCHED for the wire to arm the order out-of-band). Default False keeps
+        # the PR-T1 dry-run self-fire the engine unit tests exercise directly.
+        self._native_trail = native_trail
         self._trough = EntryTroughTracker(seeded_trough=seeded_trough)
         # Wall-clock of the last FRESH reading — the staleness-gap reference.
         self._last_fresh_now: dt.datetime | None = None
-        # memo §5 CRITICAL-2: after a session boundary, block the would-fire
-        # until a NEW post-open low forms (a fresh bounce reference), so the
-        # stale carried trigger is never handed to the market into a gap.
-        self._awaiting_fresh_low = False
+        # memo §5 CRITICAL-2: after a session boundary, block the would-fire /
+        # native arm until a NEW post-open low forms (a fresh bounce reference),
+        # so the stale carried trigger is never handed to the market into a gap.
+        # A re-armed tier is RECONSTRUCTED with this seeded True (the wire reads
+        # :attr:`awaiting_fresh_low` before it places the native order), which is
+        # equivalent to a ``session_boundary`` tick with no live-boundary plumbing.
+        self._awaiting_fresh_low = awaiting_fresh_low
 
     @classmethod
     def open_watch(
@@ -280,6 +301,15 @@ class EntryTierWatcher:
     @property
     def is_terminal(self) -> bool:
         return self._state in _TERMINAL_STATES
+
+    @property
+    def awaiting_fresh_low(self) -> bool:
+        """True while the open-check blocks the native arm (memo §5 CRITICAL-2):
+        a re-armed tier carries a stale overnight trough, so the wire places no
+        order until a FRESH post-open low re-anchors the trigger. Cleared the tick
+        a new running low forms (the clear runs before the native-mode return, so
+        it fires even when the engine never reaches the would-fire branch)."""
+        return self._awaiting_fresh_low
 
     def process(self, tick: TickInput) -> TickResult:
         """Advance the watch by one decision tick and return the intents.
@@ -337,6 +367,13 @@ class EntryTierWatcher:
             )
             return TickResult(tuple(intents), (self._suspend_alert(),), self._state)
 
+        if self._native_trail:
+            # Native executor (PR-T2b): the resting Saxo trailing order is the
+            # fire event, not the bot. Stay in TOUCHED tracking the trough (for
+            # measurement + the wire's touch reference) — the wire places the
+            # order and transitions the tier to TRAIL_ARMED out-of-band.
+            return TickResult(tuple(intents), (), self._state)
+
         trigger = self._trigger()
         fire_blocked = stale_gap or self._awaiting_fresh_low
         if trigger is not None and not fire_blocked and price >= trigger:
@@ -345,6 +382,15 @@ class EntryTierWatcher:
             return TickResult(tuple(intents), (self._would_fire_alert(trigger),), self._state)
 
         return TickResult(tuple(intents), (), self._state)
+
+    def mark_armed(self) -> None:
+        """Transition to TRAIL_ARMED after the wire places the native trailing
+        order (PR-T2b). Terminal for the engine — the resting order is the
+        broker's; the bot stops driving touch/trough/fire. A no-op once terminal
+        (a CANCELLED/SUSPENDED/EXPIRED tier must never be resurrected to armed)."""
+        if self.is_terminal:
+            return
+        self._state = WatchState.TRAIL_ARMED
 
     def cancel(self) -> TickResult:
         """Terminate the watch with a ``cancelled`` intent (KILL transition /

@@ -9,11 +9,19 @@ _handle_placement_response. NO caller is wired yet (inert until PR-T2b); this
 file pins the adapter surface in isolation.
 
 Wire facts are the SIM+LIVE-probed §4b P1/P7 set: OrderType=TrailingStopIfTraded
-with the REQUIRED TrailingStopDistanceToMarket + TrailingStopStep fields and a
-MANDATORY DayOrder OrderDuration (G1 — no trailing order lives through an
-overnight gap); the StopLimit BUY carries StopLimitPrice. Precheck LIES about
-price/type semantics (§4b P2/P6), so a wrong-side rejection is classified on the
-POST response only, never on a green precheck.
+with the REQUIRED OrderPrice (the initial trigger — probe fact 2: its OMISSION
+returns 400 "OrderPrice must be set for orders that are not of type Market") +
+TrailingStopDistanceToMarket + TrailingStopStep fields and a MANDATORY DayOrder
+OrderDuration (G1 — no trailing order lives through an overnight gap). Probe
+fact 1: the SAME native TrailingStopIfTraded order RETAINS a StopLimitPrice
+ceiling field — so ONE combined trailing-LIMIT order carries the trail fields
+AND the G1 ceiling (``ceiling_price`` -> StopLimitPrice). Probe fact 3: every
+price/distance/step MUST be tick-aligned or Saxo returns 400
+PriceNotInTickSizeIncrements — the adapter quantizes them (OrderPrice /
+StopLimitPrice via _quantize_price, distance/step floored to whole ticks >= 1
+tick so a small d never rounds to zero). Precheck LIES about price/type
+semantics (§4b P2/P6), so a wrong-side rejection is classified on the POST
+response only, never on a green precheck.
 """
 
 from __future__ import annotations
@@ -95,7 +103,15 @@ class TestSupportsTrailingStopProtocol(unittest.TestCase):
         # A trivial object with BOTH methods structurally satisfies the Protocol.
         class _Both:
             def place_trailing_stop(
-                self, uic, side, qty, trailing_distance, trailing_step, request_id=None
+                self,
+                uic,
+                side,
+                qty,
+                order_price,
+                trailing_distance,
+                trailing_step,
+                ceiling_price=None,
+                request_id=None,
             ):
                 return None
 
@@ -106,7 +122,15 @@ class TestSupportsTrailingStopProtocol(unittest.TestCase):
 
         class _OnlyTrail:  # missing place_stop_limit
             def place_trailing_stop(
-                self, uic, side, qty, trailing_distance, trailing_step, request_id=None
+                self,
+                uic,
+                side,
+                qty,
+                order_price,
+                trailing_distance,
+                trailing_step,
+                ceiling_price=None,
+                request_id=None,
             ):
                 return None
 
@@ -127,23 +151,32 @@ class TestSupportsTrailingStopProtocol(unittest.TestCase):
 
 
 class TestTrailingStopBody(unittest.TestCase):
-    def test_body_is_trailing_buy_with_distance_step_dayorder(self):
+    def test_body_is_trailing_buy_with_orderprice_distance_step_dayorder(self):
         broker, stub = _make(_StubTrailingClient())
         with mock.patch.dict("os.environ", _ALLOW):
             placed = broker.place_trailing_stop(
-                uic=307, side="BUY", qty=2, trailing_distance=0.05, trailing_step=0.01
+                uic=307,
+                side="BUY",
+                qty=2,
+                order_price=16.05,
+                trailing_distance=0.05,
+                trailing_step=0.01,
             )
         body, request_id = stub.place_calls[0]
         self.assertNotIn("Orders", body, "a standalone trailing stop carries NO Orders array")
-        self.assertNotIn("OrderPrice", body, "a trailing stop carries NO absolute price")
         self.assertEqual(body["Uic"], 307)
         self.assertEqual(body["AssetType"], "Stock")
         self.assertEqual(body["AccountKey"], "AK-1")
         self.assertEqual(body["OrderType"], "TrailingStopIfTraded")
         self.assertEqual(body["BuySell"], "Buy")
         self.assertEqual(body["Amount"], 2)
+        # Probe fact 2: OrderPrice (the initial trigger) is REQUIRED — its
+        # omission returns 400. It is tick-quantized like every other price.
+        self.assertEqual(body["OrderPrice"], 16.05, "OrderPrice is the initial trigger")
         self.assertEqual(body["TrailingStopDistanceToMarket"], 0.05)
         self.assertEqual(body["TrailingStopStep"], 0.01)
+        # A plain trailing stop (no ceiling passed) carries NO StopLimitPrice key.
+        self.assertNotIn("StopLimitPrice", body)
         self.assertEqual(
             body["OrderDuration"],
             {"DurationType": "DayOrder"},
@@ -155,12 +188,96 @@ class TestTrailingStopBody(unittest.TestCase):
         self.assertEqual(placed.exit_order_ids, ())
         self.assertIsInstance(placed, PlacedOrder)
 
+    def test_ceiling_price_becomes_stop_limit_price_one_combined_order(self):
+        # Probe fact 1: the SAME TrailingStopIfTraded order retains a
+        # StopLimitPrice ceiling — ONE combined trailing-LIMIT (trail fields +
+        # G1 ceiling), never two half-failing POSTs.
+        broker, stub = _make(_StubTrailingClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            broker.place_trailing_stop(
+                uic=307,
+                side="BUY",
+                qty=2,
+                order_price=16.05,
+                trailing_distance=0.05,
+                trailing_step=0.01,
+                ceiling_price=16.20,
+            )
+        body, _ = stub.place_calls[0]
+        self.assertEqual(body["OrderType"], "TrailingStopIfTraded")
+        self.assertEqual(body["OrderPrice"], 16.05)
+        self.assertEqual(body["TrailingStopDistanceToMarket"], 0.05)
+        self.assertEqual(body["TrailingStopStep"], 0.01)
+        self.assertEqual(body["StopLimitPrice"], 16.20, "the G1 ceiling caps the fill")
+
+    def test_prices_and_distance_step_are_tick_aligned(self):
+        # Probe fact 3: raw non-tick values -> 400 PriceNotInTickSizeIncrements.
+        # The adapter quantizes OrderPrice + StopLimitPrice to the nearest tick
+        # (0.01 here) and rounds distance/step to whole ticks.
+        broker, stub = _make(_StubTrailingClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            broker.place_trailing_stop(
+                uic=307,
+                side="BUY",
+                qty=2,
+                order_price=16.033,
+                trailing_distance=0.047,
+                trailing_step=0.006,
+                ceiling_price=16.238,
+            )
+        body, _ = stub.place_calls[0]
+        self.assertEqual(body["OrderPrice"], 16.03)
+        self.assertEqual(body["StopLimitPrice"], 16.24)
+        self.assertEqual(body["TrailingStopDistanceToMarket"], 0.05)
+        self.assertEqual(body["TrailingStopStep"], 0.01)
+
+    def test_distance_floors_at_one_tick_never_zero(self):
+        # A sub-tick distance must floor to >= 1 tick (0.01) — memo §6: the
+        # tick-round must never turn d into 0 (a zero-distance trail is invalid).
+        broker, stub = _make(_StubTrailingClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            broker.place_trailing_stop(
+                uic=307,
+                side="BUY",
+                qty=2,
+                order_price=16.05,
+                trailing_distance=0.003,
+                trailing_step=0.001,
+            )
+        body, _ = stub.place_calls[0]
+        self.assertEqual(body["TrailingStopDistanceToMarket"], 0.01)
+        self.assertEqual(body["TrailingStopStep"], 0.01)
+
+    def test_ceiling_below_trigger_rejected_pre_post(self):
+        # G1 directional clamp: a BUY ceiling caps AT or ABOVE the trigger
+        # (ceiling >= OrderPrice); a ceiling below it is malformed — reject at
+        # build, before wasting a POST.
+        broker, stub = _make(_StubTrailingClient())
+        with mock.patch.dict("os.environ", _ALLOW):
+            with self.assertRaises(OrderRejectedError) as ctx:
+                broker.place_trailing_stop(
+                    uic=307,
+                    side="BUY",
+                    qty=2,
+                    order_price=16.05,
+                    trailing_distance=0.05,
+                    trailing_step=0.01,
+                    ceiling_price=16.00,
+                )
+        self.assertIn("clamp", str(ctx.exception).lower())
+        self.assertEqual(stub.place_calls, [], "an inverted clamp must never POST")
+
     def test_successful_post_returns_the_order_id(self):
         stub = _StubTrailingClient(place_response=(201, {"OrderId": "T-4242"}))
         broker, _ = _make(stub)
         with mock.patch.dict("os.environ", _ALLOW):
             placed = broker.place_trailing_stop(
-                uic=307, side="BUY", qty=1, trailing_distance=0.05, trailing_step=0.01
+                uic=307,
+                side="BUY",
+                qty=1,
+                order_price=16.05,
+                trailing_distance=0.05,
+                trailing_step=0.01,
             )
         self.assertEqual(placed.entry_order_id, "T-4242")
         self.assertEqual(placed.exit_order_ids, ())
@@ -172,6 +289,7 @@ class TestTrailingStopBody(unittest.TestCase):
                 uic=307,
                 side="BUY",
                 qty=2,
+                order_price=16.05,
                 trailing_distance=0.05,
                 trailing_step=0.01,
                 request_id="rid-RIVN-entry-fire-1",
@@ -184,7 +302,12 @@ class TestTrailingStopBody(unittest.TestCase):
         broker, stub = _make(_StubTrailingClient())
         with mock.patch.dict("os.environ", _ALLOW):
             broker.place_trailing_stop(
-                uic=307, side="BUY", qty=2, trailing_distance=0.05, trailing_step=0.01
+                uic=307,
+                side="BUY",
+                qty=2,
+                order_price=16.05,
+                trailing_distance=0.05,
+                trailing_step=0.01,
             )
         _, request_id = stub.place_calls[0]
         uuid.UUID(request_id)
@@ -272,7 +395,12 @@ class TestTrailingStopSafety(unittest.TestCase):
             with self.subTest(env=env), mock.patch.dict("os.environ", env, clear=True):
                 with self.assertRaises(BrokerCapabilityError) as ctx:
                     broker.place_trailing_stop(
-                        uic=307, side="BUY", qty=2, trailing_distance=0.05, trailing_step=0.01
+                        uic=307,
+                        side="BUY",
+                        qty=2,
+                        order_price=16.05,
+                        trailing_distance=0.05,
+                        trailing_step=0.01,
                     )
                 self.assertIn(ALLOW_ORDERS_ENV, str(ctx.exception))
                 with self.assertRaises(BrokerCapabilityError):
@@ -291,7 +419,12 @@ class TestTrailingStopSafety(unittest.TestCase):
             with self.subTest(side=bad), mock.patch.dict("os.environ", _ALLOW):
                 with self.assertRaises(ValueError) as ctx:
                     broker.place_trailing_stop(
-                        uic=307, side=bad, qty=2, trailing_distance=0.05, trailing_step=0.01
+                        uic=307,
+                        side=bad,
+                        qty=2,
+                        order_price=16.05,
+                        trailing_distance=0.05,
+                        trailing_step=0.01,
                     )
                 self.assertIn("'BUY'", str(ctx.exception))
                 self.assertIn("'SELL'", str(ctx.exception))
@@ -309,7 +442,12 @@ class TestTrailingStopSafety(unittest.TestCase):
         with mock.patch.dict("os.environ", _ALLOW):
             with self.assertRaises(OrderRejectedError) as ctx:
                 broker.place_trailing_stop(
-                    uic=307, side="BUY", qty=2, trailing_distance=0.05, trailing_step=0.01
+                    uic=307,
+                    side="BUY",
+                    qty=2,
+                    order_price=16.05,
+                    trailing_distance=0.05,
+                    trailing_step=0.01,
                 )
         self.assertIn("TrailingStopIfTraded", str(ctx.exception))
         self.assertEqual(stub.place_calls, [], "unsupported type must never POST")
@@ -332,7 +470,12 @@ class TestTrailingStopSafety(unittest.TestCase):
             with self.subTest(distance=bad), mock.patch.dict("os.environ", _ALLOW):
                 with self.assertRaises(OrderRejectedError):
                     broker.place_trailing_stop(
-                        uic=307, side="BUY", qty=2, trailing_distance=bad, trailing_step=0.01
+                        uic=307,
+                        side="BUY",
+                        qty=2,
+                        order_price=16.05,
+                        trailing_distance=bad,
+                        trailing_step=0.01,
                     )
         self.assertEqual(stub.place_calls, [], "a garbage distance must never POST")
 
@@ -352,7 +495,12 @@ class TestTrailingStopSafety(unittest.TestCase):
         with mock.patch.dict("os.environ", _ALLOW):
             with self.assertRaises(OrderRejectedError) as ctx:
                 placed = broker.place_trailing_stop(
-                    uic=307, side="BUY", qty=2, trailing_distance=0.05, trailing_step=0.01
+                    uic=307,
+                    side="BUY",
+                    qty=2,
+                    order_price=16.05,
+                    trailing_distance=0.05,
+                    trailing_step=0.01,
                 )
                 self.assertIsNone(placed, "wrong-side must raise, never return")
         self.assertIn("OnWrongSideOfMarket", str(ctx.exception))
@@ -372,7 +520,12 @@ class TestTrailingStopSafety(unittest.TestCase):
         with mock.patch.dict("os.environ", _ALLOW):
             with self.assertRaises(OrderRejectedError):
                 broker.place_trailing_stop(
-                    uic=307, side="BUY", qty=2, trailing_distance=0.05, trailing_step=0.01
+                    uic=307,
+                    side="BUY",
+                    qty=2,
+                    order_price=16.05,
+                    trailing_distance=0.05,
+                    trailing_step=0.01,
                 )
         self.assertEqual(len(stub.place_calls), 1, "a green precheck must NOT skip the real POST")
 
@@ -392,7 +545,12 @@ class TestTrailingStopSafety(unittest.TestCase):
         with mock.patch.dict("os.environ", _ALLOW):
             with self.assertRaises(OrderRejectedError) as ctx:
                 broker.place_trailing_stop(
-                    uic=307, side="BUY", qty=2, trailing_distance=0.05, trailing_step=0.01
+                    uic=307,
+                    side="BUY",
+                    qty=2,
+                    order_price=16.05,
+                    trailing_distance=0.05,
+                    trailing_step=0.01,
                 )
         self.assertEqual(stub.precheck_calls[0].get("FieldGroups"), ["Costs"])
         self.assertEqual(stub.place_calls, [], "a failed precheck must block the real POST")

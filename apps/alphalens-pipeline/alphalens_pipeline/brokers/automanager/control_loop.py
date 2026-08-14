@@ -33,6 +33,7 @@ from broker_contract.contract import (
     SupportsAmendStop,
     SupportsOcoExit,
     SupportsStandaloneStop,
+    SupportsTrailingStop,
     _is_insufficient_funds,
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
@@ -44,6 +45,7 @@ from broker_contract.exit_geometry import (
 )
 
 from alphalens_pipeline.brokers.automanager import (
+    entry_trail_geometry,
     entry_trail_watcher,
     entry_trails,
     state_paths,
@@ -74,12 +76,13 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     advance,
     reconcile_protection,
 )
+from alphalens_pipeline.brokers.reconcile import SupportsOrderResolution
 from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 
 if TYPE_CHECKING:
     import threading
 
-    from broker_contract.contract import Broker
+    from broker_contract.contract import Broker, OrderState
     from broker_contract.price_feed import PriceFeed
     from broker_contract.sizing import TpTranchePlan
 
@@ -394,6 +397,23 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
 
     if sweep_orphans:
         _run_orphan_sweep(deps, report)
+
+    # PR-T2b fill-reconcile (Finding 1) MUST run BEFORE the placement drain: a
+    # native trail that filled appears in the broker positions immediately, but its
+    # tier stays NON-terminal in the fold until this pass writes the terminal
+    # `fired` line that releases the virtual gross reservation + un-jams watch
+    # capacity. If the drain's gross-cap / cash-floor check ran FIRST, the filled
+    # tier would be counted TWICE (once as a filled position, once as its still-live
+    # virtual reservation) — spuriously breaching the cap and PERMANENTLY refusing
+    # (`mark_refused`) another valid pick drained the same tick. Reconciling first
+    # releases the reservation so the drain counts it once. UNGATED by KILL (a fill
+    # during an emergency stop must still release + is covered by the fire-arm
+    # planned disaster line) and a no-op when the flag is unset/0; it writes ONLY
+    # terminals — never places — so this call site is unconditional (ahead of the
+    # placement gate). Running before the watch pass is safe: a tier armed THIS tick
+    # just placed a WORKING order (reconcile no-ops on it), so it only reconciles
+    # prior-tick resting orders.
+    _run_entry_trail_reconcile_pass(deps, report)
 
     if not kill and alive:
         _run_placement_drain(deps, report)
@@ -1004,6 +1024,13 @@ _ENTRY_BPS_DENOMINATOR = 10_000
 measurement stamp (mirrors ``entry_trail_watcher._BPS_DENOMINATOR``; a local
 copy keeps this module from importing a private engine constant)."""
 
+_ENTRY_REARM_MARKER = "awaiting_fresh_low"
+"""The truthy flag the reconcile pass stamps on a RE-ARM ``watch_open`` line
+(memo §5 CRITICAL-2): the reconstructed watcher seeds ``awaiting_fresh_low`` from
+it so the open-check blocks the fresh arm until a NEW post-open low forms. Absent
+on a first-time watch_open (a fresh watch tracks its trough in-session, no stale
+carried trigger to guard)."""
+
 
 @dataclass
 class _EntryWatchRuntime:
@@ -1035,13 +1062,15 @@ def _entry_watch_crid(ticker: str, brief_date: str, tier_index: int) -> str:
 
 
 def _entry_trail_mode_tag(d_bps: int) -> str:
-    """The measurement ``entry_mode`` cohort tag (memo §5 / T8): the dry-run
-    trailing mode + configured distance + the execution-config version, so
-    fills measured under different execution policies never pool in the offline
-    analysis join."""
+    """The measurement ``entry_mode`` cohort tag (memo §5 / T8): the native
+    trailing mode + configured distance + the execution-config version, so fills
+    measured under different execution policies never pool in the offline
+    analysis join. PR-T2b drops the ``dryrun`` token — a real native order rests
+    now — and the local trailing wire spellings join
+    ``execution_config_version()`` (broker.py comment §100-107)."""
     from alphalens_pipeline.brokers.execution import execution_config_version
 
-    return f"entry-trail-dryrun-d{d_bps}-{execution_config_version()}"
+    return f"entry-trail-native-d{d_bps}-{execution_config_version()}"
 
 
 def _entry_trail_eligible(plan: Any) -> bool:
@@ -1120,6 +1149,12 @@ def _open_entry_watches(
                 "next_tier_limit": None if next_limit is None else float(next_limit),
                 "pick_key": pick_key,
                 "entry_mode": mode_tag,
+                # PR-T2b never-naked (memo §5): the brief disaster-stop floor +
+                # the original tier_index, carried so the fire-arm executor can
+                # journal the `planned` disaster-SL line at placement (the plan
+                # PRICE the broker cannot know) WITHOUT re-running classify.
+                "disaster_stop": float(plan.disaster_stop),
+                "tier_index": int(tier.tier_index),
             }
         )
         opened += 1
@@ -1197,14 +1232,17 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
     advances no state, writes no journal line and sends no alert — mirroring the
     drain's ``if not kill`` gate (:func:`run_once`), NOT the ungated live-exits
     pass (copying that would let entries progress under an emergency stop).
-    Working ``-entry-`` order cancellation on the KILL edge is a T2 concern — no
-    order exists in the dry run.
+    Under KILL the pass ALSO cancels every working ``-entry-`` family order
+    (memo §3 G2): cancelling is risk-reducing so it is UNGATED by ALLOW_ORDERS
+    (only PLACEMENT is gated), and it runs BEFORE the no-op return so an
+    emergency stop takes the resting native trails off the book.
 
     Unlike the protection pass this takes NO ``records`` parameter: the watch
     state lives in the SEPARATE ``entry_trails.jsonl`` journal, never the
     submissions journal (the same reason :func:`_run_live_exits_pass` omits it).
     A no-op when the flag is unset/0."""
     if kill:
+        _cancel_working_entry_orders(deps, report)
         return
     d_bps = entry_trails.entry_trail_bps()
     if d_bps <= 0:
@@ -1234,11 +1272,20 @@ def _active_entry_watches(
     fold: entry_trails.EntryTrailFold,
 ) -> dict[str, Mapping[str, Any]]:
     """The non-terminal watch_open record per crid — the watches to advance this
-    tick. A tier with a terminal marker or no watch_open is excluded."""
+    tick. A tier with a terminal marker or no watch_open is excluded, and so is a
+    RESTING native order (PR-T2b): a ``trail_armed`` tier whose ``armed_order_id``
+    is set is owned by the broker (the server ratchets + fires; the fill is
+    monitored by reconcile), so the watch pass no longer drives it. An
+    arm-in-progress tier (``trail_armed`` with a NULL id — the G3 write-ahead
+    line before an unconfirmed POST) STAYS active so the executor re-drives it to
+    completion."""
     active: dict[str, Mapping[str, Any]] = {}
     for crid, state in fold.tiers.items():
-        if state.terminal_kind is None and state.watch_open is not None:
-            active[crid] = state.watch_open
+        if state.terminal_kind is not None or state.watch_open is None:
+            continue
+        if state.latest_kind == entry_trails.KIND_TRAIL_ARMED and state.armed_order_id is not None:
+            continue
+        active[crid] = state.watch_open
     return active
 
 
@@ -1291,7 +1338,19 @@ def _advance_one_entry_watch(
         return
     price = _entry_watch_reference_price(feed, record)
     result = runtime.watcher.process(entry_trail_watcher.TickInput(now=now, price=price))
+    # G6/G9 (memo §3): a SUSPENDED/EXPIRED terminal must never leave a resting
+    # -entry- order alive on the book. Cancel-then-verify it BEFORE the terminal
+    # is persisted — a fill that raced the cancel becomes `fired`, not the clock/
+    # depth terminal (the fill is already covered by the fire-arm planned line).
+    if _terminal_leaves_a_resting_order(result):
+        result = _finalize_entry_terminal_vs_broker(deps, crid, result, report)
     _persist_entry_watch_result(crid, record, runtime, result, now, price, d_bps)
+    # PR-T2b native arm: once TOUCHED (with a trustworthy price) PLACE the resting
+    # Saxo trailing-LIMIT order out-of-band — the server ratchets + fires from
+    # there. Re-attempted every TOUCHED tick until it arms (idempotent, dedup on
+    # the -entry- family per G3) or is terminal-refused (insufficient funds, G7).
+    if result.state is entry_trail_watcher.WatchState.TOUCHED and price is not None:
+        _arm_native_trail(deps, crid, record, runtime, price, d_bps, report)
     for alert in result.alerts:
         if deps.alert_throttled(alert.message, alert.throttle_key):
             report.alerts += 1
@@ -1337,17 +1396,44 @@ def _get_or_create_entry_runtime(
     if config is None:
         return None
     seeded_trough = tier_state.min_trough if tier_state is not None else None
-    initial_state = _entry_watch_state_from_kind(
-        tier_state.latest_kind if tier_state is not None else None
-    )
+    initial_state = _entry_watch_initial_state(tier_state)
     runtime = _EntryWatchRuntime(
         watcher=entry_trail_watcher.EntryTierWatcher(
-            config, seeded_trough=seeded_trough, initial_state=initial_state
+            config,
+            seeded_trough=seeded_trough,
+            initial_state=initial_state,
+            # PR-T2b: the server ratchets + fires; the engine must not self-fire.
+            native_trail=True,
+            # memo §5 CRITICAL-2: a re-armed tier carries the open-check marker on
+            # its re-appended watch_open, so it resumes with the arm BLOCKED until
+            # a fresh post-open low re-anchors the stale carried trigger.
+            awaiting_fresh_low=bool(record.get(_ENTRY_REARM_MARKER)),
         ),
         trough=seeded_trough,
     )
     deps.entry_watchers[crid] = runtime
     return runtime
+
+
+def _entry_watch_initial_state(
+    tier_state: entry_trails.EntryTrailTierState | None,
+) -> entry_trail_watcher.WatchState:
+    """Resolve the resumable watch state on reconstruction (PR-T2b restart).
+
+    A ``trail_armed`` tier resumes to a state that depends on whether its POST
+    was confirmed: a REAL ``armed_order_id`` -> TRAIL_ARMED (terminal, the broker
+    owns the resting order; a resting tier is already excluded from the active
+    set, but this is defensive if one is ever reconstructed); a NULL id (the G3
+    write-ahead line before an unconfirmed POST) -> TOUCHED, so the executor
+    re-drives the arm to completion. Any other kind resolves via
+    :func:`_entry_watch_state_from_kind`."""
+    if tier_state is None:
+        return entry_trail_watcher.WatchState.WATCHING
+    if tier_state.latest_kind == entry_trails.KIND_TRAIL_ARMED:
+        if tier_state.armed_order_id is not None:
+            return entry_trail_watcher.WatchState.TRAIL_ARMED
+        return entry_trail_watcher.WatchState.TOUCHED
+    return _entry_watch_state_from_kind(tier_state.latest_kind)
 
 
 def _entry_watch_config_from_record(
@@ -1401,13 +1487,13 @@ def _persist_entry_watch_result(
     the measurement blob (memo §5 Measurement / T1d). The running trough + touch
     marks are mirrored into the runtime as they pass, so a later-tick terminal
     can stamp them; the ``touched`` line ALSO carries the touch price/ts inline
-    (offline-join durability). The dry-run WOULD_FIRE additionally gets a
-    terminal ``fired`` line (``entry_order_id=null`` — no order placed) so the
-    fold marks the tier terminal: its virtual reservation releases and it can
-    never re-fire on restart (the engine emits only the non-terminal
-    ``trail_armed`` marker for the alert-only would-fire), and the offline
-    exec_quality join has a terminal stamp to match a real fill against once T2
-    arms."""
+    (offline-join durability).
+
+    PR-T2b: the engine never reaches WOULD_FIRE (native mode — the SERVER fires),
+    so there is no fabricated ``fired`` line here. The real ``trail_armed`` (with
+    the order id) and, on a fill, ``fired`` lines are written by the executor /
+    reconcile out of band; this function only persists the engine's own
+    touch/trough/suspend/expire/cancel intents."""
     for intent in result.journal_intents:
         payload = dict(intent.payload)
         if intent.kind == entry_trails.KIND_TROUGH:
@@ -1421,29 +1507,30 @@ def _persist_entry_watch_result(
             payload["touch_ts"] = runtime.touch_ts
         line: dict[str, Any] = {"kind": intent.kind, "crid": intent.crid, **payload}
         if intent.kind in entry_trails.ENTRY_TRAIL_TERMINAL_KINDS:
-            line["measurement"] = _entry_measurement_blob(record, runtime, d_bps)
+            # A `fired` line (the G6 cancel-then-verify rewrite) carries the real
+            # order id; every other terminal leaves it null (the offline reconcile
+            # join fills it — memo §5 / T1d "join by order id").
+            line["measurement"] = _entry_measurement_blob(
+                record, runtime, d_bps, order_id=payload.get("order_id")
+            )
         entry_trails.append_entry_trail_line(line)
-    if result.state is entry_trail_watcher.WatchState.WOULD_FIRE:
-        entry_trails.append_entry_trail_line(
-            {
-                "kind": entry_trails.KIND_FIRED,
-                "crid": crid,
-                "entry_order_id": None,
-                "measurement": _entry_measurement_blob(record, runtime, d_bps),
-            }
-        )
 
 
 def _entry_measurement_blob(
-    record: Mapping[str, Any], runtime: _EntryWatchRuntime, d_bps: int
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    d_bps: int,
+    *,
+    order_id: str | None = None,
 ) -> dict[str, Any]:
     """The per-tier terminal measurement stamp (memo §5 / T1d): the variant-A
     entry (``tier_limit``), the touch price/ts, the final trough, the would-be
-    trigger ``trough*(1+d)``, the order id (NULL in the dry run — filled offline
-    from reconcile once T2 places a real order), and the ``entry_mode`` cohort
-    tag (T8 poolability). Follows the ``tranche_fired`` telemetry-blob shape so
-    the offline exec_quality join can compute concession / implied ΔR / fill-
-    rate loss later."""
+    trigger ``trough*(1+d)``, the order id (the REAL id on a ``fired`` line the
+    G6 cancel-then-verify wrote; NULL on the other terminals — the offline
+    reconcile join fills those by order id), and the ``entry_mode`` cohort tag
+    (T8 poolability). Follows the ``tranche_fired`` telemetry-blob shape so the
+    offline exec_quality join can compute concession / implied ΔR / fill-rate
+    loss later."""
     trough = runtime.trough
     trigger = None if trough is None else trough * (1.0 + d_bps / _ENTRY_BPS_DENOMINATOR)
     limit = record.get("limit")
@@ -1453,9 +1540,717 @@ def _entry_measurement_blob(
         "touch_ts": runtime.touch_ts,
         "final_trough": trough,
         "would_be_trigger": trigger,
-        "order_id": None,
+        "order_id": order_id,
         "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
     }
+
+
+# --- PR-T2b native trailing-limit executor -----------------------------------
+
+
+def _entry_trail_orders_allowed() -> bool:
+    """Whether ``ALPHALENS_BROKER_ALLOW_ORDERS`` is armed (read at call time —
+    mirrors :func:`_live_exits_orders_allowed`).
+
+    The SIM/LIVE safety rail: with ALLOW_ORDERS off the executor places NOTHING
+    (no write-ahead, no POST), so a flag-ON-but-orders-disabled run is a clean
+    no-op — the tier simply stays TOUCHED and re-attempts once orders are
+    re-enabled. Defense in depth: :meth:`SaxoBroker.place_trailing_stop` ALSO
+    raises ``BrokerCapabilityError`` when the flag is off; gating here first just
+    avoids journalling a write-ahead line that could never be completed."""
+    from alphalens_pipeline.brokers.automanager import safety
+
+    return os.environ.get(safety.ALLOW_ORDERS_ENV) == "1"
+
+
+_ENTRY_ORDER_REF_MARKER = "-entry-t"
+"""The substring every entry-trail order ``ExternalReference`` carries (the crid
+is ``<ticker>-<briefdate>-entry-t<i>`` and the fire id appends ``-fire``). The
+KILL cancel + orphan sweep recognise a resting native ENTRY order by it (memo §3
+G2 / §5 -entry- family) — distinct from the exit-leg ``-stop`` / ``-tp`` refs."""
+
+
+def _entry_fire_request_id(crid: str) -> str:
+    """The deterministic ``ExternalReference`` for a tier's native trailing order
+    (memo §5 ``-entry-fire`` family). Deterministic so a crash-window re-POST hits
+    Saxo's 15 s x-request-id dedup instead of resting a second trail; the ``crid``
+    already encodes ``ticker-briefdate-entry-t<i>``, so the suffix keeps the whole
+    id inside the ``-entry-`` family the KILL cancel + orphan sweep recognise."""
+    return f"{crid}-fire"
+
+
+def _cancel_working_entry_orders(deps: LoopDeps, report: TickReport) -> None:
+    """KILL cleanup (memo §3 G2): cancel every working ``-entry-`` family order.
+
+    Cancelling is risk-reducing, so it runs UNGATED by ALLOW_ORDERS (only
+    PLACEMENT is gated) and independent of the flag. Best-effort + BROADLY
+    guarded: a broker that cannot list its open orders — or the bare ``object()``
+    broker some tests wire — is a silent no-op, never a crash that would starve
+    the rest of the KILL tick. Only entry-side (BUY / unknown) orders qualify;
+    the protective SELL disaster stop is left in place under KILL."""
+    broker = deps.broker
+    try:
+        working = [
+            state
+            for state in broker.list_open_orders()
+            if state.external_reference
+            and _ENTRY_ORDER_REF_MARKER in state.external_reference
+            and state.side != _DISASTER_STOP_SIDE
+        ]
+    # Broad on purpose (mirrors the orphan sweep / feed-build boundaries): a
+    # list failure or a broker without the method must degrade to no-op.
+    except Exception as exc:
+        logger.debug("KILL entry-trail cancel: could not list open orders (%s)", exc)
+        return
+    if not working:
+        return
+    cancelled = _cancel_orders_best_effort(
+        broker, [state.order_id for state in working], ticker="KILL:entry-trail"
+    )
+    if cancelled and deps.alert_throttled(
+        f"KILL — cancelled {cancelled} working entry-trail order(s)",
+        "entry-trail:kill-cancel",
+    ):
+        report.alerts += 1
+
+
+def _journal_trail_armed(crid: str, *, order_id: str | None, trigger: float) -> None:
+    """Append one ``trail_armed`` line (the G3 write-ahead uses ``order_id=None``
+    before the POST; the post-POST line fills the real id in — the fold's
+    latest-wins semantics adopt it)."""
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_TRAIL_ARMED,
+            "crid": crid,
+            "order_id": order_id,
+            "trigger": float(trigger),
+        }
+    )
+
+
+def _journal_entry_planned_disaster(record: Mapping[str, Any], uic: int, entry_crid: str) -> None:
+    """Journal the ``planned`` disaster-SL line at FIRE-ARM (memo §5 never-naked):
+    the brief disaster-stop PRICE the broker cannot know, keyed to the resting
+    order's ``ExternalReference`` so that when the trail fills into a Position the
+    UNCHANGED protection pass (``build_protection_view`` + ``reconcile_protection``)
+    places the covering SELL disaster stop with ZERO new protection code — a fill
+    during daemon downtime is naked for at most one tick. ``take_profit`` is left
+    ``None`` (stop-only disaster protection; the in-band OCO upgrade is a later
+    increment) — a null TP still confers the disaster stop, which is the
+    never-naked guarantee."""
+    disaster_stop = record.get("disaster_stop")
+    if disaster_stop is None:
+        logger.warning(
+            "entry-trail arm: crid=%s watch_open carries no disaster_stop — "
+            "SKIPPING the trailing order so a fill can never go uncovered",
+            entry_crid,
+        )
+        raise _EntryArmAbortError  # never place a trail we cannot cover (never-naked)
+    tier_index = record.get("tier_index")
+    _append_standalone_stop_journal(
+        _build_planned_line(
+            entry_crid=entry_crid,
+            uic=int(uic),
+            side=_DISASTER_STOP_SIDE,
+            stop_price=float(disaster_stop),
+            take_profit=None,
+            tier_index=int(tier_index) if tier_index is not None else 0,
+        )
+    )
+
+
+class _EntryArmAbortError(Exception):
+    """Internal control-flow signal: abort arming this tick WITHOUT placing an
+    order (a missing never-naked plan price). Caught inside :func:`_arm_native_trail`
+    — never escapes to the tick loop."""
+
+
+def _find_working_entry_order(broker: Broker, external_reference: str) -> str | None:
+    """The order id of a WORKING order whose ``ExternalReference`` matches
+    (idempotent re-arm, memo §3 G3): a crash between the POST and the id-journal
+    leaves a native order at Saxo the journal recorded only with a null id — on
+    the next TOUCHED tick, adopt it rather than resting a second trail. A
+    ``BrokerError`` reading the book returns ``None`` (treat as not-found): the
+    deterministic ``request_id`` + Saxo's 15 s dedup still guard the short
+    re-POST window."""
+    try:
+        for state in broker.list_open_orders():
+            if state.external_reference == external_reference:
+                return str(state.order_id)
+    except BrokerError as exc:
+        logger.warning(
+            "entry-trail arm: list_open_orders failed for dedup check (%s) — "
+            "relying on request-id dedup",
+            exc,
+        )
+    return None
+
+
+def _arm_native_trail(
+    deps: LoopDeps,
+    crid: str,
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    reference: float,
+    d_bps: int,
+    report: TickReport,
+) -> None:
+    """Place ONE native Saxo trailing-LIMIT order at the TOUCH (memo §2 V1, §5).
+
+    Sequence (money-critical ORDER):
+      1. capability + ALLOW_ORDERS gates -> place nothing when disabled;
+      2. compute the tick-agnostic geometry (the broker tick-aligns at placement);
+      3. idempotent re-arm: adopt an already-resting ``-entry-`` order (G3);
+      4. G3 write-ahead: ``trail_armed`` (null id) BEFORE the POST;
+      5. never-naked: the ``planned`` disaster-SL line at FIRE-ARM;
+      6. the POST (ALLOW_ORDERS-gated at the broker too);
+      7. fill the real order id into a second ``trail_armed`` line, mark armed.
+
+    A rejected POST leaves the tier TOUCHED (retry next tick) unless it is
+    insufficient funds (G7 -> terminal-refuse so it never spams retries)."""
+    broker = deps.broker
+    if not isinstance(broker, SupportsTrailingStop) or not _entry_trail_orders_allowed():
+        return
+    # memo §5 CRITICAL-2 open-check: a re-armed tier (a DayOrder cancelled at the
+    # prior session close) carries a STALE overnight trough — block the fresh arm
+    # until a NEW post-open low re-anchors the trigger, so the stale trigger is
+    # never handed to the broker into a gap. The tier stays TOUCHED and re-attempts
+    # every tick; the engine clears the flag the tick a fresh low forms.
+    if runtime.watcher.awaiting_fresh_low:
+        return
+    trough = runtime.trough if runtime.trough is not None else reference
+    geo = entry_trail_geometry.compute_trailing_order_geometry(
+        reference=reference, trough=trough, d_bps=d_bps
+    )
+    if geo is None:
+        return  # degenerate geometry — retry next tick
+    try:
+        uic = int(record["uic"])
+        qty = float(record["qty"])
+    except (KeyError, TypeError, ValueError):
+        logger.warning("entry-trail arm: crid=%s record missing uic/qty — skipped", crid)
+        return
+    fire_rid = _entry_fire_request_id(crid)
+
+    existing = _find_working_entry_order(broker, fire_rid)
+    if existing is not None:
+        _journal_trail_armed(crid, order_id=existing, trigger=geo.order_price)
+        runtime.watcher.mark_armed()
+        return
+
+    try:
+        # NEVER-NAKED first: journal the planned disaster-SL line BEFORE the
+        # write-ahead + POST, so a malformed record (no disaster price -> abort)
+        # never strands the tier as arm-in-progress, and the covering plan is on
+        # disk before any order can exist.
+        _journal_entry_planned_disaster(record, uic, fire_rid)
+    except _EntryArmAbortError:
+        return
+    _journal_trail_armed(crid, order_id=None, trigger=geo.order_price)  # G3 write-ahead, pre-POST
+    try:
+        placed = broker.place_trailing_stop(
+            uic,
+            _ENTRY_SIDE,
+            qty,
+            order_price=geo.order_price,
+            trailing_distance=geo.trailing_distance,
+            trailing_step=geo.trailing_step,
+            ceiling_price=geo.ceiling_price,
+            request_id=fire_rid,
+        )
+    except BrokerError as exc:
+        _handle_arm_failure(deps, crid, record, runtime, d_bps, exc, report)
+        return
+    _journal_trail_armed(crid, order_id=placed.entry_order_id, trigger=geo.order_price)
+    runtime.watcher.mark_armed()
+    logger.info(
+        "entry-trail %s: armed native trailing order %s @ trigger %.4f (ceiling %.4f)",
+        crid,
+        placed.entry_order_id,
+        geo.order_price,
+        geo.ceiling_price,
+    )
+
+
+def _handle_arm_failure(
+    deps: LoopDeps,
+    crid: str,
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    d_bps: int,
+    exc: BrokerError,
+    report: TickReport,
+) -> None:
+    """A rejected trailing-order POST: insufficient funds (memo §3 G7) is
+    TERMINAL — refuse the tier so it never re-arms to spam retries, releasing its
+    virtual reservation; any other error keeps the tier TOUCHED (arm-in-progress
+    write-ahead already journaled) to retry next tick."""
+    if _is_insufficient_funds(exc):
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_CANCELLED,
+                "crid": crid,
+                "note": f"insufficient funds at fire-arm: {exc}",
+                "measurement": _entry_measurement_blob(record, runtime, d_bps),
+            }
+        )
+        runtime.watcher.cancel()
+        if deps.alert_throttled(
+            f"entry-trail {crid}: insufficient funds at fire-arm — tier refused",
+            f"entry-trail:nofunds:{crid}",
+        ):
+            report.alerts += 1
+        return
+    if deps.alert_throttled(
+        f"entry-trail {crid}: trailing-order POST failed — will retry: {exc}",
+        f"entry-trail:arm-fail:{crid}",
+    ):
+        report.alerts += 1
+
+
+# The engine terminals that can strand a resting native order at the broker: a
+# tier that hit a G9 deep-decline (SUSPENDED) or its TTL window (EXPIRED) while
+# still arm-in-progress (a G3 null-id write-ahead whose POST rested at the broker
+# but whose id-journal was lost). WOULD_FIRE never occurs in native mode and
+# CANCELLED is only reached through the KILL / insufficient-funds paths, which do
+# their own broker cancel — so neither needs the cancel-then-verify here.
+_RESTING_BEARING_TERMINALS = frozenset(
+    {entry_trail_watcher.WatchState.SUSPENDED, entry_trail_watcher.WatchState.EXPIRED}
+)
+
+
+def _terminal_leaves_a_resting_order(result: entry_trail_watcher.TickResult) -> bool:
+    """Whether this tick's engine terminal (SUSPENDED/EXPIRED) could have left a
+    native ``-entry-`` order resting at the broker (memo §3 G6/G9)."""
+    return result.state in _RESTING_BEARING_TERMINALS
+
+
+def _read_entry_order(broker: Broker, order_id: str) -> OrderState | None:
+    """Re-read one order for the cancel-then-verify (memo §3 G6). ``None`` on any
+    doubt (a ``BrokerError`` reading the book) — a verify we cannot complete must
+    not manufacture a phantom ``fired``; the cancel already reduced exposure."""
+    try:
+        return broker.get_order(order_id)
+    except BrokerError as exc:
+        logger.warning(
+            "entry-trail terminal: get_order(%s) failed for the fill re-read (%s)", order_id, exc
+        )
+        return None
+
+
+def _entry_order_filled_qty(state: OrderState | None) -> float | None:
+    """The FILLED quantity of a re-read order, or ``None`` when it is not (yet)
+    filled. A ``FILLED``/``PARTIALLY_FILLED`` status means the cancel raced a
+    fill (memo §3 G6/G8): the tier is a ``fired`` fill, not the clock/depth
+    terminal it became in the engine."""
+    from broker_contract.contract import OrderStatus
+
+    if state is None:
+        return None
+    if state.status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+        return None
+    filled = state.filled_quantity
+    return float(filled) if isinstance(filled, (int, float)) and filled > 0 else None
+
+
+def _finalize_entry_terminal_vs_broker(
+    deps: LoopDeps,
+    crid: str,
+    result: entry_trail_watcher.TickResult,
+    report: TickReport,
+) -> entry_trail_watcher.TickResult:
+    """Cancel-then-verify a resting ``-entry-`` order before its SUSPENDED/EXPIRED
+    terminal is journaled (memo §3 G6/G9).
+
+    Returns the (possibly rewritten) tick result: unchanged when no order rests
+    (the common path), or with the terminal intent REWRITTEN to ``fired`` when the
+    re-read shows the cancel raced a fill (the fill is already covered by the
+    fire-arm planned disaster line — journalling ``suspended``/``expired`` against
+    a live fill would be the G6 violation). The cancel itself is best-effort +
+    risk-reducing (ungated by ALLOW_ORDERS, like the KILL cancel)."""
+    broker = deps.broker
+    if not isinstance(broker, SupportsTrailingStop):
+        return result  # a non-trailing broker never armed — nothing can rest
+    fire_rid = _entry_fire_request_id(crid)
+    existing = _find_working_entry_order(broker, fire_rid)
+    if existing is None:
+        return result  # nothing resting — the terminal stands as the engine set it
+    # Cancel FIRST, then re-read (memo §3 G6 cancel-then-verify).
+    _cancel_orders_best_effort(broker, [existing], ticker=f"entry-trail:{result.state.value}")
+    filled_qty = _entry_order_filled_qty(_read_entry_order(broker, existing))
+    if filled_qty is not None:
+        return _entry_terminal_rewritten_as_fired(crid, result, existing, filled_qty)
+    if deps.alert_throttled(
+        f"entry-trail {crid}: cancelled resting trail {existing} on {result.state.value}",
+        f"entry-trail:terminal-cancel:{crid}",
+    ):
+        report.alerts += 1
+    return result
+
+
+def _entry_terminal_rewritten_as_fired(
+    crid: str,
+    result: entry_trail_watcher.TickResult,
+    order_id: str,
+    filled_qty: float,
+) -> entry_trail_watcher.TickResult:
+    """Swap the SUSPENDED/EXPIRED terminal intent for a ``fired`` one carrying the
+    real order id + realized qty (memo §5 ``fired{realized_qty}`` / G6). Any
+    non-terminal intent this tick (e.g. the suspend tick's ``trough``) is kept.
+
+    The engine's own alert is DROPPED: a filled tier did not suspend/expire, so
+    the stale "suspended below next tier" alert would contradict the ``fired``
+    journal line — the fill surfaces through never-naked + reconcile instead."""
+    rewritten = tuple(
+        entry_trail_watcher.JournalIntent(
+            crid=crid,
+            kind=entry_trails.KIND_FIRED,
+            payload={"order_id": order_id, "realized_qty": filled_qty},
+        )
+        if intent.kind in entry_trails.ENTRY_TRAIL_TERMINAL_KINDS
+        else intent
+        for intent in result.journal_intents
+    )
+    return entry_trail_watcher.TickResult(rewritten, (), result.state)
+
+
+# --- PR-T2b fill-reconcile of a resting armed trail (Finding 1) --------------
+#
+# Once a tier reaches TRAIL_ARMED with a real order id the watch pass drops it
+# (_active_entry_watches :1261 — the broker owns the resting native order), so
+# nothing else ever observes its fill / DayOrder-expiry. Without a terminal
+# `entry_trails` line watching_virtual_gross_acct keeps reserving limit*qty
+# FOREVER (it skips only terminal_kind) AND _open_watch_pick_keys keeps the tier
+# occupying capacity forever — the feature arms one pick then jams. This sibling
+# pass writes the terminal `fired` line when the order fills, releasing both in
+# ONE write. It NEVER places / amends / arms (safe under KILL); a GONE-but-
+# UNFILLED order (DayOrder expiry / raced cancel) is LEFT for the Rearm phase.
+
+
+def _resting_armed_tiers(
+    fold: entry_trails.EntryTrailFold,
+) -> dict[str, entry_trails.EntryTrailTierState]:
+    """The tiers this reconcile pass owns: NON-terminal, latest kind
+    ``trail_armed``, with a REAL ``armed_order_id`` — the exact complement of the
+    resting-order exclusion in :func:`_active_entry_watches` (the watch pass drops
+    these because the broker owns the resting order, so nothing else observes their
+    fill / DayOrder-expiry). The Rearm phase (Finding 2) consumes the SAME set to
+    find a gone-but-unfilled (DayOrder-cancelled) tier to re-admit."""
+    return {
+        crid: state
+        for crid, state in fold.tiers.items()
+        if state.terminal_kind is None
+        and state.latest_kind == entry_trails.KIND_TRAIL_ARMED
+        and state.armed_order_id is not None
+    }
+
+
+def _run_entry_trail_reconcile_pass(deps: LoopDeps, report: TickReport) -> None:
+    """Reconcile every resting armed ``-entry-`` trailing order against the broker
+    (memo §5 Finding 1 — the gross-reservation leak fix).
+
+    Runs UNGATED by KILL (like the live-exits pass): a fill that lands during an
+    emergency stop must still release its virtual reservation + be covered by the
+    fire-arm planned disaster line, not freeze until KILL clears. The pass writes
+    ONLY terminals — it NEVER places, amends, or arms an order — so it is safe
+    under KILL. A no-op when the flag is unset/0 (byte-identical to today) or when
+    the broker cannot classify a disappeared order (no ``SupportsOrderResolution``
+    — the audit-log read is the ONLY fill-vs-expiry disambiguator, memo trap #4).
+
+    THIS phase handles ONLY the FILLED -> ``fired`` transition and the
+    still-working no-op; a GONE-but-UNFILLED order (a DayOrder expiry or a raced
+    cancel) is LEFT for the Rearm phase (Finding 2) — never terminated here, so no
+    terminal is ever written against a re-armable tier (memo §5 CRITICAL-2)."""
+    d_bps = entry_trails.entry_trail_bps()
+    if d_bps <= 0:
+        return
+    broker = deps.broker
+    if not isinstance(broker, SupportsOrderResolution):
+        return
+    fold = entry_trails.read_entry_trail_fold()
+    now = dt.datetime.now(dt.UTC)
+    for crid, tier_state in _resting_armed_tiers(fold).items():
+        _reconcile_one_armed_tier(deps, crid, tier_state, d_bps, now, report)
+
+
+def _reconcile_one_armed_tier(
+    deps: LoopDeps,
+    crid: str,
+    tier_state: entry_trails.EntryTrailTierState,
+    d_bps: int,
+    now: dt.datetime,
+    report: TickReport,
+) -> None:
+    """Resolve ONE resting armed tier's order and act on its outcome:
+
+    - a FILL -> the terminal ``fired`` line (releasing the reservation + un-jamming
+      capacity, Finding 1);
+    - a DayOrder gone UNFILLED (resolve -> EXPIRED / CANCELLED at the session
+      close) -> RE-ARM within the ORIGINAL TTL, or terminal ``expired`` past it
+      (Finding 2 / memo §5 CRITICAL-2, delegated to
+      :func:`_rearm_or_expire_gone_tier`);
+    - still resting, or an ambiguous / unreadable order -> a no-op this tick (retry
+      next tick — never a fabricated terminal, memo §3 G6)."""
+    order_id = tier_state.armed_order_id
+    if order_id is None:  # defensive — _resting_armed_tiers already filtered
+        return
+    broker = deps.broker
+    # Still resting on the open-orders book -> nothing to reconcile (the server is
+    # ratcheting / waiting for the bounce). get_order answers WORKING while it
+    # rests and UNKNOWN once it DISAPPEARS (Saxo drops filled/expired/cancelled
+    # from the open-orders view) — the disappearance is the only trigger to
+    # disambiguate via the audit log.
+    if not _armed_order_is_gone(_read_entry_order(broker, order_id)):
+        return
+    # GONE from the book — one audit-log read disambiguates fill vs expiry/cancel
+    # (memo trap #4: get_order alone reads UNKNOWN for ALL of them).
+    outcome = _resolve_entry_order_outcome(broker, order_id)
+    filled_qty = _entry_order_filled_qty(outcome)
+    if filled_qty is None:
+        # A GONE-but-UNFILLED order: the DayOrder cancelled at the session close.
+        # The Rearm path (Finding 2 / memo §5 CRITICAL-2) re-admits it within the
+        # ORIGINAL TTL or expires it past window_end — NEVER a fabricated fill; a
+        # still-unresolved UNKNOWN defers (verify-before-terminal, memo §3 G6).
+        _rearm_or_expire_gone_tier(deps, crid, tier_state, outcome, d_bps, now, report)
+        return
+    _journal_entry_fired(
+        crid,
+        tier_state,
+        d_bps,
+        now,
+        order_id=order_id,
+        realized_qty=filled_qty,
+        avg_price=outcome.avg_fill_price if outcome is not None else None,
+    )
+    if deps.alert_throttled(
+        f"entry-trail {crid}: native trail {order_id} filled {filled_qty:g} shares -> fired",
+        f"entry-trail:fired:{crid}",
+    ):
+        report.alerts += 1
+
+
+def _armed_order_is_gone(state: OrderState | None) -> bool:
+    """Whether a re-read armed order has LEFT the open-orders book (memo trap #4).
+
+    ``None`` (a ``BrokerError`` re-reading) -> NOT gone: a read we cannot complete
+    must not trigger the audit-log disambiguation (retry next tick). A
+    ``WORKING``/``PARTIALLY_FILLED`` status means it still rests — the residual of
+    a partial keeps its FULL virtual reservation this phase (G8 residual-cancel is
+    a later increment). Any other status (``UNKNOWN`` once Saxo drops it, or a
+    terminal a non-Saxo broker surfaces on ``get_order``) means gone -> resolve."""
+    from broker_contract.contract import OrderStatus
+
+    if state is None:
+        return False
+    return state.status not in (OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED)
+
+
+def _resolve_entry_order_outcome(
+    broker: SupportsOrderResolution, order_id: str
+) -> OrderState | None:
+    """One audit-log terminal resolution for a disappeared armed order (memo §5 /
+    trap #4). ``None`` on a ``BrokerError`` (retry next tick — never a fabricated
+    fill)."""
+    try:
+        return broker.resolve_order_outcome(order_id)
+    except BrokerError as exc:
+        logger.warning(
+            "entry-trail reconcile: resolve_order_outcome(%s) failed (%s)", order_id, exc
+        )
+        return None
+
+
+def _journal_entry_fired(
+    crid: str,
+    tier_state: entry_trails.EntryTrailTierState,
+    d_bps: int,
+    now: dt.datetime,
+    *,
+    order_id: str,
+    realized_qty: float,
+    avg_price: float | None,
+) -> None:
+    """Append the terminal ``fired`` line for a reconciled fill (memo §5
+    ``fired{realized_qty}`` + measurement).
+
+    Top-level ``order_id`` + ``realized_qty`` release the virtual reservation (the
+    fold's ``terminal_kind`` -> ``watching_virtual_gross_acct`` skips the tier) and
+    un-jam capacity (``_open_watch_pick_keys`` skips it) in ONE write; ``avg_price``
+    + ``ts`` carry the realized entry-side fill the offline exec_quality join needs.
+    Idempotent by construction: once written the tier is terminal in the fold, so
+    the next reconcile pass excludes it (``_resting_armed_tiers``)."""
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_FIRED,
+            "crid": crid,
+            "order_id": order_id,
+            "realized_qty": realized_qty,
+            "avg_price": avg_price,
+            "ts": now.isoformat(),
+            "measurement": _entry_reconcile_measurement(
+                tier_state, d_bps, order_id=order_id, realized_qty=realized_qty, avg_price=avg_price
+            ),
+        }
+    )
+
+
+def _entry_reconcile_measurement(
+    tier_state: entry_trails.EntryTrailTierState,
+    d_bps: int,
+    *,
+    order_id: str | None,
+    realized_qty: float | None,
+    avg_price: float | None,
+) -> dict[str, Any]:
+    """The terminal measurement stamp for a RECONCILED fill (memo §5 / T1d),
+    mirroring :func:`_entry_measurement_blob` but sourced from the FOLD (the
+    watcher runtime is gone once a tier is resting) + the resolved fill: the
+    variant-A entry ``tier_limit``, the final trough + its ``would_be_trigger``,
+    the join ``order_id``, the realized ``avg_price``/``realized_qty`` (the
+    entry-side concession the offline join computes vs the limit), and the
+    ``entry_mode`` cohort tag (T8). Touch marks are the ``touched`` line's job (the
+    offline join reads them there), so they are ``None`` here."""
+    record = tier_state.watch_open or {}
+    trough = tier_state.min_trough
+    trigger = None if trough is None else trough * (1.0 + d_bps / _ENTRY_BPS_DENOMINATOR)
+    limit = record.get("limit")
+    return {
+        "tier_limit": None if limit is None else float(limit),
+        "touch_price": None,
+        "touch_ts": None,
+        "final_trough": trough,
+        "would_be_trigger": trigger,
+        "order_id": order_id,
+        "avg_price": avg_price,
+        "realized_qty": realized_qty,
+        "entry_mode": record.get("entry_mode") or _entry_trail_mode_tag(d_bps),
+    }
+
+
+# --- PR-T2b overnight DayOrder-cancel -> next-session re-arm (Finding 2) ------
+#
+# A native trailing entry is a DayOrder — it cancels at the session close. Left
+# frozen, a 7-day-TTL trailing entry silently degrades to a single-session order.
+# When the fill-reconcile above sees a resting armed order GONE-but-UNFILLED it
+# hands the tier here: within the ORIGINAL TTL window re-arm it (re-admit to the
+# watch pass with the trough carried + the open-check armed), past window_end
+# expire it (release the reservation). NEVER a fabricated fill, never a window
+# extension (memo §5 CRITICAL-2 + TTL "one rule").
+
+
+def _rearm_or_expire_gone_tier(
+    deps: LoopDeps,
+    crid: str,
+    tier_state: entry_trails.EntryTrailTierState,
+    outcome: OrderState | None,
+    d_bps: int,
+    now: dt.datetime,
+    report: TickReport,
+) -> None:
+    """A resting armed DayOrder that DISAPPEARED unfilled (memo §5 CRITICAL-2).
+
+    Only a DEFINITIVE non-fill terminal (resolve -> EXPIRED / CANCELLED = the
+    DayOrder cancelled at the session close) drives the transition; an UNKNOWN /
+    unresolved outcome is a no-op this tick (retry) — never presume expiry over a
+    still-materialising fill from an ambiguous audit read (memo §3 G6 / trap #5).
+
+    Within the ORIGINAL TTL window the tier RE-ARMS (re-append watch_open — arm
+    state reset, trough carried, open-check armed — so the next session re-admits
+    it); PAST ``window_end`` it is terminal ``expired`` (the re-arm NEVER extends
+    the window, memo §5 TTL "one rule"), which releases the virtual reservation."""
+    if not _gone_order_is_definitely_unfilled(outcome):
+        return  # UNKNOWN / unresolved -> defer, never fabricate a re-arm or expiry
+    window_end = _entry_window_end(tier_state)
+    if window_end is None:
+        return  # corrupt/absent TTL -> cannot re-arm or expire safely (alarm state)
+    if now >= window_end:
+        _journal_entry_expired(crid, tier_state, d_bps, now)
+        if deps.alert_throttled(
+            f"entry-trail {crid}: TTL window closed with no fill -> expired",
+            f"entry-trail:expired:{crid}",
+        ):
+            report.alerts += 1
+        return
+    _journal_entry_rearm(crid, tier_state)
+    if deps.alert_throttled(
+        f"entry-trail {crid}: DayOrder cancelled at close -> re-armed (trough carried)",
+        f"entry-trail:rearm:{crid}",
+    ):
+        report.alerts += 1
+
+
+def _gone_order_is_definitely_unfilled(outcome: OrderState | None) -> bool:
+    """A DEFINITIVE non-fill terminal for a DISAPPEARED armed order (memo §5): the
+    DayOrder cancelled/expired at the session close. ``UNKNOWN`` / ``None`` (an
+    audit row not-in-retention, or a ``BrokerError`` on resolve) is NOT definitive
+    — the caller defers rather than presume expiry over a still-materialising fill
+    (memo §3 G6 / trap #5). A ``FILLED``/``PARTIALLY_FILLED`` outcome never reaches
+    here (the fill path handled it)."""
+    from broker_contract.contract import OrderStatus
+
+    return outcome is not None and outcome.status in (OrderStatus.EXPIRED, OrderStatus.CANCELLED)
+
+
+def _entry_window_end(tier_state: entry_trails.EntryTrailTierState) -> dt.datetime | None:
+    """The ORIGINAL TTL ``window_end`` from the tier's carried watch_open (memo §5
+    "one rule"), or ``None`` when it is missing / unparseable — the tier is then
+    unreconstructable, so the caller neither re-arms nor expires it (an alarm state
+    surfaced by the watch pass / monitoring, never a fabricated terminal)."""
+    raw = (tier_state.watch_open or {}).get("window_end")
+    if raw is None:
+        return None
+    try:
+        return dt.datetime.fromisoformat(str(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "entry-trail rearm: crid=%s has an unparseable window_end %r — deferring",
+            tier_state.crid,
+            raw,
+        )
+        return None
+
+
+def _journal_entry_rearm(crid: str, tier_state: entry_trails.EntryTrailTierState) -> None:
+    """Re-admit a DayOrder-cancelled tier to the watch pass (memo §5 CRITICAL-2):
+    re-append its carried ``watch_open`` (the SAME reservation + wire fields) with
+    the open-check marker set.
+
+    The fold then resets ``latest_kind`` -> ``watch_open`` (re-admitted to
+    :func:`_active_entry_watches`, dropped from :func:`_resting_armed_tiers`) AND
+    ``armed_order_id`` -> ``None`` (a re-opened watch owns no resting order);
+    ``min_trough`` is preserved automatically (it is the historical minimum over
+    the whole crid). NON-terminal by construction — the virtual reservation keeps
+    counting (the tier is watching again) and it re-occupies watch capacity. The
+    deterministic crid + the fold's latest-watch_open-wins make the re-append
+    idempotent (a repeated re-arm never double-reserves)."""
+    record = dict(tier_state.watch_open or {})
+    record["kind"] = entry_trails.KIND_WATCH_OPEN
+    record["crid"] = crid
+    record[_ENTRY_REARM_MARKER] = True
+    entry_trails.append_entry_trail_line(record)
+
+
+def _journal_entry_expired(
+    crid: str, tier_state: entry_trails.EntryTrailTierState, d_bps: int, now: dt.datetime
+) -> None:
+    """Terminal ``expired`` for a DayOrder gone unfilled PAST the ORIGINAL
+    ``window_end`` (memo §5 TTL "one rule" — the re-arm never extends the window).
+
+    Releases the virtual reservation (the fold's ``terminal_kind`` ->
+    ``watching_virtual_gross_acct`` skips the tier) and un-jams capacity in ONE
+    write; carries the reconcile measurement with a null fill (no order id, no
+    realized qty). Idempotent: once terminal the tier is excluded from
+    :func:`_resting_armed_tiers` next pass."""
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_EXPIRED,
+            "crid": crid,
+            "ts": now.isoformat(),
+            "measurement": _entry_reconcile_measurement(
+                tier_state, d_bps, order_id=None, realized_qty=None, avg_price=None
+            ),
+        }
+    )
 
 
 def _execute_action(
@@ -1853,7 +2648,9 @@ def build_default_deps(
         execute_protection=_make_protection_executor(
             broker, throttle, place_oco_exit=oco_placer, amend_stop=amend_placer
         ),
-        sweep_orphans_fn=lambda b: orphan_sweeper.sweep(b, _read_records()),
+        sweep_orphans_fn=lambda b: orphan_sweeper.sweep(
+            b, _read_records(), entry_trail_ref_marker=_ENTRY_ORDER_REF_MARKER
+        ),
         alert=base_alert,
         alert_throttled=_throttled,
         place_oco_exit=oco_placer,
@@ -4229,7 +5026,11 @@ def _place_pick(
     # (PR-T0 inertness proof). The intercept lands AFTER the cash floor so a
     # watch only opens once the pick has cleared every money gate.
     d_bps = entry_trails.entry_trail_bps()
-    if d_bps > 0 and _entry_trail_eligible(plan):
+    if d_bps > 0 and _entry_trail_eligible(plan) and isinstance(broker, SupportsTrailingStop):
+        # PR-T2b: the whole feature needs the native trailing-stop capability; a
+        # broker lacking it falls through to classify + _place_tiers (the
+        # resting-limit entry path, BYTE-IDENTICAL to today) — never a watch it
+        # could not later arm with a real order.
         # Crash-recovery exemption: a pick that ALREADY holds an open watch
         # (its watch_open was journaled but it was never retired — a crash
         # between the journal-FIRST watch_open and the note-only submission

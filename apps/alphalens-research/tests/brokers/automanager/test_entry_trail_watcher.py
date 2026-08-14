@@ -21,6 +21,7 @@ from alphalens_pipeline.brokers.automanager import entry_trails as et
 from alphalens_pipeline.brokers.automanager.entry_trail_watcher import (
     EntryTierWatcher,
     TickInput,
+    TickResult,
     TierWatchConfig,
     WatchState,
 )
@@ -394,6 +395,88 @@ class TestRestartResume(unittest.TestCase):
         result = watcher.process(_tick(9.72))  # trigger stays 9.7485, 9.72 < it -> no fire
         self.assertEqual(result.state, WatchState.TOUCHED)
         self.assertEqual(result.alerts, ())
+
+
+class TestNativeTrailMode(unittest.TestCase):
+    """PR-T2b native mode: with a native Saxo trailing order the SERVER fires,
+    so the engine must NOT self-fire — the would-fire branch is suppressed and
+    the watch waits in TOUCHED for the wire to place the order out-of-band."""
+
+    def _native(self, config: TierWatchConfig | None = None) -> EntryTierWatcher:
+        return EntryTierWatcher(config or _config(), native_trail=True)
+
+    def test_native_mode_touches_but_never_self_fires(self) -> None:
+        watcher = self._native()
+        watcher.process(_tick(10.0))  # touch @ limit, trough=10.0
+        watcher.process(_tick(9.90))  # new low, trough=9.90
+        result = watcher.process(_tick(9.95))  # bounce >= 9.9495 would fire in dry-run
+        # NO trail_armed marker, NO would-fire alert, stays TOUCHED — the server
+        # (not the bot) is the fire event once the wire arms a native order.
+        self.assertEqual(result.state, WatchState.TOUCHED)
+        self.assertNotIn(et.KIND_TRAIL_ARMED, _kinds(result.journal_intents))
+        self.assertEqual(result.alerts, ())
+
+    def test_native_mode_still_tracks_the_trough(self) -> None:
+        watcher = self._native()
+        watcher.process(_tick(10.0))
+        result = watcher.process(_tick(9.80))  # new low
+        self.assertIn(et.KIND_TROUGH, _kinds(result.journal_intents))
+
+    def test_native_mode_still_suspends_on_deep_decline(self) -> None:
+        watcher = self._native(_config(next_tier_limit=9.5))
+        watcher.process(_tick(10.0))  # touched
+        result = watcher.process(_tick(9.40))  # below next tier 9.5 -> suspend
+        self.assertEqual(result.state, WatchState.SUSPENDED)
+
+    def test_native_mode_still_expires(self) -> None:
+        watcher = self._native(_config(window_end=_T0 - dt.timedelta(days=1)))
+        result = watcher.process(_tick(None))
+        self.assertEqual(result.state, WatchState.EXPIRED)
+
+    def test_trail_armed_state_is_terminal(self) -> None:
+        # A tier the wire marked TRAIL_ARMED must no-op if ever reprocessed — the
+        # native order is resting at the broker; the bot no longer drives it.
+        watcher = EntryTierWatcher(
+            _config(), native_trail=True, initial_state=WatchState.TRAIL_ARMED
+        )
+        self.assertTrue(watcher.is_terminal)
+        result = watcher.process(_tick(9.95))
+        self.assertEqual(result, TickResult((), (), WatchState.TRAIL_ARMED))
+
+
+class TestNativeArmOpenCheckFlag(unittest.TestCase):
+    """memo §5 CRITICAL-2: a re-armed tier is reconstructed with the open-check
+    ARMED (``awaiting_fresh_low=True``) so the wire blocks the native arm until a
+    FRESH post-open low re-anchors the carried trigger. The flag is exposed so the
+    wire (``_arm_native_trail``) reads it rather than re-deriving; a fresh low
+    clears it even in native mode (the clear runs before the native return)."""
+
+    def _rearmed(self, *, trough: float) -> EntryTierWatcher:
+        return EntryTierWatcher(
+            _config(tier_limit=10.0, d_bps=50, next_tier_limit=9.0),
+            native_trail=True,
+            initial_state=WatchState.WATCHING,
+            seeded_trough=trough,
+            awaiting_fresh_low=True,
+        )
+
+    def test_default_watcher_is_not_awaiting_a_fresh_low(self) -> None:
+        self.assertFalse(EntryTierWatcher(_config()).awaiting_fresh_low)
+
+    def test_constructor_seeds_the_open_check(self) -> None:
+        self.assertTrue(self._rearmed(trough=9.7).awaiting_fresh_low)
+
+    def test_a_touch_without_a_new_low_keeps_the_open_check_armed(self) -> None:
+        # Session opens at/below the carried trigger but forms NO new low -> the
+        # open-check stays armed, so the wire must not arm.
+        watcher = self._rearmed(trough=9.7)
+        watcher.process(_tick(9.72))  # touched, but 9.72 > carried trough 9.7 -> no new low
+        self.assertTrue(watcher.awaiting_fresh_low, "no fresh low -> still blocked")
+
+    def test_a_fresh_post_open_low_clears_the_open_check_in_native_mode(self) -> None:
+        watcher = self._rearmed(trough=9.7)
+        watcher.process(_tick(9.65))  # a NEW low below the carried trough
+        self.assertFalse(watcher.awaiting_fresh_low, "a fresh low re-anchors the trigger")
 
 
 if __name__ == "__main__":

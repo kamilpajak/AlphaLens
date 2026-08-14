@@ -189,6 +189,41 @@ class TestFoldEntryTrailLines(unittest.TestCase):
         assert watch is not None
         self.assertEqual(watch["qty"], 40)
 
+    def test_latest_trail_armed_order_id_wins_and_null_folds_to_none(self) -> None:
+        # The G3 write-ahead journals a null-id line BEFORE the POST, then the
+        # real-id line after — latest wins.
+        armed = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(et.KIND_TRAIL_ARMED, order_id=None),
+                _line(et.KIND_TRAIL_ARMED, order_id="O-9"),
+            ]
+        )
+        self.assertEqual(armed.tiers[_CRID].armed_order_id, "O-9")
+        reverted = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(et.KIND_TRAIL_ARMED, order_id="O-9"),
+                _line(et.KIND_TRAIL_ARMED, order_id=None),
+            ]
+        )
+        self.assertIsNone(reverted.tiers[_CRID].armed_order_id)
+
+    def test_re_opening_a_watch_clears_the_armed_order_id(self) -> None:
+        # Memo §5 CRITICAL-2 re-arm: a DayOrder-cancelled tier is re-admitted to
+        # the watch pass by re-appending watch_open, which must reset the arm
+        # state — else the stale resting-order id lingers past the re-arm.
+        fold = et.fold_entry_trail_lines(
+            [
+                _watch_open(),
+                _line(et.KIND_TRAIL_ARMED, order_id="O-1", trigger=10.05),
+                _watch_open(awaiting_fresh_low=True),
+            ]
+        )
+        state = fold.tiers[_CRID]
+        self.assertIsNone(state.armed_order_id, "re-opening the watch clears the resting-order id")
+        self.assertEqual(state.latest_kind, et.KIND_WATCH_OPEN)
+
     def test_two_crids_fold_independently(self) -> None:
         fold = et.fold_entry_trail_lines(
             [_watch_open("crid-a"), _watch_open("crid-b"), _line(et.KIND_EXPIRED, "crid-b")]
