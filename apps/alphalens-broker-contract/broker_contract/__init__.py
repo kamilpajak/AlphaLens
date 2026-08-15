@@ -17,8 +17,9 @@ Sub-packages / modules:
     broker_contract.exit_geometry — pure ATR-bracket exit-geometry leaf (§4)
     broker_contract.fx — pure FX data types (``FxRateQuote``, ``FxConversion``)
     broker_contract.price_feed — the live-market price feed seam (``PricePoint``,
-        ``PriceFeed`` Protocol); ``latest(uic) -> PricePoint | None`` where
-        ``None`` is the stream-health veto (live-market execution model design)
+        ``PriceFeed`` Protocol + the ``SupportsSessionLow`` touch-latch
+        capability); ``latest(uic) -> PricePoint | None`` where ``None`` is the
+        stream-health veto (live-market execution model design)
     broker_contract.sizing — the money-math half of position sizing (value
         types ``TierPlan``/``TpTranchePlan``/``SetupPlan``,
         ``TradeSetupNotPlannableError``, ``compute_setup_plan``,

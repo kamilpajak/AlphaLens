@@ -98,3 +98,24 @@ def is_fresh(
 @runtime_checkable
 class PriceFeed(Protocol):
     def latest(self, uic: int) -> PricePoint | None: ...
+
+
+@runtime_checkable
+class SupportsSessionLow(Protocol):
+    """Extension capability: a 1 Hz running LOW accumulated between the coarse
+    point samples — the touch-latch that closes the sub-sampling touch-miss
+    (docs/research/entry_trailing_design_2026_08_12.md §5 mitigation path).
+
+    ``session_low(uic)`` DRAINS (pop-and-reset) the accumulated sub-tick running
+    low for ``uic``: the caller invokes it EXACTLY once per uic per decision
+    tick, and the reset is what bounds the accumulation window to one tick.
+    ``None`` when no trustworthy sub-tick low accrued (feed off/degraded, or
+    nothing latchable this window).
+
+    Mirrors the ``SupportsTrailingStop`` capability-protocol pattern (off the
+    frozen :class:`PriceFeed` base): a caller ``isinstance``-narrows a
+    ``PriceFeed`` to this Protocol; a feed WITHOUT it (the OFF/degraded null
+    feed) simply yields no low, which is the safe degraded behaviour — no latch,
+    point-sample only."""
+
+    def session_low(self, uic: int) -> float | None: ...

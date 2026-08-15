@@ -163,16 +163,30 @@ class _RecordingBroker:
 
 
 class _FakeFeed:
-    """A price feed keyed by uic; a missing/None entry vetoes (returns None)."""
+    """A price feed keyed by uic; a missing/None entry vetoes (returns None).
 
-    def __init__(self, prices: dict[int, float | None]) -> None:
+    Also a ``SupportsSessionLow`` (the 1 Hz touch-latch capability): ``lows``
+    holds a per-uic drained sub-tick running low that ``session_low`` POPS
+    (drain semantics, mirroring the real feed) so a test can plant a wick for
+    exactly one tick. An unset uic drains to ``None`` — the byte-identical
+    behaviour the pre-latch feed had for every uic."""
+
+    def __init__(
+        self,
+        prices: dict[int, float | None],
+        lows: dict[int, float | None] | None = None,
+    ) -> None:
         self._prices = prices
+        self._lows = lows if lows is not None else {}
 
     def latest(self, uic: int) -> Any:
         price = self._prices.get(uic)
         if price is None:
             return None
         return type("PP", (), {"bid": price, "ask": price})()
+
+    def session_low(self, uic: int) -> float | None:
+        return self._lows.pop(uic, None)
 
 
 def _journal(test: unittest.TestCase) -> Path:
@@ -620,6 +634,160 @@ class TestEntryWatchPassNativeArm(unittest.TestCase):
         self.assertEqual(
             [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED], []
         )
+
+
+class TestEntryWatchPassTouchLatch(unittest.TestCase):
+    """The 1 Hz touch-latch combine (entry_trailing_design §5): a sub-45s wick
+    the coarse point-sample missed is folded in via the drained running low,
+    gated so a re-arm open-check or a stale cross-session low can never arm into
+    a gap, and drained ONCE per uic so every laddered tier sees the same low."""
+
+    def _tick(
+        self,
+        deps: cl.LoopDeps,
+        prices: dict[int, float | None],
+        lows: dict[int, float | None],
+        *,
+        point: float | None,
+        low: float | None,
+    ) -> None:
+        prices[307] = point
+        lows[307] = low
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+
+    def test_sub_tick_wick_below_tier_touches_via_the_latch(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        prices: dict[int, float | None] = {307: None}
+        lows: dict[int, float | None] = {307: None}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices, lows), [], broker=broker)
+        # Tick 1: a fresh point ABOVE the tier (no touch) — establishes the
+        # latch's trust (a brand-new watcher discards the latch on its FIRST
+        # fresh tick, when the accumulation window is unbounded).
+        self._tick(deps, prices, lows, point=10.50, low=None)
+        self.assertEqual(broker.trailing_orders, [])
+        # Tick 2: the point-sample STILL sits above the tier (10.20 — the 45s
+        # sample misses the touch) but the 1 Hz latch dipped to 9.90 → the
+        # combine's min() registers the touch → exactly one native trail armed.
+        self._tick(deps, prices, lows, point=10.20, low=9.90)
+        self.assertEqual(len(broker.trailing_orders), 1)
+
+    def test_latch_is_discarded_on_the_first_fresh_tick(self) -> None:
+        # The very first fresh tick of a watch has an UNBOUNDED latch window (the
+        # shared stream may have accumulated a running low for this uic long
+        # before the watch opened, or across an overnight boundary). A latched
+        # low below the tier must NOT touch/arm on tick 1 — the fresh
+        # point-sample alone drives it (anti-arm-into-gap, entry_trailing §5).
+        path = _journal(self)
+        _planned_journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        prices: dict[int, float | None] = {307: None}
+        lows: dict[int, float | None] = {307: None}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices, lows), [], broker=broker)
+        self._tick(deps, prices, lows, point=10.50, low=9.00)  # latch below tier, tick 1
+        self.assertEqual(broker.trailing_orders, [])
+
+    def test_one_drained_low_reaches_every_tier_on_the_same_uic(self) -> None:
+        # A laddered pick: two tiers on the SAME uic, both active this tick. The
+        # drained low is a POP, so it must be drained ONCE per uic and shared —
+        # never consumed by whichever tier iterates first. A wick below BOTH tier
+        # limits touches+arms BOTH in one tick; a per-tier pop would arm only one.
+        path = _journal(self)
+        _planned_journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t1", limit=9.90, next_tier_limit=None)
+        prices: dict[int, float | None] = {307: None}
+        lows: dict[int, float | None] = {307: None}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices, lows), [], broker=broker)
+        self._tick(deps, prices, lows, point=10.50, low=None)  # establish trust
+        self._tick(deps, prices, lows, point=10.50, low=9.80)  # wick below BOTH
+        self.assertEqual(len(broker.trailing_orders), 2)
+
+    def test_awaiting_fresh_low_ignores_the_latch_until_a_fresh_point_low(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        crid = "KO-2026-07-20-entry-t0"
+        # A re-armed tier: the watch_open carries the open-check marker plus a
+        # carried (stale) trough of 9.0.
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_WATCH_OPEN,
+                "crid": crid,
+                "limit": 10.0,
+                "qty": 100.0,
+                "d_bps": 50,
+                "window_end": "2099-01-01T21:00:00+00:00",
+                "fx_rate": None,
+                "uic": 307,
+                "ticker": "KO",
+                "exchange_mic": "XNYS",
+                "next_tier_limit": None,
+                "pick_key": "KO:2026-07-20",
+                "entry_mode": "entry-trail-native-d50-testcfg",
+                "disaster_stop": 8.0,
+                "tier_index": 0,
+                "awaiting_fresh_low": True,
+            }
+        )
+        entry_trails.append_entry_trail_line(
+            {"kind": entry_trails.KIND_TROUGH, "crid": crid, "trough": 9.0}
+        )
+        prices: dict[int, float | None] = {307: None}
+        lows: dict[int, float | None] = {307: None}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices, lows), [], broker=broker)
+        # Tick 1: a fresh point ABOVE the tier establishes trust (no touch).
+        self._tick(deps, prices, lows, point=10.50, low=None)
+        watcher = deps.entry_watchers[crid].watcher
+        self.assertTrue(watcher.awaiting_fresh_low)
+        # Tick 2: the latch dips BELOW the carried trough (8.5 < 9.0), the point
+        # stays above the tier. While awaiting_fresh_low the latch is IGNORED:
+        # the open-check does not clear (G1 anti-arm-into-gap), no touch, no arm.
+        self._tick(deps, prices, lows, point=10.50, low=8.5)
+        self.assertTrue(watcher.awaiting_fresh_low)
+        self.assertEqual(broker.trailing_orders, [])
+        # Tick 3: a FRESH point-sample low below the tier AND the carried trough
+        # clears the open-check → touch → the tier arms (the latch resumes).
+        self._tick(deps, prices, lows, point=8.80, low=None)
+        self.assertFalse(watcher.awaiting_fresh_low)
+        self.assertEqual(len(broker.trailing_orders), 1)
+
+    def test_feed_without_session_low_capability_is_unchanged(self) -> None:
+        from broker_contract.price_feed import SupportsSessionLow
+
+        # The null/degraded feed is NOT a SupportsSessionLow (safe: yields no
+        # latch); the latch-capable fake IS.
+        self.assertNotIsInstance(cl._NullPriceFeed(), SupportsSessionLow)
+        self.assertIsInstance(_FakeFeed({}), SupportsSessionLow)
+
+        class _PointOnly:
+            """A pre-latch PriceFeed shape — no session_low method."""
+
+            def __init__(self, prices: dict[int, float | None]) -> None:
+                self._p = prices
+
+            def latest(self, uic: int) -> Any:
+                v = self._p.get(uic)
+                return None if v is None else type("PP", (), {"bid": v, "ask": v})()
+
+        self.assertNotIsInstance(_PointOnly({}), SupportsSessionLow)
+
+        path = _journal(self)
+        _planned_journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        prices: dict[int, float | None] = {307: None}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_PointOnly(prices), [], broker=broker)
+        for pt in (10.50, 10.00):  # first establishes state, second touches @ limit
+            prices[307] = pt
+            with mock.patch.dict("os.environ", _ALLOW, clear=True):
+                cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(len(broker.trailing_orders), 1)
 
 
 class TestEntryWatchPassKillGate(unittest.TestCase):

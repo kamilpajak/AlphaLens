@@ -70,3 +70,18 @@ class SaxoLivePriceFeed:
             source=SOURCE,
         )
         return point if is_fresh(point, now=self._clock()) else None
+
+    def session_low(self, uic: int) -> float | None:
+        """DRAIN the stream's 1 Hz running-low touch-latch for this uic
+        (:class:`~broker_contract.price_feed.SupportsSessionLow`). Maps the
+        caller's uic to the LIVE uic exactly like :meth:`latest`; ``None`` when
+        the uic does not resolve or nothing latchable accrued. A POP: the
+        accumulation window resets on read, so the caller must invoke it at most
+        once per uic per tick. Note it is NOT gated on the point-sample here —
+        the DRAIN is unconditional (that is what keeps the window inter-tick);
+        the combine at the call site discards the low when the concurrent
+        point-sample is itself vetoed/stale."""
+        live_uic = self._resolve_live_uic(uic)
+        if live_uic is None:
+            return None
+        return self._stream.drain_running_low(live_uic)

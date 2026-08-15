@@ -43,6 +43,7 @@ from broker_contract.exit_geometry import (
     SetupStaticPolicy,
     resolve_exit_policy,
 )
+from broker_contract.price_feed import SupportsSessionLow
 
 from alphalens_pipeline.brokers.automanager import (
     entry_trail_geometry,
@@ -1263,9 +1264,41 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
         if _has_feed_context(record)
     }
     feed = _build_entry_watch_feed(deps, uic_to_instrument, report)
+    uic_lows = _drain_session_lows(feed, uic_to_instrument)
     now = dt.datetime.now(dt.UTC)
     for crid, record in active.items():
-        _advance_one_entry_watch(deps, crid, record, fold.tiers.get(crid), feed, now, d_bps, report)
+        _advance_one_entry_watch(
+            deps, crid, record, fold.tiers.get(crid), feed, uic_lows, now, d_bps, report
+        )
+
+
+def _drain_session_lows(
+    feed: PriceFeed, uic_to_instrument: Mapping[int, tuple[str, str]]
+) -> dict[int, float | None]:
+    """Drain the 1 Hz touch-latch ONCE per DISTINCT watched uic this tick.
+
+    A laddered pick has N tiers ALL on the same uic, all active this tick. The
+    drain is a POP (read-and-reset), so calling it per-tier would let the FIRST
+    tier consume the sub-tick low and starve the deeper tiers (where the miss
+    the latch exists to close actually lives) — the winner being dict-iteration
+    order. Draining once per uic here and passing the SAME value into every
+    tier's combine kills that race.
+
+    Called UNCONDITIONALLY every tick (not only when a point-sample exists) so
+    the accumulation window stays inter-tick — the pop resets it. A feed without
+    :class:`SupportsSessionLow` (the OFF/degraded null feed) yields no lows,
+    which is the safe degraded behaviour (point-sample only)."""
+    if not isinstance(feed, SupportsSessionLow):
+        return {}
+    lows: dict[int, float | None] = {}
+    for uic in uic_to_instrument:
+        try:
+            lows[uic] = feed.session_low(uic)
+        # Broad on purpose (mirrors _entry_watch_reference_price): one bad uic
+        # must not abort the drain for the others.
+        except Exception:
+            lows[uic] = None
+    return lows
 
 
 def _active_entry_watches(
@@ -1325,18 +1358,21 @@ def _advance_one_entry_watch(
     record: Mapping[str, Any],
     tier_state: entry_trails.EntryTrailTierState | None,
     feed: PriceFeed,
+    uic_lows: Mapping[int, float | None],
     now: dt.datetime,
     d_bps: int,
     report: TickReport,
 ) -> None:
     """Advance ONE watch: reconstruct-or-fetch its runtime, read the fresh
-    reference price, ``process`` one tick, persist the journal intents + terminal
-    measurement, route the alerts, and drop the runtime once terminal. Per-watch
-    fault isolation: an unreconstructable record is skipped."""
+    reference price (folding in the tick's drained sub-tick running low),
+    ``process`` one tick, persist the journal intents + terminal measurement,
+    route the alerts, and drop the runtime once terminal. Per-watch fault
+    isolation: an unreconstructable record is skipped."""
     runtime = _get_or_create_entry_runtime(deps, crid, record, tier_state)
     if runtime is None:
         return
     price = _entry_watch_reference_price(feed, record)
+    price = _combine_with_session_low(price, uic_lows, record, runtime, now)
     result = runtime.watcher.process(entry_trail_watcher.TickInput(now=now, price=price))
     # G6/G9 (memo §3): a SUSPENDED/EXPIRED terminal must never leave a resting
     # -entry- order alive on the book. Cancel-then-verify it BEFORE the terminal
@@ -1375,6 +1411,43 @@ def _entry_watch_reference_price(feed: PriceFeed, record: Mapping[str, Any]) -> 
     if price is None or not math.isfinite(price) or price <= 0.0:
         return None
     return price
+
+
+def _combine_with_session_low(
+    price: float | None,
+    uic_lows: Mapping[int, float | None],
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    now: dt.datetime,
+) -> float | None:
+    """Fold this tick's drained 1 Hz sub-tick running low into the point-sampled
+    reference so a wick BETWEEN the coarse 45s samples still registers a touch
+    (touch-latch, entry_trailing_design §5). The drained low was popped once per
+    uic by :func:`_drain_session_lows`; here it is only READ.
+
+    Latch-then-gate-at-drain — the low is DISCARDED (point-sample alone drives
+    the tick) in three cases, and only otherwise pulls the reference DOWN:
+
+    - point-sample vetoed (``None``): never act on a latched low when the
+      concurrent point-sample is itself untrusted/stale;
+    - ``awaiting_fresh_low`` (a re-armed tier, memo G1): the open-check clear
+      must be driven by the FRESH point-sampled bid only, so a stale overnight
+      wick in the latch can never re-anchor the trigger and arm into a gap;
+    - the latch is not trusted this tick (first fresh tick of the watch, or a
+      ``> STALE_FIRE_GAP`` recovery that may span a session boundary): the
+      running low could predate the watch or the session — see
+      :meth:`EntryTierWatcher.latch_low_trusted`.
+    """
+    if price is None:
+        return None
+    if runtime.watcher.awaiting_fresh_low:
+        return price
+    if not runtime.watcher.latch_low_trusted(now):
+        return price
+    low = uic_lows.get(int(record["uic"]))
+    if low is None:
+        return price
+    return min(price, low)
 
 
 def _get_or_create_entry_runtime(

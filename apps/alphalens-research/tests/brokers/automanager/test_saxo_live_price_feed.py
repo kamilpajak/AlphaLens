@@ -10,15 +10,19 @@ _NOW = dt.datetime(2026, 8, 7, 13, 48, 0, tzinfo=dt.UTC)
 
 
 class _Stream:
-    def __init__(self, quote: Quote | None):
+    def __init__(self, quote: Quote | None, *, running_low: dict[int, float] | None = None):
         self._quote = quote
         self.subscribed: list[int] = []
+        self._running_low = dict(running_low or {})
 
     def ensure_subscribed(self, uics):
         self.subscribed = list(uics)
 
     def get(self, uic):
         return self._quote if self._quote and self._quote.uic == uic else None
+
+    def drain_running_low(self, uic):
+        return self._running_low.pop(uic, None)
 
 
 def _quote(**over) -> Quote:
@@ -96,6 +100,35 @@ class TestSaxoLivePriceFeed(unittest.TestCase):
             stream=stream, resolve_live_uic={211: 9999}.get, clock=lambda: _NOW
         )
         self.assertEqual(feed.latest(211).uic, 211)
+
+
+class TestSaxoLivePriceFeedSessionLow(unittest.TestCase):
+    """The SupportsSessionLow touch-latch capability: session_low maps the
+    caller's uic to the LIVE uic (like latest) and DRAINS the stream's 1 Hz
+    running low."""
+
+    def _feed(self, *, running_low, sim_to_live=None):
+        mapping = sim_to_live if sim_to_live is not None else {211: 9999}
+        return SaxoLivePriceFeed(
+            stream=_Stream(_quote(), running_low=running_low),
+            resolve_live_uic=mapping.get,
+            clock=lambda: _NOW,
+        )
+
+    def test_is_a_supports_session_low(self):
+        from broker_contract.price_feed import SupportsSessionLow
+
+        self.assertIsInstance(self._feed(running_low={}), SupportsSessionLow)
+
+    def test_session_low_drains_the_live_uic(self):
+        # The caller asks by SIM uic 211; the stream is keyed by LIVE uic 9999.
+        feed = self._feed(running_low={9999: 313.70})
+        self.assertEqual(feed.session_low(211), 313.70)
+        self.assertIsNone(feed.session_low(211))  # pop: the second read is empty
+
+    def test_session_low_none_for_unmapped_uic(self):
+        feed = self._feed(running_low={9999: 313.70}, sim_to_live={})
+        self.assertIsNone(feed.session_low(211))
 
 
 if __name__ == "__main__":

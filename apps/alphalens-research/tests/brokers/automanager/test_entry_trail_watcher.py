@@ -479,5 +479,36 @@ class TestNativeArmOpenCheckFlag(unittest.TestCase):
         self.assertFalse(watcher.awaiting_fresh_low, "a fresh low re-anchors the trigger")
 
 
+class TestLatchLowTrusted(unittest.TestCase):
+    """The 1 Hz touch-latch trust gate (entry_trailing_design §5): a drained
+    sub-tick running low may be folded into the reference ONLY when a fresh
+    point-sample landed on a RECENT preceding tick. Two arms discard it — a
+    watch with no fresh tick yet (unbounded latch window, may predate the watch)
+    and a recovery after a gap wider than STALE_FIRE_GAP (may span a session
+    boundary, so the latch could be a prior-session wick arming into a gap)."""
+
+    def test_untrusted_before_the_first_fresh_tick(self) -> None:
+        self.assertFalse(_fresh_watch().latch_low_trusted(_T0))
+
+    def test_trusted_within_the_stale_gap_after_a_fresh_tick(self) -> None:
+        watcher = _fresh_watch()
+        watcher.process(_tick(10.50, at=_T0))  # a fresh point-sample lands
+        self.assertTrue(watcher.latch_low_trusted(_T0 + dt.timedelta(seconds=45)))
+
+    def test_untrusted_after_a_gap_wider_than_stale_fire_gap(self) -> None:
+        watcher = _fresh_watch()
+        watcher.process(_tick(10.50, at=_T0))
+        self.assertFalse(watcher.latch_low_trusted(_T0 + dt.timedelta(minutes=6)))
+
+    def test_a_vetoed_tick_does_not_refresh_the_trust_clock(self) -> None:
+        # A None-price tick returns before _last_fresh_now updates, so the gap is
+        # measured to the last GENUINELY fresh tick — a long feed outage cannot
+        # masquerade as recent freshness.
+        watcher = _fresh_watch()
+        watcher.process(_tick(10.50, at=_T0))
+        watcher.process(_tick(None, at=_T0 + dt.timedelta(minutes=6)))  # veto, no refresh
+        self.assertFalse(watcher.latch_low_trusted(_T0 + dt.timedelta(minutes=6, seconds=1)))
+
+
 if __name__ == "__main__":
     unittest.main()
