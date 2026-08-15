@@ -311,6 +311,24 @@ class EntryTierWatcher:
         it fires even when the engine never reaches the would-fire branch)."""
         return self._awaiting_fresh_low
 
+    def latch_low_trusted(self, now: dt.datetime) -> bool:
+        """Whether a drained 1 Hz sub-tick running low (touch-latch) may be
+        folded into THIS tick's reference price. Trusted ONLY when a fresh
+        point-sample landed on a RECENT preceding tick — ``_last_fresh_now`` is
+        set AND within :data:`STALE_FIRE_GAP`.
+
+        Two cases discard the low (point-sample only drives the tick):
+        - ``_last_fresh_now is None`` — the watch has had no fresh tick yet, so
+          the latch window is UNBOUNDED (the shared stream may have accumulated a
+          running low for this uic long before the watch opened, e.g. while it
+          was subscribed for an exit position);
+        - gap ``> STALE_FIRE_GAP`` — the feed just recovered after a degrade that
+          may have spanned a session boundary, so the latched low could be a
+          prior-session wick that would arm into a gap. Mirrors the would-fire
+          ``stale_gap`` guard; a WATCHING tier's touch is not otherwise gap-gated.
+        """
+        return self._last_fresh_now is not None and now - self._last_fresh_now <= STALE_FIRE_GAP
+
     def process(self, tick: TickInput) -> TickResult:
         """Advance the watch by one decision tick and return the intents.
 

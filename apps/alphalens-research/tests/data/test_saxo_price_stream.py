@@ -250,6 +250,134 @@ class TestQuoteCache(unittest.TestCase):
         )
         self.assertTrue(c.any_delayed())
 
+    # --- 1 Hz touch-latch running low (entry_trailing_design §5 mitigation) ---
+
+    def _latch_row(self, second: int, *, bid: float, ask: float, delayed: int = 0) -> dict:
+        """A latchable quote row at a strictly-advancing second (so the sequence
+        guard never drops it) with an explicit bid/ask/delay."""
+        return {
+            "Uic": 211,
+            "LastUpdated": f"2026-08-07T13:48:{second:02d}Z",
+            "Quote": {"Bid": bid, "Ask": ask, "DelayedByMinutes": delayed},
+        }
+
+    def test_running_low_is_the_min_over_descending_then_rising_bids(self):
+        """The latch ratchets DOWN only: the drained value is the minimum bid
+        seen since the last drain, not the latest one."""
+        c = QuoteCache()
+        for i, bid in enumerate((314.05, 313.90, 313.70, 313.95)):
+            c.apply(self._latch_row(i, bid=bid, ask=bid + 0.03), received_at=_T0)
+        self.assertEqual(c.drain_running_low(211), 313.70)
+
+    def test_drain_running_low_pops_and_resets(self):
+        """Draining is read-and-reset: the accumulation window is inter-drain,
+        so a second drain with no new quote returns None."""
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=313.80, ask=313.83), received_at=_T0)
+        self.assertEqual(c.drain_running_low(211), 313.80)
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_drain_running_low_none_for_unknown_uic(self):
+        self.assertIsNone(QuoteCache().drain_running_low(999))
+
+    def test_forget_clears_the_running_low(self):
+        """``forget`` (called on unsubscribe) must pop the latch too, so the
+        dict stays bounded by the live subscription set."""
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=313.80, ask=313.83), received_at=_T0)
+        c.forget(211)
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_latch_rejects_a_delayed_quote(self):
+        """A demoted (15-minute-old) quote must never plant a running low: it
+        would drive a false touch off a stale price."""
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=313.80, ask=313.83, delayed=15), received_at=_T0)
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_latch_rejects_an_absent_delayed_flag(self):
+        """Strict ``== 0``: a quote whose DelayedByMinutes never arrived (None
+        under delta-merge) is 'unknown delay', not 'undelayed', and is rejected."""
+        c = QuoteCache()
+        c.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": 313.8, "Ask": 313.9},
+            },
+            received_at=_T0,
+        )
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_latch_rejects_a_crossed_market(self):
+        """ask < bid is a broken quote — no running low."""
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=314.01, ask=313.99), received_at=_T0)
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_latch_rejects_a_too_wide_spread(self):
+        """A relative spread beyond the latch ceiling (2%) is a broken quote."""
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=100.0, ask=105.0), received_at=_T0)  # 5% spread
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_latch_admits_a_spread_at_the_ceiling(self):
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=100.0, ask=102.0), received_at=_T0)  # exactly 2%
+        self.assertEqual(c.drain_running_low(211), 100.0)
+
+    def test_latch_rejects_a_missing_side(self):
+        """An explicit-null bid (one-sided market / halt) plants no low."""
+        c = QuoteCache()
+        c.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": None, "Ask": 314.04, "DelayedByMinutes": 0},
+            },
+            received_at=_T0,
+        )
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_latch_vetoes_not_raises_on_a_non_numeric_side(self):
+        """CRITICAL: the latchable gate runs on the WS reader thread. A
+        non-numeric bid/ask (a str, an explicit null) must VETO, never raise —
+        an uncaught exception here is counted as a connection failure and, after
+        six such frames, trips the reconnect breaker and darkens the whole live
+        feed (entries AND live exits). No arithmetic touches a side until it is
+        proven a finite number."""
+        c = QuoteCache()
+        for quote in (
+            {"Bid": "N/A", "Ask": 314.04, "DelayedByMinutes": 0},
+            {"Bid": 314.01, "Ask": "N/A", "DelayedByMinutes": 0},
+            {"Bid": None, "Ask": None, "DelayedByMinutes": 0},
+        ):
+            c.apply(
+                {"Uic": 211, "LastUpdated": "2026-08-07T13:48:00Z", "Quote": quote},
+                received_at=_T0,
+            )  # must not raise
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_latch_updates_only_from_latchable_ticks_amid_garbage(self):
+        """A single transient garbage tick (crossed) between clean ticks must
+        not corrupt the running low; the clean minimum still wins."""
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=313.90, ask=313.93), received_at=_T0)
+        c.apply(self._latch_row(1, bid=313.60, ask=313.50), received_at=_T0)  # crossed, ignored
+        c.apply(self._latch_row(2, bid=313.85, ask=313.88), received_at=_T0)
+        self.assertEqual(c.drain_running_low(211), 313.85)
+
+
+class TestLatchSpreadCeilingMirrorsContract(unittest.TestCase):
+    def test_latch_spread_ceiling_equals_broker_contract_value(self):
+        """``_LATCH_MAX_RELATIVE_SPREAD`` is a VALUE copy of
+        ``broker_contract.price_feed.DEFAULT_MAX_RELATIVE_SPREAD`` (the data
+        package must not import the decision layer). Pin them equal so the copy
+        cannot silently drift from the shared is_fresh ceiling."""
+        from broker_contract.price_feed import DEFAULT_MAX_RELATIVE_SPREAD
+
+        self.assertEqual(sps._LATCH_MAX_RELATIVE_SPREAD, DEFAULT_MAX_RELATIVE_SPREAD)
+
 
 class _FakeMarketDataClient:
     """Stand-in for SaxoMarketDataClient - _apply_frame never touches it."""

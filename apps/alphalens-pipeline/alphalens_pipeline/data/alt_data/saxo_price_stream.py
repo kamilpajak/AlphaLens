@@ -8,6 +8,18 @@ this cache MUST merge: a message carrying only a Bid must leave the Ask intact.
 The socket loop only decodes and applies. Every decision about whether a cached
 quote may drive an order lives in the feed adapter's freshness gate.
 
+The ONE exception is the 1 Hz running-low accumulator (touch-latch,
+entry_trailing_design_2026_08_12.md §5): a per-tick running minimum bid that
+provably CANNOT live in the 45s feed adapter — it needs every 1 Hz frame the
+adapter never sees. ``apply`` therefore folds each latchable quote into
+``QuoteCache._running_low`` here, gated by a local latchable check (undelayed,
+un-crossed, sane spread, both sides finite positive). This gate is a
+NECESSARY-condition prefilter, not the order-decision gate: the feed adapter
+still decides, at DRAIN time, whether a drained low may drive a touch (the
+concurrent point-sample must itself be fresh/trusted). The accumulator is
+exception-safe by construction so a payload-shape quirk can never raise out of
+the reader thread and trip the reconnect breaker.
+
 :class:`SaxoPriceStream`'s socket loop is thin glue around
 :func:`alphalens_pipeline.data.alt_data.saxo_stream_envelope.parse_stream_frames`
 and the SIM streaming reader's reconnect tuning (``max_consecutive_failures=6``,
@@ -44,6 +56,7 @@ import contextlib
 import datetime as dt
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -94,6 +107,41 @@ _RESET_SUBSCRIPTIONS_REF = "_resetsubscriptions"
 _DEFAULT_GAUGE_JOB = "live-price-stream"
 _GAUGE_MIN_INTERVAL_S = 15.0
 
+# Touch-latch spread ceiling for the 1 Hz running-low accumulator
+# (entry_trailing_design_2026_08_12.md §5 mitigation path). MIRRORS
+# ``broker_contract.price_feed.DEFAULT_MAX_RELATIVE_SPREAD`` (0.02) as a VALUE,
+# never by importing that decision-layer module (this data package must not
+# import broker_contract; same "reused as VALUES only" idiom as the reconnect
+# tuning above). Pinned equal by a test so the copy cannot silently drift.
+# Applied as (ask-bid)/bid, which is strictly TIGHTER than is_fresh's
+# (ask-bid)/mid (bid < mid), so the latch never admits a quote is_fresh would
+# reject on spread — an intentional at-least-as-strict second gate, not a
+# competing definition.
+_LATCH_MAX_RELATIVE_SPREAD = 0.02
+
+
+def _latchable_side(value: object) -> float | None:
+    """Coerce a raw JSON quote side to a finite, strictly-positive float, or
+    ``None`` on ANY doubt (non-numeric, non-finite, non-positive).
+
+    Veto-not-raise is mandatory: ``QuoteCache.apply`` runs on the WebSocket
+    reader thread and stores bid/ask uncoerced (``Quote.bid``/``ask`` are
+    ``float | None`` but a live payload can carry a string or an explicit null,
+    e.g. a one-sided market or a halt). A bare ``math.isfinite`` / comparison /
+    division on that value would raise ``TypeError`` inside ``apply``; an
+    uncaught exception there is counted as a connection failure by ``_supervise``
+    and, after ``_MAX_CONSECUTIVE_FAILURES`` such frames, trips the reconnect
+    circuit breaker and darkens the whole live feed (entries AND live exits).
+    So no arithmetic may touch a side until it is proven a finite number —
+    mirrors ``broker_contract.price_feed._is_finite_number``."""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0.0:
+        return None
+    return number
+
 
 def _parse_utc(raw: object) -> dt.datetime | None:
     if not isinstance(raw, str) or not raw:
@@ -135,6 +183,16 @@ class QuoteCache:
 
     def __init__(self) -> None:
         self._quotes: dict[int, Quote] = {}
+        # 1 Hz running-LOW accumulator per uic (touch-latch,
+        # entry_trailing_design §5): the minimum latchable bid since the last
+        # drain. Bounded by the live subscription set — ``forget`` (on
+        # unsubscribe) pops it alongside the quote. Written under ``_lock`` on
+        # the reader thread, drained under ``_lock`` on the caller thread. This
+        # is the ONE accumulation that provably cannot live in the 45s feed
+        # adapter (it needs every 1 Hz frame), so it is gated HERE by exception
+        # for the reader thread's sake; the freshness gate that decides whether
+        # a drained low may drive an order still lives in the feed adapter.
+        self._running_low: dict[int, float] = {}
         self._lock = threading.Lock()
 
     def apply(self, row: dict[str, Any], *, received_at: dt.datetime) -> None:
@@ -198,6 +256,41 @@ class QuoteCache:
                 received_at=received_at,
             )
             self._quotes[uic] = merged
+            self._update_running_low(uic, merged)
+
+    def _update_running_low(self, uic: int, quote: Quote) -> None:
+        """Fold ``quote.bid`` into the per-uic running low, but ONLY for a
+        latchable quote. MUST be called with ``self._lock`` held (it is, from
+        ``apply``) — it never re-acquires (``_lock`` is non-reentrant).
+
+        Latchable = undelayed (``DelayedByMinutes`` strictly ``0``; None/absent
+        rejected) AND both sides finite positive numbers AND not crossed
+        (``ask >= bid``) AND relative spread within ``_LATCH_MAX_RELATIVE_SPREAD``.
+        Any doubt is a veto (no arithmetic on a side until proven finite): a
+        single transient crossed / delayed / garbage tick must never plant a
+        phantom low that later drives a false touch."""
+        if quote.delayed_by_minutes != 0:
+            return
+        bid = _latchable_side(quote.bid)
+        ask = _latchable_side(quote.ask)
+        if bid is None or ask is None:
+            return
+        if ask < bid:  # crossed market
+            return
+        if (ask - bid) / bid > _LATCH_MAX_RELATIVE_SPREAD:
+            return
+        prev = self._running_low.get(uic)
+        self._running_low[uic] = bid if prev is None else min(prev, bid)
+
+    def drain_running_low(self, uic: int) -> float | None:
+        """Pop-and-reset the accumulated running low for ``uic`` (read once,
+        then gone), or ``None`` when nothing latchable accrued since the last
+        drain. The reset is what bounds the accumulation window to one tick —
+        the caller drains each watched uic EXACTLY once per decision tick, so a
+        laddered pick's deeper tiers all share the same drained low rather than
+        the first tier consuming it."""
+        with self._lock:
+            return self._running_low.pop(uic, None)
 
     def get(self, uic: int) -> Quote | None:
         with self._lock:
@@ -206,6 +299,7 @@ class QuoteCache:
     def forget(self, uic: int) -> None:
         with self._lock:
             self._quotes.pop(uic, None)
+            self._running_low.pop(uic, None)
 
     def any_delayed(self) -> bool:
         """True once ANY cached quote reports a positive ``DelayedByMinutes``
@@ -306,6 +400,11 @@ class SaxoPriceStream:
 
     def get(self, uic: int) -> Quote | None:
         return self.cache.get(uic)
+
+    def drain_running_low(self, uic: int) -> float | None:
+        """Pop-and-reset the cache's 1 Hz running low for ``uic`` (touch-latch).
+        The feed adapter drains this once per watched uic per decision tick."""
+        return self.cache.drain_running_low(uic)
 
     def is_running(self) -> bool:
         """True once ``start()`` has launched the reader thread and it is
