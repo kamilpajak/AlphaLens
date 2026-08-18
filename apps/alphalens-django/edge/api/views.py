@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from django.db.models.functions import Coalesce
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework.request import Request
@@ -139,10 +140,20 @@ class EdgeOutcomesView(APIView):
         elif status_filter == "ongoing":
             qs = qs.filter(terminal=False)
 
-        qs = qs.order_by("-brief_date", "ticker")
+        # Order by RECENCY OF ACTIVITY: maturity date for terminal rows, brief
+        # date for ongoing ones. Ordering by brief_date alone structurally starved
+        # TIME_STOP out of the capped listing — a TIME_STOP always carries an old
+        # brief_date (the position aged to its TTL), so "newest briefs first"
+        # evicted every one of them while fresher rows survived. Recency has no
+        # such class bias. Caveat: after a store re-seed / multi-day catch-up,
+        # terminal rows bunch at one matured_at and briefly dominate the top.
+        # Tiebreak on the (brief_date, ticker) composite PK keeps it deterministic.
+        qs = qs.annotate(recency=Coalesce("matured_at", "brief_date")).order_by(
+            "-recency", "-brief_date", "ticker"
+        )
         # True match count BEFORE the per-page cap, so the SPA can render an honest
         # "showing N of M" + a truncation notice instead of silently dropping the
-        # oldest rows once the window exceeds `_OUTCOMES_LIMIT`.
+        # least recently active rows once the window exceeds `_OUTCOMES_LIMIT`.
         total = qs.count()
         outcomes = list(qs[:_OUTCOMES_LIMIT])
 
