@@ -10,8 +10,10 @@ changes between them):
   ``expires_in − 120 s`` on the monotonic clock, atomic newest-pair
   persistence to ``~/.alphalens/saxo_auth/token_store.json`` (0600, flock on
   a sibling ``.lock``), sibling-process adoption instead of burning a
-  rotation, and a best-effort alert on refresh-chain loss (re-solving the job
-  of the ``alphalens-saxo-refresh`` unit removed by ADR 0012). The alert sink
+  rotation, and a best-effort alert on refresh-chain loss (the ADR 0012
+  decommission removed the old paper-chain ``alphalens-saxo-refresh`` unit; a
+  same-named unit was re-added 2026-07 running ``broker auth --refresh`` as a
+  belt over this provider's own proactive renewal). The alert sink
   is a ``NotificationPort`` (PR-4): the composition root (CLI) injects the
   concrete Telegram sink; an un-injected default just logs to journald via
   ``_log_chain_loss`` — this module never imports telegram.

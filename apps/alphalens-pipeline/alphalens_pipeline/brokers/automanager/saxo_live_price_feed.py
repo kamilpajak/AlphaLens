@@ -22,8 +22,9 @@ SOURCE = "saxo-live-l1"
 class SaxoLivePriceFeed:
     """A structural ``PriceFeed`` reading the live quote cache.
 
-    ``resolve_live_uic`` maps the caller's uic (which comes from the SIM broker's
-    positions) to the LIVE uic the stream is keyed by. The two are NOT assumed
+    ``resolve_live_uic`` maps the caller's uic (from the managing instance's
+    positions — SIM, or LIVE under the ADR 0017 daemon; the same feed factory
+    serves both) to the LIVE uic the stream is keyed by. The two are NOT assumed
     equal: subscribing to the wrong instrument would be a silent catastrophe.
     """
 

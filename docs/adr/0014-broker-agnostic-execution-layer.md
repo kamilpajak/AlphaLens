@@ -1,6 +1,10 @@
 # ADR 0014 — Broker-agnostic execution layer (Saxo first, SIM-only)
 
 - **Status:** Accepted
+- **Amended by:** ADR 0015 (attended day-bound LIVE unlock), ADR 0016
+  (per-environment broker state), ADR 0017 (standing LIVE authorization) —
+  the SIM-only rail stays the default; LIVE is reachable only via those
+  unlocks.
 - **Date:** 2026-07-17
 - **Supersedes:** — (successor to, NOT a reversal of, ADR 0012)
 - **Related:** ADR 0012 (decommission paper-trading + broker chain),

@@ -15,8 +15,10 @@ hosts where launchd is unavailable.
 | `alphalens-form4-backfill.service` | long-running | SEC EDGAR Form-4 bulk backfill (resume-safe) — the one-time historical seed (DONE 2026-05-08) |
 | `alphalens-form4-incremental.{service,timer}` | daily 02:30 UTC | Form-4 daily incremental ingest — keeps `~/.alphalens/form4_parquet/` fresh after the seed froze. Self-sizing lookback (min 3 days, auto-extends to the store's newest filing, capped at `--max-catchup-days`) via the SEC daily form index; overlap dedups on `accession_number`. Needs `SEC_EDGAR_USER_AGENT`. **First run auto-catches-up the seed→today gap — no manual step** (see section below). |
 | `alphalens-grouped-daily-topup.{service,timer}` | daily 01:30 UTC | Appends the latest missing session(s) to the split-adjusted (`adjusted=true`) whole-market grouped-daily store that feeds the O'Neil **R** (relative-strength) term at the thematic `score` stage. Self-sizing catch-up; the free-tier entitlement cliff (`NOT_AUTHORIZED` past ~21–24 mo) stops cleanly. Distinct from the population-monitor's `adjusted=false` cache. Needs `POLYGON_API_KEY`. |
-| `alphalens-broker-manager.service` | long-running daemon (poll 45 s) | SIM Saxo auto-manager (ADR 0014) — drains armed picks → places brackets + standalone disaster stops → reconciles live broker state → manages ladder exits / protective stops to terminal. `Type=simple` + `Restart=on-failure`. **SIM-only**; placement still needs `ALPHALENS_BROKER_ALLOW_ORDERS=1`. See the "Saxo auto-manager (SIM)" runbook below. |
-| `alphalens-saxo-refresh.{service,timer}` | ~every 20 min | Saxo OAuth idle keep-alive (`broker auth --refresh`) — refreshes the SIM token inside its 40 min window so the broker-manager daemon never loses auth. **Re-added 2026-07 under ADR 0014** (the identically-named paper-chain unit was decommissioned 2026-06-03 — see the note below). |
+| `alphalens-broker-manager.service` | long-running daemon (poll 45 s) | SIM Saxo auto-manager (ADR 0014) — drains armed picks → places brackets + standalone disaster stops → reconciles live broker state → manages ladder exits / protective stops to terminal. `Type=simple` + `Restart=on-failure`. **Trades SIM only** — this is the SIM instance of the two-instance model (ADR 0016); the real-money twin is `alphalens-broker-manager-live.service` (§9, ADR 0017). Placement still needs `ALPHALENS_BROKER_ALLOW_ORDERS=1`. See the "Saxo auto-manager (SIM)" runbook below. |
+| `alphalens-broker-manager-live.service` | long-running daemon (poll 45 s) | LIVE twin of the auto-manager — places **REAL-MONEY** orders on Saxo LIVE under the ADR 0017 standing account-bound grant; `ALPHALENS_BROKER_ENVIRONMENT=live` pinned in-unit; ships INERT (`ALLOW_ORDERS=0`). Runbook: §9. |
+| `alphalens-saxo-refresh.{service,timer}` | ~every 20 min | Saxo OAuth idle keep-alive (`broker auth --refresh`) — refreshes the SIM token inside its 40 min window so the broker-manager daemon never loses auth. **Re-added 2026-07 under ADR 0014** (the identically-named paper-chain unit was decommissioned 2026-06-03 — see the note below). Keeps only the SIM chain alive — the LIVE daemon's chain is kept by `alphalens-saxo-marketdata-refresh.timer` (§9.0). |
+| `alphalens-saxo-marketdata-refresh.{service,timer}` | ~every 20 min | Keep-alive for the LIVE `saxo_auth_live` OAuth chain (app `bracket-keeper`) — feeds the LIVE price stream AND, since ADR 0017, the LIVE order rail's tokens. See "Saxo LIVE market data" §3. |
 | `alphalens-edge-mirror.{service,timer}` | hourly at `:05` UTC | Self-heal for the `/edge` dashboard — rebuilds the ladder-outcome Postgres cache from the population-ladder parquets, independent of the nightly `feedback-shadow-returns` compute (so `/edge` never lags a failed/late compute run). See "Edge mirror (decoupled)" below. |
 
 > **Decommissioned 2026-06-03 (ADR 0012):** the Alpaca paper-trading units
@@ -978,7 +980,7 @@ loginctl enable-linger "$USER"           # units survive logout (idempotent)
 
 Confirm the runtime dirs exist (created on first use, but the metrics dir needs write):
 ```bash
-mkdir -p ~/.alphalens/broker_orders
+mkdir -p ~/.alphalens/broker_orders/sim
 sudo install -d -o "$USER" -g "$USER" /var/lib/node_exporter/textfile   # heartbeat gauge target
 ```
 
@@ -1074,7 +1076,7 @@ Pick a ticker from a recent local brief (needs `~/.alphalens/thematic_briefs/<da
 ```bash
 # 6.1 arm it (attended CLI — this is the human "pick"):
 .venv/bin/alphalens broker arm S --date <YYYY-MM-DD>
-cat ~/.alphalens/broker_orders/picks.jsonl        # one armed line
+cat ~/.alphalens/broker_orders/sim/picks.jsonl        # one armed line
 
 # 6.2 turn on placement (the arm) + restart-scoped go-live:
 sudo sed -i 's/^# ALPHALENS_BROKER_ALLOW_ORDERS=1/ALPHALENS_BROKER_ALLOW_ORDERS=1/' /etc/alphalens/env
@@ -1099,12 +1101,12 @@ journalctl --user -u alphalens-broker-manager.service -f      # per-tick loop
 
 | Action | Command |
 |---|---|
-| **Emergency stop (instant)** | `touch ~/.alphalens/broker_orders/KILL` — the loop stops placing, still reconciles + cancels |
-| Resume after kill | `rm ~/.alphalens/broker_orders/KILL` |
+| **Emergency stop (instant)** | `touch ~/.alphalens/broker_orders/sim/KILL` (this SIM instance only) or `touch ~/.alphalens/broker_orders/KILL` (GLOBAL — halts SIM and LIVE, ADR 0016 D3) — the loop stops placing, still reconciles + cancels |
+| Resume after kill | `rm` the KILL file you created |
 | **Disarm placement** (softer than kill) | comment `ALPHALENS_BROKER_ALLOW_ORDERS` in `/etc/alphalens/env` → `systemctl --user restart alphalens-broker-manager.service` (runs inert) |
-| Arm a new pick | `.venv/bin/alphalens broker arm TICKER --date YYYY-MM-DD` (daemon picks it up next tick, joined to `submissions.jsonl` so it places once) |
+| Arm a new pick | `.venv/bin/alphalens broker arm TICKER --date YYYY-MM-DD` (daemon picks it up next tick, joined to `submissions.jsonl` so it places once) (`--env sim\|live` selects the instance inbox; default sim — LIVE twin: §9.4) |
 | Inspect | `journalctl --user -u alphalens-broker-manager.service -f` |
-| State files | picks: `~/.alphalens/broker_orders/picks.jsonl`; placements: `~/.alphalens/broker_orders/submissions.jsonl` (both append-only) |
+| State files | picks: `~/.alphalens/broker_orders/sim/picks.jsonl`; placements: `~/.alphalens/broker_orders/sim/submissions.jsonl` (both append-only; LIVE twin under `broker_orders/live/`) |
 | Stop the daemon | `systemctl --user disable --now alphalens-broker-manager.service` |
 | Full flat check | `.venv/bin/alphalens broker positions` + `... orders` |
 
@@ -1112,7 +1114,7 @@ journalctl --user -u alphalens-broker-manager.service -f      # per-tick loop
 
 ### 8. Safety recap
 
-- **SIM-only is structural** — `SaxoClient` refuses any non-SIM base URL; live is unreachable in code.
+- **SIM-default is structural** — `SaxoClient` refuses any non-SIM base URL on every default/factory path; LIVE opens only under the ADR 0015 attended keyed unlock or the ADR 0017 standing account-bound grant used by the separate LIVE unit (§9).
 - Layers before any real POST each tick: kill-file → chain alive → `ALLOW_ORDERS=1` → `MAX_OPEN` / portfolio-gross / daily-loss caps.
 - The disaster stop is ALWAYS a standalone `StopIfTraded` placed after the entry fills, sized to realized qty (a ~30–60 s unprotected window per tick — acceptable on SIM).
 - **Deferred (known issues, see the PR):** far-TP tranches are reported operator-managed (NOT placed); no ratchet / resize-on-partial / 42-session time-stop / streaming; alert debounce absent (persistent alerts repeat each tick).
@@ -1397,7 +1399,7 @@ systemctl --user daemon-reload
 
 ### 10. Per-environment state separation (ADR 0016) — one-time VPS migration
 
-ADR 0016 (design memo `docs/research/broker_env_state_separation_design_2026_08_10.md`) moves every mutable broker-state path from one flat `~/.alphalens/broker_orders/` tree into a per-instance layout, `~/.alphalens/broker_orders/<env>/`, so a future LIVE instance cannot corrupt the SIM instance's journals. This is a preparatory move only — there is still no LIVE instance (`broker manage` structurally refuses to boot with `ALPHALENS_BROKER_ENVIRONMENT=live`, ADR 0016 D7).
+ADR 0016 (design memo `docs/research/broker_env_state_separation_design_2026_08_10.md`) moves every mutable broker-state path from one flat `~/.alphalens/broker_orders/` tree into a per-instance layout, `~/.alphalens/broker_orders/<env>/`, so a future LIVE instance cannot corrupt the SIM instance's journals. When this migration shipped it was a preparatory move only (ADR 0016 D7 then hard-blocked `ALPHALENS_BROKER_ENVIRONMENT=live`); ADR 0017 since replaced that block with the LIVE factory route — `broker manage` with env=live now boots through `create_saxo_broker_live_from_env` + the live_rails boot-assert, and the LIVE instance exists (§9).
 
 **`ALPHALENS_BROKER_ENVIRONMENT` doctrine — pin it in the unit, never in `/etc/alphalens/env`.** The SIM daemon needs `ALPHALENS_BROKER_ENVIRONMENT=sim` set somewhere. It is pinned as an `Environment=` line inside `alphalens-broker-manager.service` itself (see the `[Service]` section), NOT in `/etc/alphalens/env`. CORRECTED 2026-08-11 (front-4 stage-1 finding): `EnvironmentFile=` overrides ALL `Environment=` lines — in-unit AND drop-in, regardless of order — so an in-unit pin does NOT survive a conflicting entry in the shared file. The pins hold ONLY because every `ALPHALENS_BROKER_*` rail is banned from `/etc/alphalens/env` (the strip is load-bearing), and the LIVE boot-assert is the tripwire: on the LIVE unit's first boot it caught leaked `MAX_OPEN=10` / `ALLOW_ORDERS=1` from the shared file overriding the in-unit pins. **Never set `ALPHALENS_BROKER_ENVIRONMENT` in `/etc/alphalens/env`** — that file is shared across future instances and setting the var there defeats the whole point of the in-unit pin.
 
@@ -1430,16 +1432,18 @@ The SIM broker-manager daemon (`alphalens-broker-manager.service`, above)
 trades on **SIM only** (ADR 0014 — that stays unchanged). The LIVE daemon
 (`alphalens-broker-manager-live.service`, §9 above) is the one exception —
 it places real orders on Saxo LIVE under the ADR 0017 standing grant — but
-it too consumes THIS market-data app only for prices, never for order
-placement; its order client is a completely separate rail (`brokers/saxo/`,
-still SIM-structural except for the ADR 0017 widening). Any daemon that
-reads exit prices from Saxo reads them from a SECOND app registered on the
-**LIVE** environment (app `bracket-keeper`) — LIVE because SIM quotes are
-15-minute-delayed. That app's trading permission is never used:
-`SaxoMarketDataClient`
-(`alphalens_pipeline/data/alt_data/saxo_marketdata_client.py`) only reads
-session capabilities, resolves tickers to uics, and manages one price
-subscription. Design memo: `docs/research/live_market_execution_inc2_design_2026_08_07.md`.
+its order client is separate CODE (`brokers/saxo/`, still SIM-structural
+except for the ADR 0017 widening) that AUTHENTICATES on this same
+`saxo_auth_live` chain (`live_tokens.LiveOrderTokenProvider` adapts it,
+§9.0) — so since ADR 0017 this app's trading permission IS exercised by the
+LIVE order rail, and keeping the chain alive is a LIVE-daemon precondition,
+not just a price-feed nicety. Any daemon that reads exit prices from Saxo
+reads them from a SECOND app registered on the **LIVE** environment (app
+`bracket-keeper`) — LIVE because SIM quotes are 15-minute-delayed.
+`SaxoMarketDataClient` itself
+(`alphalens_pipeline/data/alt_data/saxo_marketdata_client.py`) still only
+reads session capabilities, resolves tickers to uics, and manages one price
+subscription — it never places. Design memo: `docs/research/live_market_execution_inc2_design_2026_08_07.md`.
 
 **This is a DIFFERENT app, a DIFFERENT OAuth client, and a DIFFERENT token
 store from the SIM auto-manager above.** Do not reuse `SAXO_APP_KEY` /

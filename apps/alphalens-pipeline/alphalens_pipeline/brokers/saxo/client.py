@@ -138,7 +138,10 @@ class SaxoClient:
 
     Single shared throttle + retry across every consumer; construction is
     refused for any base URL other than :data:`SIM_BASE_URL` unless the
-    ADR 0015 keyed day-bound unlock is active (attended probes only).
+    ADR 0015 keyed day-bound unlock is active (attended probes only) or the
+    ADR 0017 standing account-bound grant is presented
+    (``standing_live_authorized=True`` plus :data:`LIVE_STANDING_ENV` equal to
+    :data:`LIVE_ACCOUNT_KEY_ENV` — the unattended daemon arm).
     """
 
     _MIN_REQUEST_INTERVAL_S = 0.5  # 120 req/min ceiling per session per service group
@@ -217,8 +220,11 @@ class SaxoClient:
         if env is not None and env.strip().lower() != "sim":
             raise SaxoLiveEnvironmentBlockedError(
                 f"{_SAXO_ENV_VAR}={env!r} is set but SaxoClient is SIM-only; "
-                "unset it or set it to 'sim'. Reaching LIVE requires a code "
-                "change gated on a future ADR (see ADR 0014)."
+                "unset it or set it to 'sim' — SAXO_ENV is not an environment "
+                "switch and from_env is unconditionally SIM. LIVE is reachable "
+                "only via the ADR 0015 attended keyed unlock or the ADR 0017 "
+                "LIVE factory (create_saxo_broker_live_from_env), never "
+                "through this variable."
             )
         if resolve_token_store_path().is_file():
             return cls(OAuthTokenProvider.from_env(), **kw)

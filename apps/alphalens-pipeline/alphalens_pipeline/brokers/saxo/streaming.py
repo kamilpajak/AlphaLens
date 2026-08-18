@@ -106,13 +106,15 @@ def _refuse_non_sim_streaming(streaming_base_url: str) -> None:
 
     Refuses any LIVE marker AND any host that is not exactly the SIM streaming
     host, so a typo'd / proxied LIVE URL is refused too. LIVE is unreachable by
-    construction (lifting the rail needs its own ADR — see ADR 0014).
+    construction (unchanged by the ADR 0015/0017 order-rail unlocks — LIVE
+    streaming would need its own future ADR).
     """
     lowered = streaming_base_url.lower()
     if any(marker in lowered for marker in _LIVE_STREAMING_MARKERS):
         raise SaxoLiveEnvironmentBlockedError(
-            f"streaming host {streaming_base_url!r} names a LIVE marker — SIM-only "
-            "(ADR 0014). LIVE streaming needs its own future ADR."
+            f"streaming host {streaming_base_url!r} names a LIVE marker "
+            "— SIM-only (ADR 0014; unchanged by ADR 0015/0017 — LIVE "
+            "streaming needs its own future ADR)."
         )
     if streaming_base_url != SIM_STREAMING_BASE_URL:
         raise SaxoLiveEnvironmentBlockedError(
