@@ -9,6 +9,12 @@ importing this registry costs nothing — no adapter package (and none of its
 vendor deps) loads until a broker is actually requested. Adding a second
 broker (IBKR) = one factory entry here + one adapter package; zero consumer
 changes.
+
+The registry stays SIM-only by design (ADR 0017): the LIVE factory
+(``create_saxo_broker_live_from_env``) is deliberately NEVER registered in
+``_BROKER_FACTORIES`` — LIVE construction happens only at explicit
+composition roots (the daemon's ``build_default_deps``, the CLI's
+``_cli_broker`` live branch), each of which runs the full LIVE boot-assert.
 """
 
 from __future__ import annotations

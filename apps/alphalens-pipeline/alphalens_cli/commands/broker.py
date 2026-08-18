@@ -30,6 +30,14 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
         bootstrap / --status / --refresh (since ADR 0017 the same chain also
         feeds the LIVE order rail)
 
+Every one-off broker-touching command (account / positions / resolve /
+submit / orders / reconcile / reconcile-fills / cancel) resolves its broker
+through :func:`_cli_broker` — env-aware per ``ALPHALENS_BROKER_ENVIRONMENT``,
+the same seam the per-env journal paths use — and echoes one
+``env=<env> gateway=<label>`` line to stderr. Under ``env=live`` reads route
+into the ADR 0017 LIVE factory and ad-hoc placement (``submit``) refuses
+(the daemon is the only LIVE placement path).
+
 All ``brokers`` imports are lazy inside command bodies — the ``alphalens``
 binary's startup time is paid by the 15-min Layer-1 edgar-detect cron
 (+913ms precedent; see CLAUDE.md lazy-CLI convention).
@@ -112,6 +120,103 @@ def _guard_state_layout() -> None:
         assert_no_legacy_flat_state()
     except BrokerStateLayoutError as exc:
         raise _fail(str(exc)) from exc
+
+
+def _cli_broker(*, mutating: bool) -> Broker:
+    """Resolve the broker for a one-off command per ``ALPHALENS_BROKER_ENVIRONMENT``.
+
+    The environment is read through ``state_paths.broker_environment()`` — the
+    SAME seam every per-env journal path resolves through — so the gateway a
+    command talks to and the journals it touches can never disagree (pre-fix,
+    ``reconcile`` under ``env=live`` read the live journal but asked the SIM
+    gateway). Under ``sim`` (the default) this is exactly the registry
+    ``get_default_broker()`` path. Under ``live``:
+
+    * ``mutating=True`` (ad-hoc placement, i.e. ``submit``) refuses loud
+      BEFORE any broker construction — ADR 0017: the ``manage`` daemon is the
+      ONLY LIVE placement path (the §4a probes are deliberate standalone
+      scripts). ``submit`` has no broker-free preview (the dry-run still
+      reads the account and prechecks server-side), so the WHOLE command
+      refuses.
+    * everything else — reads plus the risk-reducing ``cancel`` (same
+      doctrine that keeps it ungated by ``ALLOW_ORDERS``; the LIVE
+      manual-flatten runbook needs it) — builds the LIVE broker via the
+      ADR 0017 factory ``create_saxo_broker_live_from_env`` (lazy import,
+      house doctrine). The registry stays SIM-only per ADR 0017 — ``live``
+      is never registered in ``_BROKER_FACTORIES``. The factory demands the
+      daemon's FULL LIVE boot surface (the eight rail pins in soak bounds,
+      ``SAXO_LIVE_ACCOUNT_KEY``, the standing grant, the ``SAXO_LIVE_*``
+      auth env) before any network call, so ad-hoc LIVE commands only work
+      from a shell that sources the daemon EnvironmentFile; a raw
+      ``KeyError`` / ``SaxoError`` escaping the factory is converted to the
+      standard ``_fail`` refusal here. The returned token provider is
+      dropped — it exists for the daemon's SessionKeeper, which a one-shot
+      command does not run.
+
+    Echoes one ``env=<env> gateway=<sim|live|none|refused>`` line to STDERR at
+    resolution time (stdout carries the result only — CLI convention);
+    ``gateway=none`` marks the mutating-on-live refusal and ``gateway=refused``
+    a failed LIVE construction — the ``live`` label is emitted only AFTER the
+    factory succeeds, so the echo never claims a gateway that was not built.
+    The ``mutating`` keyword has NO default on purpose: a future mutating
+    caller must state its intent or it will not compile into the live-capable
+    branch by accident (zen review).
+    """
+    from alphalens_pipeline.brokers.automanager import state_paths
+
+    try:
+        env = state_paths.broker_environment()
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+    if env != state_paths.ENV_LIVE:
+        typer.secho(f"env={env} gateway=sim", err=True)
+        from alphalens_pipeline.brokers.registry import get_default_broker
+
+        return get_default_broker()
+
+    if mutating:
+        typer.secho(f"env={env} gateway=none", err=True)
+        raise _fail(
+            "env=live: ad-hoc placement on LIVE is forbidden by design "
+            "(ADR 0017) — the `alphalens broker manage` daemon is the only "
+            "LIVE placement path, and `submit` has no broker-free preview "
+            "(the dry-run still reads the account and prechecks server-side), "
+            "so the whole command refuses. Re-run with "
+            "ALPHALENS_BROKER_ENVIRONMENT=sim, or hand the pick to the live "
+            "daemon via `alphalens broker arm ... --env live`."
+        )
+
+    from alphalens_pipeline.brokers.saxo.broker import create_saxo_broker_live_from_env
+
+    try:
+        broker, _provider = create_saxo_broker_live_from_env()
+    except KeyError as exc:
+        # ``gateway=refused``: no live gateway was ever constructed — the echo
+        # must not claim one (zen review: emit the success label only on success).
+        typer.secho(f"env={env} gateway=refused", err=True)
+        raise _fail(
+            f"env=live: LIVE broker construction failed — missing env var {exc}. "
+            "Ad-hoc LIVE commands need the daemon's full LIVE boot surface "
+            "(rail pins + SAXO_LIVE_* auth env); source the daemon "
+            "EnvironmentFile first."
+        ) from exc
+    except RuntimeError as exc:
+        # Covers BrokerError (the rails' BrokerCapabilityError) AND SaxoError
+        # (SaxoLiveEnvironmentBlockedError) — both RuntimeError subclasses,
+        # but only the former would be rendered by the commands' `except
+        # BrokerError`; converting HERE keeps every call site clean. The broad
+        # catch is fail-closed by design, so keep the traceback for genuine
+        # factory bugs in the log (they would otherwise render as a refusal).
+        typer.secho(f"env={env} gateway=refused", err=True)
+        logger.warning(
+            "env=live: LIVE broker construction refused (%s)",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        raise _fail(f"env=live: LIVE broker construction refused — {exc}") from exc
+    typer.secho(f"env={env} gateway=live", err=True)
+    return broker
 
 
 def _wait_for_oauth_callback(port: int, path: str, timeout_s: int) -> tuple[str, str]:
@@ -328,7 +433,9 @@ def auth_command(
         False, "--no-browser", help="Print the authorize URL only (headless / SSH)."
     ),
 ) -> None:
-    """Bootstrap or inspect the Saxo OAuth session (SIM-only, Code grant).
+    """Bootstrap or inspect the Saxo SIM OAuth session (Code grant; since
+    ADR 0017 the LIVE order rail reuses the separate ``marketdata-auth``
+    ``saxo_auth_live`` chain instead — this command never touches it).
 
     Attended flow: opens the SIM login in a browser, catches the redirect on
     a one-shot localhost listener, exchanges the code, and persists the token
@@ -606,11 +713,10 @@ def marketdata_auth_command(
 @broker_app.command(name="account")
 def account_command() -> None:
     """Print the broker account snapshot (cash, total value, margin)."""
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from broker_contract.contract import BrokerError
 
     try:
-        snapshot = get_default_broker().get_account()
+        snapshot = _cli_broker(mutating=False).get_account()
     except BrokerError as exc:
         raise _fail(f"broker account failed: {exc}") from exc
 
@@ -626,11 +732,10 @@ def account_command() -> None:
 @broker_app.command(name="positions")
 def positions_command() -> None:
     """List open positions (signed quantity, avg price, market value, PnL)."""
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from broker_contract.contract import BrokerError
 
     try:
-        positions = get_default_broker().get_positions()
+        positions = _cli_broker(mutating=False).get_positions()
     except BrokerError as exc:
         raise _fail(f"broker positions failed: {exc}") from exc
 
@@ -660,11 +765,10 @@ def resolve_command(
     ),
 ) -> None:
     """Resolve (ticker, MIC) to the broker instrument handle (Saxo: Uic)."""
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from broker_contract.contract import BrokerError
 
     try:
-        ref = get_default_broker().resolve_instrument(ticker, exchange)
+        ref = _cli_broker(mutating=False).resolve_instrument(ticker, exchange)
     except BrokerError as exc:
         raise _fail(f"broker resolve failed: {exc}") from exc
 
@@ -770,14 +874,16 @@ def _resolve_instrument_and_plan(
     """
     from alphalens_pipeline.brokers import execution as execution_policy
     from alphalens_pipeline.brokers.execution import build_fx_conversion
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from alphalens_pipeline.brokers.routing import resolve_us_instrument
     from alphalens_pipeline.paper.sizing import parse_brief_to_spec
     from broker_contract.contract import BrokerError
     from broker_contract.sizing import TradeSetupNotPlannableError, compute_setup_plan
 
     try:
-        broker = get_default_broker()
+        # mutating=True: submit is ad-hoc PLACEMENT — under env=live the whole
+        # command refuses HERE, before the account read below (there is no
+        # broker-free preview; ADR 0017 keeps LIVE placement daemon-only).
+        broker = _cli_broker(mutating=True)
         # The account read is unconditional now: the BUDGET is the account
         # currency (FX-leg memo §7 Q1 operator decision), so the currency
         # compare needs AccountSnapshot.currency even with --equity given.
@@ -1190,11 +1296,10 @@ def arm_command(
 @broker_app.command(name="orders")
 def orders_command() -> None:
     """List open orders (entry + exit children; UNKNOWN never guessed)."""
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from broker_contract.contract import BrokerError
 
     try:
-        states = get_default_broker().list_open_orders()
+        states = _cli_broker(mutating=False).list_open_orders()
     except BrokerError as exc:
         raise _fail(f"broker orders failed: {exc}") from exc
 
@@ -1239,7 +1344,6 @@ def reconcile_command(
         reconcile_brackets,
         summarize,
     )
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from alphalens_pipeline.brokers.submission_log import iter_submission_records
     from broker_contract.contract import BrokerError
 
@@ -1258,11 +1362,18 @@ def reconcile_command(
             err=True,
         )
     if not records:
+        # No broker is resolved on this path, but the operator still deserves
+        # the env line every other broker-touching invocation prints — an empty
+        # LIVE journal reading as "nothing to reconcile" with no env context
+        # is exactly the ambiguity the echo exists to remove (zen review).
+        from alphalens_pipeline.brokers.automanager import state_paths
+
+        typer.secho(f"env={state_paths.broker_environment()} gateway=none", err=True)
         typer.echo(f"no submission records in {path} — nothing to reconcile")
         return
 
     try:
-        verdicts = reconcile_brackets(records, get_default_broker())
+        verdicts = reconcile_brackets(records, _cli_broker(mutating=False))
     except BrokerError as exc:
         raise _fail(f"broker reconcile failed: {exc}") from exc
 
@@ -1328,7 +1439,6 @@ def reconcile_fills_command(
         write_exec_quality_parquet,
     )
     from alphalens_pipeline.brokers.reconcile import SupportsOrderResolution
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from broker_contract.contract import BrokerError
 
     _guard_state_layout()
@@ -1336,7 +1446,7 @@ def reconcile_fills_command(
     out_path = out or state_paths.exec_quality_parquet()
     lines = list(control_loop._iter_standalone_stop_journal())
 
-    broker = get_default_broker()
+    broker = _cli_broker(mutating=False)
     if not isinstance(broker, SupportsOrderResolution):
         raise _fail(
             "the configured broker does not support order-outcome resolution "
@@ -1389,11 +1499,10 @@ def cancel_command(
     order_id: str = typer.Argument(..., help="Broker OrderId (entry cancel cascades exits)."),
 ) -> None:
     """Cancel an order. Deliberately usable without the placement env gate."""
-    from alphalens_pipeline.brokers.registry import get_default_broker
     from broker_contract.contract import BrokerError
 
     try:
-        get_default_broker().cancel_order(order_id)
+        _cli_broker(mutating=False).cancel_order(order_id)
     except BrokerError as exc:
         raise _fail(f"broker cancel failed: {exc}") from exc
     typer.echo(f"cancelled {order_id} (an entry cancel cascades to its bracket children)")
