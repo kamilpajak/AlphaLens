@@ -163,6 +163,106 @@ class TestQuoteCache(unittest.TestCase):
         self.assertTrue(any("uic" in line.lower() for line in cm.output), cm.output)
         self.assertIsNone(c.get(211))
 
+    def test_truthy_non_dict_quote_block_is_skipped_not_raised(self):
+        """A row whose 'Quote' value is a truthy NON-dict slips past the
+        falsy-only ``or {}`` guard and raises AttributeError inside apply.
+        On the reader thread that is a counted connection failure — and when
+        the row comes from the create-subscription REST snapshot the SAME body
+        repeats on every reconnect, so six identical creates trip the breaker
+        deterministically. Must skip the row (cached quote untouched) with a
+        warning, never raise."""
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)
+        for garbage in ("Delayed", ["Bid", 1.0], 5):
+            with self.subTest(garbage=garbage):
+                with self.assertLogs(
+                    "alphalens_pipeline.data.alt_data.saxo_price_stream", level="WARNING"
+                ) as cm:
+                    c.apply(
+                        {"Uic": 211, "LastUpdated": "2026-08-07T13:48:02Z", "Quote": garbage},
+                        received_at=_T0 + dt.timedelta(seconds=2),
+                    )  # must not raise
+                self.assertTrue(any("quote" in line.lower() for line in cm.output), cm.output)
+        q = c.get(211)
+        self.assertEqual((q.bid, q.ask), (314.01, 314.04))  # untouched
+        self.assertEqual(q.delayed_by_minutes, 0)
+        self.assertEqual(q.event_time, dt.datetime(2026, 8, 7, 13, 47, 59, tzinfo=dt.UTC))
+
+    def test_truthy_non_dict_quote_block_on_first_contact_creates_nothing(self):
+        c = QuoteCache()
+        with self.assertLogs("alphalens_pipeline.data.alt_data.saxo_price_stream", level="WARNING"):
+            c.apply(
+                {"Uic": 300, "LastUpdated": "2026-08-07T13:48:00Z", "Quote": "Delayed"},
+                received_at=_T0,
+            )
+        self.assertIsNone(c.get(300))
+
+    def test_numeric_string_delayed_coerces_and_keeps_the_delay_signal(self):
+        """apply stored DelayedByMinutes UNCOERCED, so ``any_delayed``'s
+        ``> 0`` raised TypeError on a string payload — on the reader thread
+        (via ``_maybe_reclaim``) a counted failure, and deterministic once the
+        value comes from the create-subscription snapshot. A numeric string
+        must coerce to int (keeping the demotion signal alive), never raise."""
+        c = QuoteCache()
+        c.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": 1.0, "Ask": 1.1, "DelayedByMinutes": "15"},
+            },
+            received_at=_T0,
+        )
+        self.assertEqual(c.get(211).delayed_by_minutes, 15)
+        self.assertTrue(c.any_delayed())  # must not raise
+
+    def test_garbage_delayed_vetoes_to_none_without_raising(self):
+        """A non-numeric DelayedByMinutes is 'unknown delay': stored as None
+        (which every consumer already treats as not-confirmed-fresh), so
+        ``any_delayed`` stays False and the latch vetoes — never a raise."""
+        c = QuoteCache()
+        c.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": 1.0, "Ask": 1.1, "DelayedByMinutes": "N/A"},
+            },
+            received_at=_T0,
+        )
+        self.assertIsNone(c.get(211).delayed_by_minutes)
+        self.assertFalse(c.any_delayed())  # must not raise
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_out_of_order_row_coerces_a_carried_string_delayed_flag(self):
+        """The regression branch applies a newly-reported delay even on a
+        dropped row — that path must coerce too, or the string reaches
+        ``any_delayed`` all the same."""
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)  # DelayedByMinutes=0
+        c.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:47:50Z",  # regressive
+                "Quote": {"Bid": 1.0, "DelayedByMinutes": "15"},
+            },
+            received_at=_T0 + dt.timedelta(seconds=3),
+        )
+        self.assertEqual(c.get(211).delayed_by_minutes, 15)
+        self.assertTrue(c.any_delayed())  # must not raise
+
+    def test_prune_except_drops_quotes_and_running_lows_outside_the_keep_set(self):
+        """Reader-thread companion to the caller-side ``forget``: after a
+        (re)create, everything outside the desired set — quote AND planted
+        running low — must go, so an in-flight snapshot cannot leave a frozen
+        entry behind."""
+        c = QuoteCache()
+        c.apply(_row(), received_at=_T0)  # uic 211, latchable -> low planted
+        c.apply(_row(Uic=7), received_at=_T0)
+        c.prune_except({7})
+        self.assertIsNone(c.get(211))
+        self.assertIsNone(c.drain_running_low(211))
+        self.assertIsNotNone(c.get(7))
+        self.assertEqual(c.drain_running_low(7), 314.01)
+
     def test_non_numeric_uic_does_not_block_a_valid_row_in_the_same_frame(self):
         c = QuoteCache()
         c.apply(
@@ -623,6 +723,25 @@ class TestSaxoPriceStreamReclaim(unittest.TestCase):
         stream = SaxoPriceStream(client, _FakeTokenProvider())
         stream._apply_frame(_delayed_frame(1, delayed_by_minutes=0))
         self.assertEqual(client.calls, 0)
+
+    def test_string_delayed_delta_still_triggers_the_reclaim(self):
+        """End-to-end through ``_apply_frame``: a delta carrying
+        DelayedByMinutes as a JSON string must neither raise out of
+        ``_maybe_reclaim`` (a counted failure on the reader thread) nor lose
+        the demotion signal — the coerced 15 still fires the reclaim."""
+        client = _ReclaimTrackingClient([True])
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        payload = json.dumps(
+            [
+                {
+                    "Uic": 5,
+                    "LastUpdated": "2026-08-07T13:48:01Z",
+                    "Quote": {"Bid": 1.0, "Ask": 1.1, "DelayedByMinutes": "15"},
+                }
+            ]
+        ).encode("utf-8")
+        stream._apply_frame(_build_frame(1, "px", payload))  # must not raise
+        self.assertEqual(client.calls, 1)
 
     def test_budget_exhausted_logs_a_warning_and_leaves_the_quote_delayed(self):
         """No bypass: the freshness gate already vetoes delayed quotes, so the
@@ -1147,6 +1266,42 @@ class TestSubscriptionSnapshotSeedsTheCache(unittest.TestCase):
         self.assertTrue(any("uic" in line.lower() for line in cm.output), cm.output)
         self.assertEqual(stream.get(211).delayed_by_minutes, 0)
 
+    def test_snapshot_row_with_non_dict_quote_block_never_raises(self):
+        """The deterministic-breaker arm of the veto contract: unlike a
+        one-off malformed WS frame, the create-subscription REST body repeats
+        IDENTICALLY on every reconnect, so a raise on a truthy non-dict Quote
+        would burn the whole breaker budget in six creates. The dict-row guard
+        alone does not cover it — the row IS a dict; its Quote is not."""
+        response = {
+            "Snapshot": {
+                "Data": [
+                    {"Uic": 300, "LastUpdated": "2026-08-07T13:47:58Z", "Quote": "Delayed"},
+                    dict(_SNAPSHOT_ROW),
+                ]
+            }
+        }
+        stream = self._stream(response)
+        with self.assertLogs(
+            "alphalens_pipeline.data.alt_data.saxo_price_stream", level="WARNING"
+        ) as cm:
+            self._subscribe_and_create(stream)  # must not raise
+        self.assertTrue(any("quote" in line.lower() for line in cm.output), cm.output)
+        self.assertIsNone(stream.get(300))
+        self.assertEqual(stream.get(211).delayed_by_minutes, 0)
+
+    def test_snapshot_string_delayed_seeds_a_coerced_int_and_any_delayed_survives(self):
+        """The snapshot is what first populates delayed_by_minutes on a
+        real-time session — if it seeds an uncoerced string, the NEXT frame's
+        ``_maybe_reclaim -> any_delayed`` raises TypeError, the connection
+        dies, and the deterministic REST body re-seeds the same string until
+        the breaker trips. The seed must coerce: signal kept, no raise."""
+        row = dict(_SNAPSHOT_ROW)
+        row["Quote"] = {**_SNAPSHOT_ROW["Quote"], "DelayedByMinutes": "15"}
+        stream = self._stream({"Snapshot": {"Data": [row]}})
+        self._subscribe_and_create(stream)
+        self.assertTrue(stream.cache.any_delayed())  # must not raise
+        self.assertEqual(stream.get(211).delayed_by_minutes, 15)
+
 
 class TestSuperviseAppliesTheCreateSnapshot(unittest.TestCase):
     """End-to-end through the reader loop: the connection's own
@@ -1172,6 +1327,57 @@ class TestSuperviseAppliesTheCreateSnapshot(unittest.TestCase):
         q = stream.get(211)
         self.assertEqual(q.delayed_by_minutes, 0)
         self.assertEqual(stream.drain_running_low(211), 18.61)
+
+
+class _RacingRemovalClient(_SubTrackingClient):
+    """The finding-3 race made deterministic: the caller's ``ensure_subscribed``
+    removes a uic BETWEEN the reader's desired-set read and the create
+    response. The fake's create reflects the REQUESTED uics in its snapshot
+    (like the real venue) and, on the FIRST create only, performs the
+    caller-side removal before returning — so the response resurrects the
+    just-forgotten uic 212 with a delayed row."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stream: SaxoPriceStream | None = None
+
+    @staticmethod
+    def _snapshot_row(uic: int) -> dict:
+        return {
+            "Uic": uic,
+            "LastUpdated": "2026-08-07T13:47:58Z",
+            "Quote": {"Bid": 18.70, "Ask": 18.71, "DelayedByMinutes": 15 if uic == 212 else 0},
+        }
+
+    def create_price_subscription(self, **kwargs):
+        super().create_price_subscription(**kwargs)
+        if self.stream is not None and len(self.creates) == 1:
+            self.stream.ensure_subscribed({211})  # caller lands mid-create: 212 leaves
+        return {"Snapshot": {"Data": [self._snapshot_row(u) for u in kwargs["uics"]]}}
+
+
+class TestRecreatePrunesResurrectedQuotes(unittest.TestCase):
+    """Finding-3 race: ``ensure_subscribed``'s forget-on-removal can be undone
+    by an in-flight create's snapshot applied AFTER the forget — pre-snapshot
+    this window was benign (WS deltas omit DelayedByMinutes), but a snapshot
+    row reporting a delay would pin ``any_delayed`` True for the process
+    lifetime, retrying ``elevate_session`` every 5 minutes forever. Every
+    recreate must therefore prune the cache to a FRESH desired-set read; a
+    removal that still slips through re-arms the dirty flag, so the loop's
+    follow-up recreate prunes it (eventual invariant: cached uics ⊆ desired)."""
+
+    def test_in_flight_snapshot_cannot_pin_a_removed_uic_forever(self):
+        client = _RacingRemovalClient()
+        stream = SaxoPriceStream(client, _FakeTokenProvider(), clock=lambda: _T0)
+        client.stream = stream
+        stream.ensure_subscribed({211, 212})
+        stream._recreate_subscription()  # in-flight create resurrects 212 after the forget
+        self.assertTrue(stream._sub_dirty.is_set(), "the caller's removal re-armed the flag")
+        stream._recreate_subscription()  # the loop's guaranteed dirty follow-up
+        self.assertIsNone(stream.get(212), "the resurrected quote must be pruned")
+        self.assertIsNone(stream.cache.drain_running_low(212))
+        self.assertFalse(stream.cache.any_delayed(), "a stale delayed row must not pin any_delayed")
+        self.assertIsNotNone(stream.get(211), "the still-desired uic keeps its quote")
 
 
 class TestSuperviseIdleWithoutSubscriptions(unittest.TestCase):

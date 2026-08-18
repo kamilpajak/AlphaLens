@@ -152,6 +152,23 @@ def _latchable_side(value: object) -> float | None:
     return number
 
 
+def _coerce_delayed_minutes(value: object) -> int | None:
+    """Coerce a raw JSON ``DelayedByMinutes`` to an ``int``, or ``None`` on any
+    doubt (non-numeric, explicit null).
+
+    Same veto-not-raise rationale as :func:`_latchable_side`, with one twist:
+    ``any_delayed``'s ``> 0`` comparison would raise ``TypeError`` on an
+    uncoerced string, and once the value comes from the DETERMINISTIC
+    create-subscription REST snapshot the raise repeats on every reconnect
+    until the breaker trips. A numeric string keeps the demotion signal
+    (coerces to its int); garbage vetoes to ``None`` ("unknown delay"), which
+    every consumer already treats as not-confirmed-fresh."""
+    try:
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return None
+
+
 def _parse_utc(raw: object) -> dt.datetime | None:
     if not isinstance(raw, str) or not raw:
         return None
@@ -221,6 +238,18 @@ class QuoteCache:
             return
         event_time = _parse_utc(row.get("LastUpdated"))
         quote_block = row.get("Quote") or {}
+        if not isinstance(quote_block, dict):
+            # A truthy NON-dict Quote value slips past the falsy-only
+            # ``or {}`` guard and would raise AttributeError on the .get()
+            # calls below — on the reader thread that is a counted connection
+            # failure, and when the row comes from the create-subscription
+            # REST snapshot the SAME body repeats on every reconnect, so six
+            # identical creates trip the breaker deterministically. Skip the
+            # whole row instead (same discipline as a malformed Uic).
+            logger.warning(
+                "saxo price stream: dropping row with non-dict Quote block: %r", quote_block
+            )
+            return
         with self._lock:
             prev = self._quotes.get(uic)
             # Sequence regression: an older quote never overwrites a newer one.
@@ -241,7 +270,10 @@ class QuoteCache:
             if prev is not None and prev.event_time and event_time and event_time < prev.event_time:
                 if "DelayedByMinutes" in quote_block:
                     self._quotes[uic] = replace(
-                        prev, delayed_by_minutes=quote_block.get("DelayedByMinutes")
+                        prev,
+                        delayed_by_minutes=_coerce_delayed_minutes(
+                            quote_block.get("DelayedByMinutes")
+                        ),
                     )
                 return
             # Bid / Ask / DelayedByMinutes each apply the SAME distinction,
@@ -259,8 +291,13 @@ class QuoteCache:
                 bid=quote_block.get("Bid", prev.bid if prev else None),
                 ask=quote_block.get("Ask", prev.ask if prev else None),
                 event_time=event_time or (prev.event_time if prev else None),
-                delayed_by_minutes=quote_block.get(
-                    "DelayedByMinutes", prev.delayed_by_minutes if prev else None
+                delayed_by_minutes=(
+                    # PRESENT key: coerce-or-veto the reported value (a raw
+                    # string must never reach any_delayed's ``> 0``); OMITTED
+                    # key: inherit the previous, already-coerced value.
+                    _coerce_delayed_minutes(quote_block["DelayedByMinutes"])
+                    if "DelayedByMinutes" in quote_block
+                    else (prev.delayed_by_minutes if prev else None)
                 ),
                 received_at=received_at,
             )
@@ -327,6 +364,24 @@ class QuoteCache:
         with self._lock:
             self._quotes.pop(uic, None)
             self._running_low.pop(uic, None)
+
+    def prune_except(self, keep: set[int]) -> None:
+        """Drop every cached quote AND running low whose uic is not in
+        ``keep``. Reader-thread companion to the caller-side ``forget``: an
+        in-flight create-subscription response can re-insert a quote for a
+        uic ``ensure_subscribed`` removed (and forgot) between the reader's
+        desired-set read and the snapshot apply — a snapshot row reporting a
+        delay would then pin ``any_delayed`` True for the process lifetime,
+        retrying the session reclaim forever. ``_recreate_subscription``
+        calls this after every (re)create with a FRESH desired-set read; a
+        removal that still slips through re-arms the dirty flag, so the
+        loop's follow-up recreate prunes it (eventual invariant: cached
+        uics ⊆ desired)."""
+        with self._lock:
+            for uic in [u for u in self._quotes if u not in keep]:
+                del self._quotes[uic]
+            for uic in [u for u in self._running_low if u not in keep]:
+                del self._running_low[uic]
 
     def any_delayed(self) -> bool:
         """True once ANY cached quote reports a positive ``DelayedByMinutes``
@@ -559,6 +614,12 @@ class SaxoPriceStream:
                 refresh_rate_ms=self._refresh_rate_ms,
             )
             self._apply_create_snapshot(response)
+        # The snapshot can resurrect a uic ``ensure_subscribed`` removed (and
+        # forgot) while the create was in flight — prune against a FRESH
+        # desired-set read, not the one captured above. A removal landing
+        # after even this read has re-armed the dirty flag, so the loop's
+        # follow-up recreate prunes it (see QuoteCache.prune_except).
+        self.cache.prune_except(self._desired_uics())
 
     def _apply_create_snapshot(self, response: object) -> None:
         """(Reader thread) Fold the create-subscription response's
