@@ -840,6 +840,22 @@ class _SubTrackingClient:
         self.deletes.append((context_id, reference_id))
 
 
+class _SnapshotClient(_SubTrackingClient):
+    """``_SubTrackingClient`` whose ``create_price_subscription`` returns a
+    configured response body — the create-subscription snapshot is the ONLY
+    carrier of ``DelayedByMinutes`` on a real-time session (2026-08-18 probe:
+    WS deltas omit unchanged/zero fields, so a discarded snapshot leaves
+    ``delayed_by_minutes`` None for the process lifetime)."""
+
+    def __init__(self, response) -> None:
+        super().__init__()
+        self._response = response
+
+    def create_price_subscription(self, **kwargs):
+        super().create_price_subscription(**kwargs)
+        return self._response
+
+
 def _px_frame(message_id: int, uic: int = 5) -> bytes:
     payload = json.dumps(
         [
@@ -866,8 +882,8 @@ class _SupervisedHarness:
     instant fake ``async_sleep`` that can stop the loop after N idle sleeps,
     and a recorded ``ws_connect``."""
 
-    def __init__(self, stream_kwargs=None, conns=None, stop_after_sleeps=None):
-        self.client = _SubTrackingClient()
+    def __init__(self, stream_kwargs=None, conns=None, stop_after_sleeps=None, client=None):
+        self.client = client if client is not None else _SubTrackingClient()
         self.ws_calls: list[str] = []
         self.sleeps: list[float] = []
         self._conns = list(conns or [])
@@ -995,6 +1011,167 @@ class TestEnsureSubscribedScopes(unittest.TestCase):
         stream.ensure_subscribed({5}, scope="entry-watch")
         stream.stop(timeout=0.1)
         self.assertEqual(len(client.deletes), 1)
+
+
+# The exact row shape a live create-subscription response carries in
+# Snapshot.Data (probe evidence 2026-08-18) — the SAME shape as a WS delta
+# row, so QuoteCache.apply consumes it unchanged.
+_SNAPSHOT_ROW = {
+    "AssetType": "Stock",
+    "DisplayAndFormat": {"Symbol": "OLN:xnys"},
+    "LastUpdated": "2026-08-07T13:47:58Z",
+    "PriceInfo": {"High": 18.80, "Low": 18.50},
+    "PriceSource": "NYSE",
+    "Quote": {"Bid": 18.70, "Ask": 18.71, "DelayedByMinutes": 0, "MarketState": "Open"},
+    "Uic": 211,
+}
+
+
+def _delta_frame_without_delay(
+    message_id: int, *, bid: float, ask: float, second: int, uic: int = 211
+) -> bytes:
+    """A WS delta frame as a REAL-TIME session delivers it: Bid/Ask/LastUpdated
+    but NO DelayedByMinutes key (Saxo omits unchanged/zero fields)."""
+    payload = json.dumps(
+        [
+            {
+                "Uic": uic,
+                "LastUpdated": f"2026-08-07T13:48:{second:02d}Z",
+                "Quote": {"Bid": bid, "Ask": ask},
+            }
+        ]
+    ).encode("utf-8")
+    return _build_frame(message_id, "px", payload)
+
+
+class TestSubscriptionSnapshotSeedsTheCache(unittest.TestCase):
+    """2026-08-18 LIVE incident root cause: ``_recreate_subscription``
+    DISCARDED the create-subscription response, whose ``Snapshot.Data`` rows
+    are the ONLY place Saxo reports ``DelayedByMinutes`` on a real-time
+    session (WS deltas omit unchanged/zero fields). ``delayed_by_minutes``
+    therefore stayed None for the process lifetime, the feed's strict
+    ``!= 0`` check vetoed every point-sample, and the 1 Hz touch-latch never
+    accrued — the entry-trail watch could never touch despite frames flowing
+    with the bid below the watch limit."""
+
+    def _stream(self, response) -> SaxoPriceStream:
+        return SaxoPriceStream(_SnapshotClient(response), _FakeTokenProvider(), clock=lambda: _T0)
+
+    @staticmethod
+    def _subscribe_and_create(stream: SaxoPriceStream) -> None:
+        stream.ensure_subscribed({211})
+        stream._recreate_subscription()  # the reader-thread path under test
+
+    def test_snapshot_seeds_delayed_zero_that_later_deltas_inherit(self):
+        """THE regression: after the create + delay-less deltas, the cached
+        quote's DelayedByMinutes must be the snapshot's confirmed 0 (inherited
+        under apply()'s omitted-key semantics), not a permanent None."""
+        stream = self._stream({"Snapshot": {"Data": [dict(_SNAPSHOT_ROW)]}})
+        self._subscribe_and_create(stream)
+        stream._apply_frame(_delta_frame_without_delay(1, bid=18.61, ask=18.62, second=1))
+        q = stream.get(211)
+        self.assertEqual(q.delayed_by_minutes, 0)
+        self.assertEqual(q.bid, 18.61)
+
+    def test_snapshot_received_at_comes_from_the_stream_clock(self):
+        """``received_at`` must come from the SAME injected clock
+        ``_apply_frame`` stamps deltas with — never a second clock source."""
+        stream = self._stream({"Snapshot": {"Data": [dict(_SNAPSHOT_ROW)]}})
+        self._subscribe_and_create(stream)
+        self.assertEqual(stream.get(211).received_at, _T0)
+
+    def test_touch_latch_accrues_from_delay_less_deltas_after_the_snapshot(self):
+        """The live 30s reproduction shape: bids below the watch limit on
+        delay-less deltas. With the snapshot applied the latch inherits the
+        confirmed 0 and the drain returns the accrued low instead of None."""
+        stream = self._stream({"Snapshot": {"Data": [dict(_SNAPSHOT_ROW)]}})
+        self._subscribe_and_create(stream)
+        stream._apply_frame(_delta_frame_without_delay(1, bid=18.61, ask=18.62, second=1))
+        stream._apply_frame(_delta_frame_without_delay(2, bid=18.65, ask=18.66, second=2))
+        self.assertEqual(stream.drain_running_low(211), 18.61)
+
+    def test_feed_point_sample_is_not_vetoed_on_the_delayed_check(self):
+        """The consumer-visible symptom: ``SaxoLivePriceFeed.latest`` returns
+        None whenever ``delayed_by_minutes != 0`` — including the permanent
+        None. With the snapshot applied, a fresh delay-less delta must yield a
+        real PricePoint."""
+        from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import SaxoLivePriceFeed
+
+        stream = self._stream({"Snapshot": {"Data": [dict(_SNAPSHOT_ROW)]}})
+        self._subscribe_and_create(stream)
+        stream._apply_frame(_delta_frame_without_delay(1, bid=18.61, ask=18.62, second=1))
+        feed = SaxoLivePriceFeed(
+            stream=stream,
+            resolve_live_uic=lambda _uic: 211,
+            clock=lambda: dt.datetime(2026, 8, 7, 13, 48, 2, tzinfo=dt.UTC),
+        )
+        point = feed.latest(999)
+        self.assertIsNotNone(point)
+        self.assertEqual((point.bid, point.ask), (18.61, 18.62))
+
+    def test_malformed_snapshot_response_shapes_never_raise(self):
+        """Veto-not-raise: ``_recreate_subscription`` runs on the reader
+        thread, where an uncaught exception is a counted connection failure —
+        a payload-shape change must never burn the reconnect breaker budget."""
+        for response in (
+            None,
+            [],
+            "not-a-dict",
+            {},
+            {"Snapshot": None},
+            {"Snapshot": []},
+            {"Snapshot": {}},
+            {"Snapshot": {"Data": None}},
+            {"Snapshot": {"Data": "not-a-list"}},
+            {"Snapshot": {"Data": {"Uic": 211}}},
+        ):
+            with self.subTest(response=response):
+                stream = self._stream(response)
+                self._subscribe_and_create(stream)  # must not raise
+                self.assertIsNone(stream.get(211))
+
+    def test_malformed_snapshot_rows_are_skipped_and_a_good_row_still_applies(self):
+        """A non-dict row or a garbage-Uic row is dropped silently (same
+        discipline as ``_apply_frame``'s row handling) while the good row in
+        the same snapshot still seeds the cache."""
+        response = {
+            "Snapshot": {
+                "Data": [None, "garbage-not-a-row", {"Uic": "not-a-number"}, dict(_SNAPSHOT_ROW)]
+            }
+        }
+        stream = self._stream(response)
+        with self.assertLogs(
+            "alphalens_pipeline.data.alt_data.saxo_price_stream", level="WARNING"
+        ) as cm:
+            self._subscribe_and_create(stream)  # must not raise
+        self.assertTrue(any("uic" in line.lower() for line in cm.output), cm.output)
+        self.assertEqual(stream.get(211).delayed_by_minutes, 0)
+
+
+class TestSuperviseAppliesTheCreateSnapshot(unittest.TestCase):
+    """End-to-end through the reader loop: the connection's own
+    ``_recreate_subscription`` (not a test-called one) must seed the cache
+    before the first delta arrives."""
+
+    def test_snapshot_applies_on_connection_before_the_first_delta(self):
+        client = _SnapshotClient({"Snapshot": {"Data": [dict(_SNAPSHOT_ROW)]}})
+        h = _SupervisedHarness(client=client)
+        stream = h.stream
+        conn = _ScriptedConn(
+            [
+                _delta_frame_without_delay(1, bid=18.61, ask=18.62, second=1),
+                lambda: (
+                    setattr(stream, "_stop", True),
+                    _delta_frame_without_delay(2, bid=18.63, ask=18.64, second=2),
+                )[1],
+            ]
+        )
+        h._conns.append(conn)
+        stream.ensure_subscribed({211})
+        h.run()
+        q = stream.get(211)
+        self.assertEqual(q.delayed_by_minutes, 0)
+        self.assertEqual(stream.drain_running_low(211), 18.61)
 
 
 class TestSuperviseIdleWithoutSubscriptions(unittest.TestCase):

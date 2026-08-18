@@ -536,18 +536,51 @@ class SaxoPriceStream:
     def _recreate_subscription(self) -> None:
         """(Reader thread) DELETE best-effort + CREATE for the current desired
         set on the CURRENT context. Clears the dirty flag first so a
-        concurrent ``ensure_subscribed`` re-arms it rather than being lost."""
+        concurrent ``ensure_subscribed`` re-arms it rather than being lost.
+
+        The create RESPONSE is applied to the cache, not discarded: its
+        ``Snapshot.Data`` rows are the ONLY place Saxo reports
+        ``DelayedByMinutes`` on a real-time session (probe evidence
+        2026-08-18 — WS deltas omit unchanged/zero fields). Discarding it
+        left ``delayed_by_minutes`` None for the process lifetime, so the
+        feed adapter's strict ``!= 0`` check vetoed every point-sample and
+        the 1 Hz touch-latch never accrued; once seeded, ``apply``'s
+        inherit-on-omission semantics carry the confirmed 0 across every
+        later delta."""
         self._sub_dirty.clear()
         desired = self._desired_uics()
         with contextlib.suppress(Exception):
             self._client.delete_price_subscription(self._context_id, self._reference_id)
         if desired:
-            self._client.create_price_subscription(
+            response = self._client.create_price_subscription(
                 context_id=self._context_id,
                 reference_id=self._reference_id,
                 uics=sorted(desired),
                 refresh_rate_ms=self._refresh_rate_ms,
             )
+            self._apply_create_snapshot(response)
+
+    def _apply_create_snapshot(self, response: object) -> None:
+        """(Reader thread) Fold the create-subscription response's
+        ``Snapshot.Data`` rows into the cache. The row shape is the SAME as a
+        WS delta row, so ``QuoteCache.apply`` consumes it unchanged, stamped
+        with the same clock ``_apply_frame`` uses. Veto-not-raise on every
+        shape doubt (missing keys, non-list Data, non-dict rows) — this runs
+        inside ``_run_one_connection``, where an uncaught exception is a
+        counted connection failure, and a payload-shape change must never
+        burn the reconnect breaker budget."""
+        if not isinstance(response, dict):
+            return
+        snapshot = response.get("Snapshot")
+        if not isinstance(snapshot, dict):
+            return
+        rows = snapshot.get("Data")
+        if not isinstance(rows, list):
+            return
+        received_at = self._clock()
+        for row in rows:
+            if isinstance(row, dict):
+                self.cache.apply(row, received_at=received_at)
 
     def start(self) -> None:
         if self._thread is not None:
