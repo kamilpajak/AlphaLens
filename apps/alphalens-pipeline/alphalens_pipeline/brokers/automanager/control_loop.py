@@ -889,6 +889,12 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
     journal, never the submissions journal — a signature carrying an unused
     param would be misleading, not merely symmetric."""
     if not _live_market_exits_enabled() or not _live_exits_orders_allowed():
+        # While disabled the gate is the only code in this pass that runs, so
+        # it owns releasing the "exits" scope — otherwise toggling the feature
+        # off freezes the scope on its last uics (under a non-trailing policy
+        # nothing else writes it) and the shared subscription streams them
+        # forever.
+        _release_feed_scope(deps, _FEED_SCOPE_EXITS)
         return
     try:
         long_positions = deps.broker.get_long_positions()

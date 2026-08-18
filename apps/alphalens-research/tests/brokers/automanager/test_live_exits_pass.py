@@ -476,6 +476,20 @@ class TestLiveExitsScopeMaintenance(_JournalCase):
             cl._run_live_exits_pass(deps, cl.TickReport())
         self.assertEqual(calls, [({}, "exits")])
 
+    def test_disabled_gate_releases_the_exits_scope(self) -> None:
+        # Toggling the feature off must not freeze the scope on its last
+        # uics: while disabled the gate is the only code that runs, so it
+        # owns the release — mirroring the entry-watch pass's feature-off
+        # release. Without it, disabling live exits under a non-trailing
+        # policy leaves the last positions' uics subscribed forever.
+        broker = FakeBroker()
+        calls: list[tuple[dict[int, tuple[str, str]], str]] = []
+        deps = _deps(broker, alerts=[], live_exits_feed_factory=self._capturing_factory(calls))
+        with mock.patch.dict(os.environ, {_ALLOW_ORDERS_ENV: "1"}, clear=False):
+            os.environ.pop(_LIVE_EXITS_ENV, None)
+            cl._run_live_exits_pass(deps, cl.TickReport())
+        self.assertEqual(calls, [({}, "exits")])
+
     def test_unmanaged_long_position_keeps_the_scope_on_the_position_uics(self) -> None:
         # A long position with NO tranche plan folds to zero managed exits,
         # but the scope must stay on the open-position uics — the same set the
