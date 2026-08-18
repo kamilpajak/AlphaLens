@@ -93,7 +93,7 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
             sweep_orphans_fn=lambda _b: [],
             alert=lambda _m: None,
             alert_throttled=_throttled,
-            live_exits_feed_factory=lambda _u2i: feed,
+            live_exits_feed_factory=lambda _u2i, *, scope: feed,
         )
 
     def test_flag_on_end_to_end_arms_one_native_trailing_order(self) -> None:

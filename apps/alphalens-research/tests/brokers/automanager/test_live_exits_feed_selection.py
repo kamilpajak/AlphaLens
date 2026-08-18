@@ -34,7 +34,7 @@ class TestFeedSelection(unittest.TestCase):
         here (the pre-amendment plan's fixture) would never catch the ON path
         unpacking it wrong (fix round 2, finding 2)."""
         with mock.patch.dict("os.environ", {}, clear=True):
-            feed = _default_live_exits_feed_factory({211: ("AAPL", "XNYS")})
+            feed = _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="exits")
         self.assertIsNone(feed.latest(211))
 
 
@@ -44,14 +44,14 @@ class _FakeSharedStream:
 
     def __init__(self, live_uic_map: dict[tuple[str, str], int]) -> None:
         self._live_uic_map = live_uic_map
-        self.ensure_subscribed_calls: list[list[int]] = []
+        self.ensure_subscribed_calls: list[tuple[str, list[int]]] = []
         self.quotes: dict[int, Quote] = {}
 
     def live_uic_for(self, ticker: str, *, exchange_mic: str) -> int | None:
         return self._live_uic_map.get((ticker, exchange_mic))
 
-    def ensure_subscribed(self, uics) -> None:
-        self.ensure_subscribed_calls.append(sorted(uics))
+    def ensure_subscribed(self, uics, *, scope: str) -> None:
+        self.ensure_subscribed_calls.append((scope, sorted(uics)))
 
     def get(self, uic: int) -> Quote | None:
         return self.quotes.get(uic)
@@ -75,16 +75,28 @@ class TestDefaultFactoryOnPathWiring(unittest.TestCase):
         fake_stream = _FakeSharedStream({("AAPL", "XNYS"): 9001})
         with mock.patch.dict("os.environ", _LIVE_PRICES_ENV, clear=True):
             with _patched_shared_stream(fake_stream):
-                _default_live_exits_feed_factory({211: ("AAPL", "XNYS"), 212: ("UNKNOWN", "ZZZZ")})
+                _default_live_exits_feed_factory(
+                    {211: ("AAPL", "XNYS"), 212: ("UNKNOWN", "ZZZZ")}, scope="exits"
+                )
         # 212's (UNKNOWN, ZZZZ) never resolves -- it must NOT reach the
         # subscription request; only the resolved LIVE uic does.
-        self.assertEqual(fake_stream.ensure_subscribed_calls, [[9001]])
+        self.assertEqual(fake_stream.ensure_subscribed_calls, [("exits", [9001])])
+
+    def test_the_callers_scope_reaches_ensure_subscribed_unchanged(self):
+        """The scope names the caller's slice of the shared subscription
+        (2026-08-18 churn fix): dropping it in transit would collapse every
+        feed build back into ONE fighting scope."""
+        fake_stream = _FakeSharedStream({("AAPL", "XNYS"): 9001})
+        with mock.patch.dict("os.environ", _LIVE_PRICES_ENV, clear=True):
+            with _patched_shared_stream(fake_stream):
+                _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="entry-watch")
+        self.assertEqual(fake_stream.ensure_subscribed_calls, [("entry-watch", [9001])])
 
     def test_resolve_live_uic_is_keyed_on_the_callers_sim_uic_not_the_live_uic(self):
         fake_stream = _FakeSharedStream({("AAPL", "XNYS"): 9001})
         with mock.patch.dict("os.environ", _LIVE_PRICES_ENV, clear=True):
             with _patched_shared_stream(fake_stream):
-                feed = _default_live_exits_feed_factory({211: ("AAPL", "XNYS")})
+                feed = _default_live_exits_feed_factory({211: ("AAPL", "XNYS")}, scope="exits")
         now = dt.datetime.now(dt.UTC)
         fake_stream.quotes[9001] = Quote(
             uic=9001, bid=100.0, ask=100.1, event_time=now, delayed_by_minutes=0, received_at=now

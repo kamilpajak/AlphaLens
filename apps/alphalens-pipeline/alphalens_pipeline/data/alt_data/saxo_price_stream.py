@@ -94,6 +94,15 @@ _IDLE_POLL_S = 1.0
 # just liveness bookkeeping.
 _RESET_SUBSCRIPTIONS_REF = "_resetsubscriptions"
 
+# Retry cadence for the session reclaim while quotes STAY delayed. The
+# transition-only trigger is not enough: when the elevation is immediately
+# re-stolen (the operator logged into SaxoTraderGO), any_delayed never goes
+# False and the transition never re-fires — observed live 2026-08-18, session
+# stuck OrdersOnly/delayed for 20+ minutes. At one attempt per 5 minutes the
+# ReclaimLimiter's hourly budget (4/h) still bounds the ping-pong with an
+# operator who keeps pressing resume.
+_RECLAIM_RETRY_INTERVAL_S = 300.0
+
 # Prometheus textfile gauges (emit_domain_metrics job + throttle). Emitted
 # best-effort from the reader thread: on supervise start/stop, on every
 # counted failure, and throttled on the frame path. The job label is a
@@ -332,10 +341,11 @@ class SaxoPriceStream:
 
     Owns the cache, the read-only :class:`SaxoMarketDataClient`, the
     ``contextId``/``referenceId`` pair the price subscription is created
-    under, and the subscribed uic set. ``ensure_subscribed`` is the only entry
-    point that talks REST; the daemon thread only decodes frames off the
-    socket and applies them to the cache - it never decides whether a quote is
-    fresh enough to drive an order (that lives in the feed adapter).
+    under, and the per-scope desired uic sets whose union is the subscribed
+    set. ``ensure_subscribed`` is the only entry point that talks REST; the
+    daemon thread only decodes frames off the socket and applies them to the
+    cache - it never decides whether a quote is fresh enough to drive an
+    order (that lives in the feed adapter).
     """
 
     _CONTROL_REF_PREFIX = "_"
@@ -379,11 +389,16 @@ class SaxoPriceStream:
         self._async_sleep = async_sleep
         self._reclaim_limiter = reclaim_limiter or ReclaimLimiter(clock=self._clock)
         self._was_delayed = False
+        # Last reclaim attempt (transition or retry), on self._clock so a unit
+        # test can drive the retry interval deterministically. None whenever
+        # the session is fresh, so the next demotion fires immediately.
+        self._last_reclaim_attempt: dt.datetime | None = None
 
-        # DESIRED uic set (caller thread writes via ensure_subscribed, reader
-        # snapshots) + the dirty flag telling the reader to (re)create the
-        # server-side subscription. The reader owns ALL subscription REST.
-        self._subscribed_uics: set[int] = set()
+        # DESIRED uic sets per caller SCOPE (caller thread writes via
+        # ensure_subscribed, reader snapshots the union via _desired_uics) +
+        # the dirty flag telling the reader to (re)create the server-side
+        # subscription. The reader owns ALL subscription REST.
+        self._scope_uics: dict[str, set[int]] = {}
         self._sub_lock = threading.Lock()
         self._sub_dirty = threading.Event()
         self._ctx_seq = 0
@@ -442,10 +457,22 @@ class SaxoPriceStream:
             self._live_uic_cache[key] = live_uic
         return live_uic
 
-    def ensure_subscribed(self, uics: set[int] | list[int]) -> None:
-        """Record the DESIRED uic set; the reader thread owns the REST.
+    def ensure_subscribed(self, uics: set[int] | list[int], *, scope: str = "default") -> None:
+        """Record the DESIRED uic set for ``scope``; the reader thread owns
+        the REST.
 
-        No-op when unchanged. On change: quotes for removed uics are forgotten
+        One daemon tick builds several feeds off this ONE shared stream (live
+        exits, peak update, entry-watch), each calling in with only ITS uics.
+        Replace-the-whole-set semantics made those calls fight: zero open
+        positions plus one entry-trail watch alternated the desired set
+        {} <-> {watch uic} every ~45s tick, deleting and recreating the single
+        server-side subscription and starving the reader (no frames, no
+        heartbeats) into a recv-timeout reconnect loop — the 2026-08-18
+        subscription-churn incident. Each caller therefore owns a SCOPE: a
+        call replaces only that scope's entry, the wire-level desired set is
+        the UNION across scopes, and an unchanged union is a complete no-op.
+
+        On a union change: quotes for uics that left the union are forgotten
         (a stale delayed quote must not pin ``any_delayed`` — and thus disable
         session reclaim — forever) and the dirty flag tells the reader to
         (re)create the single server-side subscription (Saxo has no
@@ -455,17 +482,24 @@ class SaxoPriceStream:
         caller/reader race on the shared HTTP session."""
         requested = set(uics)
         with self._sub_lock:
-            if requested == self._subscribed_uics:
+            union_before = self._union_locked()
+            self._scope_uics[scope] = requested
+            union_after = self._union_locked()
+            if union_after == union_before:
                 return
-            removed = self._subscribed_uics - requested
-            self._subscribed_uics = requested
+            removed = union_before - union_after
         for uic in removed:
             self.cache.forget(uic)
         self._sub_dirty.set()
 
+    def _union_locked(self) -> set[int]:
+        """The wire-level desired set: the union across scopes. MUST be
+        called with ``self._sub_lock`` held (it never re-acquires)."""
+        return set().union(*self._scope_uics.values()) if self._scope_uics else set()
+
     def _desired_uics(self) -> set[int]:
         with self._sub_lock:
-            return set(self._subscribed_uics)
+            return self._union_locked()
 
     def _rotate_context(self) -> None:
         """Fresh ``contextId`` for every connection attempt: a reconnect must
@@ -504,7 +538,7 @@ class SaxoPriceStream:
     def stop(self, *, timeout: float = 5.0) -> None:
         """Signal the reader to stop, best-effort DELETE the subscription, join."""
         self._stop = True
-        if self._subscribed_uics:
+        if self._desired_uics():
             with contextlib.suppress(Exception):
                 self._client.delete_price_subscription(self._context_id, self._reference_id)
         thread = self._thread
@@ -654,20 +688,38 @@ class SaxoPriceStream:
         self._maybe_reclaim()
 
     def _maybe_reclaim(self) -> None:
-        """Fire the reclaim on a TRANSITION into the delayed state, not once
-        per message - a 1 Hz stream would otherwise burn the whole hourly
-        budget in seconds. On ``"budget-exhausted"`` there is no bypass: the
-        feed adapter's freshness gate already vetoes delayed quotes, so doing
-        nothing and waiting for the budget to refill is the safe outcome."""
+        """Fire the reclaim on a TRANSITION into the delayed state - a 1 Hz
+        stream firing once per message would burn the whole hourly budget in
+        seconds - and RETRY every ``_RECLAIM_RETRY_INTERVAL_S`` while quotes
+        STAY delayed: a transition-only trigger never re-fires when the
+        elevation is immediately re-stolen (the operator logged into
+        SaxoTraderGO), leaving the session OrdersOnly/delayed indefinitely
+        (observed live 2026-08-18). On ``"budget-exhausted"`` there is no
+        bypass: the feed adapter's freshness gate already vetoes delayed
+        quotes, so doing nothing and waiting for the budget to refill is the
+        safe outcome."""
         is_delayed = self.cache.any_delayed()
-        if is_delayed and not self._was_delayed:
+        if not is_delayed:
+            # Fresh again: reset so the NEXT demotion fires immediately as a
+            # transition rather than waiting out a stale retry interval.
+            self._last_reclaim_attempt = None
+            self._was_delayed = False
+            return
+        now = self._clock()
+        transition = not self._was_delayed
+        retry_due = (
+            self._last_reclaim_attempt is not None
+            and (now - self._last_reclaim_attempt).total_seconds() >= _RECLAIM_RETRY_INTERVAL_S
+        )
+        if transition or retry_due:
+            self._last_reclaim_attempt = now
             outcome = self._reclaim_limiter.try_reclaim(self._client.elevate_session)
             if outcome == "budget-exhausted":
                 logger.warning(
                     "saxo price stream: session reclaim budget exhausted - "
                     "quotes stay delayed until the budget refills"
                 )
-        self._was_delayed = is_delayed
+        self._was_delayed = True
 
 
 _shared_stream: SaxoPriceStream | None = None

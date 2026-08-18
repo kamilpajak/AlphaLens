@@ -65,6 +65,16 @@ class TestElevateSession(unittest.TestCase):
         daemon tick."""
         self.assertFalse(_client(_Session(_Resp(403))).elevate_session())
 
+    def test_success_logs_an_info_trace(self):
+        """Silent success blinded the 2026-08-18 incident diagnosis: without a
+        log line there is no way to tell 'elevation succeeded and was then
+        re-stolen' from 'elevation never happened' in the journal."""
+        with self.assertLogs(
+            "alphalens_pipeline.data.alt_data.saxo_marketdata_client", level="INFO"
+        ) as cm:
+            self.assertTrue(_client(_Session(_Resp(202))).elevate_session())
+        self.assertTrue(any("elevated" in line.lower() for line in cm.output), cm.output)
+
 
 class TestResolveUic(unittest.TestCase):
     def test_picks_the_exact_symbol_match(self):
