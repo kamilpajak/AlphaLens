@@ -821,9 +821,14 @@ class TestEntryWatchPassTouchLatch(unittest.TestCase):
         self._tick(deps, prices, lows, point=10.50, low=9.00)  # tick 1: untrusted latch
         self.assertEqual(feed.reseeds, [], "an untrusted-latch discard never reseeds")
         self.assertEqual(broker.trailing_orders, [])
-        # The discard really was final: the next fresh tick sees no resurrected
-        # low — no touch, no arm.
-        self._tick(deps, prices, lows, point=10.50, low=None)
+        # The discard really was final: tick 2 deliberately does NOT re-plant
+        # the low (a `_tick(low=None)` would overwrite the fake's accumulator
+        # and mask a wrong tick-1 reseed) — a resurrected 9.00 could only come
+        # from that reseed, and the latch IS trusted on tick 2, so it would
+        # fold in and touch+arm here. No touch, no arm.
+        prices[307] = 10.50
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
         self.assertEqual(broker.trailing_orders, [])
 
     def test_awaiting_fresh_low_discard_is_final_no_reseed(self) -> None:
