@@ -21,8 +21,9 @@ class SaxoError(RuntimeError):
 class SaxoAuthError(SaxoError, BrokerAuthError):
     """401 after one token-refresh attempt, or no token configured.
 
-    Distinct so callers can short-circuit to operator action (regenerate the
-    24h SIM token) instead of retrying.
+    Distinct so callers can short-circuit to operator action (re-run
+    ``alphalens broker auth`` — or, on the static-token fallback, regenerate
+    the 24h SIM token) instead of retrying.
     """
 
 
@@ -37,10 +38,13 @@ class SaxoNotFoundError(SaxoError):
 
 
 class SaxoLiveEnvironmentBlockedError(SaxoError):
-    """The SIM-only structural rail refused a LIVE base URL / environment.
+    """The structural rail refused a LIVE base URL / environment.
 
-    Lifting the rail requires its own future ADR (see ADR 0014) — there is
-    deliberately no env-var or constructor switch that reaches LIVE.
+    LIVE is reachable only via the ADR 0015 attended day-bound unlock or the
+    ADR 0017 standing account-bound grant — this error means neither was
+    validly present (it is also raised by the LIVE factory on a mismatched
+    grant and by ``from_env`` on a stray ``SAXO_ENV``). Every default
+    construction path stays SIM-only.
     """
 
 

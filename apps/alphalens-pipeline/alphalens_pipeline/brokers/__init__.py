@@ -1,4 +1,4 @@
-"""Broker-agnostic execution layer — Saxo first, SIM-only (ADR 0014).
+"""Broker-agnostic execution layer — Saxo first, SIM by default (ADR 0014; LIVE only via the ADR 0015/0017 unlocks).
 
 The execution layer is a downstream consumer of the T5 SETUP output in the
 ADR 0013 trade-side map. Hard rules inherited from that ADR:
@@ -22,9 +22,11 @@ Package layering (strict, one-way)::
 
 Consumers (CLI, future reconciler) import ONLY ``broker_contract.contract``
 (the shared package) + this package's ``registry``. P1 ships reads (account /
-positions / instrument resolution) on the Saxo SIM
-environment; the LIVE gateway is structurally unreachable
-(``saxo/client.py::LIVE_TRADING_ENABLED`` rail, lifted only by a future ADR).
+positions / instrument resolution) on the Saxo SIM environment; the LIVE
+gateway is unreachable from every default/factory path — only the ADR 0015
+attended keyed unlock or the ADR 0017 standing account-bound grant
+(``saxo/broker.py::create_saxo_broker_live_from_env``) widen the ``SaxoClient``
+constructor guard (``LIVE_TRADING_ENABLED`` stays ``False`` by design).
 Design memo: ``docs/research/saxo_broker_layer_design_2026_07_17.md``.
 """
 

@@ -12,7 +12,9 @@ never imports this module). Enforced conventions:
 
 - **SIM-only structural rail (ADR 0014):** the constructor accepts ONLY
   :data:`SIM_AUTH_BASE_URL` (equality check, same doctrine as the gateway
-  rail in ``client.py``). No env var or constructor path reaches LIVE.
+  rail in ``client.py``). No env var or constructor path reaches LIVE
+  (the ADR 0015/0017 unlocks cover only ``SaxoClient``; LIVE OAuth lives in
+  ``data.alt_data.saxo_marketdata_auth``).
 - **Secrets hygiene:** the AppSecret travels only in the per-request Basic
   auth pair; tokens never appear in logs, URLs, or exception messages.
 - **Chain-lost semantics:** ANY 4xx from the token endpoint means the refresh
@@ -85,8 +87,10 @@ class SaxoAuthClient:
             raise SaxoLiveEnvironmentBlockedError(
                 f"SaxoAuthClient is SIM-only: auth_base_url must be "
                 f"{SIM_AUTH_BASE_URL!r}, got {auth_base_url!r}. The LIVE "
-                "authentication host is structurally unreachable; lifting the "
-                "rail requires its own future ADR (see ADR 0014)."
+                "authentication host is deliberately not served by this class "
+                "— LIVE order-rail tokens come from the separate "
+                "``saxo_auth_live`` chain (``data.alt_data.saxo_marketdata_auth`` "
+                "adapted by ``live_tokens.LiveOrderTokenProvider``, ADR 0017)."
             )
         if not app_key or not app_secret:
             raise SaxoAuthError("SaxoAuthClient requires a non-empty app key and app secret")

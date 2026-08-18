@@ -1,4 +1,4 @@
-"""CLI: ``alphalens broker`` — broker execution layer (SIM-only, ADR 0014).
+"""CLI: ``alphalens broker`` — broker execution layer (SIM by default, ADR 0014; LIVE via the ADR 0017 standing grant).
 
 Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
 
@@ -23,6 +23,12 @@ Subcommands (P1 reads + P2 orders + P3 reconcile + P4 OAuth):
         reconciler (build-seq 1b-ii): joins each fired TP tranche to its ACTUAL
         broker fill by sell_order_id, computes implementation shortfall, writes
         the exec-quality parquet (places/cancels/amends NOTHING)
+    alphalens broker manage [--once]         — auto-manager control loop for the
+        instance selected by ALPHALENS_BROKER_ENVIRONMENT (default sim; live
+        boots only through the ADR 0017 LIVE factory + boot-assert)
+    alphalens broker marketdata-auth         — LIVE ``saxo_auth_live`` OAuth
+        bootstrap / --status / --refresh (since ADR 0017 the same chain also
+        feeds the LIVE order rail)
 
 All ``brokers`` imports are lazy inside command bodies — the ``alphalens``
 binary's startup time is paid by the 15-min Layer-1 edgar-detect cron
@@ -52,7 +58,11 @@ logger = logging.getLogger(__name__)
 
 broker_app = typer.Typer(
     name="broker",
-    help="Broker execution layer — SIM-only (ADR 0014).",
+    help=(
+        "Broker execution layer — SIM by default (ADR 0014); LIVE only via the "
+        "ADR 0017 standing account-bound grant (the "
+        "ALPHALENS_BROKER_ENVIRONMENT=live daemon)."
+    ),
     no_args_is_help=True,
 )
 
@@ -217,7 +227,9 @@ def _telegram_daemon_notify() -> NotificationPort:
     (TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID) for the ``manage`` daemon's tick
     alerts. ``control_loop.build_default_deps`` journald-mirrors this via
     ``_journaled_alert`` before every delivery attempt. send_message never
-    raises, so a delivery blip cannot crash a tick. SIM-probe-only.
+    raises, so a delivery blip cannot crash a tick. Shared by the SIM and
+    LIVE daemon instances; the composition root wraps it with
+    ``_environment_labeled_notify`` (ADR 0017 §5).
 
     Operational alert bodies carry raw request-id reprs / reasons with `_`,
     `*`, `[` — under the client's default parse_mode="Markdown" those trip a
@@ -265,7 +277,7 @@ def _environment_labeled_notify(sink: NotificationPort) -> NotificationPort:
 
 
 def _auth_refresh() -> None:
-    """One silent refresh cycle — the future keep-alive timer's primitive."""
+    """One silent refresh cycle — the ``alphalens-saxo-refresh.timer`` keep-alive primitive."""
     from alphalens_pipeline.brokers.saxo.errors import SaxoAuthError
     from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
 
@@ -305,8 +317,9 @@ def auth_command(
     refresh: bool = typer.Option(
         False,
         "--refresh",
-        help="One silent refresh cycle via the OAuth provider (keep-alive "
-        "primitive for a future systemd timer). No browser.",
+        help="One silent refresh cycle via the OAuth provider (the keep-alive "
+        "primitive the alphalens-saxo-refresh.timer runs every ~20 min). "
+        "No browser.",
     ),
     timeout: int = typer.Option(
         300, "--timeout", help="Seconds to wait for the browser redirect (attended flow)."
@@ -494,14 +507,16 @@ def marketdata_auth_command(
         False, "--no-browser", help="Print the authorize URL only (headless / SSH)."
     ),
 ) -> None:
-    """Bootstrap or inspect the Saxo LIVE MARKET-DATA OAuth session.
+    """Bootstrap or inspect the Saxo LIVE OAuth session (app ``bracket-keeper``).
 
-    App ``bracket-keeper``, MARKET-DATA ONLY — this session is never used to
-    place an order. It mirrors ``alphalens broker auth`` but targets the LIVE
-    auth path: a SEPARATE token store (``~/.alphalens/saxo_auth_live/``), a
-    SEPARATE app registration, and the LIVE logon host. The SIM-only order rail
-    under ``brokers/saxo/`` is never touched. Tokens are never printed or
-    logged.
+    Originally market-data-only; since ADR 0017 the LIVE ORDER rail REUSES this
+    same ``saxo_auth_live`` chain (``create_saxo_broker_live_from_env`` adapts it
+    via ``live_tokens.LiveOrderTokenProvider``) — keeping this chain alive is a
+    LIVE-daemon precondition. It mirrors ``alphalens broker auth`` but targets
+    the LIVE auth path: a SEPARATE token store (``~/.alphalens/saxo_auth_live/``),
+    a SEPARATE app registration, and the LIVE logon host. The SIM order-rail
+    OAuth store (``~/.alphalens/saxo_auth/``) is never touched. Tokens are never
+    printed or logged.
     """
     import contextlib
     import hmac
@@ -1200,7 +1215,8 @@ def reconcile_command(
         None,
         "--journal",
         help="Submission journal path (default: "
-        "~/.alphalens/broker_orders/<env>/submissions.jsonl).",
+        "~/.alphalens/broker_orders/<env>/submissions.jsonl) "
+        "(<env> = $ALPHALENS_BROKER_ENVIRONMENT, default sim).",
     ),
     as_json: bool = typer.Option(
         False,
@@ -1284,7 +1300,8 @@ def reconcile_fills_command(
         None,
         "--out",
         help="Parquet output path (default: "
-        "~/.alphalens/exec_quality/<env>/tranche_fills.parquet).",
+        "~/.alphalens/exec_quality/<env>/tranche_fills.parquet) "
+        "(<env> = $ALPHALENS_BROKER_ENVIRONMENT, default sim).",
     ),
     as_json: bool = typer.Option(
         False,
@@ -1389,10 +1406,13 @@ def manage_command(
         45.0, "--poll-seconds", help="Seconds to sleep between ticks in daemon mode (30-60s)."
     ),
 ) -> None:
-    """Run the SIM auto-manager loop: drain armed picks, place the in-band
+    """Run the auto-manager loop for the instance selected by
+    ALPHALENS_BROKER_ENVIRONMENT (default sim; ``live`` boots only through the
+    ADR 0017 LIVE factory + boot-assert): drain armed picks, place the in-band
     subset + standalone disaster stop, reconcile, and manage each base position
-    to terminal. Kill instantly with `touch ~/.alphalens/broker_orders/KILL`.
-    SIM-only; placement still needs ALPHALENS_BROKER_ALLOW_ORDERS=1 (enforced
+    to terminal. Kill this instance with `touch ~/.alphalens/broker_orders/<env>/KILL`;
+    `touch ~/.alphalens/broker_orders/KILL` is the GLOBAL kill (every instance,
+    ADR 0016 D3). Placement still needs ALPHALENS_BROKER_ALLOW_ORDERS=1 (enforced
     inside the broker)."""
     from alphalens_pipeline.brokers.automanager.control_loop import build_default_deps, run_daemon
     from broker_contract.contract import BrokerError
