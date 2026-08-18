@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -448,6 +449,49 @@ class TestLiveExitsFeedFactoryReceivesTheVenue(_JournalCase):
         # And the exits pass must claim ITS scope of the shared subscription
         # (2026-08-18 churn fix), never the entry-watch one.
         self.assertEqual(scopes, ["exits"])
+
+
+class TestLiveExitsScopeMaintenance(_JournalCase):
+    """Follow-up to the 2026-08-18 churn fix: the pass must keep its "exits"
+    slice of the shared price-stream subscription in step with the live long
+    positions EVERY tick it runs — including the quiet ticks with no managed
+    position. Returning before the feed build left the scope holding closed
+    positions' uics forever under a non-trailing exit policy (the peak
+    updater, the only other "exits"-scope writer, runs only when the policy
+    trails): the union never shrank, so the reader kept a WebSocket plus a
+    server-side subscription streaming uics nobody reads."""
+
+    def _capturing_factory(self, calls: list[tuple[dict[int, tuple[str, str]], str]]) -> object:
+        def factory(uic_to_instrument: Mapping[int, tuple[str, str]], *, scope: str) -> _FakeFeed:
+            calls.append((dict(uic_to_instrument), scope))
+            return _FakeFeed({})
+
+        return factory
+
+    def test_no_positions_releases_the_exits_scope(self) -> None:
+        broker = FakeBroker()  # zero positions -> zero managed exits
+        calls: list[tuple[dict[int, tuple[str, str]], str]] = []
+        deps = _deps(broker, alerts=[], live_exits_feed_factory=self._capturing_factory(calls))
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            cl._run_live_exits_pass(deps, cl.TickReport())
+        self.assertEqual(calls, [({}, "exits")])
+
+    def test_unmanaged_long_position_keeps_the_scope_on_the_position_uics(self) -> None:
+        # A long position with NO tranche plan folds to zero managed exits,
+        # but the scope must stay on the open-position uics — the same set the
+        # trailing peak updater writes. An empty write here would flip-flop
+        # the shared subscription against the peak updater every tick,
+        # reintroducing the churn the scope split exists to kill.
+        broker = FakeBroker()
+        uic = broker.uic_of("KO")
+        broker.set_position("KO", 100, avg_price=15.0)
+        calls: list[tuple[dict[int, tuple[str, str]], str]] = []
+        deps = _deps(broker, alerts=[], live_exits_feed_factory=self._capturing_factory(calls))
+        with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
+            with mock.patch.object(cl, "run_live_exits") as spy:
+                cl._run_live_exits_pass(deps, cl.TickReport())
+                spy.assert_not_called()
+        self.assertEqual(calls, [({uic: ("KO", "XNYS")}, "exits")])
 
 
 def _raising_factory(uic_to_instrument: object, *, scope: str) -> object:

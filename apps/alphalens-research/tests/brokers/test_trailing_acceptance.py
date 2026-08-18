@@ -31,6 +31,7 @@ import functools
 import json
 import os
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
@@ -183,14 +184,22 @@ class _FakeFeed:
 
 
 class _ScriptedFeedFactory:
-    """One ``_FakeFeed`` per call, popped off a per-tick script; ``calls`` counts
-    invocations so the default-policy test can assert the feed is NEVER touched."""
+    """One ``_FakeFeed`` per PRICE-CONSUMING call, popped off a per-tick script;
+    ``calls`` counts those so the default-policy test can assert the feed is
+    NEVER touched. A call with an EMPTY uic mapping is a scope RELEASE (a quiet
+    pass handing its slice of the shared subscription an empty set — see
+    ``_release_feed_scope``): it has no price consumer, so it neither burns a
+    scripted tick nor counts as a fetch."""
 
     def __init__(self, ticks: list[dict[int, float | None]]) -> None:
         self._ticks = list(ticks)
         self.calls = 0
 
-    def __call__(self, _uic_to_instrument: object, *, scope: str) -> _FakeFeed:
+    def __call__(
+        self, uic_to_instrument: Mapping[int, tuple[str, str]], *, scope: str
+    ) -> _FakeFeed:
+        if not uic_to_instrument:
+            return _FakeFeed({})
         self.calls += 1
         return _FakeFeed(self._ticks.pop(0))
 

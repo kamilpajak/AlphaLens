@@ -398,7 +398,9 @@ class TestDrainInterceptRoutesToWatch(unittest.TestCase):
 # --------------------------------------------------------------------------
 
 
-def _watch_deps(feed: Any, alerts: list[tuple[str, str]], broker: Any = None) -> cl.LoopDeps:
+def _watch_deps(
+    feed: Any, alerts: list[tuple[str, str]], broker: Any = None, factory: Any = None
+) -> cl.LoopDeps:
     def _throttled(message: str, reason: str) -> bool:
         alerts.append((message, reason))
         return True
@@ -417,7 +419,7 @@ def _watch_deps(feed: Any, alerts: list[tuple[str, str]], broker: Any = None) ->
         sweep_orphans_fn=lambda _b: [],
         alert=lambda _m: None,
         alert_throttled=_throttled,
-        live_exits_feed_factory=lambda _u2i, *, scope: feed,
+        live_exits_feed_factory=(factory if factory is not None else (lambda _u2i, *, scope: feed)),
     )
 
 
@@ -840,6 +842,68 @@ class TestEntryWatchPassKillGate(unittest.TestCase):
         with mock.patch.dict("os.environ", _ALLOW, clear=True):
             cl._run_entry_watch_pass(deps, kill=True, report=cl.TickReport())
         self.assertEqual(broker.cancels, ["TR-1"], "only the -entry- BUY order is cancelled")
+
+
+class TestEntryWatchFeedScope(unittest.TestCase):
+    """The entry-watch slice of the shared price-stream subscription
+    (2026-08-18 churn-fix follow-up). The active path must claim the
+    "entry-watch" scope — collapsing it into the exits scope would
+    reintroduce the alternating {} <-> {watch uic} subscription churn the
+    scope split killed — and every quiet early-return (all watches terminal,
+    KILL, feature off) must hand the scope an EMPTY set, or the last watch's
+    uic stays in the wire-level union for the daemon's lifetime with zero
+    price consumers."""
+
+    def _capturing_deps(
+        self,
+        prices: dict[int, float | None],
+        calls: list[tuple[dict[int, tuple[str, str]], str]],
+        broker: Any = None,
+    ) -> cl.LoopDeps:
+        feed = _FakeFeed(prices)
+
+        def factory(u2i: Any, *, scope: str) -> Any:
+            calls.append((dict(u2i), scope))
+            return feed
+
+        return _watch_deps(feed, [], broker=broker, factory=factory)
+
+    def test_an_active_watch_claims_the_entry_watch_scope(self) -> None:
+        path = _journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        calls: list[tuple[dict[int, tuple[str, str]], str]] = []
+        deps = self._capturing_deps({307: 10.50}, calls)  # above the limit: no touch
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(calls, [({307: ("KO", "XNYS")}, "entry-watch")])
+
+    def test_all_watches_terminal_releases_the_scope(self) -> None:
+        path = _journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        entry_trails.append_entry_trail_line(
+            {"kind": entry_trails.KIND_EXPIRED, "crid": "KO-2026-07-20-entry-t0"}
+        )
+        calls: list[tuple[dict[int, tuple[str, str]], str]] = []
+        deps = self._capturing_deps({}, calls)
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(calls, [({}, "entry-watch")])
+
+    def test_kill_releases_the_scope(self) -> None:
+        _journal(self)
+        calls: list[tuple[dict[int, tuple[str, str]], str]] = []
+        deps = self._capturing_deps({}, calls, broker=_RecordingBroker())
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=True, report=cl.TickReport())
+        self.assertEqual(calls, [({}, "entry-watch")])
+
+    def test_feature_off_releases_the_scope(self) -> None:
+        _journal(self)
+        calls: list[tuple[dict[int, tuple[str, str]], str]] = []
+        deps = self._capturing_deps({}, calls)
+        with mock.patch.dict("os.environ", {}, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(calls, [({}, "entry-watch")])
 
 
 if __name__ == "__main__":

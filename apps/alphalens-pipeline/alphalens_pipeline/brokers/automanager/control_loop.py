@@ -698,6 +698,29 @@ _FEED_SCOPE_EXITS = "exits"
 _FEED_SCOPE_ENTRY_WATCH = "entry-watch"
 
 
+def _release_feed_scope(deps: LoopDeps, scope: str) -> None:
+    """Hand an EMPTY desired set to one pass's slice of the shared
+    price-stream subscription.
+
+    Called on a pass's quiet early-returns (no active watches, KILL, feature
+    off) which would otherwise never reach the pass's feed build — the only
+    writer of its scope. Skipping the write leaves the scope holding its
+    LAST uics for the daemon's lifetime: the wire-level union never shrinks,
+    the reader keeps a WebSocket plus a server-side subscription streaming
+    uics nobody reads (the zero-desired-uics idle protection never engages),
+    and a stale delayed quote for a dead uic can pin ``any_delayed`` and
+    drive the session-reclaim retry loop with zero price consumers.
+
+    Quiet by design (no alert, no raise): releasing has no reader this tick,
+    a failure here is retried next tick, and a stale scope is only ever
+    over-subscription — never a safety hazard worth paging over."""
+    import contextlib
+
+    feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
+    with contextlib.suppress(Exception):
+        feed_factory({}, scope=scope)
+
+
 def _default_live_exits_feed_factory(
     uic_to_instrument: Mapping[int, tuple[str, str]],
     *,
@@ -882,8 +905,6 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         tranche_plans=fold_tranche_plans(journal_lines),
         fired=_fold_fired_since_latest_plan(journal_lines),
     )
-    if not managed:
-        return
     # uic -> (ticker, venue) off the live positions just read. The venue must
     # survive: resolving a LIVE instrument by bare ticker is ambiguous for
     # cross-listed names.
@@ -892,7 +913,17 @@ def _run_live_exits_pass(deps: LoopDeps, report: TickReport) -> None:
         for pos in long_positions
         if (uic := _position_uic(pos)) is not None
     }
+    # Built BEFORE the managed check on purpose: the build writes this pass's
+    # "exits" slice of the shared price-stream subscription off the live long
+    # positions, and that write must happen on quiet ticks too — when the last
+    # managed position closes, the scope must shrink with it (a skipped write
+    # would stream the closed positions' uics forever), and it must hold the
+    # SAME long-position set the trailing peak updater writes (an empty write
+    # here would flip-flop the shared subscription against ``_update_peaks``
+    # every tick while an unmanaged long position is open).
     feed = _build_live_exits_feed(deps, uic_to_instrument, report)
+    if not managed:
+        return
     try:
         fired_count = run_live_exits(deps.broker, feed, managed)
     except BrokerError as exc:
@@ -1265,17 +1296,26 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
     Unlike the protection pass this takes NO ``records`` parameter: the watch
     state lives in the SEPARATE ``entry_trails.jsonl`` journal, never the
     submissions journal (the same reason :func:`_run_live_exits_pass` omits it).
-    A no-op when the flag is unset/0."""
+    A no-op when the flag is unset/0.
+
+    Every early return RELEASES the pass's "entry-watch" slice of the shared
+    price-stream subscription (:func:`_release_feed_scope`): the feed build
+    below is the scope's only writer, so skipping it after the last watch went
+    terminal (or under KILL) would leave that watch's uic in the wire-level
+    union forever — a live server-side subscription with zero consumers."""
     if kill:
         _cancel_working_entry_orders(deps, report)
+        _release_feed_scope(deps, _FEED_SCOPE_ENTRY_WATCH)
         return
     d_bps = entry_trails.entry_trail_bps()
     if d_bps <= 0:
+        _release_feed_scope(deps, _FEED_SCOPE_ENTRY_WATCH)
         return
     fold = entry_trails.read_entry_trail_fold()
     active = _active_entry_watches(fold)
     if not active:
         deps.entry_watchers.clear()  # every watch went terminal — drop stale runtimes
+        _release_feed_scope(deps, _FEED_SCOPE_ENTRY_WATCH)
         return
     # Prune runtimes whose crid terminated last tick (no longer in the fold's
     # active set) so a re-picked crid can never resurrect a stale watcher.
