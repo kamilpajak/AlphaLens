@@ -624,7 +624,9 @@ class TestReconcileCommand(unittest.TestCase):
         result = self.runner.invoke(broker_app, ["reconcile", "--json"])
 
         self.assertEqual(result.exit_code, 0, msg=result.output)
-        payload = json.loads(result.output)
+        # stdout must stay EXACTLY one JSON value (the env/gateway echo line
+        # goes to stderr) — parse stdout, not the mixed output.
+        payload = json.loads(result.stdout)
         self.assertEqual(len(payload), 2)
         self.assertEqual(payload[0]["entry_order_id"], "E-1")
         self.assertEqual(payload[1]["verdict"], "FILLED(closed r=+1.00)")
@@ -638,7 +640,7 @@ class TestReconcileCommand(unittest.TestCase):
         result = self.runner.invoke(broker_app, ["reconcile", "--json"])
 
         self.assertNotEqual(result.exit_code, 0)
-        payload = json.loads(result.output)
+        payload = json.loads(result.stdout)
         self.assertEqual(len(payload), 5)
 
     def test_empty_journal_reports_and_exits_zero(self):

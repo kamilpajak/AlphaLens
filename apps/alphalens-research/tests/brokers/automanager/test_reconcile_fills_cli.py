@@ -220,7 +220,9 @@ class TestReconcileFillsCommand(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertTrue(harness.out_path.exists())
-        payload = json.loads(result.output)
+        # stdout must stay EXACTLY one JSON value (the env/gateway echo line
+        # goes to stderr) — parse stdout, not the mixed output.
+        payload = json.loads(result.stdout)
         self.assertEqual(len(payload), 3)
         by_id = {row["sell_order_id"]: row for row in payload}
         self.assertEqual(by_id["S-FILL"]["fill_status"], "filled")
