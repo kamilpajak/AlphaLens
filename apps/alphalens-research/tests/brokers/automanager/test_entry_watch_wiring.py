@@ -19,6 +19,7 @@ called on the flag-ON path — the "fire" is an alert-only log line.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import unittest
 from pathlib import Path
@@ -27,7 +28,7 @@ from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
-from alphalens_pipeline.brokers.automanager import entry_trails
+from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
 from broker_contract.sizing import SetupPlan, TierPlan
 
 _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
@@ -870,6 +871,42 @@ class TestEntryWatchPassTouchLatch(unittest.TestCase):
         self._tick(deps, prices, lows, point=10.50, low=8.5)  # open-check discard
         self.assertEqual(feed.reseeds, [], "an awaiting_fresh_low discard never reseeds")
         self.assertEqual(broker.trailing_orders, [])
+
+    def test_reseed_preserved_low_dies_at_a_recovery_beyond_the_stale_gap(self) -> None:
+        # The reseed's survival CEILING (G1 anti-gap): a preserved low may only
+        # be ACTED on when the recovery tick lands within STALE_FIRE_GAP of the
+        # watcher's last fresh tick. Every real halt pushes the recovery beyond
+        # it (an LULD pause lasts >= 5 min == STALE_FIRE_GAP and starts after
+        # the last fresh sample), so the combine discards the preserved low and
+        # the point-sample alone drives the tick — and the discard is final,
+        # because a fresh-point tick never reseeds (pinned by the finality
+        # tests above). Clock-free at the combine seam (the pass itself reads
+        # the wall clock).
+        t0 = dt.datetime(2026, 8, 18, 16, 0, tzinfo=dt.UTC)
+        config = entry_trail_watcher.TierWatchConfig(
+            crid="KO-2026-07-20-entry-t0",
+            tier_limit=10.0,
+            d_bps=50,
+            window_end=t0 + dt.timedelta(days=7),
+            qty=100.0,
+        )
+        watcher = entry_trail_watcher.EntryTierWatcher(config, native_trail=True)
+        watcher.process(entry_trail_watcher.TickInput(now=t0, price=10.50))  # last FRESH tick
+        runtime = cl._EntryWatchRuntime(watcher=watcher)
+        record = {"uic": 307}
+        lows = {307: 9.90}  # the reseed-preserved wick, below the tier limit
+        inside = t0 + entry_trail_watcher.STALE_FIRE_GAP
+        self.assertEqual(
+            cl._combine_with_session_low(10.20, lows, record, runtime, inside),
+            9.90,
+            "within the gap the preserved low folds in (the incident fix)",
+        )
+        beyond = t0 + entry_trail_watcher.STALE_FIRE_GAP + dt.timedelta(seconds=1)
+        self.assertEqual(
+            cl._combine_with_session_low(10.20, lows, record, runtime, beyond),
+            10.20,
+            "beyond the gap the preserved low is DISCARDED (halt-spanning recovery)",
+        )
 
     def test_feed_without_session_low_capability_is_unchanged(self) -> None:
         from broker_contract.price_feed import SupportsSessionLow

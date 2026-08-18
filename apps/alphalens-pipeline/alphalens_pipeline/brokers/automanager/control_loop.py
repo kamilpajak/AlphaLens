@@ -1421,7 +1421,21 @@ def _reseed_vetoed_point_lows(
     ONLY the point-veto case reseeds, once per uic. The per-tier combine's other
     discards (the ``awaiting_fresh_low`` re-arm guard, an untrusted latch)
     distrust the LOW itself (G1 anti-gap) and stay FINAL — reseeding those would
-    let a stale/pre-session wick survive until trusted and fire into a gap."""
+    let a stale/pre-session wick survive until trusted and fire into a gap.
+
+    Survival is CEILING-BOUNDED by the recovery gate, not by this function: a
+    preserved low can only ever be ACTED on when the recovery tick lands within
+    ``STALE_FIRE_GAP`` of the watcher's last fresh tick
+    (:meth:`EntryTierWatcher.latch_low_trusted`), and a recovery beyond it
+    discards the low FINALLY (a fresh-point tick never re-enters this reseed).
+    A market discontinuity cannot hide inside that window for US equities: an
+    LULD pause lasts >= 5 min (== ``STALE_FIRE_GAP``) and starts AFTER the last
+    fresh sample, so every halt-spanning recovery arrives beyond the gate; the
+    pre-open quiet spell is the overnight gap, far beyond it. Deliberately NO
+    tick-count cap on the reseed chain: with the 3s point freshness bound vs
+    the 45s tick, a thin change-driven stream (the OLN incident profile)
+    point-vetoes MOST drain instants, so a multi-tick veto chain is the normal
+    path a real touch survives — capping it would reintroduce the incident."""
     if not isinstance(feed, SupportsSessionLow):
         return
     for uic, low in uic_lows.items():
