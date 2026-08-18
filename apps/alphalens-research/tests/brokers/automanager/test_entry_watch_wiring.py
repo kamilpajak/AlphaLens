@@ -169,7 +169,10 @@ class _FakeFeed:
     holds a per-uic drained sub-tick running low that ``session_low`` POPS
     (drain semantics, mirroring the real feed) so a test can plant a wick for
     exactly one tick. An unset uic drains to ``None`` — the byte-identical
-    behaviour the pre-latch feed had for every uic."""
+    behaviour the pre-latch feed had for every uic. ``reseed_session_low``
+    hands a drained low back (min-merge, mirroring the real accumulator) and
+    RECORDS every call in ``reseeds`` so a test can pin exactly which discard
+    branches reseed (only the point-veto one) and which stay final."""
 
     def __init__(
         self,
@@ -178,6 +181,7 @@ class _FakeFeed:
     ) -> None:
         self._prices = prices
         self._lows = lows if lows is not None else {}
+        self.reseeds: list[tuple[int, float]] = []
 
     def latest(self, uic: int) -> Any:
         price = self._prices.get(uic)
@@ -187,6 +191,11 @@ class _FakeFeed:
 
     def session_low(self, uic: int) -> float | None:
         return self._lows.pop(uic, None)
+
+    def reseed_session_low(self, uic: int, low: float) -> None:
+        self.reseeds.append((uic, low))
+        prev = self._lows.get(uic)
+        self._lows[uic] = low if prev is None else min(prev, low)
 
 
 def _journal(test: unittest.TestCase) -> Path:
@@ -758,6 +767,104 @@ class TestEntryWatchPassTouchLatch(unittest.TestCase):
         self._tick(deps, prices, lows, point=8.80, low=None)
         self.assertFalse(watcher.awaiting_fresh_low)
         self.assertEqual(len(broker.trailing_orders), 1)
+
+    def test_point_veto_preserves_the_latched_low_for_the_next_fresh_tick(self) -> None:
+        # THE 2026-08-18 LIVE incident (OLN): the 1 Hz latch recorded a REAL
+        # touch (bid below the tier limit), but on that tick's point-sample the
+        # change-driven stream had been quiet >3s so is_fresh vetoed it — and the
+        # unconditional drain pop destroyed the latched evidence forever. The
+        # doctrine "no watch decision without a fresh point-sample" STANDS (no
+        # touch on the vetoed tick); the drained low must be handed BACK so a
+        # later fresh tick can fold it in.
+        path = _journal(self)
+        _planned_journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        prices: dict[int, float | None] = {307: None}
+        lows: dict[int, float | None] = {307: None}
+        broker = _RecordingBroker()
+        feed = _FakeFeed(prices, lows)
+        deps = _watch_deps(feed, [], broker=broker)
+        # Tick 1: a fresh point ABOVE the tier establishes the latch's trust.
+        self._tick(deps, prices, lows, point=10.50, low=None)
+        # Tick 2: the latch accrued 9.90 (below the 10.0 limit) but the
+        # point-sample is veto-stale (None). NO decision this tick — and the
+        # drained low is reseeded, once for the uic, instead of destroyed.
+        self._tick(deps, prices, lows, point=None, low=9.90)
+        self.assertEqual(broker.trailing_orders, [], "no decision without a fresh point")
+        self.assertEqual([ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TOUCHED], [])
+        self.assertEqual(feed.reseeds, [(307, 9.90)], "the drained low was handed back, once")
+        # Tick 3: the point recovers ABOVE the tier (10.20 — the coarse sample
+        # still misses the dip). The PRESERVED low folds in via the combine →
+        # touch + arm. Deliberately does NOT re-plant the low: it must come from
+        # the tick-2 reseed alone.
+        prices[307] = 10.20
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        touched = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TOUCHED]
+        self.assertEqual(len(touched), 1, "the preserved low registers the touch")
+        self.assertEqual(len(broker.trailing_orders), 1)
+
+    def test_untrusted_latch_discard_is_final_no_reseed(self) -> None:
+        # The first fresh tick of a brand-new watcher has an UNBOUNDED latch
+        # window, so its low is distrusted and the discard must stay FINAL —
+        # reseeding it would let a pre-watch/pre-session wick survive until
+        # trusted and fire into a gap (G1). The point-sample is FRESH here, so
+        # the point-veto reseed must not fire either.
+        path = _journal(self)
+        _planned_journal(self)
+        _seed_watch(path, crid="KO-2026-07-20-entry-t0", limit=10.0, next_tier_limit=None)
+        prices: dict[int, float | None] = {307: None}
+        lows: dict[int, float | None] = {307: None}
+        broker = _RecordingBroker()
+        feed = _FakeFeed(prices, lows)
+        deps = _watch_deps(feed, [], broker=broker)
+        self._tick(deps, prices, lows, point=10.50, low=9.00)  # tick 1: untrusted latch
+        self.assertEqual(feed.reseeds, [], "an untrusted-latch discard never reseeds")
+        self.assertEqual(broker.trailing_orders, [])
+        # The discard really was final: the next fresh tick sees no resurrected
+        # low — no touch, no arm.
+        self._tick(deps, prices, lows, point=10.50, low=None)
+        self.assertEqual(broker.trailing_orders, [])
+
+    def test_awaiting_fresh_low_discard_is_final_no_reseed(self) -> None:
+        # A re-armed tier's open-check discard (memo G1) distrusts the LOW
+        # itself — it must stay final, never reseed (the point-sample is fresh,
+        # so the point-veto reseed has no business firing either).
+        path = _journal(self)
+        _planned_journal(self)
+        crid = "KO-2026-07-20-entry-t0"
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_WATCH_OPEN,
+                "crid": crid,
+                "limit": 10.0,
+                "qty": 100.0,
+                "d_bps": 50,
+                "window_end": "2099-01-01T21:00:00+00:00",
+                "fx_rate": None,
+                "uic": 307,
+                "ticker": "KO",
+                "exchange_mic": "XNYS",
+                "next_tier_limit": None,
+                "pick_key": "KO:2026-07-20",
+                "entry_mode": "entry-trail-native-d50-testcfg",
+                "disaster_stop": 8.0,
+                "tier_index": 0,
+                "awaiting_fresh_low": True,
+            }
+        )
+        entry_trails.append_entry_trail_line(
+            {"kind": entry_trails.KIND_TROUGH, "crid": crid, "trough": 9.0}
+        )
+        prices: dict[int, float | None] = {307: None}
+        lows: dict[int, float | None] = {307: None}
+        broker = _RecordingBroker()
+        feed = _FakeFeed(prices, lows)
+        deps = _watch_deps(feed, [], broker=broker)
+        self._tick(deps, prices, lows, point=10.50, low=None)  # establish trust
+        self._tick(deps, prices, lows, point=10.50, low=8.5)  # open-check discard
+        self.assertEqual(feed.reseeds, [], "an awaiting_fresh_low discard never reseeds")
+        self.assertEqual(broker.trailing_orders, [])
 
     def test_feed_without_session_low_capability_is_unchanged(self) -> None:
         from broker_contract.price_feed import SupportsSessionLow

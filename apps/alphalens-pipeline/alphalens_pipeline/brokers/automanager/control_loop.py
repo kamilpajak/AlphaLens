@@ -1335,10 +1335,12 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
     }
     feed = _build_entry_watch_feed(deps, uic_to_instrument, report)
     uic_lows = _drain_session_lows(feed, uic_to_instrument)
+    uic_points = _point_sample_bids(feed, uic_to_instrument)
+    _reseed_vetoed_point_lows(feed, uic_points, uic_lows)
     now = dt.datetime.now(dt.UTC)
     for crid, record in active.items():
         _advance_one_entry_watch(
-            deps, crid, record, fold.tiers.get(crid), feed, uic_lows, now, d_bps, report
+            deps, crid, record, fold.tiers.get(crid), uic_points, uic_lows, now, d_bps, report
         )
 
 
@@ -1364,11 +1366,73 @@ def _drain_session_lows(
     for uic in uic_to_instrument:
         try:
             lows[uic] = feed.session_low(uic)
-        # Broad on purpose (mirrors _entry_watch_reference_price): one bad uic
-        # must not abort the drain for the others.
+        # Broad on purpose (mirrors _point_sample_bids): one bad uic must not
+        # abort the drain for the others.
         except Exception:
             lows[uic] = None
     return lows
+
+
+def _point_sample_bids(
+    feed: PriceFeed, uic_to_instrument: Mapping[int, tuple[str, str]]
+) -> dict[int, float | None]:
+    """Point-sample the fresh reference bid ONCE per DISTINCT watched uic this
+    tick (memo trap #8: detection is bid-referenced, matching the LIVE V1
+    probe). ``None`` on any doubt — a vetoed/None point or a non-finite/
+    non-positive bid — which the engine treats as the freshness/trust veto (no
+    watch progress this tick).
+
+    ONE shared sample per uic, for the same reason the drain above is once per
+    uic: every tier of a laddered pick must read the SAME verdict, and the
+    point-veto reseed (:func:`_reseed_vetoed_point_lows`) must judge the SAME
+    sample the per-tier combine will use — a second ``latest`` read could
+    disagree mid-tick (the stream keeps applying frames underneath) and either
+    destroy the drained low again or reseed one that was acted on."""
+    points: dict[int, float | None] = {}
+    for uic in uic_to_instrument:
+        try:
+            point = feed.latest(uic)
+        # Broad on purpose (mirrors _drain_session_lows): one bad uic must not
+        # abort the sampling for the others.
+        except Exception:
+            points[uic] = None
+            continue
+        bid = None if point is None else point.bid
+        points[uic] = bid if bid is not None and math.isfinite(bid) and bid > 0.0 else None
+    return points
+
+
+def _reseed_vetoed_point_lows(
+    feed: PriceFeed,
+    uic_points: Mapping[int, float | None],
+    uic_lows: Mapping[int, float | None],
+) -> None:
+    """Hand a drained 1 Hz running low BACK to the feed's accumulator when this
+    tick's point-sample for its uic is vetoed (the 2026-08-18 incident: OLN's
+    latch held a REAL touch at 18.61 below the 18.6217 tier limit, the
+    change-driven stream had sent no frame for >3s so the point-sample was
+    veto-stale, and the unconditional drain pop destroyed the touch evidence
+    forever). The doctrine "never make a watch decision without a fresh
+    point-sample" STANDS — the combine still discards the low on a vetoed point
+    — the low merely SURVIVES (min-merged back, so a deeper accrual racing in
+    from the reader thread stays the winner) until a tick whose point-sample is
+    fresh.
+
+    ONLY the point-veto case reseeds, once per uic. The per-tier combine's other
+    discards (the ``awaiting_fresh_low`` re-arm guard, an untrusted latch)
+    distrust the LOW itself (G1 anti-gap) and stay FINAL — reseeding those would
+    let a stale/pre-session wick survive until trusted and fire into a gap."""
+    if not isinstance(feed, SupportsSessionLow):
+        return
+    for uic, low in uic_lows.items():
+        if low is None or uic_points.get(uic) is not None:
+            continue
+        try:
+            feed.reseed_session_low(uic, low)
+        # Broad on purpose (mirrors _drain_session_lows): one bad uic must not
+        # abort the reseed for the others.
+        except Exception:
+            logger.warning("entry-watch: failed to reseed the drained low for uic %d", uic)
 
 
 def _active_entry_watches(
@@ -1427,7 +1491,7 @@ def _advance_one_entry_watch(
     crid: str,
     record: Mapping[str, Any],
     tier_state: entry_trails.EntryTrailTierState | None,
-    feed: PriceFeed,
+    uic_points: Mapping[int, float | None],
     uic_lows: Mapping[int, float | None],
     now: dt.datetime,
     d_bps: int,
@@ -1441,7 +1505,7 @@ def _advance_one_entry_watch(
     runtime = _get_or_create_entry_runtime(deps, crid, record, tier_state)
     if runtime is None:
         return
-    price = _entry_watch_reference_price(feed, record)
+    price = _entry_watch_reference_price(uic_points, record)
     price = _combine_with_session_low(price, uic_lows, record, runtime, now)
     result = runtime.watcher.process(entry_trail_watcher.TickInput(now=now, price=price))
     # G6/G9 (memo §3): a SUSPENDED/EXPIRED terminal must never leave a resting
@@ -1464,23 +1528,17 @@ def _advance_one_entry_watch(
         deps.entry_watchers.pop(crid, None)
 
 
-def _entry_watch_reference_price(feed: PriceFeed, record: Mapping[str, Any]) -> float | None:
-    """The fresh reference scalar for one watch (memo trap #8: detection is
-    bid-referenced, matching the LIVE V1 probe). ``None`` on any doubt — no feed
-    context, a vetoed/None point, or a non-finite/non-positive bid — which the
-    engine treats as the freshness/trust veto (no watch progress this tick)."""
+def _entry_watch_reference_price(
+    uic_points: Mapping[int, float | None], record: Mapping[str, Any]
+) -> float | None:
+    """The fresh reference scalar for one watch, read from this tick's shared
+    per-uic point samples (:func:`_point_sample_bids` — where the veto logic
+    lives). ``None`` on any doubt — no feed context, or a vetoed point — which
+    the engine treats as the freshness/trust veto (no watch progress this
+    tick)."""
     if not _has_feed_context(record):
         return None
-    try:
-        point = feed.latest(int(record["uic"]))
-    except Exception:  # broad: one bad uic must not abort the other watches
-        return None
-    if point is None:
-        return None
-    price = point.bid
-    if price is None or not math.isfinite(price) or price <= 0.0:
-        return None
-    return price
+    return uic_points.get(int(record["uic"]))
 
 
 def _combine_with_session_low(
@@ -1499,7 +1557,10 @@ def _combine_with_session_low(
     the tick) in three cases, and only otherwise pulls the reference DOWN:
 
     - point-sample vetoed (``None``): never act on a latched low when the
-      concurrent point-sample is itself untrusted/stale;
+      concurrent point-sample is itself untrusted/stale. This discard is NOT a
+      destruction: :func:`_reseed_vetoed_point_lows` already handed the drained
+      low back to the feed's accumulator (min-merge) before this per-tier
+      combine ran, so it survives for a later fresh tick (2026-08-18 incident);
     - ``awaiting_fresh_low`` (a re-armed tier, memo G1): the open-check clear
       must be driven by the FRESH point-sampled bid only, so a stale overnight
       wick in the latch can never re-anchor the trigger and arm into a gap;

@@ -367,6 +367,53 @@ class TestQuoteCache(unittest.TestCase):
         c.apply(self._latch_row(2, bid=313.85, ask=313.88), received_at=_T0)
         self.assertEqual(c.drain_running_low(211), 313.85)
 
+    # --- reseed_running_low (2026-08-18 point-veto incident) -------------------
+
+    def test_reseed_restores_a_drained_low_for_the_next_drain(self):
+        """The 2026-08-18 incident shape: the caller drained a REAL touch's low
+        (OLN bid 18.61 below the 18.6217 tier limit) but its concurrent
+        point-sample was veto-stale, so no decision could act on it. Handing the
+        low back must make the NEXT drain return it — the touch evidence
+        survives instead of being destroyed by the unconditional pop."""
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=18.61, ask=18.62), received_at=_T0)
+        drained = c.drain_running_low(211)
+        self.assertEqual(drained, 18.61)
+        c.reseed_running_low(211, drained)
+        self.assertEqual(c.drain_running_low(211), 18.61)
+
+    def test_drain_after_reseed_still_pops_and_resets(self):
+        """The reseed restores the value, not the semantics: the next drain is
+        still a pop, so the window after it starts empty again."""
+        c = QuoteCache()
+        c.reseed_running_low(211, 18.61)
+        self.assertEqual(c.drain_running_low(211), 18.61)
+        self.assertIsNone(c.drain_running_low(211))
+
+    def test_reseed_min_merges_keeping_a_deeper_fresh_accrual(self):
+        """A newer 1 Hz accrual (18.59) landed between the drain and the
+        reseed: the reseeded 18.61 must not overwrite the deeper low."""
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=18.59, ask=18.60), received_at=_T0)
+        c.reseed_running_low(211, 18.61)
+        self.assertEqual(c.drain_running_low(211), 18.59)
+
+    def test_reseed_min_merges_under_a_shallower_fresh_accrual(self):
+        """The mirror case: the fresh accrual (18.65) sits ABOVE the reseeded
+        low, so the reseeded 18.61 wins the min-merge."""
+        c = QuoteCache()
+        c.apply(self._latch_row(0, bid=18.65, ask=18.66), received_at=_T0)
+        c.reseed_running_low(211, 18.61)
+        self.assertEqual(c.drain_running_low(211), 18.61)
+
+    def test_reseed_ignores_a_non_finite_or_non_positive_low(self):
+        """Same veto-not-raise discipline as the latch gate: a doubtful value
+        must never plant a phantom low (and must never raise into the tick)."""
+        c = QuoteCache()
+        for garbage in (float("nan"), float("inf"), float("-inf"), 0.0, -1.0):
+            c.reseed_running_low(211, garbage)  # must not raise
+        self.assertIsNone(c.drain_running_low(211))
+
 
 class TestLatchSpreadCeilingMirrorsContract(unittest.TestCase):
     def test_latch_spread_ceiling_equals_broker_contract_value(self):
@@ -430,6 +477,17 @@ class TestLiveUicFor(unittest.TestCase):
         self.assertEqual(stream.live_uic_for("aapl", exchange_mic="xnas"), 5)
         self.assertEqual(stream.live_uic_for("AAPL", exchange_mic="XNAS"), 5)
         self.assertEqual(client.calls, [("aapl", "xnas")])  # 2nd call hit the cache
+
+
+class TestStreamRunningLowPassthroughs(unittest.TestCase):
+    """``SaxoPriceStream`` exposes the cache's touch-latch accumulator to the
+    feed adapter as thin passthroughs — ``drain_running_low`` (pop) and
+    ``reseed_running_low`` (min-merge hand-back for the point-veto case)."""
+
+    def test_reseed_running_low_delegates_to_the_cache(self):
+        stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        stream.reseed_running_low(211, 18.61)
+        self.assertEqual(stream.drain_running_low(211), 18.61)
 
 
 def _build_frame(message_id: int, reference_id: str, payload: bytes, *, fmt: int = 0) -> bytes:

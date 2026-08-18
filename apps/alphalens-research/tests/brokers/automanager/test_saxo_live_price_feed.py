@@ -14,6 +14,7 @@ class _Stream:
         self._quote = quote
         self.subscribed: list[int] = []
         self._running_low = dict(running_low or {})
+        self.reseed_calls: list[tuple[int, float]] = []
 
     def ensure_subscribed(self, uics):
         self.subscribed = list(uics)
@@ -23,6 +24,12 @@ class _Stream:
 
     def drain_running_low(self, uic):
         return self._running_low.pop(uic, None)
+
+    def reseed_running_low(self, uic, low):
+        # Mirrors QuoteCache.reseed_running_low's min-merge.
+        self.reseed_calls.append((uic, low))
+        prev = self._running_low.get(uic)
+        self._running_low[uic] = low if prev is None else min(prev, low)
 
 
 def _quote(**over) -> Quote:
@@ -129,6 +136,24 @@ class TestSaxoLivePriceFeedSessionLow(unittest.TestCase):
     def test_session_low_none_for_unmapped_uic(self):
         feed = self._feed(running_low={9999: 313.70}, sim_to_live={})
         self.assertIsNone(feed.session_low(211))
+
+    def test_reseed_session_low_restores_via_the_live_uic(self):
+        # The caller hands the drained-but-unusable low back by SIM uic 211; it
+        # must land under LIVE uic 9999 (like session_low's drain), so the next
+        # drain by SIM uic returns it.
+        stream = _Stream(_quote(), running_low={})
+        feed = SaxoLivePriceFeed(
+            stream=stream, resolve_live_uic={211: 9999}.get, clock=lambda: _NOW
+        )
+        feed.reseed_session_low(211, 313.70)
+        self.assertEqual(stream.reseed_calls, [(9999, 313.70)])
+        self.assertEqual(feed.session_low(211), 313.70)
+
+    def test_reseed_session_low_is_a_silent_noop_for_an_unmapped_uic(self):
+        stream = _Stream(_quote(), running_low={})
+        feed = SaxoLivePriceFeed(stream=stream, resolve_live_uic={}.get, clock=lambda: _NOW)
+        feed.reseed_session_low(211, 313.70)  # must not raise
+        self.assertEqual(stream.reseed_calls, [])
 
 
 if __name__ == "__main__":

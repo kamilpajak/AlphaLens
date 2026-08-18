@@ -301,6 +301,24 @@ class QuoteCache:
         with self._lock:
             return self._running_low.pop(uic, None)
 
+    def reseed_running_low(self, uic: int, low: float) -> None:
+        """Hand a drained running low BACK to the accumulator (the 2026-08-18
+        incident): the caller drains unconditionally once per tick, but when its
+        concurrent point-sample is veto-stale it cannot act on the low — and the
+        pop had already destroyed the only evidence of a real touch. MIN-MERGE:
+        a deeper accrual the reader thread applied after the drain wins over the
+        reseeded value, so a repeated reseed is idempotent and never resurrects
+        a shallower low. Runs on the caller (tick) thread under the same
+        ``_lock`` the reader's ``apply`` writes under. Same veto-not-raise
+        discipline as the latch gate: a non-finite/non-positive value is
+        silently ignored (a doubtful reseed must never plant a phantom low)."""
+        value = _latchable_side(low)
+        if value is None:
+            return
+        with self._lock:
+            prev = self._running_low.get(uic)
+            self._running_low[uic] = value if prev is None else min(prev, value)
+
     def get(self, uic: int) -> Quote | None:
         with self._lock:
             return self._quotes.get(uic)
@@ -420,6 +438,11 @@ class SaxoPriceStream:
         """Pop-and-reset the cache's 1 Hz running low for ``uic`` (touch-latch).
         The feed adapter drains this once per watched uic per decision tick."""
         return self.cache.drain_running_low(uic)
+
+    def reseed_running_low(self, uic: int, low: float) -> None:
+        """Hand a drained-but-unusable running low back to the cache's
+        accumulator (min-merge; see :meth:`QuoteCache.reseed_running_low`)."""
+        self.cache.reseed_running_low(uic, low)
 
     def is_running(self) -> bool:
         """True once ``start()`` has launched the reader thread and it is
