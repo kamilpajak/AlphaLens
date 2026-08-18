@@ -112,6 +112,14 @@ class SupportsSessionLow(Protocol):
     ``None`` when no trustworthy sub-tick low accrued (feed off/degraded, or
     nothing latchable this window).
 
+    ``reseed_session_low(uic, low)`` hands a drained low BACK to the accumulator
+    when the caller could not act on it — the point-veto case (2026-08-18
+    incident: the drain is unconditional, so a tick whose concurrent
+    point-sample is veto-stale used to DESTROY the latched evidence of a real
+    touch). The feed MUST min-merge (a deeper accrual that landed after the
+    drain wins), making a repeated reseed idempotent, and MUST silently ignore
+    a non-finite/non-positive value.
+
     Mirrors the ``SupportsTrailingStop`` capability-protocol pattern (off the
     frozen :class:`PriceFeed` base): a caller ``isinstance``-narrows a
     ``PriceFeed`` to this Protocol; a feed WITHOUT it (the OFF/degraded null
@@ -119,3 +127,5 @@ class SupportsSessionLow(Protocol):
     point-sample only."""
 
     def session_low(self, uic: int) -> float | None: ...
+
+    def reseed_session_low(self, uic: int, low: float) -> None: ...

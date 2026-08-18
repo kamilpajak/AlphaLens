@@ -86,3 +86,16 @@ class SaxoLivePriceFeed:
         if live_uic is None:
             return None
         return self._stream.drain_running_low(live_uic)
+
+    def reseed_session_low(self, uic: int, low: float) -> None:
+        """Hand a drained running low BACK to the stream's accumulator
+        (min-merge — see :meth:`QuoteCache.reseed_running_low`) when the caller
+        could not act on it: the point-veto case only, per the combine at the
+        call site (2026-08-18 incident — the unconditional drain destroyed a
+        real touch's evidence on a tick whose point-sample was veto-stale).
+        Maps the caller's uic to the LIVE uic exactly like :meth:`session_low`;
+        silently a no-op when the uic does not resolve."""
+        live_uic = self._resolve_live_uic(uic)
+        if live_uic is None:
+            return
+        self._stream.reseed_running_low(live_uic, low)

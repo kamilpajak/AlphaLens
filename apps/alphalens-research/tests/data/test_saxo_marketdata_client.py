@@ -255,6 +255,30 @@ class TestPriceSubscription(unittest.TestCase):
         self.assertEqual(body["Arguments"]["Uics"], "211,1249")
         self.assertEqual(body["Arguments"]["AssetType"], "Stock")
 
+    def test_create_returns_the_full_parsed_body_including_snapshot_rows(self):
+        """The stream's ``_recreate_subscription`` seeds its cache from the
+        response's ``Snapshot.Data`` rows — the ONLY carrier of
+        ``DelayedByMinutes`` on a real-time session (2026-08-18 incident), so
+        the body must reach the caller parsed and intact."""
+        body = {
+            "Snapshot": {
+                "Data": [{"Uic": 211, "Quote": {"Bid": 18.70, "Ask": 18.71, "DelayedByMinutes": 0}}]
+            }
+        }
+        got = _client(_Session(_Resp(201, body))).create_price_subscription(
+            context_id="ctx", reference_id="px", uics=[211]
+        )
+        self.assertEqual(got["Snapshot"]["Data"][0]["Quote"]["DelayedByMinutes"], 0)
+
+    def test_create_non_2xx_raises(self):
+        """The error contract is unchanged by the snapshot-seeding consumer: a
+        failed create still raises (counted as a connection failure by the
+        reader's supervisor), never returns a body to seed from."""
+        with self.assertRaises(RuntimeError):
+            _client(_Session(_Resp(429))).create_price_subscription(
+                context_id="ctx", reference_id="px", uics=[211]
+            )
+
     def test_delete_is_quiet_on_404(self):
         """Deleting an already-gone subscription is not an error."""
         _client(_Session(_Resp(404))).delete_price_subscription("ctx", "px")

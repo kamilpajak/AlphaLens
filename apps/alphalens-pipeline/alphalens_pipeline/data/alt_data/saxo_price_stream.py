@@ -152,6 +152,36 @@ def _latchable_side(value: object) -> float | None:
     return number
 
 
+def _coerce_delayed_minutes(value: object) -> int | None:
+    """Coerce a raw JSON ``DelayedByMinutes`` to an ``int``, or ``None`` on any
+    doubt (non-numeric, explicit null).
+
+    Same veto-not-raise rationale as :func:`_latchable_side`, with one twist:
+    ``any_delayed``'s ``> 0`` comparison would raise ``TypeError`` on an
+    uncoerced string, and once the value comes from the DETERMINISTIC
+    create-subscription REST snapshot the raise repeats on every reconnect
+    until the breaker trips. A numeric string keeps the demotion signal
+    (coerces to its int); garbage vetoes to ``None`` ("unknown delay"), which
+    every consumer already treats as not-confirmed-fresh."""
+    try:
+        # OverflowError: json.loads accepts non-standard Infinity as a float,
+        # and int(float("inf")) raises it — from the deterministic snapshot
+        # that raise would repeat every reconnect until the breaker trips.
+        return int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _row_uic(row: dict[str, Any]) -> int | None:
+    """The row's ``Uic`` as an ``int``, or ``None`` on any doubt — the same
+    veto-not-raise coercion :meth:`QuoteCache.apply` performs before storing
+    (a None never matches the desired set, so a doubtful row is dropped)."""
+    try:
+        return int(row.get("Uic"))  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _parse_utc(raw: object) -> dt.datetime | None:
     if not isinstance(raw, str) or not raw:
         return None
@@ -210,7 +240,7 @@ class QuoteCache:
             return
         try:
             uic = int(raw_uic)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             # A malformed Uic must degrade to "skip this row", not raise out
             # of the WebSocket reader thread: an uncaught exception here is
             # counted as a connection failure by _supervise, and after
@@ -221,6 +251,18 @@ class QuoteCache:
             return
         event_time = _parse_utc(row.get("LastUpdated"))
         quote_block = row.get("Quote") or {}
+        if not isinstance(quote_block, dict):
+            # A truthy NON-dict Quote value slips past the falsy-only
+            # ``or {}`` guard and would raise AttributeError on the .get()
+            # calls below — on the reader thread that is a counted connection
+            # failure, and when the row comes from the create-subscription
+            # REST snapshot the SAME body repeats on every reconnect, so six
+            # identical creates trip the breaker deterministically. Skip the
+            # whole row instead (same discipline as a malformed Uic).
+            logger.warning(
+                "saxo price stream: dropping row with non-dict Quote block: %r", quote_block
+            )
+            return
         with self._lock:
             prev = self._quotes.get(uic)
             # Sequence regression: an older quote never overwrites a newer one.
@@ -241,7 +283,10 @@ class QuoteCache:
             if prev is not None and prev.event_time and event_time and event_time < prev.event_time:
                 if "DelayedByMinutes" in quote_block:
                     self._quotes[uic] = replace(
-                        prev, delayed_by_minutes=quote_block.get("DelayedByMinutes")
+                        prev,
+                        delayed_by_minutes=_coerce_delayed_minutes(
+                            quote_block.get("DelayedByMinutes")
+                        ),
                     )
                 return
             # Bid / Ask / DelayedByMinutes each apply the SAME distinction,
@@ -259,8 +304,13 @@ class QuoteCache:
                 bid=quote_block.get("Bid", prev.bid if prev else None),
                 ask=quote_block.get("Ask", prev.ask if prev else None),
                 event_time=event_time or (prev.event_time if prev else None),
-                delayed_by_minutes=quote_block.get(
-                    "DelayedByMinutes", prev.delayed_by_minutes if prev else None
+                delayed_by_minutes=(
+                    # PRESENT key: coerce-or-veto the reported value (a raw
+                    # string must never reach any_delayed's ``> 0``); OMITTED
+                    # key: inherit the previous, already-coerced value.
+                    _coerce_delayed_minutes(quote_block["DelayedByMinutes"])
+                    if "DelayedByMinutes" in quote_block
+                    else (prev.delayed_by_minutes if prev else None)
                 ),
                 received_at=received_at,
             )
@@ -301,6 +351,24 @@ class QuoteCache:
         with self._lock:
             return self._running_low.pop(uic, None)
 
+    def reseed_running_low(self, uic: int, low: float) -> None:
+        """Hand a drained running low BACK to the accumulator (the 2026-08-18
+        incident): the caller drains unconditionally once per tick, but when its
+        concurrent point-sample is veto-stale it cannot act on the low — and the
+        pop had already destroyed the only evidence of a real touch. MIN-MERGE:
+        a deeper accrual the reader thread applied after the drain wins over the
+        reseeded value, so a repeated reseed is idempotent and never resurrects
+        a shallower low. Runs on the caller (tick) thread under the same
+        ``_lock`` the reader's ``apply`` writes under. Same veto-not-raise
+        discipline as the latch gate: a non-finite/non-positive value is
+        silently ignored (a doubtful reseed must never plant a phantom low)."""
+        value = _latchable_side(low)
+        if value is None:
+            return
+        with self._lock:
+            prev = self._running_low.get(uic)
+            self._running_low[uic] = value if prev is None else min(prev, value)
+
     def get(self, uic: int) -> Quote | None:
         with self._lock:
             return self._quotes.get(uic)
@@ -309,6 +377,24 @@ class QuoteCache:
         with self._lock:
             self._quotes.pop(uic, None)
             self._running_low.pop(uic, None)
+
+    def prune_except(self, keep: set[int]) -> None:
+        """Drop every cached quote AND running low whose uic is not in
+        ``keep``. Reader-thread companion to the caller-side ``forget``: an
+        in-flight create-subscription response can re-insert a quote for a
+        uic ``ensure_subscribed`` removed (and forgot) between the reader's
+        desired-set read and the snapshot apply — a snapshot row reporting a
+        delay would then pin ``any_delayed`` True for the process lifetime,
+        retrying the session reclaim forever. ``_recreate_subscription``
+        calls this after every (re)create with a FRESH desired-set read; a
+        removal that still slips through re-arms the dirty flag, so the
+        loop's follow-up recreate prunes it (eventual invariant: cached
+        uics ⊆ desired)."""
+        with self._lock:
+            for uic in [u for u in self._quotes if u not in keep]:
+                del self._quotes[uic]
+            for uic in [u for u in self._running_low if u not in keep]:
+                del self._running_low[uic]
 
     def any_delayed(self) -> bool:
         """True once ANY cached quote reports a positive ``DelayedByMinutes``
@@ -421,6 +507,11 @@ class SaxoPriceStream:
         The feed adapter drains this once per watched uic per decision tick."""
         return self.cache.drain_running_low(uic)
 
+    def reseed_running_low(self, uic: int, low: float) -> None:
+        """Hand a drained-but-unusable running low back to the cache's
+        accumulator (min-merge; see :meth:`QuoteCache.reseed_running_low`)."""
+        self.cache.reseed_running_low(uic, low)
+
     def is_running(self) -> bool:
         """True once ``start()`` has launched the reader thread and it is
         still alive. False before the first ``start()`` call, or after the
@@ -513,18 +604,57 @@ class SaxoPriceStream:
     def _recreate_subscription(self) -> None:
         """(Reader thread) DELETE best-effort + CREATE for the current desired
         set on the CURRENT context. Clears the dirty flag first so a
-        concurrent ``ensure_subscribed`` re-arms it rather than being lost."""
+        concurrent ``ensure_subscribed`` re-arms it rather than being lost.
+
+        The create RESPONSE is applied to the cache, not discarded: its
+        ``Snapshot.Data`` rows are the ONLY place Saxo reports
+        ``DelayedByMinutes`` on a real-time session (probe evidence
+        2026-08-18 — WS deltas omit unchanged/zero fields). Discarding it
+        left ``delayed_by_minutes`` None for the process lifetime, so the
+        feed adapter's strict ``!= 0`` check vetoed every point-sample and
+        the 1 Hz touch-latch never accrued; once seeded, ``apply``'s
+        inherit-on-omission semantics carry the confirmed 0 across every
+        later delta."""
         self._sub_dirty.clear()
         desired = self._desired_uics()
         with contextlib.suppress(Exception):
             self._client.delete_price_subscription(self._context_id, self._reference_id)
         if desired:
-            self._client.create_price_subscription(
+            response = self._client.create_price_subscription(
                 context_id=self._context_id,
                 reference_id=self._reference_id,
                 uics=sorted(desired),
                 refresh_rate_ms=self._refresh_rate_ms,
             )
+            self._apply_create_snapshot(response)
+        # The snapshot can resurrect a uic ``ensure_subscribed`` removed (and
+        # forgot) while the create was in flight — prune against a FRESH
+        # desired-set read, not the one captured above. A removal landing
+        # after even this read has re-armed the dirty flag, so the loop's
+        # follow-up recreate prunes it (see QuoteCache.prune_except).
+        self.cache.prune_except(self._desired_uics())
+
+    def _apply_create_snapshot(self, response: object) -> None:
+        """(Reader thread) Fold the create-subscription response's
+        ``Snapshot.Data`` rows into the cache. The row shape is the SAME as a
+        WS delta row, so ``QuoteCache.apply`` consumes it unchanged, stamped
+        with the same clock ``_apply_frame`` uses. Veto-not-raise on every
+        shape doubt (missing keys, non-list Data, non-dict rows) — this runs
+        inside ``_run_one_connection``, where an uncaught exception is a
+        counted connection failure, and a payload-shape change must never
+        burn the reconnect breaker budget."""
+        if not isinstance(response, dict):
+            return
+        snapshot = response.get("Snapshot")
+        if not isinstance(snapshot, dict):
+            return
+        rows = snapshot.get("Data")
+        if not isinstance(rows, list):
+            return
+        received_at = self._clock()
+        for row in rows:
+            if isinstance(row, dict):
+                self.cache.apply(row, received_at=received_at)
 
     def start(self) -> None:
         if self._thread is not None:
@@ -651,6 +781,12 @@ class SaxoPriceStream:
         if isinstance(frame, str):
             frame = frame.encode("utf-8")
         now = self._clock()
+        # One desired-set snapshot per frame: a late delta racing past
+        # _recreate_subscription's final prune must not resurrect a uic
+        # ensure_subscribed removed (no dirty flag would be left to prune it
+        # again; a positive delay on the resurrected row would pin
+        # any_delayed forever). Eventual invariant: cached uics ⊆ desired.
+        allowed = self._desired_uics()
         for msg in parse_stream_frames(frame):
             if msg.reference_id == _RESET_SUBSCRIPTIONS_REF:
                 # The server dropped this context's subscriptions — arm the
@@ -674,6 +810,8 @@ class SaxoPriceStream:
             rows = payload if isinstance(payload, list) else [payload]
             for row in rows:
                 if isinstance(row, dict):
+                    if _row_uic(row) not in allowed:
+                        continue  # undesired uic — see the frame-level comment
                     self.cache.apply(row, received_at=now)
                 else:
                     # A live shape mismatch (Saxo sending something other
