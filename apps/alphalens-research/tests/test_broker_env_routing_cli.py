@@ -184,6 +184,10 @@ class TestLiveReadRouting(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIsInstance(result.exception, SystemExit, "must refuse, never traceback")
         self.assertIn("SAXO_LIVE_ACCOUNT_KEY", result.stderr)
+        # The echo must never claim a gateway that was not built: the success
+        # label is emitted only AFTER factory construction succeeds.
+        self.assertIn("env=live gateway=refused", result.stderr)
+        self.assertNotIn("gateway=live", result.stderr)
 
     def test_live_factory_blocked_grant_renders_a_clean_refusal(self):
         # SaxoLiveEnvironmentBlockedError subclasses SaxoError(RuntimeError),
@@ -206,6 +210,8 @@ class TestLiveReadRouting(unittest.TestCase):
         self.assertNotEqual(result.exit_code, 0)
         self.assertIsInstance(result.exception, SystemExit, "must refuse, never traceback")
         self.assertIn("standing grant mismatch", result.stderr)
+        self.assertIn("env=live gateway=refused", result.stderr)
+        self.assertNotIn("gateway=live", result.stderr)
 
 
 class TestLiveSubmitRefusal(unittest.TestCase):

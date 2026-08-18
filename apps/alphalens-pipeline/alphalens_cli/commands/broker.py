@@ -122,7 +122,7 @@ def _guard_state_layout() -> None:
         raise _fail(str(exc)) from exc
 
 
-def _cli_broker(*, mutating: bool = False) -> Broker:
+def _cli_broker(*, mutating: bool) -> Broker:
     """Resolve the broker for a one-off command per ``ALPHALENS_BROKER_ENVIRONMENT``.
 
     The environment is read through ``state_paths.broker_environment()`` — the
@@ -153,10 +153,14 @@ def _cli_broker(*, mutating: bool = False) -> Broker:
       dropped — it exists for the daemon's SessionKeeper, which a one-shot
       command does not run.
 
-    Echoes one ``env=<env> gateway=<sim|live|none>`` line to STDERR at
+    Echoes one ``env=<env> gateway=<sim|live|none|refused>`` line to STDERR at
     resolution time (stdout carries the result only — CLI convention);
-    ``gateway=none`` marks the mutating-on-live refusal, where no gateway
-    path is taken.
+    ``gateway=none`` marks the mutating-on-live refusal and ``gateway=refused``
+    a failed LIVE construction — the ``live`` label is emitted only AFTER the
+    factory succeeds, so the echo never claims a gateway that was not built.
+    The ``mutating`` keyword has NO default on purpose: a future mutating
+    caller must state its intent or it will not compile into the live-capable
+    branch by accident (zen review).
     """
     from alphalens_pipeline.brokers.automanager import state_paths
 
@@ -183,12 +187,14 @@ def _cli_broker(*, mutating: bool = False) -> Broker:
             "daemon via `alphalens broker arm ... --env live`."
         )
 
-    typer.secho(f"env={env} gateway=live", err=True)
     from alphalens_pipeline.brokers.saxo.broker import create_saxo_broker_live_from_env
 
     try:
         broker, _provider = create_saxo_broker_live_from_env()
     except KeyError as exc:
+        # ``gateway=refused``: no live gateway was ever constructed — the echo
+        # must not claim one (zen review: emit the success label only on success).
+        typer.secho(f"env={env} gateway=refused", err=True)
         raise _fail(
             f"env=live: LIVE broker construction failed — missing env var {exc}. "
             "Ad-hoc LIVE commands need the daemon's full LIVE boot surface "
@@ -199,8 +205,17 @@ def _cli_broker(*, mutating: bool = False) -> Broker:
         # Covers BrokerError (the rails' BrokerCapabilityError) AND SaxoError
         # (SaxoLiveEnvironmentBlockedError) — both RuntimeError subclasses,
         # but only the former would be rendered by the commands' `except
-        # BrokerError`; converting HERE keeps every call site clean.
+        # BrokerError`; converting HERE keeps every call site clean. The broad
+        # catch is fail-closed by design, so keep the traceback for genuine
+        # factory bugs in the log (they would otherwise render as a refusal).
+        typer.secho(f"env={env} gateway=refused", err=True)
+        logger.warning(
+            "env=live: LIVE broker construction refused (%s)",
+            type(exc).__name__,
+            exc_info=True,
+        )
         raise _fail(f"env=live: LIVE broker construction refused — {exc}") from exc
+    typer.secho(f"env={env} gateway=live", err=True)
     return broker
 
 
@@ -701,7 +716,7 @@ def account_command() -> None:
     from broker_contract.contract import BrokerError
 
     try:
-        snapshot = _cli_broker().get_account()
+        snapshot = _cli_broker(mutating=False).get_account()
     except BrokerError as exc:
         raise _fail(f"broker account failed: {exc}") from exc
 
@@ -720,7 +735,7 @@ def positions_command() -> None:
     from broker_contract.contract import BrokerError
 
     try:
-        positions = _cli_broker().get_positions()
+        positions = _cli_broker(mutating=False).get_positions()
     except BrokerError as exc:
         raise _fail(f"broker positions failed: {exc}") from exc
 
@@ -753,7 +768,7 @@ def resolve_command(
     from broker_contract.contract import BrokerError
 
     try:
-        ref = _cli_broker().resolve_instrument(ticker, exchange)
+        ref = _cli_broker(mutating=False).resolve_instrument(ticker, exchange)
     except BrokerError as exc:
         raise _fail(f"broker resolve failed: {exc}") from exc
 
@@ -1284,7 +1299,7 @@ def orders_command() -> None:
     from broker_contract.contract import BrokerError
 
     try:
-        states = _cli_broker().list_open_orders()
+        states = _cli_broker(mutating=False).list_open_orders()
     except BrokerError as exc:
         raise _fail(f"broker orders failed: {exc}") from exc
 
@@ -1347,11 +1362,18 @@ def reconcile_command(
             err=True,
         )
     if not records:
+        # No broker is resolved on this path, but the operator still deserves
+        # the env line every other broker-touching invocation prints — an empty
+        # LIVE journal reading as "nothing to reconcile" with no env context
+        # is exactly the ambiguity the echo exists to remove (zen review).
+        from alphalens_pipeline.brokers.automanager import state_paths
+
+        typer.secho(f"env={state_paths.broker_environment()} gateway=none", err=True)
         typer.echo(f"no submission records in {path} — nothing to reconcile")
         return
 
     try:
-        verdicts = reconcile_brackets(records, _cli_broker())
+        verdicts = reconcile_brackets(records, _cli_broker(mutating=False))
     except BrokerError as exc:
         raise _fail(f"broker reconcile failed: {exc}") from exc
 
@@ -1424,7 +1446,7 @@ def reconcile_fills_command(
     out_path = out or state_paths.exec_quality_parquet()
     lines = list(control_loop._iter_standalone_stop_journal())
 
-    broker = _cli_broker()
+    broker = _cli_broker(mutating=False)
     if not isinstance(broker, SupportsOrderResolution):
         raise _fail(
             "the configured broker does not support order-outcome resolution "
@@ -1480,7 +1502,7 @@ def cancel_command(
     from broker_contract.contract import BrokerError
 
     try:
-        _cli_broker().cancel_order(order_id)
+        _cli_broker(mutating=False).cancel_order(order_id)
     except BrokerError as exc:
         raise _fail(f"broker cancel failed: {exc}") from exc
     typer.echo(f"cancelled {order_id} (an entry cancel cascades to its bracket children)")
