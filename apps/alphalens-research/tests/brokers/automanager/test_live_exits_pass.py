@@ -254,7 +254,9 @@ class TestLiveExitsFlagOff(_JournalCase):
         )
         alerts: list[str] = []
         deps = _deps(
-            broker, alerts=alerts, live_exits_feed_factory=lambda m: _FakeFeed({uic: 16.5})
+            broker,
+            alerts=alerts,
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
         )
         with mock.patch.dict(os.environ, {_ALLOW_ORDERS_ENV: "1"}, clear=False):
             os.environ.pop(_LIVE_EXITS_ENV, None)
@@ -284,7 +286,9 @@ class TestLiveExitsOrdersDisabledGate(_JournalCase):
         )
         alerts: list[str] = []
         deps = _deps(
-            broker, alerts=alerts, live_exits_feed_factory=lambda m: _FakeFeed({uic: 16.5})
+            broker,
+            alerts=alerts,
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
         )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "0"}):
             with mock.patch.object(cl, "run_live_exits") as spy:
@@ -304,7 +308,9 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         )
         alerts: list[str] = []
         deps = _deps(
-            broker, alerts=alerts, live_exits_feed_factory=lambda m: _FakeFeed({uic: 16.5})
+            broker,
+            alerts=alerts,
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
         )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             report = cl.TickReport()
@@ -339,7 +345,9 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         )
         alerts: list[str] = []
         deps = _deps(
-            broker, alerts=alerts, live_exits_feed_factory=lambda m: _FakeFeed({uic: 18.5})
+            broker,
+            alerts=alerts,
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 18.5}),
         )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             report = cl.TickReport()
@@ -365,7 +373,9 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         )
         alerts: list[str] = []
         deps = _deps(
-            broker, alerts=alerts, live_exits_feed_factory=lambda m: _FakeFeed({uic: None})
+            broker,
+            alerts=alerts,
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: None}),
         )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             report = cl.TickReport()
@@ -384,7 +394,9 @@ class TestLiveExitsFlagOnFires(_JournalCase):
         cl._append_standalone_stop_journal({"kind": "tranche_fired", "uic": uic, "tag": "tp1"})
         alerts: list[str] = []
         deps = _deps(
-            broker, alerts=alerts, live_exits_feed_factory=lambda m: _FakeFeed({uic: 16.5})
+            broker,
+            alerts=alerts,
+            live_exits_feed_factory=lambda m, *, scope: _FakeFeed({uic: 16.5}),
         )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             report = cl.TickReport()
@@ -395,7 +407,9 @@ class TestLiveExitsFlagOnFires(_JournalCase):
     def test_no_managed_positions_is_a_quiet_no_op(self) -> None:
         broker = FakeBroker()
         alerts: list[str] = []
-        deps = _deps(broker, alerts=alerts, live_exits_feed_factory=lambda m: _FakeFeed({}))
+        deps = _deps(
+            broker, alerts=alerts, live_exits_feed_factory=lambda m, *, scope: _FakeFeed({})
+        )
         with mock.patch.dict(os.environ, {_LIVE_EXITS_ENV: "1", _ALLOW_ORDERS_ENV: "1"}):
             with mock.patch.object(cl, "run_live_exits") as spy:
                 cl._run_live_exits_pass(deps, cl.TickReport())
@@ -418,9 +432,11 @@ class TestLiveExitsFeedFactoryReceivesTheVenue(_JournalCase):
             uic, tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0
         )
         received: list[dict[int, tuple[str, str]]] = []
+        scopes: list[str] = []
 
-        def capturing_factory(uic_to_instrument):
+        def capturing_factory(uic_to_instrument, *, scope):
             received.append(dict(uic_to_instrument))
+            scopes.append(scope)
             return _FakeFeed({uic: 16.5})
 
         alerts: list[str] = []
@@ -429,9 +445,12 @@ class TestLiveExitsFeedFactoryReceivesTheVenue(_JournalCase):
             cl._run_live_exits_pass(deps, cl.TickReport())
         # FakeBroker's _instrument fixture sets exchange_mic="XNYS".
         self.assertEqual(received, [{uic: ("KO", "XNYS")}])
+        # And the exits pass must claim ITS scope of the shared subscription
+        # (2026-08-18 churn fix), never the entry-watch one.
+        self.assertEqual(scopes, ["exits"])
 
 
-def _raising_factory(uic_to_instrument: object) -> object:
+def _raising_factory(uic_to_instrument: object, *, scope: str) -> object:
     raise RuntimeError("boom: cannot reach Saxo LIVE auth")
 
 
@@ -471,10 +490,10 @@ class TestLiveExitsFeedConstructionBoundary(unittest.TestCase):
             alerts.append(msg)
             return True
 
-        def raising_factory_tick_1(uic_to_instrument: object) -> object:
+        def raising_factory_tick_1(uic_to_instrument: object, *, scope: str) -> object:
             raise RuntimeError("boom: cannot reach Saxo LIVE auth")
 
-        def raising_factory_tick_2(uic_to_instrument: object) -> object:
+        def raising_factory_tick_2(uic_to_instrument: object, *, scope: str) -> object:
             raise RuntimeError("boom: token store corrupt")
 
         report = cl.TickReport()

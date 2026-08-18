@@ -584,6 +584,75 @@ class TestSaxoPriceStreamReclaim(unittest.TestCase):
         self.assertEqual(stream.get(5).delayed_by_minutes, 15)
 
 
+class _SteppingClock:
+    """Deterministic stand-in for the stream's injected ``clock`` — the same
+    instant until ``advance`` moves it, so interval arithmetic is exact."""
+
+    def __init__(self, start: dt.datetime) -> None:
+        self.now = start
+
+    def __call__(self) -> dt.datetime:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += dt.timedelta(seconds=seconds)
+
+
+class TestSaxoPriceStreamReclaimRetry(unittest.TestCase):
+    """Transition-only reclaim is not enough: when the elevation is immediately
+    re-stolen (the operator logged into SaxoTraderGO), ``any_delayed`` stays
+    True and the transition never re-fires — the session sat OrdersOnly/delayed
+    for 20+ minutes live on 2026-08-18. While quotes STAY delayed the reclaim
+    must retry every ``_RECLAIM_RETRY_INTERVAL_S``."""
+
+    def _stream(self, outcomes: list[bool]) -> tuple[_ReclaimTrackingClient, SaxoPriceStream]:
+        self.clock = _SteppingClock(_T0)
+        client = _ReclaimTrackingClient(outcomes)
+        return client, SaxoPriceStream(client, _FakeTokenProvider(), clock=self.clock)
+
+    def test_transition_attempt_still_fires_immediately(self):
+        client, stream = self._stream([True])
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
+        self.assertEqual(client.calls, 1)
+
+    def test_no_retry_before_the_interval_elapses(self):
+        client, stream = self._stream([True, True])
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
+        self.clock.advance(sps._RECLAIM_RETRY_INTERVAL_S - 1.0)
+        stream._apply_frame(_delayed_frame(2, delayed_by_minutes=15))
+        self.assertEqual(client.calls, 1)
+
+    def test_retry_fires_once_the_interval_elapses_while_still_delayed(self):
+        client, stream = self._stream([True, True])
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
+        self.clock.advance(sps._RECLAIM_RETRY_INTERVAL_S)
+        stream._apply_frame(_delayed_frame(2, delayed_by_minutes=15))
+        self.assertEqual(client.calls, 2)
+
+    def test_retry_rearms_after_each_attempt_not_just_the_first(self):
+        """The retry cadence is measured from the LAST attempt, not the
+        transition: a stolen session must keep retrying every interval."""
+        client, stream = self._stream([True, True, True])
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
+        self.clock.advance(sps._RECLAIM_RETRY_INTERVAL_S)
+        stream._apply_frame(_delayed_frame(2, delayed_by_minutes=15))
+        self.clock.advance(sps._RECLAIM_RETRY_INTERVAL_S - 1.0)
+        stream._apply_frame(_delayed_frame(3, delayed_by_minutes=15))  # too early
+        self.assertEqual(client.calls, 2)
+        self.clock.advance(1.0)
+        stream._apply_frame(_delayed_frame(4, delayed_by_minutes=15))
+        self.assertEqual(client.calls, 3)
+
+    def test_recovery_resets_so_the_next_transition_fires_immediately(self):
+        client, stream = self._stream([True, True])
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
+        self.clock.advance(10.0)  # well inside the retry interval
+        stream._apply_frame(_delayed_frame(2, delayed_by_minutes=0))  # session fresh again
+        self.clock.advance(1.0)
+        stream._apply_frame(_delayed_frame(3, delayed_by_minutes=15))  # new demotion
+        self.assertEqual(client.calls, 2)
+
+
 class _FakeSharedInstance:
     """Stand-in for SaxoPriceStream at the get_shared_price_stream() level -
     the getter only ever calls start() and is_running() on what it holds."""
@@ -791,6 +860,83 @@ class TestEnsureSubscribedOwnership(unittest.TestCase):
         stream.ensure_subscribed(set())
         self.assertEqual(client.creates, [])
         self.assertEqual(client.deletes, [])
+
+
+class TestEnsureSubscribedScopes(unittest.TestCase):
+    """Per-scope desired sets with union subscription (2026-08-18 incident):
+    one daemon tick builds several feeds off the ONE shared stream (live
+    exits, peak update, entry-watch), each calling ``ensure_subscribed`` with
+    only ITS uics. Replace-the-whole-set semantics made those calls fight —
+    zero open positions + one entry watch alternated the desired set
+    {} <-> {watch} every tick, deleting and recreating the single server-side
+    subscription and starving the reader into a ~90s recv-timeout reconnect
+    loop. Each caller now owns a SCOPE; the wire-level set is the union."""
+
+    def _stream(self) -> SaxoPriceStream:
+        return SaxoPriceStream(_SubTrackingClient(), _FakeTokenProvider())
+
+    def test_disjoint_scopes_union_into_the_desired_set(self):
+        stream = self._stream()
+        stream.ensure_subscribed({5}, scope="exits")
+        stream.ensure_subscribed({7}, scope="entry-watch")
+        self.assertEqual(stream._desired_uics(), {5, 7})
+
+    def test_alternating_empty_exits_and_entry_watch_is_a_complete_no_op(self):
+        """THE production bug: with zero open positions and one entry-trail
+        watch, every tick called in exits={} then entry-watch={N}. That pair
+        repeating must set the dirty flag ZERO additional times and never
+        forget N — an unchanged union may not touch the wire."""
+        stream = self._stream()
+        stream.ensure_subscribed({5}, scope="entry-watch")
+        stream.cache.apply(_row(Uic=5), received_at=_T0)
+        stream._sub_dirty.clear()
+        for _ in range(5):
+            stream.ensure_subscribed(set(), scope="exits")
+            stream.ensure_subscribed({5}, scope="entry-watch")
+        self.assertFalse(stream._sub_dirty.is_set())
+        self.assertIsNotNone(stream.get(5), "the watched uic's quote must survive")
+
+    def test_uic_is_forgotten_only_when_it_leaves_the_last_scope_holding_it(self):
+        stream = self._stream()
+        stream.ensure_subscribed({7}, scope="exits")
+        stream.ensure_subscribed({7}, scope="entry-watch")
+        stream.cache.apply(_row(Uic=7), received_at=_T0)
+        stream._sub_dirty.clear()
+        stream.ensure_subscribed(set(), scope="exits")  # entry-watch still holds 7
+        self.assertFalse(stream._sub_dirty.is_set())
+        self.assertIsNotNone(stream.get(7))
+        stream.ensure_subscribed(set(), scope="entry-watch")  # last holder gone
+        self.assertTrue(stream._sub_dirty.is_set())
+        self.assertIsNone(stream.get(7))
+        self.assertEqual(stream._desired_uics(), set())
+
+    def test_same_scope_replacement_still_unsubscribes_a_dropped_uic(self):
+        stream = self._stream()
+        stream.ensure_subscribed({7, 8}, scope="exits")
+        stream.cache.apply(_row(Uic=7), received_at=_T0)
+        stream._sub_dirty.clear()
+        stream.ensure_subscribed({8}, scope="exits")
+        self.assertTrue(stream._sub_dirty.is_set())
+        self.assertIsNone(stream.get(7))
+        self.assertEqual(stream._desired_uics(), {8})
+
+    def test_growing_a_scope_arms_the_dirty_flag(self):
+        stream = self._stream()
+        stream.ensure_subscribed({5}, scope="exits")
+        stream._sub_dirty.clear()
+        stream.ensure_subscribed({5, 6}, scope="exits")
+        self.assertTrue(stream._sub_dirty.is_set())
+        self.assertEqual(stream._desired_uics(), {5, 6})
+
+    def test_stop_best_effort_deletes_when_any_scope_holds_a_uic(self):
+        """``stop()`` must read the union, not a dead attribute: a subscription
+        desired by ANY scope still exists server-side and deserves the
+        best-effort DELETE."""
+        client = _SubTrackingClient()
+        stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="entry-watch")
+        stream.stop(timeout=0.1)
+        self.assertEqual(len(client.deletes), 1)
 
 
 class TestSuperviseIdleWithoutSubscriptions(unittest.TestCase):

@@ -267,9 +267,14 @@ class LoopDeps:
     # hand the pass a fake feed without touching the Saxo LIVE stream; mirrors
     # the place_oco_exit / amend_stop optional-capability pattern above. Only
     # ever consulted when the live-exits pass is armed (flag ON, ALLOW_ORDERS
-    # ON). Keyed by uic -> (ticker, exchange_mic): the venue is load-bearing,
-    # see _default_live_exits_feed_factory's docstring.
-    live_exits_feed_factory: Callable[[Mapping[int, tuple[str, str]]], PriceFeed] | None = None
+    # ON). Called as factory(uic_to_instrument, scope=...) where the mapping is
+    # uic -> (ticker, exchange_mic) (the venue is load-bearing, see
+    # _default_live_exits_feed_factory's docstring) and scope names the
+    # caller's slice of the shared price-stream subscription
+    # (_FEED_SCOPE_EXITS / _FEED_SCOPE_ENTRY_WATCH) so the tick's multiple
+    # feed builds replace only their own uics instead of fighting over one
+    # replace-the-whole-set call (the 2026-08-18 subscription-churn incident).
+    live_exits_feed_factory: Callable[..., PriceFeed] | None = None
     # Daemon-lifetime per-uic high-water mark for the trailing_atr policy (Task
     # 2's pure _maybe_trail reconcile arm reads peak/last_price off the
     # ProtectionView this feeds — wiring lands in Task 4, NOT here). A MUTABLE
@@ -685,15 +690,31 @@ class _NullPriceFeed:
         return None
 
 
+# Scopes of the shared price-stream subscription, one per feed-building call
+# site (SaxoPriceStream.ensure_subscribed keys its per-caller desired sets by
+# these). The exits pass and the peak update watch the SAME open-position uics,
+# so they share one scope; the entry-watch pass owns its own.
+_FEED_SCOPE_EXITS = "exits"
+_FEED_SCOPE_ENTRY_WATCH = "entry-watch"
+
+
 def _default_live_exits_feed_factory(
     uic_to_instrument: Mapping[int, tuple[str, str]],
+    *,
+    scope: str,
 ) -> PriceFeed:
     """The production price feed: Saxo LIVE streaming, or nothing.
 
     yfinance is NOT a fallback here. It remains in the tree, unwired, and its
     PricePoint carries no event time so the freshness gate would veto it
     anyway. Behind ``ALPHALENS_SAXO_LIVE_PRICES`` (default OFF); when off this
-    returns a feed that vetoes every uic rather than quietly downgrading."""
+    returns a feed that vetoes every uic rather than quietly downgrading.
+
+    ``scope`` is forwarded to ``stream.ensure_subscribed`` so each of the
+    tick's feed builds (exits/peaks vs entry-watch) replaces only its own
+    slice of the shared subscription — passing the whole set from every call
+    site made the builds fight and churn the single server-side subscription
+    every tick (2026-08-18 incident)."""
     if not _saxo_live_prices_enabled():
         return _NullPriceFeed()
     from alphalens_pipeline.brokers.automanager.saxo_live_price_feed import SaxoLivePriceFeed
@@ -708,7 +729,7 @@ def _default_live_exits_feed_factory(
         sim_uic: stream.live_uic_for(ticker, exchange_mic=mic)
         for sim_uic, (ticker, mic) in uic_to_instrument.items()
     }
-    stream.ensure_subscribed([u for u in live_uics.values() if u is not None])
+    stream.ensure_subscribed([u for u in live_uics.values() if u is not None], scope=scope)
     return SaxoLivePriceFeed(stream=stream, resolve_live_uic=live_uics.get)
 
 
@@ -735,7 +756,7 @@ def _build_live_exits_feed(
     explained rather than silently swallowed."""
     feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
     try:
-        return feed_factory(uic_to_instrument)
+        return feed_factory(uic_to_instrument, scope=_FEED_SCOPE_EXITS)
     # Deliberately broad: nothing that happens while building the price feed
     # may reach the tick. Do NOT narrow this to a specific exception type -
     # the whole point of this boundary is that it does not need to know what
@@ -799,7 +820,10 @@ def _update_peaks(
         if (uic := _position_uic(pos)) is not None
     }
     feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
-    feed = feed_factory(uic_to_instrument)
+    # Same scope as the exits pass: both watch the SAME open-position uics, so
+    # this build must replace (not duplicate) the exits slice of the shared
+    # price-stream subscription.
+    feed = feed_factory(uic_to_instrument, scope=_FEED_SCOPE_EXITS)
     peak_by_uic: dict[int, float] = {}
     last_price_by_uic: dict[int, float] = {}
     new_peaks = dict(deps.peak_tracker)
@@ -1340,7 +1364,7 @@ def _build_entry_watch_feed(
     mirrors :func:`_build_live_exits_feed`."""
     feed_factory = deps.live_exits_feed_factory or _default_live_exits_feed_factory
     try:
-        return feed_factory(uic_to_instrument)
+        return feed_factory(uic_to_instrument, scope=_FEED_SCOPE_ENTRY_WATCH)
     # Broad on purpose (mirrors _build_live_exits_feed): a feed/network/auth
     # error becomes a veto, never a crash — the watches simply make no progress.
     except Exception as exc:

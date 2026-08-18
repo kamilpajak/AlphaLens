@@ -152,7 +152,7 @@ class TestEntryWatchMultiSessionSoak(unittest.TestCase):
             sweep_orphans_fn=lambda _b: [],
             alert=lambda _m: None,
             alert_throttled=_throttled,
-            live_exits_feed_factory=lambda _u2i: self.feed,
+            live_exits_feed_factory=lambda _u2i, *, scope: self.feed,
         )
 
     def _record_refused(self, ticker: str, brief_date: Any, reason: str) -> None:

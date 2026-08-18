@@ -417,7 +417,7 @@ def _watch_deps(feed: Any, alerts: list[tuple[str, str]], broker: Any = None) ->
         sweep_orphans_fn=lambda _b: [],
         alert=lambda _m: None,
         alert_throttled=_throttled,
-        live_exits_feed_factory=lambda _u2i: feed,
+        live_exits_feed_factory=lambda _u2i, *, scope: feed,
     )
 
 

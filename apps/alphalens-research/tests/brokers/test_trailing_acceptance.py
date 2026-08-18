@@ -190,7 +190,7 @@ class _ScriptedFeedFactory:
         self._ticks = list(ticks)
         self.calls = 0
 
-    def __call__(self, _uic_to_instrument: object) -> _FakeFeed:
+    def __call__(self, _uic_to_instrument: object, *, scope: str) -> _FakeFeed:
         self.calls += 1
         return _FakeFeed(self._ticks.pop(0))
 

@@ -461,7 +461,9 @@ class ManagerWorld:
             # A uic price_is never touched reads stale (None) -> stream-health
             # veto, so scenarios that never call price_is never fire a tranche
             # even with live_exits_are_enabled() on.
-            live_exits_feed_factory=lambda _uic_to_ticker: _WorldPriceFeed(self._live_exit_prices),
+            live_exits_feed_factory=lambda _uic_to_ticker, *, scope: _WorldPriceFeed(
+                self._live_exit_prices
+            ),
         )
 
     def _place_pick(self, pick: Any) -> bool:

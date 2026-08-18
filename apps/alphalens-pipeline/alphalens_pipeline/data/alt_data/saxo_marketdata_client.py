@@ -81,6 +81,10 @@ class SaxoMarketDataClient:
             timeout=_TIMEOUT_S,
         )
         if 200 <= resp.status_code < 300:
+            # Success must leave a journal trace: a silent elevation is
+            # indistinguishable from one that never happened once the
+            # capability is re-stolen (2026-08-18 incident diagnosis).
+            logger.info("Saxo LIVE session elevated to %s", _ELEVATED_TRADE_LEVEL)
             return True
         logger.warning("Saxo LIVE session elevation failed: HTTP %s", resp.status_code)
         return False

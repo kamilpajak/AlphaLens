@@ -67,8 +67,10 @@ class _ScriptedFeedFactory:
 
     def __init__(self, ticks: list[dict[int, float | None]]) -> None:
         self._ticks = list(ticks)
+        self.scopes: list[str] = []
 
-    def __call__(self, _uic_to_instrument: object) -> _FakeFeed:
+    def __call__(self, _uic_to_instrument: object, *, scope: str) -> _FakeFeed:
+        self.scopes.append(scope)
         return _FakeFeed(self._ticks.pop(0))
 
 
@@ -152,7 +154,7 @@ class TestUpdatePeaksNoneBid(unittest.TestCase):
             def latest(self, uic: int) -> PricePoint | None:
                 return bad_point if uic == 500 else None
 
-        deps = _deps(live_exits_feed_factory=lambda _uic_to_instrument: _NoneBidFeed())
+        deps = _deps(live_exits_feed_factory=lambda _uic_to_instrument, *, scope: _NoneBidFeed())
 
         peak, last = cl._update_peaks(deps, [pos])  # must not raise
 
@@ -217,7 +219,9 @@ class TestUpdatePeaksPerUicFaultIsolation(unittest.TestCase):
                     raise RuntimeError("feed blew up for uic 2")
                 return _point(uic, {1: 10.0, 3: 30.0}[uic])
 
-        deps = _deps(live_exits_feed_factory=lambda _uic_to_instrument: _RaisingOnUic2Feed())
+        deps = _deps(
+            live_exits_feed_factory=lambda _uic_to_instrument, *, scope: _RaisingOnUic2Feed()
+        )
 
         peak, last = cl._update_peaks(deps, [pos1, pos2, pos3])  # must not raise
 
@@ -228,6 +232,20 @@ class TestUpdatePeaksPerUicFaultIsolation(unittest.TestCase):
         self.assertNotIn(2, peak)
         self.assertNotIn(2, last)
         self.assertEqual(dict(deps.peak_tracker), {1: 10.0, 3: 30.0})
+
+
+class TestUpdatePeaksFeedScope(unittest.TestCase):
+    def test_update_peaks_requests_the_exits_scope(self) -> None:
+        """The peak update watches the SAME open-position uics as the exits
+        pass, so it must REPLACE the exits slice of the shared price-stream
+        subscription — its own scope would double-subscribe, and no scope at
+        all would refight the 2026-08-18 subscription churn."""
+        factory = _ScriptedFeedFactory([{100: 10.0}])
+        deps = _deps(live_exits_feed_factory=factory)
+
+        cl._update_peaks(deps, [_mk_pos(uic=100)])
+
+        self.assertEqual(factory.scopes, ["exits"])
 
 
 class TestUpdatePeaksPruning(unittest.TestCase):
