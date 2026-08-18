@@ -197,13 +197,20 @@ def test_outcomes_status_filter(tmp_path: Path):
 def test_outcomes_reports_true_total_and_truncation(tmp_path: Path, monkeypatch):
     # The listing is capped at `_OUTCOMES_LIMIT`; the response must carry the TRUE
     # matching total + a truncation flag so the SPA can render an honest
-    # "showing N of M" instead of silently dropping the oldest rows.
+    # "showing N of M" instead of silently dropping rows. Distinct matured_at per
+    # row so the test also pins WHICH rows survive the cap (most recently active).
     from edge.api import views as edge_views
 
     _write_parquet(
         tmp_path,
         "2026-05-27",
-        [_terminal(f"T{i}", excess=0.01, realized_r=0.5) for i in range(3)],
+        [
+            {
+                **_terminal(f"T{i}", excess=0.01, realized_r=0.5),
+                "matured_at": dt.date(2026, 6, 2 + i),
+            }
+            for i in range(3)
+        ],
     )
     rebuild_from_parquet(tmp_path)
 
@@ -215,13 +222,94 @@ def test_outcomes_reports_true_total_and_truncation(tmp_path: Path, monkeypatch)
     assert body["truncated"] is False
 
     # Cap below the match count: rows are capped but `total` still reports the
-    # full match count and `truncated` flags the drop.
+    # full match count and `truncated` flags the drop. The survivors are the two
+    # most recently matured rows; the least recently active row is the victim.
     monkeypatch.setattr(edge_views, "_OUTCOMES_LIMIT", 2)
     capped = APIClient().get("/v1/edge/outcomes").json()
-    assert len(capped["data"]) == 2
+    assert {r["ticker"] for r in capped["data"]} == {"T1", "T2"}
     assert capped["total"] == 3
     assert capped["returned"] == 2
     assert capped["truncated"] is True
+
+
+@pytest.mark.django_db
+def test_outcomes_cap_retains_recently_matured_time_stop(tmp_path: Path, monkeypatch):
+    # Production regression (2026-08-18): a TIME_STOP necessarily carries an OLD
+    # brief_date (the position aged to its TTL), so capping "newest by brief_date"
+    # structurally evicted every TIME_STOP while fresher ongoing rows survived.
+    # The cap must evict by RECENCY OF ACTIVITY (matured_at for terminal rows,
+    # brief_date for ongoing), never by brief age alone.
+    from edge.api import views as edge_views
+
+    _write_parquet(
+        tmp_path,
+        "2026-05-01",
+        [
+            {
+                **_terminal("TSTP", excess=-0.05, realized_r=-0.2, classification="TIME_STOP"),
+                "matured_at": dt.date(2026, 7, 20),
+            }
+        ],
+    )
+    _write_parquet(tmp_path, "2026-06-01", [_ongoing("OLD1", open_r=0.1)])
+    _write_parquet(tmp_path, "2026-06-10", [_ongoing("MID2", open_r=0.1)])
+    _write_parquet(tmp_path, "2026-06-20", [_ongoing("NEW3", open_r=0.1)])
+    rebuild_from_parquet(tmp_path)
+
+    monkeypatch.setattr(edge_views, "_OUTCOMES_LIMIT", 3)
+    body = APIClient().get("/v1/edge/outcomes").json()
+    tickers = {r["ticker"] for r in body["data"]}
+    assert "TSTP" in tickers  # recently matured — must survive despite oldest brief
+    assert tickers == {"TSTP", "NEW3", "MID2"}  # victim = least recently active
+
+
+@pytest.mark.django_db
+def test_outcomes_ordered_by_recency(tmp_path: Path):
+    # Rows come back ordered by coalesce(matured_at, brief_date) descending —
+    # terminal rows sort at their maturity date, ongoing rows at their brief date —
+    # tiebroken by (-brief_date, ticker) for determinism.
+    _write_parquet(
+        tmp_path,
+        "2026-05-01",
+        [{**_terminal("TERM_A", excess=0.01, realized_r=0.5), "matured_at": dt.date(2026, 7, 20)}],
+    )
+    _write_parquet(
+        tmp_path,
+        "2026-06-01",
+        [{**_terminal("TERM_C", excess=0.01, realized_r=0.5), "matured_at": dt.date(2026, 6, 15)}],
+    )
+    _write_parquet(tmp_path, "2026-06-10", [_ongoing("ONGO_D", open_r=0.1)])
+    _write_parquet(
+        tmp_path,
+        "2026-06-20",
+        [_ongoing("ONGO_B2", open_r=0.1), _ongoing("ONGO_B1", open_r=0.1)],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    body = APIClient().get("/v1/edge/outcomes").json()
+    assert [r["ticker"] for r in body["data"]] == [
+        "TERM_A",  # recency 07-20 (matured)
+        "ONGO_B1",  # recency 06-20, ticker tiebreak
+        "ONGO_B2",  # recency 06-20
+        "TERM_C",  # recency 06-15 (matured)
+        "ONGO_D",  # recency 06-10
+    ]
+
+
+@pytest.mark.django_db
+def test_outcomes_window_anchored_to_latest_brief_date(tmp_path: Path):
+    # `?window=N` counts back from the LATEST brief_date in the cache, not from
+    # today — the window must stay stable regardless of when the API is hit
+    # relative to the nightly rebuild.
+    _write_parquet(tmp_path, "2026-05-01", [_ongoing("OLD", open_r=0.1)])
+    _write_parquet(tmp_path, "2026-06-01", [_ongoing("NEW", open_r=0.1)])
+    rebuild_from_parquet(tmp_path)
+
+    # Floor = 2026-06-01 - 10d = 2026-05-22: only the newer row qualifies. Were
+    # the window anchored to today, the floor would exclude BOTH rows.
+    body = APIClient().get("/v1/edge/outcomes?window=10").json()
+    assert {r["ticker"] for r in body["data"]} == {"NEW"}
+    assert body["total"] == 1
 
 
 @pytest.mark.django_db

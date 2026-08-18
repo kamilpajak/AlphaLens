@@ -6,10 +6,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // The /v1/edge/outcomes listing is capped server-side (`_OUTCOMES_LIMIT`). When
-// the window exceeds the cap the API returns the newest N rows plus the TRUE
-// match count + a `truncated` flag, and the table must surface an honest
-// "showing N of M" notice instead of silently hiding the oldest rows (whose
-// absence would also quietly skew the client-side terminal/ongoing chip counts).
+// the window exceeds the cap the API returns the N most recently ACTIVE rows
+// (maturity date for terminal, brief date for ongoing) plus the TRUE match count
+// + a `truncated` flag, and the table must surface an honest "showing N of M"
+// notice instead of silently hiding the dropped rows (whose absence would also
+// quietly skew the client-side terminal/ongoing chip counts).
 
 const FIXTURES = resolve(__dirname, 'fixtures/api-mock');
 const SUMMARY = JSON.parse(readFileSync(resolve(FIXTURES, 'edge-summary.json'), 'utf-8'));
@@ -51,6 +52,11 @@ test('outcomes table shows an honest truncation notice when the server caps the 
 	await expect(notice).toBeVisible();
 	// The TRUE total (M), not just the returned slice, must be shown.
 	await expect(notice).toContainText('5000');
+	// The copy must state the RECENCY eviction rule — the cap keeps the most
+	// recently active rows, it does not drop "old briefs" (that ordering
+	// structurally starved TIME_STOP out of the listing).
+	await expect(notice).toContainText('most recently active');
+	await expect(notice).toContainText('least-recently-active rows beyond the server cap');
 });
 
 test('no truncation notice when the list is not capped', async ({ page }) => {

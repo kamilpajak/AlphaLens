@@ -607,17 +607,19 @@
 			/>
 
 			{#if data.outcomesTruncated}
-				<!-- Honest cap notice: the server returns only the newest N rows once the
-				     window exceeds its listing cap. Without this, the oldest rows vanish
-				     silently and the terminal/ongoing chip counts (client-side over the
-				     returned rows) quietly under-count. -->
+				<!-- Honest cap notice: once the window exceeds the server's listing cap,
+				     only the N most recently ACTIVE rows survive (maturity date for
+				     terminal rows, brief date for ongoing). Without this, the dropped
+				     rows vanish silently and the terminal/ongoing chip counts
+				     (client-side over the returned rows) quietly under-count. -->
 				<div
 					data-testid="outcomes-truncation-notice"
 					class="mb-3 border border-amber-dim/40 bg-amber/5 px-3 py-2 text-[11px] leading-relaxed text-amber-dim"
 				>
-					Showing the newest <span class="font-bold text-fg">{data.outcomes.length}</span> of
-					<span class="font-bold text-fg">{data.outcomesTotal}</span> outcomes in window — older rows
-					beyond the server cap are not listed, so the counts above reflect only what is shown.
+					Showing the <span class="font-bold text-fg">{data.outcomes.length}</span> most recently
+					active of <span class="font-bold text-fg">{data.outcomesTotal}</span> outcomes in window —
+					the least-recently-active rows beyond the server cap are not listed, so the counts above
+					reflect only what is shown.
 				</div>
 			{/if}
 
