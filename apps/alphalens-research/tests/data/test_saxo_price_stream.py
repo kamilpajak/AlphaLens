@@ -232,6 +232,31 @@ class TestQuoteCache(unittest.TestCase):
         self.assertFalse(c.any_delayed())  # must not raise
         self.assertIsNone(c.drain_running_low(211))
 
+    def test_infinite_delayed_vetoes_to_none_without_raising(self):
+        """json.loads accepts non-standard Infinity as a float, and
+        ``int(float("inf"))`` raises OverflowError — from the DETERMINISTIC
+        create-subscription snapshot that raise would repeat every reconnect
+        until the breaker trips. Must veto to None, never raise."""
+        c = QuoteCache()
+        c.apply(
+            {
+                "Uic": 211,
+                "LastUpdated": "2026-08-07T13:48:00Z",
+                "Quote": {"Bid": 1.0, "Ask": 1.1, "DelayedByMinutes": float("inf")},
+            },
+            received_at=_T0,
+        )
+        self.assertIsNone(c.get(211).delayed_by_minutes)
+        self.assertFalse(c.any_delayed())
+
+    def test_infinite_uic_row_is_skipped_without_raising(self):
+        """``int(float("inf"))`` on the Uic raises OverflowError — same
+        deterministic-snapshot breaker-burn hazard as the delayed flag."""
+        c = QuoteCache()
+        c.apply(_row(Uic=float("inf")), received_at=_T0)  # must not raise
+        self.assertIsNone(c.get(211))
+        self.assertFalse(c.any_delayed())
+
     def test_out_of_order_row_coerces_a_carried_string_delayed_flag(self):
         """The regression branch applies a newly-reported delay even on a
         dropped row — that path must coerce too, or the string reaches
@@ -557,6 +582,7 @@ class TestLiveUicFor(unittest.TestCase):
     def test_a_successful_resolution_is_cached_not_re_resolved(self):
         client = _ResolvingClient({("AAPL", "XNYS"): 211})
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         self.assertEqual(stream.live_uic_for("AAPL", exchange_mic="XNYS"), 211)
         self.assertEqual(stream.live_uic_for("AAPL", exchange_mic="XNYS"), 211)
         self.assertEqual(client.calls, [("AAPL", "XNYS")])  # ONE REST call, not two
@@ -567,6 +593,7 @@ class TestLiveUicFor(unittest.TestCase):
         the rest of the process instead of retrying on the next tick."""
         client = _ResolvingClient({})  # every lookup misses
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         self.assertIsNone(stream.live_uic_for("QUBT", exchange_mic="ZZZZ"))
         self.assertIsNone(stream.live_uic_for("QUBT", exchange_mic="ZZZZ"))
         self.assertEqual(client.calls, [("QUBT", "ZZZZ"), ("QUBT", "ZZZZ")])  # retried both times
@@ -574,6 +601,7 @@ class TestLiveUicFor(unittest.TestCase):
     def test_the_cache_key_is_upper_cased_ticker_and_venue(self):
         client = _ResolvingClient({("AAPL", "XNAS"): 5})
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         self.assertEqual(stream.live_uic_for("aapl", exchange_mic="xnas"), 5)
         self.assertEqual(stream.live_uic_for("AAPL", exchange_mic="XNAS"), 5)
         self.assertEqual(client.calls, [("aapl", "xnas")])  # 2nd call hit the cache
@@ -645,6 +673,7 @@ class TestSaxoPriceStreamApplyFrame(unittest.TestCase):
 
     def test_malformed_non_dict_row_is_dropped_with_a_debug_log(self):
         stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         payload = json.dumps(
             [
                 {"Uic": 5, "LastUpdated": "2026-08-07T13:48:00Z", "Quote": {"Bid": 1.0}},
@@ -678,6 +707,27 @@ class _ReclaimTrackingClient:
         return next(self._outcomes)
 
 
+class TestApplyFrameDesiredSetFilter(unittest.TestCase):
+    """A WS row for a uic OUTSIDE the desired set must not land in the cache:
+    a late delta racing past _recreate_subscription's final prune could
+    otherwise resurrect a forgotten uic (and, with a positive delay, pin
+    ``any_delayed`` forever) with no dirty flag left to trigger another
+    prune. Eventual invariant: cached uics ⊆ desired."""
+
+    def test_row_for_an_undesired_uic_is_dropped(self):
+        stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        stream.ensure_subscribed({7}, scope="t")  # 5 is NOT desired
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))  # row uic=5
+        self.assertIsNone(stream.get(5))
+        self.assertFalse(stream.cache.any_delayed())
+
+    def test_row_for_a_desired_uic_still_applies(self):
+        stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
+        stream._apply_frame(_delayed_frame(1, delayed_by_minutes=0))
+        self.assertEqual(stream.get(5).bid, 1.0)
+
+
 def _delayed_frame(message_id: int, *, delayed_by_minutes: int) -> bytes:
     payload = json.dumps(
         [
@@ -699,12 +749,14 @@ class TestSaxoPriceStreamReclaim(unittest.TestCase):
     def test_delayed_transition_triggers_one_reclaim_attempt(self):
         client = _ReclaimTrackingClient([True])
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
         self.assertEqual(client.calls, 1)
 
     def test_reclaim_does_not_fire_again_while_still_delayed(self):
         client = _ReclaimTrackingClient([True, True, True])
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
         stream._apply_frame(_delayed_frame(2, delayed_by_minutes=15))
         stream._apply_frame(_delayed_frame(3, delayed_by_minutes=15))
@@ -713,6 +765,7 @@ class TestSaxoPriceStreamReclaim(unittest.TestCase):
     def test_reclaim_fires_again_after_recovering_then_delaying_once_more(self):
         client = _ReclaimTrackingClient([True, True])
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         stream._apply_frame(_delayed_frame(1, delayed_by_minutes=15))
         stream._apply_frame(_delayed_frame(2, delayed_by_minutes=0))
         stream._apply_frame(_delayed_frame(3, delayed_by_minutes=15))
@@ -721,6 +774,7 @@ class TestSaxoPriceStreamReclaim(unittest.TestCase):
     def test_healthy_stream_never_calls_elevate(self):
         client = _ReclaimTrackingClient([])
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         stream._apply_frame(_delayed_frame(1, delayed_by_minutes=0))
         self.assertEqual(client.calls, 0)
 
@@ -731,6 +785,7 @@ class TestSaxoPriceStreamReclaim(unittest.TestCase):
         the demotion signal — the coerced 15 still fires the reclaim."""
         client = _ReclaimTrackingClient([True])
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         payload = json.dumps(
             [
                 {
@@ -752,6 +807,7 @@ class TestSaxoPriceStreamReclaim(unittest.TestCase):
         )
         client = _ReclaimTrackingClient([])
         stream = SaxoPriceStream(client, _FakeTokenProvider(), reclaim_limiter=exhausted_limiter)
+        stream.ensure_subscribed({5}, scope="t")
         with self.assertLogs(
             "alphalens_pipeline.data.alt_data.saxo_price_stream", level="WARNING"
         ) as cm:
@@ -785,7 +841,9 @@ class TestSaxoPriceStreamReclaimRetry(unittest.TestCase):
     def _stream(self, outcomes: list[bool]) -> tuple[_ReclaimTrackingClient, SaxoPriceStream]:
         self.clock = _SteppingClock(_T0)
         client = _ReclaimTrackingClient(outcomes)
-        return client, SaxoPriceStream(client, _FakeTokenProvider(), clock=self.clock)
+        stream = SaxoPriceStream(client, _FakeTokenProvider(), clock=self.clock)
+        stream.ensure_subscribed({5}, scope="t")
+        return client, stream
 
     def test_transition_attempt_still_fires_immediately(self):
         client, stream = self._stream([True])
@@ -1048,6 +1106,7 @@ class TestEnsureSubscribedOwnership(unittest.TestCase):
     def test_caller_thread_never_talks_subscription_rest(self):
         client = _SubTrackingClient()
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         stream.ensure_subscribed({5})
         stream.ensure_subscribed({5, 6})
         stream.ensure_subscribed(set())
@@ -1127,6 +1186,7 @@ class TestEnsureSubscribedScopes(unittest.TestCase):
         best-effort DELETE."""
         client = _SubTrackingClient()
         stream = SaxoPriceStream(client, _FakeTokenProvider())
+        stream.ensure_subscribed({5}, scope="t")
         stream.ensure_subscribed({5}, scope="entry-watch")
         stream.stop(timeout=0.1)
         self.assertEqual(len(client.deletes), 1)

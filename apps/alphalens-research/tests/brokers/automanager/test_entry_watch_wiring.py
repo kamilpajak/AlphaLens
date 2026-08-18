@@ -941,6 +941,24 @@ class TestEntryWatchPassTouchLatch(unittest.TestCase):
         self.assertEqual(len(broker.trailing_orders), 1)
 
 
+class TestPointSampleVetoNotRaise(unittest.TestCase):
+    """_point_sample_bids is the shared once-per-uic sampling boundary: a
+    structurally invalid PricePoint (non-numeric bid despite the protocol)
+    must veto that uic, never abort the entry-watch pass and starve the
+    protection pass that runs after it."""
+
+    def test_non_numeric_bid_vetoes_the_uic_instead_of_raising(self):
+        class _WeirdPoint:
+            bid = "garbage"
+
+        class _WeirdFeed:
+            def latest(self, uic: int) -> object:
+                return _WeirdPoint()
+
+        points = cl._point_sample_bids(_WeirdFeed(), {307: ("KO", "XNYS")})
+        self.assertEqual(points, {307: None})
+
+
 class TestEntryWatchPassKillGate(unittest.TestCase):
     def test_kill_writes_nothing_and_alerts_nothing(self) -> None:
         path = _journal(self)

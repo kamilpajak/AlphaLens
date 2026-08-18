@@ -1392,13 +1392,14 @@ def _point_sample_bids(
     for uic in uic_to_instrument:
         try:
             point = feed.latest(uic)
-        # Broad on purpose (mirrors _drain_session_lows): one bad uic must not
-        # abort the sampling for the others.
+            bid = None if point is None else point.bid
+            points[uic] = bid if bid is not None and math.isfinite(bid) and bid > 0.0 else None
+        # Broad on purpose (mirrors _drain_session_lows): one bad uic — a
+        # raising feed OR a structurally invalid point (non-numeric bid) —
+        # must veto that uic, never abort the sampling for the others or
+        # starve the protection pass that runs after this one.
         except Exception:
             points[uic] = None
-            continue
-        bid = None if point is None else point.bid
-        points[uic] = bid if bid is not None and math.isfinite(bid) and bid > 0.0 else None
     return points
 
 

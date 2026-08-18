@@ -164,8 +164,21 @@ def _coerce_delayed_minutes(value: object) -> int | None:
     (coerces to its int); garbage vetoes to ``None`` ("unknown delay"), which
     every consumer already treats as not-confirmed-fresh."""
     try:
+        # OverflowError: json.loads accepts non-standard Infinity as a float,
+        # and int(float("inf")) raises it — from the deterministic snapshot
+        # that raise would repeat every reconnect until the breaker trips.
         return int(value)  # type: ignore[call-overload]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _row_uic(row: dict[str, Any]) -> int | None:
+    """The row's ``Uic`` as an ``int``, or ``None`` on any doubt — the same
+    veto-not-raise coercion :meth:`QuoteCache.apply` performs before storing
+    (a None never matches the desired set, so a doubtful row is dropped)."""
+    try:
+        return int(row.get("Uic"))  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -227,7 +240,7 @@ class QuoteCache:
             return
         try:
             uic = int(raw_uic)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             # A malformed Uic must degrade to "skip this row", not raise out
             # of the WebSocket reader thread: an uncaught exception here is
             # counted as a connection failure by _supervise, and after
@@ -768,6 +781,12 @@ class SaxoPriceStream:
         if isinstance(frame, str):
             frame = frame.encode("utf-8")
         now = self._clock()
+        # One desired-set snapshot per frame: a late delta racing past
+        # _recreate_subscription's final prune must not resurrect a uic
+        # ensure_subscribed removed (no dirty flag would be left to prune it
+        # again; a positive delay on the resurrected row would pin
+        # any_delayed forever). Eventual invariant: cached uics ⊆ desired.
+        allowed = self._desired_uics()
         for msg in parse_stream_frames(frame):
             if msg.reference_id == _RESET_SUBSCRIPTIONS_REF:
                 # The server dropped this context's subscriptions — arm the
@@ -791,6 +810,8 @@ class SaxoPriceStream:
             rows = payload if isinstance(payload, list) else [payload]
             for row in rows:
                 if isinstance(row, dict):
+                    if _row_uic(row) not in allowed:
+                        continue  # undesired uic — see the frame-level comment
                     self.cache.apply(row, received_at=now)
                 else:
                     # A live shape mismatch (Saxo sending something other
