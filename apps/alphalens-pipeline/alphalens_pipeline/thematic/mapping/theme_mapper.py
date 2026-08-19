@@ -683,10 +683,17 @@ def _normalize_decline_reason(raw: object, *, theme: str) -> str:
     :data:`NO_EVENT`. Recording it as a legal value rather than as a third
     category is what keeps the taxonomy readable; the WARNING is what stops that
     from being silent.
+
+    An ABSENT reason is a different thing and stays quiet. Both cases coerce to
+    :data:`NO_EVENT`, but a decline that simply omits the optional field is
+    routine, and firing the drift alarm on it is how the alarm the docstring is
+    built around gets tuned out.
     """
     reason = str(raw or "").strip().lower()[:_REASON_MAX_CHARS]
     if reason in DECLINE_REASONS:
         return reason
+    if not reason:
+        return NO_EVENT
     logger.warning(
         "LLM mapper declined theme %r with an off-enum reason %r -> recorded as %r",
         theme,

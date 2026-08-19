@@ -168,7 +168,10 @@ class ProposeOutcomeClassificationTests(unittest.TestCase):
         with mock.patch.object(theme_mapper, "_call_llm", return_value=_response(body)):
             result = _propose()
         self.assertEqual(result["outcome"], theme_mapper.MapperOutcome.DECLINED)
-        self.assertIn(result["decline_reason"], theme_mapper.DECLINE_REASONS)
+        # The exact fallback value, not merely a legal one: the reason feeds the
+        # refusal-share descriptives, so the bucket that absorbs a missing field
+        # has to be pinned.
+        self.assertEqual(result["decline_reason"], theme_mapper.NO_EVENT)
 
     def test_a_candidate_with_no_channel_is_a_success_carrying_that_candidate(self):
         # REVERSED 2026-08-19. ``_normalize`` used to drop a channel-less

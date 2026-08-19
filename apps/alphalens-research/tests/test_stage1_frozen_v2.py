@@ -105,5 +105,87 @@ class FrozenSurfaceIsAByteCopyOfV2(unittest.TestCase):
         self.assertEqual(result["no_candidates_reason"], "no transmission channel")
 
 
+class TheErrorLadderIsPartOfTheFrozenContract(unittest.TestCase):
+    """The retry policy is the byte-copy's easiest thing to get subtly wrong.
+
+    ``propose_candidates_frozen`` documents "same contract as the v2
+    ``propose_candidates``": ONE re-roll on an empty body, nothing else retried.
+    A copy that re-rolled a malformed payload, or that stopped re-rolling an
+    empty one, would draw from a different instrument than the pre-registration
+    names — and would do so silently, because both variants return a
+    well-formed proposal dict.
+    """
+
+    def _propose(self, *responses):
+        it = iter(responses)
+
+        def _fake(*_args, **_kwargs):
+            item = next(it)
+            if isinstance(item, Exception):
+                raise item
+            return SimpleNamespace(text=item)
+
+        with mock.patch.object(stage1_frozen_v2, "_call_llm", side_effect=_fake) as call:
+            result = stage1_frozen_v2.propose_candidates_frozen(
+                theme="ai_defense", catalyst=_catalyst(), llm_client=object()
+            )
+        return result, call.call_count
+
+    def test_an_empty_body_that_re_rolls_into_an_answer_is_a_success(self):
+        payload = json.dumps(
+            {
+                "candidates": [
+                    {"ticker": "GOOD", "confidence": 0.9, "transmission_channel": "a -> b -> c"}
+                ],
+                "search_keywords": ["drone"],
+            }
+        )
+        result, calls = self._propose("", payload)
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.SUCCESS)
+        self.assertEqual([c["ticker"] for c in result["candidates"]], ["GOOD"])
+        self.assertEqual(calls, 2)
+
+    def test_an_empty_body_is_re_rolled_exactly_once(self):
+        result, calls = self._propose("", "   ")
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.EMPTY_PAYLOAD)
+        self.assertEqual(calls, 2)
+
+    def test_a_malformed_body_is_not_re_rolled(self):
+        result, calls = self._propose("not json at all")
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.MALFORMED_PAYLOAD)
+        self.assertEqual(calls, 1)
+
+    def test_a_body_without_a_candidates_key_is_malformed(self):
+        result, calls = self._propose(json.dumps({"search_keywords": ["drone"]}))
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.MALFORMED_PAYLOAD)
+        self.assertEqual(calls, 1)
+
+    def test_a_non_empty_candidates_list_that_normalises_to_nothing_is_malformed(self):
+        # Distinct from a DECLINE: the model DID propose, and every entry was
+        # unusable. Counting it as a decline would credit the model with a
+        # judgement it never made — and would move the retro's refusal shares.
+        body = json.dumps({"candidates": [{"confidence": 0.9}], "search_keywords": ["drone"]})
+        result, calls = self._propose(body)
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.MALFORMED_PAYLOAD)
+        self.assertEqual(calls, 1)
+
+    def test_a_raising_call_is_a_call_failure_and_is_not_re_rolled(self):
+        result, calls = self._propose(RuntimeError("socket"))
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.CALL_FAILED)
+        self.assertEqual(result["candidates"], [])
+        self.assertEqual(calls, 1)
+
+    def test_a_client_init_failure_is_a_call_failure_not_a_raise(self):
+        with mock.patch.object(
+            stage1_frozen_v2,
+            "get_default_openrouter_client",
+            side_effect=RuntimeError("no key"),
+        ):
+            result = stage1_frozen_v2.propose_candidates_frozen(
+                theme="ai_defense", catalyst=_catalyst()
+            )
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.CALL_FAILED)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -366,8 +366,33 @@ class TestPropose(unittest.TestCase):
             )
         # An off-enum reason is a prompt-drift signal, not a crash: it is
         # recorded as the catch-all legal value and logged.
-        self.assertIn(result["decline_reason"], theme_mapper.DECLINE_REASONS)
+        #
+        # The TARGET of the coercion is pinned, not just its legality.
+        # decline_reason is an analysis input — the retro reported refusal-reason
+        # SHARES (no_channel 68.8%, non_event 15.9%) — so an unpinned coercion
+        # target would let the bucket that absorbs drift move without a test
+        # failing, and make every future share uninterpretable.
+        self.assertEqual(result["decline_reason"], theme_mapper.NO_EVENT)
         self.assertIn("weak linkage", "\n".join(cm.output))
+
+    def test_a_missing_decline_reason_is_recorded_as_no_event_without_a_drift_warning(self):
+        # Two DIFFERENT things previously landed on the same WARNING: a model
+        # that supplied an off-enum string (real prompt drift, worth the alarm)
+        # and a model that supplied no reason at all (the schema field is simply
+        # absent, which is routine). Firing the drift alarm on every reason-less
+        # decline is how an alarm gets tuned out, so the absent case is coerced
+        # QUIETLY and only a non-empty off-enum value warns.
+        payload = {"candidates": [], "search_keywords": ["quantum computing"]}
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with (
+            patch.object(theme_mapper, "_call_llm", return_value=fake_response),
+            self.assertNoLogs("alphalens_pipeline.thematic.mapping.theme_mapper", "WARNING"),
+        ):
+            result = theme_mapper.propose_candidates(
+                theme="quantum_computing", catalyst=_catalyst_payload(), api_key="testkey"
+            )
+        self.assertEqual(result["decline_reason"], theme_mapper.NO_EVENT)
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.DECLINED)
 
     def test_propose_carries_a_legal_decline_reason_verbatim(self):
         payload = {"candidates": [], "decline_reason": "no_event"}
