@@ -11,7 +11,7 @@
 	import ExcessScatter from '$lib/components/ExcessScatter.svelte';
 	import EdgeCompletenessBanner from '$lib/components/EdgeCompletenessBanner.svelte';
 	import { isPendingStatus, ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
-	import { getEdgeChart, getEdgeExcessTelemetry } from '$lib/api';
+	import { getEdgeChart, getEdgeExcessTelemetry, getEdgeOutcomes } from '$lib/api';
 	import { fmtNum } from '$lib/format';
 	import {
 		classificationTone,
@@ -43,8 +43,24 @@
 	} from '$lib/edgeFilter';
 	import { page } from '$app/state';
 	import { syncParamsToUrl } from '$lib/urlFilterSync.svelte';
+	import { setToParam } from '$lib/urlFilters';
 
 	let { data }: { data: PageData } = $props();
+
+	// Local mutable copies of the outcomes envelope: the classification refetch
+	// below replaces the row set in place, while `data` stays the initial
+	// (window-only) load snapshot — capturing only the initial value is the
+	// point (hence the svelte-ignores; the component remounts on navigation).
+	// `facets` are the server-truth pre-filter window population feeding the
+	// chip counts.
+	// svelte-ignore state_referenced_locally
+	let outcomes = $state(data.outcomes);
+	// svelte-ignore state_referenced_locally
+	let outcomesTotal = $state(data.outcomesTotal);
+	// svelte-ignore state_referenced_locally
+	let outcomesTruncated = $state(data.outcomesTruncated);
+	// svelte-ignore state_referenced_locally
+	let facets = $state(data.outcomesFacets);
 
 	// Inline-accordion state for the outcomes table. Each row can expand below
 	// itself into a full-width ladder-replay chart. Multiple rows may be open
@@ -130,7 +146,7 @@
 	// Pipeline: terminal/ongoing view → text+facet filter → sort → virtual window.
 	// The view is the facet universe the toolbar draws its chips + counts from.
 	const viewRows = $derived(
-		(data.outcomes ?? []).filter((o) => (filter === 'terminal' ? o.terminal : !o.terminal))
+		(outcomes ?? []).filter((o) => (filter === 'terminal' ? o.terminal : !o.terminal))
 	);
 	const filteredRows = $derived(filterOutcomes(viewRows, filterState));
 	const rows = $derived(sortOutcomes(filteredRows, sortKey, sortDir));
@@ -141,10 +157,45 @@
 	// `syncParamsToUrl` for the live-`location.search` diff + no-loop reasoning.
 	syncParamsToUrl(() => filterToParams(filterState, new URLSearchParams(window.location.search)));
 
-	// Counts for the filter chips — computed off the full outcome list so both
-	// counts are stable as the user toggles.
-	const nTerminal = $derived((data.outcomes ?? []).filter((o) => o.terminal).length);
-	const nOngoing = $derived((data.outcomes ?? []).filter((o) => !o.terminal).length);
+	// View-toggle counts — server truth from the pre-filter window facets, so
+	// they stay honest when the listing is capped or classification-filtered;
+	// client-derived fallback for an older API build without `facets`.
+	const nTerminal = $derived(facets?.status.terminal ?? (outcomes ?? []).filter((o) => o.terminal).length);
+	const nOngoing = $derived(facets?.status.ongoing ?? (outcomes ?? []).filter((o) => !o.terminal).length);
+
+	// Server-side classification refetch, race-guarded. Selecting/deselecting
+	// classification chips refetches /v1/edge/outcomes with the classification=
+	// param so rows the (capped) initial listing dropped become reachable. The
+	// guard is the standard monotonic-sequence "latest wins" pattern (no prior
+	// async-race precedent in this app — this establishes it): only the newest
+	// in-flight response may land, so out-of-order responses can never clobber
+	// a newer selection. The dedupe key is the last-REQUESTED selection, set
+	// synchronously BEFORE the fetch — guarding on the last-APPLIED key instead
+	// let a return to a previously-applied selection mid-flight (select a chip,
+	// deselect before the response lands) early-return without a corrective
+	// fetch, so the stale filtered response landed unchallenged and the table
+	// stuck on rows the current selection disowns. `requestedClassKey`/
+	// `outcomesSeq` are plain non-reactive `let`s so the effect only tracks
+	// `filterState.classes`; the initial mount with an empty selection is a
+	// no-op ('' === '' — no double fetch), while a `?class=` deep link fires
+	// exactly one refetch after hydration.
+	let requestedClassKey = '';
+	let outcomesSeq = 0;
+	$effect(() => {
+		const key = setToParam(filterState.classes);
+		if (key === requestedClassKey) return;
+		requestedClassKey = key;
+		const seq = ++outcomesSeq;
+		getEdgeOutcomes(filterState.classes).then((r) => {
+			if (seq !== outcomesSeq) return; // superseded by a newer selection
+			outcomes = r.rows;
+			outcomesTotal = r.total;
+			outcomesTruncated = r.truncated;
+			// Facets are pre-filter window truth: refresh on success, never
+			// null-out on a degraded response (keep the last known population).
+			if (r.facets) facets = r.facets;
+		});
+	});
 
 	// Row virtualization: only the rows in (and just around) the viewport are
 	// mounted, so the table stays light even at the 500-row server cap. The engine
@@ -603,23 +654,26 @@
 			<EdgeOutcomesFilter
 				rows={viewRows}
 				matched={filteredRows.length}
+				{facets}
+				view={filter}
 				bind:state={filterState}
 			/>
 
-			{#if data.outcomesTruncated}
+			{#if outcomesTruncated}
 				<!-- Honest cap notice: once the window exceeds the server's listing cap,
 				     only the N most recently ACTIVE rows survive (maturity date for
-				     terminal rows, brief date for ongoing). Without this, the dropped
-				     rows vanish silently and the terminal/ongoing chip counts
-				     (client-side over the returned rows) quietly under-count. -->
+				     terminal rows, brief date for ongoing). The chip counts are
+				     server-truth over the full window, so only the LISTED rows are
+				     affected — the dropped rows are reachable by narrowing with a
+				     status chip (server-side classification filter). -->
 				<div
 					data-testid="outcomes-truncation-notice"
 					class="mb-3 border border-amber-dim/40 bg-amber/5 px-3 py-2 text-[11px] leading-relaxed text-amber-dim"
 				>
-					Showing the <span class="font-bold text-fg">{data.outcomes.length}</span> most recently
-					active of <span class="font-bold text-fg">{data.outcomesTotal}</span> outcomes in window —
-					the least-recently-active rows beyond the server cap are not listed, so the counts above
-					reflect only what is shown.
+					Showing the <span class="font-bold text-fg">{outcomes.length}</span> most recently
+					active of <span class="font-bold text-fg">{outcomesTotal}</span> outcomes in window —
+					the least-recently-active rows beyond the server cap are not listed; select a status chip
+					to fetch that class in full.
 				</div>
 			{/if}
 

@@ -12,6 +12,8 @@ const SUMMARY = JSON.parse(readFileSync(resolve(FIXTURES, 'edge-summary.json'), 
 // clear-all, and URL round-trip so a filtered view is deep-linkable.
 
 // 6 terminal rows: 3 classes, 2 cohorts, 2 themes — enough for every facet.
+// `facets` mirror those same 6 rows (no invented numbers); with ongoing: 0 the
+// ongoing view toggle legitimately reads [0].
 const OUTCOMES = {
 	data: [
 		mk('NVDA', 'ai-infra', 'TP_FULL', 'v1'),
@@ -23,7 +25,11 @@ const OUTCOMES = {
 	],
 	total: 6,
 	returned: 6,
-	truncated: false
+	truncated: false,
+	facets: {
+		status: { terminal: 6, ongoing: 0 },
+		classification: { SL_HIT: 3, TP_FULL: 2, TIME_STOP: 1 }
+	}
 };
 
 function mk(ticker: string, theme: string, cls: string, cohort: string) {
@@ -116,4 +122,159 @@ test('deep-links: a ?q= URL arrives pre-filtered', async ({ page }) => {
 	await expect(rowLinks(page)).toHaveCount(1);
 	await expect(rowLinks(page).first()).toHaveText('SNAP');
 	await expect(page.getByTestId('outcomes-search')).toHaveValue('snap');
+});
+
+// ── Server-side classification refetch (issue #1055) ────────────────────────
+// Selecting a classification chip refetches /v1/edge/outcomes with the
+// classification= param so rows the (capped) initial listing dropped become
+// reachable; the chip counts read the server facets, so sibling chips survive
+// the narrowed row set.
+
+const classificationParam = (url: string) =>
+	new URL(url).searchParams.get('classification');
+
+test('selecting a class chip refetches server-side and keeps sibling chips', async ({ page }) => {
+	await stub(page);
+	const requested: (string | null)[] = [];
+	// Later registrations win in Playwright, so this overrides stub()'s route.
+	await page.route('**/v1/edge/outcomes**', (route) => {
+		const cls = classificationParam(route.request().url());
+		requested.push(cls);
+		if (cls === 'SL_HIT') {
+			const data = OUTCOMES.data.filter((r) => r.ladder_classification === 'SL_HIT');
+			return route.fulfill({
+				json: { ...OUTCOMES, data, total: data.length, returned: data.length }
+			});
+		}
+		return route.fulfill({ json: OUTCOMES });
+	});
+
+	await page.goto('/edge');
+	await expect(rowLinks(page)).toHaveCount(6);
+	// The initial load must stay window-only — no classification param.
+	expect(requested).toEqual([null]);
+
+	await page.getByTestId('outcomes-filter').getByRole('button', { name: /^SL_HIT/ }).click();
+	await expect(rowLinks(page)).toHaveCount(3); // AMD, SNAP, BE — server-filtered
+	await expect.poll(() => new URL(page.url()).searchParams.get('class')).toBe('SL_HIT');
+	await expect.poll(() => requested).toContain('SL_HIT');
+	// Sibling chips survive with their SERVER-FACET counts (the fetched rows no
+	// longer contain any TP_FULL row).
+	await expect(
+		page.getByTestId('outcomes-filter').getByRole('button', { name: 'TP_FULL 2' })
+	).toBeVisible();
+
+	// Back to ALL: a refetch WITHOUT the param restores the full listing. (The
+	// status bar renders before the cohort bar; both carry an "all" chip.)
+	await page.getByTestId('outcomes-filter').getByRole('button', { name: 'all 6' }).first().click();
+	await expect(rowLinks(page)).toHaveCount(6);
+	expect(requested[requested.length - 1]).toBeNull();
+});
+
+test('a class the server dropped from the listing still renders its chip and becomes reachable', async ({
+	page
+}) => {
+	await stub(page);
+	await page.route('**/v1/edge/outcomes**', (route) => {
+		const cls = classificationParam(route.request().url());
+		if (cls === 'TIME_STOP') {
+			const data = OUTCOMES.data.filter((r) => r.ladder_classification === 'TIME_STOP');
+			return route.fulfill({
+				json: { ...OUTCOMES, data, total: data.length, returned: data.length }
+			});
+		}
+		// Initial (window-only) listing: the cap dropped the TIME_STOP row, but
+		// the pre-filter facets still count it.
+		const data = OUTCOMES.data.filter((r) => r.ladder_classification !== 'TIME_STOP');
+		return route.fulfill({
+			json: { ...OUTCOMES, data, total: 6, returned: data.length, truncated: true }
+		});
+	});
+
+	await page.goto('/edge');
+	await expect(rowLinks(page)).toHaveCount(5);
+	// Defect (b)'s end-to-end pin: the chip renders from the server facets even
+	// though no fetched row carries the class...
+	const timeStopChip = page
+		.getByTestId('outcomes-filter')
+		.getByRole('button', { name: 'TIME_STOP 1' });
+	await expect(timeStopChip).toBeVisible();
+
+	// ...and selecting it refetches server-side, surfacing the dropped row.
+	await timeStopChip.click();
+	await expect(rowLinks(page)).toHaveCount(1);
+	await expect(rowLinks(page).first()).toHaveText('PLUG');
+});
+
+test('race guard: rapid chip clicks settle on the LAST selection', async ({ page }) => {
+	await stub(page);
+	await page.route('**/v1/edge/outcomes**', async (route) => {
+		const cls = classificationParam(route.request().url());
+		if (cls === 'SL_HIT') {
+			// Delay the FIRST selection's response past the second one's, so a
+			// missing guard would let the stale row set clobber the newer one.
+			await new Promise((r) => setTimeout(r, 300));
+			const data = OUTCOMES.data.filter((r) => r.ladder_classification === 'SL_HIT');
+			return route.fulfill({
+				json: { ...OUTCOMES, data, total: data.length, returned: data.length }
+			});
+		}
+		if (cls === 'SL_HIT,TIME_STOP') {
+			const data = OUTCOMES.data.filter((r) =>
+				['SL_HIT', 'TIME_STOP'].includes(r.ladder_classification)
+			);
+			return route.fulfill({
+				json: { ...OUTCOMES, data, total: data.length, returned: data.length }
+			});
+		}
+		return route.fulfill({ json: OUTCOMES });
+	});
+
+	await page.goto('/edge');
+	await expect(rowLinks(page)).toHaveCount(6);
+
+	const filterBar = page.getByTestId('outcomes-filter');
+	await filterBar.getByRole('button', { name: /^SL_HIT/ }).click();
+	await filterBar.getByRole('button', { name: /^TIME_STOP/ }).click();
+
+	// The union selection {SL_HIT, TIME_STOP} wins: 4 rows...
+	await expect(rowLinks(page)).toHaveCount(4);
+	// ...and stays 4 after the delayed SL_HIT-only response would have landed.
+	await page.waitForTimeout(400);
+	await expect(rowLinks(page)).toHaveCount(4);
+});
+
+test('race guard: deselecting back to ALL mid-flight still restores the full listing', async ({
+	page
+}) => {
+	// Regression pin: guarding on the last-APPLIED key let a return to a
+	// previously-applied selection (here '' = ALL) early-return without a
+	// corrective fetch, so the delayed filtered response landed unchallenged and
+	// the table stuck on the filtered rows while the selection read ALL.
+	await stub(page);
+	await page.route('**/v1/edge/outcomes**', async (route) => {
+		const cls = classificationParam(route.request().url());
+		if (cls === 'SL_HIT') {
+			// Delay the selection's response so the deselect happens mid-flight.
+			await new Promise((r) => setTimeout(r, 300));
+			const data = OUTCOMES.data.filter((r) => r.ladder_classification === 'SL_HIT');
+			return route.fulfill({
+				json: { ...OUTCOMES, data, total: data.length, returned: data.length }
+			});
+		}
+		return route.fulfill({ json: OUTCOMES });
+	});
+
+	await page.goto('/edge');
+	await expect(rowLinks(page)).toHaveCount(6);
+
+	const slHitChip = page.getByTestId('outcomes-filter').getByRole('button', { name: /^SL_HIT/ });
+	await slHitChip.click(); // select → delayed SL_HIT fetch in flight
+	await slHitChip.click(); // deselect back to ALL before that response lands
+
+	// After the delayed SL_HIT response would have landed, the FULL listing must
+	// be displayed — the stale filtered rows may never stick under an ALL chip.
+	await page.waitForTimeout(400);
+	await expect(rowLinks(page)).toHaveCount(6);
+	await expect.poll(() => new URL(page.url()).searchParams.has('class')).toBe(false);
 });

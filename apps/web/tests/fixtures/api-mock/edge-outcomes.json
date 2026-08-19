@@ -136,5 +136,18 @@
       "holding_days_elapsed": null,
       "realized_return_pct_of_book": null
     }
-  ]
+  ],
+  "total": 8,
+  "returned": 8,
+  "truncated": false,
+  "facets": {
+    "status": { "terminal": 5, "ongoing": 3 },
+    "classification": {
+      "TP_FULL": 2,
+      "SL_HIT": 1,
+      "TIME_STOP": 1,
+      "PARTIAL_TP_THEN_SL": 1,
+      "OPEN": 2
+    }
+  }
 }

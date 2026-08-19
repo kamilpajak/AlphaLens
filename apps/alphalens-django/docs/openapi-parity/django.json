@@ -333,9 +333,17 @@
         },
         "/v1/edge/outcomes": {
             "get": {
-                "operationId": "v1_edge_outcomes_list",
+                "operationId": "v1_edge_outcomes_retrieve",
                 "description": "``/v1/edge/outcomes`` — per-candidate rows (theme joined from the brief).",
                 "parameters": [
+                    {
+                        "in": "query",
+                        "name": "classification",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Comma-separated ladder_classification values; unknown values match nothing. Applied after facets are computed; composes with 'status'."
+                    },
                     {
                         "in": "query",
                         "name": "status",
@@ -370,10 +378,7 @@
                         "content": {
                             "application/json": {
                                 "schema": {
-                                    "type": "array",
-                                    "items": {
-                                        "$ref": "#/components/schemas/EdgeOutcomeRow"
-                                    }
+                                    "$ref": "#/components/schemas/EdgeOutcomesResponse"
                                 }
                             }
                         },
@@ -2084,6 +2089,72 @@
                     "realized_return_pct_of_book",
                     "terminal",
                     "ticker"
+                ]
+            },
+            "EdgeOutcomesFacetStatus": {
+                "type": "object",
+                "description": "Window+plannable population split by terminal state.\n\nComputed BEFORE the ``status``/``classification`` filters and before the\nper-page cap, so the counts describe the whole window population.",
+                "properties": {
+                    "terminal": {
+                        "type": "integer"
+                    },
+                    "ongoing": {
+                        "type": "integer"
+                    }
+                },
+                "required": [
+                    "ongoing",
+                    "terminal"
+                ]
+            },
+            "EdgeOutcomesFacets": {
+                "type": "object",
+                "description": "Pre-filter facet counts for the ``/v1/edge/outcomes`` window population.\n\n``classification`` maps each ``ladder_classification`` value to its count\nover the same pre-filter population; the empty-string (not-yet-priced)\nbucket is dropped.",
+                "properties": {
+                    "status": {
+                        "$ref": "#/components/schemas/EdgeOutcomesFacetStatus"
+                    },
+                    "classification": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "required": [
+                    "classification",
+                    "status"
+                ]
+            },
+            "EdgeOutcomesResponse": {
+                "type": "object",
+                "description": "The real ``/v1/edge/outcomes`` envelope.\n\n``total``/``returned``/``truncated`` describe the CURRENT (filtered,\ncapped) listing; ``facets`` describe the pre-filter window population.",
+                "properties": {
+                    "data": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/EdgeOutcomeRow"
+                        }
+                    },
+                    "total": {
+                        "type": "integer"
+                    },
+                    "returned": {
+                        "type": "integer"
+                    },
+                    "truncated": {
+                        "type": "boolean"
+                    },
+                    "facets": {
+                        "$ref": "#/components/schemas/EdgeOutcomesFacets"
+                    }
+                },
+                "required": [
+                    "data",
+                    "facets",
+                    "returned",
+                    "total",
+                    "truncated"
                 ]
             },
             "EdgePanel": {

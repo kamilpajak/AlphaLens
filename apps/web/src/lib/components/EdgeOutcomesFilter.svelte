@@ -6,10 +6,10 @@
 	// component just derives the facet chips from the current view and renders the
 	// controls. Reuses the shared `LedgerFilterBar` for the chip rows.
 	import LedgerFilterBar from './LedgerFilterBar.svelte';
-	import type { EdgeOutcome } from '$lib/types';
+	import type { EdgeOutcome, EdgeOutcomesFacets } from '$lib/types';
 	import { classificationTone, toneClasses } from '$lib/edge';
 	import { ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
-	import { isFilterActive, type EdgeFilterState } from '$lib/edgeFilter';
+	import { classFacetFromServer, isFilterActive, type EdgeFilterState } from '$lib/edgeFilter';
 	import { buildFilterChips, deriveFacet } from '$lib/faceting';
 
 	interface Props {
@@ -17,21 +17,35 @@
 		rows: EdgeOutcome[];
 		/** Rows remaining after `filterOutcomes` (parent-computed), for "N of M". */
 		matched: number;
+		/** Server-truth window facets (pre-filter population); null falls back to
+		 *  client-derived counts over `rows` (older API build / degraded fetch). */
+		facets?: EdgeOutcomesFacets | null;
+		/** Current view — selects the facet slice + the ALL-chip count. */
+		view: 'terminal' | 'ongoing';
 		/** The filter selections. Bindable — the parent syncs these to the URL. */
 		state: EdgeFilterState;
 	}
 
-	let { rows, matched, state = $bindable() }: Props = $props();
+	let { rows, matched, facets = null, view, state = $bindable() }: Props = $props();
 
 	const NEUTRAL = toneClasses('muted');
 	// Shared "all" chip config (neutral tone, view-scoped copy) for both facets.
+	// Its count is the server-truth view population when facets are available —
+	// honest even when the row listing is capped or classification-filtered.
 	const allCfg = $derived({
-		count: rows.length,
+		count: facets ? facets.status[view] : rows.length,
 		tone: NEUTRAL,
 		def: 'Show every row in the current view.'
 	});
 
-	const classFacet = $derived(deriveFacet(rows, (o) => o.ladder_classification));
+	// Classification chips from the server's pre-filter window facets (sliced to
+	// the current view) so a class the capped/filtered listing dropped still
+	// renders its chip; client derivation over the fetched rows as fallback.
+	const classFacet = $derived(
+		facets
+			? classFacetFromServer(facets.classification, view)
+			: deriveFacet(rows, (o) => o.ladder_classification)
+	);
 	const cohortFacet = $derived(deriveFacet(rows, (o) => o.scorer_config_version));
 
 	const classChips = $derived(

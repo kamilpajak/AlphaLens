@@ -1,5 +1,6 @@
 import type { EdgeOutcome } from './types';
-import { facetMatches } from './faceting';
+import { facetMatches, type FacetOption } from './faceting';
+import { ladderStatusGroup } from './data/ladderStatus';
 import { setToParam, paramToSet } from './urlFilters';
 
 // Client-side filtering for the /edge outcomes table. Pure + framework-free so
@@ -43,6 +44,43 @@ export function filterOutcomes(rows: EdgeOutcome[], s: EdgeFilterState): EdgeOut
 		if (!facetMatches(s.cohorts, o.scorer_config_version)) return false;
 		return true;
 	});
+}
+
+// Unmeasurable codes are NOT uniformly terminal. The pipeline stamps
+// `terminal=True` only for `status == "OK"` classifications inside
+// `population_ladder_monitor._TERMINAL_SET` (which includes BAD_GEOMETRY);
+// NO_DATA / NO_STRUCTURE are non-OK STATUS codes, so their rows keep
+// `terminal=False` and land in the ONGOING view's row set. Their chips must
+// follow their rows, or a terminal-view chip would client-filter to an empty
+// table while the ongoing view showed rows with no chip to select them.
+const NON_TERMINAL_UNMEASURABLE: ReadonlySet<string> = new Set(['NO_DATA', 'NO_STRUCTURE']);
+
+/** Slice the server's window-wide `facets.classification` map into the chip
+ *  options for ONE view. The server counts every plannable row in the window
+ *  (both views at once); the split mirrors the client-side terminal/ongoing row
+ *  filter (`o.terminal`) by each code's real terminal semantics: `ongoing`
+ *  group + NO_DATA / NO_STRUCTURE → ongoing view; `terminal` group +
+ *  BAD_GEOMETRY → terminal view (see `NON_TERMINAL_UNMEASURABLE` above). An
+ *  UNKNOWN code (a new pipeline class this build has no legend entry for) is
+ *  kept in BOTH views — fail-open, a new class must never silently vanish from
+ *  the chips. The empty-string bucket is dropped defensively (the server
+ *  already omits it). Ordering is count-desc then key — byte-for-byte the
+ *  `deriveFacet` ordering. */
+export function classFacetFromServer(
+	classification: Record<string, number>,
+	view: 'terminal' | 'ongoing'
+): FacetOption[] {
+	return Object.entries(classification)
+		.filter(([key]) => {
+			if (key === '') return false;
+			const group = ladderStatusGroup(key);
+			if (group === null) return true;
+			const rowTerminal =
+				group === 'terminal' || (group === 'unmeasurable' && !NON_TERMINAL_UNMEASURABLE.has(key));
+			return view === 'ongoing' ? !rowTerminal : rowTerminal;
+		})
+		.map(([key, count]) => ({ key, count }))
+		.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
 }
 
 // ── URL (de)serialization ────────────────────────────────────────────────────

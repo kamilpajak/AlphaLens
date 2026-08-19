@@ -418,6 +418,17 @@ export interface EdgeOutcome {
 	realized_return_pct_of_book: number | null;
 }
 
+/** Server-truth counts over the WHOLE window+plannable population, computed
+ *  BEFORE the status/classification filters and before the listing cap
+ *  (GET /v1/edge/outcomes `facets`). The chip counts read these so they stay
+ *  honest even when the row listing is filtered or truncated. */
+export interface EdgeOutcomesFacets {
+	status: { terminal: number; ongoing: number };
+	/** Per-`ladder_classification` counts; the "" (not-yet-priced) bucket is
+	 *  never present — the server drops it. */
+	classification: Record<string, number>;
+}
+
 /** A single daily OHLCV bar for the ladder chart (GET /v1/edge/chart/...).
  *  `time` is a `YYYY-MM-DD` string — Lightweight Charts' daily/business-day
  *  format, which auto-collapses non-trading gaps on the time scale. */

@@ -120,6 +120,12 @@ export function ladderStatusLabel(code: string | null | undefined): string {
 	return isPendingStatus(code) ? PENDING_STATUS.code : code!.trim();
 }
 
+/** Legend group for a raw classification code, or null when the code is not a
+ *  known pipeline classification (callers decide the fail-open behaviour). */
+export function ladderStatusGroup(code: string): LadderGroup | null {
+	return LADDER_STATUS_BY_CODE.get(code.trim().toUpperCase())?.group ?? null;
+}
+
 /**
  * Tooltip body for a raw `ladder_classification` value. Case-insensitive and
  * tolerant of surrounding whitespace. A blank/null value is the PENDING

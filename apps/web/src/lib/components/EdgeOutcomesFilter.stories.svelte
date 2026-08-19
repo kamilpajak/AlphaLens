@@ -40,6 +40,15 @@
 		mk('BBAI', null, 'TP_FULL')
 	];
 
+	// The server-truth window facets from tests/fixtures/api-mock/edge-outcomes.json,
+	// verbatim — every count derives from the 8 rows in that file (5 terminal +
+	// 3 ongoing; the blank-classification PEND row is dropped from the
+	// classification map by the server).
+	const FACETS = {
+		status: { terminal: 5, ongoing: 3 },
+		classification: { TP_FULL: 2, SL_HIT: 1, TIME_STOP: 1, PARTIAL_TP_THEN_SL: 1, OPEN: 2 }
+	};
+
 	const { Story } = defineMeta({
 		title: 'Edge/EdgeOutcomesFilter',
 		component: EdgeOutcomesFilter,
@@ -48,8 +57,9 @@
 	});
 </script>
 
-<!-- Default — no filter active: every facet chip present, count reads "5 of 5",
-     no clear-all, cohort bar absent (the fixture carries no scorer cohort). -->
+<!-- Default — no filter active, no server facets (the null-fallback path:
+     chips derive from the rows): every facet chip present, count reads
+     "5 of 5", no clear-all, cohort bar absent (no scorer cohort). -->
 <Story
 	name="Default (no filter)"
 	play={async ({ canvas }) => {
@@ -60,7 +70,7 @@
 >
 	{#snippet template()}
 		<div style="padding: 2rem;">
-			<EdgeOutcomesFilter rows={ROWS} matched={ROWS.length} state={emptyFilterState()} />
+			<EdgeOutcomesFilter rows={ROWS} matched={ROWS.length} view="terminal" state={emptyFilterState()} />
 		</div>
 	{/snippet}
 </Story>
@@ -77,7 +87,12 @@
 	{#snippet template()}
 		{@const state = { ...emptyFilterState(), classes: new Set(['TP_FULL']) }}
 		<div style="padding: 2rem;">
-			<EdgeOutcomesFilter rows={ROWS} matched={filterOutcomes(ROWS, state).length} {state} />
+			<EdgeOutcomesFilter
+				rows={ROWS}
+				matched={filterOutcomes(ROWS, state).length}
+				view="terminal"
+				{state}
+			/>
 		</div>
 	{/snippet}
 </Story>
@@ -96,7 +111,63 @@
 	{#snippet template()}
 		{@const state = { ...emptyFilterState(), query: 'quantum' }}
 		<div style="padding: 2rem;">
-			<EdgeOutcomesFilter rows={ROWS} matched={filterOutcomes(ROWS, state).length} {state} />
+			<EdgeOutcomesFilter
+				rows={ROWS}
+				matched={filterOutcomes(ROWS, state).length}
+				view="terminal"
+				{state}
+			/>
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Server facets — chip counts come from the pre-filter WINDOW population
+     (facets.status / facets.classification), not the fetched rows: the ALL
+     chip reads 5 (facets.status.terminal), TP_FULL reads 2, and the ongoing
+     OPEN class is sliced OUT of the terminal view's chip bar. -->
+<Story
+	name="Server facets (window truth)"
+	play={async ({ canvas }) => {
+		// Chip buttons render "{label} {count}" — counts are the server facets.
+		await waitFor(() => expect(canvas.getByRole('button', { name: 'all 5' })).toBeVisible());
+		expect(canvas.getByRole('button', { name: 'TP_FULL 2' })).toBeVisible();
+		expect(canvas.queryByRole('button', { name: /^OPEN/ })).toBeNull();
+	}}
+>
+	{#snippet template()}
+		<div style="padding: 2rem;">
+			<EdgeOutcomesFilter
+				rows={ROWS}
+				matched={ROWS.length}
+				facets={FACETS}
+				view="terminal"
+				state={emptyFilterState()}
+			/>
+		</div>
+	{/snippet}
+</Story>
+
+<!-- A class the server dropped from the (capped/filtered) row listing still
+     renders its chip with the server count — the defect this feature fixes:
+     TIME_STOP is absent from `rows` but present in facets.classification. -->
+<Story
+	name="Facet class absent from fetched rows"
+	play={async ({ canvas }) => {
+		await waitFor(() =>
+			expect(canvas.getByRole('button', { name: 'TIME_STOP 1' })).toBeVisible()
+		);
+	}}
+>
+	{#snippet template()}
+		{@const rows = ROWS.filter((r) => r.ladder_classification !== 'TIME_STOP')}
+		<div style="padding: 2rem;">
+			<EdgeOutcomesFilter
+				{rows}
+				matched={rows.length}
+				facets={FACETS}
+				view="terminal"
+				state={emptyFilterState()}
+			/>
 		</div>
 	{/snippet}
 </Story>
