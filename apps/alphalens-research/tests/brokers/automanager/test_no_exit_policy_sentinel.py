@@ -32,6 +32,7 @@ import unittest
 from alphalens_pipeline.brokers.automanager.control_loop import (
     _geometry_shadow_stamp,
     _journal_tranche_plan,
+    _journal_tranche_plan_core,
     _place_tiers,
 )
 from alphalens_pipeline.brokers.automanager.position_manager import (
@@ -76,7 +77,11 @@ _SENTINEL_TOKEN = "setup_static"
 # level (not nested), so scanning ``_place_tiers`` alone would NOT see them —
 # scan each one too, or the guard silently shrinks every time a block is
 # extracted out of the placement path.
-_PLACEMENT_JOURNAL_HELPERS = (_geometry_shadow_stamp, _journal_tranche_plan)
+_PLACEMENT_JOURNAL_HELPERS = (
+    _geometry_shadow_stamp,
+    _journal_tranche_plan,
+    _journal_tranche_plan_core,
+)
 
 # The registry-resolve call sites. ``build_default_deps`` (startup, NOT
 # scanned here) is the one allowed resolve site.

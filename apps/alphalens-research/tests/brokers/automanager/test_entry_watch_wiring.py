@@ -29,9 +29,13 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
+from alphalens_pipeline.brokers.automanager import safety as _safety
 from broker_contract.sizing import SetupPlan, TierPlan
 
 _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
+# Captured at import time (before any test patches the module attribute) so the
+# end-to-end MAX_OPEN test can restore the REAL rail over _placer's stub.
+_REAL_SAFETY_CHECK = _safety.check
 
 
 # --------------------------------------------------------------------------
@@ -941,6 +945,383 @@ class TestEntryWatchPassTouchLatch(unittest.TestCase):
         self.assertEqual(len(broker.trailing_orders), 1)
 
 
+# --------------------------------------------------------------------------
+# Managed-exit state journaled at watch-open routing (2026-08-19 live incident)
+# --------------------------------------------------------------------------
+
+
+def _tranche(index: int, target: float, pct: float, *, r: float = 1.5) -> Any:
+    from broker_contract.sizing import TpTranchePlan
+
+    return TpTranchePlan(
+        tranche_index=index, target_price=target, tranche_pct=pct, r_multiple=r, tag=f"tp{index}"
+    )
+
+
+def _plan_with_tranches(
+    tiers: tuple[tuple[int, float, int], ...], tranches: tuple[Any, ...]
+) -> SetupPlan:
+    base = _plan(*tiers)
+    return SetupPlan(
+        suggested_size_pct=base.suggested_size_pct,
+        scale_factor=base.scale_factor,
+        final_size_pct=base.final_size_pct,
+        total_notional=base.total_notional,
+        paper_equity=base.paper_equity,
+        disaster_stop=base.disaster_stop,
+        order_ttl_days=base.order_ttl_days,
+        entry_tiers=base.entry_tiers,
+        tp_tranches=tranches,
+    )
+
+
+def _exit_spec(stop: float | None, tp: float | None) -> Any:
+    levels = type("Levels", (), {"stop": stop, "tp": tp})()
+    return type("ExitSpec", (), {"initial_levels": levels, "reaction_plan": ()})()
+
+
+def _blend_spec() -> Any:
+    tier = type("SpecTier", (), {"limit_price": 10.0, "alloc_pct": 100.0})()
+    return type("Spec", (), {"entry_tiers": (tier,)})()
+
+
+_GEOMETRY_POLICY = type("GeoPolicy", (), {"applies_geometry": True})()
+
+
+def _route_watch(
+    test: unittest.TestCase,
+    plan: SetupPlan,
+    *,
+    intent: Any = None,
+    exit_policy: Any = None,
+) -> tuple[bool, list[dict[str, Any]], Path, Path]:
+    """Drive ``_route_pick_to_entry_watch`` hermetically (temp journals, stubbed
+    submission log) and return (verdict, tranche_plan lines, journal paths)."""
+    trails_path = _journal(test)
+    stops_path = _planned_journal(test)
+    pkg = "alphalens_pipeline.brokers"
+    for target, fn in (
+        (f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)),
+        (f"{pkg}.submission_log.append_submission_record", lambda _r: None),
+    ):
+        test.enterContext(mock.patch(target, fn))
+    with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+        ok = cl._route_pick_to_entry_watch(
+            object(),
+            intent if intent is not None else _pick(),
+            "KO",
+            _instr(),
+            _acct(),
+            plan,
+            None,
+            d_bps=50,
+            exit_policy=exit_policy,
+        )
+    tranche_lines = [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan"]
+    return ok, tranche_lines, trails_path, stops_path
+
+
+class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
+    """Task A1 (2026-08-19 live incident, OLN): the entry-trail routing must
+    journal the SAME per-uic ``tranche_plan`` line the bracket path writes at
+    placement — without it the live-exit engine skips the filled position every
+    tick ("no tranche_plan on record") and the position gets NO TP management."""
+
+    def _route(
+        self,
+        plan: SetupPlan,
+        *,
+        intent: Any = None,
+        exit_policy: Any = None,
+    ) -> tuple[bool, list[dict[str, Any]], Path, Path]:
+        return _route_watch(self, plan, intent=intent, exit_policy=exit_policy)
+
+    def test_static_policy_journals_the_plan_ladder_with_watch_reference_qty(self) -> None:
+        # A zero-qty tier opens NO watch — reference_qty counts only the tiers
+        # that actually watch (the fill base the live-exit engine scales from).
+        plan = _plan_with_tranches(
+            ((0, 10.0, 100), (1, 9.0, 0)), (_tranche(0, 14.0, 60.0), _tranche(1, 16.0, 40.0))
+        )
+        ok, tranche_lines, _trails, _stops = self._route(plan)
+        self.assertTrue(ok)
+        self.assertEqual(len(tranche_lines), 1)
+        line = tranche_lines[0]
+        self.assertEqual(line["uic"], 307)
+        self.assertEqual(line["stop_price"], 8.0)  # plan.disaster_stop
+        self.assertEqual(line["reference_qty"], 100.0)  # positive-qty WATCH tiers only
+        self.assertEqual([t["target_price"] for t in line["tp_tranches"]], [14.0, 16.0])
+
+    def test_geometry_policy_journals_the_single_geometry_tranche(self) -> None:
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        intent = _pick()
+        intent.exit = _exit_spec(stop=9.1, tp=13.5)
+        intent.spec = _blend_spec()
+        ok, tranche_lines, _trails, _stops = self._route(
+            plan, intent=intent, exit_policy=_GEOMETRY_POLICY
+        )
+        self.assertTrue(ok)
+        self.assertEqual(len(tranche_lines), 1)
+        line = tranche_lines[0]
+        self.assertEqual(line["stop_price"], 9.1)  # geometry stop, NOT plan.disaster_stop
+        self.assertEqual(
+            line["tp_tranches"],
+            [
+                {
+                    "tranche_index": 0,
+                    "target_price": 13.5,
+                    "tranche_pct": 1.0,
+                    "r_multiple": 0.0,
+                    "tag": "geometry",
+                }
+            ],
+        )
+
+    def test_unusable_geometry_levels_skip_the_ladder_and_warn_but_still_watch(self) -> None:
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        intent = _pick()
+        intent.exit = _exit_spec(stop=None, tp=13.5)
+        intent.spec = _blend_spec()
+        with self.assertLogs(cl.logger, level="WARNING") as captured:
+            ok, tranche_lines, trails_path, _stops = self._route(
+                plan, intent=intent, exit_policy=_GEOMETRY_POLICY
+            )
+        self.assertTrue(ok)  # the watch itself still opens (stop-only, like brackets)
+        self.assertEqual(tranche_lines, [])
+        self.assertTrue(any("geometry levels unusable" in msg for msg in captured.output))
+        opens = [ln for ln in _lines(trails_path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_tranche_plan_line_carries_the_pick_identity(self) -> None:
+        # 2026-08-19 adjudication finding 4: the watch path stamps pick_key so
+        # the fired-tranche fold treats a re-drive's re-append as the SAME
+        # trade (no fired-set reset).
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        ok, tranche_lines, _trails, _stops = self._route(plan)
+        self.assertTrue(ok)
+        self.assertEqual(tranche_lines[0]["pick_key"], "KO:2026-07-20")
+
+    def test_empty_static_ladder_journals_no_tranche_plan(self) -> None:
+        ok, tranche_lines, _trails, _stops = self._route(_plan((0, 10.0, 100)))
+        self.assertTrue(ok)
+        self.assertEqual(tranche_lines, [])
+
+    def test_tranche_plan_is_appended_before_the_watch_open_lines(self) -> None:
+        # Crash ordering: a crash between the two journals must never leave a
+        # watching tier without its ladder — so the ladder goes to disk FIRST.
+        events: list[str] = []
+        self.enterContext(
+            mock.patch.object(
+                cl, "_append_standalone_stop_journal", lambda line: events.append(line["kind"])
+            )
+        )
+        self.enterContext(
+            mock.patch.object(
+                entry_trails, "append_entry_trail_line", lambda line: events.append(line["kind"])
+            )
+        )
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        ok, _tranche_lines, _trails, _stops = self._route(plan)
+        self.assertTrue(ok)
+        self.assertIn("tranche_plan", events)
+        self.assertIn(entry_trails.KIND_WATCH_OPEN, events)
+        self.assertLess(events.index("tranche_plan"), events.index(entry_trails.KIND_WATCH_OPEN))
+
+
+class TestEntryWatchCapacityEnvRail(unittest.TestCase):
+    """Task B (2026-08-19 live incident, ETSY): the pick-denominated watch cap
+    was a hardcoded constant of 1 — with MAX_OPEN raised to 2 a second armed
+    pick was silently capacity-deferred forever at DEBUG. The cap becomes a
+    call-time env rail (ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS, default 1,
+    valid [1, 4]) and the FIRST deferral of a pick logs at INFO."""
+
+    def setUp(self) -> None:
+        # Reset the process-lifetime observability state so tests are hermetic.
+        self.enterContext(mock.patch.object(cl, "_entry_watch_max_picks_warned", False))
+        self.enterContext(mock.patch.object(cl, "_entry_watch_capacity_deferred", set()))
+
+    def test_unset_env_defaults_to_one(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(cl._entry_watch_max_picks(), 1)
+
+    def test_valid_values_are_honoured(self) -> None:
+        for raw, expected in (("1", 1), ("2", 2), ("4", 4)):
+            with mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True):
+                self.assertEqual(cl._entry_watch_max_picks(), expected)
+
+    def test_invalid_value_falls_back_to_one_and_warns_exactly_once(self) -> None:
+        with (
+            mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: "banana"}, clear=True),
+            self.assertLogs(cl.logger, level="WARNING") as captured,
+        ):
+            self.assertEqual(cl._entry_watch_max_picks(), 1)
+            self.assertEqual(cl._entry_watch_max_picks(), 1)  # second read: no new warning
+        warnings = [m for m in captured.output if cl._ENTRY_WATCH_MAX_PICKS_ENV in m]
+        self.assertEqual(len(warnings), 1)
+
+    def test_out_of_range_values_fall_back_to_one(self) -> None:
+        for raw in ("0", "5", "-1", ""):
+            with (
+                self.subTest(raw=raw),
+                mock.patch.object(cl, "_entry_watch_max_picks_warned", False),
+                mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True),
+                self.assertLogs(cl.logger, level="WARNING"),
+            ):
+                self.assertEqual(cl._entry_watch_max_picks(), 1)
+
+    def _seed_other_watch(self) -> Path:
+        path = _journal(self)
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_WATCH_OPEN,
+                "crid": "OTHER-2026-07-19-entry-t0",
+                "limit": 5.0,
+                "qty": 10.0,
+                "pick_key": "OTHER:2026-07-19",
+            }
+        )
+        return path
+
+    def test_cap_two_lets_a_second_pick_open_its_watch(self) -> None:
+        path = self._seed_other_watch()
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        env = {_ENV: "50", cl._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertTrue(placer(_pick()))  # NOT deferred at cap=2
+        opens_for_ko = [
+            ln
+            for ln in _lines(path)
+            if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "KO"
+        ]
+        self.assertEqual(len(opens_for_ko), 1)
+
+    def test_first_capacity_deferral_logs_info_then_debug(self) -> None:
+        self._seed_other_watch()
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with (
+            mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
+            self.assertLogs(cl.logger, level="DEBUG") as captured,
+        ):
+            self.assertFalse(placer(_pick()))  # first deferral -> INFO
+            self.assertFalse(placer(_pick()))  # every later tick -> DEBUG
+        records = [r for r in captured.records if "capacity reached" in r.getMessage()]
+        self.assertEqual([r.levelname for r in records], ["INFO", "DEBUG"])
+        self.assertIn("cap=1", records[0].getMessage())
+        self.assertIn("KO", records[0].getMessage())
+        self.assertIn("stays armed", records[0].getMessage())
+
+
+class TestWatchGeometryStampThroughToPlannedLine(unittest.TestCase):
+    """Task A2 (2026-08-19 live incident, OLN): the geometry blob must ride the
+    watch_open line so the fire-arm ``planned`` disaster line carries it —
+    without the stamp ``_reanchor_facts_from_governing`` has no (k_atr, atr)
+    facts and the position NEVER trails."""
+
+    def test_watch_open_lines_carry_the_geometry_stamp(self) -> None:
+        plan = _plan((0, 10.0, 100), (1, 9.0, 100))
+        intent = _pick()
+        intent.exit = _exit_spec(stop=9.1, tp=13.5)
+        intent.spec = _blend_spec()
+        expected = cl._geometry_shadow_stamp(intent.exit, intent.spec, use_geometry=True)
+        ok, _tranche_lines, trails_path, _stops = _route_watch(
+            self, plan, intent=intent, exit_policy=_GEOMETRY_POLICY
+        )
+        self.assertTrue(ok)
+        opens = [ln for ln in _lines(trails_path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 2)
+        for line in opens:
+            self.assertEqual(line["geometry"], expected)
+
+    def test_watch_open_without_exit_spec_omits_the_geometry_key(self) -> None:
+        # _pick() carries exit=None -> the stamp is None -> the key is absent
+        # (old-line byte-identity: readers treat a missing key as no geometry).
+        ok, _tranche_lines, trails_path, _stops = _route_watch(self, _plan((0, 10.0, 100)))
+        self.assertTrue(ok)
+        opens = [ln for ln in _lines(trails_path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+        self.assertNotIn("geometry", opens[0])
+
+    def test_fire_arm_planned_line_carries_the_record_geometry_stamp(self) -> None:
+        stops_path = _planned_journal(self)
+        stamp = {
+            "policy_name": "atr_bracket_1p5",
+            "policy_version": 1,
+            "planned_blend": 10.0,
+            "geometry_stop": 9.1,
+            "geometry_tp": 13.5,
+            "k_atr": 1.5,
+            "atr": 0.6,
+            "ceiling_price": None,
+            "applied": True,
+        }
+        record = {"disaster_stop": 8.0, "tier_index": 0, "geometry": stamp}
+        cl._journal_entry_planned_disaster(record, 307, "KO-2026-07-20-entry-t0-fire")
+        planned = [ln for ln in _lines(stops_path) if ln["kind"] == "planned"]
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(planned[0]["geometry"], stamp)
+
+    def test_fire_arm_planned_line_without_geometry_is_byte_identical(self) -> None:
+        # An OLD watch_open line (journaled before the stamp existed) must keep
+        # producing EXACTLY today's planned line — no new key, no reordering.
+        stops_path = _planned_journal(self)
+        record = {"disaster_stop": 8.0, "tier_index": 0}
+        cl._journal_entry_planned_disaster(record, 307, "KO-2026-07-20-entry-t0-fire")
+        planned = [ln for ln in _lines(stops_path) if ln["kind"] == "planned"]
+        self.assertEqual(
+            planned,
+            [
+                {
+                    "kind": "planned",
+                    "client_request_id": "KO-2026-07-20-entry-t0-fire",
+                    "uic": 307,
+                    "side": "SELL",
+                    "stop_price": 8.0,
+                    "take_profit": None,
+                    "tier_index": 0,
+                    "gen": 0,
+                }
+            ],
+        )
+
+    def test_stamp_survives_the_fold_from_watch_open_to_the_armed_planned_line(self) -> None:
+        # End-to-end: a seeded watch_open WITH the stamp -> touch -> native arm
+        # -> the fire-arm planned line carries the stamp read off the FOLDED
+        # record (pins the verbatim watch_open fold, not just the writer).
+        path = _journal(self)
+        stops_path = _planned_journal(self)
+        stamp = {"policy_name": "atr_bracket_1p5", "k_atr": 1.5, "atr": 0.6, "applied": True}
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_WATCH_OPEN,
+                "crid": "KO-2026-07-20-entry-t0",
+                "limit": 10.0,
+                "qty": 100.0,
+                "d_bps": 50,
+                "window_end": "2099-01-01T21:00:00+00:00",
+                "fx_rate": None,
+                "uic": 307,
+                "ticker": "KO",
+                "exchange_mic": "XNYS",
+                "next_tier_limit": None,
+                "pick_key": "KO:2026-07-20",
+                "entry_mode": "entry-trail-native-d50-testcfg",
+                "disaster_stop": 8.0,
+                "tier_index": 0,
+                "geometry": stamp,
+            }
+        )
+        prices: dict[int, float | None] = {307: 10.0}  # touch @ limit -> ARM
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(len(broker.trailing_orders), 1)
+        planned = [ln for ln in _lines(stops_path) if ln["kind"] == "planned"]
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(planned[0]["geometry"], stamp)
+
+
 class TestPointSampleVetoNotRaise(unittest.TestCase):
     """_point_sample_bids is the shared once-per-uic sampling boundary: a
     structurally invalid PricePoint (non-numeric bid despite the protocol)
@@ -1071,6 +1452,477 @@ class TestEntryWatchFeedScope(unittest.TestCase):
         with mock.patch.dict("os.environ", {}, clear=True):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
         self.assertEqual(calls, [({}, "entry-watch")])
+
+
+# --------------------------------------------------------------------------
+# Open watches count against the MAX_OPEN admission (2026-08-19 adjudication)
+# --------------------------------------------------------------------------
+
+
+def _live_long(uic: int, qty: float = 8.0) -> Any:
+    instr = type("I", (), {"broker_instrument_id": str(uic), "currency": "USD"})()
+    return type(
+        "Pos",
+        (),
+        {
+            "instrument": instr,
+            "quantity": qty,
+            "avg_price": 10.0,
+            "market_value": qty * 10.0,
+            "unrealized_pnl": 0.0,
+            "position_id": f"pos-{uic}",
+        },
+    )()
+
+
+class _BrokerWithPositions(_RecordingBroker):
+    """A recording broker whose ``get_positions`` returns injected positions."""
+
+    def __init__(self, positions: list[Any]) -> None:
+        super().__init__()
+        self._positions = positions
+
+    def get_positions(self) -> list:
+        return self._positions
+
+
+def _seed_other_watch_line(pick_key: str, *, crid: str, uic: int | None = None) -> None:
+    line: dict[str, Any] = {
+        "kind": entry_trails.KIND_WATCH_OPEN,
+        "crid": crid,
+        "limit": 5.0,
+        "qty": 10.0,
+        "pick_key": pick_key,
+    }
+    if uic is not None:
+        line["uic"] = uic
+    entry_trails.append_entry_trail_line(line)
+
+
+class TestOpenWatchesCountAgainstMaxOpen(unittest.TestCase):
+    """Adjudication finding 1 (2026-08-19): an open entry watch — or its armed
+    unfilled native trail — is a committed risk unit the MAX_OPEN rail cannot
+    see: the note-only watch submission record carries no brackets and no
+    position exists until the trail fires, so ``safety.check``'s sum (journal
+    brackets + live positions) misses it entirely and a watch capacity of N
+    could over-commit up to N extra concurrent positions. ``_place_pick`` must
+    count the DISTINCT watch-holding picks into the MAX_OPEN input."""
+
+    _CHECK_TARGET = "alphalens_pipeline.brokers.automanager.safety.check"
+
+    def _recording_check(self) -> list[Any]:
+        seen: list[Any] = []
+
+        def check(_pick: Any, journal_view: Any, broker_view: Any, _state: Any) -> Any:
+            seen.append((journal_view, broker_view))
+            # A transient Refuse stops _place_pick right after the check: these
+            # tests pin the INPUTS to the rail, not the downstream placement.
+            return _safety.Refuse("recorded — stop here")
+
+        self.enterContext(mock.patch(self._CHECK_TARGET, check))
+        return seen
+
+    def test_another_picks_open_watch_raises_the_max_open_input(self) -> None:
+        _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0")
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        env = {_ENV: "50", cl._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            placer(_pick())
+        journal_view, _broker_view = seen[0]
+        self.assertEqual(journal_view.open_bracket_count, 1)
+
+    def test_own_watch_is_excluded_from_the_max_open_input(self) -> None:
+        # Crash-recovery re-drive: the pick's OWN watch must not self-block the
+        # retirement (mirrors the intercept's already_watching exemption).
+        _journal(self)
+        _seed_other_watch_line("KO:2026-07-20", crid="KO-2026-07-20-entry-t0")
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        journal_view, _broker_view = seen[0]
+        self.assertEqual(journal_view.open_bracket_count, 0)
+
+    def test_watch_on_a_uic_with_a_live_position_is_not_double_counted(self) -> None:
+        # A pick whose tier already FIRED shows up as a live position while a
+        # deeper tier still watches — one risk unit, not two: the position side
+        # is already in BrokerView.open_position_count.
+        _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t1", uic=42)
+        broker = _BrokerWithPositions([_live_long(42)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        journal_view, broker_view = seen[0]
+        self.assertEqual(journal_view.open_bracket_count, 0)
+        self.assertEqual(broker_view.open_position_count, 1)
+
+    def test_terminal_watches_do_not_count(self) -> None:
+        _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0")
+        entry_trails.append_entry_trail_line(
+            {"kind": entry_trails.KIND_EXPIRED, "crid": "OTHER-2026-07-19-entry-t0"}
+        )
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        journal_view, _broker_view = seen[0]
+        self.assertEqual(journal_view.open_bracket_count, 0)
+
+    def test_max_open_reached_by_watches_refuses_the_pick_terminal(self) -> None:
+        # End-to-end with the REAL safety.check: two foreign open watches +
+        # MAX_OPEN=2 -> the third pick is refused terminal BEFORE any watch
+        # opens, even though the watch-capacity env rail would still admit it.
+        path = _journal(self)
+        _seed_other_watch_line("OTHER1:2026-07-19", crid="OTHER1-2026-07-19-entry-t0")
+        _seed_other_watch_line("OTHER2:2026-07-19", crid="OTHER2-2026-07-19-entry-t0")
+        broker = _RecordingBroker()
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        self.enterContext(mock.patch(self._CHECK_TARGET, _REAL_SAFETY_CHECK))
+        refused: list[tuple[Any, ...]] = []
+        self.enterContext(
+            mock.patch(
+                "alphalens_pipeline.brokers.automanager.picks.mark_refused",
+                lambda *a, **k: refused.append(a),
+            )
+        )
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        no_kill = Path(tmp.name) / "KILL"
+        for target in ("kill_file_path", "global_kill_file_path"):
+            self.enterContext(
+                mock.patch(
+                    f"alphalens_pipeline.brokers.automanager.state_paths.{target}",
+                    lambda: no_kill,
+                )
+            )
+        env = {
+            _ENV: "50",
+            "ALPHALENS_BROKER_ALLOW_ORDERS": "1",
+            "ALPHALENS_BROKER_MAX_OPEN": "2",
+            cl._ENTRY_WATCH_MAX_PICKS_ENV: "4",
+        }
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(len(refused), 1)
+        self.assertIn("MAX_OPEN", refused[0][2])
+        self.assertEqual(submissions, [])
+        opens_for_ko = [
+            ln
+            for ln in _lines(path)
+            if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "KO"
+        ]
+        self.assertEqual(opens_for_ko, [])
+
+
+class TestEodNettingRowsAreNetRiskUnits(unittest.TestCase):
+    """LIVE Saxo accounts run End-Of-Day netting
+    (``ClosedPositionNotAccessibleInEndOfDayNettingMode``): positions net only
+    at EOD, so an intraday round-trip leaves TWO ledger rows (+q and -q) that
+    net to zero until the nightly netting. MAX_OPEN counts RISK UNITS, not
+    ledger rows — live incident 2026-08-19: a NET-FLAT book showed 2 rows and
+    every drain tick terminally refused a valid pick on the MAX_OPEN rail.
+    A net-flat uic must occupy no slot AND must not suppress an open watch
+    from counting (the watch exclusion exists only because the position side
+    is already counted — a net-flat uic is not)."""
+
+    _CHECK_TARGET = "alphalens_pipeline.brokers.automanager.safety.check"
+
+    def _recording_check(self) -> list[Any]:
+        seen: list[Any] = []
+
+        def check(_pick: Any, journal_view: Any, broker_view: Any, _state: Any) -> Any:
+            seen.append((journal_view, broker_view))
+            # A transient Refuse stops _place_pick right after the check: these
+            # tests pin the INPUTS to the rail, not the downstream placement.
+            return _safety.Refuse("recorded — stop here")
+
+        self.enterContext(mock.patch(self._CHECK_TARGET, check))
+        return seen
+
+    def test_net_flat_round_trip_rows_occupy_no_slot(self) -> None:
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-8.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        _journal_view, broker_view = seen[0]
+        self.assertEqual(broker_view.open_position_count, 0)
+
+    def test_partially_closed_long_occupies_one_slot(self) -> None:
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-3.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        _journal_view, broker_view = seen[0]
+        self.assertEqual(broker_view.open_position_count, 1)
+
+    def test_two_net_open_uics_occupy_two_slots(self) -> None:
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(43, qty=5.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        _journal_view, broker_view = seen[0]
+        self.assertEqual(broker_view.open_position_count, 2)
+
+    def test_net_flat_uic_does_not_suppress_an_open_watch(self) -> None:
+        # The watch-count exclusion (finding 1) exists because a FIRED tier's
+        # position is already inside open_position_count. A net-flat uic is
+        # NOT counted there, so its watch must keep occupying a slot.
+        _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0", uic=42)
+        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-8.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        env = {_ENV: "50", cl._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            placer(_pick())
+        journal_view, broker_view = seen[0]
+        self.assertEqual(broker_view.open_position_count, 0)
+        self.assertEqual(journal_view.open_bracket_count, 1)
+
+
+# --------------------------------------------------------------------------
+# Routing defers while a live long already holds the uic (2026-08-19 adj. F2)
+# --------------------------------------------------------------------------
+
+
+class TestRoutingDefersOnLiveSameUicLong(unittest.TestCase):
+    """Adjudication finding 2 (2026-08-19): routing a re-picked ticker into a
+    watch while an earlier live long still holds the SAME uic would journal a
+    fresh ``tranche_plan`` at watch-open time — replacing the live position's
+    ladder and resetting its fired-tranche set with NO order ever placed (the
+    live-exit engine could then re-sell the runner at the new pick's targets).
+    The intercept defers such a pick (stays armed until the uic is flat); the
+    ``already_watching`` re-drive is exempt — the pick's OWN fill must not
+    deadlock the retirement record."""
+
+    def setUp(self) -> None:
+        self.enterContext(mock.patch.object(cl, "_entry_watch_live_uic_deferred", set()))
+
+    def test_live_long_on_the_pick_uic_defers_and_journals_nothing(self) -> None:
+        path = _journal(self)
+        broker = _BrokerWithPositions([_live_long(307)])  # _instr() uic
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertFalse(placer(_pick()))  # deferred, stays armed
+        self.assertEqual(_lines(path), [])  # no watch_open lines
+        self.assertEqual(submissions, [])  # never retired
+        self.assertEqual(broker.brackets, [])  # and no fall-through bracket
+
+    def test_flat_or_short_rows_on_the_uic_do_not_defer(self) -> None:
+        path = _journal(self)
+        broker = _BrokerWithPositions([_live_long(307, qty=0.0), _live_long(307, qty=-5.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_a_live_long_on_a_different_uic_does_not_defer(self) -> None:
+        path = _journal(self)
+        broker = _BrokerWithPositions([_live_long(999)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_own_redrive_with_its_own_fill_is_not_deferred(self) -> None:
+        # Crash-recovery: KO's t0 fired (live long on 307) while t1's watch is
+        # still open and the retiring submission record was never written. The
+        # re-drive must complete (re-open idempotently + retire), NOT deadlock
+        # on its own fill.
+        _journal(self)
+        _seed_other_watch_line("KO:2026-07-20", crid="KO-2026-07-20-entry-t1", uic=307)
+        broker = _BrokerWithPositions([_live_long(307)])
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        self.assertEqual(len(submissions), 1)
+        self.assertIn("watch", submissions[0]["note"])
+
+    def test_first_live_uic_deferral_logs_warning_then_debug(self) -> None:
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(307)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with (
+            mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
+            self.assertLogs(cl.logger, level="DEBUG") as captured,
+        ):
+            self.assertFalse(placer(_pick()))  # first deferral -> WARNING
+            self.assertFalse(placer(_pick()))  # every later tick -> DEBUG
+        records = [r for r in captured.records if "live long" in r.getMessage()]
+        self.assertEqual([r.levelname for r in records], ["WARNING", "DEBUG"])
+        self.assertIn("KO", records[0].getMessage())
+        self.assertIn("stays armed", records[0].getMessage())
+
+
+# --------------------------------------------------------------------------
+# Stale tranche_plan retraction on unfired watch end (2026-08-19 adj. F3)
+# --------------------------------------------------------------------------
+
+
+def _seed_terminal_watch(
+    *,
+    crid: str,
+    pick_key: str = "KO:2026-07-20",
+    uic: int = 307,
+    terminal_kind: str | None = entry_trails.KIND_EXPIRED,
+) -> None:
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_WATCH_OPEN,
+            "crid": crid,
+            "limit": 10.0,
+            "qty": 100.0,
+            "pick_key": pick_key,
+            "uic": uic,
+            "ticker": "KO",
+            "exchange_mic": "XNYS",
+        }
+    )
+    if terminal_kind is not None:
+        entry_trails.append_entry_trail_line({"kind": terminal_kind, "crid": crid})
+
+
+class TestStaleTranchePlanRetraction(unittest.TestCase):
+    """Adjudication finding 3 (2026-08-19): the watch routing journals the
+    tranche_plan at watch-OPEN, so a watch that ends without ANY fill (expired /
+    suspended / cancelled) left its ladder governing the uic FOREVER — an
+    order-free stale ladder that a later long on the uic (protection-pass
+    covering, manual buy + manual stop) would be silently sold down. The watch
+    pass now retracts the plan once the pick's watch is fully terminal and
+    unfired."""
+
+    def _seed_plan(self, pick_key: str | None = "KO:2026-07-20", uic: int = 307) -> None:
+        line: dict[str, Any] = {
+            "kind": "tranche_plan",
+            "uic": uic,
+            "tp_tranches": [
+                {
+                    "tranche_index": 0,
+                    "target_price": 14.0,
+                    "tranche_pct": 1.0,
+                    "r_multiple": 0.0,
+                    "tag": "geometry",
+                }
+            ],
+            "reference_qty": 100.0,
+            "stop_price": 8.0,
+        }
+        if pick_key is not None:
+            line["pick_key"] = pick_key
+        cl._append_standalone_stop_journal(line)
+
+    def _sweep(self) -> None:
+        cl._retract_stale_tranche_plans(entry_trails.read_entry_trail_fold())
+
+    def _retractions(self, stops_path: Path) -> list[dict[str, Any]]:
+        return [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan_retracted"]
+
+    def test_all_terminal_unfired_pick_retracts_its_plan(self) -> None:
+        for terminal in (
+            entry_trails.KIND_EXPIRED,
+            entry_trails.KIND_SUSPENDED,
+            entry_trails.KIND_CANCELLED,
+        ):
+            with self.subTest(terminal=terminal):
+                _journal(self)
+                stops_path = _planned_journal(self)
+                _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=terminal)
+                self._seed_plan()
+                self._sweep()
+                retractions = self._retractions(stops_path)
+                self.assertEqual(len(retractions), 1)
+                self.assertEqual(retractions[0]["uic"], 307)
+                self.assertEqual(retractions[0]["pick_key"], "KO:2026-07-20")
+                # The fold no longer governs the uic — the live-exit engine
+                # will never adopt a later position onto the stale ladder.
+                self.assertNotIn(307, cl.fold_tranche_plans(_lines(stops_path)))
+
+    def test_a_fired_tier_blocks_retraction(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_FIRED)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t1", terminal_kind=entry_trails.KIND_EXPIRED)
+        self._seed_plan()
+        self._sweep()
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_a_still_open_tier_blocks_retraction(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_EXPIRED)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t1", terminal_kind=None)  # still watching
+        self._seed_plan()
+        self._sweep()
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_a_plan_governed_by_a_newer_pick_is_not_retracted(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan(pick_key="KO:2026-08-01")  # a NEWER pick owns the uic now
+        self._sweep()
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_a_keyless_governing_plan_is_never_retracted(self) -> None:
+        # A bracket-path plan (no pick_key) on the same uic is coupled to a
+        # real placement — the sweep must never touch it.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan(pick_key=None)
+        self._sweep()
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_retraction_is_idempotent(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan()
+        self._sweep()
+        self._sweep()
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
+    def test_watch_pass_runs_the_sweep(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan()
+        deps = _watch_deps(_FakeFeed({}), [])
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
+    def test_a_journal_failure_never_aborts_the_sweep_caller(self) -> None:
+        _journal(self)
+        _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan()
+
+        def boom(_line: Any) -> None:
+            raise OSError("disk full")
+
+        with (
+            mock.patch.object(cl, "_append_standalone_stop_journal", boom),
+            self.assertLogs(cl.logger, level="WARNING") as captured,
+        ):
+            self._sweep()  # must swallow + warn, never raise
+        self.assertTrue(any("retraction" in msg for msg in captured.output))
 
 
 if __name__ == "__main__":
