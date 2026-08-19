@@ -149,7 +149,10 @@ SL and a TP are crossable resolves **SL-first** (conservative,
 Source of truth: `ladder_replay.py::_classify` +
 `population_ladder_monitor.py::_TERMINAL_SET`; mirrored web-side (with the
 plain-English glosses the legend shows) in
-`apps/web/src/lib/data/ladderStatus.ts`.
+`apps/web/src/lib/data/ladderStatus.ts`, which additionally carries two
+monitor-level row statuses a `/edge` reader may see — `NO_STRUCTURE` (row has
+no plannable trade setup) and `NO_DATA` (no usable price bars) — that never
+come out of `_classify`.
 
 Ongoing rows are re-replayed nightly until terminal; the session on which a
 row terminalizes is stamped as `matured_at`. `TIME_STOP_DAYS = 42` **trading**
