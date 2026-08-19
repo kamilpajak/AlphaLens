@@ -30,6 +30,26 @@ def _tr(
 
 
 class TestBuildTranchePlanLine(unittest.TestCase):
+    def test_pick_key_is_stamped_when_given(self) -> None:
+        # 2026-08-19 adjudication finding 4: the watch path stamps its pick
+        # identity so an identity-idempotent re-append never resets the
+        # fired-tranche fold.
+        line = _build_tranche_plan_line(
+            uic=486,
+            tp_tranches=(_tr(0, 16.0, 1.0),),
+            reference_qty=100.0,
+            stop_price=13.0,
+            pick_key="KO:2026-07-20",
+        )
+        self.assertEqual(line["pick_key"], "KO:2026-07-20")
+
+    def test_pick_key_is_omitted_when_not_given(self) -> None:
+        # Bracket-path byte-identity: no pick_key kwarg -> no pick_key field.
+        line = _build_tranche_plan_line(
+            uic=486, tp_tranches=(_tr(0, 16.0, 1.0),), reference_qty=100.0, stop_price=13.0
+        )
+        self.assertNotIn("pick_key", line)
+
     def test_builds_a_json_serializable_tranche_plan_line(self) -> None:
         tranches = (_tr(0, 16.0, 0.5), _tr(1, 18.0, 0.3), _tr(2, 20.0, 0.2))
         line = _build_tranche_plan_line(

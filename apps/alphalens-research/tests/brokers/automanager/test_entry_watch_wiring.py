@@ -1091,6 +1091,15 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         opens = [ln for ln in _lines(trails_path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
         self.assertEqual(len(opens), 1)
 
+    def test_tranche_plan_line_carries_the_pick_identity(self) -> None:
+        # 2026-08-19 adjudication finding 4: the watch path stamps pick_key so
+        # the fired-tranche fold treats a re-drive's re-append as the SAME
+        # trade (no fired-set reset).
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        ok, tranche_lines, _trails, _stops = self._route(plan)
+        self.assertTrue(ok)
+        self.assertEqual(tranche_lines[0]["pick_key"], "KO:2026-07-20")
+
     def test_empty_static_ladder_journals_no_tranche_plan(self) -> None:
         ok, tranche_lines, _trails, _stops = self._route(_plan((0, 10.0, 100)))
         self.assertTrue(ok)

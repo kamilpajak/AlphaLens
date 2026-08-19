@@ -217,6 +217,49 @@ class TestFoldFiredSinceLatestPlan(unittest.TestCase):
         out = cl._fold_fired_since_latest_plan(lines)
         self.assertEqual(out, {})
 
+    def test_a_same_pick_key_re_append_does_not_reset(self) -> None:
+        # 2026-08-19 adjudication finding 4: the already_watching crash-recovery
+        # re-drive re-journals the SAME pick's plan on every tick until the
+        # retirement record lands — an identity-idempotent re-append must NOT
+        # re-arm already-fired tranches (that would re-sell the remainder at
+        # the tranche-0 target instead of laddering).
+        lines = [
+            {"kind": "tranche_plan", "uic": 307, "pick_key": "KO:2026-07-20"},
+            {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
+            {"kind": "tranche_plan", "uic": 307, "pick_key": "KO:2026-07-20"},
+        ]
+        out = cl._fold_fired_since_latest_plan(lines)
+        self.assertEqual(out[307], frozenset({"tp1"}))
+
+    def test_a_different_pick_key_resets_the_fired_set(self) -> None:
+        lines = [
+            {"kind": "tranche_plan", "uic": 307, "pick_key": "KO:2026-07-20"},
+            {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
+            {"kind": "tranche_plan", "uic": 307, "pick_key": "KO:2026-08-01"},  # a NEW trade
+        ]
+        out = cl._fold_fired_since_latest_plan(lines)
+        self.assertNotIn(307, out)
+
+    def test_a_keyless_plan_always_resets(self) -> None:
+        # Bracket-path lines carry no pick_key and keep today's semantics:
+        # every keyless plan line is a new trade.
+        lines = [
+            {"kind": "tranche_plan", "uic": 307, "pick_key": "KO:2026-07-20"},
+            {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
+            {"kind": "tranche_plan", "uic": 307},
+        ]
+        out = cl._fold_fired_since_latest_plan(lines)
+        self.assertNotIn(307, out)
+
+    def test_consecutive_keyless_plans_both_reset(self) -> None:
+        lines = [
+            {"kind": "tranche_plan", "uic": 307},
+            {"kind": "tranche_fired", "uic": 307, "tag": "tp1"},
+            {"kind": "tranche_plan", "uic": 307},  # keyless == keyless must STILL reset
+        ]
+        out = cl._fold_fired_since_latest_plan(lines)
+        self.assertNotIn(307, out)
+
 
 class _JournalCase(unittest.TestCase):
     """Base case wiring a temp standalone-stop journal path per test."""

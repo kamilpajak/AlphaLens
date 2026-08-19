@@ -611,8 +611,18 @@ def _fold_fired_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[in
     uic clears its accumulator — only ``tranche_fired`` lines AFTER the LATEST
     plan for that uic count. The live-exit engine's own ``fold_fired_tranches``
     is untouched (still used by its own tests) — this is a control_loop-side
-    wrapper around the same append-only journal, not an engine change."""
+    wrapper around the same append-only journal, not an engine change.
+
+    Identity-keyed reset (2026-08-19 adjudication finding 4): a ``tranche_plan``
+    line carrying the SAME ``pick_key`` as the uic's governing plan is an
+    idempotent re-append (the ``already_watching`` crash-recovery re-drive
+    re-journals the pick's plan every tick until its retirement record lands)
+    and must NOT reset — resetting would re-arm already-fired tranches and
+    re-sell the remainder at the tranche-0 target. A DIFFERENT ``pick_key``, a
+    keyless line (the bracket path — today's always-reset semantics), or a
+    ``tranche_plan_retracted`` line (finding 3) still clears the accumulator."""
     fired: dict[int, set[str]] = {}
+    governing_key: dict[int, str] = {}
     for line in lines:
         raw_uic = line.get("uic")
         if raw_uic is None:
@@ -622,8 +632,17 @@ def _fold_fired_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[in
         except (TypeError, ValueError):
             continue
         kind = line.get("kind")
-        if kind == "tranche_plan":
+        if kind == _TRANCHE_PLAN_KIND:
+            key = line.get("pick_key")
+            if key is None or str(key) != governing_key.get(uic):
+                fired.pop(uic, None)
+            if key is None:
+                governing_key.pop(uic, None)
+            else:
+                governing_key[uic] = str(key)
+        elif kind == _TRANCHE_PLAN_RETRACTED_KIND:
             fired.pop(uic, None)
+            governing_key.pop(uic, None)
         elif kind == "tranche_fired":
             tag = line.get("tag")
             if tag:
@@ -1437,6 +1456,10 @@ def _route_pick_to_entry_watch(
             reference_qty=sum(t.qty for t in plan.entry_tiers if t.qty > 0),
             uic=int(instrument.broker_instrument_id),
             use_geometry=resolved_exit_policy.applies_geometry,
+            # Trade identity (adjudication finding 4): a crash-recovery
+            # re-drive re-appends this line — the SAME pick_key keeps the
+            # fired-tranche fold from resetting on the re-append.
+            pick_key=f"{ticker}:{intent.meta.brief_date}",
         )
         # Same use_geometry decision _place_tiers makes for its planned lines:
         # the stamp rides every watch_open so the fire-arm planned writer can
@@ -3456,12 +3479,17 @@ def _reanchor_facts_from_governing(governing: Mapping[str, Any]) -> ReanchorFact
 # reads the fold until the live-exits tick phase (Task 2) is wired.
 
 
+_TRANCHE_PLAN_KIND = "tranche_plan"
+_TRANCHE_PLAN_RETRACTED_KIND = "tranche_plan_retracted"
+
+
 def _build_tranche_plan_line(
     *,
     uic: int,
     tp_tranches: tuple[TpTranchePlan, ...],
     reference_qty: float,
     stop_price: float,
+    pick_key: str | None = None,
 ) -> dict[str, Any]:
     """One append-only ``tranche_plan`` journal line -- the per-uic TP ladder the
     live-exit engine needs (INC-5) but the ``planned`` line does not carry.
@@ -3470,9 +3498,16 @@ def _build_tranche_plan_line(
     the sizing base, and the stop price the engine amends the standalone SL
     around. Written ONCE per placement (never per tier); a same-uic re-arm
     simply appends a newer line (append-only fold, last well-formed line wins,
-    exactly like ``_build_planned_line``)."""
-    return {
-        "kind": "tranche_plan",
+    exactly like ``_build_planned_line``).
+
+    ``pick_key`` (2026-08-19 adjudication finding 4) is the plan's trade
+    identity: the entry-trail watch routing stamps ``ticker:brief_date`` so
+    :func:`_fold_fired_since_latest_plan` treats a crash-recovery re-drive's
+    re-append as the SAME trade (no fired-set reset). ``None`` (the bracket
+    path) omits the key -- a keyless line keeps today's always-reset
+    semantics."""
+    line: dict[str, Any] = {
+        "kind": _TRANCHE_PLAN_KIND,
         "uic": int(uic),
         "tp_tranches": [
             {
@@ -3487,6 +3522,9 @@ def _build_tranche_plan_line(
         "reference_qty": float(reference_qty),
         "stop_price": float(stop_price),
     }
+    if pick_key is not None:
+        line["pick_key"] = str(pick_key)
+    return line
 
 
 def fold_tranche_plans(
@@ -4735,9 +4773,12 @@ def _journal_tranche_plan_core(
     reference_qty: float,
     uic: int,
     use_geometry: bool,
+    pick_key: str | None = None,
 ) -> None:
     """The ladder-choice + line-build core shared by BOTH placement paths
     (bracket ``_journal_tranche_plan`` and the entry-trail watch routing).
+    ``pick_key`` is the optional trade identity stamped into the line (watch
+    path only — see :func:`_build_tranche_plan_line`).
     Source the ladder from whatever the ACTIVE exit policy actually places the
     TP from: under the geometry policy (atr_bracket_1p5) that is the single
     ``exit_spec.initial_levels.tp`` level (and the passed ``stop_price`` is
@@ -4772,6 +4813,7 @@ def _journal_tranche_plan_core(
             tp_tranches=ladder,
             reference_qty=reference_qty,
             stop_price=stop_price,
+            pick_key=pick_key,
         )
     )
 

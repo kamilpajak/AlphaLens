@@ -2323,6 +2323,20 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         journaled = self._run(plan=None)
         self.assertEqual([line for line in journaled if line["kind"] == "tranche_plan"], [])
 
+    def test_bracket_path_line_carries_no_pick_key(self) -> None:
+        # Byte-identity pin (2026-08-19 adjudication finding 4): only the
+        # entry-trail watch routing stamps pick_key; the bracket wrapper's
+        # journaled line is unchanged, so every bracket plan line keeps
+        # today's always-reset fold semantics.
+        tranches = (
+            TpTranchePlan(
+                tranche_index=0, target_price=11.0, tranche_pct=1.0, r_multiple=1.0, tag="tp1"
+            ),
+        )
+        journaled = self._run(plan=self._plan(tp_tranches=tranches))
+        line = next(line for line in journaled if line["kind"] == "tranche_plan")
+        self.assertNotIn("pick_key", line)
+
     def test_empty_tp_tranches_journals_nothing_extra(self) -> None:
         journaled = self._run(plan=self._plan(tp_tranches=()))
         self.assertEqual([line for line in journaled if line["kind"] == "tranche_plan"], [])
