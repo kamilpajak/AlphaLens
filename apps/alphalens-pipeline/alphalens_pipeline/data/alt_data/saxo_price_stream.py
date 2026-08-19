@@ -175,6 +175,18 @@ def _coerce_delayed_minutes(value: object) -> int | None:
         return None
 
 
+def _merged_delayed_minutes(quote_block: dict[str, Any], prev: Quote | None) -> int | None:
+    """The ``delayed_by_minutes`` value a delta merge must store, by the same
+    KEY-PRESENCE semantics as the Bid/Ask merge in :meth:`QuoteCache.apply`:
+
+    PRESENT key — coerce-or-veto the reported value (a raw string must never
+    reach ``any_delayed``'s ``> 0``); OMITTED key — inherit the previous,
+    already-coerced value (``None`` when there is no previous quote)."""
+    if "DelayedByMinutes" in quote_block:
+        return _coerce_delayed_minutes(quote_block["DelayedByMinutes"])
+    return prev.delayed_by_minutes if prev else None
+
+
 def _row_uic(row: dict[str, Any]) -> int | None:
     """The row's ``Uic`` as an ``int``, or ``None`` on any doubt — the same
     veto-not-raise coercion :meth:`QuoteCache.apply` performs before storing
@@ -302,19 +314,12 @@ class QuoteCache:
             # here and a `quote_block.get(key) or default`-style rewrite
             # would be wrong: it would treat an explicit null the same as an
             # omitted key.
-            if "DelayedByMinutes" in quote_block:
-                # PRESENT key: coerce-or-veto the reported value (a raw
-                # string must never reach any_delayed's ``> 0``).
-                delayed_by_minutes = _coerce_delayed_minutes(quote_block["DelayedByMinutes"])
-            else:
-                # OMITTED key: inherit the previous, already-coerced value.
-                delayed_by_minutes = prev.delayed_by_minutes if prev else None
             merged = Quote(
                 uic=uic,
                 bid=quote_block.get("Bid", prev.bid if prev else None),
                 ask=quote_block.get("Ask", prev.ask if prev else None),
                 event_time=event_time or (prev.event_time if prev else None),
-                delayed_by_minutes=delayed_by_minutes,
+                delayed_by_minutes=_merged_delayed_minutes(quote_block, prev),
                 received_at=received_at,
             )
             self._quotes[uic] = merged
