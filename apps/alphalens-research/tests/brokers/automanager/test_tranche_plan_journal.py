@@ -121,6 +121,38 @@ class TestFoldTranchePlans(unittest.TestCase):
         out = fold_tranche_plans([bad])
         self.assertEqual(out, {})
 
+    def test_a_retraction_removes_the_uic_from_the_fold(self) -> None:
+        # 2026-08-19 adjudication finding 3: a watch that ends unfired retracts
+        # its plan — the fold must stop governing the uic.
+        line = _build_tranche_plan_line(
+            uic=486,
+            tp_tranches=(_tr(0, 16.0, 1.0),),
+            reference_qty=100.0,
+            stop_price=13.0,
+            pick_key="KO:2026-07-20",
+        )
+        retraction = {"kind": "tranche_plan_retracted", "uic": 486, "pick_key": "KO:2026-07-20"}
+        self.assertEqual(fold_tranche_plans([line, retraction]), {})
+
+    def test_a_plan_after_a_retraction_governs_again(self) -> None:
+        old = _build_tranche_plan_line(
+            uic=486, tp_tranches=(_tr(0, 16.0, 1.0),), reference_qty=100.0, stop_price=13.0
+        )
+        retraction = {"kind": "tranche_plan_retracted", "uic": 486}
+        new = _build_tranche_plan_line(
+            uic=486, tp_tranches=(_tr(0, 17.0, 1.0),), reference_qty=80.0, stop_price=14.0
+        )
+        out = fold_tranche_plans([old, retraction, new])
+        got_tranches, _ref, _stop = out[486]
+        self.assertEqual(got_tranches, (_tr(0, 17.0, 1.0),))
+
+    def test_a_malformed_retraction_is_skipped(self) -> None:
+        line = _build_tranche_plan_line(
+            uic=486, tp_tranches=(_tr(0, 16.0, 1.0),), reference_qty=100.0, stop_price=13.0
+        )
+        out = fold_tranche_plans([line, {"kind": "tranche_plan_retracted"}])  # no uic
+        self.assertIn(486, out)
+
     def test_newest_line_wins_for_the_same_uic(self) -> None:
         old_line = _build_tranche_plan_line(
             uic=486, tp_tranches=(_tr(0, 16.0, 0.5),), reference_qty=100.0, stop_price=13.0

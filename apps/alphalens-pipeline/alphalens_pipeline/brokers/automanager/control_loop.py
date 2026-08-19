@@ -1543,6 +1543,12 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
         _release_feed_scope(deps, _FEED_SCOPE_ENTRY_WATCH)
         return
     fold = entry_trails.read_entry_trail_fold()
+    # Housekeeping BEFORE the empty-active early return: an all-terminal fold
+    # is exactly the state whose stale routed ladders need retracting
+    # (2026-08-19 adjudication finding 3). Self-contained error boundary; under
+    # KILL the pass returned above, so a KILL-cancelled watch is swept on the
+    # first non-KILL tick.
+    _retract_stale_tranche_plans(fold)
     active = _active_entry_watches(fold)
     if not active:
         deps.entry_watchers.clear()  # every watch went terminal — drop stale runtimes
@@ -3538,12 +3544,22 @@ def fold_tranche_plans(
     live position nets to one uic). Non-``tranche_plan`` lines and malformed
     lines (missing/unparsable uic, non-list ``tp_tranches``, or a tranche
     missing/mistyping any of its five fields) are skipped ENTIRELY -- a
-    malformed line contributes nothing, never a partial fold."""
+    malformed line contributes nothing, never a partial fold.
+
+    A ``tranche_plan_retracted`` line (2026-08-19 adjudication finding 3 -- a
+    watch that ended with no fill) REMOVES the uic's governing ladder; a later
+    plan line for the uic governs again (still last-wins, in write order)."""
     from broker_contract.sizing import TpTranchePlan
 
     out: dict[int, tuple[tuple[TpTranchePlan, ...], float, float]] = {}
     for line in lines:
-        if line.get("kind") != "tranche_plan":
+        kind = line.get("kind")
+        if kind == _TRANCHE_PLAN_RETRACTED_KIND:
+            retracted_uic = _coerce(line, "uic", int)
+            if retracted_uic is not None:
+                out.pop(retracted_uic, None)
+            continue
+        if kind != _TRANCHE_PLAN_KIND:
             continue
         raw_uic = line.get("uic")
         raw_tranches = line.get("tp_tranches")
@@ -3567,6 +3583,97 @@ def fold_tranche_plans(
             continue
         out[uic] = (tranches, reference_qty, stop_price)
     return out
+
+
+def _fold_governing_plan_pick_keys(lines: Iterable[Mapping[str, Any]]) -> dict[int, str | None]:
+    """The governing ``tranche_plan``'s ``pick_key`` per uic, in write order
+    (last wins; ``None`` = a keyless bracket-path plan). A
+    ``tranche_plan_retracted`` line removes the uic — an already-retracted plan
+    can never be matched (and so never re-retracted) by the sweep below."""
+    governing: dict[int, str | None] = {}
+    for line in lines:
+        kind = line.get("kind")
+        if kind not in (_TRANCHE_PLAN_KIND, _TRANCHE_PLAN_RETRACTED_KIND):
+            continue
+        uic = _coerce(line, "uic", int)
+        if uic is None:
+            continue
+        if kind == _TRANCHE_PLAN_KIND:
+            key = line.get("pick_key")
+            governing[uic] = None if key is None else str(key)
+        else:
+            governing.pop(uic, None)
+    return governing
+
+
+def _unfired_terminal_watch_picks(fold: entry_trails.EntryTrailFold) -> dict[str, int]:
+    """``{pick_key: uic}`` for every pick whose entry watch is FULLY terminal
+    with NO tier fired — the picks whose routed ``tranche_plan`` never matched
+    a fill and is now an order-free stale ladder (2026-08-19 adjudication
+    finding 3). A pick with any still-open tier is live; a pick with any
+    ``fired`` tier has a position whose ladder must stand. Records whose
+    pick_key or uic cannot be reconstructed are skipped — never retract on
+    doubt."""
+    states_by_pick: dict[str, list[entry_trails.EntryTrailTierState]] = {}
+    for state in fold.tiers.values():
+        record = state.watch_open
+        if record is None:
+            continue
+        key = record.get("pick_key")
+        if key is None:
+            continue
+        states_by_pick.setdefault(str(key), []).append(state)
+    out: dict[str, int] = {}
+    for pick_key, states in states_by_pick.items():
+        if any(s.terminal_kind is None for s in states):
+            continue  # a tier still watches / arms — the pick is live
+        if any(s.terminal_kind == entry_trails.KIND_FIRED for s in states):
+            continue  # a fill happened — the position's ladder must stand
+        uics = {_coerce(s.watch_open or {}, "uic", int) for s in states}
+        if len(uics) != 1 or None in uics:
+            continue  # unmappable / inconsistent — never retract on doubt
+        out[pick_key] = cast(int, next(iter(uics)))
+    return out
+
+
+def _retract_stale_tranche_plans(fold: entry_trails.EntryTrailFold) -> None:
+    """Retract the routed ``tranche_plan`` of every watch that ended with no
+    fill (2026-08-19 adjudication finding 3).
+
+    The watch routing journals the ladder at watch-OPEN — before any order
+    exists — so a watch that expires / suspends / is KILL-cancelled unfired
+    would otherwise leave its ladder governing the uic FOREVER, and any later
+    long on the uic that ends up with a sole standalone SL (protection-pass
+    covering of an out-of-band fill, a manual buy plus manual stop) would be
+    silently sold down the stale pick's targets.
+
+    Only a plan whose governing ``pick_key`` MATCHES the ended pick is
+    retracted: a keyless bracket plan (coupled to a real placement) and a
+    newer pick's plan on the same uic are never touched, and the retraction
+    line itself un-governs the uic so the sweep is idempotent (append-only,
+    one line per ended pick). Runs every watch-pass tick; any journal failure
+    degrades to a WARN and a retry next tick — never an aborted pass."""
+    try:
+        candidates = _unfired_terminal_watch_picks(fold)
+        if not candidates:
+            return
+        governing = _fold_governing_plan_pick_keys(_iter_standalone_stop_journal())
+        for pick_key, uic in candidates.items():
+            if governing.get(uic) != pick_key:
+                continue  # keyless/bracket plan, newer pick, or already retracted
+            _append_standalone_stop_journal(
+                {"kind": _TRANCHE_PLAN_RETRACTED_KIND, "uic": uic, "pick_key": pick_key}
+            )
+            logger.info(
+                "entry-trail %s: watch ended with no fill — retracted the tranche_plan for uic %d",
+                pick_key,
+                uic,
+            )
+    # Broad on purpose: the sweep is housekeeping inside the watch pass — a
+    # journal read/write failure must degrade to a warning + retry next tick,
+    # never abort the pass that advances live watches.
+    except Exception:
+        logger.warning("entry-trail: stale tranche_plan retraction sweep failed", exc_info=True)
 
 
 def _mark_oco_unsupported(uic: int) -> None:

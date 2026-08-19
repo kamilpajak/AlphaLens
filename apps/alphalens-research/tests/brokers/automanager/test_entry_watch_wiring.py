@@ -1698,5 +1698,160 @@ class TestRoutingDefersOnLiveSameUicLong(unittest.TestCase):
         self.assertIn("stays armed", records[0].getMessage())
 
 
+# --------------------------------------------------------------------------
+# Stale tranche_plan retraction on unfired watch end (2026-08-19 adj. F3)
+# --------------------------------------------------------------------------
+
+
+def _seed_terminal_watch(
+    *,
+    crid: str,
+    pick_key: str = "KO:2026-07-20",
+    uic: int = 307,
+    terminal_kind: str | None = entry_trails.KIND_EXPIRED,
+) -> None:
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_WATCH_OPEN,
+            "crid": crid,
+            "limit": 10.0,
+            "qty": 100.0,
+            "pick_key": pick_key,
+            "uic": uic,
+            "ticker": "KO",
+            "exchange_mic": "XNYS",
+        }
+    )
+    if terminal_kind is not None:
+        entry_trails.append_entry_trail_line({"kind": terminal_kind, "crid": crid})
+
+
+class TestStaleTranchePlanRetraction(unittest.TestCase):
+    """Adjudication finding 3 (2026-08-19): the watch routing journals the
+    tranche_plan at watch-OPEN, so a watch that ends without ANY fill (expired /
+    suspended / cancelled) left its ladder governing the uic FOREVER — an
+    order-free stale ladder that a later long on the uic (protection-pass
+    covering, manual buy + manual stop) would be silently sold down. The watch
+    pass now retracts the plan once the pick's watch is fully terminal and
+    unfired."""
+
+    def _seed_plan(self, pick_key: str | None = "KO:2026-07-20", uic: int = 307) -> None:
+        line: dict[str, Any] = {
+            "kind": "tranche_plan",
+            "uic": uic,
+            "tp_tranches": [
+                {
+                    "tranche_index": 0,
+                    "target_price": 14.0,
+                    "tranche_pct": 1.0,
+                    "r_multiple": 0.0,
+                    "tag": "geometry",
+                }
+            ],
+            "reference_qty": 100.0,
+            "stop_price": 8.0,
+        }
+        if pick_key is not None:
+            line["pick_key"] = pick_key
+        cl._append_standalone_stop_journal(line)
+
+    def _sweep(self) -> None:
+        cl._retract_stale_tranche_plans(entry_trails.read_entry_trail_fold())
+
+    def _retractions(self, stops_path: Path) -> list[dict[str, Any]]:
+        return [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan_retracted"]
+
+    def test_all_terminal_unfired_pick_retracts_its_plan(self) -> None:
+        for terminal in (
+            entry_trails.KIND_EXPIRED,
+            entry_trails.KIND_SUSPENDED,
+            entry_trails.KIND_CANCELLED,
+        ):
+            with self.subTest(terminal=terminal):
+                _journal(self)
+                stops_path = _planned_journal(self)
+                _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=terminal)
+                self._seed_plan()
+                self._sweep()
+                retractions = self._retractions(stops_path)
+                self.assertEqual(len(retractions), 1)
+                self.assertEqual(retractions[0]["uic"], 307)
+                self.assertEqual(retractions[0]["pick_key"], "KO:2026-07-20")
+                # The fold no longer governs the uic — the live-exit engine
+                # will never adopt a later position onto the stale ladder.
+                self.assertNotIn(307, cl.fold_tranche_plans(_lines(stops_path)))
+
+    def test_a_fired_tier_blocks_retraction(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_FIRED)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t1", terminal_kind=entry_trails.KIND_EXPIRED)
+        self._seed_plan()
+        self._sweep()
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_a_still_open_tier_blocks_retraction(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0", terminal_kind=entry_trails.KIND_EXPIRED)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t1", terminal_kind=None)  # still watching
+        self._seed_plan()
+        self._sweep()
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_a_plan_governed_by_a_newer_pick_is_not_retracted(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan(pick_key="KO:2026-08-01")  # a NEWER pick owns the uic now
+        self._sweep()
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_a_keyless_governing_plan_is_never_retracted(self) -> None:
+        # A bracket-path plan (no pick_key) on the same uic is coupled to a
+        # real placement — the sweep must never touch it.
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan(pick_key=None)
+        self._sweep()
+        self.assertEqual(self._retractions(stops_path), [])
+
+    def test_retraction_is_idempotent(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan()
+        self._sweep()
+        self._sweep()
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
+    def test_watch_pass_runs_the_sweep(self) -> None:
+        _journal(self)
+        stops_path = _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan()
+        deps = _watch_deps(_FakeFeed({}), [])
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(len(self._retractions(stops_path)), 1)
+
+    def test_a_journal_failure_never_aborts_the_sweep_caller(self) -> None:
+        _journal(self)
+        _planned_journal(self)
+        _seed_terminal_watch(crid="KO-2026-07-20-entry-t0")
+        self._seed_plan()
+
+        def boom(_line: Any) -> None:
+            raise OSError("disk full")
+
+        with (
+            mock.patch.object(cl, "_append_standalone_stop_journal", boom),
+            self.assertLogs(cl.logger, level="WARNING") as captured,
+        ):
+            self._sweep()  # must swallow + warn, never raise
+        self.assertTrue(any("retraction" in msg for msg in captured.output))
+
+
 if __name__ == "__main__":
     unittest.main()
