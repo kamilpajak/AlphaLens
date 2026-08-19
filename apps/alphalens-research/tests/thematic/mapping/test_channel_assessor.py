@@ -16,6 +16,8 @@ and reports its own noise.
 from __future__ import annotations
 
 import json
+import threading
+import time
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -83,12 +85,28 @@ def _payload(
     )
 
 
-def _responses(*bodies: str):
-    """Serve one recorded body per call, in order."""
+def _response(body: str, finish_reason: str = "STOP") -> SimpleNamespace:
+    """A response in the shape ``OpenRouterClient._wrap_response`` produces."""
+    return SimpleNamespace(
+        text=body,
+        candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name=finish_reason))],
+    )
+
+
+def _responses(*bodies):
+    """Serve one recorded body per call, in order.
+
+    A plain string is a clean stop; a ``(body, finish_reason)`` pair pins the
+    translated OpenRouter finish reason (``"length"`` arrives as
+    ``"MAX_TOKENS"``).
+    """
     it = iter(bodies)
 
     def _fake(*_args, **_kwargs):
-        return SimpleNamespace(text=next(it))
+        item = next(it)
+        if isinstance(item, tuple):
+            return _response(item[0], item[1])
+        return _response(item)
 
     return _fake
 
@@ -293,13 +311,177 @@ class TestAssessCandidate(unittest.TestCase):
         result = self._assess("not json at all", "not json at all", "not json at all")
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.MALFORMED_PAYLOAD)
 
+    def test_a_client_init_failure_is_a_call_failure_not_a_raise(self):
+        # The caller stamps a row either way, so a broken client must come back
+        # as unverified-with-a-failure-outcome rather than propagating.
+        with patch.object(channel_assessor, "_resolve_client", side_effect=RuntimeError("no key")):
+            result = channel_assessor.assess_candidate(
+                theme="t",
+                catalyst=_catalyst(),
+                candidate=_candidate(),
+                votes=3,
+            )
+        self.assertEqual(result.status, "unverified")
+        self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.CALL_FAILED)
+        self.assertEqual(result.valid_n, 0)
+
+
+class TestTruncation(unittest.TestCase):
+    """A clipped generation is a FAILURE with its own name, never a judgement.
+
+    The acceptance probe measured 8 of 89 stage-B calls returning an empty body
+    at exactly completion=1501 / reasoning=1500 under the old 1500-token cap:
+    the model reasoned past the budget and the answer never got emitted. Those
+    draws landed as ``unverified`` and biased the shadow verdict toward
+    ``refuse``, and the loss was not random — the draws that reasoned longest
+    are the ones most likely to have been about to name a chain.
+    """
+
+    def _assess(self, *bodies, votes: int | None = None):
+        kwargs = {} if votes is None else {"votes": votes}
+        with patch.object(channel_assessor, "_call_llm", side_effect=_responses(*bodies)):
+            return channel_assessor.assess_candidate(
+                theme="quantum_computing",
+                catalyst=_catalyst(),
+                candidate=_candidate(),
+                llm_client=object(),
+                **kwargs,
+            )
+
+    def test_the_output_cap_clears_the_measured_reasoning_tail(self):
+        # Median reasoning was 787 tokens with a tail at the old 1500 cap, so
+        # the budget has to sit well above it. This constant is a
+        # channel_config_version input: moving it after the cohort freezes ends
+        # the accrual window, which is why it is pinned here.
+        self.assertGreaterEqual(channel_assessor._ASSESS_MAX_OUTPUT_TOKENS, 4000)
+
+    def test_a_length_finish_reason_is_truncated_not_empty(self):
+        result = self._assess(("", "MAX_TOKENS"), ("", "MAX_TOKENS"), votes=1)
+        self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.TRUNCATED)
+        self.assertEqual(result.status, "unverified")
+        self.assertEqual(result.valid_n, 0)
+
+    def test_a_length_finish_reason_beats_a_parseable_body(self):
+        # A body that happens to parse after the generation was cut is still a
+        # clipped generation, not a measurement.
+        result = self._assess(
+            (_payload(status="verified"), "MAX_TOKENS"),
+            (_payload(status="verified"), "MAX_TOKENS"),
+            votes=1,
+        )
+        self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.TRUNCATED)
+        self.assertEqual(result.status, "unverified")
+
+    def test_a_truncated_draw_is_re_rolled_once(self):
+        # Same single re-roll as an empty body: the burn length is MoE
+        # non-determinism, not a judgement about the world.
+        result = self._assess(("", "MAX_TOKENS"), _payload(status="partial"), votes=1)
+        self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.SUCCESS)
+        self.assertEqual(result.status, "partial")
+
+    def test_truncation_is_a_distinct_outcome_value(self):
+        self.assertEqual(channel_assessor.AssessmentOutcome.TRUNCATED.value, "truncated")
+        self.assertIsNot(
+            channel_assessor.AssessmentOutcome.TRUNCATED,
+            channel_assessor.AssessmentOutcome.EMPTY_PAYLOAD,
+        )
+
+
+class TestEvenVoteTieBreak(unittest.TestCase):
+    """``valid_n`` is not ``k``: one lost draw makes the vote set EVEN.
+
+    The retro's instrument qualification found mixed votes on 91 of 238 pairs,
+    and a draw can be lost to a dead socket, an off-vocabulary status or a
+    clipped generation. With k = 3 that leaves two valid draws often enough to
+    matter, and the primary test's two legs are literally ``verified`` and
+    ``unverified`` — so an undocumented tie-break MOVES ROWS BETWEEN LEGS.
+
+    Pre-committed rule: when the two central ordinals disagree, the result is
+    ``partial``, which the pre-registration excludes from both legs. A tie is
+    reported as a tie rather than resolved toward either leg.
+    """
+
+    def _assess(self, *bodies, votes: int = 3):
+        with patch.object(channel_assessor, "_call_llm", side_effect=_responses(*bodies)):
+            return channel_assessor.assess_candidate(
+                theme="quantum_computing",
+                catalyst=_catalyst(),
+                candidate=_candidate(),
+                llm_client=object(),
+                votes=votes,
+            )
+
+    def test_verified_against_unverified_ties_to_partial(self):
+        result = self._assess(
+            _payload(status="verified"),
+            _payload(status="unverified", channel_type="none"),
+            "not json at all",
+            "not json at all",
+        )
+        self.assertEqual(result.valid_n, 2)
+        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.dispersion, 2)
+        self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.SUCCESS)
+
+    def test_verified_against_partial_ties_to_partial(self):
+        result = self._assess(
+            _payload(status="verified"),
+            _payload(status="partial", channel_type="supplier_input"),
+            "not json at all",
+            "not json at all",
+        )
+        self.assertEqual(result.valid_n, 2)
+        self.assertEqual(result.status, "partial")
+
+    def test_partial_against_unverified_ties_to_partial(self):
+        result = self._assess(
+            _payload(status="partial", channel_type="supplier_input"),
+            _payload(status="unverified", channel_type="none"),
+            "not json at all",
+            "not json at all",
+        )
+        self.assertEqual(result.valid_n, 2)
+        self.assertEqual(result.status, "partial")
+
+    def test_two_agreeing_draws_are_not_a_tie(self):
+        result = self._assess(
+            _payload(status="verified"),
+            _payload(status="verified"),
+            "not json at all",
+            "not json at all",
+        )
+        self.assertEqual(result.valid_n, 2)
+        self.assertEqual(result.status, "verified")
+        self.assertEqual(result.dispersion, 0)
+
+    def test_a_single_valid_draw_is_taken_as_is(self):
+        result = self._assess(
+            _payload(status="verified"),
+            "not json at all",
+            "not json at all",
+            "not json at all",
+            "not json at all",
+        )
+        self.assertEqual(result.valid_n, 1)
+        self.assertEqual(result.status, "verified")
+
 
 class TestAssessCandidatesBatch(unittest.TestCase):
     def test_one_result_per_input_in_input_order(self):
         # The never-shrinks invariant at its source: the orchestrator zips this
         # list against the candidate list positionally.
-        bodies = [_payload(status=s) for s in ("verified", "partial", "unverified") for _ in "x"]
-        with patch.object(channel_assessor, "_call_llm", side_effect=_responses(*bodies)):
+        #
+        # The answer is keyed on the CANDIDATE, not on call order, because the
+        # candidates fan out across threads: a call-ordered fake would pin the
+        # scheduler rather than the contract, and would pass even if result[i]
+        # belonged to candidate[j].
+        by_ticker = {"AAA": "verified", "BBB": "partial", "CCC": "unverified"}
+
+        def _fake(_client, prompt, **_kwargs):
+            ticker = next(t for t in by_ticker if f'candidate_ticker: "{t}"' in prompt)
+            return _response(_payload(status=by_ticker[ticker]))
+
+        with patch.object(channel_assessor, "_call_llm", side_effect=_fake):
             results = channel_assessor.assess_candidates(
                 theme="t",
                 catalyst=_catalyst(),
@@ -308,6 +490,35 @@ class TestAssessCandidatesBatch(unittest.TestCase):
                 votes=1,
             )
         self.assertEqual(len(results), 3)
+        self.assertEqual([r.status for r in results], ["verified", "partial", "unverified"])
+
+    def test_results_stay_in_input_order_when_calls_complete_out_of_order(self):
+        # Executor.map yields in INPUT order; this pins that the fan-out cannot
+        # transpose two candidates' annotations onto each other's rows.
+        started = threading.Barrier(3, timeout=10)
+        order: list[str] = []
+        lock = threading.Lock()
+
+        def _fake(_client, prompt, **_kwargs):
+            ticker = next(t for t in ("AAA", "BBB", "CCC") if f'candidate_ticker: "{t}"' in prompt)
+            started.wait()
+            # Finish in reverse of the input order.
+            time.sleep({"CCC": 0.0, "BBB": 0.02, "AAA": 0.04}[ticker])
+            with lock:
+                order.append(ticker)
+            return _response(
+                _payload(status={"AAA": "verified", "BBB": "partial"}.get(ticker, "unverified"))
+            )
+
+        with patch.object(channel_assessor, "_call_llm", side_effect=_fake):
+            results = channel_assessor.assess_candidates(
+                theme="t",
+                catalyst=_catalyst(),
+                candidates=[_candidate("AAA"), _candidate("BBB"), _candidate("CCC")],
+                llm_client=object(),
+                votes=1,
+            )
+        self.assertEqual(order, ["CCC", "BBB", "AAA"], "the fake did not complete out of order")
         self.assertEqual([r.status for r in results], ["verified", "partial", "unverified"])
 
     def test_a_total_outage_still_returns_one_result_per_input(self):
@@ -365,7 +576,11 @@ class TestUnassessedAndRowFields(unittest.TestCase):
 
 
 class TestShadowStrictVerdict(unittest.TestCase):
-    def _assessment(self, status: str):
+    def _assessment(
+        self,
+        status: str,
+        outcome: channel_assessor.AssessmentOutcome = channel_assessor.AssessmentOutcome.SUCCESS,
+    ):
         return channel_assessor.ChannelAssessment(
             status=status,
             channel_type="none",
@@ -376,27 +591,143 @@ class TestShadowStrictVerdict(unittest.TestCase):
             votes=3,
             valid_n=3,
             dispersion=0,
-            outcome=channel_assessor.AssessmentOutcome.SUCCESS,
+            outcome=outcome,
             assessed_at="2026-08-19T00:00:00+00:00",
         )
 
     def test_keep_when_any_candidate_is_verified(self):
-        verdict, verified_n, assessed_n = channel_assessor.shadow_strict_verdict(
+        shadow = channel_assessor.shadow_strict_verdict(
             [self._assessment("unverified"), self._assessment("verified")]
         )
-        self.assertEqual(verdict, "keep")
-        self.assertEqual(verified_n, 1)
-        self.assertEqual(assessed_n, 2)
+        self.assertEqual(shadow.verdict, "keep")
+        self.assertEqual(shadow.verified_n, 1)
+        self.assertEqual(shadow.assessed_n, 2)
+        self.assertEqual(shadow.failed_n, 0)
 
     def test_refuse_when_no_candidate_is_verified(self):
-        verdict, verified_n, _assessed_n = channel_assessor.shadow_strict_verdict(
+        shadow = channel_assessor.shadow_strict_verdict(
             [self._assessment("partial"), self._assessment("unverified")]
         )
-        self.assertEqual(verdict, "refuse")
-        self.assertEqual(verified_n, 0)
+        self.assertEqual(shadow.verdict, "refuse")
+        self.assertEqual(shadow.verified_n, 0)
 
     def test_no_assessed_candidates_refuses_with_a_zero_denominator(self):
-        self.assertEqual(channel_assessor.shadow_strict_verdict([]), ("refuse", 0, 0))
+        self.assertEqual(channel_assessor.shadow_strict_verdict([]), ("refuse", 0, 0, 0))
+
+    def test_an_instrument_failure_leaves_the_denominator(self):
+        # A 429 storm or a provider outage raises per draw, and every such
+        # assessment carries status "unverified". Counting those inside
+        # shadow_strict_assessed_n turns an OUTAGE into a healthy-looking
+        # "no theme had a channel today" — a failure that looks like an answer,
+        # one level up from the per-candidate outcome column.
+        shadow = channel_assessor.shadow_strict_verdict(
+            [
+                self._assessment("verified"),
+                self._assessment("unverified", channel_assessor.AssessmentOutcome.CALL_FAILED),
+                self._assessment("unverified", channel_assessor.AssessmentOutcome.TRUNCATED),
+            ]
+        )
+        self.assertEqual(shadow, ("keep", 1, 1, 2))
+
+    def test_a_total_outage_refuses_with_a_zero_denominator_and_a_failure_count(self):
+        shadow = channel_assessor.shadow_strict_verdict(
+            [
+                self._assessment("unverified", channel_assessor.AssessmentOutcome.CALL_FAILED),
+                self._assessment("unverified", channel_assessor.AssessmentOutcome.CALL_FAILED),
+            ]
+        )
+        self.assertEqual(shadow, ("refuse", 0, 0, 2))
+
+    def test_a_not_assessed_candidate_is_in_neither_numerator_nor_denominator(self):
+        # Load-bearing the moment the shadow is widened over the full
+        # pre-bracket proposal set: an off-bracket row entering the denominator
+        # would bias the verdict toward refuse.
+        shadow = channel_assessor.shadow_strict_verdict(
+            [
+                channel_assessor.unassessed(),
+                self._assessment("verified"),
+                self._assessment("unverified"),
+            ]
+        )
+        self.assertEqual(shadow, ("keep", 1, 2, 0))
+
+    def test_an_over_cap_candidate_is_in_neither_numerator_nor_denominator(self):
+        shadow = channel_assessor.shadow_strict_verdict(
+            [channel_assessor.over_assess_cap(), self._assessment("unverified")]
+        )
+        self.assertEqual(shadow, ("refuse", 0, 1, 0))
+
+
+class TestStatusCounts(unittest.TestCase):
+    def _assessment(self, status, outcome=channel_assessor.AssessmentOutcome.SUCCESS):
+        return channel_assessor.ChannelAssessment(
+            status=status,
+            channel_type="none",
+            text="",
+            evidence="",
+            falsifier="",
+            confidence=None,
+            votes=3,
+            valid_n=3,
+            dispersion=0,
+            outcome=outcome,
+            assessed_at="2026-08-19T00:00:00+00:00",
+        )
+
+    def test_the_four_tallies_split_answers_from_failures(self):
+        counts = channel_assessor.status_counts(
+            [
+                self._assessment("verified"),
+                self._assessment("partial"),
+                self._assessment("unverified"),
+                self._assessment("unverified", channel_assessor.AssessmentOutcome.CALL_FAILED),
+                self._assessment("unverified", channel_assessor.AssessmentOutcome.TRUNCATED),
+            ]
+        )
+        self.assertEqual(
+            counts,
+            {"verified": 1, "partial": 1, "unverified": 1, "assess_failed": 2},
+        )
+
+    def test_neither_sentinel_counts_as_a_failure(self):
+        # "the bracket dropped it" and "it sits below the assessment cap" are
+        # book-keeping, not outages — an alert on assess_failed must not fire
+        # on a day with many off-bracket proposals.
+        counts = channel_assessor.status_counts(
+            [channel_assessor.unassessed(), channel_assessor.over_assess_cap()]
+        )
+        self.assertEqual(
+            counts,
+            {"verified": 0, "partial": 0, "unverified": 0, "assess_failed": 0},
+        )
+
+
+class TestOverAssessCap(unittest.TestCase):
+    """An in-bracket candidate below the per-theme assessment cap.
+
+    Distinct from :func:`unassessed`, which means the mcap bracket dropped it.
+    Both share the ``not_assessed`` STATUS (the model was never asked), but the
+    outcome column keeps the two reasons apart in the funnel parquet.
+    """
+
+    def test_the_status_is_not_assessed_and_the_outcome_names_the_cap(self):
+        a = channel_assessor.over_assess_cap()
+        self.assertEqual(a.status, channel_assessor.NOT_ASSESSED)
+        self.assertIs(a.outcome, channel_assessor.AssessmentOutcome.OVER_ASSESS_CAP)
+        self.assertEqual(a.votes, 0)
+        self.assertIsNone(a.assessed_at)
+
+    def test_it_is_distinguishable_from_a_bracket_drop_in_the_row_fields(self):
+        self.assertNotEqual(
+            channel_assessor.row_fields(channel_assessor.over_assess_cap()),
+            channel_assessor.row_fields(channel_assessor.unassessed()),
+        )
+        self.assertEqual(
+            channel_assessor.row_fields(channel_assessor.over_assess_cap())[
+                "channel_assessment_outcome"
+            ],
+            "over_assess_cap",
+        )
 
     def test_rule_version_is_separate_from_the_config_token(self):
         # The rule can be re-cut offline from verified_n / assessed_n without

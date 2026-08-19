@@ -46,9 +46,16 @@ DeepSeek v4-pro is a mixture-of-experts model and is server-side
 non-deterministic even at temperature 0.0 — the retro's own instrument
 qualification measured mixed votes on 91 of 238 pairs, so a single draw is not
 a measurement. ``k`` independent draws are aggregated by ORDINAL MEDIAN over
-``unverified=0 / partial=1 / verified=2`` (deterministic for odd k, no
-tie-break needed), and ``dispersion = max − min`` over the valid draws is
-persisted per row as the instrument-noise readout.
+``unverified=0 / partial=1 / verified=2``, and ``dispersion = max − min`` over
+the valid draws is persisted per row as the instrument-noise readout.
+
+``valid_n`` is NOT ``k``: a draw lost to a dead socket, an off-vocabulary
+status or a clipped generation is excluded, so an EVEN vote set is routine at
+k = 3. The even case is pre-committed rather than left to an implicit lower or
+upper median, because the forward primary's two legs are literally ``verified``
+and ``unverified`` and a silent tie-break would move rows between them: **when
+the two central ordinals disagree the result is ``partial``**, which the
+pre-registration excludes from both legs. A tie is reported as a tie.
 
 Design memo: ``docs/research/channel_as_feature_design_2026_08_19.md``.
 Forward pre-registration: ``docs/research/channel_feature_forward_prereg_2026_08_19.md``.
@@ -62,7 +69,9 @@ import hashlib
 import json
 import logging
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from alphalens_pipeline.data.alt_data.openrouter_client import (
     OpenRouterClient,
@@ -115,8 +124,25 @@ CHANNEL_TYPES: tuple[str, ...] = (
 # can fingerprint them — a deliberate change to any of them must invalidate a
 # frozen candidate parquet whose channel fields were produced under old rules.
 _ASSESS_TEMPERATURE = 0.0
-_ASSESS_MAX_OUTPUT_TOKENS = 1500
+# Charged against REASONING tokens on this model. The acceptance probe measured
+# median completion 899 / median reasoning 787 over 89 stage-B calls, with 8 of
+# them (9.0%) returning an EMPTY body at exactly completion 1501 / reasoning
+# 1500 under the previous 1500 cap: the model reasoned past the budget and the
+# answer never got emitted. Clipping is not random — the draws that reason
+# longest are the ones about to name a chain — so the cap sits well clear of the
+# measured tail. Sibling call sites are equally generous
+# (``theme_mapper._MAPPER_MAX_OUTPUT_TOKENS`` 8000).
+_ASSESS_MAX_OUTPUT_TOKENS = 4000
 _ASSESS_VOTES = 3
+
+# Bounded fan-out across the CANDIDATES of one theme. NOT a
+# ``channel_config_version`` input: it changes nothing the model reads, only how
+# long the stage takes. Stage B is otherwise strictly sequential and the daily
+# thematic build runs under ``TimeoutStartSec``; a SIGTERM mid-``map_themes``
+# leaves NO candidates parquet at all (the write is once, after the theme loop),
+# so the next slot restarts from zero and can stall the same way. 3 matches the
+# concurrency the acceptance probe ran at without a 429.
+_ASSESS_MAX_WORKERS = 3
 
 # Ordinal scale for the median. Kept explicit rather than derived from
 # CHANNEL_STATUSES' order so a reordering of that tuple cannot silently invert
@@ -141,14 +167,28 @@ class AssessmentOutcome(enum.Enum):
     SUCCESS = "success"  # parsed, a status inside CHANNEL_STATUSES
     EMPTY_PAYLOAD = "empty_payload"  # response body empty / whitespace-only
     MALFORMED_PAYLOAD = "malformed_payload"  # non-empty body, unparseable or off-schema
+    TRUNCATED = "truncated"  # finish_reason MAX_TOKENS — the generation was cut
     CALL_FAILED = "call_failed"  # the client raised before producing a response
     NOT_ASSESSED = "not_assessed"  # the bracket dropped it before assessment
+    OVER_ASSESS_CAP = "over_assess_cap"  # in bracket, but below the per-theme cap
 
+
+# The finish reason ``openrouter_client`` translates from OpenAI-shaped
+# ``"length"``. Read from the response rather than inferred from the body,
+# because a clipped generation arrives EITHER empty (which would read as
+# EMPTY_PAYLOAD and be re-rolled at the same budget) OR as partial JSON (which
+# would read as MALFORMED_PAYLOAD and not be re-rolled at all).
+_TRUNCATED_FINISH_REASON = "MAX_TOKENS"
 
 # Same single re-roll policy as ``theme_mapper._RETRYABLE_OUTCOMES``: an empty
-# body is a plain re-roll against MoE non-determinism. A malformed payload and a
-# dead socket are not fixed by asking again.
-_RETRYABLE_OUTCOMES = frozenset({AssessmentOutcome.EMPTY_PAYLOAD})
+# body is a plain re-roll against MoE non-determinism, and so is a burn that ran
+# long — the reasoning length varies per draw. A malformed payload and a dead
+# socket are not fixed by asking again.
+_RETRYABLE_OUTCOMES = frozenset({AssessmentOutcome.EMPTY_PAYLOAD, AssessmentOutcome.TRUNCATED})
+
+# Outcomes that mean "the model was never asked". Book-keeping, not an outage:
+# they must stay out of the failure tally and out of the shadow denominator.
+_UNASKED_OUTCOMES = frozenset({AssessmentOutcome.NOT_ASSESSED, AssessmentOutcome.OVER_ASSESS_CAP})
 
 
 @dataclass(frozen=True, slots=True)
@@ -425,13 +465,26 @@ def _clean_text(value: object, *, max_chars: int) -> str:
     return text[:max_chars]
 
 
-def _parse_draw(raw: str, *, ticker: str) -> _Draw:
+def _parse_draw(raw: str, *, ticker: str, finish_reason: str = "") -> _Draw:
     """Classify ONE response body into a draw.
 
     A status outside :data:`CHANNEL_STATUSES` invalidates THIS DRAW only — never
     the candidate. An off-vocabulary ``channel_type`` is coerced to ``none`` and
     logged, because the type is telemetry while the status is the measurement.
+
+    ``finish_reason`` is checked FIRST and outranks the body: a generation the
+    provider cut at the token budget is not a judgement about the world even
+    when the truncated bytes happen to parse.
     """
+    if finish_reason == _TRUNCATED_FINISH_REASON:
+        logger.warning(
+            "channel assessor draw for %r hit the %d-token output budget "
+            "(finish_reason=%s) — discarded as truncated, the candidate is not",
+            ticker,
+            _ASSESS_MAX_OUTPUT_TOKENS,
+            finish_reason,
+        )
+        return _failed_draw(AssessmentOutcome.TRUNCATED)
     if raw.strip() == "":
         return _failed_draw(AssessmentOutcome.EMPTY_PAYLOAD)
     parsed = parse_extraction(raw)
@@ -514,13 +567,50 @@ def _resolve_client(
     return OpenRouterClient(api_key=api_key) if api_key else get_default_openrouter_client()
 
 
+def _finish_reason(response: object) -> str:
+    """The translated finish reason, or ``""`` when the shape does not carry one.
+
+    ``openrouter_client`` synthesises Gemini's
+    ``candidates[0].finish_reason.name``; anything else (a hand-built test
+    double, a future backend) degrades to "no signal" rather than raising.
+    """
+    try:
+        return str(response.candidates[0].finish_reason.name)  # type: ignore[attr-defined]
+    except Exception:
+        return ""
+
+
 def _draw_once(*, llm_client, prompt: str, ticker: str, model: str) -> _Draw:
     try:
         response = _call_llm(llm_client, prompt, model=model)
     except Exception as exc:
         logger.warning("channel assessor call failed for %r: %s", ticker, exc, exc_info=True)
         return _failed_draw(AssessmentOutcome.CALL_FAILED)
-    return _parse_draw(getattr(response, "text", "") or "", ticker=ticker)
+    return _parse_draw(
+        getattr(response, "text", "") or "",
+        ticker=ticker,
+        finish_reason=_finish_reason(response),
+    )
+
+
+def _median_status(ordinals: Sequence[int]) -> str:
+    """Ordinal median with the EVEN case pre-committed to ``partial``.
+
+    ``valid_n`` is not ``k`` — a lost draw makes the set even, which at k = 3
+    means two valid draws. An implicit lower median would place a
+    ``{verified, unverified}`` disagreement in the forward primary's leg U and an
+    upper median would place it in leg V; both would be a tie-break deciding a
+    pre-registered test. So when the two central ordinals disagree the answer is
+    ``partial``, which the pre-registration excludes from both legs. When they
+    agree there is no tie and that value stands.
+    """
+    n = len(ordinals)
+    if n % 2:
+        return _ORDINAL_STATUS[ordinals[n // 2]]
+    lower, upper = ordinals[n // 2 - 1], ordinals[n // 2]
+    if lower == upper:
+        return _ORDINAL_STATUS[lower]
+    return "partial"
 
 
 def _aggregate(draws: Sequence[_Draw], *, votes: int) -> ChannelAssessment:
@@ -548,13 +638,18 @@ def _aggregate(draws: Sequence[_Draw], *, votes: int) -> ChannelAssessment:
         )
 
     ordinals = sorted(_STATUS_ORDINAL[d.status] for d in valid if d.status is not None)
-    median_ordinal = (
-        ordinals[len(ordinals) // 2] if len(ordinals) % 2 else ordinals[len(ordinals) // 2 - 1]
-    )
-    median_status = _ORDINAL_STATUS[median_ordinal]
+    median_status = _median_status(ordinals)
     # First draw whose status equals the median: deterministic given draw order,
-    # so the persisted chain text is reproducible from the same cassette.
-    chosen = next(d for d in valid if d.status == median_status)
+    # so the persisted chain text is reproducible from the same cassette. A tie
+    # resolved to ``partial`` may have no draw of its own (the {verified,
+    # unverified} case); the fields then come from the HIGHEST-ordinal draw, so
+    # the chain one draw did name stays readable for the manual status-mix audit
+    # while the STATUS still records the disagreement. Only the status enters a
+    # test leg, so this cannot promote a tied candidate.
+    chosen = next(
+        (d for d in valid if d.status == median_status),
+        max(valid, key=lambda d: _STATUS_ORDINAL[d.status] if d.status is not None else 0),
+    )
     return ChannelAssessment(
         status=median_status,
         channel_type=chosen.channel_type,
@@ -620,9 +715,20 @@ def assess_candidates(
     Always. The orchestrator zips this list against the candidate list
     positionally, and the whole point of the design is that the assessment is
     pure enrichment — a shorter list would BE the gate coming back.
+
+    Candidates fan out across :data:`_ASSESS_MAX_WORKERS` threads because the
+    daily thematic build runs under a systemd ``TimeoutStartSec`` and a SIGTERM
+    inside ``map_themes`` leaves no candidates parquet at all. ``Executor.map``
+    yields results in INPUT order regardless of completion order, so the
+    positional contract above is unaffected; the shared ``OpenRouterClient``
+    holds one thread-safe ``httpx`` pool. The k draws WITHIN one candidate stay
+    sequential — they are a repeated measurement, not a batch.
     """
-    return [
-        assess_candidate(
+    if not candidates:
+        return []
+
+    def _one(cand: Mapping[str, object]) -> ChannelAssessment:
+        return assess_candidate(
             theme=theme,
             catalyst=catalyst,
             candidate=cand,
@@ -631,12 +737,15 @@ def assess_candidates(
             model=model,
             votes=votes,
         )
-        for cand in candidates
-    ]
+
+    if len(candidates) == 1 or _ASSESS_MAX_WORKERS <= 1:
+        return [_one(cand) for cand in candidates]
+    workers = min(_ASSESS_MAX_WORKERS, len(candidates))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="channel-assess") as pool:
+        return list(pool.map(_one, candidates))
 
 
-def unassessed() -> ChannelAssessment:
-    """The sentinel for a proposal the bracket dropped before assessment."""
+def _unasked(outcome: AssessmentOutcome) -> ChannelAssessment:
     return ChannelAssessment(
         status=NOT_ASSESSED,
         channel_type="none",
@@ -647,9 +756,25 @@ def unassessed() -> ChannelAssessment:
         votes=0,
         valid_n=0,
         dispersion=0,
-        outcome=AssessmentOutcome.NOT_ASSESSED,
+        outcome=outcome,
         assessed_at=None,
     )
+
+
+def unassessed() -> ChannelAssessment:
+    """The sentinel for a proposal the bracket dropped before assessment."""
+    return _unasked(AssessmentOutcome.NOT_ASSESSED)
+
+
+def over_assess_cap() -> ChannelAssessment:
+    """The sentinel for an in-bracket candidate below the per-theme cap.
+
+    Shares the ``not_assessed`` STATUS with :func:`unassessed` — the model was
+    never asked in either case — but keeps its own OUTCOME, so the funnel
+    parquet can tell "the bracket dropped it" apart from "it ranked below the
+    names that could still ship". Neither enters the shadow denominator.
+    """
+    return _unasked(AssessmentOutcome.OVER_ASSESS_CAP)
 
 
 def row_fields(assessment: ChannelAssessment | None) -> dict[str, object]:
@@ -676,14 +801,33 @@ def row_fields(assessment: ChannelAssessment | None) -> dict[str, object]:
     }
 
 
-def shadow_strict_verdict(
-    assessments: Sequence[ChannelAssessment],
-) -> tuple[str, int, int]:
+class ShadowVerdict(NamedTuple):
+    """What a strict channel gate would have done with one theme.
+
+    A tuple so existing positional unpacking and equality against a plain tuple
+    keep working, with names so a reader never has to count indices.
+    """
+
+    verdict: str
+    verified_n: int
+    assessed_n: int
+    failed_n: int
+
+
+def shadow_strict_verdict(assessments: Sequence[ChannelAssessment]) -> ShadowVerdict:
     """What a STRICT channel gate would have done with this theme.
 
-    Returns ``(verdict, n_verified, n_assessed)``. ``refuse`` iff no assessed
-    candidate reached ``verified`` — including the zero-assessed case, which
-    refuses with an explicit zero denominator rather than silently keeping.
+    ``refuse`` iff no ANSWERED candidate reached ``verified`` — including the
+    zero-answer case, which refuses with an explicit zero denominator rather
+    than silently keeping.
+
+    ``assessed_n`` counts only candidates the model actually ANSWERED. An
+    instrument failure carries ``status == "unverified"`` by construction, so
+    counting it here would turn a 429 storm or a provider outage into a
+    healthy-looking "no theme had a channel today" — a failure that looks like
+    an answer, one level up from the per-candidate outcome column. Those rows
+    are reported separately as ``failed_n``, which is stamped beside the verdict
+    so the two are never indistinguishable in the parquet.
 
     This is a MEASUREMENT SUBSTITUTION, not a continuation of the frozen Stage-1
     gate: it is derived per-candidate, AFTER the mcap bracket, from a
@@ -692,26 +836,29 @@ def shadow_strict_verdict(
     strict prompt. A forward result under this rule must never be pooled with
     the retro (design memo §5).
     """
-    assessed = [a for a in assessments if a.status != NOT_ASSESSED]
-    verified = sum(1 for a in assessed if a.status == "verified")
+    asked = [a for a in assessments if a.outcome not in _UNASKED_OUTCOMES]
+    answered = [a for a in asked if a.outcome is AssessmentOutcome.SUCCESS]
+    verified = sum(1 for a in answered if a.status == "verified")
     verdict = SHADOW_KEEP if verified else SHADOW_REFUSE
-    return verdict, verified, len(assessed)
+    return ShadowVerdict(verdict, verified, len(answered), len(asked) - len(answered))
 
 
 def status_counts(assessments: Sequence[ChannelAssessment]) -> dict[str, int]:
-    """Per-theme tallies for the funnel log line and the Prometheus gauges."""
+    """Per-theme tallies for the funnel log line and the Prometheus gauges.
+
+    ``assess_failed`` counts OUTAGES only. The two never-asked sentinels are
+    book-keeping, so an alert on the failure share cannot fire on a day of
+    off-bracket or below-cap proposals.
+    """
+    answered = [a for a in assessments if a.outcome is AssessmentOutcome.SUCCESS]
     return {
-        "verified": sum(1 for a in assessments if a.status == "verified"),
-        "partial": sum(1 for a in assessments if a.status == "partial"),
-        "unverified": sum(
-            1
-            for a in assessments
-            if a.status == "unverified" and a.outcome is AssessmentOutcome.SUCCESS
-        ),
+        "verified": sum(1 for a in answered if a.status == "verified"),
+        "partial": sum(1 for a in answered if a.status == "partial"),
+        "unverified": sum(1 for a in answered if a.status == "unverified"),
         "assess_failed": sum(
             1
             for a in assessments
-            if a.outcome not in (AssessmentOutcome.SUCCESS, AssessmentOutcome.NOT_ASSESSED)
+            if a.outcome is not AssessmentOutcome.SUCCESS and a.outcome not in _UNASKED_OUTCOMES
         ),
     }
 
@@ -727,10 +874,12 @@ __all__ = [
     "SHADOW_STRICT_RULE_VERSION",
     "AssessmentOutcome",
     "ChannelAssessment",
+    "ShadowVerdict",
     "assess_candidate",
     "assess_candidates",
     "build_assessment_prompt",
     "channel_config_version",
+    "over_assess_cap",
     "row_fields",
     "shadow_strict_verdict",
     "status_counts",
