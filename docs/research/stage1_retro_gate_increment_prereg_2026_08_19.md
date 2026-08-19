@@ -321,7 +321,25 @@ This study is **quasi-holdout, prior-adjusting evidence — not confirmation.**
   confidence 0.8, primary_entities [RTX], one stored implication. These are
   the two events the deployed prompt declined in the first post-deploy run
   (asof 2026-08-02, 21:04 UTC; head-to-head memo §13.7).
-- Anchor call results: —
+- **Anchor call results (2026-08-19, pinned provider, k=5 each):** both
+  anchors returned `THEME_REFUSED` 5/5 (unanimous, exceeding the k=5-majority
+  bar). `harassment` × eBay settlement — all five decline reasons cite the
+  one-time-settlement / no-beneficiary logic; `us_ukraine_relations` ×
+  Patriot-deal delay — all five decline an adverse event rather than propose
+  its victim as a long. No prompt or rubric was touched.
+- **Flip-rate gate result:** 20 pilot pairs × k=10 (two independent k=5
+  batches), 200/200 calls valid (0 unresolved failures, 0 empty-payload
+  retries needed), all 200 served by `Alibaba` /
+  `served_model=deepseek/deepseek-v4-pro`. Batch-majority agreement 19/20 =
+  95% (both at 3-level and THEME level) ≥ the pre-registered 90% bar. Mean
+  per-pair 10-vote label entropy 0.298 bits; 13/20 pairs unanimous 10/10.
+  The one disagreeing pair (`consumer_electronics` × Meta AI-pendant rumor)
+  split exactly 5/5 REFUSED vs KEPT_TICKER_ABSENT.
+- **Memorization-probe result:** 10/10 CLEAN-window events (2026-05-19..21,
+  May release-boundary weighted): the pinned model answered "I do not have
+  post-event price information" on every probe and stated it does not
+  recognize any of the events; zero direction/magnitude/date recall.
+  Phase 0 verdict: ALL GATES PASS — Phase 1 may proceed.
 - Label parquet sha256 (Stage B): —
 
 ## 12. Deliverables
