@@ -2091,6 +2091,28 @@
                     "ticker"
                 ]
             },
+            "EdgeOutcomesFacetClassification": {
+                "type": "object",
+                "description": "Per-view classification counts over the pre-filter window population.\n\nEach map keys ``ladder_classification`` values to their count among the\nrows whose actual per-row ``terminal`` flag matches the view, so the same\nclass can appear in both maps with disjoint counts. The empty-string\n(not-yet-priced) bucket is dropped; terminal rows always carry a real\nclassification, so the ``terminal`` map sums to the terminal status count.",
+                "properties": {
+                    "terminal": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer"
+                        }
+                    },
+                    "ongoing": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "required": [
+                    "ongoing",
+                    "terminal"
+                ]
+            },
             "EdgeOutcomesFacetStatus": {
                 "type": "object",
                 "description": "Window+plannable population split by terminal state.\n\nComputed BEFORE the ``status``/``classification`` filters and before the\nper-page cap, so the counts describe the whole window population.",
@@ -2109,16 +2131,13 @@
             },
             "EdgeOutcomesFacets": {
                 "type": "object",
-                "description": "Pre-filter facet counts for the ``/v1/edge/outcomes`` window population.\n\n``classification`` maps each ``ladder_classification`` value to its count\nover the same pre-filter population; the empty-string (not-yet-priced)\nbucket is dropped.",
+                "description": "Pre-filter facet counts for the ``/v1/edge/outcomes`` window population.\n\n``classification`` splits the counts per view by the actual per-row\n``terminal`` flag, so the same class can appear in both maps with\ndisjoint counts.",
                 "properties": {
                     "status": {
                         "$ref": "#/components/schemas/EdgeOutcomesFacetStatus"
                     },
                     "classification": {
-                        "type": "object",
-                        "additionalProperties": {
-                            "type": "integer"
-                        }
+                        "$ref": "#/components/schemas/EdgeOutcomesFacetClassification"
                     }
                 },
                 "required": [

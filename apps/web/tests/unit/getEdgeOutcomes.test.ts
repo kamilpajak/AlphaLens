@@ -11,7 +11,7 @@ function jsonResponse(body: unknown): Response {
 
 const FACETS = {
 	status: { terminal: 2, ongoing: 1 },
-	classification: { TP_FULL: 1, SL_HIT: 1, OPEN: 1 }
+	classification: { terminal: { TP_FULL: 1, SL_HIT: 1 }, ongoing: { OPEN: 1 } }
 };
 
 const BODY = {

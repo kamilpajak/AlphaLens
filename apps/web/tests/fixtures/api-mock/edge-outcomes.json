@@ -143,11 +143,13 @@
   "facets": {
     "status": { "terminal": 5, "ongoing": 3 },
     "classification": {
-      "TP_FULL": 2,
-      "SL_HIT": 1,
-      "TIME_STOP": 1,
-      "PARTIAL_TP_THEN_SL": 1,
-      "OPEN": 2
+      "terminal": {
+        "TP_FULL": 2,
+        "SL_HIT": 1,
+        "TIME_STOP": 1,
+        "PARTIAL_TP_THEN_SL": 1
+      },
+      "ongoing": { "OPEN": 2 }
     }
   }
 }

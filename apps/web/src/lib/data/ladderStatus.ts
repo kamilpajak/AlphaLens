@@ -67,7 +67,7 @@ export const LADDER_STATUS: readonly LadderStatusEntry[] = [
 	{
 		code: 'NO_FILL',
 		short: 'never entered',
-		body: 'The entry price was never reached within the entry window — the trade never opened.',
+		body: 'The entry price has not been reached — the trade never opened. Ongoing while the entry window is still open; terminal once it lapses without a fill.',
 		group: 'terminal'
 	},
 	// --- Not measurable (no usable result) -----------------------------------
@@ -118,12 +118,6 @@ export function isPendingStatus(code: string | null | undefined): boolean {
  *  `PENDING` for a blank/null placeholder (so the badge is never empty). */
 export function ladderStatusLabel(code: string | null | undefined): string {
 	return isPendingStatus(code) ? PENDING_STATUS.code : code!.trim();
-}
-
-/** Legend group for a raw classification code, or null when the code is not a
- *  known pipeline classification (callers decide the fail-open behaviour). */
-export function ladderStatusGroup(code: string): LadderGroup | null {
-	return LADDER_STATUS_BY_CODE.get(code.trim().toUpperCase())?.group ?? null;
 }
 
 /**

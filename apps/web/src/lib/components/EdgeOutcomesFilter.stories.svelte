@@ -42,11 +42,15 @@
 
 	// The server-truth window facets from tests/fixtures/api-mock/edge-outcomes.json,
 	// verbatim — every count derives from the 8 rows in that file (5 terminal +
-	// 3 ongoing; the blank-classification PEND row is dropped from the
-	// classification map by the server).
+	// 3 ongoing). The classification maps are split per view by the actual
+	// per-row terminal flag; the blank-classification PENDING row is dropped
+	// from them by the server (so the ongoing map undercounts status.ongoing).
 	const FACETS = {
 		status: { terminal: 5, ongoing: 3 },
-		classification: { TP_FULL: 2, SL_HIT: 1, TIME_STOP: 1, PARTIAL_TP_THEN_SL: 1, OPEN: 2 }
+		classification: {
+			terminal: { TP_FULL: 2, SL_HIT: 1, TIME_STOP: 1, PARTIAL_TP_THEN_SL: 1 },
+			ongoing: { OPEN: 2 }
+		}
 	};
 
 	const { Story } = defineMeta({
@@ -59,11 +63,15 @@
 
 <!-- Default — no filter active, no server facets (the null-fallback path:
      chips derive from the rows): every facet chip present, count reads
-     "5 of 5", no clear-all, cohort bar absent (no scorer cohort). -->
+     "5 shown of 5" (no "in window" claim without server facets), no
+     clear-all, cohort bar absent (no scorer cohort). -->
 <Story
 	name="Default (no filter)"
 	play={async ({ canvas }) => {
-		await waitFor(() => expect(canvas.getByTestId('outcomes-match-count')).toHaveTextContent('5 of 5'));
+		await waitFor(() =>
+			expect(canvas.getByTestId('outcomes-match-count')).toHaveTextContent('5 shown of 5')
+		);
+		expect(canvas.getByTestId('outcomes-match-count')).not.toHaveTextContent('in window');
 		expect(canvas.queryByTestId('outcomes-clear-all')).toBeNull();
 		expect(canvas.getByText(/^TP_FULL/)).toBeVisible();
 	}}
@@ -80,8 +88,8 @@
 	name="Class facet selected"
 	play={async ({ canvas }) => {
 		await waitFor(() => expect(canvas.getByTestId('outcomes-clear-all')).toBeVisible());
-		// TP_FULL matches AMPL + BBAI → "2 of 5".
-		expect(canvas.getByTestId('outcomes-match-count')).toHaveTextContent('2 of 5');
+		// TP_FULL matches AMPL + BBAI → "2 shown of 5" (rows fallback, no facets).
+		expect(canvas.getByTestId('outcomes-match-count')).toHaveTextContent('2 shown of 5');
 	}}
 >
 	{#snippet template()}
@@ -105,7 +113,7 @@
 		await waitFor(() =>
 			expect(canvas.getByTestId('outcomes-search')).toHaveValue('quantum')
 		);
-		expect(canvas.getByTestId('outcomes-match-count')).toHaveTextContent('2 of 5');
+		expect(canvas.getByTestId('outcomes-match-count')).toHaveTextContent('2 shown of 5');
 	}}
 >
 	{#snippet template()}
@@ -122,9 +130,10 @@
 </Story>
 
 <!-- Server facets — chip counts come from the pre-filter WINDOW population
-     (facets.status / facets.classification), not the fetched rows: the ALL
-     chip reads 5 (facets.status.terminal), TP_FULL reads 2, and the ongoing
-     OPEN class is sliced OUT of the terminal view's chip bar. -->
+     (facets.status / the per-view facets.classification maps), not the fetched
+     rows: the ALL chip reads 5 (facets.status.terminal), TP_FULL reads 2, and
+     OPEN never renders here because it lives only in the ongoing view's map —
+     the terminal chips (2+1+1+1) sum exactly to the ALL chip. -->
 <Story
 	name="Server facets (window truth)"
 	play={async ({ canvas }) => {
@@ -132,6 +141,7 @@
 		await waitFor(() => expect(canvas.getByRole('button', { name: 'all 5' })).toBeVisible());
 		expect(canvas.getByRole('button', { name: 'TP_FULL 2' })).toBeVisible();
 		expect(canvas.queryByRole('button', { name: /^OPEN/ })).toBeNull();
+		expect(canvas.getByTestId('outcomes-match-count')).toHaveTextContent('5 shown of 5 in window');
 	}}
 >
 	{#snippet template()}
@@ -167,6 +177,32 @@
 				facets={FACETS}
 				view="terminal"
 				state={emptyFilterState()}
+			/>
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Class selected with server facets — the counter's denominator narrows to
+     the SELECTED class's window count (facets.classification.terminal.TP_FULL
+     = 2), so "N shown of M in window" and the chip agree by construction. -->
+<Story
+	name="Class selected (window denominator)"
+	play={async ({ canvas }) => {
+		await waitFor(() =>
+			expect(canvas.getByTestId('outcomes-match-count')).toHaveTextContent('2 shown of 2 in window')
+		);
+		expect(canvas.getByRole('button', { name: 'TP_FULL 2' })).toBeVisible();
+	}}
+>
+	{#snippet template()}
+		{@const state = { ...emptyFilterState(), classes: new Set(['TP_FULL']) }}
+		<div style="padding: 2rem;">
+			<EdgeOutcomesFilter
+				rows={ROWS}
+				matched={filterOutcomes(ROWS, state).length}
+				facets={FACETS}
+				view="terminal"
+				{state}
 			/>
 		</div>
 	{/snippet}

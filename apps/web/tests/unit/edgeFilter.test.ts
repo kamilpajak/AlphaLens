@@ -6,9 +6,10 @@ import {
 	filterOutcomes,
 	filterToParams,
 	filterFromParams,
+	windowDenominator,
 	type EdgeFilterState
 } from '$lib/edgeFilter';
-import type { EdgeOutcome } from '$lib/types';
+import type { EdgeOutcome, EdgeOutcomesFacets } from '$lib/types';
 
 // Pure client-side filtering behind the /edge toolbar: the text+facet predicate
 // and the deep-linkable URL round-trip. (Generic facet derivation moved to
@@ -93,63 +94,96 @@ describe('filterOutcomes', () => {
 });
 
 describe('classFacetFromServer', () => {
-	// Server facets cover the WHOLE window population (both views); the SPA
-	// slices them per view by each code's REAL terminal semantics. The
-	// unmeasurable group is split: the pipeline stamps terminal only for
-	// status=='OK' classifications in _TERMINAL_SET (BAD_GEOMETRY), while
-	// NO_DATA / NO_STRUCTURE are status codes whose rows stay terminal=False —
-	// their rows land in the ONGOING view, so their chips must too.
-	const CLASSIFICATION = {
-		TP_FULL: 2,
-		SL_HIT: 1,
-		TIME_STOP: 1,
-		NO_DATA: 1,
-		NO_STRUCTURE: 1,
-		BAD_GEOMETRY: 1,
-		OPEN: 2,
-		PARTIAL_TP_OPEN: 1
+	// The server splits facets.classification per view by the ACTUAL per-row
+	// `terminal` flag (GROUP BY terminal, ladder_classification) — the SPA does
+	// no view-slicing of its own anymore, it just reads the requested view's map.
+	// The same class can legitimately appear in both maps with disjoint counts
+	// (a NO_FILL whose 7-day entry window is still open is an ongoing row).
+	const CLASSIFICATION: EdgeOutcomesFacets['classification'] = {
+		terminal: { TP_FULL: 2, SL_HIT: 1, TIME_STOP: 1, BAD_GEOMETRY: 1, NO_FILL: 3 },
+		ongoing: { OPEN: 2, PARTIAL_TP_OPEN: 1, NO_FILL: 1, NO_DATA: 1 }
 	};
 
-	it('terminal view keeps terminal codes plus BAD_GEOMETRY (the only terminal unmeasurable)', () => {
+	it('terminal view is a pure passthrough of the terminal map (no cross-view leakage)', () => {
 		const facet = classFacetFromServer(CLASSIFICATION, 'terminal');
 		expect(facet.map((f) => f.key).sort()).toEqual([
 			'BAD_GEOMETRY',
+			'NO_FILL',
 			'SL_HIT',
 			'TIME_STOP',
 			'TP_FULL'
 		]);
 		expect(facet.find((f) => f.key === 'TP_FULL')?.count).toBe(2);
+		expect(facet.some((f) => f.key === 'OPEN')).toBe(false);
 	});
 
-	it('ongoing view keeps ongoing codes plus NO_DATA / NO_STRUCTURE (terminal=False rows)', () => {
+	it('ongoing view is a pure passthrough of the ongoing map (no cross-view leakage)', () => {
 		const facet = classFacetFromServer(CLASSIFICATION, 'ongoing');
 		expect(facet.map((f) => f.key).sort()).toEqual([
 			'NO_DATA',
-			'NO_STRUCTURE',
+			'NO_FILL',
 			'OPEN',
 			'PARTIAL_TP_OPEN'
 		]);
 		expect(facet.find((f) => f.key === 'OPEN')?.count).toBe(2);
+		expect(facet.some((f) => f.key === 'TP_FULL')).toBe(false);
 	});
 
-	it('an unknown code appears in BOTH views (fail-open for new pipeline classes)', () => {
-		const withUnknown = { ...CLASSIFICATION, BRAND_NEW: 3 };
-		expect(classFacetFromServer(withUnknown, 'terminal').some((f) => f.key === 'BRAND_NEW')).toBe(
-			true
-		);
-		expect(classFacetFromServer(withUnknown, 'ongoing').some((f) => f.key === 'BRAND_NEW')).toBe(
-			true
-		);
+	it('a class present in BOTH views carries its own disjoint per-view count', () => {
+		const terminal = classFacetFromServer(CLASSIFICATION, 'terminal');
+		const ongoing = classFacetFromServer(CLASSIFICATION, 'ongoing');
+		expect(terminal.find((f) => f.key === 'NO_FILL')?.count).toBe(3);
+		expect(ongoing.find((f) => f.key === 'NO_FILL')?.count).toBe(1);
 	});
 
 	it('orders count-desc then key, matching deriveFacet', () => {
-		const facet = classFacetFromServer({ SL_HIT: 1, TP_FULL: 2, TIME_STOP: 2 }, 'terminal');
+		const facet = classFacetFromServer(
+			{ terminal: { SL_HIT: 1, TP_FULL: 2, TIME_STOP: 2 }, ongoing: {} },
+			'terminal'
+		);
 		expect(facet.map((f) => f.key)).toEqual(['TIME_STOP', 'TP_FULL', 'SL_HIT']);
 	});
 
-	it('never emits the empty-string bucket', () => {
-		const facet = classFacetFromServer({ '': 4, TP_FULL: 1 }, 'terminal');
+	it('never emits the empty-string bucket (defensive — the server already drops it)', () => {
+		const facet = classFacetFromServer({ terminal: { '': 4, TP_FULL: 1 }, ongoing: {} }, 'terminal');
 		expect(facet.map((f) => f.key)).toEqual(['TP_FULL']);
+	});
+});
+
+describe('windowDenominator', () => {
+	// The "N shown of M in window" counter's M: server-truth window population
+	// (the same numbers the chips show), never the fetched/capped row count.
+	const FACETS: EdgeOutcomesFacets = {
+		status: { terminal: 505, ongoing: 40 },
+		classification: {
+			terminal: { TP_FULL: 163, SL_HIT: 139, TIME_STOP: 118, NO_FILL: 85 },
+			ongoing: { OPEN: 25, NO_FILL: 11 }
+		}
+	};
+
+	it('is null when facets are absent (caller falls back to rows.length)', () => {
+		expect(windowDenominator(null, 'terminal', new Set())).toBeNull();
+	});
+
+	it('with no class selected it is the view status count', () => {
+		expect(windowDenominator(FACETS, 'terminal', new Set())).toBe(505);
+		expect(windowDenominator(FACETS, 'ongoing', new Set())).toBe(40);
+	});
+
+	it('with classes selected it sums the selected classes in THIS view', () => {
+		expect(windowDenominator(FACETS, 'terminal', new Set(['TP_FULL', 'SL_HIT']))).toBe(302);
+		expect(windowDenominator(FACETS, 'ongoing', new Set(['NO_FILL']))).toBe(11);
+	});
+
+	it('a stale cross-view selection contributes 0, not NaN (selection persists across the view toggle)', () => {
+		// OPEN exists only in the ongoing map; toggling to terminal with it still
+		// selected must not poison the sum.
+		expect(windowDenominator(FACETS, 'terminal', new Set(['OPEN']))).toBe(0);
+		expect(windowDenominator(FACETS, 'terminal', new Set(['OPEN', 'TP_FULL']))).toBe(163);
+	});
+
+	it('an unknown selected class contributes 0', () => {
+		expect(windowDenominator(FACETS, 'terminal', new Set(['BRAND_NEW']))).toBe(0);
 	});
 });
 
