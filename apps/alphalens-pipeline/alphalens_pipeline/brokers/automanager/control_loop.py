@@ -5070,6 +5070,57 @@ def _day1_gap_gate_defers(
     return True
 
 
+def _entry_trail_intercept(
+    broker: Broker,
+    intent: Any,
+    ticker: str,
+    instrument: Any,
+    account: Any,
+    plan: Any,
+    fx: Any,
+    entry_trail_fold: entry_trails.EntryTrailFold,
+) -> bool | None:
+    """The _place_pick entry-trailing intercept outcome: ``None`` when the pick
+    must fall through to classify + ``_place_tiers`` (flag off, ineligible plan,
+    or no native trailing-stop capability), else the drain verdict.
+
+    PR-T2b: the whole feature needs the native trailing-stop capability; a
+    broker lacking it falls through to classify + _place_tiers (the
+    resting-limit entry path, BYTE-IDENTICAL to today) — never a watch it
+    could not later arm with a real order."""
+    d_bps = entry_trails.entry_trail_bps()
+    if (
+        d_bps <= 0
+        or not _entry_trail_eligible(plan)
+        or not isinstance(broker, SupportsTrailingStop)
+    ):
+        return None
+    # Crash-recovery exemption: a pick that ALREADY holds an open watch
+    # (its watch_open was journaled but it was never retired — a crash
+    # between the journal-FIRST watch_open and the note-only submission
+    # record) owns its capacity slot. It must NOT be counted against
+    # capacity — that would make it self-block on its OWN reservation and
+    # re-drive every tick. It re-opens idempotently (deterministic crid,
+    # fold latest-wins) and finally writes the retiring submission record.
+    # Match _open_entry_watches' pick_key byte-for-byte: the string
+    # brief_date, not the caller's parsed date (str(date) happens to agree,
+    # but pin the exact form the watch_open records actually carry).
+    pick_key = f"{ticker}:{intent.meta.brief_date}"
+    already_watching = pick_key in _open_watch_pick_keys(entry_trail_fold)
+    if not already_watching and _entry_watch_capacity_reached(entry_trail_fold):
+        # Pick-denominated capacity (memo decision #4): stay ARMED (not a
+        # terminal refusal) so it opens once an earlier watch clears.
+        logger.debug(
+            "place_pick %s: entry-trail watch capacity reached (>= %d picks) — pick stays armed",
+            ticker,
+            _ENTRY_WATCH_MAX_PICKS,
+        )
+        return False
+    return _route_pick_to_entry_watch(
+        broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps
+    )
+
+
 def _place_pick(
     broker: Broker,
     intent: Any,
@@ -5244,37 +5295,11 @@ def _place_pick(
     # falls straight through to classify + _place_tiers, BYTE-IDENTICAL to today
     # (PR-T0 inertness proof). The intercept lands AFTER the cash floor so a
     # watch only opens once the pick has cleared every money gate.
-    d_bps = entry_trails.entry_trail_bps()
-    if d_bps > 0 and _entry_trail_eligible(plan) and isinstance(broker, SupportsTrailingStop):
-        # PR-T2b: the whole feature needs the native trailing-stop capability; a
-        # broker lacking it falls through to classify + _place_tiers (the
-        # resting-limit entry path, BYTE-IDENTICAL to today) — never a watch it
-        # could not later arm with a real order.
-        # Crash-recovery exemption: a pick that ALREADY holds an open watch
-        # (its watch_open was journaled but it was never retired — a crash
-        # between the journal-FIRST watch_open and the note-only submission
-        # record) owns its capacity slot. It must NOT be counted against
-        # capacity — that would make it self-block on its OWN reservation and
-        # re-drive every tick. It re-opens idempotently (deterministic crid,
-        # fold latest-wins) and finally writes the retiring submission record.
-        # Match _open_entry_watches' pick_key byte-for-byte: the string
-        # brief_date, not the parsed date above (str(date) happens to agree,
-        # but pin the exact form the watch_open records actually carry).
-        pick_key = f"{ticker}:{intent.meta.brief_date}"
-        already_watching = pick_key in _open_watch_pick_keys(entry_trail_fold)
-        if not already_watching and _entry_watch_capacity_reached(entry_trail_fold):
-            # Pick-denominated capacity (memo decision #4): stay ARMED (not a
-            # terminal refusal) so it opens once an earlier watch clears.
-            logger.debug(
-                "place_pick %s: entry-trail watch capacity reached (>= %d picks) — "
-                "pick stays armed",
-                ticker,
-                _ENTRY_WATCH_MAX_PICKS,
-            )
-            return False
-        return _route_pick_to_entry_watch(
-            broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps
-        )
+    intercepted = _entry_trail_intercept(
+        broker, intent, ticker, instrument, account, plan, fx, entry_trail_fold
+    )
+    if intercepted is not None:
+        return intercepted
 
     placement = classify(plan, instrument, side=_ENTRY_SIDE)
     if not placement.tiers:

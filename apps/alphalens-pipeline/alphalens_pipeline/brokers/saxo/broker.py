@@ -820,20 +820,33 @@ class SaxoBroker:
             "ExternalReference": client_request_id,
         }
         if ceiling_price is not None:
-            ceiling_q = self._quantize_price(ceiling_price, details, label="ceiling_price")
-            # Directional clamp sanity (memo G1), same rule as _build_stop_limit_body:
-            # a BUY ceiling caps the fill AT or ABOVE the trigger (ceiling >= trigger).
-            if (side == "BUY" and ceiling_q < trigger_q) or (
-                side == "SELL" and ceiling_q > trigger_q
-            ):
-                direction = ">=" if side == "BUY" else "<="
-                raise OrderRejectedError(
-                    f"inverted trailing-limit clamp for {side}: trigger {trigger_q}, "
-                    f"ceiling {ceiling_q} (a {side} clamp needs the ceiling {direction} "
-                    "the trigger)"
-                )
-            body[_STOP_LIMIT_PRICE_FIELD] = ceiling_q
+            body[_STOP_LIMIT_PRICE_FIELD] = self._validated_ceiling_q(
+                side, ceiling_price, trigger_q, details
+            )
         return body
+
+    def _validated_ceiling_q(
+        self,
+        side: str,
+        ceiling_price: float,
+        trigger_q: float,
+        details: dict[str, Any],
+    ) -> float:
+        """The tick-quantized trailing-limit ceiling, clamp-checked against the
+        trigger.
+
+        Directional clamp sanity (memo G1), same rule as _build_stop_limit_body:
+        a BUY ceiling caps the fill AT or ABOVE the trigger (ceiling >= trigger).
+        """
+        ceiling_q = self._quantize_price(ceiling_price, details, label="ceiling_price")
+        if (side == "BUY" and ceiling_q < trigger_q) or (side == "SELL" and ceiling_q > trigger_q):
+            direction = ">=" if side == "BUY" else "<="
+            raise OrderRejectedError(
+                f"inverted trailing-limit clamp for {side}: trigger {trigger_q}, "
+                f"ceiling {ceiling_q} (a {side} clamp needs the ceiling {direction} "
+                "the trigger)"
+            )
+        return ceiling_q
 
     @staticmethod
     def _floor_to_whole_ticks(value: float, tick: float) -> float:
