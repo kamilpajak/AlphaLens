@@ -126,6 +126,13 @@ _NO_CHANNEL_CUES = (
 )
 
 
+def majority_bucket(buckets: list[str]) -> str:
+    """Most frequent bucket; ties resolve alphabetically (set order is not
+    deterministic across runs, and identical calls-log input must always
+    yield identical taxonomy counts)."""
+    return max(sorted(set(buckets)), key=buckets.count)
+
+
 def classify_refusal_reason(reason: str | None) -> str:
     """Bucket a mapper decline reason. Heuristic, descriptive only."""
     if not reason or not reason.strip():
@@ -338,7 +345,7 @@ def _refusal_taxonomy(calls_log: Path) -> dict:
             per_pair.setdefault(rec["pair_id"], []).append(bucket)
             if reason and len(examples[bucket]) < 5:
                 examples[bucket].append(reason.strip()[:240])
-    pair_buckets = {pid: max(set(buckets), key=buckets.count) for pid, buckets in per_pair.items()}
+    pair_buckets = {pid: majority_bucket(buckets) for pid, buckets in per_pair.items()}
     counts: dict[str, int] = {}
     for bucket in pair_buckets.values():
         counts[bucket] = counts.get(bucket, 0) + 1

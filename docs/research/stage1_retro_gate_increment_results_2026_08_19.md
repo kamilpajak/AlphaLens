@@ -103,13 +103,17 @@ one-sided selection, pre-reg §1).
 
 Heuristic ordered-keyword classification (`classify_refusal_reason`, unit-tested;
 categories: non-event → direction-filter → no-channel → other) over 718 decline calls,
-aggregated to a per-pair majority across the 189 pairs with at least one decline:
+aggregated to a per-pair majority across the 189 pairs with at least one decline.
+Counts recomputed post-review with the deterministic alphabetical tie-break
+(`majority_bucket`; 25 of 189 pairs carry a tied bucket vote, and the original
+run's `max(set(...))` resolved those ties in unspecified set order — the
+hypothesis test is unaffected, only this descriptive table moved):
 
 | Bucket | Pairs | Share |
 |---|---|---|
-| no_channel (no transmission channel / no beneficiary / not material / not US-listed) | 111 | 58.7% |
-| other (mostly "no actionable specifics" phrasings the keyword rules leave unclaimed) | 40 | 21.2% |
-| non_event (commentary / forecast / round-up / vague headline) | 36 | 19.0% |
+| no_channel (no transmission channel / no beneficiary / not material / not US-listed) | 130 | 68.8% |
+| non_event (commentary / forecast / round-up / vague headline) | 30 | 15.9% |
+| other (mostly "no actionable specifics" phrasings the keyword rules leave unclaimed) | 27 | 14.3% |
 | direction_filter (adverse event; refuses to long the harmed name) | 2 | 1.1% |
 
 Manual read of the `other` examples shows they are largely no-channel/non-event blends

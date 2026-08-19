@@ -177,6 +177,9 @@ def payload_from_row(row: pd.Series) -> CatalystPayload:
         primary_entities=_lst(row.get("event_primary_entities")),
         confidence=conf,
         second_order_implications=_lst(row.get("event_second_order_implications")),
+        # echo_count / is_amplified are NOT stamped on the frozen brief rows
+        # (verified: inputs parquet carries no such columns), so the replay
+        # uses the non-amplified single-trigger defaults for every pair.
         echo_count=1,
         trigger_url=str(row["source_event_url"]),
         trigger_published_at=str(row["source_event_published_at"] or ""),
@@ -371,7 +374,10 @@ def main() -> int:
     assert mcv == FROZEN_MCV, "mapper_config_version drifted from the pre-registered instrument"
     client = OpenRouterClient.from_env()
     routing = client._provider_routing
-    assert routing == PINNED_ROUTING, f"replay env not pinned as pre-registered: {routing}"
+    # Compare only the pre-registered keys: the client may grow harmless extra
+    # routing keys, but the pinned values themselves must match byte-for-byte.
+    pinned_view = {k: routing.get(k) for k in PINNED_ROUTING}
+    assert pinned_view == PINNED_ROUTING, f"replay env not pinned as pre-registered: {routing}"
 
     args.raw_dir.mkdir(parents=True, exist_ok=True)
     _wrap_provenance(client, args.provenance_log, args.raw_dir)

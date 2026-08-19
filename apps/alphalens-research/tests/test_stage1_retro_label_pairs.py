@@ -30,15 +30,19 @@ class TestBlindingGuard(unittest.TestCase):
     # source-wide sweep for the forbidden strings.
     FORBIDDEN = ("population_" + "ladders", "market_excess" + "_return", "realized" + "_r")
 
+    def _breaches(self, source: str) -> list[str]:
+        """The one scan used by both the guard and its positive control."""
+        return [needle for needle in self.FORBIDDEN if needle in source]
+
     def test_script_source_never_references_outcome_stores(self):
         source = _SCRIPT.read_text(encoding="utf-8")
-        for needle in self.FORBIDDEN:
-            self.assertNotIn(needle, source, f"blinding breach: {needle!r} in labeling script")
+        self.assertEqual(self._breaches(source), [], "blinding breach in labeling script source")
 
     def test_positive_control_detects_a_seeded_breach(self):
-        # The check cannot rot to a tautology: a seeded breach must be caught.
+        # The check cannot rot to a tautology: the SAME scan that clears the
+        # real script must flag a source with a seeded forbidden reference.
         seeded = "df = pd.read_parquet(root / '" + self.FORBIDDEN[0] + "/2026-06-01.parquet')"
-        self.assertIn(self.FORBIDDEN[0], seeded)
+        self.assertEqual(self._breaches(seeded), [self.FORBIDDEN[0]])
 
 
 class TestPairKey(unittest.TestCase):

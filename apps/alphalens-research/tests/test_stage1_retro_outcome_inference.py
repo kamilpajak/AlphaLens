@@ -149,6 +149,19 @@ class TestRefusalReasonClassifier(unittest.TestCase):
         self.assertEqual(inference.classify_refusal_reason("  "), inference.OTHER)
 
 
+class TestMajorityBucket(unittest.TestCase):
+    def test_plain_majority_wins(self):
+        self.assertEqual(
+            inference.majority_bucket(["no_channel", "no_channel", "non_event"]),
+            "no_channel",
+        )
+
+    def test_tie_breaks_deterministically_alphabetical(self):
+        # A 1-1 tie must not depend on Python set iteration order.
+        self.assertEqual(inference.majority_bucket(["non_event", "no_channel"]), "no_channel")
+        self.assertEqual(inference.majority_bucket(["no_channel", "non_event"]), "no_channel")
+
+
 class TestPowerHelpers(unittest.TestCase):
     def test_power_monotone_in_n(self):
         p_small = inference.power_one_sided(0.07, 0.15, 10, 15)
