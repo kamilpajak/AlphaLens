@@ -61,28 +61,43 @@ ENTRY_TRAIL_BPS_MAX = 150
 
 _FEATURE_OFF_BPS = 0  # trailing disabled — today's limit-at-touch behavior
 
+_entry_trail_bps_warned = False
+"""Once-per-process latch for the invalid-flag warning (mirrors
+``control_loop._entry_watch_max_picks_warned``): the reader runs on every
+daemon tick (~45s, several call sites), so a SIM boot with a garbage env value
+must warn ONCE, not spam the journal for the whole daemon lifetime."""
+
+
+def _warn_invalid_entry_trail_bps(message: str, *args: Any) -> None:
+    """Emit the invalid-flag warning at most once per process (see the latch)."""
+    global _entry_trail_bps_warned  # noqa: PLW0603 — once-per-process warn latch
+    if _entry_trail_bps_warned:
+        return
+    _entry_trail_bps_warned = True
+    logger.warning(message, *args)
+
 
 def entry_trail_bps() -> int:
     """The runtime trail distance in basis points; ``0`` = feature OFF.
 
     Fail-CLOSED reader: unset/blank is OFF; a malformed value or one outside
-    ``[0, ENTRY_TRAIL_BPS_MAX]`` is OFF with a logged warning (today's
-    behavior — a bad flag must never arm a live trail). Explicit ``"0"`` is
-    a valid OFF. The LIVE boot-assert (``live_rails``) additionally REFUSES
-    to boot on unset/malformed — this lenient reader is the SIM/runtime
-    path."""
+    ``[0, ENTRY_TRAIL_BPS_MAX]`` is OFF with a once-per-process warning
+    (today's behavior — a bad flag must never arm a live trail). Explicit
+    ``"0"`` is a valid OFF. The LIVE boot-assert (``live_rails``) additionally
+    REFUSES to boot on unset/malformed — this lenient reader is the
+    SIM/runtime path."""
     raw = os.environ.get(ENTRY_TRAIL_BPS_ENV)
     if raw is None or not raw.strip():
         return _FEATURE_OFF_BPS
     try:
         value = int(raw)
     except ValueError:
-        logger.warning(
+        _warn_invalid_entry_trail_bps(
             "%s=%r is not an integer — entry trailing stays OFF", ENTRY_TRAIL_BPS_ENV, raw
         )
         return _FEATURE_OFF_BPS
     if not 0 <= value <= ENTRY_TRAIL_BPS_MAX:
-        logger.warning(
+        _warn_invalid_entry_trail_bps(
             "%s=%d is outside [0, %d] — entry trailing stays OFF",
             ENTRY_TRAIL_BPS_ENV,
             value,
