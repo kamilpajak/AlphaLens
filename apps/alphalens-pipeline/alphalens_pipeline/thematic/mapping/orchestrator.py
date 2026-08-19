@@ -66,6 +66,19 @@ GATE_NAMES = ("tenk", "press", "insider")
 _MAX_CANDIDATES_PER_THEME = 3
 _MAX_VERIFY_ATTEMPTS_PER_THEME = 5
 
+# How many of a theme's in-bracket candidates stage B pays for. Deliberately
+# EQUAL to _MAX_VERIFY_ATTEMPTS_PER_THEME rather than a knob of its own: the
+# verify stage attempts the top _MAX_VERIFY_ATTEMPTS_PER_THEME by confidence and
+# ships at most _MAX_CANDIDATES_PER_THEME, so a candidate ranked below that can
+# never reach a brief row and assessing it buys nothing but wall-time. Stage B
+# is otherwise unbounded (up to theme_mapper._MAX_CANDIDATES in bracket, times
+# channel_assessor._ASSESS_VOTES draws, times max_themes), and map_themes writes
+# its parquet ONCE after the whole theme loop — so a run that overruns
+# TimeoutStartSec produces no candidates file at all and the next slot restarts
+# from zero. Candidates past the cap are stamped ``over_assess_cap``, which is
+# distinct from the bracket's ``not_assessed`` and enters no denominator.
+_MAX_ASSESS_PER_THEME = _MAX_VERIFY_ATTEMPTS_PER_THEME
+
 
 # Per-gate wrappers — keep tests patchable through `orchestrator.*` and let
 # each gate fail closed if its underlying data path errors.
@@ -290,7 +303,7 @@ def _build_row(
     market_cap: float,
     catalyst: CatalystPayload | None,
     keywords: Sequence[str],
-    shadow: tuple[str, int, int],
+    shadow: channel_assessor.ShadowVerdict,
 ) -> dict:
     """One candidate row, including its channel annotation and the theme's shadow.
 
@@ -305,7 +318,9 @@ def _build_row(
         "company_name": cand.get("company_name", ""),
         "rationale": cand.get("rationale", ""),
         "llm_confidence": cand.get("confidence", 0.0),
-        # Stage-B channel assessment (12 columns). ``cand["channel"]`` is the
+        # Stage-B channel assessment (11 columns; ``channel_config_version`` is
+        # stamped FRAME-WIDE by the driver, which is the only place the run's
+        # model is known). ``cand["channel"]`` is the
         # ChannelAssessment ``_assess_channels_for_theme`` wrote onto the same
         # dict; ``None`` renders as the not-assessed shape so every row carries
         # every column.
@@ -315,9 +330,10 @@ def _build_row(
         # ship and mature — which is what makes a forward KEPT-vs-REFUSED
         # contrast computable at all. A DIFFERENT estimand from the frozen
         # Stage-1 gate; never pool the two (design memo §5).
-        "shadow_strict_verdict": shadow[0],
-        "shadow_strict_verified_n": shadow[1],
-        "shadow_strict_assessed_n": shadow[2],
+        "shadow_strict_verdict": shadow.verdict,
+        "shadow_strict_verified_n": shadow.verified_n,
+        "shadow_strict_assessed_n": shadow.assessed_n,
+        "shadow_strict_failed_n": shadow.failed_n,
         "shadow_strict_rule_version": channel_assessor.SHADOW_STRICT_RULE_VERSION,
         "market_cap": market_cap,
         "gates_passed": verdict["gates_passed"],
@@ -354,6 +370,7 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     "shadow_strict_verdict",
     "shadow_strict_verified_n",
     "shadow_strict_assessed_n",
+    "shadow_strict_failed_n",
     "shadow_strict_rule_version",
     "market_cap",
     "gates_passed",
@@ -404,7 +421,7 @@ _CANDIDATE_SORT_ASCENDING: tuple[bool, ...] = (True, False, False, True)
 
 def _channel_counts(
     theme_counts: Iterable[dict[str, int]],
-    shadows: Iterable[tuple[str, int, int]],
+    shadows: Iterable[channel_assessor.ShadowVerdict],
 ) -> dict[str, int]:
     """Run-level channel + shadow tallies for the CLI's Prometheus gauges.
 
@@ -413,7 +430,7 @@ def _channel_counts(
     disappears on healthy days is indistinguishable from a stopped exporter.
     """
     per_theme = list(theme_counts)
-    verdicts = [v for v, _n_verified, _n_assessed in shadows]
+    verdicts = [s.verdict for s in shadows]
     return {
         "channel_verified": sum(c["verified"] for c in per_theme),
         "channel_partial": sum(c["partial"] for c in per_theme),
@@ -491,6 +508,12 @@ _PROPOSAL_FUNNEL_COLUMNS = (
     "channel_status",
     "channel_type",
     "channel_confidence",
+    # Without these two, a row whose assessment DIED is byte-identical to a
+    # row the model genuinely answered "unverified" — and this file is the
+    # only on-disk record of the off-bracket and never-shipped proposals, so
+    # it is what a later recall / crowd-out audit reads.
+    "channel_assessment_outcome",
+    "channel_vote_valid_n",
     "shadow_strict_verdict",
     "channel_config_version",
     "market_cap",
@@ -513,6 +536,7 @@ _THEME_DECISION_COLUMNS = (
     "n_partial",
     "n_unverified",
     "n_assess_failed",
+    "n_over_assess_cap",
     "shadow_strict_verdict",
     "shadow_strict_rule_version",
     "mapper_config_version",
@@ -531,7 +555,7 @@ def _funnel_row(
     cand: dict,
     verdict: mcap_filter.McapVerdict | None,
     catalyst: CatalystPayload,
-    shadow: tuple[str, int, int],
+    shadow: channel_assessor.ShadowVerdict,
 ) -> dict:
     """One PRE-bracket proposal, with the verdict that decided its fate.
 
@@ -559,7 +583,9 @@ def _funnel_row(
         "channel_status": fields["channel_status"],
         "channel_type": fields["channel_type"],
         "channel_confidence": fields["channel_confidence"],
-        "shadow_strict_verdict": shadow[0],
+        "channel_assessment_outcome": fields["channel_assessment_outcome"],
+        "channel_vote_valid_n": fields["channel_vote_valid_n"],
+        "shadow_strict_verdict": shadow.verdict,
         "market_cap": verdict.market_cap if verdict is not None else None,
         "bracket_verdict": verdict.verdict if verdict is not None else mcap_filter.NO_MCAP,
         "catalyst_url": catalyst.url,
@@ -763,26 +789,33 @@ def _assess_channels_for_theme(
     api_key: str | None,
     model: str | None,
     asof: dt.date,
-) -> tuple[tuple[str, int, int], dict[str, int]]:
+) -> tuple[channel_assessor.ShadowVerdict, dict[str, int]]:
     """Annotate each in-bracket candidate with its channel assessment.
 
     Writes the :class:`~channel_assessor.ChannelAssessment` onto the candidate
-    dict under ``"channel"`` and returns
-    ``((shadow_verdict, n_verified, n_assessed), status_counts)``.
+    dict under ``"channel"`` and returns ``(shadow_verdict, status_counts)``.
 
     PURE ENRICHMENT: this function never removes a candidate and never reorders
     the list. ``assess_candidates`` returns one result per input in input order
     for every outcome, including a total outage, so the positional write below
     cannot silently misalign.
+
+    Only the top :data:`_MAX_ASSESS_PER_THEME` by stage-A confidence are sent to
+    the model — see that constant. The remainder are ANNOTATED, not dropped:
+    they keep their row, their funnel line and their place in the list, marked
+    ``over_assess_cap``.
     """
+    assessed_head = candidates[:_MAX_ASSESS_PER_THEME]
+    over_cap_tail = candidates[_MAX_ASSESS_PER_THEME:]
     assessments = channel_assessor.assess_candidates(
         theme=theme,
         catalyst=catalyst,
-        candidates=candidates,
+        candidates=assessed_head,
         api_key=api_key,
         llm_client=pro_client,
         model=model or theme_mapper.DEFAULT_MODEL,
     )
+    assessments = list(assessments) + [channel_assessor.over_assess_cap() for _ in over_cap_tail]
     for cand, assessment in zip(candidates, assessments, strict=True):
         cand["channel"] = assessment
     shadow = channel_assessor.shadow_strict_verdict(assessments)
@@ -792,15 +825,29 @@ def _assess_channels_for_theme(
     # substrings must both keep working.
     logger.info(
         "map_themes %s: theme %r channel — verified %d, partial %d, unverified %d, "
-        "failed %d -> shadow=%s",
+        "failed %d, over cap %d -> shadow=%s",
         asof.isoformat(),
         theme,
         counts["verified"],
         counts["partial"],
         counts["unverified"],
         counts["assess_failed"],
-        shadow[0],
+        len(over_cap_tail),
+        shadow.verdict,
     )
+    if over_cap_tail:
+        # The cap starts biting exactly when the crowd-out repair succeeds, so
+        # it must be visible in the journal rather than inferred from the
+        # parquet after the fact.
+        logger.warning(
+            "map_themes %s: theme %r had %d in-bracket candidates past the "
+            "assessment cap of %d (unassessed, still shipped): %s",
+            asof.isoformat(),
+            theme,
+            len(over_cap_tail),
+            _MAX_ASSESS_PER_THEME,
+            ", ".join(str(c["ticker"]) for c in over_cap_tail[:_MAX_LOGGED_DROPPED_TICKERS]),
+        )
     return shadow, counts
 
 
@@ -809,7 +856,7 @@ def _funnel_rows_for_theme(
     theme: str,
     proposal: ThemeProposal,
     catalyst: CatalystPayload,
-    shadow: tuple[str, int, int],
+    shadow: channel_assessor.ShadowVerdict,
 ) -> list[dict]:
     """One funnel row per PRE-bracket proposal, carrying its channel annotation.
 
@@ -839,7 +886,7 @@ def _verify_candidates_for_theme(
     polygon_client: PolygonClient | None,
     press_df,
     keep_unverified: bool,
-    shadow: tuple[str, int, int],
+    shadow: channel_assessor.ShadowVerdict,
 ) -> tuple[list[dict], int, int]:
     """Run the 4-gate verify on each candidate with diversity cap + backfill.
 
@@ -914,6 +961,7 @@ class ThemeDecision:
     n_partial: int
     n_unverified: int
     n_assess_failed: int
+    n_over_assess_cap: int
     shadow_strict_verdict: str
 
     def to_row(self) -> dict:
@@ -929,6 +977,7 @@ class ThemeDecision:
             "n_partial": self.n_partial,
             "n_unverified": self.n_unverified,
             "n_assess_failed": self.n_assess_failed,
+            "n_over_assess_cap": self.n_over_assess_cap,
             "shadow_strict_verdict": self.shadow_strict_verdict,
             "shadow_strict_rule_version": channel_assessor.SHADOW_STRICT_RULE_VERSION,
         }
@@ -942,7 +991,7 @@ def _decision_for(
     theme: str,
     catalyst: CatalystPayload | None,
     proposal: ThemeProposal | None,
-    shadow: tuple[str, int, int],
+    shadow: channel_assessor.ShadowVerdict,
     counts: dict[str, int],
 ) -> ThemeDecision:
     return ThemeDecision(
@@ -957,7 +1006,12 @@ def _decision_for(
         n_partial=counts["partial"],
         n_unverified=counts["unverified"],
         n_assess_failed=counts["assess_failed"],
-        shadow_strict_verdict=shadow[0],
+        # The cap starts biting exactly when the crowd-out repair succeeds, so
+        # the truncation is recorded per theme rather than inferred later.
+        n_over_assess_cap=max(
+            0, (len(proposal.candidates) if proposal else 0) - _MAX_ASSESS_PER_THEME
+        ),
+        shadow_strict_verdict=shadow.verdict,
     )
 
 
@@ -973,7 +1027,7 @@ class ThemeResult:
     decision: ThemeDecision
     funnel_rows: list[dict]
     counts: dict[str, int]
-    shadow: tuple[str, int, int]
+    shadow: channel_assessor.ShadowVerdict
 
 
 def _rows_for_theme(
@@ -1014,7 +1068,7 @@ def _rows_for_theme(
             asof.isoformat(),
             theme,
         )
-        shadow = (channel_assessor.SHADOW_REFUSE, 0, 0)
+        shadow = channel_assessor.ShadowVerdict(channel_assessor.SHADOW_REFUSE, 0, 0, 0)
         return ThemeResult(
             rows=[],
             dropped=0,
@@ -1049,7 +1103,7 @@ def _rows_for_theme(
         # Nothing in bracket: no assessment to pay for, but the off-bracket
         # proposals still get funnel rows (marked not_assessed) and the theme
         # still gets a decision row.
-        shadow = (channel_assessor.SHADOW_REFUSE, 0, 0)
+        shadow = channel_assessor.ShadowVerdict(channel_assessor.SHADOW_REFUSE, 0, 0, 0)
         counts = dict(_EMPTY_COUNTS)
         return ThemeResult(
             rows=[],
@@ -1283,7 +1337,7 @@ def map_themes(
     outcomes: list[theme_mapper.MapperOutcome | None] = []
     decisions: list[ThemeDecision] = []
     theme_counts: list[dict[str, int]] = []
-    shadows: list[tuple[str, int, int]] = []
+    shadows: list[channel_assessor.ShadowVerdict] = []
     for theme in themes:
         result = _rows_for_theme(
             theme,

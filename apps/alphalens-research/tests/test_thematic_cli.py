@@ -188,10 +188,15 @@ class TestMapThemesCLI(unittest.TestCase):
         self.assertEqual(extra["alphalens_thematic_shadow_kept_themes_total"], 2)
         self.assertEqual(extra["alphalens_thematic_shadow_refused_themes_total"], 6)
 
-    def test_map_themes_emits_zero_channel_gauges_on_a_frozen_reuse(self):
-        # Same rule as the two outcome gauges: a frozen-set reuse makes no LLM
-        # call, so every count is 0 — but the series must still be published, or
-        # "healthy and frozen" reads exactly like "exporter stopped".
+    def test_map_themes_emits_zero_channel_gauges_when_the_frame_carries_no_attrs(self):
+        # Scope, stated so a later reader does not over-read this test: it pins
+        # the CLI's DEFAULT, i.e. that a frame without the attrs still publishes
+        # all six series rather than dropping them — a series that disappears is
+        # indistinguishable from a stopped exporter. It says nothing about the
+        # values a real run produces (map_themes is patched wholesale here);
+        # those are pinned against real theme loops in
+        # tests/thematic/test_map_themes_channel_shadow.py and against the real
+        # frozen-reuse branch in tests/thematic/test_map_themes_freeze.py.
         extra = self._map_themes_extra_metrics(_FAKE_CANDIDATES.copy())
         for name in (
             "alphalens_thematic_channel_verified_total",

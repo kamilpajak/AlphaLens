@@ -87,10 +87,60 @@ class ProposalFunnelSinkTests(unittest.TestCase):
                     theme="quantum_computing",
                     proposal=proposal,
                     catalyst=_catalyst(),
-                    shadow=(channel_assessor.SHADOW_REFUSE, 0, 0),
+                    shadow=channel_assessor.ShadowVerdict(channel_assessor.SHADOW_REFUSE, 0, 0, 0),
                 )
             )
         return proposal.candidates, sink
+
+    def test_a_dead_assessment_is_not_byte_identical_to_an_unverified_answer(self):
+        # This file is the only on-disk record of the off-bracket and
+        # never-shipped proposals, so it is what a later recall / crowd-out
+        # audit reads. Carrying channel_status without the outcome would
+        # re-merge exactly the conflation the module was built to prevent, and
+        # silently over-count "unverified".
+        answered = channel_assessor.ChannelAssessment(
+            status="unverified",
+            channel_type="none",
+            text="",
+            evidence="",
+            falsifier="",
+            confidence=None,
+            votes=3,
+            valid_n=3,
+            dispersion=0,
+            outcome=channel_assessor.AssessmentOutcome.SUCCESS,
+            assessed_at="2026-08-19T00:00:00+00:00",
+        )
+        died = channel_assessor.ChannelAssessment(
+            status="unverified",
+            channel_type="none",
+            text="",
+            evidence="",
+            falsifier="",
+            confidence=None,
+            votes=3,
+            valid_n=0,
+            dispersion=0,
+            outcome=channel_assessor.AssessmentOutcome.CALL_FAILED,
+            assessed_at="2026-08-19T00:00:00+00:00",
+        )
+        rows = [
+            orchestrator._funnel_row(
+                theme="quantum_computing",
+                cand={"ticker": t, "confidence": 0.5, "channel": a},
+                verdict=None,
+                catalyst=_catalyst(),
+                shadow=channel_assessor.ShadowVerdict(channel_assessor.SHADOW_REFUSE, 0, 1, 1),
+            )
+            for t, a in (("SAID", answered), ("DIED", died))
+        ]
+        self.assertEqual([r["channel_status"] for r in rows], ["unverified", "unverified"])
+        self.assertEqual(
+            [r["channel_assessment_outcome"] for r in rows], ["success", "call_failed"]
+        )
+        self.assertEqual([r["channel_vote_valid_n"] for r in rows], [3, 0])
+        for column in ("channel_assessment_outcome", "channel_vote_valid_n"):
+            self.assertIn(column, orchestrator._PROPOSAL_FUNNEL_COLUMNS)
 
     def test_records_one_entry_per_proposal_including_the_dropped_ones(self):
         kept, sink = self._run(
@@ -153,7 +203,7 @@ class ProposalFunnelSinkTests(unittest.TestCase):
                 theme="quantum_computing",
                 proposal=proposal,
                 catalyst=_catalyst(),
-                shadow=(channel_assessor.SHADOW_REFUSE, 0, 0),
+                shadow=channel_assessor.ShadowVerdict(channel_assessor.SHADOW_REFUSE, 0, 0, 0),
             ),
             [],
         )
@@ -243,7 +293,7 @@ class ProposalFunnelSinkTests(unittest.TestCase):
             theme="quantum_computing",
             proposal=proposal,
             catalyst=_catalyst(),
-            shadow=(channel_assessor.SHADOW_REFUSE, 0, 0),
+            shadow=channel_assessor.ShadowVerdict(channel_assessor.SHADOW_REFUSE, 0, 0, 0),
         )
         self.assertEqual(len(sink), 2)
         self.assertEqual(

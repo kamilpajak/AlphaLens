@@ -236,7 +236,7 @@ class ChannelAssessmentIsPersistedTests(unittest.TestCase):
             market_cap=1_000_000_000.0,
             catalyst=_catalyst(),
             keywords=["employment litigation"],
-            shadow=(channel_assessor.SHADOW_REFUSE, 0, 1),
+            shadow=channel_assessor.ShadowVerdict(channel_assessor.SHADOW_REFUSE, 0, 1, 0),
         )
         self.assertEqual(row["channel_text"], "payout -> legal spend rises -> AAA fees rise")
         self.assertEqual(row["channel_status"], "partial")

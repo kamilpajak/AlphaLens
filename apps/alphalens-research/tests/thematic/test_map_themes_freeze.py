@@ -161,6 +161,35 @@ class TestMapThemesFreeze(unittest.TestCase):
             pro.assert_not_called()
             self.assertEqual(list(df["ticker"]), ["TIC0"])
 
+    def test_a_frozen_reuse_still_publishes_the_channel_gauges_as_zeros(self):
+        # A series that disappears on a healthy day is indistinguishable from a
+        # stopped exporter, so the six counters must be present-and-zero on the
+        # frozen path too. Asserted on the frame a REAL frozen reuse returns —
+        # the CLI-side test patches map_themes wholesale and therefore only
+        # exercises its own ``attrs.get(name, 0)`` default.
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td)
+            cfg = _cfg()
+            _write_frozen(out, config_version=cfg)
+            with (
+                patch.object(orchestrator, "_resolve_catalyst"),
+                patch.object(orchestrator, "_propose_and_bracket"),
+                patch.object(orchestrator, "_init_pro_client"),
+            ):
+                df = orchestrator.map_themes(
+                    themes=["government_contract"], asof=ASOF, output_dir=out
+                )
+        for name in (
+            "channel_verified",
+            "channel_partial",
+            "channel_unverified",
+            "channel_assess_failed",
+            "themes_shadow_kept",
+            "themes_shadow_refused",
+        ):
+            self.assertIn(name, df.attrs)
+            self.assertEqual(df.attrs[name], 0)
+
     def test_rebuild_flag_forces_recompute(self):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)

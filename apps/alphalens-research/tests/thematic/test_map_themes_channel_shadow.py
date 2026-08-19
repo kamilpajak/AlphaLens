@@ -160,7 +160,7 @@ class AssessmentNeverShrinksTheCandidateList(unittest.TestCase):
 
 
 class BuildRowStampsTheChannelFields(unittest.TestCase):
-    def _row(self, assessment, shadow=("keep", 1, 2)):
+    def _row(self, assessment, shadow=channel_assessor.ShadowVerdict("keep", 1, 2, 0)):
         return orchestrator._build_row(
             theme="quantum_computing",
             cand={"ticker": "AAA", "rationale": "does x", "confidence": 0.9, "channel": assessment},
@@ -185,7 +185,9 @@ class BuildRowStampsTheChannelFields(unittest.TestCase):
         self.assertEqual(row["channel_vote_dispersion"], 0)
 
     def test_the_shadow_verdict_and_its_denominator_land_on_the_row(self):
-        row = self._row(_assessment("verified"), shadow=("keep", 1, 3))
+        row = self._row(
+            _assessment("verified"), shadow=channel_assessor.ShadowVerdict("keep", 1, 3, 0)
+        )
         self.assertEqual(row["shadow_strict_verdict"], "keep")
         self.assertEqual(row["shadow_strict_verified_n"], 1)
         self.assertEqual(row["shadow_strict_assessed_n"], 3)
@@ -263,12 +265,37 @@ class ChannelConfigVersionFollowsTheModelOverride(unittest.TestCase):
         self.assertEqual(set(funnel["channel_config_version"]), {expected})
         self.assertEqual(set(decisions["channel_config_version"]), {expected})
 
-    def test_the_empty_day_parquet_carries_the_same_token(self):
-        with tempfile.TemporaryDirectory() as tmp:
+    def test_the_empty_day_composes_its_token_from_the_run_s_model(self):
+        # A zero-row frame holds NO value to read back, so asserting that the
+        # column merely exists could never have failed — the column is a member
+        # of _MAP_THEMES_COLUMNS and the typed empty frame carries it whatever
+        # the token would have been. What is observable, and what the empty-day
+        # path would get wrong, is the WIRING: the channel token must be built
+        # from this run's model and must be the one folded into the freeze token.
+        model = "some/other"
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(
+                orchestrator.channel_assessor,
+                "channel_config_version",
+                wraps=channel_assessor.channel_config_version,
+            ) as channel_token,
+            mock.patch.object(
+                orchestrator.theme_mapper,
+                "mapper_config_version",
+                wraps=theme_mapper.mapper_config_version,
+            ) as freeze_token,
+        ):
             out = Path(tmp)
-            orchestrator.write_empty_candidates(asof=_ASOF, output_dir=out, model="some/other")
+            orchestrator.write_empty_candidates(asof=_ASOF, output_dir=out, model=model)
             df = pd.read_parquet(out / f"{_ASOF.isoformat()}.parquet")
+        channel_token.assert_called_once_with(model=model)
+        self.assertEqual(
+            freeze_token.call_args.kwargs["channel_config_version"],
+            channel_assessor.channel_config_version(model=model),
+        )
         self.assertIn("channel_config_version", df.columns)
+        self.assertEqual(len(df), 0)
 
 
 class ShadowVerdictIsStampedOnEveryRowOfTheTheme(unittest.TestCase):
@@ -476,6 +503,223 @@ class ChannelLogLine(unittest.TestCase):
         joined = "\n".join(cm.output)
         self.assertIn("channel — verified 1, partial 0, unverified 1, failed 0", joined)
         self.assertIn("shadow=keep", joined)
+
+
+class InstrumentFailuresLeaveTheShadowDenominator(unittest.TestCase):
+    """An outage must not read as "no theme had a channel today".
+
+    Every failed assessment carries ``status == "unverified"`` by construction,
+    so counting failures inside ``shadow_strict_assessed_n`` would turn a 429
+    storm into a healthy-looking all-``refuse`` day with a non-zero denominator
+    — a failure that looks like an answer, one level up from the per-candidate
+    outcome column. The per-theme failure count lives in the theme-decisions
+    sidecar, which is written best-effort and can be absent for exactly the run
+    that needs it, so the count is also stamped on every candidate row.
+    """
+
+    def _frame(self, assessments):
+        with tempfile.TemporaryDirectory() as tmp:
+            return _RunMapThemes.run(
+                out_dir=Path(tmp),
+                proposed=[
+                    {"ticker": "AAA", "confidence": 0.9},
+                    {"ticker": "BBB", "confidence": 0.8},
+                ],
+                mcaps={"AAA": 1_000_000_000.0, "BBB": 2_000_000_000.0},
+                assessments=assessments,
+            )
+
+    def test_a_failed_assessment_is_outside_the_denominator_and_counted_apart(self):
+        failed = _assessment("unverified", outcome=channel_assessor.AssessmentOutcome.CALL_FAILED)
+        df = self._frame([_assessment("unverified"), failed])
+        self.assertEqual(set(df["shadow_strict_assessed_n"]), {1})
+        self.assertEqual(set(df["shadow_strict_failed_n"]), {1})
+        self.assertEqual(set(df["shadow_strict_verdict"]), {"refuse"})
+
+    def test_a_total_outage_refuses_with_a_zero_denominator(self):
+        failed = _assessment("unverified", outcome=channel_assessor.AssessmentOutcome.CALL_FAILED)
+        df = self._frame([failed, failed])
+        self.assertEqual(set(df["shadow_strict_assessed_n"]), {0})
+        self.assertEqual(set(df["shadow_strict_failed_n"]), {2})
+        # Rows still ship — the assessment never drops anything.
+        self.assertEqual(len(df), 2)
+
+    def test_a_healthy_theme_reports_zero_failures(self):
+        df = self._frame([_assessment("verified"), _assessment("unverified")])
+        self.assertEqual(set(df["shadow_strict_failed_n"]), {0})
+        self.assertEqual(set(df["shadow_strict_assessed_n"]), {2})
+
+
+class StageBIsCappedPerTheme(unittest.TestCase):
+    """Stage B pays only for the candidates that can still ship.
+
+    ``_verify_candidates_for_theme`` attempts the top
+    ``_MAX_VERIFY_ATTEMPTS_PER_THEME`` by stage-A confidence and ships at most
+    ``_MAX_CANDIDATES_PER_THEME``, so a candidate ranked below that can never
+    reach a brief row. Without the cap the stage is bounded only by
+    ``theme_mapper._MAX_CANDIDATES`` in bracket × ``_ASSESS_VOTES`` × the theme
+    count, against a systemd ``TimeoutStartSec`` — and ``map_themes`` writes its
+    parquet once, AFTER the theme loop, so an overrun leaves no file at all.
+    """
+
+    def _run(self, n_candidates):
+        proposed = [
+            {"ticker": f"T{i:02d}", "confidence": 0.9 - i / 100} for i in range(n_candidates)
+        ]
+        mcaps = {c["ticker"]: 1_000_000_000.0 for c in proposed}
+        seen: list[list[str]] = []
+
+        def _fake_assess(*, candidates, **_kwargs):
+            seen.append([str(c["ticker"]) for c in candidates])
+            return [_assessment("verified") for _ in candidates]
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst()),
+            mock.patch.object(
+                orchestrator.theme_mapper,
+                "propose_candidates",
+                return_value=_mapper_result(proposed),
+            ),
+            mock.patch.object(
+                orchestrator.mcap_filter, "fetch_mcap", side_effect=_mcap_from(mcaps)
+            ),
+            mock.patch.object(
+                orchestrator.channel_assessor, "assess_candidates", side_effect=_fake_assess
+            ),
+            mock.patch.object(orchestrator, "_gate_tenk", return_value=True),
+            mock.patch.object(orchestrator, "_gate_press", return_value=False),
+            mock.patch.object(orchestrator, "_gate_insider", return_value=False),
+        ):
+            out = Path(tmp)
+            df = orchestrator.map_themes(
+                themes=["quantum_computing"],
+                asof=_ASOF,
+                output_dir=out,
+                keep_unverified=True,
+            )
+            funnel = pd.read_parquet(out / "proposal_funnel" / f"{_ASOF.isoformat()}.parquet")
+            decisions = pd.read_parquet(out / "theme_decisions" / f"{_ASOF.isoformat()}.parquet")
+        return seen, df, funnel, decisions
+
+    def test_only_the_top_confidence_candidates_reach_the_model(self):
+        seen, _df, _funnel, _decisions = self._run(8)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(len(seen[0]), orchestrator._MAX_ASSESS_PER_THEME)
+        self.assertEqual(seen[0], ["T00", "T01", "T02", "T03", "T04"])
+
+    def test_the_cap_never_drops_a_candidate(self):
+        _seen, _df, funnel, _decisions = self._run(8)
+        # Every proposal still gets a funnel row: the cap is an annotation, not
+        # a filter — the whole point of the increment.
+        self.assertEqual(len(funnel), 8)
+
+    def test_a_capped_candidate_is_distinguishable_from_a_bracket_drop(self):
+        _seen, _df, funnel, _decisions = self._run(8)
+        outcomes = funnel.set_index("ticker")["channel_assessment_outcome"].to_dict()
+        self.assertEqual(outcomes["T00"], "success")
+        self.assertEqual(outcomes["T07"], "over_assess_cap")
+        self.assertNotEqual(outcomes["T07"], "not_assessed")
+        statuses = funnel.set_index("ticker")["channel_status"].to_dict()
+        self.assertEqual(statuses["T07"], channel_assessor.NOT_ASSESSED)
+
+    def test_a_capped_candidate_is_outside_the_shadow_denominator(self):
+        _seen, df, _funnel, _decisions = self._run(8)
+        self.assertEqual(set(df["shadow_strict_assessed_n"]), {5})
+
+    def test_the_theme_decision_records_how_many_were_capped(self):
+        _seen, _df, _funnel, decisions = self._run(8)
+        self.assertEqual(list(decisions["n_over_assess_cap"]), [3])
+        self.assertEqual(list(decisions["n_in_bracket"]), [8])
+
+    def test_a_small_theme_is_not_capped(self):
+        seen, _df, _funnel, decisions = self._run(2)
+        self.assertEqual(seen[0], ["T00", "T01"])
+        self.assertEqual(list(decisions["n_over_assess_cap"]), [0])
+
+    def test_the_cap_is_logged_loudly_when_it_bites(self):
+        with self.assertLogs("alphalens_pipeline.thematic.mapping.orchestrator", "WARNING") as cm:
+            self._run(8)
+        self.assertIn("past the assessment cap", "\n".join(cm.output))
+
+
+class ChannelGaugeCountersComeFromARealRun(unittest.TestCase):
+    """The six ``df.attrs`` counters the CLI publishes as Prometheus gauges.
+
+    The CLI-side test patches ``map_themes`` wholesale, so it can only exercise
+    ``attrs.get(name, 0)``. Nothing else asserted the values ``_channel_counts``
+    actually produces from a real theme loop, which left a wrong sum, a swapped
+    keep/refuse counter or a dropped key free to ship into Prometheus.
+    """
+
+    _NAMES = (
+        "channel_verified",
+        "channel_partial",
+        "channel_unverified",
+        "channel_assess_failed",
+        "themes_shadow_kept",
+        "themes_shadow_refused",
+    )
+
+    def _run(self, per_theme_assessments):
+        themes = [f"theme_{i}" for i in range(len(per_theme_assessments))]
+        proposed = [
+            {"ticker": "AAA", "confidence": 0.9},
+            {"ticker": "BBB", "confidence": 0.8},
+        ]
+        mcaps = {"AAA": 1_000_000_000.0, "BBB": 2_000_000_000.0}
+        batches = iter(per_theme_assessments)
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst()),
+            mock.patch.object(
+                orchestrator.theme_mapper,
+                "propose_candidates",
+                return_value=_mapper_result(proposed),
+            ),
+            mock.patch.object(
+                orchestrator.mcap_filter, "fetch_mcap", side_effect=_mcap_from(mcaps)
+            ),
+            mock.patch.object(
+                orchestrator.channel_assessor,
+                "assess_candidates",
+                side_effect=lambda **_kw: next(batches),
+            ),
+            mock.patch.object(orchestrator, "_gate_tenk", return_value=True),
+            mock.patch.object(orchestrator, "_gate_press", return_value=False),
+            mock.patch.object(orchestrator, "_gate_insider", return_value=False),
+        ):
+            return orchestrator.map_themes(
+                themes=themes,
+                asof=_ASOF,
+                output_dir=Path(tmp),
+                keep_unverified=True,
+            )
+
+    def test_a_known_status_mix_across_two_themes_sums_correctly(self):
+        failed = _assessment("unverified", outcome=channel_assessor.AssessmentOutcome.CALL_FAILED)
+        df = self._run(
+            [
+                [_assessment("verified"), _assessment("partial")],
+                [_assessment("unverified"), failed],
+            ]
+        )
+        self.assertEqual(
+            {name: df.attrs[name] for name in self._NAMES},
+            {
+                "channel_verified": 1,
+                "channel_partial": 1,
+                "channel_unverified": 1,
+                "channel_assess_failed": 1,
+                "themes_shadow_kept": 1,
+                "themes_shadow_refused": 1,
+            },
+        )
+
+    def test_keep_and_refuse_are_not_transposed(self):
+        df = self._run([[_assessment("verified"), _assessment("verified")]])
+        self.assertEqual(df.attrs["themes_shadow_kept"], 1)
+        self.assertEqual(df.attrs["themes_shadow_refused"], 0)
 
 
 class ChannelNeverReachesSelectionOrderingOrTheBriefSort(unittest.TestCase):
