@@ -66,7 +66,10 @@ from typing import Any
 
 from alphalens_pipeline.data.alt_data.saxo_marketdata_auth import LiveAuthConfig, LiveTokenProvider
 from alphalens_pipeline.data.alt_data.saxo_marketdata_client import SaxoMarketDataClient
-from alphalens_pipeline.data.alt_data.saxo_stream_envelope import parse_stream_frames
+from alphalens_pipeline.data.alt_data.saxo_stream_envelope import (
+    StreamMessage,
+    parse_stream_frames,
+)
 from alphalens_pipeline.data.alt_data.session_reclaim import ReclaimLimiter
 
 logger = logging.getLogger(__name__)
@@ -299,19 +302,19 @@ class QuoteCache:
             # here and a `quote_block.get(key) or default`-style rewrite
             # would be wrong: it would treat an explicit null the same as an
             # omitted key.
+            if "DelayedByMinutes" in quote_block:
+                # PRESENT key: coerce-or-veto the reported value (a raw
+                # string must never reach any_delayed's ``> 0``).
+                delayed_by_minutes = _coerce_delayed_minutes(quote_block["DelayedByMinutes"])
+            else:
+                # OMITTED key: inherit the previous, already-coerced value.
+                delayed_by_minutes = prev.delayed_by_minutes if prev else None
             merged = Quote(
                 uic=uic,
                 bid=quote_block.get("Bid", prev.bid if prev else None),
                 ask=quote_block.get("Ask", prev.ask if prev else None),
                 event_time=event_time or (prev.event_time if prev else None),
-                delayed_by_minutes=(
-                    # PRESENT key: coerce-or-veto the reported value (a raw
-                    # string must never reach any_delayed's ``> 0``); OMITTED
-                    # key: inherit the previous, already-coerced value.
-                    _coerce_delayed_minutes(quote_block["DelayedByMinutes"])
-                    if "DelayedByMinutes" in quote_block
-                    else (prev.delayed_by_minutes if prev else None)
-                ),
+                delayed_by_minutes=delayed_by_minutes,
                 received_at=received_at,
             )
             self._quotes[uic] = merged
@@ -797,33 +800,39 @@ class SaxoPriceStream:
                 continue
             if msg.reference_id.startswith(self._CONTROL_REF_PREFIX):
                 continue  # heartbeat / disconnect: liveness only, never a quote row
-            try:
-                payload = json.loads(msg.payload)
-            except ValueError:
-                # Covers json.JSONDecodeError AND UnicodeDecodeError — both
-                # derive from ValueError.
-                logger.warning(
-                    "saxo price stream: undecodable JSON payload for refId %r",
-                    msg.reference_id,
-                )
-                continue
-            rows = payload if isinstance(payload, list) else [payload]
-            for row in rows:
-                if isinstance(row, dict):
-                    if _row_uic(row) not in allowed:
-                        continue  # undesired uic — see the frame-level comment
-                    self.cache.apply(row, received_at=now)
-                else:
-                    # A live shape mismatch (Saxo sending something other
-                    # than a row object) is dropped, never applied - DEBUG
-                    # only, so it leaves a trace without paging on a shape
-                    # that may be benign (e.g. a stray scalar).
-                    logger.debug(
-                        "saxo price stream: dropping non-dict row for refId %r: %r",
-                        msg.reference_id,
-                        row,
-                    )
+            self._apply_quote_message(msg, allowed, now)
         self._maybe_reclaim()
+
+    def _apply_quote_message(self, msg: StreamMessage, allowed: set[int], now: dt.datetime) -> None:
+        """Decode one quote-bearing stream message and fold its rows into the
+        cache; undecodable payloads and non-dict rows are dropped, never raised
+        (see the row-level comments)."""
+        try:
+            payload = json.loads(msg.payload)
+        except ValueError:
+            # Covers json.JSONDecodeError AND UnicodeDecodeError — both
+            # derive from ValueError.
+            logger.warning(
+                "saxo price stream: undecodable JSON payload for refId %r",
+                msg.reference_id,
+            )
+            return
+        rows = payload if isinstance(payload, list) else [payload]
+        for row in rows:
+            if isinstance(row, dict):
+                if _row_uic(row) not in allowed:
+                    continue  # undesired uic — see _apply_frame's frame-level comment
+                self.cache.apply(row, received_at=now)
+            else:
+                # A live shape mismatch (Saxo sending something other
+                # than a row object) is dropped, never applied - DEBUG
+                # only, so it leaves a trace without paging on a shape
+                # that may be benign (e.g. a stray scalar).
+                logger.debug(
+                    "saxo price stream: dropping non-dict row for refId %r: %r",
+                    msg.reference_id,
+                    row,
+                )
 
     def _maybe_reclaim(self) -> None:
         """Fire the reclaim on a TRANSITION into the delayed state - a 1 Hz

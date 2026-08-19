@@ -42,7 +42,7 @@ import math
 import os
 import tempfile
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +190,32 @@ def _finite_positive_float(value: Any) -> float | None:
     return result
 
 
+def _fold_record_into_state(state: dict[str, Any], kind: str, record: Mapping[str, Any]) -> None:
+    """Fold ONE known-kind journal record into a tracker ``state`` dict
+    (the mutable per-crid accumulator behind :func:`fold_entry_trail_lines`)."""
+    if kind in ENTRY_TRAIL_TERMINAL_KINDS:
+        state["terminal_kind"] = kind
+        return
+    state["latest_kind"] = kind
+    if kind == KIND_WATCH_OPEN:
+        state["watch_open"] = dict(record)
+        # A (re-)opened watch has no armed order yet. The memo §5 CRITICAL-2
+        # re-arm re-appends watch_open to reset a DayOrder-cancelled tier back
+        # to WATCHING, so the arm state must clear too — else the stale
+        # resting-order id lingers past the re-arm (harmless to the current
+        # latest_kind-gated readers, but the fold must state the arm truth).
+        state["armed_order_id"] = None
+    elif kind == KIND_TRAIL_ARMED:
+        # The LATEST trail_armed wins (a real-id line overrides the earlier
+        # null-id write-ahead); a missing/blank order id folds back to None.
+        order_id = record.get("order_id")
+        state["armed_order_id"] = str(order_id) if order_id else None
+    elif kind == KIND_TROUGH:
+        trough = _finite_positive_float(record.get(KIND_TROUGH))
+        if trough is not None and (state["min_trough"] is None or trough < state["min_trough"]):
+            state["min_trough"] = trough
+
+
 def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
     """Fold RAW journal lines into per-crid tier state (memo §5).
 
@@ -205,11 +231,8 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
         if not line:
             continue
         record = _parse_record(line)
-        if record is None:
-            malformed += 1
-            continue
-        crid = _record_crid(record)
-        if crid is None:
+        crid = None if record is None else _record_crid(record)
+        if record is None or crid is None:
             malformed += 1
             continue
         kind = record.get("kind")
@@ -225,27 +248,7 @@ def fold_entry_trail_lines(raw_lines: Iterable[str]) -> EntryTrailFold:
                 "armed_order_id": None,
             },
         )
-        if kind in ENTRY_TRAIL_TERMINAL_KINDS:
-            state["terminal_kind"] = kind
-            continue
-        state["latest_kind"] = kind
-        if kind == KIND_WATCH_OPEN:
-            state["watch_open"] = dict(record)
-            # A (re-)opened watch has no armed order yet. The memo §5 CRITICAL-2
-            # re-arm re-appends watch_open to reset a DayOrder-cancelled tier back
-            # to WATCHING, so the arm state must clear too — else the stale
-            # resting-order id lingers past the re-arm (harmless to the current
-            # latest_kind-gated readers, but the fold must state the arm truth).
-            state["armed_order_id"] = None
-        elif kind == KIND_TRAIL_ARMED:
-            # The LATEST trail_armed wins (a real-id line overrides the earlier
-            # null-id write-ahead); a missing/blank order id folds back to None.
-            order_id = record.get("order_id")
-            state["armed_order_id"] = str(order_id) if order_id else None
-        elif kind == KIND_TROUGH:
-            trough = _finite_positive_float(record.get(KIND_TROUGH))
-            if trough is not None and (state["min_trough"] is None or trough < state["min_trough"]):
-                state["min_trough"] = trough
+        _fold_record_into_state(state, kind, record)
     tiers = {crid: EntryTrailTierState(crid=crid, **state) for crid, state in trackers.items()}
     return EntryTrailFold(tiers=tiers, malformed=malformed)
 
@@ -373,10 +376,7 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
     Blank lines are dropped. Pure: no I/O, input never mutated."""
     materialized = [raw_line.rstrip("\n") for raw_line in raw_lines]
     keep: set[int] = set()
-    latest_watch_open: dict[str, int] = {}
-    min_trough: dict[str, tuple[float, int]] = {}
-    latest_state: dict[str, int] = {}
-    latest_terminal: dict[str, int] = {}
+    tracker = _CompactionTracker()
 
     for index, raw_line in enumerate(materialized):
         line = raw_line.strip()
@@ -391,24 +391,45 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
         if kind not in ENTRY_TRAIL_KINDS:
             keep.add(index)  # unknown kind — preserved verbatim (G4)
             continue
+        tracker.note(crid, kind, record, index)
+
+    keep.update(tracker.kept_indexes())
+    return [materialized[index] for index in sorted(keep)]
+
+
+@dataclass
+class _CompactionTracker:
+    """The per-crid latest/min index bookkeeping behind
+    :func:`compact_entry_trail_lines` — which known-kind line indexes must
+    survive compaction for the fold to come out identical."""
+
+    latest_watch_open: dict[str, int] = field(default_factory=dict)
+    min_trough: dict[str, tuple[float, int]] = field(default_factory=dict)
+    latest_state: dict[str, int] = field(default_factory=dict)
+    latest_terminal: dict[str, int] = field(default_factory=dict)
+
+    def note(self, crid: str, kind: str, record: Mapping[str, Any], index: int) -> None:
+        """Track one known-kind record at ``index`` (file order = time order)."""
         if kind in ENTRY_TRAIL_TERMINAL_KINDS:
-            latest_terminal[crid] = index
-            continue
-        latest_state[crid] = index
+            self.latest_terminal[crid] = index
+            return
+        self.latest_state[crid] = index
         if kind == KIND_WATCH_OPEN:
-            latest_watch_open[crid] = index
+            self.latest_watch_open[crid] = index
         elif kind == KIND_TROUGH:
             trough = _finite_positive_float(record.get(KIND_TROUGH))
             if trough is not None:
-                prior = min_trough.get(crid)
+                prior = self.min_trough.get(crid)
                 if prior is None or trough <= prior[0]:
-                    min_trough[crid] = (trough, index)
+                    self.min_trough[crid] = (trough, index)
 
-    keep.update(latest_watch_open.values())
-    keep.update(index for _trough, index in min_trough.values())
-    keep.update(latest_state.values())
-    keep.update(latest_terminal.values())
-    return [materialized[index] for index in sorted(keep)]
+    def kept_indexes(self) -> set[int]:
+        """Every tracked index that must be preserved."""
+        kept = set(self.latest_watch_open.values())
+        kept.update(index for _trough, index in self.min_trough.values())
+        kept.update(self.latest_state.values())
+        kept.update(self.latest_terminal.values())
+        return kept
 
 
 def compact_entry_trail_journal() -> None:
