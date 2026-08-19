@@ -339,7 +339,7 @@ class TestUnassessedAndRowFields(unittest.TestCase):
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.NOT_ASSESSED)
         self.assertEqual(result.channel_type, "none")
 
-    def test_row_fields_emit_the_twelve_channel_columns(self):
+    def test_row_fields_emit_the_per_candidate_channel_columns(self):
         fields = channel_assessor.row_fields(channel_assessor.unassessed())
         self.assertEqual(set(fields), set(channel_assessor.CHANNEL_ROW_COLUMNS))
         self.assertEqual(fields["channel_status"], "not_assessed")
@@ -354,11 +354,14 @@ class TestUnassessedAndRowFields(unittest.TestCase):
             channel_assessor.row_fields(channel_assessor.unassessed()),
         )
 
-    def test_row_fields_carry_the_config_token(self):
+    def test_row_fields_do_not_carry_the_config_token(self):
+        # The token depends on the RUN's model, which only the driver knows, so
+        # it is stamped frame-wide beside ``mapper_config_version``. Building it
+        # per row from the default model would make a ``model=`` override ship
+        # rows whose config column contradicted their own freeze token.
         fields = channel_assessor.row_fields(channel_assessor.unassessed())
-        self.assertEqual(
-            fields["channel_config_version"], channel_assessor.channel_config_version()
-        )
+        self.assertNotIn(channel_assessor.CHANNEL_CONFIG_COLUMN, fields)
+        self.assertEqual(channel_assessor.CHANNEL_CONFIG_COLUMN, "channel_config_version")
 
 
 class TestShadowStrictVerdict(unittest.TestCase):

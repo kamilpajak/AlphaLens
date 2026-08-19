@@ -168,8 +168,9 @@ class ChannelAssessment:
     assessed_at: str | None
 
 
-# The columns :func:`row_fields` stamps. Named here so the orchestrator's
-# ``_MAP_THEMES_COLUMNS`` and the test that pins the contract read ONE list.
+# The per-candidate columns :func:`row_fields` stamps. Named here so the
+# orchestrator's ``_MAP_THEMES_COLUMNS`` and the test that pins the contract
+# read ONE list.
 CHANNEL_ROW_COLUMNS: tuple[str, ...] = (
     "channel_status",
     "channel_type",
@@ -182,8 +183,14 @@ CHANNEL_ROW_COLUMNS: tuple[str, ...] = (
     "channel_vote_dispersion",
     "channel_assessment_outcome",
     "channel_assessed_at",
-    "channel_config_version",
 )
+
+# Stamped FRAME-WIDE by the orchestrator, not per row, for the same reason
+# ``mapper_config_version`` is: the token depends on the run's model, which the
+# caller may override, and a per-row builder would have to be handed that model
+# at every call site. One stamp at the driver, where the model is known, cannot
+# disagree with the freeze token stamped beside it.
+CHANNEL_CONFIG_COLUMN = "channel_config_version"
 
 # The shadow RULE, versioned SEPARATELY from ``channel_config_version``. The
 # rule is recomputable offline from ``shadow_strict_verified_n`` /
@@ -645,14 +652,13 @@ def unassessed() -> ChannelAssessment:
     )
 
 
-def row_fields(
-    assessment: ChannelAssessment | None, *, model: str | None = None
-) -> dict[str, object]:
-    """The twelve ``channel_*`` columns for one candidate / funnel row.
+def row_fields(assessment: ChannelAssessment | None) -> dict[str, object]:
+    """The eleven per-candidate ``channel_*`` columns for one row.
 
     ``None`` renders as the :func:`unassessed` shape so every row carries every
     column — a column that appears only on some rows is a schema that changes
-    with the weather.
+    with the weather. :data:`CHANNEL_CONFIG_COLUMN` is NOT here: it is stamped
+    frame-wide by the driver, which is the only place the run's model is known.
     """
     a = assessment if assessment is not None else unassessed()
     return {
@@ -667,7 +673,6 @@ def row_fields(
         "channel_vote_dispersion": a.dispersion,
         "channel_assessment_outcome": a.outcome.value,
         "channel_assessed_at": a.assessed_at,
-        "channel_config_version": channel_config_version(model=model),
     }
 
 
@@ -712,6 +717,7 @@ def status_counts(assessments: Sequence[ChannelAssessment]) -> dict[str, int]:
 
 
 __all__ = [
+    "CHANNEL_CONFIG_COLUMN",
     "CHANNEL_ROW_COLUMNS",
     "CHANNEL_STATUSES",
     "CHANNEL_TYPES",

@@ -350,6 +350,7 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     # Parquet-only: the Django ingest reads only enumerated model fields, so
     # these ride to ~/.alphalens/thematic_briefs/ and stop there.
     *channel_assessor.CHANNEL_ROW_COLUMNS,
+    channel_assessor.CHANNEL_CONFIG_COLUMN,
     "shadow_strict_verdict",
     "shadow_strict_verified_n",
     "shadow_strict_assessed_n",
@@ -558,7 +559,6 @@ def _funnel_row(
         "channel_status": fields["channel_status"],
         "channel_type": fields["channel_type"],
         "channel_confidence": fields["channel_confidence"],
-        "channel_config_version": fields["channel_config_version"],
         "shadow_strict_verdict": shadow[0],
         "market_cap": verdict.market_cap if verdict is not None else None,
         "bracket_verdict": verdict.verdict if verdict is not None else mcap_filter.NO_MCAP,
@@ -568,7 +568,11 @@ def _funnel_row(
 
 
 def _write_proposal_funnel_best_effort(
-    asof: dt.date, funnel_rows: list[dict], config_version: str, out_dir: Path
+    asof: dt.date,
+    funnel_rows: list[dict],
+    config_version: str,
+    channel_version: str,
+    out_dir: Path,
 ) -> None:
     """Write the pre-bracket proposal funnel; swallow any failure.
 
@@ -584,6 +588,7 @@ def _write_proposal_funnel_best_effort(
         frame = pd.DataFrame(funnel_rows)
         frame["asof"] = asof.isoformat()
         frame["mapper_config_version"] = config_version
+        frame[channel_assessor.CHANNEL_CONFIG_COLUMN] = channel_version
         # ``reindex`` below fixes the schema, which also means a renamed or
         # misspelled key in ``_funnel_row`` would ship as a silently all-null
         # column instead of failing. Say so once, at WARNING, rather than
@@ -1334,6 +1339,9 @@ def map_themes(
     # atomically so a crash mid-write can never leave a partial parquet that a
     # later run would treat as a valid freeze.
     df["mapper_config_version"] = config_version
+    # Frame-wide, beside the mapper token, so the two can never disagree about
+    # which model produced the run (``model=`` overrides both).
+    df[channel_assessor.CHANNEL_CONFIG_COLUMN] = channel_version
     df.attrs["dropped_total"] = dropped_total
     df.attrs["dropped_all_unknown"] = dropped_all_unknown
     df.attrs.update(_outcome_counts(outcomes))
@@ -1348,7 +1356,9 @@ def map_themes(
     # Pre-bracket funnel: one row per proposal WITH the reason it survived or
     # died. The shadow above is post-mcap by design, so without this the names
     # the bracket rejects leave no trace anywhere on disk.
-    _write_proposal_funnel_best_effort(asof, funnel_rows, config_version, output_dir)
+    _write_proposal_funnel_best_effort(
+        asof, funnel_rows, config_version, channel_version, output_dir
+    )
     # One row per theme the driver TOUCHED, including the ones that produced no
     # candidate row at all (a stage-A decline, a no-catalyst skip). Without it a
     # refusal is invisible on disk, which is exactly why the pre-registered
@@ -1392,13 +1402,15 @@ def write_empty_candidates(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{asof.isoformat()}.parquet"
+    channel_version = channel_assessor.channel_config_version(model=model)
     config_version = theme_mapper.mapper_config_version(
         market_cap_range=market_cap_range,
         model=model,
-        channel_config_version=channel_assessor.channel_config_version(model=model),
+        channel_config_version=channel_version,
     )
     df = pd.DataFrame(columns=list(_MAP_THEMES_COLUMNS))
     df["mapper_config_version"] = config_version
+    df[channel_assessor.CHANNEL_CONFIG_COLUMN] = channel_version
     # Mirror the all-dropped branch of map_themes: record the active novelty
     # config so the empty-day parquet schema is identical to a non-empty day.
     df["novelty_config_version"] = novelty_config_version

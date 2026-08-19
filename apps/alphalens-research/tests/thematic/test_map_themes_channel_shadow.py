@@ -213,6 +213,64 @@ class BuildRowStampsTheChannelFields(unittest.TestCase):
             self.assertIn(column, orchestrator._MAP_THEMES_COLUMNS)
 
 
+class ChannelConfigVersionFollowsTheModelOverride(unittest.TestCase):
+    """The stamped token must describe the run that produced the row.
+
+    ``map_themes(model=...)`` overrides the assessor's model, and the freeze
+    token composed for the parquet already accounts for it. If the per-row
+    ``channel_config_version`` column were built from the default model instead,
+    a model-override run would ship rows whose config column contradicted the
+    freeze token stamped on the same rows.
+    """
+
+    def test_the_stamped_token_matches_the_model_the_run_used(self):
+        model = "some/other-model"
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst()),
+            mock.patch.object(
+                orchestrator.theme_mapper,
+                "propose_candidates",
+                return_value=_mapper_result([{"ticker": "AAA", "confidence": 0.9}]),
+            ),
+            mock.patch.object(
+                orchestrator.mcap_filter,
+                "fetch_mcap",
+                side_effect=_mcap_from({"AAA": 1_000_000_000.0}),
+            ),
+            mock.patch.object(
+                orchestrator.channel_assessor,
+                "assess_candidates",
+                return_value=[_assessment("verified")],
+            ),
+            mock.patch.object(orchestrator, "_gate_tenk", return_value=True),
+            mock.patch.object(orchestrator, "_gate_press", return_value=False),
+            mock.patch.object(orchestrator, "_gate_insider", return_value=False),
+        ):
+            out = Path(tmp)
+            df = orchestrator.map_themes(
+                themes=["quantum_computing"],
+                asof=_ASOF,
+                output_dir=out,
+                keep_unverified=True,
+                model=model,
+            )
+            funnel = pd.read_parquet(out / "proposal_funnel" / f"{_ASOF.isoformat()}.parquet")
+            decisions = pd.read_parquet(out / "theme_decisions" / f"{_ASOF.isoformat()}.parquet")
+
+        expected = channel_assessor.channel_config_version(model=model)
+        self.assertEqual(set(df["channel_config_version"]), {expected})
+        self.assertEqual(set(funnel["channel_config_version"]), {expected})
+        self.assertEqual(set(decisions["channel_config_version"]), {expected})
+
+    def test_the_empty_day_parquet_carries_the_same_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            orchestrator.write_empty_candidates(asof=_ASOF, output_dir=out, model="some/other")
+            df = pd.read_parquet(out / f"{_ASOF.isoformat()}.parquet")
+        self.assertIn("channel_config_version", df.columns)
+
+
 class ShadowVerdictIsStampedOnEveryRowOfTheTheme(unittest.TestCase):
     def _frame(self, assessments):
         with tempfile.TemporaryDirectory() as tmp:
