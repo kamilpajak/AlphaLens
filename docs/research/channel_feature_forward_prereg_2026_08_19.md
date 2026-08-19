@@ -63,10 +63,26 @@ legs are reported descriptively and are not pooled across the token change.
 
 Aggregation per candidate: k = 3 independent draws at temperature 0.0 under the pinned
 OpenRouter provider, ordinal median over `unverified=0 / partial=1 / verified=2`,
-`channel_vote_dispersion = max − min` over valid draws. Draws that fail or come back
-off-vocabulary are excluded from the median; a candidate with zero valid draws is recorded
-`channel_status="unverified", channel_assessment_outcome="call_failed"` and is **excluded
-from both legs of the primary test** (§4), pre-committed here.
+`channel_vote_dispersion = max − min` over valid draws. Draws that fail, come back
+off-vocabulary, or arrive truncated (`finish_reason` `MAX_TOKENS`) are excluded from the
+median; a candidate with zero valid draws is recorded `channel_status="unverified"` with the
+failing `channel_assessment_outcome` and is **excluded from both legs of the primary test**
+(§4), pre-committed here.
+
+**Even vote sets (pre-committed).** `valid_n` is not `k`: one lost draw leaves two valid
+draws, which is routine. The even case is decided here rather than by an implicit lower or
+upper median, because the primary's two legs are literally `verified` and `unverified` and
+a silent tie-break would move rows between them. **When the two central ordinals disagree,
+the result is `partial`**; when they agree, that value stands. `partial` is excluded from
+both legs (§4.1), so a tied candidate is reported as tied and enters neither leg. Pinned by
+`tests/thematic/mapping/test_channel_assessor.py::TestEvenVoteTieBreak`.
+
+**Instrument failures and the shadow denominator.** `shadow_strict_assessed_n` counts only
+candidates the model ANSWERED. A failed assessment carries `channel_status == "unverified"`
+by construction, so counting it would make an outage read as a channel-less day; those rows
+are reported as `shadow_strict_failed_n` on the same row. Any offline re-cut of the shadow
+rule (§5.6) must filter on `channel_assessment_outcome == "success"` before recomputing —
+the same filter §4.1 already applies to the candidate-level legs.
 
 ## 4. Primary hypothesis — one test, one slot
 
@@ -152,11 +168,22 @@ None of the following may carry a verdict word, and none may be used to promote
 2. **`channel_type` breakdown** — counts and cell means by the nine-value vocabulary.
    Interest concentrates on `category_attention` (an honest "attention only" answer) versus
    the mechanical types, but no per-type test is registered; n per type will be small.
-3. **Crowd-out metric** — share of stage-A proposals that land in the 500M-10B bracket, and
-   the distribution of proposed tickers by mcap decile, compared against the retro's 96.0%
-   `KEPT_TICKER_ABSENT` and the mega-cap-headed kept-theme proposal sets (XOM/CVX/COP/
-   GOOGL/PSX/NVDA/RTX). This is the acceptance readout for Move 1; it uses **proposal**
-   data, not outcomes, so it can be read within days of deploy.
+3. **Crowd-out metric, at BOTH levels.** (a) *Proposal level* — share of stage-A proposals
+   that land in the 500M-10B bracket, and the distribution of proposed tickers by mcap
+   decile, compared against the retro's 96.0% `KEPT_TICKER_ABSENT` and the mega-cap-headed
+   kept-theme proposal sets (XOM/CVX/COP/GOOGL/PSX/NVDA/RTX). (b) *Ship level* — the same
+   two readouts over the rows that actually reach a brief: share of brief rows whose ticker
+   was NOT named in the source event, and the mcap-decile distribution of shipped rows.
+   Level (b) exists because the repair is only real if it survives the ship path: the
+   verify stage attempts the top `_MAX_VERIFY_ATTEMPTS_PER_THEME` = 5 in-bracket candidates
+   by stage-A confidence and ships at most `_MAX_CANDIDATES_PER_THEME` = 3, and stage A is
+   now asked to order most-direct-first — so the less-visible names this increment exists
+   to surface sit at the tail. The acceptance probe measured 2.1 in-bracket per theme, at
+   which the cap does not bind; §11 projects 5-7 per theme if Move 1 works, at which it
+   does. **Watch `n_in_bracket` and `n_over_assess_cap` in the theme-decisions sidecar
+   against the cap of 5 on the first days after deploy.** Selection is deliberately NOT
+   changed in this increment; the cap is made visible, not moved. Both levels use
+   **proposal / brief** data, not outcomes, so they can be read within days of deploy.
 4. **Volume per day** — proposals/day, in-bracket/day, assessed/day, brief rows/day, and
    the `channel_status` mix; against the pre-Stage-1 baseline (~99 proposals/day,
    ~10 brief rows/day) and the Stage-1 baseline (~19/day, ~1-6/day).

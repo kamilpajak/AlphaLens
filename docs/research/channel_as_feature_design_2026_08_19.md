@@ -161,7 +161,11 @@ today. No migration, no serializer change, no API surface in this increment.
 ## 4. Field contract
 
 Stamped by `orchestrator._build_row` and listed in `_MAP_THEMES_COLUMNS` (the typed-empty
-schema, so a zero-candidate day writes the same column set).
+schema, so a zero-candidate day writes the same column set). One exception, marked in the
+table: **`channel_config_version` is stamped frame-wide by the driver, not by
+`_build_row`** — the token depends on the run's model, which only the driver knows under
+`map_themes(model=...)`, and a per-row builder reading `DEFAULT_MODEL` would contradict the
+freeze token stamped beside it on the same rows.
 
 | Column | Type | Vocabulary / meaning |
 |---|---|---|
@@ -174,12 +178,13 @@ schema, so a zero-candidate day writes the same column set).
 | `channel_vote_k` | Int64 | Draws requested (`_ASSESS_VOTES`). Persisted so a later change of k is visible in the data, not only in the config token. |
 | `channel_vote_valid_n` | Int64 | Draws that parsed and entered the median. |
 | `channel_vote_dispersion` | Int64 | Ordinal spread over valid draws; 0 = unanimous. The per-row instrument-noise readout the retro's instrument qualification makes mandatory. |
-| `channel_assessment_outcome` | str | `success` / `empty_payload` / `malformed_payload` / `call_failed` / `not_assessed`. Mirrors `MapperOutcome` so "the assessor said unverified" is never conflated with "the assessor call died". |
+| `channel_assessment_outcome` | str | `success` / `empty_payload` / `malformed_payload` / `truncated` / `call_failed` / `not_assessed` / `over_assess_cap`. Mirrors `MapperOutcome` so "the assessor said unverified" is never conflated with "the assessor call died". `truncated` is a generation the provider cut at the output budget (`finish_reason` `MAX_TOKENS`), read from the response rather than inferred from the body — a clipped draw arrives either empty or as partial JSON, and both would otherwise masquerade as a different failure. `over_assess_cap` is an in-bracket candidate ranked below the per-theme assessment cap; it shares the `not_assessed` STATUS with a bracket drop but keeps its own outcome so the two stay separable in the funnel parquet. |
 | `channel_assessed_at` | str | ISO-8601 UTC, or None. |
-| `channel_config_version` | str | Canonical-JSON poolability token for the assessment stage. |
+| `channel_config_version` | str | Canonical-JSON poolability token for the assessment stage. **Stamped frame-wide by the driver**, not by `_build_row`. |
 | `shadow_strict_verdict` | str | Theme-level, `keep` / `refuse` (§5). |
-| `shadow_strict_verified_n` | Int64 | Theme's assessed candidates with `channel_status == "verified"`. |
-| `shadow_strict_assessed_n` | Int64 | Theme's candidates actually assessed (in-bracket). Makes the verdict's denominator explicit. |
+| `shadow_strict_verified_n` | Int64 | Theme's ANSWERED candidates with `channel_status == "verified"`. |
+| `shadow_strict_assessed_n` | Int64 | Theme's candidates the model actually ANSWERED (in-bracket, assessed, `channel_assessment_outcome == "success"`). Makes the verdict's denominator explicit. |
+| `shadow_strict_failed_n` | Int64 | Theme's assessed candidates whose call FAILED. Kept out of `shadow_strict_assessed_n` on purpose: an instrument failure carries `channel_status == "unverified"` by construction, so counting it in the denominator would turn a 429 storm into a healthy-looking "no theme had a channel today". Stamped on the row rather than only in the sidecar, which is written best-effort and can be absent for exactly the run that needs it. |
 | `shadow_strict_rule_version` | str | `shadow-strict-any-verified-v1`. |
 
 **Removed:** `transmission_channel` (free text, stamped today at `_build_row` and carried in
@@ -189,7 +194,7 @@ with a real status beside it. No alias, no shim.
 **New sidecar:** `~/.alphalens/thematic_candidates/theme_decisions/{asof}.parquet`, one row
 per theme the driver touched — `asof, theme, catalyst_url, catalyst_event_type,
 mapper_outcome, decline_reason, n_proposed, n_in_bracket, n_verified, n_partial,
-n_unverified, n_assess_failed, shadow_strict_verdict, shadow_strict_rule_version,
+n_unverified, n_assess_failed, n_over_assess_cap, shadow_strict_verdict, shadow_strict_rule_version,
 mapper_config_version, channel_config_version`. Written best-effort, exactly like the
 proposal-funnel writer. Without it, a stage-A decline and a no-catalyst skip still leave
 zero trace on disk.
@@ -200,7 +205,7 @@ regression test pins that.
 
 ## 5. The shadow verdict
 
-`shadow_strict_verdict = "refuse"` iff **no** assessed candidate of the theme reached
+`shadow_strict_verdict = "refuse"` iff **no** ANSWERED candidate of the theme reached
 `channel_status == "verified"`, else `"keep"`. Rule version
 `shadow-strict-any-verified-v1`, deliberately **not** part of `channel_config_version`: the
 rule can be re-cut offline from `shadow_strict_verified_n` / `shadow_strict_assessed_n`
@@ -384,11 +389,11 @@ purpose. If it works and volume lands at 50-70/day, stage B is nearer ~$25/mo.
   does one mcap lookup per proposal, and the 2026-07-25 rate-limit incident cost a whole
   day's briefs. Watch the `NO_MCAP` share in the funnel parquet and the named-dropped log
   line on the first days.
-* **Latency.** k=3 × ~40 candidates ≈ 120 sequential stage-B calls added to map-themes;
-  at a few seconds each that is ~5-15 minutes on the first slot. The
-  `alphalens-thematic-build` unit already runs at `TimeoutStartSec=75min` after #582. Check
-  headroom before deploy; if it bites, use a bounded `ThreadPoolExecutor` within a theme
-  while keeping the provider pin intact.
+* **Latency.** REVISED — see §15. The original estimate ("a few seconds each, ~5-15
+  minutes") was contradicted by the acceptance probe's own measurement (median 899
+  completion tokens, 787 of them reasoning), and the token-cap fix makes each call slower
+  still. The stage is now capped per theme AND fanned out 3-wide, and
+  `TimeoutStartSec` went 75 → 110min.
 * **An unverified row is now shippable and the UI says nothing about it.** Accepted for
   this increment, stated here so it is a decision rather than a leak; a display PR must not
   render it as an unlabelled quality claim.
@@ -493,3 +498,31 @@ $0.26), summed from the OpenRouter `usage.cost` field rather than estimated.
 
 Full report and per-call provenance:
 `scratchpad/channel_feature/acceptance.md` (session scratch, not versioned).
+
+
+## 15. Review-fix increment (2026-08-19, post-probe)
+
+Three reviewers read the branch after the acceptance probe. Everything below landed as
+separate commits on the same PR, **before** the first frozen day, because each item is
+either a `channel_config_version` input (retrofitting after the cohort opens ends the
+accrual window a second time) or a production-stall risk.
+
+| Finding | Fix |
+|---|---|
+| The 1500-token cap sits below the model's reasoning burn (probe: 9.0% of stage-B calls returned an empty body at exactly completion 1501 / reasoning 1500) | `_ASSESS_MAX_OUTPUT_TOKENS` 1500 → 4000. |
+| A clipped generation was invisible to the parser: it arrived either empty (`EMPTY_PAYLOAD`, re-rolled at the same budget) or as partial JSON (`MALFORMED_PAYLOAD`, not re-rolled at all) | `finish_reason` is threaded from the response into `_parse_draw`; `MAX_TOKENS` becomes `AssessmentOutcome.TRUNCATED`, which outranks the body and is re-rolled once. |
+| A 4000-token reasoning draw exceeds the client's 60s read timeout, which would convert truncation failures into socket timeouts | `openrouter_client._DEFAULT_TIMEOUT` read 60 → 180s. NOT a config-version input, so it stays tunable later. |
+| `_aggregate` resolved an EVEN vote set to the LOWER median silently, and `valid_n` is not `k` whenever a draw is lost — so a `{verified, unverified}` disagreement was placed in the primary's leg U by an untested tie-break | Pre-committed rule: two disagreeing central ordinals resolve to `partial`, which the pre-registration excludes from both legs. Written into the forward pre-reg §3 and pinned by `TestEvenVoteTieBreak`. |
+| `shadow_strict_verdict` counted instrument failures in its denominator, so an outage read as "no theme had a channel today" with a healthy-looking non-zero `shadow_strict_assessed_n` | The denominator counts ANSWERED candidates only; failures are reported as the new `shadow_strict_failed_n` column, stamped on every row (the sidecar that used to hold the count is best-effort and can be absent for exactly the run that needs it). |
+| Stage B was sequential, unbounded and unthrottled — worst case 10 themes × 15 in-bracket × 3 votes = 450 calls against `TimeoutStartSec`, and `map_themes` writes its parquet ONCE after the theme loop, so a SIGTERM leaves no file and the next slot restarts from zero | Capped at `_MAX_ASSESS_PER_THEME = _MAX_VERIFY_ATTEMPTS_PER_THEME` (5) — the candidates that can still ship — and fanned out 3-wide per theme via `ThreadPoolExecutor` (`Executor.map` preserves input order, so the positional zip contract is untouched). Candidates past the cap are annotated `over_assess_cap`, never dropped, and the truncation is logged at WARNING plus recorded per theme as `n_over_assess_cap`. `TimeoutStartSec` 75 → 110min. |
+| The six new Prometheus gauges had no alert rule anywhere | `AlphalensThematicChannelAssessFailureHigh` (failure share > 1/3 over ≥5 assessed, `for: 6h`) plus an `AlphalensThematicChannelGaugesMissing` companion. Live rules are hand-synced on the VPS — the repo edit alone does not arm them. |
+| `_PROPOSAL_FUNNEL_COLUMNS` carried `channel_status` without the outcome, so a row whose assessment DIED was byte-identical to a row the model answered `unverified` — in the one file a later recall audit reads | Added `channel_assessment_outcome` and `channel_vote_valid_n` to the funnel. |
+| The crowd-out repair was measured only at PROPOSAL level, while the ship path still truncates at 5 attempts / 3 rows in stage-A confidence order | The pre-reg's descriptive 3 now has a ship-level arm (share of brief rows whose ticker was not named in the event; mcap-decile distribution of shipped rows) and an instruction to watch `n_in_bracket` / `n_over_assess_cap` against the cap. Selection itself is deliberately unchanged. |
+| A missing `decline_reason` fired the same prompt-drift WARNING as a genuine off-enum value | Absent coerces to `no_event` quietly; only a non-empty off-enum value warns. Both tests now assert the coercion TARGET, not merely enum membership. |
+
+Test-side fixes in the same pass: the `valid_n == 2` cases, an `over_assess_cap` case, the
+`not_assessed` shadow-filter case, `status_counts` value assertions, the frozen-v2 error
+ladder (empty → re-roll, malformed not re-rolled, raising call, client-init failure), the
+six gauge counters asserted against a REAL theme loop and against the REAL frozen-reuse
+branch (the CLI test patches `map_themes` wholesale and can only exercise its own default),
+and the empty-day token test rewritten to pin the wiring rather than a column's presence.
