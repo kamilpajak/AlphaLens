@@ -360,6 +360,45 @@ def append_entry_trail_line(record: Mapping[str, Any]) -> None:
 # --- Compaction (memo G4) ----------------------------------------------------
 
 
+@dataclass
+class _CompactionTracker:
+    """The per-crid latest/min index bookkeeping behind
+    :func:`compact_entry_trail_lines` — which known-kind line indexes must
+    survive compaction for the fold to come out identical.
+
+    MUTABLE by design (unlike this module's frozen dataclasses): ``note()``
+    updates the four index dicts in place across a single compaction pass and
+    the instance is discarded after ``kept_indexes()``."""
+
+    latest_watch_open: dict[str, int] = field(default_factory=dict)
+    min_trough: dict[str, tuple[float, int]] = field(default_factory=dict)
+    latest_state: dict[str, int] = field(default_factory=dict)
+    latest_terminal: dict[str, int] = field(default_factory=dict)
+
+    def note(self, crid: str, kind: str, record: Mapping[str, Any], index: int) -> None:
+        """Track one known-kind record at ``index`` (file order = time order)."""
+        if kind in ENTRY_TRAIL_TERMINAL_KINDS:
+            self.latest_terminal[crid] = index
+            return
+        self.latest_state[crid] = index
+        if kind == KIND_WATCH_OPEN:
+            self.latest_watch_open[crid] = index
+        elif kind == KIND_TROUGH:
+            trough = _finite_positive_float(record.get(KIND_TROUGH))
+            if trough is not None:
+                prior = self.min_trough.get(crid)
+                if prior is None or trough <= prior[0]:
+                    self.min_trough[crid] = (trough, index)
+
+    def kept_indexes(self) -> set[int]:
+        """Every tracked index that must be preserved."""
+        kept = set(self.latest_watch_open.values())
+        kept.update(index for _trough, index in self.min_trough.values())
+        kept.update(self.latest_state.values())
+        kept.update(self.latest_terminal.values())
+        return kept
+
+
 def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
     """The MINIMAL set of raw lines that folds IDENTICALLY to ``raw_lines``,
     in their original relative order (the fold's latest-kind semantics are
@@ -395,41 +434,6 @@ def compact_entry_trail_lines(raw_lines: Iterable[str]) -> list[str]:
 
     keep.update(tracker.kept_indexes())
     return [materialized[index] for index in sorted(keep)]
-
-
-@dataclass
-class _CompactionTracker:
-    """The per-crid latest/min index bookkeeping behind
-    :func:`compact_entry_trail_lines` — which known-kind line indexes must
-    survive compaction for the fold to come out identical."""
-
-    latest_watch_open: dict[str, int] = field(default_factory=dict)
-    min_trough: dict[str, tuple[float, int]] = field(default_factory=dict)
-    latest_state: dict[str, int] = field(default_factory=dict)
-    latest_terminal: dict[str, int] = field(default_factory=dict)
-
-    def note(self, crid: str, kind: str, record: Mapping[str, Any], index: int) -> None:
-        """Track one known-kind record at ``index`` (file order = time order)."""
-        if kind in ENTRY_TRAIL_TERMINAL_KINDS:
-            self.latest_terminal[crid] = index
-            return
-        self.latest_state[crid] = index
-        if kind == KIND_WATCH_OPEN:
-            self.latest_watch_open[crid] = index
-        elif kind == KIND_TROUGH:
-            trough = _finite_positive_float(record.get(KIND_TROUGH))
-            if trough is not None:
-                prior = self.min_trough.get(crid)
-                if prior is None or trough <= prior[0]:
-                    self.min_trough[crid] = (trough, index)
-
-    def kept_indexes(self) -> set[int]:
-        """Every tracked index that must be preserved."""
-        kept = set(self.latest_watch_open.values())
-        kept.update(index for _trough, index in self.min_trough.values())
-        kept.update(self.latest_state.values())
-        kept.update(self.latest_terminal.values())
-        return kept
 
 
 def compact_entry_trail_journal() -> None:
