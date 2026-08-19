@@ -5605,6 +5605,55 @@ def _planned_fold_data(
     }
 
 
+def _position_row(uic: int | None, qty: float) -> Any:
+    """A duck-typed broker position ledger row; ``uic=None`` builds a row whose
+    ``broker_instrument_id`` cannot be parsed back to a uic."""
+    instr = type(
+        "I", (), {"broker_instrument_id": None if uic is None else str(uic), "currency": "USD"}
+    )()
+    return type("Pos", (), {"instrument": instr, "quantity": qty})()
+
+
+class TestNetOpenPositionUics(unittest.TestCase):
+    """EOD-netting risk-unit counting: a LIVE Saxo intraday round-trip is two
+    ledger rows (+q / -q) netting to zero until the nightly netting — MAX_OPEN
+    must count distinct net-nonzero uics, never raw rows."""
+
+    def test_round_trip_rows_net_to_no_open_uic(self) -> None:
+        uics, unresolvable = cl._net_open_position_uics(
+            [_position_row(42, 8.0), _position_row(42, -8.0)]
+        )
+        self.assertEqual(uics, frozenset())
+        self.assertEqual(unresolvable, 0)
+
+    def test_partially_closed_long_is_one_open_uic(self) -> None:
+        uics, unresolvable = cl._net_open_position_uics(
+            [_position_row(42, 8.0), _position_row(42, -3.0)]
+        )
+        self.assertEqual(uics, frozenset({42}))
+        self.assertEqual(unresolvable, 0)
+
+    def test_two_net_nonzero_uics_are_two_open_uics(self) -> None:
+        # A net short is a risk unit too — only net-ZERO drops out.
+        uics, unresolvable = cl._net_open_position_uics(
+            [_position_row(42, 8.0), _position_row(43, -5.0)]
+        )
+        self.assertEqual(uics, frozenset({42, 43}))
+        self.assertEqual(unresolvable, 0)
+
+    def test_unresolvable_uic_rows_count_one_each(self) -> None:
+        # Fail-conservative: a row we cannot attribute to a uic still occupies
+        # a slot — never undercount risk units.
+        uics, unresolvable = cl._net_open_position_uics(
+            [_position_row(None, 8.0), _position_row(None, 3.0)]
+        )
+        self.assertEqual(uics, frozenset())
+        self.assertEqual(unresolvable, 2)
+
+    def test_empty_book_is_zero(self) -> None:
+        self.assertEqual(cl._net_open_position_uics([]), (frozenset(), 0))
+
+
 class TestCompactStandaloneStopJournalLines(unittest.TestCase):
     """Issue #895: the pure compaction returns the minimal fold-equivalent set."""
 

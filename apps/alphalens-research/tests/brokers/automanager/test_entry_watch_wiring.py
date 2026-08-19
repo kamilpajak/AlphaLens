@@ -1622,6 +1622,78 @@ class TestOpenWatchesCountAgainstMaxOpen(unittest.TestCase):
         self.assertEqual(opens_for_ko, [])
 
 
+class TestEodNettingRowsAreNetRiskUnits(unittest.TestCase):
+    """LIVE Saxo accounts run End-Of-Day netting
+    (``ClosedPositionNotAccessibleInEndOfDayNettingMode``): positions net only
+    at EOD, so an intraday round-trip leaves TWO ledger rows (+q and -q) that
+    net to zero until the nightly netting. MAX_OPEN counts RISK UNITS, not
+    ledger rows — live incident 2026-08-19: a NET-FLAT book showed 2 rows and
+    every drain tick terminally refused a valid pick on the MAX_OPEN rail.
+    A net-flat uic must occupy no slot AND must not suppress an open watch
+    from counting (the watch exclusion exists only because the position side
+    is already counted — a net-flat uic is not)."""
+
+    _CHECK_TARGET = "alphalens_pipeline.brokers.automanager.safety.check"
+
+    def _recording_check(self) -> list[Any]:
+        seen: list[Any] = []
+
+        def check(_pick: Any, journal_view: Any, broker_view: Any, _state: Any) -> Any:
+            seen.append((journal_view, broker_view))
+            # A transient Refuse stops _place_pick right after the check: these
+            # tests pin the INPUTS to the rail, not the downstream placement.
+            return _safety.Refuse("recorded — stop here")
+
+        self.enterContext(mock.patch(self._CHECK_TARGET, check))
+        return seen
+
+    def test_net_flat_round_trip_rows_occupy_no_slot(self) -> None:
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-8.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        _journal_view, broker_view = seen[0]
+        self.assertEqual(broker_view.open_position_count, 0)
+
+    def test_partially_closed_long_occupies_one_slot(self) -> None:
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-3.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        _journal_view, broker_view = seen[0]
+        self.assertEqual(broker_view.open_position_count, 1)
+
+    def test_two_net_open_uics_occupy_two_slots(self) -> None:
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(43, qty=5.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        _journal_view, broker_view = seen[0]
+        self.assertEqual(broker_view.open_position_count, 2)
+
+    def test_net_flat_uic_does_not_suppress_an_open_watch(self) -> None:
+        # The watch-count exclusion (finding 1) exists because a FIRED tier's
+        # position is already inside open_position_count. A net-flat uic is
+        # NOT counted there, so its watch must keep occupying a slot.
+        _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0", uic=42)
+        broker = _BrokerWithPositions([_live_long(42, qty=8.0), _live_long(42, qty=-8.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        env = {_ENV: "50", cl._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            placer(_pick())
+        journal_view, broker_view = seen[0]
+        self.assertEqual(broker_view.open_position_count, 0)
+        self.assertEqual(journal_view.open_bracket_count, 1)
+
+
 # --------------------------------------------------------------------------
 # Routing defers while a live long already holds the uic (2026-08-19 adj. F2)
 # --------------------------------------------------------------------------

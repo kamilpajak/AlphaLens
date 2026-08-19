@@ -1280,7 +1280,10 @@ def _open_watch_picks_for_max_open(
       intercept's ``already_watching`` exemption);
     - any watch whose uic is in ``position_uics`` — a pick whose tier already
       FIRED shows up as a live position while a deeper tier still watches; that
-      unit is already counted in ``BrokerView.open_position_count``.
+      unit is already counted in ``BrokerView.open_position_count``. The caller
+      passes NET-open uics (``_net_open_position_uics``) — a net-flat uic
+      (an EOD-netting round-trip's two ledger rows) is NOT in the position
+      count, so its watch must keep occupying a slot here.
 
     A watch record with no parseable uic still counts (conservative: an
     over-reserved slot refuses one pick too early; an under-count re-opens the
@@ -5691,10 +5694,15 @@ def _place_pick(
     # watch-holding picks (own pick + already-live uics excluded, see the
     # helper) so total concurrent risk units stay bounded by MAX_OPEN for ANY
     # value of the watch-capacity rail.
+    # NET risk-unit counting (live incident 2026-08-19): under LIVE EOD netting
+    # an intraday round-trip is two ledger rows netting to zero — both the
+    # MAX_OPEN position term and the watch exclusion below must see distinct
+    # net-nonzero uics, never raw rows (see _net_open_position_uics).
+    net_position_uics, unresolvable_position_rows = _net_open_position_uics(positions)
     open_watch_picks = _open_watch_picks_for_max_open(
         entry_trail_fold,
         own_pick_key=f"{ticker}:{intent.meta.brief_date}",
-        position_uics={u for u in (_position_uic(p) for p in positions) if u is not None},
+        position_uics=net_position_uics,
     )
 
     open_bracket_count, gross_committed, realized_r_today = _summarize_open_verdicts(
@@ -5707,7 +5715,10 @@ def _place_pick(
             gross_committed=gross_committed,
             realized_r_today=realized_r_today,
         ),
-        safety.BrokerView(open_position_count=len(positions), equity=account.total_value),
+        safety.BrokerView(
+            open_position_count=len(net_position_uics) + unresolvable_position_rows,
+            equity=account.total_value,
+        ),
         _AlreadyGatedSessionState(),
     )
     if isinstance(decision, safety.Refuse):
@@ -5893,6 +5904,32 @@ def _position_uic(pos: Position) -> int | None:
         return int(pos.instrument.broker_instrument_id)
     except (TypeError, ValueError, AttributeError):
         return None
+
+
+def _net_open_position_uics(positions: Iterable[Position]) -> tuple[frozenset[int], int]:
+    """``(uics with nonzero NET quantity, count of rows with no resolvable uic)``.
+
+    LIVE Saxo accounts run End-Of-Day netting
+    (``ClosedPositionNotAccessibleInEndOfDayNettingMode``): positions net only
+    at EOD, so an intraday round-trip leaves TWO ledger rows (+q and -q) that
+    net to zero until the nightly netting. MAX_OPEN counts RISK UNITS, not
+    ledger rows — a raw ``len(positions)`` over such a book refuses valid picks
+    on phantom slots (live incident 2026-08-19: a net-flat book showed 2 rows
+    and terminally refused ETSY on the MAX_OPEN rail all session). Quantities
+    are summed per uic; a net magnitude within ``_QTY_EPS`` of zero is flat and
+    occupies no slot. Rows whose uic cannot be resolved are counted ONE each
+    (fail-conservative — never undercount risk units)."""
+    net_by_uic: dict[int, float] = {}
+    unresolvable = 0
+    for pos in positions:
+        uic = _position_uic(pos)
+        if uic is None:
+            unresolvable += 1
+            continue
+        qty = float(getattr(pos, "quantity", 0.0) or 0.0)
+        net_by_uic[uic] = net_by_uic.get(uic, 0.0) + qty
+    open_uics = frozenset(uic for uic, net in net_by_uic.items() if abs(net) > _QTY_EPS)
+    return open_uics, unresolvable
 
 
 def build_protection_view(
