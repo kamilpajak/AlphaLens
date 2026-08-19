@@ -374,7 +374,38 @@ Consolidated instrument-qualification summary (full detail: study scratch artifa
   ticker is in that set, else `KEPT_TICKER_ABSENT`. Pilot pairs take their Phase-1
   labels from this main pass (§7).
 
-- Label parquet sha256 (Stage B): —
+### 11.2 Stage-B amendment (2026-08-19, committed BEFORE any outcome join)
+
+- **Label parquet sha256 (Stage B):**
+  `c8440d40a0c2751717b62f3a83ef2d245957c2a43cd55fbe3405ccdb25bfb95f`
+  (`labels.parquet`, 816 rows over 238 labeled (theme, source_event) pairs;
+  study scratch artifacts: `phase1_calls.jsonl`, `phase1_provenance.jsonl`,
+  `raw_calls/`, `phase1_summary.json`, `phase1_final_stats.json`).
+- **Pin purity (Phase 1):** all 1,202 underlying calls returned
+  `provider=Alibaba`, `served_model=deepseek/deepseek-v4-pro` (per-call
+  `generation_id` in the provenance sidecar). Mean attempts per valid slot
+  1.003; 1,187/1,190 k-slots valid.
+- **Pair-label distribution (238 pairs):** THEME_REFUSED 142, KEPT 95,
+  INSTRUMENT_FAILURE 1. By window — CLEAN: 64 refused / 47 kept / 1 failure;
+  DEV: 77 refused / 45 kept; excluded CLEAN days (§3.1, out of contrast):
+  1 refused / 3 kept.
+- **Row-label distribution (816 rows):** THEME_REFUSED 462,
+  KEPT_TICKER_ABSENT 334, KEPT_TICKER_PROPOSED 14, INSTRUMENT_FAILURE 4,
+  NO_SOURCE_EVENT 2 (the two 2026-05-21 `discounts` rows with no stored
+  `source_event_url`).
+- **Flip stats (k=5 votes per pair):** 147/238 pairs unanimous 5/5 (61.8%);
+  refused-vote histogram 0:49, 1:28, 2:19, 3:14, 4:30, 5:98 — 33 pairs
+  (13.9%) sit on a 2-3 / 3-2 knife edge, consistent with the Phase-0
+  borderline-split observation.
+- **Attrition:** exactly one pair failed the k=5 protocol —
+  `geopolitics` × the 2026-05-19 bignewsnetwork "Putin visits China" event
+  (CLEAN; rows MP/BAH/FLR/AVAV): 3/5 slots returned persistently truncated
+  JSON (`malformed_payload` on all 4 attempts each; 2 slots valid). Labeled
+  `INSTRUMENT_FAILURE`, excluded from the contrast, counted here per §5.
+- Labeling ran entirely blind: the labeling script cannot reference the
+  outcome store (unittest-pinned in
+  `apps/alphalens-research/tests/test_stage1_retro_label_pairs.py`), and no
+  outcome join has run before this commit.
 
 ## 12. Deliverables
 
