@@ -1451,8 +1451,19 @@ class TestEntryWatchFeedScope(unittest.TestCase):
 
 
 def _live_long(uic: int, qty: float = 8.0) -> Any:
-    instr = type("I", (), {"broker_instrument_id": str(uic)})()
-    return type("Pos", (), {"instrument": instr, "quantity": qty})()
+    instr = type("I", (), {"broker_instrument_id": str(uic), "currency": "USD"})()
+    return type(
+        "Pos",
+        (),
+        {
+            "instrument": instr,
+            "quantity": qty,
+            "avg_price": 10.0,
+            "market_value": qty * 10.0,
+            "unrealized_pnl": 0.0,
+            "position_id": f"pos-{uic}",
+        },
+    )()
 
 
 class _BrokerWithPositions(_RecordingBroker):
@@ -1600,6 +1611,82 @@ class TestOpenWatchesCountAgainstMaxOpen(unittest.TestCase):
             if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "KO"
         ]
         self.assertEqual(opens_for_ko, [])
+
+
+# --------------------------------------------------------------------------
+# Routing defers while a live long already holds the uic (2026-08-19 adj. F2)
+# --------------------------------------------------------------------------
+
+
+class TestRoutingDefersOnLiveSameUicLong(unittest.TestCase):
+    """Adjudication finding 2 (2026-08-19): routing a re-picked ticker into a
+    watch while an earlier live long still holds the SAME uic would journal a
+    fresh ``tranche_plan`` at watch-open time — replacing the live position's
+    ladder and resetting its fired-tranche set with NO order ever placed (the
+    live-exit engine could then re-sell the runner at the new pick's targets).
+    The intercept defers such a pick (stays armed until the uic is flat); the
+    ``already_watching`` re-drive is exempt — the pick's OWN fill must not
+    deadlock the retirement record."""
+
+    def setUp(self) -> None:
+        self.enterContext(mock.patch.object(cl, "_entry_watch_live_uic_deferred", set()))
+
+    def test_live_long_on_the_pick_uic_defers_and_journals_nothing(self) -> None:
+        path = _journal(self)
+        broker = _BrokerWithPositions([_live_long(307)])  # _instr() uic
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertFalse(placer(_pick()))  # deferred, stays armed
+        self.assertEqual(_lines(path), [])  # no watch_open lines
+        self.assertEqual(submissions, [])  # never retired
+        self.assertEqual(broker.brackets, [])  # and no fall-through bracket
+
+    def test_flat_or_short_rows_on_the_uic_do_not_defer(self) -> None:
+        path = _journal(self)
+        broker = _BrokerWithPositions([_live_long(307, qty=0.0), _live_long(307, qty=-5.0)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_a_live_long_on_a_different_uic_does_not_defer(self) -> None:
+        path = _journal(self)
+        broker = _BrokerWithPositions([_live_long(999)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_own_redrive_with_its_own_fill_is_not_deferred(self) -> None:
+        # Crash-recovery: KO's t0 fired (live long on 307) while t1's watch is
+        # still open and the retiring submission record was never written. The
+        # re-drive must complete (re-open idempotently + retire), NOT deadlock
+        # on its own fill.
+        _journal(self)
+        _seed_other_watch_line("KO:2026-07-20", crid="KO-2026-07-20-entry-t1", uic=307)
+        broker = _BrokerWithPositions([_live_long(307)])
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            self.assertTrue(placer(_pick()))
+        self.assertEqual(len(submissions), 1)
+        self.assertIn("watch", submissions[0]["note"])
+
+    def test_first_live_uic_deferral_logs_warning_then_debug(self) -> None:
+        _journal(self)
+        broker = _BrokerWithPositions([_live_long(307)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with (
+            mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
+            self.assertLogs(cl.logger, level="DEBUG") as captured,
+        ):
+            self.assertFalse(placer(_pick()))  # first deferral -> WARNING
+            self.assertFalse(placer(_pick()))  # every later tick -> DEBUG
+        records = [r for r in captured.records if "live long" in r.getMessage()]
+        self.assertEqual([r.levelname for r in records], ["WARNING", "DEBUG"])
+        self.assertIn("KO", records[0].getMessage())
+        self.assertIn("stays armed", records[0].getMessage())
 
 
 if __name__ == "__main__":

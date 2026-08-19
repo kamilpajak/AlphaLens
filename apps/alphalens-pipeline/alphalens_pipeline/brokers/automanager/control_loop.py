@@ -1202,6 +1202,41 @@ def _open_watch_pick_keys(fold: entry_trails.EntryTrailFold) -> set[str]:
     return pick_keys
 
 
+_entry_watch_live_uic_deferred: set[str] = set()
+"""``pick_key``s already logged as live-uic-deferred (2026-08-19 adjudication
+finding 2) — first deferral WARNs, later ticks DEBUG. Process-lifetime
+observability only, no behaviour rides on membership."""
+
+
+def _has_live_long_on_uic(positions: Iterable[Position], uic: int) -> bool:
+    """Whether any live broker position row is LONG on ``uic`` (a zero/short
+    row never blocks — only an actual long can be clobbered by a re-picked
+    ticker's fresh ``tranche_plan``)."""
+    return any(
+        _position_uic(pos) == uic and float(getattr(pos, "quantity", 0.0) or 0.0) > 0.0
+        for pos in positions
+    )
+
+
+def _log_live_uic_deferral(ticker: str, pick_key: str, uic: int) -> None:
+    """Log a live-uic routing deferral: WARNING the FIRST time this pick_key is
+    deferred in this process (an abnormal state the operator should see — a
+    re-picked ticker is queuing behind its own live position), DEBUG on every
+    later tick. Process-lifetime observability only — no behaviour rides on the
+    set (mirrors :func:`_log_watch_capacity_deferral`)."""
+    log = logger.debug
+    if pick_key not in _entry_watch_live_uic_deferred:
+        _entry_watch_live_uic_deferred.add(pick_key)
+        log = logger.warning
+    log(
+        "place_pick %s: a live long already holds uic %d — %s stays armed until the "
+        "uic is flat (routing a watch now would clobber the live position's ladder)",
+        ticker,
+        uic,
+        ticker,
+    )
+
+
 def _open_watch_picks_for_max_open(
     fold: entry_trails.EntryTrailFold,
     *,
@@ -5281,13 +5316,17 @@ def _entry_trail_intercept(
     fx: Any,
     entry_trail_fold: entry_trails.EntryTrailFold,
     exit_policy: ExitPolicy | None = None,
+    *,
+    positions: Iterable[Position] = (),
 ) -> bool | None:
     """The _place_pick entry-trailing intercept outcome: ``None`` when the pick
     must fall through to classify + ``_place_tiers`` (flag off, ineligible plan,
     or no native trailing-stop capability), else the drain verdict.
     ``exit_policy`` is threaded through to the watch routing so its journaled
     managed-exit state (tranche_plan ladder + geometry stamp) mirrors what
-    ``_place_tiers`` would have journaled for the same pick.
+    ``_place_tiers`` would have journaled for the same pick. ``positions`` is
+    the caller's already-fetched broker snapshot (zero extra I/O) feeding the
+    live-uic routing guard below.
 
     PR-T2b: the whole feature needs the native trailing-stop capability; a
     broker lacking it falls through to classify + _place_tiers (the
@@ -5316,6 +5355,17 @@ def _entry_trail_intercept(
         # Pick-denominated capacity (memo decision #4): stay ARMED (not a
         # terminal refusal) so it opens once an earlier watch clears.
         _log_watch_capacity_deferral(ticker, pick_key)
+        return False
+    # 2026-08-19 adjudication finding 2: routing while a live long still holds
+    # the SAME uic would journal a fresh tranche_plan that replaces the live
+    # position's ladder and resets its fired-tranche set with NO order placed
+    # — the live-exit engine could then re-sell the runner at the new pick's
+    # targets. Defer (stay armed) until the uic is flat. The already_watching
+    # re-drive is EXEMPT: the pick's OWN fill on this uic must not deadlock the
+    # retirement record (its tranche_plan re-append is identity-idempotent).
+    uic = int(instrument.broker_instrument_id)
+    if not already_watching and _has_live_long_on_uic(positions, uic):
+        _log_live_uic_deferral(ticker, pick_key, uic)
         return False
     return _route_pick_to_entry_watch(
         broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps, exit_policy=exit_policy
@@ -5512,7 +5562,16 @@ def _place_pick(
     # (PR-T0 inertness proof). The intercept lands AFTER the cash floor so a
     # watch only opens once the pick has cleared every money gate.
     intercepted = _entry_trail_intercept(
-        broker, intent, ticker, instrument, account, plan, fx, entry_trail_fold, exit_policy
+        broker,
+        intent,
+        ticker,
+        instrument,
+        account,
+        plan,
+        fx,
+        entry_trail_fold,
+        exit_policy,
+        positions=positions,
     )
     if intercepted is not None:
         return intercepted
