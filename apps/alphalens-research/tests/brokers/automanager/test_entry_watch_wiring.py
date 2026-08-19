@@ -984,6 +984,39 @@ def _blend_spec() -> Any:
 _GEOMETRY_POLICY = type("GeoPolicy", (), {"applies_geometry": True})()
 
 
+def _route_watch(
+    test: unittest.TestCase,
+    plan: SetupPlan,
+    *,
+    intent: Any = None,
+    exit_policy: Any = None,
+) -> tuple[bool, list[dict[str, Any]], Path, Path]:
+    """Drive ``_route_pick_to_entry_watch`` hermetically (temp journals, stubbed
+    submission log) and return (verdict, tranche_plan lines, journal paths)."""
+    trails_path = _journal(test)
+    stops_path = _planned_journal(test)
+    pkg = "alphalens_pipeline.brokers"
+    for target, fn in (
+        (f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)),
+        (f"{pkg}.submission_log.append_submission_record", lambda _r: None),
+    ):
+        test.enterContext(mock.patch(target, fn))
+    with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+        ok = cl._route_pick_to_entry_watch(
+            object(),
+            intent if intent is not None else _pick(),
+            "KO",
+            _instr(),
+            _acct(),
+            plan,
+            None,
+            d_bps=50,
+            exit_policy=exit_policy,
+        )
+    tranche_lines = [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan"]
+    return ok, tranche_lines, trails_path, stops_path
+
+
 class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
     """Task A1 (2026-08-19 live incident, OLN): the entry-trail routing must
     journal the SAME per-uic ``tranche_plan`` line the bracket path writes at
@@ -997,28 +1030,7 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         intent: Any = None,
         exit_policy: Any = None,
     ) -> tuple[bool, list[dict[str, Any]], Path, Path]:
-        trails_path = _journal(self)
-        stops_path = _planned_journal(self)
-        pkg = "alphalens_pipeline.brokers"
-        for target, fn in (
-            (f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)),
-            (f"{pkg}.submission_log.append_submission_record", lambda _r: None),
-        ):
-            self.enterContext(mock.patch(target, fn))
-        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
-            ok = cl._route_pick_to_entry_watch(
-                object(),
-                intent if intent is not None else _pick(),
-                "KO",
-                _instr(),
-                _acct(),
-                plan,
-                None,
-                d_bps=50,
-                exit_policy=exit_policy,
-            )
-        tranche_lines = [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan"]
-        return ok, tranche_lines, trails_path, stops_path
+        return _route_watch(self, plan, intent=intent, exit_policy=exit_policy)
 
     def test_static_policy_journals_the_plan_ladder_with_watch_reference_qty(self) -> None:
         # A zero-qty tier opens NO watch — reference_qty counts only the tiers
@@ -1100,6 +1112,116 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         self.assertIn("tranche_plan", events)
         self.assertIn(entry_trails.KIND_WATCH_OPEN, events)
         self.assertLess(events.index("tranche_plan"), events.index(entry_trails.KIND_WATCH_OPEN))
+
+
+class TestWatchGeometryStampThroughToPlannedLine(unittest.TestCase):
+    """Task A2 (2026-08-19 live incident, OLN): the geometry blob must ride the
+    watch_open line so the fire-arm ``planned`` disaster line carries it —
+    without the stamp ``_reanchor_facts_from_governing`` has no (k_atr, atr)
+    facts and the position NEVER trails."""
+
+    def test_watch_open_lines_carry_the_geometry_stamp(self) -> None:
+        plan = _plan((0, 10.0, 100), (1, 9.0, 100))
+        intent = _pick()
+        intent.exit = _exit_spec(stop=9.1, tp=13.5)
+        intent.spec = _blend_spec()
+        expected = cl._geometry_shadow_stamp(intent.exit, intent.spec, use_geometry=True)
+        ok, _tranche_lines, trails_path, _stops = _route_watch(
+            self, plan, intent=intent, exit_policy=_GEOMETRY_POLICY
+        )
+        self.assertTrue(ok)
+        opens = [ln for ln in _lines(trails_path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 2)
+        for line in opens:
+            self.assertEqual(line["geometry"], expected)
+
+    def test_watch_open_without_exit_spec_omits_the_geometry_key(self) -> None:
+        # _pick() carries exit=None -> the stamp is None -> the key is absent
+        # (old-line byte-identity: readers treat a missing key as no geometry).
+        ok, _tranche_lines, trails_path, _stops = _route_watch(self, _plan((0, 10.0, 100)))
+        self.assertTrue(ok)
+        opens = [ln for ln in _lines(trails_path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+        self.assertNotIn("geometry", opens[0])
+
+    def test_fire_arm_planned_line_carries_the_record_geometry_stamp(self) -> None:
+        stops_path = _planned_journal(self)
+        stamp = {
+            "policy_name": "atr_bracket_1p5",
+            "policy_version": 1,
+            "planned_blend": 10.0,
+            "geometry_stop": 9.1,
+            "geometry_tp": 13.5,
+            "k_atr": 1.5,
+            "atr": 0.6,
+            "ceiling_price": None,
+            "applied": True,
+        }
+        record = {"disaster_stop": 8.0, "tier_index": 0, "geometry": stamp}
+        cl._journal_entry_planned_disaster(record, 307, "KO-2026-07-20-entry-t0-fire")
+        planned = [ln for ln in _lines(stops_path) if ln["kind"] == "planned"]
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(planned[0]["geometry"], stamp)
+
+    def test_fire_arm_planned_line_without_geometry_is_byte_identical(self) -> None:
+        # An OLD watch_open line (journaled before the stamp existed) must keep
+        # producing EXACTLY today's planned line — no new key, no reordering.
+        stops_path = _planned_journal(self)
+        record = {"disaster_stop": 8.0, "tier_index": 0}
+        cl._journal_entry_planned_disaster(record, 307, "KO-2026-07-20-entry-t0-fire")
+        planned = [ln for ln in _lines(stops_path) if ln["kind"] == "planned"]
+        self.assertEqual(
+            planned,
+            [
+                {
+                    "kind": "planned",
+                    "client_request_id": "KO-2026-07-20-entry-t0-fire",
+                    "uic": 307,
+                    "side": "SELL",
+                    "stop_price": 8.0,
+                    "take_profit": None,
+                    "tier_index": 0,
+                    "gen": 0,
+                }
+            ],
+        )
+
+    def test_stamp_survives_the_fold_from_watch_open_to_the_armed_planned_line(self) -> None:
+        # End-to-end: a seeded watch_open WITH the stamp -> touch -> native arm
+        # -> the fire-arm planned line carries the stamp read off the FOLDED
+        # record (pins the verbatim watch_open fold, not just the writer).
+        path = _journal(self)
+        stops_path = _planned_journal(self)
+        stamp = {"policy_name": "atr_bracket_1p5", "k_atr": 1.5, "atr": 0.6, "applied": True}
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_WATCH_OPEN,
+                "crid": "KO-2026-07-20-entry-t0",
+                "limit": 10.0,
+                "qty": 100.0,
+                "d_bps": 50,
+                "window_end": "2099-01-01T21:00:00+00:00",
+                "fx_rate": None,
+                "uic": 307,
+                "ticker": "KO",
+                "exchange_mic": "XNYS",
+                "next_tier_limit": None,
+                "pick_key": "KO:2026-07-20",
+                "entry_mode": "entry-trail-native-d50-testcfg",
+                "disaster_stop": 8.0,
+                "tier_index": 0,
+                "geometry": stamp,
+            }
+        )
+        prices: dict[int, float | None] = {307: 10.0}  # touch @ limit -> ARM
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+        self.assertEqual(len(broker.trailing_orders), 1)
+        planned = [ln for ln in _lines(stops_path) if ln["kind"] == "planned"]
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(planned[0]["geometry"], stamp)
 
 
 class TestPointSampleVetoNotRaise(unittest.TestCase):

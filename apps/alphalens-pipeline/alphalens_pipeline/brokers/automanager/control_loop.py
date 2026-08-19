@@ -1162,7 +1162,14 @@ def _entry_watch_capacity_reached(fold: entry_trails.EntryTrailFold) -> bool:
 
 
 def _open_entry_watches(
-    intent: Any, ticker: str, instrument: Any, plan: Any, fx: Any, *, d_bps: int
+    intent: Any,
+    ticker: str,
+    instrument: Any,
+    plan: Any,
+    fx: Any,
+    *,
+    d_bps: int,
+    geometry_stamp: dict[str, Any] | None = None,
 ) -> int:
     """Journal one ``watch_open`` line per positive-quantity entry tier (memo
     §5, G3 journal-FIRST) and return the count opened.
@@ -1176,7 +1183,14 @@ def _open_entry_watches(
     (``uic``/``ticker``/``exchange_mic``/``next_tier_limit``/``d_bps``/
     ``window_end``/``pick_key``/``entry_mode``). Tiers are strictly descending,
     so ``next_tier_limit`` is the deeper tier's limit for the G9 depth suspend;
-    ``None`` on the deepest tier."""
+    ``None`` on the deepest tier.
+
+    ``geometry_stamp`` (2026-08-19 incident fix) is the exact
+    :func:`_geometry_shadow_stamp` blob the bracket path journals on its
+    ``planned`` lines — stamped on every watch_open here so the fire-arm
+    ``planned`` writer can pass it through and the trailing-SL pass has its
+    (k_atr, atr) reanchor facts. ``None`` omits the key entirely, keeping the
+    line byte-identical to a pre-stamp watch_open."""
     from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_close_utc
 
     brief_date = intent.meta.brief_date
@@ -1196,29 +1210,30 @@ def _open_entry_watches(
         if tier.qty <= 0:
             continue  # a zero-sized tier has nothing to watch (mirrors classify)
         next_limit = tiers[index + 1].limit_price if index + 1 < len(tiers) else None
-        entry_trails.append_entry_trail_line(
-            {
-                "kind": entry_trails.KIND_WATCH_OPEN,
-                "crid": _entry_watch_crid(ticker, brief_date, tier.tier_index),
-                "limit": float(tier.limit_price),
-                "qty": float(tier.qty),
-                "d_bps": int(d_bps),
-                "window_end": window_end,
-                "fx_rate": fx_rate,
-                "uic": uic,
-                "ticker": ticker,
-                "exchange_mic": mic,
-                "next_tier_limit": None if next_limit is None else float(next_limit),
-                "pick_key": pick_key,
-                "entry_mode": mode_tag,
-                # PR-T2b never-naked (memo §5): the brief disaster-stop floor +
-                # the original tier_index, carried so the fire-arm executor can
-                # journal the `planned` disaster-SL line at placement (the plan
-                # PRICE the broker cannot know) WITHOUT re-running classify.
-                "disaster_stop": float(plan.disaster_stop),
-                "tier_index": int(tier.tier_index),
-            }
-        )
+        line: dict[str, Any] = {
+            "kind": entry_trails.KIND_WATCH_OPEN,
+            "crid": _entry_watch_crid(ticker, brief_date, tier.tier_index),
+            "limit": float(tier.limit_price),
+            "qty": float(tier.qty),
+            "d_bps": int(d_bps),
+            "window_end": window_end,
+            "fx_rate": fx_rate,
+            "uic": uic,
+            "ticker": ticker,
+            "exchange_mic": mic,
+            "next_tier_limit": None if next_limit is None else float(next_limit),
+            "pick_key": pick_key,
+            "entry_mode": mode_tag,
+            # PR-T2b never-naked (memo §5): the brief disaster-stop floor +
+            # the original tier_index, carried so the fire-arm executor can
+            # journal the `planned` disaster-SL line at placement (the plan
+            # PRICE the broker cannot know) WITHOUT re-running classify.
+            "disaster_stop": float(plan.disaster_stop),
+            "tier_index": int(tier.tier_index),
+        }
+        if geometry_stamp is not None:
+            line["geometry"] = geometry_stamp
+        entry_trails.append_entry_trail_line(line)
         opened += 1
     return opened
 
@@ -1274,7 +1289,21 @@ def _route_pick_to_entry_watch(
             uic=int(instrument.broker_instrument_id),
             use_geometry=resolved_exit_policy.applies_geometry,
         )
-        opened = _open_entry_watches(intent, ticker, instrument, plan, fx, d_bps=d_bps)
+        # Same use_geometry decision _place_tiers makes for its planned lines:
+        # the stamp rides every watch_open so the fire-arm planned writer can
+        # hand the (k_atr, atr) reanchor facts to the trailing-SL pass.
+        use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
+        opened = _open_entry_watches(
+            intent,
+            ticker,
+            instrument,
+            plan,
+            fx,
+            d_bps=d_bps,
+            geometry_stamp=_geometry_shadow_stamp(
+                exit_spec, intent.spec, use_geometry=use_geometry
+            ),
+        )
     # Broad on purpose: an unrecognised MIC (calendar ValueError) or a journal
     # I/O error must degrade to "pick stays armed", never abort the tick before
     # the protection pass (_place_pick's own try only catches BrokerError).
@@ -1898,6 +1927,12 @@ def _journal_entry_planned_disaster(record: Mapping[str, Any], uic: int, entry_c
             stop_price=float(disaster_stop),
             take_profit=None,
             tier_index=int(tier_index) if tier_index is not None else 0,
+            # 2026-08-19 incident fix: the geometry blob stamped on the
+            # watch_open at routing time rides through to the planned line so
+            # _reanchor_facts_from_governing can recover (k_atr, atr) and the
+            # position actually trails. Absent on old lines -> None -> the
+            # planned line stays byte-identical to today.
+            geometry_stamp=record.get("geometry"),
         )
     )
 
