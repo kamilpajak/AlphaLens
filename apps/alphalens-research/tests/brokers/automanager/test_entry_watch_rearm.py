@@ -33,7 +33,7 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trails
-from broker_contract.contract import OrderStatus
+from broker_contract.contract import BrokerError, OrderStatus
 
 # Shared hermetic fixtures live in the T1c wiring tests.
 from tests.brokers.automanager.test_entry_watch_reconcile import _os, _ResolvingBroker, _seed_armed
@@ -351,6 +351,78 @@ class TestReArmDoesNotDoublePlace(unittest.TestCase):
         self.assertEqual(
             armed[-1]["order_id"], "TR-STALE", "the existing order is adopted by reference"
         )
+
+
+class _RejectOnceBroker(_RecordingBroker):
+    """``place_trailing_stop`` rejects the FIRST POST (a transient broker error),
+    then records normally — the arm-failed-on-the-fresh-low-tick scenario."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._rejects_left = 1
+
+    def place_trailing_stop(self, *args: Any, **kwargs: Any) -> Any:
+        if self._rejects_left:
+            self._rejects_left -= 1
+            raise BrokerError("simulated transient reject")
+        return super().place_trailing_stop(*args, **kwargs)
+
+
+class TestOpenCheckClearanceSurvivesRestart(unittest.TestCase):
+    """The fresh-low open-check clear must be DURABLE: the engine clears
+    ``awaiting_fresh_low`` in memory, but the latest ``watch_open`` line keeps
+    the re-arm marker — so an arm failure on the fresh-low tick followed by a
+    daemon restart re-seeded the block from the fold and froze the tier until
+    a SECOND fresh low formed (potentially a whole session's only dip)."""
+
+    def test_arm_failure_then_restart_retries_instead_of_reblocking(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        _rearm_watch_open(path, trough=9.70)
+        prices: dict[int, float | None] = {}
+        broker = _RejectOnceBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+
+        # A fresh post-open low clears the open-check, but the POST fails.
+        _run_watch(deps, 9.60, prices)
+        self.assertEqual(broker.trailing_orders, [], "the rejected POST placed nothing")
+
+        # Daemon restart: runtimes are rebuilt from the journal fold. No NEW
+        # low forms (9.65 > 9.60) — the already-cleared open-check must not
+        # re-block, so the arm retries and succeeds.
+        restarted = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        _run_watch(restarted, 9.65, prices)
+        self.assertEqual(len(broker.trailing_orders), 1, "restart must not re-block the arm")
+
+    def test_clearance_is_journaled_once_on_the_clear_tick(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        _rearm_watch_open(path, trough=9.70)
+        prices: dict[int, float | None] = {}
+        broker = _RejectOnceBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+
+        _run_watch(deps, 9.60, prices)  # the clear tick (arm fails, stays TOUCHED)
+        fold = entry_trails.read_entry_trail_fold()
+        watch_open = fold.tiers[_CRID].watch_open
+        assert watch_open is not None
+        self.assertFalse(
+            watch_open.get("awaiting_fresh_low"),
+            "the latest watch_open must no longer carry the re-arm marker",
+        )
+
+        _run_watch(deps, 9.58, prices)  # same lifetime: no second clearance line
+        opens = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 2, "one re-arm watch_open + exactly one clearance re-append")
+
+    def test_clearance_helper_is_a_noop_without_the_marker(self) -> None:
+        # Defensive guard: a record with no marker (nothing to clear) appends
+        # nothing — the clearance is transition-driven, never a per-tick echo.
+        path = _journal(self)
+        cl._persist_open_check_clearance(
+            {"kind": entry_trails.KIND_WATCH_OPEN, "crid": _CRID, "limit": 10.0}
+        )
+        self.assertEqual(_lines(path), [])
 
 
 if __name__ == "__main__":

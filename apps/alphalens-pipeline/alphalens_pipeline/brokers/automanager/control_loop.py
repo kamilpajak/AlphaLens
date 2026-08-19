@@ -1754,6 +1754,7 @@ def _advance_one_entry_watch(
     runtime = _get_or_create_entry_runtime(deps, crid, record, tier_state)
     if runtime is None:
         return
+    was_awaiting_fresh_low = runtime.watcher.awaiting_fresh_low
     price = _entry_watch_reference_price(uic_points, record)
     price = _combine_with_session_low(price, uic_lows, record, runtime, now)
     result = runtime.watcher.process(entry_trail_watcher.TickInput(now=now, price=price))
@@ -1764,6 +1765,11 @@ def _advance_one_entry_watch(
     if _terminal_leaves_a_resting_order(result):
         result = _finalize_entry_terminal_vs_broker(deps, crid, result, report)
     _persist_entry_watch_result(crid, record, runtime, result, now, price, d_bps)
+    # Persist the open-check clearance ON THE TRANSITION tick, BEFORE the arm
+    # attempt below — the arm can fail transiently for many ticks, and only the
+    # journal survives a restart (see _persist_open_check_clearance).
+    if was_awaiting_fresh_low and not runtime.watcher.awaiting_fresh_low:
+        _persist_open_check_clearance(record)
     # PR-T2b native arm: once TOUCHED (with a trustworthy price) PLACE the resting
     # Saxo trailing-LIMIT order out-of-band — the server ratchets + fires from
     # there. Re-attempted every TOUCHED tick until it arms (idempotent, dedup on
@@ -1967,6 +1973,29 @@ def _persist_entry_watch_result(
                 record, runtime, d_bps, order_id=payload.get("order_id")
             )
         entry_trails.append_entry_trail_line(line)
+
+
+def _persist_open_check_clearance(record: Mapping[str, Any]) -> None:
+    """Make the open-check clear DURABLE (memo §5 CRITICAL-2 hardening).
+
+    The engine clears ``awaiting_fresh_low`` in memory the tick a fresh
+    post-open low forms, but the latest ``watch_open`` line still carries the
+    re-arm marker — so a daemon restart between the clear and a SUCCESSFUL arm
+    (the POST can keep failing transiently, or the geometry can stay degenerate
+    for ticks) would re-seed the block from the fold and freeze the tier until
+    a SECOND fresh low forms, silently dropping a session's only dip.
+
+    Re-append the watch_open record WITHOUT the marker: the fold's
+    latest-watch_open-wins semantics adopt it (no new state store, no fold
+    change), so reconstruction reads the marker as absent. Every other field
+    rides through verbatim; the fold's watch_open handler also resets
+    ``armed_order_id``, which is correct here — the tier has no confirmed
+    order yet (the arm attempt runs AFTER this persist on the same tick, and
+    its ``trail_armed`` lines land later in the journal)."""
+    if not record.get(_ENTRY_REARM_MARKER):
+        return  # the latest watch_open already carries no marker
+    cleared = {key: value for key, value in record.items() if key != _ENTRY_REARM_MARKER}
+    entry_trails.append_entry_trail_line(cleared)
 
 
 def _entry_measurement_blob(
