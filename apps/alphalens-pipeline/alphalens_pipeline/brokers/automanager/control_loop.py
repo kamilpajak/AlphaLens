@@ -3487,6 +3487,7 @@ def _reanchor_facts_from_governing(governing: Mapping[str, Any]) -> ReanchorFact
 
 _TRANCHE_PLAN_KIND = "tranche_plan"
 _TRANCHE_PLAN_RETRACTED_KIND = "tranche_plan_retracted"
+_TRANCHE_FIRED_KIND = "tranche_fired"
 
 
 def _build_tranche_plan_line(
@@ -3969,6 +3970,94 @@ def _keep_latest_marker(
         dest[uic] = (sort_key, dict(line))
 
 
+def _track_tranche_plan(
+    line: Mapping[str, Any],
+    uic: int,
+    *,
+    ladder_line: dict[int, Mapping[str, Any]],
+    latest_plan: dict[int, Mapping[str, Any]],
+    governing_key: dict[int, str],
+    fired_lines: dict[int, list[Mapping[str, Any]]],
+) -> None:
+    """Advance the tranche-compaction state for one ``tranche_plan`` line,
+    mirroring ``_fold_fired_since_latest_plan``'s identity-keyed reset EXACTLY:
+    a keyless line or a ``pick_key`` differing from the uic's governing key
+    resets the fired accumulator; a same-key re-append (the crash-recovery
+    re-drive) does not. The line becomes the uic's latest plan always, and its
+    ladder-governing plan only when ``fold_tranche_plans`` accepts it as
+    well-formed (a corrupt line still resets fired but never governs the
+    ladder — the folds' own semantics, reproduced line-for-line)."""
+    key = line.get("pick_key")
+    if key is None or str(key) != governing_key.get(uic):
+        fired_lines.pop(uic, None)
+    if key is None:
+        governing_key.pop(uic, None)
+    else:
+        governing_key[uic] = str(key)
+    latest_plan[uic] = line
+    if fold_tranche_plans([line]):
+        ladder_line[uic] = line
+
+
+def _compact_tranche_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The kept tranche-ladder lines: per uic, the governing plan line(s)
+    followed by the fired lines still counting, so ``fold_tranche_plans``,
+    ``_fold_fired_since_latest_plan``, and ``_fold_governing_plan_pick_keys``
+    all return exactly what they return on the full journal.
+
+    Per uic the election keeps, in this write order (both folds process lines
+    in order — the governing plan MUST precede its fired lines so a fired tag
+    recorded before a same-key re-append is never mistaken for a pre-reset
+    leftover):
+      1. the plan line whose values are the uic's final folded ladder (if any);
+      2. the LATEST plan line, when distinct from (1) — it may be
+         ladder-malformed yet still carry the fired fold's reset identity and
+         the retraction sweep's governing ``pick_key``;
+      3. every ``tranche_fired`` line inside the fired fold's END accumulator
+         (fired tags reset away by a later plan/retraction are dropped).
+    ``tranche_plan_retracted`` markers are consumed during the election — a
+    retraction erases the uic's kept plan and fired lines, so a fully
+    retracted uic keeps NOTHING (all three folds already treat it as absent).
+    Pure; kept lines are shallow-copied."""
+    ladder_line: dict[int, Mapping[str, Any]] = {}
+    latest_plan: dict[int, Mapping[str, Any]] = {}
+    governing_key: dict[int, str] = {}
+    fired_lines: dict[int, list[Mapping[str, Any]]] = {}
+    for line in lines:
+        kind = line.get("kind")
+        if kind not in (_TRANCHE_PLAN_KIND, _TRANCHE_PLAN_RETRACTED_KIND, _TRANCHE_FIRED_KIND):
+            continue
+        uic = _coerce(line, "uic", int)
+        if uic is None:
+            continue
+        if kind == _TRANCHE_PLAN_KIND:
+            _track_tranche_plan(
+                line,
+                uic,
+                ladder_line=ladder_line,
+                latest_plan=latest_plan,
+                governing_key=governing_key,
+                fired_lines=fired_lines,
+            )
+        elif kind == _TRANCHE_PLAN_RETRACTED_KIND:
+            ladder_line.pop(uic, None)
+            latest_plan.pop(uic, None)
+            governing_key.pop(uic, None)
+            fired_lines.pop(uic, None)
+        elif line.get("tag"):
+            fired_lines.setdefault(uic, []).append(line)
+    kept: list[dict[str, Any]] = []
+    for uic in sorted(set(latest_plan) | set(fired_lines)):
+        ladder = ladder_line.get(uic)
+        latest = latest_plan.get(uic)
+        if ladder is not None:
+            kept.append(dict(ladder))
+        if latest is not None and latest is not ladder:
+            kept.append(dict(latest))
+        kept.extend(dict(fired) for fired in fired_lines.get(uic, ()))
+    return kept
+
+
 def _compact_standalone_stop_journal_lines(
     lines: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -3987,12 +4076,19 @@ def _compact_standalone_stop_journal_lines(
         / ``amend_ok`` outcome record per uic (observability-only, no fold reads
         them; the latest outcome is what latency inspection needs);
       - the ``amend_seq`` carrying the MAX seq per uic (``_read_persisted_amend_seq``
-        returns that max).
+        returns that max);
+      - the tranche-ladder lines ``_compact_tranche_lines`` elects — per uic the
+        governing ``tranche_plan`` line(s) followed by the ``tranche_fired``
+        lines still inside ``_fold_fired_since_latest_plan``'s accumulator, so
+        ``fold_tranche_plans`` / ``_fold_fired_since_latest_plan`` / the
+        retraction sweep's ``_fold_governing_plan_pick_keys`` are unchanged;
+        ``tranche_plan_retracted`` markers are consumed during the election (a
+        fully retracted uic keeps nothing).
 
     Every other line — ``gen`` markers (read only by ``_read_persisted_gen``, whose
     reset to the initial gen is harmless: post-restart re-emits are past Saxo's 15s
     request-id dedup window, and protection is broker-state-truth not journal-derived),
-    unknown kinds, and malformed lines — is dropped; none contributes to the four
+    unknown kinds, and malformed lines — is dropped; none contributes to the
     folds above. Pure: no I/O, input never mutated (kept lines are shallow-copied)."""
     materialized = list(lines)
 
@@ -4039,6 +4135,7 @@ def _compact_standalone_stop_journal_lines(
     compacted.extend(ttl_latest["stop_placed"][uic][1] for uic in sorted(ttl_latest["stop_placed"]))
     compacted.extend(ttl_latest["amend_ok"][uic][1] for uic in sorted(ttl_latest["amend_ok"]))
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
+    compacted.extend(_compact_tranche_lines(materialized))
     return compacted
 
 
