@@ -239,6 +239,21 @@ class TestThematicCandidatesSchema(unittest.TestCase):
         with self.assertRaises(SchemaError):
             THEMATIC_CANDIDATES_SCHEMA.validate(bad)
 
+    def test_channel_annotation_columns_validate_as_extras(self):
+        # The stage-B channel columns are parquet-only telemetry and are NOT in
+        # the hop contract on purpose (nothing downstream may depend on them —
+        # a required channel column would be one step toward the gate coming
+        # back). The schema is strict=False, so they pass as extras; pinning it
+        # here means a future strict=True tightening fails loudly in this file
+        # rather than in production.
+        frame = _valid_candidates_frame()
+        n = len(frame)
+        frame["channel_status"] = ["verified", "unverified"][:n]
+        frame["channel_type"] = ["customer_demand", "none"][:n]
+        frame["channel_vote_dispersion"] = pd.array([0, 2][:n], dtype="Int64")
+        frame["shadow_strict_verdict"] = ["keep", "keep"][:n]
+        THEMATIC_CANDIDATES_SCHEMA.validate(frame)
+
 
 class TestThematicScoredSchema(unittest.TestCase):
     def test_valid_frame_passes(self):

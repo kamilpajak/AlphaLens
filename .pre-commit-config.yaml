@@ -29,7 +29,10 @@ repos:
       - id: check-case-conflict
       - id: check-added-large-files
         args: ["--maxkb=500"]
-        exclude: ^(uv\.lock|reports/|data/sp500_pit/)
+        # docs/research/assets/ holds rendered figures (SVG + PNG). A diagram
+        # that carries full LLM prompts is thousands of pixels tall, so its
+        # 2x PNG is megabytes by construction.
+        exclude: ^(uv\.lock|reports/|data/sp500_pit/|docs/research/assets/)
 
 # Type checker (ty) and security scanner (bandit) live in CI only —
 # too slow for local commit hook (delays development).

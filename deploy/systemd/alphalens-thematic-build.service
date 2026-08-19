@@ -169,7 +169,18 @@ TasksMax=512
 # had already been written to parquet never reached Postgres and the
 # dashboard sat a day behind. 75min stays well under the 4h slot spacing,
 # so a truly wedged run is still killed before the next fire.
-TimeoutStartSec=75min
+#
+# Bumped 75→110min on 2026-08-19 for the stage-B channel assessment: map-themes
+# now adds up to _MAX_ASSESS_PER_THEME (5) × _ASSESS_VOTES (3) OpenRouter calls
+# per theme, each bounded above only by the client's read timeout. The stage
+# fans out 3-wide per theme and is capped per theme, so the expected cost is
+# minutes, but the worst case is materially larger than before — and map_themes
+# writes its candidates parquet ONCE, after the whole theme loop, so a SIGTERM
+# mid-stage leaves NO parquet at all: under `set -euo pipefail` the score and
+# brief stages never run and the slot produces no brief. The next slot then
+# restarts from zero and can fail the same way, which is a permanent stall
+# rather than one missed slot. 110min still leaves ~2h of slot spacing.
+TimeoutStartSec=110min
 
 # Oneshot doesn't auto-restart on success. On real failures (Polygon 5xx,
 # OpenRouter quota, OOM) systemd surfaces non-zero exit in journalctl + status.

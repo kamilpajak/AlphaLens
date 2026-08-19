@@ -135,10 +135,17 @@ _FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
 _HTTP_REFERER = "https://github.com/kamilpajak/AlphaLens"
 _APP_TITLE = "AlphaLens"
 
-# Default HTTP timeouts. read=60s covers DeepSeek v4-pro's worst-case
-# 4-5s typical generation time × ~10× safety margin (some prompts
-# generate long JSON). connect=10s catches DNS / TLS issues quickly.
-_DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+# Default HTTP timeouts. connect=10s catches DNS / TLS issues quickly.
+#
+# read=180s, raised from 60s on 2026-08-19. These calls are NOT streamed, so the
+# read timeout covers the whole generation, and v4-pro spends most of it on
+# reasoning tokens the caller never sees: the channel-assessment probe measured
+# a median of 787 reasoning tokens per draw with a tail at the output cap. A
+# 60s ceiling turns that tail into a socket timeout, i.e. it converts one
+# failure mode into another instead of removing it. The read timeout is NOT an
+# input to any config-version token, so it can be tuned later without ending a
+# frozen cohort — unlike the per-call output caps.
+_DEFAULT_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=10.0, pool=10.0)
 
 __all__ = [
     "API_KEY_ENV",

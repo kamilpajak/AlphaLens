@@ -14,13 +14,13 @@ parquets) through ``map_themes`` and asserts the cascade:
 
   * theme A ("state_media_theme") — only catalyst is an entity-less
     state-media (voc.com.cn / China) article -> gate returns None -> theme is
-    SKIPPED -> NO candidate row, and ``_propose_and_filter_candidates`` is
+    SKIPPED -> NO candidate row, and ``_propose_and_bracket`` is
     NEVER called for it (the skip happens before propose).
   * theme B ("legit_theme") — entity-less TechCrunch article (non-state-media)
     -> gate returns a payload -> propose IS called -> a candidate row is emitted
     carrying theme B's catalyst URL.
 
-Hermetic: the LLM proposal is mocked (``_propose_and_filter_candidates``
+Hermetic: the LLM proposal is mocked (``_propose_and_bracket``
 replaced by a deterministic stub), the verify gates are mocked to pass, the
 press window is empty, and the Pro client is a ``Mock``. ``find_trigger_event``
 is wrapped (not replaced) so the REAL source-gate logic runs over the tmp
@@ -46,6 +46,8 @@ from unittest.mock import Mock, patch
 import pandas as pd
 from alphalens_pipeline.thematic.mapping import catalyst_resolver, orchestrator
 from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
+
+from tests.thematic.mapping_stubs import stub_assessor, theme_proposal
 
 ASOF = dt.date(2026, 6, 12)
 
@@ -119,16 +121,13 @@ def _seed_two_themes(news_dir: Path, events_dir: Path) -> None:
     )
 
 
-def _propose_stub(
-    *, theme: str, **_kwargs
-) -> tuple[list[dict], dict[str, float], list[str], MapperOutcome]:
-    """Deterministic stand-in for ``_propose_and_filter_candidates``.
+def _propose_stub(*, theme: str, **_kwargs):
+    """Deterministic stand-in for ``_propose_and_bracket``.
 
-    Returns the real 4-tuple shape ``(candidates, in_bracket, keywords,
-    outcome)`` with a single in-bracket candidate per theme so ``_build_row``
-    emits exactly one row. The real proposal (LLM + yfinance mcap filter) is
-    what we are bypassing; the gate that decides whether this stub is reached
-    at all is what we test.
+    Returns a real ``ThemeProposal`` with a single in-bracket candidate per
+    theme so ``_build_row`` emits exactly one row. The real proposal (LLM +
+    yfinance mcap filter) is what we are bypassing; the gate that decides
+    whether this stub is reached at all is what we test.
     """
     ticker = STATE_MEDIA_TICKER if theme == STATE_MEDIA_THEME else LEGIT_TICKER
     candidate = {
@@ -137,7 +136,12 @@ def _propose_stub(
         "rationale": "stub",
         "confidence": 0.9,
     }
-    return [candidate], {ticker: 2_000_000_000.0}, [theme], MapperOutcome.SUCCESS
+    return theme_proposal(
+        proposed=[candidate],
+        in_bracket={ticker: 2_000_000_000.0},
+        keywords=[theme],
+        outcome=MapperOutcome.SUCCESS,
+    )
 
 
 def _passing_verdict(*, ticker: str, **_kwargs) -> dict:
@@ -154,6 +158,7 @@ def _passing_verdict(*, ticker: str, **_kwargs) -> dict:
 
 class TestCatalystGateMapThemesIntegration(unittest.TestCase):
     def setUp(self) -> None:
+        stub_assessor(self)
         # The gate path reads two module-level @lru_cache helpers: _load_window
         # (events/news parquets, keyed on dir+asof+lookback) and
         # _load_state_media_filters (the YAML blocklist). Clear both so this
@@ -191,7 +196,7 @@ class TestCatalystGateMapThemesIntegration(unittest.TestCase):
                 "find_trigger_event",
                 side_effect=_wrapped_find_trigger_event,
             ),
-            patch.object(orchestrator, "_propose_and_filter_candidates", propose_mock),
+            patch.object(orchestrator, "_propose_and_bracket", propose_mock),
             patch.object(orchestrator, "verify_candidate", side_effect=_passing_verdict),
             # This suite pins the catalyst source-gate cascade, not the V-forward
             # proposal-shadow side effect — stub the best-effort writer so it never

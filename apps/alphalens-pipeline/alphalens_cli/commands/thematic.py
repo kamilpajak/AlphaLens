@@ -260,6 +260,22 @@ def _map_themes_outcome_metrics(df: pd.DataFrame | None = None) -> dict[str, flo
     return {
         "alphalens_thematic_map_themes_declined_total": int(attrs.get("themes_declined", 0)),
         "alphalens_thematic_map_themes_failed_total": int(attrs.get("themes_failed", 0)),
+        # Stage-B channel assessment. The status mix separates "nothing had a
+        # channel today" from "the assessor died": the first shows as unverified,
+        # the second as assess_failed. Same emit-always / read-a-window rules as
+        # the two gauges above.
+        "alphalens_thematic_channel_verified_total": int(attrs.get("channel_verified", 0)),
+        "alphalens_thematic_channel_partial_total": int(attrs.get("channel_partial", 0)),
+        "alphalens_thematic_channel_unverified_total": int(attrs.get("channel_unverified", 0)),
+        "alphalens_thematic_channel_assess_failed_total": int(
+            attrs.get("channel_assess_failed", 0)
+        ),
+        # What a strict channel gate WOULD have done, per theme. Telemetry for
+        # the pre-registered forward contrast; nothing in the pipeline reads it.
+        "alphalens_thematic_shadow_kept_themes_total": int(attrs.get("themes_shadow_kept", 0)),
+        "alphalens_thematic_shadow_refused_themes_total": int(
+            attrs.get("themes_shadow_refused", 0)
+        ),
     }
 
 

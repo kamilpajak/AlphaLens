@@ -856,7 +856,18 @@ class TestThematicBuildCadence(unittest.TestCase):
         # 2026-06-15 a yfinance DNS-resolution storm pushed two
         # slots past 45min mid-enrich, so they were SIGKILLed before
         # the rebuild-cache publish and the freshly-built brief never
-        # reached Postgres (dashboard stuck a day behind). 75min is
+        # reached Postgres (dashboard stuck a day behind).
+        #
+        # Bumped 75→110min on 2026-08-19 for the stage-B channel
+        # assessment: map-themes now adds up to 5 candidates × 3 draws
+        # of OpenRouter per theme, each bounded above only by the
+        # client's read timeout. The stage is capped per theme and
+        # fanned out 3-wide, so the expected cost is minutes — but
+        # map_themes writes its candidates parquet ONCE, after the
+        # whole theme loop, so a SIGTERM mid-stage leaves no parquet at
+        # all and `set -euo pipefail` then skips score and brief. The
+        # next slot restarts from zero and can fail identically, which
+        # is a permanent stall rather than one missed slot. 110min is
         # still < the 4h slot spacing, so a truly wedged run is killed
         # before the next fire. Zen pre-merge review of PR-F flagged
         # the hang-blocks-queue class as the real pipeline-overlap
@@ -864,8 +875,8 @@ class TestThematicBuildCadence(unittest.TestCase):
         # actually occur on Type=oneshot).
         self.assertRegex(
             SERVICE_PATH.read_text(),
-            re.compile(r"^TimeoutStartSec=75min\s*$", re.MULTILINE),
-            "Service must carry TimeoutStartSec=75min or a wedged run "
+            re.compile(r"^TimeoutStartSec=110min\s*$", re.MULTILINE),
+            "Service must carry TimeoutStartSec=110min or a wedged run "
             "blocks every subsequent timer fire indefinitely.",
         )
 

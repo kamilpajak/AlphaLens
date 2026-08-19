@@ -39,7 +39,18 @@ PROVENANCE_FILENAME = "provenance.json"
 # being read with a field silently absent.
 # v2: added ``seeded_surfaces`` — the frozen surfaces whose content was written
 # by hand rather than captured.
-PROVENANCE_SCHEMA_VERSION = 2
+# v3: added the ``stage_b`` block. map-themes stopped being a ONE-CALL stage on
+# 2026-08-19: the proposal call is followed by a per-candidate channel
+# assessment, so a recording now holds one stage-A cassette plus one per
+# assessed candidate, at a different model config.
+PROVENANCE_SCHEMA_VERSION = 3
+
+# The version a STAGE-A-ONLY recording carries. Recordings captured before the
+# channel assessment existed keep it: back-stamping them to v3 with an empty
+# stage_b block would assert a stage they never ran. The expected version is
+# therefore derived from the ARTIFACTS (see :func:`expected_schema_version`),
+# not from this module's newest constant.
+PROVENANCE_SCHEMA_VERSION_STAGE_A_ONLY = 2
 
 # Re-recording a characterization golden is a reviewed operation, so the
 # document names the human who approved the execution it pins.
@@ -153,21 +164,101 @@ def seeded_surfaces(fixture: MapFixture) -> dict[str, str]:
     return dict(sorted(fixture.seeded_surfaces))
 
 
-def cassette_record(fixture: MapFixture, version: str | None = None) -> dict[str, Any]:
-    """The one recorded LLM request/response for a recording version.
-
-    ``map_themes`` makes exactly one Pro call per theme and every fixture pins
-    one theme, so more than one cassette in a version directory means two
-    recordings were mixed — refuse rather than pick.
-    """
+def _cassette_records(fixture: MapFixture, version: str | None = None) -> list[dict[str, Any]]:
     directory = fixture.llm_cassette_dir(version)
-    cassettes = sorted(directory.glob("*.json"))
-    if len(cassettes) != 1:
+    return [json.loads(path.read_text()) for path in sorted(directory.glob("*.json"))]
+
+
+def _is_stage_b(record: dict[str, Any]) -> bool:
+    """Whether one cassette is a channel-assessment request.
+
+    Discriminated on the REQUEST SCHEMA rather than on the prompt text or the
+    token budget: the two stages ask for different objects, and the schema is
+    the part of the request that cannot be edited without also moving the
+    stage's own config-version token. The client renders the schema into the
+    synthesised SYSTEM MESSAGE (``response_format`` is the bare
+    ``{"type": "json_object"}``), so that is where it is read from.
+    """
+    config = record.get("config") or {}
+    return "channel_status" in str(config.get("system_message") or "")
+
+
+def split_cassette_records(
+    fixture: MapFixture, version: str | None = None
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """``(stage-A record, stage-B records)`` for one recording version.
+
+    ``map_themes`` makes exactly ONE proposal call per theme and every fixture
+    pins one theme, so more than one stage-A cassette means two recordings were
+    mixed — refuse rather than pick. Stage B makes one call per ASSESSED
+    candidate, so its count is data, not an error.
+
+    A caveat the caller must not lose: the cassette key is a sha256 over the
+    whole request, and the ``_ASSESS_VOTES`` draws of one candidate are
+    IDENTICAL requests. They collapse to a single cassette file, and the replay
+    then serves the same body to every draw — so a replayed run always reports
+    ``channel_vote_valid_n = 3`` with ``channel_vote_dispersion = 0``. The
+    golden shows the stage is wired; it can never evidence vote stability.
+    """
+    records = _cassette_records(fixture, version)
+    stage_b = [r for r in records if _is_stage_b(r)]
+    stage_a = [r for r in records if not _is_stage_b(r)]
+    if len(stage_a) != 1:
         raise ValueError(
-            f"expected exactly 1 LLM cassette in {directory}, found {len(cassettes)} — "
-            "a recording version holds one request, so this is two recordings mixed"
+            f"expected exactly 1 stage-A LLM cassette in "
+            f"{fixture.llm_cassette_dir(version)}, found {len(stage_a)} "
+            f"(of {len(records)} total) — one recording holds one proposal call, "
+            "so this is two recordings mixed"
         )
-    return json.loads(cassettes[0].read_text())
+    return stage_a[0], stage_b
+
+
+def cassette_record(fixture: MapFixture, version: str | None = None) -> dict[str, Any]:
+    """The recorded STAGE-A (proposal) request/response for a recording version."""
+    return split_cassette_records(fixture, version)[0]
+
+
+def expected_schema_version(fixture: MapFixture, version: str | None = None) -> int:
+    """The document version this recording's ARTIFACTS imply.
+
+    A recording captured before the channel assessment existed holds no stage-B
+    cassette and legitimately stays at v2; one that does hold them must carry
+    the v3 block describing them.
+    """
+    _stage_a, stage_b = split_cassette_records(fixture, version)
+    return PROVENANCE_SCHEMA_VERSION if stage_b else PROVENANCE_SCHEMA_VERSION_STAGE_A_ONLY
+
+
+def stage_b_block(fixture: MapFixture, version: str | None = None) -> dict[str, Any] | None:
+    """The ``stage_b`` document block, or ``None`` for a stage-A-only recording."""
+    _stage_a, stage_b = split_cassette_records(fixture, version)
+    if not stage_b:
+        return None
+    models = sorted({str(r["model"]) for r in stage_b})
+    configs = [r.get("config") or {} for r in stage_b]
+    temperatures = sorted({c.get("temperature") for c in configs}, key=repr)
+    max_tokens = sorted({c.get("max_tokens") for c in configs}, key=repr)
+    if len(models) != 1 or len(temperatures) != 1 or len(max_tokens) != 1:
+        raise ValueError(
+            f"{fixture.name}/{version or fixture.current_recording}: the stage-B "
+            "cassettes disagree on model or sampling — one recording is one config"
+        )
+    return {
+        "cassette_keys": sorted(str(r["key"]) for r in stage_b),
+        "model": models[0],
+        "sampling": {
+            "temperature": temperatures[0],
+            "max_tokens": max_tokens[0],
+            "response_format": configs[0].get("response_format"),
+        },
+        "system_message_sha": sha256_text(configs[0].get("system_message") or ""),
+        "vote_collapse_note": (
+            "The k identical draws of one candidate share a request descriptor and "
+            "therefore ONE cassette file. A replay serves the same body to every "
+            "draw, so channel_vote_valid_n and channel_vote_dispersion in the golden "
+            "projection are artefacts of replay, not measurements of vote stability."
+        ),
+    }
 
 
 def resolve_event(fixture: MapFixture) -> dict[str, Any]:
@@ -269,7 +360,7 @@ def audit_recording(fixture: MapFixture, version: str, doc: dict[str, Any]) -> l
     stamped = stamped_config_version(fixture, version)
 
     expected: list[tuple[str, Any]] = [
-        ("schema_version", PROVENANCE_SCHEMA_VERSION),
+        ("schema_version", expected_schema_version(fixture, version)),
         ("fixture", fixture.name),
         ("recording", version),
         ("approved_by", APPROVER),
@@ -293,7 +384,13 @@ def audit_recording(fixture: MapFixture, version: str, doc: dict[str, Any]) -> l
     ]
     if stamped is not None:
         expected.append(("prompt.mapper_config_version", stamped))
-    problems = []
+    problems: list[str] = []
+    stage_b = stage_b_block(fixture, version)
+    if stage_b is None:
+        if doc.get("stage_b") is not None:
+            problems.append("stage_b is documented but no stage-B cassette was recorded")
+    else:
+        expected.append(("stage_b", stage_b))
     for dotted, want in expected:
         got = _field(doc, dotted)
         if got != want:
@@ -360,11 +457,11 @@ def build_provenance(
     committed artifacts. Keeping both visible is what makes a backfilled record
     legible as backfilled instead of passing as contemporaneous.
     """
-    record = cassette_record(fixture, version)
+    record, _stage_b_records = split_cassette_records(fixture, version)
     config = record.get("config") or {}
     parsed = json.loads(mapper_config_version)
     doc: dict[str, Any] = {
-        "schema_version": PROVENANCE_SCHEMA_VERSION,
+        "schema_version": expected_schema_version(fixture, version),
         "fixture": fixture.name,
         "recording": version,
         "event": resolve_event(fixture),
@@ -389,6 +486,9 @@ def build_provenance(
         "recorded_by": recorded_by,
         "approved_by": APPROVER,
     }
+    stage_b = stage_b_block(fixture, version)
+    if stage_b is not None:
+        doc["stage_b"] = stage_b
     if notes:
         doc["notes"] = notes
     return doc
@@ -405,11 +505,13 @@ __all__ = [
     "APPROVER",
     "PROVENANCE_FILENAME",
     "PROVENANCE_SCHEMA_VERSION",
+    "PROVENANCE_SCHEMA_VERSION_STAGE_A_ONLY",
     "REQUIRED_FIELDS",
     "audit_recording",
     "audit_surfaces",
     "build_provenance",
     "cassette_record",
+    "expected_schema_version",
     "load_provenance",
     "missing_fields",
     "provenance_path",
@@ -418,6 +520,8 @@ __all__ = [
     "seeded_surfaces",
     "sha256_file",
     "sha256_text",
+    "split_cassette_records",
+    "stage_b_block",
     "stamped_config_version",
     "surface_manifest",
     "write_provenance",

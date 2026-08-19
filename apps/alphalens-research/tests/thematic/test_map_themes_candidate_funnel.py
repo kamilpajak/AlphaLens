@@ -56,13 +56,13 @@ def _proposal(
     *,
     tickers: list[str],
     outcome: MapperOutcome,
-    no_candidates_reason: str = "",
+    decline_reason: str = "",
 ) -> dict:
     return {
         "candidates": [{"ticker": t, "confidence": 0.9} for t in tickers],
         "search_keywords": [],
         "outcome": outcome,
-        "no_candidates_reason": no_candidates_reason,
+        "decline_reason": decline_reason,
     }
 
 
@@ -79,7 +79,7 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
             ),
             self.assertLogs(_LOGGER, level=level) as cm,
         ):
-            candidates, _mcap, _keywords, outcome = orchestrator._propose_and_filter_candidates(
+            proposal = orchestrator._propose_and_bracket(
                 theme="ai_defense",
                 catalyst=_catalyst(),
                 api_key="k",
@@ -88,7 +88,7 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
                 max_cap=10_000_000_000,
                 asof=dt.date(2026, 7, 25),
             )
-        return candidates, outcome, "\n".join(cm.output)
+        return proposal.candidates, proposal.outcome, "\n".join(cm.output)
 
     def _propose(self, *, proposed_tickers: list[str], in_bracket: list[str]):
         candidates, _outcome, logs = self._run(
@@ -127,19 +127,21 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
 
     def test_a_decline_names_the_model_reason_in_the_funnel_line(self):
         # Issue #982. A decline is a judgement; the funnel must say so AND carry
-        # the model's own words, so no second log line has to be cross-referenced.
+        # the reason, so no second log line has to be cross-referenced. The
+        # reason is enumerated since 2026-08-19 — free text let "weak linkage"
+        # (no longer a legal decline) read as one.
         candidates, outcome, logs = self._run(
             _proposal(
                 tickers=[],
                 outcome=MapperOutcome.DECLINED,
-                no_candidates_reason="a one-time litigation payout with no transmission channel",
+                decline_reason="not_business_development",
             ),
             [],
         )
         self.assertEqual(candidates, [])
         self.assertEqual(outcome, MapperOutcome.DECLINED)
         self.assertIn("declined", logs.lower())
-        self.assertIn("one-time litigation payout", logs)
+        self.assertIn("not_business_development", logs)
 
     def test_a_failure_is_logged_at_warning_and_is_not_worded_as_a_decline(self):
         # The theme was LOST, not judged. It must be greppable apart from a
@@ -156,9 +158,7 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
     def test_a_decline_and_a_failure_do_not_produce_the_same_funnel_line(self):
         # The whole point of #982: before the fix these two rendered identically.
         _c, _o, declined_logs = self._run(
-            _proposal(
-                tickers=[], outcome=MapperOutcome.DECLINED, no_candidates_reason="no channel"
-            ),
+            _proposal(tickers=[], outcome=MapperOutcome.DECLINED, decline_reason="no_event"),
             [],
         )
         _c2, _o2, failed_logs = self._run(
@@ -192,7 +192,7 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
             ],
             "search_keywords": [],
             "outcome": MapperOutcome.SUCCESS,
-            "no_candidates_reason": "",
+            "decline_reason": "",
         }
         with (
             mock.patch.object(
@@ -210,17 +210,16 @@ class MapThemesCandidateFunnelLoggingTests(unittest.TestCase):
                 ),
             ),
         ):
-            candidates, in_bracket, _keywords, _outcome = (
-                orchestrator._propose_and_filter_candidates(
-                    theme="ai_defense",
-                    catalyst=_catalyst(),
-                    api_key="k",
-                    pro_client=None,
-                    min_cap=500_000_000,
-                    max_cap=10_000_000_000,
-                    asof=dt.date(2026, 7, 25),
-                )
+            proposal = orchestrator._propose_and_bracket(
+                theme="ai_defense",
+                catalyst=_catalyst(),
+                api_key="k",
+                pro_client=None,
+                min_cap=500_000_000,
+                max_cap=10_000_000_000,
+                asof=dt.date(2026, 7, 25),
             )
+            candidates, in_bracket = proposal.candidates, proposal.in_bracket
         # OUT is filtered (not in bracket); the rest are sorted by confidence desc.
         self.assertEqual([c["ticker"] for c in candidates], ["HIGH", "MID", "LOW"])
         self.assertEqual(set(in_bracket), {"HIGH", "MID", "LOW"})

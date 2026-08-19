@@ -1,6 +1,7 @@
 # theme_mapper mechanical-rule head-to-head — design memo (D4)
 
-**Status:** LOCKED (pre-compute) — adversarial review pending before the retro first-look compute.
+**Status:** LOCKED (pre-compute) — adversarial review pending before the retro first-look compute. **§13.4 item 3 SUPERSEDED 2026-08-19:** the ISO week 40-42 verdict window (2026-09-28..10-18) no longer applies — the channel-as-feature change bumps `mapper_config_version` to `mapper-freeze-v3` and restarts the accrual counter for both arms a second time.
+**Superseded-window pointer:** `docs/research/channel_feature_forward_prereg_2026_08_19.md` §9 (why the window is dropped and what replaces it); design in `docs/research/channel_as_feature_design_2026_08_19.md`.
 **Date:** 2026-07-12
 **Author:** Kamil Pająk
 **Supersedes-as-powered-path:** the D3 forward grounding-stamp in `theme_mapper_grounding_leak_design_2026_07_12.md` §11.1 (D3 kept only as long-horizon insurance; instrument A ~1.5 yr to power).

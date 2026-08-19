@@ -44,6 +44,8 @@ import unittest
 
 from tests.golden.map_fixtures import MAP_FIXTURES, NVDA_ISING_2026_04_14
 from tests.golden.map_provenance import (
+    PROVENANCE_SCHEMA_VERSION,
+    PROVENANCE_SCHEMA_VERSION_STAGE_A_ONLY,
     REQUIRED_FIELDS,
     audit_recording,
     audit_surfaces,
@@ -51,6 +53,8 @@ from tests.golden.map_provenance import (
     missing_fields,
     provenance_path,
     recording_versions,
+    split_cassette_records,
+    stage_b_block,
     stamped_config_version,
     surface_manifest,
 )
@@ -252,6 +256,93 @@ class TestSeededSurfacesAreDeclared(unittest.TestCase):
             self.assertTrue(
                 any("seeded_surfaces" in problem for problem in problems),
                 f"a dropped seeded-surface declaration was not reported: {problems}",
+            )
+
+
+class TestStageBIsDocumented(unittest.TestCase):
+    """map-themes stopped being a ONE-CALL stage on 2026-08-19.
+
+    The proposal call is now followed by a per-candidate channel assessment at
+    a different model config, so a recording holds one stage-A cassette plus one
+    per assessed candidate. Two things must not go unrecorded: the assessment
+    stage's own model and sampling (otherwise the document describes half of the
+    execution it pins), and the fact that the k identical draws of one candidate
+    collapse to ONE cassette file — which makes the replayed
+    ``channel_vote_dispersion`` an artefact rather than a measurement.
+    """
+
+    def test_the_stage_a_cassette_is_the_proposal_call(self):
+        for fixture in MAP_FIXTURES:
+            for version in recording_versions(fixture):
+                with self.subTest(fixture=fixture.name, recording=version):
+                    stage_a, _stage_b = split_cassette_records(fixture, version)
+                    system_message = stage_a["config"]["system_message"]
+                    self.assertIn("candidates", system_message)
+                    self.assertNotIn("channel_status", system_message)
+
+    def test_a_recording_with_stage_b_cassettes_carries_the_block(self):
+        described = 0
+        for fixture in MAP_FIXTURES:
+            for version in recording_versions(fixture):
+                block = stage_b_block(fixture, version)
+                if block is None:
+                    continue
+                described += 1
+                with self.subTest(fixture=fixture.name, recording=version):
+                    doc = load_provenance(fixture, version)
+                    self.assertEqual(doc.get("stage_b"), block)
+                    self.assertEqual(doc["schema_version"], PROVENANCE_SCHEMA_VERSION)
+                    self.assertTrue(block["cassette_keys"])
+                    self.assertIn("vote_collapse_note", block)
+                    # The two stages are different requests, not the same one
+                    # counted twice: their rendered schemas must differ.
+                    stage_a, _ = split_cassette_records(fixture, version)
+                    self.assertNotEqual(
+                        block["system_message_sha"],
+                        doc["prompt"]["system_message_sha"],
+                    )
+                    self.assertNotEqual(
+                        block["sampling"]["max_tokens"], stage_a["config"]["max_tokens"]
+                    )
+        self.assertTrue(described, "no recording carries a stage-B cassette — the check is vacuous")
+
+    def test_a_pre_stage_b_recording_keeps_its_own_schema_version(self):
+        # Back-stamping an older recording to the new schema with an empty
+        # stage_b block would assert a stage it never ran.
+        older = 0
+        for fixture in MAP_FIXTURES:
+            for version in recording_versions(fixture):
+                if stage_b_block(fixture, version) is not None:
+                    continue
+                older += 1
+                with self.subTest(fixture=fixture.name, recording=version):
+                    doc = load_provenance(fixture, version)
+                    self.assertIsNone(doc.get("stage_b"))
+                    self.assertEqual(doc["schema_version"], PROVENANCE_SCHEMA_VERSION_STAGE_A_ONLY)
+        self.assertTrue(older, "no pre-stage-B recording on disk — the check is vacuous")
+
+    def test_audit_reports_a_stage_b_block_that_contradicts_the_cassettes(self):
+        # POSITIVE CONTROL, both directions: a document that misstates the
+        # assessment config, and one that drops the block entirely.
+        target = next(
+            (f, v)
+            for f in MAP_FIXTURES
+            for v in recording_versions(f)
+            if stage_b_block(f, v) is not None
+        )
+        fixture, version = target
+        doc = load_provenance(fixture, version)
+        self.assertEqual(audit_recording(fixture, version, doc), [])
+        for tampered in (
+            _drop_field(doc, "stage_b"),
+            _set_field(doc, "stage_b.model", "deepseek/deepseek-v4-flash"),
+            _set_field(doc, "stage_b.sampling", {"temperature": 0.7, "max_tokens": 1500}),
+            _set_field(doc, "stage_b.cassette_keys", ["0" * 64]),
+        ):
+            problems = audit_recording(fixture, version, tampered)
+            self.assertTrue(
+                any("stage_b" in problem for problem in problems),
+                f"a tampered stage_b block was not reported: {problems}",
             )
 
 

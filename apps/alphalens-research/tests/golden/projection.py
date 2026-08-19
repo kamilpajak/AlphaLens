@@ -113,6 +113,24 @@ def map_themes_projection(candidates: pd.DataFrame) -> dict[str, Any]:
     ``map_themes``), the raw ``market_cap`` float (→ bucket), and the catalyst
     prose (``source_event_*`` → the ``has_catalyst`` boolean). The gate verdicts
     are what a verification regression would flip.
+
+    NO ``channel_*`` field is in the exemplar, and that is a deliberate limit of
+    this golden rather than an oversight. The cassette key is a sha256 over the
+    whole request, and the ``_ASSESS_VOTES`` draws of one candidate are
+    IDENTICAL requests: they collapse to ONE cassette file (last write wins) and
+    a replay then serves that one body to every draw. Every vote-derived field
+    is therefore unreproducible under replay whenever the live draws disagreed —
+    measured, not hypothetical: in the ``nvda_ising_2026_04_14`` v2 capture two
+    tickers drew 2 verified + 1 partial live (median ``verified``,
+    ``dispersion = 1``) and replay to a unanimous ``partial``. Asserting any of
+    them here would pin an artefact of replay as if it were a measurement.
+
+    What the golden DOES lock about stage B: the column set (all eleven
+    ``channel_*`` columns plus the shadow block present, ``transmission_channel``
+    gone) and ``row_count`` — which is the never-drops invariant, the one
+    property of the assessment that must hold whatever the model says. Vote
+    stability and the status mix are measured live (forward pre-registration §5
+    descriptive 5), never here.
     """
     rows = []
     for _, r in candidates.sort_values("ticker").iterrows():

@@ -19,6 +19,8 @@ import pandas as pd
 from alphalens_pipeline.thematic.mapping import orchestrator
 from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
 
+from tests.thematic.mapping_stubs import stub_assessor, theme_proposal
+
 from .test_theme_mapping import _catalyst_payload
 
 ASOF = dt.date(2026, 6, 18)
@@ -38,6 +40,11 @@ def _survivor_row(theme: str, ticker: str) -> dict:
 
 
 class TestMapThemesProposalShadow(unittest.TestCase):
+    def setUp(self) -> None:
+        # Stage B calls OpenRouter once per in-bracket candidate; without
+        # this stub these tests hit the live API.
+        stub_assessor(self)
+
     def test_shadow_receives_full_pregate_proposals_not_just_survivors(self):
         # Pro proposes TWO tickers for the theme; the gate keeps only ONE.
         proposed = [
@@ -57,12 +64,11 @@ class TestMapThemesProposalShadow(unittest.TestCase):
                 patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst_payload()),
                 patch.object(
                     orchestrator,
-                    "_propose_and_filter_candidates",
-                    return_value=(
-                        proposed,
-                        {"KEEP": True, "DROP": True},
-                        ["kw"],
-                        MapperOutcome.SUCCESS,
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(
+                        proposed=proposed,
+                        in_bracket={"KEEP": 1_000_000_000.0, "DROP": 1_000_000_000.0},
+                        outcome=MapperOutcome.SUCCESS,
                     ),
                 ),
                 patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
@@ -81,6 +87,42 @@ class TestMapThemesProposalShadow(unittest.TestCase):
             tickers = {p["ticker"] for p in llm_proposals}
             self.assertEqual(tickers, {"KEEP", "DROP"})
             self.assertEqual(kwargs["mapper_config_version"], df.loc[0, "mapper_config_version"])
+
+    def test_no_channel_column_leaks_into_the_shadow_rows(self):
+        # The proposal-shadow parquet feeds a PRE-REGISTERED head-to-head whose
+        # row shape must not move. Widening it with channel telemetry would
+        # corrupt that measurement, so the assessment annotates the candidate
+        # dicts only — the shadow builder reads a fixed three keys.
+        proposed = [{"ticker": "KEEP", "confidence": 0.9}]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(orchestrator, "_init_pro_client", return_value=object()),
+                patch.object(orchestrator, "_fetch_press_window", return_value=pd.DataFrame()),
+                patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst_payload()),
+                patch.object(
+                    orchestrator,
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(
+                        proposed=proposed,
+                        in_bracket={"KEEP": 1_000_000_000.0},
+                        outcome=MapperOutcome.SUCCESS,
+                    ),
+                ),
+                patch.object(
+                    orchestrator,
+                    "_verify_candidates_for_theme",
+                    side_effect=lambda *, theme, **_k: ([_survivor_row(theme, "KEEP")], 0, 0),
+                ),
+                patch.object(orchestrator.proposal_shadow, "write_proposal_shadow") as shadow,
+            ):
+                orchestrator.map_themes(
+                    themes=["ai"], asof=ASOF, api_key="dummy", output_dir=Path(tmp), rebuild=True
+                )
+
+        llm_proposals = shadow.call_args.args[1]
+        for row in llm_proposals:
+            self.assertEqual(set(row), {"theme", "ticker", "llm_confidence"})
 
     def test_no_proposals_skips_shadow_write(self):
         # A theme with no catalyst yields no proposals → writer must not fire.
@@ -111,8 +153,12 @@ class TestMapThemesProposalShadow(unittest.TestCase):
                 patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst_payload()),
                 patch.object(
                     orchestrator,
-                    "_propose_and_filter_candidates",
-                    return_value=(proposed, {"KEEP": True}, ["kw"], MapperOutcome.SUCCESS),
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(
+                        proposed=proposed,
+                        in_bracket={"KEEP": 1_000_000_000.0},
+                        outcome=MapperOutcome.SUCCESS,
+                    ),
                 ),
                 patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
                 patch.object(

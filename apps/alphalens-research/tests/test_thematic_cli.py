@@ -168,6 +168,71 @@ class TestMapThemesCLI(unittest.TestCase):
         self.assertEqual(extra["alphalens_thematic_map_themes_declined_total"], 4)
         self.assertEqual(extra["alphalens_thematic_map_themes_failed_total"], 2)
 
+    def test_map_themes_emits_the_channel_and_shadow_gauges(self):
+        # The stage-B status mix and the shadow verdict split. Without them, a
+        # day where the assessor silently died and a day where nothing had a
+        # channel produce the same candidate volume.
+        df = _FAKE_CANDIDATES.copy()
+        df.attrs["channel_verified"] = 3
+        df.attrs["channel_partial"] = 5
+        df.attrs["channel_unverified"] = 7
+        df.attrs["channel_assess_failed"] = 1
+        df.attrs["themes_shadow_kept"] = 2
+        df.attrs["themes_shadow_refused"] = 6
+
+        extra = self._map_themes_extra_metrics(df)
+        self.assertEqual(extra["alphalens_thematic_channel_verified_total"], 3)
+        self.assertEqual(extra["alphalens_thematic_channel_partial_total"], 5)
+        self.assertEqual(extra["alphalens_thematic_channel_unverified_total"], 7)
+        self.assertEqual(extra["alphalens_thematic_channel_assess_failed_total"], 1)
+        self.assertEqual(extra["alphalens_thematic_shadow_kept_themes_total"], 2)
+        self.assertEqual(extra["alphalens_thematic_shadow_refused_themes_total"], 6)
+
+    def test_map_themes_emits_zero_channel_gauges_when_the_frame_carries_no_attrs(self):
+        # Scope, stated so a later reader does not over-read this test: it pins
+        # the CLI's DEFAULT, i.e. that a frame without the attrs still publishes
+        # all six series rather than dropping them — a series that disappears is
+        # indistinguishable from a stopped exporter. It says nothing about the
+        # values a real run produces (map_themes is patched wholesale here);
+        # those are pinned against real theme loops in
+        # tests/thematic/test_map_themes_channel_shadow.py and against the real
+        # frozen-reuse branch in tests/thematic/test_map_themes_freeze.py.
+        extra = self._map_themes_extra_metrics(_FAKE_CANDIDATES.copy())
+        for name in (
+            "alphalens_thematic_channel_verified_total",
+            "alphalens_thematic_channel_partial_total",
+            "alphalens_thematic_channel_unverified_total",
+            "alphalens_thematic_channel_assess_failed_total",
+            "alphalens_thematic_shadow_kept_themes_total",
+            "alphalens_thematic_shadow_refused_themes_total",
+        ):
+            self.assertEqual(extra[name], 0, name)
+
+    def _map_themes_extra_metrics(self, df) -> dict:
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, self._env(), clear=False),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.roll_up",
+                return_value=self._novel_frame(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel",
+                return_value=self._novel_frame(),
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.orchestrator.map_themes",
+                return_value=df,
+            ),
+            patch("alphalens_cli.commands.thematic._emit_stage_volume") as emit,
+        ):
+            result = self.runner.invoke(
+                app,
+                ["thematic", "map-themes", "--date", "2026-05-15", "--output-dir", tmpdir],
+            )
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        return emit.call_args.kwargs["extra_metrics"]
+
     def test_map_themes_emits_zero_gauges_when_nothing_declined_or_failed(self):
         # Positive control: the gauges must be able to read 0. Emitting them only
         # when non-zero would leave the series absent on healthy days, so a drop
@@ -396,8 +461,9 @@ class TestMapThemesCLI(unittest.TestCase):
             self.assertEqual(result.exit_code, 0, msg=result.output)
             # Observability contract stays uniform: the quiet-day path emits the
             # true 0/0 volume so the gauge does not carry stale values.
-            # The #982 gauges ride along even here: a quiet day must publish
-            # them as 0 rather than leaving the series absent.
+            # The #982 gauges and the stage-B channel gauges ride along even
+            # here: a quiet day must publish them as 0 rather than leaving the
+            # series absent.
             emit.assert_called_once_with(
                 "map-themes",
                 output_rows=0,
@@ -405,6 +471,12 @@ class TestMapThemesCLI(unittest.TestCase):
                 extra_metrics={
                     "alphalens_thematic_map_themes_declined_total": 0,
                     "alphalens_thematic_map_themes_failed_total": 0,
+                    "alphalens_thematic_channel_verified_total": 0,
+                    "alphalens_thematic_channel_partial_total": 0,
+                    "alphalens_thematic_channel_unverified_total": 0,
+                    "alphalens_thematic_channel_assess_failed_total": 0,
+                    "alphalens_thematic_shadow_kept_themes_total": 0,
+                    "alphalens_thematic_shadow_refused_themes_total": 0,
                 },
             )
             self.assertIn("No novel themes", result.output)
