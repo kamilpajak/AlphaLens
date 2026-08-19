@@ -29,9 +29,13 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_trails
+from alphalens_pipeline.brokers.automanager import safety as _safety
 from broker_contract.sizing import SetupPlan, TierPlan
 
 _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
+# Captured at import time (before any test patches the module attribute) so the
+# end-to-end MAX_OPEN test can restore the REAL rail over _placer's stub.
+_REAL_SAFETY_CHECK = _safety.check
 
 
 # --------------------------------------------------------------------------
@@ -1439,6 +1443,163 @@ class TestEntryWatchFeedScope(unittest.TestCase):
         with mock.patch.dict("os.environ", {}, clear=True):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
         self.assertEqual(calls, [({}, "entry-watch")])
+
+
+# --------------------------------------------------------------------------
+# Open watches count against the MAX_OPEN admission (2026-08-19 adjudication)
+# --------------------------------------------------------------------------
+
+
+def _live_long(uic: int, qty: float = 8.0) -> Any:
+    instr = type("I", (), {"broker_instrument_id": str(uic)})()
+    return type("Pos", (), {"instrument": instr, "quantity": qty})()
+
+
+class _BrokerWithPositions(_RecordingBroker):
+    """A recording broker whose ``get_positions`` returns injected positions."""
+
+    def __init__(self, positions: list[Any]) -> None:
+        super().__init__()
+        self._positions = positions
+
+    def get_positions(self) -> list:
+        return self._positions
+
+
+def _seed_other_watch_line(pick_key: str, *, crid: str, uic: int | None = None) -> None:
+    line: dict[str, Any] = {
+        "kind": entry_trails.KIND_WATCH_OPEN,
+        "crid": crid,
+        "limit": 5.0,
+        "qty": 10.0,
+        "pick_key": pick_key,
+    }
+    if uic is not None:
+        line["uic"] = uic
+    entry_trails.append_entry_trail_line(line)
+
+
+class TestOpenWatchesCountAgainstMaxOpen(unittest.TestCase):
+    """Adjudication finding 1 (2026-08-19): an open entry watch — or its armed
+    unfilled native trail — is a committed risk unit the MAX_OPEN rail cannot
+    see: the note-only watch submission record carries no brackets and no
+    position exists until the trail fires, so ``safety.check``'s sum (journal
+    brackets + live positions) misses it entirely and a watch capacity of N
+    could over-commit up to N extra concurrent positions. ``_place_pick`` must
+    count the DISTINCT watch-holding picks into the MAX_OPEN input."""
+
+    _CHECK_TARGET = "alphalens_pipeline.brokers.automanager.safety.check"
+
+    def _recording_check(self) -> list[Any]:
+        seen: list[Any] = []
+
+        def check(_pick: Any, journal_view: Any, broker_view: Any, _state: Any) -> Any:
+            seen.append((journal_view, broker_view))
+            # A transient Refuse stops _place_pick right after the check: these
+            # tests pin the INPUTS to the rail, not the downstream placement.
+            return _safety.Refuse("recorded — stop here")
+
+        self.enterContext(mock.patch(self._CHECK_TARGET, check))
+        return seen
+
+    def test_another_picks_open_watch_raises_the_max_open_input(self) -> None:
+        _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0")
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        env = {_ENV: "50", cl._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            placer(_pick())
+        journal_view, _broker_view = seen[0]
+        self.assertEqual(journal_view.open_bracket_count, 1)
+
+    def test_own_watch_is_excluded_from_the_max_open_input(self) -> None:
+        # Crash-recovery re-drive: the pick's OWN watch must not self-block the
+        # retirement (mirrors the intercept's already_watching exemption).
+        _journal(self)
+        _seed_other_watch_line("KO:2026-07-20", crid="KO-2026-07-20-entry-t0")
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        journal_view, _broker_view = seen[0]
+        self.assertEqual(journal_view.open_bracket_count, 0)
+
+    def test_watch_on_a_uic_with_a_live_position_is_not_double_counted(self) -> None:
+        # A pick whose tier already FIRED shows up as a live position while a
+        # deeper tier still watches — one risk unit, not two: the position side
+        # is already in BrokerView.open_position_count.
+        _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t1", uic=42)
+        broker = _BrokerWithPositions([_live_long(42)])
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        journal_view, broker_view = seen[0]
+        self.assertEqual(journal_view.open_bracket_count, 0)
+        self.assertEqual(broker_view.open_position_count, 1)
+
+    def test_terminal_watches_do_not_count(self) -> None:
+        _journal(self)
+        _seed_other_watch_line("OTHER:2026-07-19", crid="OTHER-2026-07-19-entry-t0")
+        entry_trails.append_entry_trail_line(
+            {"kind": entry_trails.KIND_EXPIRED, "crid": "OTHER-2026-07-19-entry-t0"}
+        )
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        seen = self._recording_check()
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            placer(_pick())
+        journal_view, _broker_view = seen[0]
+        self.assertEqual(journal_view.open_bracket_count, 0)
+
+    def test_max_open_reached_by_watches_refuses_the_pick_terminal(self) -> None:
+        # End-to-end with the REAL safety.check: two foreign open watches +
+        # MAX_OPEN=2 -> the third pick is refused terminal BEFORE any watch
+        # opens, even though the watch-capacity env rail would still admit it.
+        path = _journal(self)
+        _seed_other_watch_line("OTHER1:2026-07-19", crid="OTHER1-2026-07-19-entry-t0")
+        _seed_other_watch_line("OTHER2:2026-07-19", crid="OTHER2-2026-07-19-entry-t0")
+        broker = _RecordingBroker()
+        placer, submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        self.enterContext(mock.patch(self._CHECK_TARGET, _REAL_SAFETY_CHECK))
+        refused: list[tuple[Any, ...]] = []
+        self.enterContext(
+            mock.patch(
+                "alphalens_pipeline.brokers.automanager.picks.mark_refused",
+                lambda *a, **k: refused.append(a),
+            )
+        )
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        no_kill = Path(tmp.name) / "KILL"
+        for target in ("kill_file_path", "global_kill_file_path"):
+            self.enterContext(
+                mock.patch(
+                    f"alphalens_pipeline.brokers.automanager.state_paths.{target}",
+                    lambda: no_kill,
+                )
+            )
+        env = {
+            _ENV: "50",
+            "ALPHALENS_BROKER_ALLOW_ORDERS": "1",
+            "ALPHALENS_BROKER_MAX_OPEN": "2",
+            cl._ENTRY_WATCH_MAX_PICKS_ENV: "4",
+        }
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertFalse(placer(_pick()))
+        self.assertEqual(len(refused), 1)
+        self.assertIn("MAX_OPEN", refused[0][2])
+        self.assertEqual(submissions, [])
+        opens_for_ko = [
+            ln
+            for ln in _lines(path)
+            if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "KO"
+        ]
+        self.assertEqual(opens_for_ko, [])
 
 
 if __name__ == "__main__":

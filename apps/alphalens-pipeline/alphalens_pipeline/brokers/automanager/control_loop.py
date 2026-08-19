@@ -17,7 +17,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -1200,6 +1200,56 @@ def _open_watch_pick_keys(fold: entry_trails.EntryTrailFold) -> set[str]:
             continue
         pick_keys.add(str(state.watch_open.get("pick_key") or state.crid))
     return pick_keys
+
+
+def _open_watch_picks_for_max_open(
+    fold: entry_trails.EntryTrailFold,
+    *,
+    own_pick_key: str,
+    position_uics: Collection[int],
+) -> set[str]:
+    """The DISTINCT ``pick_key`` of every open entry watch that occupies a
+    prospective-position slot in the MAX_OPEN admission check (2026-08-19
+    adjudication finding 1).
+
+    An open watch — or its armed unfilled native trail, which is equally
+    non-terminal in the fold — is a committed risk unit ``safety.check`` cannot
+    see: the note-only watch submission record carries no brackets and no
+    position exists until the trail fires, so with N watches open the classic
+    sum (journal brackets + live positions) under-counts by N and a raised
+    watch capacity could over-commit up to N extra concurrent positions.
+
+    Two exclusions keep the count one-slot-per-risk-unit:
+
+    - ``own_pick_key`` — the candidate pick's own watch (the crash-recovery
+      re-drive must not self-block on its own reservation, mirroring the
+      intercept's ``already_watching`` exemption);
+    - any watch whose uic is in ``position_uics`` — a pick whose tier already
+      FIRED shows up as a live position while a deeper tier still watches; that
+      unit is already counted in ``BrokerView.open_position_count``.
+
+    A watch record with no parseable uic still counts (conservative: an
+    over-reserved slot refuses one pick too early; an under-count re-opens the
+    over-commit)."""
+    picks: set[str] = set()
+    for state in fold.tiers.values():
+        if state.terminal_kind is not None or state.watch_open is None:
+            continue
+        record = state.watch_open
+        pick_key = str(record.get("pick_key") or state.crid)
+        if pick_key == own_pick_key or _watch_uic_in(record, position_uics):
+            continue
+        picks.add(pick_key)
+    return picks
+
+
+def _watch_uic_in(record: Mapping[str, Any], uics: Collection[int]) -> bool:
+    """Whether the watch record's uic parses AND is in ``uics``; False on a
+    missing/unparseable uic (the caller then counts the watch conservatively)."""
+    try:
+        return int(record["uic"]) in uics
+    except (KeyError, TypeError, ValueError):
+        return False
 
 
 def _entry_watch_capacity_reached(fold: entry_trails.EntryTrailFold) -> bool:
@@ -5333,13 +5383,31 @@ def _place_pick(
         logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
         return False
 
+    # Entry-trailing reservation fold (memo G5) — read ONCE here, BEFORE
+    # safety.check, and threaded into the MAX_OPEN admission input, BOTH money
+    # gates below AND the watch-capacity / drain-intercept check further down
+    # (torn-read fix). A single snapshot per placement attempt. Empty/absent
+    # journal (flag off) folds to zero, so this is inert until a watch is open
+    # (PR-T0 inertness).
+    entry_trail_fold = entry_trails.read_entry_trail_fold()
+    # 2026-08-19 adjudication finding 1: open watches are committed risk units
+    # invisible to both terms of the MAX_OPEN sum — count the distinct
+    # watch-holding picks (own pick + already-live uics excluded, see the
+    # helper) so total concurrent risk units stay bounded by MAX_OPEN for ANY
+    # value of the watch-capacity rail.
+    open_watch_picks = _open_watch_picks_for_max_open(
+        entry_trail_fold,
+        own_pick_key=f"{ticker}:{intent.meta.brief_date}",
+        position_uics={u for u in (_position_uic(p) for p in positions) if u is not None},
+    )
+
     open_bracket_count, gross_committed, realized_r_today = _summarize_open_verdicts(
         open_verdicts, records, dt.date.today().isoformat()
     )
     decision = safety.check(
         intent,
         safety.JournalView(
-            open_bracket_count=open_bracket_count,
+            open_bracket_count=open_bracket_count + len(open_watch_picks),
             gross_committed=gross_committed,
             realized_r_today=realized_r_today,
         ),
@@ -5388,12 +5456,9 @@ def _place_pick(
         )
         return False
 
-    # Entry-trailing reservation fold (memo G5) — read ONCE here and threaded
-    # into BOTH money gates below (torn-read fix) AND the watch-capacity /
-    # drain-intercept check further down. A single snapshot per placement
-    # attempt. Empty/absent journal (flag off) folds to zero, so this is inert
-    # until a watch is open (PR-T0 inertness).
-    entry_trail_fold = entry_trails.read_entry_trail_fold()
+    # (The entry-trailing reservation fold was read ONCE above, before
+    # safety.check — the same snapshot feeds the money gates here and the
+    # drain intercept below.)
 
     # Post-sizing portfolio gross cap (broker sizing memo §3) — the pre-sizing
     # safety.check gross rail stays as a cheap early exit, but it is currency-
