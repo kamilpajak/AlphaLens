@@ -44,8 +44,8 @@ Branch `feature/channel-as-feature`, commit `2605f710`
 
 The prompt text is valid for a wider window than that single commit: both prompt template
 literals are byte-identical between the acceptance-probe build `1a29fe95` and `2605f710`.
-`sha256[:12]` of `_PROMPT_TEMPLATE` is `b980490a830e` (8030 bytes) and of
-`_ASSESS_PROMPT_TEMPLATE` is `03962f7ddcbe` (5015 bytes) at both commits.
+`sha256[:12]` of `_PROMPT_TEMPLATE` is `fdcbf59d0720` (8010 bytes) and of
+`_ASSESS_PROMPT_TEMPLATE` is `6928ef746443` (4984 bytes) at both commits.
 
 **How to regenerate**
 
