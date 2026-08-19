@@ -516,6 +516,61 @@ groups:
           summary: "{{ $value }} thematic briefs are brief_status=unavailable (>1/3 of the day)"
           description: "A sustained large fraction of today's briefs shipped without text (terminal generation failure). Possible LLM model retirement / quota exhaustion surviving the retry ladder. Check the daily thematic-build logs."
 
+      # Stage-B channel assessor outage. The whole reason
+      # ``channel_assess_failed`` is split from ``channel_unverified`` is that
+      # an OUTAGE and a quiet news day must not look alike: a failed assessment
+      # carries status "unverified" by construction, and a sustained OpenRouter
+      # 429 window would otherwise produce a plausible-looking all-refuse day
+      # that nothing pages on — and those rows then enter a pre-registered
+      # forward accrual (docs/research/channel_feature_forward_prereg_2026_08_19.md).
+      # The denominator is the whole assessed population from the same emit, so
+      # the ratio is same-run consistent. ``>= 5`` volume guard keeps a 1-2
+      # candidate day from tripping on a single failure; ``for: 6h`` means the
+      # condition survived at least two 4-hourly slots, so a one-slot hiccup the
+      # next rerun heals does not page.
+      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
+      # — copy this file over and HUP prometheus after editing.
+      - alert: AlphalensThematicChannelAssessFailureHigh
+        expr: |
+          alphalens_thematic_channel_assess_failed_total
+          >
+          0.33 * (
+            alphalens_thematic_channel_verified_total
+            + alphalens_thematic_channel_partial_total
+            + alphalens_thematic_channel_unverified_total
+            + alphalens_thematic_channel_assess_failed_total
+          )
+          and
+          (
+            alphalens_thematic_channel_verified_total
+            + alphalens_thematic_channel_partial_total
+            + alphalens_thematic_channel_unverified_total
+            + alphalens_thematic_channel_assess_failed_total
+          ) >= 5
+        for: 6h
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "{{ $value }} channel assessments failed (>1/3 of the day's assessed candidates)"
+          description: "Stage-B assessor outage, not a channel-less day. The shadow verdict reads refuse for these themes and the rows still ship, so nothing else surfaces it. Check OpenRouter quota / 429s in `journalctl --user -u alphalens-thematic-build.service` on the VPS."
+
+      # Companion MetricMissing: the six channel gauges are emitted on EVERY
+      # run including a frozen reuse (all zeros), so their absence means the
+      # emit path broke or the exporter stopped — not a quiet day. Only the
+      # denominator's first term is checked; the six are emitted together.
+      - alert: AlphalensThematicChannelGaugesMissing
+        expr: absent(alphalens_thematic_channel_verified_total)
+        for: 12h
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "thematic channel gauges missing"
+          description: "No alphalens_thematic_channel_* series. Either map-themes has not run since the channel-assessment increment deployed, or the textfile collector / node_exporter scrape is broken. Clears after the first map-themes run on the new image."
+
       # Output-QUALITY degradation (the volume rules above cannot see it).
       # 2026-07-25/26 shipped a volume-NORMAL day whose briefs were
       # internally empty: every ``brief_trade_setup`` came back
