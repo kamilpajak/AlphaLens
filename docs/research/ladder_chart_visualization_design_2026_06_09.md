@@ -2,6 +2,7 @@
 
 **Status:** DRAFT
 **Date:** 2026-06-09
+**Mechanics reference:** the as-built replay is documented in `apps/alphalens-pipeline/alphalens_pipeline/feedback/README.md`.
 **Surface:** `apps/web` (SvelteKit SPA) + `apps/alphalens-django` (edge API)
 **Related:** [[project_population_ladder_monitor_2026_06_03]], [[project_edge_dashboard_p1_2026_06_04]], `docs/research/feedback_edge_dashboard_2026_06_04.md`
 

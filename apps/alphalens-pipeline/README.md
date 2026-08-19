@@ -14,6 +14,7 @@ systemd-user units on the VPS.
 | `alphalens_pipeline/data/` | ACTIVE namespace | 4 canonical clients (EDGAR/AV/Polygon/Gemini) + PIT store + universes + fundamentals + macro |
 | `alphalens_pipeline/core/` | ACTIVE namespace | candidate-queue plumbing (SQLite + dataclass) |
 | `alphalens_pipeline/scorers/` | ACTIVE | reusable validated scorer library (carved out from screeners) |
+| `alphalens_pipeline/feedback/` | ACTIVE | broker-free population-ladder replay feeding `/edge` — see [`alphalens_pipeline/feedback/README.md`](alphalens_pipeline/feedback/README.md) |
 | `alphalens_cli/` | ACTIVE | the `alphalens` binary; lazy-imports research-side modules for `audit`/`preaudit`/`preregister` |
 
 ## Boundary

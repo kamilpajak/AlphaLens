@@ -2,6 +2,7 @@
 
 **Status:** DRAFT
 **Date:** 2026-06-03
+**Mechanics reference:** the as-built replay is documented in `apps/alphalens-pipeline/alphalens_pipeline/feedback/README.md`.
 **Scope:** How a candidate's 3-entry / 3-TP / 1-SL ladder *should* behave (north-star — the fully dynamic, literature-grounded version), why Alpaca cannot deliver it, how the simplified static version we emit today diverges from that ideal, and how we capture the "did the setup work" feedback signal **without a broker** via a deterministic price-path replay.
 
 **Two ideals, kept separate on purpose:**
