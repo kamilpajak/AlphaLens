@@ -12,9 +12,13 @@ Pins, per the pre-registration
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import sys
+import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import numpy as np
@@ -179,6 +183,160 @@ class TestPowerHelpers(unittest.TestCase):
     def test_required_n_rejects_nonpositive_effect(self):
         with self.assertRaises(ValueError):
             inference.required_n_per_leg(-0.01, 0.15)
+
+
+def _e2e_fixture(root: Path) -> tuple[Path, Path, Path]:
+    """Small but complete study fixture: labels parquet (both windows, both
+    legs, every attrition class), matching outcomes CSV, and a calls log."""
+    rows = []
+
+    def add(pair, window, label, row_label, ticker, date):
+        rows.append(
+            {
+                "brief_date": date,
+                "ticker": ticker,
+                "theme": pair.split("|")[0],
+                "pair_id": pair,
+                "window": window,
+                "source_event_url": "https://news.test/" + pair,
+                "pair_label": label,
+                "row_label": row_label,
+            }
+        )
+
+    kept, refused = inference.KEPT, inference.REFUSED
+    for i, date in enumerate(("2026-05-20", "2026-05-21", "2026-05-22")):
+        add(f"k{i}|u", "CLEAN", kept, "KEPT_TICKER_ABSENT", f"KT{i}A", date)
+        add(f"k{i}|u", "CLEAN", kept, "KEPT_TICKER_PROPOSED", f"KT{i}B", date)
+        add(f"r{i}|u", "CLEAN", refused, refused, f"RT{i}A", date)
+        add(f"r{i}|u", "CLEAN", refused, refused, f"RT{i}B", date)
+    add("k9|u", "DEV", kept, "KEPT_TICKER_ABSENT", "DKA", "2026-07-01")
+    add("k9|u", "DEV", kept, "KEPT_TICKER_ABSENT", "DKB", "2026-07-02")
+    add("r9|u", "DEV", refused, refused, "DRA", "2026-07-01")
+    add("r9|u", "DEV", refused, refused, "DRB", "2026-07-02")
+    add("x1|u", "CLEAN", "INSTRUMENT_FAILURE", "INSTRUMENT_FAILURE", "IFT", "2026-05-20")
+    add("k0|u", "CLEAN", kept, "KEPT_TICKER_ABSENT", "ONG", "2026-05-22")  # ongoing
+    add("k0|u", "CLEAN", kept, "KEPT_TICKER_ABSENT", "NPL", "2026-05-22")  # nonplannable
+    add("e1|u", "EXCLUDED_CLEAN_DAY", refused, refused, "EXC", "2026-05-24")
+    labels_path = root / "labels.parquet"
+    labels = pd.DataFrame(rows)
+    labels.loc[len(labels)] = {
+        "brief_date": "2026-05-21",
+        "ticker": "NSE",
+        "theme": "t",
+        "pair_id": None,
+        "window": "CLEAN",
+        "source_event_url": None,
+        "pair_label": "NO_SOURCE_EVENT",
+        "row_label": "NO_SOURCE_EVENT",
+    }
+    labels.to_parquet(labels_path, index=False)
+
+    outcome_rows = []
+    for r in labels.to_dict("records"):
+        terminal = r["ticker"] not in ("ONG", "NPL")
+        excess = None
+        if terminal:
+            # Vary by pair so each leg has nonzero pair-level spread (the
+            # power helpers reject sd == 0); leg means stay 0.06 vs −0.02.
+            spread = {"0": -0.01, "1": 0.0, "2": +0.01}.get(str(r["pair_id"])[1], 0.0)
+            base = 0.06 if r["pair_label"] == inference.KEPT else -0.02
+            excess = base + spread
+        outcome_rows.append(
+            {
+                "brief_date": r["brief_date"],
+                "ticker": r["ticker"],
+                "terminal": terminal,
+                "matured_at": r["brief_date"] if terminal else None,
+                "market_excess_return": excess,
+                "plannable": r["ticker"] != "NPL",
+            }
+        )
+    outcomes_path = root / "outcomes.csv"
+    pd.DataFrame(outcome_rows).to_csv(outcomes_path, index=False)
+
+    calls_path = root / "calls.jsonl"
+    reasons = {
+        "r0|u": "no transmission channel to any beneficiary",
+        "r1|u": "the article is commentary, not an event",
+        "r2|u": "adverse for the named company",
+    }
+    with calls_path.open("w") as fh:
+        for pid, reason in reasons.items():
+            for _ in range(3):
+                fh.write(
+                    json.dumps(
+                        {
+                            "pair_id": pid,
+                            "call_label": inference.REFUSED,
+                            "no_candidates_reason": reason,
+                        }
+                    )
+                    + "\n"
+                )
+    return labels_path, outcomes_path, calls_path
+
+
+class TestMainEndToEnd(unittest.TestCase):
+    def _run(self, root: Path, labels: Path, outcomes: Path, calls: Path) -> int:
+        out = root / "results.json"
+        argv = [
+            "--labels",
+            str(labels),
+            "--outcomes",
+            str(outcomes),
+            "--calls-log",
+            str(calls),
+            "--out",
+            str(out),
+        ]
+        return inference.main(argv)
+
+    def test_full_pipeline_writes_consistent_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            labels, outcomes, calls = _e2e_fixture(root)
+            digest = hashlib.sha256(labels.read_bytes()).hexdigest()
+            with unittest.mock.patch.object(inference, "LABELS_SHA256", digest):
+                self.assertEqual(self._run(root, labels, outcomes, calls), 0)
+            results = json.loads((root / "results.json").read_text())
+            primary = results["primary_clean"]
+            # KEPT leg mean +0.06, REFUSED −0.02 → delta ≈ +0.08 (winsorization
+            # of the tiny fixture nudges the extreme rows slightly).
+            self.assertAlmostEqual(primary["delta"], 0.08, places=2)
+            self.assertAlmostEqual(results["primary_clean_unwinsorized"]["delta"], 0.08, places=9)
+            self.assertEqual(primary["legs"][inference.KEPT]["n_pairs"], 3)
+            self.assertEqual(primary["legs"][inference.REFUSED]["n_pairs"], 3)
+            attrition = results["attrition"]["CLEAN"]
+            self.assertEqual(attrition["rows_ongoing_plannable_excluded"], 1)
+            self.assertEqual(attrition["rows_nonplannable_never_matured_excluded"], 1)
+            self.assertEqual(attrition["rows_instrument_failure"], 1)
+            self.assertEqual(attrition["rows_no_source_event"], 1)
+            self.assertEqual(results["crowd_out"]["ticker_proposed"], 3)
+            self.assertEqual(
+                results["refusal_taxonomy"]["pair_majority_counts"],
+                {"no_channel": 1, "non_event": 1, "direction_filter": 1},
+            )
+            self.assertEqual(results["refusal_rate"]["clean_refused"], 3)
+            self.assertGreater(results["power_memo"]["required_n_per_leg_full_effect"], 0)
+
+    def test_wrong_labels_hash_refuses_to_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            labels, outcomes, calls = _e2e_fixture(root)
+            # No patch: the real Stage-B constant cannot match this fixture.
+            self.assertEqual(self._run(root, labels, outcomes, calls), 1)
+            self.assertFalse((root / "results.json").exists())
+
+    def test_non_unique_outcome_join_refuses_to_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            labels, outcomes, calls = _e2e_fixture(root)
+            frame = pd.read_csv(outcomes)
+            pd.concat([frame, frame.head(1)]).to_csv(outcomes, index=False)
+            digest = hashlib.sha256(labels.read_bytes()).hexdigest()
+            with unittest.mock.patch.object(inference, "LABELS_SHA256", digest):
+                self.assertEqual(self._run(root, labels, outcomes, calls), 1)
 
 
 if __name__ == "__main__":
