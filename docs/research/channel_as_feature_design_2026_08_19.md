@@ -8,6 +8,8 @@
 **Forward pre-registration:** `docs/research/channel_feature_forward_prereg_2026_08_19.md`
 **Supersedes-as-verdict-window:** §13.4 item 3 of `theme_mapper_mechanical_rule_headtohead_design_2026_07_12.md` (ISO weeks 40-42, 2026-09-28..10-18) — see §8.
 
+**Figure:** [`assets/channel_feature_selection_flow.svg`](assets/channel_feature_selection_flow.svg) — the whole selection flow on one page, with both prompts verbatim and real acceptance-probe outputs ([`assets/README.md`](assets/README.md)).
+
 ---
 
 ## 1. What happened, in numbers
