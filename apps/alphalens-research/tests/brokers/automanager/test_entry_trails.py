@@ -61,6 +61,11 @@ class TestEntryTrailBpsReader(unittest.TestCase):
     """``entry_trail_bps`` — unset/blank/malformed/out-of-bounds all fail
     CLOSED to 0 (feature OFF, today's behavior); explicit ``"0"`` is valid."""
 
+    def setUp(self) -> None:
+        # The invalid-flag warning is latched once per process (the reader runs
+        # every daemon tick); reset the latch so each test observes its warning.
+        self.enterContext(mock.patch.object(et, "_entry_trail_bps_warned", False))
+
     def _read(self, value: str | None) -> int:
         env = {} if value is None else {et.ENTRY_TRAIL_BPS_ENV: value}
         with mock.patch.dict("os.environ", env, clear=True):
@@ -96,6 +101,15 @@ class TestEntryTrailBpsReader(unittest.TestCase):
     def test_malformed_fails_closed_with_warning(self) -> None:
         with self.assertLogs(et.logger, level="WARNING"):
             self.assertEqual(self._read("abc"), 0)
+
+    def test_invalid_value_warns_once_per_process(self) -> None:
+        # The reader runs on EVERY daemon tick (~45s); an invalid flag must
+        # warn once, not spam the journal for the whole daemon lifetime.
+        with self.assertLogs(et.logger, level="WARNING") as captured:
+            self.assertEqual(self._read("abc"), 0)
+            self.assertEqual(self._read("abc"), 0)
+            self.assertEqual(self._read("999"), 0)
+        self.assertEqual(len(captured.records), 1, "the warn latch fires once per process")
 
 
 class TestKindWhitelist(unittest.TestCase):

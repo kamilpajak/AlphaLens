@@ -17,7 +17,7 @@ import logging
 import math
 import os
 import time
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -611,8 +611,18 @@ def _fold_fired_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[in
     uic clears its accumulator — only ``tranche_fired`` lines AFTER the LATEST
     plan for that uic count. The live-exit engine's own ``fold_fired_tranches``
     is untouched (still used by its own tests) — this is a control_loop-side
-    wrapper around the same append-only journal, not an engine change."""
+    wrapper around the same append-only journal, not an engine change.
+
+    Identity-keyed reset (2026-08-19 adjudication finding 4): a ``tranche_plan``
+    line carrying the SAME ``pick_key`` as the uic's governing plan is an
+    idempotent re-append (the ``already_watching`` crash-recovery re-drive
+    re-journals the pick's plan every tick until its retirement record lands)
+    and must NOT reset — resetting would re-arm already-fired tranches and
+    re-sell the remainder at the tranche-0 target. A DIFFERENT ``pick_key``, a
+    keyless line (the bracket path — today's always-reset semantics), or a
+    ``tranche_plan_retracted`` line (finding 3) still clears the accumulator."""
     fired: dict[int, set[str]] = {}
+    governing_key: dict[int, str] = {}
     for line in lines:
         raw_uic = line.get("uic")
         if raw_uic is None:
@@ -622,8 +632,17 @@ def _fold_fired_since_latest_plan(lines: Iterable[Mapping[str, Any]]) -> dict[in
         except (TypeError, ValueError):
             continue
         kind = line.get("kind")
-        if kind == "tranche_plan":
+        if kind == _TRANCHE_PLAN_KIND:
+            key = line.get("pick_key")
+            if key is None or str(key) != governing_key.get(uic):
+                fired.pop(uic, None)
+            if key is None:
+                governing_key.pop(uic, None)
+            else:
+                governing_key[uic] = str(key)
+        elif kind == _TRANCHE_PLAN_RETRACTED_KIND:
             fired.pop(uic, None)
+            governing_key.pop(uic, None)
         elif kind == "tranche_fired":
             tag = line.get("tag")
             if tag:
@@ -1073,13 +1092,60 @@ def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) ->
 # plus a journal marker (memo §7 PR-T1). Flag unset/0 => nothing here runs and
 # the daemon is byte-identical to today (PR-T0 inertness).
 
-_ENTRY_WATCH_MAX_PICKS = 1
-"""Watch capacity (memo decision #4 / G5 CRITICAL-1): at most this many DISTINCT
-picks may hold open watches at once — a PICK-denominated limit, deliberately NOT
-folded into MAX_OPEN (which counts per tier and would make a 3-tier trailing
-pick un-armable at MAX_OPEN=1). The account is protected by the virtual
-gross/cash reservation fold (entry_trails.watching_virtual_gross_acct), not by
-this capacity number."""
+_ENTRY_WATCH_MAX_PICKS_ENV = "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS"
+"""Env rail for the watch capacity (2026-08-19 live incident, ETSY: the old
+hardcoded constant of 1 silently capacity-deferred every second armed pick
+after MAX_OPEN was raised to 2). Read at CALL time so an operator bump takes
+effect on the next tick without a daemon restart."""
+
+_ENTRY_WATCH_MAX_PICKS_DEFAULT = 1
+_ENTRY_WATCH_MAX_PICKS_MIN = 1
+_ENTRY_WATCH_MAX_PICKS_MAX = 4
+
+_entry_watch_max_picks_warned = False
+"""One logger.warning per process for an invalid/out-of-range env value — the
+env is re-read every tick and would otherwise warn every ~45s all day."""
+
+_entry_watch_capacity_deferred: set[str] = set()
+"""Process-lifetime observability only (no behaviour): the pick_keys whose
+capacity deferral was already logged at INFO, so an armed pick queued behind a
+full watch book is visible exactly once per daemon lifetime (later ticks stay
+DEBUG)."""
+
+
+def _entry_watch_max_picks() -> int:
+    """Watch capacity (memo decision #4 / G5 CRITICAL-1): at most this many
+    DISTINCT picks may hold open watches at once — a PICK-denominated limit,
+    deliberately NOT folded into MAX_OPEN (which counts per tier and would make
+    a 3-tier trailing pick un-armable at MAX_OPEN=1). The account is protected
+    by the virtual gross/cash reservation fold
+    (entry_trails.watching_virtual_gross_acct), not by this capacity number.
+
+    Sourced from :data:`_ENTRY_WATCH_MAX_PICKS_ENV`; unset falls back to the
+    default silently, an invalid or out-of-range value falls back too but pages
+    the journal with ONE warning per process."""
+    global _entry_watch_max_picks_warned  # noqa: PLW0603 — once-per-process warn latch
+    raw = os.environ.get(_ENTRY_WATCH_MAX_PICKS_ENV)
+    if raw is None:
+        return _ENTRY_WATCH_MAX_PICKS_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+    if value is not None and _ENTRY_WATCH_MAX_PICKS_MIN <= value <= _ENTRY_WATCH_MAX_PICKS_MAX:
+        return value
+    if not _entry_watch_max_picks_warned:
+        _entry_watch_max_picks_warned = True
+        logger.warning(
+            "%s=%r is invalid (expected an integer in [%d, %d]) — using the default %d",
+            _ENTRY_WATCH_MAX_PICKS_ENV,
+            raw,
+            _ENTRY_WATCH_MAX_PICKS_MIN,
+            _ENTRY_WATCH_MAX_PICKS_MAX,
+            _ENTRY_WATCH_MAX_PICKS_DEFAULT,
+        )
+    return _ENTRY_WATCH_MAX_PICKS_DEFAULT
+
 
 _ENTRY_BPS_DENOMINATOR = 10_000
 """``d = d_bps / 10_000`` — the would-be-trigger basis-point divisor for the
@@ -1155,14 +1221,126 @@ def _open_watch_pick_keys(fold: entry_trails.EntryTrailFold) -> set[str]:
     return pick_keys
 
 
+_entry_watch_live_uic_deferred: set[str] = set()
+"""``pick_key``s already logged as live-uic-deferred (2026-08-19 adjudication
+finding 2) — first deferral WARNs, later ticks DEBUG. Process-lifetime
+observability only, no behaviour rides on membership."""
+
+
+def _has_live_long_on_uic(positions: Iterable[Position], uic: int) -> bool:
+    """Whether any live broker position row is LONG on ``uic`` (a zero/short
+    row never blocks — only an actual long can be clobbered by a re-picked
+    ticker's fresh ``tranche_plan``)."""
+    return any(
+        _position_uic(pos) == uic and float(getattr(pos, "quantity", 0.0) or 0.0) > 0.0
+        for pos in positions
+    )
+
+
+def _log_live_uic_deferral(ticker: str, pick_key: str, uic: int) -> None:
+    """Log a live-uic routing deferral: WARNING the FIRST time this pick_key is
+    deferred in this process (an abnormal state the operator should see — a
+    re-picked ticker is queuing behind its own live position), DEBUG on every
+    later tick. Process-lifetime observability only — no behaviour rides on the
+    set (mirrors :func:`_log_watch_capacity_deferral`)."""
+    log = logger.debug
+    if pick_key not in _entry_watch_live_uic_deferred:
+        _entry_watch_live_uic_deferred.add(pick_key)
+        log = logger.warning
+    log(
+        "place_pick %s: a live long already holds uic %d — %s stays armed until the "
+        "uic is flat (routing a watch now would clobber the live position's ladder)",
+        ticker,
+        uic,
+        ticker,
+    )
+
+
+def _open_watch_picks_for_max_open(
+    fold: entry_trails.EntryTrailFold,
+    *,
+    own_pick_key: str,
+    position_uics: Collection[int],
+) -> set[str]:
+    """The DISTINCT ``pick_key`` of every open entry watch that occupies a
+    prospective-position slot in the MAX_OPEN admission check (2026-08-19
+    adjudication finding 1).
+
+    An open watch — or its armed unfilled native trail, which is equally
+    non-terminal in the fold — is a committed risk unit ``safety.check`` cannot
+    see: the note-only watch submission record carries no brackets and no
+    position exists until the trail fires, so with N watches open the classic
+    sum (journal brackets + live positions) under-counts by N and a raised
+    watch capacity could over-commit up to N extra concurrent positions.
+
+    Two exclusions keep the count one-slot-per-risk-unit:
+
+    - ``own_pick_key`` — the candidate pick's own watch (the crash-recovery
+      re-drive must not self-block on its own reservation, mirroring the
+      intercept's ``already_watching`` exemption);
+    - any watch whose uic is in ``position_uics`` — a pick whose tier already
+      FIRED shows up as a live position while a deeper tier still watches; that
+      unit is already counted in ``BrokerView.open_position_count``. The caller
+      passes NET-open uics (``_net_open_position_uics``) — a net-flat uic
+      (an EOD-netting round-trip's two ledger rows) is NOT in the position
+      count, so its watch must keep occupying a slot here.
+
+    A watch record with no parseable uic still counts (conservative: an
+    over-reserved slot refuses one pick too early; an under-count re-opens the
+    over-commit)."""
+    picks: set[str] = set()
+    for state in fold.tiers.values():
+        if state.terminal_kind is not None or state.watch_open is None:
+            continue
+        record = state.watch_open
+        pick_key = str(record.get("pick_key") or state.crid)
+        if pick_key == own_pick_key or _watch_uic_in(record, position_uics):
+            continue
+        picks.add(pick_key)
+    return picks
+
+
+def _watch_uic_in(record: Mapping[str, Any], uics: Collection[int]) -> bool:
+    """Whether the watch record's uic parses AND is in ``uics``; False on a
+    missing/unparseable uic (the caller then counts the watch conservatively)."""
+    try:
+        return int(record["uic"]) in uics
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 def _entry_watch_capacity_reached(fold: entry_trails.EntryTrailFold) -> bool:
-    """True iff opening another watch would exceed :data:`_ENTRY_WATCH_MAX_PICKS`
+    """True iff opening another watch would exceed :func:`_entry_watch_max_picks`
     DISTINCT watching picks."""
-    return len(_open_watch_pick_keys(fold)) >= _ENTRY_WATCH_MAX_PICKS
+    return len(_open_watch_pick_keys(fold)) >= _entry_watch_max_picks()
+
+
+def _log_watch_capacity_deferral(ticker: str, pick_key: str) -> None:
+    """Log a capacity deferral: INFO the FIRST time this pick_key is deferred in
+    this process, DEBUG on every later tick. Process-lifetime observability
+    only — no behaviour rides on the set (2026-08-19 incident: ETSY sat
+    capacity-deferred for a day with only DEBUG lines to show for it)."""
+    log = logger.debug
+    if pick_key not in _entry_watch_capacity_deferred:
+        _entry_watch_capacity_deferred.add(pick_key)
+        log = logger.info
+    log(
+        "place_pick %s: entry-trail watch capacity reached (cap=%d) — %s stays armed",
+        ticker,
+        _entry_watch_max_picks(),
+        ticker,
+    )
 
 
 def _open_entry_watches(
-    intent: Any, ticker: str, instrument: Any, plan: Any, fx: Any, *, d_bps: int
+    intent: Any,
+    ticker: str,
+    instrument: Any,
+    plan: Any,
+    fx: Any,
+    *,
+    d_bps: int,
+    geometry_stamp: dict[str, Any] | None = None,
 ) -> int:
     """Journal one ``watch_open`` line per positive-quantity entry tier (memo
     §5, G3 journal-FIRST) and return the count opened.
@@ -1176,7 +1354,14 @@ def _open_entry_watches(
     (``uic``/``ticker``/``exchange_mic``/``next_tier_limit``/``d_bps``/
     ``window_end``/``pick_key``/``entry_mode``). Tiers are strictly descending,
     so ``next_tier_limit`` is the deeper tier's limit for the G9 depth suspend;
-    ``None`` on the deepest tier."""
+    ``None`` on the deepest tier.
+
+    ``geometry_stamp`` (2026-08-19 incident fix) is the exact
+    :func:`_geometry_shadow_stamp` blob the bracket path journals on its
+    ``planned`` lines — stamped on every watch_open here so the fire-arm
+    ``planned`` writer can pass it through and the trailing-SL pass has its
+    (k_atr, atr) reanchor facts. ``None`` omits the key entirely, keeping the
+    line byte-identical to a pre-stamp watch_open."""
     from alphalens_pipeline.paper.calendar import advance_trading_sessions, session_close_utc
 
     brief_date = intent.meta.brief_date
@@ -1196,29 +1381,30 @@ def _open_entry_watches(
         if tier.qty <= 0:
             continue  # a zero-sized tier has nothing to watch (mirrors classify)
         next_limit = tiers[index + 1].limit_price if index + 1 < len(tiers) else None
-        entry_trails.append_entry_trail_line(
-            {
-                "kind": entry_trails.KIND_WATCH_OPEN,
-                "crid": _entry_watch_crid(ticker, brief_date, tier.tier_index),
-                "limit": float(tier.limit_price),
-                "qty": float(tier.qty),
-                "d_bps": int(d_bps),
-                "window_end": window_end,
-                "fx_rate": fx_rate,
-                "uic": uic,
-                "ticker": ticker,
-                "exchange_mic": mic,
-                "next_tier_limit": None if next_limit is None else float(next_limit),
-                "pick_key": pick_key,
-                "entry_mode": mode_tag,
-                # PR-T2b never-naked (memo §5): the brief disaster-stop floor +
-                # the original tier_index, carried so the fire-arm executor can
-                # journal the `planned` disaster-SL line at placement (the plan
-                # PRICE the broker cannot know) WITHOUT re-running classify.
-                "disaster_stop": float(plan.disaster_stop),
-                "tier_index": int(tier.tier_index),
-            }
-        )
+        line: dict[str, Any] = {
+            "kind": entry_trails.KIND_WATCH_OPEN,
+            "crid": _entry_watch_crid(ticker, brief_date, tier.tier_index),
+            "limit": float(tier.limit_price),
+            "qty": float(tier.qty),
+            "d_bps": int(d_bps),
+            "window_end": window_end,
+            "fx_rate": fx_rate,
+            "uic": uic,
+            "ticker": ticker,
+            "exchange_mic": mic,
+            "next_tier_limit": None if next_limit is None else float(next_limit),
+            "pick_key": pick_key,
+            "entry_mode": mode_tag,
+            # PR-T2b never-naked (memo §5): the brief disaster-stop floor +
+            # the original tier_index, carried so the fire-arm executor can
+            # journal the `planned` disaster-SL line at placement (the plan
+            # PRICE the broker cannot know) WITHOUT re-running classify.
+            "disaster_stop": float(plan.disaster_stop),
+            "tier_index": int(tier.tier_index),
+        }
+        if geometry_stamp is not None:
+            line["geometry"] = geometry_stamp
+        entry_trails.append_entry_trail_line(line)
         opened += 1
     return opened
 
@@ -1233,24 +1419,66 @@ def _route_pick_to_entry_watch(
     fx: Any,
     *,
     d_bps: int,
+    exit_policy: ExitPolicy | None = None,
 ) -> bool:
-    """The flag-ON drain tail: journal the per-tier watches (G3 journal-FIRST),
+    """The flag-ON drain tail: journal the pick's managed-exit state (ONE
+    ``tranche_plan`` line per uic, exactly what the bracket path journals in
+    ``_place_tiers`` — 2026-08-19 live incident: without it the live-exit
+    engine skips the filled position forever), then the per-tier watches (G3
+    journal-FIRST; the tranche_plan goes to disk BEFORE the watch_open lines so
+    a crash between the two never yields a watching tier without its ladder),
     then RETIRE the pick from the drain with the SAME note-only submission
     record ``_place_tiers`` uses (``_submitted_pick_keys`` treats a note-only
     record as submitted, so the drain never re-drives this pick). Returns True
-    when at least one watch opened. No broker order is placed — DRY-RUN.
+    when at least one watch opened. No broker order is placed here — the
+    native trail rests later, at TOUCH.
 
-    A calendar/journal failure inside :func:`_open_entry_watches` must never
-    crash the drain: it is contained to a logged False (the pick stays armed and
-    is re-attempted next tick; the deterministic crid makes any partial
-    watch_open idempotent on retry)."""
+    ``exit_policy`` is the same resolved-once cached policy ``_place_tiers``
+    receives; the geometry gate below mirrors its ``use_geometry`` decision
+    (``applies_geometry`` + a buildable ``exit_spec``) so the two paths can
+    never disagree on which ladder is journaled.
+
+    A calendar/journal failure inside the journal writes must never crash the
+    drain: it is contained to a logged False (the pick stays armed and is
+    re-attempted next tick; the deterministic crid + the tranche_plan fold's
+    last-wins semantics make any partial write idempotent on retry)."""
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
         build_submission_record,
     )
 
+    resolved_exit_policy: ExitPolicy = (
+        exit_policy if exit_policy is not None else SetupStaticPolicy()
+    )
+    exit_spec = intent.exit
     try:
-        opened = _open_entry_watches(intent, ticker, instrument, plan, fx, d_bps=d_bps)
+        _journal_tranche_plan_core(
+            plan=plan,
+            exit_spec=exit_spec,
+            stop_price=float(plan.disaster_stop),
+            reference_qty=sum(t.qty for t in plan.entry_tiers if t.qty > 0),
+            uic=int(instrument.broker_instrument_id),
+            use_geometry=resolved_exit_policy.applies_geometry,
+            # Trade identity (adjudication finding 4): a crash-recovery
+            # re-drive re-appends this line — the SAME pick_key keeps the
+            # fired-tranche fold from resetting on the re-append.
+            pick_key=f"{ticker}:{intent.meta.brief_date}",
+        )
+        # Same use_geometry decision _place_tiers makes for its planned lines:
+        # the stamp rides every watch_open so the fire-arm planned writer can
+        # hand the (k_atr, atr) reanchor facts to the trailing-SL pass.
+        use_geometry = resolved_exit_policy.applies_geometry and exit_spec is not None
+        opened = _open_entry_watches(
+            intent,
+            ticker,
+            instrument,
+            plan,
+            fx,
+            d_bps=d_bps,
+            geometry_stamp=_geometry_shadow_stamp(
+                exit_spec, intent.spec, use_geometry=use_geometry
+            ),
+        )
     # Broad on purpose: an unrecognised MIC (calendar ValueError) or a journal
     # I/O error must degrade to "pick stays armed", never abort the tick before
     # the protection pass (_place_pick's own try only catches BrokerError).
@@ -1318,6 +1546,12 @@ def _run_entry_watch_pass(deps: LoopDeps, kill: bool, report: TickReport) -> Non
         _release_feed_scope(deps, _FEED_SCOPE_ENTRY_WATCH)
         return
     fold = entry_trails.read_entry_trail_fold()
+    # Housekeeping BEFORE the empty-active early return: an all-terminal fold
+    # is exactly the state whose stale routed ladders need retracting
+    # (2026-08-19 adjudication finding 3). Self-contained error boundary; under
+    # KILL the pass returned above, so a KILL-cancelled watch is swept on the
+    # first non-KILL tick.
+    _retract_stale_tranche_plans(fold)
     active = _active_entry_watches(fold)
     if not active:
         deps.entry_watchers.clear()  # every watch went terminal — drop stale runtimes
@@ -1520,6 +1754,7 @@ def _advance_one_entry_watch(
     runtime = _get_or_create_entry_runtime(deps, crid, record, tier_state)
     if runtime is None:
         return
+    was_awaiting_fresh_low = runtime.watcher.awaiting_fresh_low
     price = _entry_watch_reference_price(uic_points, record)
     price = _combine_with_session_low(price, uic_lows, record, runtime, now)
     result = runtime.watcher.process(entry_trail_watcher.TickInput(now=now, price=price))
@@ -1530,6 +1765,11 @@ def _advance_one_entry_watch(
     if _terminal_leaves_a_resting_order(result):
         result = _finalize_entry_terminal_vs_broker(deps, crid, result, report)
     _persist_entry_watch_result(crid, record, runtime, result, now, price, d_bps)
+    # Persist the open-check clearance ON THE TRANSITION tick, BEFORE the arm
+    # attempt below — the arm can fail transiently for many ticks, and only the
+    # journal survives a restart (see _persist_open_check_clearance).
+    if was_awaiting_fresh_low and not runtime.watcher.awaiting_fresh_low:
+        _persist_open_check_clearance(record)
     # PR-T2b native arm: once TOUCHED (with a trustworthy price) PLACE the resting
     # Saxo trailing-LIMIT order out-of-band — the server ratchets + fires from
     # there. Re-attempted every TOUCHED tick until it arms (idempotent, dedup on
@@ -1735,6 +1975,29 @@ def _persist_entry_watch_result(
         entry_trails.append_entry_trail_line(line)
 
 
+def _persist_open_check_clearance(record: Mapping[str, Any]) -> None:
+    """Make the open-check clear DURABLE (memo §5 CRITICAL-2 hardening).
+
+    The engine clears ``awaiting_fresh_low`` in memory the tick a fresh
+    post-open low forms, but the latest ``watch_open`` line still carries the
+    re-arm marker — so a daemon restart between the clear and a SUCCESSFUL arm
+    (the POST can keep failing transiently, or the geometry can stay degenerate
+    for ticks) would re-seed the block from the fold and freeze the tier until
+    a SECOND fresh low forms, silently dropping a session's only dip.
+
+    Re-append the watch_open record WITHOUT the marker: the fold's
+    latest-watch_open-wins semantics adopt it (no new state store, no fold
+    change), so reconstruction reads the marker as absent. Every other field
+    rides through verbatim; the fold's watch_open handler also resets
+    ``armed_order_id``, which is correct here — the tier has no confirmed
+    order yet (the arm attempt runs AFTER this persist on the same tick, and
+    its ``trail_armed`` lines land later in the journal)."""
+    if not record.get(_ENTRY_REARM_MARKER):
+        return  # the latest watch_open already carries no marker
+    cleared = {key: value for key, value in record.items() if key != _ENTRY_REARM_MARKER}
+    entry_trails.append_entry_trail_line(cleared)
+
+
 def _entry_measurement_blob(
     record: Mapping[str, Any],
     runtime: _EntryWatchRuntime,
@@ -1874,6 +2137,12 @@ def _journal_entry_planned_disaster(record: Mapping[str, Any], uic: int, entry_c
             stop_price=float(disaster_stop),
             take_profit=None,
             tier_index=int(tier_index) if tier_index is not None else 0,
+            # 2026-08-19 incident fix: the geometry blob stamped on the
+            # watch_open at routing time rides through to the planned line so
+            # _reanchor_facts_from_governing can recover (k_atr, atr) and the
+            # position actually trails. Absent on old lines -> None -> the
+            # planned line stays byte-identical to today.
+            geometry_stamp=record.get("geometry"),
         )
     )
 
@@ -3248,12 +3517,18 @@ def _reanchor_facts_from_governing(governing: Mapping[str, Any]) -> ReanchorFact
 # reads the fold until the live-exits tick phase (Task 2) is wired.
 
 
+_TRANCHE_PLAN_KIND = "tranche_plan"
+_TRANCHE_PLAN_RETRACTED_KIND = "tranche_plan_retracted"
+_TRANCHE_FIRED_KIND = "tranche_fired"
+
+
 def _build_tranche_plan_line(
     *,
     uic: int,
     tp_tranches: tuple[TpTranchePlan, ...],
     reference_qty: float,
     stop_price: float,
+    pick_key: str | None = None,
 ) -> dict[str, Any]:
     """One append-only ``tranche_plan`` journal line -- the per-uic TP ladder the
     live-exit engine needs (INC-5) but the ``planned`` line does not carry.
@@ -3262,9 +3537,16 @@ def _build_tranche_plan_line(
     the sizing base, and the stop price the engine amends the standalone SL
     around. Written ONCE per placement (never per tier); a same-uic re-arm
     simply appends a newer line (append-only fold, last well-formed line wins,
-    exactly like ``_build_planned_line``)."""
-    return {
-        "kind": "tranche_plan",
+    exactly like ``_build_planned_line``).
+
+    ``pick_key`` (2026-08-19 adjudication finding 4) is the plan's trade
+    identity: the entry-trail watch routing stamps ``ticker:brief_date`` so
+    :func:`_fold_fired_since_latest_plan` treats a crash-recovery re-drive's
+    re-append as the SAME trade (no fired-set reset). ``None`` (the bracket
+    path) omits the key -- a keyless line keeps today's always-reset
+    semantics."""
+    line: dict[str, Any] = {
+        "kind": _TRANCHE_PLAN_KIND,
         "uic": int(uic),
         "tp_tranches": [
             {
@@ -3279,6 +3561,9 @@ def _build_tranche_plan_line(
         "reference_qty": float(reference_qty),
         "stop_price": float(stop_price),
     }
+    if pick_key is not None:
+        line["pick_key"] = str(pick_key)
+    return line
 
 
 def fold_tranche_plans(
@@ -3292,12 +3577,22 @@ def fold_tranche_plans(
     live position nets to one uic). Non-``tranche_plan`` lines and malformed
     lines (missing/unparsable uic, non-list ``tp_tranches``, or a tranche
     missing/mistyping any of its five fields) are skipped ENTIRELY -- a
-    malformed line contributes nothing, never a partial fold."""
+    malformed line contributes nothing, never a partial fold.
+
+    A ``tranche_plan_retracted`` line (2026-08-19 adjudication finding 3 -- a
+    watch that ended with no fill) REMOVES the uic's governing ladder; a later
+    plan line for the uic governs again (still last-wins, in write order)."""
     from broker_contract.sizing import TpTranchePlan
 
     out: dict[int, tuple[tuple[TpTranchePlan, ...], float, float]] = {}
     for line in lines:
-        if line.get("kind") != "tranche_plan":
+        kind = line.get("kind")
+        if kind == _TRANCHE_PLAN_RETRACTED_KIND:
+            retracted_uic = _coerce(line, "uic", int)
+            if retracted_uic is not None:
+                out.pop(retracted_uic, None)
+            continue
+        if kind != _TRANCHE_PLAN_KIND:
             continue
         raw_uic = line.get("uic")
         raw_tranches = line.get("tp_tranches")
@@ -3321,6 +3616,97 @@ def fold_tranche_plans(
             continue
         out[uic] = (tranches, reference_qty, stop_price)
     return out
+
+
+def _fold_governing_plan_pick_keys(lines: Iterable[Mapping[str, Any]]) -> dict[int, str | None]:
+    """The governing ``tranche_plan``'s ``pick_key`` per uic, in write order
+    (last wins; ``None`` = a keyless bracket-path plan). A
+    ``tranche_plan_retracted`` line removes the uic — an already-retracted plan
+    can never be matched (and so never re-retracted) by the sweep below."""
+    governing: dict[int, str | None] = {}
+    for line in lines:
+        kind = line.get("kind")
+        if kind not in (_TRANCHE_PLAN_KIND, _TRANCHE_PLAN_RETRACTED_KIND):
+            continue
+        uic = _coerce(line, "uic", int)
+        if uic is None:
+            continue
+        if kind == _TRANCHE_PLAN_KIND:
+            key = line.get("pick_key")
+            governing[uic] = None if key is None else str(key)
+        else:
+            governing.pop(uic, None)
+    return governing
+
+
+def _unfired_terminal_watch_picks(fold: entry_trails.EntryTrailFold) -> dict[str, int]:
+    """``{pick_key: uic}`` for every pick whose entry watch is FULLY terminal
+    with NO tier fired — the picks whose routed ``tranche_plan`` never matched
+    a fill and is now an order-free stale ladder (2026-08-19 adjudication
+    finding 3). A pick with any still-open tier is live; a pick with any
+    ``fired`` tier has a position whose ladder must stand. Records whose
+    pick_key or uic cannot be reconstructed are skipped — never retract on
+    doubt."""
+    states_by_pick: dict[str, list[entry_trails.EntryTrailTierState]] = {}
+    for state in fold.tiers.values():
+        record = state.watch_open
+        if record is None:
+            continue
+        key = record.get("pick_key")
+        if key is None:
+            continue
+        states_by_pick.setdefault(str(key), []).append(state)
+    out: dict[str, int] = {}
+    for pick_key, states in states_by_pick.items():
+        if any(s.terminal_kind is None for s in states):
+            continue  # a tier still watches / arms — the pick is live
+        if any(s.terminal_kind == entry_trails.KIND_FIRED for s in states):
+            continue  # a fill happened — the position's ladder must stand
+        uics = {_coerce(s.watch_open or {}, "uic", int) for s in states}
+        if len(uics) != 1 or None in uics:
+            continue  # unmappable / inconsistent — never retract on doubt
+        out[pick_key] = cast(int, next(iter(uics)))
+    return out
+
+
+def _retract_stale_tranche_plans(fold: entry_trails.EntryTrailFold) -> None:
+    """Retract the routed ``tranche_plan`` of every watch that ended with no
+    fill (2026-08-19 adjudication finding 3).
+
+    The watch routing journals the ladder at watch-OPEN — before any order
+    exists — so a watch that expires / suspends / is KILL-cancelled unfired
+    would otherwise leave its ladder governing the uic FOREVER, and any later
+    long on the uic that ends up with a sole standalone SL (protection-pass
+    covering of an out-of-band fill, a manual buy plus manual stop) would be
+    silently sold down the stale pick's targets.
+
+    Only a plan whose governing ``pick_key`` MATCHES the ended pick is
+    retracted: a keyless bracket plan (coupled to a real placement) and a
+    newer pick's plan on the same uic are never touched, and the retraction
+    line itself un-governs the uic so the sweep is idempotent (append-only,
+    one line per ended pick). Runs every watch-pass tick; any journal failure
+    degrades to a WARN and a retry next tick — never an aborted pass."""
+    try:
+        candidates = _unfired_terminal_watch_picks(fold)
+        if not candidates:
+            return
+        governing = _fold_governing_plan_pick_keys(_iter_standalone_stop_journal())
+        for pick_key, uic in candidates.items():
+            if governing.get(uic) != pick_key:
+                continue  # keyless/bracket plan, newer pick, or already retracted
+            _append_standalone_stop_journal(
+                {"kind": _TRANCHE_PLAN_RETRACTED_KIND, "uic": uic, "pick_key": pick_key}
+            )
+            logger.info(
+                "entry-trail %s: watch ended with no fill — retracted the tranche_plan for uic %d",
+                pick_key,
+                uic,
+            )
+    # Broad on purpose: the sweep is housekeeping inside the watch pass — a
+    # journal read/write failure must degrade to a warning + retry next tick,
+    # never abort the pass that advances live watches.
+    except Exception:
+        logger.warning("entry-trail: stale tranche_plan retraction sweep failed", exc_info=True)
 
 
 def _mark_oco_unsupported(uic: int) -> None:
@@ -3616,6 +4002,94 @@ def _keep_latest_marker(
         dest[uic] = (sort_key, dict(line))
 
 
+def _track_tranche_plan(
+    line: Mapping[str, Any],
+    uic: int,
+    *,
+    ladder_line: dict[int, Mapping[str, Any]],
+    latest_plan: dict[int, Mapping[str, Any]],
+    governing_key: dict[int, str],
+    fired_lines: dict[int, list[Mapping[str, Any]]],
+) -> None:
+    """Advance the tranche-compaction state for one ``tranche_plan`` line,
+    mirroring ``_fold_fired_since_latest_plan``'s identity-keyed reset EXACTLY:
+    a keyless line or a ``pick_key`` differing from the uic's governing key
+    resets the fired accumulator; a same-key re-append (the crash-recovery
+    re-drive) does not. The line becomes the uic's latest plan always, and its
+    ladder-governing plan only when ``fold_tranche_plans`` accepts it as
+    well-formed (a corrupt line still resets fired but never governs the
+    ladder — the folds' own semantics, reproduced line-for-line)."""
+    key = line.get("pick_key")
+    if key is None or str(key) != governing_key.get(uic):
+        fired_lines.pop(uic, None)
+    if key is None:
+        governing_key.pop(uic, None)
+    else:
+        governing_key[uic] = str(key)
+    latest_plan[uic] = line
+    if fold_tranche_plans([line]):
+        ladder_line[uic] = line
+
+
+def _compact_tranche_lines(lines: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The kept tranche-ladder lines: per uic, the governing plan line(s)
+    followed by the fired lines still counting, so ``fold_tranche_plans``,
+    ``_fold_fired_since_latest_plan``, and ``_fold_governing_plan_pick_keys``
+    all return exactly what they return on the full journal.
+
+    Per uic the election keeps, in this write order (both folds process lines
+    in order — the governing plan MUST precede its fired lines so a fired tag
+    recorded before a same-key re-append is never mistaken for a pre-reset
+    leftover):
+      1. the plan line whose values are the uic's final folded ladder (if any);
+      2. the LATEST plan line, when distinct from (1) — it may be
+         ladder-malformed yet still carry the fired fold's reset identity and
+         the retraction sweep's governing ``pick_key``;
+      3. every ``tranche_fired`` line inside the fired fold's END accumulator
+         (fired tags reset away by a later plan/retraction are dropped).
+    ``tranche_plan_retracted`` markers are consumed during the election — a
+    retraction erases the uic's kept plan and fired lines, so a fully
+    retracted uic keeps NOTHING (all three folds already treat it as absent).
+    Pure; kept lines are shallow-copied."""
+    ladder_line: dict[int, Mapping[str, Any]] = {}
+    latest_plan: dict[int, Mapping[str, Any]] = {}
+    governing_key: dict[int, str] = {}
+    fired_lines: dict[int, list[Mapping[str, Any]]] = {}
+    for line in lines:
+        kind = line.get("kind")
+        if kind not in (_TRANCHE_PLAN_KIND, _TRANCHE_PLAN_RETRACTED_KIND, _TRANCHE_FIRED_KIND):
+            continue
+        uic = _coerce(line, "uic", int)
+        if uic is None:
+            continue
+        if kind == _TRANCHE_PLAN_KIND:
+            _track_tranche_plan(
+                line,
+                uic,
+                ladder_line=ladder_line,
+                latest_plan=latest_plan,
+                governing_key=governing_key,
+                fired_lines=fired_lines,
+            )
+        elif kind == _TRANCHE_PLAN_RETRACTED_KIND:
+            ladder_line.pop(uic, None)
+            latest_plan.pop(uic, None)
+            governing_key.pop(uic, None)
+            fired_lines.pop(uic, None)
+        elif line.get("tag"):
+            fired_lines.setdefault(uic, []).append(line)
+    kept: list[dict[str, Any]] = []
+    for uic in sorted(set(latest_plan) | set(fired_lines)):
+        ladder = ladder_line.get(uic)
+        latest = latest_plan.get(uic)
+        if ladder is not None:
+            kept.append(dict(ladder))
+        if latest is not None and latest is not ladder:
+            kept.append(dict(latest))
+        kept.extend(dict(fired) for fired in fired_lines.get(uic, ()))
+    return kept
+
+
 def _compact_standalone_stop_journal_lines(
     lines: Iterable[Mapping[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -3634,12 +4108,19 @@ def _compact_standalone_stop_journal_lines(
         / ``amend_ok`` outcome record per uic (observability-only, no fold reads
         them; the latest outcome is what latency inspection needs);
       - the ``amend_seq`` carrying the MAX seq per uic (``_read_persisted_amend_seq``
-        returns that max).
+        returns that max);
+      - the tranche-ladder lines ``_compact_tranche_lines`` elects — per uic the
+        governing ``tranche_plan`` line(s) followed by the ``tranche_fired``
+        lines still inside ``_fold_fired_since_latest_plan``'s accumulator, so
+        ``fold_tranche_plans`` / ``_fold_fired_since_latest_plan`` / the
+        retraction sweep's ``_fold_governing_plan_pick_keys`` are unchanged;
+        ``tranche_plan_retracted`` markers are consumed during the election (a
+        fully retracted uic keeps nothing).
 
     Every other line — ``gen`` markers (read only by ``_read_persisted_gen``, whose
     reset to the initial gen is harmless: post-restart re-emits are past Saxo's 15s
     request-id dedup window, and protection is broker-state-truth not journal-derived),
-    unknown kinds, and malformed lines — is dropped; none contributes to the four
+    unknown kinds, and malformed lines — is dropped; none contributes to the
     folds above. Pure: no I/O, input never mutated (kept lines are shallow-copied)."""
     materialized = list(lines)
 
@@ -3686,6 +4167,7 @@ def _compact_standalone_stop_journal_lines(
     compacted.extend(ttl_latest["stop_placed"][uic][1] for uic in sorted(ttl_latest["stop_placed"]))
     compacted.extend(ttl_latest["amend_ok"][uic][1] for uic in sorted(ttl_latest["amend_ok"]))
     compacted.extend(amend_seq[uic][1] for uic in sorted(amend_seq))
+    compacted.extend(_compact_tranche_lines(materialized))
     return compacted
 
 
@@ -4519,28 +5001,29 @@ def _geometry_tranche_ladder(exit_spec: Any) -> tuple[tuple[TpTranchePlan, ...],
     return ladder, geo_stop
 
 
-def _journal_tranche_plan(
+def _journal_tranche_plan_core(
     *,
     plan: Any,
     exit_spec: Any,
-    placement: Any,
-    instrument: Any,
+    stop_price: float,
+    reference_qty: float,
+    uic: int,
     use_geometry: bool,
+    pick_key: str | None = None,
 ) -> None:
-    """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
-    rebuild the TP ladder from the journal alone. Source it from whatever the
-    ACTIVE exit policy actually places the TP from: under the geometry policy
-    (atr_bracket_1p5) that is the single ``exit_spec.initial_levels.tp`` level and
-    ``plan.tp_tranches`` is EMPTY (the brief expresses its exit as geometry, not
-    static tranches) — so gating on ``plan.tp_tranches`` alone silently dropped
-    every geometry pick. Under the static policy the ladder IS
-    ``plan.tp_tranches``. ``getattr`` keeps a bare-stub plan (unrelated
-    failure-path unit doubles with no ``entry_tiers``/``tp_tranches``) from
-    crashing — it simply journals nothing."""
-    entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
-    if not entry_tiers:
-        return
-    stop_price = placement.disaster_stop_price
+    """The ladder-choice + line-build core shared by BOTH placement paths
+    (bracket ``_journal_tranche_plan`` and the entry-trail watch routing).
+    ``pick_key`` is the optional trade identity stamped into the line (watch
+    path only — see :func:`_build_tranche_plan_line`).
+    Source the ladder from whatever the ACTIVE exit policy actually places the
+    TP from: under the geometry policy (atr_bracket_1p5) that is the single
+    ``exit_spec.initial_levels.tp`` level (and the passed ``stop_price`` is
+    REPLACED by the geometry stop); under the static policy the ladder IS
+    ``plan.tp_tranches`` and ``stop_price`` is journaled verbatim. Takes
+    explicit ``stop_price``/``reference_qty``/``uic`` so the caller decides the
+    plan-vs-placement source of each — the bracket path reads
+    ``placement.disaster_stop_price`` and sums ALL entry tiers, the watch path
+    reads ``plan.disaster_stop`` and sums only the tiers that actually watch."""
     if use_geometry and exit_spec is not None:
         geometry = _geometry_tranche_ladder(exit_spec)
         if geometry is None:
@@ -4550,7 +5033,7 @@ def _journal_tranche_plan(
             logger.warning(
                 "tranche_plan uic %d: geometry levels unusable (stop=%r, tp=%r) — "
                 "no TP ladder journaled, the position stays stop-only",
-                int(instrument.broker_instrument_id),
+                uic,
                 exit_spec.initial_levels.stop,
                 exit_spec.initial_levels.tp,
             )
@@ -4562,11 +5045,42 @@ def _journal_tranche_plan(
         return
     _append_standalone_stop_journal(
         _build_tranche_plan_line(
-            uic=int(instrument.broker_instrument_id),
+            uic=uic,
             tp_tranches=ladder,
-            reference_qty=sum(t.qty for t in entry_tiers),
+            reference_qty=reference_qty,
             stop_price=stop_price,
+            pick_key=pick_key,
         )
+    )
+
+
+def _journal_tranche_plan(
+    *,
+    plan: Any,
+    exit_spec: Any,
+    placement: Any,
+    instrument: Any,
+    use_geometry: bool,
+) -> None:
+    """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
+    rebuild the TP ladder from the journal alone — see
+    :func:`_journal_tranche_plan_core` for which ladder the ACTIVE policy
+    sources it from. This is the BRACKET-path wrapper: gating on
+    ``plan.tp_tranches`` alone silently dropped every geometry pick (the brief
+    expresses a geometry exit as ``exit_spec``, not static tranches), so the
+    guard here is ``entry_tiers`` only. ``getattr`` keeps a bare-stub plan
+    (unrelated failure-path unit doubles with no ``entry_tiers``/
+    ``tp_tranches``) from crashing — it simply journals nothing."""
+    entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
+    if not entry_tiers:
+        return
+    _journal_tranche_plan_core(
+        plan=plan,
+        exit_spec=exit_spec,
+        stop_price=placement.disaster_stop_price,
+        reference_qty=sum(t.qty for t in entry_tiers),
+        uic=int(instrument.broker_instrument_id),
+        use_geometry=use_geometry,
     )
 
 
@@ -5079,10 +5593,18 @@ def _entry_trail_intercept(
     plan: Any,
     fx: Any,
     entry_trail_fold: entry_trails.EntryTrailFold,
+    exit_policy: ExitPolicy | None = None,
+    *,
+    positions: Iterable[Position] = (),
 ) -> bool | None:
     """The _place_pick entry-trailing intercept outcome: ``None`` when the pick
     must fall through to classify + ``_place_tiers`` (flag off, ineligible plan,
     or no native trailing-stop capability), else the drain verdict.
+    ``exit_policy`` is threaded through to the watch routing so its journaled
+    managed-exit state (tranche_plan ladder + geometry stamp) mirrors what
+    ``_place_tiers`` would have journaled for the same pick. ``positions`` is
+    the caller's already-fetched broker snapshot (zero extra I/O) feeding the
+    live-uic routing guard below.
 
     PR-T2b: the whole feature needs the native trailing-stop capability; a
     broker lacking it falls through to classify + _place_tiers (the
@@ -5110,14 +5632,21 @@ def _entry_trail_intercept(
     if not already_watching and _entry_watch_capacity_reached(entry_trail_fold):
         # Pick-denominated capacity (memo decision #4): stay ARMED (not a
         # terminal refusal) so it opens once an earlier watch clears.
-        logger.debug(
-            "place_pick %s: entry-trail watch capacity reached (>= %d picks) — pick stays armed",
-            ticker,
-            _ENTRY_WATCH_MAX_PICKS,
-        )
+        _log_watch_capacity_deferral(ticker, pick_key)
+        return False
+    # 2026-08-19 adjudication finding 2: routing while a live long still holds
+    # the SAME uic would journal a fresh tranche_plan that replaces the live
+    # position's ladder and resets its fired-tranche set with NO order placed
+    # — the live-exit engine could then re-sell the runner at the new pick's
+    # targets. Defer (stay armed) until the uic is flat. The already_watching
+    # re-drive is EXEMPT: the pick's OWN fill on this uic must not deadlock the
+    # retirement record (its tranche_plan re-append is identity-idempotent).
+    uic = int(instrument.broker_instrument_id)
+    if not already_watching and _has_live_long_on_uic(positions, uic):
+        _log_live_uic_deferral(ticker, pick_key, uic)
         return False
     return _route_pick_to_entry_watch(
-        broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps
+        broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps, exit_policy=exit_policy
     )
 
 
@@ -5182,17 +5711,43 @@ def _place_pick(
         logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
         return False
 
+    # Entry-trailing reservation fold (memo G5) — read ONCE here, BEFORE
+    # safety.check, and threaded into the MAX_OPEN admission input, BOTH money
+    # gates below AND the watch-capacity / drain-intercept check further down
+    # (torn-read fix). A single snapshot per placement attempt. Empty/absent
+    # journal (flag off) folds to zero, so this is inert until a watch is open
+    # (PR-T0 inertness).
+    entry_trail_fold = entry_trails.read_entry_trail_fold()
+    # 2026-08-19 adjudication finding 1: open watches are committed risk units
+    # invisible to both terms of the MAX_OPEN sum — count the distinct
+    # watch-holding picks (own pick + already-live uics excluded, see the
+    # helper) so total concurrent risk units stay bounded by MAX_OPEN for ANY
+    # value of the watch-capacity rail.
+    # NET risk-unit counting (live incident 2026-08-19): under LIVE EOD netting
+    # an intraday round-trip is two ledger rows netting to zero — both the
+    # MAX_OPEN position term and the watch exclusion below must see distinct
+    # net-nonzero uics, never raw rows (see _net_open_position_uics).
+    net_position_uics, unresolvable_position_rows = _net_open_position_uics(positions)
+    open_watch_picks = _open_watch_picks_for_max_open(
+        entry_trail_fold,
+        own_pick_key=f"{ticker}:{intent.meta.brief_date}",
+        position_uics=net_position_uics,
+    )
+
     open_bracket_count, gross_committed, realized_r_today = _summarize_open_verdicts(
         open_verdicts, records, dt.date.today().isoformat()
     )
     decision = safety.check(
         intent,
         safety.JournalView(
-            open_bracket_count=open_bracket_count,
+            open_bracket_count=open_bracket_count + len(open_watch_picks),
             gross_committed=gross_committed,
             realized_r_today=realized_r_today,
         ),
-        safety.BrokerView(open_position_count=len(positions), equity=account.total_value),
+        safety.BrokerView(
+            open_position_count=len(net_position_uics) + unresolvable_position_rows,
+            equity=account.total_value,
+        ),
         _AlreadyGatedSessionState(),
     )
     if isinstance(decision, safety.Refuse):
@@ -5237,12 +5792,9 @@ def _place_pick(
         )
         return False
 
-    # Entry-trailing reservation fold (memo G5) — read ONCE here and threaded
-    # into BOTH money gates below (torn-read fix) AND the watch-capacity /
-    # drain-intercept check further down. A single snapshot per placement
-    # attempt. Empty/absent journal (flag off) folds to zero, so this is inert
-    # until a watch is open (PR-T0 inertness).
-    entry_trail_fold = entry_trails.read_entry_trail_fold()
+    # (The entry-trailing reservation fold was read ONCE above, before
+    # safety.check — the same snapshot feeds the money gates here and the
+    # drain intercept below.)
 
     # Post-sizing portfolio gross cap (broker sizing memo §3) — the pre-sizing
     # safety.check gross rail stays as a cheap early exit, but it is currency-
@@ -5296,7 +5848,16 @@ def _place_pick(
     # (PR-T0 inertness proof). The intercept lands AFTER the cash floor so a
     # watch only opens once the pick has cleared every money gate.
     intercepted = _entry_trail_intercept(
-        broker, intent, ticker, instrument, account, plan, fx, entry_trail_fold
+        broker,
+        intent,
+        ticker,
+        instrument,
+        account,
+        plan,
+        fx,
+        entry_trail_fold,
+        exit_policy,
+        positions=positions,
     )
     if intercepted is not None:
         return intercepted
@@ -5372,6 +5933,32 @@ def _position_uic(pos: Position) -> int | None:
         return int(pos.instrument.broker_instrument_id)
     except (TypeError, ValueError, AttributeError):
         return None
+
+
+def _net_open_position_uics(positions: Iterable[Position]) -> tuple[frozenset[int], int]:
+    """``(uics with nonzero NET quantity, count of rows with no resolvable uic)``.
+
+    LIVE Saxo accounts run End-Of-Day netting
+    (``ClosedPositionNotAccessibleInEndOfDayNettingMode``): positions net only
+    at EOD, so an intraday round-trip leaves TWO ledger rows (+q and -q) that
+    net to zero until the nightly netting. MAX_OPEN counts RISK UNITS, not
+    ledger rows — a raw ``len(positions)`` over such a book refuses valid picks
+    on phantom slots (live incident 2026-08-19: a net-flat book showed 2 rows
+    and terminally refused ETSY on the MAX_OPEN rail all session). Quantities
+    are summed per uic; a net magnitude within ``_QTY_EPS`` of zero is flat and
+    occupies no slot. Rows whose uic cannot be resolved are counted ONE each
+    (fail-conservative — never undercount risk units)."""
+    net_by_uic: dict[int, float] = {}
+    unresolvable = 0
+    for pos in positions:
+        uic = _position_uic(pos)
+        if uic is None:
+            unresolvable += 1
+            continue
+        qty = float(getattr(pos, "quantity", 0.0) or 0.0)
+        net_by_uic[uic] = net_by_uic.get(uic, 0.0) + qty
+    open_uics = frozenset(uic for uic, net in net_by_uic.items() if abs(net) > _QTY_EPS)
+    return open_uics, unresolvable
 
 
 def build_protection_view(

@@ -2323,6 +2323,20 @@ class TestPlaceTiersJournalsTranchePlan(unittest.TestCase):
         journaled = self._run(plan=None)
         self.assertEqual([line for line in journaled if line["kind"] == "tranche_plan"], [])
 
+    def test_bracket_path_line_carries_no_pick_key(self) -> None:
+        # Byte-identity pin (2026-08-19 adjudication finding 4): only the
+        # entry-trail watch routing stamps pick_key; the bracket wrapper's
+        # journaled line is unchanged, so every bracket plan line keeps
+        # today's always-reset fold semantics.
+        tranches = (
+            TpTranchePlan(
+                tranche_index=0, target_price=11.0, tranche_pct=1.0, r_multiple=1.0, tag="tp1"
+            ),
+        )
+        journaled = self._run(plan=self._plan(tp_tranches=tranches))
+        line = next(line for line in journaled if line["kind"] == "tranche_plan")
+        self.assertNotIn("pick_key", line)
+
     def test_empty_tp_tranches_journals_nothing_extra(self) -> None:
         journaled = self._run(plan=self._plan(tp_tranches=()))
         self.assertEqual([line for line in journaled if line["kind"] == "tranche_plan"], [])
@@ -5535,6 +5549,43 @@ def _rich_standalone_stop_journal() -> list[dict[str, Any]]:
     ]
 
 
+def _tranche_plan_line(
+    uic: int, *, pick_key: str | None = None, target_price: float = 20.0
+) -> dict[str, Any]:
+    """A well-formed ``tranche_plan`` journal line carrying a one-tranche ladder."""
+    return cl._build_tranche_plan_line(
+        uic=uic,
+        tp_tranches=(
+            TpTranchePlan(
+                tranche_index=0,
+                target_price=target_price,
+                tranche_pct=0.5,
+                r_multiple=1.0,
+                tag="tp1",
+            ),
+        ),
+        reference_qty=10.0,
+        stop_price=9.0,
+        pick_key=pick_key,
+    )
+
+
+def _tranche_journal() -> list[dict[str, Any]]:
+    """Tranche-ladder lines across three uics: a live ladder with a fired tranche
+    (333), a re-picked ladder whose old fired tag must stay reset (444), and a
+    fully retracted ladder (555)."""
+    return [
+        _tranche_plan_line(333, pick_key="OLN:2026-08-14"),
+        {"kind": "tranche_fired", "uic": 333, "tag": "tp1"},
+        _tranche_plan_line(444, pick_key="ABC:2026-08-10", target_price=15.0),
+        {"kind": "tranche_fired", "uic": 444, "tag": "tp1"},
+        _tranche_plan_line(444, pick_key="ABC:2026-08-17", target_price=18.0),
+        {"kind": "tranche_fired", "uic": 444, "tag": "tp2"},
+        _tranche_plan_line(555, pick_key="XYZ:2026-08-12"),
+        {"kind": "tranche_plan_retracted", "uic": 555, "pick_key": "XYZ:2026-08-12"},
+    ]
+
+
 def _planned_fold_data(
     fold: dict[int, PlannedExit],
 ) -> dict[int, tuple[Any, ...]]:
@@ -5552,6 +5603,55 @@ def _planned_fold_data(
         )
         for uic, planned in fold.items()
     }
+
+
+def _position_row(uic: int | None, qty: float) -> Any:
+    """A duck-typed broker position ledger row; ``uic=None`` builds a row whose
+    ``broker_instrument_id`` cannot be parsed back to a uic."""
+    instr = type(
+        "I", (), {"broker_instrument_id": None if uic is None else str(uic), "currency": "USD"}
+    )()
+    return type("Pos", (), {"instrument": instr, "quantity": qty})()
+
+
+class TestNetOpenPositionUics(unittest.TestCase):
+    """EOD-netting risk-unit counting: a LIVE Saxo intraday round-trip is two
+    ledger rows (+q / -q) netting to zero until the nightly netting — MAX_OPEN
+    must count distinct net-nonzero uics, never raw rows."""
+
+    def test_round_trip_rows_net_to_no_open_uic(self) -> None:
+        uics, unresolvable = cl._net_open_position_uics(
+            [_position_row(42, 8.0), _position_row(42, -8.0)]
+        )
+        self.assertEqual(uics, frozenset())
+        self.assertEqual(unresolvable, 0)
+
+    def test_partially_closed_long_is_one_open_uic(self) -> None:
+        uics, unresolvable = cl._net_open_position_uics(
+            [_position_row(42, 8.0), _position_row(42, -3.0)]
+        )
+        self.assertEqual(uics, frozenset({42}))
+        self.assertEqual(unresolvable, 0)
+
+    def test_two_net_nonzero_uics_are_two_open_uics(self) -> None:
+        # A net short is a risk unit too — only net-ZERO drops out.
+        uics, unresolvable = cl._net_open_position_uics(
+            [_position_row(42, 8.0), _position_row(43, -5.0)]
+        )
+        self.assertEqual(uics, frozenset({42, 43}))
+        self.assertEqual(unresolvable, 0)
+
+    def test_unresolvable_uic_rows_count_one_each(self) -> None:
+        # Fail-conservative: a row we cannot attribute to a uic still occupies
+        # a slot — never undercount risk units.
+        uics, unresolvable = cl._net_open_position_uics(
+            [_position_row(None, 8.0), _position_row(None, 3.0)]
+        )
+        self.assertEqual(uics, frozenset())
+        self.assertEqual(unresolvable, 2)
+
+    def test_empty_book_is_zero(self) -> None:
+        self.assertEqual(cl._net_open_position_uics([]), (frozenset(), 0))
 
 
 class TestCompactStandaloneStopJournalLines(unittest.TestCase):
@@ -5629,6 +5729,88 @@ class TestCompactStandaloneStopJournalLines(unittest.TestCase):
             [(line["uic"], line["ts"], line["qty"]) for line in amend_ok],
             [(111, 260.0, 8.0)],
             "the newest amend_ok per uic survives; the older one is dropped",
+        )
+
+    def test_tranche_plan_and_fired_survive_compaction(self) -> None:
+        # Pre-fix the compactor dropped tranche_plan / tranche_fired entirely, so
+        # every daemon restart erased the live-exit TP ladders and re-armed
+        # already-fired tranches for all open positions.
+        original = [
+            _tranche_plan_line(333, pick_key="OLN:2026-08-14"),
+            {"kind": "tranche_fired", "uic": 333, "tag": "tp1"},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(original)
+        self.assertIn(333, cl.fold_tranche_plans(original))  # guard: non-vacuous
+        self.assertEqual(cl.fold_tranche_plans(original), cl.fold_tranche_plans(compacted))
+        self.assertEqual({333: frozenset({"tp1"})}, cl._fold_fired_since_latest_plan(compacted))
+
+    def test_retracted_ladder_compacts_to_no_tranche_lines(self) -> None:
+        original = [
+            _tranche_plan_line(555, pick_key="XYZ:2026-08-12"),
+            {"kind": "tranche_plan_retracted", "uic": 555, "pick_key": "XYZ:2026-08-12"},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(original)
+        self.assertEqual(cl.fold_tranche_plans(compacted), {})
+        self.assertEqual(cl._fold_fired_since_latest_plan(compacted), {})
+        self.assertEqual(
+            [line for line in compacted if str(line.get("kind", "")).startswith("tranche")],
+            [],
+            "a fully retracted uic keeps no tranche lines",
+        )
+
+    def test_repick_preserves_fired_reset_semantics(self) -> None:
+        original = [
+            _tranche_plan_line(444, pick_key="ABC:2026-08-10", target_price=15.0),
+            {"kind": "tranche_fired", "uic": 444, "tag": "tp1"},
+            _tranche_plan_line(444, pick_key="ABC:2026-08-17", target_price=18.0),
+            {"kind": "tranche_fired", "uic": 444, "tag": "tp2"},
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(original)
+        self.assertEqual(cl.fold_tranche_plans(original), cl.fold_tranche_plans(compacted))
+        self.assertEqual({444: frozenset({"tp2"})}, cl._fold_fired_since_latest_plan(original))
+        self.assertEqual(
+            cl._fold_fired_since_latest_plan(original),
+            cl._fold_fired_since_latest_plan(compacted),
+        )
+
+    def test_idempotent_reappend_keeps_prior_fired_tags(self) -> None:
+        # The crash-recovery re-drive re-appends the SAME pick's plan every tick;
+        # a fired tag recorded BEFORE such a re-append must survive compaction.
+        # The kept governing plan precedes the kept fired lines in the compacted
+        # output, so the fold's same-identity no-reset path is preserved.
+        original = [
+            _tranche_plan_line(333, pick_key="OLN:2026-08-14"),
+            {"kind": "tranche_fired", "uic": 333, "tag": "tp1"},
+            _tranche_plan_line(333, pick_key="OLN:2026-08-14"),
+        ]
+        compacted = cl._compact_standalone_stop_journal_lines(original)
+        self.assertEqual({333: frozenset({"tp1"})}, cl._fold_fired_since_latest_plan(original))
+        self.assertEqual(
+            cl._fold_fired_since_latest_plan(original),
+            cl._fold_fired_since_latest_plan(compacted),
+        )
+        self.assertEqual(cl.fold_tranche_plans(original), cl.fold_tranche_plans(compacted))
+
+    def test_compaction_is_idempotent_on_mixed_journal(self) -> None:
+        mixed = _rich_standalone_stop_journal() + _tranche_journal()
+        once = cl._compact_standalone_stop_journal_lines(mixed)
+        self.assertEqual(once, cl._compact_standalone_stop_journal_lines(once))
+
+    def test_mixed_journal_folds_identical_and_existing_kinds_unchanged(self) -> None:
+        mixed = _rich_standalone_stop_journal() + _tranche_journal()
+        compacted = cl._compact_standalone_stop_journal_lines(mixed)
+        self.assertEqual(cl.fold_tranche_plans(mixed), cl.fold_tranche_plans(compacted))
+        self.assertEqual(
+            cl._fold_fired_since_latest_plan(mixed),
+            cl._fold_fired_since_latest_plan(compacted),
+        )
+        non_tranche = [
+            line for line in compacted if not str(line.get("kind", "")).startswith("tranche")
+        ]
+        self.assertEqual(
+            non_tranche,
+            cl._compact_standalone_stop_journal_lines(_rich_standalone_stop_journal()),
+            "tranche retention must not disturb the existing kept-kinds election",
         )
 
 
