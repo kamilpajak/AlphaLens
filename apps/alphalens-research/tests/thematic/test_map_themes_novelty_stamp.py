@@ -22,6 +22,8 @@ import pandas as pd
 from alphalens_pipeline.thematic.mapping import orchestrator
 from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
 
+from tests.thematic.mapping_stubs import stub_assessor, theme_proposal
+
 from .test_theme_mapping import _catalyst_payload
 
 ASOF = dt.date(2026, 6, 18)
@@ -59,12 +61,11 @@ def _run_map_themes(
         patch.object(orchestrator, "_resolve_catalyst", return_value=catalyst),
         patch.object(
             orchestrator,
-            "_propose_and_filter_candidates",
-            return_value=(
-                [{"ticker": "TIC", "confidence": 0.8}],
-                {"TIC": True},
-                ["kw"],
-                MapperOutcome.SUCCESS,
+            "_propose_and_bracket",
+            return_value=theme_proposal(
+                proposed=[{"ticker": "TIC", "confidence": 0.8}],
+                in_bracket={"TIC": 1_000_000_000.0},
+                outcome=MapperOutcome.SUCCESS,
             ),
         ),
         patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
@@ -85,6 +86,11 @@ def _run_map_themes(
 
 
 class TestMapThemesNoveltyStamp(unittest.TestCase):
+    def setUp(self) -> None:
+        # Stage B calls OpenRouter once per in-bracket candidate; without
+        # this stub these tests hit the live API.
+        stub_assessor(self)
+
     def test_stamps_rank_and_score_per_theme(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp)

@@ -17,10 +17,12 @@ from pathlib import Path
 from unittest import mock
 
 import pandas as pd
-from alphalens_pipeline.thematic.mapping import orchestrator
+from alphalens_pipeline.thematic.mapping import channel_assessor, orchestrator
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
 from alphalens_pipeline.thematic.verification import mcap_filter
+
+from tests.thematic.mapping_stubs import stub_assessor, theme_proposal
 
 ASOF = dt.date(2026, 8, 5)
 MIN_CAP, MAX_CAP = 500_000_000, 10_000_000_000
@@ -54,7 +56,12 @@ def _proposal(candidates: list[dict]) -> dict:
 
 
 class ProposalFunnelSinkTests(unittest.TestCase):
-    """``_propose_and_filter_candidates`` records every proposal, not just survivors."""
+    """The funnel records every proposal, not just the bracket survivors."""
+
+    def setUp(self) -> None:
+        # Stage B calls OpenRouter once per in-bracket candidate; without
+        # this stub these tests hit the live API.
+        stub_assessor(self)
 
     def _run(self, candidates: list[dict], mcaps: dict[str, float | None]):
         sink: list[dict] = []
@@ -66,7 +73,7 @@ class ProposalFunnelSinkTests(unittest.TestCase):
                 orchestrator.mcap_filter, "fetch_mcap", side_effect=lambda t, **_: mcaps.get(t)
             ),
         ):
-            kept, _in_bracket, _kw, _outcome = orchestrator._propose_and_filter_candidates(
+            proposal = orchestrator._propose_and_bracket(
                 theme="quantum_computing",
                 catalyst=_catalyst(),
                 api_key="k",
@@ -74,9 +81,16 @@ class ProposalFunnelSinkTests(unittest.TestCase):
                 min_cap=MIN_CAP,
                 max_cap=MAX_CAP,
                 asof=ASOF,
-                funnel_sink=sink,
             )
-        return kept, sink
+            sink.extend(
+                orchestrator._funnel_rows_for_theme(
+                    theme="quantum_computing",
+                    proposal=proposal,
+                    catalyst=_catalyst(),
+                    shadow=(channel_assessor.SHADOW_REFUSE, 0, 0),
+                )
+            )
+        return proposal.candidates, sink
 
     def test_records_one_entry_per_proposal_including_the_dropped_ones(self):
         kept, sink = self._run(
@@ -115,7 +129,6 @@ class ProposalFunnelSinkTests(unittest.TestCase):
         self.assertEqual(row["llm_confidence"], 0.7)
 
     def test_a_decline_records_nothing_rather_than_an_empty_row(self):
-        sink: list[dict] = []
         with mock.patch.object(
             orchestrator.theme_mapper,
             "propose_candidates",
@@ -123,10 +136,10 @@ class ProposalFunnelSinkTests(unittest.TestCase):
                 "candidates": [],
                 "search_keywords": [],
                 "outcome": MapperOutcome.DECLINED,
-                "no_candidates_reason": "no transmission channel",
+                "decline_reason": "no_event",
             },
         ):
-            orchestrator._propose_and_filter_candidates(
+            proposal = orchestrator._propose_and_bracket(
                 theme="quantum_computing",
                 catalyst=_catalyst(),
                 api_key="k",
@@ -134,11 +147,18 @@ class ProposalFunnelSinkTests(unittest.TestCase):
                 min_cap=MIN_CAP,
                 max_cap=MAX_CAP,
                 asof=ASOF,
-                funnel_sink=sink,
             )
-        self.assertEqual(sink, [])
+        self.assertEqual(
+            orchestrator._funnel_rows_for_theme(
+                theme="quantum_computing",
+                proposal=proposal,
+                catalyst=_catalyst(),
+                shadow=(channel_assessor.SHADOW_REFUSE, 0, 0),
+            ),
+            [],
+        )
 
-    def test_the_sink_is_optional_so_existing_callers_are_unaffected(self):
+    def test_the_bracket_survivors_are_returned_alongside_the_full_proposal_set(self):
         with (
             mock.patch.object(
                 orchestrator.theme_mapper,
@@ -147,7 +167,7 @@ class ProposalFunnelSinkTests(unittest.TestCase):
             ),
             mock.patch.object(orchestrator.mcap_filter, "fetch_mcap", return_value=1_827_000_000),
         ):
-            kept, _in_bracket, _kw, _outcome = orchestrator._propose_and_filter_candidates(
+            proposal = orchestrator._propose_and_bracket(
                 theme="quantum_computing",
                 catalyst=_catalyst(),
                 api_key="k",
@@ -156,7 +176,8 @@ class ProposalFunnelSinkTests(unittest.TestCase):
                 max_cap=MAX_CAP,
                 asof=ASOF,
             )
-        self.assertEqual([c["ticker"] for c in kept], ["QUBT"])
+        self.assertEqual([c["ticker"] for c in proposal.candidates], ["QUBT"])
+        self.assertEqual([c["ticker"] for c in proposal.proposed], ["QUBT"])
 
     def test_logs_which_tickers_were_dropped_not_only_how_many(self):
         with self.assertLogs(
@@ -199,7 +220,6 @@ class ProposalFunnelSinkTests(unittest.TestCase):
             # Second lookup of DUP comes back out of bracket.
             return 1_000_000_000.0 if seen.count(ticker) == 1 else 4_000_000_000_000.0
 
-        sink: list[dict] = []
         with (
             mock.patch.object(
                 orchestrator.theme_mapper,
@@ -210,7 +230,7 @@ class ProposalFunnelSinkTests(unittest.TestCase):
             ),
             mock.patch.object(orchestrator.mcap_filter, "fetch_mcap", side_effect=_drifting_mcap),
         ):
-            orchestrator._propose_and_filter_candidates(
+            proposal = orchestrator._propose_and_bracket(
                 theme="quantum_computing",
                 catalyst=_catalyst(),
                 api_key="k",
@@ -218,8 +238,13 @@ class ProposalFunnelSinkTests(unittest.TestCase):
                 min_cap=MIN_CAP,
                 max_cap=MAX_CAP,
                 asof=ASOF,
-                funnel_sink=sink,
             )
+        sink = orchestrator._funnel_rows_for_theme(
+            theme="quantum_computing",
+            proposal=proposal,
+            catalyst=_catalyst(),
+            shadow=(channel_assessor.SHADOW_REFUSE, 0, 0),
+        )
         self.assertEqual(len(sink), 2)
         self.assertEqual(
             [r["bracket_verdict"] for r in sink], [mcap_filter.IN_BRACKET, mcap_filter.TOO_BIG]
@@ -235,15 +260,24 @@ class ProposalFunnelSinkTests(unittest.TestCase):
 class ProposalFunnelParquetTests(unittest.TestCase):
     """``map_themes`` persists the funnel next to the candidates it explains."""
 
-    def _map(self, out: Path, sink_rows: list[dict]):
-        def _fake_propose(**kwargs):
-            kwargs["funnel_sink"].extend(sink_rows)
-            return ([], {}, [], MapperOutcome.SUCCESS)
+    def setUp(self) -> None:
+        # Stage B calls OpenRouter once per in-bracket candidate; without
+        # this stub these tests hit the live API.
+        stub_assessor(self)
 
+    def _map(self, out: Path, funnel_rows: list[dict]):
+        # ``_funnel_rows_for_theme`` is stubbed rather than the proposal itself:
+        # this suite pins the PARQUET (columns, asof stamp, failure tolerance),
+        # and the row shape is pinned by ProposalFunnelSinkTests above.
         with (
             mock.patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst()),
             mock.patch.object(
-                orchestrator, "_propose_and_filter_candidates", side_effect=_fake_propose
+                orchestrator,
+                "_propose_and_bracket",
+                return_value=theme_proposal(outcome=MapperOutcome.SUCCESS),
+            ),
+            mock.patch.object(
+                orchestrator, "_funnel_rows_for_theme", return_value=list(funnel_rows)
             ),
             mock.patch.object(orchestrator, "_init_pro_client"),
             mock.patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -257,7 +291,11 @@ class ProposalFunnelParquetTests(unittest.TestCase):
                 "ticker": "QUBT",
                 "company_name": "Quantum Computing Inc",
                 "llm_confidence": 0.7,
-                "transmission_channel": "IBM signals viability -> sector re-rates",
+                "channel_status": "verified",
+                "channel_type": "category_attention",
+                "channel_confidence": 0.6,
+                "channel_config_version": "channel-assess-v1-stub",
+                "shadow_strict_verdict": "keep",
                 "market_cap": 1_827_000_000.0,
                 "bracket_verdict": mcap_filter.IN_BRACKET,
                 "catalyst_url": "https://example.com/ibm-quantum",
@@ -268,7 +306,11 @@ class ProposalFunnelParquetTests(unittest.TestCase):
                 "ticker": "NVDA",
                 "company_name": "NVIDIA",
                 "llm_confidence": 0.9,
-                "transmission_channel": "supplies accelerators",
+                "channel_status": "not_assessed",
+                "channel_type": "none",
+                "channel_confidence": None,
+                "channel_config_version": "channel-assess-v1-stub",
+                "shadow_strict_verdict": "keep",
                 "market_cap": 4_000_000_000_000.0,
                 "bracket_verdict": mcap_filter.TOO_BIG,
                 "catalyst_url": "https://example.com/ibm-quantum",
@@ -301,7 +343,11 @@ class ProposalFunnelParquetTests(unittest.TestCase):
                 "ticker": "QUBT",
                 "company_name": "Quantum Computing Inc",
                 "llm_confidence": 0.7,
-                "transmission_channel": "",
+                "channel_status": "unverified",
+                "channel_type": "none",
+                "channel_confidence": None,
+                "channel_config_version": "channel-assess-v1-stub",
+                "shadow_strict_verdict": "refuse",
                 "market_cap": 1_827_000_000.0,
                 "bracket_verdict": mcap_filter.IN_BRACKET,
                 "catalyst_url": "https://example.com/ibm-quantum",

@@ -16,10 +16,48 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
-from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping import channel_assessor, orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
+
+from tests.thematic.mapping_stubs import stub_assessor, theme_proposal
 
 ASOF = dt.date(2026, 6, 15)
 MCAP = orchestrator.DEFAULT_MCAP_RANGE
+
+
+_CATALYST = CatalystPayload(
+    url="https://example.com/freeze",
+    title="Stub catalyst",
+    published_at="2026-08-04",
+    event_type="contract_award",
+    primary_entities=[],
+    confidence=0.8,
+    second_order_implications=[],
+    echo_count=1,
+    trigger_url="https://example.com/freeze",
+    trigger_published_at="2026-08-04",
+    is_amplified=False,
+    template_id=None,
+    template_facts=None,
+)
+
+
+def _cfg(**over) -> str:
+    """The freeze token, with the stage-B channel token composed in.
+
+    ``mapper_config_version`` takes ``channel_config_version`` as a REQUIRED
+    keyword since 2026-08-19: an assessment-prompt edit must invalidate the
+    day's frozen candidate parquet, otherwise the 6x/day rerun would serve
+    channel fields produced under different rules.
+    """
+    model = over.pop("model", None)
+    return theme_mapper.mapper_config_version(
+        market_cap_range=over.pop("market_cap_range", MCAP),
+        model=model,
+        channel_config_version=over.pop(
+            "channel_config_version", channel_assessor.channel_config_version(model=model)
+        ),
+    )
 
 
 def _frozen_row(ticker: str, *, verified: bool) -> dict:
@@ -69,43 +107,49 @@ def _write_frozen(
 
 class TestMapperConfigVersion(unittest.TestCase):
     def test_stable_for_identical_inputs(self):
-        a = theme_mapper.mapper_config_version(market_cap_range=MCAP)
-        b = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+        a = _cfg()
+        b = _cfg()
         self.assertEqual(a, b)
 
     def test_changes_with_mcap_range(self):
-        a = theme_mapper.mapper_config_version(market_cap_range=(1, 2))
-        b = theme_mapper.mapper_config_version(market_cap_range=(1, 3))
+        a = _cfg(market_cap_range=(1, 2))
+        b = _cfg(market_cap_range=(1, 3))
         self.assertNotEqual(a, b)
 
     def test_carries_schema_tag(self):
-        self.assertIn("mapper-freeze", theme_mapper.mapper_config_version(market_cap_range=MCAP))
+        self.assertIn("mapper-freeze", _cfg())
 
     def test_changes_with_model(self):
-        a = theme_mapper.mapper_config_version(market_cap_range=MCAP)
-        b = theme_mapper.mapper_config_version(market_cap_range=MCAP, model="other/model")
+        a = _cfg()
+        b = _cfg(model="other/model")
         self.assertNotEqual(a, b)
+
+    def test_changes_with_the_channel_assessment_config(self):
+        # An assessment-prompt edit must invalidate the frozen candidate
+        # parquet: its channel fields were produced under the old rules, and a
+        # rerun that reused them would mix two configs in one column.
+        self.assertNotEqual(_cfg(), _cfg(channel_config_version="channel-assess-vX"))
 
     def test_default_model_token_matches_explicit_default(self):
         # Threading model must not gratuitously invalidate existing frozen sets:
         # the default-model token equals the no-model token byte-for-byte.
-        self.assertEqual(
-            theme_mapper.mapper_config_version(market_cap_range=MCAP),
-            theme_mapper.mapper_config_version(
-                market_cap_range=MCAP, model=theme_mapper.DEFAULT_MODEL
-            ),
-        )
+        self.assertEqual(_cfg(), _cfg(model=theme_mapper.DEFAULT_MODEL))
 
 
 class TestMapThemesFreeze(unittest.TestCase):
+    def setUp(self) -> None:
+        # Stage B calls OpenRouter once per in-bracket candidate; without
+        # this stub these tests hit the live API.
+        stub_assessor(self)
+
     def test_reuses_frozen_set_without_proposing_or_building_llm(self):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
-            cfg = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+            cfg = _cfg()
             _write_frozen(out, config_version=cfg)
             with (
                 patch.object(orchestrator, "_resolve_catalyst") as cat,
-                patch.object(orchestrator, "_propose_and_filter_candidates") as prop,
+                patch.object(orchestrator, "_propose_and_bracket") as prop,
                 patch.object(orchestrator, "_init_pro_client") as pro,
             ):
                 df = orchestrator.map_themes(
@@ -120,14 +164,14 @@ class TestMapThemesFreeze(unittest.TestCase):
     def test_rebuild_flag_forces_recompute(self):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
-            cfg = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+            cfg = _cfg()
             _write_frozen(out, config_version=cfg)
             with (
-                patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
+                patch.object(orchestrator, "_resolve_catalyst", return_value=_CATALYST),
                 patch.object(
                     orchestrator,
-                    "_propose_and_filter_candidates",
-                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(outcome=theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -141,11 +185,11 @@ class TestMapThemesFreeze(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
             with (
-                patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
+                patch.object(orchestrator, "_resolve_catalyst", return_value=_CATALYST),
                 patch.object(
                     orchestrator,
-                    "_propose_and_filter_candidates",
-                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(outcome=theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -163,11 +207,11 @@ class TestMapThemesFreeze(unittest.TestCase):
             out = Path(td)
             _write_frozen(out, config_version="stale-config-token")
             with (
-                patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
+                patch.object(orchestrator, "_resolve_catalyst", return_value=_CATALYST),
                 patch.object(
                     orchestrator,
-                    "_propose_and_filter_candidates",
-                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(outcome=theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -179,14 +223,14 @@ class TestMapThemesFreeze(unittest.TestCase):
         # A first run that produced only unverified rows must not seal the date.
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
-            cfg = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+            cfg = _cfg()
             _write_frozen(out, config_version=cfg, verified=False)
             with (
-                patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
+                patch.object(orchestrator, "_resolve_catalyst", return_value=_CATALYST),
                 patch.object(
                     orchestrator,
-                    "_propose_and_filter_candidates",
-                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(outcome=theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -199,11 +243,11 @@ class TestMapThemesFreeze(unittest.TestCase):
             out = Path(td)
             _write_frozen(out, config_version=None)  # pre-freeze shape
             with (
-                patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
+                patch.object(orchestrator, "_resolve_catalyst", return_value=_CATALYST),
                 patch.object(
                     orchestrator,
-                    "_propose_and_filter_candidates",
-                    return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(outcome=theme_mapper.MapperOutcome.DECLINED),
                 ) as prop,
                 patch.object(orchestrator, "_init_pro_client"),
                 patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -214,17 +258,16 @@ class TestMapThemesFreeze(unittest.TestCase):
     def test_fresh_run_stamps_config_version(self):
         with tempfile.TemporaryDirectory() as td:
             out = Path(td)
-            cfg = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+            cfg = _cfg()
             with (
-                patch.object(orchestrator, "_resolve_catalyst", return_value=object()),
+                patch.object(orchestrator, "_resolve_catalyst", return_value=_CATALYST),
                 patch.object(
                     orchestrator,
-                    "_propose_and_filter_candidates",
-                    return_value=(
-                        [{"ticker": "AAA"}],
-                        {"AAA": 1_000_000_000},
-                        ["k"],
-                        theme_mapper.MapperOutcome.SUCCESS,
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(
+                        proposed=[{"ticker": "AAA"}],
+                        in_bracket={"AAA": 1_000_000_000},
+                        outcome=theme_mapper.MapperOutcome.SUCCESS,
                     ),
                 ),
                 patch.object(
@@ -263,7 +306,7 @@ class TestWriteEmptyCandidates(unittest.TestCase):
             self.assertEqual(len(df), 0)
             for col in orchestrator._MAP_THEMES_COLUMNS:
                 self.assertIn(col, df.columns)
-            cfg = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+            cfg = _cfg()
             self.assertTrue((df["mapper_config_version"] == cfg).all())
 
     def test_empty_set_is_not_reused_so_later_slots_recompute(self):
@@ -276,7 +319,7 @@ class TestWriteEmptyCandidates(unittest.TestCase):
             path = orchestrator.write_empty_candidates(
                 asof=ASOF, output_dir=out, market_cap_range=MCAP
             )
-            cfg = theme_mapper.mapper_config_version(market_cap_range=MCAP)
+            cfg = _cfg()
             self.assertIsNone(orchestrator._load_frozen_candidates(path, cfg))
 
 

@@ -12,7 +12,7 @@ Supreme Court headline, Lyft on an eBay harassment prosecution.
 The catalyst was already a local variable one frame above the proposal call
 (``_rows_for_theme`` resolves it and hard-returns when there is none), so the
 whole fix is a parameter chain. These tests pin that chain end to end:
-``_rows_for_theme`` -> ``_propose_and_filter_candidates`` ->
+``_rows_for_theme`` -> ``_propose_and_bracket`` -> ``_assess_channels_for_theme`` ->
 ``theme_mapper.propose_candidates`` -> ``build_prompt``.
 """
 
@@ -22,8 +22,10 @@ import datetime as dt
 import unittest
 from unittest import mock
 
-from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping import channel_assessor, orchestrator, theme_mapper
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
+
+from tests.thematic.mapping_stubs import theme_proposal
 
 
 def _mcap_from(mcaps):
@@ -59,13 +61,13 @@ def _catalyst(title: str = "eBay to pay $56m over its harassment campaign") -> C
 
 
 class ProposalCallIsEventConditionedTests(unittest.TestCase):
-    def test_propose_and_filter_forwards_the_catalyst_to_the_mapper(self):
+    def test_propose_and_bracket_forwards_the_catalyst_to_the_mapper(self):
         catalyst = _catalyst()
         proposal = {
-            "candidates": [{"ticker": "AAA", "confidence": 0.9, "transmission_channel": "a->b->c"}],
+            "candidates": [{"ticker": "AAA", "confidence": 0.9}],
             "search_keywords": [],
             "outcome": theme_mapper.MapperOutcome.SUCCESS,
-            "no_candidates_reason": "",
+            "decline_reason": "",
         }
         with (
             mock.patch.object(
@@ -77,7 +79,7 @@ class ProposalCallIsEventConditionedTests(unittest.TestCase):
                 side_effect=_mcap_from({"AAA": 1_000_000_000.0}),
             ),
         ):
-            orchestrator._propose_and_filter_candidates(
+            orchestrator._propose_and_bracket(
                 theme="harassment",
                 catalyst=catalyst,
                 api_key="k",
@@ -88,12 +90,12 @@ class ProposalCallIsEventConditionedTests(unittest.TestCase):
             )
         self.assertIs(propose.call_args.kwargs["catalyst"], catalyst)
 
-    def test_propose_and_filter_requires_a_catalyst(self):
+    def test_propose_and_bracket_requires_a_catalyst(self):
         # Non-optional by design: ``_rows_for_theme`` hard-returns before this
         # call when no catalyst resolved, so an ungrounded proposal should be
         # unrepresentable rather than merely unlikely.
         with self.assertRaises(TypeError):
-            orchestrator._propose_and_filter_candidates(
+            orchestrator._propose_and_bracket(
                 theme="harassment",
                 api_key="k",
                 pro_client=None,
@@ -112,8 +114,8 @@ class ProposalCallIsEventConditionedTests(unittest.TestCase):
             mock.patch.object(orchestrator, "_resolve_catalyst", return_value=catalyst) as resolve,
             mock.patch.object(
                 orchestrator,
-                "_propose_and_filter_candidates",
-                return_value=([], {}, [], theme_mapper.MapperOutcome.DECLINED),
+                "_propose_and_bracket",
+                return_value=theme_proposal(outcome=theme_mapper.MapperOutcome.DECLINED),
             ) as propose,
         ):
             orchestrator._rows_for_theme(
@@ -131,6 +133,42 @@ class ProposalCallIsEventConditionedTests(unittest.TestCase):
             )
         self.assertEqual(resolve.call_count, 1)
         self.assertIs(propose.call_args.kwargs["catalyst"], catalyst)
+
+    def test_rows_for_theme_forwards_the_same_object_to_the_assessor(self):
+        # Identity again, one layer down. Stage B must judge the channel against
+        # the event the row will cite as provenance — a re-resolve here would
+        # split "the event we assessed" from "the event we show".
+        catalyst = _catalyst()
+        with (
+            mock.patch.object(orchestrator, "_resolve_catalyst", return_value=catalyst),
+            mock.patch.object(
+                orchestrator,
+                "_propose_and_bracket",
+                return_value=theme_proposal(proposed=[{"ticker": "AAA", "confidence": 0.9}]),
+            ),
+            mock.patch.object(
+                orchestrator.channel_assessor,
+                "assess_candidates",
+                return_value=[channel_assessor.unassessed()],
+            ) as assess,
+            mock.patch.object(
+                orchestrator, "_verify_candidates_for_theme", return_value=([], 0, 0)
+            ),
+        ):
+            orchestrator._rows_for_theme(
+                "harassment",
+                asof=_ASOF,
+                catalyst_cache={},
+                api_key="k",
+                pro_client=None,
+                min_cap=1,
+                max_cap=2,
+                model=None,
+                polygon_client=None,
+                press_df=None,
+                keep_unverified=False,
+            )
+        self.assertIs(assess.call_args.kwargs["catalyst"], catalyst)
 
     def test_propose_candidates_conditions_the_prompt_on_the_catalyst(self):
         catalyst = _catalyst()
@@ -161,18 +199,33 @@ class ProposalCallIsEventConditionedTests(unittest.TestCase):
         self.assertIn("EBAY", sent["prompt"])
 
 
-class TransmissionChannelIsPersistedTests(unittest.TestCase):
-    def test_build_row_persists_the_transmission_channel(self):
-        # Without persisting it the fix is unfalsifiable: the original
-        # 397-row audit cannot be re-run on the new output to check whether
-        # candidates now actually carry a channel.
+class ChannelAssessmentIsPersistedTests(unittest.TestCase):
+    def test_build_row_persists_the_channel_assessment(self):
+        # Without persisting it the change is unfalsifiable: the (event, ticker)
+        # plausibility audit cannot be re-run on the new output, and the forward
+        # KEPT-vs-REFUSED contrast has nothing to read. The free-text
+        # ``transmission_channel`` column is gone — its content is now
+        # ``channel_text`` with a real status beside it.
+        assessment = channel_assessor.ChannelAssessment(
+            status="partial",
+            channel_type="customer_demand",
+            text="payout -> legal spend rises -> AAA fees rise",
+            evidence="the event states a settlement",
+            falsifier="AAA's 10-K names no litigation-services segment",
+            confidence=0.5,
+            votes=3,
+            valid_n=3,
+            dispersion=1,
+            outcome=channel_assessor.AssessmentOutcome.SUCCESS,
+            assessed_at="2026-08-19T00:00:00+00:00",
+        )
         row = orchestrator._build_row(
             theme="harassment",
             cand={
                 "ticker": "AAA",
                 "rationale": "does x",
-                "transmission_channel": "payout -> legal spend rises -> AAA fees rise",
                 "confidence": 0.9,
+                "channel": assessment,
             },
             verdict={
                 "gates_passed": [],
@@ -183,22 +236,29 @@ class TransmissionChannelIsPersistedTests(unittest.TestCase):
             market_cap=1_000_000_000.0,
             catalyst=_catalyst(),
             keywords=["employment litigation"],
+            shadow=(channel_assessor.SHADOW_REFUSE, 0, 1),
         )
-        self.assertEqual(
-            row["transmission_channel"], "payout -> legal spend rises -> AAA fees rise"
-        )
-        self.assertIn("transmission_channel", orchestrator._MAP_THEMES_COLUMNS)
+        self.assertEqual(row["channel_text"], "payout -> legal spend rises -> AAA fees rise")
+        self.assertEqual(row["channel_status"], "partial")
+        self.assertEqual(row["channel_vote_dispersion"], 1)
+        self.assertNotIn("transmission_channel", orchestrator._MAP_THEMES_COLUMNS)
+        for column in channel_assessor.CHANNEL_ROW_COLUMNS:
+            self.assertIn(column, orchestrator._MAP_THEMES_COLUMNS)
 
 
 class MapperFreezeTokenTests(unittest.TestCase):
     def test_freeze_schema_records_the_event_conditioned_cohort(self):
-        # ``mapper_config_version`` fingerprints the prompt template, so the
+        # ``mapper_config_version`` fingerprints the prompt template, so each
         # rewrite already changes the token. The schema tag is bumped as well
         # because ``_normalize`` changed shape (a code-level change the data
         # hash cannot describe) and because a shifted 12-char sha is not
-        # legible to a human reading the cohort boundary.
-        token = theme_mapper.mapper_config_version(market_cap_range=(1, 2))
-        self.assertIn("mapper-freeze-v2", token)
+        # legible to a human reading the cohort boundary. v3 = the channel
+        # stopped being a proposal-time requirement (2026-08-19).
+        token = theme_mapper.mapper_config_version(
+            market_cap_range=(1, 2),
+            channel_config_version=channel_assessor.channel_config_version(),
+        )
+        self.assertIn("mapper-freeze-v3", token)
 
 
 if __name__ == "__main__":

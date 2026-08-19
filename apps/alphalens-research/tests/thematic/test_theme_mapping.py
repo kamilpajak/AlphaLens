@@ -6,8 +6,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping import channel_assessor, orchestrator, theme_mapper
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
+
+from tests.thematic.mapping_stubs import stub_assessor
 
 
 def _mcap_from(mcaps):
@@ -55,27 +57,18 @@ SAMPLE_MAPPER_RESPONSE = {
             "ticker": "QBTS",
             "company_name": "D-Wave Quantum Inc",
             "rationale": "Pure-play quantum annealing hardware vendor",
-            "transmission_channel": (
-                "the award funds annealing pilots -> federal buyers expand "
-                "procurement -> QBTS government revenue rises next fiscal year"
-            ),
             "confidence": 0.85,
         },
         {
             "ticker": "IONQ",
             "company_name": "IonQ Inc",
             "rationale": "Trapped-ion quantum hardware specialist",
-            "transmission_channel": (
-                "the contract names trapped-ion hardware -> the named supplier "
-                "wins follow-on orders -> IONQ backlog and revenue rise"
-            ),
             "confidence": 0.9,
         },
         {
             "ticker": "MADEUP",
             "company_name": "Made Up Inc",
             "rationale": "Hallucinated candidate",
-            "transmission_channel": "event -> unclear -> revenue",
             "confidence": 0.3,
         },
     ],
@@ -92,7 +85,7 @@ def _mapper_result(
     candidates: list[dict] | None = None,
     search_keywords: list[str] | None = None,
     outcome: theme_mapper.MapperOutcome | None = None,
-    no_candidates_reason: str = "",
+    decline_reason: str = "",
 ) -> dict:
     """Build the dict shape returned by ``theme_mapper.propose_candidates``.
 
@@ -110,7 +103,7 @@ def _mapper_result(
         "candidates": cands,
         "search_keywords": list(search_keywords or []),
         "outcome": outcome,
-        "no_candidates_reason": no_candidates_reason,
+        "decline_reason": decline_reason,
     }
 
 
@@ -168,22 +161,45 @@ class TestGeminiMapperPromptBuilding(unittest.TestCase):
         self.assertIn("do not analyse the tag", prompt)
         self.assertIn("the event wins", prompt)
 
-    def test_prompt_requires_a_transmission_channel(self):
-        # A candidate qualifies only via a concrete causal path from THIS event
-        # to one of the four economic lines. "Shares a word with the theme" is
-        # explicitly not a channel.
-        prompt = self._prompt().lower()
-        self.assertIn("transmission_channel", prompt)
-        for line in ("revenue", "costs", "cost of capital", "competitive position"):
-            self.assertIn(line, prompt)
+    def test_prompt_does_not_require_a_transmission_channel(self):
+        # INVERTED on 2026-08-19. The channel requirement moved OUT of the
+        # proposal call and into a separate assessment stage that never drops a
+        # candidate. The pre-registered retro (PR #1065) found the gate's point
+        # estimate inverted (Δ = −0.0715, one-sided p = 0.945) and measured 96.0%
+        # crowd-out onto mega-caps. Stage A's job is now recall.
+        prompt = self._prompt()
+        self.assertNotIn("transmission_channel", prompt)
+        self.assertNotIn("TRANSMISSION CHANNEL", prompt)
 
-    def test_prompt_permits_returning_no_candidates(self):
-        # Many events (a procedural court step, a personnel dispute inside a
-        # private firm) have no investable read. A floor above zero guarantees
-        # fabrication, which is what manufactured the lexical links.
+    def test_prompt_does_not_decline_for_weak_or_indirect_linkage(self):
+        # The single most important stage-A property: weak links are WANTED
+        # here and are graded in stage B. A model that keeps refusing them
+        # rebuilds the gate inside the prompt.
+        prompt = self._prompt().lower()
+        self.assertIn("never decline because", prompt)
+        for word in ("weak", "indirect", "speculative"):
+            self.assertIn(word, prompt)
+
+    def test_prompt_invites_less_visible_companies(self):
+        # The crowd-out repair. Event conditioning pulled proposals onto the
+        # firms the article literally names, which are large: 334 rows where the
+        # original small/mid-cap ticker was absent vs 14 where it was proposed.
+        # No market-cap number may appear — see
+        # ``test_prompt_does_not_constrain_market_cap``.
+        prompt = self._prompt().lower()
+        self.assertIn("less-visible", prompt)
+        self.assertIn("obvious", prompt)
+
+    def test_prompt_permits_returning_no_candidates_for_two_reasons_only(self):
+        # The decline licence is narrowed to "cannot tell what happened / not a
+        # business development" and "touches no line of business of any
+        # US-listed company". Nothing else is a legal decline.
         prompt = self._prompt().lower()
         self.assertIn("there is no minimum", prompt)
-        self.assertIn("no_candidates_reason", prompt)
+        self.assertIn("decline_reason", prompt)
+        self.assertIn("no_event", prompt)
+        self.assertIn("not_business_development", prompt)
+        self.assertNotIn("no_candidates_reason", prompt)
 
     def test_prompt_keeps_the_second_order_read_open(self):
         # The pipeline is a deliberate second-order beneficiary mapper: a
@@ -308,27 +324,38 @@ class TestPropose(unittest.TestCase):
         self.assertIn("quantum computing", result["search_keywords"])
         self.assertIn("qubit", result["search_keywords"])
 
-    def test_propose_carries_the_transmission_channel(self):
+    def test_propose_does_not_emit_a_transmission_channel(self):
+        # The field left the stage-A response schema entirely; the channel is
+        # judged by ``channel_assessor`` afterwards, per candidate.
         fake_response = SimpleNamespace(text=json.dumps(SAMPLE_MAPPER_RESPONSE))
         with patch.object(theme_mapper, "_call_llm", return_value=fake_response):
             result = theme_mapper.propose_candidates(
                 theme="quantum_computing", catalyst=_catalyst_payload(), api_key="testkey"
             )
-        self.assertIn("federal buyers expand", result["candidates"][0]["transmission_channel"])
+        self.assertNotIn("transmission_channel", result["candidates"][0])
 
-    def test_propose_drops_a_candidate_with_no_transmission_channel(self):
-        # An unstated channel IS the defect being fixed — a candidate whose
-        # link to the event the model could not name must not reach the
-        # parquet. Dropping is observable: the count is logged as a WARNING
-        # so a model-side format drift reads as a mass drop, not as silence.
+    def test_propose_keeps_a_candidate_with_no_transmission_channel(self):
+        # The behaviour reversal. ``_normalize`` used to drop these; that drop
+        # is what destroyed the outcome labels needed to ever evaluate the gate
+        # (the reject-inference hole), on top of an inverted point estimate.
         payload = {
             "candidates": [
-                {"ticker": "GOOD", "confidence": 0.9, "transmission_channel": "a -> b -> c"},
+                {"ticker": "GOOD", "confidence": 0.9},
                 {"ticker": "BARE", "confidence": 0.9},
                 {"ticker": "BLANK", "confidence": 0.9, "transmission_channel": "   "},
             ],
             "search_keywords": ["quantum"],
         }
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(theme_mapper, "_call_llm", return_value=fake_response):
+            result = theme_mapper.propose_candidates(
+                theme="quantum_computing", catalyst=_catalyst_payload(), api_key="testkey"
+            )
+        self.assertEqual([c["ticker"] for c in result["candidates"]], ["GOOD", "BARE", "BLANK"])
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.SUCCESS)
+
+    def test_propose_normalises_the_decline_reason_to_the_enum(self):
+        payload = {"candidates": [], "decline_reason": "weak linkage"}
         fake_response = SimpleNamespace(text=json.dumps(payload))
         with (
             patch.object(theme_mapper, "_call_llm", return_value=fake_response),
@@ -337,8 +364,20 @@ class TestPropose(unittest.TestCase):
             result = theme_mapper.propose_candidates(
                 theme="quantum_computing", catalyst=_catalyst_payload(), api_key="testkey"
             )
-        self.assertEqual([c["ticker"] for c in result["candidates"]], ["GOOD"])
-        self.assertIn("2", "\n".join(cm.output))
+        # An off-enum reason is a prompt-drift signal, not a crash: it is
+        # recorded as the catch-all legal value and logged.
+        self.assertIn(result["decline_reason"], theme_mapper.DECLINE_REASONS)
+        self.assertIn("weak linkage", "\n".join(cm.output))
+
+    def test_propose_carries_a_legal_decline_reason_verbatim(self):
+        payload = {"candidates": [], "decline_reason": "no_event"}
+        fake_response = SimpleNamespace(text=json.dumps(payload))
+        with patch.object(theme_mapper, "_call_llm", return_value=fake_response):
+            result = theme_mapper.propose_candidates(
+                theme="quantum_computing", catalyst=_catalyst_payload(), api_key="testkey"
+            )
+        self.assertEqual(result["decline_reason"], "no_event")
+        self.assertIs(result["outcome"], theme_mapper.MapperOutcome.DECLINED)
 
     def test_propose_requires_a_catalyst(self):
         with self.assertRaises(TypeError):
@@ -699,6 +738,9 @@ def _install_default_catalyst(testcase: unittest.TestCase) -> None:
     )
     patcher.start()
     testcase.addCleanup(patcher.stop)
+    # Stage B calls OpenRouter once per in-bracket candidate. Without this stub
+    # every map_themes test below reaches the live API for real.
+    stub_assessor(testcase)
 
 
 class TestMapThemes(unittest.TestCase):
@@ -1392,6 +1434,11 @@ class TestSkipsThemesWithoutCatalyst(unittest.TestCase):
     every emitted row pointed at nowhere.
     """
 
+    def setUp(self) -> None:
+        # One theme in this test DOES resolve a catalyst, so stage B would
+        # otherwise reach the live API.
+        stub_assessor(self)
+
     def test_theme_without_catalyst_does_not_call_pro_proposal(self):
         propose_calls: list[str] = []
 
@@ -1498,7 +1545,10 @@ class TestFreezeTokenCoversRenderedPrompt(unittest.TestCase):
     inside the fenced block without touching the template literal."""
 
     def _token(self) -> str:
-        return theme_mapper.mapper_config_version(market_cap_range=(500_000_000, 10_000_000_000))
+        return theme_mapper.mapper_config_version(
+            market_cap_range=(500_000_000, 10_000_000_000),
+            channel_config_version=channel_assessor.channel_config_version(),
+        )
 
     def _assert_constant_is_fingerprinted(self, name: str, other: object) -> None:
         before = self._token()
@@ -1546,6 +1596,40 @@ class TestFreezeTokenCoversRenderedPrompt(unittest.TestCase):
         self._assert_constant_is_fingerprinted("_FIELD_UNAVAILABLE", "(unavailable)")
 
 
+class TestFreezeTokenCarriesTheChannelStage(unittest.TestCase):
+    """The assessment stage rides INSIDE ``mapper_config_version``.
+
+    Without this, an assessment-prompt edit would leave the freeze token
+    unchanged and the 6x/day rerun would serve stale ``channel_*`` fields from a
+    parquet produced under different rules — the same hole ``max_candidates`` /
+    ``block_tag`` were added to close for the two template placeholders."""
+
+    def _token(self, channel: str) -> str:
+        return theme_mapper.mapper_config_version(
+            market_cap_range=(500_000_000, 10_000_000_000),
+            channel_config_version=channel,
+        )
+
+    def test_the_channel_token_is_a_required_keyword(self):
+        with self.assertRaises(TypeError):
+            theme_mapper.mapper_config_version(market_cap_range=(500_000_000, 10_000_000_000))
+
+    def test_a_different_channel_token_changes_the_mapper_token(self):
+        self.assertNotEqual(
+            self._token(channel_assessor.channel_config_version()),
+            self._token(channel_assessor.channel_config_version(model="other/model")),
+        )
+
+    def test_the_freeze_tag_marks_the_new_cohort(self):
+        # The human-legible cohort marker. ``_normalize`` losing its
+        # channel-less drop is a code-level change no hash can see, which is
+        # exactly what the tag exists for.
+        self.assertEqual(theme_mapper._MAPPER_FREEZE_SCHEMA, "mapper-freeze-v3")
+        payload = json.loads(self._token(channel_assessor.channel_config_version()))
+        self.assertEqual(payload["schema"], "mapper-freeze-v3")
+        self.assertEqual(payload["channel"], channel_assessor.channel_config_version())
+
+
 class TestCandidateCeiling(unittest.TestCase):
     """The fix removes the MINIMUM candidate count (the old prompt demanded at
     least 5, which manufactured names for events with no investable read). The
@@ -1562,18 +1646,20 @@ class TestCandidateCeiling(unittest.TestCase):
         self.assertIn("15", prompt)
 
 
-class TestChannelDirectionRequirement(unittest.TestCase):
-    """Long-only tool: a channel that moves the candidate's economics the WRONG
-    way must disqualify it. This is NOT a filter on the event's sentiment - a
-    damaging event is frequently the right catalyst for a different company
-    (a breach sells security software). The test is the direction of the effect
-    on the CANDIDATE, not the sign of the news."""
+class TestNoDirectionFilter(unittest.TestCase):
+    """Drop-test (b) ``Direction`` was DELETED on 2026-08-19 and nothing
+    replaced it. It was a direction filter on the candidate's own economics,
+    which standing doctrine puts out of scope (long-only geometry is not a
+    selection question here), and it accounted for 1.1% of the retro's
+    refusals. A ``channel_direction`` annotation was considered for stage B and
+    deliberately left out: it is the field most likely to be quietly turned
+    into a filter later."""
 
-    def test_prompt_requires_the_channel_to_favour_the_candidate(self):
+    def test_prompt_no_longer_demands_a_favourable_direction(self):
         prompt = theme_mapper.build_prompt(theme="harassment", catalyst=_catalyst_payload())
-        self.assertIn("FAVOURABLY", prompt)
+        self.assertNotIn("FAVOURABLY", prompt)
 
-    def test_prompt_still_welcomes_bearish_events_with_a_favourable_channel(self):
+    def test_prompt_still_welcomes_bearish_events(self):
         # Guard against over-correcting into an event-sentiment filter.
         prompt = theme_mapper.build_prompt(theme="harassment", catalyst=_catalyst_payload())
         self.assertIn("a breach sells security software", prompt)

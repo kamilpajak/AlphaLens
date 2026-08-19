@@ -28,6 +28,7 @@ import json
 import logging
 import os
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -39,6 +40,7 @@ from alphalens_pipeline.data.alt_data.polygon_client import (
 from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.thematic.mapping import (
     catalyst_resolver,
+    channel_assessor,
     proposal_shadow,
     theme_mapper,
 )
@@ -288,21 +290,35 @@ def _build_row(
     market_cap: float,
     catalyst: CatalystPayload | None,
     keywords: Sequence[str],
+    shadow: tuple[str, int, int],
 ) -> dict:
+    """One candidate row, including its channel annotation and the theme's shadow.
+
+    The ``channel_*`` block and the ``shadow_strict_*`` block are ANNOTATIONS.
+    Nothing downstream may read them in a filter, a sort key or a score — the
+    structural guard lives in
+    ``tests/thematic/test_map_themes_channel_shadow.py``.
+    """
     return {
         "theme": theme,
         "ticker": cand["ticker"],
         "company_name": cand.get("company_name", ""),
         "rationale": cand.get("rationale", ""),
-        # The causal path the model named from the catalyst event to this
-        # company's revenue / costs / cost of capital / competitive position.
-        # Persisted so the (event, ticker) plausibility audit that diagnosed
-        # the ungrounded-linkage defect can be re-run on the new output —
-        # without it the fix is unfalsifiable. Parquet-only telemetry: no
-        # downstream stage reads it (not score, not brief, not the Django
-        # model, not the SPA); the audit reads the parquet directly.
-        "transmission_channel": cand.get("transmission_channel", ""),
         "llm_confidence": cand.get("confidence", 0.0),
+        # Stage-B channel assessment (12 columns). ``cand["channel"]`` is the
+        # ChannelAssessment ``_assess_channels_for_theme`` wrote onto the same
+        # dict; ``None`` renders as the not-assessed shape so every row carries
+        # every column.
+        **channel_assessor.row_fields(cand.get("channel")),
+        # What a STRICT channel gate WOULD have done with this theme. Stamped on
+        # every row of the theme so a "refused" theme leaves rows that exist,
+        # ship and mature — which is what makes a forward KEPT-vs-REFUSED
+        # contrast computable at all. A DIFFERENT estimand from the frozen
+        # Stage-1 gate; never pool the two (design memo §5).
+        "shadow_strict_verdict": shadow[0],
+        "shadow_strict_verified_n": shadow[1],
+        "shadow_strict_assessed_n": shadow[2],
+        "shadow_strict_rule_version": channel_assessor.SHADOW_STRICT_RULE_VERSION,
         "market_cap": market_cap,
         "gates_passed": verdict["gates_passed"],
         "gates_passed_str": ",".join(verdict["gates_passed"]),
@@ -329,8 +345,15 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     "ticker",
     "company_name",
     "rationale",
-    "transmission_channel",
     "llm_confidence",
+    # Stage-B channel annotation + the derived per-theme shadow verdict.
+    # Parquet-only: the Django ingest reads only enumerated model fields, so
+    # these ride to ~/.alphalens/thematic_briefs/ and stop there.
+    *channel_assessor.CHANNEL_ROW_COLUMNS,
+    "shadow_strict_verdict",
+    "shadow_strict_verified_n",
+    "shadow_strict_assessed_n",
+    "shadow_strict_rule_version",
     "market_cap",
     "gates_passed",
     "gates_passed_str",
@@ -362,6 +385,42 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     "novelty_score",
     "novelty_config_version",
 )
+
+
+# The candidate frame's sort. Promoted from an inline literal to a module
+# constant so the structural guard in
+# ``tests/thematic/test_map_themes_channel_shadow.py`` can assert that no
+# ``channel_*`` column ever joins it — a channel column in the sort would be the
+# rejected gate returning as an ordering rule.
+_CANDIDATE_SORT_KEYS: tuple[str, ...] = (
+    "theme",
+    "n_gates_passed",
+    "llm_confidence",
+    "ticker",
+)
+_CANDIDATE_SORT_ASCENDING: tuple[bool, ...] = (True, False, False, True)
+
+
+def _channel_counts(
+    theme_counts: Iterable[dict[str, int]],
+    shadows: Iterable[tuple[str, int, int]],
+) -> dict[str, int]:
+    """Run-level channel + shadow tallies for the CLI's Prometheus gauges.
+
+    Emitted on EVERY run, including a quiet day and a frozen-set reuse (all
+    zeros), for the same reason the two outcome gauges are: a series that
+    disappears on healthy days is indistinguishable from a stopped exporter.
+    """
+    per_theme = list(theme_counts)
+    verdicts = [v for v, _n_verified, _n_assessed in shadows]
+    return {
+        "channel_verified": sum(c["verified"] for c in per_theme),
+        "channel_partial": sum(c["partial"] for c in per_theme),
+        "channel_unverified": sum(c["unverified"] for c in per_theme),
+        "channel_assess_failed": sum(c["assess_failed"] for c in per_theme),
+        "themes_shadow_kept": sum(1 for v in verdicts if v == channel_assessor.SHADOW_KEEP),
+        "themes_shadow_refused": sum(1 for v in verdicts if v == channel_assessor.SHADOW_REFUSE),
+    }
 
 
 def _outcome_counts(outcomes: Iterable[theme_mapper.MapperOutcome | None]) -> dict[str, int]:
@@ -428,13 +487,41 @@ _PROPOSAL_FUNNEL_COLUMNS = (
     "ticker",
     "company_name",
     "llm_confidence",
-    "transmission_channel",
+    "channel_status",
+    "channel_type",
+    "channel_confidence",
+    "shadow_strict_verdict",
+    "channel_config_version",
     "market_cap",
     "bracket_verdict",
     "catalyst_url",
     "catalyst_event_type",
     "mapper_config_version",
 )
+
+_THEME_DECISION_COLUMNS = (
+    "asof",
+    "theme",
+    "catalyst_url",
+    "catalyst_event_type",
+    "mapper_outcome",
+    "decline_reason",
+    "n_proposed",
+    "n_in_bracket",
+    "n_verified",
+    "n_partial",
+    "n_unverified",
+    "n_assess_failed",
+    "shadow_strict_verdict",
+    "shadow_strict_rule_version",
+    "mapper_config_version",
+    "channel_config_version",
+)
+
+# Recorded in the theme-decisions sidecar when the theme never reached the
+# mapper because no catalyst event resolved. Distinct from every MapperOutcome:
+# a skip is neither a decline nor a mapper failure.
+_NO_CATALYST_OUTCOME = "no_catalyst"
 
 
 def _funnel_row(
@@ -443,6 +530,7 @@ def _funnel_row(
     cand: dict,
     verdict: mcap_filter.McapVerdict | None,
     catalyst: CatalystPayload,
+    shadow: tuple[str, int, int],
 ) -> dict:
     """One PRE-bracket proposal, with the verdict that decided its fate.
 
@@ -450,7 +538,14 @@ def _funnel_row(
     that is recorded as :data:`~mcap_filter.NO_MCAP` rather than dropped, so the
     row count always equals the proposal count and "how many did the model
     actually propose" stays answerable from this file alone.
+
+    An OFF-BRACKET proposal never reached the assessor, so it renders as
+    ``channel_status="not_assessed"`` — never as ``"unverified"``. Merging the
+    two would make "the bracket dropped it" indistinguishable from "the model
+    could not name a chain", and the shadow verdict's denominator meaningless.
     """
+    assessment = cand.get("channel")
+    fields = channel_assessor.row_fields(assessment)
     return {
         "theme": theme,
         "ticker": cand["ticker"],
@@ -460,7 +555,11 @@ def _funnel_row(
         # (The proposal-shadow builder keeps its own None default on purpose —
         # its rows feed a pre-registered measurement and must not shift.)
         "llm_confidence": cand.get("confidence", 0.0),
-        "transmission_channel": cand.get("transmission_channel", ""),
+        "channel_status": fields["channel_status"],
+        "channel_type": fields["channel_type"],
+        "channel_confidence": fields["channel_confidence"],
+        "channel_config_version": fields["channel_config_version"],
+        "shadow_strict_verdict": shadow[0],
         "market_cap": verdict.market_cap if verdict is not None else None,
         "bracket_verdict": verdict.verdict if verdict is not None else mcap_filter.NO_MCAP,
         "catalyst_url": catalyst.url,
@@ -510,7 +609,25 @@ def _write_proposal_funnel_best_effort(
         )
 
 
-def _propose_and_filter_candidates(
+@dataclass(frozen=True, slots=True)
+class ThemeProposal:
+    """One theme's stage-A output, before the channel assessment.
+
+    ``candidates`` holds the SAME dict objects as ``proposed`` (an in-bracket
+    subset, re-sorted by confidence), so an annotation written onto a candidate
+    dict is visible to the funnel builder for free.
+    """
+
+    proposed: list[dict]
+    verdicts: list[mcap_filter.McapVerdict]  # 1:1 positional with ``proposed``
+    candidates: list[dict]
+    in_bracket: dict[str, float]
+    keywords: list[str]
+    outcome: theme_mapper.MapperOutcome
+    decline_reason: str
+
+
+def _propose_and_bracket(
     *,
     theme: str,
     catalyst: CatalystPayload,
@@ -520,9 +637,8 @@ def _propose_and_filter_candidates(
     max_cap: int,
     asof: dt.date,
     model: str | None = None,
-    funnel_sink: list[dict] | None = None,
-) -> tuple[list[dict], dict[str, float], list[str], theme_mapper.MapperOutcome]:
-    """Pro proposal → real-time mcap filter → keyword harvest.
+) -> ThemeProposal:
+    """Stage-A proposal → real-time mcap filter → keyword harvest.
 
     ``catalyst`` is the theme's resolved trigger event and is REQUIRED — the
     proposal reasons from the event, not from the theme word. Typed
@@ -530,15 +646,15 @@ def _propose_and_filter_candidates(
     unrepresentable; :func:`_rows_for_theme` already hard-returns before this
     call when nothing resolved.
 
-    Returns (in-bracket candidate dicts, ticker→mcap map, search keywords,
-    mapper outcome). Empty candidates list signals "nothing further to do for
-    this theme"; the outcome says WHETHER THAT WAS AN ANSWER OR A LOSS, which
-    the list itself cannot (issue #982).
+    An empty ``candidates`` list signals "nothing further to do for this theme";
+    ``outcome`` says WHETHER THAT WAS AN ANSWER OR A LOSS, which the list itself
+    cannot (issue #982).
 
-    ``funnel_sink``, when given, is appended with one dict per PRE-BRACKET
-    proposal (see :func:`_funnel_row`). It is an out-parameter rather than a
-    fifth return value so the existing four-tuple contract — and every test that
-    patches this function — stays intact. Telemetry only; nothing reads it back.
+    The channel assessment deliberately runs AFTER this function, on the
+    in-bracket subset only: the bracket is the largest sink (17 of 19 proposals
+    dropped on 2026-08-05) and only in-bracket names can ever produce a ladder
+    outcome, so only they can carry the forward contrast. Off-bracket proposals
+    still get a funnel row, marked ``not_assessed``.
     """
     proposal = theme_mapper.propose_candidates(
         theme=theme,
@@ -548,7 +664,9 @@ def _propose_and_filter_candidates(
         model=model or theme_mapper.DEFAULT_MODEL,
     )
     outcome = proposal["outcome"]
+    decline_reason = proposal.get("decline_reason") or ""
     proposed = proposal.get("candidates") or []
+    keywords = _theme_keywords(theme, pro_keywords=proposal.get("search_keywords") or [])
     if not proposed:
         # One funnel line per theme, and it has to be self-contained: an
         # operator reading `journalctl` must not have to cross-reference the
@@ -558,7 +676,7 @@ def _propose_and_filter_candidates(
                 "map_themes %s: theme %r funnel — proposed 0 (model declined: %r)",
                 asof.isoformat(),
                 theme,
-                proposal.get("no_candidates_reason") or "",
+                decline_reason,
             )
         else:
             # WARNING, not INFO: the theme was LOST. Since the event-conditioned
@@ -570,7 +688,15 @@ def _propose_and_filter_candidates(
                 theme,
                 outcome.value,
             )
-        return [], {}, [], outcome
+        return ThemeProposal(
+            proposed=[],
+            verdicts=[],
+            candidates=[],
+            in_bracket={},
+            keywords=keywords,
+            outcome=outcome,
+            decline_reason=decline_reason,
+        )
     verdicts = mcap_filter.classify_by_mcap(
         [c["ticker"] for c in proposed],
         min_cap=min_cap,
@@ -587,19 +713,6 @@ def _propose_and_filter_candidates(
         key=lambda c: c.get("confidence", 0.0),
         reverse=True,
     )
-    if funnel_sink is not None:
-        # Zip POSITIONALLY, not through a {ticker: verdict} dict. The model can
-        # propose the same ticker twice, and a dict would collapse both rows onto
-        # the LAST verdict — so a duplicate whose two mcap lookups disagreed (a
-        # cache write landing between them, or the PIT->live fallback firing on
-        # one call only) would record a verdict that never applied to the first
-        # row. ``classify_by_mcap`` returns one verdict per input position, so the
-        # zip is exact and a length mismatch would surface here rather than
-        # silently writing a plausible-looking NO_MCAP row.
-        funnel_sink.extend(
-            _funnel_row(theme=theme, cand=c, verdict=v, catalyst=catalyst)
-            for c, v in zip(proposed, verdicts, strict=True)
-        )
     # Funnel telemetry: the mcap stage is otherwise SILENT when it drops
     # everything (nothing reaches the later kept/dropped log), which is exactly
     # how a yfinance/mcap outage collapses the whole day's briefs to zero
@@ -625,8 +738,89 @@ def _propose_and_filter_candidates(
         len(proposed) - len(candidates),
         detail,
     )
-    keywords = _theme_keywords(theme, pro_keywords=proposal.get("search_keywords") or [])
-    return candidates, in_bracket, keywords, outcome
+    return ThemeProposal(
+        proposed=proposed,
+        verdicts=list(verdicts),
+        candidates=candidates,
+        in_bracket=in_bracket,
+        keywords=keywords,
+        outcome=outcome,
+        decline_reason=decline_reason,
+    )
+
+
+def _assess_channels_for_theme(
+    *,
+    theme: str,
+    catalyst: CatalystPayload,
+    candidates: list[dict],
+    pro_client,
+    api_key: str | None,
+    model: str | None,
+    asof: dt.date,
+) -> tuple[tuple[str, int, int], dict[str, int]]:
+    """Annotate each in-bracket candidate with its channel assessment.
+
+    Writes the :class:`~channel_assessor.ChannelAssessment` onto the candidate
+    dict under ``"channel"`` and returns
+    ``((shadow_verdict, n_verified, n_assessed), status_counts)``.
+
+    PURE ENRICHMENT: this function never removes a candidate and never reorders
+    the list. ``assess_candidates`` returns one result per input in input order
+    for every outcome, including a total outage, so the positional write below
+    cannot silently misalign.
+    """
+    assessments = channel_assessor.assess_candidates(
+        theme=theme,
+        catalyst=catalyst,
+        candidates=candidates,
+        api_key=api_key,
+        llm_client=pro_client,
+        model=model or theme_mapper.DEFAULT_MODEL,
+    )
+    for cand, assessment in zip(candidates, assessments, strict=True):
+        cand["channel"] = assessment
+    shadow = channel_assessor.shadow_strict_verdict(assessments)
+    counts = channel_assessor.status_counts(assessments)
+    # A SECOND line, deliberately not appended to the funnel line above: the
+    # operator's `grep 'funnel —'` recipe and the tests that pin its exact
+    # substrings must both keep working.
+    logger.info(
+        "map_themes %s: theme %r channel — verified %d, partial %d, unverified %d, "
+        "failed %d -> shadow=%s",
+        asof.isoformat(),
+        theme,
+        counts["verified"],
+        counts["partial"],
+        counts["unverified"],
+        counts["assess_failed"],
+        shadow[0],
+    )
+    return shadow, counts
+
+
+def _funnel_rows_for_theme(
+    *,
+    theme: str,
+    proposal: ThemeProposal,
+    catalyst: CatalystPayload,
+    shadow: tuple[str, int, int],
+) -> list[dict]:
+    """One funnel row per PRE-bracket proposal, carrying its channel annotation.
+
+    Zip POSITIONALLY, not through a {ticker: verdict} dict. The model can
+    propose the same ticker twice, and a dict would collapse both rows onto the
+    LAST verdict — so a duplicate whose two mcap lookups disagreed (a cache
+    write landing between them, or the PIT->live fallback firing on one call
+    only) would record a verdict that never applied to the first row.
+    ``classify_by_mcap`` returns one verdict per input position, so the zip is
+    exact and a length mismatch would surface here rather than silently writing
+    a plausible-looking NO_MCAP row.
+    """
+    return [
+        _funnel_row(theme=theme, cand=c, verdict=v, catalyst=catalyst, shadow=shadow)
+        for c, v in zip(proposal.proposed, proposal.verdicts, strict=True)
+    ]
 
 
 def _verify_candidates_for_theme(
@@ -640,6 +834,7 @@ def _verify_candidates_for_theme(
     polygon_client: PolygonClient | None,
     press_df,
     keep_unverified: bool,
+    shadow: tuple[str, int, int],
 ) -> tuple[list[dict], int, int]:
     """Run the 4-gate verify on each candidate with diversity cap + backfill.
 
@@ -687,9 +882,93 @@ def _verify_candidates_for_theme(
                 market_cap=in_bracket[cand["ticker"]],
                 catalyst=catalyst,
                 keywords=keywords,
+                shadow=shadow,
             )
         )
     return rows, dropped, dropped_all_unknown
+
+
+@dataclass(frozen=True, slots=True)
+class ThemeDecision:
+    """One row of the theme-decisions sidecar.
+
+    Exists because a stage-A decline and a no-catalyst skip otherwise leave ZERO
+    trace on disk — the exact defect that made the ISO 40-42 forward window
+    unmeasurable, since a refused theme produced no candidate row, no brief row
+    and no ladder outcome to compare against.
+    """
+
+    theme: str
+    catalyst_url: str | None
+    catalyst_event_type: str | None
+    mapper_outcome: str
+    decline_reason: str
+    n_proposed: int
+    n_in_bracket: int
+    n_verified: int
+    n_partial: int
+    n_unverified: int
+    n_assess_failed: int
+    shadow_strict_verdict: str
+
+    def to_row(self) -> dict:
+        return {
+            "theme": self.theme,
+            "catalyst_url": self.catalyst_url,
+            "catalyst_event_type": self.catalyst_event_type,
+            "mapper_outcome": self.mapper_outcome,
+            "decline_reason": self.decline_reason,
+            "n_proposed": self.n_proposed,
+            "n_in_bracket": self.n_in_bracket,
+            "n_verified": self.n_verified,
+            "n_partial": self.n_partial,
+            "n_unverified": self.n_unverified,
+            "n_assess_failed": self.n_assess_failed,
+            "shadow_strict_verdict": self.shadow_strict_verdict,
+            "shadow_strict_rule_version": channel_assessor.SHADOW_STRICT_RULE_VERSION,
+        }
+
+
+_EMPTY_COUNTS = {"verified": 0, "partial": 0, "unverified": 0, "assess_failed": 0}
+
+
+def _decision_for(
+    *,
+    theme: str,
+    catalyst: CatalystPayload | None,
+    proposal: ThemeProposal | None,
+    shadow: tuple[str, int, int],
+    counts: dict[str, int],
+) -> ThemeDecision:
+    return ThemeDecision(
+        theme=theme,
+        catalyst_url=catalyst.url if catalyst else None,
+        catalyst_event_type=catalyst.event_type if catalyst else None,
+        mapper_outcome=proposal.outcome.value if proposal else _NO_CATALYST_OUTCOME,
+        decline_reason=proposal.decline_reason if proposal else "",
+        n_proposed=len(proposal.proposed) if proposal else 0,
+        n_in_bracket=len(proposal.candidates) if proposal else 0,
+        n_verified=counts["verified"],
+        n_partial=counts["partial"],
+        n_unverified=counts["unverified"],
+        n_assess_failed=counts["assess_failed"],
+        shadow_strict_verdict=shadow[0],
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ThemeResult:
+    """Everything :func:`map_themes` needs back from one theme."""
+
+    rows: list[dict]
+    dropped: int
+    dropped_unknown: int
+    proposals: list[dict]
+    outcome: theme_mapper.MapperOutcome | None
+    decision: ThemeDecision
+    funnel_rows: list[dict]
+    counts: dict[str, int]
+    shadow: tuple[str, int, int]
 
 
 def _rows_for_theme(
@@ -705,23 +984,19 @@ def _rows_for_theme(
     polygon_client: PolygonClient | None,
     press_df: pd.DataFrame | None,
     keep_unverified: bool,
-    funnel_sink: list[dict] | None = None,
-) -> tuple[list[dict], int, int, list[dict], theme_mapper.MapperOutcome | None]:
-    """Resolve → propose → verify one theme.
-
-    Returns ``(rows, dropped, dropped_unknown, proposals, outcome)``.
-
-    ``funnel_sink`` is threaded straight through to
-    :func:`_propose_and_filter_candidates` — see its docstring for why the
-    pre-bracket funnel travels as an out-parameter rather than a return value.
+) -> ThemeResult:
+    """Resolve → propose → bracket → assess → verify one theme.
 
     ``proposals`` is the LLM's **pre-gate** candidate set (post-mcap, before the
     verification gates that ``rows`` survives) — captured for the V-forward
-    proposal-shadow log. ``outcome`` is the mapper's :class:`MapperOutcome`, or
-    ``None`` when the mapper was never called because no catalyst event
-    resolved — a skip is neither a decline nor a mapper failure, so it must not
-    land in either counter. Extracted from :func:`map_themes`'s loop so the
-    driver stays within the cognitive-complexity budget.
+    proposal-shadow log, and deliberately NOT widened with channel keys: that
+    file feeds a pre-registered head-to-head whose row shape must not move.
+
+    ``outcome`` is the mapper's :class:`MapperOutcome`, or ``None`` when the
+    mapper was never called because no catalyst event resolved — a skip is
+    neither a decline nor a mapper failure, so it must not land in either
+    counter. The ``decision`` carries that same skip to the sidecar, where it IS
+    recorded, under ``mapper_outcome="no_catalyst"``.
     """
     catalyst = _resolve_catalyst(theme, asof, catalyst_cache)
     if not catalyst:
@@ -734,8 +1009,25 @@ def _rows_for_theme(
             asof.isoformat(),
             theme,
         )
-        return [], 0, 0, [], None
-    candidates, in_bracket, keywords, outcome = _propose_and_filter_candidates(
+        shadow = (channel_assessor.SHADOW_REFUSE, 0, 0)
+        return ThemeResult(
+            rows=[],
+            dropped=0,
+            dropped_unknown=0,
+            proposals=[],
+            outcome=None,
+            decision=_decision_for(
+                theme=theme,
+                catalyst=None,
+                proposal=None,
+                shadow=shadow,
+                counts=dict(_EMPTY_COUNTS),
+            ),
+            funnel_rows=[],
+            counts=dict(_EMPTY_COUNTS),
+            shadow=shadow,
+        )
+    proposal = _propose_and_bracket(
         theme=theme,
         # The SAME payload the emitted rows are stamped with (see
         # ``_build_row``), so the article the card cites as provenance is the
@@ -747,30 +1039,121 @@ def _rows_for_theme(
         max_cap=max_cap,
         asof=asof,
         model=model,
-        funnel_sink=funnel_sink,
     )
-    if not candidates:
-        return [], 0, 0, [], outcome
+    if not proposal.candidates:
+        # Nothing in bracket: no assessment to pay for, but the off-bracket
+        # proposals still get funnel rows (marked not_assessed) and the theme
+        # still gets a decision row.
+        shadow = (channel_assessor.SHADOW_REFUSE, 0, 0)
+        counts = dict(_EMPTY_COUNTS)
+        return ThemeResult(
+            rows=[],
+            dropped=0,
+            dropped_unknown=0,
+            proposals=[],
+            outcome=proposal.outcome,
+            decision=_decision_for(
+                theme=theme,
+                catalyst=catalyst,
+                proposal=proposal,
+                shadow=shadow,
+                counts=counts,
+            ),
+            funnel_rows=_funnel_rows_for_theme(
+                theme=theme, proposal=proposal, catalyst=catalyst, shadow=shadow
+            ),
+            counts=counts,
+            shadow=shadow,
+        )
+    shadow, counts = _assess_channels_for_theme(
+        theme=theme,
+        catalyst=catalyst,
+        candidates=proposal.candidates,
+        pro_client=pro_client,
+        api_key=api_key,
+        model=model,
+        asof=asof,
+    )
     proposals = [
         {
             "theme": theme,
             "ticker": cand["ticker"],
             "llm_confidence": cand.get("confidence"),
         }
-        for cand in candidates
+        for cand in proposal.candidates
     ]
     rows, dropped, dropped_unknown = _verify_candidates_for_theme(
         theme=theme,
-        candidates=candidates,
-        in_bracket=in_bracket,
-        keywords=keywords,
+        candidates=proposal.candidates,
+        in_bracket=proposal.in_bracket,
+        keywords=proposal.keywords,
         catalyst=catalyst,
         asof=asof,
         polygon_client=polygon_client,
         press_df=press_df,
         keep_unverified=keep_unverified,
+        shadow=shadow,
     )
-    return rows, dropped, dropped_unknown, proposals, outcome
+    return ThemeResult(
+        rows=rows,
+        dropped=dropped,
+        dropped_unknown=dropped_unknown,
+        proposals=proposals,
+        outcome=proposal.outcome,
+        decision=_decision_for(
+            theme=theme,
+            catalyst=catalyst,
+            proposal=proposal,
+            shadow=shadow,
+            counts=counts,
+        ),
+        funnel_rows=_funnel_rows_for_theme(
+            theme=theme, proposal=proposal, catalyst=catalyst, shadow=shadow
+        ),
+        counts=counts,
+        shadow=shadow,
+    )
+
+
+def _write_theme_decisions_best_effort(
+    asof: dt.date,
+    decisions: list[ThemeDecision],
+    config_version: str,
+    channel_version: str,
+    out_dir: Path,
+) -> None:
+    """Write one row per theme the driver touched; swallow any failure.
+
+    Sibling of the candidates parquet, written exactly like the proposal-funnel:
+    telemetry only, and the daily thematic build must never abort because it
+    could not be written.
+    """
+    if not decisions:
+        return
+    try:
+        frame = pd.DataFrame([d.to_row() for d in decisions])
+        frame["asof"] = asof.isoformat()
+        frame["mapper_config_version"] = config_version
+        frame["channel_config_version"] = channel_version
+        missing = [c for c in _THEME_DECISION_COLUMNS if c not in frame.columns]
+        if missing:
+            logger.warning(
+                "map_themes %s: theme-decision rows are missing %s — the column(s) "
+                "will be written all-null; ThemeDecision.to_row and "
+                "_THEME_DECISION_COLUMNS have drifted apart",
+                asof.isoformat(),
+                missing,
+            )
+        frame = frame.reindex(columns=list(_THEME_DECISION_COLUMNS))
+        decisions_dir = Path(out_dir) / "theme_decisions"
+        decisions_dir.mkdir(parents=True, exist_ok=True)
+        write_parquet_atomic(frame, decisions_dir / f"{asof.isoformat()}.parquet", index=False)
+    except Exception:
+        logger.warning(
+            "map_themes %s: theme-decisions write failed (telemetry only, ignored)",
+            asof.isoformat(),
+            exc_info=True,
+        )
 
 
 def _write_proposal_shadow_best_effort(
@@ -856,8 +1239,11 @@ def map_themes(
     # borderline candidate would otherwise appear in one run and vanish in the
     # next, silently mutating the recommended set the EDGE feedback record is
     # keyed on. Reuse the frozen parquet when its config token still matches.
+    channel_version = channel_assessor.channel_config_version(model=model)
     config_version = theme_mapper.mapper_config_version(
-        market_cap_range=market_cap_range, model=model
+        market_cap_range=market_cap_range,
+        model=model,
+        channel_config_version=channel_version,
     )
     if not rebuild:
         frozen = _load_frozen_candidates(out_path, config_version)
@@ -872,6 +1258,11 @@ def map_themes(
             # must exist: the CLI emits them on every run and a gauge that
             # disappears on frozen days is itself an alertable condition.
             frozen.attrs.update(_outcome_counts([]))
+            # Same rule as the two outcome gauges: no LLM call was made, so
+            # there is nothing to count, but the keys must EXIST. A series that
+            # disappears on a frozen day is indistinguishable from a stopped
+            # exporter.
+            frozen.attrs.update(_channel_counts([], []))
             return frozen
 
     pro_client = _init_pro_client(api_key)
@@ -885,8 +1276,11 @@ def map_themes(
     llm_proposals: list[dict] = []
     funnel_rows: list[dict] = []
     outcomes: list[theme_mapper.MapperOutcome | None] = []
+    decisions: list[ThemeDecision] = []
+    theme_counts: list[dict[str, int]] = []
+    shadows: list[tuple[str, int, int]] = []
     for theme in themes:
-        theme_rows, dropped, dropped_unknown, proposals, outcome = _rows_for_theme(
+        result = _rows_for_theme(
             theme,
             asof=asof,
             catalyst_cache=catalyst_cache,
@@ -898,13 +1292,16 @@ def map_themes(
             polygon_client=polygon_client,
             press_df=press_df,
             keep_unverified=keep_unverified,
-            funnel_sink=funnel_rows,
         )
-        rows.extend(theme_rows)
-        llm_proposals.extend(proposals)
-        dropped_total += dropped
-        dropped_all_unknown += dropped_unknown
-        outcomes.append(outcome)
+        rows.extend(result.rows)
+        llm_proposals.extend(result.proposals)
+        funnel_rows.extend(result.funnel_rows)
+        dropped_total += result.dropped
+        dropped_all_unknown += result.dropped_unknown
+        outcomes.append(result.outcome)
+        decisions.append(result.decision)
+        theme_counts.append(result.counts)
+        shadows.append(result.shadow)
 
     if rows:
         df = (
@@ -914,8 +1311,8 @@ def map_themes(
             # run-to-run ordering jitter (e.g. when Pro returns two
             # candidates at the same confidence).
             .sort_values(
-                ["theme", "n_gates_passed", "llm_confidence", "ticker"],
-                ascending=[True, False, False, True],
+                list(_CANDIDATE_SORT_KEYS),
+                ascending=list(_CANDIDATE_SORT_ASCENDING),
             )
             .reset_index(drop=True)
         )
@@ -940,6 +1337,7 @@ def map_themes(
     df.attrs["dropped_total"] = dropped_total
     df.attrs["dropped_all_unknown"] = dropped_all_unknown
     df.attrs.update(_outcome_counts(outcomes))
+    df.attrs.update(_channel_counts(theme_counts, shadows))
     write_parquet_atomic(df, out_path, index=False)
     # V-forward telemetry: log BOTH ungated proposal sources (LLM pre-gate +
     # mechanical salience) for a clean forward head-to-head (design memo
@@ -951,6 +1349,11 @@ def map_themes(
     # died. The shadow above is post-mcap by design, so without this the names
     # the bracket rejects leave no trace anywhere on disk.
     _write_proposal_funnel_best_effort(asof, funnel_rows, config_version, output_dir)
+    # One row per theme the driver TOUCHED, including the ones that produced no
+    # candidate row at all (a stage-A decline, a no-catalyst skip). Without it a
+    # refusal is invisible on disk, which is exactly why the pre-registered
+    # ISO 40-42 forward window could not compute a KEPT-vs-REFUSED contrast.
+    _write_theme_decisions_best_effort(asof, decisions, config_version, channel_version, output_dir)
     if dropped_total > 0:
         logger.info(
             "map_themes %s: kept %d / dropped %d (all-unknown %d)",
@@ -990,7 +1393,9 @@ def write_empty_candidates(
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{asof.isoformat()}.parquet"
     config_version = theme_mapper.mapper_config_version(
-        market_cap_range=market_cap_range, model=model
+        market_cap_range=market_cap_range,
+        model=model,
+        channel_config_version=channel_assessor.channel_config_version(model=model),
     )
     df = pd.DataFrame(columns=list(_MAP_THEMES_COLUMNS))
     df["mapper_config_version"] = config_version

@@ -64,7 +64,6 @@ _GOOD_PAYLOAD = {
             "ticker": "AVAV",
             "company_name": "AeroVironment",
             "rationale": "Small unmanned aircraft prime",
-            "transmission_channel": "the award funds drones -> USAF orders -> AVAV revenue",
             "confidence": 0.8,
         }
     ],
@@ -72,12 +71,9 @@ _GOOD_PAYLOAD = {
 }
 
 _DECLINE_PAYLOAD = {
-    "event_read": "eBay settled a harassment suit for a one-time payout.",
+    "event_read": "A local court set a hearing date in a private personal dispute.",
     "candidates": [],
-    "no_candidates_reason": (
-        "a one-time litigation payout by eBay with no clear transmission channel "
-        "to benefit any other U.S.-listed company materially"
-    ),
+    "decline_reason": "no_event",
     "search_keywords": ["workplace harassment litigation"],
 }
 
@@ -99,14 +95,14 @@ class ProposeOutcomeClassificationTests(unittest.TestCase):
         self.assertEqual(result["outcome"], theme_mapper.MapperOutcome.SUCCESS)
         self.assertEqual([c["ticker"] for c in result["candidates"]], ["AVAV"])
 
-    def test_decline_is_reported_as_declined_with_the_model_reason(self):
+    def test_decline_is_reported_as_declined_with_the_enumerated_reason(self):
         with mock.patch.object(
             theme_mapper, "_call_llm", return_value=_response(json.dumps(_DECLINE_PAYLOAD))
         ):
             result = _propose()
         self.assertEqual(result["outcome"], theme_mapper.MapperOutcome.DECLINED)
         self.assertEqual(result["candidates"], [])
-        self.assertIn("no clear transmission channel", result["no_candidates_reason"])
+        self.assertEqual(result["decline_reason"], theme_mapper.NO_EVENT)
 
     def test_empty_response_body_is_reported_as_empty_payload(self):
         # The observed #982 failure: the model returned nothing at all.
@@ -165,21 +161,33 @@ class ProposeOutcomeClassificationTests(unittest.TestCase):
         self.assertEqual(len(values), len(set(values)))
         self.assertEqual(len(values), 5)
 
-    def test_declined_carries_no_reason_when_the_model_supplied_none(self):
+    def test_declined_falls_back_to_the_enum_when_the_model_supplied_no_reason(self):
         # A decline without a stated reason is still a decline — the outcome
         # must not fall back to a failure kind just because the field is absent.
         body = json.dumps({"candidates": [], "search_keywords": ["drone"]})
         with mock.patch.object(theme_mapper, "_call_llm", return_value=_response(body)):
             result = _propose()
         self.assertEqual(result["outcome"], theme_mapper.MapperOutcome.DECLINED)
-        self.assertEqual(result["no_candidates_reason"], "")
+        self.assertIn(result["decline_reason"], theme_mapper.DECLINE_REASONS)
 
-    def test_all_candidates_dropped_for_a_missing_channel_is_not_a_decline(self):
-        # The model DID propose; ``_normalize`` dropped every entry for having
-        # no transmission_channel. That is a response-shape defect, not a
-        # judgement, so it must not be counted as the model declining.
+    def test_a_candidate_with_no_channel_is_a_success_carrying_that_candidate(self):
+        # REVERSED 2026-08-19. ``_normalize`` used to drop a channel-less
+        # candidate, which turned a perfectly usable proposal into a
+        # MALFORMED_PAYLOAD. Stage A no longer asks for a channel at all, so the
+        # candidate ships and ``channel_assessor`` annotates it afterwards.
         body = json.dumps(
             {"candidates": [{"ticker": "AVAV", "confidence": 0.9}], "search_keywords": ["drone"]}
+        )
+        with mock.patch.object(theme_mapper, "_call_llm", return_value=_response(body)):
+            result = _propose()
+        self.assertEqual(result["outcome"], theme_mapper.MapperOutcome.SUCCESS)
+        self.assertEqual([c["ticker"] for c in result["candidates"]], ["AVAV"])
+
+    def test_a_ticker_less_proposal_is_still_malformed(self):
+        # The MALFORMED branch survives, narrowed: the model DID propose and
+        # nothing survived normalization for a real shape reason.
+        body = json.dumps(
+            {"candidates": [{"company_name": "No Ticker Inc"}], "search_keywords": ["drone"]}
         )
         with mock.patch.object(theme_mapper, "_call_llm", return_value=_response(body)):
             result = _propose()

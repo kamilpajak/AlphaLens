@@ -21,6 +21,8 @@ import pandas as pd
 from alphalens_pipeline.thematic.mapping import orchestrator
 from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
 
+from tests.thematic.mapping_stubs import stub_assessor, theme_proposal
+
 from .test_theme_mapping import _catalyst_payload
 
 ASOF = dt.date(2026, 8, 2)
@@ -40,6 +42,11 @@ def _survivor_row(theme: str, ticker: str) -> dict:
 
 
 class MapThemesOutcomeCountTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # Stage B calls OpenRouter once per in-bracket candidate; without
+        # this stub these tests hit the live API.
+        stub_assessor(self)
+
     def _run(self, per_theme: dict[str, MapperOutcome], *, catalyst_for=None) -> pd.DataFrame:
         """Drive ``map_themes`` with one scripted mapper outcome per theme."""
 
@@ -51,7 +58,7 @@ class MapThemesOutcomeCountTests(unittest.TestCase):
                 else []
             )
             mcap = {c["ticker"]: 1_000_000_000.0 for c in candidates}
-            return candidates, mcap, ["kw"], outcome
+            return theme_proposal(proposed=candidates, in_bracket=mcap, outcome=outcome)
 
         def _verify(*, theme, candidates, **_kwargs):
             return ([_survivor_row(theme, c["ticker"]) for c in candidates], 0, 0)
@@ -66,7 +73,7 @@ class MapThemesOutcomeCountTests(unittest.TestCase):
                 patch.object(orchestrator, "_init_pro_client", return_value=object()),
                 patch.object(orchestrator, "_fetch_press_window", return_value=pd.DataFrame()),
                 patch.object(orchestrator, "_resolve_catalyst", side_effect=_catalyst),
-                patch.object(orchestrator, "_propose_and_filter_candidates", side_effect=_propose),
+                patch.object(orchestrator, "_propose_and_bracket", side_effect=_propose),
                 patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
                 patch.object(orchestrator.proposal_shadow, "write_proposal_shadow"),
             ):
@@ -126,11 +133,10 @@ class MapThemesOutcomeCountTests(unittest.TestCase):
         per_theme = {"good": MapperOutcome.SUCCESS}
 
         def _propose(*, theme, **_kwargs):
-            return (
-                [{"ticker": "GOODX", "confidence": 0.9}],
-                {"GOODX": 1e9},
-                ["kw"],
-                per_theme[theme],
+            return theme_proposal(
+                proposed=[{"ticker": "GOODX", "confidence": 0.9}],
+                in_bracket={"GOODX": 1e9},
+                outcome=per_theme[theme],
             )
 
         def _verify(*, theme, candidates, **_kwargs):
@@ -142,9 +148,7 @@ class MapThemesOutcomeCountTests(unittest.TestCase):
                 patch.object(orchestrator, "_init_pro_client", return_value=object()),
                 patch.object(orchestrator, "_fetch_press_window", return_value=pd.DataFrame()),
                 patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst_payload()),
-                patch.object(
-                    orchestrator, "_propose_and_filter_candidates", side_effect=_propose
-                ) as propose,
+                patch.object(orchestrator, "_propose_and_bracket", side_effect=_propose) as propose,
                 patch.object(orchestrator, "_verify_candidates_for_theme", side_effect=_verify),
                 patch.object(orchestrator.proposal_shadow, "write_proposal_shadow"),
             ):
