@@ -340,6 +340,40 @@ This study is **quasi-holdout, prior-adjusting evidence — not confirmation.**
   post-event price information" on every probe and stated it does not
   recognize any of the events; zero direction/magnitude/date recall.
   Phase 0 verdict: ALL GATES PASS — Phase 1 may proceed.
+
+### 11.1 Phase-1 start amendment (2026-08-19, committed BEFORE the first labeling call)
+
+Consolidated instrument-qualification summary (full detail: study scratch artifact
+`phase0_report.md` + `phase0_summary.json`):
+
+- **Pinned provider (Phase 1 replay env):** `Alibaba` (endpoint tag `alibaba/fp8`,
+  fp8 quantization) — most-frequently-served fp8 provider over 6 discovery calls
+  (Alibaba 4/6, DeepInfra 2/6). Env pin: `ALPHALENS_OPENROUTER_PROVIDER_ORDER=Alibaba`,
+  `ALPHALENS_OPENROUTER_QUANTIZATIONS=fp8`, `ALPHALENS_OPENROUTER_ALLOW_FALLBACKS`
+  unset ⇒ `allow_fallbacks: false` (hard pin), `require_parameters: true`.
+  **Pin purity in Phase 0: 100%** — all 230 subsequent calls (5 verify + 200 pilot
+  + 10 probe + 10 anchor + 5 shared) returned `provider=Alibaba`,
+  `served_model=deepseek/deepseek-v4-pro` (per-call `generation_id` in
+  `phase0_provenance.jsonl`).
+- **Phase-0 flip rate:** batch-majority agreement 19/20 = 95% (bar ≥18/20), at both
+  the 3-level and THEME level; mean per-pair 10-vote label entropy 0.298 bits;
+  13/20 pairs unanimous 10/10; the single disagreement is a maximal 5/5 borderline
+  split (`consumer_electronics` × Meta AI-pendant rumor), not drift.
+- **Cutoff evidence:** the OpenRouter slug `deepseek/deepseek-v4-pro` is the V4 Pro
+  **0423** checkpoint (created 2026-04-24), whose training necessarily predates the
+  cohort start 2026-05-19; the GA V4-Pro-**0813** checkpoint (2026-08-13, cohort-
+  overlapping) is a distinct slug and DeepSeek's first-party API re-pointed its
+  native name to 0813 — hence the first-party `DeepSeek` proxy provider is banned
+  as a pin. Memorization probe: 0/10 recall on May-boundary CLEAN events.
+- **Phase-1 protocol re-affirmed:** every (theme, source_event) pair in the frozen
+  input table, k=5 via the frozen mapper path, 3 threads, exponential backoff,
+  empty/malformed = FAILURE (retried; a pair short of 5 valid calls is
+  `INSTRUMENT_FAILURE`, excluded and counted). Pair majority: `THEME_REFUSED` if
+  ≥3/5 calls decline; else the pair is KEPT and the **majority proposal set** =
+  tickers proposed in ≥3/5 calls; row label `KEPT_TICKER_PROPOSED` iff the row's
+  ticker is in that set, else `KEPT_TICKER_ABSENT`. Pilot pairs take their Phase-1
+  labels from this main pass (§7).
+
 - Label parquet sha256 (Stage B): —
 
 ## 12. Deliverables
