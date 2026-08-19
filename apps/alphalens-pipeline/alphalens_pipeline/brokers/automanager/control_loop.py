@@ -1233,23 +1233,47 @@ def _route_pick_to_entry_watch(
     fx: Any,
     *,
     d_bps: int,
+    exit_policy: ExitPolicy | None = None,
 ) -> bool:
-    """The flag-ON drain tail: journal the per-tier watches (G3 journal-FIRST),
+    """The flag-ON drain tail: journal the pick's managed-exit state (ONE
+    ``tranche_plan`` line per uic, exactly what the bracket path journals in
+    ``_place_tiers`` — 2026-08-19 live incident: without it the live-exit
+    engine skips the filled position forever), then the per-tier watches (G3
+    journal-FIRST; the tranche_plan goes to disk BEFORE the watch_open lines so
+    a crash between the two never yields a watching tier without its ladder),
     then RETIRE the pick from the drain with the SAME note-only submission
     record ``_place_tiers`` uses (``_submitted_pick_keys`` treats a note-only
     record as submitted, so the drain never re-drives this pick). Returns True
-    when at least one watch opened. No broker order is placed — DRY-RUN.
+    when at least one watch opened. No broker order is placed here — the
+    native trail rests later, at TOUCH.
 
-    A calendar/journal failure inside :func:`_open_entry_watches` must never
-    crash the drain: it is contained to a logged False (the pick stays armed and
-    is re-attempted next tick; the deterministic crid makes any partial
-    watch_open idempotent on retry)."""
+    ``exit_policy`` is the same resolved-once cached policy ``_place_tiers``
+    receives; the geometry gate below mirrors its ``use_geometry`` decision
+    (``applies_geometry`` + a buildable ``exit_spec``) so the two paths can
+    never disagree on which ladder is journaled.
+
+    A calendar/journal failure inside the journal writes must never crash the
+    drain: it is contained to a logged False (the pick stays armed and is
+    re-attempted next tick; the deterministic crid + the tranche_plan fold's
+    last-wins semantics make any partial write idempotent on retry)."""
     from alphalens_pipeline.brokers.submission_log import (
         append_submission_record,
         build_submission_record,
     )
 
+    resolved_exit_policy: ExitPolicy = (
+        exit_policy if exit_policy is not None else SetupStaticPolicy()
+    )
+    exit_spec = intent.exit
     try:
+        _journal_tranche_plan_core(
+            plan=plan,
+            exit_spec=exit_spec,
+            stop_price=float(plan.disaster_stop),
+            reference_qty=sum(t.qty for t in plan.entry_tiers if t.qty > 0),
+            uic=int(instrument.broker_instrument_id),
+            use_geometry=resolved_exit_policy.applies_geometry,
+        )
         opened = _open_entry_watches(intent, ticker, instrument, plan, fx, d_bps=d_bps)
     # Broad on purpose: an unrecognised MIC (calendar ValueError) or a journal
     # I/O error must degrade to "pick stays armed", never abort the tick before
@@ -4519,28 +4543,26 @@ def _geometry_tranche_ladder(exit_spec: Any) -> tuple[tuple[TpTranchePlan, ...],
     return ladder, geo_stop
 
 
-def _journal_tranche_plan(
+def _journal_tranche_plan_core(
     *,
     plan: Any,
     exit_spec: Any,
-    placement: Any,
-    instrument: Any,
+    stop_price: float,
+    reference_qty: float,
+    uic: int,
     use_geometry: bool,
 ) -> None:
-    """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
-    rebuild the TP ladder from the journal alone. Source it from whatever the
-    ACTIVE exit policy actually places the TP from: under the geometry policy
-    (atr_bracket_1p5) that is the single ``exit_spec.initial_levels.tp`` level and
-    ``plan.tp_tranches`` is EMPTY (the brief expresses its exit as geometry, not
-    static tranches) — so gating on ``plan.tp_tranches`` alone silently dropped
-    every geometry pick. Under the static policy the ladder IS
-    ``plan.tp_tranches``. ``getattr`` keeps a bare-stub plan (unrelated
-    failure-path unit doubles with no ``entry_tiers``/``tp_tranches``) from
-    crashing — it simply journals nothing."""
-    entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
-    if not entry_tiers:
-        return
-    stop_price = placement.disaster_stop_price
+    """The ladder-choice + line-build core shared by BOTH placement paths
+    (bracket ``_journal_tranche_plan`` and the entry-trail watch routing).
+    Source the ladder from whatever the ACTIVE exit policy actually places the
+    TP from: under the geometry policy (atr_bracket_1p5) that is the single
+    ``exit_spec.initial_levels.tp`` level (and the passed ``stop_price`` is
+    REPLACED by the geometry stop); under the static policy the ladder IS
+    ``plan.tp_tranches`` and ``stop_price`` is journaled verbatim. Takes
+    explicit ``stop_price``/``reference_qty``/``uic`` so the caller decides the
+    plan-vs-placement source of each — the bracket path reads
+    ``placement.disaster_stop_price`` and sums ALL entry tiers, the watch path
+    reads ``plan.disaster_stop`` and sums only the tiers that actually watch."""
     if use_geometry and exit_spec is not None:
         geometry = _geometry_tranche_ladder(exit_spec)
         if geometry is None:
@@ -4550,7 +4572,7 @@ def _journal_tranche_plan(
             logger.warning(
                 "tranche_plan uic %d: geometry levels unusable (stop=%r, tp=%r) — "
                 "no TP ladder journaled, the position stays stop-only",
-                int(instrument.broker_instrument_id),
+                uic,
                 exit_spec.initial_levels.stop,
                 exit_spec.initial_levels.tp,
             )
@@ -4562,11 +4584,41 @@ def _journal_tranche_plan(
         return
     _append_standalone_stop_journal(
         _build_tranche_plan_line(
-            uic=int(instrument.broker_instrument_id),
+            uic=uic,
             tp_tranches=ladder,
-            reference_qty=sum(t.qty for t in entry_tiers),
+            reference_qty=reference_qty,
             stop_price=stop_price,
         )
+    )
+
+
+def _journal_tranche_plan(
+    *,
+    plan: Any,
+    exit_spec: Any,
+    placement: Any,
+    instrument: Any,
+    use_geometry: bool,
+) -> None:
+    """INC-5: journal ONE ``tranche_plan`` line per uic so the live-exit engine can
+    rebuild the TP ladder from the journal alone — see
+    :func:`_journal_tranche_plan_core` for which ladder the ACTIVE policy
+    sources it from. This is the BRACKET-path wrapper: gating on
+    ``plan.tp_tranches`` alone silently dropped every geometry pick (the brief
+    expresses a geometry exit as ``exit_spec``, not static tranches), so the
+    guard here is ``entry_tiers`` only. ``getattr`` keeps a bare-stub plan
+    (unrelated failure-path unit doubles with no ``entry_tiers``/
+    ``tp_tranches``) from crashing — it simply journals nothing."""
+    entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
+    if not entry_tiers:
+        return
+    _journal_tranche_plan_core(
+        plan=plan,
+        exit_spec=exit_spec,
+        stop_price=placement.disaster_stop_price,
+        reference_qty=sum(t.qty for t in entry_tiers),
+        uic=int(instrument.broker_instrument_id),
+        use_geometry=use_geometry,
     )
 
 
@@ -5079,10 +5131,14 @@ def _entry_trail_intercept(
     plan: Any,
     fx: Any,
     entry_trail_fold: entry_trails.EntryTrailFold,
+    exit_policy: ExitPolicy | None = None,
 ) -> bool | None:
     """The _place_pick entry-trailing intercept outcome: ``None`` when the pick
     must fall through to classify + ``_place_tiers`` (flag off, ineligible plan,
     or no native trailing-stop capability), else the drain verdict.
+    ``exit_policy`` is threaded through to the watch routing so its journaled
+    managed-exit state (tranche_plan ladder + geometry stamp) mirrors what
+    ``_place_tiers`` would have journaled for the same pick.
 
     PR-T2b: the whole feature needs the native trailing-stop capability; a
     broker lacking it falls through to classify + _place_tiers (the
@@ -5117,7 +5173,7 @@ def _entry_trail_intercept(
         )
         return False
     return _route_pick_to_entry_watch(
-        broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps
+        broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps, exit_policy=exit_policy
     )
 
 
@@ -5296,7 +5352,7 @@ def _place_pick(
     # (PR-T0 inertness proof). The intercept lands AFTER the cash floor so a
     # watch only opens once the pick has cleared every money gate.
     intercepted = _entry_trail_intercept(
-        broker, intent, ticker, instrument, account, plan, fx, entry_trail_fold
+        broker, intent, ticker, instrument, account, plan, fx, entry_trail_fold, exit_policy
     )
     if intercepted is not None:
         return intercepted

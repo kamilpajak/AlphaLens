@@ -941,6 +941,167 @@ class TestEntryWatchPassTouchLatch(unittest.TestCase):
         self.assertEqual(len(broker.trailing_orders), 1)
 
 
+# --------------------------------------------------------------------------
+# Managed-exit state journaled at watch-open routing (2026-08-19 live incident)
+# --------------------------------------------------------------------------
+
+
+def _tranche(index: int, target: float, pct: float, *, r: float = 1.5) -> Any:
+    from broker_contract.sizing import TpTranchePlan
+
+    return TpTranchePlan(
+        tranche_index=index, target_price=target, tranche_pct=pct, r_multiple=r, tag=f"tp{index}"
+    )
+
+
+def _plan_with_tranches(
+    tiers: tuple[tuple[int, float, int], ...], tranches: tuple[Any, ...]
+) -> SetupPlan:
+    base = _plan(*tiers)
+    return SetupPlan(
+        suggested_size_pct=base.suggested_size_pct,
+        scale_factor=base.scale_factor,
+        final_size_pct=base.final_size_pct,
+        total_notional=base.total_notional,
+        paper_equity=base.paper_equity,
+        disaster_stop=base.disaster_stop,
+        order_ttl_days=base.order_ttl_days,
+        entry_tiers=base.entry_tiers,
+        tp_tranches=tranches,
+    )
+
+
+def _exit_spec(stop: float | None, tp: float | None) -> Any:
+    levels = type("Levels", (), {"stop": stop, "tp": tp})()
+    return type("ExitSpec", (), {"initial_levels": levels, "reaction_plan": ()})()
+
+
+def _blend_spec() -> Any:
+    tier = type("SpecTier", (), {"limit_price": 10.0, "alloc_pct": 100.0})()
+    return type("Spec", (), {"entry_tiers": (tier,)})()
+
+
+_GEOMETRY_POLICY = type("GeoPolicy", (), {"applies_geometry": True})()
+
+
+class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
+    """Task A1 (2026-08-19 live incident, OLN): the entry-trail routing must
+    journal the SAME per-uic ``tranche_plan`` line the bracket path writes at
+    placement — without it the live-exit engine skips the filled position every
+    tick ("no tranche_plan on record") and the position gets NO TP management."""
+
+    def _route(
+        self,
+        plan: SetupPlan,
+        *,
+        intent: Any = None,
+        exit_policy: Any = None,
+    ) -> tuple[bool, list[dict[str, Any]], Path, Path]:
+        trails_path = _journal(self)
+        stops_path = _planned_journal(self)
+        pkg = "alphalens_pipeline.brokers"
+        for target, fn in (
+            (f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)),
+            (f"{pkg}.submission_log.append_submission_record", lambda _r: None),
+        ):
+            self.enterContext(mock.patch(target, fn))
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            ok = cl._route_pick_to_entry_watch(
+                object(),
+                intent if intent is not None else _pick(),
+                "KO",
+                _instr(),
+                _acct(),
+                plan,
+                None,
+                d_bps=50,
+                exit_policy=exit_policy,
+            )
+        tranche_lines = [ln for ln in _lines(stops_path) if ln["kind"] == "tranche_plan"]
+        return ok, tranche_lines, trails_path, stops_path
+
+    def test_static_policy_journals_the_plan_ladder_with_watch_reference_qty(self) -> None:
+        # A zero-qty tier opens NO watch — reference_qty counts only the tiers
+        # that actually watch (the fill base the live-exit engine scales from).
+        plan = _plan_with_tranches(
+            ((0, 10.0, 100), (1, 9.0, 0)), (_tranche(0, 14.0, 60.0), _tranche(1, 16.0, 40.0))
+        )
+        ok, tranche_lines, _trails, _stops = self._route(plan)
+        self.assertTrue(ok)
+        self.assertEqual(len(tranche_lines), 1)
+        line = tranche_lines[0]
+        self.assertEqual(line["uic"], 307)
+        self.assertEqual(line["stop_price"], 8.0)  # plan.disaster_stop
+        self.assertEqual(line["reference_qty"], 100.0)  # positive-qty WATCH tiers only
+        self.assertEqual([t["target_price"] for t in line["tp_tranches"]], [14.0, 16.0])
+
+    def test_geometry_policy_journals_the_single_geometry_tranche(self) -> None:
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        intent = _pick()
+        intent.exit = _exit_spec(stop=9.1, tp=13.5)
+        intent.spec = _blend_spec()
+        ok, tranche_lines, _trails, _stops = self._route(
+            plan, intent=intent, exit_policy=_GEOMETRY_POLICY
+        )
+        self.assertTrue(ok)
+        self.assertEqual(len(tranche_lines), 1)
+        line = tranche_lines[0]
+        self.assertEqual(line["stop_price"], 9.1)  # geometry stop, NOT plan.disaster_stop
+        self.assertEqual(
+            line["tp_tranches"],
+            [
+                {
+                    "tranche_index": 0,
+                    "target_price": 13.5,
+                    "tranche_pct": 1.0,
+                    "r_multiple": 0.0,
+                    "tag": "geometry",
+                }
+            ],
+        )
+
+    def test_unusable_geometry_levels_skip_the_ladder_and_warn_but_still_watch(self) -> None:
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        intent = _pick()
+        intent.exit = _exit_spec(stop=None, tp=13.5)
+        intent.spec = _blend_spec()
+        with self.assertLogs(cl.logger, level="WARNING") as captured:
+            ok, tranche_lines, trails_path, _stops = self._route(
+                plan, intent=intent, exit_policy=_GEOMETRY_POLICY
+            )
+        self.assertTrue(ok)  # the watch itself still opens (stop-only, like brackets)
+        self.assertEqual(tranche_lines, [])
+        self.assertTrue(any("geometry levels unusable" in msg for msg in captured.output))
+        opens = [ln for ln in _lines(trails_path) if ln["kind"] == entry_trails.KIND_WATCH_OPEN]
+        self.assertEqual(len(opens), 1)
+
+    def test_empty_static_ladder_journals_no_tranche_plan(self) -> None:
+        ok, tranche_lines, _trails, _stops = self._route(_plan((0, 10.0, 100)))
+        self.assertTrue(ok)
+        self.assertEqual(tranche_lines, [])
+
+    def test_tranche_plan_is_appended_before_the_watch_open_lines(self) -> None:
+        # Crash ordering: a crash between the two journals must never leave a
+        # watching tier without its ladder — so the ladder goes to disk FIRST.
+        events: list[str] = []
+        self.enterContext(
+            mock.patch.object(
+                cl, "_append_standalone_stop_journal", lambda line: events.append(line["kind"])
+            )
+        )
+        self.enterContext(
+            mock.patch.object(
+                entry_trails, "append_entry_trail_line", lambda line: events.append(line["kind"])
+            )
+        )
+        plan = _plan_with_tranches(((0, 10.0, 100),), (_tranche(0, 14.0, 100.0),))
+        ok, _tranche_lines, _trails, _stops = self._route(plan)
+        self.assertTrue(ok)
+        self.assertIn("tranche_plan", events)
+        self.assertIn(entry_trails.KIND_WATCH_OPEN, events)
+        self.assertLess(events.index("tranche_plan"), events.index(entry_trails.KIND_WATCH_OPEN))
+
+
 class TestPointSampleVetoNotRaise(unittest.TestCase):
     """_point_sample_bids is the shared once-per-uic sampling boundary: a
     structurally invalid PricePoint (non-numeric bid despite the protocol)
