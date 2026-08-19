@@ -35,6 +35,8 @@ Pure + deterministic: this module imports nothing from the store / Polygon /
 broker. It takes a parsed trade-setup dict + a list of OHLC bars and returns a
 :class:`LadderOutcome`. Brief enumeration, the Polygon fetch and the parquet
 write live in the caller (``population_ladder_monitor``).
+
+Operator/researcher overview: ``alphalens_pipeline/feedback/README.md``.
 """
 
 from __future__ import annotations

@@ -10,7 +10,8 @@
 	// money): every marker is a *modeled* bar-replay fill, never a broker
 	// execution. The persistent `SIM` chip, the `(?) how?` popover, and the
 	// RTH-only footnote all stay visible so the modeling limits are never
-	// hidden. See the design memo §5.
+	// hidden. See the design memo §5. Replay mechanics reference:
+	// apps/alphalens-pipeline/alphalens_pipeline/feedback/README.md.
 	//
 	// TRADE LIFECYCLE (PR-2): the chart reads its visual language from a derived
 	// lifecycle state so a glance distinguishes a closed trade (history) from a

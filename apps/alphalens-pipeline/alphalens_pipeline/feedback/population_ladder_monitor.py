@@ -39,6 +39,8 @@ Resilience
   A brand-new ticker that fails on its first night gets a retryable placeholder
   row (``ladder_classification=None``, ``terminal=False``), never dropped.
 * A terminal NO_DATA is never written on a transient gap (cache-poisoning class).
+
+Operator/researcher overview: ``alphalens_pipeline/feedback/README.md``.
 """
 
 from __future__ import annotations
