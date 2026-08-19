@@ -1073,13 +1073,60 @@ def _track_oco_lag(deps: LoopDeps, actions: list[Action], report: TickReport) ->
 # plus a journal marker (memo §7 PR-T1). Flag unset/0 => nothing here runs and
 # the daemon is byte-identical to today (PR-T0 inertness).
 
-_ENTRY_WATCH_MAX_PICKS = 1
-"""Watch capacity (memo decision #4 / G5 CRITICAL-1): at most this many DISTINCT
-picks may hold open watches at once — a PICK-denominated limit, deliberately NOT
-folded into MAX_OPEN (which counts per tier and would make a 3-tier trailing
-pick un-armable at MAX_OPEN=1). The account is protected by the virtual
-gross/cash reservation fold (entry_trails.watching_virtual_gross_acct), not by
-this capacity number."""
+_ENTRY_WATCH_MAX_PICKS_ENV = "ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS"
+"""Env rail for the watch capacity (2026-08-19 live incident, ETSY: the old
+hardcoded constant of 1 silently capacity-deferred every second armed pick
+after MAX_OPEN was raised to 2). Read at CALL time so an operator bump takes
+effect on the next tick without a daemon restart."""
+
+_ENTRY_WATCH_MAX_PICKS_DEFAULT = 1
+_ENTRY_WATCH_MAX_PICKS_MIN = 1
+_ENTRY_WATCH_MAX_PICKS_MAX = 4
+
+_entry_watch_max_picks_warned = False
+"""One logger.warning per process for an invalid/out-of-range env value — the
+env is re-read every tick and would otherwise warn every ~45s all day."""
+
+_entry_watch_capacity_deferred: set[str] = set()
+"""Process-lifetime observability only (no behaviour): the pick_keys whose
+capacity deferral was already logged at INFO, so an armed pick queued behind a
+full watch book is visible exactly once per daemon lifetime (later ticks stay
+DEBUG)."""
+
+
+def _entry_watch_max_picks() -> int:
+    """Watch capacity (memo decision #4 / G5 CRITICAL-1): at most this many
+    DISTINCT picks may hold open watches at once — a PICK-denominated limit,
+    deliberately NOT folded into MAX_OPEN (which counts per tier and would make
+    a 3-tier trailing pick un-armable at MAX_OPEN=1). The account is protected
+    by the virtual gross/cash reservation fold
+    (entry_trails.watching_virtual_gross_acct), not by this capacity number.
+
+    Sourced from :data:`_ENTRY_WATCH_MAX_PICKS_ENV`; unset falls back to the
+    default silently, an invalid or out-of-range value falls back too but pages
+    the journal with ONE warning per process."""
+    global _entry_watch_max_picks_warned  # noqa: PLW0603 — once-per-process warn latch
+    raw = os.environ.get(_ENTRY_WATCH_MAX_PICKS_ENV)
+    if raw is None:
+        return _ENTRY_WATCH_MAX_PICKS_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        value = None
+    if value is not None and _ENTRY_WATCH_MAX_PICKS_MIN <= value <= _ENTRY_WATCH_MAX_PICKS_MAX:
+        return value
+    if not _entry_watch_max_picks_warned:
+        _entry_watch_max_picks_warned = True
+        logger.warning(
+            "%s=%r is invalid (expected an integer in [%d, %d]) — using the default %d",
+            _ENTRY_WATCH_MAX_PICKS_ENV,
+            raw,
+            _ENTRY_WATCH_MAX_PICKS_MIN,
+            _ENTRY_WATCH_MAX_PICKS_MAX,
+            _ENTRY_WATCH_MAX_PICKS_DEFAULT,
+        )
+    return _ENTRY_WATCH_MAX_PICKS_DEFAULT
+
 
 _ENTRY_BPS_DENOMINATOR = 10_000
 """``d = d_bps / 10_000`` — the would-be-trigger basis-point divisor for the
@@ -1156,9 +1203,26 @@ def _open_watch_pick_keys(fold: entry_trails.EntryTrailFold) -> set[str]:
 
 
 def _entry_watch_capacity_reached(fold: entry_trails.EntryTrailFold) -> bool:
-    """True iff opening another watch would exceed :data:`_ENTRY_WATCH_MAX_PICKS`
+    """True iff opening another watch would exceed :func:`_entry_watch_max_picks`
     DISTINCT watching picks."""
-    return len(_open_watch_pick_keys(fold)) >= _ENTRY_WATCH_MAX_PICKS
+    return len(_open_watch_pick_keys(fold)) >= _entry_watch_max_picks()
+
+
+def _log_watch_capacity_deferral(ticker: str, pick_key: str) -> None:
+    """Log a capacity deferral: INFO the FIRST time this pick_key is deferred in
+    this process, DEBUG on every later tick. Process-lifetime observability
+    only — no behaviour rides on the set (2026-08-19 incident: ETSY sat
+    capacity-deferred for a day with only DEBUG lines to show for it)."""
+    log = logger.debug
+    if pick_key not in _entry_watch_capacity_deferred:
+        _entry_watch_capacity_deferred.add(pick_key)
+        log = logger.info
+    log(
+        "place_pick %s: entry-trail watch capacity reached (cap=%d) — %s stays armed",
+        ticker,
+        _entry_watch_max_picks(),
+        ticker,
+    )
 
 
 def _open_entry_watches(
@@ -5201,11 +5265,7 @@ def _entry_trail_intercept(
     if not already_watching and _entry_watch_capacity_reached(entry_trail_fold):
         # Pick-denominated capacity (memo decision #4): stay ARMED (not a
         # terminal refusal) so it opens once an earlier watch clears.
-        logger.debug(
-            "place_pick %s: entry-trail watch capacity reached (>= %d picks) — pick stays armed",
-            ticker,
-            _ENTRY_WATCH_MAX_PICKS,
-        )
+        _log_watch_capacity_deferral(ticker, pick_key)
         return False
     return _route_pick_to_entry_watch(
         broker, intent, ticker, instrument, account, plan, fx, d_bps=d_bps, exit_policy=exit_policy

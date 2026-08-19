@@ -1114,6 +1114,91 @@ class TestWatchRoutingJournalsTranchePlan(unittest.TestCase):
         self.assertLess(events.index("tranche_plan"), events.index(entry_trails.KIND_WATCH_OPEN))
 
 
+class TestEntryWatchCapacityEnvRail(unittest.TestCase):
+    """Task B (2026-08-19 live incident, ETSY): the pick-denominated watch cap
+    was a hardcoded constant of 1 — with MAX_OPEN raised to 2 a second armed
+    pick was silently capacity-deferred forever at DEBUG. The cap becomes a
+    call-time env rail (ALPHALENS_BROKER_ENTRY_WATCH_MAX_PICKS, default 1,
+    valid [1, 4]) and the FIRST deferral of a pick logs at INFO."""
+
+    def setUp(self) -> None:
+        # Reset the process-lifetime observability state so tests are hermetic.
+        self.enterContext(mock.patch.object(cl, "_entry_watch_max_picks_warned", False))
+        self.enterContext(mock.patch.object(cl, "_entry_watch_capacity_deferred", set()))
+
+    def test_unset_env_defaults_to_one(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(cl._entry_watch_max_picks(), 1)
+
+    def test_valid_values_are_honoured(self) -> None:
+        for raw, expected in (("1", 1), ("2", 2), ("4", 4)):
+            with mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True):
+                self.assertEqual(cl._entry_watch_max_picks(), expected)
+
+    def test_invalid_value_falls_back_to_one_and_warns_exactly_once(self) -> None:
+        with (
+            mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: "banana"}, clear=True),
+            self.assertLogs(cl.logger, level="WARNING") as captured,
+        ):
+            self.assertEqual(cl._entry_watch_max_picks(), 1)
+            self.assertEqual(cl._entry_watch_max_picks(), 1)  # second read: no new warning
+        warnings = [m for m in captured.output if cl._ENTRY_WATCH_MAX_PICKS_ENV in m]
+        self.assertEqual(len(warnings), 1)
+
+    def test_out_of_range_values_fall_back_to_one(self) -> None:
+        for raw in ("0", "5", "-1", ""):
+            with (
+                self.subTest(raw=raw),
+                mock.patch.object(cl, "_entry_watch_max_picks_warned", False),
+                mock.patch.dict("os.environ", {cl._ENTRY_WATCH_MAX_PICKS_ENV: raw}, clear=True),
+                self.assertLogs(cl.logger, level="WARNING"),
+            ):
+                self.assertEqual(cl._entry_watch_max_picks(), 1)
+
+    def _seed_other_watch(self) -> Path:
+        path = _journal(self)
+        entry_trails.append_entry_trail_line(
+            {
+                "kind": entry_trails.KIND_WATCH_OPEN,
+                "crid": "OTHER-2026-07-19-entry-t0",
+                "limit": 5.0,
+                "qty": 10.0,
+                "pick_key": "OTHER:2026-07-19",
+            }
+        )
+        return path
+
+    def test_cap_two_lets_a_second_pick_open_its_watch(self) -> None:
+        path = self._seed_other_watch()
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        env = {_ENV: "50", cl._ENTRY_WATCH_MAX_PICKS_ENV: "2"}
+        with mock.patch.dict("os.environ", env, clear=True):
+            self.assertTrue(placer(_pick()))  # NOT deferred at cap=2
+        opens_for_ko = [
+            ln
+            for ln in _lines(path)
+            if ln["kind"] == entry_trails.KIND_WATCH_OPEN and ln.get("ticker") == "KO"
+        ]
+        self.assertEqual(len(opens_for_ko), 1)
+
+    def test_first_capacity_deferral_logs_info_then_debug(self) -> None:
+        self._seed_other_watch()
+        broker = _RecordingBroker()
+        placer, _submissions = _placer(self, broker, _plan((0, 10.0, 100)))
+        with (
+            mock.patch.dict("os.environ", {_ENV: "50"}, clear=True),
+            self.assertLogs(cl.logger, level="DEBUG") as captured,
+        ):
+            self.assertFalse(placer(_pick()))  # first deferral -> INFO
+            self.assertFalse(placer(_pick()))  # every later tick -> DEBUG
+        records = [r for r in captured.records if "capacity reached" in r.getMessage()]
+        self.assertEqual([r.levelname for r in records], ["INFO", "DEBUG"])
+        self.assertIn("cap=1", records[0].getMessage())
+        self.assertIn("KO", records[0].getMessage())
+        self.assertIn("stays armed", records[0].getMessage())
+
+
 class TestWatchGeometryStampThroughToPlannedLine(unittest.TestCase):
     """Task A2 (2026-08-19 live incident, OLN): the geometry blob must ride the
     watch_open line so the fire-arm ``planned`` disaster line carries it —
