@@ -420,3 +420,76 @@ purpose. If it works and volume lands at 50-70/day, stage B is nearer ~$25/mo.
 
 All new and edited research tests subclass `unittest.TestCase` — the runner is
 `unittest discover`, and pytest-style tests are silently skipped.
+
+## 14. Acceptance probe (2026-08-19) — PASS
+
+An engineering gate run on this branch before deploy, **not** a hypothesis test and **not**
+evidence about returns. The clean design-holdout was consumed by PR #1065 and this design
+was written in reaction to that result, so no number below is joined to
+`market_excess_return`, `population_ladders` or any outcome store, and no such join was
+computed. The only questions asked: does the machine propose what it was built to propose,
+does the assessment annotate instead of delete, do the two anchors behave.
+
+Setup: worktree build at `1a29fe95` (`mapper-freeze-v3`), the retro's own provider pin
+(`deepseek/deepseek-v4-pro`, order `Alibaba`, `fp8`, `allow_fallbacks: false`) — purity
+186/186 calls — 3 threads, exponential backoff, an empty or malformed body retried as a
+failure. Inputs: the frozen `stage1_retro/inputs.parquet` (238 theme-event pairs). Sample:
+40 themes drawn uniformly without replacement (`random.Random(20260819)`), one pair per
+theme ⇒ **40 pairs / 127 brief rows**, DEV 26 / CLEAN 14. k=1 on the sample, k=3 on the
+anchors. Real production path throughout: `propose_candidates` →
+`mcap_filter.classify_by_mcap` (PIT, `asof` = the pair's `brief_date`) →
+`channel_assessor.assess_candidate` / `shadow_strict_verdict`.
+
+**Crowd-out repair (the primary number).** Brief rows whose ORIGINAL small/mid-cap ticker
+appears in the new proposal set: **27 / 94 = 28.7%** on the denominator comparable to the
+retro's kept-theme rows, against the frozen gate's **14 / 348 = 4.0%** — a 7.2× recovery
+(21.3% on all 127 sampled rows; 10 of 40 themes recover at least one). **All 22 recovered
+pair×ticker names were also in bracket**, so the recovery is not an artifact of naming
+companies the mcap filter then discards. None of the 22 is `verified`: under a strict
+any-verified gate every one would be deleted again, which is the design argument restated
+as data. Comparability caveat: the retro labelled by majority-of-5, this probe used a
+single draw; single-draw noise cannot move 4% to 29%, but the figure is not a point
+estimate of a production rate.
+
+**Volume.** 295 stage-A proposals = 7.4 per sampled theme (9.5 per proposing theme, median
+10, cap 15). Bracket: `in_bracket` 84 (28.5%), `too_big` 162, `no_mcap` 27, `too_small` 22
+⇒ 2.1 in-bracket per theme. Stage-A outcomes 31 `success` / 9 `declined` / 0 unresolved;
+every decline used the narrowed enum (`no_event` 9/9) and eight of the nine are `EX-99.1`
+filler, listicles, an "SA Asks" Q&A or a law-firm solicitation. The ninth (`press_freedom`)
+is a real event whose first draw truncated — one manual look after deploy.
+
+**Channel distribution (84 in-bracket candidates, k=1).** `verified` 5 (6.0%), `partial` 42
+(50.0%), `unverified` as an answer 34 (40.5%), `unverified` carrying a call failure 3
+(3.6%). Types: `none` 37, `category_attention` 16, `customer_demand` 16, `substitution` 5,
+`supplier_input` 5, `financing_ma` 3, `regulatory` 1, `input_cost` 1. Theme-level shadow
+verdict **3 keep / 22 refuse** over the 25 themes with an in-bracket candidate. Against the
+retro's 68.8% `no_channel` refusal share this is the healthy reading: the assessment still
+discriminates at least as hard as the gate did — it simply no longer deletes. 84 candidates
+in, 84 annotated rows out, order preserved.
+
+**Anchors (k=3).** `harassment_ebay_settlement`: stage A gave one
+`declined:not_business_development` and two proposal draws (7 and 10 names, all marketplace
+or litigation-services companies — no ride-hailing name in any draw, so the theme-tag guard
+held); stage B returned 0 verified / 3 partial / 4 unverified, shadow `refuse` (0 of 7),
+every candidate kept. `us_ukraine_relations_patriot`: three proposal draws, all `success`
+(9 / 10 / 5 names); stage B returned 0 verified / 7 partial / 2 unverified, shadow `refuse`
+(0 of 9), every candidate kept. Both anchors PASS — no deletion, and no fabricated
+`verified` channel on either.
+
+**Defect found — the stage-B token cap is below this model's reasoning burn.**
+`_ASSESS_MAX_OUTPUT_TOKENS = 1500` is charged against reasoning tokens as well. Over 89
+stage-B calls: median completion 899, median reasoning 787, and **8 calls (9.0%) returned
+an EMPTY body at exactly `completion_tokens = 1501` / `reasoning_tokens = 1500`**; two
+anchor calls truncated mid-JSON. After the single re-roll, 3 of 84 candidates (3.6%) still
+ended `unverified` + `empty_payload`. Because such a row is a non-verified row inside
+`shadow_strict_assessed_n`, an assessor that is merely thinking too long biases the shadow
+verdict toward `refuse`. Fix before the first frozen day (both are
+`channel_config_version` inputs, so retrofitting later is far more expensive): raise the
+cap above the observed reasoning tail (≥4000) and classify a `length` finish reason as its
+own outcome instead of letting it arrive as `empty_payload`.
+
+Cost actually spent: **$1.07** over 186 calls (stage A $0.41 / stage B $0.40 / anchors
+$0.26), summed from the OpenRouter `usage.cost` field rather than estimated.
+
+Full report and per-call provenance:
+`scratchpad/channel_feature/acceptance.md` (session scratch, not versioned).
