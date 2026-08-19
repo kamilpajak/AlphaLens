@@ -44,7 +44,7 @@
 			label: 'no fill',
 			count: 18,
 			tone: 'text-fg-muted border-grid',
-			def: 'The entry price was never reached within the entry window — the trade never opened.'
+			def: 'The entry price has not been reached — the trade never opened. Ongoing while the entry window is still open; terminal once it lapses without a fill.'
 		},
 		{
 			key: 'NO_STRUCTURE',

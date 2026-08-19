@@ -57,16 +57,30 @@ class EdgeOutcomesFacetStatusSerializer(serializers.Serializer):
     ongoing = serializers.IntegerField()
 
 
+class EdgeOutcomesFacetClassificationSerializer(serializers.Serializer):
+    """Per-view classification counts over the pre-filter window population.
+
+    Each map keys ``ladder_classification`` values to their count among the
+    rows whose actual per-row ``terminal`` flag matches the view, so the same
+    class can appear in both maps with disjoint counts. The empty-string
+    (not-yet-priced) bucket is dropped; terminal rows always carry a real
+    classification, so the ``terminal`` map sums to the terminal status count.
+    """
+
+    terminal = serializers.DictField(child=serializers.IntegerField())
+    ongoing = serializers.DictField(child=serializers.IntegerField())
+
+
 class EdgeOutcomesFacetsSerializer(serializers.Serializer):
     """Pre-filter facet counts for the ``/v1/edge/outcomes`` window population.
 
-    ``classification`` maps each ``ladder_classification`` value to its count
-    over the same pre-filter population; the empty-string (not-yet-priced)
-    bucket is dropped.
+    ``classification`` splits the counts per view by the actual per-row
+    ``terminal`` flag, so the same class can appear in both maps with
+    disjoint counts.
     """
 
     status = EdgeOutcomesFacetStatusSerializer()
-    classification = serializers.DictField(child=serializers.IntegerField())
+    classification = EdgeOutcomesFacetClassificationSerializer()
 
 
 class EdgeOutcomesResponseSerializer(serializers.Serializer):

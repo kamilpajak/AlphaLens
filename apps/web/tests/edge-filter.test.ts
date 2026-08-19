@@ -28,7 +28,7 @@ const OUTCOMES = {
 	truncated: false,
 	facets: {
 		status: { terminal: 6, ongoing: 0 },
-		classification: { SL_HIT: 3, TP_FULL: 2, TIME_STOP: 1 }
+		classification: { terminal: { SL_HIT: 3, TP_FULL: 2, TIME_STOP: 1 }, ongoing: {} }
 	}
 };
 
@@ -82,7 +82,9 @@ test('free-text search narrows the table and updates the count + URL', async ({ 
 	await page.getByTestId('outcomes-search').fill('nvda');
 	await expect(rowLinks(page)).toHaveCount(1);
 	await expect(rowLinks(page).first()).toHaveText('NVDA');
-	await expect(page.getByTestId('outcomes-match-count')).toContainText('1 of 6');
+	// The denominator is the SERVER-truth window population ("in window"), not
+	// the fetched row count — honest under the cap.
+	await expect(page.getByTestId('outcomes-match-count')).toContainText('1 shown of 6 in window');
 	await expect.poll(() => new URL(page.url()).searchParams.get('q')).toBe('nvda');
 
 	// Theme substring hits every high-gas row.
@@ -98,6 +100,9 @@ test('a classification facet chip filters, and clear-all resets', async ({ page 
 	await page.getByTestId('outcomes-filter').getByRole('button', { name: /^SL_HIT/ }).click();
 	await expect(rowLinks(page)).toHaveCount(3); // AMD, SNAP, BE
 	await expect.poll(() => new URL(page.url()).searchParams.get('class')).toBe('SL_HIT');
+	// Under a single selected chip, the visible table equals that chip's window
+	// count (3), and the counter's denominator is the selected class's count.
+	await expect(page.getByTestId('outcomes-match-count')).toContainText('3 shown of 3 in window');
 
 	await page.getByTestId('outcomes-clear-all').click();
 	await expect(rowLinks(page)).toHaveCount(6);
@@ -122,6 +127,23 @@ test('deep-links: a ?q= URL arrives pre-filtered', async ({ page }) => {
 	await expect(rowLinks(page)).toHaveCount(1);
 	await expect(rowLinks(page).first()).toHaveText('SNAP');
 	await expect(page.getByTestId('outcomes-search')).toHaveValue('snap');
+});
+
+test('terminal class chips sum exactly to the ALL chip (per-view server facets)', async ({
+	page
+}) => {
+	await stub(page);
+	await page.goto('/edge');
+	const bar = page.getByTestId('outcomes-filter');
+	// The server now groups facets.classification by the actual per-row terminal
+	// flag, so the terminal view's chips (3 + 2 + 1) sum EXACTLY to the ALL chip
+	// / view-toggle population (6) — the "516 vs 505" checksum failure dies.
+	await expect(bar.getByRole('button', { name: 'SL_HIT 3' })).toBeVisible();
+	await expect(bar.getByRole('button', { name: 'TP_FULL 2' })).toBeVisible();
+	await expect(bar.getByRole('button', { name: 'TIME_STOP 1' })).toBeVisible();
+	await expect(bar.getByRole('button', { name: 'all 6' }).first()).toBeVisible();
+	// No class from the other view leaks into this view's chip row.
+	await expect(bar.getByRole('button', { name: /^OPEN/ })).toHaveCount(0);
 });
 
 // ── Server-side classification refetch (issue #1055) ────────────────────────

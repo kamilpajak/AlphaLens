@@ -1,6 +1,5 @@
-import type { EdgeOutcome } from './types';
+import type { EdgeOutcome, EdgeOutcomesFacets } from './types';
 import { facetMatches, type FacetOption } from './faceting';
-import { ladderStatusGroup } from './data/ladderStatus';
 import { setToParam, paramToSet } from './urlFilters';
 
 // Client-side filtering for the /edge outcomes table. Pure + framework-free so
@@ -46,41 +45,42 @@ export function filterOutcomes(rows: EdgeOutcome[], s: EdgeFilterState): EdgeOut
 	});
 }
 
-// Unmeasurable codes are NOT uniformly terminal. The pipeline stamps
-// `terminal=True` only for `status == "OK"` classifications inside
-// `population_ladder_monitor._TERMINAL_SET` (which includes BAD_GEOMETRY);
-// NO_DATA / NO_STRUCTURE are non-OK STATUS codes, so their rows keep
-// `terminal=False` and land in the ONGOING view's row set. Their chips must
-// follow their rows, or a terminal-view chip would client-filter to an empty
-// table while the ongoing view showed rows with no chip to select them.
-const NON_TERMINAL_UNMEASURABLE: ReadonlySet<string> = new Set(['NO_DATA', 'NO_STRUCTURE']);
-
-/** Slice the server's window-wide `facets.classification` map into the chip
- *  options for ONE view. The server counts every plannable row in the window
- *  (both views at once); the split mirrors the client-side terminal/ongoing row
- *  filter (`o.terminal`) by each code's real terminal semantics: `ongoing`
- *  group + NO_DATA / NO_STRUCTURE → ongoing view; `terminal` group +
- *  BAD_GEOMETRY → terminal view (see `NON_TERMINAL_UNMEASURABLE` above). An
- *  UNKNOWN code (a new pipeline class this build has no legend entry for) is
- *  kept in BOTH views — fail-open, a new class must never silently vanish from
- *  the chips. The empty-string bucket is dropped defensively (the server
- *  already omits it). Ordering is count-desc then key — byte-for-byte the
- *  `deriveFacet` ordering. */
+/** Chip options for ONE view from the server's per-view window facets. The
+ *  server groups `facets.classification` by the ACTUAL per-row `terminal` flag
+ *  (the same flag the client-side view filter applies), so this is a pure
+ *  passthrough of the requested view's map — no client-side guessing of a
+ *  code's terminal semantics, and a new pipeline class lands in exactly the
+ *  view its rows are in. The empty-string bucket is dropped defensively (the
+ *  server already omits it). Ordering is count-desc then key — byte-for-byte
+ *  the `deriveFacet` ordering. */
 export function classFacetFromServer(
-	classification: Record<string, number>,
+	classification: EdgeOutcomesFacets['classification'],
 	view: 'terminal' | 'ongoing'
 ): FacetOption[] {
-	return Object.entries(classification)
-		.filter(([key]) => {
-			if (key === '') return false;
-			const group = ladderStatusGroup(key);
-			if (group === null) return true;
-			const rowTerminal =
-				group === 'terminal' || (group === 'unmeasurable' && !NON_TERMINAL_UNMEASURABLE.has(key));
-			return view === 'ongoing' ? !rowTerminal : rowTerminal;
-		})
+	return Object.entries(classification[view])
+		.filter(([key]) => key !== '')
 		.map(([key, count]) => ({ key, count }))
 		.sort((a, b) => b.count - a.count || a.key.localeCompare(b.key));
+}
+
+/** Server-truth denominator M for the toolbar's "N shown of M in window"
+ *  counter: the selected classes' window counts in THIS view, or the whole
+ *  view population when no class is selected — the same numbers the chips
+ *  show, honest under the listing cap. A selected class absent from this
+ *  view's map contributes 0 (the selection persists across the view toggle, so
+ *  a stale cross-view selection must not yield NaN). Null when the server sent
+ *  no facets (older API build / degraded fetch) — the caller falls back to the
+ *  fetched row count. */
+export function windowDenominator(
+	facets: EdgeOutcomesFacets | null,
+	view: 'terminal' | 'ongoing',
+	classes: ReadonlySet<string>
+): number | null {
+	if (!facets) return null;
+	if (classes.size === 0) return facets.status[view];
+	let sum = 0;
+	for (const k of classes) sum += facets.classification[view][k] ?? 0;
+	return sum;
 }
 
 // ── URL (de)serialization ────────────────────────────────────────────────────

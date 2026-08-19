@@ -322,7 +322,10 @@ def test_outcomes_facets_reflect_window_population_before_filters_and_cap(
     body = APIClient().get("/v1/edge/outcomes").json()
     assert body["returned"] == 2  # cap applied to the listing...
     assert body["facets"]["status"] == {"terminal": 3, "ongoing": 2}  # ...not the facets
-    assert body["facets"]["classification"] == {"TP_FULL": 2, "SL_HIT": 1, "OPEN": 2}
+    assert body["facets"]["classification"] == {
+        "terminal": {"TP_FULL": 2, "SL_HIT": 1},
+        "ongoing": {"OPEN": 2},
+    }
 
     # The status filter narrows the listing but must NOT change the facets.
     filtered = APIClient().get("/v1/edge/outcomes?status=terminal").json()
@@ -344,9 +347,66 @@ def test_outcomes_facets_drop_empty_classification_bucket(tmp_path: Path):
     rebuild_from_parquet(tmp_path)
 
     facets = APIClient().get("/v1/edge/outcomes").json()["facets"]
-    assert "" not in facets["classification"]
-    assert facets["classification"] == {"TP_FULL": 1}
+    assert "" not in facets["classification"]["terminal"]
+    assert "" not in facets["classification"]["ongoing"]
+    assert facets["classification"] == {"terminal": {"TP_FULL": 1}, "ongoing": {}}
     assert facets["status"] == {"terminal": 1, "ongoing": 1}
+
+
+@pytest.mark.django_db
+def test_outcomes_facets_split_by_row_terminal_flag_not_class_name(tmp_path: Path):
+    # The per-view split follows the ACTUAL per-row `terminal` flag, never the
+    # nominal semantics of the class name: a NO_FILL whose 7-day entry window is
+    # still open is an ONGOING row, while a lapsed NO_FILL is TERMINAL. The same
+    # class must therefore be able to appear in BOTH view maps with disjoint
+    # counts — the SPA no longer guesses a class's view from its name.
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [
+            _terminal("NFA", excess=0.0, realized_r=0.0, classification="NO_FILL"),
+            _terminal("NFB", excess=0.0, realized_r=0.0, classification="NO_FILL"),
+            {**_ongoing("NFC", open_r=0.0), "ladder_classification": "NO_FILL"},
+            _ongoing("BLBD", open_r=0.16),
+        ],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    facets = APIClient().get("/v1/edge/outcomes").json()["facets"]
+    assert facets["classification"]["terminal"]["NO_FILL"] == 2
+    assert facets["classification"]["ongoing"]["NO_FILL"] == 1
+    # No cross-view leakage of the classes that exist in only one view.
+    assert "OPEN" not in facets["classification"]["terminal"]
+    assert facets["classification"]["ongoing"]["OPEN"] == 1
+
+
+@pytest.mark.django_db
+def test_outcomes_facets_terminal_view_sums_to_status_terminal(tmp_path: Path):
+    # Amendment (b): the monitor promises terminal ⇒ real classification, so the
+    # dropped ""-class bucket may only ever swallow ONGOING (not-yet-priced)
+    # rows. Pinned here as an API contract: the terminal view map carries no ""
+    # key and its values sum EXACTLY to facets.status.terminal — the invariant
+    # the SPA's "terminal chips sum to ALL" display relies on.
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [
+            _terminal("AMPL", excess=0.04, realized_r=1.2),
+            _terminal("RGTI", excess=-0.03, realized_r=-1.0, classification="SL_HIT"),
+            _terminal("IONQ", excess=-0.01, realized_r=-0.2, classification="TIME_STOP"),
+            _terminal("NFA", excess=0.0, realized_r=0.0, classification="NO_FILL"),
+            {**_ongoing("PEND", open_r=0.0), "ladder_classification": ""},
+            _ongoing("BLBD", open_r=0.16),
+        ],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    facets = APIClient().get("/v1/edge/outcomes").json()["facets"]
+    assert "" not in facets["classification"]["terminal"]
+    assert sum(facets["classification"]["terminal"].values()) == facets["status"]["terminal"] == 4
+    # The ongoing view undercounts status.ongoing by exactly the blank-class rows.
+    assert sum(facets["classification"]["ongoing"].values()) == 1
+    assert facets["status"]["ongoing"] == 2
 
 
 @pytest.mark.django_db
@@ -366,7 +426,10 @@ def test_outcomes_classification_param_filters_rows_server_side(tmp_path: Path):
     assert {r["ticker"] for r in body["data"]} == {"RGTI", "IONQ"}
     assert body["total"] == 2
     # Facets are pre-filter — all three classes stay visible.
-    assert body["facets"]["classification"] == {"TP_FULL": 1, "SL_HIT": 1, "TIME_STOP": 1}
+    assert body["facets"]["classification"] == {
+        "terminal": {"TP_FULL": 1, "SL_HIT": 1, "TIME_STOP": 1},
+        "ongoing": {},
+    }
 
 
 @pytest.mark.django_db
@@ -398,7 +461,7 @@ def test_outcomes_classification_unknown_value_matches_nothing(tmp_path: Path):
     assert body["data"] == []
     assert body["total"] == 0
     assert body["truncated"] is False
-    assert body["facets"]["classification"] == {"TP_FULL": 1}
+    assert body["facets"]["classification"] == {"terminal": {"TP_FULL": 1}, "ongoing": {}}
 
 
 @pytest.mark.django_db
@@ -415,7 +478,7 @@ def test_outcomes_facets_respect_window(tmp_path: Path):
 
     facets = APIClient().get("/v1/edge/outcomes?window=10").json()["facets"]
     assert facets["status"] == {"terminal": 0, "ongoing": 1}
-    assert facets["classification"] == {"OPEN": 1}
+    assert facets["classification"] == {"terminal": {}, "ongoing": {"OPEN": 1}}
 
 
 @pytest.mark.django_db

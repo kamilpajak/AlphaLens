@@ -424,9 +424,18 @@ export interface EdgeOutcome {
  *  honest even when the row listing is filtered or truncated. */
 export interface EdgeOutcomesFacets {
 	status: { terminal: number; ongoing: number };
-	/** Per-`ladder_classification` counts; the "" (not-yet-priced) bucket is
-	 *  never present — the server drops it. */
-	classification: Record<string, number>;
+	/** Per-view `ladder_classification` counts, split by the ACTUAL per-row
+	 *  `terminal` flag (the same flag the SPA's view filter applies), so a
+	 *  class's chip count equals its visible row count by construction. The same
+	 *  class can appear in both maps with disjoint counts (e.g. a NO_FILL whose
+	 *  7-day entry window is still open is an ongoing row). The "" (not-yet-
+	 *  priced) bucket is never present — the server drops it; terminal rows
+	 *  always carry a real classification, so the terminal map sums exactly to
+	 *  `status.terminal`. */
+	classification: {
+		terminal: Record<string, number>;
+		ongoing: Record<string, number>;
+	};
 }
 
 /** A single daily OHLCV bar for the ladder chart (GET /v1/edge/chart/...).

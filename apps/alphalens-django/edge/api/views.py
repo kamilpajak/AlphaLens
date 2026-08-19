@@ -158,16 +158,23 @@ class EdgeOutcomesView(APIView):
         # Facets describe the WHOLE window+plannable population — computed
         # BEFORE the status/classification filters and before the cap, so the
         # SPA chips carry server truth even when the listing is filtered/capped.
+        # Classification counts are split per view by the ACTUAL per-row
+        # `terminal` flag (the same flag the SPA's view filter applies), so the
+        # same class can appear in both views with disjoint counts (e.g. a
+        # NO_FILL whose entry window is still open is ongoing, a lapsed one is
+        # terminal) and the client never guesses a class's view from its name.
         # The empty-string (not-yet-priced) classification bucket is dropped.
         status_counts = {
             row["terminal"]: row["n"] for row in qs.values("terminal").annotate(n=Count("pk"))
         }
-        classification_counts = {
-            row["ladder_classification"]: row["n"]
-            for row in qs.exclude(ladder_classification="")
-            .values("ladder_classification")
+        classification_counts: dict[str, dict[str, int]] = {"terminal": {}, "ongoing": {}}
+        for row in (
+            qs.exclude(ladder_classification="")
+            .values("terminal", "ladder_classification")
             .annotate(n=Count("pk"))
-        }
+        ):
+            view = "terminal" if row["terminal"] else "ongoing"
+            classification_counts[view][row["ladder_classification"]] = row["n"]
         facets = {
             "status": {
                 "terminal": status_counts.get(True, 0),

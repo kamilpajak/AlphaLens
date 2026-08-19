@@ -9,13 +9,19 @@
 	import type { EdgeOutcome, EdgeOutcomesFacets } from '$lib/types';
 	import { classificationTone, toneClasses } from '$lib/edge';
 	import { ladderStatusBody, ladderStatusLabel } from '$lib/data/ladderStatus';
-	import { classFacetFromServer, isFilterActive, type EdgeFilterState } from '$lib/edgeFilter';
+	import {
+		classFacetFromServer,
+		isFilterActive,
+		windowDenominator,
+		type EdgeFilterState
+	} from '$lib/edgeFilter';
 	import { buildFilterChips, deriveFacet } from '$lib/faceting';
 
 	interface Props {
 		/** The current terminal/ongoing view — the facet universe + counts. */
 		rows: EdgeOutcome[];
-		/** Rows remaining after `filterOutcomes` (parent-computed), for "N of M". */
+		/** Rows remaining after `filterOutcomes` (parent-computed) — the N in the
+		 *  "N shown of M in window" counter. */
 		matched: number;
 		/** Server-truth window facets (pre-filter population); null falls back to
 		 *  client-derived counts over `rows` (older API build / degraded fetch). */
@@ -69,6 +75,13 @@
 
 	const active = $derived(isFilterActive(state));
 
+	// "N shown of M in window": M is the server-truth window population the
+	// chips beside it show (the selected classes' counts, or the whole view),
+	// never the fetched/capped row count. Null facets (older API build /
+	// degraded fetch) fall back to the fetched rows — and drop the "in window"
+	// claim, since fetched rows are all the fallback can speak for.
+	const denominator = $derived(windowDenominator(facets, view, state.classes) ?? rows.length);
+
 	function clearAll() {
 		state.query = '';
 		state.classes = new Set();
@@ -93,8 +106,8 @@
 			/>
 		</label>
 		<span class="text-[10px] uppercase tracking-widest text-fg-muted" data-testid="outcomes-match-count">
-			<span class="font-mono text-fg-dim">{matched}</span> of
-			<span class="font-mono text-fg-dim">{rows.length}</span>
+			<span class="font-mono text-fg-dim">{matched}</span> shown of
+			<span class="font-mono text-fg-dim">{denominator}</span>{#if facets}{' in window'}{/if}
 		</span>
 		{#if active}
 			<button

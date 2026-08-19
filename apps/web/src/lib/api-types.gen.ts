@@ -735,6 +735,23 @@ export interface components {
             realized_return_pct_of_book: number | null;
         };
         /**
+         * @description Per-view classification counts over the pre-filter window population.
+         *
+         *     Each map keys ``ladder_classification`` values to their count among the
+         *     rows whose actual per-row ``terminal`` flag matches the view, so the same
+         *     class can appear in both maps with disjoint counts. The empty-string
+         *     (not-yet-priced) bucket is dropped; terminal rows always carry a real
+         *     classification, so the ``terminal`` map sums to the terminal status count.
+         */
+        EdgeOutcomesFacetClassification: {
+            terminal: {
+                [key: string]: number;
+            };
+            ongoing: {
+                [key: string]: number;
+            };
+        };
+        /**
          * @description Window+plannable population split by terminal state.
          *
          *     Computed BEFORE the ``status``/``classification`` filters and before the
@@ -747,15 +764,13 @@ export interface components {
         /**
          * @description Pre-filter facet counts for the ``/v1/edge/outcomes`` window population.
          *
-         *     ``classification`` maps each ``ladder_classification`` value to its count
-         *     over the same pre-filter population; the empty-string (not-yet-priced)
-         *     bucket is dropped.
+         *     ``classification`` splits the counts per view by the actual per-row
+         *     ``terminal`` flag, so the same class can appear in both maps with
+         *     disjoint counts.
          */
         EdgeOutcomesFacets: {
             status: components["schemas"]["EdgeOutcomesFacetStatus"];
-            classification: {
-                [key: string]: number;
-            };
+            classification: components["schemas"]["EdgeOutcomesFacetClassification"];
         };
         /**
          * @description The real ``/v1/edge/outcomes`` envelope.
