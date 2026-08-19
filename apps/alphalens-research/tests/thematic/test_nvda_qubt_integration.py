@@ -76,27 +76,18 @@ CANNED_MAPPER = {
             "ticker": "qubt",
             "company_name": "Quantum Computing Inc",
             "rationale": "Photonic quantum hardware; benefits from QEC tooling",
-            "transmission_channel": (
-                "NVDA ships QEC tooling -> photonic stacks integrate it faster "
-                "-> QUBT hardware revenue accelerates"
-            ),
             "confidence": 0.82,
         },
         {
             "ticker": "IONQ",
             "company_name": "IonQ Inc",
             "rationale": "Trapped-ion pure-play named in the release",
-            "transmission_channel": (
-                "the release names trapped-ion partners -> the named partner "
-                "wins follow-on orders -> IONQ backlog rises"
-            ),
             "confidence": 0.95,
         },
         {
             "ticker": "MADEUP",
             "company_name": "Made Up Inc",
             "rationale": "Low-confidence filler",
-            "transmission_channel": "event -> unclear -> revenue",
             "confidence": 0.3,
         },
     ],

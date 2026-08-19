@@ -9,7 +9,9 @@ the brief.
 
 Locked parameters (pre-registered; do not change without a memo amendment):
 
-* **Instrument** — `theme_mapper.propose_candidates` with the frozen prompt.
+* **Instrument** — `stage1_frozen_v2.propose_candidates_frozen`, a byte copy of the
+  mapper-freeze-v2 proposal call (the live `theme_mapper` moved to v3 on
+  2026-08-19 and no longer has this shape).
   The run asserts `mapper_config_version(market_cap_range=(500e6, 10e9))`
   equals the pre-registered ``FROZEN_MCV`` string byte-for-byte, and that the
   OpenRouter routing block is the exact pinned-provider block
@@ -65,9 +67,9 @@ from pathlib import Path
 
 import pandas as pd
 from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
-from alphalens_pipeline.thematic.mapping import theme_mapper
 from alphalens_pipeline.thematic.mapping.catalyst_contract import CatalystPayload
 from alphalens_pipeline.thematic.mapping.theme_mapper import MapperOutcome
+from alphalens_research.retrospective_audit import stage1_frozen_v2
 
 # --- Locked constants (pre-reg §4-§6, §11.1) --------------------------------
 
@@ -244,7 +246,9 @@ def one_slot(
     _task_ctx.task = f"{pair_id}#{slot}"
     delay = RETRY_BACKOFF_BASE_S
     for attempt in range(1, MAX_ATTEMPTS_PER_SLOT + 1):
-        result = theme_mapper.propose_candidates(theme=theme, catalyst=catalyst, llm_client=client)
+        result = stage1_frozen_v2.propose_candidates_frozen(
+            theme=theme, catalyst=catalyst, llm_client=client
+        )
         outcome: MapperOutcome = result["outcome"]
         if outcome in (MapperOutcome.SUCCESS, MapperOutcome.DECLINED):
             rec = {
@@ -370,8 +374,10 @@ def main() -> int:
     args = ap.parse_args()
 
     # Frozen-instrument + pinned-routing assertions BEFORE any call (pre-reg §2, §6).
-    mcv = theme_mapper.mapper_config_version(market_cap_range=(500_000_000, 10_000_000_000))
-    assert mcv == FROZEN_MCV, "mapper_config_version drifted from the pre-registered instrument"
+    mcv = stage1_frozen_v2.frozen_mapper_config_version(
+        market_cap_range=(500_000_000, 10_000_000_000)
+    )
+    assert mcv == FROZEN_MCV, "the frozen instrument drifted from the pre-registered one"
     client = OpenRouterClient.from_env()
     routing = client._provider_routing
     # Compare only the pre-registered keys: the client may grow harmless extra

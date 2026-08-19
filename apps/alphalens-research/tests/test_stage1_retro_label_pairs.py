@@ -248,7 +248,9 @@ class TestOneSlot(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             unittest.mock.patch.object(
-                label_pairs.theme_mapper, "propose_candidates", lambda **kw: next(calls)
+                label_pairs.stage1_frozen_v2,
+                "propose_candidates_frozen",
+                lambda **kw: next(calls),
             ),
             unittest.mock.patch.object(label_pairs.time, "sleep", lambda s: None),
         ):
@@ -404,12 +406,14 @@ class TestMainSmoke(unittest.TestCase):
             with (
                 unittest.mock.patch.object(sys, "argv", argv),
                 unittest.mock.patch.object(
-                    label_pairs.theme_mapper,
-                    "mapper_config_version",
+                    label_pairs.stage1_frozen_v2,
+                    "frozen_mapper_config_version",
                     lambda **kw: label_pairs.FROZEN_MCV,
                 ),
                 unittest.mock.patch.object(
-                    label_pairs.theme_mapper, "propose_candidates", lambda **kw: dict(declined)
+                    label_pairs.stage1_frozen_v2,
+                    "propose_candidates_frozen",
+                    lambda **kw: dict(declined),
                 ),
                 unittest.mock.patch.object(
                     label_pairs.OpenRouterClient, "from_env", staticmethod(_FakeClient)

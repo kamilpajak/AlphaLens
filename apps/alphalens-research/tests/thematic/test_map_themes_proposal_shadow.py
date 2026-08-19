@@ -88,6 +88,42 @@ class TestMapThemesProposalShadow(unittest.TestCase):
             self.assertEqual(tickers, {"KEEP", "DROP"})
             self.assertEqual(kwargs["mapper_config_version"], df.loc[0, "mapper_config_version"])
 
+    def test_no_channel_column_leaks_into_the_shadow_rows(self):
+        # The proposal-shadow parquet feeds a PRE-REGISTERED head-to-head whose
+        # row shape must not move. Widening it with channel telemetry would
+        # corrupt that measurement, so the assessment annotates the candidate
+        # dicts only — the shadow builder reads a fixed three keys.
+        proposed = [{"ticker": "KEEP", "confidence": 0.9}]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                patch.object(orchestrator, "_init_pro_client", return_value=object()),
+                patch.object(orchestrator, "_fetch_press_window", return_value=pd.DataFrame()),
+                patch.object(orchestrator, "_resolve_catalyst", return_value=_catalyst_payload()),
+                patch.object(
+                    orchestrator,
+                    "_propose_and_bracket",
+                    return_value=theme_proposal(
+                        proposed=proposed,
+                        in_bracket={"KEEP": 1_000_000_000.0},
+                        outcome=MapperOutcome.SUCCESS,
+                    ),
+                ),
+                patch.object(
+                    orchestrator,
+                    "_verify_candidates_for_theme",
+                    side_effect=lambda *, theme, **_k: ([_survivor_row(theme, "KEEP")], 0, 0),
+                ),
+                patch.object(orchestrator.proposal_shadow, "write_proposal_shadow") as shadow,
+            ):
+                orchestrator.map_themes(
+                    themes=["ai"], asof=ASOF, api_key="dummy", output_dir=Path(tmp), rebuild=True
+                )
+
+        llm_proposals = shadow.call_args.args[1]
+        for row in llm_proposals:
+            self.assertEqual(set(row), {"theme", "ticker", "llm_confidence"})
+
     def test_no_proposals_skips_shadow_write(self):
         # A theme with no catalyst yields no proposals → writer must not fire.
         with tempfile.TemporaryDirectory() as tmp:
