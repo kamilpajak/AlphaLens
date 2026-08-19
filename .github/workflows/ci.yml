@@ -266,7 +266,11 @@ jobs:
   web:
     name: web (SvelteKit)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 20, not 10: the Playwright chromium download sometimes crawls on the
+    # runner-to-CDN path (2026-08-19: four consecutive runs killed at the 10min
+    # ceiling mid-download while every other job was green); normal runtime is
+    # ~5min, so 20 still bounds a genuine hang.
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
