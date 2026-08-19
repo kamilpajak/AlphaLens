@@ -77,6 +77,7 @@ import pandas as pd
 from alphalens_pipeline.data.alt_data.openrouter_client import OpenRouterClient
 from alphalens_pipeline.data.alt_data.polygon_client import PolygonClient
 from alphalens_pipeline.thematic.mapping import catalyst_resolver, orchestrator
+from alphalens_pipeline.thematic.mapping.channel_assessor import channel_config_version
 from alphalens_pipeline.thematic.mapping.theme_mapper import mapper_config_version
 from alphalens_pipeline.thematic.sources.form4_store import classification_years
 from alphalens_pipeline.thematic.verification import mcap_filter, recent_press, tenk_grep
@@ -224,8 +225,13 @@ def _write_provenance(fixture: MapFixture, *, mode: str) -> None:
     doc = build_provenance(
         fixture,
         version=fixture.current_recording,
+        # The freeze token now NESTS the stage-B assessment token, exactly as
+        # ``map_themes`` composes it — a provenance document built from the
+        # stage-A token alone would describe a run that never happened, and
+        # would not match the token stamped on the recorded parquet.
         mapper_config_version=mapper_config_version(
-            market_cap_range=orchestrator.DEFAULT_MCAP_RANGE
+            market_cap_range=orchestrator.DEFAULT_MCAP_RANGE,
+            channel_config_version=channel_config_version(),
         ),
         recorded_by=f"scripts/record_golden_map.py --fixture {fixture.name}{mode}",
         recorded_date=dt.date.today(),

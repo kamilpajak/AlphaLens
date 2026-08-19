@@ -1,0 +1,68 @@
+{
+  "approved_by": "Kamil Pajak",
+  "cassette_key": "98e3d8694d7adb8a7b08a876b04da05021596f1b920c1fcf95ab756b6a2eda49",
+  "event": {
+    "asof": "2026-04-14",
+    "event_id": "nvda_ising_2026_04_14",
+    "event_type": "product_launch",
+    "headline": "NVIDIA Launches Ising, the Worlds First Open AI Models to Accelerate the Path to Useful Quantum Computers",
+    "published_at": "2026-04-14",
+    "theme": "quantum_computing",
+    "url": "https://nvidianews.nvidia.com/news/nvidia-launches-ising-the-worlds-first-open-ai-models-to-accelerate-the-path-to-useful-quantum-computers"
+  },
+  "fixture": "nvda_ising_2026_04_14",
+  "frozen_surfaces": {
+    "cassettes_vendor/86674e2e18f85e2ab882fb5addc480f8fa3ee7a5c52a12147c2a11f2aa28c0e9.json": "108868b42ef6cf83f1c328667f5fc201697a17730df25f9edd8b6de776ad646e",
+    "events/2026-04-14.parquet": "13d33b7e5c79fa87e8b1aaebac9389c0a14bfca2721aa2fef4a6bcaf272eea7a",
+    "form4_parquet/transaction_year=2023/compacted.parquet": "f0e481118b882ee1f81835de50852fda3b2e024c96f55dfcf5019652b2cd0c3a",
+    "form4_parquet/transaction_year=2024/compacted.parquet": "cfd868aa2be25b481cbc37faaa5e04a9ea5ad222aa92d31e4a1a05297dbd2d27",
+    "form4_parquet/transaction_year=2025/compacted.parquet": "0274161d3c1434922fccf0b7fd5525e2f1bbcfcbe9f8f84e7a00c7eaab8cc829",
+    "form4_parquet/transaction_year=2026/compacted.parquet": "814a5f69e4fa93c2570f8e32e3eb36cf690d9d24c3a30e68811a3fb15de23446",
+    "mcap.json": "666146864ebc6d36c35a0931cf8ae30227bad431896bd746ce175d841bd4dd66",
+    "news/2026-04-14.parquet": "82a013772d2f1f5f88d3710a9f9918a5942f0ec0f721b9ff0b8a958ebf123649",
+    "tenk_cache/QBTS_2026-02-26.txt": "e15c437fcb6a4c562b0836afc99eb6d0e6ab95c22196fd8bc94028fa77a6a992",
+    "tenk_cache/QUBT_2026-03-02.txt": "74d5975cb3ac13456ed146ec17f32f846c6eaab4834d3020f54852970145fac2",
+    "tenk_cache/RGTI_2026-03-04.txt": "480d01ecdeb71ac021a42baad390d875b825fdd60819df58aae05233f46ba49d"
+  },
+  "model": "deepseek/deepseek-v4-pro",
+  "prompt": {
+    "mapper_config_version": "{\"block_tag\":\"untrusted_event\",\"channel\":\"{\\\"field_constants\\\":{\\\"block_tag\\\":\\\"untrusted_event\\\",\\\"candidate_field_max_chars\\\":120,\\\"candidate_rationale_max_chars\\\":300,\\\"field_max_chars\\\":80,\\\"headline_max_chars\\\":200,\\\"implication_max_chars\\\":240,\\\"implications_max\\\":5,\\\"text_max_chars\\\":600,\\\"unavailable\\\":\\\"(none)\\\"},\\\"max_output_tokens\\\":4000,\\\"model\\\":\\\"deepseek/deepseek-v4-pro\\\",\\\"prompt_sha\\\":\\\"6928ef746443\\\",\\\"schema\\\":\\\"channel-assess-v1\\\",\\\"schema_sha\\\":\\\"60fc8c1012af\\\",\\\"statuses\\\":[\\\"verified\\\",\\\"partial\\\",\\\"unverified\\\"],\\\"temperature\\\":0.0,\\\"types\\\":[\\\"customer_demand\\\",\\\"supplier_input\\\",\\\"input_cost\\\",\\\"regulatory\\\",\\\"substitution\\\",\\\"capacity_supply\\\",\\\"financing_ma\\\",\\\"category_attention\\\",\\\"none\\\"],\\\"votes\\\":3}\",\"field_constants\":{\"entities_max\":10,\"field_max_chars\":80,\"headline_max_chars\":200,\"implication_max_chars\":240,\"implications_max\":5,\"unavailable\":\"(none)\"},\"max_candidates\":15,\"max_output_tokens\":8000,\"mcap_range\":[500000000,10000000000],\"model\":\"deepseek/deepseek-v4-pro\",\"prompt_sha\":\"fdcbf59d0720\",\"schema\":\"mapper-freeze-v3\",\"schema_sha\":\"30118172b8b8\",\"temperature\":0.0}",
+    "prompt_sha": "fdcbf59d0720",
+    "schema": "mapper-freeze-v3",
+    "schema_sha": "30118172b8b8",
+    "system_message_sha": "dbe56ff77239"
+  },
+  "provenance_written": "2026-08-19",
+  "recorded_by": "scripts/record_golden_map.py --fixture nvda_ising_2026_04_14 --llm-only",
+  "recorded_date": "2026-08-19",
+  "recording": "v2",
+  "sampling": {
+    "max_tokens": 8000,
+    "response_format": {
+      "type": "json_object"
+    },
+    "temperature": 0.0
+  },
+  "schema_version": 3,
+  "seeded_surfaces": {
+    "events/2026-04-14.parquet": "Hand-authored scenario row, not an ingested article. The store window for this date holds one row that was seeded for the NVDA->QUBT replay (scripts/replay_nvda_qubt.py); the recorder copied it faithfully, but the id, source, body and the extraction read-outs were typed, not produced by news_ingest / event_extractor. Headline and URL are the real NVIDIA press release.",
+    "news/2026-04-14.parquet": "Hand-authored scenario row, not an ingested article. The store window for this date holds one row that was seeded for the NVDA->QUBT replay (scripts/replay_nvda_qubt.py); the recorder copied it faithfully, but the id, source, body and the extraction read-outs were typed, not produced by news_ingest / event_extractor. Headline and URL are the real NVIDIA press release."
+  },
+  "stage_b": {
+    "cassette_keys": [
+      "4898c31fee1c52466b28245d7ff6b8a956aad04cfcc81ae746244b503f056e3a",
+      "a108804702fb13236313ed8532ed608eb48f5d7135950972629db13b7b8edc93",
+      "c773337e7d27eac88e5e7993a5328e0476b436cd106965142d466b52e67c2ece"
+    ],
+    "model": "deepseek/deepseek-v4-pro",
+    "sampling": {
+      "max_tokens": 4000,
+      "response_format": {
+        "type": "json_object"
+      },
+      "temperature": 0.0
+    },
+    "system_message_sha": "26bc6d9818fb",
+    "vote_collapse_note": "The k identical draws of one candidate share a request descriptor and therefore ONE cassette file. A replay serves the same body to every draw, so channel_vote_valid_n and channel_vote_dispersion in the golden projection are artefacts of replay, not measurements of vote stability."
+  }
+}
