@@ -119,7 +119,7 @@ export interface paths {
             cookie?: never;
         };
         /** @description ``/v1/edge/outcomes`` — per-candidate rows (theme joined from the brief). */
-        get: operations["v1_edge_outcomes_list"];
+        get: operations["v1_edge_outcomes_retrieve"];
         put?: never;
         post?: never;
         delete?: never;
@@ -529,9 +529,10 @@ export interface components {
         /**
          * @description One modeled fill / exit marker, snapped to a daily bar ``time``.
          *
-         *     ``kind`` is the chart vocabulary (``ENTRY`` / ``TP`` / ``SL`` / ``TIME_STOP``);
-         *     ``ambiguous`` carries the SL-first intrabar flag (a bar that touched both a TP
-         *     high and the SL low, resolved SL-first).
+         *     ``kind`` is the pipeline's marker vocabulary; opaque to this serializer (a
+         *     plain passthrough, so new kinds need no change here). ``ambiguous`` carries
+         *     the SL-first intrabar flag (a bar that touched both a TP high and the SL
+         *     low, resolved SL-first).
          */
         ChartMarker: {
             time: string;
@@ -575,6 +576,7 @@ export interface components {
             /** Format: double */
             realized_r: number | null;
             status: components["schemas"]["ChartResponseStatusEnum"];
+            context: (components["schemas"]["ContextEnum"] | components["schemas"]["NullEnum"]) | null;
             bars: components["schemas"]["ChartBar"][];
             price_lines: components["schemas"]["ChartPriceLines"];
             markers: components["schemas"]["ChartMarker"][];
@@ -589,6 +591,13 @@ export interface components {
          * @enum {string}
          */
         ChartResponseStatusEnum: "OK" | "NO_DATA" | "NO_STRUCTURE";
+        /**
+         * @description * `OK` - OK
+         *     * `reused` - reused
+         *     * `in_trade_only` - in_trade_only
+         * @enum {string}
+         */
+        ContextEnum: "OK" | "reused" | "in_trade_only";
         /** @description Full payload for one day: meta + every ranked candidate. */
         DayBrief: {
             /** Format: date */
@@ -726,6 +735,42 @@ export interface components {
             realized_return_pct_of_book: number | null;
         };
         /**
+         * @description Window+plannable population split by terminal state.
+         *
+         *     Computed BEFORE the ``status``/``classification`` filters and before the
+         *     per-page cap, so the counts describe the whole window population.
+         */
+        EdgeOutcomesFacetStatus: {
+            terminal: number;
+            ongoing: number;
+        };
+        /**
+         * @description Pre-filter facet counts for the ``/v1/edge/outcomes`` window population.
+         *
+         *     ``classification`` maps each ``ladder_classification`` value to its count
+         *     over the same pre-filter population; the empty-string (not-yet-priced)
+         *     bucket is dropped.
+         */
+        EdgeOutcomesFacets: {
+            status: components["schemas"]["EdgeOutcomesFacetStatus"];
+            classification: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * @description The real ``/v1/edge/outcomes`` envelope.
+         *
+         *     ``total``/``returned``/``truncated`` describe the CURRENT (filtered,
+         *     capped) listing; ``facets`` describe the pre-filter window population.
+         */
+        EdgeOutcomesResponse: {
+            data: components["schemas"]["EdgeOutcomeRow"][];
+            total: number;
+            returned: number;
+            truncated: boolean;
+            facets: components["schemas"]["EdgeOutcomesFacets"];
+        };
+        /**
          * @description The EDGE panel — gated. ``status='insufficient'`` nulls the stat fields.
          *
          *     The key SHAPE is stable (every field always present); the N-gate hides the
@@ -770,6 +815,8 @@ export interface components {
             whatif: components["schemas"]["WhatIfPanel"];
             deployment: components["schemas"]["DeploymentPanel"];
             open_positions: components["schemas"]["OpenPositions"];
+            /** Format: date-time */
+            enriched_at: string | null;
         };
         MarketStatus: {
             is_trading_day: boolean;
@@ -781,6 +828,8 @@ export interface components {
             next_close_iso: string;
             exchange: string;
         };
+        /** @enum {unknown} */
+        NullEnum: null;
         /** @description Ongoing positions as a DESCRIPTIVE distribution (never a scalar mean). */
         OpenPositions: {
             n_open: number;
@@ -1074,9 +1123,11 @@ export interface operations {
             };
         };
     };
-    v1_edge_outcomes_list: {
+    v1_edge_outcomes_retrieve: {
         parameters: {
             query?: {
+                /** @description Comma-separated ladder_classification values; unknown values match nothing. Applied after facets are computed; composes with 'status'. */
+                classification?: string;
                 /** @description Filter: 'terminal' or 'ongoing' (default: all plannable). */
                 status?: string;
                 /** @description Calendar days back from the latest brief date (default: all). */
@@ -1093,7 +1144,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EdgeOutcomeRow"][];
+                    "application/json": components["schemas"]["EdgeOutcomesResponse"];
                 };
             };
         };

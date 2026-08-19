@@ -46,6 +46,45 @@ class EdgeOutcomeRowSerializer(serializers.Serializer):
     realized_return_pct_of_book = serializers.FloatField(allow_null=True)
 
 
+class EdgeOutcomesFacetStatusSerializer(serializers.Serializer):
+    """Window+plannable population split by terminal state.
+
+    Computed BEFORE the ``status``/``classification`` filters and before the
+    per-page cap, so the counts describe the whole window population.
+    """
+
+    terminal = serializers.IntegerField()
+    ongoing = serializers.IntegerField()
+
+
+class EdgeOutcomesFacetsSerializer(serializers.Serializer):
+    """Pre-filter facet counts for the ``/v1/edge/outcomes`` window population.
+
+    ``classification`` maps each ``ladder_classification`` value to its count
+    over the same pre-filter population; the empty-string (not-yet-priced)
+    bucket is dropped.
+    """
+
+    status = EdgeOutcomesFacetStatusSerializer()
+    classification = serializers.DictField(child=serializers.IntegerField())
+
+
+class EdgeOutcomesResponseSerializer(serializers.Serializer):
+    """The real ``/v1/edge/outcomes`` envelope.
+
+    ``total``/``returned``/``truncated`` describe the CURRENT (filtered,
+    capped) listing; ``facets`` describe the pre-filter window population.
+    """
+
+    # Shadows the base ``Serializer.data`` property only statically — DRF's
+    # metaclass pops declared fields off the class namespace at runtime.
+    data = EdgeOutcomeRowSerializer(many=True)  # pyright: ignore[reportAssignmentType]
+    total = serializers.IntegerField()
+    returned = serializers.IntegerField()
+    truncated = serializers.BooleanField()
+    facets = EdgeOutcomesFacetsSerializer()
+
+
 class _QuantilesSerializer(serializers.Serializer):
     p10 = serializers.FloatField(allow_null=True)
     p50 = serializers.FloatField(allow_null=True)

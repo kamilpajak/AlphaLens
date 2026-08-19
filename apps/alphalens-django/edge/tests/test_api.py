@@ -297,6 +297,128 @@ def test_outcomes_ordered_by_recency(tmp_path: Path):
 
 
 @pytest.mark.django_db
+def test_outcomes_facets_reflect_window_population_before_filters_and_cap(
+    tmp_path: Path, monkeypatch
+):
+    # `facets` describe the WHOLE window+plannable population — computed BEFORE
+    # the status/classification filters and BEFORE the per-page cap — so the SPA
+    # chips carry server truth even when the listing itself is filtered/capped.
+    from edge.api import views as edge_views
+
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [
+            _terminal("AMPL", excess=0.04, realized_r=1.2),
+            _terminal("BBAI", excess=0.02, realized_r=0.8),
+            _terminal("RGTI", excess=-0.03, realized_r=-1.0, classification="SL_HIT"),
+            _ongoing("BLBD", open_r=0.16),
+            _ongoing("RKLB", open_r=0.05),
+        ],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    monkeypatch.setattr(edge_views, "_OUTCOMES_LIMIT", 2)
+    body = APIClient().get("/v1/edge/outcomes").json()
+    assert body["returned"] == 2  # cap applied to the listing...
+    assert body["facets"]["status"] == {"terminal": 3, "ongoing": 2}  # ...not the facets
+    assert body["facets"]["classification"] == {"TP_FULL": 2, "SL_HIT": 1, "OPEN": 2}
+
+    # The status filter narrows the listing but must NOT change the facets.
+    filtered = APIClient().get("/v1/edge/outcomes?status=terminal").json()
+    assert filtered["facets"] == body["facets"]
+
+
+@pytest.mark.django_db
+def test_outcomes_facets_drop_empty_classification_bucket(tmp_path: Path):
+    # Not-yet-priced rows carry an empty ladder_classification; the "" bucket is
+    # dropped from facets.classification but the row still counts in facets.status.
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [
+            {**_ongoing("PEND", open_r=0.0), "ladder_classification": ""},
+            _terminal("AMPL", excess=0.04, realized_r=1.2),
+        ],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    facets = APIClient().get("/v1/edge/outcomes").json()["facets"]
+    assert "" not in facets["classification"]
+    assert facets["classification"] == {"TP_FULL": 1}
+    assert facets["status"] == {"terminal": 1, "ongoing": 1}
+
+
+@pytest.mark.django_db
+def test_outcomes_classification_param_filters_rows_server_side(tmp_path: Path):
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [
+            _terminal("AMPL", excess=0.04, realized_r=1.2),
+            _terminal("RGTI", excess=-0.03, realized_r=-1.0, classification="SL_HIT"),
+            _terminal("IONQ", excess=-0.01, realized_r=-0.2, classification="TIME_STOP"),
+        ],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    body = APIClient().get("/v1/edge/outcomes?classification=SL_HIT,TIME_STOP").json()
+    assert {r["ticker"] for r in body["data"]} == {"RGTI", "IONQ"}
+    assert body["total"] == 2
+    # Facets are pre-filter — all three classes stay visible.
+    assert body["facets"]["classification"] == {"TP_FULL": 1, "SL_HIT": 1, "TIME_STOP": 1}
+
+
+@pytest.mark.django_db
+def test_outcomes_classification_composes_with_status(tmp_path: Path):
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [_terminal("AMPL", excess=0.04, realized_r=1.2), _ongoing("BLBD", open_r=0.16)],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    none = APIClient().get("/v1/edge/outcomes?status=ongoing&classification=TP_FULL").json()
+    assert none["data"] == []
+    assert none["total"] == 0
+
+    one = APIClient().get("/v1/edge/outcomes?status=terminal&classification=TP_FULL").json()
+    assert [r["ticker"] for r in one["data"]] == ["AMPL"]
+
+
+@pytest.mark.django_db
+def test_outcomes_classification_unknown_value_matches_nothing(tmp_path: Path):
+    # Unknown values simply match nothing — no validation, no 400 (solo project).
+    _write_parquet(tmp_path, "2026-05-27", [_terminal("AMPL", excess=0.04, realized_r=1.2)])
+    rebuild_from_parquet(tmp_path)
+
+    resp = APIClient().get("/v1/edge/outcomes?classification=BOGUS")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"] == []
+    assert body["total"] == 0
+    assert body["truncated"] is False
+    assert body["facets"]["classification"] == {"TP_FULL": 1}
+
+
+@pytest.mark.django_db
+def test_outcomes_facets_respect_window(tmp_path: Path):
+    # Facets count only in-window rows — the window floor is applied before the
+    # facet aggregation, same as before the listing.
+    _write_parquet(
+        tmp_path,
+        "2026-05-01",
+        [{**_terminal("OLD", excess=0.01, realized_r=0.5, classification="SL_HIT")}],
+    )
+    _write_parquet(tmp_path, "2026-06-01", [_ongoing("NEW", open_r=0.1)])
+    rebuild_from_parquet(tmp_path)
+
+    facets = APIClient().get("/v1/edge/outcomes?window=10").json()["facets"]
+    assert facets["status"] == {"terminal": 0, "ongoing": 1}
+    assert facets["classification"] == {"OPEN": 1}
+
+
+@pytest.mark.django_db
 def test_outcomes_window_anchored_to_latest_brief_date(tmp_path: Path):
     # `?window=N` counts back from the LATEST brief_date in the cache, not from
     # today — the window must stay stable regardless of when the API is hit

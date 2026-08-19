@@ -29,6 +29,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -70,6 +71,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -94,6 +96,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -140,6 +143,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -171,6 +175,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -194,6 +199,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -203,10 +209,16 @@ paths:
           description: ''
   /v1/edge/outcomes:
     get:
-      operationId: v1_edge_outcomes_list
+      operationId: v1_edge_outcomes_retrieve
       description: '``/v1/edge/outcomes`` — per-candidate rows (theme joined from
         the brief).'
       parameters:
+      - in: query
+        name: classification
+        schema:
+          type: string
+        description: Comma-separated ladder_classification values; unknown values
+          match nothing. Applied after facets are computed; composes with 'status'.
       - in: query
         name: status
         schema:
@@ -222,14 +234,13 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/EdgeOutcomeRow'
+                $ref: '#/components/schemas/EdgeOutcomesResponse'
           description: ''
   /v1/edge/summary:
     get:
@@ -246,6 +257,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -278,6 +290,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -307,6 +320,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -348,6 +362,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -395,6 +410,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -443,6 +459,7 @@ paths:
       security:
       - CloudflareAccessJWT: []
       - cookieAuth: []
+      - {}
       responses:
         '200':
           content:
@@ -1075,9 +1092,10 @@ components:
       description: |-
         One modeled fill / exit marker, snapped to a daily bar ``time``.
 
-        ``kind`` is the chart vocabulary (``ENTRY`` / ``TP`` / ``SL`` / ``TIME_STOP``);
-        ``ambiguous`` carries the SL-first intrabar flag (a bar that touched both a TP
-        high and the SL low, resolved SL-first).
+        ``kind`` is the pipeline's marker vocabulary; opaque to this serializer (a
+        plain passthrough, so new kinds need no change here). ``ambiguous`` carries
+        the SL-first intrabar flag (a bar that touched both a TP high and the SL
+        low, resolved SL-first).
       properties:
         time:
           type: string
@@ -1157,6 +1175,11 @@ components:
           nullable: true
         status:
           $ref: '#/components/schemas/ChartResponseStatusEnum'
+        context:
+          nullable: true
+          oneOf:
+          - $ref: '#/components/schemas/ContextEnum'
+          - $ref: '#/components/schemas/NullEnum'
         bars:
           type: array
           items:
@@ -1177,6 +1200,7 @@ components:
       - ambiguous_bars
       - bars
       - brief_date
+      - context
       - holding_days_elapsed
       - intrabar_rule
       - ladder_classification
@@ -1198,6 +1222,16 @@ components:
         * `OK` - OK
         * `NO_DATA` - NO_DATA
         * `NO_STRUCTURE` - NO_STRUCTURE
+    ContextEnum:
+      enum:
+      - OK
+      - reused
+      - in_trade_only
+      type: string
+      description: |-
+        * `OK` - OK
+        * `reused` - reused
+        * `in_trade_only` - in_trade_only
     DayBrief:
       type: object
       description: 'Full payload for one day: meta + every ranked candidate.'
@@ -1515,6 +1549,65 @@ components:
       - realized_return_pct_of_book
       - terminal
       - ticker
+    EdgeOutcomesFacetStatus:
+      type: object
+      description: |-
+        Window+plannable population split by terminal state.
+
+        Computed BEFORE the ``status``/``classification`` filters and before the
+        per-page cap, so the counts describe the whole window population.
+      properties:
+        terminal:
+          type: integer
+        ongoing:
+          type: integer
+      required:
+      - ongoing
+      - terminal
+    EdgeOutcomesFacets:
+      type: object
+      description: |-
+        Pre-filter facet counts for the ``/v1/edge/outcomes`` window population.
+
+        ``classification`` maps each ``ladder_classification`` value to its count
+        over the same pre-filter population; the empty-string (not-yet-priced)
+        bucket is dropped.
+      properties:
+        status:
+          $ref: '#/components/schemas/EdgeOutcomesFacetStatus'
+        classification:
+          type: object
+          additionalProperties:
+            type: integer
+      required:
+      - classification
+      - status
+    EdgeOutcomesResponse:
+      type: object
+      description: |-
+        The real ``/v1/edge/outcomes`` envelope.
+
+        ``total``/``returned``/``truncated`` describe the CURRENT (filtered,
+        capped) listing; ``facets`` describe the pre-filter window population.
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/EdgeOutcomeRow'
+        total:
+          type: integer
+        returned:
+          type: integer
+        truncated:
+          type: boolean
+        facets:
+          $ref: '#/components/schemas/EdgeOutcomesFacets'
+      required:
+      - data
+      - facets
+      - returned
+      - total
+      - truncated
     EdgePanel:
       type: object
       description: |-
@@ -1612,10 +1705,15 @@ components:
           $ref: '#/components/schemas/DeploymentPanel'
         open_positions:
           $ref: '#/components/schemas/OpenPositions'
+        enriched_at:
+          type: string
+          format: date-time
+          nullable: true
       required:
       - benchmark
       - deployment
       - edge
+      - enriched_at
       - metric_note
       - n_brief
       - n_gate_threshold
@@ -1649,6 +1747,9 @@ components:
       - is_trading_day
       - next_close_iso
       - next_open_iso
+    NullEnum:
+      enum:
+      - null
     OpenPositions:
       type: object
       description: Ongoing positions as a DESCRIPTIVE distribution (never a scalar

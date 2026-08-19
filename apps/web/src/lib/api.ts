@@ -149,6 +149,58 @@ export async function apiFetch(
 	return res;
 }
 
+/** Calendar days back from the LATEST brief_date in the cache (backend
+ *  semantics) for the /edge dashboard's outcome window. Shared by the loader
+ *  and the toolbar's classification refetch so both hit the SAME window. */
+export const EDGE_WINDOW_DAYS = 90;
+
+/**
+ * Fetch the /v1/edge/outcomes envelope for the standard /edge window.
+ *
+ * `classifications` (when non-empty) is serialized into the server-side
+ * `classification=` filter — sorted so the URL is stable regardless of click
+ * order (mirrors `setToParam`); an empty selection (ALL) drops the param
+ * entirely. `total`/`truncated` describe the CURRENT (filtered, capped)
+ * listing; `facets` are the pre-filter window population (null-degrading
+ * against an older API build that omits the block). Any failure (offline, 401,
+ * 5xx, malformed body) degrades to an empty result so the page renders a clean
+ * "no data" state rather than crashing — same pattern as `getEdgeChart`.
+ */
+export async function getEdgeOutcomes(
+	classifications: ReadonlySet<string> = new Set(),
+	fetcher: typeof fetch = fetch
+): Promise<{
+	rows: import('./types').EdgeOutcome[];
+	total: number;
+	truncated: boolean;
+	facets: import('./types').EdgeOutcomesFacets | null;
+}> {
+	let path = `/v1/edge/outcomes?window=${EDGE_WINDOW_DAYS}`;
+	if (classifications.size > 0) {
+		const param = [...classifications].sort((a, b) => a.localeCompare(b, 'en')).join(',');
+		path += `&classification=${encodeURIComponent(param)}`;
+	}
+	try {
+		const res = await apiFetch(path, {}, fetcher);
+		if (!res.ok) return { rows: [], total: 0, truncated: false, facets: null };
+		const body: {
+			data?: import('./types').EdgeOutcome[];
+			total?: number;
+			truncated?: boolean;
+			facets?: import('./types').EdgeOutcomesFacets;
+		} = await res.json();
+		const rows = body.data ?? [];
+		return {
+			rows,
+			total: body.total ?? rows.length,
+			truncated: body.truncated ?? false,
+			facets: body.facets ?? null
+		};
+	} catch {
+		return { rows: [], total: 0, truncated: false, facets: null };
+	}
+}
+
 /**
  * Fetch the ladder-replay chart payload for one recommendation.
  *

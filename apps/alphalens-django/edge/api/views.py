@@ -3,8 +3,10 @@
 * ``GET /v1/edge/summary?window=N`` — :class:`EdgeSummaryView`. The N-gated,
   benchmark-relative aggregate (memo §3). ``window`` (calendar days back from the
   latest brief date) bounds the population; default = all.
-* ``GET /v1/edge/outcomes?window=N&status=terminal|ongoing`` —
-  :class:`EdgeOutcomesView`. The per-candidate rows behind the aggregate.
+* ``GET /v1/edge/outcomes?window=N&status=terminal|ongoing&classification=A,B``
+  — :class:`EdgeOutcomesView`. The per-candidate rows behind the aggregate,
+  wrapped in the ``{data, total, returned, truncated, facets}`` envelope;
+  ``facets`` carry pre-filter window-population counts for the SPA chips.
 
 Both are auth_cf-gated like the rest of the API (the project-wide
 ``IsAuthenticated`` default). TELEMETRY / EXPLORATORY only — no re-weight action,
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import datetime as dt
 
+from django.db.models import Count
 from django.db.models.functions import Coalesce
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
@@ -27,7 +30,7 @@ from edge.api.chart import EdgeChartView
 from edge.api.excess_telemetry import build_excess_telemetry
 from edge.api.serializers import (
     EdgeExcessTelemetrySerializer,
-    EdgeOutcomeRowSerializer,
+    EdgeOutcomesResponseSerializer,
     EdgeSummarySerializer,
 )
 from edge.api.summary import build_edge_summary
@@ -54,6 +57,15 @@ def _parse_window(request: Request) -> int | None:
     if n <= 0:
         return None
     return min(n, _MAX_WINDOW_DAYS)
+
+
+def _parse_classifications(request: Request) -> list[str]:
+    """Parse the ``classification`` query param (comma-separated values).
+
+    Unknown values naturally match nothing — no validation, no 400.
+    """
+    raw = request.query_params.get("classification") or ""
+    return [v for v in raw.split(",") if v]
 
 
 def _window_floor(window: int | None) -> dt.date | None:
@@ -124,8 +136,17 @@ class EdgeOutcomesView(APIView):
                 OpenApiTypes.STR,
                 description="Filter: 'terminal' or 'ongoing' (default: all plannable).",
             ),
+            OpenApiParameter(
+                "classification",
+                OpenApiTypes.STR,
+                description=(
+                    "Comma-separated ladder_classification values; unknown values "
+                    "match nothing. Applied after facets are computed; composes "
+                    "with 'status'."
+                ),
+            ),
         ],
-        responses=EdgeOutcomeRowSerializer(many=True),
+        responses=EdgeOutcomesResponseSerializer,
     )
     def get(self, request: Request) -> Response:
         window = _parse_window(request)
@@ -134,11 +155,36 @@ class EdgeOutcomesView(APIView):
         if floor is not None:
             qs = qs.filter(brief_date__gte=floor)
 
+        # Facets describe the WHOLE window+plannable population — computed
+        # BEFORE the status/classification filters and before the cap, so the
+        # SPA chips carry server truth even when the listing is filtered/capped.
+        # The empty-string (not-yet-priced) classification bucket is dropped.
+        status_counts = {
+            row["terminal"]: row["n"] for row in qs.values("terminal").annotate(n=Count("pk"))
+        }
+        classification_counts = {
+            row["ladder_classification"]: row["n"]
+            for row in qs.exclude(ladder_classification="")
+            .values("ladder_classification")
+            .annotate(n=Count("pk"))
+        }
+        facets = {
+            "status": {
+                "terminal": status_counts.get(True, 0),
+                "ongoing": status_counts.get(False, 0),
+            },
+            "classification": classification_counts,
+        }
+
         status_filter = (request.query_params.get("status") or "").lower()
         if status_filter == "terminal":
             qs = qs.filter(terminal=True)
         elif status_filter == "ongoing":
             qs = qs.filter(terminal=False)
+
+        classifications = _parse_classifications(request)
+        if classifications:
+            qs = qs.filter(ladder_classification__in=classifications)
 
         # Order by RECENCY OF ACTIVITY: maturity date for terminal rows, brief
         # date for ongoing ones. Ordering by brief_date alone structurally starved
@@ -187,13 +233,18 @@ class EdgeOutcomesView(APIView):
             }
             for o in outcomes
         ]
+        # Serialize the whole envelope through the response serializer so the
+        # runtime shape and the published schema cannot diverge.
         return Response(
-            {
-                "data": EdgeOutcomeRowSerializer(rows, many=True).data,
-                "total": total,
-                "returned": len(rows),
-                "truncated": total > _OUTCOMES_LIMIT,
-            }
+            EdgeOutcomesResponseSerializer(
+                {
+                    "data": rows,
+                    "total": total,
+                    "returned": len(rows),
+                    "truncated": total > _OUTCOMES_LIMIT,
+                    "facets": facets,
+                }
+            ).data
         )
 
 
