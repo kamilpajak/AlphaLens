@@ -248,12 +248,79 @@ This study is **quasi-holdout, prior-adjusting evidence — not confirmation.**
 
 ## 11. Phase-0 amendment record
 
-(To be appended by amendment before Phase 1 — empty at lock.)
+(Amended 2026-08-19, before any Phase-1 labeling call, per §10 Stage A.)
 
-- Pinned provider: —
-- Documented v4 training cutoff + source: —
-- Pilot pair ids (20): —
-- Memorization-probe event ids (10): —
+- **Pinned provider: `Alibaba`** (OpenRouter provider name; endpoint tag
+  `alibaba/fp8`, quantization fp8). Chosen as the most-frequently-served fp8
+  provider over 6 discovery calls through the canonical `OpenRouterClient`
+  with the production fp8 quantization pool and no order pin (Alibaba 4/6,
+  DeepInfra 2/6). Pin verified 5/5: with
+  `ALPHALENS_OPENROUTER_PROVIDER_ORDER=Alibaba`,
+  `ALPHALENS_OPENROUTER_ALLOW_FALLBACKS` unset (⇒ `allow_fallbacks: false`),
+  `ALPHALENS_OPENROUTER_QUANTIZATIONS=fp8`, `require_parameters: true`, all 5
+  verification calls returned `provider=Alibaba`,
+  `served_model=deepseek/deepseek-v4-pro`. Replay environment only.
+- **Documented v4 training cutoff + source:** DeepSeek publishes no exact
+  knowledge-cutoff date. The binding evidence is checkpoint identity: the
+  OpenRouter slug `deepseek/deepseek-v4-pro` is the **V4 Pro 0423
+  checkpoint** ("DeepSeek: DeepSeek V4 Pro 0423", created 2026-04-24 per the
+  OpenRouter `/api/v1/models` registry and the model page "Release Date:
+  April 24, 2026"). A checkpoint released 2026-04-24 cannot contain training
+  data past its release, so its cutoff strictly predates the cohort start
+  2026-05-19. **Known hazard, bounded:** the GA **V4-Pro-0813** checkpoint
+  (released 2026-08-13, training data potentially covering the cohort) is a
+  DISTINCT OpenRouter slug (`deepseek/deepseek-v4-pro-0813`), and DeepSeek's
+  own first-party API has re-pointed its native `deepseek-v4-pro` name to
+  0813 — therefore the pinned provider must never be the first-party
+  `DeepSeek` proxy. The pin (Alibaba, an open-weights hoster serving the
+  0423-slug weights) plus per-call `served_model` logging plus the §7.4
+  memorization probe bound this substitution risk.
+- **Pilot pair ids (20; seed 20260819, 10 CLEAN + 10 DEV, no straddles):**
+  CLEAN — `Artificial Intelligence|gadget.co.za/sasagenticai38f`,
+  `ai_inference_hardware|macdailynews.com/2026/06/04/apple-finally-set-to-launch-all-new-siri…`,
+  `consumer_electronics|techcrunch.com/2026/05/30/meta-is-reportedly-developing-an-ai-pendant`,
+  `defense_procurement|attackofthefanboy.com/politics/us-will-need-years-to-replenish-stockpiles…`,
+  `fda_approval|benzinga.com/…/vertex-says-pediatric-casgevy-data…`,
+  `fintech|digitaltrends.com/computing/canva-adds-new-editing-tools-payments…`,
+  `investment strategy|fool.com/investing/2026/05/25/billionaire-stanley-druckenmiller-just-dumped-alph`,
+  `ios|techcrunch.com/2026/06/09/wwdc-2026-everything-announced…`,
+  `passive_investing|benzinga.com/…/the-voo-and-chill-economy-is-now-worth-a-historic-1-trillion`,
+  `quantum_computing|finance.yahoo.com/…/globalfoundries-gfs-launches-dedicated-quantum-200944118`;
+  DEV — `augmented_reality|seekingalpha.com/news/4605204-snap-gets-a-reality-check…`,
+  `bank_earnings|ground.news/article/how-major-us-stock-indexes-fared-tuesday-7-14-2026`,
+  `dividend_etf|fool.com/coverage/etfs/2026/06/22/dividend-etfs-how-schd-and-fdvv-measure-up`,
+  `dividend_king|fool.com/investing/2026/07/30/coca-cola-just-hit-an-all-time-high…`,
+  `government_investigation|thesun.ng/tinubu-orders-fccpc-probe-of-big-tech…`,
+  `investment_banking|investing.com/analysis/sp-500-rally-tests-whether-softer-inflation…200683900`,
+  `precision_medicine|sec.gov/Archives/edgar/data/1217234/000121723426000038/…index.htm`,
+  `press_freedom|yahoo.com/news/politics/articles/trump-t-stop-white-house-162003161`,
+  `s_p_500|investing.com/analysis/factories-hold-their-ground…200683135`,
+  `subpoena|military.com/justice-department-subpoenas-reporters-air-force-one-security`.
+  Full exact `pair_id` strings in the study scratch artifact
+  `phase0_selection.json` (seeded draw, reproducible).
+- **Memorization-probe event ids (10; earliest CLEAN pairs, May-boundary
+  weighted):** 2026-05-19 AI (`Artificial Intelligence|marketwatch.com/…anthropics-latest-hire…`),
+  2026-05-19 QS (`Electric Vehicles|finance.sina.com.cn/…doc-inhymysz9850678`),
+  2026-05-19 SOUN (`artificial_intelligence|techcrunch.com/2026/05/19/how-to-use-googles-new-ai-agents…`),
+  2026-05-19 MP (`geopolitics|bignewsnetwork.com/…putin-visits-china…`),
+  2026-05-20 BAH (`geopolitics|ft.com/content/c4dc62eb-2dc0-47b3-bcd5-0c4495872783`),
+  2026-05-20 RDW (`space exploration|ft.com/content/c4dc62eb…`),
+  2026-05-21 SYM (`AI|vietnamnet.vn/…google-deepmind-and-qualcomm-leaders…`),
+  2026-05-21 AI (`Artificial Intelligence|gadget.co.za/sasagenticai38f`),
+  2026-05-21 WK (`IPO|marketwatch.com/…spacex-has-a-lot-riding…`),
+  2026-05-21 EXPO (`consumer warning|ktar.com/…newsoms-office-warns-californians-to-avoid…`).
+- **Anchor payload identities (stored events, recovered read-only from the
+  VPS stores):** (a) `harassment` × the eBay harassment-settlement event —
+  news_id `1286800032aaad71`, stamped title "eBay pays $46M to journalists it
+  targeted in bizarre harassment campaign", published 2026-07-28, event_type
+  `settlement`, confidence 0.95, primary_entities [EBAY], no implications;
+  (b) `us_ukraine_relations` × the Patriot-deal event — news_id
+  `8bb2a99ed083524e`, title "Trump frânează acordul cu Ucraina pentru
+  fabricarea rachetelor Patriot, invocând riscuri legate de tehnologia
+  militară americană", published 2026-08-01, event_type `geopolitical`,
+  confidence 0.8, primary_entities [RTX], one stored implication. These are
+  the two events the deployed prompt declined in the first post-deploy run
+  (asof 2026-08-02, 21:04 UTC; head-to-head memo §13.7).
 - Anchor call results: —
 - Label parquet sha256 (Stage B): —
 
