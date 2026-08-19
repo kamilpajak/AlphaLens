@@ -312,7 +312,16 @@ jobs:
         # playwright.config.ts targets a single chromium project. --with-deps
         # pulls the OS libraries the headless browser needs on ubuntu-latest.
         # Only chromium is installed (not webkit/firefox) to keep the step fast.
-        run: pnpm exec playwright install --with-deps chromium
+        # kill-and-retry wrapper (2026-08-19): the CDN download sometimes STALLS
+        # (dead TCP, no progress, no error) — a stalled attempt never triggers
+        # playwright's own mirror fallback, so bound each attempt to 4min and
+        # retry; a fresh connection usually lands on a healthy CDN edge.
+        run: |
+          for attempt in 1 2 3 4; do
+            timeout 240 pnpm exec playwright install --with-deps chromium && exit 0
+            echo "playwright install attempt ${attempt} failed/stalled — retrying"
+          done
+          exit 1
 
       - name: Web tests (Playwright)
         working-directory: apps/web
