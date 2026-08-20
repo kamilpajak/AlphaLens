@@ -358,6 +358,8 @@ def generate_brief(
                 parsed,
                 causal_support=causal_support,
                 grounding=str(facts.get("channel_grounding") or ""),
+                ticker=str(facts.get("ticker") or ""),
+                company_name=str(facts.get("company_name") or ""),
             )
             if v.suppressed_by is None
         ]

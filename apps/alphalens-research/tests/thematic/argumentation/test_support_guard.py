@@ -11,8 +11,14 @@ model's uncertainty, not attaching a label beside otherwise-confident text.
 
 In hazard-control terms a chip next to a confident paragraph is an
 administrative control, near the bottom of the ordering. The engineering control
-is to generate the prose FROM the record and make the unsupported shape
-mechanically impossible to render. That is what this module tests.
+is to generate the prose FROM the record and check the rendered shape against
+it. That is what this module tests.
+
+The check is LEXICAL, so it cannot claim to make the unsupported shape
+unrenderable: a paraphrase outside the list renders exactly as before. What the
+tests here pin is the two directions that would make the instrument LIE — an
+entry that can never fire, and a suppressor that disarms on prose the prompt
+itself mandates.
 
 SCOPE IS THE WHOLE DESIGN
 -------------------------
@@ -63,6 +69,7 @@ class TheGuardFiresOnAnUnsupportedBenefitClaim(unittest.TestCase):
             ),
             causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
             grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
         )
         fired = [v for v in violations if v.suppressed_by is None]
         self.assertGreaterEqual(len(fired), 1)
@@ -76,6 +83,7 @@ class TheGuardFiresOnAnUnsupportedBenefitClaim(unittest.TestCase):
             ),
             causal_support=channel_assessor.SUPPORT_ESTABLISHED,
             grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
         )
         self.assertEqual(violations, [])
 
@@ -119,14 +127,16 @@ class TheGuardFiresOnAnUnsupportedBenefitClaim(unittest.TestCase):
                     _brief(**{field: "The company benefits from the theme."}),
                     causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
                     grounding=channel_assessor.GROUNDING_GROUNDED,
+                    ticker="QUBT",
                 )
                 self.assertEqual([v.field for v in violations if v.suppressed_by is None], [field])
 
     def test_two_benefit_claims_in_one_field_collapse_to_one_violation(self):
         violations = support_guard.check_support_language(
-            _brief(tldr="It benefits from the theme and also gains share."),
+            _brief(tldr="QUBT benefits from the theme and also gains share."),
             causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
             grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
         )
         self.assertEqual(len([v for v in violations if v.suppressed_by is None]), 1)
 
@@ -144,6 +154,7 @@ class TheSuppressorsLetHonestHedgingThrough(unittest.TestCase):
             _brief(tldr=text),
             causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
             grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
         )
 
     def _fired(self, text: str) -> int:
@@ -194,6 +205,7 @@ class Tier2TokensNeedAnEconomicAnchor(unittest.TestCase):
             _brief(supply_chain_reasoning=text),
             causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
             grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
         )
         return len([v for v in violations if v.suppressed_by is None])
 
@@ -208,6 +220,279 @@ class Tier2TokensNeedAnEconomicAnchor(unittest.TestCase):
 
     def test_lift_with_margin_fires(self):
         self.assertEqual(self._fired("The change lifts margin at this company."), 1)
+
+
+class ASuppressorMustGovernThePhraseNotTheSentence(unittest.TestCase):
+    """The cue has to apply TO the benefit phrase, not merely share a sentence.
+
+    This is the failure mode that made the guard anti-correlated with the risk
+    it exists to catch. The prompt MANDATES a negated sentence at
+    ``not_established`` ("no company-specific cash-flow path ... was
+    established") and MANDATES hedged risk prose in ``bear_summary``, so a
+    sentence-wide suppressor is disarmed by the model's own instructions:
+    the naive violation the model rarely writes fired, and the
+    hedge-plus-assertion shape the prompt actively teaches went quiet.
+    """
+
+    def _fired(self, text: str) -> int:
+        violations = support_guard.check_support_language(
+            _brief(tldr=text),
+            causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+            grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
+        )
+        return len([v for v in violations if v.suppressed_by is None])
+
+    def test_a_negation_in_an_earlier_comma_segment_does_not_suppress(self):
+        # The mandated not_established sentence with a benefit claim bolted on
+        # after the comma. The negation governs "was established", not
+        # "benefits".
+        self.assertEqual(
+            self._fired(
+                "QUBT surfaced from the Yahoo Finance market round-up; no "
+                "company-specific cash-flow path from that event to this company "
+                "was established, though the datacenter buildout benefits its "
+                "optics line."
+            ),
+            1,
+        )
+
+    def test_a_negation_before_an_adversative_does_not_suppress(self):
+        self.assertEqual(
+            self._fired(
+                "The event names no link to this company (it is a macro item "
+                "about the category), so treat the pairing as unreliable, but "
+                "QUBT is positioned to win share in optics."
+            ),
+            1,
+        )
+
+    def test_a_modal_in_a_trailing_segment_does_not_suppress(self):
+        self.assertEqual(
+            self._fired(
+                "QUBT benefits from the AI capex cycle, and the shares could "
+                "stay volatile into the print."
+            ),
+            1,
+        )
+
+    def test_a_conditional_governing_an_earlier_clause_does_not_suppress(self):
+        self.assertEqual(
+            self._fired("Exit if the buildout stalls, since QUBT benefits from continued capex."),
+            1,
+        )
+
+    def test_a_concessive_modal_does_not_suppress(self):
+        self.assertEqual(
+            self._fired(
+                "P/S 30 is rich and momentum could fade, even though QUBT "
+                "benefits from the datacenter cycle."
+            ),
+            1,
+        )
+
+    def test_the_honest_escape_hatch_still_suppresses(self):
+        """Anti-inertness control for the narrowed scope.
+
+        Narrowing the suppressors must not delete the contract's own escape
+        hatch: a forward statement conditional on the missing link is the shape
+        the prompt asks for at ``suggestive``, and it must stay allowed.
+        """
+        text = "If the reported contract is confirmed, QUBT benefits from a new customer."
+        self.assertEqual(self._fired(text), 0)
+        violations = support_guard.check_support_language(
+            _brief(tldr=text),
+            causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+            grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
+        )
+        self.assertEqual(violations[0].suppressed_by, support_guard.SUPPRESSED_BY_CONDITIONAL)
+
+    def test_a_same_segment_negation_still_suppresses(self):
+        self.assertEqual(self._fired("The event does not show that QUBT benefits."), 0)
+
+
+class TheSubjectOfTheBenefitMustBeThisCompany(unittest.TestCase):
+    """A benefit verb about RIVALS is honest risk prose, not a violation.
+
+    ``bear_summary`` is MANDATORY and its own instruction asks for competitor,
+    momentum and valuation risks, so competitor-benefit sentences are the
+    expected shape there. Firing on them withheld exactly the honest prose this
+    increment exists to keep visible — and the withholding was perfectly
+    correlated with the epistemic status the design forbids gating on.
+    """
+
+    def _violations(self, **fields):
+        return support_guard.check_support_language(
+            _brief(**fields),
+            causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+            grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
+            company_name="Quantum Computing Inc",
+        )
+
+    def _fired(self, **fields) -> int:
+        return len([v for v in self._violations(**fields) if v.suppressed_by is None])
+
+    def test_a_bear_case_about_rivals_does_not_fire(self):
+        self.assertEqual(
+            self._fired(
+                bear_summary=(
+                    "Larger rivals with existing contracts benefit more from any "
+                    "category spend. Incumbents capture share in this category, "
+                    "and any category tailwind for peers is already priced."
+                )
+            ),
+            0,
+        )
+
+    def test_the_third_party_match_is_still_reported_as_suppressed(self):
+        violations = self._violations(
+            bear_summary="Larger rivals with existing contracts benefit more from category spend."
+        )
+        self.assertTrue(violations)
+        self.assertEqual(violations[0].suppressed_by, support_guard.SUPPRESSED_BY_NO_SUBJECT)
+
+    def test_the_ticker_as_subject_still_fires(self):
+        """Anti-inertness control: the subject rule must not silence the guard."""
+        self.assertEqual(self._fired(tldr="QUBT benefits from the theme."), 1)
+
+    def test_the_company_name_as_subject_still_fires(self):
+        self.assertEqual(self._fired(tldr="Quantum Computing benefits from the theme."), 1)
+
+    def test_a_generic_self_reference_still_fires(self):
+        self.assertEqual(self._fired(tldr="The company benefits from the theme."), 1)
+
+
+class EveryLexiconEntryMustBeAbleToFire(unittest.TestCase):
+    """Structural anti-rot: an entry that can never match reads as covered.
+
+    Two entries were inert on every possible input — one because ``_normalise``
+    stripped hyphens from the TEXT but not from the compiled phrase, one
+    because it contains its own conditional cue. Both were formulations a model
+    reaches for on a weak link, so this is not a random gap. Enumerating the
+    lexicon is the only check that catches the class permanently.
+    """
+
+    #: Subject + economic anchor + no negation and no conditional cue, so a
+    #: failure here is the ENTRY's inability to fire and nothing else.
+    CARRIER = "QUBT {phrase} revenue at scale."
+
+    def test_each_tier1_phrase_fires_on_a_minimal_carrier_sentence(self):
+        for phrase in support_guard.BANNED_BENEFIT_PHRASES:
+            with self.subTest(phrase=phrase):
+                violations = support_guard.check_support_language(
+                    _brief(tldr=self.CARRIER.format(phrase=phrase)),
+                    causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+                    grounding=channel_assessor.GROUNDING_GROUNDED,
+                    ticker="QUBT",
+                )
+                self.assertEqual(
+                    len([v for v in violations if v.suppressed_by is None]),
+                    1,
+                    f"{phrase!r} can never fire",
+                )
+
+    def test_the_hyphenated_entry_fires_in_both_spellings(self):
+        for text in (
+            "QUBT is a second-order beneficiary of the datacenter buildout.",
+            "QUBT is a second order beneficiary of the datacenter buildout.",
+        ):
+            with self.subTest(text=text):
+                violations = support_guard.check_support_language(
+                    _brief(tldr=text),
+                    causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+                    grounding=channel_assessor.GROUNDING_GROUNDED,
+                    ticker="QUBT",
+                )
+                self.assertEqual(len([v for v in violations if v.suppressed_by is None]), 1)
+
+    def test_the_modal_bearing_entry_fires(self):
+        violations = support_guard.check_support_language(
+            _brief(tldr="QUBT should see demand from hyperscalers."),
+            causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+            grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
+        )
+        self.assertEqual([v.matched_phrase for v in violations], ["should see demand"])
+        self.assertIsNone(violations[0].suppressed_by)
+
+    def test_the_near_neighbour_paraphrases_are_covered(self):
+        # The list was built by enumeration, so the obvious neighbours of
+        # entries that ARE present were missing. These are not exhaustive and
+        # the docstring says so — recall is measured, not assumed.
+        for text in (
+            "QUBT stands to profit from the datacenter cycle.",
+            "QUBT is levered to hyperscaler capex.",
+            "The award is a windfall for QUBT.",
+            "QUBT takes share in optics.",
+            "QUBT has pricing power in optics.",
+            "The cycle drives margin expansion at QUBT.",
+        ):
+            with self.subTest(text=text):
+                violations = support_guard.check_support_language(
+                    _brief(tldr=text),
+                    causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+                    grounding=channel_assessor.GROUNDING_GROUNDED,
+                    ticker="QUBT",
+                )
+                self.assertEqual(len([v for v in violations if v.suppressed_by is None]), 1)
+
+
+class PolysemousStemsStayOnTheAnchoredPath(unittest.TestCase):
+    """Duplicated stems bypassed the anchor requirement and over-fired.
+
+    ``captures`` / ``lifts`` / ``gains`` sat in BOTH tiers; tier 1 is scanned
+    first and returns on the first fired match, so the documented anchor
+    requirement was dead for exactly the three stems that most need it. A false
+    fire costs a draw and can withhold honest prose from a ``not_established``
+    row — the opposite of the design intent.
+    """
+
+    def _fired(self, text: str) -> int:
+        violations = support_guard.check_support_language(
+            _brief(supply_chain_reasoning=text),
+            causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+            grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
+        )
+        return len([v for v in violations if v.suppressed_by is None])
+
+    def test_a_sensor_capturing_images_is_not_a_benefit_claim(self):
+        self.assertEqual(self._fired("The QUBT sensor captures images at 40 Hz."), 0)
+
+    def test_a_crane_lifting_a_module_is_not_a_benefit_claim(self):
+        self.assertEqual(self._fired("The QUBT crane lifts the module into place."), 0)
+
+    def test_a_price_move_is_not_a_benefit_claim(self):
+        self.assertEqual(self._fired("QUBT gains 3% on the day."), 0)
+
+    def test_no_stem_sits_in_both_tiers(self):
+        """The structural form of the same defect, so it cannot come back.
+
+        Tier 1 is scanned first and returns on the first FIRED match, so a stem
+        present in both tiers permanently bypasses the anchor requirement.
+        """
+        overlap = set(support_guard.BANNED_BENEFIT_PHRASES) & set(support_guard._TIER2_TOKENS)
+        self.assertEqual(overlap, set())
+
+    def test_the_lexicon_carries_no_hyphens(self):
+        """`_normalise` maps a hyphen to a space on both sides of the compare.
+
+        A hyphenated ENTRY therefore matches neither spelling of the text. The
+        per-entry carrier test above catches it too; this states the rule.
+        """
+        self.assertEqual([p for p in support_guard.BANNED_BENEFIT_PHRASES if "-" in p], [])
+
+    def test_the_same_stems_fire_when_anchored(self):
+        """Anti-inertness control for the demotion to tier 2."""
+        for text in (
+            "The award captures revenue for QUBT.",
+            "The change lifts margin at QUBT.",
+            "QUBT gains share in optics.",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(self._fired(text), 1)
 
 
 class TheGuardReportsItsOwnVersion(unittest.TestCase):
