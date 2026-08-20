@@ -849,3 +849,11 @@ class TestLengthAnnotationStrip(unittest.TestCase):
         text = "The filing lists 3 characters of the CUSIP (see exhibit 99.1)."
         brief, _ = self._generate(self._brief_with(bear_summary=text))
         self.assertEqual(brief["bear_summary"], text)
+
+    def test_prose_without_a_marker_is_left_byte_identical(self):
+        # The whitespace collapse must fire ONLY after a removal. A brief with a
+        # paragraph break and no marker has nothing wrong with it, and reflowing
+        # it would silently rewrite every brief the model ever writes.
+        spaced = "First paragraph.\n\nSecond paragraph.  Still the second."
+        brief, _ = self._generate(self._brief_with(supply_chain_reasoning=spaced))
+        self.assertEqual(brief["supply_chain_reasoning"], spaced)

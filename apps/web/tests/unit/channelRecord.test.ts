@@ -121,7 +121,19 @@ describe('channelRecord', () => {
 		// The shipped text is the compliant rewrite, so nothing is wrong with what
 		// the reader sees — but the fact that a first draft overclaimed belongs in
 		// the record.
-		const rec = channelRecord(candidate({ brief_support_guard_status: 'repaired' }));
+		//
+		// The fixture is not_established + grounded ON PURPOSE. The guard only runs
+		// when guard_applies() is true (bottom support level, no record, or a
+		// grounding failure), so `repaired` beside the default `suggestive` would
+		// be a state the pipeline cannot produce. This combination is the one
+		// reachable way for a repair to happen on a row that still reads quiet.
+		const rec = channelRecord(
+			candidate({
+				brief_causal_support: 'not_established',
+				brief_channel_grounding: 'grounded',
+				brief_support_guard_status: 'repaired'
+			})
+		);
 		expect(rec?.emphasis).toBe('quiet');
 		expect(rec?.guardNote).toMatch(/rewritten/);
 	});

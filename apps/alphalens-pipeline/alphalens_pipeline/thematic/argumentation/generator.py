@@ -151,10 +151,18 @@ def _strip_length_annotations(parsed: dict) -> None:
         value = parsed.get(key)
         if not isinstance(value, str) or not value:
             continue
+        cleaned, n_removed = _LENGTH_ANNOTATION_RE.subn(" ", value)
+        if not n_removed:
+            # Leave an unmarked field BYTE-IDENTICAL. The whitespace collapse
+            # below exists only to tidy up after a removal; running it
+            # unconditionally would rewrite every brief the model ever writes,
+            # folding a paragraph break in ``supply_chain_reasoning`` into a
+            # single space. This function's remit is one artifact, not
+            # house-style reflow of prose it has no complaint about.
+            continue
         # Collapse the whitespace the removal leaves behind so a marker sitting
         # BETWEEN two sentences does not weld them together or leave a double
         # space, and a trailing marker does not leave a trailing space.
-        cleaned = _LENGTH_ANNOTATION_RE.sub(" ", value)
         parsed[key] = re.sub(r"\s{2,}", " ", cleaned).strip()
 
 
