@@ -967,6 +967,25 @@ class TestGetSharedPriceStream(unittest.TestCase):
             sps.get_shared_price_stream()
         self.assertEqual(mock_cls.call_args.kwargs["metrics_job"], "live-price-stream")
 
+    def test_default_session_window_is_none(self) -> None:
+        """No gate wired -> None reaches the constructor -> today's behavior
+        (the stream-side fail-open contract treats None as always-in-session)."""
+        instance = _FakeSharedInstance(running=True)
+        p1, p2, p3, p4 = self._patched_construction(instance)
+        with p1, p2, p3, p4 as mock_cls:
+            sps.get_shared_price_stream()
+        self.assertIsNone(mock_cls.call_args.kwargs["session_window"])
+
+    def test_explicit_session_window_is_forwarded_to_construction(self) -> None:
+        """The composition root's env-gated predicate must reach the
+        SaxoPriceStream constructor unchanged on the constructing call."""
+        instance = _FakeSharedInstance(running=True)
+        predicate = lambda: True  # noqa: E731 — identity is what is asserted
+        p1, p2, p3, p4 = self._patched_construction(instance)
+        with p1, p2, p3, p4 as mock_cls:
+            sps.get_shared_price_stream(session_window=predicate)
+        self.assertIs(mock_cls.call_args.kwargs["session_window"], predicate)
+
     def test_explicit_metrics_job_is_forwarded_to_construction(self) -> None:
         """The composition root (control_loop._default_live_exits_feed_factory)
         injects ``state_paths.price_stream_metrics_job()`` here every tick — it

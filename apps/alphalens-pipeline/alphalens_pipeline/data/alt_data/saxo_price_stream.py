@@ -932,7 +932,11 @@ _shared_stream: SaxoPriceStream | None = None
 _shared_stream_lock = threading.Lock()
 
 
-def get_shared_price_stream(*, metrics_job: str = _DEFAULT_GAUGE_JOB) -> SaxoPriceStream:
+def get_shared_price_stream(
+    *,
+    metrics_job: str = _DEFAULT_GAUGE_JOB,
+    session_window: Callable[[], bool] | None = None,
+) -> SaxoPriceStream:
     """Module-level singleton, started on first call.
 
     A WebSocket must outlive a single daemon tick, but the feed factory that
@@ -958,6 +962,13 @@ def get_shared_price_stream(*, metrics_job: str = _DEFAULT_GAUGE_JOB) -> SaxoPri
     (``control_loop._default_live_exits_feed_factory``) passes
     ``state_paths.price_stream_metrics_job()`` every tick; the default here
     keeps standalone/test construction unchanged.
+
+    ``session_window`` follows the same constructing-call-only rule: the
+    composition root passes its env-gated "is now inside the trading window"
+    predicate (or None — today's behavior); a call that reuses the still-live
+    singleton keeps that stream's already-wired predicate. The stream side is
+    fail-open (see ``SaxoPriceStream``), so a mis-wired predicate can never
+    silence the stream during trading hours.
     """
     global _shared_stream  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _shared_stream is None or not _shared_stream.is_running():
@@ -966,7 +977,12 @@ def get_shared_price_stream(*, metrics_job: str = _DEFAULT_GAUGE_JOB) -> SaxoPri
                 cfg = LiveAuthConfig.from_env()
                 token_provider = LiveTokenProvider(cfg)
                 client = SaxoMarketDataClient(token_provider=token_provider)
-                stream = SaxoPriceStream(client, token_provider, metrics_job=metrics_job)
+                stream = SaxoPriceStream(
+                    client,
+                    token_provider,
+                    metrics_job=metrics_job,
+                    session_window=session_window,
+                )
                 stream.start()
                 _shared_stream = stream
     return _shared_stream

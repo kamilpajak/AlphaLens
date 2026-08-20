@@ -698,6 +698,98 @@ def _saxo_live_prices_enabled() -> bool:
     return os.environ.get(_SAXO_LIVE_PRICES_ENV) == "1"
 
 
+# Session gate for the shared price stream: outside market hours no frames
+# flow, so a 24/7 WebSocket recv-times-out every ~3min into a reconnect +
+# subscription-recreate cycle all night. Behind its own flag (default OFF ->
+# None -> today's behavior); the stream side is fail-open by contract, so a
+# raising predicate can never silence the stream during trading hours.
+_STREAM_SESSION_GATE_ENV = "ALPHALENS_SAXO_STREAM_SESSION_GATE"
+
+# The window is [session_open - WARMUP, session_close + GRACE]. WARMUP exists
+# because the connection must be up and the create-subscription snapshot
+# applied BEFORE the open — the DelayedByMinutes flag arrives ONLY in that
+# snapshot (2026-08-18 probe), so connecting at the bell would veto the first
+# minutes of quotes. GRACE keeps the closing auction's last prints flowing.
+_STREAM_SESSION_WARMUP = dt.timedelta(minutes=15)
+_STREAM_SESSION_GRACE = dt.timedelta(minutes=10)
+
+# US equities: XNYS and XNAS share the regular session (09:30-16:00 ET, same
+# holidays and early closes), so the XNYS calendar gates the stream for every
+# instrument the daemon trades on either venue.
+_STREAM_SESSION_EXCHANGE = "XNYS"
+
+
+def _stream_session_gate_enabled() -> bool:
+    return os.environ.get(_STREAM_SESSION_GATE_ENV) == "1"
+
+
+def _make_stream_session_window(
+    clock: Callable[[], dt.datetime] | None = None,
+) -> Callable[[], bool]:
+    """Build the "is now inside the trading window" predicate for the price
+    stream's session gate.
+
+    The window comes from the exchange-parametrized calendar helpers
+    (``paper.calendar`` on ``exchange_calendars`` — real holidays, early
+    closes, DST), NEVER hand-rolled hours: half-days resolve to the actual
+    per-session close, a non-trading day is False all day.
+
+    A calendar exception PROPAGATES by design — the stream side fails OPEN on
+    a raise (connects, warns once). Swallowing it into False here would let a
+    calendar bug silence the stream during trading hours, the one failure the
+    gate's safety contract forbids.
+
+    Per-day session bounds are memoized (the reader polls the predicate every
+    second while asleep); only successful lookups are cached, so a transient
+    raise is retried on the next poll.
+
+    UTC-date note: the XNYS regular session plus WARMUP/GRACE spans at most
+    13:15-21:10 UTC, never crossing UTC midnight, so ``now.date()`` in UTC is
+    always the session date being asked about.
+    """
+    read_clock = clock or (lambda: dt.datetime.now(dt.UTC))
+    bounds_by_day: dict[dt.date, tuple[dt.datetime, dt.datetime] | None] = {}
+
+    def _bounds(day: dt.date) -> tuple[dt.datetime, dt.datetime] | None:
+        from alphalens_pipeline.paper.calendar import (
+            is_trading_day,
+            session_close_utc,
+            session_open_utc,
+        )
+
+        if not is_trading_day(day, _STREAM_SESSION_EXCHANGE):
+            return None
+        return (
+            session_open_utc(day, _STREAM_SESSION_EXCHANGE) - _STREAM_SESSION_WARMUP,
+            session_close_utc(day, _STREAM_SESSION_EXCHANGE) + _STREAM_SESSION_GRACE,
+        )
+
+    def _in_window() -> bool:
+        now = read_clock()
+        day = now.date()
+        if day not in bounds_by_day:
+            # One live entry is enough (the daemon runs for months): drop
+            # yesterday's bounds before caching today's.
+            bounds_by_day.clear()
+            bounds_by_day[day] = _bounds(day)
+        bounds = bounds_by_day[day]
+        if bounds is None:
+            return False
+        window_start, window_end = bounds
+        return window_start <= now <= window_end
+
+    return _in_window
+
+
+def _stream_session_window_if_enabled() -> Callable[[], bool] | None:
+    """The predicate ``get_shared_price_stream`` should construct the stream
+    with: None (today's behavior, byte-identical) unless
+    ``ALPHALENS_SAXO_STREAM_SESSION_GATE`` is exactly ``"1"``."""
+    if not _stream_session_gate_enabled():
+        return None
+    return _make_stream_session_window()
+
+
 class _NullPriceFeed:
     """Vetoes everything. The OFF state of the Saxo feed is 'no prices', never a
     quiet downgrade to a weaker source (see the INC-2 design memo)."""
@@ -764,9 +856,13 @@ def _default_live_exits_feed_factory(
 
     # ADR 0016 D5: the stream's gauges must carry a per-instance job label so a
     # future LIVE daemon's price stream never shares a Prometheus job (and thus
-    # textfile) with the SIM instance's. Only takes effect on the FIRST call
-    # that actually constructs the singleton — see get_shared_price_stream.
-    stream = get_shared_price_stream(metrics_job=state_paths.price_stream_metrics_job())
+    # textfile) with the SIM instance's. Like metrics_job, session_window only
+    # takes effect on the FIRST call that actually constructs the singleton —
+    # see get_shared_price_stream.
+    stream = get_shared_price_stream(
+        metrics_job=state_paths.price_stream_metrics_job(),
+        session_window=_stream_session_window_if_enabled(),
+    )
     live_uics = {
         sim_uic: stream.live_uic_for(ticker, exchange_mic=mic)
         for sim_uic, (ticker, mic) in uic_to_instrument.items()
