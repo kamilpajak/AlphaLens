@@ -510,5 +510,52 @@ class TestLatchLowTrusted(unittest.TestCase):
         self.assertFalse(watcher.latch_low_trusted(_T0 + dt.timedelta(minutes=6, seconds=1)))
 
 
+_PROD_CRID = "OLN-2026-08-18-entry-t1"
+
+
+def _prod_config(**kwargs: object) -> TierWatchConfig:
+    base = _config(**kwargs)  # type: ignore[arg-type]
+    return TierWatchConfig(
+        crid=_PROD_CRID,
+        tier_limit=base.tier_limit,
+        d_bps=base.d_bps,
+        window_end=base.window_end,
+        qty=base.qty,
+        fx_rate=base.fx_rate,
+        next_tier_limit=base.next_tier_limit,
+    )
+
+
+class TestOperatorLabelRendering(unittest.TestCase):
+    """The alert MESSAGE text renders E{n}/E{n+1}; the crid + throttle_key keep
+    the raw machine crid (dedup invariant)."""
+
+    def test_would_fire_message_renders_entry_label(self) -> None:
+        watcher = _fresh_watch(_prod_config())
+        watcher.process(_tick(10.0))
+        watcher.process(_tick(9.8))
+        result = watcher.process(_tick(9.85))
+        self.assertEqual(result.state, WatchState.WOULD_FIRE)
+        alert = result.alerts[0]
+        # tier index 1 -> E2; the raw crid never appears in the human message.
+        self.assertIn("entry-trail E2 would fire", alert.message)
+        self.assertNotIn(_PROD_CRID, alert.message)
+        # INVARIANT: crid field + throttle_key still carry the raw crid.
+        self.assertEqual(alert.crid, _PROD_CRID)
+        self.assertIn(_PROD_CRID, alert.throttle_key)
+
+    def test_suspend_message_renders_entry_and_next_tier_labels(self) -> None:
+        watcher = _fresh_watch(_prod_config(next_tier_limit=9.5))
+        watcher.process(_tick(10.0))
+        result = watcher.process(_tick(9.40))  # below next tier 9.5 -> suspend
+        self.assertEqual(result.state, WatchState.SUSPENDED)
+        alert = result.alerts[0]
+        self.assertIn("entry-trail E2 suspended", alert.message)
+        self.assertIn("next tier E3", alert.message)
+        self.assertNotIn(_PROD_CRID, alert.message)
+        self.assertEqual(alert.crid, _PROD_CRID)
+        self.assertIn(_PROD_CRID, alert.throttle_key)
+
+
 if __name__ == "__main__":
     unittest.main()
