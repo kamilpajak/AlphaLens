@@ -601,6 +601,13 @@ def channel_config_version(*, model: str | None = None) -> str:
             json.dumps(_ASSESS_RESPONSE_SCHEMA, sort_keys=True).encode()
         ).hexdigest()[:12],
         "support_levels": list(CHANNEL_SUPPORT_LEVELS),
+        # Named directly, not left to reach the token through ``schema_sha``.
+        # The response schema embeds this tuple at import time, so today a
+        # vocabulary edit moves the token only as a side effect of that
+        # embedding — an implementation detail nobody was testing. A refactor
+        # inlining the enum into the schema literal would silently stop
+        # invalidating frozen parquets on a vocabulary change.
+        "grounding_statuses": list(CHANNEL_GROUNDING_STATUSES),
         "types": list(CHANNEL_TYPES),
         # Every constant that shapes a RENDERED field inside the fenced block,
         # for the same reason theme_mapper fingerprints its own: they change the

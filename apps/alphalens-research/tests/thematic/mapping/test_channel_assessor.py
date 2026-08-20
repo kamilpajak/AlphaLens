@@ -1239,6 +1239,40 @@ class TestChannelConfigVersion(unittest.TestCase):
         with patch.object(channel_assessor, "_ASSESS_RESPONSE_SCHEMA", patched):
             self.assertNotEqual(baseline, channel_assessor.channel_config_version())
 
+    def test_both_vocabularies_are_named_in_the_payload(self):
+        payload = json.loads(channel_assessor.channel_config_version())
+        self.assertEqual(payload["support_levels"], list(channel_assessor.CHANNEL_SUPPORT_LEVELS))
+        self.assertEqual(
+            payload["grounding_statuses"], list(channel_assessor.CHANNEL_GROUNDING_STATUSES)
+        )
+
+    def test_a_support_vocabulary_edit_moves_the_token(self):
+        baseline = channel_assessor.channel_config_version()
+        with patch.object(
+            channel_assessor,
+            "CHANNEL_SUPPORT_LEVELS",
+            (*channel_assessor.CHANNEL_SUPPORT_LEVELS, "invented"),
+        ):
+            self.assertNotEqual(baseline, channel_assessor.channel_config_version())
+
+    def test_a_grounding_vocabulary_edit_moves_the_token(self):
+        """The pin the pre-registration promises, made direct rather than
+        incidental.
+
+        The grounding vocabulary reached the token only through ``schema_sha``,
+        because ``_ASSESS_RESPONSE_SCHEMA`` embeds the tuple at import time. A
+        refactor that inlined the enum into the schema literal would silently
+        stop invalidating frozen parquets on a vocabulary change, and every
+        document saying the vocabulary is covered would still read as true.
+        """
+        baseline = channel_assessor.channel_config_version()
+        with patch.object(
+            channel_assessor,
+            "CHANNEL_GROUNDING_STATUSES",
+            (*channel_assessor.CHANNEL_GROUNDING_STATUSES, "invented"),
+        ):
+            self.assertNotEqual(baseline, channel_assessor.channel_config_version())
+
 
 if __name__ == "__main__":
     unittest.main()
