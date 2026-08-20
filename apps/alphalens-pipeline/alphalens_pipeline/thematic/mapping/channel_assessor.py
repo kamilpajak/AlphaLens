@@ -25,18 +25,36 @@ that frozen gate over a cohort whose forward returns are known and found:
 
 A hard gate also destroys the labels needed to ever check it: a refused theme
 leaves no candidate row, no brief row and no ladder outcome. So the channel
-becomes an annotation with "no verified channel" as a first-class legal answer,
-plus a SHADOW verdict recording what a strict gate *would* have done — which is
-what makes the forward KEPT-vs-REFUSED contrast computable at all.
+becomes an annotation with "no company-specific path was established" as a
+first-class legal answer, plus a SHADOW verdict recording what a strict gate
+*would* have done — which is what makes the forward KEPT-vs-REFUSED contrast
+computable at all.
+
+THE VOCABULARY IS ABOUT EVIDENCE, NOT ABOUT VERIFICATION
+--------------------------------------------------------
+The first live run (2026-08-19) exposed two wording defects, fixed here per
+``docs/research/grounding_and_prose_honesty_design_2026_08_20.md``:
+
+* The old top level claimed VERIFICATION the instrument does not perform — the
+  verdict comes from a second LLM call over the same rendered event text, not
+  from an independent source or a document fetch. The scale now measures **how
+  well the event text supports a causal mechanism**:
+  :data:`CHANNEL_SUPPORT_LEVELS`.
+* The old bottom level conflated two different epistemic conditions: honest
+  uncertainty ("the event is about the theme, this company is plausibly in
+  scope, no company-specific mechanism was established") and a PIPELINE DEFECT
+  ("this company was attached to a story it has nothing to do with"). Grounding
+  is therefore its own orthogonal column, never a level of the support scale.
 
 INVARIANTS (violating any of these is a defect)
 -----------------------------------------------
 * :func:`assess_candidates` returns EXACTLY one result per input candidate, in
   input order, for every outcome including a total outage.
-* ``unverified`` is an ANSWER (``AssessmentOutcome.SUCCESS``). A dead or
-  unparseable call is a FAILURE, recorded as ``unverified`` + the failure
-  outcome — never as ``verified``, and never as a drop.
-* No ``channel_*`` column may enter any filter, sort key or score input.
+* :data:`SUPPORT_NOT_ESTABLISHED` is an ANSWER (``AssessmentOutcome.SUCCESS``).
+  A dead or unparseable call is a FAILURE, recorded as the bottom level + the
+  failure outcome — never as the top level, and never as a drop.
+* No ``channel_*`` column may enter any filter, sort key or score input. That
+  includes the grounding column: **detect, stamp, keep, measure.**
 * The prompt carries no market-cap / P/E / volume token: the mcap bracket is a
   deterministic post-LLM Python filter (project LLM doctrine).
 
@@ -46,18 +64,20 @@ DeepSeek v4-pro is a mixture-of-experts model and is server-side
 non-deterministic even at temperature 0.0 — the retro's own instrument
 qualification measured mixed votes on 91 of 238 pairs, so a single draw is not
 a measurement. ``k`` independent draws are aggregated by ORDINAL MEDIAN over
-``unverified=0 / partial=1 / verified=2``, and ``dispersion = max − min`` over
-the valid draws is persisted per row as the instrument-noise readout.
+:data:`_SUPPORT_ORDINAL` (0 = bottom, 2 = top), and
+``support_dispersion = max − min`` over the valid draws is persisted per row as
+the instrument-noise readout.
 
 ``valid_n`` is NOT ``k``: a draw lost to a dead socket, an off-vocabulary
-status or a clipped generation is excluded, so an EVEN vote set is routine at
+answer or a clipped generation is excluded, so an EVEN vote set is routine at
 k = 3. The even case is pre-committed rather than left to an implicit lower or
-upper median, because the forward primary's two legs are literally ``verified``
-and ``unverified`` and a silent tie-break would move rows between them: **when
-the two central ordinals disagree the result is ``partial``**, which the
+upper median, because the forward primary's two legs are the TOP and BOTTOM
+levels and a silent tie-break would move rows between them: **when the two
+central ordinals disagree the result is the MIDDLE level**, which the
 pre-registration excludes from both legs. A tie is reported as a tie.
 
-Design memo: ``docs/research/channel_as_feature_design_2026_08_19.md``.
+Design memos: ``docs/research/channel_as_feature_design_2026_08_19.md`` and
+``docs/research/grounding_and_prose_honesty_design_2026_08_20.md``.
 Forward pre-registration: ``docs/research/channel_feature_forward_prereg_2026_08_19.md``.
 """
 
@@ -94,9 +114,25 @@ from alphalens_pipeline.thematic.mapping.theme_mapper import (
 
 logger = logging.getLogger(__name__)
 
-# The three answers the MODEL may give. ``not_assessed`` is deliberately absent:
-# see :data:`NOT_ASSESSED`.
-CHANNEL_STATUSES: tuple[str, ...] = ("verified", "partial", "unverified")
+# CAUSAL SUPPORT — the three answers the MODEL may give about how well the event
+# text supports a mechanism. An ORDINAL scale, top to bottom. ``not_assessed`` is
+# deliberately absent: see :data:`NOT_ASSESSED`.
+SUPPORT_ESTABLISHED = "established"
+SUPPORT_SUGGESTIVE = "suggestive"
+SUPPORT_NOT_ESTABLISHED = "not_established"
+CHANNEL_SUPPORT_LEVELS: tuple[str, ...] = (
+    SUPPORT_ESTABLISHED,
+    SUPPORT_SUGGESTIVE,
+    SUPPORT_NOT_ESTABLISHED,
+)
+
+# Single-sourced in the prompt AND exported for the card / prose layer, so the
+# one sentence that bounds what the scale claims cannot drift between the
+# instrument and what the operator reads.
+CAUSAL_SUPPORT_NOT_A_FORECAST = (
+    "Causal support describes how well the event text supports a mechanism; "
+    "it is not a forecast of the share price."
+)
 
 # Python-only sentinel for a proposal the mcap bracket dropped BEFORE the
 # assessment ran. Never offered to the model — if it were, "the bracket dropped
@@ -145,10 +181,15 @@ _ASSESS_VOTES = 3
 _ASSESS_MAX_WORKERS = 3
 
 # Ordinal scale for the median. Kept explicit rather than derived from
-# CHANNEL_STATUSES' order so a reordering of that tuple cannot silently invert
-# the aggregation.
-_STATUS_ORDINAL: dict[str, int] = {"unverified": 0, "partial": 1, "verified": 2}
-_ORDINAL_STATUS: dict[int, str] = {v: k for k, v in _STATUS_ORDINAL.items()}
+# CHANNEL_SUPPORT_LEVELS' order so a reordering of that tuple cannot silently
+# invert the aggregation. The codes are UNCHANGED across the 2026-08-20 rename,
+# so the median arithmetic and the pre-committed even-vote rule survive it.
+_SUPPORT_ORDINAL: dict[str, int] = {
+    SUPPORT_NOT_ESTABLISHED: 0,
+    SUPPORT_SUGGESTIVE: 1,
+    SUPPORT_ESTABLISHED: 2,
+}
+_ORDINAL_SUPPORT: dict[int, str] = {v: k for k, v in _SUPPORT_ORDINAL.items()}
 
 _CHANNEL_TEXT_MAX_CHARS = 600
 _CANDIDATE_FIELD_MAX_CHARS = 120
@@ -158,13 +199,14 @@ _CANDIDATE_RATIONALE_MAX_CHARS = 300
 class AssessmentOutcome(enum.Enum):
     """How ONE candidate's assessment ended.
 
-    Mirrors :class:`theme_mapper.MapperOutcome` on purpose: "the assessor said
-    unverified" and "the assessor call died" must never be the same value. The
-    first is a judgement about the world, the second is an outage — and an
-    outage that read as a channel-less day would corrupt the shadow verdict.
+    Mirrors :class:`theme_mapper.MapperOutcome` on purpose: "the assessor found
+    no company-specific path" and "the assessor call died" must never be the
+    same value. The first is a judgement about the world, the second is an
+    outage — and an outage that read as a channel-less day would corrupt the
+    shadow verdict.
     """
 
-    SUCCESS = "success"  # parsed, a status inside CHANNEL_STATUSES
+    SUCCESS = "success"  # parsed, a level inside CHANNEL_SUPPORT_LEVELS
     EMPTY_PAYLOAD = "empty_payload"  # response body empty / whitespace-only
     MALFORMED_PAYLOAD = "malformed_payload"  # non-empty body, unparseable or off-schema
     TRUNCATED = "truncated"  # finish_reason MAX_TOKENS — the generation was cut
@@ -195,7 +237,7 @@ _UNASKED_OUTCOMES = frozenset({AssessmentOutcome.NOT_ASSESSED, AssessmentOutcome
 class ChannelAssessment:
     """One candidate's channel judgment, aggregated over ``votes`` draws."""
 
-    status: str
+    support_status: str
     channel_type: str
     text: str
     evidence: str
@@ -203,7 +245,7 @@ class ChannelAssessment:
     confidence: float | None
     votes: int
     valid_n: int
-    dispersion: int
+    support_dispersion: int
     outcome: AssessmentOutcome
     assessed_at: str | None
 
@@ -212,7 +254,7 @@ class ChannelAssessment:
 # orchestrator's ``_MAP_THEMES_COLUMNS`` and the test that pins the contract
 # read ONE list.
 CHANNEL_ROW_COLUMNS: tuple[str, ...] = (
-    "channel_status",
+    "channel_support_status",
     "channel_type",
     "channel_text",
     "channel_evidence",
@@ -220,7 +262,7 @@ CHANNEL_ROW_COLUMNS: tuple[str, ...] = (
     "channel_confidence",
     "channel_vote_k",
     "channel_vote_valid_n",
-    "channel_vote_dispersion",
+    "channel_support_dispersion",
     "channel_assessment_outcome",
     "channel_assessed_at",
 )
@@ -233,11 +275,12 @@ CHANNEL_ROW_COLUMNS: tuple[str, ...] = (
 CHANNEL_CONFIG_COLUMN = "channel_config_version"
 
 # The shadow RULE, versioned SEPARATELY from ``channel_config_version``. The
-# rule is recomputable offline from ``shadow_strict_verified_n`` /
-# ``shadow_strict_assessed_n``, so re-cutting it (e.g. "verified OR partial",
-# or n>=2) must NOT invalidate a day's frozen parquet. It is a poolability key,
-# not a freeze input.
-SHADOW_STRICT_RULE_VERSION = "shadow-strict-any-verified-v1"
+# rule is recomputable offline from ``shadow_strict_established_n`` /
+# ``shadow_strict_assessed_n``, so re-cutting it (e.g. top-OR-middle level, or
+# n>=2) must NOT invalidate a day's frozen parquet. It is a poolability key,
+# not a freeze input. It moves on the 2026-08-20 rename only because it names a
+# vocabulary that no longer exists.
+SHADOW_STRICT_RULE_VERSION = "shadow-strict-any-established-v1"
 
 SHADOW_KEEP = "keep"
 SHADOW_REFUSE = "refuse"
@@ -245,7 +288,7 @@ SHADOW_REFUSE = "refuse"
 _ASSESS_RESPONSE_SCHEMA: dict = {
     "type": "object",
     "properties": {
-        "channel_status": {"type": "string", "enum": list(CHANNEL_STATUSES)},
+        "channel_support_status": {"type": "string", "enum": list(CHANNEL_SUPPORT_LEVELS)},
         "channel_type": {"type": "string", "enum": list(CHANNEL_TYPES)},
         "channel_text": {"type": "string"},
         # The fact IN THE EVENT the chain rests on. This is what makes a
@@ -256,7 +299,7 @@ _ASSESS_RESPONSE_SCHEMA: dict = {
         "channel_confidence": {"type": "number"},
     },
     "required": [
-        "channel_status",
+        "channel_support_status",
         "channel_type",
         "channel_text",
         "channel_evidence",
@@ -265,7 +308,8 @@ _ASSESS_RESPONSE_SCHEMA: dict = {
     ],
 }
 
-_ASSESS_PROMPT_TEMPLATE = """\
+_ASSESS_PROMPT_TEMPLATE = (
+    """\
 You are an equity analyst. You are given ONE news event and ONE company. Judge
 whether a transmission channel runs from the event to that company's revenue,
 costs, cost of capital or competitive position. Answer as a single json object.
@@ -307,20 +351,39 @@ Write the channel as a chain:
     <a fact stated in the event> -> <what changes, and for whom> -> <which line
     of this company's economics moves, and roughly when>
 
-Answer with a status:
-  verified   - every link names something real and stated in, or directly
-               implied by, the event.
-  partial    - the mechanism is named and plausible, but one link rests on a
-               fact the event does not state (for example you believe this
-               company supplies a party, but the event does not say so).
-  unverified - you cannot name a chain from this event to this company. This is
-               a normal, expected answer. Say `unverified` rather than
-               inventing a link; a fabricated chain is worse than none.
+Answer with a CAUSAL SUPPORT level - how well the EVENT TEXT supports that
+chain. This is a statement about the evidence, not about the company:
+  established     - a named mechanism PLUS company-specific evidence present in
+                    the event: the event states a fact about this company, a
+                    named counterparty of it, its product line or its market,
+                    and every link of the chain rests on something the event
+                    states or directly implies. No link comes from your own
+                    background knowledge.
+  suggestive      - a mechanism is named and plausible, but at least one link
+                    rests on a fact the event does not state (for example you
+                    believe this company supplies a named party and the event
+                    never says so), OR the link is category-level rather than
+                    company-specific (the event moves the category this company
+                    sells into, without naming a buyer, payer, contract,
+                    regulation, input price or competitor).
+  not_established - no concrete company-specific cash-flow path from this event
+                    to this company was found. This is a normal, expected
+                    answer. Say `not_established` rather than inventing a link;
+                    a fabricated chain is worse than none.
 
-`unverified` is not a failure and carries no penalty. Do NOT stretch to reach
-`verified`. You are NOT deciding whether to keep or drop this company.
-Nothing is dropped on your answer and the company ships either way; your answer
-is recorded as an annotation and measured later against what actually happened.
+`not_established` is not a failure and carries no penalty. It is NOT a claim
+that the company is a bad candidate, and NOT a claim that no path exists. Do
+NOT stretch to reach `established`. You are NOT deciding whether to keep or drop
+this company. Nothing is dropped on your answer and the company ships either
+way; your answer is recorded as an annotation and measured later against what
+actually happened.
+
+"""
+    # Single-sourced: the ONE sentence bounding what the scale claims, shared
+    # verbatim with the card / prose layer. Concatenated rather than
+    # placeholder-substituted so ``prompt_sha`` covers an edit to it.
+    + CAUSAL_SUPPORT_NOT_A_FORECAST
+    + """
 
 Judging the effect on THIS company's economics is the whole question. The
 effect on the event's subject is not the question, and an event that harms its
@@ -349,24 +412,26 @@ CHANNEL TYPE - pick exactly one
                        buyer, payer, contract, regulation, input price or
                        competitor. This is a REAL, nameable answer, not a
                        rejection.
-  none               - use this when, and only when, the status is unverified.
+  none               - use this when, and only when, the support level is
+                       not_established.
 
 OUTPUT
 ------
 Return ONE json object and nothing else. No prose before it, none after it.
 {{
-  "channel_status": "verified" | "partial" | "unverified",
+  "channel_support_status": "established" | "suggestive" | "not_established",
   "channel_type": "<one of the nine values above>",
   "channel_text": "<the chain: event fact -> what changes -> which line of this
-    company's economics moves, and when. Empty string when unverified>",
+    company's economics moves, and when. Empty string when not_established>",
   "channel_evidence": "<the fact IN THE EVENT the chain rests on, quoted or
-    closely paraphrased. Empty string when unverified>",
+    closely paraphrased. Empty string when not_established>",
   "channel_falsifier": "<the single observable that would show this chain is
-    not real. Empty string when unverified>",
+    not real. Empty string when not_established>",
   "channel_confidence": <0.0..1.0, your own subjective confidence that this
     chain is real and material>
 }}
 """
+)
 
 
 def _call_llm(llm_client: OpenRouterClient, prompt: str, *, model: str):
@@ -393,7 +458,7 @@ def channel_config_version(*, model: str | None = None) -> str:
     ``mapper_config_version`` / ``insider_signal_version`` / ``panel_config_version``.
     """
     payload = {
-        "schema": "channel-assess-v1",
+        "schema": "channel-assess-v2",
         "model": model or DEFAULT_MODEL,
         "temperature": _ASSESS_TEMPERATURE,
         "max_output_tokens": _ASSESS_MAX_OUTPUT_TOKENS,
@@ -402,7 +467,7 @@ def channel_config_version(*, model: str | None = None) -> str:
         "schema_sha": hashlib.sha256(
             json.dumps(_ASSESS_RESPONSE_SCHEMA, sort_keys=True).encode()
         ).hexdigest()[:12],
-        "statuses": list(CHANNEL_STATUSES),
+        "support_levels": list(CHANNEL_SUPPORT_LEVELS),
         "types": list(CHANNEL_TYPES),
         # Every constant that shapes a RENDERED field inside the fenced block,
         # for the same reason theme_mapper fingerprints its own: they change the
@@ -451,7 +516,7 @@ def build_assessment_prompt(
 class _Draw:
     """One parsed assessment draw, or the failure that replaced it."""
 
-    status: str | None
+    support_status: str | None
     channel_type: str
     text: str
     evidence: str
@@ -468,9 +533,10 @@ def _clean_text(value: object, *, max_chars: int) -> str:
 def _parse_draw(raw: str, *, ticker: str, finish_reason: str = "") -> _Draw:
     """Classify ONE response body into a draw.
 
-    A status outside :data:`CHANNEL_STATUSES` invalidates THIS DRAW only — never
-    the candidate. An off-vocabulary ``channel_type`` is coerced to ``none`` and
-    logged, because the type is telemetry while the status is the measurement.
+    A level outside :data:`CHANNEL_SUPPORT_LEVELS` invalidates THIS DRAW only —
+    never the candidate. An off-vocabulary ``channel_type`` is coerced to
+    ``none`` and logged, because the type is telemetry while the support level
+    is the measurement.
 
     ``finish_reason`` is checked FIRST and outranks the body: a generation the
     provider cut at the token budget is not a judgement about the world even
@@ -494,12 +560,12 @@ def _parse_draw(raw: str, *, ticker: str, finish_reason: str = "") -> _Draw:
         )
         return _failed_draw(AssessmentOutcome.MALFORMED_PAYLOAD)
 
-    status = str(parsed.get("channel_status") or "").strip().lower()
-    if status not in CHANNEL_STATUSES:
+    support_status = str(parsed.get("channel_support_status") or "").strip().lower()
+    if support_status not in CHANNEL_SUPPORT_LEVELS:
         logger.warning(
-            "channel assessor returned an off-vocabulary status %r for %r "
+            "channel assessor returned an off-vocabulary support level %r for %r "
             "— this draw is discarded, the candidate is not",
-            status,
+            support_status,
             ticker,
         )
         return _failed_draw(AssessmentOutcome.MALFORMED_PAYLOAD)
@@ -523,17 +589,17 @@ def _parse_draw(raw: str, *, ticker: str, finish_reason: str = "") -> _Draw:
     evidence = _clean_text(parsed.get("channel_evidence"), max_chars=_CHANNEL_TEXT_MAX_CHARS)
     falsifier = _clean_text(parsed.get("channel_falsifier"), max_chars=_CHANNEL_TEXT_MAX_CHARS)
 
-    if status == "unverified":
-        # An "unverified" answer that still carries a chain is self-contradictory;
-        # normalising it code-side (never prompt-side) keeps the parquet's
-        # meaning single-valued.
+    if support_status == SUPPORT_NOT_ESTABLISHED:
+        # A bottom-level answer that still carries a chain is
+        # self-contradictory; normalising it code-side (never prompt-side) keeps
+        # the parquet's meaning single-valued.
         channel_type = "none"
         text = ""
         evidence = ""
         falsifier = ""
 
     return _Draw(
-        status=status,
+        support_status=support_status,
         channel_type=channel_type,
         text=text,
         evidence=evidence,
@@ -545,7 +611,7 @@ def _parse_draw(raw: str, *, ticker: str, finish_reason: str = "") -> _Draw:
 
 def _failed_draw(outcome: AssessmentOutcome) -> _Draw:
     return _Draw(
-        status=None,
+        support_status=None,
         channel_type="none",
         text="",
         evidence="",
@@ -593,38 +659,39 @@ def _draw_once(*, llm_client, prompt: str, ticker: str, model: str) -> _Draw:
     )
 
 
-def _median_status(ordinals: Sequence[int]) -> str:
-    """Ordinal median with the EVEN case pre-committed to ``partial``.
+def _median_support(ordinals: Sequence[int]) -> str:
+    """Ordinal median with the EVEN case pre-committed to the MIDDLE level.
 
     ``valid_n`` is not ``k`` — a lost draw makes the set even, which at k = 3
     means two valid draws. An implicit lower median would place a
-    ``{verified, unverified}`` disagreement in the forward primary's leg U and an
-    upper median would place it in leg V; both would be a tie-break deciding a
+    top-versus-bottom disagreement in the forward primary's leg U and an upper
+    median would place it in leg V; both would be a tie-break deciding a
     pre-registered test. So when the two central ordinals disagree the answer is
-    ``partial``, which the pre-registration excludes from both legs. When they
-    agree there is no tie and that value stands.
+    :data:`SUPPORT_SUGGESTIVE`, which the pre-registration excludes from both
+    legs. When they agree there is no tie and that value stands.
     """
     n = len(ordinals)
     if n % 2:
-        return _ORDINAL_STATUS[ordinals[n // 2]]
+        return _ORDINAL_SUPPORT[ordinals[n // 2]]
     lower, upper = ordinals[n // 2 - 1], ordinals[n // 2]
     if lower == upper:
-        return _ORDINAL_STATUS[lower]
-    return "partial"
+        return _ORDINAL_SUPPORT[lower]
+    return SUPPORT_SUGGESTIVE
 
 
 def _aggregate(draws: Sequence[_Draw], *, votes: int) -> ChannelAssessment:
     """Ordinal median over the VALID draws; failures are excluded, not counted.
 
-    With no valid draw the result is ``unverified`` carrying the LAST failure
-    outcome — a failure is recorded as unverified-with-a-failure-outcome, never
-    as a drop and never as ``verified``.
+    With no valid draw the result is :data:`SUPPORT_NOT_ESTABLISHED` — the
+    LEAST-CLAIMING answer — carrying the LAST failure outcome. A failure is
+    recorded as bottom-level-with-a-failure-outcome, never as a drop and never
+    as :data:`SUPPORT_ESTABLISHED`.
     """
-    valid = [d for d in draws if d.status is not None]
+    valid = [d for d in draws if d.support_status is not None]
     if not valid:
         outcome = draws[-1].outcome if draws else AssessmentOutcome.CALL_FAILED
         return ChannelAssessment(
-            status="unverified",
+            support_status=SUPPORT_NOT_ESTABLISHED,
             channel_type="none",
             text="",
             evidence="",
@@ -632,26 +699,26 @@ def _aggregate(draws: Sequence[_Draw], *, votes: int) -> ChannelAssessment:
             confidence=None,
             votes=votes,
             valid_n=0,
-            dispersion=0,
+            support_dispersion=0,
             outcome=outcome,
             assessed_at=_now_iso(),
         )
 
-    ordinals = sorted(_STATUS_ORDINAL[d.status] for d in valid if d.status is not None)
-    median_status = _median_status(ordinals)
-    # First draw whose status equals the median: deterministic given draw order,
+    ordinals = sorted(_SUPPORT_ORDINAL[d.support_status] for d in valid if d.support_status)
+    median_support = _median_support(ordinals)
+    # First draw whose level equals the median: deterministic given draw order,
     # so the persisted chain text is reproducible from the same cassette. A tie
-    # resolved to ``partial`` may have no draw of its own (the {verified,
-    # unverified} case); the fields then come from the HIGHEST-ordinal draw, so
-    # the chain one draw did name stays readable for the manual status-mix audit
-    # while the STATUS still records the disagreement. Only the status enters a
-    # test leg, so this cannot promote a tied candidate.
+    # resolved to the middle level may have no draw of its own (the top-versus-
+    # bottom case); the fields then come from the HIGHEST-ordinal draw, so the
+    # chain one draw did name stays readable for the manual mix audit while the
+    # LEVEL still records the disagreement. Only the level enters a test leg, so
+    # this cannot promote a tied candidate.
     chosen = next(
-        (d for d in valid if d.status == median_status),
-        max(valid, key=lambda d: _STATUS_ORDINAL[d.status] if d.status is not None else 0),
+        (d for d in valid if d.support_status == median_support),
+        max(valid, key=lambda d: _SUPPORT_ORDINAL[d.support_status] if d.support_status else 0),
     )
     return ChannelAssessment(
-        status=median_status,
+        support_status=median_support,
         channel_type=chosen.channel_type,
         text=chosen.text,
         evidence=chosen.evidence,
@@ -659,7 +726,7 @@ def _aggregate(draws: Sequence[_Draw], *, votes: int) -> ChannelAssessment:
         confidence=chosen.confidence,
         votes=votes,
         valid_n=len(valid),
-        dispersion=max(ordinals) - min(ordinals),
+        support_dispersion=max(ordinals) - min(ordinals),
         outcome=AssessmentOutcome.SUCCESS,
         assessed_at=_now_iso(),
     )
@@ -678,8 +745,9 @@ def assess_candidate(
     """Assess ONE (event, candidate) pair over ``votes`` independent draws.
 
     Never raises and never returns ``None``: a client-init failure, a dead
-    socket and an unparseable body all come back as ``unverified`` carrying the
-    failure outcome, because the caller must stamp a row either way.
+    socket and an unparseable body all come back at the bottom support level
+    carrying the failure outcome, because the caller must stamp a row either
+    way.
     """
     ticker = str(candidate.get("ticker") or "")
     try:
@@ -747,7 +815,7 @@ def assess_candidates(
 
 def _unasked(outcome: AssessmentOutcome) -> ChannelAssessment:
     return ChannelAssessment(
-        status=NOT_ASSESSED,
+        support_status=NOT_ASSESSED,
         channel_type="none",
         text="",
         evidence="",
@@ -755,7 +823,7 @@ def _unasked(outcome: AssessmentOutcome) -> ChannelAssessment:
         confidence=None,
         votes=0,
         valid_n=0,
-        dispersion=0,
+        support_dispersion=0,
         outcome=outcome,
         assessed_at=None,
     )
@@ -769,7 +837,7 @@ def unassessed() -> ChannelAssessment:
 def over_assess_cap() -> ChannelAssessment:
     """The sentinel for an in-bracket candidate below the per-theme cap.
 
-    Shares the ``not_assessed`` STATUS with :func:`unassessed` — the model was
+    Shares the ``not_assessed`` LEVEL with :func:`unassessed` — the model was
     never asked in either case — but keeps its own OUTCOME, so the funnel
     parquet can tell "the bracket dropped it" apart from "it ranked below the
     names that could still ship". Neither enters the shadow denominator.
@@ -787,7 +855,7 @@ def row_fields(assessment: ChannelAssessment | None) -> dict[str, object]:
     """
     a = assessment if assessment is not None else unassessed()
     return {
-        "channel_status": a.status,
+        "channel_support_status": a.support_status,
         "channel_type": a.channel_type,
         "channel_text": a.text,
         "channel_evidence": a.evidence,
@@ -795,7 +863,7 @@ def row_fields(assessment: ChannelAssessment | None) -> dict[str, object]:
         "channel_confidence": a.confidence,
         "channel_vote_k": a.votes,
         "channel_vote_valid_n": a.valid_n,
-        "channel_vote_dispersion": a.dispersion,
+        "channel_support_dispersion": a.support_dispersion,
         "channel_assessment_outcome": a.outcome.value,
         "channel_assessed_at": a.assessed_at,
     }
@@ -809,7 +877,7 @@ class ShadowVerdict(NamedTuple):
     """
 
     verdict: str
-    verified_n: int
+    established_n: int
     assessed_n: int
     failed_n: int
 
@@ -817,17 +885,22 @@ class ShadowVerdict(NamedTuple):
 def shadow_strict_verdict(assessments: Sequence[ChannelAssessment]) -> ShadowVerdict:
     """What a STRICT channel gate would have done with this theme.
 
-    ``refuse`` iff no ANSWERED candidate reached ``verified`` — including the
-    zero-answer case, which refuses with an explicit zero denominator rather
-    than silently keeping.
+    ``refuse`` iff no ANSWERED candidate reached :data:`SUPPORT_ESTABLISHED` —
+    including the zero-answer case, which refuses with an explicit zero
+    denominator rather than silently keeping.
 
     ``assessed_n`` counts only candidates the model actually ANSWERED. An
-    instrument failure carries ``status == "unverified"`` by construction, so
+    instrument failure carries the BOTTOM support level by construction, so
     counting it here would turn a 429 storm or a provider outage into a
     healthy-looking "no theme had a channel today" — a failure that looks like
     an answer, one level up from the per-candidate outcome column. Those rows
     are reported separately as ``failed_n``, which is stamped beside the verdict
     so the two are never indistinguishable in the parquet.
+
+    Grounding is deliberately NOT folded in: the shadow replays the OLD gate,
+    which had no grounding concept, and coupling them would change the estimand
+    being shadowed. The per-theme grounding counts are stamped beside it in the
+    sidecar so any offline re-cut is possible without new LLM calls.
 
     This is a MEASUREMENT SUBSTITUTION, not a continuation of the frozen Stage-1
     gate: it is derived per-candidate, AFTER the mcap bracket, from a
@@ -838,9 +911,9 @@ def shadow_strict_verdict(assessments: Sequence[ChannelAssessment]) -> ShadowVer
     """
     asked = [a for a in assessments if a.outcome not in _UNASKED_OUTCOMES]
     answered = [a for a in asked if a.outcome is AssessmentOutcome.SUCCESS]
-    verified = sum(1 for a in answered if a.status == "verified")
-    verdict = SHADOW_KEEP if verified else SHADOW_REFUSE
-    return ShadowVerdict(verdict, verified, len(answered), len(asked) - len(answered))
+    established = sum(1 for a in answered if a.support_status == SUPPORT_ESTABLISHED)
+    verdict = SHADOW_KEEP if established else SHADOW_REFUSE
+    return ShadowVerdict(verdict, established, len(answered), len(asked) - len(answered))
 
 
 def status_counts(assessments: Sequence[ChannelAssessment]) -> dict[str, int]:
@@ -852,9 +925,11 @@ def status_counts(assessments: Sequence[ChannelAssessment]) -> dict[str, int]:
     """
     answered = [a for a in assessments if a.outcome is AssessmentOutcome.SUCCESS]
     return {
-        "verified": sum(1 for a in answered if a.status == "verified"),
-        "partial": sum(1 for a in answered if a.status == "partial"),
-        "unverified": sum(1 for a in answered if a.status == "unverified"),
+        SUPPORT_ESTABLISHED: sum(1 for a in answered if a.support_status == SUPPORT_ESTABLISHED),
+        SUPPORT_SUGGESTIVE: sum(1 for a in answered if a.support_status == SUPPORT_SUGGESTIVE),
+        SUPPORT_NOT_ESTABLISHED: sum(
+            1 for a in answered if a.support_status == SUPPORT_NOT_ESTABLISHED
+        ),
         "assess_failed": sum(
             1
             for a in assessments
@@ -864,14 +939,18 @@ def status_counts(assessments: Sequence[ChannelAssessment]) -> dict[str, int]:
 
 
 __all__ = [
+    "CAUSAL_SUPPORT_NOT_A_FORECAST",
     "CHANNEL_CONFIG_COLUMN",
     "CHANNEL_ROW_COLUMNS",
-    "CHANNEL_STATUSES",
+    "CHANNEL_SUPPORT_LEVELS",
     "CHANNEL_TYPES",
     "NOT_ASSESSED",
     "SHADOW_KEEP",
     "SHADOW_REFUSE",
     "SHADOW_STRICT_RULE_VERSION",
+    "SUPPORT_ESTABLISHED",
+    "SUPPORT_NOT_ESTABLISHED",
+    "SUPPORT_SUGGESTIVE",
     "AssessmentOutcome",
     "ChannelAssessment",
     "ShadowVerdict",

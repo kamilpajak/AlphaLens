@@ -268,7 +268,7 @@ class TestStageBIsDocumented(unittest.TestCase):
     stage's own model and sampling (otherwise the document describes half of the
     execution it pins), and the fact that the k identical draws of one candidate
     collapse to ONE cassette file — which makes the replayed
-    ``channel_vote_dispersion`` an artefact rather than a measurement.
+    ``channel_support_dispersion`` an artefact rather than a measurement.
     """
 
     def test_the_stage_a_cassette_is_the_proposal_call(self):
@@ -278,7 +278,7 @@ class TestStageBIsDocumented(unittest.TestCase):
                     stage_a, _stage_b = split_cassette_records(fixture, version)
                     system_message = stage_a["config"]["system_message"]
                     self.assertIn("candidates", system_message)
-                    self.assertNotIn("channel_status", system_message)
+                    self.assertNotIn("channel_support_status", system_message)
 
     def test_a_recording_with_stage_b_cassettes_carries_the_block(self):
         described = 0

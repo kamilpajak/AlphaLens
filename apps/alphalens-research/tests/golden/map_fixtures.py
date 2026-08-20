@@ -85,7 +85,7 @@ A CAVEAT a reader of a green replay must not miss: the cassette is keyed on the
 full request descriptor, and stage B issues ``_ASSESS_VOTES`` IDENTICAL requests
 per candidate. They therefore collapse to ONE cassette file, and every replay
 serves the same body three times — so a replayed run always reports
-``channel_vote_valid_n = 3`` with ``channel_vote_dispersion = 0``. The golden
+``channel_vote_valid_n = 3`` with ``channel_support_dispersion = 0``. The golden
 proves the stage is WIRED, never that the k-draw voting is stable; vote
 stability is measured live (forward pre-registration §5 descriptive 5), not
 here.

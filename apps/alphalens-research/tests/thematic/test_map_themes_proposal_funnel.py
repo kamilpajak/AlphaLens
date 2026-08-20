@@ -95,11 +95,11 @@ class ProposalFunnelSinkTests(unittest.TestCase):
     def test_a_dead_assessment_is_not_byte_identical_to_an_unverified_answer(self):
         # This file is the only on-disk record of the off-bracket and
         # never-shipped proposals, so it is what a later recall / crowd-out
-        # audit reads. Carrying channel_status without the outcome would
+        # audit reads. Carrying channel_support_status without the outcome would
         # re-merge exactly the conflation the module was built to prevent, and
-        # silently over-count "unverified".
+        # silently over-count the bottom support level.
         answered = channel_assessor.ChannelAssessment(
-            status="unverified",
+            support_status="not_established",
             channel_type="none",
             text="",
             evidence="",
@@ -107,12 +107,12 @@ class ProposalFunnelSinkTests(unittest.TestCase):
             confidence=None,
             votes=3,
             valid_n=3,
-            dispersion=0,
+            support_dispersion=0,
             outcome=channel_assessor.AssessmentOutcome.SUCCESS,
             assessed_at="2026-08-19T00:00:00+00:00",
         )
         died = channel_assessor.ChannelAssessment(
-            status="unverified",
+            support_status="not_established",
             channel_type="none",
             text="",
             evidence="",
@@ -120,7 +120,7 @@ class ProposalFunnelSinkTests(unittest.TestCase):
             confidence=None,
             votes=3,
             valid_n=0,
-            dispersion=0,
+            support_dispersion=0,
             outcome=channel_assessor.AssessmentOutcome.CALL_FAILED,
             assessed_at="2026-08-19T00:00:00+00:00",
         )
@@ -134,7 +134,9 @@ class ProposalFunnelSinkTests(unittest.TestCase):
             )
             for t, a in (("SAID", answered), ("DIED", died))
         ]
-        self.assertEqual([r["channel_status"] for r in rows], ["unverified", "unverified"])
+        self.assertEqual(
+            [r["channel_support_status"] for r in rows], ["not_established", "not_established"]
+        )
         self.assertEqual(
             [r["channel_assessment_outcome"] for r in rows], ["success", "call_failed"]
         )
@@ -341,7 +343,7 @@ class ProposalFunnelParquetTests(unittest.TestCase):
                 "ticker": "QUBT",
                 "company_name": "Quantum Computing Inc",
                 "llm_confidence": 0.7,
-                "channel_status": "verified",
+                "channel_support_status": "established",
                 "channel_type": "category_attention",
                 "channel_confidence": 0.6,
                 "channel_config_version": "channel-assess-v1-stub",
@@ -356,7 +358,7 @@ class ProposalFunnelParquetTests(unittest.TestCase):
                 "ticker": "NVDA",
                 "company_name": "NVIDIA",
                 "llm_confidence": 0.9,
-                "channel_status": "not_assessed",
+                "channel_support_status": "not_assessed",
                 "channel_type": "none",
                 "channel_confidence": None,
                 "channel_config_version": "channel-assess-v1-stub",
@@ -393,7 +395,7 @@ class ProposalFunnelParquetTests(unittest.TestCase):
                 "ticker": "QUBT",
                 "company_name": "Quantum Computing Inc",
                 "llm_confidence": 0.7,
-                "channel_status": "unverified",
+                "channel_support_status": "not_established",
                 "channel_type": "none",
                 "channel_confidence": None,
                 "channel_config_version": "channel-assess-v1-stub",

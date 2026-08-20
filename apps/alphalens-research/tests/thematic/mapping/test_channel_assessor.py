@@ -8,17 +8,19 @@ judgment therefore moves OUT of the proposal call and becomes a per-candidate
 annotation that never drops anything.
 
 These tests pin the properties that make the annotation trustworthy:
-"unverified" is a legal ANSWER (not a failure and not a drop), a dead call is a
-FAILURE (not an "unverified" label), and the k-draw aggregation is deterministic
+"not_established" is a legal ANSWER (not a failure and not a drop), a dead call is a
+FAILURE (not an "not_established" label), and the k-draw aggregation is deterministic
 and reports its own noise.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -65,7 +67,7 @@ def _candidate(ticker: str = "QBTS", **over) -> dict:
 
 def _payload(
     *,
-    status: str = "verified",
+    status: str = "established",
     channel_type: str = "customer_demand",
     text: str = "the award funds annealing pilots -> federal buyers expand procurement "
     "-> QBTS government revenue rises next fiscal year",
@@ -75,7 +77,7 @@ def _payload(
 ) -> str:
     return json.dumps(
         {
-            "channel_status": status,
+            "channel_support_status": status,
             "channel_type": channel_type,
             "channel_text": text,
             "channel_evidence": evidence,
@@ -112,8 +114,49 @@ def _responses(*bodies):
 
 
 class TestVocabulary(unittest.TestCase):
-    def test_statuses_are_the_three_llm_emittable_values(self):
-        self.assertEqual(channel_assessor.CHANNEL_STATUSES, ("verified", "partial", "unverified"))
+    def test_support_levels_are_the_three_llm_emittable_values(self):
+        # Causal support: an ORDINAL scale about the world. "established" was not
+        # defensible — the verdict comes from a second LLM call over the same
+        # rendered event text, not from an independent check.
+        self.assertEqual(
+            channel_assessor.CHANNEL_SUPPORT_LEVELS,
+            ("established", "suggestive", "not_established"),
+        )
+        self.assertEqual(channel_assessor.SUPPORT_ESTABLISHED, "established")
+        self.assertEqual(channel_assessor.SUPPORT_SUGGESTIVE, "suggestive")
+        self.assertEqual(channel_assessor.SUPPORT_NOT_ESTABLISHED, "not_established")
+
+    def test_the_ordinal_codes_are_unchanged_by_the_rename(self):
+        # 0/1/2 order-preserving, so the median rule and the pre-committed
+        # even-vote tie-break survive the rename verbatim.
+        self.assertEqual(
+            channel_assessor._SUPPORT_ORDINAL,
+            {"not_established": 0, "suggestive": 1, "established": 2},
+        )
+
+    def test_the_old_vocabulary_appears_nowhere_in_the_module(self):
+        # No alias, no shim (project doctrine). A leftover literal would make a
+        # renamed column silently read as an empty leg in the forward test.
+        dead_re = re.compile(r"""["'](?:verified|partial|unverified)["']""")
+        offenders = [
+            f"{n}: {line.strip()}"
+            for n, line in enumerate(
+                Path(channel_assessor.__file__).read_text().splitlines(), start=1
+            )
+            if dead_re.search(line)
+        ]
+        self.assertEqual(
+            offenders, [], f"retired status literals still in channel_assessor: {offenders}"
+        )
+
+    def test_causal_support_is_declared_not_to_be_a_forecast(self):
+        # Single-sourced wording: the prompt AND the prose layer read this one
+        # constant, so the card can never drift from what the prompt promised.
+        self.assertIn("not a forecast", channel_assessor.CAUSAL_SUPPORT_NOT_A_FORECAST)
+        self.assertIn(
+            channel_assessor.CAUSAL_SUPPORT_NOT_A_FORECAST,
+            channel_assessor._ASSESS_PROMPT_TEMPLATE,
+        )
 
     def test_not_assessed_is_a_python_only_sentinel(self):
         # It marks a proposal the mcap bracket dropped before assessment. It
@@ -121,7 +164,7 @@ class TestVocabulary(unittest.TestCase):
         # dropped it" and "the model could not find a chain" collapse into one
         # value in the parquet.
         self.assertEqual(channel_assessor.NOT_ASSESSED, "not_assessed")
-        self.assertNotIn(channel_assessor.NOT_ASSESSED, channel_assessor.CHANNEL_STATUSES)
+        self.assertNotIn(channel_assessor.NOT_ASSESSED, channel_assessor.CHANNEL_SUPPORT_LEVELS)
         schema_json = json.dumps(channel_assessor._ASSESS_RESPONSE_SCHEMA)
         self.assertNotIn("not_assessed", schema_json)
 
@@ -163,9 +206,9 @@ class TestAssessmentPrompt(unittest.TestCase):
     def test_prompt_says_unverified_is_a_normal_answer(self):
         # The failure mode the retro measured on the strict prompt was an
         # INVENTED channel (AI ethics -> VERI), not a refusal. A legal,
-        # unpenalised "unverified" is what removes the pressure to invent.
+        # unpenalised "not_established" is what removes the pressure to invent.
         prompt = self._prompt().lower()
-        self.assertIn("unverified", prompt)
+        self.assertIn("not_established", prompt)
         self.assertIn("normal", prompt)
         self.assertIn("nothing is dropped", prompt)
 
@@ -202,7 +245,7 @@ class TestAssessCandidate(unittest.TestCase):
 
     def test_verified_round_trips_every_structured_field(self):
         result = self._assess(_payload(), _payload(), _payload())
-        self.assertEqual(result.status, "verified")
+        self.assertEqual(result.support_status, "established")
         self.assertEqual(result.channel_type, "customer_demand")
         self.assertIn("federal buyers expand", result.text)
         self.assertIn("Air Force", result.evidence)
@@ -212,21 +255,21 @@ class TestAssessCandidate(unittest.TestCase):
         self.assertIsNotNone(result.assessed_at)
 
     def test_unverified_is_a_success_not_a_failure(self):
-        # THE central property. "No verified channel" is an ANSWER; conflating
+        # THE central property. "No established channel" is an ANSWER; conflating
         # it with a dead call is what would make the shadow verdict unreadable.
         result = self._assess(
-            _payload(status="unverified", channel_type="none", text="", evidence=""),
-            _payload(status="unverified", channel_type="none", text="", evidence=""),
-            _payload(status="unverified", channel_type="none", text="", evidence=""),
+            _payload(status="not_established", channel_type="none", text="", evidence=""),
+            _payload(status="not_established", channel_type="none", text="", evidence=""),
+            _payload(status="not_established", channel_type="none", text="", evidence=""),
         )
-        self.assertEqual(result.status, "unverified")
+        self.assertEqual(result.support_status, "not_established")
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.SUCCESS)
 
     def test_unverified_forces_type_none_and_empties_the_chain(self):
         result = self._assess(
-            _payload(status="unverified", channel_type="regulatory", text="a -> b -> c"),
-            _payload(status="unverified", channel_type="regulatory", text="a -> b -> c"),
-            _payload(status="unverified", channel_type="regulatory", text="a -> b -> c"),
+            _payload(status="not_established", channel_type="regulatory", text="a -> b -> c"),
+            _payload(status="not_established", channel_type="regulatory", text="a -> b -> c"),
+            _payload(status="not_established", channel_type="regulatory", text="a -> b -> c"),
         )
         self.assertEqual(result.channel_type, "none")
         self.assertEqual(result.text, "")
@@ -251,35 +294,35 @@ class TestAssessCandidate(unittest.TestCase):
 
     def test_ordinal_median_picks_the_middle_status(self):
         result = self._assess(
-            _payload(status="verified"),
-            _payload(status="partial", channel_type="supplier_input"),
-            _payload(status="unverified", channel_type="none"),
+            _payload(status="established"),
+            _payload(status="suggestive", channel_type="supplier_input"),
+            _payload(status="not_established", channel_type="none"),
         )
-        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.support_status, "suggestive")
         # Fields come from the FIRST draw whose status equals the median, so
         # the chosen text is deterministic given draw order.
         self.assertEqual(result.channel_type, "supplier_input")
         self.assertEqual(result.votes, 3)
         self.assertEqual(result.valid_n, 3)
-        self.assertEqual(result.dispersion, 2)
+        self.assertEqual(result.support_dispersion, 2)
 
     def test_unanimous_draws_report_zero_dispersion(self):
         result = self._assess(_payload(), _payload(), _payload())
-        self.assertEqual(result.dispersion, 0)
+        self.assertEqual(result.support_dispersion, 0)
 
     def test_an_off_vocabulary_status_invalidates_only_that_draw(self):
         result = self._assess(
             _payload(status="probably"),
-            _payload(status="verified"),
-            _payload(status="verified"),
+            _payload(status="established"),
+            _payload(status="established"),
         )
-        self.assertEqual(result.status, "verified")
+        self.assertEqual(result.support_status, "established")
         self.assertEqual(result.valid_n, 2)
         self.assertEqual(result.votes, 3)
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.SUCCESS)
 
     def test_a_dead_call_is_a_failure_recorded_as_unverified(self):
-        # Never "verified" (that would fabricate evidence) and never a drop
+        # Never "established" (that would fabricate evidence) and never a drop
         # (the candidate still ships) — but the outcome column has to say the
         # call died, or an outage reads as a genuinely channel-less day.
         with patch.object(channel_assessor, "_call_llm", side_effect=RuntimeError("socket")):
@@ -290,7 +333,7 @@ class TestAssessCandidate(unittest.TestCase):
                 llm_client=object(),
                 votes=3,
             )
-        self.assertEqual(result.status, "unverified")
+        self.assertEqual(result.support_status, "not_established")
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.CALL_FAILED)
         self.assertEqual(result.valid_n, 0)
         self.assertEqual(result.channel_type, "none")
@@ -299,12 +342,12 @@ class TestAssessCandidate(unittest.TestCase):
         # Same single re-roll policy as the proposal call: an empty body is MoE
         # non-determinism, so ONE draw costs two calls before it gives up.
         result = self._assess("", "", votes=1)
-        self.assertEqual(result.status, "unverified")
+        self.assertEqual(result.support_status, "not_established")
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.EMPTY_PAYLOAD)
 
     def test_an_empty_body_that_re_rolls_into_an_answer_is_a_success(self):
-        result = self._assess("", _payload(status="partial"), votes=1)
-        self.assertEqual(result.status, "partial")
+        result = self._assess("", _payload(status="suggestive"), votes=1)
+        self.assertEqual(result.support_status, "suggestive")
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.SUCCESS)
 
     def test_a_non_json_body_is_malformed(self):
@@ -313,7 +356,7 @@ class TestAssessCandidate(unittest.TestCase):
 
     def test_a_client_init_failure_is_a_call_failure_not_a_raise(self):
         # The caller stamps a row either way, so a broken client must come back
-        # as unverified-with-a-failure-outcome rather than propagating.
+        # as not_established-with-a-failure-outcome rather than propagating.
         with patch.object(channel_assessor, "_resolve_client", side_effect=RuntimeError("no key")):
             result = channel_assessor.assess_candidate(
                 theme="t",
@@ -321,7 +364,7 @@ class TestAssessCandidate(unittest.TestCase):
                 candidate=_candidate(),
                 votes=3,
             )
-        self.assertEqual(result.status, "unverified")
+        self.assertEqual(result.support_status, "not_established")
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.CALL_FAILED)
         self.assertEqual(result.valid_n, 0)
 
@@ -332,7 +375,7 @@ class TestTruncation(unittest.TestCase):
     The acceptance probe measured 8 of 89 stage-B calls returning an empty body
     at exactly completion=1501 / reasoning=1500 under the old 1500-token cap:
     the model reasoned past the budget and the answer never got emitted. Those
-    draws landed as ``unverified`` and biased the shadow verdict toward
+    draws landed as ``not_established`` and biased the shadow verdict toward
     ``refuse``, and the loss was not random — the draws that reasoned longest
     are the ones most likely to have been about to name a chain.
     """
@@ -358,26 +401,26 @@ class TestTruncation(unittest.TestCase):
     def test_a_length_finish_reason_is_truncated_not_empty(self):
         result = self._assess(("", "MAX_TOKENS"), ("", "MAX_TOKENS"), votes=1)
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.TRUNCATED)
-        self.assertEqual(result.status, "unverified")
+        self.assertEqual(result.support_status, "not_established")
         self.assertEqual(result.valid_n, 0)
 
     def test_a_length_finish_reason_beats_a_parseable_body(self):
         # A body that happens to parse after the generation was cut is still a
         # clipped generation, not a measurement.
         result = self._assess(
-            (_payload(status="verified"), "MAX_TOKENS"),
-            (_payload(status="verified"), "MAX_TOKENS"),
+            (_payload(status="established"), "MAX_TOKENS"),
+            (_payload(status="established"), "MAX_TOKENS"),
             votes=1,
         )
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.TRUNCATED)
-        self.assertEqual(result.status, "unverified")
+        self.assertEqual(result.support_status, "not_established")
 
     def test_a_truncated_draw_is_re_rolled_once(self):
         # Same single re-roll as an empty body: the burn length is MoE
         # non-determinism, not a judgement about the world.
-        result = self._assess(("", "MAX_TOKENS"), _payload(status="partial"), votes=1)
+        result = self._assess(("", "MAX_TOKENS"), _payload(status="suggestive"), votes=1)
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.SUCCESS)
-        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.support_status, "suggestive")
 
     def test_truncation_is_a_distinct_outcome_value(self):
         self.assertEqual(channel_assessor.AssessmentOutcome.TRUNCATED.value, "truncated")
@@ -393,11 +436,11 @@ class TestEvenVoteTieBreak(unittest.TestCase):
     The retro's instrument qualification found mixed votes on 91 of 238 pairs,
     and a draw can be lost to a dead socket, an off-vocabulary status or a
     clipped generation. With k = 3 that leaves two valid draws often enough to
-    matter, and the primary test's two legs are literally ``verified`` and
-    ``unverified`` — so an undocumented tie-break MOVES ROWS BETWEEN LEGS.
+    matter, and the primary test's two legs are literally ``established`` and
+    ``not_established`` — so an undocumented tie-break MOVES ROWS BETWEEN LEGS.
 
     Pre-committed rule: when the two central ordinals disagree, the result is
-    ``partial``, which the pre-registration excludes from both legs. A tie is
+    ``suggestive``, which the pre-registration excludes from both legs. A tie is
     reported as a tie rather than resolved toward either leg.
     """
 
@@ -413,57 +456,57 @@ class TestEvenVoteTieBreak(unittest.TestCase):
 
     def test_verified_against_unverified_ties_to_partial(self):
         result = self._assess(
-            _payload(status="verified"),
-            _payload(status="unverified", channel_type="none"),
+            _payload(status="established"),
+            _payload(status="not_established", channel_type="none"),
             "not json at all",
             "not json at all",
         )
         self.assertEqual(result.valid_n, 2)
-        self.assertEqual(result.status, "partial")
-        self.assertEqual(result.dispersion, 2)
+        self.assertEqual(result.support_status, "suggestive")
+        self.assertEqual(result.support_dispersion, 2)
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.SUCCESS)
 
     def test_verified_against_partial_ties_to_partial(self):
         result = self._assess(
-            _payload(status="verified"),
-            _payload(status="partial", channel_type="supplier_input"),
+            _payload(status="established"),
+            _payload(status="suggestive", channel_type="supplier_input"),
             "not json at all",
             "not json at all",
         )
         self.assertEqual(result.valid_n, 2)
-        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.support_status, "suggestive")
 
     def test_partial_against_unverified_ties_to_partial(self):
         result = self._assess(
-            _payload(status="partial", channel_type="supplier_input"),
-            _payload(status="unverified", channel_type="none"),
+            _payload(status="suggestive", channel_type="supplier_input"),
+            _payload(status="not_established", channel_type="none"),
             "not json at all",
             "not json at all",
         )
         self.assertEqual(result.valid_n, 2)
-        self.assertEqual(result.status, "partial")
+        self.assertEqual(result.support_status, "suggestive")
 
     def test_two_agreeing_draws_are_not_a_tie(self):
         result = self._assess(
-            _payload(status="verified"),
-            _payload(status="verified"),
+            _payload(status="established"),
+            _payload(status="established"),
             "not json at all",
             "not json at all",
         )
         self.assertEqual(result.valid_n, 2)
-        self.assertEqual(result.status, "verified")
-        self.assertEqual(result.dispersion, 0)
+        self.assertEqual(result.support_status, "established")
+        self.assertEqual(result.support_dispersion, 0)
 
     def test_a_single_valid_draw_is_taken_as_is(self):
         result = self._assess(
-            _payload(status="verified"),
+            _payload(status="established"),
             "not json at all",
             "not json at all",
             "not json at all",
             "not json at all",
         )
         self.assertEqual(result.valid_n, 1)
-        self.assertEqual(result.status, "verified")
+        self.assertEqual(result.support_status, "established")
 
 
 class TestAssessCandidatesBatch(unittest.TestCase):
@@ -475,7 +518,7 @@ class TestAssessCandidatesBatch(unittest.TestCase):
         # candidates fan out across threads: a call-ordered fake would pin the
         # scheduler rather than the contract, and would pass even if result[i]
         # belonged to candidate[j].
-        by_ticker = {"AAA": "verified", "BBB": "partial", "CCC": "unverified"}
+        by_ticker = {"AAA": "established", "BBB": "suggestive", "CCC": "not_established"}
 
         def _fake(_client, prompt, **_kwargs):
             ticker = next(t for t in by_ticker if f'candidate_ticker: "{t}"' in prompt)
@@ -490,7 +533,9 @@ class TestAssessCandidatesBatch(unittest.TestCase):
                 votes=1,
             )
         self.assertEqual(len(results), 3)
-        self.assertEqual([r.status for r in results], ["verified", "partial", "unverified"])
+        self.assertEqual(
+            [r.support_status for r in results], ["established", "suggestive", "not_established"]
+        )
 
     def test_results_stay_in_input_order_when_calls_complete_out_of_order(self):
         # Executor.map yields in INPUT order; this pins that the fan-out cannot
@@ -507,7 +552,11 @@ class TestAssessCandidatesBatch(unittest.TestCase):
             with lock:
                 order.append(ticker)
             return _response(
-                _payload(status={"AAA": "verified", "BBB": "partial"}.get(ticker, "unverified"))
+                _payload(
+                    status={"AAA": "established", "BBB": "suggestive"}.get(
+                        ticker, "not_established"
+                    )
+                )
             )
 
         with patch.object(channel_assessor, "_call_llm", side_effect=_fake):
@@ -519,7 +568,9 @@ class TestAssessCandidatesBatch(unittest.TestCase):
                 votes=1,
             )
         self.assertEqual(order, ["CCC", "BBB", "AAA"], "the fake did not complete out of order")
-        self.assertEqual([r.status for r in results], ["verified", "partial", "unverified"])
+        self.assertEqual(
+            [r.support_status for r in results], ["established", "suggestive", "not_established"]
+        )
 
     def test_a_total_outage_still_returns_one_result_per_input(self):
         with patch.object(channel_assessor, "_call_llm", side_effect=RuntimeError("down")):
@@ -546,14 +597,14 @@ class TestAssessCandidatesBatch(unittest.TestCase):
 class TestUnassessedAndRowFields(unittest.TestCase):
     def test_unassessed_is_the_bracket_dropped_sentinel(self):
         result = channel_assessor.unassessed()
-        self.assertEqual(result.status, channel_assessor.NOT_ASSESSED)
+        self.assertEqual(result.support_status, channel_assessor.NOT_ASSESSED)
         self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.NOT_ASSESSED)
         self.assertEqual(result.channel_type, "none")
 
     def test_row_fields_emit_the_per_candidate_channel_columns(self):
         fields = channel_assessor.row_fields(channel_assessor.unassessed())
         self.assertEqual(set(fields), set(channel_assessor.CHANNEL_ROW_COLUMNS))
-        self.assertEqual(fields["channel_status"], "not_assessed")
+        self.assertEqual(fields["channel_support_status"], "not_assessed")
         self.assertEqual(fields["channel_assessment_outcome"], "not_assessed")
         self.assertIsNone(fields["channel_assessed_at"])
 
@@ -582,7 +633,7 @@ class TestShadowStrictVerdict(unittest.TestCase):
         outcome: channel_assessor.AssessmentOutcome = channel_assessor.AssessmentOutcome.SUCCESS,
     ):
         return channel_assessor.ChannelAssessment(
-            status=status,
+            support_status=status,
             channel_type="none",
             text="",
             evidence="",
@@ -590,41 +641,41 @@ class TestShadowStrictVerdict(unittest.TestCase):
             confidence=None,
             votes=3,
             valid_n=3,
-            dispersion=0,
+            support_dispersion=0,
             outcome=outcome,
             assessed_at="2026-08-19T00:00:00+00:00",
         )
 
     def test_keep_when_any_candidate_is_verified(self):
         shadow = channel_assessor.shadow_strict_verdict(
-            [self._assessment("unverified"), self._assessment("verified")]
+            [self._assessment("not_established"), self._assessment("established")]
         )
         self.assertEqual(shadow.verdict, "keep")
-        self.assertEqual(shadow.verified_n, 1)
+        self.assertEqual(shadow.established_n, 1)
         self.assertEqual(shadow.assessed_n, 2)
         self.assertEqual(shadow.failed_n, 0)
 
     def test_refuse_when_no_candidate_is_verified(self):
         shadow = channel_assessor.shadow_strict_verdict(
-            [self._assessment("partial"), self._assessment("unverified")]
+            [self._assessment("suggestive"), self._assessment("not_established")]
         )
         self.assertEqual(shadow.verdict, "refuse")
-        self.assertEqual(shadow.verified_n, 0)
+        self.assertEqual(shadow.established_n, 0)
 
     def test_no_assessed_candidates_refuses_with_a_zero_denominator(self):
         self.assertEqual(channel_assessor.shadow_strict_verdict([]), ("refuse", 0, 0, 0))
 
     def test_an_instrument_failure_leaves_the_denominator(self):
         # A 429 storm or a provider outage raises per draw, and every such
-        # assessment carries status "unverified". Counting those inside
+        # assessment carries status "not_established". Counting those inside
         # shadow_strict_assessed_n turns an OUTAGE into a healthy-looking
         # "no theme had a channel today" — a failure that looks like an answer,
         # one level up from the per-candidate outcome column.
         shadow = channel_assessor.shadow_strict_verdict(
             [
-                self._assessment("verified"),
-                self._assessment("unverified", channel_assessor.AssessmentOutcome.CALL_FAILED),
-                self._assessment("unverified", channel_assessor.AssessmentOutcome.TRUNCATED),
+                self._assessment("established"),
+                self._assessment("not_established", channel_assessor.AssessmentOutcome.CALL_FAILED),
+                self._assessment("not_established", channel_assessor.AssessmentOutcome.TRUNCATED),
             ]
         )
         self.assertEqual(shadow, ("keep", 1, 1, 2))
@@ -632,8 +683,8 @@ class TestShadowStrictVerdict(unittest.TestCase):
     def test_a_total_outage_refuses_with_a_zero_denominator_and_a_failure_count(self):
         shadow = channel_assessor.shadow_strict_verdict(
             [
-                self._assessment("unverified", channel_assessor.AssessmentOutcome.CALL_FAILED),
-                self._assessment("unverified", channel_assessor.AssessmentOutcome.CALL_FAILED),
+                self._assessment("not_established", channel_assessor.AssessmentOutcome.CALL_FAILED),
+                self._assessment("not_established", channel_assessor.AssessmentOutcome.CALL_FAILED),
             ]
         )
         self.assertEqual(shadow, ("refuse", 0, 0, 2))
@@ -645,15 +696,15 @@ class TestShadowStrictVerdict(unittest.TestCase):
         shadow = channel_assessor.shadow_strict_verdict(
             [
                 channel_assessor.unassessed(),
-                self._assessment("verified"),
-                self._assessment("unverified"),
+                self._assessment("established"),
+                self._assessment("not_established"),
             ]
         )
         self.assertEqual(shadow, ("keep", 1, 2, 0))
 
     def test_an_over_cap_candidate_is_in_neither_numerator_nor_denominator(self):
         shadow = channel_assessor.shadow_strict_verdict(
-            [channel_assessor.over_assess_cap(), self._assessment("unverified")]
+            [channel_assessor.over_assess_cap(), self._assessment("not_established")]
         )
         self.assertEqual(shadow, ("refuse", 0, 1, 0))
 
@@ -661,7 +712,7 @@ class TestShadowStrictVerdict(unittest.TestCase):
 class TestStatusCounts(unittest.TestCase):
     def _assessment(self, status, outcome=channel_assessor.AssessmentOutcome.SUCCESS):
         return channel_assessor.ChannelAssessment(
-            status=status,
+            support_status=status,
             channel_type="none",
             text="",
             evidence="",
@@ -669,7 +720,7 @@ class TestStatusCounts(unittest.TestCase):
             confidence=None,
             votes=3,
             valid_n=3,
-            dispersion=0,
+            support_dispersion=0,
             outcome=outcome,
             assessed_at="2026-08-19T00:00:00+00:00",
         )
@@ -677,16 +728,16 @@ class TestStatusCounts(unittest.TestCase):
     def test_the_four_tallies_split_answers_from_failures(self):
         counts = channel_assessor.status_counts(
             [
-                self._assessment("verified"),
-                self._assessment("partial"),
-                self._assessment("unverified"),
-                self._assessment("unverified", channel_assessor.AssessmentOutcome.CALL_FAILED),
-                self._assessment("unverified", channel_assessor.AssessmentOutcome.TRUNCATED),
+                self._assessment("established"),
+                self._assessment("suggestive"),
+                self._assessment("not_established"),
+                self._assessment("not_established", channel_assessor.AssessmentOutcome.CALL_FAILED),
+                self._assessment("not_established", channel_assessor.AssessmentOutcome.TRUNCATED),
             ]
         )
         self.assertEqual(
             counts,
-            {"verified": 1, "partial": 1, "unverified": 1, "assess_failed": 2},
+            {"established": 1, "suggestive": 1, "not_established": 1, "assess_failed": 2},
         )
 
     def test_neither_sentinel_counts_as_a_failure(self):
@@ -698,7 +749,7 @@ class TestStatusCounts(unittest.TestCase):
         )
         self.assertEqual(
             counts,
-            {"verified": 0, "partial": 0, "unverified": 0, "assess_failed": 0},
+            {"established": 0, "suggestive": 0, "not_established": 0, "assess_failed": 0},
         )
 
 
@@ -712,7 +763,7 @@ class TestOverAssessCap(unittest.TestCase):
 
     def test_the_status_is_not_assessed_and_the_outcome_names_the_cap(self):
         a = channel_assessor.over_assess_cap()
-        self.assertEqual(a.status, channel_assessor.NOT_ASSESSED)
+        self.assertEqual(a.support_status, channel_assessor.NOT_ASSESSED)
         self.assertIs(a.outcome, channel_assessor.AssessmentOutcome.OVER_ASSESS_CAP)
         self.assertEqual(a.votes, 0)
         self.assertIsNone(a.assessed_at)
@@ -730,11 +781,11 @@ class TestOverAssessCap(unittest.TestCase):
         )
 
     def test_rule_version_is_separate_from_the_config_token(self):
-        # The rule can be re-cut offline from verified_n / assessed_n without
+        # The rule can be re-cut offline from established_n / assessed_n without
         # invalidating a frozen candidate parquet, so it must NOT ride inside
         # channel_config_version.
         self.assertEqual(
-            channel_assessor.SHADOW_STRICT_RULE_VERSION, "shadow-strict-any-verified-v1"
+            channel_assessor.SHADOW_STRICT_RULE_VERSION, "shadow-strict-any-established-v1"
         )
         self.assertNotIn(
             channel_assessor.SHADOW_STRICT_RULE_VERSION, channel_assessor.channel_config_version()
@@ -746,7 +797,7 @@ class TestChannelConfigVersion(unittest.TestCase):
         token = channel_assessor.channel_config_version()
         self.assertEqual(token, channel_assessor.channel_config_version())
         payload = json.loads(token)
-        self.assertEqual(payload["schema"], "channel-assess-v1")
+        self.assertEqual(payload["schema"], "channel-assess-v2")
         self.assertEqual(payload["votes"], channel_assessor._ASSESS_VOTES)
 
     def test_token_changes_with_the_model(self):

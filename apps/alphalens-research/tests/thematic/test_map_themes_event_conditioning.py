@@ -207,7 +207,7 @@ class ChannelAssessmentIsPersistedTests(unittest.TestCase):
         # ``transmission_channel`` column is gone — its content is now
         # ``channel_text`` with a real status beside it.
         assessment = channel_assessor.ChannelAssessment(
-            status="partial",
+            support_status="suggestive",
             channel_type="customer_demand",
             text="payout -> legal spend rises -> AAA fees rise",
             evidence="the event states a settlement",
@@ -215,7 +215,7 @@ class ChannelAssessmentIsPersistedTests(unittest.TestCase):
             confidence=0.5,
             votes=3,
             valid_n=3,
-            dispersion=1,
+            support_dispersion=1,
             outcome=channel_assessor.AssessmentOutcome.SUCCESS,
             assessed_at="2026-08-19T00:00:00+00:00",
         )
@@ -239,8 +239,8 @@ class ChannelAssessmentIsPersistedTests(unittest.TestCase):
             shadow=channel_assessor.ShadowVerdict(channel_assessor.SHADOW_REFUSE, 0, 1, 0),
         )
         self.assertEqual(row["channel_text"], "payout -> legal spend rises -> AAA fees rise")
-        self.assertEqual(row["channel_status"], "partial")
-        self.assertEqual(row["channel_vote_dispersion"], 1)
+        self.assertEqual(row["channel_support_status"], "suggestive")
+        self.assertEqual(row["channel_support_dispersion"], 1)
         self.assertNotIn("transmission_channel", orchestrator._MAP_THEMES_COLUMNS)
         for column in channel_assessor.CHANNEL_ROW_COLUMNS:
             self.assertIn(column, orchestrator._MAP_THEMES_COLUMNS)
@@ -258,7 +258,7 @@ class MapperFreezeTokenTests(unittest.TestCase):
             market_cap_range=(1, 2),
             channel_config_version=channel_assessor.channel_config_version(),
         )
-        self.assertIn("mapper-freeze-v3", token)
+        self.assertIn("mapper-freeze-v4", token)
 
 
 if __name__ == "__main__":

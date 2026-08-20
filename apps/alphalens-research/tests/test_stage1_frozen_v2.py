@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
@@ -42,6 +43,41 @@ def _catalyst() -> CatalystPayload:
         template_id=None,
         template_facts=None,
     )
+
+
+class ARepoWideRenameCannotCorruptTheFrozenInstrument(unittest.TestCase):
+    """The 2026-08-20 causal-support rename must stop at this module's door.
+
+    The live assessor dropped the ``verified`` / ``partial`` / ``unverified``
+    vocabulary and the free-text ``transmission_channel`` column. This module is
+    a byte copy of the FROZEN Stage-1 instrument: it has to keep both, because
+    the retrospective's replayability is the pre-registration's guarantee. A
+    find-and-replace that swept this file would break that silently — the token
+    test below would still pass if the rename were confined to prose, so the
+    vocabulary is pinned explicitly rather than left to a reviewer's memory.
+    """
+
+    def test_the_frozen_prompt_and_schema_keep_the_retired_channel_field(self):
+        source = Path(stage1_frozen_v2.__file__).read_text()
+        self.assertIn('"transmission_channel"', source)
+        self.assertIn("transmission_channel", stage1_frozen_v2._PROMPT_TEMPLATE)
+        self.assertIn(
+            "transmission_channel",
+            stage1_frozen_v2._MAPPER_RESPONSE_SCHEMA["properties"]["candidates"]["items"][
+                "required"
+            ],
+        )
+
+    def test_the_frozen_module_never_imports_the_live_assessor(self):
+        # The live module's constants move with the live cohort; binding to them
+        # would make the frozen replay follow a vocabulary it never ran under.
+        source = Path(stage1_frozen_v2.__file__).read_text()
+        self.assertNotIn("channel_assessor", source)
+
+    def test_the_frozen_token_still_reproduces_after_the_live_rename(self):
+        self.assertEqual(
+            stage1_frozen_v2.frozen_mapper_config_version(market_cap_range=_MCAP), FROZEN_MCV
+        )
 
 
 class FrozenTokenReproducesThePreRegisteredLiteral(unittest.TestCase):

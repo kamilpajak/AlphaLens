@@ -331,7 +331,7 @@ def _build_row(
         # contrast computable at all. A DIFFERENT estimand from the frozen
         # Stage-1 gate; never pool the two (design memo §5).
         "shadow_strict_verdict": shadow.verdict,
-        "shadow_strict_verified_n": shadow.verified_n,
+        "shadow_strict_established_n": shadow.established_n,
         "shadow_strict_assessed_n": shadow.assessed_n,
         "shadow_strict_failed_n": shadow.failed_n,
         "shadow_strict_rule_version": channel_assessor.SHADOW_STRICT_RULE_VERSION,
@@ -368,7 +368,7 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
     *channel_assessor.CHANNEL_ROW_COLUMNS,
     channel_assessor.CHANNEL_CONFIG_COLUMN,
     "shadow_strict_verdict",
-    "shadow_strict_verified_n",
+    "shadow_strict_established_n",
     "shadow_strict_assessed_n",
     "shadow_strict_failed_n",
     "shadow_strict_rule_version",
@@ -432,9 +432,11 @@ def _channel_counts(
     per_theme = list(theme_counts)
     verdicts = [s.verdict for s in shadows]
     return {
-        "channel_verified": sum(c["verified"] for c in per_theme),
-        "channel_partial": sum(c["partial"] for c in per_theme),
-        "channel_unverified": sum(c["unverified"] for c in per_theme),
+        "channel_established": sum(c[channel_assessor.SUPPORT_ESTABLISHED] for c in per_theme),
+        "channel_suggestive": sum(c[channel_assessor.SUPPORT_SUGGESTIVE] for c in per_theme),
+        "channel_not_established": sum(
+            c[channel_assessor.SUPPORT_NOT_ESTABLISHED] for c in per_theme
+        ),
         "channel_assess_failed": sum(c["assess_failed"] for c in per_theme),
         "themes_shadow_kept": sum(1 for v in verdicts if v == channel_assessor.SHADOW_KEEP),
         "themes_shadow_refused": sum(1 for v in verdicts if v == channel_assessor.SHADOW_REFUSE),
@@ -464,8 +466,8 @@ def _load_frozen_candidates(out_path: Path, config_version: str) -> pd.DataFrame
 
     The freeze is honoured only when the existing parquet (1) is readable,
     (2) carries a ``mapper_config_version`` matching the current config, and
-    (3) is non-degraded — at least one verified candidate. A legacy parquet
-    without the column, a config mismatch, or an empty/all-unverified set is
+    (3) is non-degraded — at least one gate-verified candidate. A legacy parquet
+    without the column, a config mismatch, or an empty/no-gate-verified set is
     treated as a miss so the caller recomputes (anti-poisoned-freeze: a thin
     set from a transient first-run failure must not seal the date). Mirrors the
     buffett-qual successes-only / config-version cache discipline.
@@ -488,7 +490,7 @@ def _load_frozen_candidates(out_path: Path, config_version: str) -> pd.DataFrame
         )
         return None
     if df.empty or "verified" not in df.columns or not bool(df["verified"].astype(bool).any()):
-        logger.info("map_themes: frozen set degraded (empty / no verified) -> recomputing")
+        logger.info("map_themes: frozen set degraded (empty / no gate-verified) -> recomputing")
         return None
     return df
 
@@ -505,7 +507,7 @@ _PROPOSAL_FUNNEL_COLUMNS = (
     "ticker",
     "company_name",
     "llm_confidence",
-    "channel_status",
+    "channel_support_status",
     "channel_type",
     "channel_confidence",
     # Without these two, a row whose assessment DIED is byte-identical to a
@@ -532,9 +534,9 @@ _THEME_DECISION_COLUMNS = (
     "decline_reason",
     "n_proposed",
     "n_in_bracket",
-    "n_verified",
-    "n_partial",
-    "n_unverified",
+    "n_established",
+    "n_suggestive",
+    "n_not_established",
     "n_assess_failed",
     "n_over_assess_cap",
     "shadow_strict_verdict",
@@ -565,7 +567,8 @@ def _funnel_row(
     actually propose" stays answerable from this file alone.
 
     An OFF-BRACKET proposal never reached the assessor, so it renders as
-    ``channel_status="not_assessed"`` — never as ``"unverified"``. Merging the
+    ``channel_support_status="not_assessed"`` — never as the bottom support
+    level. Merging the
     two would make "the bracket dropped it" indistinguishable from "the model
     could not name a chain", and the shadow verdict's denominator meaningless.
     """
@@ -580,7 +583,7 @@ def _funnel_row(
         # (The proposal-shadow builder keeps its own None default on purpose —
         # its rows feed a pre-registered measurement and must not shift.)
         "llm_confidence": cand.get("confidence", 0.0),
-        "channel_status": fields["channel_status"],
+        "channel_support_status": fields["channel_support_status"],
         "channel_type": fields["channel_type"],
         "channel_confidence": fields["channel_confidence"],
         "channel_assessment_outcome": fields["channel_assessment_outcome"],
@@ -824,13 +827,13 @@ def _assess_channels_for_theme(
     # operator's `grep 'funnel —'` recipe and the tests that pin its exact
     # substrings must both keep working.
     logger.info(
-        "map_themes %s: theme %r channel — verified %d, partial %d, unverified %d, "
-        "failed %d, over cap %d -> shadow=%s",
+        "map_themes %s: theme %r channel — established %d, suggestive %d, "
+        "not_established %d, failed %d, over cap %d -> shadow=%s",
         asof.isoformat(),
         theme,
-        counts["verified"],
-        counts["partial"],
-        counts["unverified"],
+        counts[channel_assessor.SUPPORT_ESTABLISHED],
+        counts[channel_assessor.SUPPORT_SUGGESTIVE],
+        counts[channel_assessor.SUPPORT_NOT_ESTABLISHED],
         counts["assess_failed"],
         len(over_cap_tail),
         shadow.verdict,
@@ -957,9 +960,9 @@ class ThemeDecision:
     decline_reason: str
     n_proposed: int
     n_in_bracket: int
-    n_verified: int
-    n_partial: int
-    n_unverified: int
+    n_established: int
+    n_suggestive: int
+    n_not_established: int
     n_assess_failed: int
     n_over_assess_cap: int
     shadow_strict_verdict: str
@@ -973,9 +976,9 @@ class ThemeDecision:
             "decline_reason": self.decline_reason,
             "n_proposed": self.n_proposed,
             "n_in_bracket": self.n_in_bracket,
-            "n_verified": self.n_verified,
-            "n_partial": self.n_partial,
-            "n_unverified": self.n_unverified,
+            "n_established": self.n_established,
+            "n_suggestive": self.n_suggestive,
+            "n_not_established": self.n_not_established,
             "n_assess_failed": self.n_assess_failed,
             "n_over_assess_cap": self.n_over_assess_cap,
             "shadow_strict_verdict": self.shadow_strict_verdict,
@@ -983,7 +986,12 @@ class ThemeDecision:
         }
 
 
-_EMPTY_COUNTS = {"verified": 0, "partial": 0, "unverified": 0, "assess_failed": 0}
+_EMPTY_COUNTS = {
+    channel_assessor.SUPPORT_ESTABLISHED: 0,
+    channel_assessor.SUPPORT_SUGGESTIVE: 0,
+    channel_assessor.SUPPORT_NOT_ESTABLISHED: 0,
+    "assess_failed": 0,
+}
 
 
 def _decision_for(
@@ -1002,9 +1010,9 @@ def _decision_for(
         decline_reason=proposal.decline_reason if proposal else "",
         n_proposed=len(proposal.proposed) if proposal else 0,
         n_in_bracket=len(proposal.candidates) if proposal else 0,
-        n_verified=counts["verified"],
-        n_partial=counts["partial"],
-        n_unverified=counts["unverified"],
+        n_established=counts[channel_assessor.SUPPORT_ESTABLISHED],
+        n_suggestive=counts[channel_assessor.SUPPORT_SUGGESTIVE],
+        n_not_established=counts[channel_assessor.SUPPORT_NOT_ESTABLISHED],
         n_assess_failed=counts["assess_failed"],
         # The cap starts biting exactly when the crowd-out repair succeeds, so
         # the truncation is recorded per theme rather than inferred later.

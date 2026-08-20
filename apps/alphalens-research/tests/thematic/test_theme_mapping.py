@@ -1649,9 +1649,9 @@ class TestFreezeTokenCarriesTheChannelStage(unittest.TestCase):
         # The human-legible cohort marker. ``_normalize`` losing its
         # channel-less drop is a code-level change no hash can see, which is
         # exactly what the tag exists for.
-        self.assertEqual(theme_mapper._MAPPER_FREEZE_SCHEMA, "mapper-freeze-v3")
+        self.assertEqual(theme_mapper._MAPPER_FREEZE_SCHEMA, "mapper-freeze-v4")
         payload = json.loads(self._token(channel_assessor.channel_config_version()))
-        self.assertEqual(payload["schema"], "mapper-freeze-v3")
+        self.assertEqual(payload["schema"], "mapper-freeze-v4")
         self.assertEqual(payload["channel"], channel_assessor.channel_config_version())
 
 

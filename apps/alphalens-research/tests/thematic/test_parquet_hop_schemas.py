@@ -248,9 +248,9 @@ class TestThematicCandidatesSchema(unittest.TestCase):
         # rather than in production.
         frame = _valid_candidates_frame()
         n = len(frame)
-        frame["channel_status"] = ["verified", "unverified"][:n]
+        frame["channel_support_status"] = ["established", "not_established"][:n]
         frame["channel_type"] = ["customer_demand", "none"][:n]
-        frame["channel_vote_dispersion"] = pd.array([0, 2][:n], dtype="Int64")
+        frame["channel_support_dispersion"] = pd.array([0, 2][:n], dtype="Int64")
         frame["shadow_strict_verdict"] = ["keep", "keep"][:n]
         THEMATIC_CANDIDATES_SCHEMA.validate(frame)
 

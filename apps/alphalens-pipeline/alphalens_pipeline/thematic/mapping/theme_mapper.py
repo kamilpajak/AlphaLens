@@ -414,7 +414,13 @@ def _call_llm(llm_client: OpenRouterClient, prompt: str, *, model: str):
 # candidate cohort resets, the ISO 40-42 forward window is superseded, and the
 # pre-registered proposal-shadow head-to-head restarts BOTH arms for the second
 # time after the 2026-08-03 reset.
-_MAPPER_FREEZE_SCHEMA = "mapper-freeze-v3"
+# 2026-08-20: bumped to v4 PURELY as a cohort marker. Stage A's prompt, schema
+# and sampling do NOT change in that increment — the assessor's causal-support
+# rename and its new grounding fields move the nested channel token anyway. The
+# tag moves too so a reader filtering on the legible marker alone cannot pool
+# the discarded 2026-08-19 day (mapper-freeze-v3 + channel-assess-v1) with the
+# new cohort. See docs/research/grounding_and_prose_honesty_design_2026_08_20.md §7.
+_MAPPER_FREEZE_SCHEMA = "mapper-freeze-v4"
 
 
 def mapper_config_version(
