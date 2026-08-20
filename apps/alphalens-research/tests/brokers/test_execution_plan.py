@@ -151,6 +151,29 @@ class TestLadderDecomposition(unittest.TestCase):
 
         self.assertEqual([b.take_profit for b in brackets], [60.0])
 
+    def test_tier_index_is_faithful_across_zero_qty_skips(self):
+        # tier 0 sizes to 0 shares and is dropped, so the FIRST placed bracket
+        # realizes tier 1 -> tier_index 1 -> a human renderer shows E2, never a
+        # lying sequential E1.
+        plan = _plan(
+            tiers=(_tier(0, 50.0, 0), _tier(1, 48.0, 12)),
+            tranches=(_tranche(0, 55.0), _tranche(1, 60.0)),
+        )
+
+        brackets = decompose_setup_plan(plan, _instrument())
+
+        self.assertEqual([b.tier_index for b in brackets], [1])
+
+    def test_tier_index_mirrors_every_surviving_tier_position(self):
+        plan = _plan(
+            tiers=(_tier(0, 50.0, 10), _tier(1, 48.0, 12), _tier(2, 46.0, 14)),
+            tranches=(_tranche(0, 55.0),),
+        )
+
+        brackets = decompose_setup_plan(plan, _instrument())
+
+        self.assertEqual([b.tier_index for b in brackets], [0, 1, 2])
+
     def test_entry_ttl_passthrough_and_zero_sentinel_default(self):
         explicit = decompose_setup_plan(
             _plan(tiers=(_tier(0, 50.0, 10),), order_ttl_days=9), _instrument()

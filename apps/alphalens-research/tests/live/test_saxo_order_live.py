@@ -110,6 +110,7 @@ class TestSaxoSimLiveOrder(unittest.TestCase):
                     take_profit=_TAKE_PROFIT,
                     entry_ttl_days=1,
                     client_request_id=str(uuid.uuid4()),
+                    tier_index=0,
                 )
                 placed = broker.place_bracket_order(request)
             except Exception as exc:

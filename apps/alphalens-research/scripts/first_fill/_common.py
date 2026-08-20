@@ -105,6 +105,7 @@ def place_and_journal(
         take_profit=tp,
         entry_ttl_days=ttl,
         client_request_id=str(uuid.uuid4()),
+        tier_index=0,  # single manual first-fill bracket == E1
     )
     request_echo = dataclasses.asdict(request)
     ts_utc = dt.datetime.now(dt.UTC).isoformat(timespec="seconds")

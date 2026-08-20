@@ -245,6 +245,14 @@ class BracketOrderRequest:
     take_profit: float | None
     entry_ttl_days: int  # TRADING days (trade_setup.order_ttl_days); exits GoodTillCancel
     client_request_id: str  # uuid4; idempotency/dedup token (Saxo x-request-id)
+    # The 0-based SETUP-PLAN tier position this bracket realizes (``TierPlan.
+    # tier_index``), NOT the placement position in the decomposed list. Faithful
+    # under a dropped zero-qty tier: when tier 0 sizes to 0 shares and is skipped,
+    # the first PLACED bracket carries ``tier_index=1`` so a human renderer shows
+    # ``E2`` (its true tier), never a lying sequential ``E1``. A REQUIRED field —
+    # no default that could silently mislabel. Presentation-only overlay: the id,
+    # ExternalReference, and every journal field keep their raw machine values.
+    tier_index: int
 
 
 @dataclass(frozen=True)
