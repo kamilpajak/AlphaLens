@@ -184,6 +184,8 @@ class TestGenerateBriefs(unittest.TestCase):
                 (_FAKE_BRIEF_PRO if row["ticker"] == "IONQ" else _FAKE_BRIEF_FLASH),
                 None,
                 generator.BriefErrorKind.NONE,
+                {},
+                [],
             ),
         ):
             with tempfile.TemporaryDirectory() as tmp:
@@ -208,7 +210,13 @@ class TestGenerateBriefs(unittest.TestCase):
             patch.object(
                 orchestrator,
                 "_brief_for_row",
-                side_effect=lambda row, **kw: (None, None, generator.BriefErrorKind.TRANSPORT),
+                side_effect=lambda row, **kw: (
+                    None,
+                    None,
+                    generator.BriefErrorKind.TRANSPORT,
+                    {},
+                    [],
+                ),
             ),
             patch(
                 "alphalens_pipeline.thematic.sources.canonical_title.canonical_title_for",
@@ -228,7 +236,7 @@ class TestGenerateBriefs(unittest.TestCase):
         def fake_brief(row, **kw):
             brief = _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
             captured_models[row["ticker"]] = brief["model_used"]
-            return brief, None, generator.BriefErrorKind.NONE
+            return brief, None, generator.BriefErrorKind.NONE, {}, []
 
         with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
             with tempfile.TemporaryDirectory() as tmp:
@@ -242,7 +250,7 @@ class TestGenerateBriefs(unittest.TestCase):
         with patch.object(
             orchestrator,
             "_brief_for_row",
-            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE),
+            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE, {}, []),
         ):
             with tempfile.TemporaryDirectory() as tmp:
                 output_dir = Path(tmp)
@@ -262,7 +270,7 @@ class TestGenerateBriefs(unittest.TestCase):
         with patch.object(
             orchestrator,
             "_brief_for_row",
-            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE),
+            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE, {}, []),
         ):
             with tempfile.TemporaryDirectory() as tmp:
                 output_dir = Path(tmp)
@@ -282,7 +290,7 @@ class TestGenerateBriefs(unittest.TestCase):
         with patch.object(
             orchestrator,
             "_brief_for_row",
-            return_value=(None, None, generator.BriefErrorKind.TRANSPORT),
+            return_value=(None, None, generator.BriefErrorKind.TRANSPORT, {}, []),
         ):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
@@ -298,7 +306,7 @@ class TestGenerateBriefs(unittest.TestCase):
     def test_attrs_contain_per_model_counts(self):
         def fake_brief(row, **kw):
             brief = _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
-            return brief, None, generator.BriefErrorKind.NONE
+            return brief, None, generator.BriefErrorKind.NONE, {}, []
 
         with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
             with tempfile.TemporaryDirectory() as tmp:
@@ -366,7 +374,7 @@ class TestBriefStatusStamping(unittest.TestCase):
             "generate_brief_with_retry",
             side_effect=RuntimeError("boom"),
         ):
-            brief, next_earnings, kind = orchestrator._brief_for_row(
+            brief, next_earnings, kind, _facts, _violations = orchestrator._brief_for_row(
                 row, llm_client_pro=None, llm_client_flash=None
             )
         self.assertIsNone(brief)
@@ -400,7 +408,7 @@ class TestEarningsDatePropagation(unittest.TestCase):
         with patch.object(
             orchestrator,
             "_brief_for_row",
-            return_value=(_FAKE_BRIEF_FLASH, "2026-05-08", generator.BriefErrorKind.NONE),
+            return_value=(_FAKE_BRIEF_FLASH, "2026-05-08", generator.BriefErrorKind.NONE, {}, []),
         ):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
@@ -414,7 +422,7 @@ class TestEarningsDatePropagation(unittest.TestCase):
         with patch.object(
             orchestrator,
             "_brief_for_row",
-            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE),
+            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE, {}, []),
         ):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(
@@ -467,7 +475,7 @@ class TestSidecarPersistence(unittest.TestCase):
     def test_sidecar_records_per_model_counts(self):
         def fake_brief(row, **kw):
             brief = _FAKE_BRIEF_PRO if row["layer4_weighted_score"] >= 4 else _FAKE_BRIEF_FLASH
-            return brief, None, generator.BriefErrorKind.NONE
+            return brief, None, generator.BriefErrorKind.NONE, {}, []
 
         with patch.object(orchestrator, "_brief_for_row", side_effect=fake_brief):
             with tempfile.TemporaryDirectory() as tmp:
@@ -492,7 +500,7 @@ class TestDedupOnMerge(unittest.TestCase):
         with patch.object(
             orchestrator,
             "_brief_for_row",
-            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE),
+            return_value=(_FAKE_BRIEF_FLASH, None, generator.BriefErrorKind.NONE, {}, []),
         ):
             with tempfile.TemporaryDirectory() as tmp:
                 out = orchestrator.generate_briefs(

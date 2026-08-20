@@ -18,11 +18,13 @@ import logging
 import os
 from collections import Counter
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
 
-from alphalens_pipeline.thematic.argumentation import generator
+from alphalens_pipeline.thematic.argumentation import generator, support_guard
+from alphalens_pipeline.thematic.mapping import channel_assessor
 from alphalens_pipeline.thematic.trade_setup import builder as trade_setup_builder
 
 logger = logging.getLogger(__name__)
@@ -187,6 +189,53 @@ def _row_template_facts(row: pd.Series) -> dict | None:
     return decoded
 
 
+def _cell(row: pd.Series, key: str) -> str:
+    value = row.get(key)
+    if value is None or (not isinstance(value, str) and pd.isna(value)):
+        return ""
+    return str(value).strip()
+
+
+def _channel_facts(row: pd.Series) -> dict:
+    """Project the channel record for the prompt, or the ``no_record`` shape.
+
+    ``no_record`` is a FACTS-level value, not a fourth taxonomy level. It renders
+    whenever the assessment did not succeed, or the row predates the columns.
+    Without it an assessor outage — which by construction carries the LOWEST
+    support level — would make the model write "no company-specific path was
+    established", asserting a judgement no model ever made. That is the same
+    refusal the assessor already makes, pushed one stage downstream.
+
+    ``channel_confidence`` / ``channel_vote_k`` / ``channel_vote_valid_n`` /
+    ``channel_support_dispersion`` are deliberately NOT projected: they are
+    instrument telemetry, and a self-reported float in the prompt invites "with
+    80% confidence" prose. The calibration evidence says the hedging must track
+    the LEVEL.
+    """
+    support = _cell(row, "channel_support_status")
+    outcome = _cell(row, "channel_assessment_outcome")
+    grounding = _cell(row, "channel_grounding_status")
+    if outcome != "success" or not support:
+        return {
+            "causal_support": support_guard.NO_RECORD,
+            "channel_grounding": grounding or channel_assessor.GROUNDING_UNKNOWN,
+            "channel_type": "",
+            "channel_text": "",
+            "channel_evidence": "",
+            "channel_falsifier": "",
+            "catalyst_event_type": _cell(row, "catalyst_event_type"),
+        }
+    return {
+        "causal_support": support,
+        "channel_grounding": grounding or channel_assessor.GROUNDING_UNKNOWN,
+        "channel_type": _cell(row, "channel_type"),
+        "channel_text": _cell(row, "channel_text"),
+        "channel_evidence": _cell(row, "channel_evidence"),
+        "channel_falsifier": _cell(row, "channel_falsifier"),
+        "catalyst_event_type": _cell(row, "catalyst_event_type"),
+    }
+
+
 def _row_to_facts(row: pd.Series) -> dict:
     """Project Phase D row → flat facts dict for the prompt template."""
     weighted = row.get("layer4_weighted_score")
@@ -216,6 +265,11 @@ def _row_to_facts(row: pd.Series) -> dict:
         # rows that had no template match.
         "template_id": _row_template_id(row),
         "template_facts": _row_template_facts(row),
+        # The stage-B channel record. It was computed, persisted and carried
+        # through scoring, and then dropped RIGHT HERE — so the prose was the
+        # only channel-related artefact the operator ever saw, and the one that
+        # never saw the record.
+        **_channel_facts(row),
     }
     for field in _BRIEF_NUMERIC_FIELDS:
         value = row.get(field)
@@ -242,7 +296,9 @@ def _brief_for_row(
     llm_client_flash,
     asof: dt.date | None = None,
     base_max_output_tokens: int = generator._DEFAULT_MAX_OUTPUT_TOKENS,
-) -> tuple[dict | None, str | None, generator.BriefErrorKind]:
+) -> tuple[
+    dict | None, str | None, generator.BriefErrorKind, dict, list[support_guard.SupportViolation]
+]:
     """Single-row LLM call with per-row exception absorption.
 
     Returns ``(brief_dict, next_earnings_date_iso, terminal_kind)``. The
@@ -250,6 +306,14 @@ def _brief_for_row(
     to the brief parquet AND pass it to the renderer — without this split it
     was only reaching the LLM prompt and getting dropped before reaching the
     operator (bug 2026-05-18: next_earnings_date column was always None).
+    The projected ``facts`` come back too, so the caller can stamp the guard's
+    telemetry from the SAME record the prompt was built on rather than
+    re-projecting it and risking a disagreement.
+
+    The support-guard violations of the last violating draw come back too: a
+    withheld row returns no brief, so this is the only place the count and spans
+    of the text the operator would have been shown survive.
+
     ``terminal_kind`` is the ``BriefErrorKind`` from the retry ladder
     (``NONE`` on success) so the orchestrator can stamp an honest per-row
     ``brief_status`` / ``brief_error_kind`` into the output parquet; the
@@ -265,18 +329,20 @@ def _brief_for_row(
     if asof is not None:
         facts = _enrich_facts_with_earnings(facts, asof)
     next_earnings = facts.get("next_earnings_date")
+    violations: list[support_guard.SupportViolation] = []
     try:
         brief, kind = generator.generate_brief_with_retry(
             facts,
             llm_client_pro=llm_client_pro,
             llm_client_flash=llm_client_flash,
             base_max_output_tokens=base_max_output_tokens,
+            violation_sink=violations,
         )
     except Exception as exc:
         logger.warning("brief generation raised for %s: %s", row.get("ticker"), exc, exc_info=True)
         brief = None
         kind = generator.BriefErrorKind.TRANSPORT
-    return brief, next_earnings, kind
+    return brief, next_earnings, kind, facts, violations
 
 
 def _build_clients(api_key: str | None):
@@ -298,6 +364,34 @@ def _build_clients(api_key: str | None):
         logger.warning("OpenRouterClient construction failed; cannot generate briefs: %s", exc)
         return None, None
     return client, client  # Same client serves both Pro and Flash models.
+
+
+# Guard telemetry stamped on every brief row. Parquet-only by design: putting a
+# causal-support level ON THE CARD is a separate PR with a Django migration, an
+# OpenAPI regeneration in the same commit, a Storybook state and the
+# unvalidated-display doctrine.
+_SUPPORT_GUARD_COLUMNS: tuple[str, ...] = (
+    "brief_support_guard_status",
+    "brief_support_guard_violations",
+    "brief_support_guard_spans_json",
+    "brief_support_guard_version",
+    "brief_causal_support",
+    "brief_channel_grounding",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _GuardOutcome:
+    """What the support guard did to ONE row's prose.
+
+    Never what it did to the ROW: the row ships in every case.
+    """
+
+    status: str
+    violations: int
+    spans_json: str | None
+    causal_support: str
+    grounding: str
 
 
 _EMPTY_OUT_COLUMNS = (
@@ -323,6 +417,7 @@ _EMPTY_OUT_COLUMNS = (
     "brief_status",
     "brief_error_kind",
     "brief_generated_at",
+    *_SUPPORT_GUARD_COLUMNS,
 )
 
 
@@ -445,6 +540,62 @@ def _empty_output(output_dir: Path, asof: dt.date) -> pd.DataFrame:
     return empty
 
 
+_MAX_LOGGED_GUARD_SPANS = 3
+
+
+def _guard_outcome(
+    facts: dict,
+    *,
+    brief: dict | None,
+    terminal_kind: generator.BriefErrorKind,
+    violations: list[support_guard.SupportViolation],
+) -> _GuardOutcome:
+    """Describe what the support guard did to this row's PROSE — never to the row.
+
+    Four states, and ``not_applicable`` is a REAL value rather than a null:
+    "the guard did not fire" and "the guard did not run" must never merge, the
+    same discipline as ``not_assessed`` versus a real level in the assessor.
+
+    * ``not_applicable`` — the record supports a benefit claim (established or
+      suggestive, and grounded), so the guard never scanned.
+    * ``clean``     — in scope, first draw complied.
+    * ``repaired``  — in scope, first draw violated, the single greedy re-roll
+      complied. The SHIPPED text is the retry's, so it carries no violation.
+    * ``withheld``  — both draws violated. The four prose strings are withheld;
+      the ROW ships with its rank, its signals and its full trade setup.
+
+    ``violations`` is the count on the WITHHELD text, i.e. what the operator
+    would have been shown. Zero elsewhere. Spans ride along, capped, for the
+    first-weeks manual read of the guard itself.
+    """
+    causal_support = str(facts.get("causal_support") or support_guard.NO_RECORD)
+    grounding = str(facts.get("channel_grounding") or channel_assessor.GROUNDING_UNKNOWN)
+    applies = support_guard.guard_applies(causal_support=causal_support, grounding=grounding)
+    if not applies:
+        return _GuardOutcome("not_applicable", 0, None, causal_support, grounding)
+    if terminal_kind is generator.BriefErrorKind.UNSUPPORTED_BENEFIT_CLAIM:
+        spans = [v.span for v in violations][:_MAX_LOGGED_GUARD_SPANS]
+        return _GuardOutcome(
+            status="withheld",
+            violations=len(violations),
+            spans_json=json.dumps(spans) if spans else None,
+            causal_support=causal_support,
+            grounding=grounding,
+        )
+    repaired = (
+        brief is not None
+        and brief.get(generator.FIRST_ATTEMPT_KIND_KEY)
+        == generator.BriefErrorKind.UNSUPPORTED_BENEFIT_CLAIM.value
+    )
+    return _GuardOutcome(
+        status="repaired" if repaired else "clean",
+        violations=0,
+        spans_json=None,
+        causal_support=causal_support,
+        grounding=grounding,
+    )
+
+
 def _enriched_row(
     row: pd.Series,
     *,
@@ -452,6 +603,7 @@ def _enriched_row(
     terminal_kind: generator.BriefErrorKind,
     next_earnings: str | None,
     setup,
+    guard: _GuardOutcome,
 ) -> dict:
     """Project one verified row + its LLM outcome into an enrichment record."""
     # Single explicit branch on the LLM outcome (not `brief or {}` + repeated
@@ -496,6 +648,14 @@ def _enriched_row(
             json.dumps(tmpl_facts, sort_keys=True) if tmpl_facts else None
         ),
         "brief_generated_at": pd.Timestamp.now(tz="UTC"),
+        # Guard telemetry, parquet-only (the Django ingest drops unknown columns
+        # by design, so this needs no migration and no OpenAPI regeneration).
+        "brief_support_guard_status": guard.status,
+        "brief_support_guard_violations": guard.violations,
+        "brief_support_guard_spans_json": guard.spans_json,
+        "brief_support_guard_version": support_guard.SUPPORT_GUARD_VERSION,
+        "brief_causal_support": guard.causal_support,
+        "brief_channel_grounding": guard.grounding,
     }
 
 
@@ -549,7 +709,7 @@ def generate_briefs(
 
     rows: list[dict] = []
     for _, row in verified.iterrows():
-        brief, next_earnings, terminal_kind = _brief_for_row(
+        brief, next_earnings, terminal_kind, facts, violations = _brief_for_row(
             row,
             llm_client_pro=client_pro,
             llm_client_flash=client_flash,
@@ -575,6 +735,9 @@ def generate_briefs(
                 terminal_kind=terminal_kind,
                 next_earnings=next_earnings,
                 setup=setup,
+                guard=_guard_outcome(
+                    facts, brief=brief, terminal_kind=terminal_kind, violations=violations
+                ),
             )
         )
 

@@ -129,6 +129,31 @@ def _brief_unavailable_count(enriched: pd.DataFrame) -> int:
     return int((enriched["brief_status"] == "unavailable").sum())
 
 
+def _support_guard_metrics(enriched: pd.DataFrame) -> dict[str, int]:
+    """Per-run counts of what the support guard did to the day's PROSE.
+
+    Emitted on EVERY run including all-zero days: a series that vanishes on a
+    healthy day is indistinguishable from a stopped exporter.
+
+    ``withheld`` also raises ``alphalens_thematic_brief_unavailable_count`` (the
+    withholding reuses the existing graceful-degradation path rather than
+    inventing a ``brief_status`` value the SPA cannot render), so the paired
+    AlphalensThematicBriefUnavailableHigh rule needs re-tuning by hand on the
+    same deploy. That is a recorded deploy step, not a code change.
+    """
+    counts = {"fired": 0, "repaired": 0, "withheld": 0}
+    if enriched.empty or "brief_support_guard_status" not in enriched.columns:
+        return {f"alphalens_thematic_brief_support_guard_{k}_total": v for k, v in counts.items()}
+    status = enriched["brief_support_guard_status"]
+    counts["repaired"] = int((status == "repaired").sum())
+    counts["withheld"] = int((status == "withheld").sum())
+    # "Fired" is every row where the guard caught something, whether the re-roll
+    # then fixed it or not — the rate that says how often the prose contract is
+    # being broken, independent of the recovery.
+    counts["fired"] = counts["repaired"] + counts["withheld"]
+    return {f"alphalens_thematic_brief_support_guard_{k}_total": v for k, v in counts.items()}
+
+
 def _has_usable_ladder(v: Any) -> bool:
     """True when a ``brief_trade_setup`` cell carries an actionable entry ladder.
 
@@ -995,6 +1020,11 @@ def brief(
                 # AlphalensThematicBriefUnavailableHigh rule alerts when
                 # the ratio vs briefs_total is sustained across slots.
                 "alphalens_thematic_brief_unavailable_count": _brief_unavailable_count(enriched),
+                # Support-guard telemetry: how often the prose asserted a benefit
+                # the channel record could not support, and whether one greedy
+                # re-roll fixed it. NOT a gate — a withheld row still ships, only
+                # its four prose strings are withheld.
+                **_support_guard_metrics(enriched),
                 # Ladder-quality telemetry: fraction of the day's briefs that
                 # carry an actionable entry ladder. A volume-normal day whose
                 # setups all came back NO_STRUCTURE (the #910 / #917 signature)

@@ -157,7 +157,7 @@ class TestOrchestratorBriefParquetCarriesTemplateFacts(unittest.TestCase):
             with patch.object(
                 orchestrator,
                 "_brief_for_row",
-                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE, {}, []),
             ):
                 out = orchestrator.generate_briefs(
                     scored,
@@ -182,7 +182,7 @@ class TestOrchestratorBriefParquetCarriesTemplateFacts(unittest.TestCase):
             with patch.object(
                 orchestrator,
                 "_brief_for_row",
-                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE, {}, []),
             ):
                 out = orchestrator.generate_briefs(
                     scored,
@@ -239,7 +239,7 @@ class TestDedupAtInjectionGuard(unittest.TestCase):
             with patch.object(
                 orchestrator,
                 "_brief_for_row",
-                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE, {}, []),
             ):
                 out = orchestrator.generate_briefs(
                     scored,
@@ -284,7 +284,7 @@ class TestDedupAtInjectionGuard(unittest.TestCase):
             with patch.object(
                 orchestrator,
                 "_brief_for_row",
-                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE, {}, []),
             ):
                 out = orchestrator.generate_briefs(
                     scored,

@@ -952,6 +952,16 @@ class ChannelNeverReachesSelectionOrderingOrTheBriefSort(unittest.TestCase):
         planted = 'if row["channel_grounding_status"] != "grounded": continue\n'
         self.assertIsNotNone(self._TOKEN.search(planted))
 
+    def test_the_prose_layer_is_the_one_permitted_reader(self):
+        # Stated so it is not mistaken for a breach: the argumentation prompt
+        # builder MAY read the channel record to write prose. Prose is not
+        # selection — it changes no row's presence, rank or score. Selection,
+        # ordering and the brief sort stay closed, which the other tests here
+        # enforce.
+        from alphalens_pipeline.thematic.argumentation import prompts
+
+        self.assertIsNotNone(self._TOKEN.search(self._source(prompts)))
+
     def test_no_channel_column_is_a_candidate_sort_key(self):
         self.assertFalse([k for k in orchestrator._CANDIDATE_SORT_KEYS if k.startswith("channel_")])
 
