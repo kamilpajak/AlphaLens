@@ -458,6 +458,7 @@ class SaxoPriceStream:
         async_sleep: Callable[[float], Awaitable[None]] | None = None,
         reclaim_limiter: ReclaimLimiter | None = None,
         metrics_job: str = _DEFAULT_GAUGE_JOB,
+        session_window: Callable[[], bool] | None = None,
     ) -> None:
         self._client = client
         self._token_provider = token_provider
@@ -482,6 +483,17 @@ class SaxoPriceStream:
         self._clock = clock
         self._async_sleep = async_sleep
         self._reclaim_limiter = reclaim_limiter or ReclaimLimiter(clock=self._clock)
+        # Optional "is now inside the trading window" predicate (session gate):
+        # when wired and False, _supervise holds NO WebSocket and idles like
+        # the zero-desired-uics branch (outside market hours no frames flow,
+        # so a 24/7 connection recv-times-out every ~3min into a pointless
+        # reconnect + subscription-recreate cycle all night). FAIL-OPEN by
+        # contract: None means today's behavior, and a RAISING predicate is
+        # treated as in-session (connect) with one warning per stream — the
+        # gate must never be able to silence the stream during trading hours.
+        self._session_window = session_window
+        self._session_window_warned = False
+        self._session_asleep = False
         self._was_delayed = False
         # Last reclaim attempt (transition or retry), on self._clock so a unit
         # test can drive the retry interval deterministically. None whenever
@@ -700,6 +712,15 @@ class SaxoPriceStream:
         self._emit_stream_gauge(reader_up=True, force=True)
         try:
             while not self._stop:
+                if not self._session_window_allows():
+                    # Outside the trading window -> hold NO WebSocket, exactly
+                    # like the zero-desired-uics branch below (reader thread
+                    # up, intentionally idle — same gauge semantics: no
+                    # reader_up=False emit). Overnight no frames flow, so an
+                    # open connection just recv-times-out every ~3min into a
+                    # reconnect + subscription-recreate cycle.
+                    await async_sleep(_IDLE_POLL_S)
+                    continue
                 if not self._desired_uics():
                     # Zero desired uics -> hold NO WebSocket: an idle,
                     # subscription-less connection is exactly what the venue
@@ -729,6 +750,49 @@ class SaxoPriceStream:
             # crash alike. reader_up=0 with subscribed_uics>0 is the
             # Prometheus-visible "dark feed" signature.
             self._emit_stream_gauge(reader_up=False, force=True)
+
+    def _session_window_in_session(self) -> bool:
+        """The predicate's answer with the FAIL-OPEN contract applied: no
+        predicate wired -> True (today's behavior); a RAISING predicate ->
+        True, warned ONCE per stream (latched) — a calendar bug must never be
+        able to silence the stream during trading hours."""
+        if self._session_window is None:
+            return True
+        try:
+            return bool(self._session_window())
+        except Exception:
+            if not self._session_window_warned:
+                self._session_window_warned = True
+                logger.warning(
+                    "saxo price stream: session window predicate raised - "
+                    "failing open (treating as in-session)",
+                    exc_info=True,
+                )
+            return True
+
+    def _session_window_allows(self) -> bool:
+        """Session-gate check for one ``_supervise`` iteration, logging one
+        INFO per TRANSITION (awake->asleep / asleep->awake) — never one per
+        idle poll (the gate exists to kill the nightly log spam, not to
+        replace it). Each edge also force-emits the stream gauges so
+        Prometheus promptly sees ``session_asleep`` flip — the sleep polls
+        themselves stay emit-free, mirroring the zero-uics idle branch."""
+        in_session = self._session_window_in_session()
+        if not in_session and not self._session_asleep:
+            self._session_asleep = True
+            # Entering sleep proves any recently counted failures were
+            # off-hours artifacts (the post-close recv-timeout tail), not
+            # connection health — carried over the night they would resume
+            # from that count at wake and could trip the circuit breaker
+            # mid-warmup before the open.
+            self._consecutive_failures = 0
+            logger.info("saxo price stream: outside the trading window - sleeping (no connection)")
+            self._emit_stream_gauge(reader_up=True, force=True)
+        elif in_session and self._session_asleep:
+            self._session_asleep = False
+            logger.info("saxo price stream: trading window open - resuming connections")
+            self._emit_stream_gauge(reader_up=True, force=True)
+        return in_session
 
     async def _run_one_connection(self) -> None:
         import asyncio
@@ -780,6 +844,12 @@ class SaxoPriceStream:
                     f"alphalens_live_price_stream_subscribed_uics{label}": len(
                         self._desired_uics()
                     ),
+                    # Intentional session-gate sleep freezes last_frame at
+                    # ~close with reader_up=1 — the exact dark-but-connected
+                    # signature AlphalensLivePriceStreamStale pages on. This
+                    # gauge lets the Stale rules drop the asleep state
+                    # (`unless ... == 1`) instead of firing all night.
+                    f"alphalens_live_price_stream_session_asleep{label}": int(self._session_asleep),
                 },
             )
         except OSError:
@@ -878,7 +948,11 @@ _shared_stream: SaxoPriceStream | None = None
 _shared_stream_lock = threading.Lock()
 
 
-def get_shared_price_stream(*, metrics_job: str = _DEFAULT_GAUGE_JOB) -> SaxoPriceStream:
+def get_shared_price_stream(
+    *,
+    metrics_job: str = _DEFAULT_GAUGE_JOB,
+    session_window: Callable[[], bool] | None = None,
+) -> SaxoPriceStream:
     """Module-level singleton, started on first call.
 
     A WebSocket must outlive a single daemon tick, but the feed factory that
@@ -904,6 +978,13 @@ def get_shared_price_stream(*, metrics_job: str = _DEFAULT_GAUGE_JOB) -> SaxoPri
     (``control_loop._default_live_exits_feed_factory``) passes
     ``state_paths.price_stream_metrics_job()`` every tick; the default here
     keeps standalone/test construction unchanged.
+
+    ``session_window`` follows the same constructing-call-only rule: the
+    composition root passes its env-gated "is now inside the trading window"
+    predicate (or None — today's behavior); a call that reuses the still-live
+    singleton keeps that stream's already-wired predicate. The stream side is
+    fail-open (see ``SaxoPriceStream``), so a mis-wired predicate can never
+    silence the stream during trading hours.
     """
     global _shared_stream  # noqa: PLW0603 — lazy singleton is the documented pattern
     if _shared_stream is None or not _shared_stream.is_running():
@@ -912,7 +993,12 @@ def get_shared_price_stream(*, metrics_job: str = _DEFAULT_GAUGE_JOB) -> SaxoPri
                 cfg = LiveAuthConfig.from_env()
                 token_provider = LiveTokenProvider(cfg)
                 client = SaxoMarketDataClient(token_provider=token_provider)
-                stream = SaxoPriceStream(client, token_provider, metrics_job=metrics_job)
+                stream = SaxoPriceStream(
+                    client,
+                    token_provider,
+                    metrics_job=metrics_job,
+                    session_window=session_window,
+                )
                 stream.start()
                 _shared_stream = stream
     return _shared_stream

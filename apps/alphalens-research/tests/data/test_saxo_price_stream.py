@@ -967,6 +967,25 @@ class TestGetSharedPriceStream(unittest.TestCase):
             sps.get_shared_price_stream()
         self.assertEqual(mock_cls.call_args.kwargs["metrics_job"], "live-price-stream")
 
+    def test_default_session_window_is_none(self) -> None:
+        """No gate wired -> None reaches the constructor -> today's behavior
+        (the stream-side fail-open contract treats None as always-in-session)."""
+        instance = _FakeSharedInstance(running=True)
+        p1, p2, p3, p4 = self._patched_construction(instance)
+        with p1, p2, p3, p4 as mock_cls:
+            sps.get_shared_price_stream()
+        self.assertIsNone(mock_cls.call_args.kwargs["session_window"])
+
+    def test_explicit_session_window_is_forwarded_to_construction(self) -> None:
+        """The composition root's env-gated predicate must reach the
+        SaxoPriceStream constructor unchanged on the constructing call."""
+        instance = _FakeSharedInstance(running=True)
+        predicate = lambda: True  # noqa: E731 — identity is what is asserted
+        p1, p2, p3, p4 = self._patched_construction(instance)
+        with p1, p2, p3, p4 as mock_cls:
+            sps.get_shared_price_stream(session_window=predicate)
+        self.assertIs(mock_cls.call_args.kwargs["session_window"], predicate)
+
     def test_explicit_metrics_job_is_forwarded_to_construction(self) -> None:
         """The composition root (control_loop._default_live_exits_feed_factory)
         injects ``state_paths.price_stream_metrics_job()`` here every tick — it
@@ -1618,6 +1637,151 @@ class TestStreamGaugeJobLabel(unittest.TestCase):
             self.assertEqual(job, "live-price-stream-sim")
             for name in metrics:
                 self.assertIn('job="live-price-stream-sim"', name)
+
+
+class TestSessionWindowGate(unittest.TestCase):
+    """Outside-market-hours sleep gate: with the optional ``session_window``
+    predicate wired and returning False, the reader holds NO WebSocket and
+    idles exactly like the zero-desired-uics branch (the 24/7 connection used
+    to recv-timeout every ~3min all night — reconnect churn + warning spam).
+
+    HARD SAFETY RULE — fail-open everywhere: no predicate wired means today's
+    behavior, and a RAISING predicate must be treated as in-session (connect)
+    with exactly one warning per stream. The gate must never be able to
+    silence the stream during trading hours."""
+
+    _LOGGER = "alphalens_pipeline.data.alt_data.saxo_price_stream"
+
+    def test_constructor_defaults_to_no_session_window(self):
+        stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        self.assertIsNone(stream._session_window)
+
+    def test_predicate_false_never_connects_and_idles(self):
+        h = _SupervisedHarness(stream_kwargs={"session_window": lambda: False}, stop_after_sleeps=3)
+        h.stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(h.ws_calls, [])
+        self.assertEqual(h.sleeps, [sps._IDLE_POLL_S] * 3)
+        self.assertEqual(h.stream._consecutive_failures, 0)
+
+    def test_predicate_true_connects_via_the_existing_paths(self):
+        h = _SupervisedHarness(stream_kwargs={"session_window": lambda: True})
+        stream = h.stream
+        conn = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn)
+        stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(len(h.ws_calls), 1)
+        self.assertEqual(stream.get(5).bid, 1.0)
+
+    def test_no_predicate_behaves_like_today(self):
+        """Spot-pin for the flag-off / un-wired case (byte-identical behavior
+        is otherwise pinned by every pre-existing _SupervisedHarness test,
+        none of which passes session_window)."""
+        h = _SupervisedHarness()
+        stream = h.stream
+        conn = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn)
+        stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(len(h.ws_calls), 1)
+        self.assertEqual(stream.get(5).bid, 1.0)
+
+    def test_raising_predicate_fails_open_and_warns_exactly_once(self):
+        """A calendar bug must never darken the feed during trading hours: a
+        raising predicate is treated as in-session (the reader connects), and
+        the raise is logged ONCE per stream — not once per poll."""
+        calls = {"count": 0}
+
+        def raising_predicate() -> bool:
+            calls["count"] += 1
+            raise RuntimeError("calendar exploded")
+
+        h = _SupervisedHarness(stream_kwargs={"session_window": raising_predicate})
+        stream = h.stream
+        # Two loop iterations (a dropped connection forces a second one), so
+        # the predicate raises at least twice while the warning stays at one.
+        conn1 = _ScriptedConn([ConnectionError("dropped")])
+        conn2 = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(2))[1]])
+        h._conns.extend([conn1, conn2])
+        stream.ensure_subscribed({5})
+        with self.assertLogs(self._LOGGER, level="WARNING") as cm:
+            h.run()
+        gate_warnings = [line for line in cm.output if "session window" in line.lower()]
+        self.assertEqual(len(gate_warnings), 1, cm.output)
+        self.assertGreaterEqual(calls["count"], 2)
+        self.assertEqual(len(h.ws_calls), 2, "fail-open: the reader must still connect")
+
+    def test_transitions_log_exactly_once_per_edge(self):
+        """One INFO on awake->asleep, one INFO on asleep->awake — never one
+        per idle poll (the whole point is killing the nightly log spam)."""
+        scripted = [False, False, False]  # three asleep polls, then in-session
+
+        def predicate() -> bool:
+            return scripted.pop(0) if scripted else True
+
+        h = _SupervisedHarness(stream_kwargs={"session_window": predicate})
+        stream = h.stream
+        conn = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn)
+        stream.ensure_subscribed({5})
+        with self.assertLogs(self._LOGGER, level="INFO") as cm:
+            h.run()
+        asleep_lines = [line for line in cm.output if "sleeping" in line.lower()]
+        awake_lines = [line for line in cm.output if "resuming" in line.lower()]
+        self.assertEqual(len(asleep_lines), 1, cm.output)
+        self.assertEqual(len(awake_lines), 1, cm.output)
+        self.assertEqual(len(h.ws_calls), 1)
+
+    def test_entering_sleep_resets_the_failure_counter(self):
+        """The post-close recv-timeout tail leaves 1-3 counted failures at
+        sleep entry; carried over the night they would resume from that count
+        at wake and could trip the circuit breaker mid-warmup. Entering sleep
+        proves those failures were off-hours artifacts, not connection
+        health — the counter must be zeroed on the awake->asleep edge."""
+        scripted = [True]  # one in-session check (fails), then asleep
+
+        def predicate() -> bool:
+            return scripted.pop(0) if scripted else False
+
+        h = _SupervisedHarness(stream_kwargs={"session_window": predicate}, stop_after_sleeps=3)
+        h._conns.append(_ScriptedConn([ConnectionError("post-close timeout")]))
+        h.stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(len(h.ws_calls), 1, "the single in-session poll must have connected")
+        self.assertEqual(
+            h.stream._consecutive_failures,
+            0,
+            "the awake->asleep transition must zero the carried failure count",
+        )
+
+    def test_sleep_transitions_emit_the_session_asleep_gauge(self):
+        """Prometheus must be able to tell INTENTIONAL overnight sleep from
+        the dark-but-connected failure AlphalensLivePriceStreamStale pages
+        on: each sleep/wake edge force-emits the gauges with
+        ``session_asleep`` flipped (1 exactly once per sleep edge — the idle
+        polls themselves stay emit-free, mirroring the zero-uics branch),
+        and every emit carries the key so the series never goes absent."""
+        scripted = [False, False]  # two asleep polls, then in-session
+
+        def predicate() -> bool:
+            return scripted.pop(0) if scripted else True
+
+        h = _SupervisedHarness(stream_kwargs={"session_window": predicate})
+        stream = h.stream
+        conn = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn)
+        stream.ensure_subscribed({5})
+        emitted: list[dict] = []
+        with mock.patch(
+            "alphalens_pipeline.observability.textfile.emit_domain_metrics",
+            side_effect=lambda job, metrics: emitted.append(dict(metrics)),
+        ):
+            h.run()
+        values = [TestStreamGauges._value(m, "session_asleep") for m in emitted]
+        self.assertEqual(values[0], 0, "the startup emit must report awake")
+        self.assertEqual(values.count(1), 1, f"one asleep emit per sleep edge, got {values}")
+        self.assertEqual(values[-1], 0, "the final reader-down emit must report awake")
 
 
 if __name__ == "__main__":

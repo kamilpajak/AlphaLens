@@ -1685,5 +1685,48 @@ class TestLiveBrokerManagerHealthRules(unittest.TestCase):
                 )
 
 
+class TestPriceStreamStaleSessionGateGuard(unittest.TestCase):
+    """The price-stream session gate (``session_window`` on SaxoPriceStream)
+    intentionally holds NO WebSocket outside the trading window, which
+    freezes ``last_frame_timestamp`` at ~close while ``reader_up`` stays 1
+    and overnight positions keep ``subscribed_uics`` > 0 — byte-identical to
+    the dark-but-connected signature ``AlphalensLivePriceStreamStale`` pages
+    on. Without a guard the alert fires solidly all night with the gate on,
+    training the operator to ignore it.
+
+    The stream emits ``alphalens_live_price_stream_session_asleep`` on each
+    sleep/wake edge; every Stale rule must drop the asleep state via
+    ``unless ... == 1``. ``unless`` (NOT ``and ... == 0``) so an ABSENT
+    gauge — older stream code, gate never wired — leaves the alert exactly
+    as it behaves today (fail-open for alerting; the live Prometheus rules
+    are hand-synced and may lead or lag the daemon code)."""
+
+    RULES = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
+
+    def test_every_stale_rule_drops_the_asleep_state_via_unless(self) -> None:
+        data = yaml.safe_load(self.RULES.read_text())
+        stale_rules = [
+            rule
+            for rule in data["groups"][0]["rules"]
+            if rule.get("alert") == "AlphalensLivePriceStreamStale"
+        ]
+        self.assertEqual(len(stale_rules), 2, "expected the SIM + LIVE Stale twins")
+        for rule in stale_rules:
+            expr = rule["expr"]
+            job_match = re.search(r'job="(live-price-stream-[a-z]+)"', expr)
+            assert job_match is not None, f"Stale expr missing its job filter: {expr!r}"
+            job = job_match.group(1)
+            with self.subTest(job=job):
+                self.assertRegex(
+                    expr,
+                    re.compile(
+                        r"unless\s+alphalens_live_price_stream_session_asleep"
+                        rf'\{{job="{job}"\}}\s*==\s*1'
+                    ),
+                    f"AlphalensLivePriceStreamStale for {job!r} must drop the "
+                    "session-gate asleep state via `unless session_asleep == 1`.",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
