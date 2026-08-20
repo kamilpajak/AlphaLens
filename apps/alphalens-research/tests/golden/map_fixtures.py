@@ -197,7 +197,7 @@ QUANTUM_2026_05_24 = MapFixture(
     theme="quantum_computing",
     asof=dt.date(2026, 5, 24),
     window_dates=("2026-05-15", "2026-05-18", "2026-05-24"),
-    current_recording="v3",
+    current_recording="v4",
     dirname="map_day",
 )
 
@@ -219,7 +219,7 @@ NVDA_ISING_2026_04_14 = MapFixture(
     # exactly one candidate trigger. That is a property of the seeded window
     # (see seeded_surfaces below), not a measurement of the news corpus.
     window_dates=("2026-04-14",),
-    current_recording="v2",
+    current_recording="v3",
     dirname="map_day_nvda_ising",
     seeded_surfaces=(
         ("events/2026-04-14.parquet", _ISING_SEEDED_WHY),

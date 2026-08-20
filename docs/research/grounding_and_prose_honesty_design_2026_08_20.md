@@ -915,3 +915,90 @@ Zen pre-merge review with `deepseek/deepseek-v4-pro` at high thinking is mandato
 6. The first-two-weeks stratified manual read of ~30 rows across grounded and non-grounded,
    reported qualitatively with no rate claimed — and explicitly **not** the audit that §6
    requires before any gating.
+
+## 13. Addendum — golden re-record findings (2026-08-20)
+
+Recorded during the golden re-baseline
+(`docs/research/golden_rebaseline_recorded_2026_08_20.md`). This memo is LOCKED, so these are
+appended as a dated addendum rather than edited into the sections above; the reasoning that
+produced them is otherwise unchanged.
+
+### 13.1 Known issue — a cassette-loader defect in the eval-golden tests, not in generation
+
+The brief generator's own truncation handling is unaffected by anything below and worked exactly
+as designed: `generator._classify_finish_reason` reads `finish_reason` on every call (both the
+live default `_DEFAULT_MAX_OUTPUT_TOKENS = 8000` path and the golden's decoupled
+`GOLDEN_RECORDED_MAX_OUTPUT_TOKENS = 2000`), and `generate_brief_with_retry` escalates the token
+cap on `BriefErrorKind.TRUNCATED` before accepting an answer — a truncated draw is never parsed
+as a result, in production or in the recorder. During the 2026-08-19 re-record, CRSP's first
+draw truncated at the golden's 2000-token base cap and the retry succeeded cleanly at 4000; this
+is the ladder working, not failing, and it left BOTH cassettes on disk (recording tees every
+draw), which is required for `ReplayOpenRouter` to reproduce the same retry sequence on replay.
+
+The actual defect was in four `tests/golden/*.py` eval helpers
+(`test_golden_brief_faithfulness.py::_load_cassettes`, `test_financing_claims.py`,
+`test_fabrication_triage.py`, `test_faithfulness_measurement.py`) that glob every cassette file
+in `fixtures/brief_day/cassettes/` and `json.loads` its `content` unconditionally, on the
+assumption that a cassette on disk is always a final answer. That assumption breaks the moment a
+retry leaves a discarded truncated draw beside its successful replacement — it crashed loud
+(`json.JSONDecodeError: Unterminated string`) here, but the same defect class could in principle
+misread a coincidentally-parseable partial fragment as a real (if truncated) answer. Fixed by a
+shared `tests.golden.replay_client.load_final_answer_cassette_records`, which classifies each
+cassette's `finish_reason` through the SAME `_FINISH_REASON_MAP` the production client
+translates through and excludes a `MAX_TOKENS` draw, TDD with a positive control
+(`TestTruncatedCassetteDetection` in `tests/golden/test_replay_client.py`) pinning that a
+truncated cassette is excluded and a `stop` one is not. No production code changed, and the
+golden's base token cap was deliberately left at 2000 — the ladder recovered in one hop, and
+`GOLDEN_RECORDED_MAX_OUTPUT_TOKENS`'s own docstring reserves a bump for "a genuine re-record at a
+new cap," not for absorbing one rare retry for free (OpenRouter bills tokens generated, not the
+cap, so the retry cost about $0.0005 more than a clean first draw and nothing beyond that).
+
+### 13.2 Finding — `established` did not occur in 22 real candidates; the bar may be structurally hard to reach from this pipeline shape
+
+Zero of 22 verified candidates across two independent live `map_themes` days (2026-08-18,
+2026-08-19; 11 each) scored `established`. The mix was `suggestive` 11 / `not_established` 11.
+This is worth reading as a design finding, not just a fixture-sourcing note.
+
+Reading the `suggestive` rows' `channel_text`, every one shares the same shape: the event names a
+BROAD category or a large-cap subject (Broadcom, Alphabet/SpaceX, a Moderna/Merck trial readout,
+a macro retail-sales print) and the candidate is a small/mid-cap the model INFERS as a plausible
+beneficiary — never a company the event text itself names. That is not incidental: stage A's job
+is to propose the NON-OBVIOUS beneficiary (per its own docstring, "propose 5-15 candidate
+small/mid-cap beneficiaries"), and a company the event actually names is disproportionately
+likely to be the large-cap subject of the article, which the deterministic mcap bracket then
+drops (`AXON=too_big`, `ADBE=too_big`, `WMT=too_big` — all observed in the live run logs).
+`established` requires "the event states a fact about this company, a named counterparty of it,
+its product line or its market" with "no link... supplied from the model's own background
+knowledge" (§4.1). The retrieval task (find the non-obvious small-cap beneficiary) and the
+evidentiary bar (the event must say something company-specific) pull in close to opposite
+directions by construction. The bar is not wrong — it is exactly what §2.2 asked for, and a
+`suggestive` row that infers "Redwire benefits from sector attention to SpaceX" is an honest
+description of what the event supports, not a defect. But the three-level scale may be
+functionally closer to two reachable levels (`suggestive` / `not_established`) for the current
+stage-A prompt shape, and that is worth watching rather than assuming: `established` is defined
+to be rare, not defined to be empty, and 22 rows is nowhere near enough to call the boundary. The
+first-two-weeks manual read (§12.6) should explicitly look for it.
+
+### 13.3 Gap — the support guard does not check prose direction against an adverse `suggestive` channel
+
+`support_guard.guard_applies` is INERT for `established` and `suggestive` rows once grounding is
+`grounded` (§5.6, by design — the guard is a support-contract check, not a style police, and
+must never fire on a well-grounded row). The channel vocabulary is deliberately direction-neutral
+(§5.4: `input_cost` is paid BY the company, `capacity_supply` may hurt it, `substitution` may
+move demand away), and two rows observed in exploratory (non-recorded) live data make the gap
+concrete: GO / OLLI on 2026-08-18, `suggestive` + `grounded`, with `channel_text` reading
+"potential negative impact on revenue for small-cap retailers" and "reduced customer demand,
+leading to lower revenue" respectively — an explicitly ADVERSE mechanism. Nothing today checks
+whether the `tldr` / `supply_chain_reasoning` prose for such a row states the adverse direction
+honestly (which the prompt instructs, §5.4) or flips it into affirmative benefit language — the
+guard's phrase list would not fire either way, because `guard_applies` never reaches the
+lexical scan for a grounded row regardless of level. This is a real gap in the honesty contract's
+enforcement, distinct from the intentionally-narrow guard scope: §5.4 is a PROMPT instruction
+(administrative control) with no matching engineering control for the `established` /
+`suggestive` levels. Not fixed in this branch — it needs its own design (most likely: a
+direction-consistency check comparing the channel record's `channel_type` polarity against the
+prose's stated direction, scoped narrowly like the existing guard) and is recorded here so it is
+not lost. The two example rows are NOT in the recorded golden fixture (neither GO nor OLLI
+survived to the 2026-08-19 slice used for the re-record), so this gap is confirmed by code
+inspection (`guard_applies`) and by the exploratory (uncommitted) live data, not demonstrated in
+the committed cassettes.

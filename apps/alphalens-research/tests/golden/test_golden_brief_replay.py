@@ -103,14 +103,17 @@ class TestGoldenBriefReplay(unittest.TestCase):
 
     def test_model_routing_by_score(self):
         # Score >=4 routes to Pro, <4 to Flash. Pins the deterministic
-        # choose_model boundary end-to-end.
+        # choose_model boundary end-to-end. The 2026-08-19 re-baseline slice
+        # (PSNL/CRSP/ABUS/MRVI/RDN) all score layer4_weighted_score in {1, 2}
+        # (< 4), so this recording exercises only the Flash routing path — the
+        # Pro path is not re-verified by THIS recording (it was covered by the
+        # superseded 2026-05-24 slice; see
+        # docs/research/golden_rebaseline_recorded_2026_08_20.md).
         with tempfile.TemporaryDirectory() as td:
             brief = _replay_briefs(Path(td))
         routed = dict(zip(brief["ticker"], brief["brief_model_used"], strict=True))
-        self.assertEqual(routed["DFIN"], _PRO)
-        self.assertEqual(routed["QLYS"], _PRO)
-        self.assertEqual(routed["MANH"], _FLASH)
-        self.assertEqual(routed["QUBT"], _FLASH)
+        for ticker in ("PSNL", "CRSP", "ABUS", "MRVI", "RDN"):
+            self.assertEqual(routed[ticker], _FLASH, ticker)
 
     def test_replay_is_deterministic(self):
         # Two replays of the cassettes produce the identical projection

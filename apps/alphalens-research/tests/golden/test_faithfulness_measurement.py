@@ -38,7 +38,7 @@ from alphalens_research.eval.measurement import (
 )
 
 _GOLDEN_PARQUET = (
-    Path(__file__).resolve().parent / "fixtures" / "brief_day" / "golden" / "2026-05-24.parquet"
+    Path(__file__).resolve().parent / "fixtures" / "brief_day" / "golden" / "2026-08-19.parquet"
 )
 
 
@@ -373,7 +373,7 @@ class TestWilsonInterval(unittest.TestCase):
 
 
 class TestMeasureCorpus(unittest.TestCase):
-    """(c) measure_corpus over the existing golden fixture (4 real rows,
+    """(c) measure_corpus over the existing golden fixture (5 real rows,
     deterministic, no network) returns a structured report with the expected
     keys, per-field breakdown, and Wilson CIs that bracket the point estimate."""
 
@@ -398,7 +398,7 @@ class TestMeasureCorpus(unittest.TestCase):
         self.assertEqual(self.report["scorer_version"], FAITHFULNESS_SCORER_VERSION)
 
     def test_corpus_size(self) -> None:
-        self.assertEqual(self.report["n_briefs"], 4)
+        self.assertEqual(self.report["n_briefs"], 5)
 
     def test_corpus_rates_have_wilson_ci_bracketing_point(self) -> None:
         rates = self.report["corpus_rates"]

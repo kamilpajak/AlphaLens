@@ -61,6 +61,51 @@ from tests.golden.map_provenance import (
 
 _FIRST = MAP_FIXTURES[0]
 
+# Recordings whose stage-B cassette carries the OLD `channel_status` vocabulary
+# (channel-as-feature, PR #1066, 2026-08-19) rather than the renamed
+# `channel_support_status` (grounding-and-prose-honesty, 2026-08-20) that
+# ``map_provenance._is_stage_b`` now keys on. Both cassettes in each of these
+# two recordings are genuine (one real proposal call, one real per-candidate
+# assessment call) — but the CURRENT classifier cannot tell them apart any
+# more, because the field it looks for does not exist in either. That is
+# ``split_cassette_records``'s documented ambiguity ("two recordings mixed, or
+# the recordings pre-date the current stage-B schema"): here it is always the
+# second cause, never the first, and it must NOT be resolved by teaching the
+# classifier to accept either spelling — see
+# docs/research/golden_rebaseline_pending_2026_08_20.md ("A second, subtler
+# miss") and docs/research/golden_rebaseline_recorded_2026_08_20.md.
+#
+# These two are kept on disk forever (never deleted — a re-baseline only ADDS
+# a version, per map_fixtures.py's own doctrine) so a reviewer can diff the
+# re-baseline against them, but they can no longer be RE-DERIVED from their
+# cassettes by code that postdates their vocabulary. Their historical
+# provenance.json is still checked for COMPLETENESS
+# (test_every_recording_carries_a_complete_provenance_file, which never calls
+# split_cassette_records) — only the CONSISTENCY / stage-B checks below, which
+# re-classify the cassettes to cross-check the document, are excluded for
+# them specifically.
+_PRE_GROUNDING_VOCABULARY_RECORDINGS = frozenset(
+    {
+        ("quantum_2026_05_24", "v3"),
+        ("nvda_ising_2026_04_14", "v2"),
+    }
+)
+
+
+def _derivable_recording_versions(fixture) -> tuple[str, ...]:
+    """``recording_versions(fixture)`` minus the pre-vocabulary-boundary set.
+
+    Use this instead of :func:`~tests.golden.map_provenance.recording_versions`
+    in any loop that classifies cassettes (``split_cassette_records``,
+    ``stage_b_block``, ``audit_recording``, ``cassette_record``) — those calls
+    raise loud, by design, for the two recordings named above.
+    """
+    return tuple(
+        v
+        for v in recording_versions(fixture)
+        if (fixture.name, v) not in _PRE_GROUNDING_VOCABULARY_RECORDINGS
+    )
+
 
 def _set_field(doc: dict, dotted: str, value: object) -> dict:
     """Copy of ``doc`` with the dotted path set to ``value`` (for the controls)."""
@@ -113,7 +158,7 @@ class TestMapFixtureProvenance(unittest.TestCase):
 
     def test_every_recording_agrees_with_its_cassette_event_and_descriptor(self):
         for fixture in MAP_FIXTURES:
-            for version in recording_versions(fixture):
+            for version in _derivable_recording_versions(fixture):
                 with self.subTest(fixture=fixture.name, recording=version):
                     doc = load_provenance(fixture, version)
                     self.assertEqual(audit_recording(fixture, version, doc), [])
@@ -259,6 +304,26 @@ class TestSeededSurfacesAreDeclared(unittest.TestCase):
             )
 
 
+class TestPreGroundingVocabularyRecordingsStillRaiseLoud(unittest.TestCase):
+    """Positive control for the exclusion above: the classifier is UNCHANGED.
+
+    ``_derivable_recording_versions`` exists because these two recordings
+    cannot be re-classified, not because the classifier was softened to
+    tolerate them. This pins that ``split_cassette_records`` still raises
+    ``ValueError`` for both — if this ever stops raising, someone relaxed the
+    classifier to accept the old field name, which the design memo forbids.
+    """
+
+    def test_both_pre_boundary_recordings_still_raise(self):
+        for fixture in MAP_FIXTURES:
+            for fixture_name, version in _PRE_GROUNDING_VOCABULARY_RECORDINGS:
+                if fixture.name != fixture_name:
+                    continue
+                with self.subTest(fixture=fixture.name, recording=version):
+                    with self.assertRaises(ValueError):
+                        split_cassette_records(fixture, version)
+
+
 class TestStageBIsDocumented(unittest.TestCase):
     """map-themes stopped being a ONE-CALL stage on 2026-08-19.
 
@@ -273,7 +338,7 @@ class TestStageBIsDocumented(unittest.TestCase):
 
     def test_the_stage_a_cassette_is_the_proposal_call(self):
         for fixture in MAP_FIXTURES:
-            for version in recording_versions(fixture):
+            for version in _derivable_recording_versions(fixture):
                 with self.subTest(fixture=fixture.name, recording=version):
                     stage_a, _stage_b = split_cassette_records(fixture, version)
                     system_message = stage_a["config"]["system_message"]
@@ -283,7 +348,7 @@ class TestStageBIsDocumented(unittest.TestCase):
     def test_a_recording_with_stage_b_cassettes_carries_the_block(self):
         described = 0
         for fixture in MAP_FIXTURES:
-            for version in recording_versions(fixture):
+            for version in _derivable_recording_versions(fixture):
                 block = stage_b_block(fixture, version)
                 if block is None:
                     continue
@@ -311,7 +376,7 @@ class TestStageBIsDocumented(unittest.TestCase):
         # stage_b block would assert a stage it never ran.
         older = 0
         for fixture in MAP_FIXTURES:
-            for version in recording_versions(fixture):
+            for version in _derivable_recording_versions(fixture):
                 if stage_b_block(fixture, version) is not None:
                     continue
                 older += 1
@@ -327,7 +392,7 @@ class TestStageBIsDocumented(unittest.TestCase):
         target = next(
             (f, v)
             for f in MAP_FIXTURES
-            for v in recording_versions(f)
+            for v in _derivable_recording_versions(f)
             if stage_b_block(f, v) is not None
         )
         fixture, version = target

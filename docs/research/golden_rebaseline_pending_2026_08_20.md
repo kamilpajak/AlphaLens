@@ -1,7 +1,12 @@
 # Golden re-baseline REQUIRED — causal-support taxonomy + grounding + prose contract (2026-08-20)
 
-**Status:** PENDING — the re-record has NOT been done. This note exists so the red
-tests are read as a required reviewed operation, not as a defect to be worked around.
+**Status:** DONE — recorded 2026-08-20. See
+`docs/research/golden_rebaseline_recorded_2026_08_20.md` for what was recorded, the composition
+of the re-cut brief fixture, the cost, and a reading of the projection — including the honest gap
+(`established` did not occur in 22 real candidates and is not represented in the golden) and a
+truncation-loader defect the recording caught in the eval-golden tests (not in brief generation).
+This note is left in place, unedited below, as the record of why the red state was correct and
+required before the recording.
 **Scope:** three fixture sets —
 `apps/alphalens-research/tests/golden/fixtures/map_day/` (v3 → v4),
 `apps/alphalens-research/tests/golden/fixtures/map_day_nvda_ising/` (v2 → v3),

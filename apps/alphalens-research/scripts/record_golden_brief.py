@@ -36,11 +36,30 @@ from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orch
 from tests.golden.projection import brief_projection
 from tests.golden.replay_client import GOLDEN_RECORDED_MAX_OUTPUT_TOKENS, RecordingOpenRouter
 
-# The frozen day + the slice. All four tickers have a matching OHLCV cache file
-# for this asof; DFIN/QLYS score >=4 (route to Pro), QUBT/MANH <4 (route to
-# Flash) — so the golden exercises both model paths.
-ASOF = dt.date(2026, 5, 24)
-SLICE_TICKERS = ("DFIN", "QLYS", "QUBT", "MANH")
+# The frozen day + the slice. Re-cut 2026-08-20 for the grounding-and-prose-
+# honesty golden re-baseline (docs/research/golden_rebaseline_recorded_2026_08_20.md):
+# the previous slice (2026-05-24) predates PR #1066 and carries zero channel_*
+# columns, so replaying it would render an EMPTY channel block on every row and
+# never exercise the new causal-support / grounding contract at all.
+#
+# ASOF is a genuine post-#1066, post-grounding-and-prose-honesty live run of
+# THIS branch's map-themes + score stages (real OpenRouter/Polygon/SEC/yfinance
+# calls, real news/event window synced from the VPS store) — not a frozen
+# fixture. All five tickers have a matching OHLCV cache file for this asof.
+#
+# The five candidates cover: channel_support_status in {suggestive,
+# not_established} and channel_grounding_status in {grounded, candidate_misfit,
+# theme_misroute} — PSNL/ABUS/MRVI are suggestive+grounded, CRSP is
+# not_established+candidate_misfit, RDN is not_established+theme_misroute.
+#
+# NO `established` row is included because none occurred: two full days of live
+# map-themes runs on this branch (2026-08-18 + 2026-08-19, 22 verified
+# candidates total) produced zero. See the provenance memo for the reading of
+# why. All five score layer4_weighted_score < 4, so this recording exercises
+# only the Flash routing path — Pro-path coverage is not re-verified by this
+# recording (it was covered by the superseded 2026-05-24 slice).
+ASOF = dt.date(2026, 8, 19)
+SLICE_TICKERS = ("PSNL", "CRSP", "ABUS", "MRVI", "RDN")
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "tests" / "golden" / "fixtures" / "brief_day"
 _ALPHALENS = Path.home() / ".alphalens"
