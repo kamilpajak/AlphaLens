@@ -112,6 +112,41 @@ export interface Candidate {
 	brief_error_kind: string | null;
 
 	/**
+	 * The causal-support record the prose was written against (#1069).
+	 *
+	 * TWO ORTHOGONAL AXES, and the display must never fold them into one:
+	 *
+	 * - `brief_causal_support` — how well the event text carries a mechanism to
+	 *   this company: `established` / `suggestive` / `not_established`, plus
+	 *   `no_record` when the assessor never answered. NOT a return forecast.
+	 * - `brief_channel_grounding` — whether that question applied at all:
+	 *   `grounded`, or the pipeline defects `theme_misroute` (the event does not
+	 *   concern the theme it was routed under) / `candidate_misfit` (the event
+	 *   does not involve this company), plus `unknown` for an instrument failure.
+	 *   A misrouted event can still elicit a confident chain, which is exactly
+	 *   why grounding is not a fourth support level.
+	 *
+	 * All three status fields are null on rows written before the assessor
+	 * existed — null means "never measured", never a value.
+	 *
+	 * `brief_support_guard_status` reports what the deterministic prose guard did:
+	 * `not_applicable` / `clean` / `repaired` / `withheld` / `fired_unrecovered`
+	 * / `no_prose`.
+	 *
+	 * The remaining fields are the record's CONTENT and are legitimately empty
+	 * strings when the assessor named no chain.
+	 */
+	brief_causal_support: string | null;
+	brief_channel_grounding: string | null;
+	brief_support_guard_status: string | null;
+	channel_type: string | null;
+	channel_text: string | null;
+	channel_evidence: string | null;
+	channel_falsifier: string | null;
+	channel_grounding_quote: string | null;
+	channel_grounding_reason: string | null;
+
+	/**
 	 * Market-state context signal (PR-3) — an INDEX-LEVEL (SPY) daily regime
 	 * label, broadcast identically onto every candidate for a given date, so the
 	 * brief-level banner reads it from any candidate in the day's list.

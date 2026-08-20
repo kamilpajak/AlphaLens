@@ -340,3 +340,121 @@ export function briefUnavailableLabel(
 	const base = 'brief unavailable — generation failed';
 	return errorKind ? `${base} (${errorKind})` : base;
 }
+
+/**
+ * The one sentence that bounds what the causal-support scale claims (#1069).
+ *
+ * Mirrored VERBATIM from the pipeline, where it is single-sourced into the
+ * assessor prompt as
+ * ``channel_assessor.CAUSAL_SUPPORT_NOT_A_FORECAST`` — so the sentence the model
+ * is held to and the sentence the reader is shown cannot drift apart. The
+ * research suite pins the two copies against each other
+ * (``test_channel_not_a_forecast_string_matches_spa``); change one and CI names
+ * the other.
+ */
+export const CAUSAL_SUPPORT_NOT_A_FORECAST =
+	'Causal support describes how well the event text supports a mechanism; ' +
+	'it is not a forecast of the share price.';
+
+/** Quiet = the measurement worked; flag = it did not, or the guard had to act. */
+export type ChannelEmphasis = 'quiet' | 'flag';
+
+/** Structural, not `Pick<Candidate, …>`: format.ts imports nothing by design. */
+export interface ChannelRecordSource {
+	brief_causal_support: string | null;
+	brief_channel_grounding: string | null;
+	brief_support_guard_status: string | null;
+}
+
+export interface ChannelRecordDisplay {
+	emphasis: ChannelEmphasis;
+	/** Plain-language evidence status — the line the card shows at rest. */
+	headline: string;
+	/** Raw pipeline tokens, kept for the drawer + the audit trail. */
+	support: string;
+	grounding: string;
+	/** Why the measurement did not apply; null when the row is grounded. */
+	groundingNote: string | null;
+	/** What the prose guard did; null when it never applied or found nothing. */
+	guardNote: string | null;
+}
+
+// Evidence-status framing, deliberately NOT a confidence framing: every line
+// describes what the EVENT TEXT does, never how likely anything is. "implies"
+// vs "does not state" is the whole distinction between the two middle levels,
+// so the words carry it — a reader must not have to decode a colour.
+const SUPPORT_HEADLINES: Record<string, string> = {
+	established: 'the event states a link to this company',
+	suggestive: 'the event implies a link to this company',
+	not_established: 'the event does not state a link to this company',
+	no_record: 'the link was not assessed'
+};
+
+// A grounding failure is a PIPELINE defect, not a finding about the company, and
+// the wording says so — the reader should discount the thesis and the operator
+// should be able to act on it.
+const GROUNDING_NOTES: Record<string, string> = {
+	theme_misroute: 'the event does not concern this theme — a routing defect upstream',
+	candidate_misfit: 'the event does not involve this company',
+	unknown: 'grounding was not assessed'
+};
+
+// `withheld` is deliberately ABSENT. That outcome always ships with
+// brief_status "unavailable" + brief_error_kind "unsupported_benefit_claim"
+// (the orchestrator sets all three from the same terminal kind), and
+// briefUnavailableLabel already states it in the blockquote — a second sentence
+// saying the same thing two lines below reads as two separate problems.
+//
+// `fired_unrecovered` IS here: there the row's brief_error_kind names the LLM's
+// own failure (truncated, transport), so nothing else on the card would ever
+// mention that the guard also fired.
+const GUARD_NOTES: Record<string, string> = {
+	fired_unrecovered:
+		'a draft asserted support the record does not carry; no compliant rewrite was produced',
+	repaired: 'a first draft asserted support the record does not carry and was rewritten'
+};
+
+// Guard outcomes that mean the reader is looking at (or missing) text the guard
+// had to act on. `repaired` is absent ON PURPOSE: the shipped sentence is the
+// compliant rewrite, so the note belongs in the record but the alarm does not.
+const GUARD_FLAGS = new Set(['withheld', 'fired_unrecovered']);
+
+const GROUNDED = 'grounded';
+const NO_RECORD = 'no_record';
+
+/**
+ * Project a candidate's causal-support record into what the card renders.
+ *
+ * Returns null for a row written before the assessor existed (NULL status) —
+ * such a row must render nothing, because "not assessed" is itself a claim and
+ * the instrument never looked at it.
+ *
+ * Emphasis is QUIET by default, including for `not_established`. That level is
+ * the instrument working correctly and reporting a weak link — the honest
+ * uncertainty the #1068 split exists to keep separate from a broken
+ * measurement. Emphasis is reserved for a measurement that failed (grounding is
+ * not `grounded`, or nothing was assessed) and for prose the guard withheld.
+ */
+export function channelRecord(c: ChannelRecordSource): ChannelRecordDisplay | null {
+	const support = c.brief_causal_support;
+	if (!support) return null;
+
+	const grounding = c.brief_channel_grounding || '';
+	const guard = c.brief_support_guard_status || '';
+
+	// An unrecognised token (a pipeline vocabulary change the SPA has not caught
+	// up with) degrades to "not assessed" rather than to silence: showing the
+	// reader nothing would be indistinguishable from a grounded, established row.
+	const headline = SUPPORT_HEADLINES[support] ?? SUPPORT_HEADLINES[NO_RECORD];
+	const groundingNote = grounding === GROUNDED ? null : (GROUNDING_NOTES[grounding] ?? null);
+	const measurementFailed = grounding !== GROUNDED || support === NO_RECORD;
+
+	return {
+		emphasis: measurementFailed || GUARD_FLAGS.has(guard) ? 'flag' : 'quiet',
+		headline,
+		support,
+		grounding,
+		groundingNote,
+		guardNote: GUARD_NOTES[guard] ?? null
+	};
+}
