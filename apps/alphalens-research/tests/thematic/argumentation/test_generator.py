@@ -768,3 +768,84 @@ class TestLanguageDriftRetry(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLengthAnnotationStrip(unittest.TestCase):
+    """The model sometimes narrates the length instruction out loud.
+
+    Live case, brief date 2026-08-19, ticker ABUS: the shipped ``tldr`` ended
+    with a literal ``(199 chars)``. The prompt gives each field a character
+    budget; a model that echoes the budget back is complying out loud, and the
+    marker then renders on the card as if it were part of the analyst's
+    sentence.
+
+    The strip is a NORMALISATION and nothing more. It runs before the
+    empty-content and support guards so a body that was ONLY the marker is
+    correctly seen as empty rather than as content — but it deliberately does
+    NOT repair the deeper failure in that same live row (all four sections
+    collapsed into ``tldr`` while the sibling fields shipped blank). Detecting
+    that collapse is a separate contract change with its own retry budget.
+    """
+
+    @staticmethod
+    def _brief_with(**overrides) -> dict:
+        brief = dict(_SAMPLE_BRIEF)
+        brief.update(overrides)
+        return brief
+
+    def _generate(self, brief: dict):
+        fake_response = SimpleNamespace(text=json.dumps(brief))
+        with patch.object(generator, "_call_llm", return_value=fake_response):
+            return generator.generate_brief(_facts(weighted_score=4), api_key="k")
+
+    def test_trailing_char_count_is_stripped(self):
+        brief, kind = self._generate(
+            self._brief_with(tldr="A plausible channel runs to Arbutus. (199 chars)")
+        )
+        self.assertEqual(kind, generator.BriefErrorKind.NONE)
+        self.assertEqual(brief["tldr"], "A plausible channel runs to Arbutus.")
+
+    def test_marker_stripped_from_every_prose_field(self):
+        brief, _ = self._generate(
+            self._brief_with(
+                tldr="One. (12 chars)",
+                supply_chain_reasoning="Two. (400 characters)",
+                bear_summary="Three. (250 CHARS)",
+                catalyst_failure_exit="Four. ( 200 chars )",
+            )
+        )
+        self.assertEqual(brief["tldr"], "One.")
+        self.assertEqual(brief["supply_chain_reasoning"], "Two.")
+        self.assertEqual(brief["bear_summary"], "Three.")
+        self.assertEqual(brief["catalyst_failure_exit"], "Four.")
+
+    def test_mid_sentence_marker_leaves_one_space(self):
+        # The live ABUS row carried the marker BETWEEN sentences, not only at the
+        # end, so removing it must not weld two sentences together.
+        brief, _ = self._generate(
+            self._brief_with(tldr="First sentence. (199 chars) Second sentence.")
+        )
+        self.assertEqual(brief["tldr"], "First sentence. Second sentence.")
+
+    def test_body_that_is_only_a_marker_is_empty_content(self):
+        # Stripping runs BEFORE the empty-content guard: a response whose every
+        # field is just the echoed budget carries no brief, and must be retried
+        # rather than shipped as four marker-only strings.
+        brief, kind = self._generate(
+            {
+                "tldr": "(199 chars)",
+                "supply_chain_reasoning": "(400 chars)",
+                "bear_summary": "(250 chars)",
+                "catalyst_failure_exit": "(200 chars)",
+            }
+        )
+        self.assertIsNone(brief)
+        self.assertEqual(kind, generator.BriefErrorKind.EMPTY_CONTENT)
+
+    def test_real_prose_about_a_character_is_untouched(self):
+        # The pattern is deliberately narrow: a bare number followed by
+        # "chars"/"characters" inside parentheses. Ordinary prose that merely
+        # mentions characters must survive verbatim.
+        text = "The filing lists 3 characters of the CUSIP (see exhibit 99.1)."
+        brief, _ = self._generate(self._brief_with(bear_summary=text))
+        self.assertEqual(brief["bear_summary"], text)
