@@ -748,6 +748,9 @@ def _make_stream_session_window(
     always the session date being asked about.
     """
     read_clock = clock or (lambda: dt.datetime.now(dt.UTC))
+    # Single-writer by construction: the predicate is called ONLY from the
+    # stream's reader thread (_supervise), so this memo needs no lock — do not
+    # share the predicate across threads without adding one.
     bounds_by_day: dict[dt.date, tuple[dt.datetime, dt.datetime] | None] = {}
 
     def _bounds(day: dt.date) -> tuple[dt.datetime, dt.datetime] | None:
