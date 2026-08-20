@@ -230,7 +230,10 @@ def decompose_setup_plan(
     - ``entry_ttl_days`` = ``order_ttl_days`` with the 0 sentinel resolved to
       :data:`_TTL_ZERO_SENTINEL_DAYS`;
     - ``client_request_id`` = a FRESH uuid4 per bracket (Saxo ``x-request-id``
-      dedup token — reused only when retrying the SAME logical bracket).
+      dedup token — reused only when retrying the SAME logical bracket);
+    - ``tier_index`` = ``tier.tier_index`` (the FAITHFUL 0-based setup-plan tier
+      position, so a dropped zero-qty tier 0 leaves the first placed bracket at
+      ``tier_index=1`` -> ``E2`` in a human renderer, never a lying ``E1``).
 
     Zero-qty tiers are skipped with a structured log entry and never POSTed
     (:data:`_ZERO_QTY_TIER_POLICY`).
@@ -267,6 +270,7 @@ def decompose_setup_plan(
                 take_profit=take_profit,
                 entry_ttl_days=ttl_days,
                 client_request_id=str(uuid.uuid4()),
+                tier_index=tier.tier_index,
             )
         )
     return brackets

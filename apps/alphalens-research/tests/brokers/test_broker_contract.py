@@ -232,6 +232,7 @@ class TestContractDataclassesFrozen(unittest.TestCase):
                 take_profit=12.0,
                 entry_ttl_days=5,
                 client_request_id="uuid",
+                tier_index=0,
             ),
             PlacedOrder(entry_order_id="e", exit_order_ids=("x1", "x2")),
         ]
@@ -389,6 +390,7 @@ class BrokerConformanceMixin:
             take_profit=55.0,
             entry_ttl_days=5,
             client_request_id=str(uuid.uuid4()),
+            tier_index=0,
         )
 
     def test_place_get_list_cancel_lifecycle(self):
@@ -460,6 +462,7 @@ class TestFakeBrokerProtectionReads(unittest.TestCase):
             take_profit=55.0,
             entry_ttl_days=5,
             client_request_id=str(uuid.uuid4()),
+            tier_index=0,
         )
         with mock.patch.dict("os.environ", {"ALPHALENS_BROKER_ALLOW_ORDERS": "1"}):
             broker.place_bracket_order(request)

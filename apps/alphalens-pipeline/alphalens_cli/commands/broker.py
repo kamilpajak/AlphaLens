@@ -781,23 +781,29 @@ def resolve_command(
 
 
 def _echo_bracket_table(brackets: list) -> None:
+    # Human labels only: E{n}/SL/TP columns and the FAITHFUL entry label from
+    # each bracket's setup-plan tier_index (E2 when tier 0 was dropped for zero
+    # qty), never a 0-based placement index. The machine journal keeps raw
+    # values. Width 3 fits E10 (lazy-CLI: import inside the body).
+    from alphalens_pipeline.brokers.automanager.labels import human_entry_label
+
     typer.echo(
-        f"{'#':>2s}  {'qty':>6s}  {'entry':>10s}  {'stop':>10s}  {'tp':>10s}  "
+        f"{'E':>3s}  {'qty':>6s}  {'entry':>10s}  {'SL':>10s}  {'TP':>10s}  "
         f"{'ttl':>4s}  client_request_id"
     )
-    for index, bracket in enumerate(brackets):
+    for bracket in brackets:
         tp = "-" if bracket.take_profit is None else f"{bracket.take_profit:.4f}"
         stop = "-" if bracket.stop_loss is None else f"{bracket.stop_loss:.4f}"
         typer.echo(
-            f"{index:>2d}  {bracket.quantity:>6d}  {bracket.entry_limit:>10.4f}  "
-            f"{stop:>10s}  {tp:>10s}  {bracket.entry_ttl_days:>4d}  "
-            f"{bracket.client_request_id}"
+            f"{human_entry_label(bracket.tier_index):>3s}  {bracket.quantity:>6d}  "
+            f"{bracket.entry_limit:>10.4f}  {stop:>10s}  {tp:>10s}  "
+            f"{bracket.entry_ttl_days:>4d}  {bracket.client_request_id}"
         )
 
 
 def _assert_fx_precheck_cross_checks(
     *,
-    index: int,
+    entry_label: str,
     ticker: str,
     payload: dict,
     fx: object,
@@ -818,7 +824,7 @@ def _assert_fx_precheck_cross_checks(
     est_cash_currency = payload.get("EstimatedCashRequiredCurrency")
     if est_cash_currency != account_currency:
         raise _fail(
-            f"{ticker}: precheck {index} EstimatedCashRequiredCurrency="
+            f"{ticker}: precheck {entry_label} EstimatedCashRequiredCurrency="
             f"{est_cash_currency!r} does not match the account currency "
             f"{account_currency!r} — the account model is not what we think; "
             "refusing placement"
@@ -830,7 +836,7 @@ def _assert_fx_precheck_cross_checks(
         conversion_rate = 0.0
     if conversion_rate <= 0:
         raise _fail(
-            f"{ticker}: precheck {index} carries no usable "
+            f"{ticker}: precheck {entry_label} carries no usable "
             f"InstrumentToAccountConversionRate ({conversion_rate_raw!r}) — the "
             "independent FX cross-check cannot run; refusing placement"
         )
@@ -841,16 +847,16 @@ def _assert_fx_precheck_cross_checks(
         # Belt: both rates are validated positive above/at FxConversion build,
         # but a helper-level ValueError must surface as a clean refusal, never
         # a traceback (review finding, PR #849).
-        raise _fail(f"{ticker}: precheck {index} FX divergence check failed: {exc}") from exc
+        raise _fail(f"{ticker}: precheck {entry_label} FX divergence check failed: {exc}") from exc
     if divergence > divergence_max_pct:
         raise _fail(
-            f"{ticker}: precheck {index} FX divergence {divergence:.2f}% exceeds the "
+            f"{ticker}: precheck {entry_label} FX divergence {divergence:.2f}% exceeds the "
             f"{divergence_max_pct}% bound — sizing rate {sizing_rate:.6f} "
             f"(account->instrument) vs Saxo {conversion_rate:.6f} "
             "(instrument->account, inverted before comparing); refusing placement"
         )
     typer.echo(
-        f"precheck {index}: fx cross-check ok — saxo rate {conversion_rate:.6f} "
+        f"precheck {entry_label}: fx cross-check ok — saxo rate {conversion_rate:.6f} "
         f"(instrument->account), divergence {divergence:.2f}% <= {divergence_max_pct}%"
     )
     return conversion_rate
@@ -936,6 +942,7 @@ def _run_prechecks(
     ``(precheck_summaries, precheck_conversion_rate)``.
     """
     from alphalens_pipeline.brokers import execution as execution_policy
+    from alphalens_pipeline.brokers.automanager.labels import human_entry_label
     from alphalens_pipeline.brokers.execution import fx_precheck_divergence_pct
     from broker_contract.contract import BrokerError
 
@@ -945,11 +952,14 @@ def _run_prechecks(
     if precheck_fn is None:
         typer.echo("precheck: not supported by this broker — skipping")
         return precheck_summaries, precheck_conversion_rate
-    for index, bracket in enumerate(brackets):
+    for bracket in brackets:
+        # FAITHFUL entry label from the setup-plan tier_index, not the 0-based
+        # placement position (E2 when tier 0 was dropped for zero qty).
+        entry_label = human_entry_label(bracket.tier_index)
         try:
             payload = precheck_fn(bracket)
         except BrokerError as exc:
-            raise _fail(f"precheck failed for bracket {index}: {exc}") from exc
+            raise _fail(f"precheck failed for entry tier {entry_label}: {exc}") from exc
         est_cash_currency = payload.get("EstimatedCashRequiredCurrency")
         summary = {
             "client_request_id": bracket.client_request_id,
@@ -966,12 +976,12 @@ def _run_prechecks(
             else f"{summary['EstimatedCashRequired']!r} {est_cash_currency}"
         )
         typer.echo(
-            f"precheck {index}: result={summary['PreCheckResult']!r} "
+            f"precheck {entry_label}: result={summary['PreCheckResult']!r} "
             f"est_cash={est_cash_label} costs={summary['Costs']!r}"
         )
         if fx is not None:
             precheck_conversion_rate = _assert_fx_precheck_cross_checks(
-                index=index,
+                entry_label=entry_label,
                 ticker=wanted,
                 payload=payload,
                 fx=fx,
@@ -1476,16 +1486,21 @@ def reconcile_fills_command(
     ]
     mean_bps = sum(priced_bps) / len(priced_bps) if priced_bps else None
 
+    # Human TP label only (tp1 -> TP1); the parquet and the --json path above
+    # keep the raw ``record.tag``.
+    from alphalens_pipeline.brokers.automanager.labels import tp_label_from_tag
+
     typer.echo(
-        f"{'uic':>8s}  {'tag':6s}  {'sell_order_id':16s}  {'status':10s}  "
+        f"{'uic':>8s}  {'TP':6s}  {'sell_order_id':16s}  {'status':10s}  "
         f"{'fill_price':>10s}  {'slippage_bps':>12s}"
     )
     for record in records:
         fill_price = "-" if record.fill_price is None else f"{record.fill_price:.4f}"
         slippage = "-" if record.slippage_bps is None else f"{record.slippage_bps:.2f}"
         typer.echo(
-            f"{record.uic:>8d}  {record.tag:6s}  {record.sell_order_id:16s}  "
-            f"{record.fill_status:10s}  {fill_price:>10s}  {slippage:>12s}"
+            f"{record.uic:>8d}  {tp_label_from_tag(record.tag):6s}  "
+            f"{record.sell_order_id:16s}  {record.fill_status:10s}  "
+            f"{fill_price:>10s}  {slippage:>12s}"
         )
 
     mean_str = "n/a" if mean_bps is None else f"{mean_bps:.2f} bps"

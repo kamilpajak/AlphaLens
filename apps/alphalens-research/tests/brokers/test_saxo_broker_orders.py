@@ -90,6 +90,7 @@ def _request(**overrides: Any) -> BracketOrderRequest:
         "take_profit": 55.0,
         "entry_ttl_days": 5,
         "client_request_id": str(uuid.uuid4()),
+        "tier_index": 0,
     }
     defaults.update(overrides)
     return BracketOrderRequest(**defaults)

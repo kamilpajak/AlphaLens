@@ -48,14 +48,14 @@ _TRADE_SETUP = {
 _BRIEF_DATE = dt.date(2026, 7, 16)
 
 
-def _candidate(ticker: str = "KO") -> CandidateBrief:
+def _candidate(ticker: str = "KO", *, trade_setup: dict | None = None) -> CandidateBrief:
     return CandidateBrief(
         brief_date=_BRIEF_DATE,
         ticker=ticker,
         theme="test-theme",
         verified=True,
         suggested_size_pct=3.0,
-        trade_setup=dict(_TRADE_SETUP),
+        trade_setup=dict(trade_setup) if trade_setup is not None else dict(_TRADE_SETUP),
         n_gates_passed=3,
         n_gates_failed=0,
         layer4_weighted_score=1.0,
@@ -207,11 +207,47 @@ class TestSubmitDryRun(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, msg=result.output)
         self.assertIn("DRY-RUN", result.output)
         self.assertIn("client_request_id", result.output, "bracket table header expected")
+        # Human header columns: E / SL / TP, never the old #/stop/tp headers.
+        header = next(line for line in result.output.splitlines() if "client_request_id" in line)
+        self.assertIn("SL", header)
+        self.assertIn("TP", header)
+        self.assertNotIn("stop", header)
+        self.assertNotIn("#", header)
+        # Single tier -> the FAITHFUL entry label E1 on the row and the precheck.
+        self.assertIn("E1", result.output)
+        self.assertIn("precheck E1", result.output)
         # 3% of 100k at 50 = 60 shares on the single tier.
         self.assertIn("60", result.output)
         self.assertEqual(len(harness.broker.precheck_calls), 1, "dry-run STILL prechecks")
         self.assertEqual(harness.broker.place_calls, [], "dry-run must send NOTHING")
         self.assertEqual(harness.appended, [], "dry-run must not journal")
+
+    def test_dropped_zero_qty_first_tier_labels_faithfully(self):
+        # tier 0 (alloc 1% -> 0 shares) is dropped, so the first PLACED bracket
+        # realizes setup-plan tier 1 -> the table and precheck must read E2, not
+        # a lying sequential E1. This is the faithful-label regression.
+        two_tier_setup = dict(
+            _TRADE_SETUP,
+            entry_tiers=[
+                {"limit": 50.0, "alloc_pct": 1.0, "atr_distance": 1.0, "tag": "t0"},
+                {"limit": 50.0, "alloc_pct": 99.0, "atr_distance": 1.5, "tag": "t1"},
+            ],
+        )
+        harness = _SubmitHarness(self, candidates=[_candidate(trade_setup=two_tier_setup)])
+        from alphalens_cli.commands.broker import broker_app
+
+        result = self.runner.invoke(broker_app, _SUBMIT_ARGS)
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(len(harness.broker.precheck_calls), 1, "only the sized tier is placed")
+        self.assertIn("E2", result.output)
+        self.assertIn("precheck E2", result.output)
+        table_lines = [ln for ln in result.output.splitlines() if ln.strip().startswith("E")]
+        self.assertNotIn(
+            "E1",
+            "".join(table_lines),
+            "the first placed bracket is tier 1 -> E2, never a lying E1",
+        )
 
     def test_unknown_ticker_fails_cleanly(self):
         _SubmitHarness(self, candidates=[_candidate("OTHER")])
@@ -370,6 +406,7 @@ class TestSubmitFxLeg(unittest.TestCase):
         self.assertIn("USD", result.output)
         self.assertIn("@ 1.0800 mid", result.output)
         self.assertIn("fx cross-check ok", result.output)
+        self.assertIn("precheck E1", result.output)
 
     def test_fx_path_journals_the_conversion_verbatim(self):
         harness = _SubmitHarness(self, broker=_FxFakeBroker())
@@ -1108,7 +1145,7 @@ class TestEnvironmentLabeledNotify(unittest.TestCase):
         from alphalens_cli.commands.broker import _environment_labeled_notify
 
         sink = mock.Mock()
-        message = "precheck 0: fx cross-check ok — saxo rate 1.234500"
+        message = "precheck E1: fx cross-check ok — saxo rate 1.234500"
         with mock.patch.dict("os.environ", {}, clear=True):
             wrapped = _environment_labeled_notify(sink)
         wrapped(message)

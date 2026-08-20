@@ -209,6 +209,13 @@ class TestReconcileFillsCommand(unittest.TestCase):
         # Mean slippage over the single priced fill.
         self.assertIn("mean slippage", result.output)
         self.assertIn(f"{_EXPECTED_SLIPPAGE_BPS:.2f}", result.output)
+        # Human table: the tranche column header is TP (not the raw "tag") and
+        # each row renders the TP label (tp0 -> TP0), never the lowercase tag.
+        header = next(line for line in result.output.splitlines() if "sell_order_id" in line)
+        self.assertIn("TP", header)
+        self.assertNotIn("tag", header)
+        self.assertIn("TP0", result.output)
+        self.assertNotIn("tp0", result.output)
 
     def test_json_output_is_parseable_and_still_writes_parquet(self):
         harness = _Harness(self)
@@ -229,6 +236,8 @@ class TestReconcileFillsCommand(unittest.TestCase):
         self.assertAlmostEqual(by_id["S-FILL"]["fill_price"], _FILL_PRICE)
         self.assertEqual(by_id["S-PEND"]["fill_status"], "pending")
         self.assertEqual(by_id["S-UNK"]["fill_status"], "unresolved")
+        # The machine path keeps the RAW tag ("tp0"), never the human TP label.
+        self.assertEqual(by_id["S-FILL"]["tag"], "tp0")
 
     def test_empty_journal_writes_empty_parquet_and_exits_zero(self):
         harness = _Harness(self, lines=[])
