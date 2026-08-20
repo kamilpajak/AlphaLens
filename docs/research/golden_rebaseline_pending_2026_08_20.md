@@ -44,10 +44,17 @@ The replay harness says so itself, verbatim, on every miss:
 A second, subtler miss is worth naming because it looks like a bug and is not.
 `map_provenance.split_cassette_records` classifies a stage-B cassette by looking for
 `channel_support_status` in the recorded request. The recorded v3 / v2 cassettes carry
-the OLD key name, so the classifier now reports "0 stage-A cassettes of 2" and raises.
-That is the classifier correctly stating that **the recordings pre-date this
-instrument**. It must NOT be relaxed to accept either spelling: doing so would let a
-future reader believe the golden exercised the new contract when it replayed the old one.
+the OLD key name, so EVERY record now falls into the stage-A bucket and the classifier
+raises, verbatim:
+
+> expected exactly 1 stage-A LLM cassette in .../map_day/cassettes_llm/v3, found 2 (of 2
+> total) — one recording holds one proposal call, so this is two recordings mixed, or the
+> recordings pre-date the current stage-B schema
+
+Note the count: **2 stage-A of 2**, not "0 of 2". The classifier cannot distinguish its two
+possible causes, so the message names both; here the cause is the second one, and the
+recordings are pre-boundary. It must NOT be relaxed to accept either spelling: doing so would
+let a future reader believe the golden exercised the new contract when it replayed the old one.
 
 ## What the re-record must do
 
@@ -76,14 +83,20 @@ replay as evidence on either.
 
 ## Also on the deploy checklist, not in this branch
 
-* Prometheus rules are hand-synced to the VPS and are NOT repo-mounted. The renamed
-  channel gauges (`_verified_total` → `_established_total`, and the rest) break
-  `AlphalensThematicChannelAssessFailureHigh`, and an `absent()` rule on a renamed
-  metric alerts forever. The rules edit, the copy to the VPS and the reload must happen
-  in the SAME operation as the image deploy.
+* The repo rules file has been renamed to the new gauges in this branch. Live rules on the
+  VPS are hand-synced and NOT repo-mounted, so the copy to the VPS and the reload must still
+  happen in the SAME operation as the image deploy — until then the live
+  `AlphalensThematicChannelAssessFailureHigh` sums absent series and never fires, and the live
+  `absent()` rule alerts forever.
 * A new theme-misroute rule should be worded as a PIPELINE DEFECT page — misroute share
-  above one third of answered, volume guard of 5 answered, `for: 12h` — and never as a
-  trading signal.
+  above one third of answered, volume guard of 5 answered — and never as a trading signal.
+  It MUST read a WINDOW, not an instant vector:
+  `max_over_time(alphalens_thematic_channel_theme_misroute_total[6h])` against the
+  `max_over_time` of the answered sum, with a short `for:`. `map_themes` calls
+  `_channel_counts([], [])` on a frozen-set reuse, so five of the six daily slots publish
+  zeros and the textfile is overwritten a few hours later — an instant-vector ratio with
+  `for: 12h` can never stay true long enough to fire, and the volume guard is false for most
+  of the day. Same rule the `_map_themes_outcome_metrics` docstring already states.
 * The withheld-prose path reuses `brief_status="unavailable"`, which feeds
   `AlphalensThematicBriefUnavailableHigh`. A couple of withheld rows a day raises that
   ratio and can page; re-tune it by hand on the same deploy rather than inventing a

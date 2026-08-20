@@ -533,17 +533,40 @@ the confident prose with a badge beside it — is precisely what the persuasion 
 says does not work.
 
 **Stamped columns** (parquet-only, in `_enriched_row` and in the empty-day schema mirror):
-`brief_support_guard_status` (`clean` / `repaired` / `withheld` / `not_applicable`),
-`brief_support_guard_violations` (Int64, fired count on the first draw),
+`brief_support_guard_status` (`clean` / `repaired` / `withheld` / `fired_unrecovered` /
+`no_prose` / `not_applicable`),
+`brief_support_guard_violations` (Int64, the FIRED count on the LAST draw the guard scanned —
+the withheld text on `withheld`, the first draw on `fired_unrecovered`),
+`brief_support_guard_suppressed` (Int64, the near-miss count on that same draw, so a suppressor
+that misfires is readable rather than trusted),
 `brief_support_guard_spans_json` (at most 3 spans, for the audit worksheet),
 `brief_support_guard_version`, `brief_causal_support`, `brief_channel_grounding`.
 `not_applicable` is a real value, so "the guard did not fire" and "the guard did not run" never
-merge — the same discipline as `not_assessed` versus a real level in the assessor.
+merge — the same discipline as `not_assessed` versus a real level in the assessor. `clean` is
+held to the same rule: `fired_unrecovered` (the guard fired, the re-roll then died for an
+unrelated reason) and `no_prose` (no draw ever reached the guard) are separate values, because
+folding either into `clean` would bias the compliance rate optimistically — the direction that
+would wrongly argue the detector is accurate.
+
+**What the guard can and cannot claim.** It is a LEXICAL detector over a bounded, English-only
+phrase list, so the `clean` rate measures that list's RECALL, not the prose's honesty. Verified
+misses at the time of writing include "is a key supplier of" and "demand for its products
+rises". The suppressors are scoped to the phrase, not the sentence, because the prompt itself
+mandates a negation at `not_established` and hedged risk prose in every `bear_summary`; a
+sentence-wide suppressor made the guard anti-correlated with the risk it exists to catch. A
+match counts only when its own segment names the candidate, so competitor-benefit sentences in
+the bear case — the shape that field's instruction asks for — are not violations.
 
 **Gauges**, emitted every run including zeros:
 `alphalens_thematic_brief_support_guard_fired_total`, `..._repaired_total`,
-`..._withheld_total`. A series that vanishes on a healthy day is indistinguishable from a
-stopped exporter.
+`..._withheld_total`, `..._fired_unrecovered_total`, `..._no_prose_total`. A series that
+vanishes on a healthy day is indistinguishable from a stopped exporter.
+`fired_total = repaired + withheld + fired_unrecovered`: every draw on which the prose contract
+was actually broken, independent of the recovery.
+
+A withheld row raises `alphalens_thematic_brief_unavailable_count` too, because the withhold
+reuses the graceful-degradation path. The paired alert's description names both causes so a
+withhold day is not read as an LLM outage; splitting them is `..._withheld_total`.
 
 ## 6. Detect, stamp, keep, measure
 
@@ -850,7 +873,10 @@ later. §5.4 gets direction honesty into the **prose** without creating the colu
    including the never-shrink cases with an all-misroute theme and a mixed theme.
 6. **Version tokens**, red on the new schema tags plus positive controls that a prompt edit, a
    support-vocabulary edit and a grounding-vocabulary edit **each** move
-   `channel_config_version`, and that `mapper_config_version` reads `mapper-freeze-v4`.
+   `channel_config_version`, and that `mapper_config_version` reads `mapper-freeze-v4`. The two
+   vocabulary controls patch the tuples directly: before this increment the grounding vocabulary
+   reached the token only through `schema_sha` (the response schema embeds the tuple at import),
+   which is an implementation detail a refactor could remove without any document noticing.
 7. **Facts projection + channel block**, red on: delimiters, XML escaping of a hostile payload,
    no block rendered when the facts dict has no channel keys, no mcap token in the new text, and
    each `causal_support` value rendering its own instruction. Watch the standing
@@ -866,7 +892,12 @@ later. §5.4 gets direction honesty into the **prose** without creating the colu
     fixture with one row of each level, new projections, provenance memos. A reviewed operation
     with real LLM cost, not a CI-green fix.
 11. **Prometheus rules** — rename in the repo rules file, hand-sync to the VPS and reload in the
-    same operation as the image deploy; add the misroute rule worded as a pipeline defect.
+    same operation as the image deploy; add the misroute rule worded as a pipeline defect. The
+    misroute rule MUST read a window, e.g.
+    `max_over_time(alphalens_thematic_channel_theme_misroute_total[6h])` against the
+    `max_over_time` of the answered sum, with `for:` shortened to match. Five of every six daily
+    slots reuse the day's frozen parquet and publish zeros, so an instant-vector ratio with a
+    long `for:` can never stay true long enough to fire.
 
 Zen pre-merge review with `deepseek/deepseek-v4-pro` at high thinking is mandatory for this PR
 (shared assessor / generator / prompt / schema surface).
