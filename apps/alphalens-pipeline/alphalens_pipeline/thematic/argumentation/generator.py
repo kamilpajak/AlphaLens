@@ -121,6 +121,51 @@ class BriefErrorKind(enum.Enum):
     UNSUPPORTED_BENEFIT_CLAIM = "unsupported_benefit_claim"
 
 
+# The model narrating its own length budget: a bare integer followed by
+# "chars"/"characters" inside parentheses. Live case, brief date 2026-08-19,
+# ticker ABUS: the shipped tldr ended with a literal "(199 chars)".
+#
+# Deliberately NARROW. A wider pattern (any parenthetical containing a number,
+# or a bare "199 chars" without brackets) would eat legitimate prose — an
+# exhibit reference, a filing count, a size given in characters. The cost of a
+# miss is one visible artifact on one card; the cost of an over-match is
+# silently deleting a fact from an analyst's sentence, which is the worse
+# failure by a wide margin.
+_LENGTH_ANNOTATION_RE = re.compile(r"\(\s*\d+\s*(?:chars|characters)\s*\)", re.IGNORECASE)
+
+
+def _strip_length_annotations(parsed: dict) -> None:
+    """Remove echoed character-budget markers from the prose fields, in place.
+
+    A NORMALISATION, not a repair. It runs before the empty-content and support
+    guards so that a body which was ONLY the marker is correctly classified as
+    empty rather than shipped as four marker-only strings.
+
+    What it does NOT fix, and must not be mistaken for fixing: the same live
+    ABUS row had all four sections collapsed into ``tldr`` with the sibling
+    fields blank. Stripping the marker leaves that collapse exactly as visible
+    as it was — three empty sections on the card — because hiding it behind a
+    tidier ``tldr`` is the opposite of what this surface is for.
+    """
+    for key in BRIEF_RESPONSE_SCHEMA["required"]:
+        value = parsed.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        cleaned, n_removed = _LENGTH_ANNOTATION_RE.subn(" ", value)
+        if not n_removed:
+            # Leave an unmarked field BYTE-IDENTICAL. The whitespace collapse
+            # below exists only to tidy up after a removal; running it
+            # unconditionally would rewrite every brief the model ever writes,
+            # folding a paragraph break in ``supply_chain_reasoning`` into a
+            # single space. This function's remit is one artifact, not
+            # house-style reflow of prose it has no complaint about.
+            continue
+        # Collapse the whitespace the removal leaves behind so a marker sitting
+        # BETWEEN two sentences does not weld them together or leave a double
+        # space, and a trailing marker does not leave a trailing space.
+        parsed[key] = re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
 def _has_substantive_field(parsed: dict) -> bool:
     """True when at least one schema-required field carries non-whitespace text.
 
@@ -317,6 +362,10 @@ def generate_brief(
     # Defensive: ensure all 4 expected keys present; missing key → string "".
     for key in BRIEF_RESPONSE_SCHEMA["required"]:
         parsed.setdefault(key, "")
+
+    # Normalise away an echoed character budget BEFORE any guard reads the
+    # prose, so "(199 chars)" can neither reach the card nor count as content.
+    _strip_length_annotations(parsed)
 
     # Empty-content guard: a valid JSON body whose required fields are ALL blank
     # (empty or whitespace-only) parses cleanly but is not a usable brief — the

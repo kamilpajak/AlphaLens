@@ -33,6 +33,7 @@
 	import ExpertPanel from './ExpertPanel.svelte';
 	import TradeSetup from './TradeSetup.svelte';
 	import TemplateFacts from './TemplateFacts.svelte';
+	import ChannelRecord from './ChannelRecord.svelte';
 	import { GLOSSARY_BY_TERM } from '$lib/data/glossary';
 
 	// Same tipProps pattern as /experiments — looks up term in shared glossary.
@@ -393,6 +394,11 @@
 						</a>
 					{/if}
 				</div>
+				<!-- What the source event above actually carries (#1069) — the record
+				     the thesis was written against, checked by a second model pass.
+				     It follows the event because it is a comment ON that event.
+				     Renders nothing on rows written before the assessor existed. -->
+				<ChannelRecord candidate={c} />
 				{#if c.brief_template_id}
 					<div class="mt-4 border-t border-grid pt-4">
 						<TemplateFacts templateId={c.brief_template_id} facts={c.brief_template_facts} />

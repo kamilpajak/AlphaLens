@@ -372,6 +372,15 @@ export interface components {
             brief_generated_at?: string | null;
             brief_status?: string | null;
             brief_error_kind?: string | null;
+            brief_causal_support?: string | null;
+            brief_channel_grounding?: string | null;
+            brief_support_guard_status?: string | null;
+            channel_type?: string;
+            channel_text?: string;
+            channel_evidence?: string;
+            channel_falsifier?: string;
+            channel_grounding_quote?: string;
+            channel_grounding_reason?: string;
         };
         /**
          * @description One candidate for the single-candidate DETAIL endpoint
@@ -506,6 +515,15 @@ export interface components {
             brief_generated_at?: string | null;
             brief_status?: string | null;
             brief_error_kind?: string | null;
+            brief_causal_support?: string | null;
+            brief_channel_grounding?: string | null;
+            brief_support_guard_status?: string | null;
+            channel_type?: string;
+            channel_text?: string;
+            channel_evidence?: string;
+            channel_falsifier?: string;
+            channel_grounding_quote?: string;
+            channel_grounding_reason?: string;
         };
         /**
          * @description One daily OHLC candle (folded from the cached minute bars, RTH-only).

@@ -137,7 +137,19 @@
 		market_state_vix: null,
 		market_state_vix_decile: null,
 		market_state_squeeze_on: null,
-		market_state_config_version: null
+		market_state_config_version: null,
+		// Pre-#1066 row: the causal-support assessor did not exist on 2026-05-18,
+		// so every status column is NULL and <ChannelRecord> renders nothing. This
+		// is the faithful shape for this fixture's date, not a placeholder.
+		brief_causal_support: null,
+		brief_channel_grounding: null,
+		brief_support_guard_status: null,
+		channel_type: null,
+		channel_text: null,
+		channel_evidence: null,
+		channel_falsifier: null,
+		channel_grounding_quote: null,
+		channel_grounding_reason: null
 	};
 
 	// Story 2 — PIPR (rank 3/16):
@@ -260,7 +272,19 @@
 		market_state_vix: null,
 		market_state_vix_decile: null,
 		market_state_squeeze_on: null,
-		market_state_config_version: null
+		market_state_config_version: null,
+		// Pre-#1066 row: the causal-support assessor did not exist on 2026-05-18,
+		// so every status column is NULL and <ChannelRecord> renders nothing. This
+		// is the faithful shape for this fixture's date, not a placeholder.
+		brief_causal_support: null,
+		brief_channel_grounding: null,
+		brief_support_guard_status: null,
+		channel_type: null,
+		channel_text: null,
+		channel_evidence: null,
+		channel_falsifier: null,
+		channel_grounding_quote: null,
+		channel_grounding_reason: null
 	};
 
 	// Story 3 — empty narrative: FOUR with the three bottom sections blanked to
@@ -414,7 +438,19 @@
 		market_state_vix: null,
 		market_state_vix_decile: null,
 		market_state_squeeze_on: null,
-		market_state_config_version: null
+		market_state_config_version: null,
+		// Pre-#1066 row: the causal-support assessor did not exist on 2026-05-18,
+		// so every status column is NULL and <ChannelRecord> renders nothing. This
+		// is the faithful shape for this fixture's date, not a placeholder.
+		brief_causal_support: null,
+		brief_channel_grounding: null,
+		brief_support_guard_status: null,
+		channel_type: null,
+		channel_text: null,
+		channel_evidence: null,
+		channel_falsifier: null,
+		channel_grounding_quote: null,
+		channel_grounding_reason: null
 	};
 
 	// Story 6 — PAR again, the support guard's WITHHELD state:
@@ -426,7 +462,153 @@
 	//     unguarded mapper prose, and promoting it would undo the withhold
 	const candidatePARProseWithheld: Candidate = {
 		...candidatePARBriefUnavailable,
-		brief_error_kind: 'unsupported_benefit_claim'
+		brief_error_kind: 'unsupported_benefit_claim',
+		// The guard only ever fires on a row whose record cannot carry a benefit
+		// claim, so the withheld state always ships WITH a record — here the
+		// lowest support level on an otherwise sound measurement.
+		brief_causal_support: 'not_established',
+		brief_channel_grounding: 'grounded',
+		brief_support_guard_status: 'withheld',
+		channel_type: 'none',
+		channel_text: '',
+		channel_evidence: '',
+		channel_falsifier: '',
+		channel_grounding_quote: '',
+		channel_grounding_reason: ''
+	};
+
+	// ------------------------------------------------------------------
+	// Stories 7-10 — the causal-support record (#1069).
+	//
+	// Every value below is VERBATIM from the recorded golden brief day
+	// tests/golden/fixtures/brief_day/golden/2026-08-19.parquet — the first
+	// production day on the post-#1068 taxonomy. Real assessor output, not
+	// plausible-looking prose: a fabricated record here would quietly misrepresent
+	// what the instrument actually says, which is the failure this surface exists
+	// to prevent.
+	// ------------------------------------------------------------------
+
+	// MRVI — suggestive x grounded. The COMMON case and the quiet one: the event
+	// implies a supplier chain, the assessor named it, and nothing about the
+	// measurement broke. The chain (mechanism / quoted evidence / falsifier) sits
+	// in the drawer; the face carries one line.
+	const candidateMRVI: Candidate = {
+		...candidateFOUR,
+		date: '2026-08-19',
+		ticker: 'MRVI',
+		company_name: 'Maravai LifeSciences Holdings, Inc.',
+		theme: 'phase_3_trial',
+		catalyst_event_type: 'other',
+		catalyst_strength: 0.58,
+		source_event_title:
+			"Moderna and Merck Just Made History With the First mRNA Cancer Vaccine to Succeed in a Phase 3 Trial. Here's What That Means for Investors.",
+		source_event_published_at: '2026-08-19',
+		source_event_url:
+			'https://www.fool.com/investing/2026/08/19/moderna-and-merck-just-made-history-with-the-first-mrna-cancer-vaccine-to-succeed-in-a-phase-3-trial-heres-what-that-means-for-investors/?source=iedfolrf0000001',
+		brief_tldr:
+			"A plausible supplier_input channel runs from the Moderna/Merck Phase 3 mRNA cancer vaccine success to increased demand for Maravai's TriLink CleanCap and nucleotides, but the event does not state that any Maravai products were used in the trial or that Maravai will receive associated orders.",
+		brief_supply_chain_md:
+			"The event validates mRNA oncology, which could boost mRNA manufacturing and demand for TriLink's CleanCap capping analogs and modified nucleotides, creating a plausible supplier_input channel. However, the event does not state that Maravai's products were used in this specific trial or that any new orders for Maravai have been placed. Any revenue benefit is conditional on that link.",
+		brief_bear_summary_md:
+			"FCFF yield of 1.3% (20th percentile) indicates weak cash-flow generation relative to price. P/S of 5.8 and EV/Rev of 6.2 are elevated. Fundamentals are stale (174 days since last filing). The trial success could benefit competitors or other suppliers, and Maravai's revenue may not increase if mRNA demand does not materialize.",
+		brief_catalyst_failure_exit:
+			"If Maravai's revenue from mRNA-related products does not increase in the following quarters, the suggested channel is invalidated.",
+		brief_causal_support: 'suggestive',
+		brief_channel_grounding: 'grounded',
+		brief_support_guard_status: 'not_applicable',
+		channel_type: 'supplier_input',
+		channel_text:
+			"The success of Moderna and Merck's mRNA cancer vaccine in Phase 3 trial validates the mRNA oncology platform, leading to increased investment and demand for mRNA-based therapies, which in turn increases demand for mRNA manufacturing inputs such as CleanCap capping analogs and modified nucleotides supplied by Maravai's TriLink, potentially boosting Maravai's revenue in the near future.",
+		channel_evidence:
+			'First mRNA Cancer Vaccine to Succeed in a Phase 3 Trial; validation of the mRNA oncology platform',
+		channel_falsifier:
+			"If Maravai's revenue from mRNA-related products does not increase in the following quarters, or if the trial success does not lead to increased mRNA manufacturing demand.",
+		channel_grounding_quote: 'validation of the mRNA oncology platform',
+		channel_grounding_reason: ''
+	};
+
+	// RDN — not_established x THEME_MISROUTE. A pipeline routing defect: a
+	// financing story was filed under retail_sales. The card must flag it and say
+	// whose fault it is, so the reader discounts this row rather than the tool.
+	// No chain and no quoted span, so no drawer is offered — everything the
+	// assessor produced fits on the face.
+	const candidateRDN: Candidate = {
+		...candidateFOUR,
+		date: '2026-08-19',
+		ticker: 'RDN',
+		company_name: 'Radian Group Inc.',
+		theme: 'retail_sales',
+		catalyst_event_type: 'macro',
+		catalyst_strength: 0.62,
+		source_event_title: 'Broadcom falls sharply after investors question financing plans',
+		source_event_published_at: '2026-08-14',
+		brief_tldr:
+			"RDN surfaced from Broadcom's sharp decline on financing concerns; no company-specific cash-flow path from this event to Radian was established.",
+		brief_supply_chain_md:
+			"The event describes Broadcom's stock drop due to investor questions about financing plans. Radian Group provides mortgage insurance, with no direct operational or financial link to Broadcom or semiconductor supply chains. No mechanism connects Broadcom's financing issues to Radian's mortgage insurance volume or premiums.",
+		brief_bear_summary_md:
+			'Bear risks: low FCFF yield (3.1%, sector 25th percentile) and zero insider buying over 180 days suggest limited internal conviction; technical weakness (RSI 41, price -2.4% below MA50) reflects near-term momentum lag.',
+		brief_catalyst_failure_exit:
+			"Broadcom's financing concerns are resolved or proven unfounded, removing the event that triggered this screening; no RDN-specific catalyst exit is applicable.",
+		brief_causal_support: 'not_established',
+		brief_channel_grounding: 'theme_misroute',
+		brief_support_guard_status: 'clean',
+		channel_type: 'none',
+		channel_text: '',
+		channel_evidence: '',
+		channel_falsifier: '',
+		channel_grounding_quote: '',
+		channel_grounding_reason: "The event is about Broadcom's financing plans, not retail sales."
+	};
+
+	// CRSP — not_established x CANDIDATE_MISFIT. The event is on-theme; this
+	// company simply is not in it. A stage-A proposal defect, and a different fix
+	// from a misroute, which is why the two never share a word.
+	const candidateCRSP: Candidate = {
+		...candidateFOUR,
+		date: '2026-08-19',
+		ticker: 'CRSP',
+		company_name: 'CRISPR Therapeutics AG',
+		theme: 'melanoma',
+		catalyst_event_type: 'other',
+		catalyst_strength: 0.54,
+		source_event_title:
+			'mRNA cancer vaccine succeeded in Phase 3 melanoma trial, Moderna and Merck say',
+		source_event_published_at: '2026-08-19',
+		brief_tldr:
+			'CRISPR Therapeutics surfaced from an mRNA cancer vaccine Phase 3 success for melanoma; no company-specific cash-flow path from that event to this company was established.',
+		brief_supply_chain_md:
+			"The event describes a competitor's vaccine trial result; CRISPR Therapeutics develops gene-edited cell therapies, not mRNA vaccines. No operational or financial link is stated in the event or grounding. The pairing rests on the theme tag 'melanoma' alone.",
+		brief_bear_summary_md:
+			'P/S 1647.6 and EV/Rev 1548.6 are extreme valuation multiples with no FCF margin reported. Fundamentals are 188 days stale; RSI at 70 signals overbought while MA200 slope is negative. No insider buys in 180 days.',
+		brief_catalyst_failure_exit:
+			'No company-specific mechanism exists; the event-level condition is whether mRNA cancer vaccines broadly lift immuno-oncology sentiment, but no CRISPR product or cash-flow link is named.',
+		brief_causal_support: 'not_established',
+		brief_channel_grounding: 'candidate_misfit',
+		brief_support_guard_status: 'clean',
+		channel_type: 'none',
+		channel_text: '',
+		channel_evidence: '',
+		channel_falsifier: '',
+		channel_grounding_quote: '',
+		channel_grounding_reason:
+			'Event is about an mRNA cancer vaccine trial for melanoma; CRISPR Therapeutics develops gene-edited cell therapies, not mRNA vaccines, and is not mentioned or implied.'
+	};
+
+	// Assessor OUTAGE. No such row exists in the recorded golden day, so this is
+	// the ONE derived state here: the real CRSP row with only the two status
+	// tokens swapped for the literals the orchestrator substitutes when no draw
+	// survives. Its prose is therefore still CRSP's real prose and describes a
+	// verdict that WAS reached — read this story for the record block alone.
+	// Kept distinct from not_established on purpose: "nothing answered" and "the
+	// answer was weak" must never render the same way.
+	const candidateNoRecord: Candidate = {
+		...candidateCRSP,
+		brief_causal_support: 'no_record',
+		brief_channel_grounding: 'unknown',
+		brief_support_guard_status: 'clean',
+		channel_type: '',
+		channel_grounding_reason: ''
 	};
 
 	const { Story } = defineMeta({
@@ -540,6 +722,86 @@
 	{#snippet template()}
 		<div style="width: 56rem; padding: 2rem;">
 			<CandidateCard candidate={candidatePARProseWithheld} index={15} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Story 7: MRVI — suggestive x grounded. The COMMON case: present but quiet.
+     No amber, no alarm — the measurement worked and reported a conditional link. -->
+<Story
+	name="Channel Record Grounded"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByText('evidence')).toBeVisible());
+		// The verb is what separates this level from the one below it — a reader
+		// must not have to decode a colour to tell them apart.
+		await waitFor(() =>
+			expect(canvas.getByText('the event implies a link to this company')).toBeVisible()
+		);
+		// Nothing about a sound measurement is flagged.
+		expect(canvas.queryByText(/does not concern this theme/)).toBeNull();
+		expect(canvas.queryByText(/withheld/)).toBeNull();
+	}}
+>
+	{#snippet template()}
+		<div style="width: 56rem; padding: 2rem;">
+			<CandidateCard candidate={candidateMRVI} index={0} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Story 8: RDN — theme_misroute. Flagged, and named as an upstream routing
+     defect so the reader discounts the row rather than the whole tool. -->
+<Story
+	name="Channel Record Theme Misroute"
+	play={async ({ canvas }) => {
+		await waitFor(() =>
+			expect(canvas.getByText('the event does not state a link to this company')).toBeVisible()
+		);
+		await waitFor(() =>
+			expect(
+				canvas.getByText('the event does not concern this theme — a routing defect upstream')
+			).toBeVisible()
+		);
+	}}
+>
+	{#snippet template()}
+		<div style="width: 56rem; padding: 2rem;">
+			<CandidateCard candidate={candidateRDN} index={0} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Story 9: CRSP — candidate_misfit. On-theme event, wrong company: a stage-A
+     proposal defect, worded differently from a misroute because the fix differs. -->
+<Story
+	name="Channel Record Candidate Misfit"
+	play={async ({ canvas }) => {
+		await waitFor(() =>
+			expect(canvas.getByText('the event does not involve this company')).toBeVisible()
+		);
+	}}
+>
+	{#snippet template()}
+		<div style="width: 56rem; padding: 2rem;">
+			<CandidateCard candidate={candidateCRSP} index={0} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Story 10: assessor outage. "Not assessed" must never read as "assessed and
+     found weak" — the whole point of keeping no_record out of the level scale. -->
+<Story
+	name="Channel Record Not Assessed"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByText('the link was not assessed')).toBeVisible());
+		await waitFor(() => expect(canvas.getByText('grounding was not assessed')).toBeVisible());
+		// It must NOT borrow the wording of a real verdict.
+		expect(canvas.queryByText('the event does not state a link to this company')).toBeNull();
+	}}
+>
+	{#snippet template()}
+		<div style="width: 56rem; padding: 2rem;">
+			<CandidateCard candidate={candidateNoRecord} index={0} />
 		</div>
 	{/snippet}
 </Story>

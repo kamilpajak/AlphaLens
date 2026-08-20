@@ -193,6 +193,50 @@ class Brief(models.Model):
     brief_status = models.CharField(max_length=16, null=True, blank=True)  # NOSONAR
     brief_error_kind = models.CharField(max_length=32, null=True, blank=True)  # NOSONAR
 
+    # Causal-support record (#1069) — what the prose was written AGAINST.
+    #
+    # The pipeline stamps two status pairs. ``channel_support_status`` /
+    # ``channel_grounding_status`` are the assessor's raw answers and go blank on
+    # an assessor outage; the pair below is the orchestrator's normalisation of
+    # them, which substitutes the explicit ``no_record`` / ``unknown`` literals
+    # instead. The card renders THIS pair: a card that hedges has to hedge
+    # against the record its writer actually saw, and "the instrument did not
+    # answer" must never collapse into "the instrument answered not_established".
+    #
+    # NULLABLE for the same tri-state reason as brief_status above — a parquet
+    # written before the assessor existed ingests as NULL (unknown), which stays
+    # distinct from every real value. That is why S6553 is suppressed here too.
+    #
+    #   brief_causal_support      established | suggestive | not_established | no_record
+    #   brief_channel_grounding   grounded | theme_misroute | candidate_misfit | unknown
+    #   brief_support_guard_status
+    #       not_applicable | clean | repaired | withheld | fired_unrecovered | no_prose
+    #
+    # Grounding is an ORTHOGONAL validity condition on the measurement, never a
+    # level of it: a misrouted event can still elicit a confident chain, so the
+    # two columns must not be read as one ordinal scale.
+    brief_causal_support = models.CharField(max_length=32, null=True, blank=True)  # NOSONAR
+    brief_channel_grounding = models.CharField(max_length=32, null=True, blank=True)  # NOSONAR
+    brief_support_guard_status = models.CharField(max_length=32, null=True, blank=True)  # NOSONAR
+
+    # The record's CONTENT. Genuinely empty (not unknown) whenever the assessor
+    # named no chain — ``channel_type`` "none" carries empty text/evidence/
+    # falsifier by construction — so these floor to "" like every other blank
+    # text column rather than carrying the NULL tri-state.
+    #
+    # The vote telemetry (channel_confidence, channel_vote_k, channel_vote_valid_n,
+    # channel_support_dispersion, channel_grounding_agree_n) and the fingerprint
+    # blob (channel_config_version) stay PARQUET-ONLY: they are instrument
+    # readouts for the stratified audit, and a self-reported confidence float on
+    # the card would invite exactly the calibrated-sounding reading the level is
+    # there to prevent.
+    channel_type = models.CharField(max_length=32, blank=True, default="")
+    channel_text = models.TextField(blank=True)
+    channel_evidence = models.TextField(blank=True)
+    channel_falsifier = models.TextField(blank=True)
+    channel_grounding_quote = models.TextField(blank=True)
+    channel_grounding_reason = models.TextField(blank=True)
+
     class Meta:
         indexes = [
             models.Index(fields=["-date", "-layer4_weighted_score"], name="brief_date_score_idx"),

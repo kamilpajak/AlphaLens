@@ -772,3 +772,138 @@ class TestBriefStatusIngest:
         aaa = Brief.objects.get(ticker="AAA")
         assert aaa.brief_status is None
         assert aaa.brief_error_kind is None
+
+
+@pytest.mark.django_db
+class TestChannelRecordIngest:
+    """#1069: the causal-support record must reach the API.
+
+    The pipeline stamps the whole record on every brief parquet row (#1066 for
+    the assessment, #1068 for the grounding split + the prose guard). Django's
+    ingest drops unknown parquet columns by design, so before this the SPA could
+    only ever render the prose and never what the prose was written against.
+
+    Two status pairs exist in the parquet and they are NOT interchangeable:
+
+    * ``channel_support_status`` / ``channel_grounding_status`` are the
+      ASSESSOR's raw answers — blank when the assessment call did not succeed.
+    * ``brief_causal_support`` / ``brief_channel_grounding`` are the values the
+      prose was actually generated against, normalised by the orchestrator to
+      ``no_record`` / ``unknown`` on an assessor outage.
+
+    The card renders the SECOND pair, because a card that hedges must hedge
+    against the record the writer saw. An outage and a genuine
+    ``not_established`` verdict must stay distinguishable, which is exactly what
+    the ``no_record`` value preserves.
+    """
+
+    @staticmethod
+    def _row(**overrides) -> dict:
+        row = {
+            "ticker": "ABUS",
+            "theme": "mrna-platform",
+            "brief_causal_support": "suggestive",
+            "brief_channel_grounding": "grounded",
+            "brief_support_guard_status": "not_applicable",
+            "channel_type": "category_attention",
+            "channel_text": "LNP royalty demand rises if the platform is validated.",
+            "channel_evidence": "First mRNA Cancer Vaccine to Succeed in a Phase 3 Trial.",
+            "channel_falsifier": "If the LNP patents are not required, the channel fails.",
+            "channel_grounding_quote": "Moderna and Merck Just Made History",
+            "channel_grounding_reason": "",
+        }
+        row.update(overrides)
+        return row
+
+    def test_record_round_trips(self, tmp_path: Path):
+        _write_parquet(tmp_path, "2026-08-19", [self._row()])
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        abus = Brief.objects.get(ticker="ABUS")
+        assert abus.brief_causal_support == "suggestive"
+        assert abus.brief_channel_grounding == "grounded"
+        assert abus.brief_support_guard_status == "not_applicable"
+        assert abus.channel_type == "category_attention"
+        assert abus.channel_text.startswith("LNP royalty demand")
+        assert abus.channel_evidence.startswith("First mRNA Cancer Vaccine")
+        assert abus.channel_falsifier.startswith("If the LNP patents")
+        assert abus.channel_grounding_quote == "Moderna and Merck Just Made History"
+        assert abus.channel_grounding_reason == ""
+
+    def test_grounding_failure_carries_its_reason_and_empty_chain(self, tmp_path: Path):
+        # A theme_misroute row: the assessor names WHY the event does not
+        # concern the theme, and the chain fields are empty because no chain was
+        # asserted. Both halves have to survive — the reason is the only thing
+        # that makes the failure auditable by a reader.
+        _write_parquet(
+            tmp_path,
+            "2026-08-18",
+            [
+                self._row(
+                    ticker="AVGO",
+                    brief_causal_support="not_established",
+                    brief_channel_grounding="theme_misroute",
+                    brief_support_guard_status="clean",
+                    channel_type="none",
+                    channel_text="",
+                    channel_evidence="",
+                    channel_falsifier="",
+                    channel_grounding_quote="",
+                    channel_grounding_reason="The event is about financing plans, not retail sales.",
+                )
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        avgo = Brief.objects.get(ticker="AVGO")
+        assert avgo.brief_channel_grounding == "theme_misroute"
+        assert avgo.brief_causal_support == "not_established"
+        assert avgo.channel_text == ""
+        assert avgo.channel_grounding_reason.startswith("The event is about financing plans")
+
+    def test_assessor_outage_ingests_as_no_record_not_blank(self, tmp_path: Path):
+        # The orchestrator normalises an outage to no_record / unknown BEFORE
+        # writing the parquet. Ingest must carry those literals through: a card
+        # that showed a blank here would be indistinguishable from a card whose
+        # assessor answered "not_established".
+        _write_parquet(
+            tmp_path,
+            "2026-08-17",
+            [
+                self._row(
+                    ticker="OPEN",
+                    brief_causal_support="no_record",
+                    brief_channel_grounding="unknown",
+                    brief_support_guard_status="clean",
+                    channel_type="",
+                    channel_text="",
+                    channel_evidence="",
+                    channel_falsifier="",
+                    channel_grounding_quote="",
+                    channel_grounding_reason="",
+                )
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        row = Brief.objects.get(ticker="OPEN")
+        assert row.brief_causal_support == "no_record"
+        assert row.brief_channel_grounding == "unknown"
+
+    def test_legacy_parquet_without_channel_columns_ingests_null(self, tmp_path: Path):
+        # Pre-#1066 parquet: no channel columns at all. The three STATUS fields
+        # must land NULL (the row predates the instrument — not a verdict), while
+        # the free-text record fields floor to "" like every other blank TextField.
+        _write_parquet(tmp_path, "2026-05-22", [{"ticker": "AAA", "theme": "t"}])
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+        aaa = Brief.objects.get(ticker="AAA")
+        assert aaa.brief_causal_support is None
+        assert aaa.brief_channel_grounding is None
+        assert aaa.brief_support_guard_status is None
+        assert aaa.channel_type == ""
+        assert aaa.channel_text == ""
+        assert aaa.channel_evidence == ""
+        assert aaa.channel_falsifier == ""
+        assert aaa.channel_grounding_quote == ""
+        assert aaa.channel_grounding_reason == ""
