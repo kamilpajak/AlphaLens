@@ -21,6 +21,7 @@ from broker_contract.contract import Broker, OrderState
 from broker_contract.price_feed import PriceFeed, PricePoint
 from broker_contract.sizing import TpTranchePlan
 
+from alphalens_pipeline.brokers.automanager.labels import tp_label_from_tag
 from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,12 @@ def execute_tranche_exit(
     owned = max(live.quantity, 0.0)
     qty = min(exit.qty, round(owned))
     if qty <= 0:
-        logger.info("tranche %s uic %s: position gone (owned=%.2f) — no sell", exit.tag, uic, owned)
+        logger.info(
+            "tranche %s uic %s: position gone (owned=%.2f) — no sell",
+            tp_label_from_tag(exit.tag),
+            uic,
+            owned,
+        )
         return TrancheExitResult(sold=False, sell_order_id=None)
     new_sl_qty = max(round(owned) - qty, 0.0)
     # 1) free the tranche from the SL FIRST (a sell while the SL commits full
@@ -131,7 +137,13 @@ def execute_tranche_exit(
         uic, "SELL", qty, request_id=f"{request_ref}-{exit.tag}-sell"
     )
     sell_order_id = placed.entry_order_id or None
-    logger.info("tranche %s uic %s: SL qty -> %.0f, market-sold %d", exit.tag, uic, new_sl_qty, qty)
+    logger.info(
+        "tranche %s uic %s: SL qty -> %.0f, market-sold %d",
+        tp_label_from_tag(exit.tag),
+        uic,
+        new_sl_qty,
+        qty,
+    )
     return TrancheExitResult(sold=True, sell_order_id=sell_order_id)
 
 
