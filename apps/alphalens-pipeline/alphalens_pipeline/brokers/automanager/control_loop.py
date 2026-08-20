@@ -51,6 +51,10 @@ from alphalens_pipeline.brokers.automanager import (
     entry_trails,
     state_paths,
 )
+from alphalens_pipeline.brokers.automanager.labels import (
+    entry_label_from_crid,
+    human_label_from_external_reference,
+)
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     ManagedExit,
     run_live_exits,
@@ -482,7 +486,12 @@ def _run_orphan_sweep(deps: LoopDeps, report: TickReport) -> None:
         report.alerts += 1
         orphans = []
     for orphan in orphans:
-        deps.alert(f"orphan (placed but never journaled): {orphan}")
+        # Human line renders the E{n}/TP{n} label off the machine ref (falls back
+        # to the order id for an order orphan with no ref); the raw machine repr
+        # is kept OUT of the operator line and carried only on a debug logger.
+        human = human_label_from_external_reference(orphan.external_reference) or orphan.order_id
+        deps.alert(f"orphan (placed but never journaled): {human} [{orphan.kind}]")
+        logger.debug("orphan detail: %r", orphan)
         report.orphans += 1
 
 
@@ -2014,8 +2023,8 @@ def _entry_watch_config_from_record(
         )
     except (KeyError, TypeError, ValueError):
         logger.warning(
-            "entry-watch: watch_open record for crid=%s is unreconstructable — skipping",
-            record.get("crid"),
+            "entry-watch: watch_open record for %s is unreconstructable — skipping",
+            entry_label_from_crid(str(record.get("crid"))),
         )
         return None
 
@@ -2222,9 +2231,9 @@ def _journal_entry_planned_disaster(record: Mapping[str, Any], uic: int, entry_c
     disaster_stop = record.get("disaster_stop")
     if disaster_stop is None:
         logger.warning(
-            "entry-trail arm: crid=%s watch_open carries no disaster_stop — "
+            "entry-trail arm: %s watch_open carries no disaster_stop — "
             "SKIPPING the trailing order so a fill can never go uncovered",
-            entry_crid,
+            entry_label_from_crid(entry_crid),
         )
         raise _EntryArmAbortError  # never place a trail we cannot cover (never-naked)
     tier_index = record.get("tier_index")
@@ -2315,7 +2324,9 @@ def _arm_native_trail(
         uic = int(record["uic"])
         qty = float(record["qty"])
     except (KeyError, TypeError, ValueError):
-        logger.warning("entry-trail arm: crid=%s record missing uic/qty — skipped", crid)
+        logger.warning(
+            "entry-trail arm: %s record missing uic/qty — skipped", entry_label_from_crid(crid)
+        )
         return
     fire_rid = _entry_fire_request_id(crid)
 
@@ -2352,7 +2363,7 @@ def _arm_native_trail(
     runtime.watcher.mark_armed()
     logger.info(
         "entry-trail %s: armed native trailing order %s @ trigger %.4f (ceiling %.4f)",
-        crid,
+        entry_label_from_crid(crid),
         placed.entry_order_id,
         geo.order_price,
         geo.ceiling_price,
@@ -2383,13 +2394,13 @@ def _handle_arm_failure(
         )
         runtime.watcher.cancel()
         if deps.alert_throttled(
-            f"entry-trail {crid}: insufficient funds at fire-arm — tier refused",
+            f"entry-trail {entry_label_from_crid(crid)}: insufficient funds at fire-arm — tier refused",
             f"entry-trail:nofunds:{crid}",
         ):
             report.alerts += 1
         return
     if deps.alert_throttled(
-        f"entry-trail {crid}: trailing-order POST failed — will retry: {exc}",
+        f"entry-trail {entry_label_from_crid(crid)}: trailing-order POST failed — will retry: {exc}",
         f"entry-trail:arm-fail:{crid}",
     ):
         report.alerts += 1
@@ -2468,7 +2479,8 @@ def _finalize_entry_terminal_vs_broker(
     if filled_qty is not None:
         return _entry_terminal_rewritten_as_fired(crid, result, existing, filled_qty)
     if deps.alert_throttled(
-        f"entry-trail {crid}: cancelled resting trail {existing} on {result.state.value}",
+        f"entry-trail {entry_label_from_crid(crid)}: cancelled resting trail {existing} "
+        f"on {result.state.value}",
         f"entry-trail:terminal-cancel:{crid}",
     ):
         report.alerts += 1
@@ -2610,7 +2622,8 @@ def _reconcile_one_armed_tier(
         avg_price=outcome.avg_fill_price if outcome is not None else None,
     )
     if deps.alert_throttled(
-        f"entry-trail {crid}: native trail {order_id} filled {filled_qty:g} shares -> fired",
+        f"entry-trail {entry_label_from_crid(crid)}: native trail {order_id} "
+        f"filled {filled_qty:g} shares -> fired",
         f"entry-trail:fired:{crid}",
     ):
         report.alerts += 1
@@ -2753,14 +2766,15 @@ def _rearm_or_expire_gone_tier(
     if now >= window_end:
         _journal_entry_expired(crid, tier_state, d_bps, now)
         if deps.alert_throttled(
-            f"entry-trail {crid}: TTL window closed with no fill -> expired",
+            f"entry-trail {entry_label_from_crid(crid)}: TTL window closed with no fill -> expired",
             f"entry-trail:expired:{crid}",
         ):
             report.alerts += 1
         return
     _journal_entry_rearm(crid, tier_state)
     if deps.alert_throttled(
-        f"entry-trail {crid}: DayOrder cancelled at close -> re-armed (trough carried)",
+        f"entry-trail {entry_label_from_crid(crid)}: DayOrder cancelled at close "
+        f"-> re-armed (trough carried)",
         f"entry-trail:rearm:{crid}",
     ):
         report.alerts += 1
@@ -2790,8 +2804,8 @@ def _entry_window_end(tier_state: entry_trails.EntryTrailTierState) -> dt.dateti
         return dt.datetime.fromisoformat(str(raw))
     except (TypeError, ValueError):
         logger.warning(
-            "entry-trail rearm: crid=%s has an unparseable window_end %r — deferring",
-            tier_state.crid,
+            "entry-trail rearm: %s has an unparseable window_end %r — deferring",
+            entry_label_from_crid(tier_state.crid),
             raw,
         )
         return None

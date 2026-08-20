@@ -2887,6 +2887,12 @@ class TestFoldPlannedExitsBuildsReanchorFacts(unittest.TestCase):
 
 class TestRunOnceAlertsEachOrphan(unittest.TestCase):
     def test_each_swept_orphan_is_alerted(self) -> None:
+        from alphalens_pipeline.brokers.automanager.orphan_sweeper import Orphan
+
+        orphans = [
+            Orphan(order_id="", external_reference="OLN-2026-08-18-entry-t0-fire", kind="position"),
+            Orphan(order_id="99", external_reference="", kind="order"),
+        ]
         with TemporaryDirectory() as d:
             alerts: list[str] = []
             deps = _deps(
@@ -2896,12 +2902,15 @@ class TestRunOnceAlertsEachOrphan(unittest.TestCase):
                 place_calls=[],
                 alerts=alerts,
             )
-            deps = cl.LoopDeps(
-                **{**deps.__dict__, "sweep_orphans_fn": lambda _b: ["orphan-A", "orphan-B"]}
-            )
+            deps = cl.LoopDeps(**{**deps.__dict__, "sweep_orphans_fn": lambda _b: orphans})
             report = cl.run_once(deps, sweep_orphans=True)
         self.assertEqual(report.orphans, 2)
-        self.assertTrue(any("orphan-A" in a for a in alerts))
+        # The human line renders the E{n} label + kind; the raw machine ref never
+        # appears in the operator alert (it rides a debug logger instead).
+        self.assertTrue(any("OLN E1 (fire)" in a and "[position]" in a for a in alerts))
+        self.assertFalse(any("OLN-2026-08-18-entry-t0-fire" in a for a in alerts))
+        # An order orphan with no ref falls back to the order id.
+        self.assertTrue(any("99" in a and "[order]" in a for a in alerts))
 
 
 class TestLatestPlannedSkipsMalformedLines(unittest.TestCase):
