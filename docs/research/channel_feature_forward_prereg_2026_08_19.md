@@ -338,3 +338,315 @@ contemplated for a `mapper_config_version` change.
    pre-specified sensitivities (unwinsorized; `partial` pooled into V), the attrition table,
    and every descriptive in §5 — written whatever the answer is.
 5. A one-line status update on this memo when the slot is consumed or sunset.
+
+---
+
+## Amendment 1 — cohort restart, new taxonomy, grounding condition (2026-08-20)
+
+**Status of this amendment:** LOCKED, committed **before** the change it describes is
+implemented and **before** it deploys, as §3 requires of any mid-window instrument change.
+**Nothing above this line is rewritten.** §1-§10 stand as the record of cohort 1; this
+amendment closes that cohort, opens cohort 2, and restates every rule that names a value of
+the old vocabulary. Where the two disagree, this amendment governs from boundary 2 onward
+and §1-§10 governs the closed cohort 1.
+
+**Design memo for the change:** `docs/research/grounding_and_prose_honesty_design_2026_08_20.md`.
+
+### A1.1 What cohort 1 accrued, and what is being discarded
+
+Cohort 1 opened at the first VPS `alphalens thematic map-themes` run on
+`mapper-freeze-v3` + `channel-assess-v1`, **2026-08-19 22:46 UTC**, and accrued exactly one
+run before this amendment:
+
+| Quantity | Cohort 1, total |
+|---|---|
+| Themes with a resolved catalyst | 10 |
+| Stage-A proposals | 102 |
+| In the 500M-10B bracket | 13 |
+| Assessed (stage B answered) | 13 |
+| `verified` / `partial` / `unverified` | 1 / 8 / 4 |
+| `channel_assessment_outcome != "success"` | 0 |
+| Brief rows shipped | 12 |
+| **Matured `market_excess_return` outcomes** | **0** |
+
+The ladder endpoint is ~42 sessions away, so **no row of cohort 1 has an outcome, and no leg
+of the primary has a single cell.** What is discarded by restarting is 13 label rows and one
+day of descriptive volume — not one unit of the accrual the floor in §6.2 counts. The
+instrument was never brought into contact with an outcome, so the slot registered in §4.3 is
+**not consumed** by cohort 1 and is carried into cohort 2 unspent (§4.3 returns the slot only
+when a cohort ends "with no label→outcome contact ever having occurred", which is exactly
+this case).
+
+Cohort 1 rows are **never pooled** with cohort 2, exactly as §2 forbids pooling
+`mapper-freeze-v2` rows with cohort 1. They remain readable on disk under their own tokens.
+
+### A1.2 What changes, and why it moves the tokens
+
+Two changes to the stage-B instrument, both in one increment:
+
+1. **The status vocabulary is renamed to a causal-support taxonomy.** `verified` /
+   `partial` / `unverified` become **`established` / `suggestive` / `not_established`**,
+   order-preserving and 1:1, ordinal codes 0/1/2 unchanged. The reason is that `verified`
+   overclaims: the verdict comes from a second LLM call over the same rendered event text,
+   not from independent verification. The three levels also gain written operational
+   definitions, and the prompt gains one fixed sentence stating that causal support is a
+   statement about evidence and **not** a forecast of the share price.
+2. **A second, orthogonal column is added: `channel_grounding_status`** in
+   `grounded` / `theme_misroute` / `candidate_misfit` (model-emitted), plus the Python-only
+   `unknown` (asked, no valid draw) and `not_assessed` (never asked). It separates two
+   conditions that today both render as `unverified`: honest uncertainty ("the event is
+   about the theme, this company is plausibly in scope, no company-specific mechanism was
+   established") from a pipeline defect ("this company was attached to a story it has
+   nothing to do with"). It is **not** a fourth support level and is never folded into the
+   support column.
+
+Both move `prompt_sha` and `schema_sha` inside `channel_config_version`, whose payload tag
+also moves `channel-assess-v1` → **`channel-assess-v2`**. `channel_config_version` rides
+inside `mapper_config_version` under key `"channel"`, so `mapper_config_version` moves too;
+`_MAPPER_FREEZE_SCHEMA` is additionally bumped `mapper-freeze-v3` → **`mapper-freeze-v4`**
+purely as a legible cohort marker, so that a future reader filtering on the human-readable
+tag alone cannot silently pool the discarded 2026-08-19 day with cohort 2. Stage A's prompt,
+schema, sampling constants and mcap range are **unchanged** in this increment.
+
+`SHADOW_STRICT_RULE_VERSION` moves `shadow-strict-any-verified-v1` →
+`shadow-strict-any-established-v1`. It stays a poolability key and **not** a freeze input, as
+§3 already records; it moves only because it names a vocabulary that no longer exists.
+
+Per §3, this ends the accrual window and starts a new cohort.
+
+### A1.3 Why now rather than later
+
+One day of data is the cheapest possible reset this programme will ever be offered. The same
+two changes made in a week cost a week of accrual; in a month, a month — and §6.3 already
+puts the floor between roughly four and nine months away, so a later reset would push the
+read past the 2027-09-30 sunset in the slower accrual scenarios. The defects are known now,
+the instrument has zero outcomes attached now, and the correction is cheap now. Deferring
+would also mean knowingly accruing a cohort under a vocabulary the programme has already
+decided is indefensible, which is worse than losing the day.
+
+**Corollary, pre-committed here: a third restart is not acceptable.** Every vocabulary,
+prompt and schema change this programme already knows it wants — including whatever the
+argumentation / thesis layer needs to read from the assessor — lands in this one increment.
+A further mid-window instrument change before the floor is met is an amendment that must
+argue why it could not have landed here.
+
+### A1.4 Cohort 2 boundary
+
+**Cohort 2 opens at the first VPS `alphalens thematic map-themes` run on the image carrying
+`mapper-freeze-v4` + `channel-assess-v2` — deploy time, not merge time.**
+
+Membership is identified in the data, not by hand: a row belongs to cohort 2 iff its
+`mapper_config_version` payload carries `"schema": "mapper-freeze-v4"` **and** a `"channel"`
+key equal to the deployed `channel_config_version` (whose payload carries
+`"schema": "channel-assess-v2"`).
+
+**Amendment 2 is owed on deploy day**, before any post-boundary row matures, recording the
+exact `mapper_config_version` and `channel_config_version` token strings and the first
+cohort-2 `asof`. It replaces deliverable §10.2, which cohort 1 never reached.
+
+Boundary history, kept rather than rewritten:
+
+| Cohort | Opened | Tokens | Closed | Accrued |
+|---|---|---|---|---|
+| 1 | 2026-08-19 22:46 UTC | `mapper-freeze-v3` + `channel-assess-v1` | 2026-08-20, by this amendment | 13 assessed candidates, 12 briefs, 0 matured outcomes |
+| 2 | first run on the new image (Amendment 2) | `mapper-freeze-v4` + `channel-assess-v2` | — | — |
+
+### A1.5 Frozen instrument identity, restated (supersedes the §3 table)
+
+| Token | Pins |
+|---|---|
+| `mapper_config_version` (`mapper-freeze-v4`) | stage-A proposal prompt, response schema, sampling constants, mcap range, and (nested, key `"channel"`) the stage-B token |
+| `channel_config_version` (`channel-assess-v2`) | stage-B prompt sha, response-schema sha, temperature 0.0, max output tokens, `votes = 3`, the **support** and **grounding** vocabularies, the channel-type vocabulary, render caps |
+| `shadow_strict_rule_version` (`shadow-strict-any-established-v1`) | the theme-level shadow rule only; still **not** a freeze input |
+
+Aggregation per candidate, k = 3 draws at temperature 0.0 under the pinned OpenRouter
+provider:
+
+* **Support level** — ordinal median over `not_established=0 / suggestive=1 / established=2`
+  (the codes are unchanged, so the §3 arithmetic and the even-vote rule survive verbatim).
+  `channel_support_dispersion = max − min` over valid draws (renamed from
+  `channel_vote_dispersion`; there are now two aggregated answers and the bare word
+  "dispersion" would be ambiguous).
+* **Even vote sets** — unchanged and still pre-committed: when the two central ordinals
+  disagree the result is the middle value, now named **`suggestive`**, which is excluded from
+  both legs. Pinned by
+  `tests/thematic/mapping/test_channel_assessor.py::TestEvenVoteTieBreak`.
+* **Grounding status** — categorical, so no median. **Plurality over the valid draws, with
+  tie precedence `grounded` > `theme_misroute` > `candidate_misfit`**, pre-committed here.
+  A split vote therefore never manufactures a defect, and when every draw claims a defect but
+  they disagree, the candidate-independent value wins because an operator can verify it once
+  per theme instead of once per row. `channel_grounding_agree_n` (valid draws equal to the
+  aggregate) is the per-row noise readout, the categorical counterpart of
+  `channel_support_dispersion`.
+* **Draw validity is all-or-nothing.** An off-vocabulary grounding value invalidates that
+  draw, exactly as an off-vocabulary support value does; it is never coerced. A valid draw
+  therefore always carries both answers, so `grounding_unknown` equals `assess_failed` by
+  construction, and that identity is pinned by a test.
+* **Zero valid draws** → `channel_support_status = "not_established"` (the least-claiming
+  answer, unchanged convention) + `channel_grounding_status = "unknown"` + the failing
+  `channel_assessment_outcome`, and the row is excluded from both legs, as §3 already
+  pre-commits.
+
+**No cross-normalisation between the two columns.** A `theme_misroute` row is **not** forced
+to `not_established`: the (`established` × `theme_misroute`) cell is the fabrication readout
+— a fluent chain built on an event that is not about the theme — and it is the single most
+informative cell for the later stratified audit. Both answers are recorded as given; the
+exclusion happens in the analysis by the pre-committed rule in A1.6, not by overwriting a
+field.
+
+### A1.6 Primary hypothesis, restated in the new taxonomy (supersedes §4 and §4.1)
+
+**H1 (TWO-SIDED, unchanged in substance):** among post-boundary candidates with a matured
+outcome **and `channel_grounding_status == "grounded"`**, the mean `market_excess_return` of
+`channel_support_status == "established"` candidates differs from that of
+`channel_support_status == "not_established"` candidates. α = 0.05, two-sided, single look.
+Two-sided for the reason already given in §4 and not revisited.
+
+* **Leg E** (was leg V): `channel_support_status == "established"`.
+* **Leg N** (was leg U): `channel_support_status == "not_established"`.
+* **`suggestive` is EXCLUDED from the primary** and reported descriptively; the pre-specified
+  sensitivity pooling it into leg E is carried over unchanged and still consumes no slot.
+* **`not_assessed` rows** (off-bracket, or over the per-theme assessment cap) never enter
+  either leg — they have no outcome by construction, and both columns read `not_assessed` on
+  such a row.
+* **Instrument-failure rows** (`channel_assessment_outcome != "success"`) are excluded from
+  both legs and counted in the attrition table, unchanged.
+
+**NEW pre-committed exclusion — grounding-failed rows.** Rows with
+`channel_grounding_status != "grounded"` are **excluded from both legs** and counted in the
+attrition table on the same footing as instrument failures. The reason is definitional, not
+statistical: a row whose event is not about the theme, or whose company has no relationship
+to the event's subject matter, is not a measurement of that theme's transmission channel at
+all. Grounding is a **validity condition on the measurement**, not a level of the thing being
+measured, and it is therefore reported separately and never contrasted against the support
+levels as if it were one of them.
+
+The attrition table gains four counted rows, reported with the leg counts and never merged
+into them:
+
+| Attrition reason | Reported as |
+|---|---|
+| `channel_grounding_status == "theme_misroute"` | `n_excluded_theme_misroute` |
+| `channel_grounding_status == "candidate_misfit"` | `n_excluded_candidate_misfit` |
+| `channel_grounding_status == "unknown"` | `n_excluded_grounding_unknown` (equals the instrument-failure count by construction; reported anyway so the identity is visible) |
+| `channel_support_status == "suggestive"` (grounded) | `n_excluded_suggestive`, unchanged |
+
+**Third pre-specified sensitivity (no slot, cannot replace the verdict):** the identical
+estimator re-run with the grounding exclusion lifted, i.e. over all matured rows regardless
+of `channel_grounding_status`. It exists so the cost of the exclusion is visible rather than
+assumed, and it is pre-committed here, before any cohort-2 row exists. Like the other two
+sensitivities it may qualify the reading and may never replace the verdict.
+
+**Unit of inference, outcome, winsorization, estimator, machinery and the two-stage commit
+protocol are unchanged** (§4.1 last paragraph, §4.2). The grounding exclusion is applied
+**before** cells are formed, so a pair-cell mean never mixes grounded and non-grounded rows.
+
+**Ledger entry.** The registered id `channel_status_forward_verified_minus_unverified_2026_08_19`
+is **not renamed** — a registered identifier is immutable, and renaming it would look like a
+second registration. Its wording refers to the superseded vocabulary; the mapping is 1:1
+(`verified` → `established`, `unverified` → `not_established`) and is recorded here. Looks
+budgeted remains **1**, still unspent (A1.1).
+
+### A1.7 Descriptives, restated (supersedes the affected items of §5)
+
+Unchanged in intent; renamed and extended:
+
+* **§5.2 `channel_type` breakdown** — unchanged.
+* **§5.3 crowd-out, both levels** — unchanged.
+* **§5.4 volume per day** — the `channel_status` mix becomes the **`channel_support_status`
+  mix**, and a **`channel_grounding_status` mix** is reported beside it.
+* **§5.5 instrument stability** — `channel_vote_dispersion` is renamed
+  **`channel_support_dispersion`**; **`channel_grounding_agree_n`** joins the same
+  descriptive. A support-dispersion distribution concentrated at 2 remains a HALT condition
+  (A1.8). A grounding-agreement distribution concentrated at 1-of-3 means the grounding
+  question is not being answered stably and invalidates any theme-level reading of it.
+* **§5.6 shadow descriptives** — `shadow_strict_verified_n` becomes
+  `shadow_strict_established_n`; the shadow rule's meaning is unchanged ("keep iff at least
+  one ANSWERED candidate reached the top level"). **Grounding is deliberately NOT folded into
+  the shadow**: the shadow replays the OLD gate, which had no grounding concept, and coupling
+  them would change the estimand being shadowed. The per-theme grounding counts
+  (`n_grounded`, `n_theme_misroute`, `n_candidate_misfit`, `n_grounding_unknown`) are stamped
+  beside it in the theme-decisions sidecar so any offline re-cut is possible without new LLM
+  calls.
+* **§5.7 status-mix audit** — extended into a **stratified** manual read of ~30 rows in the
+  first two weeks, stratified across grounded and non-grounded rows, checking
+  `channel_evidence` and `channel_grounding_quote` against the source event. Qualitative, no
+  rate claimed. This read is **not** the audit that A1.9 requires before any gating.
+* **NEW descriptive — the 3×3 cross-tab** of `channel_support_status` ×
+  `channel_grounding_status`, reported every time either column is reported. The cells that
+  carry the diagnostic: (`grounded` × `not_established`) is the honest-uncertainty population
+  this whole design exists to keep; (`grounded` × `established`) is the working case;
+  (`theme_misroute` × anything) is an upstream pipeline defect; (`candidate_misfit` ×
+  `not_established`) is a stage-A defect; (`established` × `theme_misroute`) is the
+  fabrication readout.
+
+**Reporting rule, pre-committed:** because the plurality tie-break resolves toward
+`grounded`, the measured `theme_misroute` rate is a **lower bound** on the pipeline defect
+rate and must always be reported next to the `channel_grounding_agree_n` distribution, never
+as a point estimate.
+
+### A1.8 Integrity conditions and HALT, restated over the new names (supersedes §7)
+
+The experiment is void, and the slot returned, if any of these is found before the look:
+
+1. **`channel_*` reached selection.** Unchanged. The new columns keep the `channel_` prefix
+   precisely so the existing structural anti-rot test covers them. **One consumer is
+   explicitly permitted and is not a breach: the argumentation prompt builder may READ the
+   channel columns to write the brief prose.** Prose is not selection — it changes no row's
+   presence, rank or score. `_BRIEF_SORT_KEYS`, `compose_weighted_score` and `selection_score`
+   remain forbidden.
+2. **Assessment changed row counts.** Unchanged and now doubly binding: the never-shrink
+   invariant (`len(rows_out) == len(rows_in)` for every assessment outcome, including a total
+   assessor outage) must hold **including for every value of `channel_grounding_status`**. A
+   `theme_misroute` row that fails to ship is a breach.
+3. **Instrument collapse.** `channel_support_dispersion == 2` on a large share of rows, or a
+   support mix with almost no `not_established`, remains a HALT. **Added:** a grounding mix
+   with essentially no `theme_misroute` on days when a round-up-shaped catalyst is visible in
+   the funnel is a prompt defect of the same kind — the comfortable-middle failure pointing
+   the other way — and fixing it ends the cohort and restarts accrual, as any prompt fix does.
+   It is a prompt defect, not a finding.
+4. **Provider drift.** Unchanged.
+5. **Peeking.** Unchanged. The grounding mix, the 3×3 cross-tab, the agreement distribution
+   and the crowd-out readouts are all readable during accrual precisely because none of them
+   touches `market_excess_return` by leg.
+
+### A1.9 The grounding detector does not gate anything
+
+Pre-committed, and binding on this experiment and on the pipeline:
+
+**DETECT, STAMP, KEEP, MEASURE.** `channel_grounding_status` never removes a candidate, never
+enters a filter, a sort key, a score, the verify loop or the assessment cap. `assess_candidates`
+keeps its one-result-per-input contract. A row detected as `theme_misroute` or
+`candidate_misfit` ships exactly as it would have shipped, in the same position, with the
+status recorded, counted in the per-theme log line and the sidecar, and exported as a
+Prometheus gauge on every run including zero.
+
+The reason is the record above this line: §1 of this memo exists because a gate that deleted
+candidates on an LLM judgement was measured and found inverted. Turning a fresh LLM judgement
+into a fresh deletion gate on day one would repeat that error with a new vocabulary.
+
+**Any future gating on `channel_grounding_status` requires, in this order:** (a) an
+independent stratified audit of detector accuracy against operator-labelled ground truth,
+with its own design memo; (b) a separate pre-registration with its own slot, drawn against
+the same program-lifetime hypothesis budget; (c) a deploy that ends whatever cohort is then
+accruing. No part of that is authorised by this amendment.
+
+### A1.10 Accrual consequence of the new exclusion
+
+The floor in §6.2 (≥ 69 matured pair-cells per leg, recomputed upward if the realised sd
+exceeds 0.149) is **unchanged in value and now counts grounded cells only**. Because
+non-grounded rows are excluded before cells are formed, the effective accrual rate is the
+§6.3 rate multiplied by the grounded share, which is unknown today and measurable within the
+first month of cohort 2 (A1.7). The §6.3 calendar estimate is therefore **optimistic by
+exactly that factor** and is refreshed as a descriptive note once the grounded share is
+observed — without moving the floor, and without touching the **2027-09-30 sunset**, which
+stands.
+
+### A1.11 Deliverables added by this amendment
+
+1. This amendment, committed before the implementation lands and before it deploys.
+2. **Amendment 2 on deploy day** — exact `mapper_config_version`, `channel_config_version`,
+   first cohort-2 `asof`.
+3. The results memo (§10.4) additionally reports: the 3×3 cross-tab, the four new attrition
+   rows, the `channel_grounding_agree_n` distribution, and the third sensitivity (grounding
+   exclusion lifted).
