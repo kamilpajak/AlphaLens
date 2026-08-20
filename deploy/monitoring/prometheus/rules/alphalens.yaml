@@ -514,12 +514,13 @@ groups:
           unit: thematic-build
         annotations:
           summary: "{{ $value }} thematic briefs are brief_status=unavailable (>1/3 of the day)"
-          description: "A sustained large fraction of today's briefs shipped without text (terminal generation failure). Possible LLM model retirement / quota exhaustion surviving the retry ladder. Check the daily thematic-build logs."
+          description: "A sustained large fraction of today's briefs shipped without text. TWO causes now feed this counter: a terminal generation failure (LLM model retirement / quota exhaustion surviving the retry ladder), and a support-guard withhold (the prose asserted a benefit the evidence record does not carry, so the pipeline suppressed text it had already generated). Split them with alphalens_thematic_brief_support_guard_withheld_total before treating this as an LLM outage. Check the daily thematic-build logs."
 
       # Stage-B channel assessor outage. The whole reason
-      # ``channel_assess_failed`` is split from ``channel_unverified`` is that
-      # an OUTAGE and a quiet news day must not look alike: a failed assessment
-      # carries status "unverified" by construction, and a sustained OpenRouter
+      # ``channel_assess_failed`` is split from ``channel_not_established`` is
+      # that an OUTAGE and a quiet news day must not look alike: a failed
+      # assessment carries the bottom support level by construction, and a
+      # sustained OpenRouter
       # 429 window would otherwise produce a plausible-looking all-refuse day
       # that nothing pages on — and those rows then enter a pre-registered
       # forward accrual (docs/research/channel_feature_forward_prereg_2026_08_19.md).
@@ -535,16 +536,16 @@ groups:
           alphalens_thematic_channel_assess_failed_total
           >
           0.33 * (
-            alphalens_thematic_channel_verified_total
-            + alphalens_thematic_channel_partial_total
-            + alphalens_thematic_channel_unverified_total
+            alphalens_thematic_channel_established_total
+            + alphalens_thematic_channel_suggestive_total
+            + alphalens_thematic_channel_not_established_total
             + alphalens_thematic_channel_assess_failed_total
           )
           and
           (
-            alphalens_thematic_channel_verified_total
-            + alphalens_thematic_channel_partial_total
-            + alphalens_thematic_channel_unverified_total
+            alphalens_thematic_channel_established_total
+            + alphalens_thematic_channel_suggestive_total
+            + alphalens_thematic_channel_not_established_total
             + alphalens_thematic_channel_assess_failed_total
           ) >= 5
         for: 6h
@@ -561,7 +562,7 @@ groups:
       # emit path broke or the exporter stopped — not a quiet day. Only the
       # denominator's first term is checked; the six are emitted together.
       - alert: AlphalensThematicChannelGaugesMissing
-        expr: absent(alphalens_thematic_channel_verified_total)
+        expr: absent(alphalens_thematic_channel_established_total)
         for: 12h
         labels:
           severity: warning
