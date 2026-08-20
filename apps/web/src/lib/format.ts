@@ -294,19 +294,49 @@ export function catalystLabel(eventType: string | null | undefined): string | nu
 }
 
 /**
+ * The `brief_error_kind` the pipeline uses when it WITHHELD prose it had
+ * already generated, rather than failing to generate any.
+ */
+const WITHHELD_KIND = 'unsupported_benefit_claim';
+
+/**
+ * True when the row's prose was withheld by the support guard.
+ *
+ * The withhold reuses the graceful-degradation path (`brief_status:
+ * "unavailable"`), so this kind is the only thing separating "the model failed"
+ * from "the model succeeded and the pipeline suppressed the text". The card
+ * needs the distinction twice: for the label, and to suppress the stage-A
+ * `rationale` fallback. Falling back to `rationale` here would promote prose
+ * the guard never scanned into the slot the guarded sentence just vacated —
+ * and on a misrouted row the rationale IS the manufactured theme link.
+ */
+export function proseWithheld(errorKind: string | null | undefined): boolean {
+	return errorKind === WITHHELD_KIND;
+}
+
+/**
  * The honest "brief unavailable" label for the catalyst.event blockquote
  * (#921). Returns the tone-neutral label ONLY when `brief_status` is
- * `"unavailable"`, appending the terminal `brief_error_kind` in parentheses
- * when present (e.g. "(truncated)"). For `"ok"` and for null/undefined
- * (legacy pre-feature rows) it returns null so the card renders byte-identical
- * to the pre-#921 behaviour. Deliberately verdict-free wording — the status is
- * a pipeline fact, not a signal.
+ * `"unavailable"`. For `"ok"` and for null/undefined (legacy pre-feature rows)
+ * it returns null so the card renders byte-identical to the pre-#921
+ * behaviour. Deliberately verdict-free wording — the status is a pipeline
+ * fact, not a signal.
+ *
+ * Two shapes, because two different things happen:
+ * - the LLM never produced a usable brief: "generation failed", with the
+ *   terminal `brief_error_kind` in parentheses (e.g. "(truncated)");
+ * - the support guard withheld a brief that WAS produced: saying "generation
+ *   failed" there is factually wrong, and it would be wrong on exactly the
+ *   honest-uncertainty rows this display exists to keep visible.
  */
 export function briefUnavailableLabel(
 	status: string | null | undefined,
 	errorKind: string | null | undefined
 ): string | null {
 	if (status !== 'unavailable') return null;
+	if (proseWithheld(errorKind)) {
+		return 'brief withheld — the wording asserted support the evidence record does not carry';
+	}
 	const base = 'brief unavailable — generation failed';
 	return errorKind ? `${base} (${errorKind})` : base;
 }
