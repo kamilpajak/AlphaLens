@@ -131,6 +131,15 @@ class TheGuardFiresOnAnUnsupportedBenefitClaim(unittest.TestCase):
                 )
                 self.assertEqual([v.field for v in violations if v.suppressed_by is None], [field])
 
+    def test_a_blank_or_non_string_field_is_skipped(self):
+        violations = support_guard.check_support_language(
+            {**_brief(), "bear_summary": "   ", "catalyst_failure_exit": None},
+            causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+            grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
+        )
+        self.assertEqual(violations, [])
+
     def test_two_benefit_claims_in_one_field_collapse_to_one_violation(self):
         violations = support_guard.check_support_language(
             _brief(tldr="QUBT benefits from the theme and also gains share."),
@@ -310,6 +319,29 @@ class ASuppressorMustGovernThePhraseNotTheSentence(unittest.TestCase):
 
     def test_a_same_segment_negation_still_suppresses(self):
         self.assertEqual(self._fired("The event does not show that QUBT benefits."), 0)
+
+    def test_a_quoted_headline_naming_the_candidate_still_suppresses(self):
+        """The quotation suppressor must stay reachable past the subject rule.
+
+        The pre-existing quotation case used a headline about "quantum firms",
+        which the subject rule now suppresses first — so without a case whose
+        quoted text NAMES the candidate, the quotation arm would be shadowed
+        and could rot to inert unnoticed.
+        """
+        text = 'The headline reads "QUBT benefits from the AI build-out".'
+        self.assertEqual(self._fired(text), 0)
+        violations = support_guard.check_support_language(
+            _brief(tldr=text),
+            causal_support=channel_assessor.SUPPORT_NOT_ESTABLISHED,
+            grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="QUBT",
+        )
+        self.assertEqual(violations[0].suppressed_by, support_guard.SUPPRESSED_BY_QUOTED)
+
+    def test_a_field_with_no_trailing_punctuation_is_still_scanned(self):
+        # The clause scan has to terminate at end-of-text, not only at a
+        # boundary character; the model does drop the final full stop.
+        self.assertEqual(self._fired("QUBT benefits from the theme"), 1)
 
 
 class TheSubjectOfTheBenefitMustBeThisCompany(unittest.TestCase):
