@@ -437,12 +437,18 @@ def _suppressor(
     Ordered most-fundamental first: a sentence that is not about this company at
     all cannot assert that this company benefits, whatever its mood.
 
-    Known residual, in the SAFE direction for a detector that may not gate: a
-    segment naming both a rival and the candidate ("larger rivals benefit more
-    than XYZ") still fires. Tightening that needs real parsing, and a false
-    NEGATIVE only under-counts a telemetry gauge, whereas a false POSITIVE
-    withholds honest prose from precisely the honest-uncertainty rows this
-    increment exists to keep visible.
+    Known residual, and it is a FALSE POSITIVE — the direction this file
+    otherwise treats as the worse one: a segment naming both a rival and the
+    candidate ("larger rivals benefit more than XYZ") still fires, as does a
+    company whose name carries a generic token ("entertainment") that a sentence
+    about a competitor may reuse. Both withhold prose that should ship.
+
+    It is accepted rather than fixed because separating the two subjects needs
+    real parsing, and the failure is bounded and visible: a withheld brief is
+    stamped, counted and re-generated once, so it shows up in the guard
+    telemetry rather than silently altering a card. That is only tolerable while
+    the guard cannot gate selection; if it ever does, this residual must be
+    fixed first.
     """
     if not _names_the_candidate(_segment_around(text_lower, start, end), terms):
         return SUPPRESSED_BY_NO_SUBJECT
