@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import datetime as dt
 import unittest
+from collections.abc import Mapping
+from typing import Any
 from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
@@ -126,7 +128,7 @@ class TestFactoryForwardsSessionWindow(unittest.TestCase):
     ``get_shared_price_stream`` alongside metrics_job — it only takes effect
     on the call that actually constructs the singleton."""
 
-    def _factory_call_kwargs(self, env: dict[str, str]) -> dict:
+    def _factory_call_kwargs(self, env: dict[str, str]) -> Mapping[str, Any]:
         with mock.patch.dict("os.environ", env, clear=True):
             with mock.patch(
                 "alphalens_pipeline.data.alt_data.saxo_price_stream.get_shared_price_stream",

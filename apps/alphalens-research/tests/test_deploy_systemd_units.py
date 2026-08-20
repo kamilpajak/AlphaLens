@@ -1714,7 +1714,7 @@ class TestPriceStreamStaleSessionGateGuard(unittest.TestCase):
         for rule in stale_rules:
             expr = rule["expr"]
             job_match = re.search(r'job="(live-price-stream-[a-z]+)"', expr)
-            self.assertIsNotNone(job_match, f"Stale expr missing its job filter: {expr!r}")
+            assert job_match is not None, f"Stale expr missing its job filter: {expr!r}"
             job = job_match.group(1)
             with self.subTest(job=job):
                 self.assertRegex(
