@@ -1733,6 +1733,56 @@ class TestSessionWindowGate(unittest.TestCase):
         self.assertEqual(len(awake_lines), 1, cm.output)
         self.assertEqual(len(h.ws_calls), 1)
 
+    def test_entering_sleep_resets_the_failure_counter(self):
+        """The post-close recv-timeout tail leaves 1-3 counted failures at
+        sleep entry; carried over the night they would resume from that count
+        at wake and could trip the circuit breaker mid-warmup. Entering sleep
+        proves those failures were off-hours artifacts, not connection
+        health — the counter must be zeroed on the awake->asleep edge."""
+        scripted = [True]  # one in-session check (fails), then asleep
+
+        def predicate() -> bool:
+            return scripted.pop(0) if scripted else False
+
+        h = _SupervisedHarness(stream_kwargs={"session_window": predicate}, stop_after_sleeps=3)
+        h._conns.append(_ScriptedConn([ConnectionError("post-close timeout")]))
+        h.stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(len(h.ws_calls), 1, "the single in-session poll must have connected")
+        self.assertEqual(
+            h.stream._consecutive_failures,
+            0,
+            "the awake->asleep transition must zero the carried failure count",
+        )
+
+    def test_sleep_transitions_emit_the_session_asleep_gauge(self):
+        """Prometheus must be able to tell INTENTIONAL overnight sleep from
+        the dark-but-connected failure AlphalensLivePriceStreamStale pages
+        on: each sleep/wake edge force-emits the gauges with
+        ``session_asleep`` flipped (1 exactly once per sleep edge — the idle
+        polls themselves stay emit-free, mirroring the zero-uics branch),
+        and every emit carries the key so the series never goes absent."""
+        scripted = [False, False]  # two asleep polls, then in-session
+
+        def predicate() -> bool:
+            return scripted.pop(0) if scripted else True
+
+        h = _SupervisedHarness(stream_kwargs={"session_window": predicate})
+        stream = h.stream
+        conn = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn)
+        stream.ensure_subscribed({5})
+        emitted: list[dict] = []
+        with mock.patch(
+            "alphalens_pipeline.observability.textfile.emit_domain_metrics",
+            side_effect=lambda job, metrics: emitted.append(dict(metrics)),
+        ):
+            h.run()
+        values = [TestStreamGauges._value(m, "session_asleep") for m in emitted]
+        self.assertEqual(values[0], 0, "the startup emit must report awake")
+        self.assertEqual(values.count(1), 1, f"one asleep emit per sleep edge, got {values}")
+        self.assertEqual(values[-1], 0, "the final reader-down emit must report awake")
+
 
 if __name__ == "__main__":
     unittest.main()

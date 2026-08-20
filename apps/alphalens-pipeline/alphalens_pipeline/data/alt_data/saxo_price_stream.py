@@ -774,14 +774,24 @@ class SaxoPriceStream:
         """Session-gate check for one ``_supervise`` iteration, logging one
         INFO per TRANSITION (awake->asleep / asleep->awake) — never one per
         idle poll (the gate exists to kill the nightly log spam, not to
-        replace it)."""
+        replace it). Each edge also force-emits the stream gauges so
+        Prometheus promptly sees ``session_asleep`` flip — the sleep polls
+        themselves stay emit-free, mirroring the zero-uics idle branch."""
         in_session = self._session_window_in_session()
         if not in_session and not self._session_asleep:
             self._session_asleep = True
+            # Entering sleep proves any recently counted failures were
+            # off-hours artifacts (the post-close recv-timeout tail), not
+            # connection health — carried over the night they would resume
+            # from that count at wake and could trip the circuit breaker
+            # mid-warmup before the open.
+            self._consecutive_failures = 0
             logger.info("saxo price stream: outside the trading window - sleeping (no connection)")
+            self._emit_stream_gauge(reader_up=True, force=True)
         elif in_session and self._session_asleep:
             self._session_asleep = False
             logger.info("saxo price stream: trading window open - resuming connections")
+            self._emit_stream_gauge(reader_up=True, force=True)
         return in_session
 
     async def _run_one_connection(self) -> None:
@@ -834,6 +844,12 @@ class SaxoPriceStream:
                     f"alphalens_live_price_stream_subscribed_uics{label}": len(
                         self._desired_uics()
                     ),
+                    # Intentional session-gate sleep freezes last_frame at
+                    # ~close with reader_up=1 — the exact dark-but-connected
+                    # signature AlphalensLivePriceStreamStale pages on. This
+                    # gauge lets the Stale rules drop the asleep state
+                    # (`unless ... == 1`) instead of firing all night.
+                    f"alphalens_live_price_stream_session_asleep{label}": int(self._session_asleep),
                 },
             )
         except OSError:

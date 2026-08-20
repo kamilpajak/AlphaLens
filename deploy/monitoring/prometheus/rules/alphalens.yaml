@@ -897,10 +897,23 @@ groups:
       - alert: AlphalensLivePriceStreamStale
         # No frame for 5m while subscribed and the reader claims to be up:
         # the dark-but-connected case observability exists to catch.
+        #
+        # The session gate (ALPHALENS_SAXO_STREAM_SESSION_GATE) intentionally
+        # holds no WebSocket overnight, freezing last_frame at ~close with
+        # reader_up=1 and subscribed_uics>0 — the exact signature above. The
+        # stream flips session_asleep on each sleep/wake edge; drop that
+        # state via `unless == 1`. `unless` (NOT `and == 0`) so an ABSENT
+        # gauge (older stream code / gate never wired; live rules are
+        # hand-synced and may lead the daemon) leaves the alert exactly as
+        # before. Residual: a predicate wrongly returning False DURING a
+        # session silences the stream and this alert together — that mode is
+        # pinned by the window-math unit tests, and a RAISING predicate
+        # fails open stream-side (treated as in-session).
         expr: >-
           (time() - alphalens_live_price_stream_last_frame_timestamp_seconds{job="live-price-stream-sim"}) > 300
           and alphalens_live_price_stream_subscribed_uics{job="live-price-stream-sim"} > 0
           and alphalens_live_price_stream_reader_up{job="live-price-stream-sim"} == 1
+          unless alphalens_live_price_stream_session_asleep{job="live-price-stream-sim"} == 1
         for: 5m
         labels:
           severity: warning
@@ -992,10 +1005,14 @@ groups:
       - alert: AlphalensLivePriceStreamStale
         # No frame for 5m while subscribed and the reader claims to be up:
         # the dark-but-connected case observability exists to catch.
+        # `unless session_asleep == 1` drops the session gate's intentional
+        # overnight sleep — see the SIM twin above for the full rationale
+        # (absent-gauge fail-open, wrong-False residual).
         expr: >-
           (time() - alphalens_live_price_stream_last_frame_timestamp_seconds{job="live-price-stream-live"}) > 300
           and alphalens_live_price_stream_subscribed_uics{job="live-price-stream-live"} > 0
           and alphalens_live_price_stream_reader_up{job="live-price-stream-live"} == 1
+          unless alphalens_live_price_stream_session_asleep{job="live-price-stream-live"} == 1
         for: 5m
         labels:
           severity: warning
