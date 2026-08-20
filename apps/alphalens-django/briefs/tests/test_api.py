@@ -753,3 +753,90 @@ class TestBriefStatusOnAPI:
         assert "brief_error_kind" in CandidateSerializer().fields
         assert "brief_status" in CandidateDetailSerializer().fields
         assert "brief_error_kind" in CandidateDetailSerializer().fields
+
+
+@pytest.mark.django_db
+class TestChannelRecordOnAPI:
+    """#1069: the causal-support record must ride every candidate-bearing payload.
+
+    Serializers use Meta.exclude=("pk",) so the fields are auto-exposed; these
+    tests are the regression guard against a future exclude-tuple change
+    silently dropping the record back off the wire — which is the exact failure
+    this issue exists to correct, since a dropped record leaves the card showing
+    a thesis with nothing to weigh it against.
+    """
+
+    _RECORD_FIELDS = (
+        "brief_causal_support",
+        "brief_channel_grounding",
+        "brief_support_guard_status",
+        "channel_type",
+        "channel_text",
+        "channel_evidence",
+        "channel_falsifier",
+        "channel_grounding_quote",
+        "channel_grounding_reason",
+    )
+
+    @staticmethod
+    def _fixture(tmp_path: Path) -> None:
+        _write_parquet(
+            tmp_path,
+            "2026-08-19",
+            [
+                {
+                    "ticker": "ABUS",
+                    "theme": "mrna-platform",
+                    "layer4_weighted_score": 12,
+                    "brief_causal_support": "suggestive",
+                    "brief_channel_grounding": "grounded",
+                    "brief_support_guard_status": "not_applicable",
+                    "channel_type": "category_attention",
+                    "channel_text": "LNP royalty demand rises if the platform is validated.",
+                    "channel_evidence": "First mRNA Cancer Vaccine to Succeed in a Phase 3 Trial.",
+                    "channel_falsifier": "If the LNP patents are not required, the channel fails.",
+                    "channel_grounding_quote": "Moderna and Merck Just Made History",
+                    "channel_grounding_reason": "",
+                },
+            ],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+
+    def test_record_round_trips_on_detail(self, client, tmp_path):
+        self._fixture(tmp_path)
+        body = client.get("/v1/candidates/2026-08-19/ABUS").json()
+        assert body["brief_causal_support"] == "suggestive"
+        assert body["brief_channel_grounding"] == "grounded"
+        assert body["brief_support_guard_status"] == "not_applicable"
+        assert body["channel_type"] == "category_attention"
+        assert body["channel_evidence"].startswith("First mRNA Cancer Vaccine")
+        assert body["channel_falsifier"].startswith("If the LNP patents")
+
+    def test_record_present_on_candidate_list(self, client, tmp_path):
+        self._fixture(tmp_path)
+        body = client.get("/v1/days/2026-08-19/candidates").json()
+        cand = body["data"][0]
+        assert cand["brief_causal_support"] == "suggestive"
+        assert cand["channel_text"].startswith("LNP royalty demand")
+
+    def test_legacy_rows_serialize_null_status_not_empty(self, client, tmp_path):
+        # Pre-#1066 ingested row: the three STATUS fields are NULL on the wire
+        # (the row predates the instrument), never "" and never a real level.
+        _write_parquet(
+            tmp_path,
+            "2026-05-22",
+            [{"ticker": "AAA", "theme": "t", "layer4_weighted_score": 1}],
+        )
+        rebuild_from_parquet(briefs_dir=tmp_path)
+        body = client.get("/v1/candidates/2026-05-22/AAA").json()
+        assert body["brief_causal_support"] is None
+        assert body["brief_channel_grounding"] is None
+        assert body["brief_support_guard_status"] is None
+        assert body["channel_text"] == ""
+
+    def test_record_present_in_both_serializers(self):
+        list_fields = CandidateSerializer().fields
+        detail_fields = CandidateDetailSerializer().fields
+        for name in self._RECORD_FIELDS:
+            assert name in list_fields, f"{name} missing from the bulk-list serializer"
+            assert name in detail_fields, f"{name} missing from the detail serializer"

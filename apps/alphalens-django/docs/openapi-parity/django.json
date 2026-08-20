@@ -1103,6 +1103,40 @@
                         "type": "string",
                         "nullable": true,
                         "maxLength": 32
+                    },
+                    "brief_causal_support": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
+                    },
+                    "brief_channel_grounding": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
+                    },
+                    "brief_support_guard_status": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
+                    },
+                    "channel_type": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "channel_text": {
+                        "type": "string"
+                    },
+                    "channel_evidence": {
+                        "type": "string"
+                    },
+                    "channel_falsifier": {
+                        "type": "string"
+                    },
+                    "channel_grounding_quote": {
+                        "type": "string"
+                    },
+                    "channel_grounding_reason": {
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -1470,6 +1504,40 @@
                         "type": "string",
                         "nullable": true,
                         "maxLength": 32
+                    },
+                    "brief_causal_support": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
+                    },
+                    "brief_channel_grounding": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
+                    },
+                    "brief_support_guard_status": {
+                        "type": "string",
+                        "nullable": true,
+                        "maxLength": 32
+                    },
+                    "channel_type": {
+                        "type": "string",
+                        "maxLength": 32
+                    },
+                    "channel_text": {
+                        "type": "string"
+                    },
+                    "channel_evidence": {
+                        "type": "string"
+                    },
+                    "channel_falsifier": {
+                        "type": "string"
+                    },
+                    "channel_grounding_quote": {
+                        "type": "string"
+                    },
+                    "channel_grounding_reason": {
+                        "type": "string"
                     }
                 },
                 "required": [

@@ -149,6 +149,23 @@ LEGACY_CONTRACT_COLUMNS: tuple[str, ...] = (
     # non-breaking response extension.
     "brief_status",
     "brief_error_kind",
+    # Post-legacy extension (2026-08-20, #1069): the causal-support record the
+    # prose was written against. The two status columns are the ORCHESTRATOR's
+    # normalisation (no_record / unknown on an assessor outage), not the
+    # assessor's raw answers, and they are nullable so pre-#1066 rows stay
+    # tri-state NULL. brief_support_guard_status reports whether the prose guard
+    # was applicable and what it did. The remaining six carry the record's
+    # content. Auto-served via exclude=("pk",); additive, non-breaking. The vote
+    # telemetry + channel_config_version stay parquet-only by design.
+    "brief_causal_support",
+    "brief_channel_grounding",
+    "brief_support_guard_status",
+    "channel_type",
+    "channel_text",
+    "channel_evidence",
+    "channel_falsifier",
+    "channel_grounding_quote",
+    "channel_grounding_reason",
 )
 
 # Columns the legacy contract exposed that Django deliberately does not model.
