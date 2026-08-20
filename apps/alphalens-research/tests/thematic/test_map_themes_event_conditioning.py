@@ -208,6 +208,11 @@ class ChannelAssessmentIsPersistedTests(unittest.TestCase):
         # ``channel_text`` with a real status beside it.
         assessment = channel_assessor.ChannelAssessment(
             support_status="suggestive",
+            grounding_status=channel_assessor.GROUNDING_GROUNDED,
+            grounding_quote="the event states x",
+            grounding_reason="",
+            grounding_agree_n=3,
+            grounding_quote_verbatim=True,
             channel_type="customer_demand",
             text="payout -> legal spend rises -> AAA fees rise",
             evidence="the event states a settlement",

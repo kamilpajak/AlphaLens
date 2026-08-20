@@ -100,6 +100,11 @@ class ProposalFunnelSinkTests(unittest.TestCase):
         # silently over-count the bottom support level.
         answered = channel_assessor.ChannelAssessment(
             support_status="not_established",
+            grounding_status=channel_assessor.GROUNDING_GROUNDED,
+            grounding_quote="the event states x",
+            grounding_reason="",
+            grounding_agree_n=3,
+            grounding_quote_verbatim=True,
             channel_type="none",
             text="",
             evidence="",
@@ -113,6 +118,11 @@ class ProposalFunnelSinkTests(unittest.TestCase):
         )
         died = channel_assessor.ChannelAssessment(
             support_status="not_established",
+            grounding_status=channel_assessor.GROUNDING_GROUNDED,
+            grounding_quote="the event states x",
+            grounding_reason="",
+            grounding_agree_n=3,
+            grounding_quote_verbatim=True,
             channel_type="none",
             text="",
             evidence="",
@@ -344,6 +354,7 @@ class ProposalFunnelParquetTests(unittest.TestCase):
                 "company_name": "Quantum Computing Inc",
                 "llm_confidence": 0.7,
                 "channel_support_status": "established",
+                "channel_grounding_status": "grounded",
                 "channel_type": "category_attention",
                 "channel_confidence": 0.6,
                 "channel_config_version": "channel-assess-v1-stub",
@@ -359,6 +370,7 @@ class ProposalFunnelParquetTests(unittest.TestCase):
                 "company_name": "NVIDIA",
                 "llm_confidence": 0.9,
                 "channel_support_status": "not_assessed",
+                "channel_grounding_status": "not_assessed",
                 "channel_type": "none",
                 "channel_confidence": None,
                 "channel_config_version": "channel-assess-v1-stub",

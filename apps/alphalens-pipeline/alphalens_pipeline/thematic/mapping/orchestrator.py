@@ -419,6 +419,24 @@ _CANDIDATE_SORT_KEYS: tuple[str, ...] = (
 _CANDIDATE_SORT_ASCENDING: tuple[bool, ...] = (True, False, False, True)
 
 
+def _is_misrouted_theme(counts: Mapping[str, int]) -> bool:
+    """True when a theme's ANSWERED majority is ``theme_misroute``.
+
+    Answered only: ``grounding_unknown`` and the never-asked sentinels are out of
+    both numerator and denominator, exactly as instrument failures are out of the
+    shadow denominator. Derived rather than stored, because a stored theme-level
+    grounding VERDICT is the shape most likely to be turned into a gate later.
+    """
+    answered = (
+        counts[channel_assessor.GROUNDING_GROUNDED]
+        + counts[channel_assessor.GROUNDING_THEME_MISROUTE]
+        + counts[channel_assessor.GROUNDING_CANDIDATE_MISFIT]
+    )
+    if not answered:
+        return False
+    return counts[channel_assessor.GROUNDING_THEME_MISROUTE] * 2 > answered
+
+
 def _channel_counts(
     theme_counts: Iterable[dict[str, int]],
     shadows: Iterable[channel_assessor.ShadowVerdict],
@@ -438,6 +456,22 @@ def _channel_counts(
             c[channel_assessor.SUPPORT_NOT_ESTABLISHED] for c in per_theme
         ),
         "channel_assess_failed": sum(c["assess_failed"] for c in per_theme),
+        # Grounding: DETECT, STAMP, KEEP, MEASURE. These counters are the whole
+        # point of the column — nothing in the pipeline reads them, and a future
+        # gate on them needs its own stratified accuracy audit and its own
+        # pre-registration (design memo §6).
+        "channel_grounded": sum(c[channel_assessor.GROUNDING_GROUNDED] for c in per_theme),
+        "channel_theme_misroute": sum(
+            c[channel_assessor.GROUNDING_THEME_MISROUTE] for c in per_theme
+        ),
+        "channel_candidate_misfit": sum(
+            c[channel_assessor.GROUNDING_CANDIDATE_MISFIT] for c in per_theme
+        ),
+        "channel_grounding_unknown": sum(c["grounding_unknown"] for c in per_theme),
+        # Themes whose ANSWERED majority says the event is not about the theme.
+        # A theme-level count because theme_misroute is candidate-INDEPENDENT:
+        # every candidate of a misrouted theme should answer the same way.
+        "themes_misrouted": sum(1 for c in per_theme if _is_misrouted_theme(c)),
         "themes_shadow_kept": sum(1 for v in verdicts if v == channel_assessor.SHADOW_KEEP),
         "themes_shadow_refused": sum(1 for v in verdicts if v == channel_assessor.SHADOW_REFUSE),
     }
@@ -508,6 +542,10 @@ _PROPOSAL_FUNNEL_COLUMNS = (
     "company_name",
     "llm_confidence",
     "channel_support_status",
+    # The grounding VALUE rides the funnel; the quote, reason and agree_n do not.
+    # Off-bracket rows are never assessed, and the in-bracket detail lives in the
+    # candidates parquet.
+    "channel_grounding_status",
     "channel_type",
     "channel_confidence",
     # Without these two, a row whose assessment DIED is byte-identical to a
@@ -537,6 +575,10 @@ _THEME_DECISION_COLUMNS = (
     "n_established",
     "n_suggestive",
     "n_not_established",
+    "n_grounded",
+    "n_theme_misroute",
+    "n_candidate_misfit",
+    "n_grounding_unknown",
     "n_assess_failed",
     "n_over_assess_cap",
     "shadow_strict_verdict",
@@ -584,6 +626,7 @@ def _funnel_row(
         # its rows feed a pre-registered measurement and must not shift.)
         "llm_confidence": cand.get("confidence", 0.0),
         "channel_support_status": fields["channel_support_status"],
+        "channel_grounding_status": fields["channel_grounding_status"],
         "channel_type": fields["channel_type"],
         "channel_confidence": fields["channel_confidence"],
         "channel_assessment_outcome": fields["channel_assessment_outcome"],
@@ -838,6 +881,40 @@ def _assess_channels_for_theme(
         len(over_cap_tail),
         shadow.verdict,
     )
+    # A THIRD line, again deliberately separate: the operator's `grep 'channel —'`
+    # recipe and the tests that pin its exact substrings must both keep working.
+    logger.info(
+        "map_themes %s: theme %r grounding — grounded %d, theme_misroute %d, "
+        "candidate_misfit %d, unknown %d",
+        asof.isoformat(),
+        theme,
+        counts[channel_assessor.GROUNDING_GROUNDED],
+        counts[channel_assessor.GROUNDING_THEME_MISROUTE],
+        counts[channel_assessor.GROUNDING_CANDIDATE_MISFIT],
+        counts["grounding_unknown"],
+    )
+    if _is_misrouted_theme(counts):
+        # A PIPELINE DEFECT page, never a trading signal: the answered majority
+        # says the event this theme ran on is not about the theme. Attributable
+        # upstream — to extraction's theme tagging, or to catalyst_resolver
+        # picking one event out of a multi-event article (EPIC #974 / #976).
+        #
+        # NOTHING IS DROPPED ON IT. The rows ship, in the same order, with the
+        # status recorded; this line exists so the defect is visible in the
+        # journal instead of being inferred from the parquet after the fact.
+        logger.warning(
+            "map_themes %s: theme %r — the answered majority says theme_misroute "
+            "(%d of %d answered): the event is probably not about this theme. "
+            "This is an upstream extraction / catalyst-resolution defect, not a "
+            "signal about the candidates, and no row was dropped for it. Read it "
+            "beside the within-theme agreement before acting on it.",
+            asof.isoformat(),
+            theme,
+            counts[channel_assessor.GROUNDING_THEME_MISROUTE],
+            counts[channel_assessor.GROUNDING_GROUNDED]
+            + counts[channel_assessor.GROUNDING_THEME_MISROUTE]
+            + counts[channel_assessor.GROUNDING_CANDIDATE_MISFIT],
+        )
     if over_cap_tail:
         # The cap starts biting exactly when the crowd-out repair succeeds, so
         # it must be visible in the journal rather than inferred from the
@@ -963,6 +1040,17 @@ class ThemeDecision:
     n_established: int
     n_suggestive: int
     n_not_established: int
+    # Grounding counts sit BESIDE the shadow verdict rather than inside it: the
+    # shadow replays the OLD gate, which had no grounding concept, so folding
+    # them in would change the estimand being shadowed. Stamped here so any
+    # offline re-cut is possible without new LLM calls. No theme-level grounding
+    # VERDICT column and no second rule token — it is fully re-derivable from
+    # these four, and a stored verdict field is the shape most likely to become
+    # a gate.
+    n_grounded: int
+    n_theme_misroute: int
+    n_candidate_misfit: int
+    n_grounding_unknown: int
     n_assess_failed: int
     n_over_assess_cap: int
     shadow_strict_verdict: str
@@ -979,6 +1067,10 @@ class ThemeDecision:
             "n_established": self.n_established,
             "n_suggestive": self.n_suggestive,
             "n_not_established": self.n_not_established,
+            "n_grounded": self.n_grounded,
+            "n_theme_misroute": self.n_theme_misroute,
+            "n_candidate_misfit": self.n_candidate_misfit,
+            "n_grounding_unknown": self.n_grounding_unknown,
             "n_assess_failed": self.n_assess_failed,
             "n_over_assess_cap": self.n_over_assess_cap,
             "shadow_strict_verdict": self.shadow_strict_verdict,
@@ -991,6 +1083,10 @@ _EMPTY_COUNTS = {
     channel_assessor.SUPPORT_SUGGESTIVE: 0,
     channel_assessor.SUPPORT_NOT_ESTABLISHED: 0,
     "assess_failed": 0,
+    channel_assessor.GROUNDING_GROUNDED: 0,
+    channel_assessor.GROUNDING_THEME_MISROUTE: 0,
+    channel_assessor.GROUNDING_CANDIDATE_MISFIT: 0,
+    "grounding_unknown": 0,
 }
 
 
@@ -1013,6 +1109,10 @@ def _decision_for(
         n_established=counts[channel_assessor.SUPPORT_ESTABLISHED],
         n_suggestive=counts[channel_assessor.SUPPORT_SUGGESTIVE],
         n_not_established=counts[channel_assessor.SUPPORT_NOT_ESTABLISHED],
+        n_grounded=counts[channel_assessor.GROUNDING_GROUNDED],
+        n_theme_misroute=counts[channel_assessor.GROUNDING_THEME_MISROUTE],
+        n_candidate_misfit=counts[channel_assessor.GROUNDING_CANDIDATE_MISFIT],
+        n_grounding_unknown=counts["grounding_unknown"],
         n_assess_failed=counts["assess_failed"],
         # The cap starts biting exactly when the crowd-out repair succeeds, so
         # the truncation is recorded per theme rather than inferred later.

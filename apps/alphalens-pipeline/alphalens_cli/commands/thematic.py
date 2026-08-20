@@ -269,6 +269,24 @@ def _map_themes_outcome_metrics(df: pd.DataFrame | None = None) -> dict[str, flo
         "alphalens_thematic_channel_not_established_total": int(
             attrs.get("channel_not_established", 0)
         ),
+        # Grounding — an orthogonal VALIDITY condition on the assessment, not a
+        # trading signal and not a gate. A rising theme_misroute share is a
+        # PIPELINE DEFECT page (upstream extraction / catalyst resolution, EPIC
+        # #974 / #976); nothing in the pipeline reads these, and no row is ever
+        # dropped on them. The measured misroute rate is a LOWER BOUND, because
+        # the plurality tie-break resolves toward `grounded` so a split vote can
+        # never manufacture a defect — read it beside the agree_n distribution.
+        "alphalens_thematic_channel_grounded_total": int(attrs.get("channel_grounded", 0)),
+        "alphalens_thematic_channel_theme_misroute_total": int(
+            attrs.get("channel_theme_misroute", 0)
+        ),
+        "alphalens_thematic_channel_candidate_misfit_total": int(
+            attrs.get("channel_candidate_misfit", 0)
+        ),
+        "alphalens_thematic_channel_grounding_unknown_total": int(
+            attrs.get("channel_grounding_unknown", 0)
+        ),
+        "alphalens_thematic_themes_misrouted_total": int(attrs.get("themes_misrouted", 0)),
         "alphalens_thematic_channel_assess_failed_total": int(
             attrs.get("channel_assess_failed", 0)
         ),

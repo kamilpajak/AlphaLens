@@ -74,9 +74,15 @@ def _payload(
     evidence: str = "the event states the Air Force awarded a trapped-ion contract",
     falsifier: str = "the company's 10-K names no federal customer",
     confidence: float = 0.7,
+    grounding: str = "grounded",
+    quote: str = "Air Force awards a trapped-ion computing contract",
+    reason: str = "",
 ) -> str:
     return json.dumps(
         {
+            "grounding_status": grounding,
+            "grounding_quote": quote,
+            "grounding_reason": reason,
             "channel_support_status": status,
             "channel_type": channel_type,
             "channel_text": text,
@@ -93,6 +99,15 @@ def _response(body: str, finish_reason: str = "STOP") -> SimpleNamespace:
         text=body,
         candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name=finish_reason))],
     )
+
+
+def _collapse(text: str) -> str:
+    """Whitespace-collapsed prompt text.
+
+    Prompt-content pins assert what the model READS, not how the template happens
+    to wrap. Without this a purely cosmetic re-wrap reads as a contract break.
+    """
+    return " ".join(text.split())
 
 
 def _responses(*bodies):
@@ -509,6 +524,331 @@ class TestEvenVoteTieBreak(unittest.TestCase):
         self.assertEqual(result.support_status, "established")
 
 
+class TestGroundingVocabulary(unittest.TestCase):
+    """Grounding is an orthogonal VALIDITY condition, not a fourth support level.
+
+    ``not_established`` conflated two different things before this: honest
+    uncertainty ("the event is about the theme, this company is plausibly in
+    scope, no company-specific mechanism was established") and a PIPELINE DEFECT
+    ("this company was attached to a story it has nothing to do with"). The
+    second is a bug ticket against a named upstream layer and is worth nothing
+    as a measurement; filing it inside an uncertainty category makes both
+    unreadable.
+    """
+
+    def test_the_model_emittable_grounding_values(self):
+        self.assertEqual(
+            channel_assessor.CHANNEL_GROUNDING_STATUSES,
+            ("grounded", "theme_misroute", "candidate_misfit"),
+        )
+        self.assertEqual(channel_assessor.GROUNDING_GROUNDED, "grounded")
+        self.assertEqual(channel_assessor.GROUNDING_THEME_MISROUTE, "theme_misroute")
+        self.assertEqual(channel_assessor.GROUNDING_CANDIDATE_MISFIT, "candidate_misfit")
+
+    def test_unknown_is_python_only_and_never_offered_to_the_model(self):
+        # Grounding has no least-claiming value: "grounded" would hide a bug and
+        # "theme_misroute" would invent one. So an instrument failure gets its
+        # own value, excluded from every numerator AND denominator.
+        self.assertEqual(channel_assessor.GROUNDING_UNKNOWN, "unknown")
+        self.assertNotIn(
+            channel_assessor.GROUNDING_UNKNOWN, channel_assessor.CHANNEL_GROUNDING_STATUSES
+        )
+        self.assertNotIn("unknown", json.dumps(channel_assessor._ASSESS_RESPONSE_SCHEMA))
+
+    def test_grounding_is_not_a_support_level(self):
+        for value in (*channel_assessor.CHANNEL_GROUNDING_STATUSES, "unknown"):
+            self.assertNotIn(value, channel_assessor.CHANNEL_SUPPORT_LEVELS)
+
+    def test_the_tie_precedence_never_manufactures_a_defect(self):
+        # A split vote resolves toward `grounded`, so the measured misroute rate
+        # is a LOWER BOUND and must be read beside grounding_agree_n.
+        self.assertEqual(
+            channel_assessor._GROUNDING_TIE_PRECEDENCE,
+            ("grounded", "theme_misroute", "candidate_misfit"),
+        )
+
+
+class TestGroundingPrompt(unittest.TestCase):
+    def _prompt(self) -> str:
+        return channel_assessor.build_assessment_prompt(
+            theme="quantum_computing", catalyst=_catalyst(), candidate=_candidate()
+        )
+
+    def test_grounding_is_asked_before_the_support_grade(self):
+        # Ordering is the ONLY thing separating the two questions inside one
+        # call, so the grounding answer cannot be reasoned backwards from a
+        # chain the model has already committed to.
+        prompt = self._prompt()
+        self.assertLess(prompt.index("grounding_status"), prompt.index("channel_support_status"))
+
+    def test_the_output_object_emits_grounding_first(self):
+        output = self._prompt().split("OUTPUT")[-1]
+        self.assertLess(output.index("grounding_status"), output.index("channel_support_status"))
+
+    def test_the_quote_is_scoped_to_the_rendered_block(self):
+        # The assessor never sees the article body, so a "verbatim quote" can
+        # only mean a span of what was rendered. Saying otherwise invites a
+        # fabricated citation that the Python substring check then flags.
+        # Whitespace-collapsed so a re-wrap of the template is not a test break.
+        prompt = _collapse(self._prompt()).lower()
+        self.assertIn("verbatim", prompt)
+        self.assertIn("you have not been shown the article body", prompt)
+
+    def test_the_prompt_forbids_the_exact_confusion_being_fixed(self):
+        # candidate_misfit must NOT be used merely because no mechanism could be
+        # established — that IS the defect this increment exists to separate.
+        prompt = _collapse(self._prompt())
+        self.assertIn("candidate_misfit", prompt)
+        self.assertIn("not_established", prompt)
+        self.assertIn(
+            "Do NOT answer `candidate_misfit` merely because you could not establish a mechanism",
+            prompt,
+        )
+
+    def test_the_standing_doctrine_pins_survive_the_rewrite(self):
+        prompt = self._prompt().lower()
+        for token in ("market cap", "market_cap", "small-cap", "mid-cap", "small/mid"):
+            self.assertNotIn(token, prompt)
+        for banned in ("bullish", "bearish", "positive news", "good news"):
+            self.assertNotIn(banned, prompt)
+        self.assertIn("nothing is dropped", prompt)
+
+
+class TestGroundingDetection(unittest.TestCase):
+    def _assess(self, *bodies, votes: int | None = None, catalyst=None):
+        kwargs = {} if votes is None else {"votes": votes}
+        with patch.object(channel_assessor, "_call_llm", side_effect=_responses(*bodies)):
+            return channel_assessor.assess_candidate(
+                theme="quantum_computing",
+                catalyst=catalyst or _catalyst(),
+                candidate=_candidate(),
+                llm_client=object(),
+                **kwargs,
+            )
+
+    def test_each_grounding_value_round_trips(self):
+        for value in channel_assessor.CHANNEL_GROUNDING_STATUSES:
+            with self.subTest(value=value):
+                body = _payload(
+                    grounding=value,
+                    quote="Air Force awards a trapped-ion computing contract"
+                    if value == "grounded"
+                    else "",
+                    reason="" if value == "grounded" else "the event is a market round-up",
+                )
+                result = self._assess(body, body, body)
+                self.assertEqual(result.grounding_status, value)
+                self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.SUCCESS)
+
+    def test_an_off_vocabulary_grounding_value_invalidates_only_that_draw(self):
+        # NOT coerced. channel_type is telemetry so it may be coerced to none;
+        # grounding is a MEASUREMENT, and coercion would manufacture either "the
+        # pipeline is fine" or "the pipeline is broken" out of noise.
+        result = self._assess(
+            _payload(grounding="probably_fine"),
+            _payload(grounding="grounded"),
+            _payload(grounding="grounded"),
+        )
+        self.assertEqual(result.grounding_status, "grounded")
+        self.assertEqual(result.valid_n, 2)
+        self.assertEqual(result.votes, 3)
+        self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.SUCCESS)
+
+    def test_a_valid_draw_always_carries_both_answers(self):
+        # Consequence of all-or-nothing draw validity, pinned so the identity
+        # grounding_unknown == assess_failed cannot quietly stop holding.
+        result = self._assess(
+            json.loads(_payload()) and _payload_without("grounding_status"),
+            _payload_without("grounding_status"),
+            votes=1,
+        )
+        self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.MALFORMED_PAYLOAD)
+        self.assertEqual(result.grounding_status, channel_assessor.GROUNDING_UNKNOWN)
+
+    def test_grounded_blanks_the_reason(self):
+        # A grounded row has nothing to explain; a stray reason would read as a
+        # defect note on a healthy row.
+        body = _payload(grounding="grounded", reason="this looks off to me")
+        result = self._assess(body, body, body)
+        self.assertEqual(result.grounding_reason, "")
+
+    def test_a_non_grounded_answer_blanks_the_quote(self):
+        # There is no span placing the company in scope, so a quote would be a
+        # fabricated citation by construction.
+        body = _payload(
+            grounding="theme_misroute",
+            quote="Air Force awards a trapped-ion computing contract",
+            reason="the event is a daily market round-up, not a quantum event",
+        )
+        result = self._assess(body, body, body)
+        self.assertEqual(result.grounding_quote, "")
+        self.assertEqual(
+            result.grounding_reason, "the event is a daily market round-up, not a quantum event"
+        )
+
+    def test_a_fabricated_quote_is_flagged_without_changing_the_status(self):
+        # THE detect-stamp-keep-measure rule at field level. The deterministic
+        # check is the only mechanical defence against an invented citation, and
+        # it must never overwrite the model's answer.
+        body = _payload(grounding="grounded", quote="the Navy awarded a photonics contract")
+        result = self._assess(body, body, body)
+        self.assertEqual(result.grounding_status, "grounded")
+        self.assertFalse(result.grounding_quote_verbatim)
+
+    def test_a_real_span_of_the_rendered_block_passes_the_check(self):
+        body = _payload(
+            grounding="grounded", quote="Air Force awards a trapped-ion computing contract"
+        )
+        result = self._assess(body, body, body)
+        self.assertTrue(result.grounding_quote_verbatim)
+
+    def test_the_check_is_whitespace_and_case_insensitive(self):
+        body = _payload(grounding="grounded", quote="  AIR FORCE   awards a TRAPPED-ion  ")
+        result = self._assess(body, body, body)
+        self.assertTrue(result.grounding_quote_verbatim)
+
+    def test_an_empty_quote_is_not_verbatim(self):
+        body = _payload(grounding="theme_misroute", quote="", reason="off topic")
+        result = self._assess(body, body, body)
+        self.assertFalse(result.grounding_quote_verbatim)
+
+
+def _payload_without(key: str) -> str:
+    body = json.loads(_payload())
+    body.pop(key)
+    return json.dumps(body)
+
+
+class TestGroundingAggregation(unittest.TestCase):
+    """Categorical, so plurality — never a median.
+
+    ``theme_misroute`` is candidate-INDEPENDENT yet measured per candidate, so
+    within-theme disagreement is itself a readout. ``grounding_agree_n`` is the
+    per-row noise instrument, the categorical counterpart of
+    ``support_dispersion``.
+    """
+
+    def _assess(self, *bodies, votes: int = 3):
+        with patch.object(channel_assessor, "_call_llm", side_effect=_responses(*bodies)):
+            return channel_assessor.assess_candidate(
+                theme="quantum_computing",
+                catalyst=_catalyst(),
+                candidate=_candidate(),
+                llm_client=object(),
+                votes=votes,
+            )
+
+    def _g(self, value: str, reason: str = "r") -> str:
+        return _payload(
+            grounding=value,
+            quote="Air Force awards a trapped-ion computing contract"
+            if value == "grounded"
+            else "",
+            reason="" if value == "grounded" else reason,
+        )
+
+    def test_plurality_wins(self):
+        result = self._assess(
+            self._g("theme_misroute"), self._g("theme_misroute"), self._g("grounded")
+        )
+        self.assertEqual(result.grounding_status, "theme_misroute")
+        self.assertEqual(result.grounding_agree_n, 2)
+
+    def test_a_unanimous_vote_agrees_on_every_draw(self):
+        result = self._assess(self._g("grounded"), self._g("grounded"), self._g("grounded"))
+        self.assertEqual(result.grounding_status, "grounded")
+        self.assertEqual(result.grounding_agree_n, 3)
+
+    def test_a_three_way_split_resolves_to_grounded(self):
+        # Tie precedence grounded > theme_misroute > candidate_misfit: a split
+        # vote never manufactures a defect.
+        result = self._assess(
+            self._g("candidate_misfit"), self._g("theme_misroute"), self._g("grounded")
+        )
+        self.assertEqual(result.grounding_status, "grounded")
+        self.assertEqual(result.grounding_agree_n, 1)
+
+    def test_a_two_way_defect_tie_prefers_the_candidate_independent_value(self):
+        # When every draw claims a defect but they disagree, theme_misroute wins
+        # because an operator can verify it ONCE PER THEME rather than per row.
+        result = self._assess(
+            self._g("candidate_misfit"), self._g("theme_misroute"), "not json at all", votes=3
+        )
+        self.assertEqual(result.grounding_status, "theme_misroute")
+        self.assertEqual(result.valid_n, 2)
+        self.assertEqual(result.grounding_agree_n, 1)
+
+    def test_the_quote_and_reason_come_from_the_first_matching_draw(self):
+        result = self._assess(
+            self._g("grounded"),
+            self._g("theme_misroute", reason="first misroute reason"),
+            self._g("theme_misroute", reason="second misroute reason"),
+        )
+        self.assertEqual(result.grounding_status, "theme_misroute")
+        self.assertEqual(result.grounding_reason, "first misroute reason")
+
+    def test_grounding_and_support_are_never_cross_normalised(self):
+        # (established x theme_misroute) is the FABRICATION readout — a fluent
+        # chain built on an event that is not about the theme — and it is the
+        # single most valuable cell for the later stratified audit. Forcing the
+        # support level down would destroy exactly that evidence.
+        body = _payload(status="established", grounding="theme_misroute", quote="", reason="off")
+        result = self._assess(body, body, body)
+        self.assertEqual(result.support_status, "established")
+        self.assertEqual(result.grounding_status, "theme_misroute")
+        self.assertNotEqual(result.text, "")
+
+
+class TestGroundingFailureLadder(unittest.TestCase):
+    def test_a_dead_call_is_unknown_grounding_not_a_grounding_verdict(self):
+        # An outage is an INSTRUMENT FAILURE. Recording it as `grounded` would
+        # hide a pipeline bug; recording it as `theme_misroute` would invent one.
+        with patch.object(channel_assessor, "_call_llm", side_effect=RuntimeError("socket")):
+            result = channel_assessor.assess_candidate(
+                theme="t",
+                catalyst=_catalyst(),
+                candidate=_candidate(),
+                llm_client=object(),
+                votes=3,
+            )
+        self.assertEqual(result.support_status, "not_established")
+        self.assertEqual(result.grounding_status, channel_assessor.GROUNDING_UNKNOWN)
+        self.assertIs(result.outcome, channel_assessor.AssessmentOutcome.CALL_FAILED)
+        self.assertEqual(result.grounding_agree_n, 0)
+        self.assertFalse(result.grounding_quote_verbatim)
+
+    def test_a_never_asked_candidate_reads_not_assessed_in_both_columns(self):
+        for sentinel in (channel_assessor.unassessed(), channel_assessor.over_assess_cap()):
+            with self.subTest(outcome=sentinel.outcome):
+                self.assertEqual(sentinel.support_status, channel_assessor.NOT_ASSESSED)
+                self.assertEqual(sentinel.grounding_status, channel_assessor.NOT_ASSESSED)
+
+    def test_grounding_unknown_equals_assess_failed(self):
+        # A valid draw always carries BOTH answers, so the two counters are the
+        # same number by construction. Pinned so a future partial-parse path
+        # cannot silently break the identity the sidecar reads.
+        failed = channel_assessor.ChannelAssessment(
+            support_status="not_established",
+            grounding_status=channel_assessor.GROUNDING_UNKNOWN,
+            grounding_quote="",
+            grounding_reason="",
+            grounding_agree_n=0,
+            grounding_quote_verbatim=False,
+            channel_type="none",
+            text="",
+            evidence="",
+            falsifier="",
+            confidence=None,
+            votes=3,
+            valid_n=0,
+            support_dispersion=0,
+            outcome=channel_assessor.AssessmentOutcome.CALL_FAILED,
+            assessed_at="2026-08-20T00:00:00+00:00",
+        )
+        counts = channel_assessor.status_counts([failed])
+        self.assertEqual(counts["grounding_unknown"], counts["assess_failed"])
+
+
 class TestAssessCandidatesBatch(unittest.TestCase):
     def test_one_result_per_input_in_input_order(self):
         # The never-shrinks invariant at its source: the orchestrator zips this
@@ -605,8 +945,40 @@ class TestUnassessedAndRowFields(unittest.TestCase):
         fields = channel_assessor.row_fields(channel_assessor.unassessed())
         self.assertEqual(set(fields), set(channel_assessor.CHANNEL_ROW_COLUMNS))
         self.assertEqual(fields["channel_support_status"], "not_assessed")
+        self.assertEqual(fields["channel_grounding_status"], "not_assessed")
         self.assertEqual(fields["channel_assessment_outcome"], "not_assessed")
         self.assertIsNone(fields["channel_assessed_at"])
+
+    def test_the_sixteen_column_contract_is_ordered_and_complete(self):
+        self.assertEqual(
+            channel_assessor.CHANNEL_ROW_COLUMNS,
+            (
+                "channel_support_status",
+                "channel_grounding_status",
+                "channel_grounding_quote",
+                "channel_grounding_reason",
+                "channel_grounding_agree_n",
+                "channel_grounding_quote_verbatim",
+                "channel_type",
+                "channel_text",
+                "channel_evidence",
+                "channel_falsifier",
+                "channel_confidence",
+                "channel_vote_k",
+                "channel_vote_valid_n",
+                "channel_support_dispersion",
+                "channel_assessment_outcome",
+                "channel_assessed_at",
+            ),
+        )
+
+    def test_every_grounding_column_keeps_the_channel_prefix(self):
+        # Load-bearing: the structural anti-rot guard scans for channel_[a-z_]*,
+        # so a grounding column that dropped the prefix would slip past the one
+        # test standing between this design and a resurrected gate.
+        grounding = [c for c in channel_assessor.CHANNEL_ROW_COLUMNS if "grounding" in c]
+        self.assertEqual(len(grounding), 5)
+        self.assertTrue(all(c.startswith("channel_") for c in grounding))
 
     def test_row_fields_of_none_is_the_unassessed_shape(self):
         # A candidate dict that never went through the assessor (an off-bracket
@@ -634,6 +1006,11 @@ class TestShadowStrictVerdict(unittest.TestCase):
     ):
         return channel_assessor.ChannelAssessment(
             support_status=status,
+            grounding_status=channel_assessor.GROUNDING_GROUNDED,
+            grounding_quote="",
+            grounding_reason="",
+            grounding_agree_n=3,
+            grounding_quote_verbatim=False,
             channel_type="none",
             text="",
             evidence="",
@@ -710,9 +1087,19 @@ class TestShadowStrictVerdict(unittest.TestCase):
 
 
 class TestStatusCounts(unittest.TestCase):
-    def _assessment(self, status, outcome=channel_assessor.AssessmentOutcome.SUCCESS):
+    def _assessment(
+        self,
+        status,
+        outcome=channel_assessor.AssessmentOutcome.SUCCESS,
+        grounding=channel_assessor.GROUNDING_GROUNDED,
+    ):
         return channel_assessor.ChannelAssessment(
             support_status=status,
+            grounding_status=grounding,
+            grounding_quote="",
+            grounding_reason="",
+            grounding_agree_n=3,
+            grounding_quote_verbatim=False,
             channel_type="none",
             text="",
             evidence="",
@@ -723,6 +1110,33 @@ class TestStatusCounts(unittest.TestCase):
             support_dispersion=0,
             outcome=outcome,
             assessed_at="2026-08-19T00:00:00+00:00",
+        )
+
+    def test_the_eight_tallies_cover_support_and_grounding(self):
+        counts = channel_assessor.status_counts(
+            [
+                self._assessment("established"),
+                self._assessment("suggestive", grounding="theme_misroute"),
+                self._assessment("not_established", grounding="candidate_misfit"),
+                self._assessment(
+                    "not_established",
+                    channel_assessor.AssessmentOutcome.CALL_FAILED,
+                    grounding=channel_assessor.GROUNDING_UNKNOWN,
+                ),
+            ]
+        )
+        self.assertEqual(
+            counts,
+            {
+                "established": 1,
+                "suggestive": 1,
+                "not_established": 1,
+                "assess_failed": 1,
+                "grounded": 1,
+                "theme_misroute": 1,
+                "candidate_misfit": 1,
+                "grounding_unknown": 1,
+            },
         )
 
     def test_the_four_tallies_split_answers_from_failures(self):
@@ -736,7 +1150,10 @@ class TestStatusCounts(unittest.TestCase):
             ]
         )
         self.assertEqual(
-            counts,
+            {
+                k: counts[k]
+                for k in ("established", "suggestive", "not_established", "assess_failed")
+            },
             {"established": 1, "suggestive": 1, "not_established": 1, "assess_failed": 2},
         )
 
@@ -747,10 +1164,8 @@ class TestStatusCounts(unittest.TestCase):
         counts = channel_assessor.status_counts(
             [channel_assessor.unassessed(), channel_assessor.over_assess_cap()]
         )
-        self.assertEqual(
-            counts,
-            {"established": 0, "suggestive": 0, "not_established": 0, "assess_failed": 0},
-        )
+        self.assertEqual(counts, dict.fromkeys(counts, 0))
+        self.assertEqual(len(counts), 8)
 
 
 class TestOverAssessCap(unittest.TestCase):
