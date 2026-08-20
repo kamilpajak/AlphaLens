@@ -57,6 +57,11 @@ from alphalens_pipeline.brokers.automanager.entry_trails import (
     KIND_TROUGH,
     KIND_WATCH_OPEN,
 )
+from alphalens_pipeline.brokers.automanager.labels import (
+    entry_label_from_crid,
+    entry_tier_index_from_crid,
+    human_entry_label,
+)
 
 # --- Constants ---------------------------------------------------------------
 
@@ -444,20 +449,34 @@ class EntryTierWatcher:
         return trough * (1.0 + self._config.d_bps / _BPS_DENOMINATOR)
 
     def _would_fire_alert(self, trigger: float) -> AlertIntent:
+        # Operator-facing MESSAGE renders the E{n} label; the ``crid`` field and
+        # ``throttle_key`` keep the raw crid (alert dedup invariant).
         return AlertIntent(
             crid=self._config.crid,
             kind=_ALERT_WOULD_FIRE,
-            message=f"entry-trail {self._config.crid} would fire @ trigger {trigger:.4f} (dry run)",
+            message=(
+                f"entry-trail {entry_label_from_crid(self._config.crid)} "
+                f"would fire @ trigger {trigger:.4f} (dry run)"
+            ),
             throttle_key=f"entry-trail:would-fire:{self._config.crid}",
         )
 
+    def _next_tier_label(self) -> str:
+        """The NEXT-deeper tier's E{n+1} label when the crid index is known,
+        else a plain ``"next tier"`` fallback."""
+        index = entry_tier_index_from_crid(self._config.crid)
+        return human_entry_label(index + 1) if index is not None else "next tier"
+
     def _suspend_alert(self) -> AlertIntent:
+        # Operator-facing MESSAGE renders the E{n} label; the ``crid`` field and
+        # ``throttle_key`` keep the raw crid (alert dedup invariant).
         return AlertIntent(
             crid=self._config.crid,
             kind=_ALERT_SUSPENDED,
             message=(
-                f"entry-trail {self._config.crid} suspended: trough "
-                f"{self._trough.trough} below next tier {self._config.next_tier_limit}"
+                f"entry-trail {entry_label_from_crid(self._config.crid)} suspended: trough "
+                f"{self._trough.trough} below next tier {self._next_tier_label()} "
+                f"(limit {self._config.next_tier_limit})"
             ),
             throttle_key=f"entry-trail:suspended:{self._config.crid}",
         )

@@ -109,8 +109,10 @@ class TestClassifyLaz(unittest.TestCase):
     def test_report_enumerates_every_tier_and_tp_no_silent_drop(self):
         setup, instrument = _laz()
         report = classify(setup, instrument).operator_report
-        for token in ("tier 0", "tier 1", "46.54", "50.95", "operator-managed", "13.2", "31.1"):
+        # Operator report renders 1-based E{n} tier labels, never 0-based "tier N".
+        for token in ("E1", "E2", "46.54", "50.95", "operator-managed", "13.2", "31.1"):
             self.assertIn(token, report)
+        self.assertNotIn("tier 0", report)
 
 
 class TestClassifyKnifeEdge(unittest.TestCase):

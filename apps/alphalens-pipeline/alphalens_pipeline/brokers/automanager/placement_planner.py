@@ -26,6 +26,7 @@ from broker_contract.contract import BracketOrderRequest, InstrumentRef
 from broker_contract.sizing import SetupPlan
 
 from alphalens_pipeline.brokers import execution as execution_policy
+from alphalens_pipeline.brokers.automanager.labels import human_entry_label
 from alphalens_pipeline.brokers.execution import decompose_setup_plan
 
 
@@ -110,11 +111,13 @@ def _operator_report(
             pct = abs(tp - entry) / entry * 100.0
             band = "OCO-eligible" if tier.tp_planned_in_oco else f"beyond {limit_frac * 100:.0f}%"
             lines.append(
-                f"  tier {tier.tier_index}: entry {entry:.2f} (entry-only); "
+                f"  {human_entry_label(tier.tier_index)}: entry {entry:.2f} (entry-only); "
                 f"TP {tp:.2f} operator-managed (+{pct:.1f}%, {band})"
             )
         else:
-            lines.append(f"  tier {tier.tier_index}: entry {entry:.2f} (entry-only, no TP)")
+            lines.append(
+                f"  {human_entry_label(tier.tier_index)}: entry {entry:.2f} (entry-only, no TP)"
+            )
     lines.append(
         f"  disaster stop {disaster_stop:.2f}: standalone StopIfTraded after fill (placed once)"
     )
