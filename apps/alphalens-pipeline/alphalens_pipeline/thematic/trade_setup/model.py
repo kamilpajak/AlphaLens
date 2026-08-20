@@ -16,6 +16,16 @@ STATUS_OK = "OK"
 STATUS_NO_STRUCTURE = "NO_STRUCTURE"
 
 
+def entry_tier_label(i: int) -> str:
+    """Canonical ordinal label for the i-th entry tier (0-based in → 1-based out): E1, E2, ..."""
+    return f"E{i + 1}"
+
+
+def tp_tranche_label(i: int) -> str:
+    """Canonical ordinal label for the i-th take-profit tranche (0-based in → 1-based out): TP1, TP2, ..."""
+    return f"TP{i + 1}"
+
+
 @dataclass(frozen=True)
 class EntryTier:
     """One limit-entry tier. ``atr_distance`` is (close − limit)/ATR (>0 = below close)."""
@@ -101,8 +111,17 @@ class TradeSetup:
             "disaster_stop": self.disaster_stop,
             "suggested_size_pct": self.suggested_size_pct,
             "order_ttl_days": self.order_ttl_days,
-            "entry_tiers": [t.to_dict() for t in self.entry_tiers],
-            "tp_tranches": [t.to_dict() for t in self.tp_tranches],
+            # Stamp the canonical ordinal label at the one place with the index.
+            # Purely additive: EntryTier/TpTranche.to_dict() keep their per-object
+            # structural keys byte-identical; the ordinal is enumerated here.
+            "entry_tiers": [
+                {**t.to_dict(), "label": entry_tier_label(i)}
+                for i, t in enumerate(self.entry_tiers)
+            ],
+            "tp_tranches": [
+                {**t.to_dict(), "label": tp_tranche_label(i)}
+                for i, t in enumerate(self.tp_tranches)
+            ],
             "builder_config_version": self.builder_config_version,
         }
 
@@ -114,4 +133,6 @@ __all__ = [
     "EntryTier",
     "TpTranche",
     "TradeSetup",
+    "entry_tier_label",
+    "tp_tranche_label",
 ]

@@ -216,6 +216,12 @@ export interface EntryTier {
 	alloc_pct: number;
 	atr_distance: number;
 	tag: string;
+	/**
+	 * Canonical ordinal label (`E1`, `E2`, …) stamped by the pipeline. Optional:
+	 * older parquets / fixtures predate it, so the card falls back to the
+	 * position-derived label when it is absent.
+	 */
+	label?: string;
 }
 
 /** One take-profit tranche. `r_multiple` is the reward-to-risk multiple. */

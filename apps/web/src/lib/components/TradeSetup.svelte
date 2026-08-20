@@ -2,6 +2,7 @@
 	import type { TradeSetup } from '$lib/types';
 	import { fmtPrice, fmtPct } from '$lib/format';
 	import {
+		entryTierLabel,
 		fullLadderBlendedEntry,
 		stopDistanceFracFull,
 		impliedRiskPctOfBook
@@ -160,7 +161,7 @@
 						class="grid grid-cols-[3rem_auto_1fr] sm:grid-cols-[3rem_auto_auto_auto_1fr] items-center gap-x-2 sm:gap-x-3 px-3 py-1.5 bg-bg-2 border-l-2 border-violet text-[11px]"
 					>
 						<span class="text-violet uppercase tracking-widest text-[9px] whitespace-nowrap"
-							>tier {i + 1}</span
+							>{entryTierLabel(tier, i)}</span
 						>
 						<span class="text-fg font-bold whitespace-nowrap">{fmtPrice(tier.limit)}</span>
 						<span class="text-fg-dim text-right sm:text-left whitespace-nowrap">{fmtPct(tier.alloc_pct, 0, false)}</span>

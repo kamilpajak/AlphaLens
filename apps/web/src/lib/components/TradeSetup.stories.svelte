@@ -70,17 +70,46 @@
 </Story>
 
 <!-- OK: full ladder — sizing headline (suggested size / disaster stop) + entry
-     tiers + TP tranches. Asserts both key sizing labels are visible. -->
+     tiers + TP tranches. Fixture carries NO `label` on its tiers, so the entry
+     rows must render the POSITION-derived E1/E2/E3 (regression: the old code
+     rendered "TIER 1/2/3"). Asserts the sizing labels and E1/E2/E3 are visible. -->
 <Story
 	name="Structured Ladder"
 	play={async ({ canvas }) => {
 		await waitFor(() => expect(canvas.getByText(/suggested size/i)).toBeVisible());
 		await waitFor(() => expect(canvas.getByText(/disaster stop/i)).toBeVisible());
+		await waitFor(() => expect(canvas.getByText('E1')).toBeVisible());
+		await waitFor(() => expect(canvas.getByText('E2')).toBeVisible());
+		await waitFor(() => expect(canvas.getByText('E3')).toBeVisible());
+		expect(canvas.queryByText(/tier 1/i)).toBeNull();
 	}}
 >
 	{#snippet template()}
 		<div style="width: 28rem; padding: 4rem 6rem;">
 			<TradeSetup setup={OK_SETUP} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- OK with data labels: same PIPR fixture, now with the canonical `label`
+     stamped by the pipeline. The card renders the data label directly (same
+     E1/E2/E3 vocabulary) rather than re-deriving it from position. -->
+<Story
+	name="Structured Ladder (data labels)"
+	play={async ({ canvas }) => {
+		await waitFor(() => expect(canvas.getByText('E1')).toBeVisible());
+		await waitFor(() => expect(canvas.getByText('E2')).toBeVisible());
+		await waitFor(() => expect(canvas.getByText('E3')).toBeVisible());
+	}}
+>
+	{#snippet template()}
+		<div style="width: 28rem; padding: 4rem 6rem;">
+			<TradeSetup
+				setup={{
+					...OK_SETUP,
+					entry_tiers: OK_SETUP.entry_tiers.map((t, i) => ({ ...t, label: `E${i + 1}` }))
+				}}
+			/>
 		</div>
 	{/snippet}
 </Story>
