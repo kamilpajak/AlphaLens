@@ -13,6 +13,16 @@ import type { EntryTier } from '$lib/types';
  */
 
 /**
+ * Canonical ordinal label for the i-th entry tier: prefer the self-describing
+ * `label` stamped by the pipeline (`E1`, `E2`, …) and fall back to the
+ * position-derived label for older payloads that carry no `label`. Mirrors the
+ * Python `entry_tier_label` (0-based index in → 1-based label out).
+ */
+export function entryTierLabel(tier: EntryTier, i: number): string {
+	return tier.label ? tier.label : `E${i + 1}`;
+}
+
+/**
  * Alloc-weighted blended entry over ALL intended entry tiers — the average
  * fill price if the whole ladder fills. Uses `alloc_pct` weights with an
  * equal-weight fallback when allocs are absent/zero (matches the engine's
