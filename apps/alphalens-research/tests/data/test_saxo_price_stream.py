@@ -1620,5 +1620,100 @@ class TestStreamGaugeJobLabel(unittest.TestCase):
                 self.assertIn('job="live-price-stream-sim"', name)
 
 
+class TestSessionWindowGate(unittest.TestCase):
+    """Outside-market-hours sleep gate: with the optional ``session_window``
+    predicate wired and returning False, the reader holds NO WebSocket and
+    idles exactly like the zero-desired-uics branch (the 24/7 connection used
+    to recv-timeout every ~3min all night — reconnect churn + warning spam).
+
+    HARD SAFETY RULE — fail-open everywhere: no predicate wired means today's
+    behavior, and a RAISING predicate must be treated as in-session (connect)
+    with exactly one warning per stream. The gate must never be able to
+    silence the stream during trading hours."""
+
+    _LOGGER = "alphalens_pipeline.data.alt_data.saxo_price_stream"
+
+    def test_constructor_defaults_to_no_session_window(self):
+        stream = SaxoPriceStream(_FakeMarketDataClient(), _FakeTokenProvider())
+        self.assertIsNone(stream._session_window)
+
+    def test_predicate_false_never_connects_and_idles(self):
+        h = _SupervisedHarness(stream_kwargs={"session_window": lambda: False}, stop_after_sleeps=3)
+        h.stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(h.ws_calls, [])
+        self.assertEqual(h.sleeps, [sps._IDLE_POLL_S] * 3)
+        self.assertEqual(h.stream._consecutive_failures, 0)
+
+    def test_predicate_true_connects_via_the_existing_paths(self):
+        h = _SupervisedHarness(stream_kwargs={"session_window": lambda: True})
+        stream = h.stream
+        conn = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn)
+        stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(len(h.ws_calls), 1)
+        self.assertEqual(stream.get(5).bid, 1.0)
+
+    def test_no_predicate_behaves_like_today(self):
+        """Spot-pin for the flag-off / un-wired case (byte-identical behavior
+        is otherwise pinned by every pre-existing _SupervisedHarness test,
+        none of which passes session_window)."""
+        h = _SupervisedHarness()
+        stream = h.stream
+        conn = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn)
+        stream.ensure_subscribed({5})
+        h.run()
+        self.assertEqual(len(h.ws_calls), 1)
+        self.assertEqual(stream.get(5).bid, 1.0)
+
+    def test_raising_predicate_fails_open_and_warns_exactly_once(self):
+        """A calendar bug must never darken the feed during trading hours: a
+        raising predicate is treated as in-session (the reader connects), and
+        the raise is logged ONCE per stream — not once per poll."""
+        calls = {"count": 0}
+
+        def raising_predicate() -> bool:
+            calls["count"] += 1
+            raise RuntimeError("calendar exploded")
+
+        h = _SupervisedHarness(stream_kwargs={"session_window": raising_predicate})
+        stream = h.stream
+        # Two loop iterations (a dropped connection forces a second one), so
+        # the predicate raises at least twice while the warning stays at one.
+        conn1 = _ScriptedConn([ConnectionError("dropped")])
+        conn2 = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(2))[1]])
+        h._conns.extend([conn1, conn2])
+        stream.ensure_subscribed({5})
+        with self.assertLogs(self._LOGGER, level="WARNING") as cm:
+            h.run()
+        gate_warnings = [line for line in cm.output if "session window" in line.lower()]
+        self.assertEqual(len(gate_warnings), 1, cm.output)
+        self.assertGreaterEqual(calls["count"], 2)
+        self.assertEqual(len(h.ws_calls), 2, "fail-open: the reader must still connect")
+
+    def test_transitions_log_exactly_once_per_edge(self):
+        """One INFO on awake->asleep, one INFO on asleep->awake — never one
+        per idle poll (the whole point is killing the nightly log spam)."""
+        scripted = [False, False, False]  # three asleep polls, then in-session
+
+        def predicate() -> bool:
+            return scripted.pop(0) if scripted else True
+
+        h = _SupervisedHarness(stream_kwargs={"session_window": predicate})
+        stream = h.stream
+        conn = _ScriptedConn([lambda: (setattr(stream, "_stop", True), _px_frame(1))[1]])
+        h._conns.append(conn)
+        stream.ensure_subscribed({5})
+        with self.assertLogs(self._LOGGER, level="INFO") as cm:
+            h.run()
+        asleep_lines = [line for line in cm.output if "sleeping" in line.lower()]
+        awake_lines = [line for line in cm.output if "resuming" in line.lower()]
+        self.assertEqual(len(asleep_lines), 1, cm.output)
+        self.assertEqual(len(awake_lines), 1, cm.output)
+        self.assertEqual(len(h.ws_calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
