@@ -180,7 +180,7 @@ def _is_stage_b(record: dict[str, Any]) -> bool:
     ``{"type": "json_object"}``), so that is where it is read from.
     """
     config = record.get("config") or {}
-    return "channel_status" in str(config.get("system_message") or "")
+    return "channel_support_status" in str(config.get("system_message") or "")
 
 
 def split_cassette_records(
@@ -197,18 +197,25 @@ def split_cassette_records(
     whole request, and the ``_ASSESS_VOTES`` draws of one candidate are
     IDENTICAL requests. They collapse to a single cassette file, and the replay
     then serves the same body to every draw — so a replayed run always reports
-    ``channel_vote_valid_n = 3`` with ``channel_vote_dispersion = 0``. The
+    ``channel_vote_valid_n = 3`` with ``channel_support_dispersion = 0``. The
     golden shows the stage is wired; it can never evidence vote stability.
     """
     records = _cassette_records(fixture, version)
     stage_b = [r for r in records if _is_stage_b(r)]
     stage_a = [r for r in records if not _is_stage_b(r)]
     if len(stage_a) != 1:
+        # Two causes, and this classifier cannot tell them apart: a genuinely
+        # mixed pair of recordings, or a recording whose stage-B requests carry
+        # a PRE-BOUNDARY key name and therefore all fall into the stage-A
+        # bucket. Naming only the first sends the reader hunting for mixed
+        # recordings when the real answer is "re-record against the current
+        # schema".
         raise ValueError(
             f"expected exactly 1 stage-A LLM cassette in "
             f"{fixture.llm_cassette_dir(version)}, found {len(stage_a)} "
             f"(of {len(records)} total) — one recording holds one proposal call, "
-            "so this is two recordings mixed"
+            "so this is two recordings mixed, or the recordings pre-date the "
+            "current stage-B schema"
         )
     return stage_a[0], stage_b
 
@@ -255,7 +262,7 @@ def stage_b_block(fixture: MapFixture, version: str | None = None) -> dict[str, 
         "vote_collapse_note": (
             "The k identical draws of one candidate share a request descriptor and "
             "therefore ONE cassette file. A replay serves the same body to every "
-            "draw, so channel_vote_valid_n and channel_vote_dispersion in the golden "
+            "draw, so channel_vote_valid_n and channel_support_dispersion in the golden "
             "projection are artefacts of replay, not measurements of vote stability."
         ),
     }

@@ -39,7 +39,7 @@ from alphalens_research.eval.faithfulness import FAITHFULNESS_SCORER_VERSION
 from alphalens_research.eval.measurement import fact_index_from_brief_row, score_row
 
 _GOLDEN_PARQUET = (
-    Path(__file__).resolve().parent / "fixtures" / "brief_day" / "golden" / "2026-05-24.parquet"
+    Path(__file__).resolve().parent / "fixtures" / "brief_day" / "golden" / "2026-08-19.parquet"
 )
 
 
@@ -294,7 +294,7 @@ class TestTriageCorpusOverParquetFixture(unittest.TestCase):
 
     def test_golden_fixture_is_clean(self) -> None:
         report = triage_corpus([str(_GOLDEN_PARQUET)])
-        self.assertEqual(report["n_briefs"], 4)
+        self.assertEqual(report["n_briefs"], 5)
         self.assertEqual(report["total_fabricated_atoms"], 0)
         band = report["estimated_true_hallucination_band"]
         self.assertEqual(band["floor_atoms"], 0)

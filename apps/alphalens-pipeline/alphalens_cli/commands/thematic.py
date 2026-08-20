@@ -129,6 +129,40 @@ def _brief_unavailable_count(enriched: pd.DataFrame) -> int:
     return int((enriched["brief_status"] == "unavailable").sum())
 
 
+def _support_guard_metrics(enriched: pd.DataFrame) -> dict[str, int]:
+    """Per-run counts of what the support guard did to the day's PROSE.
+
+    Emitted on EVERY run including all-zero days: a series that vanishes on a
+    healthy day is indistinguishable from a stopped exporter.
+
+    ``withheld`` also raises ``alphalens_thematic_brief_unavailable_count`` (the
+    withholding reuses the existing graceful-degradation path rather than
+    inventing a ``brief_status`` value the SPA cannot render), so the paired
+    AlphalensThematicBriefUnavailableHigh rule needs re-tuning by hand on the
+    same deploy. That is a recorded deploy step, not a code change.
+    """
+    counts = {"fired": 0, "repaired": 0, "withheld": 0, "fired_unrecovered": 0, "no_prose": 0}
+    if enriched.empty or "brief_support_guard_status" not in enriched.columns:
+        return {f"alphalens_thematic_brief_support_guard_{k}_total": v for k, v in counts.items()}
+    status = enriched["brief_support_guard_status"]
+    counts["repaired"] = int((status == "repaired").sum())
+    counts["withheld"] = int((status == "withheld").sum())
+    # The guard fired and the row then ended without prose for an unrelated
+    # reason. Counted as a fire: the prose contract WAS broken on a real draw,
+    # and folding it into "clean" would bias the compliance rate optimistically
+    # — the direction that would wrongly argue the detector is accurate.
+    counts["fired_unrecovered"] = int((status == "fired_unrecovered").sum())
+    # In scope, but no draw ever reached the guard. Emitted so the ``clean``
+    # rate is not silently padded with rows that produced no prose at all.
+    counts["no_prose"] = int((status == "no_prose").sum())
+    # "Fired" is every row where the guard caught something, whether the re-roll
+    # then fixed it, the row was withheld, or the row died for another reason —
+    # the rate that says how often the prose contract is being broken,
+    # independent of the recovery.
+    counts["fired"] = counts["repaired"] + counts["withheld"] + counts["fired_unrecovered"]
+    return {f"alphalens_thematic_brief_support_guard_{k}_total": v for k, v in counts.items()}
+
+
 def _has_usable_ladder(v: Any) -> bool:
     """True when a ``brief_trade_setup`` cell carries an actionable entry ladder.
 
@@ -260,13 +294,33 @@ def _map_themes_outcome_metrics(df: pd.DataFrame | None = None) -> dict[str, flo
     return {
         "alphalens_thematic_map_themes_declined_total": int(attrs.get("themes_declined", 0)),
         "alphalens_thematic_map_themes_failed_total": int(attrs.get("themes_failed", 0)),
-        # Stage-B channel assessment. The status mix separates "nothing had a
-        # channel today" from "the assessor died": the first shows as unverified,
-        # the second as assess_failed. Same emit-always / read-a-window rules as
-        # the two gauges above.
-        "alphalens_thematic_channel_verified_total": int(attrs.get("channel_verified", 0)),
-        "alphalens_thematic_channel_partial_total": int(attrs.get("channel_partial", 0)),
-        "alphalens_thematic_channel_unverified_total": int(attrs.get("channel_unverified", 0)),
+        # Stage-B causal-support assessment. The level mix separates "nothing had
+        # a channel today" from "the assessor died": the first shows as
+        # not_established, the second as assess_failed. Same emit-always /
+        # read-a-window rules as the two gauges above.
+        "alphalens_thematic_channel_established_total": int(attrs.get("channel_established", 0)),
+        "alphalens_thematic_channel_suggestive_total": int(attrs.get("channel_suggestive", 0)),
+        "alphalens_thematic_channel_not_established_total": int(
+            attrs.get("channel_not_established", 0)
+        ),
+        # Grounding — an orthogonal VALIDITY condition on the assessment, not a
+        # trading signal and not a gate. A rising theme_misroute share is a
+        # PIPELINE DEFECT page (upstream extraction / catalyst resolution, EPIC
+        # #974 / #976); nothing in the pipeline reads these, and no row is ever
+        # dropped on them. The measured misroute rate is a LOWER BOUND, because
+        # the plurality tie-break resolves toward `grounded` so a split vote can
+        # never manufacture a defect — read it beside the agree_n distribution.
+        "alphalens_thematic_channel_grounded_total": int(attrs.get("channel_grounded", 0)),
+        "alphalens_thematic_channel_theme_misroute_total": int(
+            attrs.get("channel_theme_misroute", 0)
+        ),
+        "alphalens_thematic_channel_candidate_misfit_total": int(
+            attrs.get("channel_candidate_misfit", 0)
+        ),
+        "alphalens_thematic_channel_grounding_unknown_total": int(
+            attrs.get("channel_grounding_unknown", 0)
+        ),
+        "alphalens_thematic_themes_misrouted_total": int(attrs.get("themes_misrouted", 0)),
         "alphalens_thematic_channel_assess_failed_total": int(
             attrs.get("channel_assess_failed", 0)
         ),
@@ -975,6 +1029,11 @@ def brief(
                 # AlphalensThematicBriefUnavailableHigh rule alerts when
                 # the ratio vs briefs_total is sustained across slots.
                 "alphalens_thematic_brief_unavailable_count": _brief_unavailable_count(enriched),
+                # Support-guard telemetry: how often the prose asserted a benefit
+                # the channel record could not support, and whether one greedy
+                # re-roll fixed it. NOT a gate — a withheld row still ships, only
+                # its four prose strings are withheld.
+                **_support_guard_metrics(enriched),
                 # Ladder-quality telemetry: fraction of the day's briefs that
                 # carry an actionable entry ladder. A volume-normal day whose
                 # setups all came back NO_STRUCTURE (the #910 / #917 signature)

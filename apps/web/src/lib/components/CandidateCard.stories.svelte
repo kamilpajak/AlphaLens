@@ -417,6 +417,18 @@
 		market_state_config_version: null
 	};
 
+	// Story 6 — PAR again, the support guard's WITHHELD state:
+	//   - same row, but brief_error_kind "unsupported_benefit_claim"
+	//   - the label must say the prose was WITHHELD, not that generation failed
+	//     (the model returned two schema-valid briefs; the pipeline suppressed
+	//     them because the wording asserted a benefit the record cannot carry)
+	//   - the italic stage-A rationale fallback is SUPPRESSED here: it is
+	//     unguarded mapper prose, and promoting it would undo the withhold
+	const candidatePARProseWithheld: Candidate = {
+		...candidatePARBriefUnavailable,
+		brief_error_kind: 'unsupported_benefit_claim'
+	};
+
 	const { Story } = defineMeta({
 		title: 'Composites/CandidateCard',
 		component: CandidateCard,
@@ -506,6 +518,28 @@
 	{#snippet template()}
 		<div style="width: 56rem; padding: 2rem;">
 			<CandidateCard candidate={candidatePARBriefUnavailable} index={15} />
+		</div>
+	{/snippet}
+</Story>
+
+<!-- Story 6: PAR — the support guard withheld the prose. Distinct label, and NO rationale fallback. -->
+<Story
+	name="Prose Withheld"
+	play={async ({ canvas }) => {
+		await waitFor(() =>
+			expect(
+				canvas.getByText(
+					'brief withheld — the wording asserted support the evidence record does not carry'
+				)
+			).toBeVisible()
+		);
+		// The unguarded stage-A rationale must NOT take the vacated slot.
+		expect(canvas.queryByText(/Punchh division is a leading provider/)).toBeNull();
+	}}
+>
+	{#snippet template()}
+		<div style="width: 56rem; padding: 2rem;">
+			<CandidateCard candidate={candidatePARProseWithheld} index={15} />
 		</div>
 	{/snippet}
 </Story>

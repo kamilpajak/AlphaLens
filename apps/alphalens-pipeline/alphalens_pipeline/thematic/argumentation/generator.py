@@ -38,6 +38,9 @@ from alphalens_pipeline.data.alt_data.openrouter_client import (
 )
 from alphalens_pipeline.thematic.argumentation.prompts import build_flash_prompt, build_pro_prompt
 from alphalens_pipeline.thematic.argumentation.schema import BRIEF_RESPONSE_SCHEMA
+from alphalens_pipeline.thematic.argumentation.support_guard import (
+    check_support_language,
+)
 from alphalens_pipeline.thematic.extraction.schema import parse_extraction
 
 logger = logging.getLogger(__name__)
@@ -58,6 +61,11 @@ _DEFAULT_MAX_OUTPUT_TOKENS = 8000
 # -> 32000) before giving up, covering a rare heavier reasoning trace.
 _MAX_OUTPUT_TOKENS_CEILING = 32000
 _DEFAULT_TEMPERATURE = 0.2
+
+# Key stamped on a brief the retry recovered, naming the FIRST draw's failing
+# kind. Not part of BRIEF_RESPONSE_SCHEMA and never rendered — the four prose
+# columns are projected by name.
+FIRST_ATTEMPT_KIND_KEY = "first_attempt_error_kind"
 _RETRY_TEMPERATURE = 0.0  # greedy decode for stability on the retry
 
 
@@ -106,6 +114,11 @@ class BriefErrorKind(enum.Enum):
     SAFETY = "safety"  # finish_reason == SAFETY
     TRANSPORT = "transport"  # SDK raised before producing a response
     LANGUAGE_DRIFT = "language_drift"  # parsed cleanly but the prose is CJK, not English
+    # Parsed cleanly, but the prose asserts a benefit the channel record
+    # cannot support. Same SHAPE as LANGUAGE_DRIFT — a contract violation in
+    # otherwise-valid output — and handled the same way: ONE greedy re-roll,
+    # then withhold the prose while the ROW still ships.
+    UNSUPPORTED_BENEFIT_CLAIM = "unsupported_benefit_claim"
 
 
 def _has_substantive_field(parsed: dict) -> bool:
@@ -219,8 +232,15 @@ def generate_brief(
     llm_client_flash: OpenRouterClient | None = None,
     max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
     temperature: float = _DEFAULT_TEMPERATURE,
+    violation_sink: list | None = None,
 ) -> tuple[dict | None, BriefErrorKind]:
     """Compose a single brief for one Phase D-scored candidate.
+
+    ``violation_sink``, when given, receives every support-guard match — fired
+    AND suppressed — of the LAST draw the guard scanned. A withheld row returns
+    no brief, so without this the count and spans of the text the operator would
+    have been shown are lost, and those are exactly what the first-weeks manual
+    read of the guard needs.
 
     Returns ``(brief_dict_with_model_used, BriefErrorKind.NONE)`` on
     success, or ``(None, kind)`` describing the failure mode.
@@ -321,6 +341,53 @@ def generate_brief(
         logger.warning("brief language drift (CJK output) for %s", facts.get("ticker"))
         return None, BriefErrorKind.LANGUAGE_DRIFT
 
+    # Support-contract guard: the prose must not assert a benefit the channel
+    # record cannot support. Same position and same shape as the CJK check —
+    # parsed cleanly, but it violates a hard contract. INERT unless the record
+    # is bottom-level, absent, or not grounded, so a well-grounded brief is
+    # never touched.
+    # An absent ``causal_support`` means the CALLER projected no record at all,
+    # which is not the same as a record that failed: there is nothing for the
+    # prose to contradict, so the guard stays inert. Production cannot take this
+    # branch — ``orchestrator._row_to_facts`` always projects the key, using
+    # ``no_record`` for an outage, and a test pins that.
+    causal_support = str(facts.get("causal_support") or "")
+    matches = (
+        check_support_language(
+            parsed,
+            causal_support=causal_support,
+            grounding=str(facts.get("channel_grounding") or ""),
+            ticker=str(facts.get("ticker") or ""),
+            company_name=str(facts.get("company_name") or ""),
+        )
+        if causal_support
+        else []
+    )
+    # The sink is refilled on EVERY guard-evaluated draw, including a draw with
+    # no matches at all, so it always describes the LAST draw the guard actually
+    # scanned. That is what lets the caller tell "the guard fired and the
+    # re-roll then died for another reason" (sink holds the first draw, because
+    # the second never reached the guard) from "no draw ever reached the guard"
+    # (sink empty). Suppressed matches ride along: a suppressor that misfires
+    # must be visible, not indistinguishable from no match at all.
+    if causal_support and violation_sink is not None:
+        violation_sink.clear()
+        violation_sink.extend(matches)
+    violations = [v for v in matches if v.suppressed_by is None]
+    if violations:
+        for violation in violations:
+            logger.warning(
+                "brief asserts an unsupported benefit for %s "
+                "(causal_support=%s, grounding=%s, field=%s, phrase=%r): %s",
+                facts.get("ticker"),
+                facts.get("causal_support"),
+                facts.get("channel_grounding"),
+                violation.field,
+                violation.matched_phrase,
+                violation.span,
+            )
+        return None, BriefErrorKind.UNSUPPORTED_BENEFIT_CLAIM
+
     parsed["model_used"] = model
     return parsed, BriefErrorKind.NONE
 
@@ -363,6 +430,7 @@ def generate_brief_with_retry(
     llm_client_flash: OpenRouterClient | None = None,
     base_max_output_tokens: int = _DEFAULT_MAX_OUTPUT_TOKENS,
     max_output_tokens_ceiling: int = _MAX_OUTPUT_TOKENS_CEILING,
+    violation_sink: list | None = None,
 ) -> tuple[dict | None, BriefErrorKind]:
     """Generate a brief, retrying on ``TRUNCATED`` / ``EMPTY`` / drift.
 
@@ -415,21 +483,33 @@ def generate_brief_with_retry(
         llm_client_flash=llm_client_flash,
         max_output_tokens=base_max_output_tokens,
         temperature=_DEFAULT_TEMPERATURE,
+        violation_sink=violation_sink,
     )
     if kind == BriefErrorKind.NONE:
         return brief, kind
+    # Recorded on a brief that only survives BECAUSE of the retry, so the caller
+    # can tell "clean on the first draw" from "repaired on the second" without a
+    # second signature. Read by the orchestrator's guard telemetry; the four
+    # prose columns are projected by name, so this extra key never ships.
+    first_attempt_kind = kind
     if kind not in (
         BriefErrorKind.TRUNCATED,
         BriefErrorKind.EMPTY,
         BriefErrorKind.EMPTY_CONTENT,
         BriefErrorKind.LANGUAGE_DRIFT,
+        BriefErrorKind.UNSUPPORTED_BENEFIT_CLAIM,
     ):
         return None, kind
 
     # TRUNCATED = the reasoning trace + JSON ran out of room -> escalate the cap
     # through the doubling ladder, stopping at the first success. EMPTY /
-    # EMPTY_CONTENT / LANGUAGE_DRIFT were NOT token-exhaustion, so a single fresh
-    # greedy call at the base cap is the right recovery (more tokens do nothing).
+    # EMPTY_CONTENT / LANGUAGE_DRIFT / UNSUPPORTED_BENEFIT_CLAIM were NOT
+    # token-exhaustion, so a single fresh greedy call at the base cap is the right
+    # recovery (more tokens do nothing). The retry uses the SAME prompt — the
+    # contract is already in it — so the model gets a clean greedy draw rather
+    # than a post-hoc edit. We never edit the model's text: a Python-inserted
+    # "may" would fabricate hedging the model never reasoned about and would
+    # destroy the audit trail.
     if kind == BriefErrorKind.TRUNCATED:
         for retry_tokens in _truncation_retry_caps(
             base_max_output_tokens, max_output_tokens_ceiling
@@ -446,9 +526,10 @@ def generate_brief_with_retry(
                 llm_client_flash=llm_client_flash,
                 max_output_tokens=retry_tokens,
                 temperature=_RETRY_TEMPERATURE,
+                violation_sink=violation_sink,
             )
             if kind == BriefErrorKind.NONE:
-                return brief, kind
+                return _stamp_first_attempt(brief, first_attempt_kind), kind
         # Ladder exhausted — surface the LAST failing kind observed (usually
         # TRUNCATED, but the final rung may have failed differently).
         return None, kind
@@ -466,13 +547,24 @@ def generate_brief_with_retry(
         llm_client_flash=llm_client_flash,
         max_output_tokens=base_max_output_tokens,
         temperature=_RETRY_TEMPERATURE,
+        violation_sink=violation_sink,
     )
     # On a failed retry the terminal kind is the RETRY's failing kind (it may
     # differ from the first attempt's kind).
-    return (brief, kind) if kind == BriefErrorKind.NONE else (None, kind)
+    if kind != BriefErrorKind.NONE:
+        return None, kind
+    return _stamp_first_attempt(brief, first_attempt_kind), kind
+
+
+def _stamp_first_attempt(brief: dict | None, kind: BriefErrorKind) -> dict | None:
+    """Record which failure the FIRST draw hit on a brief the retry recovered."""
+    if brief is not None:
+        brief[FIRST_ATTEMPT_KIND_KEY] = kind.value
+    return brief
 
 
 __all__ = [
+    "FIRST_ATTEMPT_KIND_KEY",
     "FLASH_MODEL",
     "PRO_MODEL",
     "BriefErrorKind",

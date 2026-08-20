@@ -248,11 +248,25 @@ class TestThematicCandidatesSchema(unittest.TestCase):
         # rather than in production.
         frame = _valid_candidates_frame()
         n = len(frame)
-        frame["channel_status"] = ["verified", "unverified"][:n]
+        frame["channel_support_status"] = ["established", "not_established"][:n]
         frame["channel_type"] = ["customer_demand", "none"][:n]
-        frame["channel_vote_dispersion"] = pd.array([0, 2][:n], dtype="Int64")
+        frame["channel_support_dispersion"] = pd.array([0, 2][:n], dtype="Int64")
+        # The grounding columns are extras on exactly the same footing. Making
+        # any of them REQUIRED would be a step toward gating on a detector whose
+        # accuracy nothing has audited yet.
+        frame["channel_grounding_status"] = ["grounded", "theme_misroute"][:n]
+        frame["channel_grounding_quote"] = ["the event states x", ""][:n]
+        frame["channel_grounding_reason"] = ["", "the event is a round-up"][:n]
+        frame["channel_grounding_agree_n"] = pd.array([3, 2][:n], dtype="Int64")
+        frame["channel_grounding_quote_verbatim"] = [True, False][:n]
         frame["shadow_strict_verdict"] = ["keep", "keep"][:n]
         THEMATIC_CANDIDATES_SCHEMA.validate(frame)
+
+    def test_no_channel_column_is_required_by_the_hop_contract(self):
+        # Positive control for the sentence above: a frame with NO channel column
+        # at all still validates, so nothing downstream can have quietly started
+        # depending on one.
+        THEMATIC_CANDIDATES_SCHEMA.validate(_valid_candidates_frame())
 
 
 class TestThematicScoredSchema(unittest.TestCase):

@@ -35,9 +35,11 @@ from alphalens_research.eval.financing_claims import (
 )
 from alphalens_research.eval.measurement import _COLUMN_TO_FACT_KEY
 
+from tests.golden.replay_client import load_final_answer_cassette_records
+
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "brief_day"
 _CASSETTES = _FIXTURES / "cassettes"
-_GOLDEN_PARQUET = _FIXTURES / "golden" / "2026-05-24.parquet"
+_GOLDEN_PARQUET = _FIXTURES / "golden" / "2026-08-19.parquet"
 
 
 def _fired(row: dict) -> list[FinancingFlag]:
@@ -275,7 +277,7 @@ class TestScorerHelperContract(unittest.TestCase):
 
 
 class TestVersionBumpAndDualStamp(unittest.TestCase):
-    """The negation patch bumped FAITHFULNESS_SCORER_VERSION to t6-v1.3; the 4
+    """The negation patch bumped FAITHFULNESS_SCORER_VERSION to t6-v1.3; the 5
     golden cassettes still score clean WITHOUT a re-record; the report dual-stamps
     both poolability keys."""
 
@@ -285,16 +287,20 @@ class TestVersionBumpAndDualStamp(unittest.TestCase):
     def test_golden_cassettes_still_clean_no_rerecord(self) -> None:
         from alphalens_research.eval.faithfulness import parse_facts_index, score_brief
 
-        cassettes = sorted(_CASSETTES.glob("*.json"))
-        self.assertEqual(len(cassettes), 4)
-        for path in cassettes:
-            record = json.loads(path.read_text())
+        # load_final_answer_cassette_records excludes a truncated, discarded
+        # retry attempt (CRSP's first draw at the golden's base 2000-token cap
+        # truncated before succeeding at 4000 in the 2026-08-19 re-baseline) —
+        # a bare glob("*.json") would crash json.loads on that draw's cut-off
+        # content. See docs/research/golden_rebaseline_recorded_2026_08_20.md.
+        records = load_final_answer_cassette_records(_CASSETTES)
+        self.assertEqual(len(records), 5)
+        for record in records:
             facts = parse_facts_index(record["contents"])
             brief_json = record["openrouter_response"]["choices"][0]["message"]["content"]
             brief = json.loads(brief_json)
             result = score_brief(facts, brief)
-            self.assertEqual(result.characterization_violations, 0, path.name)
-            self.assertEqual(result.fabricated_numeric_date_atoms, 0, path.name)
+            self.assertEqual(result.characterization_violations, 0, facts.get("ticker"))
+            self.assertEqual(result.fabricated_numeric_date_atoms, 0, facts.get("ticker"))
 
     def test_report_dual_stamps_both_versions(self) -> None:
         report = measure_financing_fabrication(
@@ -372,7 +378,7 @@ class TestMeasureFinancingFabrication(unittest.TestCase):
         # even though the live parquet has no brief_date column.
         report = measure_financing_fabrication([str(_GOLDEN_PARQUET)])
         self.assertIn("brief_date", report["per_stratum"])
-        self.assertIn("2026-05-24", report["per_stratum"]["brief_date"])
+        self.assertIn("2026-08-19", report["per_stratum"]["brief_date"])
 
 
 class TestBuildFinancingAuditWorksheet(unittest.TestCase):

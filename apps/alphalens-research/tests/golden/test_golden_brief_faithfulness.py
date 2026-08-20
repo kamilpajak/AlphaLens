@@ -4,9 +4,9 @@ Implements the LOCKED design memo
 ``docs/research/reading_quality_eval_design_2026_07_11.md`` (§6, §8, §11):
 
 * **Parser round-trip guard** — the fact-index parser recovers KNOWN typed facts
-  for the 4 golden cassettes, so a red gate is never a regex-parser bug
+  for the 5 golden cassettes, so a red gate is never a regex-parser bug
   misattributed to the model (memo §6.4 "Parser-correctness guard").
-* **Gating assertions** — over the 4 real cassettes,
+* **Gating assertions** — over the 5 real cassettes,
   ``fabricated_numeric_date_atoms == 0`` AND ``characterization_violations == 0``
   (the ONLY registered v1 success criteria, memo §2 pre-registration clause).
 * **Seeded positive-control** — a synthetic brief carrying a KNOWN fabricated
@@ -17,7 +17,7 @@ Implements the LOCKED design memo
   seeded DISTORTED that proves the DISTORTED branch is reachable (memo §6.4).
 
 The fact-index source at test time: the golden parquet's
-``brief_template_facts_json`` is NULL for all 4 rows (verified 2026-07-11), so
+``brief_template_facts_json`` is NULL for all rows, so
 the harness uses the memo's documented FALLBACK — parse the rendered ``<facts>``
 string from the cassette ``contents``. The cassettes are self-contained: each
 carries ``contents`` (facts block) + ``openrouter_response`` (brief JSON).
@@ -39,20 +39,27 @@ from alphalens_research.eval.financing_claims import (
     financing_gate_violations,
 )
 
+from tests.golden.replay_client import load_final_answer_cassette_records
+
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "brief_day"
 _CASSETTES = _FIXTURES / "cassettes"
 
 
 def _load_cassettes() -> dict[str, dict]:
-    """Load the 4 golden cassettes keyed by ticker.
+    """Load the golden FINAL-ANSWER cassettes keyed by ticker.
 
     Each record → ``{ticker: {"contents": <facts prompt>, "brief": {field: text}}}``.
     Ticker is parsed off the ``ticker:`` line inside the rendered ``<facts>``
     block (the same line the fallback fact-index parser keys on).
+
+    Uses :func:`load_final_answer_cassette_records` rather than a bare
+    ``glob("*.json")`` — a retried ticker (CRSP in the 2026-08-19 re-baseline
+    truncated once at the base 2000-token cap before succeeding at 4000)
+    leaves TWO cassette files on disk, and the truncated one is not valid JSON
+    to parse as an answer. See ``docs/research/golden_rebaseline_recorded_2026_08_20.md``.
     """
     out: dict[str, dict] = {}
-    for path in sorted(_CASSETTES.glob("*.json")):
-        record = json.loads(path.read_text())
+    for record in load_final_answer_cassette_records(_CASSETTES):
         contents = record["contents"]
         brief_json = record["openrouter_response"]["choices"][0]["message"]["content"]
         brief = json.loads(brief_json)
@@ -84,33 +91,45 @@ def _cassette_financing_row(data: dict) -> dict:
     }
 
 
-# Known typed facts for the 4 golden cassettes, read directly off the rendered
-# <facts> blocks (verified against the cassette contents 2026-07-11). The parser
-# round-trip guard asserts parse_facts_index() recovers exactly these.
+# Known typed facts for the 5 golden cassettes (2026-08-19 grounding-and-prose-
+# honesty re-baseline; see docs/research/golden_rebaseline_recorded_2026_08_20.md),
+# read directly off the rendered <facts> blocks. The parser round-trip guard
+# asserts parse_facts_index() recovers exactly these.
 _KNOWN_FACTS = {
-    "QUBT": {
-        "ticker": "QUBT",
-        "valuation_ps": 4052.9,
-        "valuation_ev_rev": 2985.3,
-        "technical_pct_off_52w_high": -50.0,
-        "technical_ma200_distance_pct": 0.7,
+    "RDN": {
+        "ticker": "RDN",
+        "valuation_ps": 4.1,
+        "valuation_ev_rev": 4.9,
+        "technical_pct_off_52w_high": -8.4,
+        "technical_ma200_distance_pct": 2.9,
     },
-    "MANH": {
-        "ticker": "MANH",
-        "valuation_ps": 7.5,
-        "valuation_ev_rev": 7.2,
-        "technical_pct_off_52w_high": -39.2,
-        "technical_ma200_distance_pct": -18.3,
+    "PSNL": {
+        "ticker": "PSNL",
+        "valuation_ps": 23.8,
+        "valuation_ev_rev": 22.2,
+        "technical_pct_off_52w_high": 0.0,
+        "technical_ma200_distance_pct": 69.6,
     },
-    "DFIN": {
-        "ticker": "DFIN",
-        "technical_pct_off_52w_high": -40.5,
-        "technical_ma200_distance_pct": -21.0,
+    "CRSP": {
+        "ticker": "CRSP",
+        "valuation_ps": 1647.6,
+        "valuation_ev_rev": 1548.6,
+        "technical_pct_off_52w_high": -22.1,
+        "technical_ma200_distance_pct": 12.6,
     },
-    "QLYS": {
-        "ticker": "QLYS",
-        "technical_pct_off_52w_high": -33.4,
-        "technical_ma200_distance_pct": -14.4,
+    "MRVI": {
+        "ticker": "MRVI",
+        "valuation_ps": 5.8,
+        "valuation_ev_rev": 6.2,
+        "technical_pct_off_52w_high": -0.3,
+        "technical_ma200_distance_pct": 72.1,
+    },
+    "ABUS": {
+        "ticker": "ABUS",
+        "valuation_ps": 69.1,
+        "valuation_ev_rev": 67.8,
+        "technical_pct_off_52w_high": -4.6,
+        "technical_ma200_distance_pct": 11.7,
     },
 }
 
@@ -118,7 +137,7 @@ _KNOWN_FACTS = {
 class TestParserRoundTrip(unittest.TestCase):
     """The parser recovers KNOWN typed facts — a red gate is never a parser bug."""
 
-    def test_all_four_cassettes_parse(self):
+    def test_all_five_cassettes_parse(self):
         cassettes = _load_cassettes()
         self.assertEqual(set(cassettes), set(_KNOWN_FACTS))
 
@@ -145,7 +164,7 @@ class TestGoldenGate(unittest.TestCase):
     def test_no_fabricated_numeric_date_over_golden(self):
         cassettes = _load_cassettes()
         # Explicit fixture-presence guard: the gate loop below is only
-        # non-vacuous if the 4 cassettes are present. Do not rely on a sibling
+        # non-vacuous if the 5 cassettes are present. Do not rely on a sibling
         # test to prove the fixtures exist (mirrors the repo "positive-control
         # so the regex cannot rot to empty" doctrine, applied to fixtures).
         self.assertEqual(set(cassettes), set(_KNOWN_FACTS))
@@ -171,7 +190,7 @@ class TestGoldenGate(unittest.TestCase):
             )
 
     def test_no_financing_fabrication_over_golden(self):
-        # T6.5 promoted to the gate (hermetic): the 4 frozen golden cassettes
+        # T6.5 promoted to the gate (hermetic): the 5 frozen golden cassettes
         # carry no financing assertion by construction, so the financing detector
         # must fire 0 on each. Corpus precision (~60%) is irrelevant here — this
         # runs only on clean reference briefs, and it is NOT a per-brief
@@ -202,18 +221,18 @@ class TestGoldenGate(unittest.TestCase):
         }
         self.assertGreaterEqual(financing_gate_violations(_cassette_financing_row(seed)), 1)
 
-    def test_manh_negation_guard_does_not_fire(self):
-        # MANH bear/reasoning both say "not a bargain" — the compliant framing.
-        cassettes = _load_cassettes()
-        result = score_brief(cassettes["MANH"]["facts"], cassettes["MANH"]["brief"])
-        self.assertEqual(result.characterization_violations, 0)
-
 
 class TestSeededPositiveControl(unittest.TestCase):
     """The gate MUST fire red on a known fabrication + a known violation."""
 
-    def _manh_facts(self) -> dict:
-        return _load_cassettes()["MANH"]["facts"]
+    def _reference_facts(self) -> dict:
+        # Any real golden ticker's facts serve as the substrate — the fabricated
+        # $999M figure and the "cheap entry" characterization below are SEEDED
+        # (synthetic), not real generated prose, so the choice of ticker only
+        # needs a real facts dict to score against. CRSP carries large, distinct
+        # valuation multiples (P/S 1647.6) that cannot coincidentally collide
+        # with the seeded $999M.
+        return _load_cassettes()["CRSP"]["facts"]
 
     def test_positive_control_fires_both_metrics(self):
         # Synthetic brief against MANH facts (memo §6.5 contrast case):
@@ -225,7 +244,7 @@ class TestSeededPositiveControl(unittest.TestCase):
             "bear_summary": "Momentum laggard risk and valuation risk.",
             "catalyst_failure_exit": "Exit if the catalyst fails.",
         }
-        result = score_brief(self._manh_facts(), seeded)
+        result = score_brief(self._reference_facts(), seeded)
         self.assertGreaterEqual(
             result.fabricated_numeric_date_atoms,
             1,
@@ -239,7 +258,7 @@ class TestSeededPositiveControl(unittest.TestCase):
 
     def test_positive_control_forecast_verb_fires(self):
         # Forecast verb adjacent to next_earnings_date fires a VIOLATION.
-        facts = dict(self._manh_facts())
+        facts = dict(self._reference_facts())
         facts["next_earnings_date"] = "2026-06-15"
         seeded = {
             "tldr": "We are expecting a beat at the next_earnings_date of 2026-06-15.",
@@ -253,7 +272,7 @@ class TestSeededPositiveControl(unittest.TestCase):
     def test_forecast_verb_fires_on_date_only_reference(self):
         # A date-only earnings reference ("a strong print on 2026-06-15") anchors
         # the forecast-verb check even without the literal word "earnings".
-        facts = dict(self._manh_facts())
+        facts = dict(self._reference_facts())
         facts["next_earnings_date"] = "2026-06-15"
         seeded = {
             "tldr": "We are anticipating a strong print on 2026-06-15.",
@@ -286,11 +305,11 @@ class TestBoundaryPins(unittest.TestCase):
         return _load_cassettes()[ticker]["facts"]
 
     def test_grounded_sign_strip(self):
-        # QUBT "50% drawdown from 52w high" vs fact -50.0% → GROUNDED (sign stripped).
-        # Pin WHICH fact grounded it — a coincidental cross-fact collision must
-        # not be able to pass this test.
+        # CRSP "22.1% drawdown from 52w high" vs fact -22.1% → GROUNDED (sign
+        # stripped). Pin WHICH fact grounded it — a coincidental cross-fact
+        # collision must not be able to pass this test.
         result = score_brief(
-            self._facts("QUBT"), {"supply_chain_reasoning": "50% drawdown from 52w high"}
+            self._facts("CRSP"), {"supply_chain_reasoning": "22.1% drawdown from 52w high"}
         )
         numeric = [a for a in result.atoms if a.kind == "numeric"]
         grounded = [a for a in numeric if a.verdict == "GROUNDED"]
@@ -307,9 +326,11 @@ class TestBoundaryPins(unittest.TestCase):
         self.assertTrue(any(a.kind == "numeric" for a in atoms), atoms)
 
     def test_grounded_after_rounding(self):
-        # DFIN "21% below MA200" vs fact -21.0% → GROUNDED (rounded to brief precision).
+        # MRVI "72% above its 200-day moving average" vs fact 72.1% → GROUNDED
+        # (fact rounded to the brief's stated 0-decimal precision).
         result = score_brief(
-            self._facts("DFIN"), {"supply_chain_reasoning": "trading 21% below MA200"}
+            self._facts("MRVI"),
+            {"supply_chain_reasoning": "trading 72% above its 200-day moving average"},
         )
         numeric = [a for a in result.atoms if a.kind == "numeric"]
         grounded = [a for a in numeric if a.verdict == "GROUNDED"]
@@ -320,11 +341,11 @@ class TestBoundaryPins(unittest.TestCase):
         )
         self.assertEqual(result.fabricated_numeric_date_atoms, 0)
 
-    def test_grounded_40_5_below_52w_high(self):
-        # DFIN "40.5% below its 52-week high" vs fact -40.5% → GROUNDED.
+    def test_grounded_exact_decimal(self):
+        # ABUS "4.6% below its 52-week high" vs fact -4.6% → GROUNDED.
         result = score_brief(
-            self._facts("DFIN"),
-            {"supply_chain_reasoning": "trading 40.5% below its 52-week high"},
+            self._facts("ABUS"),
+            {"supply_chain_reasoning": "trading 4.6% below its 52-week high"},
         )
         numeric = [a for a in result.atoms if a.kind == "numeric"]
         grounded = [a for a in numeric if a.verdict == "GROUNDED"]
@@ -334,14 +355,16 @@ class TestBoundaryPins(unittest.TestCase):
         )
 
     def test_distorted_branch_is_reachable(self):
-        # Seeded: MANH "50% drawdown from 52w high" vs the 52w-high fact -39.2%.
-        # 50 vs |39.2| = 27% relative → inside the 40%-of-fact DISTORTED band but
-        # not exact after rounding → DISTORTED. Pin the DRIVING fact so the
-        # verdict cannot come from an unrelated same-digit fact (the "%" atom is
-        # unit-locked to "%" facts, so RSI 53 can no longer collide).
+        # Seeded: RDN "9% drawdown from 52w high" vs the 52w-high fact -8.4%.
+        # |9 - 8.4| = 0.6, within the 40%-of-fact (|8.4|*0.4 = 3.36) DISTORTED
+        # band but not exact after rounding → DISTORTED. Pin the DRIVING fact
+        # so the verdict cannot come from an unrelated same-digit fact — RDN
+        # also carries technical_pct_off_52w_low=14.8, further away (5.8) than
+        # the driving fact (0.6), so the "closest fact wins" rule picks
+        # technical_pct_off_52w_high unambiguously.
         result = score_brief(
-            self._facts("MANH"),
-            {"supply_chain_reasoning": "a 50% drawdown from 52w high"},
+            self._facts("RDN"),
+            {"supply_chain_reasoning": "a 9% drawdown from 52w high"},
         )
         numeric = [a for a in result.atoms if a.kind == "numeric"]
         distorted = [a for a in numeric if a.verdict == "DISTORTED"]
@@ -356,13 +379,17 @@ class TestBoundaryPins(unittest.TestCase):
         )
 
     def test_gross_overstatement_is_fabricated_not_distorted(self):
-        # A "%" drawdown claim overstating the -39.2% fact by >40% relative
-        # (55% vs 39.2 = 40.3% over) must be FABRICATED, not DISTORTED — the
-        # DISTORTED band is scaled to the FACT magnitude only (symmetric),
-        # so tolerance does not grow as the brief overstates.
+        # A "%" drawdown claim overstating the -8.4% fact by far more than 40%
+        # relative (30% vs 8.4 = 257% over) must be FABRICATED, not DISTORTED —
+        # the DISTORTED band is scaled to the FACT magnitude only (symmetric),
+        # so tolerance does not grow as the brief overstates. 30 also clears
+        # every OTHER %-unit fact on RDN's row (technical_pct_off_52w_low=14.8,
+        # fcff_yield_pct=3.1, technical_atr_pct=2.5, technical_ma200_distance_pct=2.9,
+        # technical_ma50_distance_pct=-2.4), so no collision can accidentally
+        # ground or distort it instead.
         result = score_brief(
-            self._facts("MANH"),
-            {"supply_chain_reasoning": "a 55% drawdown from 52w high"},
+            self._facts("RDN"),
+            {"supply_chain_reasoning": "a 30% drawdown from 52w high"},
         )
         numeric = [a for a in result.atoms if a.kind == "numeric"]
         self.assertTrue(
@@ -374,8 +401,8 @@ class TestBoundaryPins(unittest.TestCase):
     def test_fabricated_numeric_gates(self):
         # A number nowhere in the facts, far outside any band → FABRICATED (gating).
         result = score_brief(
-            self._facts("MANH"),
-            {"supply_chain_reasoning": "P/S of 12345.6 signals froth"},
+            self._facts("CRSP"),
+            {"supply_chain_reasoning": "P/S of 999999.9 signals froth"},
         )
         self.assertGreaterEqual(result.fabricated_numeric_date_atoms, 1)
 

@@ -180,9 +180,9 @@ class TestMapThemesFreeze(unittest.TestCase):
                     themes=["government_contract"], asof=ASOF, output_dir=out
                 )
         for name in (
-            "channel_verified",
-            "channel_partial",
-            "channel_unverified",
+            "channel_established",
+            "channel_suggestive",
+            "channel_not_established",
             "channel_assess_failed",
             "themes_shadow_kept",
             "themes_shadow_refused",

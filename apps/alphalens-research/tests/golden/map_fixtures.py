@@ -85,7 +85,7 @@ A CAVEAT a reader of a green replay must not miss: the cassette is keyed on the
 full request descriptor, and stage B issues ``_ASSESS_VOTES`` IDENTICAL requests
 per candidate. They therefore collapse to ONE cassette file, and every replay
 serves the same body three times — so a replayed run always reports
-``channel_vote_valid_n = 3`` with ``channel_vote_dispersion = 0``. The golden
+``channel_vote_valid_n = 3`` with ``channel_support_dispersion = 0``. The golden
 proves the stage is WIRED, never that the k-draw voting is stable; vote
 stability is measured live (forward pre-registration §5 descriptive 5), not
 here.
@@ -197,7 +197,7 @@ QUANTUM_2026_05_24 = MapFixture(
     theme="quantum_computing",
     asof=dt.date(2026, 5, 24),
     window_dates=("2026-05-15", "2026-05-18", "2026-05-24"),
-    current_recording="v3",
+    current_recording="v4",
     dirname="map_day",
 )
 
@@ -219,7 +219,7 @@ NVDA_ISING_2026_04_14 = MapFixture(
     # exactly one candidate trigger. That is a property of the seeded window
     # (see seeded_surfaces below), not a measurement of the news corpus.
     window_dates=("2026-04-14",),
-    current_recording="v2",
+    current_recording="v3",
     dirname="map_day_nvda_ising",
     seeded_surfaces=(
         ("events/2026-04-14.parquet", _ISING_SEEDED_WHY),

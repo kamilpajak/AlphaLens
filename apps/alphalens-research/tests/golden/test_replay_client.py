@@ -23,7 +23,9 @@ from tests.golden.replay_client import (
     CassetteMissError,
     RecordingOpenRouter,
     ReplayOpenRouter,
+    cassette_is_truncated,
     cassette_key,
+    load_final_answer_cassette_records,
 )
 
 _MODEL = "deepseek/deepseek-v4-flash"
@@ -155,6 +157,59 @@ class TestBuildConfigDelegation(unittest.TestCase):
             cassette_key(model=_MODEL, contents="same", config=cfg_a),
             cassette_key(model=_MODEL, contents="same", config=cfg_b),
         )
+
+
+class TestTruncatedCassetteDetection(unittest.TestCase):
+    """A cassette on disk is not automatically a final answer.
+
+    ``generate_brief_with_retry`` records EVERY draw it makes, including a
+    truncated (``finish_reason == "length"``) attempt it discards before
+    retrying at a higher token cap. A caller that globs every cassette and
+    parses its ``content`` unconditionally is exactly the defect this pins:
+    a real CRSP recording (2026-08-19 golden re-baseline) truncated at the
+    base 2000-token cap, succeeded on retry at 4000, and both cassettes were
+    written to the SAME directory — the eval-golden loaders that glob-and-
+    parse crashed on the truncated one with ``Unterminated string``.
+    """
+
+    def test_stop_finish_reason_is_not_truncated(self):
+        record = {"openrouter_response": _payload('{"tldr": "ok"}', finish_reason="stop")}
+        self.assertFalse(cassette_is_truncated(record))
+
+    def test_length_finish_reason_is_truncated(self):
+        record = {"openrouter_response": _payload('{"tldr": "cut off', finish_reason="length")}
+        self.assertTrue(cassette_is_truncated(record))
+
+    def test_missing_choices_is_not_truncated(self):
+        # A cassette recorded for a non-brief call (e.g. a map-themes stage)
+        # may carry no `choices` at all under a hand-built payload; absence
+        # must not be misread as truncation.
+        self.assertFalse(cassette_is_truncated({"openrouter_response": {}}))
+
+    def test_load_final_answer_cassette_records_skips_truncated(self):
+        with tempfile.TemporaryDirectory() as td:
+            cdir = Path(td)
+            # The discarded truncated attempt at the base cap.
+            fake_truncated = _FakeRealClient(_payload('{"tldr": "cut off', finish_reason="length"))
+            recorder = RecordingOpenRouter(fake_truncated, cdir)
+            cfg_base = recorder.build_config(max_output_tokens=2000)
+            recorder.generate_content(model=_MODEL, contents="CRSP facts", config=cfg_base)
+
+            # The successful retry at an escalated cap — a DIFFERENT cassette
+            # key (max_tokens differs), same directory.
+            fake_ok = _FakeRealClient(_payload('{"tldr": "ok"}', finish_reason="stop"))
+            recorder_ok = RecordingOpenRouter(fake_ok, cdir)
+            cfg_retry = recorder_ok.build_config(max_output_tokens=4000)
+            recorder_ok.generate_content(model=_MODEL, contents="CRSP facts", config=cfg_retry)
+
+            self.assertEqual(len(list(cdir.glob("*.json"))), 2)
+            final = load_final_answer_cassette_records(cdir)
+            self.assertEqual(len(final), 1)
+            self.assertEqual(final[0]["openrouter_response"]["choices"][0]["finish_reason"], "stop")
+
+    def test_load_final_answer_cassette_records_empty_dir(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertEqual(load_final_answer_cassette_records(Path(td)), [])
 
 
 if __name__ == "__main__":

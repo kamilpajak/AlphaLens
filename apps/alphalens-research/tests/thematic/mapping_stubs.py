@@ -8,9 +8,9 @@ reach OpenRouter for real — a live network call inside the default
 
 Use :func:`stub_assessor` in ``setUp`` (auto-undone via ``addCleanup``) or
 :func:`patch_assessor` as a context manager. The default answer is
-``unverified``, chosen because it is the assessment outcome that used to DROP a
-candidate: a test that silently starts filtering on the channel would go red
-here rather than passing on a lucky "verified".
+``not_established``, chosen because it is the assessment outcome that used to
+DROP a candidate: a test that silently starts filtering on the channel would go
+red here rather than passing on a lucky ``established``.
 """
 
 from __future__ import annotations
@@ -20,11 +20,30 @@ from unittest import mock
 from alphalens_pipeline.thematic.mapping import channel_assessor
 
 
-def assessment(status: str = "unverified") -> channel_assessor.ChannelAssessment:
-    """One deterministic assessment, no LLM involved."""
-    scored = status in ("verified", "partial")
+def assessment(
+    status: str = channel_assessor.SUPPORT_NOT_ESTABLISHED,
+    *,
+    grounding: str = channel_assessor.GROUNDING_GROUNDED,
+) -> channel_assessor.ChannelAssessment:
+    """One deterministic assessment, no LLM involved.
+
+    ``grounding`` defaults to ``grounded`` so the default stub expresses the
+    NORMAL case — honest uncertainty (``not_established`` + ``grounded``), which
+    is precisely the population this design exists to keep. Pass a defect value
+    for the never-shrink cases; see :func:`misrouted_assessment`.
+    """
+    scored = status in (
+        channel_assessor.SUPPORT_ESTABLISHED,
+        channel_assessor.SUPPORT_SUGGESTIVE,
+    )
+    grounded = grounding == channel_assessor.GROUNDING_GROUNDED
     return channel_assessor.ChannelAssessment(
-        status=status,
+        support_status=status,
+        grounding_status=grounding,
+        grounding_quote="the event states x" if grounded else "",
+        grounding_reason="" if grounded else "the event does not concern this theme",
+        grounding_agree_n=channel_assessor._ASSESS_VOTES if grounded else 1,
+        grounding_quote_verbatim=False,
         channel_type="customer_demand" if scored else "none",
         text="the event states x -> demand shifts -> revenue moves" if scored else "",
         evidence="the event states x" if scored else "",
@@ -32,13 +51,25 @@ def assessment(status: str = "unverified") -> channel_assessor.ChannelAssessment
         confidence=0.5 if scored else None,
         votes=channel_assessor._ASSESS_VOTES,
         valid_n=channel_assessor._ASSESS_VOTES if scored else 0,
-        dispersion=0,
+        support_dispersion=0,
         outcome=channel_assessor.AssessmentOutcome.SUCCESS,
         assessed_at="2026-08-19T00:00:00+00:00",
     )
 
 
-def patch_assessor(status: str = "unverified"):
+def misrouted_assessment(
+    grounding: str = channel_assessor.GROUNDING_THEME_MISROUTE,
+) -> channel_assessor.ChannelAssessment:
+    """A grounding-FAILED assessment, for the never-shrink cases.
+
+    The row it annotates must still reach the parquet, keep its rank and reach a
+    brief: DETECT, STAMP, KEEP, MEASURE. A test that starts dropping on grounding
+    goes red on the row count, not on a status assertion.
+    """
+    return assessment(channel_assessor.SUPPORT_NOT_ESTABLISHED, grounding=grounding)
+
+
+def patch_assessor(status: str = channel_assessor.SUPPORT_NOT_ESTABLISHED):
     """Patch ``assess_candidates`` to answer one result per input, in order."""
 
     def _fake(*, candidates, **_kwargs):
@@ -49,7 +80,7 @@ def patch_assessor(status: str = "unverified"):
     )
 
 
-def stub_assessor(testcase, status: str = "unverified"):
+def stub_assessor(testcase, status: str = channel_assessor.SUPPORT_NOT_ESTABLISHED):
     """Start :func:`patch_assessor` for the lifetime of one test."""
     patcher = patch_assessor(status)
     patcher.start()

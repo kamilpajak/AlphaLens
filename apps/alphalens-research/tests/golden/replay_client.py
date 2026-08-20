@@ -33,6 +33,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from alphalens_pipeline.data.alt_data.openrouter_client import (
+    _FINISH_REASON_MAP,
     OpenRouterClient,
     OpenRouterConfig,
     _wrap_response,
@@ -84,6 +85,46 @@ def cassette_key(*, model: str, contents: str, config: OpenRouterConfig | None) 
     }
     blob = json.dumps(descriptor, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def cassette_is_truncated(record: dict[str, Any]) -> bool:
+    """True when a recorded cassette's raw response was cut off (MAX_TOKENS).
+
+    A cassette FILE on disk is not automatically a final answer. The brief
+    generator's retry ladder (``generator.generate_brief_with_retry``) records
+    EVERY draw it makes through :class:`RecordingOpenRouter` — including a
+    truncated (OpenRouter ``finish_reason == "length"``) attempt it discards
+    and retries at a higher token cap, exactly as ``generator._classify_finish_reason``
+    already does for the live client. A caller that globs every ``*.json``
+    cassette and parses its ``content`` unconditionally as the answer is
+    treating "recorded" as "accepted", which are not the same thing — this is
+    the shared classification a loader must apply first. Reuses the SAME
+    ``_FINISH_REASON_MAP`` the production client translates through, so a
+    cassette classifies identically here and in ``generator.py``.
+    """
+    choices = (record.get("openrouter_response") or {}).get("choices") or []
+    if not choices:
+        return False
+    raw_reason = choices[0].get("finish_reason")
+    return _FINISH_REASON_MAP.get(raw_reason, "UNKNOWN") == "MAX_TOKENS"
+
+
+def load_final_answer_cassette_records(cassette_dir: Path | str) -> list[dict[str, Any]]:
+    """Every cassette record under ``cassette_dir`` that represents a FINAL answer.
+
+    Excludes truncated attempts (see :func:`cassette_is_truncated`) — the
+    discarded first draw of a retry ladder. Any eval-golden test that reads
+    raw cassette JSON directly (rather than driving ``generate_briefs`` through
+    :class:`ReplayOpenRouter`, which correctly replays the whole retry
+    sequence) MUST go through this function instead of a bare
+    ``glob("*.json")`` + ``json.loads``.
+    """
+    records = []
+    for path in sorted(Path(cassette_dir).glob("*.json")):
+        record = json.loads(path.read_text())
+        if not cassette_is_truncated(record):
+            records.append(record)
+    return records
 
 
 class ReplayOpenRouter:
@@ -180,5 +221,7 @@ __all__ = [
     "CassetteMissError",
     "RecordingOpenRouter",
     "ReplayOpenRouter",
+    "cassette_is_truncated",
     "cassette_key",
+    "load_final_answer_cassette_records",
 ]

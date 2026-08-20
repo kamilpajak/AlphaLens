@@ -836,7 +836,7 @@ class TestEndToEndSubjectMatchPopulatesBriefTemplateId(unittest.TestCase):
             with patch.object(
                 orchestrator,
                 "_brief_for_row",
-                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE, {}, []),
             ):
                 out = orchestrator.generate_briefs(
                     scored, asof=dt.date(2026, 5, 31), output_dir=Path(tmp), api_key="testkey"
@@ -857,7 +857,7 @@ class TestEndToEndSubjectMatchPopulatesBriefTemplateId(unittest.TestCase):
             with patch.object(
                 orchestrator,
                 "_brief_for_row",
-                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE),
+                return_value=(_FAKE_BRIEF, None, generator.BriefErrorKind.NONE, {}, []),
             ):
                 out = orchestrator.generate_briefs(
                     scored, asof=dt.date(2026, 5, 31), output_dir=Path(tmp), api_key="testkey"

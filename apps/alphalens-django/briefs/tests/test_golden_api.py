@@ -27,9 +27,12 @@ from rest_framework.test import APIClient
 
 from briefs.ingest.parquet import rebuild_from_parquet
 
-_ASOF = dt.date(2026, 5, 24)
 # Single source of truth: the golden produced by the research-side recorder.
-_GOLDEN_PARQUET = (
+# The asof is DISCOVERED from the directory rather than hardcoded — the golden is
+# re-cut onto a new day whenever the brief contract changes (2026-05-24 -> 2026-08-19
+# for the causal-support taxonomy), and a hardcoded date turns every honest
+# re-baseline into a cross-app CI break.
+_GOLDEN_DIR = (
     Path(__file__).resolve().parents[3]
     / "alphalens-research"
     / "tests"
@@ -37,8 +40,28 @@ _GOLDEN_PARQUET = (
     / "fixtures"
     / "brief_day"
     / "golden"
-    / f"{_ASOF.isoformat()}.parquet"
 )
+
+
+def _discover_golden() -> tuple[dt.date, Path]:
+    """The single ``<asof>.parquet`` in the golden dir, as ``(asof, path)``.
+
+    Raises when the count is not exactly one: zero means the recorder has not run,
+    and more than one means an old recording was left behind, which would make
+    WHICH day this test pins depend on sort order.
+    """
+    found = sorted(_GOLDEN_DIR.glob("*.parquet"))
+    if len(found) != 1:
+        raise FileNotFoundError(
+            f"expected exactly 1 golden brief parquet in {_GOLDEN_DIR}, found {len(found)}"
+            f" ({[p.name for p in found]}) — run "
+            "apps/alphalens-research/scripts/record_golden_brief.py (live capture) "
+            "or remove the superseded recording"
+        )
+    return dt.date.fromisoformat(found[0].stem), found[0]
+
+
+_ASOF, _GOLDEN_PARQUET = _discover_golden()
 
 
 @pytest.fixture
