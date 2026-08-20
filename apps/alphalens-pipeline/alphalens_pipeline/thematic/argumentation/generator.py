@@ -236,10 +236,11 @@ def generate_brief(
 ) -> tuple[dict | None, BriefErrorKind]:
     """Compose a single brief for one Phase D-scored candidate.
 
-    ``violation_sink``, when given, receives the support-guard violations of the
-    LAST draw that violated. A withheld row returns no brief, so without this the
-    count and spans of the text the operator would have been shown are lost —
-    and those are exactly what the first-weeks manual read of the guard needs.
+    ``violation_sink``, when given, receives every support-guard match — fired
+    AND suppressed — of the LAST draw the guard scanned. A withheld row returns
+    no brief, so without this the count and spans of the text the operator would
+    have been shown are lost, and those are exactly what the first-weeks manual
+    read of the guard needs.
 
     Returns ``(brief_dict_with_model_used, BriefErrorKind.NONE)`` on
     success, or ``(None, kind)`` describing the failure mode.
@@ -351,25 +352,29 @@ def generate_brief(
     # branch — ``orchestrator._row_to_facts`` always projects the key, using
     # ``no_record`` for an outage, and a test pins that.
     causal_support = str(facts.get("causal_support") or "")
-    violations = (
-        [
-            v
-            for v in check_support_language(
-                parsed,
-                causal_support=causal_support,
-                grounding=str(facts.get("channel_grounding") or ""),
-                ticker=str(facts.get("ticker") or ""),
-                company_name=str(facts.get("company_name") or ""),
-            )
-            if v.suppressed_by is None
-        ]
+    matches = (
+        check_support_language(
+            parsed,
+            causal_support=causal_support,
+            grounding=str(facts.get("channel_grounding") or ""),
+            ticker=str(facts.get("ticker") or ""),
+            company_name=str(facts.get("company_name") or ""),
+        )
         if causal_support
         else []
     )
+    # The sink is refilled on EVERY guard-evaluated draw, including a draw with
+    # no matches at all, so it always describes the LAST draw the guard actually
+    # scanned. That is what lets the caller tell "the guard fired and the
+    # re-roll then died for another reason" (sink holds the first draw, because
+    # the second never reached the guard) from "no draw ever reached the guard"
+    # (sink empty). Suppressed matches ride along: a suppressor that misfires
+    # must be visible, not indistinguishable from no match at all.
+    if causal_support and violation_sink is not None:
+        violation_sink.clear()
+        violation_sink.extend(matches)
+    violations = [v for v in matches if v.suppressed_by is None]
     if violations:
-        if violation_sink is not None:
-            violation_sink.clear()
-            violation_sink.extend(violations)
         for violation in violations:
             logger.warning(
                 "brief asserts an unsupported benefit for %s "

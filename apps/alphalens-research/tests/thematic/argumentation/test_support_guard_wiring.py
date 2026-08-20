@@ -5,11 +5,13 @@ backfired: the gate's keep/refuse decision ran the wrong way against realised
 returns and crowded out 96% of the small/mid-cap tickers it touched. So the
 honesty repair must not become a second deletion gate wearing new words.
 
-When the guard trips, the ladder is: log at WARNING, regenerate ONCE at
-temperature 0 (never a Python rewrite — an inserted "may" would fabricate
-hedging the model never reasoned about and destroy the audit trail), and if the
-second draw also violates, keep the row and withhold only the four prose
-strings through the EXISTING graceful-degradation path.
+When the guard trips, the ladder is: log at WARNING, re-roll at temperature 0
+(never a Python rewrite — an inserted "may" would fabricate hedging the model
+never reasoned about and destroy the audit trail), and if the next draw also
+violates, keep the row and withhold only the four prose strings through the
+EXISTING graceful-degradation path. The re-roll shares the brief's single retry
+budget, so the stamped status has to say how many draws the guard actually saw
+— ``clean`` may never absorb a fire, nor a row that produced no prose at all.
 
 ``test_a_twice_violating_row_still_ships_with_its_prose_withheld`` and
 ``test_the_row_count_is_identical_across_every_guard_outcome`` are the positive
@@ -51,6 +53,25 @@ _CLEAN_BRIEF = {
     "bear_summary": "P/S 30 sits in the 1st sector percentile.",
     "catalyst_failure_exit": "Exit if no further event ties this company to the "
     "theme within the setup horizon.",
+}
+
+
+# Every required field blank -> EMPTY_CONTENT, a terminal kind that is NOT the
+# guard's. Used to script "the guard fired, then the re-roll died for another
+# reason".
+_BLANK_BRIEF = {
+    "tldr": "",
+    "supply_chain_reasoning": "",
+    "bear_summary": "",
+    "catalyst_failure_exit": "",
+}
+
+# Compliant prose that nonetheless TRIPS a lexicon entry and is then suppressed:
+# the conditional escape hatch the contract asks for at a missing link.
+_HEDGED_BRIEF = {
+    **_CLEAN_BRIEF,
+    "supply_chain_reasoning": "If the reported contract is confirmed, QUBT "
+    "benefits from a new customer; the event does not state that link.",
 }
 
 
@@ -256,6 +277,98 @@ class TheGuardRegeneratesOnceThenWithholdsProse(unittest.TestCase):
         self.assertTrue(
             [k for k in planted if k.startswith(("brief_support_guard_", "brief_causal_support"))]
         )
+
+
+class TheGuardStatusNeverReportsAFireAsClean(unittest.TestCase):
+    """`clean` must mean "prose was produced and it complied" — nothing else.
+
+    The whole authorisation for this detector is DETECT-STAMP-KEEP-and-MEASURE,
+    and a later pre-registered decision about whether it may gate anything will
+    read these counters. Two paths merged a fire, or a row that produced no
+    prose at all, into `clean`; both bias the compliance rate in the optimistic
+    direction, which is the direction that would wrongly argue the detector is
+    accurate.
+    """
+
+    def test_a_first_draw_fire_survives_a_retry_that_dies_otherwise(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            df, calls = _RunBriefs.run(Path(tmp), [_scored_row()], [_BENEFIT_BRIEF, _BLANK_BRIEF])
+        self.assertEqual(len(calls), 2)
+        row = df.iloc[0]
+        self.assertEqual(row["brief_support_guard_status"], "fired_unrecovered")
+        self.assertGreaterEqual(int(row["brief_support_guard_violations"]), 1)
+        self.assertTrue(row["brief_support_guard_spans_json"])
+        # The row still ships, and the terminal kind is the RETRY's — the guard
+        # status carries the guard's own fact, it does not overwrite the LLM's.
+        self.assertEqual(len(df), 1)
+        self.assertEqual(row["brief_error_kind"], "empty_content")
+
+    def test_a_row_that_never_produced_prose_is_not_reported_as_clean(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            df, _calls = _RunBriefs.run(Path(tmp), [_scored_row()], [_BLANK_BRIEF, _BLANK_BRIEF])
+        row = df.iloc[0]
+        self.assertEqual(row["brief_support_guard_status"], "no_prose")
+        self.assertEqual(int(row["brief_support_guard_violations"]), 0)
+
+    def test_clean_still_means_scanned_and_compliant(self):
+        """Anti-inertness control: the two new statuses must not swallow `clean`."""
+        with tempfile.TemporaryDirectory() as tmp:
+            df, _calls = _RunBriefs.run(Path(tmp), [_scored_row()], [_CLEAN_BRIEF])
+        self.assertEqual(df.iloc[0]["brief_support_guard_status"], "clean")
+
+    def test_every_non_guard_terminal_kind_reports_no_prose(self):
+        facts = {"causal_support": "not_established", "channel_grounding": "grounded"}
+        for kind in (
+            generator.BriefErrorKind.TRANSPORT,
+            generator.BriefErrorKind.TRUNCATED,
+            generator.BriefErrorKind.MALFORMED_JSON,
+            generator.BriefErrorKind.SAFETY,
+            generator.BriefErrorKind.EMPTY,
+            generator.BriefErrorKind.EMPTY_CONTENT,
+            generator.BriefErrorKind.LANGUAGE_DRIFT,
+        ):
+            with self.subTest(kind=kind.value):
+                outcome = brief_orchestrator._guard_outcome(
+                    facts, brief=None, terminal_kind=kind, violations=[]
+                )
+                self.assertEqual(outcome.status, "no_prose")
+
+    def test_the_suppressed_matches_are_stamped_beside_the_fired_ones(self):
+        """The near-miss column: a suppressor that misfires must be visible.
+
+        Without it a suppressed match is indistinguishable from no match at
+        all, and the first weeks would have to trust the suppressors rather
+        than read them.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            df, _calls = _RunBriefs.run(Path(tmp), [_scored_row()], [_HEDGED_BRIEF])
+        row = df.iloc[0]
+        self.assertEqual(row["brief_support_guard_status"], "clean")
+        self.assertEqual(int(row["brief_support_guard_violations"]), 0)
+        self.assertGreaterEqual(int(row["brief_support_guard_suppressed"]), 1)
+
+
+class TheFiredGaugeCountsEveryFire(unittest.TestCase):
+    """`..._fired_total` is the only counter that answers "how often is the
+    prose contract being broken", so a fire it cannot see biases the read."""
+
+    @staticmethod
+    def _metrics(statuses: list[str]) -> dict[str, int]:
+        from alphalens_cli.commands.thematic import _support_guard_metrics
+
+        return _support_guard_metrics(pd.DataFrame({"brief_support_guard_status": statuses}))
+
+    def test_an_unrecovered_fire_counts_as_fired(self):
+        metrics = self._metrics(["fired_unrecovered"])
+        self.assertEqual(metrics["alphalens_thematic_brief_support_guard_fired_total"], 1)
+
+    def test_fired_is_the_sum_of_every_fire_shape(self):
+        metrics = self._metrics(["repaired", "withheld", "fired_unrecovered", "clean", "no_prose"])
+        self.assertEqual(metrics["alphalens_thematic_brief_support_guard_fired_total"], 3)
+
+    def test_a_row_with_no_prose_is_not_a_fire(self):
+        metrics = self._metrics(["no_prose", "clean", "not_applicable"])
+        self.assertEqual(metrics["alphalens_thematic_brief_support_guard_fired_total"], 0)
 
 
 class TheErrorKindJoinsTheSingleRerollSet(unittest.TestCase):

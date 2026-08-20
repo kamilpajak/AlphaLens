@@ -141,16 +141,25 @@ def _support_guard_metrics(enriched: pd.DataFrame) -> dict[str, int]:
     AlphalensThematicBriefUnavailableHigh rule needs re-tuning by hand on the
     same deploy. That is a recorded deploy step, not a code change.
     """
-    counts = {"fired": 0, "repaired": 0, "withheld": 0}
+    counts = {"fired": 0, "repaired": 0, "withheld": 0, "fired_unrecovered": 0, "no_prose": 0}
     if enriched.empty or "brief_support_guard_status" not in enriched.columns:
         return {f"alphalens_thematic_brief_support_guard_{k}_total": v for k, v in counts.items()}
     status = enriched["brief_support_guard_status"]
     counts["repaired"] = int((status == "repaired").sum())
     counts["withheld"] = int((status == "withheld").sum())
+    # The guard fired and the row then ended without prose for an unrelated
+    # reason. Counted as a fire: the prose contract WAS broken on a real draw,
+    # and folding it into "clean" would bias the compliance rate optimistically
+    # — the direction that would wrongly argue the detector is accurate.
+    counts["fired_unrecovered"] = int((status == "fired_unrecovered").sum())
+    # In scope, but no draw ever reached the guard. Emitted so the ``clean``
+    # rate is not silently padded with rows that produced no prose at all.
+    counts["no_prose"] = int((status == "no_prose").sum())
     # "Fired" is every row where the guard caught something, whether the re-roll
-    # then fixed it or not — the rate that says how often the prose contract is
-    # being broken, independent of the recovery.
-    counts["fired"] = counts["repaired"] + counts["withheld"]
+    # then fixed it, the row was withheld, or the row died for another reason —
+    # the rate that says how often the prose contract is being broken,
+    # independent of the recovery.
+    counts["fired"] = counts["repaired"] + counts["withheld"] + counts["fired_unrecovered"]
     return {f"alphalens_thematic_brief_support_guard_{k}_total": v for k, v in counts.items()}
 
 

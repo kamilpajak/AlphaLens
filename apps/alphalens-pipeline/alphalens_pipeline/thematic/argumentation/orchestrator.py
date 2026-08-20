@@ -373,6 +373,7 @@ def _build_clients(api_key: str | None):
 _SUPPORT_GUARD_COLUMNS: tuple[str, ...] = (
     "brief_support_guard_status",
     "brief_support_guard_violations",
+    "brief_support_guard_suppressed",
     "brief_support_guard_spans_json",
     "brief_support_guard_version",
     "brief_causal_support",
@@ -389,6 +390,7 @@ class _GuardOutcome:
 
     status: str
     violations: int
+    suppressed: int
     spans_json: str | None
     causal_support: str
     grounding: str
@@ -552,45 +554,65 @@ def _guard_outcome(
 ) -> _GuardOutcome:
     """Describe what the support guard did to this row's PROSE — never to the row.
 
-    Four states, and ``not_applicable`` is a REAL value rather than a null:
-    "the guard did not fire" and "the guard did not run" must never merge, the
-    same discipline as ``not_assessed`` versus a real level in the assessor.
+    Six states, and ``not_applicable`` is a REAL value rather than a null:
+    "the guard did not fire", "the guard did not run" and "the guard fired and
+    the row then failed for an unrelated reason" must never merge, the same
+    discipline as ``not_assessed`` versus a real level in the assessor. The
+    whole authorisation for this detector is DETECT-STAMP-KEEP-and-MEASURE, so a
+    status that quietly folded a fire into ``clean`` would corrupt the one leg
+    that a later decision about gating would have to rest on — and it would bias
+    it optimistically, making the guard look better behaved than it is.
 
-    * ``not_applicable`` — the record supports a benefit claim (established or
+    * ``not_applicable``    — the record supports a benefit claim (established or
       suggestive, and grounded), so the guard never scanned.
-    * ``clean``     — in scope, first draw complied.
-    * ``repaired``  — in scope, first draw violated, the single greedy re-roll
-      complied. The SHIPPED text is the retry's, so it carries no violation.
-    * ``withheld``  — both draws violated. The four prose strings are withheld;
-      the ROW ships with its rank, its signals and its full trade setup.
+    * ``clean``             — in scope, prose was produced, and the draw that
+      SHIPPED complied.
+    * ``repaired``          — in scope, the first draw violated, the greedy
+      re-roll complied. The shipped text is the retry's, so it carries no fired
+      violation.
+    * ``withheld``          — the terminal draw violated. The four prose strings
+      are withheld; the ROW ships with its rank, its signals and its full trade
+      setup.
+    * ``fired_unrecovered`` — the guard fired on a draw, and the row then ended
+      without prose for a DIFFERENT reason (an empty body, a transport error).
+      The fire is real and is counted; the row's ``brief_error_kind`` still
+      names the LLM's own terminal failure.
+    * ``no_prose``          — in scope, but no draw ever reached the guard
+      (truncated, malformed, transport, safety, empty). Scanned-and-clean must
+      stay separable from never-scanned.
 
-    ``violations`` is the count on the WITHHELD text, i.e. what the operator
-    would have been shown. Zero elsewhere. Spans ride along, capped, for the
-    first-weeks manual read of the guard itself.
+    ``violations`` and ``spans_json`` describe the LAST draw the guard scanned —
+    the withheld text on ``withheld``, the first draw on ``fired_unrecovered``.
+    ``suppressed`` is the near-miss count on that same draw: a suppressor that
+    misfires has to be readable rather than trusted.
     """
     causal_support = str(facts.get("causal_support") or support_guard.NO_RECORD)
     grounding = str(facts.get("channel_grounding") or channel_assessor.GROUNDING_UNKNOWN)
     applies = support_guard.guard_applies(causal_support=causal_support, grounding=grounding)
     if not applies:
-        return _GuardOutcome("not_applicable", 0, None, causal_support, grounding)
+        return _GuardOutcome("not_applicable", 0, 0, None, causal_support, grounding)
+    fired = [v for v in violations if v.suppressed_by is None]
+    suppressed = len(violations) - len(fired)
+    spans = json.dumps([v.span for v in fired][:_MAX_LOGGED_GUARD_SPANS]) if fired else None
     if terminal_kind is generator.BriefErrorKind.UNSUPPORTED_BENEFIT_CLAIM:
-        spans = [v.span for v in violations][:_MAX_LOGGED_GUARD_SPANS]
-        return _GuardOutcome(
-            status="withheld",
-            violations=len(violations),
-            spans_json=json.dumps(spans) if spans else None,
-            causal_support=causal_support,
-            grounding=grounding,
-        )
-    repaired = (
-        brief is not None
-        and brief.get(generator.FIRST_ATTEMPT_KIND_KEY)
+        status = "withheld"
+    elif brief is None:
+        # A fire recorded on a draw the retry never got past. Without this the
+        # event is invisible in ``..._fired_total`` and survives only as a log
+        # line, and the sink's spans are thrown away.
+        status = "fired_unrecovered" if fired else "no_prose"
+    elif (
+        brief.get(generator.FIRST_ATTEMPT_KIND_KEY)
         == generator.BriefErrorKind.UNSUPPORTED_BENEFIT_CLAIM.value
-    )
+    ):
+        status = "repaired"
+    else:
+        status = "clean"
     return _GuardOutcome(
-        status="repaired" if repaired else "clean",
-        violations=0,
-        spans_json=None,
+        status=status,
+        violations=len(fired),
+        suppressed=suppressed,
+        spans_json=spans,
         causal_support=causal_support,
         grounding=grounding,
     )
@@ -652,6 +674,7 @@ def _enriched_row(
         # by design, so this needs no migration and no OpenAPI regeneration).
         "brief_support_guard_status": guard.status,
         "brief_support_guard_violations": guard.violations,
+        "brief_support_guard_suppressed": guard.suppressed,
         "brief_support_guard_spans_json": guard.spans_json,
         "brief_support_guard_version": support_guard.SUPPORT_GUARD_VERSION,
         "brief_causal_support": guard.causal_support,

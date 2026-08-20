@@ -52,10 +52,17 @@ unauthorised thing.
 
 WHAT IT IS NOT
 --------------
-It is NOT a deletion gate. When it trips the caller regenerates once and, if the
-second draw also violates, withholds the four PROSE strings while the row ships
+It is NOT a deletion gate. When it trips the caller re-rolls and, if the next
+draw also violates, withholds the four PROSE strings while the row ships
 unchanged — same rank, same trade setup, same deterministic signals. Nothing
 here removes a candidate.
+
+The re-roll comes out of the brief's ONE SHARED retry budget, not a budget of
+its own, so a row whose first draw came back empty and whose retry then violates
+is withheld after a single guard-evaluated draw. That is a deliberate cost bound
+(each draw is a paid Pro call) and it is why the stamped status distinguishes
+``fired_unrecovered`` and ``no_prose`` from ``clean``: the number of draws the
+guard actually saw has to be recoverable from the record.
 
 Design memo: ``docs/research/grounding_and_prose_honesty_design_2026_08_20.md`` §5.6.
 """
