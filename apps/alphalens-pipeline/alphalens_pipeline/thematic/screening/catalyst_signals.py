@@ -108,6 +108,15 @@ _FLOOR_MODERATE_THRESHOLD = 0.45
 # v2 (2026-08-21): added ``noise_event_types``. NOISE_EVENT_TYPES was a live
 # input to compute_catalyst_strength that sat outside the poolability boundary,
 # so a change to the noise set re-scored rows while the token stood still.
+#
+# KNOWN GAP, and it is the reason to read this before editing the formula: this
+# token fingerprints CONSTANTS, not CODE. A change to the arithmetic itself —
+# the [0, 1] clamps, the ``.lower()`` normalisation, the ``or "other"`` default,
+# or ``_safe_float``'s NaN handling — re-scores rows and moves NOTHING here.
+# The sibling ``themes._NOVELTY_CONFIG_SCHEMA`` explicitly covers that case for
+# its own formula; these two tokens disagree about what their schema field is
+# for. Until that is reconciled, a code-level change to the strength formula
+# must bump this constant BY HAND, with a comment saying what changed.
 _STAMP_SCHEMA = 2
 
 # Deep-drawdown-reversal thresholds. Drawdown threshold matches the

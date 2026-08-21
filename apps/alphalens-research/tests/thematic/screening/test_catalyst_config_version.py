@@ -41,7 +41,17 @@ class TestCatalystConfigVersion(unittest.TestCase):
         # letting the changed constant produce one. A bump is legitimate only
         # when a key is added, removed or renamed — v2 added noise_event_types.
         # If this reddens, confirm the stamp SHAPE really changed before editing.
-        self.assertEqual(catalyst_signals._STAMP_SCHEMA, 2)
+        self.assertEqual(
+            catalyst_signals._STAMP_SCHEMA,
+            2,
+            msg=(
+                "The stamp schema changed. Confirm the payload SHAPE really moved "
+                "(a key added, removed or renamed) — a changed CONSTANT must show up "
+                "as a different digest, never as a schema bump. See the _STAMP_SCHEMA "
+                "docstring, and note the known gap: a code-level formula change does "
+                "require a manual bump here."
+            ),
+        )
 
     def test_token_changes_when_floor_threshold_changes(self):
         base = catalyst_config_version()
