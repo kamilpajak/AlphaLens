@@ -104,7 +104,20 @@ _FLOOR_MODERATE_THRESHOLD = 0.45
 # Bumped ONLY when the SHAPE of the config-version stamp changes (a key added /
 # removed / renamed), NEVER when a constant's value changes — a value change
 # must surface as a different token, not a schema bump.
-_STAMP_SCHEMA = 1
+#
+# v2 (2026-08-21): added ``noise_event_types``. NOISE_EVENT_TYPES was a live
+# input to compute_catalyst_strength that sat outside the poolability boundary,
+# so a change to the noise set re-scored rows while the token stood still.
+#
+# KNOWN GAP, and it is the reason to read this before editing the formula: this
+# token fingerprints CONSTANTS, not CODE. A change to the arithmetic itself —
+# the [0, 1] clamps, the ``.lower()`` normalisation, the ``or "other"`` default,
+# or ``_safe_float``'s NaN handling — re-scores rows and moves NOTHING here.
+# The sibling ``themes._NOVELTY_CONFIG_SCHEMA`` explicitly covers that case for
+# its own formula; these two tokens disagree about what their schema field is
+# for. Until that is reconciled, a code-level change to the strength formula
+# must bump this constant BY HAND, with a comment saying what changed.
+_STAMP_SCHEMA = 2
 
 # Deep-drawdown-reversal thresholds. Drawdown threshold matches the
 # renderer's setup classifier so the brief's "Pattern: deep drawdown"
@@ -131,8 +144,14 @@ def catalyst_config_version() -> str:
     Returns ``catalyst-v{schema}-{sha256(canonical_json)[:12]}`` where the
     canonical JSON covers every live constant that shapes
     :func:`compute_catalyst_strength` / :func:`catalyst_floor`: the three
-    dimension weights, the SOI saturation anchor, both floor thresholds, and
-    the full ``EVENT_TYPE_TIER`` map (sorted key/value pairs).
+    dimension weights, the SOI saturation anchor, both floor thresholds, the
+    full ``EVENT_TYPE_TIER`` map, and ``NOISE_EVENT_TYPES`` (both sorted).
+
+    ``NOISE_EVENT_TYPES`` belongs here because it short-circuits the whole
+    formula: a noise type returns 0.0 outright, ahead of the tier lookup. It was
+    missing until 2026-08-21, so moving a type in or out of the noise set
+    re-scored every row of that type while the token stood still — precisely the
+    silent pooling of two formulas that rule R3 exists to prevent.
 
     Bump semantics: the token drifts AUTOMATICALLY on any change to a weight,
     threshold, tier value, or the strength definition's constant inputs —
@@ -158,6 +177,9 @@ def catalyst_config_version() -> str:
         "floor_strong": _FLOOR_STRONG_THRESHOLD,
         "floor_moderate": _FLOOR_MODERATE_THRESHOLD,
         "event_type_tier": sorted(EVENT_TYPE_TIER.items()),
+        # Sorted, so a pure reordering of the tuple — which changes no
+        # behaviour — cannot invalidate a cohort. Same treatment as the tier map.
+        "noise_event_types": sorted(NOISE_EVENT_TYPES),
     }
     canon = json.dumps(config, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
