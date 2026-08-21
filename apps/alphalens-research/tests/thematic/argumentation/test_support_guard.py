@@ -1079,3 +1079,18 @@ class TheSubjectTestInsistsOnTheNameNotAPronoun(unittest.TestCase):
                 **self.OLLI,
             )
         )
+
+    def test_a_mixed_chain_fires(self):
+        # ACCEPTED behaviour, pinned so it cannot drift into an accident. A record
+        # that states an adverse mechanism about the candidate AND a favourable
+        # one still records the adverse mechanism, so an UNQUALIFIED benefit
+        # assertion is not what it supports. The guard makes no claim about which
+        # way the record nets out — only about what the prose may assert
+        # without qualification. Surfaced by zen pre-merge.
+        self.assertTrue(
+            support_guard.channel_describes_harm(
+                "Weaker consumer spending may reduce revenue for Ollie's Bargain "
+                "Outlet, but trade-down could ultimately lift its comparable sales.",
+                **self.OLLI,
+            )
+        )

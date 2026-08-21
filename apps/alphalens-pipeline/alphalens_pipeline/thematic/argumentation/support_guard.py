@@ -459,6 +459,13 @@ def channel_describes_harm(channel_text: str, *, ticker: str, company_name: str)
     customer demand" is still a record of an adverse mechanism. That asymmetry
     is a decision, not an oversight.
 
+    MIXED chains fire, and that is the intended reading rather than a residual:
+    "weaker spending may reduce revenue for X, but trade-down could lift its
+    comparable sales" genuinely records an adverse mechanism about X. The guard
+    does not claim such a record is net-negative — it claims that an UNQUALIFIED
+    benefit assertion is not what it supports. Pinned by
+    ``TheSubjectTestInsistsOnTheNameNotAPronoun.test_a_mixed_chain_fires``.
+
     Residual, inherited from :func:`_suppressor` and on the same terms: a
     segment naming BOTH the candidate and a rival still fires. Separating two
     subjects in one clause needs real parsing. The failure is bounded and
