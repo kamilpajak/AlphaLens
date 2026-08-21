@@ -650,3 +650,85 @@ stands.
 3. The results memo (§10.4) additionally reports: the 3×3 cross-tab, the four new attrition
    rows, the `channel_grounding_agree_n` distribution, and the third sensitivity (grounding
    exclusion lifted).
+
+## Amendment 2 — deploy-day record for cohort 2 (2026-08-21)
+
+**Status of this amendment:** LOCKED. It records facts about a deploy that has already
+happened; it changes no rule, moves no token, and opens no cohort.
+
+**It is one day late.** A1.4 owed it "on deploy day, before any post-boundary row matures".
+Cohort 2 opened 2026-08-20 13:51 UTC and this is written 2026-08-21. No cohort-2 row has
+matured in the interval (maturation needs the ~42-session ladder window), so nothing is
+compromised — but the obligation was to write it before, not merely before harm, and that
+was missed. Recorded rather than quietly corrected.
+
+### A2.1 Exact tokens (discharges A1.4 and deliverable A1.11.2)
+
+`channel_config_version`, verbatim from the first cohort-2 candidates parquet:
+
+```
+{"field_constants":{"block_tag":"untrusted_event","candidate_field_max_chars":120,"candidate_rationale_max_chars":300,"field_max_chars":80,"headline_max_chars":200,"implication_max_chars":240,"implications_max":5,"text_max_chars":600,"unavailable":"(none)"},"grounding_statuses":["grounded","theme_misroute","candidate_misfit"],"max_output_tokens":4000,"model":"deepseek/deepseek-v4-pro","prompt_sha":"0af6af9132f8","schema":"channel-assess-v2","schema_sha":"72effbe5c286","support_levels":["established","suggestive","not_established"],"temperature":0.0,"types":["customer_demand","supplier_input","input_cost","regulatory","substitution","capacity_supply","financing_ma","category_attention","none"],"votes":3}
+```
+
+`mapper_config_version` carries `"schema":"mapper-freeze-v4"`, `"prompt_sha":"fdcbf59d0720"`,
+`"schema_sha":"30118172b8b8"`, `"mcap_range":[500000000,10000000000]`, `"max_candidates":15`,
+`"model":"deepseek/deepseek-v4-pro"`, `"temperature":0.0`, and the nested `"channel"` key
+holding the `channel_config_version` string above — exactly the nesting A1.4 uses to define
+membership.
+
+Both tokens are single-valued across every cohort-2 row inspected (`nunique() == 1` per
+column), so no row straddles a token change.
+
+### A2.2 First cohort-2 `asof` — and a wrinkle that must be stated
+
+**First cohort-2 `asof`: 2026-08-19**, written 2026-08-20 14:39 UTC by the first
+`map-themes` run on the new image (boundary 13:51 UTC).
+
+The wrinkle: **that `asof` predates the cohort boundary timestamp.** It is nonetheless a
+cohort-2 row, and correctly so — A1.4 pre-committed that membership is "identified in the
+data, not by hand", by the token pair. The brief parquets are regenerated on every one of the
+six daily slots, so a run after the boundary rewrites `asof` dates from before it under the
+new instrument.
+
+Two consequences, recorded now rather than discovered during the read-out:
+
+1. **Cohort membership is not a function of `asof`.** Any analysis that partitions cohorts by
+   date rather than by token will mis-assign rows. The token rule governs, as written.
+2. **A day's rows are a snapshot, not a fixed set.** The same `asof` can carry different rows,
+   and a different count, depending on which slot last wrote it. Counts quoted from a single
+   read are provisional; the results memo must state the read timestamp beside any count.
+
+Boundary history, restated in full (supersedes the A1.4 table, which left cohort 2 open):
+
+| Cohort | Opened | Tokens | Closed | Accrued (asof dates) |
+|---|---|---|---|---|
+| 1 | 2026-08-19 22:46 UTC | `mapper-freeze-v3` + `channel-assess-v1` | 2026-08-20 by Amendment 1 | `asof` 2026-08-18 only — 13 candidates, 0 matured |
+| 2 | 2026-08-20 13:51 UTC (first write 14:39 UTC) | `mapper-freeze-v4` + `channel-assess-v2` | — | `asof` 2026-08-19 (8) and 2026-08-20 (11) at the 2026-08-21 read |
+
+### A2.3 A change that is deliberately NOT an amendment
+
+Issue #1070 (a `suggestive` + `grounded` row whose channel describes HARM while the prose may
+still assert benefit) is being closed by extending the deterministic prose guard so that it
+also refuses a benefit claim against a harm-direction channel.
+
+**This is not an instrument change under A1.3 and opens no cohort**, for two independent
+reasons:
+
+1. The guard lives in the argumentation stage and is fingerprinted by
+   `brief_support_guard_version`, which A1.5 does not list as a freeze input. The cohort key
+   is `mapper_config_version` + `channel_config_version` and neither moves.
+2. H1 tests `market_excess_return` conditioned on `channel_grounding_status`. The guard
+   touches neither. It governs what the written brief may CLAIM, not what is measured.
+
+The alternative considered and **rejected**: adding a `channel_direction` field to the
+assessor schema. It is the better instrument — a label on the model's own chain rather than a
+lexical test over it — but it would move `channel_config_version` and open cohort 3. A1.3
+pre-commits that "a third restart is not acceptable" and names "whatever the argumentation /
+thesis layer needs to read from the assessor" as belonging to increment 2. The honest answer
+to A1.3's required question — why could this not have landed there — is that **it could
+have**: #1070 was filed as a known gap of the same increment and shipped without it. That is
+not an argument for an exception; it is an argument for accepting the weaker instrument now
+and revisiting the schema at the next legitimate boundary.
+
+The lexical guard's known residual — a miss is indistinguishable from compliance — is the one
+already documented for the benefit lexicon, and the same suppressed-match telemetry applies.
