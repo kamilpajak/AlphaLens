@@ -23,9 +23,19 @@ itself mandates.
 SCOPE IS THE WHOLE DESIGN
 -------------------------
 The guard is INERT unless the record actually fails to support a benefit claim.
-A guard that also policed `established` rows would start rewriting well-grounded
-prose and would drift into an editorial filter, which is a different (and
-unauthorised) thing.
+A guard that also policed prose AGREEING with a well-evidenced, benefit-direction
+record would start rewriting it and would drift into an editorial filter, which
+is a different (and unauthorised) thing.
+
+Failing to support a benefit claim has four shapes, not three. The support LEVEL
+answers "how well is this chain evidenced", never "which way does it point" — so
+a `suggestive` + `grounded` record reading "potential negative impact on revenue"
+is a well-formed record of an ADVERSE mechanism, and benefit prose beside it
+contradicts the row's own record (issue #1070).
+`AHarmDirectionChannelPutsTheRowInScope` and
+`ABenefitDirectionChannelIsNeverPutInScopeByDirection` are the two halves of
+that: the first proves the arm can fire, the second proves it discriminates
+rather than simply widening scope to everything.
 
 AND IT IS NOT A DELETION GATE
 -----------------------------
@@ -41,6 +51,80 @@ import unittest
 
 from alphalens_pipeline.thematic.argumentation import support_guard
 from alphalens_pipeline.thematic.mapping import channel_assessor
+
+# The two harm-direction channel records from issue #1070, verbatim. They are
+# the ONLY observed harm strings: the exploratory slot that produced them was
+# overwritten by a later slot, and the committed golden fixtures carry none, so
+# the true-positive evidence for the harm lexicon is N=2 and is quoted here
+# rather than paraphrased.
+_HARM_GO = (
+    "Softer retail sales and consumer sentiment data -> concerns about weakening "
+    "consumer spending -> potential negative impact on revenue for small-cap "
+    "retailers like Grocery Outlet."
+)
+_HARM_OLLI = (
+    "As a small-cap retailer, Ollie's could see reduced customer demand, leading "
+    "to lower revenue in the near term."
+)
+
+# Subject for the LEXICON-level tests. The direction arm drops the generic
+# self-references (see _named_subject_terms), so a carrier saying "at this
+# company" would fail for the wrong reason. The carriers below therefore NAME
+# this company, and a failure in those tests is the ENTRY's inability to fire.
+# The subject test itself has its own class with real records.
+_ANY_TICKER = "KFL"
+_ANY_NAME = "Kingfisher Labs"
+
+# REAL benefit-direction records, quoted from the committed golden fixtures and
+# from the live store. They are the false-positive corpus, and they are chosen
+# for the shapes that break a naive harm lexicon rather than for variety:
+#   * GO / SVV  — a defensive-retail chain whose OPENING arm is harm to the
+#                 consumer and whose last arm is revenue growth. This is the
+#                 same macro sentence the GO HARM record above opens with.
+#   * Z         — a unicode arrow, and "lower mortgage rates" mid-chain.
+#   * MTH       — four arrows, and "rates stay lower for longer" mid-chain.
+#   * ABUS      — no arrows at all: the comma-tail fallback path.
+#   * HIVE      — a margin arm, in the direction the margin entries invert.
+#   * OLLI      — the SAME ticker as the harm record, pointing the other way.
+_REAL_BENEFIT_CHANNELS: tuple[str, ...] = (
+    "Softer retail sales and consumer sentiment indicate consumers are pulling "
+    "back on spending -> Budget-conscious shoppers trade down from traditional "
+    "grocers to discount options -> Grocery Outlet's revenue increases from "
+    "higher customer traffic and basket size in the coming quarters.",
+    "Softer retail sales indicate consumers are reducing spending on new goods "
+    "-> consumers trade down to cheaper secondhand alternatives -> demand for "
+    "Savers Value Village's thrift stores increases, boosting revenue in the "
+    "near term.",
+    "Reduced rate hike expectations (from event implication) → lower mortgage "
+    "rates → increased housing market activity → higher demand for Zillow's "
+    "real estate marketplace and iBuying services, boosting revenue.",
+    "Cooler US inflation reinforces Fed pause expectations -> interest rates "
+    "stay lower for longer -> mortgage rates remain supportive -> homebuyer "
+    "demand for entry-level homes increases -> Meritage Homes' new home "
+    "orders/revenue improve over subsequent quarters.",
+    "The success of Moderna and Merck's mRNA cancer vaccine validates the mRNA "
+    "platform, potentially accelerating development of other mRNA vaccines. "
+    "This could increase demand for Arbutus Biopharma's lipid nanoparticle "
+    "(LNP) delivery technology, which is critical for mRNA therapeutics, "
+    "leading to higher royalty revenue over the medium term.",
+    "Bitcoin price jumps 6-7% -> higher market price for mined Bitcoin -> "
+    "HIVE's mining revenue per Bitcoin rises, improving margins and earnings "
+    "over the following days/weeks.",
+    "The event notes that discount retailers could benefit if inflation drives "
+    "trade-down behavior -> consumers shift purchases from higher-priced "
+    "retailers toward discounters -> Ollie's Bargain Outlet, as a "
+    "closeout/discount retailer, sees increased customer traffic and revenue "
+    "from trade-down demand over subsequent quarters.",
+)
+
+# A REAL falsifier, quoted from the committed golden fixture. Falsifiers are
+# written in non-occurrence language by construction, and the prompt instructs
+# the model to render them into `bear_summary` and `catalyst_failure_exit`.
+_REAL_FALSIFIER = (
+    "If Maravai's revenue from mRNA-related products does not increase in the "
+    "following quarters, or if the trial success does not lead to increased "
+    "mRNA manufacturing demand."
+)
 
 
 def _brief(**over) -> dict:
@@ -88,10 +172,15 @@ class TheGuardFiresOnAnUnsupportedBenefitClaim(unittest.TestCase):
         self.assertEqual(violations, [])
 
     def test_it_is_inert_at_suggestive(self):
+        # With no record text to read, the direction arm cannot fire, so the
+        # level and grounding arms are the whole test — the pre-#1070 behaviour.
         self.assertFalse(
             support_guard.guard_applies(
                 causal_support=channel_assessor.SUPPORT_SUGGESTIVE,
                 grounding=channel_assessor.GROUNDING_GROUNDED,
+                channel_text="",
+                ticker=_ANY_TICKER,
+                company_name=_ANY_NAME,
             )
         )
 
@@ -102,6 +191,9 @@ class TheGuardFiresOnAnUnsupportedBenefitClaim(unittest.TestCase):
             support_guard.guard_applies(
                 causal_support=channel_assessor.SUPPORT_ESTABLISHED,
                 grounding=channel_assessor.GROUNDING_THEME_MISROUTE,
+                channel_text="",
+                ticker=_ANY_TICKER,
+                company_name=_ANY_NAME,
             )
         )
 
@@ -112,6 +204,9 @@ class TheGuardFiresOnAnUnsupportedBenefitClaim(unittest.TestCase):
             support_guard.guard_applies(
                 causal_support=support_guard.NO_RECORD,
                 grounding=channel_assessor.GROUNDING_UNKNOWN,
+                channel_text="",
+                ticker=_ANY_TICKER,
+                company_name=_ANY_NAME,
             )
         )
 
@@ -527,6 +622,266 @@ class PolysemousStemsStayOnTheAnchoredPath(unittest.TestCase):
                 self.assertEqual(self._fired(text), 1)
 
 
+class AHarmDirectionChannelPutsTheRowInScope(unittest.TestCase):
+    """A record that describes HARM cannot support a benefit claim either.
+
+    The support LEVEL says how well the chain is evidenced, never which way it
+    points. So a `suggestive` + `grounded` row whose own channel text ends in
+    "potential negative impact on revenue" was out of scope, and prose asserting
+    a benefit shipped beside a record saying the opposite. Issue #1070.
+    """
+
+    def test_a_suggestive_grounded_harm_channel_is_in_scope(self):
+        # The REAL subject, not the generic one: this record names Ollie's, and
+        # the direction arm asks who is harmed. Passing a stranger's ticker here
+        # would assert that the arm is inert, which is the opposite claim.
+        self.assertTrue(
+            support_guard.guard_applies(
+                causal_support=channel_assessor.SUPPORT_SUGGESTIVE,
+                grounding=channel_assessor.GROUNDING_GROUNDED,
+                channel_text=_HARM_OLLI,
+                ticker="OLLI",
+                company_name="Ollie's Bargain Outlet",
+            )
+        )
+
+    def test_benefit_prose_against_a_harm_channel_fires(self):
+        violations = support_guard.check_support_language(
+            _brief(tldr="Ollie's benefits from the theme and is positioned to win share."),
+            causal_support=channel_assessor.SUPPORT_SUGGESTIVE,
+            grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="OLLI",
+            company_name="Ollie's Bargain Outlet Holdings",
+            channel_text=_HARM_OLLI,
+        )
+        fired = [v for v in violations if v.suppressed_by is None]
+        self.assertEqual([v.field for v in fired], ["tldr"])
+
+    def test_the_other_observed_harm_record_is_in_scope(self):
+        # The arrow-chain shape, where the harm sits in the final arm and the
+        # first two arms are about the macro economy.
+        self.assertTrue(
+            support_guard.channel_describes_harm(
+                _HARM_GO, ticker="GO", company_name="Grocery Outlet"
+            )
+        )
+
+    def test_a_hedged_adverse_chain_is_still_adverse(self):
+        """The prose escape hatch has NO counterpart on the direction test.
+
+        "could see reduced customer demand" carries a conditional cue, and the
+        prose scan would suppress it. 21 of the 32 real records carry such a
+        cue, because the assessor writes `suggestive` chains in modal language
+        by construction — so reusing the suppressor would disarm the check on
+        one of the only two known true positives. A hedged adverse mechanism is
+        still an adverse mechanism.
+        """
+        self.assertTrue(
+            support_guard.channel_describes_harm(
+                _HARM_OLLI, ticker="OLLI", company_name="Ollie's Bargain Outlet"
+            )
+        )
+        self.assertTrue(
+            any(cue.search(_HARM_OLLI.lower()) for cue in support_guard._CONDITIONAL_RES),
+            "the fixture must actually carry a conditional cue, or this proves nothing",
+        )
+
+
+class ABenefitDirectionChannelIsNeverPutInScopeByDirection(unittest.TestCase):
+    """FALSE POSITIVES ARE THE WORSE FAILURE, and here they are measurable.
+
+    Withholding prose from a row whose record genuinely supports it is the
+    direction :func:`_suppressor` already calls the worse one. Unlike the
+    true-positive side (N=2), this side has a real corpus: 32 distinct real
+    benefit records, of which the seven quoted above are the shapes that break a
+    naive lexicon.
+    """
+
+    def test_no_real_benefit_channel_reads_as_harm(self):
+        for text in _REAL_BENEFIT_CHANNELS:
+            with self.subTest(text=text[:60]):
+                self.assertFalse(
+                    support_guard.channel_describes_harm(
+                        text, ticker=_ANY_TICKER, company_name=_ANY_NAME
+                    )
+                )
+
+    def test_no_real_benefit_channel_puts_a_row_in_scope_at_any_support_level(self):
+        for level in (
+            channel_assessor.SUPPORT_ESTABLISHED,
+            channel_assessor.SUPPORT_SUGGESTIVE,
+        ):
+            for text in _REAL_BENEFIT_CHANNELS:
+                with self.subTest(level=level, text=text[:60]):
+                    self.assertFalse(
+                        support_guard.guard_applies(
+                            causal_support=level,
+                            grounding=channel_assessor.GROUNDING_GROUNDED,
+                            channel_text=text,
+                            ticker=_ANY_TICKER,
+                            company_name=_ANY_NAME,
+                        )
+                    )
+
+    def test_a_harm_arm_before_the_last_link_does_not_fire(self):
+        """The discriminator, stated on its own.
+
+        This is the real Savers Value Village record with its middle arm
+        rewritten into the lexicon's own vocabulary. The chain still ENDS in
+        revenue growth, so it is a benefit record — a scan over the whole text
+        would invert it.
+        """
+        text = (
+            "Softer retail sales -> reduced demand for new goods pushes shoppers "
+            "to cheaper secondhand alternatives -> demand for Savers Value "
+            "Village's thrift stores increases, boosting revenue in the near term."
+        )
+        self.assertTrue(
+            support_guard._HARM_RE.search(text.lower()),
+            "the fixture must carry a harm phrase somewhere, or this proves nothing",
+        )
+        self.assertFalse(
+            support_guard.channel_describes_harm(text, ticker=_ANY_TICKER, company_name=_ANY_NAME)
+        )
+
+    def test_a_real_falsifier_does_not_read_as_harm(self):
+        """The falsifier is outside the scanned text, and must stay outside.
+
+        All 32 real falsifiers are written in non-occurrence language and 11 of
+        them literally contain "not increase". Feeding one to the direction test
+        must not fire, or a future refactor that widened the read would turn the
+        check into an always-fire.
+        """
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                _REAL_FALSIFIER, ticker=_ANY_TICKER, company_name=_ANY_NAME
+            )
+        )
+
+    def test_the_harm_lexicon_is_never_applied_to_the_prose(self):
+        """The prompt TEACHES harm vocabulary into two of the guarded fields.
+
+        "The bear case may cite the falsifier. The exit line is the falsifier
+        rendered as an observable." So an exit line reading "if revenue does not
+        increase" is the contract working as designed, and a row with a
+        benefit-direction record must stay out of scope however its prose reads.
+        """
+        violations = support_guard.check_support_language(
+            _brief(
+                bear_summary="A weaker consumer could mean lower revenue and margin compression.",
+                catalyst_failure_exit=(
+                    "If Maravai's revenue from mRNA-related products does not "
+                    "increase in the following quarters, the channel is invalidated."
+                ),
+            ),
+            causal_support=channel_assessor.SUPPORT_SUGGESTIVE,
+            grounding=channel_assessor.GROUNDING_GROUNDED,
+            ticker="MRVI",
+            company_name="Maravai LifeSciences Holdings",
+            channel_text=_REAL_BENEFIT_CHANNELS[4],
+        )
+        self.assertEqual(violations, [])
+
+    def test_an_absent_record_is_not_read_as_harm(self):
+        """Absent evidence, not evidence of absence.
+
+        The assessor blanks `channel_text` at `not_established`, and the
+        `no_record` projection carries "". Both rows are already in scope on the
+        level / grounding arms, so the empty default may only ever make the
+        direction arm inert — never wrong.
+        """
+        self.assertFalse(
+            support_guard.channel_describes_harm("", ticker=_ANY_TICKER, company_name=_ANY_NAME)
+        )
+        self.assertFalse(
+            support_guard.guard_applies(
+                causal_support=channel_assessor.SUPPORT_SUGGESTIVE,
+                grounding=channel_assessor.GROUNDING_GROUNDED,
+                channel_text="",
+                ticker=_ANY_TICKER,
+                company_name=_ANY_NAME,
+            )
+        )
+
+    def test_the_pre_existing_scope_is_unchanged_by_a_benefit_channel(self):
+        """Anti-regression: the direction arm WIDENS scope, it never narrows it."""
+        for level, grounding in (
+            (channel_assessor.SUPPORT_NOT_ESTABLISHED, channel_assessor.GROUNDING_GROUNDED),
+            (support_guard.NO_RECORD, channel_assessor.GROUNDING_UNKNOWN),
+            (channel_assessor.SUPPORT_ESTABLISHED, channel_assessor.GROUNDING_THEME_MISROUTE),
+        ):
+            with self.subTest(level=level, grounding=grounding):
+                self.assertTrue(
+                    support_guard.guard_applies(
+                        causal_support=level,
+                        grounding=grounding,
+                        channel_text=_REAL_BENEFIT_CHANNELS[0],
+                        ticker=_ANY_TICKER,
+                        company_name=_ANY_NAME,
+                    )
+                )
+
+
+class EveryHarmEntryMustBeAbleToFire(unittest.TestCase):
+    """Structural anti-rot, mirroring ``EveryLexiconEntryMustBeAbleToFire``.
+
+    An entry that can never match reads as covered. The benefit list had two
+    such entries, for two different mechanical reasons, so this class is not a
+    hypothetical.
+    """
+
+    #: An arrow chain whose FINAL arm hosts the phrase, so a failure here is the
+    #: ENTRY's inability to fire and not the terminal-link rule.
+    CARRIER = "The event -> weaker end markets -> {phrase} at Kingfisher Labs."
+
+    def test_each_harm_phrase_fires_on_a_minimal_carrier_chain(self):
+        for phrase in support_guard.HARM_DIRECTION_PHRASES:
+            with self.subTest(phrase=phrase):
+                self.assertTrue(
+                    support_guard.channel_describes_harm(
+                        self.CARRIER.format(phrase=phrase),
+                        ticker=_ANY_TICKER,
+                        company_name=_ANY_NAME,
+                    ),
+                    f"{phrase!r} can never fire",
+                )
+
+    def test_a_carrier_without_the_phrase_does_not_fire(self):
+        """POSITIVE CONTROL for the carrier itself: it must be inert on its own."""
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                self.CARRIER.format(phrase="higher revenue and expanding margins"),
+                ticker=_ANY_TICKER,
+                company_name=_ANY_NAME,
+            )
+        )
+
+    def test_the_harm_lexicon_carries_no_hyphens(self):
+        # `_normalise` maps a hyphen to a space on both sides of the compare, so
+        # a hyphenated ENTRY matches neither spelling of the text.
+        self.assertEqual([p for p in support_guard.HARM_DIRECTION_PHRASES if "-" in p], [])
+
+    def test_the_harm_lexicon_is_not_empty(self):
+        # An empty tuple would compile to a regex that matches everything or
+        # nothing depending on the join, and would silently disable the arm.
+        self.assertGreater(len(support_guard.HARM_DIRECTION_PHRASES), 10)
+
+    def test_a_hyphenated_record_still_fires_in_both_spellings(self):
+        # Names the company rather than saying "this company": the direction arm
+        # drops the generic self-references, so a pronoun carrier would fail for
+        # a reason that has nothing to do with hyphenation.
+        for text in (
+            "Weak demand -> margin-compression at Kingfisher Labs.",
+            "Weak demand -> margin compression at Kingfisher Labs.",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(
+                    support_guard.channel_describes_harm(
+                        text, ticker=_ANY_TICKER, company_name=_ANY_NAME
+                    )
+                )
+
+
 class TheGuardReportsItsOwnVersion(unittest.TestCase):
     def test_the_version_token_is_stamped_and_stable(self):
         self.assertTrue(support_guard.SUPPORT_GUARD_VERSION.startswith("support-guard-"))
@@ -547,3 +902,195 @@ class TheGuardReportsItsOwnVersion(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheDirectionTestAsksWhoIsHarmedNotWhereTheHarmSits(unittest.TestCase):
+    """Regression suite for three defects the adversarial review demonstrated.
+
+    The first implementation answered "is the harm to this company?" by POSITION
+    — it scanned only the chain's last link. Position is a proxy for subject, and
+    the review showed it is the wrong one in both directions on real wordings.
+
+    The fix asks the question directly, reusing the prose arm's own machinery:
+    a harm phrase counts only when the clause carrying it NAMES THE CANDIDATE and
+    is not negated. Scope is then the whole record, because there is no longer
+    anything for the scoping to protect against.
+    """
+
+    TICKER = "OLLI"
+    NAME = "Ollie's Bargain Outlet"
+
+    def _harm(self, text: str) -> bool:
+        return support_guard.channel_describes_harm(
+            text, ticker=self.TICKER, company_name=self.NAME
+        )
+
+    def test_a_denied_harm_does_not_fire(self):
+        # "sees NO negative impact ... and gains share" is a benefit chain. The
+        # prose arm has owned _NEGATION_RES since day one; the direction arm
+        # shipped without it, so an explicit denial of harm read AS harm.
+        self.assertFalse(
+            self._harm(
+                "Softer retail sales -> consumers pull back -> Ollie's Bargain Outlet "
+                "sees no negative impact on revenue and gains share."
+            )
+        )
+
+    def test_harm_to_a_rival_in_the_final_arm_does_not_fire(self):
+        # The substitution / trade-down family: the mechanism IS a rival losing,
+        # and the assessor prompt teaches exactly that shape. Whether the loser
+        # lands in the middle arm or the final one is a wording coin flip, so
+        # position cannot separate them — the subject can.
+        self.assertFalse(
+            self._harm(
+                "Inflation drives trade-down -> Ollie's Bargain Outlet gains share "
+                "while full-price retailers lose share."
+            )
+        )
+
+    def test_harm_to_the_candidate_fires_wherever_it_sits(self):
+        # The #1070 record, reworded so the harm clause is no longer the last
+        # comma segment. The record still says harm to this company, so the
+        # verdict must not depend on where the sentence ends.
+        self.assertTrue(
+            self._harm(
+                "Softer retail sales suggest consumers are pulling back. This could "
+                "reduce customer demand at Ollie's Bargain Outlet, though the timing "
+                "is unclear."
+            )
+        )
+
+    def test_the_original_1070_records_still_fire(self):
+        # Both real harm records from the issue. Losing either would mean the
+        # rewrite fixed the false positives by disarming the check.
+        self.assertTrue(
+            self._harm(
+                "Softer retail sales and consumer sentiment data -> concerns about "
+                "weakening consumer spending -> potential negative impact on revenue "
+                "for small-cap retailers like Ollie's Bargain Outlet."
+            )
+        )
+        self.assertTrue(
+            self._harm(
+                "As a small-cap retailer, Ollie's Bargain Outlet could see reduced "
+                "customer demand, leading to lower revenue in the near term."
+            )
+        )
+
+    def test_a_benefit_chain_opening_on_macro_harm_does_not_fire(self):
+        # The shape the old scoping existed to protect: a real defensive-retail
+        # chain OPENS on harm to the world and ends in the candidate gaining.
+        # The subject test covers it without any scoping at all.
+        self.assertFalse(
+            self._harm(
+                "Softer retail sales indicate consumers are reducing spending on new "
+                "goods -> consumers trade down to cheaper alternatives -> demand at "
+                "Ollie's Bargain Outlet increases."
+            )
+        )
+
+    def test_an_unnamed_candidate_cannot_be_the_harmed_party(self):
+        # No name anywhere: the record does not say harm to THIS company, so the
+        # least-claiming answer is False. The support and grounding conditions
+        # are what cover a row with no usable record.
+        self.assertFalse(
+            self._harm("Tariffs raise component prices, reducing demand across the sector.")
+        )
+
+
+class TheSubjectTestInsistsOnTheNameNotAPronoun(unittest.TestCase):
+    """Second round of adversarial findings, after the subject rewrite.
+
+    The rewrite fixed WHO by reusing ``subject_terms``, which also returns the
+    generic self-references ("its", "the company", "the stock"). That is right
+    for the prose arm — a brief is about one company — and wrong here, because a
+    channel record routinely names a rival, a customer or the macro economy, and
+    a clause about any of them can borrow exactly those pronouns.
+
+    Two mechanisms, both found by attacking the code rather than reading it:
+    :func:`_named_subject_terms` drops the generics, and arrows are substituted
+    to clause boundaries BEFORE ``_normalise`` — which maps a hyphen to a space
+    and would otherwise leave the pattern nothing to match.
+    """
+
+    SVV = {"ticker": "SVV", "company_name": "Savers Value Village"}
+    OLLI = {"ticker": "OLLI", "company_name": "Ollie's Bargain Outlet"}
+
+    def test_a_pronoun_in_a_rivals_clause_is_not_this_company(self):
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                "Softer demand -> full-price apparel retailers see lower revenue at "
+                "its stores -> shoppers move to Savers Value Village.",
+                **self.SVV,
+            )
+        )
+
+    def test_an_arm_about_a_rival_does_not_bleed_into_the_candidates_arm(self):
+        # The regression the arrow substitution exists for: without it the whole
+        # chain is one segment, so every arm "names the candidate".
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                "Lithium prices fall -> competitors face margin pressure on legacy "
+                "inventory -> Savers Value Village gains share.",
+                **self.SVV,
+            )
+        )
+
+    def test_arrows_are_split_before_hyphen_normalisation(self):
+        # POSITIVE CONTROL for the ordering itself. _normalise maps "-" to " ",
+        # so an arrow substitution running after it sees " >" and matches
+        # nothing — silently, with the whole chain collapsing into one segment.
+        # Assert on the mechanism, not only on its effect.
+        lowered = support_guard._normalise(
+            support_guard._ARROW_RE.sub(". ", "a -> b --> c => d → e")
+        ).lower()
+        self.assertNotIn(">", lowered)
+        self.assertEqual(lowered.count("."), 4)
+
+    def test_the_name_survives_where_the_pronoun_does_not(self):
+        # The other half: dropping the generics must not disarm the arm on a
+        # record that does name the company.
+        self.assertTrue(
+            support_guard.channel_describes_harm(
+                "Softer retail sales -> weaker spending -> lower revenue at Savers "
+                "Value Village over the coming quarters.",
+                **self.SVV,
+            )
+        )
+
+    def test_a_falsifier_clause_inside_the_record_does_not_fire(self):
+        # Falsifiers are written in non-occurrence language by construction. This
+        # one sits in the record's own text and names the company generically.
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                "Trade-down lifts Savers Value Village revenue; this fails if instead "
+                "the company sees reduced demand.",
+                **self.SVV,
+            )
+        )
+
+    def test_a_rival_losing_share_in_the_final_arm_does_not_fire(self):
+        # The substitution / trade-down family, whose mechanism IS a rival
+        # losing. The assessor prompt teaches this shape explicitly.
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                "Inflation drives trade-down -> Ollie's Bargain Outlet gains share "
+                "while full-price retailers lose share.",
+                **self.OLLI,
+            )
+        )
+
+    def test_a_mixed_chain_fires(self):
+        # ACCEPTED behaviour, pinned so it cannot drift into an accident. A record
+        # that states an adverse mechanism about the candidate AND a favourable
+        # one still records the adverse mechanism, so an UNQUALIFIED benefit
+        # assertion is not what it supports. The guard makes no claim about which
+        # way the record nets out — only about what the prose may assert
+        # without qualification. Surfaced by zen pre-merge.
+        self.assertTrue(
+            support_guard.channel_describes_harm(
+                "Weaker consumer spending may reduce revenue for Ollie's Bargain "
+                "Outlet, but trade-down could ultimately lift its comparable sales.",
+                **self.OLLI,
+            )
+        )
