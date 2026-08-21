@@ -32,7 +32,7 @@ implausible value was found.
 
 ## 1. Was 78% a single-day artefact? No.
 
-**Primary estimand: `too_big` = 370/488 = 75.8%** (Wilson 95%: 71.8% .. 79.4%).
+**Primary estimand: `too_big` = 370/488 = 75.8%** (exact binomial 95%: 71.8% .. 79.6%).
 
 The 2026-08-06 anecdote that opened #1002 measured 78.3%. Fifteen days later
 the pooled figure is 75.8%, and 08-06 sits near the middle of the daily range,
@@ -47,48 +47,74 @@ On all 524 proposals, including the ones whose cap never resolved:
 | `too_small` | 31 | 5.9% |
 | `no_mcap` | 36 | 6.9% |
 
-## 2. Is the share stable day to day? The two pre-committed instruments disagree, and the band is the one at fault
+## 2. Is the share stable day to day? The pre-committed verdict is VARIES
 
-| instrument | pre-committed in | result |
+The contract's stability rule (§8) is a ±10 pp band around the pooled share, and
+§7 says that when the chi-square has an expected cell below 5 it is unreliable
+and **the range alone is used**. Both conditions bind here.
+
+**Pre-committed verdict: VARIES.** Over the 14 days the contract admits (the
+hypothesis day 2026-08-06 is excluded from every stability comparison, as §"what
+was known" requires), the `too_big` share ranges 57.8% .. 95.5% and the worst
+day deviates 19.6 pp from the pooled 75.8%, against a 10 pp band.
+
+Everything else in this section is secondary or post-hoc, and none of it
+overrides that verdict:
+
+| | 14 days (contract) | 15 days (sensitivity, incl. hypothesis day) |
 |---|---|---|
-| ±10 pp band around the pooled share (§8) | contract | **VARIES** — observed range 57.8% .. 95.5%, worst deviation 19.6 pp |
-| Pearson chi-square of homogeneity (§7) | contract | chi2 = 22.18, p = 0.075 over 15 days — **does not reject** one constant rate |
-| permutation version of the same statistic | contract §7's own remedy for a small expected cell (min expected 2.2) | p = 0.0744 — same answer without the assumption |
+| pre-committed band verdict | **VARIES** (19.6 pp vs 10 pp) | **VARIES** (19.6 pp vs 10 pp) |
+| Pearson chi-square (§7) | chi2 = 22.03, p = 0.055 | chi2 = 22.18, p = 0.075 |
+| min expected cell | 2.2 → unreliable | 2.2 → unreliable |
+| permutation p — **post-hoc, not in the contract** | 0.056 | 0.074 |
 
-Both were fixed before the data and both are reported. They point opposite ways,
-and the honest reading is that **the band is the weaker instrument, for a reason
-that did not depend on the numbers**: the days range from 9 to 96 proposals, and
-a 9-proposal day swings ±25 pp on sampling noise alone. A fixed percentage-point
-band cannot be met by days of such different sizes. The day-level intervals show
-this directly — every daily interval overlaps the pooled 75.8% except 2026-08-16
-(95.5%, interval 78.2% .. 99.2%), which is one day out of fifteen.
+**The band and the chi-square point different ways, and the contract already
+decided which wins**: the band. Recording that plainly matters more than the
+statistics, because the disagreement is exactly the moment at which a plan gets
+quietly renegotiated. A first draft of this memo argued the band was the weaker
+instrument and carried "no day-to-day movement is established" forward as the
+conclusion. That was wrong twice over — it overrode a pre-committed rule after
+seeing the result, and it described the permutation test as the contract's own
+remedy when the contract never mentions a permutation test at all.
 
-**Recorded as a contract-design lesson**, not as a reason to ignore the band:
-a stability threshold must be stated on an estimate whose precision is roughly
-constant, or stated as an interval-overlap rule. This one was not, and the fix
-belongs in the next contract that needs a stability clause.
+Two things are true at once and both belong on the record:
 
-Conclusion carried forward: **no day-to-day movement is established.** The
-composition behaves like one rate near 76% with the spread that daily sample
-sizes imply.
+- **The verdict is VARIES.** That is what the plan said, and the plan was
+  written first.
+- **The band was badly designed, and would have been badly designed whatever
+  the numbers did.** Days range from 9 to 96 proposals, so a 9-proposal day
+  swings roughly ±25 pp on sampling noise alone; a fixed percentage-point band
+  cannot be satisfiable and informative across sizes that different. The fix —
+  state a stability threshold on an estimate of roughly constant precision, or
+  state it as an interval-overlap rule — belongs in the **next** contract, not
+  in a re-reading of this one.
+
+Note also that `p = 0.055` is not evidence of stability. The contract's own §9
+says this design has no power to detect small day-to-day drift, and a p-value
+above a threshold never becomes a positive claim.
+
+Per day, with the exact binomial interval the contract fixed:
 
 | asof | prop | resolved | themes | too_big | in | small | no_mcap | too_big share (95%) |
 |---|---:|---:|---:|---:|---:|---:|---:|---|
-| 2026-08-06 | 23 | 23 | 7 | 18 | 3 | 2 | 0 | 78.3% (58.1 .. 90.3) |
-| 2026-08-07 | 31 | 29 | 8 | 24 | 3 | 2 | 2 | 82.8% (65.5 .. 92.4) |
-| 2026-08-08 | 10 | 10 | 5 | 6 | 4 | 0 | 0 | 60.0% (31.3 .. 83.2) |
-| 2026-08-09 | 20 | 19 | 6 | 12 | 7 | 0 | 1 | 63.2% (41.0 .. 80.9) |
-| 2026-08-10 | 32 | 31 | 8 | 21 | 8 | 2 | 1 | 67.7% (50.1 .. 81.4) |
-| 2026-08-11 | 26 | 23 | 7 | 19 | 4 | 0 | 3 | 82.6% (62.9 .. 93.0) |
-| 2026-08-12 | 23 | 23 | 6 | 19 | 3 | 1 | 0 | 82.6% (62.9 .. 93.0) |
-| 2026-08-13 | 21 | 20 | 6 | 17 | 2 | 1 | 1 | 85.0% (64.0 .. 94.8) |
-| 2026-08-14 | 26 | 25 | 5 | 18 | 6 | 1 | 1 | 72.0% (52.4 .. 85.7) |
-| 2026-08-15 | 19 | 19 | 4 | 17 | 2 | 0 | 0 | 89.5% (68.6 .. 97.1) |
-| 2026-08-16 | 22 | 22 | 4 | 21 | 1 | 0 | 0 | 95.5% (78.2 .. 99.2) |
-| 2026-08-17 | 9 | 9 | 3 | 7 | 2 | 0 | 0 | 77.8% (45.3 .. 93.7) |
-| 2026-08-18 | 102 | 96 | 10 | 75 | 13 | 8 | 6 | 78.1% (68.9 .. 85.2) |
-| 2026-08-19 | 53 | 45 | 5 | 26 | 13 | 6 | 8 | 57.8% (43.3 .. 71.0) |
-| 2026-08-20 | 107 | 94 | 10 | 70 | 16 | 8 | 13 | 74.5% (64.8 .. 82.2) |
+| 2026-08-06 † | 23 | 23 | 7 | 18 | 3 | 2 | 0 | 78.3% (56.3 .. 92.5) |
+| 2026-08-07 | 31 | 29 | 8 | 24 | 3 | 2 | 2 | 82.8% (64.2 .. 94.2) |
+| 2026-08-08 | 10 | 10 | 5 | 6 | 4 | 0 | 0 | 60.0% (26.2 .. 87.8) |
+| 2026-08-09 | 20 | 19 | 6 | 12 | 7 | 0 | 1 | 63.2% (38.4 .. 83.7) |
+| 2026-08-10 | 32 | 31 | 8 | 21 | 8 | 2 | 1 | 67.7% (48.6 .. 83.3) |
+| 2026-08-11 | 26 | 23 | 7 | 19 | 4 | 0 | 3 | 82.6% (61.2 .. 95.0) |
+| 2026-08-12 | 23 | 23 | 6 | 19 | 3 | 1 | 0 | 82.6% (61.2 .. 95.0) |
+| 2026-08-13 | 21 | 20 | 6 | 17 | 2 | 1 | 1 | 85.0% (62.1 .. 96.8) |
+| 2026-08-14 | 26 | 25 | 5 | 18 | 6 | 1 | 1 | 72.0% (50.6 .. 87.9) |
+| 2026-08-15 | 19 | 19 | 4 | 17 | 2 | 0 | 0 | 89.5% (66.9 .. 98.7) |
+| 2026-08-16 | 22 | 22 | 4 | 21 | 1 | 0 | 0 | 95.5% (77.2 .. 99.9) |
+| 2026-08-17 | 9 | 9 | 3 | 7 | 2 | 0 | 0 | 77.8% (40.0 .. 97.2) |
+| 2026-08-18 | 102 | 96 | 10 | 75 | 13 | 8 | 6 | 78.1% (68.5 .. 85.9) |
+| 2026-08-19 | 53 | 45 | 5 | 26 | 13 | 6 | 8 | 57.8% (42.2 .. 72.3) |
+| 2026-08-20 | 107 | 94 | 10 | 70 | 16 | 8 | 13 | 74.5% (64.4 .. 82.9) |
+
+† the hypothesis day — shown for completeness, excluded from the stability
+comparison above.
 
 ## 3. Is it theme-dependent? Overwhelmingly
 
@@ -136,15 +162,21 @@ p10  $1.37B   p20  $7.75B   p30 $16.87B   p40 $24.15B   p50 $41.21B
 p60 $73.43B   p70 $131.66B  p80 $194.45B  p90 $434.77B
 ```
 
+Buckets are **half-open**, `[10^b, 10^(b+1))`. This differs from the bracket
+itself, which is closed at both ends — a cap of exactly $10B would be
+`in_bracket` and yet land in the `[$10B, $100B)` bucket. No cap sits on a
+boundary in this data, and the script reports how many values fall outside every
+bucket (0 here) so the two conventions cannot quietly disagree.
+
 | bucket | n |
 |---|---:|
-| $1M .. $10M | 3 |
-| $10M .. $100M | 7 |
-| $100M .. $1B | 29 |
-| $1B .. $10B | 79 |
-| $10B .. $100B | **202** |
-| $100B .. $1T | **145** |
-| above $1T | 23 |
+| [$1M, $10M) | 3 |
+| [$10M, $100M) | 7 |
+| [$100M, $1B) | 29 |
+| [$1B, $10B) | 79 |
+| [$10B, $100B) | **202** |
+| [$100B, $1T) | **145** |
+| [$1T, $10T) | 23 |
 
 The median proposal is **four times the top of the bracket**. The mass is not a
 tail of a few giants — 370 of 488 resolved proposals sit above $10B (which is
@@ -190,7 +222,9 @@ changed nothing about the shape.
 
 **Can:**
 - the pooled composition and its denominator;
-- whether the composition moves day to day (it does not, measurably);
+- whether the composition meets the pre-committed stability band (it does not —
+  verdict **VARIES**), while noting that the band itself was poorly specified
+  and the chi-square does not reject a constant rate;
 - that theme identity dominates the variance, and which specific themes never
   produce an in-bracket name;
 - the full cap distribution rather than the three-bucket summary;
@@ -225,4 +259,30 @@ changed nothing about the shape.
    from theme selection or from the mapper's behaviour inside a theme. Replayable
    from `theme_rollup` without spending a call. Needs its own contract.
 3. **The stability-threshold lesson** in §2 belongs in the next contract that
-   states one.
+   states one: a fixed percentage-point band is the wrong shape when the units
+   it is applied to differ tenfold in size.
+
+## 9. Review trail
+
+The first version of this memo was wrong in three ways, all caught before merge
+and all recorded here rather than quietly fixed:
+
+1. Three counts were stated from recollection instead of from the parquets
+   (theme count 51 vs the real 39; the ">$10B" tally 347 vs 370; the theme
+   cut-off 33 vs 34). Corrected by querying.
+2. §2 overrode a pre-committed verdict after seeing that it failed, and
+   described a permutation test as "the contract's own remedy" when the
+   contract never mentions one. The verdict is now reported as the contract
+   fixed it, with the permutation test labelled post-hoc.
+3. The script did not implement two of the contract's own clauses: it included
+   the hypothesis day in the stability comparison, and it used a Wilson
+   interval where §6 fixed an exact binomial one. Both now follow the contract;
+   switching to Clopper-Pearson widened the primary interval from
+   71.8-79.4% to 71.8-79.6%, and excluding the hypothesis day moved the
+   chi-square from p = 0.075 to p = 0.055 — neither changes any conclusion.
+
+A latent defect was also fixed: "resolved" was computed as `!= no_mcap`, so a
+null or unrecognised verdict would have entered the primary denominator by
+failing an inequality. It is now an explicit whitelist, and the script stops
+outright if a verdict outside the contract's vocabulary appears, since the
+contract has no rule for one.
