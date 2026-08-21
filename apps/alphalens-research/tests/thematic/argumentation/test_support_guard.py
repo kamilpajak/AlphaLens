@@ -67,13 +67,13 @@ _HARM_OLLI = (
     "to lower revenue in the near term."
 )
 
-# Subject for the LEXICON-level tests. Any ticker/name works: subject_terms
-# always includes the generic self-references ("this company", "the company",
-# "its"), and the carriers below use them — so a failure in those tests is the
-# ENTRY's inability to fire, never a subject mismatch. The subject test itself
-# has its own class with a real, named candidate.
-_ANY_TICKER = "XYZ"
-_ANY_NAME = "Example Corp"
+# Subject for the LEXICON-level tests. The direction arm drops the generic
+# self-references (see _named_subject_terms), so a carrier saying "at this
+# company" would fail for the wrong reason. The carriers below therefore NAME
+# this company, and a failure in those tests is the ENTRY's inability to fire.
+# The subject test itself has its own class with real records.
+_ANY_TICKER = "KFL"
+_ANY_NAME = "Kingfisher Labs"
 
 # REAL benefit-direction records, quoted from the committed golden fixtures and
 # from the live store. They are the false-positive corpus, and they are chosen
@@ -832,7 +832,7 @@ class EveryHarmEntryMustBeAbleToFire(unittest.TestCase):
 
     #: An arrow chain whose FINAL arm hosts the phrase, so a failure here is the
     #: ENTRY's inability to fire and not the terminal-link rule.
-    CARRIER = "The event -> weaker end markets -> {phrase} at this company."
+    CARRIER = "The event -> weaker end markets -> {phrase} at Kingfisher Labs."
 
     def test_each_harm_phrase_fires_on_a_minimal_carrier_chain(self):
         for phrase in support_guard.HARM_DIRECTION_PHRASES:
@@ -867,9 +867,12 @@ class EveryHarmEntryMustBeAbleToFire(unittest.TestCase):
         self.assertGreater(len(support_guard.HARM_DIRECTION_PHRASES), 10)
 
     def test_a_hyphenated_record_still_fires_in_both_spellings(self):
+        # Names the company rather than saying "this company": the direction arm
+        # drops the generic self-references, so a pronoun carrier would fail for
+        # a reason that has nothing to do with hyphenation.
         for text in (
-            "Weak demand -> margin-compression at this company.",
-            "Weak demand -> margin compression at this company.",
+            "Weak demand -> margin-compression at Kingfisher Labs.",
+            "Weak demand -> margin compression at Kingfisher Labs.",
         ):
             with self.subTest(text=text):
                 self.assertTrue(
@@ -992,4 +995,87 @@ class TheDirectionTestAsksWhoIsHarmedNotWhereTheHarmSits(unittest.TestCase):
         # are what cover a row with no usable record.
         self.assertFalse(
             self._harm("Tariffs raise component prices, reducing demand across the sector.")
+        )
+
+
+class TheSubjectTestInsistsOnTheNameNotAPronoun(unittest.TestCase):
+    """Second round of adversarial findings, after the subject rewrite.
+
+    The rewrite fixed WHO by reusing ``subject_terms``, which also returns the
+    generic self-references ("its", "the company", "the stock"). That is right
+    for the prose arm — a brief is about one company — and wrong here, because a
+    channel record routinely names a rival, a customer or the macro economy, and
+    a clause about any of them can borrow exactly those pronouns.
+
+    Two mechanisms, both found by attacking the code rather than reading it:
+    :func:`_named_subject_terms` drops the generics, and arrows are substituted
+    to clause boundaries BEFORE ``_normalise`` — which maps a hyphen to a space
+    and would otherwise leave the pattern nothing to match.
+    """
+
+    SVV = {"ticker": "SVV", "company_name": "Savers Value Village"}
+    OLLI = {"ticker": "OLLI", "company_name": "Ollie's Bargain Outlet"}
+
+    def test_a_pronoun_in_a_rivals_clause_is_not_this_company(self):
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                "Softer demand -> full-price apparel retailers see lower revenue at "
+                "its stores -> shoppers move to Savers Value Village.",
+                **self.SVV,
+            )
+        )
+
+    def test_an_arm_about_a_rival_does_not_bleed_into_the_candidates_arm(self):
+        # The regression the arrow substitution exists for: without it the whole
+        # chain is one segment, so every arm "names the candidate".
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                "Lithium prices fall -> competitors face margin pressure on legacy "
+                "inventory -> Savers Value Village gains share.",
+                **self.SVV,
+            )
+        )
+
+    def test_arrows_are_split_before_hyphen_normalisation(self):
+        # POSITIVE CONTROL for the ordering itself. _normalise maps "-" to " ",
+        # so an arrow substitution running after it sees " >" and matches
+        # nothing — silently, with the whole chain collapsing into one segment.
+        # Assert on the mechanism, not only on its effect.
+        lowered = support_guard._normalise(
+            support_guard._ARROW_RE.sub(". ", "a -> b --> c => d → e")
+        ).lower()
+        self.assertNotIn(">", lowered)
+        self.assertEqual(lowered.count("."), 4)
+
+    def test_the_name_survives_where_the_pronoun_does_not(self):
+        # The other half: dropping the generics must not disarm the arm on a
+        # record that does name the company.
+        self.assertTrue(
+            support_guard.channel_describes_harm(
+                "Softer retail sales -> weaker spending -> lower revenue at Savers "
+                "Value Village over the coming quarters.",
+                **self.SVV,
+            )
+        )
+
+    def test_a_falsifier_clause_inside_the_record_does_not_fire(self):
+        # Falsifiers are written in non-occurrence language by construction. This
+        # one sits in the record's own text and names the company generically.
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                "Trade-down lifts Savers Value Village revenue; this fails if instead "
+                "the company sees reduced demand.",
+                **self.SVV,
+            )
+        )
+
+    def test_a_rival_losing_share_in_the_final_arm_does_not_fire(self):
+        # The substitution / trade-down family, whose mechanism IS a rival
+        # losing. The assessor prompt teaches this shape explicitly.
+        self.assertFalse(
+            support_guard.channel_describes_harm(
+                "Inflation drives trade-down -> Ollie's Bargain Outlet gains share "
+                "while full-price retailers lose share.",
+                **self.OLLI,
+            )
         )

@@ -395,6 +395,32 @@ class SupportViolation:
     suppressed_by: str | None
 
 
+# Arrows are clause separators inside a channel record — see
+# :func:`channel_describes_harm`. Longest first so "-->" is not left with a
+# dangling "-".
+_ARROW_RE = re.compile(r"-->|->|=>|\u2192")
+
+
+def _named_subject_terms(ticker: str, company_name: str) -> tuple[str, ...]:
+    """Subject terms for the DIRECTION test: the NAME only, no generic pronouns.
+
+    :func:`subject_terms` also returns "its", "the company", "the stock" and the
+    other generic self-references, which is right for the prose arm — a brief is
+    about one company, so a pronoun in it refers to that company.
+
+    A channel record is not. It routinely names a rival, a customer or the macro
+    economy, and a clause about any of them can borrow exactly those pronouns:
+    "full-price retailers see lower revenue at ITS stores" would otherwise read
+    as harm to the candidate. So the direction test insists on the NAME.
+
+    The cost is recall — a final arm that says only "its revenue falls" is a
+    miss. That is the cheaper error here by this module's own ranking, and it is
+    the same trade the prose arm makes in the opposite direction.
+    """
+    generic = set(subject_terms("", ""))
+    return tuple(t for t in subject_terms(ticker, company_name) if t not in generic)
+
+
 def channel_describes_harm(channel_text: str, *, ticker: str, company_name: str) -> bool:
     """True when the record describes harm TO THIS COMPANY.
 
@@ -444,12 +470,21 @@ def channel_describes_harm(channel_text: str, *, ticker: str, company_name: str)
     """
     if not channel_text:
         return False
-    terms = subject_terms(ticker, company_name)
+    terms = _named_subject_terms(ticker, company_name)
     if not terms:
         # Nothing to anchor the subject test on, so no segment can be shown to
         # be about this company. The least-claiming answer is "not harm".
         return False
-    lowered = _normalise(channel_text).lower()
+    # Arrows separate the arms of a chain, so they separate CLAUSES. Without
+    # this an arm about a competitor bleeds into the next arm about the
+    # candidate, and "-> competitors face margin pressure -> this company gains
+    # share" reads as harm to this company.
+    #
+    # BEFORE :func:`_normalise`, which maps a hyphen to a space and would turn
+    # "->" into " >" — an arrow the pattern can no longer see. Getting this
+    # order wrong is silent: the subject test then reads the whole chain as one
+    # segment and every arm names the candidate.
+    lowered = _normalise(_ARROW_RE.sub(". ", channel_text)).lower()
     for match in _HARM_RE.finditer(lowered):
         segment = _segment_around(lowered, match.start(), match.end())
         if not _names_the_candidate(segment, terms):
