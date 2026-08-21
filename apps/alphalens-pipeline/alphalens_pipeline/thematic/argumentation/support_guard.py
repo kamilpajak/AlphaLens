@@ -44,11 +44,28 @@ weakening the DAG.
 
 SCOPE, AND WHY IT IS NARROW
 ---------------------------
-Inert unless the record cannot support a benefit claim: bottom support level, no
-record at all, or a grounding failure. For ``established`` / ``suggestive`` it
-must NEVER fire. A guard that also policed well-grounded prose would start
-rewriting it and would drift into an editorial filter, which is a different and
-unauthorised thing.
+Inert unless the record cannot support a benefit claim. Four ways it cannot:
+bottom support level, no record at all, a grounding failure, and a record that
+describes HARM to this company. The guard still never polices
+prose that agrees with a well-evidenced, benefit-direction record — it would
+drift into an editorial filter, which is a different and unauthorised thing.
+
+The fourth condition is the only one that reads the chain TEXT rather than a
+graded label, and it exists because the support level answers "how well is this
+chain evidenced", never "which way does it point". A ``suggestive`` +
+``grounded`` record reading "potential negative impact on revenue for small-cap
+retailers like Grocery Outlet" is a well-formed record of an ADVERSE mechanism,
+and prose asserting a benefit beside it contradicts the row's own record
+(issue #1070). Direction is tested lexically over the channel text, and asks WHO is harmed —
+a harm phrase counts only where the segment names the candidate and is not
+negated — with the same measured-recall caveat as the benefit lexicon below.
+
+Deliberately NOT done here: adding a ``channel_direction`` field to the
+assessor's schema. It is the better instrument — a label on the model's own
+chain rather than a lexical test over it — but it would move
+``channel_config_version`` and open a third pre-registered cohort, which
+``docs/research/channel_feature_forward_prereg_2026_08_19.md`` A1.3 forbids and
+its Amendment 2 §A2.3 records as rejected for that reason.
 
 WHAT IT IS NOT
 --------------
@@ -79,7 +96,7 @@ from alphalens_pipeline.thematic.mapping.channel_assessor import (
     SUPPORT_NOT_ESTABLISHED,
 )
 
-SUPPORT_GUARD_VERSION = "support-guard-v1-2026-08-20"
+SUPPORT_GUARD_VERSION = "support-guard-v2-2026-08-21"
 
 # The facts-level value for "the assessor never produced a record for this row"
 # (an outage, or a row predating the columns). A FOURTH facts value, NOT a fourth
@@ -180,6 +197,74 @@ _TIER2_TOKENS: tuple[str, ...] = (
 )
 _TIER2_ANCHORS: tuple[str, ...] = ("revenue", "margin", "margins", "earnings", "demand", "share")
 
+# Harm-direction phrases, matched over the channel record's LAST LINK only (see
+# :func:`channel_describes_harm`). Same normalisation, same whole-phrase rule and the
+# same hyphen-free requirement as the benefit lexicon above.
+#
+# RECALL IS MEASURED, NOT ASSUMED — and here the measurement is far thinner in
+# one direction than the other. The true-positive evidence is N=2: the two
+# channel records in issue #1070, and nothing else. Both were overwritten by a
+# later pipeline slot, so they survive only as quotations. The FALSE-positive
+# side is stronger: every entry below was measured against 32 distinct real
+# benefit-direction channel records (14 from the committed golden fixtures, 9
+# from the assessor cassettes, 19 from the live store, deduplicated) and none of
+# them fires on any of those, at terminal-link scope or over the whole text.
+#
+# Entries are grouped by what motivates them, because the motivation is uneven
+# and hiding that would repeat the failure the benefit lexicon confesses to:
+#   * OBSERVED     — quoted from the two harm records.
+#   * INVERTED     — the antonym of a terminal arm that DOES occur in the 32
+#                    benefit records ("boosting revenue", "increases demand",
+#                    "improving margins", and the lexicon's own "takes share").
+# No entry is here on plausibility alone.
+HARM_DIRECTION_PHRASES: tuple[str, ...] = (
+    # OBSERVED (issue #1070).
+    "negative impact",
+    "reduced customer demand",
+    "lower revenue",
+    # INVERTED — revenue / sales arms.
+    "lower revenues",
+    "reduced revenue",
+    "declining revenue",
+    "revenue declines",
+    "lower sales",
+    "declining sales",
+    # INVERTED — demand arms.
+    "reduced demand",
+    "lower demand",
+    "weaker demand",
+    "softer demand",
+    "declining demand",
+    # INVERTED — margin arms.
+    "margin compression",
+    "margin pressure",
+    "pressure on margins",
+    # INVERTED — share arms (mirrors "takes share" / "capture share" above).
+    "lose share",
+    "loses share",
+    # BASE FORMS. The assessor writes suggestive chains in modal language, so
+    # "could reduce customer demand" is at least as natural as "reduced customer
+    # demand" — and the participle-only list missed the real #1070 record the
+    # moment it was reworded that way. This is the same near-neighbour gap the
+    # benefit lexicon shipped with ("stands to profit" absent, "stands to gain"
+    # present), found the same way: by a test written from a real record rather
+    # than from the list.
+    "reduce customer demand",
+    "reduce demand",
+    "reduce revenue",
+    "reduce sales",
+    "lowers revenue",
+    "lowers demand",
+    "weigh on revenue",
+    "weighs on revenue",
+    "weigh on margins",
+    "weighs on margins",
+)
+
+# Chain separators the assessor actually writes. The record is an arrow chain by
+# convention ("event -> mechanism -> effect on this company"), and the unicode
+# arrow occurs in the live store beside the ASCII one.
+
 _CLAUSE_BOUNDARY = ".;:\n"
 
 # Coordinators that open a NEW independent clause. A cue on the far side of one
@@ -275,6 +360,11 @@ SUPPRESSED_BY_NO_SUBJECT = "no_subject"
 _SPAN_CHARS = 120
 
 
+def _normalise(text: str) -> str:
+    """Hyphen to space, so "second-order beneficiary" matches either spelling."""
+    return text.replace("-", " ")
+
+
 def _compile_cues(cues: tuple[str, ...]) -> tuple[re.Pattern, ...]:
     return tuple(
         re.compile(rf"\b{re.escape(cue)}\b" if cue.isalpha() else re.escape(cue)) for cue in cues
@@ -284,6 +374,10 @@ def _compile_cues(cues: tuple[str, ...]) -> tuple[re.Pattern, ...]:
 _NEGATION_RES = _compile_cues(_NEGATION_CUES)
 _CONDITIONAL_RES = _compile_cues(_CONDITIONAL_CUES)
 _TIER2_ANCHOR_RE = re.compile("|".join(rf"\b{re.escape(a)}\b" for a in _TIER2_ANCHORS))
+# Whole-phrase on both ends, unlike ``_compile_cues``: every harm entry is a
+# phrase, and a bare substring would match "lower revenues" inside a longer
+# token. Entries are normalised here exactly as the scanned text is.
+_HARM_RE = re.compile("|".join(rf"\b{re.escape(_normalise(p))}\b" for p in HARM_DIRECTION_PHRASES))
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,22 +395,100 @@ class SupportViolation:
     suppressed_by: str | None
 
 
-def guard_applies(*, causal_support: str, grounding: str) -> bool:
+def channel_describes_harm(channel_text: str, *, ticker: str, company_name: str) -> bool:
+    """True when the record describes harm TO THIS COMPANY.
+
+    The question is WHO is harmed, so the test asks that directly: a harm phrase
+    counts only when the segment carrying it NAMES THE CANDIDATE and is not
+    negated. Both checks reuse the prose arm's own primitives
+    (:func:`_names_the_candidate`, :data:`_NEGATION_RES`), in its order —
+    subject first, because a segment that is not about this company cannot say
+    this company is harmed, whatever its mood.
+
+    An earlier revision answered the same question by POSITION, scanning only
+    the chain's last link on the theory that earlier links describe the world
+    and the final one describes the candidate. Adversarial review killed it, and
+    the measurements are worth keeping because they are the reason this file
+    does not scope:
+
+    * It fired on harm to a RIVAL inside the final arm — "Ollie's gains share
+      while full-price retailers lose share". That is the substitution /
+      trade-down family, whose mechanism IS a rival losing, and it is ~21% of
+      live records. Whether the loser lands in the middle arm or the last one is
+      a wording coin flip, so position cannot separate them.
+    * It fired on an explicit DENIAL of harm — "sees no negative impact on
+      revenue and gains share" — because it skipped the negation suppressor the
+      prose arm has always had.
+    * It MISSED the real #1070 record reworded so the harm clause was no longer
+      the last comma segment, and truncated at abbreviation periods, reducing
+      one committed golden record to the fragment "'s offerings".
+    * And it bought nothing: over every real benefit record then in the corpus,
+      the lexicon fired zero times at last-link scope AND zero times over the
+      whole text. The scoping was defended by a hand-authored fixture, not by
+      any record the assessor ever wrote.
+
+    Hedging in the chain is deliberately NOT suppressed, unlike the prose arm.
+    The assessor writes ``suggestive`` chains in modal language by construction,
+    so a conditional cue carries no information here; "could see reduced
+    customer demand" is still a record of an adverse mechanism. That asymmetry
+    is a decision, not an oversight.
+
+    Residual, inherited from :func:`_suppressor` and on the same terms: a
+    segment naming BOTH the candidate and a rival still fires. Separating two
+    subjects in one clause needs real parsing. The failure is bounded and
+    visible — a withheld brief is stamped, counted and regenerated once — and is
+    only tolerable while the guard cannot gate selection.
+
+    An empty ``channel_text`` is ABSENT EVIDENCE, not evidence of absence: it
+    returns False, and the grounding / support conditions cover that row.
+    """
+    if not channel_text:
+        return False
+    terms = subject_terms(ticker, company_name)
+    if not terms:
+        # Nothing to anchor the subject test on, so no segment can be shown to
+        # be about this company. The least-claiming answer is "not harm".
+        return False
+    lowered = _normalise(channel_text).lower()
+    for match in _HARM_RE.finditer(lowered):
+        segment = _segment_around(lowered, match.start(), match.end())
+        if not _names_the_candidate(segment, terms):
+            continue
+        if any(cue.search(_segment_before(lowered, match.start())) for cue in _NEGATION_RES):
+            continue
+        return True
+    return False
+
+
+def guard_applies(
+    *,
+    causal_support: str,
+    grounding: str,
+    channel_text: str,
+    ticker: str,
+    company_name: str,
+) -> bool:
     """True only when the record cannot support a benefit claim.
 
-    Three in-scope conditions: the bottom support level, no record at all, and a
+    Four in-scope conditions: the bottom support level, no record at all, a
     grounding failure (which overlays ANY support level — an event that is not
     about the theme cannot support a benefit claim however confident the chain
-    reads).
+    reads), and a record that describes harm TO THIS COMPANY.
+
+    The last three arguments are REQUIRED, deliberately. An empty string is a
+    real value the facts projection carries — the assessor blanks the text at
+    ``not_established``, and the ``no_record`` shape projects "" — and those rows
+    are already in scope on the first two conditions, so an empty text can only
+    make the direction arm inert, never wrong. A MISSING argument is a different
+    thing: a call site that forgot. Defaulting it would turn that mistake into
+    silence, and silence here reads exactly like "this record describes no harm".
+    So the caller must say.
     """
     if causal_support in (SUPPORT_NOT_ESTABLISHED, NO_RECORD):
         return True
-    return grounding != GROUNDING_GROUNDED
-
-
-def _normalise(text: str) -> str:
-    """Hyphen to space, so "second-order beneficiary" matches either spelling."""
-    return text.replace("-", " ")
+    if grounding != GROUNDING_GROUNDED:
+        return True
+    return channel_describes_harm(channel_text, ticker=ticker, company_name=company_name)
 
 
 def _clause_before(text_lower: str, phrase_start: int) -> str:
@@ -519,11 +691,19 @@ def check_support_language(
     grounding: str,
     ticker: str,
     company_name: str = "",
+    channel_text: str = "",
 ) -> list[SupportViolation]:
     """Scan a parsed brief for benefit claims the record cannot support.
 
     Returns ``[]`` WITHOUT scanning when :func:`guard_applies` is false, so an
-    ``established`` row is never touched.
+    ``established`` row with a benefit-direction chain is never touched.
+
+    ``channel_text`` is the RECORD's own chain and is read only to decide scope,
+    via :func:`channel_describes_harm`. The harm lexicon is never applied to the
+    four prose fields: the prompt instructs the model to render the record's
+    FALSIFIER into ``bear_summary`` and ``catalyst_failure_exit`` ("if Maravai's
+    revenue does not increase, the suggested channel is invalidated"), so harm
+    vocabulary in the prose is the contract working as designed.
 
     ``ticker`` and ``company_name`` are what "this company" MEANS to the scan.
     They are required because the contract is about the SUBJECT of the benefit,
@@ -532,7 +712,13 @@ def check_support_language(
     benefit more from any category spend" is the prose working as designed and
     must not be read as a violation.
     """
-    if not guard_applies(causal_support=causal_support, grounding=grounding):
+    if not guard_applies(
+        causal_support=causal_support,
+        grounding=grounding,
+        channel_text=channel_text,
+        ticker=ticker,
+        company_name=company_name,
+    ):
         return []
     terms = subject_terms(ticker, company_name)
     violations: list[SupportViolation] = []
@@ -550,6 +736,7 @@ __all__ = [
     "BANNED_BENEFIT_PHRASES",
     "CAUSAL_SUPPORT_NOT_A_FORECAST",
     "GUARDED_FIELDS",
+    "HARM_DIRECTION_PHRASES",
     "NO_RECORD",
     "SUPPORT_GUARD_VERSION",
     "SUPPRESSED_BY_CONDITIONAL",
@@ -557,6 +744,7 @@ __all__ = [
     "SUPPRESSED_BY_NO_SUBJECT",
     "SUPPRESSED_BY_QUOTED",
     "SupportViolation",
+    "channel_describes_harm",
     "check_support_language",
     "guard_applies",
     "subject_terms",

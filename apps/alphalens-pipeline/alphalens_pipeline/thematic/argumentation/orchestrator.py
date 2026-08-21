@@ -564,7 +564,8 @@ def _guard_outcome(
     it optimistically, making the guard look better behaved than it is.
 
     * ``not_applicable``    — the record supports a benefit claim (established or
-      suggestive, and grounded), so the guard never scanned.
+      suggestive, grounded, and pointing at a benefit rather than at harm), so
+      the guard never scanned.
     * ``clean``             — in scope, prose was produced, and the draw that
       SHIPPED complied.
     * ``repaired``          — in scope, the first draw violated, the greedy
@@ -588,7 +589,19 @@ def _guard_outcome(
     """
     causal_support = str(facts.get("causal_support") or support_guard.NO_RECORD)
     grounding = str(facts.get("channel_grounding") or channel_assessor.GROUNDING_UNKNOWN)
-    applies = support_guard.guard_applies(causal_support=causal_support, grounding=grounding)
+    # The SAME inputs the generator's own call used, including the ticker and
+    # company name the direction arm needs for its subject test. Re-deriving
+    # `applies` from a SUBSET of them would stamp `not_applicable` on a row the
+    # generator actually withheld — `brief_error_kind` and
+    # `brief_support_guard_status` would then contradict each other on exactly
+    # the rows the direction arm is for.
+    applies = support_guard.guard_applies(
+        causal_support=causal_support,
+        grounding=grounding,
+        channel_text=str(facts.get("channel_text") or ""),
+        ticker=str(facts.get("ticker") or ""),
+        company_name=str(facts.get("company_name") or ""),
+    )
     if not applies:
         return _GuardOutcome("not_applicable", 0, 0, None, causal_support, grounding)
     fired = [v for v in violations if v.suppressed_by is None]

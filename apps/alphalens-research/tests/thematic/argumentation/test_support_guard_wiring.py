@@ -98,6 +98,47 @@ def _scored_row(**over) -> dict:
     return row
 
 
+# Issue #1070, verbatim: a record graded `suggestive` + `grounded` whose chain
+# ends in harm to the candidate. Before the direction arm this row was out of
+# scope entirely, so the prose below shipped unchallenged.
+_HARM_CHANNEL_OLLI = (
+    "As a small-cap retailer, Ollie's could see reduced customer demand, leading "
+    "to lower revenue in the near term."
+)
+
+# The SAME ticker's real benefit-direction record, from the live store. The two
+# differ only in where the chain points, which is the whole discrimination.
+_BENEFIT_CHANNEL_OLLI = (
+    "The event notes that discount retailers could benefit if inflation drives "
+    "trade-down behavior -> consumers shift purchases from higher-priced "
+    "retailers toward discounters -> Ollie's Bargain Outlet, as a "
+    "closeout/discount retailer, sees increased customer traffic and revenue "
+    "from trade-down demand over subsequent quarters."
+)
+
+_OLLI_BENEFIT_BRIEF = {
+    "tldr": "Ollie's benefits from softer consumer spending and is positioned to win share.",
+    "supply_chain_reasoning": "Trade-down behaviour boosts demand for its closeout assortment.",
+    "bear_summary": "P/S sits in the 1st sector percentile.",
+    "catalyst_failure_exit": "Exit if the trade-down behaviour does not show up in comps.",
+}
+
+
+def _harm_direction_row(**over) -> dict:
+    """A `suggestive` + `grounded` row whose record points at HARM."""
+    fields = {
+        "ticker": "OLLI",
+        "company_name": "Ollie's Bargain Outlet Holdings",
+        "theme": "consumer_trade_down",
+        "channel_support_status": "suggestive",
+        "channel_grounding_status": "grounded",
+        "channel_type": "customer_demand",
+        "channel_text": _HARM_CHANNEL_OLLI,
+    }
+    fields.update(over)
+    return _scored_row(**fields)
+
+
 def _scored(rows: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
@@ -277,6 +318,63 @@ class TheGuardRegeneratesOnceThenWithholdsProse(unittest.TestCase):
         self.assertTrue(
             [k for k in planted if k.startswith(("brief_support_guard_", "brief_causal_support"))]
         )
+
+
+class AHarmDirectionRecordIsWithheldAndStampedAsSuchEndToEnd(unittest.TestCase):
+    """POSITIVE CONTROL 3 — the direction arm cannot rot into a no-op.
+
+    The row is `suggestive` + `grounded`, which was OUT OF SCOPE before issue
+    #1070, and its own channel record ends in "lower revenue". Benefit prose
+    beside it contradicts the row's own record, so it must be re-rolled once and
+    then withheld — while the ROW ships exactly as every other outcome does.
+    """
+
+    def _run(self, drafts):
+        with tempfile.TemporaryDirectory() as tmp:
+            return _RunBriefs.run(Path(tmp), [_harm_direction_row()], drafts)
+
+    def test_a_suggestive_grounded_harm_record_withholds_benefit_prose(self):
+        df, calls = self._run([_OLLI_BENEFIT_BRIEF, _OLLI_BENEFIT_BRIEF])
+        self.assertEqual(len(calls), 2, "exactly one regeneration, never a rewrite")
+        self.assertEqual(len(df), 1, "the ROW ships; only the prose is withheld")
+        row = df.iloc[0]
+        self.assertEqual(row["brief_error_kind"], "unsupported_benefit_claim")
+        self.assertIsNone(row["brief_tldr"])
+        self.assertTrue(row["brief_trade_setup"])
+
+    def test_the_stamped_status_agrees_with_the_withheld_prose(self):
+        """The two `guard_applies` call sites must move together.
+
+        The generator decides whether to SCAN, and the orchestrator re-derives
+        the same question to decide what to STAMP. Teaching only the generator
+        about direction would ship a row whose `brief_error_kind` says the guard
+        withheld the prose while `brief_support_guard_status` says the guard
+        never ran — a contradiction inside one row, and no other test would see
+        it because every other fixture carries an empty `channel_text`.
+        """
+        df, _calls = self._run([_OLLI_BENEFIT_BRIEF, _OLLI_BENEFIT_BRIEF])
+        row = df.iloc[0]
+        self.assertEqual(row["brief_support_guard_status"], "withheld")
+        self.assertEqual(row["brief_causal_support"], "suggestive")
+        self.assertEqual(row["brief_channel_grounding"], "grounded")
+        self.assertGreaterEqual(int(row["brief_support_guard_violations"]), 1)
+
+    def test_the_same_row_with_a_benefit_record_stays_not_applicable(self):
+        """Anti-inertness control in the other direction.
+
+        Same ticker, same prose, same support level — only the record's
+        DIRECTION differs. If this ever reports `withheld`, the arm has stopped
+        discriminating and is withholding honest prose.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            df, calls = _RunBriefs.run(
+                Path(tmp),
+                [_harm_direction_row(channel_text=_BENEFIT_CHANNEL_OLLI)],
+                [_OLLI_BENEFIT_BRIEF],
+            )
+        self.assertEqual(len(calls), 1, "a benefit record must not cost a re-roll")
+        self.assertEqual(df.iloc[0]["brief_support_guard_status"], "not_applicable")
+        self.assertEqual(df.iloc[0]["brief_status"], "ok")
 
 
 class TheGuardStatusNeverReportsAFireAsClean(unittest.TestCase):

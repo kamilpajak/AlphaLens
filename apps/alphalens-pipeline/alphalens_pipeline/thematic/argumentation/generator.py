@@ -408,6 +408,7 @@ def generate_brief(
             grounding=str(facts.get("channel_grounding") or ""),
             ticker=str(facts.get("ticker") or ""),
             company_name=str(facts.get("company_name") or ""),
+            channel_text=str(facts.get("channel_text") or ""),
         )
         if causal_support
         else []
