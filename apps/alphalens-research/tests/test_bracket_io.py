@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -435,47 +436,23 @@ class TestPrepareFreezesGeometry(unittest.TestCase):
 class TestReplayPasses(unittest.TestCase):
     """Brand-new rows draw from a hardcoded 50-per-run budget.
 
-    Measured on the real funnel: the rate was 17.2 proposals/day before the
-    2026-08-18 prompt change and **51.5/day after it, peaking at 68** — above the
-    budget. One pass per fire would therefore accumulate a backlog that never
-    drains, silently, because the job still exits 0.
+    Measured on the real funnel: 17.2 proposals/day before the 2026-08-18
+    prompt change and **51.5/day after it, peaking at 68** — above the budget.
+    One pass per fire would accumulate a backlog that never drains, silently,
+    because the job still exits 0.
+
+    The pass-count behaviour itself is pinned in TestReplayEarlyExitSignal; the
+    earlier version of this class asserted a fetch-count exit that the first
+    live run disproved.
     """
-
-    def test_runs_several_passes_and_stops_when_a_pass_fetches_nothing(self):
-        calls = []
-
-        def fake_replay(briefs_dir, **kwargs):
-            calls.append(kwargs)
-            # Two productive passes, then a pass that fetches nothing.
-            fetches = 0 if len(calls) >= 3 else 7
-            return [SimpleNamespace(fetches=fetches, brief_date=dt.date(2026, 8, 6))]
-
-        n = replay_arms.replay(
-            briefs_dir=Path("/tmp/nonexistent-briefs"),
-            store_dir=Path("/tmp/nonexistent-store"),
-            max_passes=6,
-            _replay_fn=fake_replay,
-        )
-
-        self.assertEqual(n, 3)
-        self.assertEqual(len(calls), 3)
-
-    def test_stops_at_max_passes_when_work_keeps_arriving(self):
-        def fake_replay(briefs_dir, **kwargs):
-            return [SimpleNamespace(fetches=50, brief_date=dt.date(2026, 8, 6))]
-
-        n = replay_arms.replay(
-            briefs_dir=Path("/tmp/nonexistent-briefs"),
-            store_dir=Path("/tmp/nonexistent-store"),
-            max_passes=4,
-            _replay_fn=fake_replay,
-        )
-
-        self.assertEqual(n, 4)
 
     def test_default_passes_cover_the_measured_daily_rate(self):
         """4 passes x 50 = 200/day against a measured 51.5/day mean, 68 peak."""
         self.assertGreaterEqual(replay_arms.DEFAULT_REPLAY_PASSES * 50, 150)
+
+    def test_refuses_the_production_store_before_doing_any_work(self):
+        with self.assertRaises(SystemExit):
+            replay_arms.replay(store_dir=_PRODUCTION_LADDERS, _replay_fn=lambda *a, **k: [])
 
 
 class TestBriefWritesAreAtomic(unittest.TestCase):
@@ -544,3 +521,67 @@ class TestBuiltAtProvenance(unittest.TestCase):
 
             written = pd.read_parquet(briefs / f"{asof.isoformat()}.parquet")
             self.assertEqual(list(written["built_at"]), ["2026-08-23"])
+
+
+class TestReplayEarlyExitSignal(unittest.TestCase):
+    """The early exit must key on UNRESOLVED rows, not on fetch count.
+
+    Measured on the first live run: all four passes reported 85 fetches and the
+    exit never triggered. `fetches` counts the main budget too, and ongoing rows
+    legitimately consume it every night by design — so it is never 0 while any
+    position is open, and it cannot distinguish "new rows still draining" from
+    "steady state".
+    """
+
+    def _store(self, tmp: Path, unresolved: list[int]) -> tuple[Path, Any]:
+        """A store whose unresolved count follows ``unresolved`` on each pass."""
+        store = tmp / "s"
+        store.mkdir()
+        state = {"i": -1}
+
+        def fake_replay(briefs_dir, **kwargs):
+            state["i"] += 1
+            n = unresolved[min(state["i"], len(unresolved) - 1)]
+            pd.DataFrame(
+                {
+                    "brief_date": [dt.date(2026, 8, 6)] * (n + 1),
+                    "ticker": [f"T{i}" for i in range(n + 1)],
+                    "ladder_classification": [None] * n + ["TP_FULL"],
+                }
+            ).to_parquet(store / "2026-08-06.parquet")
+            return [SimpleNamespace(fetches=85, brief_date=dt.date(2026, 8, 6))]
+
+        return store, fake_replay
+
+    def test_stops_once_a_pass_resolves_nothing_new(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            # 60 unresolved -> 10 -> 0 -> 0: the fourth pass is unnecessary.
+            store, fake = self._store(Path(tmp), [60, 10, 0, 0])
+
+            n = replay_arms.replay(
+                briefs_dir=Path(tmp), store_dir=store, max_passes=6, _replay_fn=fake
+            )
+
+            self.assertEqual(n, 3)
+
+    def test_steady_state_costs_one_pass(self):
+        """Nothing unresolved from the start — one pass, not four."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store, fake = self._store(Path(tmp), [0])
+
+            n = replay_arms.replay(
+                briefs_dir=Path(tmp), store_dir=store, max_passes=4, _replay_fn=fake
+            )
+
+            self.assertEqual(n, 1)
+
+    def test_a_constant_fetch_count_does_not_keep_it_looping(self):
+        """The live failure exactly: fetches never fall, unresolved never moves."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store, fake = self._store(Path(tmp), [7, 7, 7, 7])
+
+            n = replay_arms.replay(
+                briefs_dir=Path(tmp), store_dir=store, max_passes=6, _replay_fn=fake
+            )
+
+            self.assertEqual(n, 2)

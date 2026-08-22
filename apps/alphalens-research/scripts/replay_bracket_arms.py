@@ -154,6 +154,23 @@ def synthetic_brief_frame(rows: pd.DataFrame, setups: Mapping[str, Any]) -> pd.D
     return keep[cols].reset_index(drop=True)
 
 
+def unresolved_rows(store_dir: Path) -> int:
+    """Rows in the store with no ladder classification yet.
+
+    This is the drain signal, and the FETCH COUNT is not. Measured on the first
+    live run: all four passes reported 85 fetches because ``fetches`` counts the
+    main budget as well, and ongoing positions consume it every night by design.
+    A count that never reaches zero cannot tell "new rows still draining" from
+    "steady state", so the early exit never fired and every fire paid for four
+    passes.
+    """
+    total = 0
+    for path in glob.glob(str(store_dir / "*.parquet")):
+        frame = pd.read_parquet(path, columns=["ladder_classification"])
+        total += int(frame["ladder_classification"].isna().sum())
+    return total
+
+
 def write_brief(frame: pd.DataFrame, path: Path) -> None:
     """Write a brief parquet atomically.
 
@@ -363,13 +380,23 @@ def replay(
         _replay_fn = replay_population_ladders
 
     passes = 0
+    # The baseline is taken AFTER the first pass, never before it: on a fresh
+    # store the count starts at 0, and a "did it fall?" test against 0 stops
+    # immediately on the one run that has the most work to do.
+    previous: int | None = None
     for attempt in range(1, max_passes + 1):
-        reports = _replay_fn(briefs_dir, lookback_days=90, store_dir=store_dir)
+        _replay_fn(briefs_dir, lookback_days=90, store_dir=store_dir)
         passes = attempt
-        fetched = sum(int(getattr(r, "fetches", 0) or 0) for r in reports)
-        logger.info("replay pass %d/%d: %d fetches", attempt, max_passes, fetched)
-        if fetched == 0:
+        remaining = unresolved_rows(store_dir)
+        logger.info(
+            "replay pass %d/%d: %s unresolved rows left",
+            attempt,
+            max_passes,
+            remaining,
+        )
+        if remaining == 0 or (previous is not None and remaining >= previous):
             break
+        previous = remaining
     return passes
 
 

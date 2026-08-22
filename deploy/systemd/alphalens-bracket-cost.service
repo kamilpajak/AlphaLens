@@ -18,8 +18,14 @@
 # would fall behind every day and accumulate a backlog that never drains —
 # silently, because the job still exits 0 and the staleness alert only sees
 # whether it ran. `--replay` therefore makes up to four passes (~200/day of
-# headroom) and stops early as soon as a pass fetches nothing, so a quiet day
-# costs one cheap screen rather than four.
+# headroom) and stops as soon as a pass leaves no UNRESOLVED rows or fails to
+# reduce their number.
+#
+# The drain signal is the unresolved-row count, NOT the fetch count. The first
+# live run reported 85 fetches on all four passes and never exited early:
+# `fetches` counts the main budget too, and ongoing positions consume it every
+# night by design, so it never reaches zero and cannot distinguish "new rows
+# still draining" from "steady state".
 #
 # An earlier version of this comment reasoned from ~26/day, which was the
 # 16-day average dominated by the pre-change period — a number that was true of
