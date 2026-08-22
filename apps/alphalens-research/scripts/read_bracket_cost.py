@@ -43,8 +43,14 @@ STORE_DIR = Path.home() / ".alphalens" / "bracket_cost_ladders"
 BRIEFS_DIR = Path.home() / ".alphalens" / "bracket_cost" / "briefs"
 # Read-only, for the §10 control. Never written to by this analysis.
 PRODUCTION_STORE_DIR = Path.home() / ".alphalens" / "population_ladders"
+FUNNEL_DIR = Path.home() / ".alphalens" / "thematic_candidates" / "proposal_funnel"
 # Contract §7: the "mega vs merely above ten billion" split.
 MEGA_CAP_USD = 50e9
+# Contract §9: the mapper prompt changed here and roughly quadrupled proposals
+# per day. Reported as a stratum, never adjusted away.
+PROMPT_CHANGE_DATE = dt.date(2026, 8, 18)
+# Contract §3: named exclusions. Counted and reported, never silently omitted.
+EXCLUDED_VERDICTS = ("too_small", "no_mcap")
 
 
 @dataclass(frozen=True)
@@ -234,8 +240,73 @@ def report(frame: pd.DataFrame) -> dict:
         "n": len(mega),
         "median_realized_r": _median(mega, "realized_r"),
     }
+    out["prompt_change_strata"] = _prompt_change_strata(terminal)
+    out["by_theme"] = _by_theme(terminal)
     out["positive_control"] = positive_control(frame, _load_production())
     return out
+
+
+def _arm_cells(frame: pd.DataFrame) -> dict:
+    """``{arm: {n, median_realized_r}}`` where n is the count the median used."""
+    cells = {}
+    for arm in (ARM_DISCARDED, ARM_KEPT):
+        vals = frame.loc[frame["arm"] == arm, "realized_r"].dropna()
+        cells[arm] = {
+            "n": len(vals),
+            "median_realized_r": float(vals.median()) if len(vals) else None,
+        }
+    return cells
+
+
+def _prompt_change_strata(terminal: pd.DataFrame) -> dict:
+    """Contract §9: split at the prompt change rather than adjusting it away.
+
+    Day sizes before and after differ several-fold, so pooling them hides a
+    composition shift inside what looks like one sample.
+    """
+    dates = pd.to_datetime(terminal["brief_date"]).dt.date
+    before = terminal[dates < PROMPT_CHANGE_DATE]
+    after = terminal[dates >= PROMPT_CHANGE_DATE]
+    return {
+        "boundary_date": str(PROMPT_CHANGE_DATE),
+        "before": _arm_cells(before),
+        "on_or_after": _arm_cells(after),
+    }
+
+
+def _by_theme(terminal: pd.DataFrame) -> dict:
+    """Contract §9: theme-stratified primary, a SECONDARY.
+
+    Theme is confounded with market cap — three themes sit structurally outside
+    the bracket — so this shows where any pooled difference comes from. It is not
+    the primary: the strata are thin and the theme count is small.
+    """
+    if "theme" not in terminal.columns:
+        return {}
+    return {
+        str(theme): _arm_cells(group)
+        for theme, group in terminal.groupby("theme")
+        if group["realized_r"].notna().any()
+    }
+
+
+def excluded_verdict_counts(funnel: pd.DataFrame) -> dict[str, int]:
+    """Contract §3: what the two arms leave out, counted rather than omitted.
+
+    ``too_small`` asks about the floor, not the ceiling, and ``no_mcap`` has no
+    cap to classify on. Both are legitimate exclusions and neither may vanish
+    from the report — a reader must be able to see the whole funnel.
+    """
+    counts = funnel["bracket_verdict"].value_counts()
+    return {v: int(counts.get(v, 0)) for v in EXCLUDED_VERDICTS}
+
+
+def _load_funnel(funnel_dir: Path = FUNNEL_DIR) -> pd.DataFrame:
+    """The raw funnel, for the §3 exclusion counts."""
+    frames = [pd.read_parquet(p) for p in sorted(glob.glob(str(funnel_dir / "*.parquet")))]
+    if not frames:
+        return pd.DataFrame(columns=["bracket_verdict"])
+    return pd.concat(frames, ignore_index=True)
 
 
 def _load_production(store_dir: Path = PRODUCTION_STORE_DIR) -> pd.DataFrame:
@@ -270,6 +341,7 @@ def main() -> None:
     args = parser.parse_args()
 
     out = report(load_replayed())
+    out["excluded_verdicts"] = excluded_verdict_counts(_load_funnel())
     if args.json:
         print(json.dumps(out, indent=2, default=str))
         return

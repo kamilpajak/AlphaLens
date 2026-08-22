@@ -27,6 +27,10 @@ for an inconclusive primary.
 | — kept arm (`in_bracket`) | 93 |
 | distinct days reaching a terminal row | 9 |
 
+Excluded by §3, counted here because the clause forbids omitting them:
+`too_small` 45, `no_mcap` 50. Neither is in either arm; `too_small` asks about
+the floor rather than the ceiling, and `no_mcap` has no cap to classify on.
+
 Attrition (§10, sums to 413 per Amendment 1):
 
 | bucket | n |
@@ -85,6 +89,41 @@ interval computed because the floor was not met. The two medians differ in the
 direction that would matter, and at these counts that is indistinguishable from
 noise; the contract exists precisely so that this sentence cannot be replaced by
 a more interesting one.
+
+## Prompt-change stratum (§9)
+
+Split at 2026-08-18, never pooled:
+
+| | discarded n | median R | kept n | median R |
+|---|---:|---:|---:|---:|
+| before | 10 | 0.220 | 2 | 0.209 |
+| on or after | 2 | −0.173 | 1 | 0.135 |
+
+Almost every observation so far predates the prompt change, which is what a
+42-session hold implies: the newer proposals have had less time to terminate.
+The post-change cells hold two and one observation.
+
+## Theme-stratified secondary (§9)
+
+Ten themes have at least one realised R. Nine of the twenty cells hold exactly
+one observation and only two themes have rows in both arms:
+
+| theme | discarded n / median | kept n / median |
+|---|---|---|
+| ammunition_shortage | — | 1 / 0.057 |
+| currency_intervention | 1 / 0.055 | — |
+| flu_vaccine | 3 / 0.231 | — |
+| melanoma | 1 / −1.000 | 1 / 0.135 |
+| minerals | 2 / 0.109 | — |
+| mrna_technology | 1 / 0.252 | — |
+| mrna_vaccine | 1 / 0.221 | 1 / 0.361 |
+| obesity | 1 / 0.250 | — |
+| risk_appetite | 1 / 0.653 | — |
+| tech_rally | 1 / 0.121 | — |
+
+This is the clearest picture of why the primary is inconclusive. It also shows
+the confound §9 named: most themes contribute to one arm only, so a pooled
+difference between arms is partly a difference between themes.
 
 ## A secondary that could not be computed
 
@@ -145,6 +184,14 @@ Two contract defects were also found and amended, both recorded with the reason
 the resolution cannot favour a preferred answer: §10's row count contradicted
 §2's unit (Amendment 1), and §6 assumed the engine assigns `NO_FILL` a numeric
 value when it assigns null (Amendment 2).
+
+A fourth error, and the one this project has paid for before: the first draft of
+the read script **did not implement three clauses of its own contract** — §3's
+requirement to count the excluded verdicts, and §9's prompt-change stratum and
+theme-stratified secondary. All three were absent, and the memo was written
+without noticing. They were found by walking the contract clause by clause and
+naming the line that implements each, which is the check that should have run
+before the first read rather than after it.
 
 The read script was run once against the partially-drained store as a smoke test
 before the final read, so interim numbers were seen. The verdict logic was

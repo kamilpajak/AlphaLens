@@ -6,6 +6,7 @@ number here was chosen with knowledge of the answer.
 
 from __future__ import annotations
 
+import datetime as dt
 import unittest
 
 import pandas as pd
@@ -13,11 +14,13 @@ from scripts.read_bracket_cost import (
     ARM_DISCARDED,
     ARM_KEPT,
     MIN_TERMINAL_PER_ARM,
+    PROMPT_CHANGE_DATE,
     VERDICT_EARNS,
     VERDICT_INCONCLUSIVE,
     VERDICT_NOT_JUSTIFIED,
     cluster_bootstrap_median_diff,
     decide,
+    excluded_verdict_counts,
     positive_control,
     report,
 )
@@ -146,10 +149,6 @@ class TestDecide(unittest.TestCase):
         self.assertEqual(out.n_kept, 33)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestPositiveControl(unittest.TestCase):
     """Contract §10. A synthetic-brief path that diverges from production
     invalidates the whole run, so the check must be able to FAIL loudly and must
@@ -266,3 +265,70 @@ class TestReportedNMatchesTheMedian(unittest.TestCase):
 
         self.assertEqual(out["mega_split"]["n"], 2)
         self.assertEqual(out["mega_split"]["median_realized_r"], 1.0)
+
+
+class TestClausesTheFirstDraftSkipped(unittest.TestCase):
+    """Clauses the read script did not implement until a clause-by-clause walk.
+
+    Contract §3 requires the excluded verdicts to be counted and reported rather
+    than silently omitted; §9 requires the 2026-08-18 prompt change to be
+    reported as a stratum and a theme-stratified primary as a secondary. All
+    three were absent from the first draft.
+    """
+
+    def _terminal(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "arm": [ARM_DISCARDED, ARM_DISCARDED, ARM_KEPT, ARM_KEPT],
+                "ticker": ["AAA", "BBB", "CCC", "DDD"],
+                "theme": ["t1", "t2", "t1", "t2"],
+                "brief_date": [
+                    dt.date(2026, 8, 7),
+                    dt.date(2026, 8, 20),
+                    dt.date(2026, 8, 7),
+                    dt.date(2026, 8, 20),
+                ],
+                "terminal": [True] * 4,
+                "market_cap": [50e9, 60e9, 3e9, 4e9],
+                "realized_r": [1.0, 2.0, 0.5, 1.5],
+                "ladder_classification": ["TP_FULL"] * 4,
+                "market_excess_return": [None] * 4,
+            }
+        )
+
+    def test_prompt_change_stratum_splits_on_the_named_date(self):
+        out = report(self._terminal())
+
+        strata = out["prompt_change_strata"]
+        self.assertEqual(strata["before"]["discarded"]["n"], 1)
+        self.assertEqual(strata["on_or_after"]["discarded"]["n"], 1)
+        self.assertEqual(strata["boundary_date"], str(PROMPT_CHANGE_DATE))
+
+    def test_theme_stratified_primary_is_reported(self):
+        out = report(self._terminal())
+
+        self.assertIn("t1", out["by_theme"])
+        self.assertEqual(out["by_theme"]["t1"]["discarded"]["n"], 1)
+        self.assertEqual(out["by_theme"]["t1"]["discarded"]["median_realized_r"], 1.0)
+
+    def test_excluded_verdicts_are_counted_not_omitted(self):
+        funnel = pd.DataFrame(
+            {
+                "ticker": ["A", "B", "C", "D", "E"],
+                "bracket_verdict": [
+                    "too_big",
+                    "in_bracket",
+                    "too_small",
+                    "no_mcap",
+                    "too_small",
+                ],
+            }
+        )
+
+        out = excluded_verdict_counts(funnel)
+
+        self.assertEqual(out, {"too_small": 2, "no_mcap": 1})
+
+
+if __name__ == "__main__":
+    unittest.main()
