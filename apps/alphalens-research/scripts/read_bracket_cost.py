@@ -32,9 +32,9 @@ MIN_TERMINAL_PER_ARM = 30
 # Amendment 3. The cluster bootstrap resamples DAYS, so its precision is bounded
 # by the number of days that can contribute to a DIFFERENCE — days carrying rows
 # in BOTH arms. A row-count floor cannot see this: at read 1 the row floor was
-# nowhere near met, but even so 9 days carried a realised R while the kept arm
-# appeared on only 3 of them. A percentile cluster bootstrap under-covers badly
-# below roughly 20 clusters.
+# nowhere near met, but even so 9 days carried a realised R while only 2 carried
+# one in BOTH arms. A percentile cluster bootstrap under-covers badly below
+# roughly 20 clusters.
 MIN_PAIRED_DAYS = 20
 # Contract §6.
 DEFAULT_DRAWS = 10_000
@@ -81,7 +81,7 @@ def paired_days(frame: pd.DataFrame) -> int:
     The estimand is a DIFFERENCE, so a day contributing to only one arm adds no
     information about it. This is the cluster count that bounds the bootstrap's
     precision, and it can be far below the day count: at read 1 nine days
-    carried an R while only three carried one in each arm.
+    carried an R while only two carried one in each arm.
     """
     with_r = frame[frame["realized_r"].notna()]
     per_day = with_r.groupby("brief_date")["arm"].nunique()

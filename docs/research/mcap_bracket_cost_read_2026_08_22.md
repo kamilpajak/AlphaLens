@@ -7,11 +7,18 @@ Amendments in force at this read: 1, 2
 
 ## Verdict
 
-**INCONCLUSIVE.**
+**INCONCLUSIVE**, on both floors.
 
 The maturity floor in §8 requires 30 rows per arm carrying a realised R. The
-discarded arm has 12; the kept arm has 3. The contract pre-committed this
-outcome as the expected result of a first read and this read is it.
+discarded arm has 12; the kept arm has 3. Amendment 3 additionally requires 20
+days carrying a realised R in BOTH arms; there are **2**. The contract
+pre-committed this outcome as the expected result of a first read and this read
+is it.
+
+The paired-day count is the more informative of the two. Nine days carry a
+realised R, but only two carry one in each arm, so the estimator the contract
+fixed has an effective cluster count of two. A row-count floor could not have
+shown that.
 
 Everything below is published because §8 requires the numbers to be shown with
 their N. None of it decides anything, and §13 forbids substituting a secondary
@@ -125,12 +132,17 @@ This is the clearest picture of why the primary is inconclusive. It also shows
 the confound §9 named: most themes contribute to one arm only, so a pooled
 difference between arms is partly a difference between themes.
 
-## A secondary that could not be computed
+## The benchmark secondary, after a missing step was found
 
-`market_excess_return` is null on every replayed row in both arms, so the §7
-secondary that uses it is absent from this read rather than reported as zero.
-The column is populated in the production store, so this is a property of the
-replay path, not of the data. Named here as an open item for read 2.
+`market_excess_return` was null on every replayed row in the first pass. It is
+not computed by the monitor at all: `replay_population_ladders` writes null and
+a SEPARATE pass (`benchmark_excess.enrich_store_with_benchmark_excess`) fills
+it, because the benchmark leg needs its own index fetch. Production runs that
+pass right after the monitor; this replay had not.
+
+After running it over 402 rows, the §7 secondary reads: median market-excess
+return **−0.001** discarded, **+0.017** kept. Two medians over 12 and 3
+observations, which decides nothing and is reported because §7 requires it.
 
 ## What this read does establish
 

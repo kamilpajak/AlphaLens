@@ -272,9 +272,14 @@ BOTH arms — and a row-count floor is blind to it. A percentile cluster bootstr
 under-covers badly below roughly 20 clusters, so a verdict could be issued with
 an interval far narrower than the design earns.
 
-**Measured, not assumed.** On the read-1 store, 9 days carried a realised R and
-the kept arm appeared on only **3** of them. The effective cluster count for the
-difference was 3, not 9.
+**Measured, not assumed.** On the read-1 store, 9 days carried a realised R.
+The kept arm had a row on 3 of them, and only **2** days carried a row in BOTH
+arms. The effective cluster count for the difference was 2, not 9.
+
+(An earlier draft of this amendment said 3. That is the number of days the kept
+arm appears on, which is not the same as the number of days that can inform a
+difference. Corrected here rather than silently: the paired count is the one the
+rule is written against.)
 
 **Amendment.** A verdict additionally requires **at least 20 paired days** —
 days with a realised R in each arm (`MIN_PAIRED_DAYS`). Below that the verdict is
