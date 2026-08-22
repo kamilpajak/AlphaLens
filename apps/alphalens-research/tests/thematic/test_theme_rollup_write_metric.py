@@ -20,6 +20,7 @@ that reads the same for both would answer no question worth asking.
 
 from __future__ import annotations
 
+import ast
 import datetime as dt
 import os
 import tempfile
@@ -158,10 +159,82 @@ class TestTheRollupWriteGaugeIsOneHot(unittest.TestCase):
                 self.assertEqual(_gauge(metrics, outcome), 1)
                 self.assertEqual(sum(metrics.values()), 1)
 
-    def test_an_unknown_outcome_is_refused(self):
-        # A typo must not publish an all-zero gauge set that reads as "no run".
-        with self.assertRaises(ValueError):
-            thematic_cmd._theme_rollup_write_metrics("wrote")
+    def test_an_unknown_outcome_gets_its_own_series(self):
+        # A typo must not publish an all-zero gauge set — all-zero reads as "the
+        # stage never ran", which is the one thing a typo must not be able to
+        # fake. It gets a distinct label value instead, so the degraded state is
+        # visible as itself rather than as a healthy day or a missing exporter.
+        metrics = thematic_cmd._theme_rollup_write_metrics("wrote")
+        self.assertEqual(_gauge(metrics, "unknown"), 1)
+        self.assertEqual(sum(metrics.values()), 1)
+        for outcome in ("written", "skipped", "empty", "failed"):
+            self.assertEqual(_gauge(metrics, outcome), 0, msg=outcome)
+
+    def test_an_unknown_outcome_never_raises(self):
+        # The call sits in the ARGUMENT position of _emit_stage_volume, i.e.
+        # outside that function's try/except, and runs AFTER the candidate
+        # parquet is on disk. A raise here exits map-themes non-zero and
+        # run_thematic_day.sh's `set -euo pipefail` then aborts score, brief and
+        # rebuild-cache for the whole day — telemetry costing the briefs, which
+        # is exactly what the best-effort write a few functions above forbids.
+        for outcome in ("wrote", "", "WRITTEN", "failed "):
+            with self.subTest(outcome=outcome):
+                thematic_cmd._theme_rollup_write_metrics(outcome)
+
+
+class TestNoCodePathPassesAnUnknownOutcome(unittest.TestCase):
+    """The strictness the runtime gave up, kept where it costs nothing.
+
+    Degrading instead of raising means a typo now ships quietly. It is caught
+    here instead: statically, over the real source, at no risk to a production
+    run. ``unknown`` is the emitter's fallback, never something a caller names.
+    """
+
+    REAL_OUTCOMES = ("written", "skipped", "empty", "failed")
+
+    def _module_ast(self) -> ast.Module:
+        source = Path(thematic_cmd.__file__).read_text(encoding="utf-8")
+        return ast.parse(source)
+
+    def test_every_literal_handed_to_the_gauge_is_a_real_outcome(self):
+        found = []
+        for node in ast.walk(self._module_ast()):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if name != "_theme_rollup_write_metrics":
+                continue
+            for arg in node.args:
+                if isinstance(arg, ast.Constant):
+                    found.append(arg.value)
+        self.assertTrue(found, "no literal call sites found — has the helper been renamed?")
+        for literal in found:
+            self.assertIn(literal, self.REAL_OUTCOMES)
+
+    def test_the_writer_only_ever_returns_a_real_outcome(self):
+        # The other way an outcome reaches the gauge: the best-effort writer's
+        # return value, threaded through a local and invisible to the check above.
+        writer = next(
+            node
+            for node in ast.walk(self._module_ast())
+            if isinstance(node, ast.FunctionDef) and node.name == "_write_theme_rollup_best_effort"
+        )
+        returns = [
+            node.value.value
+            for node in ast.walk(writer)
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.Constant)
+        ]
+        conditional = [
+            branch.value
+            for node in ast.walk(writer)
+            if isinstance(node, ast.Return) and isinstance(node.value, ast.IfExp)
+            for branch in (node.value.body, node.value.orelse)
+            if isinstance(branch, ast.Constant)
+        ]
+        self.assertTrue(returns + conditional, "the writer returns no string literal at all")
+        for literal in returns + conditional:
+            self.assertIn(literal, self.REAL_OUTCOMES)
 
 
 class TestTheSlotPublishesWhatHappenedToTheRollup(unittest.TestCase):
@@ -266,6 +339,73 @@ class TestTheSlotPublishesWhatHappenedToTheRollup(unittest.TestCase):
         )
         self.assertIn('alphalens_thematic_stage_output_rows{stage="map-themes"}', metrics)
         self.assertIn(f'{_METRIC}{{outcome="written"}}', metrics)
+
+
+class TestATypoInAnOutcomeCannotKillTheDay(unittest.TestCase):
+    """The whole day, end to end, with a drifted outcome literal in the code.
+
+    Reproduces the real shape: ``map-themes`` exits non-zero AFTER the candidate
+    parquet is already on disk, and no metrics file is written at all — so the
+    stage that was supposed to make a hole visible instead makes a bigger one,
+    and ``run_thematic_day.sh`` (``set -euo pipefail``) drops score, brief and
+    rebuild-cache for the day.
+    """
+
+    def test_the_stage_still_exits_zero_and_publishes(self):
+        with ExitStack() as stack:
+            root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
+            stack.enter_context(
+                patch.dict(
+                    os.environ,
+                    {
+                        "OPENROUTER_API_KEY": "fake",
+                        "ALPHALENS_TEXTFILE_DIR": str(root / "metrics"),
+                    },
+                    clear=False,
+                )
+            )
+            rollup = _rollup_frame()
+            stack.enter_context(
+                patch.object(thematic_cmd.themes_mod, "DEFAULT_THEME_ROLLUP_DIR", root / "rollup")
+            )
+            stack.enter_context(
+                patch.object(thematic_cmd.themes_mod, "roll_up", return_value=rollup)
+            )
+            stack.enter_context(
+                patch.object(thematic_cmd.themes_mod, "flag_novel", return_value=rollup.copy())
+            )
+            stack.enter_context(
+                patch.object(
+                    thematic_cmd.orchestrator,
+                    "map_themes",
+                    return_value=_candidates(frozen_reuse=False),
+                )
+            )
+            # The defect under test: a future edit renames an outcome on one side
+            # only. Everything upstream of it succeeded.
+            stack.enter_context(
+                patch.object(thematic_cmd, "_write_theme_rollup_best_effort", return_value="wrote")
+            )
+            result = CliRunner().invoke(
+                app,
+                [
+                    "thematic",
+                    "map-themes",
+                    "--date",
+                    ASOF.isoformat(),
+                    "--output-dir",
+                    str(root / "candidates"),
+                ],
+            )
+            prom_path = root / "metrics" / "alphalens_domain_thematic-map-themes.prom"
+            published = prom_path.read_text() if prom_path.exists() else ""
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertIn(f'{_METRIC}{{outcome="unknown"}} 1', published)
+        self.assertIn(f'{_METRIC}{{outcome="written"}} 0', published)
+        # Not an all-zero set: that reads as "the stage never ran", and a typo
+        # must not be able to fake a stopped exporter.
+        self.assertIn('alphalens_thematic_stage_output_rows{stage="map-themes"}', published)
 
 
 if __name__ == "__main__":

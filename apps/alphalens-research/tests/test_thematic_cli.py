@@ -558,6 +558,12 @@ class TestMapThemesCLI(unittest.TestCase):
                     'alphalens_thematic_theme_rollup_write{outcome="skipped"}': 0,
                     'alphalens_thematic_theme_rollup_write{outcome="empty"}': 1,
                     'alphalens_thematic_theme_rollup_write{outcome="failed"}': 0,
+                    # The emitter's fallback for an outcome literal it does not
+                    # recognise. No code path reaches it, so it reads 0 here —
+                    # but it is published like the rest, because a series that
+                    # only appears once something is wrong is a series nobody
+                    # can tell from a stopped exporter.
+                    'alphalens_thematic_theme_rollup_write{outcome="unknown"}': 0,
                 },
             )
             self.assertIn("No novel themes", result.output)

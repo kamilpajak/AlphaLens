@@ -115,13 +115,17 @@ def _candidate_row(theme: str) -> dict:
 class _Slots:
     """One temp world: events in, candidates + rollup out, six slots to fire."""
 
-    def __init__(self, stack: ExitStack) -> None:
+    def __init__(self, stack: ExitStack, *, candidates_survive: bool = True) -> None:
         root = Path(stack.enter_context(tempfile.TemporaryDirectory()))
         self.events_dir = root / "events"
         self.output_dir = root / "candidates"
         self.rollup_dir = root / "rollup"
         self.runner = CliRunner()
         self.mapped: list[list[str]] = []
+        # When False, verification drops every proposed ticker — a NORMAL
+        # production outcome (the declined / failed gauges, issue #982), and the
+        # one that leaves a decided day holding ZERO candidate rows.
+        self.candidates_survive = candidates_survive
         stack.enter_context(patch.dict(os.environ, {"OPENROUTER_API_KEY": "fake"}, clear=False))
         stack.enter_context(
             patch.object(thematic_cmd.themes_mod, "DEFAULT_THEME_ROLLUP_DIR", self.rollup_dir)
@@ -155,7 +159,11 @@ class _Slots:
             patch.object(
                 orchestrator,
                 "_verify_candidates_for_theme",
-                side_effect=lambda *, theme, **_kw: ([_candidate_row(theme)], 0, 0),
+                side_effect=(
+                    (lambda *, theme, **_kw: ([_candidate_row(theme)], 0, 0))
+                    if self.candidates_survive
+                    else (lambda *, theme, **_kw: ([], 1, 0))
+                ),
             ),
             patch.object(orchestrator, "_init_pro_client"),
             patch.object(orchestrator, "_fetch_press_window", return_value=None),
@@ -388,6 +396,34 @@ class TestAZeroNovelSlotCannotEraseADecidedDay(unittest.TestCase):
         self.assertEqual(selected, set())
         self.assertEqual(set(prop.values()), {0.0})
 
+    def test_a_day_whose_candidates_all_died_in_verification_is_still_decided(self):
+        # The case that slipped through. "Decided" is a property of the SLATE,
+        # not of how many tickers survived downstream of it: a day can map a real
+        # slate and legitimately end with zero candidate rows, because
+        # verification dropped everything — a normal production outcome this
+        # codebase models explicitly (the declined / failed gauges, #982).
+        # Keying the guard on the candidate ROW COUNT reads that day as "nothing
+        # to protect", so a zero-novel rerun rewrote its mapped themes to
+        # selection_propensity 0.0 — the infinite inverse-propensity weight,
+        # reached down the one path the guard was supposed to close.
+        with ExitStack() as stack:
+            slots = _Slots(stack, candidates_survive=False)
+            _write_events(slots.events_dir, {"aa_theme": 4, "bb_theme": 4, "cc_theme": 1})
+            slots.run()
+            mapped_slate = set(slots.mapped[0])
+            candidate_rows = len(slots.candidates())
+            before = slots.rollup()
+
+            slots.run("--novelty-threshold", "999")
+            after = slots.rollup()
+            prop = slots.propensities()
+
+        self.assertEqual(candidate_rows, 0, msg="the premise: a decided day holding no rows")
+        self.assertEqual(len(mapped_slate), MAX_THEMES)
+        pd.testing.assert_frame_equal(before, after)
+        for theme in mapped_slate:
+            self.assertGreater(prop[theme], 0.0, msg=theme)
+
     def test_a_first_ever_zero_novel_slot_still_writes_the_empty_day(self):
         # Positive control: with nothing on disk to protect, the quiet-day
         # contract is unchanged — `score` still needs the typed-empty parquet or
@@ -400,6 +436,29 @@ class TestAZeroNovelSlotCannotEraseADecidedDay(unittest.TestCase):
             candidates = slots.candidates()
 
         self.assertEqual(len(candidates), 0)
+
+    def test_a_second_quiet_slot_leaves_the_first_ones_empty_day_alone(self):
+        # An empty draw is a decision too, and the guard now covers it: the first
+        # quiet slot writes the typed-empty parquet `score` depends on and records
+        # the draw, and a later quiet slot re-derives nothing new. Its rollup would
+        # differ (the day's event counts have grown), so rewriting it would replace
+        # the recorded draw with one no mapper acted upon.
+        with ExitStack() as stack:
+            slots = _Slots(stack)
+            _write_events(slots.events_dir, {"aa_theme": 4, "bb_theme": 4, "cc_theme": 1})
+            slots.run("--novelty-threshold", "999")
+            before = slots.rollup()
+
+            _write_events(
+                slots.events_dir,
+                {"aa_theme": 4, "bb_theme": 4, "cc_theme": 30, "dd_theme": 30},
+            )
+            slots.run("--novelty-threshold", "999")
+            after = slots.rollup()
+            still_there = slots.candidates_path.exists()
+
+        self.assertTrue(still_there, msg="score needs the typed-empty parquet to exist")
+        pd.testing.assert_frame_equal(before, after)
 
 
 class TestFrozenReuseIsReportedByTheMapper(unittest.TestCase):
