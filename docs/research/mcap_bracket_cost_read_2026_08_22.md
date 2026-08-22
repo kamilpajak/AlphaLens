@@ -3,7 +3,7 @@
 Date: 2026-08-22
 Contract: [`mcap_bracket_cost_contract_2026_08_22.md`](mcap_bracket_cost_contract_2026_08_22.md)
 (committed `44d852cd`, 18:32:33 +02:00, before any outcome existed)
-Amendments in force at this read: 1, 2
+Amendments in force at this read: 1, 2, 3
 
 ## Verdict
 
@@ -196,6 +196,19 @@ Two contract defects were also found and amended, both recorded with the reason
 the resolution cannot favour a preferred answer: §10's row count contradicted
 §2's unit (Amendment 1), and §6 assumed the engine assigns `NO_FILL` a numeric
 value when it assigns null (Amendment 2).
+
+An adversarial review (zen, deepseek-v4-pro) then produced one real finding and
+one false one, and both were checked by running them rather than accepted:
+
+* **Real.** The row floor cannot see the cluster count the bootstrap depends on.
+  Measured: 9 days carry a realised R and only 2 carry one in both arms, so the
+  effective cluster count was 2. Amendment 3 adds a paired-day floor, and the
+  fraction of resamples dropped for leaving an arm empty (2.5% here) is now
+  reported instead of silent.
+* **False.** The review reported that the `theme` column is never loaded, so the
+  §9 theme secondary is always empty. Run against the store, `theme` is present
+  and non-null on all 413 rows — it arrives on the ladder rows, which the monitor
+  stamps, not through the brief columns the review inspected.
 
 A fourth error, and the one this project has paid for before: the first draft of
 the read script **did not implement three clauses of its own contract** — §3's
