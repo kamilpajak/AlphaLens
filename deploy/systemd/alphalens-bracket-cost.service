@@ -1,0 +1,51 @@
+# Keeps the market-cap bracket-cost measurement alive (PR #1087).
+#
+# The measurement replays BOTH bracket arms — the `too_big` proposals the filter
+# discards and the `in_bracket` ones it keeps — through the production ladder
+# monitor, into a store of its own. Positions run to ~42 trading sessions, so the
+# answer only arrives if the replay keeps advancing them. Left to a human it
+# would silently stop and the October read would never happen.
+#
+# DAILY, not weekly, and the reason is a hard constraint rather than taste:
+# brand-new rows draw from `_FORCED_RESOLVE_BUDGET` (50, hardcoded, NOT tunable
+# by ALPHALENS_FEEDBACK_MAX_FETCHES). The funnel adds ~26 proposals a day, so a
+# daily fire stays inside that budget while a weekly one would need ~180 and
+# fall permanently behind.
+#
+# Three steps, in order:
+#   --prepare    build synthetic briefs for funnel days not yet written. Days
+#                already written are FROZEN: the grouped daily store is
+#                split-adjusted and retro-adjusts history, so re-deriving a
+#                setup weeks later would move the levels of a ladder already
+#                under replay.
+#   --replay     advance every row through the production monitor.
+#   --benchmark  fill the benchmark-excess columns, which the monitor writes as
+#                null because the index leg needs its own fetch.
+#
+# 03:30 UTC sits between the form4 incremental (02:30) and the thematic build
+# (04:30), and well clear of the nightly feedback sweep (06:30), so the Polygon
+# quota is never contended.
+[Unit]
+Description=AlphaLens market-cap bracket-cost replay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+EnvironmentFile=/etc/alphalens/env
+ExecStart=%h/AlphaLens/.venv/bin/python \
+    apps/alphalens-research/scripts/replay_bracket_arms.py --prepare
+ExecStart=%h/AlphaLens/.venv/bin/python \
+    apps/alphalens-research/scripts/replay_bracket_arms.py --replay
+ExecStart=%h/AlphaLens/.venv/bin/python \
+    apps/alphalens-research/scripts/replay_bracket_arms.py --benchmark
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics bracket-cost
+StandardOutput=journal
+StandardError=journal
+MemoryMax=2G
+TasksMax=32
+TimeoutStartSec=45min
+
+[Install]
+WantedBy=default.target

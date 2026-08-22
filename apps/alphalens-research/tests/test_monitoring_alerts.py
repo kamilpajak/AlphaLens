@@ -66,6 +66,12 @@ ACTIVE_JOBS = (
     # stays OUT of this enum for the same reason SIM's does (its own
     # AlphalensBrokerManagerLiveHeartbeatStale family, not this pattern).
     "saxo-marketdata-refresh",
+    # Market-cap bracket-cost replay (PR #1087). A research measurement rather
+    # than live infrastructure, so nobody watches it daily — which is precisely
+    # why it carries the same staleness pair as the production timers. A silent
+    # stop would surface only in October as "the measurement never matured",
+    # and the lost weeks of maturity cannot be recovered afterwards.
+    "bracket-cost",
 )
 
 

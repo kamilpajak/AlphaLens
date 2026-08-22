@@ -1,0 +1,18 @@
+# Trigger the bracket-cost replay daily at 03:30 UTC — between the form4
+# incremental (02:30) and the thematic build (04:30), clear of the nightly
+# feedback sweep (06:30), so the Polygon quota is never contended.
+#
+# Persistent=true so a missed fire runs on next boot. Catching up is safe and
+# cheap: --prepare freezes days already written and the monitor advances rows
+# from wherever they were, so a gap costs a day of maturity, never correctness.
+[Unit]
+Description=Trigger AlphaLens market-cap bracket-cost replay
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+Persistent=true
+Unit=alphalens-bracket-cost.service
+
+[Install]
+WantedBy=timers.target

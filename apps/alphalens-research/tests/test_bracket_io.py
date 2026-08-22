@@ -292,3 +292,99 @@ class TestReportShape(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPrepareFreezesGeometry(unittest.TestCase):
+    """A scheduled prepare must not re-derive a day it already wrote.
+
+    The grouped daily store is SPLIT-ADJUSTED and retro-adjusts history when a
+    split happens, so re-deriving a setup weeks later can move every level of a
+    ladder that is already being replayed. The proposal's geometry is fixed at
+    the proposal date or the measurement drifts under its own feet.
+    """
+
+    def _fixture(self, root: Path):
+        funnel, grouped, briefs = root / "f", root / "g", root / "b"
+        for d in (funnel, grouped, briefs):
+            d.mkdir()
+        frame = _bars()
+        asof = frame.index[250].date()
+        pd.DataFrame(
+            {
+                "ticker": ["AAA"],
+                "theme": ["t1"],
+                "bracket_verdict": ["too_big"],
+                "market_cap": [50e9],
+            }
+        ).to_parquet(funnel / f"{asof.isoformat()}.parquet")
+        for ts in frame.index:
+            pd.DataFrame(
+                {
+                    "T": ["AAA"],
+                    "t": [int(ts.timestamp() * 1000)],
+                    "o": [float(frame.at[ts, "open"])],
+                    "h": [float(frame.at[ts, "high"])],
+                    "l": [float(frame.at[ts, "low"])],
+                    "c": [float(frame.at[ts, "close"])],
+                    "v": [1e6],
+                }
+            ).to_parquet(grouped / f"{ts.date().isoformat()}.parquet")
+        return funnel, grouped, briefs, asof
+
+    def test_existing_day_is_not_rewritten_even_if_prices_changed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            funnel, grouped, briefs, asof = self._fixture(Path(tmp))
+            replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
+            first = pd.read_parquet(briefs / f"{asof.isoformat()}.parquet")
+
+            # Simulate a retro-adjustment: every historical close halves.
+            for path in grouped.glob("*.parquet"):
+                day = pd.read_parquet(path)
+                for col in ("o", "h", "l", "c"):
+                    day[col] = day[col] / 2.0
+                day.to_parquet(path)
+
+            replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
+            second = pd.read_parquet(briefs / f"{asof.isoformat()}.parquet")
+
+            self.assertEqual(
+                first["brief_trade_setup"].iloc[0], second["brief_trade_setup"].iloc[0]
+            )
+
+    def test_rebuild_flag_reopens_a_frozen_day(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            funnel, grouped, briefs, asof = self._fixture(Path(tmp))
+            replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
+            first = pd.read_parquet(briefs / f"{asof.isoformat()}.parquet")
+            for path in grouped.glob("*.parquet"):
+                day = pd.read_parquet(path)
+                for col in ("o", "h", "l", "c"):
+                    day[col] = day[col] / 2.0
+                day.to_parquet(path)
+
+            replay_arms.prepare(
+                funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped, rebuild=True
+            )
+            second = pd.read_parquet(briefs / f"{asof.isoformat()}.parquet")
+
+            self.assertNotEqual(
+                first["brief_trade_setup"].iloc[0], second["brief_trade_setup"].iloc[0]
+            )
+
+    def test_a_new_day_is_still_written_alongside_frozen_ones(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            funnel, grouped, briefs, asof = self._fixture(Path(tmp))
+            replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
+            later = asof + dt.timedelta(days=1)
+            pd.DataFrame(
+                {
+                    "ticker": ["AAA"],
+                    "theme": ["t1"],
+                    "bracket_verdict": ["in_bracket"],
+                    "market_cap": [3e9],
+                }
+            ).to_parquet(funnel / f"{later.isoformat()}.parquet")
+
+            replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
+
+            self.assertTrue((briefs / f"{later.isoformat()}.parquet").exists())

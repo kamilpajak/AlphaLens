@@ -73,9 +73,14 @@ class Attrition:
     no_bars: int
     terminal: int
     ongoing: int
+    # Rows on a day whose brief was already written and is deliberately left
+    # alone, so a scheduled re-run cannot look like rows vanishing.
+    frozen: int = 0
 
     def balanced(self) -> bool:
-        return self.in_scope == self.no_structure + self.no_bars + self.terminal + self.ongoing
+        return self.in_scope == (
+            self.no_structure + self.no_bars + self.terminal + self.ongoing + self.frozen
+        )
 
     def as_row(self) -> dict[str, int]:
         return {
@@ -84,6 +89,7 @@ class Attrition:
             "no_bars": self.no_bars,
             "terminal": self.terminal,
             "ongoing": self.ongoing,
+            "frozen": self.frozen,
         }
 
 
@@ -215,6 +221,7 @@ def prepare(
     funnel_dir: Path = FUNNEL_DIR,
     briefs_dir: Path = BRIEFS_DIR,
     grouped_dir: Path = GROUPED_DIR,
+    rebuild: bool = False,
 ) -> Attrition:
     """Write one synthetic brief parquet per funnel date.
 
@@ -226,16 +233,37 @@ def prepare(
     """
     funnel = load_funnel(funnel_dir)
     rows = select_arms(funnel)
-    tickers = {str(t).upper() for t in rows["ticker"]}
-    logger.info("in scope: %d rows, %d tickers", len(rows), len(tickers))
-
-    bars = load_grouped_ohlcv(tickers, grouped_dir=grouped_dir)
-    missing = len(rows[~rows["ticker"].str.upper().isin(bars.keys())])
-    setups, no_structure = build_setups(rows, bars)
-
     briefs_dir.mkdir(parents=True, exist_ok=True)
+
+    # A day already written is FROZEN. The grouped daily store is split-adjusted
+    # and retro-adjusts history, so re-deriving a setup weeks later can move
+    # every level of a ladder already under replay. A proposal's geometry belongs
+    # to its proposal date; ``rebuild`` is the deliberate escape.
+    frozen_days = (
+        set()
+        if rebuild
+        else {
+            dt.date.fromisoformat(os.path.basename(q)[:-8])
+            for q in glob.glob(str(briefs_dir / "*.parquet"))
+        }
+    )
+    is_frozen = rows["asof"].isin(frozen_days)
+    frozen_rows = int(is_frozen.sum())
+    todo = rows[~is_frozen]
+    logger.info(
+        "in scope: %d rows; %d frozen on existing days; %d to build",
+        len(rows),
+        frozen_rows,
+        len(todo),
+    )
+
+    tickers = {str(t).upper() for t in todo["ticker"]}
+    bars = load_grouped_ohlcv(tickers, grouped_dir=grouped_dir) if tickers else {}
+    missing = len(todo[~todo["ticker"].str.upper().isin(bars.keys())])
+    setups, no_structure = build_setups(todo, bars)
+
     written = 0
-    for raw_asof, day_rows in rows.groupby("asof"):
+    for raw_asof, day_rows in todo.groupby("asof"):
         asof = cast("dt.date", raw_asof)
         day_setups = {
             str(t): setups[(asof, str(t))] for t in day_rows["ticker"] if (asof, str(t)) in setups
@@ -247,10 +275,11 @@ def prepare(
         written += len(frame)
 
     logger.info(
-        "prepared %d plannable rows (%d no-structure, %d without bars)",
+        "prepared %d rows (%d no-structure, %d without bars, %d frozen)",
         written,
         no_structure,
         missing,
+        frozen_rows,
     )
     # terminal/ongoing are unknown until the replay runs; the balance check that
     # matters is asserted in the read memo against the replayed store.
@@ -260,6 +289,7 @@ def prepare(
         no_bars=missing,
         terminal=0,
         ongoing=written,
+        frozen=frozen_rows,
     )
 
 
@@ -304,6 +334,11 @@ def benchmark(store_dir: Path = STORE_DIR) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepare", action="store_true", help="build synthetic briefs")
+    parser.add_argument(
+        "--rebuild-briefs",
+        action="store_true",
+        help="re-derive setups for days already written (moves live ladder levels)",
+    )
     parser.add_argument("--replay", action="store_true", help="run the ladder replay")
     parser.add_argument(
         "--benchmark", action="store_true", help="fill the benchmark-excess columns"
@@ -312,7 +347,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     if args.prepare:
-        att = prepare()
+        att = prepare(rebuild=args.rebuild_briefs)
         print(json.dumps(att.as_row(), indent=2))
     if args.replay:
         replay()
