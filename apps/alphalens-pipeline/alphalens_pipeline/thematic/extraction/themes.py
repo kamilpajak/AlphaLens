@@ -164,7 +164,25 @@ def selection_propensity(rollup: pd.DataFrame, *, threshold: float, max_themes: 
     MARGINAL, not joint. The quantity a later off-policy evaluation needs is
     ``P(theme i is in the slate)`` per theme, not the probability of the exact
     slate that came out — the latter is astronomically small and useless as a
-    weight. Three cases, and the pool is the set of themes sharing the MARGINAL
+    weight.
+
+    That substitution is only valid where the reward is ADDITIVE across the
+    selected themes, because ``E[sum_i in S r_i] = sum_i P(i in S) * r_i`` is
+    what lets a Horvitz-Thompson estimator drop the joint distribution. State
+    the condition rather than assume it, because it holds at one stage of this
+    pipeline and fails at the next:
+
+    * at the MAPPING stage it holds — ``theme_mapper.build_prompt`` takes a
+      single theme and the orchestrator loops themes independently, so a
+      theme's proposals do not depend on which other themes were selected.
+      These propensities are logged for that stage and weight its outcomes
+      correctly;
+    * at the BRIEF stage it does NOT hold — a fixed number of cards means
+      themes compete, so one theme's shipped outcome depends on the rest of the
+      slate. Weighting a brief-stage outcome by these marginals is invalid, and
+      no arithmetic here can detect the misuse.
+
+    Three cases, and the pool is the set of themes sharing the MARGINAL
     ranking key (the key of the last theme that fits), not the whole tied frame:
 
     * ranked strictly above the marginal key, and eligible -> 1.0; it was going to

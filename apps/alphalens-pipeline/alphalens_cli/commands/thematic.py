@@ -773,7 +773,11 @@ def map_themes_cmd(
         help=(
             "Force re-proposing candidates even when a frozen parquet for this date "
             "already exists. By default map-themes is idempotent per (date, config): "
-            "a rerun reuses the frozen set instead of re-rolling the LLM proposal."
+            "a rerun reuses the frozen set instead of re-rolling the LLM proposal. "
+            "WARNING: this also bypasses the guard that stops a decided day being "
+            "erased, so combining it with a threshold that leaves no novel themes "
+            "replaces a real slate with an empty one and rewrites that day's "
+            "selection propensities to zero."
         ),
     ),
 ) -> None:
