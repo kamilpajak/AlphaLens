@@ -585,3 +585,15 @@ class TestReplayEarlyExitSignal(unittest.TestCase):
             )
 
             self.assertEqual(n, 2)
+
+    def test_respects_max_passes_when_the_count_never_stops_falling(self):
+        """The ceiling itself, pinned. Without this only the early exits are
+        covered, and a refactor that moved the increment could run past it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store, fake = self._store(Path(tmp), [100, 80, 60, 40])
+
+            n = replay_arms.replay(
+                briefs_dir=Path(tmp), store_dir=store, max_passes=2, _replay_fn=fake
+            )
+
+            self.assertEqual(n, 2)
