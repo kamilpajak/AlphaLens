@@ -185,6 +185,58 @@ class TestSeededTiebreak(unittest.TestCase):
         self.assertEqual(list(ordered["theme"]), ["zz_big", "aa_small"])
 
 
+class TestTiebreakSeedInput(unittest.TestCase):
+    """``dt.datetime`` and ``pd.Timestamp`` are ``dt.date`` SUBCLASSES.
+
+    Neither the annotation nor pyright can see the difference, and
+    ``datetime.isoformat()`` emits ``2026-08-18T00:00:00`` where
+    ``date.isoformat()`` emits ``2026-08-18`` — a different seed, a different
+    draw, a different slate. That is the one remaining way to break the
+    six-runs-a-day determinism the whole change rests on: one caller reaching for
+    ``pd.Timestamp`` is enough.
+    """
+
+    def test_a_datetime_seeds_the_same_day_as_the_plain_date(self):
+        self.assertEqual(
+            themes.tiebreak_seed(dt.datetime(2026, 8, 18, 13, 45, 7)),
+            themes.tiebreak_seed(dt.date(2026, 8, 18)),
+        )
+
+    def test_a_midnight_datetime_seeds_the_same_day_as_the_plain_date(self):
+        # The likeliest accidental input, and the one that LOOKS equal.
+        self.assertEqual(
+            themes.tiebreak_seed(dt.datetime(2026, 8, 18)),
+            themes.tiebreak_seed(dt.date(2026, 8, 18)),
+        )
+
+    def test_a_pandas_timestamp_seeds_the_same_day_as_the_plain_date(self):
+        self.assertEqual(
+            themes.tiebreak_seed(pd.Timestamp("2026-08-18T13:45:07Z")),
+            themes.tiebreak_seed(dt.date(2026, 8, 18)),
+        )
+
+    def test_the_keys_follow_the_seed_through_a_timestamp(self):
+        # The seed is only reachable through the keys in production, so pin the
+        # property where it is actually consumed too.
+        self.assertEqual(
+            list(themes.tiebreak_keys(["aa_theme", "bb_theme"], asof=pd.Timestamp("2026-08-18"))),
+            list(themes.tiebreak_keys(["aa_theme", "bb_theme"], asof=dt.date(2026, 8, 18))),
+        )
+
+    def test_a_non_date_is_rejected_rather_than_hashed(self):
+        # A string would hash happily and produce a plausible-looking seed for a
+        # value that is not a date at all.
+        with self.assertRaises(TypeError):
+            themes.tiebreak_seed("2026-08-18")
+
+    def test_the_seed_still_differs_across_days(self):
+        # Positive control: normalisation must collapse the TIME, never the DATE.
+        self.assertNotEqual(
+            themes.tiebreak_seed(pd.Timestamp("2026-08-18T23:59:59")),
+            themes.tiebreak_seed(pd.Timestamp("2026-08-19T00:00:00")),
+        )
+
+
 class TestSelectionPropensity(unittest.TestCase):
     """Marginal inclusion probability per theme — not a joint slate probability."""
 
@@ -245,6 +297,49 @@ class TestSelectionPropensity(unittest.TestCase):
         b = list(themes.selection_propensity(shuffled, threshold=3.0, max_themes=4))
 
         self.assertEqual(sorted(a), sorted(b))
+
+
+class TestPropensityWithANaNRankingKey(unittest.TestCase):
+    """A NaN in a ranking key must not cost the day's rollup.
+
+    ``NaN != NaN``, so an equality mask against a marginal row that carries one
+    is all-False, the boundary pool measures 0 and the division by it raises.
+    ``roll_up`` cannot produce that today, but the function is exported and the
+    CLI wraps the writer in a bare ``except Exception`` — so the failure mode is
+    a whole day's rollup silently missing behind one WARNING line.
+
+    Two NaN keys ARE indistinguishable to the sorter, which is exactly what the
+    tie-break pool means, so they belong in the same pool.
+    """
+
+    def _rollup(self) -> pd.DataFrame:
+        return pd.DataFrame(
+            [
+                {"theme": "sure_a", "novelty_score": 9.0, "count_window": 9.0},
+                {"theme": "nan_a", "novelty_score": 4.0, "count_window": float("nan")},
+                {"theme": "nan_b", "novelty_score": 4.0, "count_window": float("nan")},
+                {"theme": "cold", "novelty_score": 0.5, "count_window": 1.0},
+            ]
+        )
+
+    def _propensity(self, max_themes: int = 2) -> dict[str, float]:
+        frame = self._rollup()
+        values = themes.selection_propensity(frame, threshold=3.0, max_themes=max_themes)
+        return dict(zip(frame["theme"], values, strict=True))
+
+    def test_a_nan_at_the_margin_does_not_raise(self):
+        self.assertEqual(self._propensity()["sure_a"], 1.0)
+
+    def test_the_two_nan_keyed_themes_share_the_last_slot(self):
+        prop = self._propensity()
+        self.assertAlmostEqual(prop["nan_a"], 0.5)
+        self.assertAlmostEqual(prop["nan_b"], 0.5)
+
+    def test_the_propensities_still_add_up_to_the_slots_filled(self):
+        self.assertAlmostEqual(sum(self._propensity().values()), 2.0)
+
+    def test_a_theme_below_the_threshold_is_still_impossible(self):
+        self.assertEqual(self._propensity()["cold"], 0.0)
 
 
 class TestRollupRecordsTheDraw(unittest.TestCase):

@@ -84,6 +84,21 @@ def novelty_config_version(*, window_days: int, recent_days: int, threshold: flo
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
 
+def _as_day(asof: dt.date) -> dt.date:
+    """Collapse any date-like input to the calendar day it names.
+
+    ``dt.datetime`` (and therefore ``pd.Timestamp``) passes every ``dt.date``
+    type check there is, and differs only in what ``isoformat()`` prints. The
+    seed is a per-DAY quantity, so the time part is dropped rather than allowed
+    to fork the seed; a value that is not a date at all is refused.
+    """
+    if isinstance(asof, dt.datetime):
+        return asof.date()
+    if isinstance(asof, dt.date):
+        return asof
+    raise TypeError(f"asof must be a datetime.date, got {type(asof).__name__}")
+
+
 def tiebreak_seed(asof: dt.date) -> str:
     """The day's tie-break seed — a pure function of the asof date and the rule.
 
@@ -97,8 +112,16 @@ def tiebreak_seed(asof: dt.date) -> str:
     from two places with different ``recent_days``, and a seed that moved with the
     token would make the two disagree about the order they show and the order they
     use. The tie-break identity travels in the token, not the token in the seed.
+
+    The input is normalised to a plain date first. ``dt.datetime`` and
+    ``pd.Timestamp`` are ``dt.date`` SUBCLASSES, so neither the annotation nor
+    pyright can stop one reaching this function, and their ``isoformat()`` emits
+    ``2026-08-18T00:00:00`` — a different string, a different seed, a different
+    slate. One caller reaching for ``pd.Timestamp`` would otherwise be enough to
+    break the agreement between the day's six runs. Anything that is not a date
+    at all raises rather than hashing into a plausible-looking seed.
     """
-    return hashlib.sha256(f"{TIEBREAK_VERSION}|{asof.isoformat()}".encode()).hexdigest()
+    return hashlib.sha256(f"{TIEBREAK_VERSION}|{_as_day(asof).isoformat()}".encode()).hexdigest()
 
 
 def tiebreak_keys(theme_names: Iterable[str], *, asof: dt.date) -> list[str]:
@@ -181,7 +204,14 @@ def selection_propensity(rollup: pd.DataFrame, *, threshold: float, max_themes: 
     marginal = ranked.iloc[max_themes - 1]
     # Sorting descending puts equal-key rows next to each other, so the first
     # match is also the count of themes that beat the pool outright.
-    at_margin = (ranked == marginal).all(axis=1).to_numpy()
+    #
+    # NaN-aware, and not for tidiness: ``NaN != NaN``, so a plain equality mask
+    # against a marginal row carrying one is all-False, the pool measures 0 and
+    # the division below raises. Two NaN keys are INDISTINGUISHABLE to the
+    # sorter, which is precisely what membership of the tie-break pool means, so
+    # they belong in the same pool. The mask therefore always matches at least
+    # the marginal row against itself and the pool is never empty.
+    at_margin = ((ranked == marginal) | (ranked.isna() & marginal.isna())).all(axis=1).to_numpy()
     n_certain = int(at_margin.argmax())
     pool_size = int(at_margin.sum())
     slots_remaining = max_themes - n_certain
@@ -507,6 +537,47 @@ def write_theme_rollup(
     return path
 
 
+def read_theme_rollups(store_dir: Path = DEFAULT_THEME_ROLLUP_DIR) -> pd.DataFrame:
+    """Read the whole rollup store, one file at a time, unioning their schemas.
+
+    USE THIS, NOT ``pd.read_parquet(store_dir)``. A directory read hands the path
+    to pyarrow as a DATASET, and a dataset takes its schema from the FIRST
+    fragment: the files that predate a column are read as if the column had never
+    been added, and the rows that carry it come back without it. There is no
+    error, no warning and no null marker — the column is simply absent from the
+    frame. The store on disk has exactly that shape (the tie-break columns
+    arrived in 2026-08, the earliest files are from before it), and the earlier
+    files sort first, so the naive read drops precisely
+    ``selection_propensity`` — the column the store exists for.
+
+    Per-file reads plus ``concat`` make the union explicit: a file that lacks a
+    column contributes NaN for it, which is what "this run recorded no
+    propensity" means. NaN and not 0.0 — a zero propensity is the positive claim
+    that a theme could not have been selected, and a file written before the
+    draw existed makes no claim at all. Filling it would manufacture the weights
+    an off-policy estimator divides by.
+
+    Declared columns lead the frame in :data:`THEME_ROLLUP_COLUMNS` order; any
+    column a legacy file carries that the schema has since dropped follows,
+    rather than being discarded — a reader that hides data is how this defect
+    started. Rows come back in filename (i.e. date) order. Legacy files are NEVER
+    rewritten to fit: their schema IS the record of what that run stored.
+    """
+    store_dir = Path(store_dir)
+    frames: list[pd.DataFrame] = []
+    if store_dir.exists():
+        for path in sorted(store_dir.glob("*.parquet")):
+            frames.append(pd.read_parquet(path))
+    if not frames:
+        return pd.DataFrame({c: pd.Series(dtype=object) for c in THEME_ROLLUP_COLUMNS})
+    frame = pd.concat(frames, ignore_index=True)
+    for column in THEME_ROLLUP_COLUMNS:
+        if column not in frame.columns:
+            frame[column] = pd.NA
+    extra = [c for c in frame.columns if c not in THEME_ROLLUP_COLUMNS]
+    return frame[[*THEME_ROLLUP_COLUMNS, *extra]]
+
+
 def flag_novel(
     rollup: pd.DataFrame, *, threshold: float = DEFAULT_NOVELTY_THRESHOLD
 ) -> pd.DataFrame:
@@ -530,6 +601,7 @@ __all__ = [
     "flag_novel",
     "novelty_config_version",
     "rate_surprise",
+    "read_theme_rollups",
     "roll_up",
     "selection_propensity",
     "tiebreak_keys",

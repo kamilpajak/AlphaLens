@@ -333,6 +333,47 @@ def _map_themes_outcome_metrics(df: pd.DataFrame | None = None) -> dict[str, flo
     }
 
 
+def _write_theme_rollup_best_effort(
+    target: dt.date,
+    rollup: pd.DataFrame,
+    *,
+    selected: list[str],
+    novelty_config_version: str,
+    threshold: float,
+    max_themes: int,
+) -> None:
+    """Record the day's full ranking and the slate this run actually acted upon.
+
+    ``selected`` must be the slate the MAPPER used, not merely the one this slot
+    computed — the two differ whenever the mapper served a frozen candidate set,
+    and the file is worthless as a record of the draw if it silently describes
+    the wrong one. Call this only where those two coincide.
+
+    ``threshold`` and ``max_themes`` are the cut the run really applied; the
+    writer needs both to compute each theme's inclusion propensity, which is
+    defined only against the full pre-truncation ranking.
+
+    Telemetry only, so a failure is logged rather than raised: nothing
+    downstream reads the rollup and losing it must not cost the day's briefs.
+    """
+    try:
+        themes_mod.write_theme_rollup(
+            target,
+            rollup,
+            selected=selected,
+            out_dir=themes_mod.DEFAULT_THEME_ROLLUP_DIR,
+            novelty_config_version=novelty_config_version,
+            threshold=threshold,
+            max_themes=max_themes,
+        )
+    except Exception:
+        logger.warning(
+            "theme-rollup write failed for %s (telemetry only, ignored)",
+            target,
+            exc_info=True,
+        )
+
+
 def _emit_stage_volume(
     stage: str,
     *,
@@ -682,32 +723,6 @@ def map_themes_cmd(
     novelty_cfg = themes_mod.novelty_config_version(
         window_days=window_days, recent_days=recent_days, threshold=novelty_threshold
     )
-    # Persist the FULL ranking — every theme in the window, both scores, and which
-    # ones were actually mapped. Written here, after truncation, so the `selected`
-    # flag records what really happened rather than what a reader would have to
-    # reconstruct. This is what makes an alternative selection rule replayable
-    # offline against real days instead of requiring a live experiment. Telemetry
-    # only: nothing below reads it, and a failure must not cost the day's briefs.
-    try:
-        themes_mod.write_theme_rollup(
-            target,
-            rollup,
-            selected=list(novel["theme"]),
-            out_dir=themes_mod.DEFAULT_THEME_ROLLUP_DIR,
-            novelty_config_version=novelty_cfg,
-            # The cut the run really applied. The writer needs both to record the
-            # inclusion propensity of each theme, which is only defined against
-            # the FULL pre-truncation ranking — after head() every survivor sits
-            # at 1.0 and the tie-break randomisation records nothing.
-            threshold=novelty_threshold,
-            max_themes=max_themes,
-        )
-    except Exception:
-        logger.warning(
-            "theme-rollup write failed for %s (telemetry only, ignored)",
-            target,
-            exc_info=True,
-        )
     if len(novel) == 0:
         # Quiet day: nothing to map, but still write a typed-empty candidates
         # parquet so `score` finds the file and the run_thematic_day.sh `set -e`
@@ -715,6 +730,16 @@ def map_themes_cmd(
         # recompute-eligible, so a later same-date slot with news is not frozen.
         out_path = orchestrator.write_empty_candidates(
             asof=target, output_dir=output_dir, model=model, novelty_config_version=novelty_cfg
+        )
+        # A quiet day IS a selection decision — an empty slate, acted upon by the
+        # empty candidate parquet just written — so it is recorded like any other.
+        _write_theme_rollup_best_effort(
+            target,
+            rollup,
+            selected=[],
+            novelty_config_version=novelty_cfg,
+            threshold=novelty_threshold,
+            max_themes=max_themes,
         )
         # Keep the observability contract uniform: emit the true 0/0 volume so
         # the map-themes gauges reflect a quiet day instead of carrying stale
@@ -755,6 +780,32 @@ def map_themes_cmd(
         theme_novelty=theme_novelty,
         novelty_config_version=novelty_cfg,
     )
+    # Persist the FULL ranking — every theme in the window, all three scores, and
+    # which ones were mapped — but ONLY when this slot really made the selection.
+    # Written after the mapper, not before, because the mapper is frozen per
+    # (asof, mapper_config_version): on slots 2-6 of the same day it serves slot
+    # 1's candidate set and ignores `themes` entirely. A rollup written on those
+    # slots would record THIS slot's slate, re-drawn from grown event counts,
+    # against a candidate set proposed from a different one — and a theme that
+    # was mapped would carry selection_propensity 0.0, i.e. an infinite
+    # inverse-propensity weight that leaves the off-policy estimator undefined
+    # rather than noisy. Skipping the write leaves the day described by the slot
+    # that actually decided it; `--rebuild` re-rolls both together.
+    if bool(df.attrs.get(orchestrator.FROZEN_REUSE_ATTR, False)):
+        logger.info(
+            "theme-rollup %s: mapper reused a frozen candidate set, so this slot "
+            "selected nothing — leaving the rollup as the deciding slot wrote it",
+            target,
+        )
+    else:
+        _write_theme_rollup_best_effort(
+            target,
+            rollup,
+            selected=themes,
+            novelty_config_version=novelty_cfg,
+            threshold=novelty_threshold,
+            max_themes=max_themes,
+        )
     # input = novel themes fed to the mapper; output = verified candidate rows.
     # The early `return` above handles the legitimate "no novel themes" case, so
     # 0 candidates from N novel themes means the themes were mapped and nothing
