@@ -550,6 +550,14 @@ class TestMapThemesCLI(unittest.TestCase):
                     "alphalens_thematic_channel_assess_failed_total": 0,
                     "alphalens_thematic_shadow_kept_themes_total": 0,
                     "alphalens_thematic_shadow_refused_themes_total": 0,
+                    # No themes in the window at all, so the rollup writer stored
+                    # nothing — which is not the same as having failed to store
+                    # something, and not the same as a frozen slot deferring to
+                    # the slot that decided the day.
+                    'alphalens_thematic_theme_rollup_write{outcome="written"}': 0,
+                    'alphalens_thematic_theme_rollup_write{outcome="skipped"}': 0,
+                    'alphalens_thematic_theme_rollup_write{outcome="empty"}': 1,
+                    'alphalens_thematic_theme_rollup_write{outcome="failed"}': 0,
                 },
             )
             self.assertIn("No novel themes", result.output)

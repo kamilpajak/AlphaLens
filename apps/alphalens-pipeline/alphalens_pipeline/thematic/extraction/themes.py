@@ -465,6 +465,44 @@ THEME_ROLLUP_COLUMNS = (
     "novelty_config_version",
 )
 
+# The subset of :data:`THEME_ROLLUP_COLUMNS` that carries numbers. Kept apart
+# because :func:`read_theme_rollups` guarantees their dtype, and the guarantee
+# has to name them: ``tiebreak_seed`` and ``tiebreak_key`` are hex STRINGS
+# despite reading like numbers, and coercing either would destroy the seed the
+# whole draw is reproducible from.
+THEME_ROLLUP_NUMERIC_COLUMNS = (
+    "count_window",
+    "count_recent",
+    "count_baseline",
+    "novelty_score",
+    "novelty_rank",
+    "rate_surprise",
+    "rate_surprise_rank",
+    "excess_activity",
+    "excess_activity_rank",
+    "selection_propensity",
+)
+
+
+def _as_float_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Force every declared numeric column to ``float64``, missing values as NaN.
+
+    Without this the dtype of a column is a function of what the store happens to
+    hold. A column no file carries is filled with ``pd.NA`` and stays ``object``;
+    the same column reads back ``float64``/NaN as soon as ONE file carries it.
+    The object form is not merely untidy — ``np.isnan`` raises ``TypeError`` on
+    it and so does ``.astype(float)``, which is every natural way to ask whether
+    a run recorded a value. The real store is entirely in the object case today.
+
+    A COERCION, never a fill: ``errors="coerce"`` turns "not recorded" into NaN
+    and leaves a recorded 0.0 alone. The two must stay apart — a zero propensity
+    is the positive claim that a theme could not have been selected, and it is
+    the number an off-policy estimator divides by.
+    """
+    for column in THEME_ROLLUP_NUMERIC_COLUMNS:
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("float64")
+    return frame
+
 
 def write_theme_rollup(
     asof: dt.date,
@@ -562,6 +600,10 @@ def read_theme_rollups(store_dir: Path = DEFAULT_THEME_ROLLUP_DIR) -> pd.DataFra
     rather than being discarded — a reader that hides data is how this defect
     started. Rows come back in filename (i.e. date) order. Legacy files are NEVER
     rewritten to fit: their schema IS the record of what that run stored.
+
+    Every column in :data:`THEME_ROLLUP_NUMERIC_COLUMNS` comes back as
+    ``float64`` whatever the store contains, so the caller's dtype does not
+    depend on which files happen to be on disk — see :func:`_as_float_columns`.
     """
     store_dir = Path(store_dir)
     frames: list[pd.DataFrame] = []
@@ -569,11 +611,13 @@ def read_theme_rollups(store_dir: Path = DEFAULT_THEME_ROLLUP_DIR) -> pd.DataFra
         for path in sorted(store_dir.glob("*.parquet")):
             frames.append(pd.read_parquet(path))
     if not frames:
-        return pd.DataFrame({c: pd.Series(dtype=object) for c in THEME_ROLLUP_COLUMNS})
+        empty = pd.DataFrame({c: pd.Series(dtype=object) for c in THEME_ROLLUP_COLUMNS})
+        return _as_float_columns(empty)
     frame = pd.concat(frames, ignore_index=True)
     for column in THEME_ROLLUP_COLUMNS:
         if column not in frame.columns:
             frame[column] = pd.NA
+    frame = _as_float_columns(frame)
     extra = [c for c in frame.columns if c not in THEME_ROLLUP_COLUMNS]
     return frame[[*THEME_ROLLUP_COLUMNS, *extra]]
 
@@ -595,6 +639,7 @@ __all__ = [
     "DEFAULT_THEME_ROLLUP_DIR",
     "DEFAULT_WINDOW_DAYS",
     "THEME_ROLLUP_COLUMNS",
+    "THEME_ROLLUP_NUMERIC_COLUMNS",
     "TIEBREAK_VERSION",
     "apply_tiebreak",
     "excess_activity",

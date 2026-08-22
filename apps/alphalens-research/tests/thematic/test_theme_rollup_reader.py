@@ -18,6 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from alphalens_pipeline.thematic.extraction import themes
 
@@ -174,6 +175,111 @@ class TestThemeRollupStoreReader(unittest.TestCase):
 
         self.assertEqual(list(frame.columns), list(themes.THEME_ROLLUP_COLUMNS))
         self.assertEqual(list(frame["theme"]), ["aa_theme"])
+
+
+class TestNumericColumnsComeBackNumeric(unittest.TestCase):
+    """The dtype must not depend on what the store happens to hold.
+
+    A column no file carries is filled with ``pd.NA``, which leaves the column at
+    ``object`` dtype — so ``selection_propensity`` reads back as ``float64``/NaN
+    the moment ONE file carries it and as ``object``/``pd.NA`` when none does.
+    The two are not interchangeable: ``np.isnan`` raises ``TypeError`` on the
+    object form and so does ``.astype(float)``, which is every natural way to ask
+    "did this run record a propensity?".
+
+    This is not hypothetical. All 17 files in the real store
+    (``~/.alphalens/theme_rollup``, 185687 rows read 2026-08-22) predate the
+    column, so the all-legacy shape IS the shape production has today — and the
+    existing fixture above always pairs one legacy file with one current one,
+    which is exactly why it never saw this.
+    """
+
+    def _all_legacy_store(self, tmpdir: str) -> Path:
+        store = Path(tmpdir)
+        _legacy_file(store, "2026-08-01")
+        _legacy_file(store, "2026-08-02")
+        return store
+
+    def test_an_all_legacy_store_still_returns_float_propensities(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            frame = themes.read_theme_rollups(self._all_legacy_store(tmpdir))
+
+        self.assertEqual(frame["selection_propensity"].dtype, np.dtype("float64"))
+
+    def test_np_isnan_answers_instead_of_raising(self):
+        # The failing call, verbatim: on an object column holding pd.NA this is
+        # a TypeError, not a False.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            frame = themes.read_theme_rollups(self._all_legacy_store(tmpdir))
+
+        self.assertTrue(np.isnan(frame["selection_propensity"].to_numpy()).all())
+
+    def test_a_legacy_row_is_still_missing_not_a_zero_propensity(self):
+        # The coercion must not become a fill. NaN means "this run recorded no
+        # propensity"; 0.0 is the positive claim that the theme could not have
+        # been selected, and it is the value an off-policy estimator divides by.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            frame = themes.read_theme_rollups(self._all_legacy_store(tmpdir))
+
+        self.assertTrue(frame["selection_propensity"].isna().all())
+        self.assertFalse((frame["selection_propensity"] == 0.0).any())
+
+    def test_every_declared_numeric_column_is_float_on_an_all_legacy_store(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            frame = themes.read_theme_rollups(self._all_legacy_store(tmpdir))
+
+        for column in themes.THEME_ROLLUP_NUMERIC_COLUMNS:
+            with self.subTest(column=column):
+                self.assertEqual(frame[column].dtype, np.dtype("float64"))
+
+    def test_every_declared_numeric_column_is_float_on_a_mixed_store(self):
+        # Same guarantee from the other side, so the dtype cannot be an accident
+        # of which files the store happens to contain.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = Path(tmpdir)
+            _legacy_file(store, "2026-08-01")
+            _current_file(store, "2026-08-20")
+            frame = themes.read_theme_rollups(store)
+
+        for column in themes.THEME_ROLLUP_NUMERIC_COLUMNS:
+            with self.subTest(column=column):
+                self.assertEqual(frame[column].dtype, np.dtype("float64"))
+
+    def test_an_empty_store_declares_the_numeric_columns_as_float(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            frame = themes.read_theme_rollups(Path(tmpdir))
+
+        for column in themes.THEME_ROLLUP_NUMERIC_COLUMNS:
+            with self.subTest(column=column):
+                self.assertEqual(frame[column].dtype, np.dtype("float64"))
+
+    def test_a_recorded_zero_propensity_survives_the_coercion(self):
+        # Positive control: the reader must not turn a genuine 0.0 into NaN
+        # either. A theme below the novelty threshold really did have no chance.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = Path(tmpdir)
+            pd.DataFrame(
+                [
+                    {
+                        "asof": "2026-08-20",
+                        "theme": "missed_theme",
+                        "novelty_score": 1.0,
+                        "selected": False,
+                        "selection_propensity": 0.0,
+                    }
+                ]
+            ).to_parquet(store / "2026-08-20.parquet", index=False)
+            frame = themes.read_theme_rollups(store)
+
+        self.assertEqual(list(frame["selection_propensity"]), [0.0])
+
+    def test_the_declared_numeric_columns_are_all_real_columns(self):
+        # Anti-rot: a renamed column would otherwise leave a coercion aimed at a
+        # name nothing writes, and the tests above would still pass on the NaN
+        # placeholder the reader creates for it.
+        self.assertTrue(
+            set(themes.THEME_ROLLUP_NUMERIC_COLUMNS) <= set(themes.THEME_ROLLUP_COLUMNS)
+        )
 
 
 if __name__ == "__main__":

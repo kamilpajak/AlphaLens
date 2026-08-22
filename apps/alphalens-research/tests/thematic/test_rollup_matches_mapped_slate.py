@@ -184,12 +184,23 @@ class _Slots:
     def rollup_path(self) -> Path:
         return self.rollup_dir / f"{ASOF.isoformat()}.parquet"
 
+    @property
+    def candidates_path(self) -> Path:
+        return self.output_dir / f"{ASOF.isoformat()}.parquet"
+
     def rollup(self) -> pd.DataFrame:
         return pd.read_parquet(self.rollup_path)
+
+    def candidates(self) -> pd.DataFrame:
+        return pd.read_parquet(self.candidates_path)
 
     def selected(self) -> set[str]:
         frame = self.rollup()
         return set(frame.loc[frame["selected"], "theme"])
+
+    def propensities(self) -> dict[str, float]:
+        frame = self.rollup()
+        return dict(zip(frame["theme"], frame["selection_propensity"], strict=True))
 
 
 class TestRollupMatchesTheMappedSlate(unittest.TestCase):
@@ -244,9 +255,27 @@ class TestRollupMatchesTheMappedSlate(unittest.TestCase):
                 {"aa_theme": 4, "bb_theme": 4, "cc_theme": 30, "dd_theme": 30},
             )
             slots.run()
-            frame = slots.rollup()
+            prop = slots.propensities()
 
-        prop = dict(zip(frame["theme"], frame["selection_propensity"], strict=True))
+        for theme in mapped_slate:
+            self.assertGreater(prop[theme], 0.0, msg=theme)
+
+    def test_a_zero_novel_rerun_never_zeroes_a_mapped_themes_propensity(self):
+        # The SAME invariant, reached down the other branch. When a rerun of an
+        # already-decided day computes zero novel themes — an operator raising
+        # --novelty-threshold, lowering --max-themes, or a shrunk re-extract —
+        # the zero-novel path used to rewrite the whole day at propensity 0.0,
+        # mapped themes included. Identical arithmetic, identical damage.
+        with ExitStack() as stack:
+            slots = _Slots(stack)
+            _write_events(slots.events_dir, {"aa_theme": 4, "bb_theme": 4, "cc_theme": 1})
+            slots.run()
+            mapped_slate = set(slots.mapped[0])
+
+            slots.run("--novelty-threshold", "999")
+            prop = slots.propensities()
+
+        self.assertEqual(len(mapped_slate), MAX_THEMES)
         for theme in mapped_slate:
             self.assertGreater(prop[theme], 0.0, msg=theme)
 
@@ -283,6 +312,94 @@ class TestRollupMatchesTheMappedSlate(unittest.TestCase):
                 slots.rollup_path.exists(),
                 msg="a frozen slot re-derived no slate, so it has nothing to record",
             )
+
+
+class TestAZeroNovelSlotCannotEraseADecidedDay(unittest.TestCase):
+    """The zero-novel branch never consulted the freeze, so it overwrote both files.
+
+    ``write_empty_candidates`` replaces the day's candidate parquet outright, and
+    the rollup write that follows it re-describes the day as an empty draw. Run
+    against an asof that was ALREADY mapped, that erases a real slate and rewrites
+    every mapped theme to ``selection_propensity`` 0.0 — the infinite
+    inverse-propensity weight the sibling class exists to prevent, arrived at from
+    the other side.
+
+    Production's 6x/day cron cannot reach it today: it passes no flags, and within
+    one asof the event counts only grow, so a day that had novel themes keeps
+    having them. An operator rerun with a different ``--novelty-threshold`` or
+    ``--max-themes``, or a re-extract that shrank the day, reaches it immediately.
+
+    A day that has a mapped, non-empty slate is DECIDED. Only ``--rebuild`` may
+    take that back, because only ``--rebuild`` recomputes the slate to replace it.
+    """
+
+    def _decided_day(self, stack: ExitStack) -> _Slots:
+        slots = _Slots(stack)
+        _write_events(slots.events_dir, {"aa_theme": 4, "bb_theme": 4, "cc_theme": 1})
+        slots.run()
+        return slots
+
+    def test_the_candidate_parquet_survives_a_zero_novel_slot(self):
+        with ExitStack() as stack:
+            slots = self._decided_day(stack)
+            before = slots.candidates()
+
+            slots.run("--novelty-threshold", "999")
+            after = slots.candidates()
+
+        self.assertFalse(before.empty)
+        pd.testing.assert_frame_equal(before, after)
+
+    def test_the_rollup_survives_a_zero_novel_slot(self):
+        with ExitStack() as stack:
+            slots = self._decided_day(stack)
+            before = slots.rollup()
+
+            slots.run("--novelty-threshold", "999")
+            after = slots.rollup()
+
+        pd.testing.assert_frame_equal(before, after)
+
+    def test_the_mapper_is_not_called_to_defend_the_day(self):
+        # The day is preserved by NOT writing, not by re-deriving it. A rerun
+        # that re-rolled the frozen LLM proposal to keep the file alive would be
+        # a different (and expensive) bug.
+        with ExitStack() as stack:
+            slots = self._decided_day(stack)
+            calls_after_decision = len(slots.mapped)
+
+            slots.run("--novelty-threshold", "999")
+
+            self.assertEqual(len(slots.mapped), calls_after_decision)
+
+    def test_rebuild_still_recomputes_a_zero_novel_day(self):
+        # The escape hatch stays open: --rebuild is the operator saying "replace
+        # what is there", and an empty draw is a legitimate thing to replace it
+        # with. Without this the fix would be a lock, not a guard.
+        with ExitStack() as stack:
+            slots = self._decided_day(stack)
+
+            slots.run("--novelty-threshold", "999", "--rebuild")
+            candidates = slots.candidates()
+            selected = slots.selected()
+            prop = slots.propensities()
+
+        self.assertEqual(len(candidates), 0)
+        self.assertEqual(selected, set())
+        self.assertEqual(set(prop.values()), {0.0})
+
+    def test_a_first_ever_zero_novel_slot_still_writes_the_empty_day(self):
+        # Positive control: with nothing on disk to protect, the quiet-day
+        # contract is unchanged — `score` still needs the typed-empty parquet or
+        # run_thematic_day.sh's `set -e` aborts before brief + rebuild-cache.
+        with ExitStack() as stack:
+            slots = _Slots(stack)
+            _write_events(slots.events_dir, {"aa_theme": 4, "bb_theme": 4, "cc_theme": 1})
+
+            slots.run("--novelty-threshold", "999")
+            candidates = slots.candidates()
+
+        self.assertEqual(len(candidates), 0)
 
 
 class TestFrozenReuseIsReportedByTheMapper(unittest.TestCase):
