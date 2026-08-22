@@ -270,10 +270,33 @@ def replay(briefs_dir: Path = BRIEFS_DIR, store_dir: Path = STORE_DIR) -> None:
         logger.info("%s", rep)
 
 
+def benchmark(store_dir: Path = STORE_DIR) -> int:
+    """Fill the benchmark-excess columns the monitor deliberately leaves null.
+
+    ``replay_population_ladders`` writes ``market_excess_return = None`` and a
+    SEPARATE pass computes it, because the benchmark leg needs its own index
+    fetch. Production runs that pass right after the monitor; this replay has to
+    run it too or the contract's §7 excess secondary is permanently absent —
+    which is what read 1 reported.
+    """
+    from alphalens_pipeline.feedback.benchmark_excess import (
+        enrich_store_with_benchmark_excess,
+    )
+
+    if store_dir == Path.home() / ".alphalens" / "population_ladders":
+        raise SystemExit("refusing to write the production ladder store")
+    n = enrich_store_with_benchmark_excess(store_dir)
+    logger.info("benchmark-excess: enriched %d rows", n)
+    return n
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prepare", action="store_true", help="build synthetic briefs")
     parser.add_argument("--replay", action="store_true", help="run the ladder replay")
+    parser.add_argument(
+        "--benchmark", action="store_true", help="fill the benchmark-excess columns"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
@@ -282,8 +305,10 @@ def main() -> None:
         print(json.dumps(att.as_row(), indent=2))
     if args.replay:
         replay()
-    if not (args.prepare or args.replay):
-        parser.error("pass --prepare and/or --replay")
+    if args.benchmark:
+        benchmark()
+    if not (args.prepare or args.replay or args.benchmark):
+        parser.error("pass --prepare, --replay and/or --benchmark")
 
 
 if __name__ == "__main__":

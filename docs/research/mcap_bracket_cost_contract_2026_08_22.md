@@ -257,3 +257,43 @@ before the ambiguity was noticed.
 abstract (no position, no P&L) and was the first thing considered. It is rejected
 because it would make this analysis measure a different quantity than every
 number the project already reports, which is exactly what §6 forbids.
+
+---
+
+## Amendment 3 — the row floor cannot see the cluster count
+
+Written 2026-08-22 after read 1, prompted by an adversarial review (zen,
+deepseek-v4-pro) and then measured rather than accepted.
+
+**The gap.** §6 fixes a cluster bootstrap over DAYS and §8 fixes a floor of 30
+rows per arm. Those are different quantities. The bootstrap's precision is
+bounded by how many days can inform a DIFFERENCE — days carrying a realised R in
+BOTH arms — and a row-count floor is blind to it. A percentile cluster bootstrap
+under-covers badly below roughly 20 clusters, so a verdict could be issued with
+an interval far narrower than the design earns.
+
+**Measured, not assumed.** On the read-1 store, 9 days carried a realised R and
+the kept arm appeared on only **3** of them. The effective cluster count for the
+difference was 3, not 9.
+
+**Amendment.** A verdict additionally requires **at least 20 paired days** —
+days with a realised R in each arm (`MIN_PAIRED_DAYS`). Below that the verdict is
+INCONCLUSIVE regardless of row counts.
+
+**Why this cannot favour an answer.** It only ever converts a verdict into
+INCONCLUSIVE. It cannot produce EARNS or NOT JUSTIFIED where the original rules
+produced INCONCLUSIVE, and read 1 was already INCONCLUSIVE on the row floor
+alone, so it changes no published verdict.
+
+**Second item: the skipped draws.** §6 did not say what to do with a resample
+that leaves an arm empty. The implementation drops it, which conditions the
+bootstrap on both arms being present. The fraction dropped is now REPORTED on
+every read (`skipped_draw_fraction`) rather than left silent; it measured 2.5%
+on the read-1 store, where the shift is negligible, and a future read where it is
+large will say so on its face.
+
+**One reviewer claim was checked and rejected.** The review reported that the
+theme column is never loaded, so §9's theme-stratified secondary is always
+empty. Run against the store, `theme` is present and non-null on all 413 rows:
+it arrives on the ladder rows, which the monitor stamps, not through the brief
+columns the review inspected. The secondary reports 10 themes.

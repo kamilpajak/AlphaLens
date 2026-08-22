@@ -13,6 +13,7 @@ import pandas as pd
 from scripts.read_bracket_cost import (
     ARM_DISCARDED,
     ARM_KEPT,
+    MIN_PAIRED_DAYS,
     MIN_TERMINAL_PER_ARM,
     PROMPT_CHANGE_DATE,
     VERDICT_EARNS,
@@ -26,8 +27,15 @@ from scripts.read_bracket_cost import (
 )
 
 
-def _rows(*, discarded: list[float], kept: list[float], days: int = 6) -> pd.DataFrame:
-    """Terminal rows spread across ``days`` so the day-cluster has something to resample."""
+def _rows(
+    *, discarded: list[float], kept: list[float], days: int = MIN_PAIRED_DAYS
+) -> pd.DataFrame:
+    """Terminal rows spread across ``days`` so the day-cluster has something to resample.
+
+    The default is the paired-day floor: with fewer days every verdict test would
+    be short-circuited to INCONCLUSIVE by Amendment 3 and would stop testing what
+    it names.
+    """
     recs = []
     for i, r in enumerate(discarded):
         recs.append(
@@ -328,6 +336,67 @@ class TestClausesTheFirstDraftSkipped(unittest.TestCase):
         out = excluded_verdict_counts(funnel)
 
         self.assertEqual(out, {"too_small": 2, "no_mcap": 1})
+
+
+class TestPairedDayFloor(unittest.TestCase):
+    """Amendment 3. A percentile cluster bootstrap needs enough CLUSTERS.
+
+    Measured on the real store at read 1: 9 days carried a realised R but the
+    kept arm appeared on only 3 of them, so the effective cluster count for a
+    DIFFERENCE was 3. A row-count floor cannot see that.
+    """
+
+    def _paired(self, *, paired_days: int, rows_per_arm: int) -> pd.DataFrame:
+        recs = []
+        for day in range(paired_days):
+            for i in range(rows_per_arm):
+                for arm in (ARM_DISCARDED, ARM_KEPT):
+                    recs.append(
+                        {
+                            "arm": arm,
+                            "brief_date": f"2026-08-{1 + day:02d}",
+                            "realized_r": 0.1 * (i + 1) + (0.5 if arm == ARM_DISCARDED else 0.0),
+                        }
+                    )
+        return pd.DataFrame(recs)
+
+    def test_too_few_paired_days_is_inconclusive_even_with_many_rows(self):
+        frame = self._paired(paired_days=MIN_PAIRED_DAYS - 1, rows_per_arm=40)
+
+        out = decide(frame, n_draws=200, seed=5)
+
+        self.assertEqual(out.verdict, VERDICT_INCONCLUSIVE)
+        self.assertGreaterEqual(out.n_discarded, MIN_TERMINAL_PER_ARM)
+
+    def test_enough_paired_days_allows_a_verdict(self):
+        frame = self._paired(paired_days=MIN_PAIRED_DAYS, rows_per_arm=3)
+
+        out = decide(frame, n_draws=200, seed=5)
+
+        self.assertNotEqual(out.verdict, VERDICT_INCONCLUSIVE)
+
+    def test_days_carrying_only_one_arm_do_not_count_as_paired(self):
+        frame = self._paired(paired_days=2, rows_per_arm=20)
+        solo = pd.DataFrame(
+            {
+                "arm": [ARM_DISCARDED] * 30,
+                "brief_date": [f"2026-09-{1 + i:02d}" for i in range(30)],
+                "realized_r": [0.3] * 30,
+            }
+        )
+
+        out = decide(pd.concat([frame, solo], ignore_index=True), n_draws=200, seed=5)
+
+        self.assertEqual(out.n_paired_days, 2)
+        self.assertEqual(out.verdict, VERDICT_INCONCLUSIVE)
+
+    def test_skipped_draw_fraction_is_reported_not_hidden(self):
+        frame = self._paired(paired_days=MIN_PAIRED_DAYS, rows_per_arm=3)
+
+        out = decide(frame, n_draws=200, seed=5)
+
+        self.assertIsNotNone(out.skipped_draw_fraction)
+        self.assertGreaterEqual(out.skipped_draw_fraction, 0.0)
 
 
 if __name__ == "__main__":

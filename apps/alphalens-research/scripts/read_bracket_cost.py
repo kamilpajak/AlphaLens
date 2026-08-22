@@ -29,6 +29,13 @@ ARM_KEPT = "kept"
 
 # Contract §8. Below this the read publishes numbers but refuses a verdict.
 MIN_TERMINAL_PER_ARM = 30
+# Amendment 3. The cluster bootstrap resamples DAYS, so its precision is bounded
+# by the number of days that can contribute to a DIFFERENCE — days carrying rows
+# in BOTH arms. A row-count floor cannot see this: at read 1 the row floor was
+# nowhere near met, but even so 9 days carried a realised R while the kept arm
+# appeared on only 3 of them. A percentile cluster bootstrap under-covers badly
+# below roughly 20 clusters.
+MIN_PAIRED_DAYS = 20
 # Contract §6.
 DEFAULT_DRAWS = 10_000
 DEFAULT_SEED = 20260822
@@ -64,6 +71,21 @@ class Decision:
     n_discarded: int
     n_kept: int
     n_days: int
+    n_paired_days: int
+    skipped_draw_fraction: float | None
+
+
+def paired_days(frame: pd.DataFrame) -> int:
+    """Days carrying a realised R in BOTH arms.
+
+    The estimand is a DIFFERENCE, so a day contributing to only one arm adds no
+    information about it. This is the cluster count that bounds the bootstrap's
+    precision, and it can be far below the day count: at read 1 nine days
+    carried an R while only three carried one in each arm.
+    """
+    with_r = frame[frame["realized_r"].notna()]
+    per_day = with_r.groupby("brief_date")["arm"].nunique()
+    return int((per_day >= 2).sum())
 
 
 def cluster_bootstrap_median_diff(
@@ -99,6 +121,39 @@ def cluster_bootstrap_median_diff(
     )
 
 
+def _bootstrap_with_skip_rate(
+    frame: pd.DataFrame, *, n_draws: int, seed: int
+) -> tuple[float, float, float]:
+    """The interval plus the fraction of draws that produced no estimate.
+
+    Draws leaving an arm empty are dropped, which conditions the bootstrap on
+    both arms being present and shifts the interval slightly. The shift is small
+    when the fraction is small, so the fraction is REPORTED rather than assumed
+    away — measured at 2.5% on the read-1 store.
+    """
+    days = frame["brief_date"].unique()
+    rng = np.random.default_rng(seed)
+    by_day = {d: frame[frame["brief_date"] == d] for d in days}
+    diffs: list[float] = []
+    skipped = 0
+    for _ in range(n_draws):
+        picked = rng.choice(days, size=len(days), replace=True)
+        sample = pd.concat([by_day[d] for d in picked], ignore_index=True)
+        a = sample.loc[sample["arm"] == ARM_DISCARDED, "realized_r"].dropna()
+        b = sample.loc[sample["arm"] == ARM_KEPT, "realized_r"].dropna()
+        if a.empty or b.empty:
+            skipped += 1
+            continue
+        diffs.append(float(a.median() - b.median()))
+    if not diffs:
+        return (float("nan"), float("nan"), 1.0)
+    return (
+        float(np.percentile(diffs, CI_LOW_PCT)),
+        float(np.percentile(diffs, CI_HIGH_PCT)),
+        skipped / n_draws,
+    )
+
+
 def decide(
     frame: pd.DataFrame, *, n_draws: int = DEFAULT_DRAWS, seed: int = DEFAULT_SEED
 ) -> Decision:
@@ -111,8 +166,9 @@ def decide(
     a = frame[frame["arm"] == ARM_DISCARDED]["realized_r"].dropna()
     b = frame[frame["arm"] == ARM_KEPT]["realized_r"].dropna()
     n_days = int(frame["brief_date"].nunique())
+    n_paired = paired_days(frame)
 
-    if len(a) < MIN_TERMINAL_PER_ARM or len(b) < MIN_TERMINAL_PER_ARM:
+    if len(a) < MIN_TERMINAL_PER_ARM or len(b) < MIN_TERMINAL_PER_ARM or n_paired < MIN_PAIRED_DAYS:
         return Decision(
             verdict=VERDICT_INCONCLUSIVE,
             median_discarded=float(a.median()) if len(a) else None,
@@ -123,11 +179,13 @@ def decide(
             n_discarded=len(a),
             n_kept=len(b),
             n_days=n_days,
+            n_paired_days=n_paired,
+            skipped_draw_fraction=None,
         )
 
     med_a, med_b = float(a.median()), float(b.median())
     diff = med_a - med_b
-    lo, hi = cluster_bootstrap_median_diff(frame, n_draws=n_draws, seed=seed)
+    lo, hi, skipped = _bootstrap_with_skip_rate(frame, n_draws=n_draws, seed=seed)
     excludes_zero = not (lo <= 0.0 <= hi)
     kept_better = diff < 0.0
     verdict = VERDICT_EARNS if (kept_better and excludes_zero) else VERDICT_NOT_JUSTIFIED
@@ -141,6 +199,8 @@ def decide(
         n_discarded=len(a),
         n_kept=len(b),
         n_days=n_days,
+        n_paired_days=n_paired,
+        skipped_draw_fraction=skipped,
     )
 
 
