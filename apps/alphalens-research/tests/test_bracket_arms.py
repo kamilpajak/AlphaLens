@@ -12,14 +12,35 @@ from __future__ import annotations
 import json
 import unittest
 
+import numpy as np
 import pandas as pd
+from alphalens_pipeline.thematic.trade_setup.builder import build_trade_setup_from_frame
+from alphalens_pipeline.thematic.trade_setup.model import TradeSetup
 from scripts.replay_bracket_arms import (
     ARM_DISCARDED,
     ARM_KEPT,
     Attrition,
+    is_plannable_setup,
     select_arms,
     synthetic_brief_frame,
 )
+
+
+def _real_ohlcv(bars: int = 300) -> pd.DataFrame:
+    """A frame the real builder accepts — deterministic, not random per run."""
+    rng = np.random.default_rng(20260822)
+    close = 100.0 * np.cumprod(1.0 + rng.normal(0.0005, 0.02, bars))
+    span = np.abs(rng.normal(0.0, 0.015, bars)) * close
+    return pd.DataFrame(
+        {
+            "open": close - span / 3,
+            "high": close + span,
+            "low": close - span,
+            "close": close,
+            "volume": rng.integers(1_000_000, 5_000_000, bars).astype(float),
+        },
+        index=pd.date_range("2025-06-01", periods=bars, freq="B"),
+    )
 
 
 def _funnel(**overrides) -> pd.DataFrame:
@@ -72,6 +93,32 @@ class TestSelectArms(unittest.TestCase):
         out = select_arms(f)
 
         self.assertEqual(len(out), 1)
+
+
+class TestIsPlannableSetup(unittest.TestCase):
+    """Guarded against the REAL payload shape, never against a guessed one.
+
+    The first version of this script tested its plannability guard with a
+    hand-written ``{"entries": [...]}`` dict. The real class emits ``status`` and
+    ``entry_tiers``, so the guard rejected 413 of 413 rows and the run reported a
+    clean, entirely fictional zero.
+    """
+
+    def test_accepts_a_setup_the_real_builder_produced(self):
+        setup = build_trade_setup_from_frame(_real_ohlcv())
+
+        self.assertTrue(is_plannable_setup(setup.to_dict()))
+
+    def test_rejects_the_real_no_structure_payload(self):
+        setup = TradeSetup.no_structure(asof_close=10.0, atr=0.0, order_ttl_days=7)
+
+        self.assertFalse(is_plannable_setup(setup.to_dict()))
+
+    def test_rejects_a_payload_with_no_entry_tiers(self):
+        payload = build_trade_setup_from_frame(_real_ohlcv()).to_dict()
+        payload["entry_tiers"] = []
+
+        self.assertFalse(is_plannable_setup(payload))
 
 
 class TestAttrition(unittest.TestCase):

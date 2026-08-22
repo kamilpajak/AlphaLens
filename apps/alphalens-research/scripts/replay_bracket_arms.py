@@ -87,6 +87,20 @@ class Attrition:
         }
 
 
+def is_plannable_setup(payload: Mapping[str, Any]) -> bool:
+    """True when a serialised ``TradeSetup`` carries a usable ladder.
+
+    The key names come from ``TradeSetup.to_dict`` — ``status`` and
+    ``entry_tiers`` — and are asserted against a REAL builder output in the
+    tests. An earlier version of this guard read invented keys, so it was
+    unconditionally False and the run reported a clean, entirely fictional zero
+    plannable rows.
+    """
+    from alphalens_pipeline.thematic.trade_setup.model import STATUS_OK
+
+    return payload.get("status") == STATUS_OK and bool(payload.get("entry_tiers"))
+
+
 def select_arms(funnel: pd.DataFrame) -> pd.DataFrame:
     """Rows in scope, stamped with their arm (contract §3 + §4).
 
@@ -190,7 +204,7 @@ def build_setups(
         cut = frame[frame.index <= pd.Timestamp(asof)]
         setup = builder.build_trade_setup_from_frame(cut)
         payload = setup.to_dict()
-        if payload.get("structure") == "NO_STRUCTURE" or not payload.get("entries"):
+        if not is_plannable_setup(payload):
             no_structure += 1
             continue
         setups[(asof, ticker)] = payload
