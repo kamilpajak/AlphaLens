@@ -301,10 +301,15 @@ class TestWriteThemeRollup(unittest.TestCase):
     def _write(self, out_dir: Path, selected: list[str]):
         themes.write_theme_rollup(
             dt.date(2026, 8, 5),
-            self._rollup(),
+            # Through apply_tiebreak, so the fixture carries the same columns
+            # roll_up really hands the writer — a frame short of one stamps an
+            # all-null column and only logs about it.
+            themes.apply_tiebreak(self._rollup(), asof=dt.date(2026, 8, 5)),
             selected=selected,
             out_dir=out_dir,
             novelty_config_version="cfg-token",
+            threshold=themes.DEFAULT_NOVELTY_THRESHOLD,
+            max_themes=1,
         )
         return pd.read_parquet(out_dir / "2026-08-05.parquet")
 
@@ -359,6 +364,8 @@ class TestWriteThemeRollup(unittest.TestCase):
                 selected=[],
                 out_dir=out,
                 novelty_config_version="cfg-token",
+                threshold=themes.DEFAULT_NOVELTY_THRESHOLD,
+                max_themes=themes.DEFAULT_MAX_THEMES,
             )
             self.assertEqual(list(out.glob("*.parquet")), [])
 
@@ -450,10 +457,12 @@ class TestExcessActivity(unittest.TestCase):
                             "excess_activity": 1.0,
                         },
                     ]
-                ),
+                ).assign(count_window=1, tiebreak_key=["a1", "b1", "c1"]),
                 selected=[],
                 out_dir=out,
                 novelty_config_version="cfg",
+                threshold=themes.DEFAULT_NOVELTY_THRESHOLD,
+                max_themes=themes.DEFAULT_MAX_THEMES,
             )
             ranks = (
                 pd.read_parquet(out / "2026-08-05.parquet")

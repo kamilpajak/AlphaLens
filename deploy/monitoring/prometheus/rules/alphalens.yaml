@@ -675,6 +675,70 @@ groups:
           summary: "thematic brief ladder-quality gauge missing"
           description: "No alphalens_thematic_brief_usable_ladder_ratio series. The brief stage's emit has not succeeded since the gauge shipped, or the textfile collector / node_exporter scrape is broken — either way AlphalensThematicBriefLadderUsableLow is disarmed. Expected once on a fresh deploy; clears after the first thematic-build run carrying the gauge."
 
+      # The day's theme rollup is written EXACTLY ONCE per asof — by the slot
+      # that really re-derived the slate — and the write is best-effort, so a
+      # failure is logged and swallowed rather than costing the day's briefs.
+      # Those two together mean one failed write erases the day from the store
+      # for good: a later slot cannot redo it (the propensities need the
+      # deciding slot's event counts, and the growing events parquet has
+      # already overwritten them). The one-hot
+      # ``alphalens_thematic_theme_rollup_write{outcome=...}`` gauge is what
+      # makes that hole countable instead of merely absent; this rule is what
+      # watches it.
+      #
+      # Both sides are read over a RANGE, never as an instant vector: the six
+      # daily slots overwrite the same textfile, so an instant read returns
+      # whichever slot fired last. In steady state the deciding slot publishes
+      # written=1 for its ~4h holding period each day, so
+      # ``max_over_time(written[24h])`` is 1 and the rule stays silent; a day
+      # whose deciding slot failed leaves failed=1 and no written sample at all,
+      # and the rule arms once yesterday's written sample ages out of the window.
+      #
+      # ``ignoring(outcome)`` is load-bearing. ``and`` matches on the FULL label
+      # set, and the two sides carry different ``outcome`` values, so a bare
+      # ``and`` would never match — the rule would sit green forever and the
+      # gauge would go unwatched, which is the condition it exists to end.
+      #
+      # ``for: 6h`` = the condition survived at least one further 4-hourly slot,
+      # so a deciding slot that failed and was re-derived by the next one (its
+      # candidate set having been degraded / empty) does not page.
+      # NOTE: live rules on the VPS are hand-synced (not repo-mounted)
+      # — copy this file over and HUP prometheus after editing.
+      - alert: AlphalensThematicThemeRollupLost
+        expr: |
+          (max_over_time(alphalens_thematic_theme_rollup_write{outcome="failed"}[24h]) > 0)
+          and ignoring(outcome)
+          (max_over_time(alphalens_thematic_theme_rollup_write{outcome="written"}[24h]) == 0)
+        for: 6h
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "the theme rollup for today's asof failed to write and no slot wrote one"
+          description: "map-themes swallowed the rollup write (telemetry must never cost the briefs), and no later slot wrote one either — the day's theme ranking and its selection propensities are gone, so that asof cannot enter an off-policy evaluation. A rerun cannot recover it: the propensities need the deciding slot's event counts and the events parquet has grown since. Check `journalctl --user -u alphalens-thematic-build.service` on the VPS for the swallowed exception (disk full / permissions are the usual causes)."
+
+      # Companion to the rule above, for the state its emitter degrades to. An
+      # outcome literal the emitter does not recognise is published as
+      # ``outcome="unknown"`` rather than raised — raising would kill map-themes
+      # AFTER the candidate parquet is written, and under run_thematic_day.sh's
+      # ``set -e`` that aborts score, brief and rebuild-cache for the whole day.
+      # A telemetry typo must not cost the briefs. The rule above cannot see
+      # this state (the write itself may well have succeeded), so the degraded
+      # state gets its own rule; a static test pins that no code path passes an
+      # unrecognised literal, so this firing means a real code defect shipped.
+      - alert: AlphalensThematicThemeRollupOutcomeUnknown
+        expr: |
+          max_over_time(alphalens_thematic_theme_rollup_write{outcome="unknown"}[24h]) > 0
+        for: 6h
+        labels:
+          severity: warning
+          route: telegram
+          unit: thematic-build
+        annotations:
+          summary: "map-themes published an unrecognised theme-rollup write outcome"
+          description: "The rollup-write gauge fell back to outcome=unknown, which no code path is supposed to reach — an outcome literal drifted out of THEME_ROLLUP_WRITE_OUTCOMES in alphalens_cli/commands/thematic.py. The stage still completed and the briefs are unaffected, but AlphalensThematicThemeRollupLost is blind for as long as this lasts: it can no longer tell a written day from a failed one."
+
       # ---------------------------------------------------------------
       # Structured-event-template health (epic #321 PR-1).
       # ---------------------------------------------------------------

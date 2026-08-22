@@ -333,6 +333,132 @@ def _map_themes_outcome_metrics(df: pd.DataFrame | None = None) -> dict[str, flo
     }
 
 
+# What one ``map-themes`` run did about the day's theme rollup. Published as a
+# one-hot gauge (see :func:`_theme_rollup_write_metrics`) because the four cases
+# are operationally different and only one of them is a hole:
+#
+# * ``written``  — this slot decided the day and the parquet landed;
+# * ``skipped``  — the mapper served a frozen candidate set, so this slot made no
+#                  selection to record. Normal and EXPECTED on five of the six
+#                  daily slots; the deciding slot already holds the day;
+# * ``empty``    — nothing to record at all (no themes in the window), so no file
+#                  is written and no other slot holds one either. Not a gap;
+# * ``failed``   — the write raised and was swallowed. THIS is the hole, and it
+#                  no longer heals: the rollup is attempted once per asof, and
+#                  the propensities need the deciding slot's event counts, which
+#                  the growing events parquet has since overwritten;
+# * ``unknown``  — no code path produces this one. It is the emitter's fallback
+#                  for an outcome literal it does not recognise, so a future typo
+#                  degrades to a visible state instead of raising mid-stage. See
+#                  :func:`_theme_rollup_write_metrics`.
+_THEME_ROLLUP_UNKNOWN_OUTCOME = "unknown"
+THEME_ROLLUP_WRITE_OUTCOMES: tuple[str, ...] = (
+    "written",
+    "skipped",
+    "empty",
+    "failed",
+    _THEME_ROLLUP_UNKNOWN_OUTCOME,
+)
+
+
+def _theme_rollup_write_metrics(outcome: str) -> dict[str, int]:
+    """One-hot gauge naming what happened to this run's theme rollup.
+
+    All series are emitted on EVERY run, zeros included: the textfile is
+    overwritten per run, and a series that disappears on healthy days is
+    indistinguishable from a stopped exporter (same rule as the map-themes
+    outcome gauges next door).
+
+    PER-RUN, not cumulative, and the six daily slots overwrite each other, so an
+    alert MUST read a window rather than an instant vector. The rule an operator
+    wants is "a day that failed and was never written" — it ships as
+    ``AlphalensThematicThemeRollupLost`` in
+    ``deploy/monitoring/prometheus/rules/alphalens.yaml``:
+
+        (max_over_time(alphalens_thematic_theme_rollup_write{outcome="failed"}[24h]) > 0)
+          and ignoring(outcome)
+        (max_over_time(alphalens_thematic_theme_rollup_write{outcome="written"}[24h]) == 0)
+
+    ``ignoring(outcome)`` is load-bearing — the two sides carry different label
+    values, so a bare ``and`` would never match and the rule would never fire.
+
+    An outcome outside :data:`THEME_ROLLUP_WRITE_OUTCOMES` degrades to
+    ``outcome="unknown"``. It must NOT raise: this runs in the ARGUMENT position
+    of :func:`_emit_stage_volume`, i.e. outside that function's try/except, and
+    long after the candidate parquet is on disk — so a raise exits ``map-themes``
+    non-zero and ``run_thematic_day.sh`` (``set -euo pipefail``) then drops
+    score, brief and rebuild-cache for the whole day. Telemetry must never cost
+    the day's briefs, the same rule that keeps the write itself best-effort.
+    It must equally not publish an all-zero set, which would read as "the stage
+    never ran" — the one thing a typo here must not be able to fake — so the
+    fallback is a label value of its own, watched by
+    ``AlphalensThematicThemeRollupOutcomeUnknown``. The "no code path passes an
+    unrecognised literal" guarantee is kept statically instead, by
+    ``tests/thematic/test_theme_rollup_write_metric.py``.
+    """
+    if outcome not in THEME_ROLLUP_WRITE_OUTCOMES:
+        logger.error(
+            "unrecognised theme-rollup write outcome %r (expected one of %s); "
+            "publishing outcome=%s — the stage is unaffected",
+            outcome,
+            THEME_ROLLUP_WRITE_OUTCOMES,
+            _THEME_ROLLUP_UNKNOWN_OUTCOME,
+        )
+        outcome = _THEME_ROLLUP_UNKNOWN_OUTCOME
+    return {
+        f'alphalens_thematic_theme_rollup_write{{outcome="{name}"}}': int(name == outcome)
+        for name in THEME_ROLLUP_WRITE_OUTCOMES
+    }
+
+
+def _write_theme_rollup_best_effort(
+    target: dt.date,
+    rollup: pd.DataFrame,
+    *,
+    selected: list[str],
+    novelty_config_version: str,
+    threshold: float,
+    max_themes: int,
+) -> str:
+    """Record the day's full ranking and the slate this run actually acted upon.
+
+    ``selected`` must be the slate the MAPPER used, not merely the one this slot
+    computed — the two differ whenever the mapper served a frozen candidate set,
+    and the file is worthless as a record of the draw if it silently describes
+    the wrong one. Call this only where those two coincide.
+
+    ``threshold`` and ``max_themes`` are the cut the run really applied; the
+    writer needs both to compute each theme's inclusion propensity, which is
+    defined only against the full pre-truncation ranking.
+
+    Telemetry only, so a failure is logged rather than raised: nothing
+    downstream reads the rollup and losing it must not cost the day's briefs.
+    Returns the outcome for :func:`_theme_rollup_write_metrics` — swallowing the
+    exception is what keeps the briefs safe, and publishing the outcome is what
+    keeps the resulting hole countable instead of merely absent.
+    """
+    try:
+        path = themes_mod.write_theme_rollup(
+            target,
+            rollup,
+            selected=selected,
+            out_dir=themes_mod.DEFAULT_THEME_ROLLUP_DIR,
+            novelty_config_version=novelty_config_version,
+            threshold=threshold,
+            max_themes=max_themes,
+        )
+    except Exception:
+        logger.warning(
+            "theme-rollup write failed for %s (telemetry only, ignored)",
+            target,
+            exc_info=True,
+        )
+        return "failed"
+    # The writer returns None for an empty rollup: there was nothing to store,
+    # which is not the same as having failed to store something.
+    return "empty" if path is None else "written"
+
+
 def _emit_stage_volume(
     stage: str,
     *,
@@ -626,7 +752,7 @@ def map_themes_cmd(
         help="Recent/baseline ratio for theme to be picked up by Layer 3.",
     ),
     max_themes: int = typer.Option(
-        10,
+        themes_mod.DEFAULT_MAX_THEMES,
         "--max-themes",
         help="Cap on novel themes mapped per run (DeepSeek v4-pro spend control).",
     ),
@@ -647,7 +773,11 @@ def map_themes_cmd(
         help=(
             "Force re-proposing candidates even when a frozen parquet for this date "
             "already exists. By default map-themes is idempotent per (date, config): "
-            "a rerun reuses the frozen set instead of re-rolling the LLM proposal."
+            "a rerun reuses the frozen set instead of re-rolling the LLM proposal. "
+            "WARNING: this also bypasses the guard that stops a decided day being "
+            "erased, so combining it with a threshold that leaves no novel themes "
+            "replaces a real slate with an empty one and rewrites that day's "
+            "selection propensities to zero."
         ),
     ),
 ) -> None:
@@ -682,33 +812,78 @@ def map_themes_cmd(
     novelty_cfg = themes_mod.novelty_config_version(
         window_days=window_days, recent_days=recent_days, threshold=novelty_threshold
     )
-    # Persist the FULL ranking — every theme in the window, both scores, and which
-    # ones were actually mapped. Written here, after truncation, so the `selected`
-    # flag records what really happened rather than what a reader would have to
-    # reconstruct. This is what makes an alternative selection rule replayable
-    # offline against real days instead of requiring a live experiment. Telemetry
-    # only: nothing below reads it, and a failure must not cost the day's briefs.
-    try:
-        themes_mod.write_theme_rollup(
-            target,
-            rollup,
-            selected=list(novel["theme"]),
-            out_dir=themes_mod.DEFAULT_THEME_ROLLUP_DIR,
-            novelty_config_version=novelty_cfg,
-        )
-    except Exception:
-        logger.warning(
-            "theme-rollup write failed for %s (telemetry only, ignored)",
-            target,
-            exc_info=True,
-        )
     if len(novel) == 0:
+        # A day that already mapped a slate is DECIDED, and a zero-novel rerun
+        # must not take that back. `write_empty_candidates` replaces the parquet
+        # outright and the rollup write that follows it re-describes the day as
+        # an empty draw — every mapped theme rewritten to selection_propensity
+        # 0.0, i.e. the infinite inverse-propensity weight this whole record
+        # exists to keep out of the store. The 6x/day cron cannot get here (it
+        # passes no flags, and within one asof the event counts only grow), but
+        # an operator rerun with a different --novelty-threshold / --max-themes,
+        # or a re-extract that shrank the day, arrives immediately. Only
+        # --rebuild may replace a decided day, because only --rebuild recomputes
+        # the slate that would replace it.
+        #
+        # The key is the candidate parquet's EXISTENCE, never its row count. A
+        # day can map a real slate and legitimately end with zero rows because
+        # verification dropped everything — a normal outcome this pipeline models
+        # explicitly (the declined / failed gauges, issue #982) — and on such a
+        # day a row-count key reads "nothing to protect" and erases the decision
+        # anyway. What is being protected is the SLATE, and the parquet is its
+        # record whether or not any ticker survived downstream of it.
+        #
+        # Not the rollup's existence, though it is the more direct record of the
+        # draw: that write is best-effort telemetry, so its absence can equally
+        # mean a swallowed failure (outcome="failed") on a day that WAS decided —
+        # and keying on it would let a rerun erase real candidate rows on exactly
+        # the day whose record was already lost. A corrupt candidate parquet is
+        # likewise kept rather than silently replaced; --rebuild is the way out,
+        # and a normal (non-zero-novel) slot heals it anyway, since the mapper's
+        # freeze check treats an unreadable parquet as a miss and recomputes.
+        decided_path = output_dir / f"{target.isoformat()}.parquet"
+        if not rebuild and decided_path.exists():
+            decided_rows = _parquet_num_rows(decided_path)
+            logger.info(
+                "map-themes %s: 0 novel themes, but this date was already mapped "
+                "(%d candidate row(s) on disk) — keeping the decision (pass "
+                "--rebuild to replace the day with an empty slate)",
+                target,
+                decided_rows,
+            )
+            # The rollup is left exactly as the deciding slot wrote it, which is
+            # the same state a frozen slot reports: this run selected nothing.
+            _emit_stage_volume(
+                "map-themes",
+                output_rows=decided_rows,
+                input_rows=0,
+                extra_metrics={
+                    **_map_themes_outcome_metrics(),
+                    **_theme_rollup_write_metrics("skipped"),
+                },
+            )
+            typer.echo(
+                f"No novel themes above {novelty_threshold:.1f} in {window_days}d window — "
+                f"{target} was already mapped ({decided_rows} candidate row(s) on disk), "
+                "keeping that decision"
+            )
+            return
         # Quiet day: nothing to map, but still write a typed-empty candidates
         # parquet so `score` finds the file and the run_thematic_day.sh `set -e`
         # chain does not abort before brief + rebuild-cache. The empty set is
         # recompute-eligible, so a later same-date slot with news is not frozen.
         out_path = orchestrator.write_empty_candidates(
             asof=target, output_dir=output_dir, model=model, novelty_config_version=novelty_cfg
+        )
+        # A quiet day IS a selection decision — an empty slate, acted upon by the
+        # empty candidate parquet just written — so it is recorded like any other.
+        rollup_outcome = _write_theme_rollup_best_effort(
+            target,
+            rollup,
+            selected=[],
+            novelty_config_version=novelty_cfg,
+            threshold=novelty_threshold,
+            max_themes=max_themes,
         )
         # Keep the observability contract uniform: emit the true 0/0 volume so
         # the map-themes gauges reflect a quiet day instead of carrying stale
@@ -718,7 +893,10 @@ def map_themes_cmd(
             "map-themes",
             output_rows=0,
             input_rows=0,
-            extra_metrics=_map_themes_outcome_metrics(),
+            extra_metrics={
+                **_map_themes_outcome_metrics(),
+                **_theme_rollup_write_metrics(rollup_outcome),
+            },
         )
         typer.echo(
             f"No novel themes above {novelty_threshold:.1f} in {window_days}d window — "
@@ -749,6 +927,33 @@ def map_themes_cmd(
         theme_novelty=theme_novelty,
         novelty_config_version=novelty_cfg,
     )
+    # Persist the FULL ranking — every theme in the window, all three scores, and
+    # which ones were mapped — but ONLY when this slot really made the selection.
+    # Written after the mapper, not before, because the mapper is frozen per
+    # (asof, mapper_config_version): on slots 2-6 of the same day it serves slot
+    # 1's candidate set and ignores `themes` entirely. A rollup written on those
+    # slots would record THIS slot's slate, re-drawn from grown event counts,
+    # against a candidate set proposed from a different one — and a theme that
+    # was mapped would carry selection_propensity 0.0, i.e. an infinite
+    # inverse-propensity weight that leaves the off-policy estimator undefined
+    # rather than noisy. Skipping the write leaves the day described by the slot
+    # that actually decided it; `--rebuild` re-rolls both together.
+    if bool(df.attrs.get(orchestrator.FROZEN_REUSE_ATTR, False)):
+        logger.info(
+            "theme-rollup %s: mapper reused a frozen candidate set, so this slot "
+            "selected nothing — leaving the rollup as the deciding slot wrote it",
+            target,
+        )
+        rollup_outcome = "skipped"
+    else:
+        rollup_outcome = _write_theme_rollup_best_effort(
+            target,
+            rollup,
+            selected=themes,
+            novelty_config_version=novelty_cfg,
+            threshold=novelty_threshold,
+            max_themes=max_themes,
+        )
     # input = novel themes fed to the mapper; output = verified candidate rows.
     # The early `return` above handles the legitimate "no novel themes" case, so
     # 0 candidates from N novel themes means the themes were mapped and nothing
@@ -760,7 +965,10 @@ def map_themes_cmd(
         "map-themes",
         output_rows=len(df),
         input_rows=len(novel),
-        extra_metrics=_map_themes_outcome_metrics(df),
+        extra_metrics={
+            **_map_themes_outcome_metrics(df),
+            **_theme_rollup_write_metrics(rollup_outcome),
+        },
     )
 
     out_path = output_dir / f"{target.isoformat()}.parquet"

@@ -764,6 +764,108 @@ class TestThematicBriefLadderQualityRule(unittest.TestCase):
         self.assertEqual(rule.get("labels", {}).get("unit"), "thematic-build")
 
 
+class TestThematicThemeRollupWriteRules(unittest.TestCase):
+    """Pin the alerts that watch the theme-rollup write outcome gauge.
+
+    The rollup is written EXACTLY ONCE per asof (the deciding slot) and the write
+    is best-effort, so a failure is swallowed and the day is gone for good: a
+    later slot cannot redo it (the propensities need the deciding slot's event
+    counts, which the growing events parquet has since overwritten). The one-hot
+    ``alphalens_thematic_theme_rollup_write{outcome=...}`` gauge exists to make
+    that hole countable — and a gauge nothing alerts on is not watched.
+
+    Two properties of the gauge shape the expression and must not be edited away:
+
+    * The six daily slots OVERWRITE the same textfile, so an instant vector reads
+      whichever slot fired last. Both sides must be read over a range.
+    * The two sides carry DIFFERENT ``outcome`` label values, so a bare ``and``
+      (which matches on the full label set) never matches and the rule would sit
+      silently green forever. ``ignoring(outcome)`` is what makes it able to fire.
+
+    The second alert covers the state the runtime degradation introduced: an
+    outcome literal the emitter does not recognise is published as
+    ``outcome="unknown"`` instead of raising mid-stage. That is a code defect, and
+    the failed/written rule above cannot see it (the write may well have
+    succeeded), so it needs a rule of its own.
+    """
+
+    METRIC = "alphalens_thematic_theme_rollup_write"
+    LOST = "AlphalensThematicThemeRollupLost"
+    UNKNOWN = "AlphalensThematicThemeRollupOutcomeUnknown"
+    WINDOW = "24h"
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self, alertname: str) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == alertname]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {alertname}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_both_alerts_exist(self) -> None:
+        for name in (self.LOST, self.UNKNOWN):
+            self._one(name)
+
+    def test_lost_expr_reads_both_sides_over_a_range(self) -> None:
+        # An instant vector would read whichever of the six slots wrote the
+        # textfile last, which is a coin toss rather than a question about the day.
+        expr = self._one(self.LOST)["expr"]
+        for outcome in ("failed", "written"):
+            self.assertIn(
+                f'max_over_time({self.METRIC}{{outcome="{outcome}"}}[{self.WINDOW}])',
+                expr,
+                f"the {outcome} side must be read over a {self.WINDOW} range",
+            )
+
+    def test_lost_expr_joins_ignoring_the_outcome_label(self) -> None:
+        # The load-bearing clause. Without it the two sides never match and the
+        # rule is silently incapable of firing.
+        expr = self._one(self.LOST)["expr"]
+        self.assertIn("and ignoring(outcome)", expr)
+
+    def test_lost_expr_requires_a_failure_and_no_write(self) -> None:
+        expr = self._one(self.LOST)["expr"]
+        self.assertIn("> 0", expr)
+        self.assertIn("== 0", expr)
+
+    def test_unknown_expr_reads_the_unknown_series_over_a_range(self) -> None:
+        expr = self._one(self.UNKNOWN)["expr"]
+        self.assertIn(
+            f'max_over_time({self.METRIC}{{outcome="unknown"}}[{self.WINDOW}])',
+            expr,
+        )
+        self.assertIn("> 0", expr)
+
+    def test_neither_alert_uses_counter_functions_on_the_gauge(self) -> None:
+        # The gauge is overwritten per run, never accumulated.
+        for name in (self.LOST, self.UNKNOWN):
+            expr = self._one(name)["expr"]
+            for func in ("increase(", "rate(", "irate("):
+                self.assertNotIn(func, expr, f"{name} applies {func} to a gauge")
+
+    def test_both_alerts_debounce_across_at_least_two_slots(self) -> None:
+        # thematic-build fires every 4h; 6h means the condition survived a slot.
+        for name in (self.LOST, self.UNKNOWN):
+            self.assertEqual(self._one(name).get("for"), "6h")
+
+    def test_both_alerts_carry_the_thematic_family_labels(self) -> None:
+        for name in (self.LOST, self.UNKNOWN):
+            labels = self._one(name).get("labels", {})
+            self.assertEqual(labels.get("severity"), "warning")
+            self.assertEqual(labels.get("route"), "telegram")
+            self.assertEqual(labels.get("unit"), "thematic-build")
+
+    def test_neither_alert_carries_a_job_label_or_matcher(self) -> None:
+        # A per-domain slice, not a systemd unit's last_success — a job= label
+        # would falsely register it in the job-keyed parity tests.
+        for name in (self.LOST, self.UNKNOWN):
+            rule = self._one(name)
+            self.assertNotIn("job", rule.get("labels", {}))
+            self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+
 class TestVixCacheStaleness(unittest.TestCase):
     """Pin the VIX-cache staleness alert pair (Track A v2 PR-2 follow-up).
 

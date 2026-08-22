@@ -1,0 +1,148 @@
+# promtool unit tests for alphalens.yaml.
+#
+# WHY THIS FILE EXISTS. `promtool check rules` parses PromQL; it does not
+# evaluate it. A rule whose operands are swapped, whose range selector is
+# missing, or whose vector matching never matches is SYNTACTICALLY PERFECT and
+# ships green — and the alerting that would report the mistake is the thing that
+# just broke. `promtool test rules` evaluates the shipped file against a series
+# fixture and asserts which alerts fire, so an inverted rule goes red in CI.
+#
+# The two theme-rollup rules below were verified by hand when they were written;
+# this file is what makes that verification survive. Adding cases for the other
+# rules in alphalens.yaml is worthwhile and deliberately out of scope here.
+#
+# Run: `just test-rules` (same pinned promtool image as `just lint-rules`).
+
+rule_files:
+  - alphalens.yaml
+
+evaluation_interval: 1h
+
+tests:
+  # ---------------------------------------------------------------------
+  # AlphalensThematicThemeRollupLost
+  # ---------------------------------------------------------------------
+  #
+  # The gauge is a one-hot set republished by every one of the six daily
+  # slots, all writing the SAME textfile. So a slot's value is overwritten by
+  # the next slot roughly four hours later — which is exactly why the rule
+  # reads `max_over_time(...[24h])` and not an instant vector.
+
+  # The incident: the deciding slot's write failed and no later slot wrote one,
+  # because later slots reuse the frozen candidate slate and skip the write.
+  # That asof's selection propensities are gone for good.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="failed"}'
+        values: '1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="written"}'
+        values: '0x23'
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="skipped"}'
+        values: '0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="empty"}'
+        values: '0x23'
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="unknown"}'
+        values: '0x23'
+    alert_rule_test:
+      # `for: 6h` has not elapsed yet.
+      - eval_time: 5h
+        alertname: AlphalensThematicThemeRollupLost
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: AlphalensThematicThemeRollupLost
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: thematic-build
+              outcome: failed
+            exp_annotations:
+              summary: "the theme rollup for today's asof failed to write and no slot wrote one"
+              description: "map-themes swallowed the rollup write (telemetry must never cost the briefs), and no later slot wrote one either — the day's theme ranking and its selection propensities are gone, so that asof cannot enter an off-policy evaluation. A rerun cannot recover it: the propensities need the deciding slot's event counts and the events parquet has grown since. Check `journalctl --user -u alphalens-thematic-build.service` on the VPS for the swallowed exception (disk full / permissions are the usual causes)."
+      # The degraded state is a different rule's job; this one must stay quiet.
+      - eval_time: 12h
+        alertname: AlphalensThematicThemeRollupOutcomeUnknown
+        exp_alerts: []
+
+  # Recovered: an early slot failed but a later one wrote. Nothing is lost, so
+  # the rule must stay quiet. This is the case a naive `failed > 0` rule would
+  # page on.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="failed"}'
+        values: '1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="written"}'
+        values: '0 0 0 0 1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: AlphalensThematicThemeRollupLost
+        exp_alerts: []
+      - eval_time: 23h
+        alertname: AlphalensThematicThemeRollupLost
+        exp_alerts: []
+
+  # A healthy day: the deciding slot wrote, slots 2-6 skipped because the
+  # mapper served the frozen slate. `skipped` is the normal steady state and
+  # must never page.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="written"}'
+        values: '1 1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="skipped"}'
+        values: '0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="failed"}'
+        values: '0x23'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: AlphalensThematicThemeRollupLost
+        exp_alerts: []
+      - eval_time: 23h
+        alertname: AlphalensThematicThemeRollupLost
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensThematicThemeRollupOutcomeUnknown
+  # ---------------------------------------------------------------------
+  #
+  # The emitter degrades to `unknown` rather than raising, because raising
+  # would kill map-themes after the candidate parquet is written and abort the
+  # rest of the day. The Lost rule is blind while this lasts (the write itself
+  # may have succeeded), so the degraded state needs its own rule.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="unknown"}'
+        values: '1x23'
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="failed"}'
+        values: '0x23'
+      - series: 'alphalens_thematic_theme_rollup_write{outcome="written"}'
+        values: '0x23'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: AlphalensThematicThemeRollupOutcomeUnknown
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: AlphalensThematicThemeRollupOutcomeUnknown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: thematic-build
+              outcome: unknown
+            exp_annotations:
+              summary: "map-themes published an unrecognised theme-rollup write outcome"
+              description: "The rollup-write gauge fell back to outcome=unknown, which no code path is supposed to reach — an outcome literal drifted out of THEME_ROLLUP_WRITE_OUTCOMES in alphalens_cli/commands/thematic.py. The stage still completed and the briefs are unaffected, but AlphalensThematicThemeRollupLost is blind for as long as this lasts: it can no longer tell a written day from a failed one."
+
+  # A day with no rollup activity at all emits nothing. Neither rule may fire
+  # on absent series — that is the "stopped exporter" case, which the
+  # MetricMissing family owns, not these two.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_thematic_stage_output_rows{stage="map-themes"}'
+        values: '1x23'
+    alert_rule_test:
+      - eval_time: 12h
+        alertname: AlphalensThematicThemeRollupLost
+        exp_alerts: []
+      - eval_time: 12h
+        alertname: AlphalensThematicThemeRollupOutcomeUnknown
+        exp_alerts: []

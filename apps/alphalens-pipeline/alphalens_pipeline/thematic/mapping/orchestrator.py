@@ -405,6 +405,20 @@ _MAP_THEMES_COLUMNS: tuple[str, ...] = (
 )
 
 
+# ``frame.attrs`` key naming whether :func:`map_themes` re-derived the day's
+# candidate set or served the frozen one. Rides on ``attrs`` beside the gauge
+# counts because that is the channel this module already uses for per-run
+# metadata the parquet schema has no room for.
+#
+# The caller needs it because the freeze IGNORES the ``themes`` argument: on
+# slots 2-6 of the same asof the slate the CLI computed was never acted upon, so
+# any record the CLI writes about that slate (the theme rollup, its inclusion
+# propensities) would describe a decision that did not happen. Absent key means
+# "unknown provenance" — read it with an explicit default and treat a missing
+# value as NOT a reuse only when the frame came from this function.
+FROZEN_REUSE_ATTR = "frozen_reuse"
+
+
 # The candidate frame's sort. Promoted from an inline literal to a module
 # constant so the structural guard in
 # ``tests/thematic/test_map_themes_channel_shadow.py`` can assert that no
@@ -1430,6 +1444,10 @@ def map_themes(
             # disappears on a frozen day is indistinguishable from a stopped
             # exporter.
             frozen.attrs.update(_channel_counts([], []))
+            # The `themes` argument was NOT used: this set was proposed by an
+            # earlier slot, under that slot's theme slate. Say so, or the caller
+            # records its own slate as the one that ran.
+            frozen.attrs[FROZEN_REUSE_ATTR] = True
             return frozen
 
     pro_client = _init_pro_client(api_key)
@@ -1508,6 +1526,10 @@ def map_themes(
     df.attrs["dropped_all_unknown"] = dropped_all_unknown
     df.attrs.update(_outcome_counts(outcomes))
     df.attrs.update(_channel_counts(theme_counts, shadows))
+    # Stamped on BOTH branches, never only on the frozen one: a key that exists
+    # solely when the answer is True makes "fresh run" and "frame from some other
+    # producer" the same observation to the caller.
+    df.attrs[FROZEN_REUSE_ATTR] = False
     write_parquet_atomic(df, out_path, index=False)
     # V-forward telemetry: log BOTH ungated proposal sources (LLM pre-gate +
     # mechanical salience) for a clean forward head-to-head (design memo
@@ -1583,6 +1605,7 @@ def write_empty_candidates(
 
 __all__ = [
     "DEFAULT_OUTPUT_DIR",
+    "FROZEN_REUSE_ATTR",
     "GATE_NAMES",
     "map_themes",
     "verify_candidate",
