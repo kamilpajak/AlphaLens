@@ -211,14 +211,25 @@ def build_setups(
     return setups, no_structure
 
 
-def prepare(funnel_dir: Path = FUNNEL_DIR, briefs_dir: Path = BRIEFS_DIR) -> Attrition:
-    """Write one synthetic brief parquet per funnel date."""
+def prepare(
+    funnel_dir: Path = FUNNEL_DIR,
+    briefs_dir: Path = BRIEFS_DIR,
+    grouped_dir: Path = GROUPED_DIR,
+) -> Attrition:
+    """Write one synthetic brief parquet per funnel date.
+
+    ``grouped_dir`` is a parameter rather than a module global read inside,
+    because a default argument binds at def time: a test that reassigned the
+    global still read the real store, passed on a machine that had one, and
+    failed on CI which does not. The bug was in the test, and the fix is to make
+    the dependency injectable rather than ambient.
+    """
     funnel = load_funnel(funnel_dir)
     rows = select_arms(funnel)
     tickers = {str(t).upper() for t in rows["ticker"]}
     logger.info("in scope: %d rows, %d tickers", len(rows), len(tickers))
 
-    bars = load_grouped_ohlcv(tickers)
+    bars = load_grouped_ohlcv(tickers, grouped_dir=grouped_dir)
     missing = len(rows[~rows["ticker"].str.upper().isin(bars.keys())])
     setups, no_structure = build_setups(rows, bars)
 

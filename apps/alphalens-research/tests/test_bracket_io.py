@@ -131,6 +131,30 @@ class TestBuildSetups(unittest.TestCase):
 
 
 class TestPrepare(unittest.TestCase):
+    def test_reads_the_injected_grouped_dir_not_the_real_store(self):
+        """The first version reassigned a module global, which a default
+        argument had already captured. It therefore read the developer's real
+        grouped store, found a real ticker called AAA, and passed on that
+        machine while failing on CI, where no store exists."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            funnel, grouped, briefs = root / "f", root / "g", root / "b"
+            for d in (funnel, grouped, briefs):
+                d.mkdir()
+            pd.DataFrame(
+                {
+                    "ticker": ["AAA"],
+                    "theme": ["t1"],
+                    "bracket_verdict": ["too_big"],
+                    "market_cap": [50e9],
+                }
+            ).to_parquet(funnel / "2026-08-06.parquet")
+
+            att = replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
+
+            self.assertEqual(att.no_bars, 1)
+            self.assertEqual(att.ongoing, 0)
+
     def test_writes_one_brief_per_day_and_balances_attrition(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -161,12 +185,7 @@ class TestPrepare(unittest.TestCase):
                     }
                 ).to_parquet(grouped / f"{ts.date().isoformat()}.parquet")
 
-            original = replay_arms.GROUPED_DIR
-            replay_arms.GROUPED_DIR = grouped
-            try:
-                att = replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs)
-            finally:
-                replay_arms.GROUPED_DIR = original
+            att = replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
 
             self.assertTrue(att.balanced())
             self.assertEqual(att.in_scope, 2)
