@@ -388,3 +388,44 @@ class TestPrepareFreezesGeometry(unittest.TestCase):
             replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
 
             self.assertTrue((briefs / f"{later.isoformat()}.parquet").exists())
+
+    def test_a_row_added_to_a_frozen_day_still_joins(self):
+        """The funnel for an asof is rewritten AFTER that date — measured on the
+        VPS, where 2026-08-18's file was last modified on 2026-08-20. A
+        day-level freeze would strand every row that arrives late, so the freeze
+        is per ROW: existing rows keep their geometry byte-for-byte, new ones
+        join with a setup built now.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            funnel, grouped, briefs, asof = self._fixture(Path(tmp))
+            replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
+            first = pd.read_parquet(briefs / f"{asof.isoformat()}.parquet")
+
+            # Same asof gains a second proposal, the way a later slot would add
+            # one, and every historical close halves under a retro-adjustment.
+            pd.DataFrame(
+                {
+                    "ticker": ["AAA", "BBB"],
+                    "theme": ["t1", "t2"],
+                    "bracket_verdict": ["too_big", "in_bracket"],
+                    "market_cap": [50e9, 3e9],
+                }
+            ).to_parquet(funnel / f"{asof.isoformat()}.parquet")
+            for path in grouped.glob("*.parquet"):
+                day = pd.read_parquet(path)
+                day["T"] = "AAA"
+                extra = day.copy()
+                extra["T"] = "BBB"
+                for col in ("o", "h", "l", "c"):
+                    day[col] = day[col] / 2.0
+                pd.concat([day, extra], ignore_index=True).to_parquet(path)
+
+            replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs, grouped_dir=grouped)
+            second = pd.read_parquet(briefs / f"{asof.isoformat()}.parquet").set_index("ticker")
+
+            self.assertEqual(sorted(second.index), ["AAA", "BBB"])
+            # AAA was already measured: its geometry must not have moved.
+            self.assertEqual(
+                first.set_index("ticker").loc["AAA", "brief_trade_setup"],
+                second.loc["AAA", "brief_trade_setup"],
+            )

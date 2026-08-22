@@ -144,6 +144,20 @@ def synthetic_brief_frame(rows: pd.DataFrame, setups: Mapping[str, Any]) -> pd.D
     return keep[cols].reset_index(drop=True)
 
 
+def _load_existing_briefs(briefs_dir: Path) -> dict[tuple[dt.date, str], dict[str, Any]]:
+    """Already-measured rows, keyed ``(asof, ticker)``, as plain dicts.
+
+    Read verbatim so a row that has been under replay keeps the exact setup it
+    was replayed against. Nothing here re-derives geometry.
+    """
+    out: dict[tuple[dt.date, str], dict[str, Any]] = {}
+    for path in sorted(glob.glob(str(briefs_dir / "*.parquet"))):
+        asof = dt.date.fromisoformat(os.path.basename(path)[:-8])
+        for record in pd.read_parquet(path).to_dict("records"):
+            out[(asof, str(record["ticker"]))] = cast("dict[str, Any]", record)
+    return out
+
+
 def load_funnel(funnel_dir: Path = FUNNEL_DIR) -> pd.DataFrame:
     """All funnel days, with ``asof`` recovered from the filename."""
     frames = []
@@ -235,23 +249,21 @@ def prepare(
     rows = select_arms(funnel)
     briefs_dir.mkdir(parents=True, exist_ok=True)
 
-    # A day already written is FROZEN. The grouped daily store is split-adjusted
-    # and retro-adjusts history, so re-deriving a setup weeks later can move
-    # every level of a ladder already under replay. A proposal's geometry belongs
-    # to its proposal date; ``rebuild`` is the deliberate escape.
-    frozen_days = (
-        set()
-        if rebuild
-        else {
-            dt.date.fromisoformat(os.path.basename(q)[:-8])
-            for q in glob.glob(str(briefs_dir / "*.parquet"))
-        }
-    )
-    is_frozen = rows["asof"].isin(frozen_days)
+    # A row already written is FROZEN, and the unit of freezing is the ROW, not
+    # the day. The grouped daily store is split-adjusted and retro-adjusts
+    # history, so re-deriving a setup weeks later can move every level of a
+    # ladder already under replay — but a DAY-level freeze would be wrong in the
+    # other direction: the funnel for an asof is rewritten after that date (on
+    # the VPS, 2026-08-18's file was last modified on 2026-08-20), so a late
+    # proposal would be stranded forever. Existing rows keep their geometry
+    # byte-for-byte; new ones join. ``rebuild`` re-derives everything.
+    existing = {} if rebuild else _load_existing_briefs(briefs_dir)
+    keys = list(zip(rows["asof"], rows["ticker"].astype(str), strict=True))
+    is_frozen = pd.Series([k in existing for k in keys], index=rows.index)
     frozen_rows = int(is_frozen.sum())
     todo = rows[~is_frozen]
     logger.info(
-        "in scope: %d rows; %d frozen on existing days; %d to build",
+        "in scope: %d rows; %d already measured; %d to build",
         len(rows),
         frozen_rows,
         len(todo),
@@ -269,9 +281,12 @@ def prepare(
             str(t): setups[(asof, str(t))] for t in day_rows["ticker"] if (asof, str(t)) in setups
         }
         frame = synthetic_brief_frame(day_rows, day_setups)
-        if frame.empty:
+        kept_rows = [existing[(asof, t)] for (a, t) in existing if a == asof]
+        if frame.empty and not kept_rows:
             continue
-        frame.to_parquet(briefs_dir / f"{asof.isoformat()}.parquet")
+        merged = pd.concat([pd.DataFrame(kept_rows), frame], ignore_index=True)
+        merged = merged.drop_duplicates(subset=["ticker"], keep="first")
+        merged.to_parquet(briefs_dir / f"{asof.isoformat()}.parquet")
         written += len(frame)
 
     logger.info(

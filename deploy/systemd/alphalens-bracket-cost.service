@@ -12,12 +12,19 @@
 # daily fire stays inside that budget while a weekly one would need ~180 and
 # fall permanently behind.
 #
+# A BURST is survivable and self-draining: the 2026-08-18 prompt change produced
+# 75 proposals in a day, which leaves 25 deferred. The next day carries 26 new
+# plus those 25 = 51, so 1 defers; the day after drains it. A burst costs about
+# two days of maturity, never a permanent backlog.
+#
 # Three steps, in order:
-#   --prepare    build synthetic briefs for funnel days not yet written. Days
-#                already written are FROZEN: the grouped daily store is
-#                split-adjusted and retro-adjusts history, so re-deriving a
-#                setup weeks later would move the levels of a ladder already
-#                under replay.
+#   --prepare    add funnel rows not yet measured. Rows already written are
+#                FROZEN — per ROW, not per day. Re-deriving a setup weeks later
+#                would move the levels of a ladder already under replay (the
+#                grouped store is split-adjusted and retro-adjusts history);
+#                freezing the whole DAY instead would strand late arrivals,
+#                because the funnel for an asof IS rewritten after that date
+#                (2026-08-18's file was last modified on 2026-08-20).
 #   --replay     advance every row through the production monitor.
 #   --benchmark  fill the benchmark-excess columns, which the monitor writes as
 #                null because the index leg needs its own fetch.
