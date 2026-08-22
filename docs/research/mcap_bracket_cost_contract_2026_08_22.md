@@ -185,3 +185,34 @@ Result memo: `docs/research/mcap_bracket_cost_read_<DATE>.md`, one per read,
 each naming the N it ran on. Script:
 `apps/alphalens-research/scripts/replay_bracket_arms.py`. Store:
 `~/.alphalens/bracket_cost_ladders/` — outside the production ladder store.
+
+---
+
+## Amendment 1 — §10's row count contradicts §2's unit
+
+Written 2026-08-22, BEFORE any outcome was computed or read. The replay was
+running; no `realized_r` for either arm had been looked at.
+
+**The inconsistency.** §2 fixes the unit as `(asof, ticker)`. §3 admits every
+funnel row whose verdict is in the two arms. Those are different counts, because
+the same ticker is frequently proposed under several themes on the same day:
+515 funnel rows collapse to **413** distinct `(asof, ticker)` units. §10 then
+asserts the attrition table "must sum to 515", which is the pre-collapse number.
+
+**Resolution: §2 governs.** The unit clause is the one that defines what is being
+counted; §10's 515 was an arithmetic slip made while writing §10, not a second
+decision about the unit. The attrition table must sum to **413**.
+
+**Why this is not a convenient reinterpretation.** The change cannot move the
+primary in a known direction: collapsing duplicates removes rows from BOTH arms,
+and which arm loses more is a property of the data that was not consulted. It
+also shrinks the discarded arm — the larger one — so if anything it makes the
+maturity floor harder to clear, not easier.
+
+**What would have made this improper.** Noticing it after reading the primary,
+or resolving it the other way (keeping 515) so that the floor cleared sooner.
+Neither happened; the collapse is what the code did on its first run, and it is
+pinned by `test_duplicate_asof_ticker_collapses_to_one_row`.
+
+The 102 collapsed rows are themselves reportable: about a fifth of proposals are
+the same company reached through a different theme on the same day.
