@@ -208,3 +208,33 @@ class TestPositiveControl(unittest.TestCase):
         out = positive_control(replayed, self._production())
 
         self.assertEqual(out["n_overlap"], 2)
+
+    def test_unclassified_rows_are_not_counted_as_disagreement(self):
+        """A row this store has not classified holds no opinion to disagree with.
+
+        Same rule as the empty-overlap case one level up, which this file
+        already pins: 'not checked' and 'disagreed' are opposite facts. Letting
+        an unresolved row score as a disagreement made the control read 61%
+        when the rows it had actually resolved agreed 86% of the time.
+        """
+        replayed = self._replayed(
+            brief_date=["2026-08-06", "2026-08-07"],
+            ticker=["AAA", "BBB"],
+            arm=[ARM_KEPT, ARM_KEPT],
+            ladder_classification=["SL_HIT", None],
+        )
+
+        out = positive_control(replayed, self._production())
+
+        self.assertEqual(out["n_comparable"], 1)
+        self.assertEqual(out["classification_agreement"], 1.0)
+        self.assertEqual(out["n_unclassified_here"], 1)
+
+    def test_all_unclassified_reports_none(self):
+        replayed = self._replayed(ladder_classification=[None, None])
+
+        out = positive_control(replayed, self._production())
+
+        self.assertEqual(out["n_comparable"], 0)
+        self.assertIsNone(out["classification_agreement"])
+        self.assertEqual(out["n_unclassified_here"], 2)

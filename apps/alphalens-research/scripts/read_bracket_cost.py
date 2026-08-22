@@ -149,15 +149,34 @@ def positive_control(replayed: pd.DataFrame, production: pd.DataFrame) -> dict:
     "everything disagreed" are opposite facts and must not share a number: a
     control that silently reports total disagreement as its healthy state is
     worse than no control.
+
+    The SAME rule applies one level down, and the first version of this function
+    broke it: a row this store has not yet classified holds no opinion, so it
+    cannot agree or disagree. Counting those as disagreements made the control
+    read 0.61 while the rows it had actually resolved agreed 0.86 of the time.
+    They are reported as ``n_unclassified_here`` — a measure of how far the
+    replay has got, which is a different fact from whether it is faithful.
     """
     kept = replayed[replayed["arm"] == ARM_KEPT]
     merged = kept.merge(
         production, on=["brief_date", "ticker"], how="inner", suffixes=("", "_prod")
     )
-    if merged.empty:
-        return {"n_overlap": 0, "classification_agreement": None}
-    agree = (merged["ladder_classification"] == merged["ladder_classification_prod"]).mean()
-    return {"n_overlap": len(merged), "classification_agreement": float(agree)}
+    comparable = merged[
+        merged["ladder_classification"].notna() & merged["ladder_classification_prod"].notna()
+    ]
+    agreement = (
+        float(
+            (comparable["ladder_classification"] == comparable["ladder_classification_prod"]).mean()
+        )
+        if len(comparable)
+        else None
+    )
+    return {
+        "n_overlap": len(merged),
+        "n_comparable": len(comparable),
+        "n_unclassified_here": int(merged["ladder_classification"].isna().sum()),
+        "classification_agreement": agreement,
+    }
 
 
 def load_replayed(store_dir: Path = STORE_DIR, briefs_dir: Path = BRIEFS_DIR) -> pd.DataFrame:
