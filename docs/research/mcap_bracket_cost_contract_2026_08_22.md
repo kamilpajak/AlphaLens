@@ -216,3 +216,44 @@ pinned by `test_duplicate_asof_ticker_collapses_to_one_row`.
 
 The 102 collapsed rows are themselves reportable: about a fifth of proposals are
 the same company reached through a different theme on the same day.
+
+---
+
+## Amendment 2 — §6 describes a mechanism the engine does not have
+
+Written 2026-08-22 at the first read, after the primary had been computed. The
+verdict was already INCONCLUSIVE under §8 and stays INCONCLUSIVE under every
+reading below, so nothing here can have been chosen to reach an answer.
+
+**The defect.** §6 says `NO_FILL` rows are "INCLUDED, carrying the value the
+engine assigns them". The engine assigns them **NULL**: of 44 terminal rows,
+29 are `NO_FILL` and every one has `realized_r = NaN`. A null cannot enter a
+median, so §6 is unimplementable as literally written.
+
+**Resolution, decided by §6's own criterion.** §6 gives the tie-breaker in its
+next sentence — the primary must match "how the shipped population is measured".
+Production does this, in `apps/alphalens-django/edge/api/summary.py`
+`_accumulate_terminal`: it counts a `NO_FILL` terminal in `n_terminal` and in the
+`NO_FILL` rate, then takes `rv = _finite(row.get("realized_r"))` and appends
+only finite values to the R aggregates. Never-filled rows are therefore excluded
+from `/edge`'s R statistics and are NOT mapped to zero.
+
+The primary is accordingly **median `realized_r` over terminal rows that opened
+a position**, which is what the script already did. The prose in §6 was wrong
+about the mechanism; the criterion in §6 was right and decides it.
+
+**Consequence for §7.** The secondary "median `realized_r` excluding `NO_FILL`"
+is now degenerate — identical to the primary by construction. It is dropped as a
+separate figure. The `NO_FILL` RATE, which §7 lists separately, carries the
+information that secondary was meant to carry and is unaffected.
+
+**Consequence for §8.** The floor counts rows that contribute to the primary,
+i.e. rows with a finite `realized_r` — not all terminal rows. This is the
+STRICTER reading: it puts the discarded arm at 12 rather than 34, so it delays a
+verdict rather than enabling one. The script already implemented it this way
+before the ambiguity was noticed.
+
+**Why zero was rejected.** Mapping `NO_FILL` to 0.0R is defensible in the
+abstract (no position, no P&L) and was the first thing considered. It is rejected
+because it would make this analysis measure a different quantity than every
+number the project already reports, which is exactly what §6 forbids.

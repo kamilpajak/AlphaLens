@@ -225,7 +225,10 @@ def report(frame: pd.DataFrame) -> dict:
         }
         for arm, g in frame.groupby("arm")
     }
-    mega = terminal[terminal["market_cap"] > MEGA_CAP_USD]
+    # N is the count the median actually ran on, not the row count (contract §7:
+    # every figure carries ITS OWN N). A NO_FILL terminal has a market cap but no
+    # realized R, so the two differ and one label over two denominators misleads.
+    mega = terminal[(terminal["market_cap"] > MEGA_CAP_USD) & terminal["realized_r"].notna()]
     out["mega_split"] = {
         "threshold_usd": MEGA_CAP_USD,
         "n": len(mega),

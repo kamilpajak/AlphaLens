@@ -19,6 +19,7 @@ from scripts.read_bracket_cost import (
     cluster_bootstrap_median_diff,
     decide,
     positive_control,
+    report,
 )
 
 
@@ -238,3 +239,30 @@ class TestPositiveControl(unittest.TestCase):
         self.assertEqual(out["n_comparable"], 0)
         self.assertIsNone(out["classification_agreement"])
         self.assertEqual(out["n_unclassified_here"], 2)
+
+
+class TestReportedNMatchesTheMedian(unittest.TestCase):
+    """Contract §7: every figure is reported with ITS OWN N.
+
+    A count of rows beside a median computed over a subset of them is two
+    different denominators wearing one label.
+    """
+
+    def test_mega_split_n_counts_the_rows_the_median_used(self):
+        frame = pd.DataFrame(
+            {
+                "arm": [ARM_DISCARDED] * 4,
+                "ticker": ["AAA", "BBB", "CCC", "DDD"],
+                "brief_date": ["2026-08-06"] * 4,
+                "terminal": [True] * 4,
+                "market_cap": [60e9, 70e9, 80e9, 1e9],
+                "realized_r": [0.5, None, 1.5, 9.9],
+                "ladder_classification": ["TP_FULL", "NO_FILL", "TP_FULL", "TP_FULL"],
+                "market_excess_return": [None] * 4,
+            }
+        )
+
+        out = report(frame)
+
+        self.assertEqual(out["mega_split"]["n"], 2)
+        self.assertEqual(out["mega_split"]["median_realized_r"], 1.0)
