@@ -6,16 +6,24 @@
 # answer only arrives if the replay keeps advancing them. Left to a human it
 # would silently stop and the October read would never happen.
 #
-# DAILY, not weekly, and the reason is a hard constraint rather than taste:
-# brand-new rows draw from `_FORCED_RESOLVE_BUDGET` (50, hardcoded, NOT tunable
-# by ALPHALENS_FEEDBACK_MAX_FETCHES). The funnel adds ~26 proposals a day, so a
-# daily fire stays inside that budget while a weekly one would need ~180 and
-# fall permanently behind.
+# DAILY, and with MULTIPLE PASSES, because one pass is not enough at the current
+# arrival rate. Brand-new rows draw from `_FORCED_RESOLVE_BUDGET` (50 per run,
+# hardcoded, NOT tunable by ALPHALENS_FEEDBACK_MAX_FETCHES). Measured on the
+# real funnel:
 #
-# A BURST is survivable and self-draining: the 2026-08-18 prompt change produced
-# 75 proposals in a day, which leaves 25 deferred. The next day carries 26 new
-# plus those 25 = 51, so 1 defers; the day after drains it. A burst costs about
-# two days of maturity, never a permanent backlog.
+#   before the 2026-08-18 prompt change   17.2 proposals/day
+#   after it                              51.5 proposals/day, peaking at 68
+#
+# So the post-change rate is ABOVE the per-run budget. A single pass per fire
+# would fall behind every day and accumulate a backlog that never drains —
+# silently, because the job still exits 0 and the staleness alert only sees
+# whether it ran. `--replay` therefore makes up to four passes (~200/day of
+# headroom) and stops early as soon as a pass fetches nothing, so a quiet day
+# costs one cheap screen rather than four.
+#
+# An earlier version of this comment reasoned from ~26/day, which was the
+# 16-day average dominated by the pre-change period — a number that was true of
+# a window that had already closed.
 #
 # Three steps, in order:
 #   --prepare    add funnel rows not yet measured. Rows already written are
@@ -41,18 +49,28 @@ Wants=network-online.target
 Type=oneshot
 WorkingDirectory=%h/AlphaLens
 EnvironmentFile=/etc/alphalens/env
-ExecStart=%h/AlphaLens/.venv/bin/python \
-    apps/alphalens-research/scripts/replay_bracket_arms.py --prepare
-ExecStart=%h/AlphaLens/.venv/bin/python \
-    apps/alphalens-research/scripts/replay_bracket_arms.py --replay
-ExecStart=%h/AlphaLens/.venv/bin/python \
-    apps/alphalens-research/scripts/replay_bracket_arms.py --benchmark
+# All three stages run even if an earlier one fails, and the unit still reports
+# failure if any did. Plain sequential ExecStart= lines would abort the rest on
+# the first failure, so a --prepare that tripped on one new day would also stop
+# --replay from advancing every EXISTING row — the more valuable work, and the
+# one that decides whether the measurement ever matures.
+ExecStart=/bin/sh -c '\
+    PY=%h/AlphaLens/.venv/bin/python; \
+    S=apps/alphalens-research/scripts/replay_bracket_arms.py; \
+    rc=0; \
+    "$PY" "$S" --prepare   || rc=1; \
+    "$PY" "$S" --replay    || rc=1; \
+    "$PY" "$S" --benchmark || rc=1; \
+    exit $rc'
+
 ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics bracket-cost
 StandardOutput=journal
 StandardError=journal
 MemoryMax=2G
 TasksMax=32
-TimeoutStartSec=45min
+# Four replay passes at Polygon's 5 req/min can reach ~40min on a backlog day;
+# the nightly feedback job uses 90min for the same reason.
+TimeoutStartSec=90min
 
 [Install]
 WantedBy=default.target

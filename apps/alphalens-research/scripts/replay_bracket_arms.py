@@ -63,6 +63,16 @@ STORE_DIR = Path.home() / ".alphalens" / "bracket_cost_ladders"
 # bars; the grouped store holds ~487 sessions, comfortably more.
 OHLCV_LOOKBACK_SESSIONS = 400
 
+# Brand-new rows draw from the monitor's `_FORCED_RESOLVE_BUDGET` — 50 per run,
+# hardcoded, NOT tunable by ALPHALENS_FEEDBACK_MAX_FETCHES. Measured on the real
+# funnel: 17.2 proposals/day before the 2026-08-18 prompt change and 51.5/day
+# after it, peaking at 68. One pass per fire would therefore fall behind at the
+# CURRENT rate and accumulate a backlog that never drains — silently, because
+# the job still exits 0. Four passes give ~200/day of headroom and the loop
+# stops early as soon as a pass fetches nothing, so the cost on a quiet day is
+# one cheap screen.
+DEFAULT_REPLAY_PASSES = 4
+
 
 @dataclass(frozen=True)
 class Attrition:
@@ -142,6 +152,19 @@ def synthetic_brief_frame(rows: pd.DataFrame, setups: Mapping[str, Any]) -> pd.D
         if extra in keep.columns:
             cols.append(extra)
     return keep[cols].reset_index(drop=True)
+
+
+def write_brief(frame: pd.DataFrame, path: Path) -> None:
+    """Write a brief parquet atomically.
+
+    An overwrite killed halfway — OOM, the unit timeout, a full disk — leaves a
+    torn parquet, and the next scheduled run cannot read it: ``prepare`` would
+    fail on load and the job would wedge with no brief for that day. Temp file
+    plus rename makes the replacement all-or-nothing.
+    """
+    from alphalens_pipeline.data.parquet_io import write_parquet_atomic
+
+    write_parquet_atomic(frame, path, index=False)
 
 
 def _load_existing_briefs(briefs_dir: Path) -> dict[tuple[dt.date, str], dict[str, Any]]:
@@ -236,6 +259,7 @@ def prepare(
     briefs_dir: Path = BRIEFS_DIR,
     grouped_dir: Path = GROUPED_DIR,
     rebuild: bool = False,
+    built_on: dt.date | None = None,
 ) -> Attrition:
     """Write one synthetic brief parquet per funnel date.
 
@@ -281,12 +305,18 @@ def prepare(
             str(t): setups[(asof, str(t))] for t in day_rows["ticker"] if (asof, str(t)) in setups
         }
         frame = synthetic_brief_frame(day_rows, day_setups)
+        # Provenance, not decoration: a row built later than its day-mates was
+        # derived from a grouped store that may have been retro-adjusted since,
+        # so the read must be able to tell them apart. Impossible to backfill
+        # once the rows exist, which is why it goes in before it is needed.
+        if not frame.empty:
+            frame["built_at"] = (built_on or dt.date.today()).isoformat()
         kept_rows = [existing[(asof, t)] for (a, t) in existing if a == asof]
         if frame.empty and not kept_rows:
             continue
         merged = pd.concat([pd.DataFrame(kept_rows), frame], ignore_index=True)
         merged = merged.drop_duplicates(subset=["ticker"], keep="first")
-        merged.to_parquet(briefs_dir / f"{asof.isoformat()}.parquet")
+        write_brief(merged, briefs_dir / f"{asof.isoformat()}.parquet")
         written += len(frame)
 
     logger.info(
@@ -308,22 +338,39 @@ def prepare(
     )
 
 
-def replay(briefs_dir: Path = BRIEFS_DIR, store_dir: Path = STORE_DIR) -> None:
-    """Run the production monitor over the synthetic briefs, into our own store."""
-    from alphalens_pipeline.feedback.population_ladder_monitor import (
-        replay_population_ladders,
-    )
+def replay(
+    briefs_dir: Path = BRIEFS_DIR,
+    store_dir: Path = STORE_DIR,
+    *,
+    max_passes: int = DEFAULT_REPLAY_PASSES,
+    _replay_fn: Any = None,
+) -> int:
+    """Advance every row, in up to ``max_passes`` passes. Returns passes run.
 
+    One pass resolves at most 50 brand-new rows (see ``DEFAULT_REPLAY_PASSES``),
+    which is below the measured arrival rate, so a single pass per fire would
+    leave a permanent backlog. The loop stops as soon as a pass fetches nothing:
+    on a quiet day that is one cheap grouped screen, not four.
+    """
     if store_dir == Path.home() / ".alphalens" / "population_ladders":
         raise SystemExit("refusing to write the production ladder store")
 
-    reports = replay_population_ladders(
-        briefs_dir,
-        lookback_days=90,
-        store_dir=store_dir,
-    )
-    for rep in reports:
-        logger.info("%s", rep)
+    if _replay_fn is None:
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            replay_population_ladders,
+        )
+
+        _replay_fn = replay_population_ladders
+
+    passes = 0
+    for attempt in range(1, max_passes + 1):
+        reports = _replay_fn(briefs_dir, lookback_days=90, store_dir=store_dir)
+        passes = attempt
+        fetched = sum(int(getattr(r, "fetches", 0) or 0) for r in reports)
+        logger.info("replay pass %d/%d: %d fetches", attempt, max_passes, fetched)
+        if fetched == 0:
+            break
+    return passes
 
 
 def benchmark(store_dir: Path = STORE_DIR) -> int:
@@ -356,6 +403,12 @@ def main() -> None:
     )
     parser.add_argument("--replay", action="store_true", help="run the ladder replay")
     parser.add_argument(
+        "--replay-passes",
+        type=int,
+        default=DEFAULT_REPLAY_PASSES,
+        help="max passes per run; stops early once a pass fetches nothing",
+    )
+    parser.add_argument(
         "--benchmark", action="store_true", help="fill the benchmark-excess columns"
     )
     args = parser.parse_args()
@@ -365,7 +418,7 @@ def main() -> None:
         att = prepare(rebuild=args.rebuild_briefs)
         print(json.dumps(att.as_row(), indent=2))
     if args.replay:
-        replay()
+        replay(max_passes=args.replay_passes)
     if args.benchmark:
         benchmark()
     if not (args.prepare or args.replay or args.benchmark):
