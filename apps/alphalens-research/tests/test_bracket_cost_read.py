@@ -18,6 +18,7 @@ from scripts.read_bracket_cost import (
     VERDICT_NOT_JUSTIFIED,
     cluster_bootstrap_median_diff,
     decide,
+    positive_control,
 )
 
 
@@ -146,3 +147,64 @@ class TestDecide(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPositiveControl(unittest.TestCase):
+    """Contract §10. A synthetic-brief path that diverges from production
+    invalidates the whole run, so the check must be able to FAIL loudly and must
+    not report a comfortable number when there is nothing to compare."""
+
+    def _replayed(self, **over) -> pd.DataFrame:
+        base = {
+            "brief_date": ["2026-08-06", "2026-08-07"],
+            "ticker": ["AAA", "BBB"],
+            "arm": [ARM_KEPT, ARM_KEPT],
+            "ladder_classification": ["SL_HIT", "TP_FULL"],
+        }
+        base.update(over)
+        return pd.DataFrame(base)
+
+    def _production(self, **over) -> pd.DataFrame:
+        base = {
+            "brief_date": ["2026-08-06", "2026-08-07"],
+            "ticker": ["AAA", "BBB"],
+            "ladder_classification": ["SL_HIT", "TP_FULL"],
+        }
+        base.update(over)
+        return pd.DataFrame(base)
+
+    def test_full_agreement_reports_one(self):
+        out = positive_control(self._replayed(), self._production())
+
+        self.assertEqual(out["n_overlap"], 2)
+        self.assertEqual(out["classification_agreement"], 1.0)
+
+    def test_disagreement_is_visible(self):
+        prod = self._production(ladder_classification=["TP_FULL", "TP_FULL"])
+
+        out = positive_control(self._replayed(), prod)
+
+        self.assertEqual(out["classification_agreement"], 0.5)
+
+    def test_no_overlap_reports_none_not_zero(self):
+        """Zero overlap is 'nothing was checked', never 'everything disagreed'."""
+        prod = self._production(ticker=["ZZZ", "YYY"])
+
+        out = positive_control(self._replayed(), prod)
+
+        self.assertEqual(out["n_overlap"], 0)
+        self.assertIsNone(out["classification_agreement"])
+
+    def test_only_the_kept_arm_is_compared(self):
+        """The production store holds no discarded rows; including them would
+        manufacture a disagreement out of rows that cannot exist there."""
+        replayed = self._replayed(
+            brief_date=["2026-08-06", "2026-08-07", "2026-08-06"],
+            ticker=["AAA", "BBB", "NVDA"],
+            arm=[ARM_KEPT, ARM_KEPT, ARM_DISCARDED],
+            ladder_classification=["SL_HIT", "TP_FULL", "TP_FULL"],
+        )
+
+        out = positive_control(replayed, self._production())
+
+        self.assertEqual(out["n_overlap"], 2)

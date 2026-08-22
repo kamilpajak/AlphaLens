@@ -41,6 +41,8 @@ VERDICT_INCONCLUSIVE = "INCONCLUSIVE"
 
 STORE_DIR = Path.home() / ".alphalens" / "bracket_cost_ladders"
 BRIEFS_DIR = Path.home() / ".alphalens" / "bracket_cost" / "briefs"
+# Read-only, for the §10 control. Never written to by this analysis.
+PRODUCTION_STORE_DIR = Path.home() / ".alphalens" / "population_ladders"
 # Contract §7: the "mega vs merely above ten billion" split.
 MEGA_CAP_USD = 50e9
 
@@ -136,6 +138,28 @@ def decide(
     )
 
 
+def positive_control(replayed: pd.DataFrame, production: pd.DataFrame) -> dict:
+    """Contract §10: does the kept arm here agree with the production store?
+
+    Only the KEPT arm can be compared — the production store holds no discarded
+    rows at all, because the bracket filter runs before a card exists. Comparing
+    them would count rows that could never match as disagreements.
+
+    Zero overlap returns ``None``, not ``0.0``. "Nothing was checked" and
+    "everything disagreed" are opposite facts and must not share a number: a
+    control that silently reports total disagreement as its healthy state is
+    worse than no control.
+    """
+    kept = replayed[replayed["arm"] == ARM_KEPT]
+    merged = kept.merge(
+        production, on=["brief_date", "ticker"], how="inner", suffixes=("", "_prod")
+    )
+    if merged.empty:
+        return {"n_overlap": 0, "classification_agreement": None}
+    agree = (merged["ladder_classification"] == merged["ladder_classification_prod"]).mean()
+    return {"n_overlap": len(merged), "classification_agreement": float(agree)}
+
+
 def load_replayed(store_dir: Path = STORE_DIR, briefs_dir: Path = BRIEFS_DIR) -> pd.DataFrame:
     """Ladder rows joined to their arm, which lives on the synthetic brief."""
     ladders = []
@@ -188,6 +212,19 @@ def report(frame: pd.DataFrame) -> dict:
         "n": len(mega),
         "median_realized_r": _median(mega, "realized_r"),
     }
+    out["positive_control"] = positive_control(frame, _load_production())
+    return out
+
+
+def _load_production(store_dir: Path = PRODUCTION_STORE_DIR) -> pd.DataFrame:
+    """Production ladder rows, read-only, for the §10 control."""
+    frames = []
+    for path in sorted(glob.glob(str(store_dir / "*.parquet"))):
+        frames.append(pd.read_parquet(path)[["brief_date", "ticker", "ladder_classification"]])
+    if not frames:
+        return pd.DataFrame(columns=["brief_date", "ticker", "ladder_classification"])
+    out = pd.concat(frames, ignore_index=True)
+    out["brief_date"] = pd.to_datetime(out["brief_date"]).dt.date
     return out
 
 
