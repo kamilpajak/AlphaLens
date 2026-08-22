@@ -626,7 +626,7 @@ def map_themes_cmd(
         help="Recent/baseline ratio for theme to be picked up by Layer 3.",
     ),
     max_themes: int = typer.Option(
-        10,
+        themes_mod.DEFAULT_MAX_THEMES,
         "--max-themes",
         help="Cap on novel themes mapped per run (DeepSeek v4-pro spend control).",
     ),
@@ -695,6 +695,12 @@ def map_themes_cmd(
             selected=list(novel["theme"]),
             out_dir=themes_mod.DEFAULT_THEME_ROLLUP_DIR,
             novelty_config_version=novelty_cfg,
+            # The cut the run really applied. The writer needs both to record the
+            # inclusion propensity of each theme, which is only defined against
+            # the FULL pre-truncation ranking — after head() every survivor sits
+            # at 1.0 and the tie-break randomisation records nothing.
+            threshold=novelty_threshold,
+            max_themes=max_themes,
         )
     except Exception:
         logger.warning(

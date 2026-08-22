@@ -440,6 +440,59 @@ class TestMapThemesCLI(unittest.TestCase):
         self.assertEqual(mapping["beta_theme"][0], 2)
         self.assertTrue(np.isnan(mapping["alpha_theme"][1]))
 
+    def test_map_themes_forwards_the_cut_parameters_to_the_rollup_writer(self):
+        # The inclusion propensity is a function of the threshold and the cut
+        # size, and only the CLI knows both. If it stops forwarding them the
+        # stored propensities silently describe a cut that never happened.
+        novel = pd.DataFrame(
+            [
+                {"theme": "t_a", "novelty_score": 5.0, "count_window": 4},
+                {"theme": "t_b", "novelty_score": 5.0, "count_window": 4},
+            ]
+        )
+        captured = {}
+
+        def _fake_write(asof, rollup, **kwargs):
+            captured.update(kwargs)
+
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.dict(os.environ, self._env(), clear=False),
+            patch("alphalens_cli.commands.thematic.themes_mod.roll_up", return_value=novel.copy()),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.flag_novel", return_value=novel.copy()
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.themes_mod.write_theme_rollup",
+                side_effect=_fake_write,
+            ),
+            patch(
+                "alphalens_cli.commands.thematic.orchestrator.map_themes",
+                return_value=_FAKE_CANDIDATES.copy(),
+            ),
+        ):
+            result = self.runner.invoke(
+                app,
+                [
+                    "thematic",
+                    "map-themes",
+                    "--date",
+                    "2026-05-15",
+                    "--output-dir",
+                    tmpdir,
+                    "--max-themes",
+                    "1",
+                    "--novelty-threshold",
+                    "2.5",
+                ],
+            )
+
+        self.assertEqual(result.exit_code, 0, msg=result.output)
+        self.assertEqual(captured["max_themes"], 1)
+        self.assertEqual(captured["threshold"], 2.5)
+        # Selection still truncates to the cut, and the writer sees the full frame.
+        self.assertEqual(captured["selected"], ["t_a"])
+
     def test_map_themes_no_novel_themes_writes_empty_parquet(self):
         # A genuinely quiet news day yields 0 novel themes — a documented,
         # EXPECTED state. map-themes must still write a typed-empty candidates
