@@ -732,3 +732,77 @@ and revisiting the schema at the next legitimate boundary.
 
 The lexical guard's known residual — a miss is indistinguishable from compliance — is the one
 already documented for the benefit lexicon, and the same suppressed-match telemetry applies.
+
+---
+
+## Amendment 3 — a population change at the theme selector (2026-08-22)
+
+**Status of this amendment:** LOCKED, committed **before** the change it describes deploys.
+Nothing above this line is rewritten. **Cohort 2 continues; the accrual counter does not
+restart.**
+
+### A3.1 What changes
+
+The theme selector's tie-break. The daily pipeline ranks ~11,000 candidate themes and takes
+the top 10 by `novelty_rank`. That score is coarse and count-based, so the cut is frequently a
+tie: on 12 of 17 measured days the boundary was tied, the tied pool had median size 7 (max
+18), and 82 themes were dropped by the tie-break alone. The tie was being resolved
+**alphabetically** — pandas sort stability over the groupby output — verified on 9 of 9 days
+where a fully-tied pool was split.
+
+It becomes a permutation seeded from the `asof` date, and each theme's marginal inclusion
+probability is recorded on the theme rollup. PR #1086.
+
+### A3.2 Why this is NOT an instrument change under A1.3
+
+Four independent reasons, in descending order of how much they settle:
+
+1. **The cohort key does not move.** A1.5 names exactly two freeze inputs,
+   `mapper_config_version` and `channel_config_version`. Both were computed on this branch and
+   on `origin/main` and are **byte-identical**. The selector is fingerprinted by
+   `novelty_config_version`, which A1.5 does not list — the same argument A2.3 made for
+   `brief_support_guard_version`.
+2. **The restart rule does not reach it.** §3 ends the accrual window on "any change to either
+   prompt, to `votes`, or to the status/type vocabulary". A tie-break at theme selection is
+   none of those.
+3. **No §7 HALT condition is touched.** No `channel_*` or `shadow_strict_*` column reaches
+   selection; the never-drops invariant is untouched; the assessor prompt, vote count and
+   vocabularies are unchanged; the pinned provider is unchanged.
+4. **H1 is a within-cohort contrast.** It tests `market_excess_return` conditioned on
+   `channel_grounding_status`. Both legs are drawn from whatever population the selector
+   produces, so a change in that population shifts both legs together rather than one.
+
+### A3.3 What it nevertheless does, stated plainly
+
+It changes **which themes enter the cohort**, and therefore which candidates are assessed. That
+is a population change, and it is recorded here rather than left implicit, because §7.4 sets
+the precedent that a population-level shift is amendment-worthy even when no token moves: it
+requires provider drift to be recorded "and restart accrual if the status mix shifts with it".
+
+The same test applies here. The status mix (§5.4) is readable during accrual, and it is the
+quantity to watch. **Pre-committed now, before the change deploys:** if the support or
+grounding status mix shifts materially after this lands, that is grounds to treat the boundary
+as a cohort break and say so — not grounds to reinterpret the mix afterwards. The direction of
+any observed shift is not predicted here, deliberately.
+
+The expected magnitude is small: the change only reorders themes the score already treats as
+equivalent, and it binds on the ~12-of-17 days where the boundary is tied, affecting the
+marginal slot rather than the top of the ranking.
+
+### A3.4 Why now rather than at the next boundary
+
+A1.3 requires a change made mid-window to argue why it could not have landed in increment 2.
+The honest answer here is that **it is not an instrument change at all**, so A1.3's question is
+addressed to a different class of change. But the substantive reason to do it now is that the
+propensities are only useful going forward: they cannot be reconstructed for days already
+accrued, because a propensity needs the deciding slot's event counts and the events parquet has
+grown since. Every day of delay is a day that can never enter an off-policy evaluation. The
+alphabetical bias it removes is, separately, a defect with no defender.
+
+### A3.5 Transition-day exclusion
+
+`mapper_config_version` does not fingerprint `novelty_config_version`, so on the deploy day an
+`asof` whose candidates are already frozen keeps its old slate while its rollup carries the new
+token. **That date is excluded from any propensity-weighted analysis**, recorded here so the
+exclusion is a rule rather than a later judgement call. It has no effect on H1, which does not
+read propensities.
