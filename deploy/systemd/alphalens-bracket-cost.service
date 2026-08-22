@@ -1,0 +1,76 @@
+# Keeps the market-cap bracket-cost measurement alive (PR #1087).
+#
+# The measurement replays BOTH bracket arms — the `too_big` proposals the filter
+# discards and the `in_bracket` ones it keeps — through the production ladder
+# monitor, into a store of its own. Positions run to ~42 trading sessions, so the
+# answer only arrives if the replay keeps advancing them. Left to a human it
+# would silently stop and the October read would never happen.
+#
+# DAILY, and with MULTIPLE PASSES, because one pass is not enough at the current
+# arrival rate. Brand-new rows draw from `_FORCED_RESOLVE_BUDGET` (50 per run,
+# hardcoded, NOT tunable by ALPHALENS_FEEDBACK_MAX_FETCHES). Measured on the
+# real funnel:
+#
+#   before the 2026-08-18 prompt change   17.2 proposals/day
+#   after it                              51.5 proposals/day, peaking at 68
+#
+# So the post-change rate is ABOVE the per-run budget. A single pass per fire
+# would fall behind every day and accumulate a backlog that never drains —
+# silently, because the job still exits 0 and the staleness alert only sees
+# whether it ran. `--replay` therefore makes up to four passes (~200/day of
+# headroom) and stops early as soon as a pass fetches nothing, so a quiet day
+# costs one cheap screen rather than four.
+#
+# An earlier version of this comment reasoned from ~26/day, which was the
+# 16-day average dominated by the pre-change period — a number that was true of
+# a window that had already closed.
+#
+# Three steps, in order:
+#   --prepare    add funnel rows not yet measured. Rows already written are
+#                FROZEN — per ROW, not per day. Re-deriving a setup weeks later
+#                would move the levels of a ladder already under replay (the
+#                grouped store is split-adjusted and retro-adjusts history);
+#                freezing the whole DAY instead would strand late arrivals,
+#                because the funnel for an asof IS rewritten after that date
+#                (2026-08-18's file was last modified on 2026-08-20).
+#   --replay     advance every row through the production monitor.
+#   --benchmark  fill the benchmark-excess columns, which the monitor writes as
+#                null because the index leg needs its own fetch.
+#
+# 03:30 UTC sits between the form4 incremental (02:30) and the thematic build
+# (04:30), and well clear of the nightly feedback sweep (06:30), so the Polygon
+# quota is never contended.
+[Unit]
+Description=AlphaLens market-cap bracket-cost replay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+EnvironmentFile=/etc/alphalens/env
+# All three stages run even if an earlier one fails, and the unit still reports
+# failure if any did. Plain sequential ExecStart= lines would abort the rest on
+# the first failure, so a --prepare that tripped on one new day would also stop
+# --replay from advancing every EXISTING row — the more valuable work, and the
+# one that decides whether the measurement ever matures.
+ExecStart=/bin/sh -c '\
+    PY=%h/AlphaLens/.venv/bin/python; \
+    S=apps/alphalens-research/scripts/replay_bracket_arms.py; \
+    rc=0; \
+    "$PY" "$S" --prepare   || rc=1; \
+    "$PY" "$S" --replay    || rc=1; \
+    "$PY" "$S" --benchmark || rc=1; \
+    exit $rc'
+
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics bracket-cost
+StandardOutput=journal
+StandardError=journal
+MemoryMax=2G
+TasksMax=32
+# Four replay passes at Polygon's 5 req/min can reach ~40min on a backlog day;
+# the nightly feedback job uses 90min for the same reason.
+TimeoutStartSec=90min
+
+[Install]
+WantedBy=default.target

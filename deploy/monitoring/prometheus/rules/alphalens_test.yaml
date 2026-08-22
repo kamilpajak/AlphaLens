@@ -146,3 +146,39 @@ tests:
       - eval_time: 12h
         alertname: AlphalensThematicThemeRollupOutcomeUnknown
         exp_alerts: []
+
+  # Bracket-cost staleness. Two cases that must not share an answer: the job ran
+  # and then stopped (Stale), and the job never ran at all (MetricMissing). A
+  # single rule cannot express both — absent() fires with the literal value 1,
+  # so the shared humanizeDuration annotation would report "1 second ago" for a
+  # metric that does not exist.
+  - interval: 1h
+    input_series:
+      # Success stamped once at t=0, then the series holds that timestamp
+      # while wall-clock advances — the shape of a job that stopped running.
+      - series: 'alphalens_job_last_success_timestamp_seconds{job="bracket-cost"}'
+        values: '0x71'
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: AlphalensJobStale
+        exp_alerts: []
+      - eval_time: 60h
+        alertname: AlphalensJobStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: bracket-cost
+              job: bracket-cost
+            exp_annotations:
+              summary: "bracket-cost stale > 48h (expected daily cadence)"
+              description: "Last successful run was 2d 12h 0m 0s ago. The bracket-cost replay has stopped advancing its ladders, so the measurement of what the market-cap filter discards is frozen and its maturity date slips by one day per day of outage."
+
+  # NOT tested here: "MetricMissing fires when the series is absent". Every job
+  # shares the alertname AlphalensJobMetricMissing and is distinguished only by
+  # its `unit` label, so a fixture with one job's series present makes every
+  # OTHER job's rule fire. Asserting that would mean enumerating every unit in
+  # the repo and re-editing this file whenever one is added — a test that breaks
+  # for reasons unrelated to what it claims to check. The case above pins the
+  # half that is specific and stable: the rule stays SILENT while the series
+  # exists, which is what separates "stopped" from "never started".
