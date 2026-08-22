@@ -17,8 +17,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from scripts import read_bracket_cost as R
-from scripts import replay_bracket_arms as B
+from scripts import read_bracket_cost as read_cost
+from scripts import replay_bracket_arms as replay_arms
 
 _PRODUCTION_LADDERS = Path.home() / ".alphalens" / "population_ladders"
 
@@ -50,7 +50,7 @@ class TestLoadFunnel(unittest.TestCase):
                 d / "2026-08-07.parquet"
             )
 
-            out = B.load_funnel(d)
+            out = replay_arms.load_funnel(d)
 
             self.assertEqual(len(out), 2)
             self.assertEqual(sorted(out["asof"]), [dt.date(2026, 8, 6), dt.date(2026, 8, 7)])
@@ -58,7 +58,7 @@ class TestLoadFunnel(unittest.TestCase):
     def test_empty_directory_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(SystemExit):
-                B.load_funnel(Path(tmp))
+                replay_arms.load_funnel(Path(tmp))
 
 
 class TestLoadGroupedOhlcv(unittest.TestCase):
@@ -83,7 +83,7 @@ class TestLoadGroupedOhlcv(unittest.TestCase):
             d = Path(tmp)
             self._write_grouped(d)
 
-            out = B.load_grouped_ohlcv({"aaa", "BBB"}, grouped_dir=d)
+            out = replay_arms.load_grouped_ohlcv({"aaa", "BBB"}, grouped_dir=d)
 
             self.assertEqual(sorted(out), ["AAA", "BBB"])
             self.assertEqual(list(out["AAA"].columns), ["open", "high", "low", "close", "volume"])
@@ -92,7 +92,7 @@ class TestLoadGroupedOhlcv(unittest.TestCase):
 
     def test_missing_directory_returns_empty(self):
         with tempfile.TemporaryDirectory() as tmp:
-            out = B.load_grouped_ohlcv({"AAA"}, grouped_dir=Path(tmp) / "absent")
+            out = replay_arms.load_grouped_ohlcv({"AAA"}, grouped_dir=Path(tmp) / "absent")
 
             self.assertEqual(out, {})
 
@@ -103,7 +103,7 @@ class TestBuildSetups(unittest.TestCase):
         asof = frame.index[200].date()
         rows = pd.DataFrame({"ticker": ["AAA"], "asof": [asof]})
 
-        setups, no_structure = B.build_setups(rows, {"AAA": frame})
+        setups, no_structure = replay_arms.build_setups(rows, {"AAA": frame})
 
         self.assertIn((asof, "AAA"), setups)
         self.assertEqual(no_structure, 0)
@@ -115,7 +115,7 @@ class TestBuildSetups(unittest.TestCase):
     def test_ticker_without_bars_is_skipped_not_counted_as_no_structure(self):
         rows = pd.DataFrame({"ticker": ["MISSING"], "asof": [dt.date(2026, 8, 6)]})
 
-        setups, no_structure = B.build_setups(rows, {})
+        setups, no_structure = replay_arms.build_setups(rows, {})
 
         self.assertEqual(setups, {})
         self.assertEqual(no_structure, 0)
@@ -124,7 +124,7 @@ class TestBuildSetups(unittest.TestCase):
         short = _bars(bars=3)
         rows = pd.DataFrame({"ticker": ["AAA"], "asof": [short.index[-1].date()]})
 
-        setups, no_structure = B.build_setups(rows, {"AAA": short})
+        setups, no_structure = replay_arms.build_setups(rows, {"AAA": short})
 
         self.assertEqual(setups, {})
         self.assertEqual(no_structure, 1)
@@ -161,12 +161,12 @@ class TestPrepare(unittest.TestCase):
                     }
                 ).to_parquet(grouped / f"{ts.date().isoformat()}.parquet")
 
-            original = B.GROUPED_DIR
-            B.GROUPED_DIR = grouped
+            original = replay_arms.GROUPED_DIR
+            replay_arms.GROUPED_DIR = grouped
             try:
-                att = B.prepare(funnel_dir=funnel, briefs_dir=briefs)
+                att = replay_arms.prepare(funnel_dir=funnel, briefs_dir=briefs)
             finally:
-                B.GROUPED_DIR = original
+                replay_arms.GROUPED_DIR = original
 
             self.assertTrue(att.balanced())
             self.assertEqual(att.in_scope, 2)
@@ -182,11 +182,11 @@ class TestProductionStoreGuards(unittest.TestCase):
 
     def test_replay_refuses_the_production_store(self):
         with self.assertRaises(SystemExit):
-            B.replay(briefs_dir=Path("/nonexistent"), store_dir=_PRODUCTION_LADDERS)
+            replay_arms.replay(briefs_dir=Path("/nonexistent"), store_dir=_PRODUCTION_LADDERS)
 
     def test_benchmark_refuses_the_production_store(self):
         with self.assertRaises(SystemExit):
-            B.benchmark(store_dir=_PRODUCTION_LADDERS)
+            replay_arms.benchmark(store_dir=_PRODUCTION_LADDERS)
 
 
 class TestReadLoaders(unittest.TestCase):
@@ -206,29 +206,34 @@ class TestReadLoaders(unittest.TestCase):
                 }
             ).to_parquet(store / "2026-08-06.parquet")
             pd.DataFrame(
-                {"ticker": ["AAA"], "arm": [R.ARM_DISCARDED], "market_cap": [50e9], "theme": ["t1"]}
+                {
+                    "ticker": ["AAA"],
+                    "arm": [read_cost.ARM_DISCARDED],
+                    "market_cap": [50e9],
+                    "theme": ["t1"],
+                }
             ).to_parquet(briefs / "2026-08-06.parquet")
 
-            out = R.load_replayed(store, briefs)
+            out = read_cost.load_replayed(store, briefs)
 
-            self.assertEqual(out["arm"].iloc[0], R.ARM_DISCARDED)
+            self.assertEqual(out["arm"].iloc[0], read_cost.ARM_DISCARDED)
             self.assertEqual(out["market_cap"].iloc[0], 50e9)
 
     def test_load_replayed_without_a_store_fails_loudly(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(SystemExit):
-                R.load_replayed(Path(tmp), Path(tmp))
+                read_cost.load_replayed(Path(tmp), Path(tmp))
 
     def test_load_funnel_absent_returns_an_empty_frame_not_a_crash(self):
         with tempfile.TemporaryDirectory() as tmp:
-            out = R._load_funnel(Path(tmp))
+            out = read_cost._load_funnel(Path(tmp))
 
             self.assertTrue(out.empty)
-            self.assertEqual(R.excluded_verdict_counts(out), {"too_small": 0, "no_mcap": 0})
+            self.assertEqual(read_cost.excluded_verdict_counts(out), {"too_small": 0, "no_mcap": 0})
 
     def test_load_production_absent_returns_an_empty_frame(self):
         with tempfile.TemporaryDirectory() as tmp:
-            out = R._load_production(Path(tmp))
+            out = read_cost._load_production(Path(tmp))
 
             self.assertTrue(out.empty)
             self.assertIn("ladder_classification", out.columns)
@@ -238,7 +243,7 @@ class TestReportShape(unittest.TestCase):
     def test_report_covers_every_contract_block(self):
         frame = pd.DataFrame(
             {
-                "arm": [R.ARM_DISCARDED, R.ARM_KEPT],
+                "arm": [read_cost.ARM_DISCARDED, read_cost.ARM_KEPT],
                 "ticker": ["AAA", "BBB"],
                 "theme": ["t1", "t1"],
                 "brief_date": [dt.date(2026, 8, 6)] * 2,
@@ -250,7 +255,7 @@ class TestReportShape(unittest.TestCase):
             }
         )
 
-        out = R.report(frame)
+        out = read_cost.report(frame)
 
         for block in (
             "primary",
