@@ -39,6 +39,17 @@ lint-rules:
         -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" \
         prom/prometheus:v3.3.1 check rules /r/alphalens.yaml
 
+# EVALUATE the Prometheus rules against a series fixture. `check rules` only
+# parses PromQL: a rule whose operands are swapped, whose range selector is
+# missing, or whose vector matching never matches is syntactically perfect and
+# ships green — and the alerting that would report the mistake is what just
+# broke. This asserts which alerts actually fire. Same pinned image as
+# lint-rules; `-w /r` because rule_files: in the fixture is relative.
+test-rules:
+    docker run --rm --entrypoint promtool \
+        -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" -w /r \
+        prom/prometheus:v3.3.1 test rules /r/alphalens_test.yaml
+
 # Format Python (all members)
 fmt:
     uv run ruff format apps/alphalens-pipeline apps/alphalens-research apps/alphalens-django

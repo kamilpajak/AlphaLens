@@ -370,6 +370,20 @@ jobs:
             -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" \
             prom/prometheus:v3.3.1 check rules /r/alphalens.yaml
 
+      # `check rules` above only PARSES the PromQL. A rule with swapped
+      # operands, a missing range selector, or vector matching that never
+      # matches parses cleanly and ships green — and the alerting that would
+      # report it is the thing that just broke. This step EVALUATES the rules
+      # against a series fixture and asserts which alerts fire. Mutation-tested
+      # when it was added: swapping the operands, dropping the range selector
+      # and removing `ignoring(outcome)` each turn it red.
+      - name: promtool test rules
+        run: |
+          docker run --rm \
+            --entrypoint promtool \
+            -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" -w /r \
+            prom/prometheus:v3.3.1 test rules /r/alphalens_test.yaml
+
   sonar:
     name: sonarcloud
     needs: [research, django, web]
