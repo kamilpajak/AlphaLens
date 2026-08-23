@@ -122,6 +122,19 @@ Closed paradigms used to ship CLI replay tooling; that surface was removed per [
 
 ## Workflow conventions
 
+**Issue tracking + board (Projects v2)** — every task is a GitHub ISSUE; the board (`github.com/users/kamilpajak/projects/1`, linked to this repo) is a VIEW layer over issues, never a second registry. Issues stay canonical: the wake timer reads the issue BODY, not board fields, so deleting the board breaks nothing.
+
+- **Creating a task:** `gh issue create --repo kamilpajak/AlphaLens ...`, then add it to the board — new issues are NOT auto-added: `gh project item-add 1 --owner kamilpajak --url <issue-url>`. Set the board Status to mirror the label (below); Status options: Todo / In progress / Waiting: decision / Waiting: data / Blocked / Done.
+- **State labels** (default = NO label = actionable now; over-labelling trains the reader to ignore labels):
+  - `waiting:decision` — blocked on a judgement call by the owner. The issue MUST NAME the decision (options + costs), or the label is noise — enforced socially since the 2026-08-23 triage refuted 5 of 12 waiting labels, one of them exactly for not naming any decision.
+  - `waiting:data` — paused until a date or a data/sample threshold. May carry a wake line (below). If no date exists, state the unblocking CONDITION in the body instead.
+  - `blocked` — blocked on something external (vendor, upstream, another person).
+- **Wake line:** a `waiting:data` issue that should resurface on a date carries `Wake: YYYY-MM-DD` on its own line in the body. The `alphalens-issue-wake` timer (daily 07:30 CEST on the VPS, PR #1092) removes the label when the date arrives and sends one Telegram message. Rules: the date must be STATED by the issue's facts or derivable from them by plain arithmetic — NEVER estimated ("seems reasonable" dates fire notifications that teach the owner to ignore notifications); one Wake line per issue (the FIRST wins); a Wake line inside a code block is reported as malformed, never honoured. Mirror the date into the board's `Wake` field for the Schedule view.
+- **Closing:** PRs carry `Closes #N`; closing flips the board card to Done automatically. Closing as obsolete uses `--reason "not planned"` + a comment naming the ADR/decision that obsoleted it (pattern: #422 under ADR 0012).
+- **No epics for one-PR scope.** An epic is for genuinely multi-PR work with sub-issues; a deferred follow-up carved out of a review gets its own small issue with a `Wake:` line, not a bullet in a comment.
+- **Board API gotchas:** the built-in `Auto-add sub-issues` workflow drags CLOSED sub-issues onto the board with no Status (cannot be disabled via API — remove them by hand); Projects GraphQL aggregates LAG your own writes (verify counts after settling, never mid-burst); views cannot be created via API.
+
+
 **TDD always** — production code is always red→green→refactor, even 2-line fixes. Write test first.
 
 **Quality over speed** — never downgrade models / data sources to avoid rate limits. Wait, cache, throttle — don't lower precision.
