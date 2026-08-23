@@ -226,3 +226,41 @@ make the arms less comparable — which is the one property this design has.
 beside the theme-day count for each arm, and the mean number of days each theme
 appears. A theme-day total that comes from twelve themes is a different sample
 from one that comes from forty, and the reader must be able to see which.
+
+---
+
+## Amendment 2 — where the rank actually comes from, and a claim I got wrong
+
+Written 2026-08-23, before any comparison between the arms exists.
+
+**A commit message of mine was false.** `758f237a` says the shadow call was
+omitting `theme_novelty` and that adding it fixes the missing rank. Checked
+against the stores: `map_themes` stamps `novelty_rank` / `novelty_score` onto
+the post-bracket CANDIDATE parquet, never onto the funnel. The production funnel
+carries no novelty column either:
+
+```
+production funnel cols: asof, theme, ticker, company_name, llm_confidence,
+  channel_*, shadow_strict_verdict, channel_config_version, market_cap,
+  bracket_verdict, catalyst_url, catalyst_event_type, mapper_config_version
+production candidates:  ... novelty_rank, novelty_score, novelty_config_version
+```
+
+So the arms were symmetric on this all along and the omission never made them
+differ. Mirroring the call parameters remains correct — two calls that differ in
+any argument are two different treatments — but not for the reason the commit
+gave.
+
+**Where the rank comes from.** `~/.alphalens/theme_rollup/<date>.parquet`
+(PR #1086) carries `novelty_rank`, `novelty_score`, `selected` and
+`selection_propensity` for EVERY theme in the window: 10801 rows on 2026-08-20,
+18 days on disk. Both arms join their rank from there at read time.
+
+This is better than stamping one arm at collection: a rank stamped on arm U by
+this collector and a rank joined for arm S from elsewhere would be two
+provenances for one covariate, and any drift between them would look like a
+theme effect.
+
+**Obligation.** Every read joins rank from the rollup store for BOTH arms, and
+states the join's coverage — the rollup begins 2026-08-05, so an earlier day
+would have no rank for either arm rather than for one.
