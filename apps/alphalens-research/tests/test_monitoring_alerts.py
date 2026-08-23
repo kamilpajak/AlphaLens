@@ -1332,6 +1332,46 @@ class TestFeedbackGuardSustainedLookupFailures(unittest.TestCase):
         self.assertIn('"alphalens_feedback_",', source)
 
 
+class TestFeedbackGuardGaugeMissing(unittest.TestCase):
+    """Pins for the guard gauge's absence companion.
+
+    A missing series (broken emit / dark scrape) silently DISARMS
+    AlphalensFeedbackGuardLookupFailed while the nightly job still exits 0 —
+    so absence needs its own page, same discipline as the
+    AlphalensJobMetricMissing family.
+    """
+
+    ALERT = "AlphalensFeedbackGuardGaugeMissing"
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_expr_is_absent_on_the_lookup_failed_series(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn("absent(", expr)
+        self.assertIn('alphalens_feedback_guard_total{disposition="lookup_failed"}', expr)
+
+    def test_has_for_debounce_and_routes_warning_telegram(self) -> None:
+        rule = self._one()
+        self.assertIn("for", rule)
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertEqual(rule.get("labels", {}).get("unit"), "feedback-shadow-returns")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+    def test_annotation_notes_manual_live_rules_deploy(self) -> None:
+        description = self._one().get("annotations", {}).get("description", "")
+        self.assertIn("manually", description)
+
+
 class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):
     """Regression pin: the #384 alerts stay isolated from the cron-keyed
     AlphalensJobStale / AlphalensJobMetricMissing machinery — same contract the

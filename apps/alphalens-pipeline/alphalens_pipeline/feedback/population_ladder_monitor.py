@@ -1231,6 +1231,7 @@ def replay_population_ladders(
     guard = _build_guard(
         store,
         exchange,
+        grouped_fetch=grouped,
         actions_lookup=actions_lookup,
         adjusted_closes_fetch=adjusted_closes_fetch,
     )
@@ -1307,6 +1308,7 @@ def _build_guard(
     store_dir: Path,
     exchange: str,
     *,
+    grouped_fetch: GroupedFetch,
     actions_lookup: Any | None,
     adjusted_closes_fetch: AdjustedClosesFetch | None,
 ) -> _ImplausibleGuard:
@@ -1322,7 +1324,7 @@ def _build_guard(
         actions_lookup = CachedCorporateActionsLookup(
             PolygonCorporateActionsLookup(
                 pre_ex_close=lambda ticker, ex_date: _grouped_pre_ex_close(
-                    store_dir, ticker, ex_date, exchange
+                    store_dir, ticker, ex_date, exchange, grouped_fetch
                 )
             ),
             store_dir / "corporate_actions_cache.json",
@@ -1334,18 +1336,27 @@ def _build_guard(
 
 
 def _grouped_pre_ex_close(
-    store_dir: Path, ticker: str, ex_date: dt.date, exchange: str
+    store_dir: Path, ticker: str, ex_date: dt.date, exchange: str, grouped_fetch: GroupedFetch
 ) -> float | None:
     """Raw close of the session before ``ex_date`` from the grouped-daily store.
 
-    ``None`` when the session is not cached or the ticker did not trade — the
-    lookup then fails closed (carry + lookup_failed) rather than guessing the
-    dividend-materiality denominator.
+    SELF-HEALING on a cache miss: the pre-ex session is typically outside the
+    prefetch set (a brand-new row prefetches nothing), so a give-up-on-miss
+    denominator would loop a REAL special-dividend row as ``lookup_failed``
+    forever — the eternal carry #1090 removes. One on-demand grouped fetch,
+    cached, only when a concrete dividend record needs assessing. ``None``
+    when the fetch fails or the ticker did not trade — the lookup then fails
+    closed (carry + lookup_failed) rather than guessing the materiality
+    denominator.
     """
     from alphalens_pipeline.paper.calendar import previous_trading_day
 
     prev_session = previous_trading_day(ex_date, exchange)
     grouped = _read_grouped_cache(store_dir, prev_session)
+    if grouped is None:
+        grouped = _prefetch_grouped_daily(store_dir, [prev_session], grouped_fetch, exchange)[
+            prev_session
+        ]
     if grouped is None:
         return None
     bar = grouped.get(ticker.upper())

@@ -202,7 +202,9 @@ class YFinanceClient:
             return None
         if raw.empty or "Close" not in raw.columns:
             return pd.Series(dtype=float)
-        series = raw["Close"].astype(float).copy()
+        # errors="coerce": a malformed vendor payload (string Close values)
+        # must degrade to dropped points, not break the never-raises contract.
+        series = pd.to_numeric(raw["Close"], errors="coerce").astype(float)
         if isinstance(series.index, pd.DatetimeIndex) and series.index.tz is not None:
             series.index = series.index.tz_localize(None)
         return series[np.isfinite(series)]

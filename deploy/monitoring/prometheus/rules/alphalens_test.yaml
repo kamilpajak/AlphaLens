@@ -249,3 +249,37 @@ tests:
       - eval_time: 52h
         alertname: AlphalensFeedbackGuardLookupFailed
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensFeedbackGuardGaugeMissing
+  # ---------------------------------------------------------------------
+  #
+  # absent() companion: the lookup_failed series missing (broken emit / dark
+  # scrape) silently disarms AlphalensFeedbackGuardLookupFailed. A sibling
+  # disposition series being present does NOT satisfy the matcher.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_feedback_guard_total{disposition="extreme_validated"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: AlphalensFeedbackGuardGaugeMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: feedback-shadow-returns
+              disposition: lookup_failed
+            exp_annotations:
+              summary: "implausible-move guard disposition gauge missing"
+              description: "No alphalens_feedback_guard_total series is being scraped: either the guard-metric emit has not succeeded since deploy, or the textfile collector / node_exporter scrape is broken — AlphalensFeedbackGuardLookupFailed is disarmed while this fires. Clears after the first successful nightly emit. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+
+  # Healthy night: the series exists (value 0 is a PRESENT series) -> quiet.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_feedback_guard_total{disposition="lookup_failed"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: AlphalensFeedbackGuardGaugeMissing
+        exp_alerts: []

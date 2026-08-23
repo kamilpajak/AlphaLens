@@ -809,6 +809,22 @@ class TestAdjustedDailyCloses(unittest.TestCase):
         self.assertEqual(len(series), 1)
         self.assertEqual(float(series.iloc[0]), 10.5)
 
+    def test_non_numeric_close_column_never_raises(self):
+        # "Never raises" is the tri-state contract: a malformed vendor payload
+        # with a string Close column must coerce, not blow up post-retry.
+        frame = pd.DataFrame(
+            {"Close": ["n/a", "82.8"]},
+            index=pd.DatetimeIndex(["2026-07-22", "2026-07-23"], tz="America/New_York"),
+        )
+        fake = MagicMock()
+        fake.history.return_value = frame
+        with patch("yfinance.Ticker", return_value=fake):
+            series = _client().adjusted_daily_closes(
+                "QUBT", start=dt.date(2026, 7, 1), end=dt.date(2026, 8, 1)
+            )
+        self.assertIsNotNone(series)
+        self.assertEqual(list(series), [82.8])
+
 
 if __name__ == "__main__":
     unittest.main()

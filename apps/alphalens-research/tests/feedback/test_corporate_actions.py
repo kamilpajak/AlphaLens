@@ -212,6 +212,13 @@ class TestAdjustedWindowReturn(unittest.TestCase):
         value = adjusted_window_return(closes, _MRNA_ARRIVAL, _MRNA_HORIZON)
         self.assertAlmostEqual(value, 145.13 / 59.17 - 1.0)
 
+    def test_unsorted_series_is_sorted_before_taking_endpoints(self):
+        # yfinance returns a sorted index, but the contract must not depend on
+        # it: endpoints are by DATE, not by supplied order.
+        shuffled = _closes({"2026-08-21": 145.13, "2026-08-07": 59.17})
+        value = adjusted_window_return(shuffled, _MRNA_ARRIVAL, _MRNA_HORIZON)
+        self.assertAlmostEqual(value, 145.13 / 59.17 - 1.0)
+
 
 class TestResolveGuardDisposition(unittest.TestCase):
     def _resolve(self, *, forward_return, lookup, closes, arrival=None, horizon=None):
@@ -338,6 +345,22 @@ class TestCachedCorporateActionsLookup(unittest.TestCase):
         second = cached.lookup("MRNA", _MRNA_ARRIVAL, _MRNA_HORIZON)
         self.assertEqual(len(inner.calls), 1)
         self.assertEqual(first.found, second.found)
+
+    def test_semantically_corrupt_found_flag_is_a_miss_not_a_found(self):
+        # bool("false") is True — a valid-JSON but semantically corrupt entry
+        # must never be trusted as an immutable FOUND answer (that would
+        # quarantine the row forever); it is a miss and re-queries.
+        key = f"MRNA:{_MRNA_ARRIVAL.isoformat()}:{_MRNA_HORIZON.isoformat()}"
+        self.cache_path.write_text(
+            json.dumps(
+                {key: {"found": "false", "detail": None, "checked_at": "2026-08-20T00:00:00+00:00"}}
+            )
+        )
+        inner = _StubLookup(CorporateActionsAnswer(found=False))
+        now = dt.datetime(2026, 8, 23, 6, 30, tzinfo=dt.UTC)
+        answer = self._cached(inner, now=now).lookup("MRNA", _MRNA_ARRIVAL, _MRNA_HORIZON)
+        self.assertFalse(answer.found)
+        self.assertEqual(len(inner.calls), 1)
 
     def test_found_answer_is_cached_forever(self):
         inner = _StubLookup(CorporateActionsAnswer(found=True, detail="split 4:1"))

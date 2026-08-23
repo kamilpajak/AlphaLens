@@ -1006,6 +1006,23 @@ groups:
           summary: "Implausible-move guard corporate-actions lookups failing on consecutive runs"
           description: "alphalens_feedback_guard_total{disposition=\"lookup_failed\"} stayed > 0 across the last two nightly feedback-shadow-returns runs — the guard is carrying >60% movers unresolved instead of classifying them (the fail-closed arm has reverted to the pre-#1090 blindness). Check `journalctl --user -u alphalens-feedback-shadow-returns.service` for the Polygon reference-endpoint errors. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
 
+      # Companion absence guard for the rule above: the guard gauge is
+      # (re)written by every successful nightly run, so a missing series means
+      # the emit path broke or the textfile scrape is dark — states in which
+      # AlphalensFeedbackGuardLookupFailed is silently DISARMED while the job
+      # itself still exits 0 (AlphalensJobStale stays quiet). Same discipline
+      # as the AlphalensJobMetricMissing family.
+      - alert: AlphalensFeedbackGuardGaugeMissing
+        expr: absent(alphalens_feedback_guard_total{disposition="lookup_failed"})
+        for: 1h
+        labels:
+          severity: warning
+          route: telegram
+          unit: feedback-shadow-returns
+        annotations:
+          summary: "implausible-move guard disposition gauge missing"
+          description: "No alphalens_feedback_guard_total series is being scraped: either the guard-metric emit has not succeeded since deploy, or the textfile collector / node_exporter scrape is broken — AlphalensFeedbackGuardLookupFailed is disarmed while this fires. Clears after the first successful nightly emit. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+
       # broker-manager is a Type=simple daemon: ExecStopPost fires only on
       # crash/restart, so health = the per-tick heartbeat gauge the control loop
       # writes each ~45s tick. 300s = 5min ~ 6-7 missed ticks.

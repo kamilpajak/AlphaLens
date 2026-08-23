@@ -3798,5 +3798,47 @@ class TestGuardMetricsEmissionFromFixtureRun(_MonitorTestBase):
             self.assertEqual(metrics[f'alphalens_feedback_guard_total{{disposition="{label}"}}'], 0)
 
 
+class TestGroupedPreExCloseSelfHeals(unittest.TestCase):
+    """The dividend-materiality denominator must SELF-HEAL on a cache miss.
+
+    A brand-new row's pre-ex session is typically never in the grouped
+    prefetch set, so a give-up-on-miss denominator would loop a REAL
+    special-dividend row as ``lookup_failed`` forever — exactly the eternal
+    carry #1090 exists to remove. A failed fetch still fails closed.
+    """
+
+    _EX = dt.date(2026, 7, 10)  # Friday; previous session Thu 2026-07-09
+    _PREV = dt.date(2026, 7, 9)
+
+    def test_cache_miss_fetches_caches_and_returns_the_close(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _grouped_pre_ex_close
+
+        calls: list[dt.date] = []
+
+        def grouped_fetch(session):
+            calls.append(session)
+            return {"XYZ": {"c": 50.0, "h": 51.0, "l": 49.0}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            close = _grouped_pre_ex_close(store, "XYZ", self._EX, _XNYS, grouped_fetch)
+            self.assertEqual(close, 50.0)
+            self.assertEqual(calls, [self._PREV])
+            # The fetched session is cached: a second assessment is disk-only.
+            again = _grouped_pre_ex_close(store, "XYZ", self._EX, _XNYS, grouped_fetch)
+            self.assertEqual(again, 50.0)
+            self.assertEqual(calls, [self._PREV])
+
+    def test_fetch_failure_still_fails_closed(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _grouped_pre_ex_close
+
+        def broken_fetch(session):
+            raise RuntimeError("polygon down")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            close = _grouped_pre_ex_close(Path(tmp), "XYZ", self._EX, _XNYS, broken_fetch)
+        self.assertIsNone(close)
+
+
 if __name__ == "__main__":
     unittest.main()

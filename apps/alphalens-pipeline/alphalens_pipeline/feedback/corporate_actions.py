@@ -243,9 +243,13 @@ class CachedCorporateActionsLookup:
 
     def _answer_from_entry(self, entry: dict | None) -> CorporateActionsAnswer | None:
         """A still-valid cached answer, or None (miss / expired / malformed)."""
-        if not isinstance(entry, dict) or "found" not in entry:
+        if not isinstance(entry, dict):
             return None
-        found = bool(entry["found"])
+        found = entry.get("found")
+        if not isinstance(found, bool):
+            # A semantically corrupt flag (e.g. the string "false", which is
+            # truthy) must never be trusted as an immutable FOUND — miss.
+            return None
         if found:  # immutable once executed — never expires
             return CorporateActionsAnswer(found=True, detail=entry.get("detail"))
         checked_at = _parse_iso_datetime(entry.get("checked_at"))
@@ -285,6 +289,7 @@ def adjusted_window_return(closes: pd.Series | None, start: dt.date, end: dt.dat
     if closes is None or len(closes) == 0:
         return None
     try:
+        closes = closes.sort_index()  # endpoints are by DATE, not supplied order
         dates = pd.to_datetime(closes.index)
     except (TypeError, ValueError):
         return None
