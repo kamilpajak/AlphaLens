@@ -1,6 +1,6 @@
 # Design — teach the implausible-move guard to ask, not guess
 
-Status: DRAFT (awaiting owner decision — see §7)
+Status: ACCEPTED 2026-08-23 (owner approved the §7 decision: lookup + cross-check, `SPLIT_INVALIDATED` terminal, parked rows resolve)
 Date: 2026-08-23
 Issue: #1090
 Related: `docs/research/mcap_bracket_cost_contract_2026_08_22.md` (the measurement
