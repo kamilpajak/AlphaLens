@@ -1,0 +1,55 @@
+# Wakes the GitHub issues whose `Wake: YYYY-MM-DD` date has arrived.
+#
+# An issue parked on external data ("re-measure the ML floor once 25 clusters
+# mature", "first options-vs-EDGE look at N>=30") carries the `waiting:data`
+# label plus one `Wake:` line in its body. This unit drops the label from every
+# labelled issue whose wake date is today or earlier and sends ONE Telegram
+# message listing them. Nothing due means nothing sent.
+#
+# The whole job exists because a date written into an issue body is a reminder
+# nobody receives. Left to a human, the wake arrives when someone happens to
+# re-read the issue — which for a parked issue is precisely never.
+#
+# SILENCE MEANS "NOTHING WAS DUE". That contract is what the ExecStopPost hook
+# below is protecting: a dead timer produces exactly the same Telegram traffic
+# as a quiet day (none), so the ONLY thing that can tell them apart is the
+# last-success clock and its AlphalensJobStale/MetricMissing pair. The failure
+# is also cumulative — every issue whose date passes during an outage sleeps
+# through its wake and stays parked behind the ones before it.
+#
+# Exit codes carry meaning, so the unit must NOT be made failure-tolerant:
+#   0  ran; whatever was due was announced and unlabelled (usually nothing)
+#   1  something needs a human — the Telegram send failed (labels deliberately
+#      left ON so the next run repeats the whole set), or a label removal
+#      failed. Non-zero also holds the last_success clock still, which is what
+#      eventually pages.
+#
+# Environment (all three already in /etc/alphalens/env): GH_TOKEN for the `gh`
+# CLI, TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID for the message. EnvironmentFile
+# carries no `-`, so a missing env file fails the unit loudly rather than
+# running it half-configured.
+#
+# Requires `gh` on PATH — the same CLI the literature-scan publish wrapper
+# already depends on.
+[Unit]
+Description=AlphaLens waiting:data wake-date notifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+EnvironmentFile=/etc/alphalens/env
+ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/wake_due_issues.py
+
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics issue-wake
+StandardOutput=journal
+StandardError=journal
+MemoryMax=256M
+TasksMax=32
+# Two `gh` calls plus one per due issue, each capped at 60s inside the script.
+# 10min is far above any realistic run and still bounds a hung CLI.
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=default.target
