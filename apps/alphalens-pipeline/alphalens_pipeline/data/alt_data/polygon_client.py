@@ -36,6 +36,8 @@ _NEWS_PATH = "/v2/reference/news"
 _SHORT_INTEREST_PATH = "/stocks/v1/short-interest"
 _OPTIONS_CONTRACTS_PATH = "/v3/reference/options/contracts"
 _GROUPED_DAILY_PATH = "/v2/aggs/grouped/locale/us/market/stocks"
+_SPLITS_PATH = "/v3/reference/splits"
+_DIVIDENDS_PATH = "/v3/reference/dividends"
 
 # Fields kept from each grouped-daily result row: bar time + OHLCV + VWAP. The
 # symbol (``T``) is the dict KEY, never carried inside the value.
@@ -325,6 +327,70 @@ class PolygonClient:
             payload = self._get_json(url, params=params if pages == 0 else None)
             results = payload.get("results") or []
             rows.extend(results)
+            next_url = payload.get("next_url")
+            url = _strip_apikey_from_url(next_url) if next_url else None
+            pages += 1
+        return rows
+
+    def get_splits(
+        self,
+        *,
+        ticker: str,
+        execution_date_gte: dt.date | None = None,
+        execution_date_lte: dt.date | None = None,
+        limit: int = 1000,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Polygon ``/v3/reference/splits`` for ``ticker``, optionally windowed.
+
+        Corporate-actions source of record for the population-monitor
+        implausible-move guard (#1090): a raw-bar |move| > 60% is only
+        invalidated when a real split (or a material special dividend, see
+        :meth:`get_dividends`) executed inside the replay window. Each returned
+        row is the raw Polygon record (``execution_date``, ``split_from``,
+        ``split_to``). An empty window returns ``[]`` (NOT an error).
+        """
+        params: dict[str, Any] = {"ticker": ticker.upper(), "limit": limit}
+        if execution_date_gte is not None:
+            params["execution_date.gte"] = execution_date_gte.isoformat()
+        if execution_date_lte is not None:
+            params["execution_date.lte"] = execution_date_lte.isoformat()
+        return self._paginate(f"{_BASE_URL}{_SPLITS_PATH}", params, max_pages=max_pages)
+
+    def get_dividends(
+        self,
+        *,
+        ticker: str,
+        ex_dividend_date_gte: dt.date | None = None,
+        ex_dividend_date_lte: dt.date | None = None,
+        limit: int = 1000,
+        max_pages: int = 10,
+    ) -> list[dict[str, Any]]:
+        """Polygon ``/v3/reference/dividends`` for ``ticker``, optionally windowed.
+
+        Second reference arm of the implausible-move guard: a large special
+        cash dividend gaps raw (adjusted=false) bars exactly like a split.
+        Each returned row is the raw Polygon record (``ex_dividend_date``,
+        ``cash_amount`` — as-declared per share, unadjusted). The caller owns
+        the materiality decision (cash vs the pre-ex-date raw close).
+        """
+        params: dict[str, Any] = {"ticker": ticker.upper(), "limit": limit}
+        if ex_dividend_date_gte is not None:
+            params["ex_dividend_date.gte"] = ex_dividend_date_gte.isoformat()
+        if ex_dividend_date_lte is not None:
+            params["ex_dividend_date.lte"] = ex_dividend_date_lte.isoformat()
+        return self._paginate(f"{_BASE_URL}{_DIVIDENDS_PATH}", params, max_pages=max_pages)
+
+    def _paginate(
+        self, first_url: str, params: dict[str, Any], *, max_pages: int
+    ) -> list[dict[str, Any]]:
+        """Collect ``results`` across ``next_url`` pages (``apiKey`` stripped)."""
+        rows: list[dict[str, Any]] = []
+        url: str | None = first_url
+        pages = 0
+        while url and pages < max_pages:
+            payload = self._get_json(url, params=params if pages == 0 else None)
+            rows.extend(payload.get("results") or [])
             next_url = payload.get("next_url")
             url = _strip_apikey_from_url(next_url) if next_url else None
             pages += 1

@@ -338,6 +338,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "alphalens_av_",
             "alphalens_vix_",
             "alphalens_form4_",
+            "alphalens_feedback_",
         )
         for rule in rules:
             expr = rule.get("expr", "")
@@ -1268,6 +1269,107 @@ class TestForm4IncrementalSustainedTransientErrors(unittest.TestCase):
         rule = self._one()
         self.assertNotIn("job", rule.get("labels", {}))
         self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+
+class TestFeedbackGuardSustainedLookupFailures(unittest.TestCase):
+    """Pins for the implausible-guard fail-closed alert (#1090 memo §4).
+
+    A ``lookup_failed`` disposition means the guard could not reach the
+    corporate-actions reference and carried the row — i.e. the pre-#1090
+    blindness, silently back. Sustained lookup failures must page; a single
+    clean nightly run emits 0 and clears it. DISTINCT alertname + NO ``job=``
+    label keep it out of the cron-keyed enumerations (the form4
+    transient-errors precedent), so it needs its OWN pins here.
+    """
+
+    ALERT = "AlphalensFeedbackGuardLookupFailed"
+    SERIES = 'alphalens_feedback_guard_total{disposition="lookup_failed"}'
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_alert_exists(self) -> None:
+        self._one()
+
+    def test_expr_is_sustained_gauge_over_two_nightly_runs(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn(f"min_over_time({self.SERIES}", expr)
+        self.assertIn("[50h]", expr)  # covers 2 daily 06:30 UTC runs, form4 sizing
+        self.assertIn("> 0", expr)
+        # Textfile metrics are per-run GAUGES despite the _total suffix — no
+        # monotonic-counter functions.
+        for func in ("increase(", "rate(", "irate("):
+            self.assertNotIn(func, expr)
+
+    def test_has_for_debounce_and_routes_warning_telegram(self) -> None:
+        rule = self._one()
+        self.assertIn("for", rule)
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertEqual(rule.get("labels", {}).get("unit"), "feedback-shadow-returns")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+    def test_annotation_notes_manual_live_rules_deploy(self) -> None:
+        # The repo rules file is the SoT but the live VPS Prometheus loads a
+        # separately, manually deployed copy — the operator reading the page
+        # must know a merged rule change is not live until copied + HUP'd.
+        description = self._one().get("annotations", {}).get("description", "")
+        self.assertIn("manually", description)
+
+    def test_feedback_prefix_is_registered_as_gauge_family(self) -> None:
+        # Belt-pin: the no-counter-functions test must cover the new
+        # alphalens_feedback_* family so a future rule cannot apply
+        # increase()/rate() to the per-run gauge.
+        source = Path(__file__).read_text()
+        self.assertIn('"alphalens_feedback_",', source)
+
+
+class TestFeedbackGuardGaugeMissing(unittest.TestCase):
+    """Pins for the guard gauge's absence companion.
+
+    A missing series (broken emit / dark scrape) silently DISARMS
+    AlphalensFeedbackGuardLookupFailed while the nightly job still exits 0 —
+    so absence needs its own page, same discipline as the
+    AlphalensJobMetricMissing family.
+    """
+
+    ALERT = "AlphalensFeedbackGuardGaugeMissing"
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_expr_is_absent_on_the_lookup_failed_series(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn("absent(", expr)
+        self.assertIn('alphalens_feedback_guard_total{disposition="lookup_failed"}', expr)
+
+    def test_has_for_debounce_and_routes_warning_telegram(self) -> None:
+        rule = self._one()
+        self.assertIn("for", rule)
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertEqual(rule.get("labels", {}).get("unit"), "feedback-shadow-returns")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+    def test_annotation_notes_manual_live_rules_deploy(self) -> None:
+        description = self._one().get("annotations", {}).get("description", "")
+        self.assertIn("manually", description)
 
 
 class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):

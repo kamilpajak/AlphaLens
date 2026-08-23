@@ -145,6 +145,19 @@ SL and a TP are crossable resolves **SL-first** (conservative,
 | `TIME_STOP` | terminal | 42-session horizon expired; remainder marked at the expiry close |
 | `NO_FILL` | terminal | no entry tier ever touched inside the TTL |
 | `BAD_GEOMETRY` | terminal-degenerate | stop at/above blended entry — R undefined, frozen |
+| `SPLIT_INVALIDATED` | terminal-degenerate | replay window crosses a real corporate action (split / material special dividend, #1090) — ladder levels were set on pre-action prices, `realized_r` null, frozen |
+
+**Implausible-move guard (#1090).** `|forward_return| > 0.60`
+(`bar_window.IMPLAUSIBLE_RETURN_THRESHOLD`) is a *trigger*, not a verdict
+(design memo `docs/research/implausible_guard_redesign_2026_08_23.md`,
+Amendment 1): the monitor asks Polygon `/v3/reference/{splits,dividends}`
+(cached at `<store>/corporate_actions_cache.json`; FOUND forever, NONE-FOUND
+14 days) and, when nothing is found, cross-checks the window return against
+yfinance ADJUSTED closes. Dispositions — `split_invalidated` (terminal
+quarantine above), `extreme_validated` (outcome accepted), `lookup_failed` /
+`data_quality` (prior carried) — are stamped per touched row in the additive
+`guard_disposition` + `guard_config_version` columns and counted on the sweep
+report (`corporate_actions.py`).
 
 Source of truth: `ladder_replay.py::_classify` +
 `population_ladder_monitor.py::_TERMINAL_SET`; mirrored web-side (with the

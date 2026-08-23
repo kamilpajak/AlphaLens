@@ -41,6 +41,9 @@
 		await waitFor(() => expect(canvas.getByText('running, nothing hit yet')).toBeVisible());
 		await waitFor(() => expect(canvas.getByText('hit all targets (win)')).toBeVisible());
 		await waitFor(() => expect(canvas.getByText('invalid setup')).toBeVisible());
+		// SPLIT_INVALIDATED (corporate action crossed the replay window) sits in
+		// the not-measurable group.
+		await waitFor(() => expect(canvas.getByText('split crossed the window')).toBeVisible());
 		// PENDING synthetic placeholder belongs with the ongoing group.
 		await waitFor(() => expect(canvas.getByText('not priced yet (queued)')).toBeVisible());
 	}}
