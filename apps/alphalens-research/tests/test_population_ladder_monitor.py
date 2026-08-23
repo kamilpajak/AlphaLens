@@ -3403,8 +3403,8 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
     independent-vendor cross-check: action found -> SPLIT_INVALIDATED terminal;
     lookup failed -> carry (lookup_failed); none found + yfinance agrees ->
     accept (extreme_validated); disagrees / no data -> carry (data_quality).
-    The synthetic ladders mirror the three REAL production trips: MRNA +142%,
-    CRSR +61.6% (both real moves), MQ +342% (4:1 reverse split 2026-07-01).
+    The synthetic ladders mirror the three REAL production trips: MRNA +142.5%,
+    CRSR +61.6% (both real moves), MQ +342.5% (4:1 reverse split 2026-07-01).
     """
 
     _BRIEF_DATE = dt.date(2026, 6, 25)
@@ -3481,7 +3481,7 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
 
         reports = self._run(
             "MQ",
-            442.0,  # forward_return +3.42 — the real MQ artifact magnitude
+            442.5,  # forward_return +3.425 — the real MQ artifact magnitude
             actions_lookup=_FoundLookup(),
             adjusted_closes_fetch=lambda t, s, e: None,
         )
@@ -3505,7 +3505,7 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
 
         self._run(
             "MQ",
-            442.0,
+            442.5,
             actions_lookup=_FoundLookup(),
             adjusted_closes_fetch=lambda t, s, e: None,
         )
@@ -3573,7 +3573,7 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
 
         reports = self._run(
             "MRNA",
-            242.0,  # forward_return +1.42 — the real MRNA magnitude
+            242.5,  # forward_return +1.425 — the real MRNA magnitude
             actions_lookup=_NoneFound(),
             adjusted_closes_fetch=self._agreeing_closes(242.0),
         )
@@ -3612,7 +3612,7 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
 
         reports = self._run(
             "MRNA",
-            242.0,
+            242.5,
             actions_lookup=_BrokenLookup(),
             adjusted_closes_fetch=self._agreeing_closes(242.0),
         )
@@ -3644,7 +3644,7 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
 
         reports = self._run(
             "MRNA",
-            242.0,
+            242.5,
             actions_lookup=_NoneFound(),
             adjusted_closes_fetch=flat_closes,
         )
@@ -3663,7 +3663,7 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
 
         self._run(
             "MRNA",
-            242.0,
+            242.5,
             actions_lookup=_NoneFound(),
             adjusted_closes_fetch=lambda t, s, e: None,
         )

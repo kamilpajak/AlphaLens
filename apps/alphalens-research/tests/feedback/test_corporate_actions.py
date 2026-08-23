@@ -11,8 +11,8 @@ independent vendor, instead of guessing:
 * none found + disagrees / no data -> ``data_quality`` (carry, counted)
 
 Fixtures are the three REAL measured production cases (the session's standing
-lesson — never invented shapes): MRNA +142% (real move, no actions), CRSR
-+61.6% (real move, barely over the trigger), MQ +342% (4:1 reverse split
+lesson — never invented shapes): MRNA +142.5% (real move, no actions), CRSR
++61.6% (real move, barely over the trigger), MQ +342.5% (4:1 reverse split
 executed 2026-07-01 inside the window).
 """
 
@@ -45,18 +45,26 @@ from alphalens_pipeline.feedback.corporate_actions import (
 
 # ---- the three REAL measured cases (production, last 21 days before 2026-08-23) --
 
-# MRNA: +142% rejected by the old guard; NO corporate actions in the window
+# Coordinates grounded 2026-08-23 from the VPS journals + stores: the forward
+# returns are the logged rejection values; the windows are the parked rows'
+# own (MRNA: the bracket-arm brief 2026-08-06; MQ: the production brief
+# 2026-05-29); the closes below are yfinance adjusted values measured live.
+
+# MRNA: +142.5% rejected by the old guard; NO corporate actions in the window
 # (volume 4.3M -> 199M on 2026-08-19 — a real move, not a split artifact).
-_MRNA_FORWARD_RETURN = 1.42
-_MRNA_ARRIVAL = dt.date(2026, 7, 6)
+_MRNA_FORWARD_RETURN = 1.425
+_MRNA_ARRIVAL = dt.date(2026, 8, 7)
 _MRNA_HORIZON = dt.date(2026, 8, 21)
 
-# CRSR: +61.6%, barely over the 0.60 trigger; no actions.
+# CRSR: +61.6%, barely over the 0.60 trigger; no actions. Its window predates
+# MRNA's, so its resolver test passes these bounds explicitly.
 _CRSR_FORWARD_RETURN = 0.616
+_CRSR_ARRIVAL = dt.date(2026, 7, 7)
+_CRSR_HORIZON = dt.date(2026, 8, 8)
 
-# MQ: +342% raw-bar artifact; 4:1 reverse split EXECUTED 2026-07-01 in-window.
-_MQ_FORWARD_RETURN = 3.42
-_MQ_ARRIVAL = dt.date(2026, 6, 25)
+# MQ: +342.5% raw-bar artifact; 4:1 reverse split EXECUTED 2026-07-01 in-window.
+_MQ_FORWARD_RETURN = 3.425
+_MQ_ARRIVAL = dt.date(2026, 6, 1)
 _MQ_HORIZON = dt.date(2026, 8, 21)
 _MQ_SPLIT_RECORD = {
     "ticker": "MQ",
@@ -73,10 +81,11 @@ def _closes(points: dict[str, float]) -> pd.Series:
     )
 
 
-# MRNA adjusted closes consistent with the measured +142% window return.
-_MRNA_CLOSES = _closes({"2026-07-06": 34.2, "2026-08-19": 81.0, "2026-08-21": 82.8})
-# CRSR adjusted closes consistent with the measured +61.6%.
-_CRSR_CLOSES = _closes({"2026-07-06": 8.20, "2026-08-21": 13.25})
+# MRNA adjusted closes measured live from yfinance for the real window
+# (+145.3%, a 2.8pp gap vs the raw forward — inside the agreement band).
+_MRNA_CLOSES = _closes({"2026-08-07": 59.17, "2026-08-21": 145.13})
+# CRSR adjusted closes measured live (+61.4%, a 0.2pp gap).
+_CRSR_CLOSES = _closes({"2026-07-07": 8.89, "2026-08-07": 14.35})
 
 
 class _StubLookup:
@@ -185,11 +194,11 @@ class TestAdjustedWindowReturn(unittest.TestCase):
     def test_mrna_window_return_matches_measured_move(self):
         value = adjusted_window_return(_MRNA_CLOSES, _MRNA_ARRIVAL, _MRNA_HORIZON)
         self.assertIsNotNone(value)
-        self.assertAlmostEqual(value, 82.8 / 34.2 - 1.0)
+        self.assertAlmostEqual(value, 145.13 / 59.17 - 1.0)
         self.assertLess(abs(value - _MRNA_FORWARD_RETURN), CROSS_CHECK_AGREEMENT_PP)
 
     def test_single_point_returns_none(self):
-        closes = _closes({"2026-07-06": 34.2})
+        closes = _closes({"2026-08-07": 59.17})
         self.assertIsNone(adjusted_window_return(closes, _MRNA_ARRIVAL, _MRNA_HORIZON))
 
     def test_none_or_empty_returns_none(self):
@@ -199,9 +208,9 @@ class TestAdjustedWindowReturn(unittest.TestCase):
         )
 
     def test_closes_outside_window_are_ignored(self):
-        closes = _closes({"2026-06-01": 10.0, "2026-07-06": 34.2, "2026-08-21": 82.8})
+        closes = _closes({"2026-08-01": 10.0, "2026-08-07": 59.17, "2026-08-21": 145.13})
         value = adjusted_window_return(closes, _MRNA_ARRIVAL, _MRNA_HORIZON)
-        self.assertAlmostEqual(value, 82.8 / 34.2 - 1.0)
+        self.assertAlmostEqual(value, 145.13 / 59.17 - 1.0)
 
 
 class TestResolveGuardDisposition(unittest.TestCase):
@@ -225,7 +234,11 @@ class TestResolveGuardDisposition(unittest.TestCase):
     def test_crsr_no_actions_yf_agrees_is_extreme_validated(self):
         lookup = _StubLookup(CorporateActionsAnswer(found=False))
         disposition = self._resolve(
-            forward_return=_CRSR_FORWARD_RETURN, lookup=lookup, closes=_CRSR_CLOSES
+            forward_return=_CRSR_FORWARD_RETURN,
+            lookup=lookup,
+            closes=_CRSR_CLOSES,
+            arrival=_CRSR_ARRIVAL,
+            horizon=_CRSR_HORIZON,
         )
         self.assertEqual(disposition, DISPOSITION_EXTREME_VALIDATED)
 
@@ -256,20 +269,20 @@ class TestResolveGuardDisposition(unittest.TestCase):
         self.assertEqual(disposition, DISPOSITION_LOOKUP_FAILED)
 
     def test_yf_disagreement_beyond_10pp_is_data_quality(self):
-        # yfinance sees a flat window while the raw bars claim +142%: the raw
+        # yfinance sees a flat window while the raw bars claim +142.5%: the raw
         # data is suspect (bad vendor bar / halt-reopen / lineage break).
         lookup = _StubLookup(CorporateActionsAnswer(found=False))
-        flat = _closes({"2026-07-06": 34.2, "2026-08-21": 35.0})
+        flat = _closes({"2026-08-07": 34.2, "2026-08-21": 35.0})
         disposition = self._resolve(forward_return=_MRNA_FORWARD_RETURN, lookup=lookup, closes=flat)
         self.assertEqual(disposition, DISPOSITION_DATA_QUALITY)
 
     def test_cross_check_just_inside_the_band_agrees(self):
-        # Band-width pin from the inside: raw +142% vs adjusted +132.1% is a
+        # Band-width pin from the inside: raw +142.5% vs adjusted +132.6% is a
         # 9.9pp gap — inside CROSS_CHECK_AGREEMENT_PP. (The exact-0.10 edge is
         # deliberately unpinned: at float precision a strict-vs-inclusive flip
         # there is unobservable, so the pair 9.9/10.1 pins the band's width.)
         lookup = _StubLookup(CorporateActionsAnswer(found=False))
-        inside = _closes({"2026-07-06": 100.0, "2026-08-21": 232.1})
+        inside = _closes({"2026-08-07": 100.0, "2026-08-21": 232.6})
         disposition = self._resolve(
             forward_return=_MRNA_FORWARD_RETURN, lookup=lookup, closes=inside
         )
@@ -278,7 +291,7 @@ class TestResolveGuardDisposition(unittest.TestCase):
     def test_cross_check_just_outside_the_band_is_data_quality(self):
         # Band-width pin from the outside: a 10.1pp gap must NOT validate.
         lookup = _StubLookup(CorporateActionsAnswer(found=False))
-        outside = _closes({"2026-07-06": 100.0, "2026-08-21": 231.9})
+        outside = _closes({"2026-08-07": 100.0, "2026-08-21": 232.4})
         disposition = self._resolve(
             forward_return=_MRNA_FORWARD_RETURN, lookup=lookup, closes=outside
         )
