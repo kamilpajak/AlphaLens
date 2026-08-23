@@ -8,7 +8,8 @@
 //
 // The set of codes mirrors `ladder_replay._classify` + the `LadderOutcome`
 // status values (TP_FULL / PARTIAL_TP_THEN_SL / SL_HIT / TIME_STOP /
-// PARTIAL_TP_OPEN / OPEN / NO_FILL / BAD_GEOMETRY / NO_STRUCTURE / NO_DATA).
+// PARTIAL_TP_OPEN / OPEN / NO_FILL / BAD_GEOMETRY / NO_STRUCTURE / NO_DATA)
+// plus the population monitor's SPLIT_INVALIDATED corporate-action terminal.
 // `tests/unit/ladderStatus.test.ts` pins that every one of those is covered.
 
 export type LadderGroup = 'ongoing' | 'terminal' | 'unmeasurable';
@@ -71,6 +72,12 @@ export const LADDER_STATUS: readonly LadderStatusEntry[] = [
 		group: 'terminal'
 	},
 	// --- Not measurable (no usable result) -----------------------------------
+	{
+		code: 'SPLIT_INVALIDATED',
+		short: 'split crossed the window',
+		body: 'A stock split or large special dividend fell inside the replay window, so the planned entry / target / stop levels no longer match the price series — the outcome cannot be measured.',
+		group: 'unmeasurable'
+	},
 	{
 		code: 'BAD_GEOMETRY',
 		short: 'invalid setup',
