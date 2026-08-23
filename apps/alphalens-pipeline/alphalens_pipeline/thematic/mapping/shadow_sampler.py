@@ -43,6 +43,10 @@ SHADOW_DRAW_VERSION = "sha256-asof-shadow-v1"
 
 SHADOW_STORE_DIR = Path.home() / ".alphalens" / "theme_shadow"
 
+# Present on every written row even when the mapper returned nothing at all, so
+# the read and the metrics emitter never need to ask whether a column exists.
+CORE_COLUMNS = ("theme", "ticker", "bracket_verdict")
+
 
 @dataclass(frozen=True)
 class ShadowDraw:
@@ -159,6 +163,12 @@ def build_shadow_frame(funnel: pd.DataFrame, draw: ShadowDraw) -> pd.DataFrame:
       the arms, and a contaminated arm is worse than a missing day.
     """
     band = dict.fromkeys(draw.near, "near") | dict.fromkeys(draw.far, "far")
+    # A day where the mapper declined EVERY theme writes a funnel with no
+    # columns at all, not a funnel with zero rows. Reading `theme` off that
+    # raises and the whole day is lost — yet "every drawn theme yielded
+    # nothing" is a real observation the theme-day unit needs, not an error.
+    if "theme" not in funnel.columns:
+        funnel = pd.DataFrame({"theme": pd.Series(dtype=object)})
     stray = sorted(set(funnel["theme"].dropna().astype(str)) - set(band))
     if stray:
         raise ValueError(
@@ -171,6 +181,13 @@ def build_shadow_frame(funnel: pd.DataFrame, draw: ShadowDraw) -> pd.DataFrame:
     if missing:
         blank = pd.DataFrame({"theme": missing})
         rows = pd.concat([rows, blank], ignore_index=True)
+
+    # Stable schema regardless of what the mapper returned. A day where every
+    # theme declined would otherwise produce a frame without `ticker`, and every
+    # consumer — the metrics emitter, the read — would need its own guard.
+    for col in CORE_COLUMNS:
+        if col not in rows.columns:
+            rows[col] = pd.Series([pd.NA] * len(rows), dtype=object)
 
     rows["shadow_band"] = rows["theme"].map(band)
     rows["shadow_seed"] = draw.seed

@@ -203,6 +203,15 @@ class TestShadowFrame(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_shadow_frame(rogue, self._draw())
 
+    def test_a_funnel_with_no_columns_yields_a_row_per_drawn_theme(self):
+        """The mapper declining every theme writes a funnel with no columns at
+        all. That is a real observation for a theme-day unit, not an error."""
+        out = build_shadow_frame(pd.DataFrame(), self._draw())
+
+        self.assertEqual(sorted(out["theme"]), ["alpha", "beta", "gamma"])
+        self.assertTrue(out["ticker"].isna().all() if "ticker" in out else True)
+        self.assertTrue(out["shadow_band"].notna().all())
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -269,3 +278,7 @@ class TestBandsUseOriginalRanks(unittest.TestCase):
 
         near_ranks = sorted(order.index(t) for t in draw.near)
         self.assertTrue(all(10 <= r < 30 for r in near_ranks), near_ranks)
+
+
+if __name__ == "__main__":
+    unittest.main()
