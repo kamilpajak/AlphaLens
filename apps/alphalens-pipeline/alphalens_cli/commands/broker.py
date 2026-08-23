@@ -48,6 +48,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -1566,3 +1567,122 @@ def manage_command(
         raise _fail(f"broker manage failed: {exc}") from exc
     if once:
         typer.echo("manage: single tick complete")
+
+
+# ``stream-status`` result contract version (rearm design memo §6 INC-6).
+# Within this major version fields are only ever ADDED, never renamed/retyped.
+_STREAM_STATUS_SCHEMA = "alphalens.broker.stream-status/v1"
+
+# Stable machine-readable error code for a missing stream textfile — never
+# renamed (CLI doctrine: domain detail lives in error.code, the process exit
+# stays on the small documented set; 4 = not found).
+_STREAM_STATUS_MISSING_CODE = "stream_metrics_missing"
+
+_STREAM_STATUS_EXIT_NOT_FOUND = 4
+
+# Full PromQL line: ``name{labels} value`` (labels optional). The daemon
+# writes labels into the metric key (textfile.py doctrine), so parsing strips
+# them back off to the base gauge name.
+_PROM_LINE_RE = re.compile(
+    r"^(?P<name>[A-Za-z_:][A-Za-z0-9_:]*)(?:\{[^}]*\})?\s+(?P<value>[-+0-9.eEnaif]+)\s*$"
+)
+
+
+@broker_app.command(name="stream-status")
+def stream_status_command(
+    env: str = typer.Option(
+        _DEFAULT_ARM_ENV,
+        "--env",
+        help="Broker instance whose stream gauges to read (sim|live).",
+    ),
+    output_format: str = typer.Option(
+        "human",
+        "--format",
+        help="Output format: human|json (json = exactly one JSON value on stdout).",
+    ),
+) -> None:
+    """Read-only snapshot of the SIM order-stream breaker/liveness gauges.
+
+    Reads the ``alphalens_domain_broker-manager-<env>-stream.prom`` textfile
+    the daemon rewrites every tick (through the existing
+    ``ALPHALENS_TEXTFILE_DIR`` resolution) — no broker call, no auth, no
+    mutation, safe while the daemon runs. One internal result object rendered
+    two ways (repo CLI doctrine); exit 4 when the textfile is absent (the
+    daemon never ticked with streaming on, or the wrong --env)."""
+    from alphalens_pipeline.brokers.automanager import state_paths
+    from alphalens_pipeline.observability import textfile
+
+    if output_format not in ("human", "json"):
+        raise _fail(f"unknown --format {output_format!r} (expected human|json)")
+    try:
+        job = state_paths.stream_metrics_job(env)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+
+    path = textfile._resolve_dir() / f"alphalens_domain_{job}.prom"
+    if not path.is_file():
+        error = {
+            "code": _STREAM_STATUS_MISSING_CODE,
+            "message": f"no stream gauge textfile at {path}",
+            "retryable": False,
+            "details": {"path": str(path), "env": env, "job": job},
+            "suggestions": [
+                {
+                    "argv": [
+                        "systemctl",
+                        "--user",
+                        "status",
+                        "alphalens-broker-manager.service",
+                    ],
+                    "why": (
+                        "the daemon writes the gauges every tick only while it "
+                        "runs with ALPHALENS_BROKER_STREAMING_ENABLED=1"
+                    ),
+                }
+            ],
+        }
+        typer.secho(json.dumps(error), err=True)
+        raise typer.Exit(code=_STREAM_STATUS_EXIT_NOT_FOUND)
+
+    gauges: dict[str, float] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        match = _PROM_LINE_RE.match(line.strip())
+        if match:
+            try:
+                gauges[match.group("name")] = float(match.group("value"))
+            except ValueError:  # a malformed value line is skipped, not fatal
+                continue
+
+    result = {
+        "schema": _STREAM_STATUS_SCHEMA,
+        "env": env,
+        "job": state_paths.metrics_job(env),
+        "source": str(path),
+        "gauges": gauges,
+    }
+
+    if output_format == "json":
+        typer.echo(json.dumps(result))
+        return
+
+    def _gauge(name: str) -> float | None:
+        return gauges.get(f"alphalens_broker_manager_stream_{name}")
+
+    def _fmt(value: float | None) -> str:
+        return "absent" if value is None else f"{value:g}"
+
+    breaker_open = _gauge("breaker_open")
+    breaker_state = (
+        "absent"
+        if breaker_open is None
+        else ("OPEN (episode running)" if breaker_open else "closed")
+    )
+    reader_up = _gauge("reader_up")
+    reader_state = "absent" if reader_up is None else ("up" if reader_up else "down")
+    typer.echo(f"env                   {env}")
+    typer.echo(f"breaker               {breaker_state}")
+    typer.echo(f"reader                {reader_state}")
+    typer.echo(f"last message age (s)  {_fmt(_gauge('last_message_age_seconds'))}")
+    typer.echo(f"consecutive failures  {_fmt(_gauge('consecutive_failures'))}")
+    typer.echo(f"trips / re-arm cycles {_fmt(_gauge('trips_total'))}")
+    typer.echo(f"in session            {_fmt(_gauge('in_session'))}")

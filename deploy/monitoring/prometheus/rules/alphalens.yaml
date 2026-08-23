@@ -1048,6 +1048,73 @@ groups:
           summary: "broker-manager heartbeat metric missing"
           description: "No heartbeat gauge for broker-manager. The daemon has not ticked since metrics were enabled, or the textfile collector / node_exporter scrape is broken. Clears after the first tick."
 
+      # --- SIM order/position stream breaker (rearm design memo §4.6) -------
+      # Telegram gets EDGES (the daemon's episode latch pages one OPEN and one
+      # delivery-confirmed CLOSE); Prometheus owns every LEVEL below. Every
+      # rule carries the daemon-freshness guard (time() - last_tick < 300):
+      # emit_domain_metrics never unlinks, so a stopped SIM unit leaves
+      # node_exporter re-serving a frozen breaker_open=1 forever — the guard
+      # goes false as the heartbeat freezes and
+      # AlphalensBrokerManagerHeartbeatStale fires instead, which is the
+      # correct alert for "the daemon stopped".
+      - alert: AlphalensBrokerStreamBreakerOpen
+        # for: 20m exceeds the first four re-arm ladder rungs
+        # (60+120+240+480 = 900s) plus one 300s delivery dwell, so a blip
+        # healed within four trials never reaches Alertmanager. Safe to choose
+        # freely because breaker_open is EPISODE-scoped and does not flicker
+        # per trial.
+        expr: >-
+          alphalens_broker_manager_stream_breaker_open{job="broker-manager-sim"} == 1
+          and (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}) < 300
+        for: 20m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "SIM order-stream breaker episode open > 20m (re-arm ladder not converging)"
+          description: "The Saxo SIM order/position stream has stayed dark across at least four re-arm trials plus a delivery dwell — likely a sustained Saxo outage. Protection is unaffected (the ~45s poll backstop covers every tick); the cost is wake latency. Check `journalctl --user -u alphalens-broker-manager.service` for the trial failures and run `alphalens broker stream-status` for the gauge snapshot. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+
+      - alert: AlphalensBrokerStreamStale
+        # Dark-but-CONNECTED: the reader claims to be up but no frame has
+        # arrived for >300s (the LivePriceStreamStale shape on the order
+        # stream). Suppressed while a breaker episode is open — that state is
+        # already reported by its own pages and the BreakerOpen rule. `unless`
+        # (NOT `and == 0`) so an ABSENT breaker gauge (live rules are
+        # hand-synced and may lead the daemon) leaves the alert exactly as
+        # before.
+        expr: >-
+          alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager-sim"} > 300
+          and alphalens_broker_manager_stream_reader_up{job="broker-manager-sim"} == 1
+          and (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}) < 300
+          unless alphalens_broker_manager_stream_breaker_open{job="broker-manager-sim"} == 1
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "SIM order-stream silent > 5m while the reader claims up"
+          description: "The stream reader reports up but no frame has arrived for over 5 minutes — the dark-but-connected case (recv timeout + resubscribe should self-heal; sustained staleness means they are not). Early wake degrades to the ~45s poll; protection is unaffected. Check `journalctl --user -u alphalens-broker-manager.service`. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+
+      - alert: AlphalensBrokerStreamFlapping
+        # increase() is correct here: trips_total is the one genuinely
+        # monotonic counter in the stream family (it survives tick gaps by
+        # design). >3 trips/hour means the ladder is cycling
+        # trip/re-arm/re-trip instead of converging; the daemon has already
+        # sent its single CRITICAL flap page and latched OPEN pages off.
+        expr: >-
+          increase(alphalens_broker_manager_stream_trips_total{job="broker-manager-sim"}[1h]) > 3
+          and (time() - alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}) < 300
+        for: 10m
+        labels:
+          severity: warning
+          route: telegram
+          unit: broker-manager
+        annotations:
+          summary: "SIM order-stream breaker flapping (>3 trips/hour)"
+          description: "More than 3 breaker trips inside an hour — the stream connects and dies repeatedly, so the re-arm ladder is cycling instead of converging (a gateway that accepts sockets and then drops them, or a Saxo-side incident). Check `journalctl --user -u alphalens-broker-manager.service` for the trip reasons. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+
       - alert: AlphalensLivePriceStreamReaderDown
         # Gated on subscribed_uics > 0: an idle reader (nothing subscribed)
         # holds no WebSocket BY DESIGN and must not page. reader_up=0 while

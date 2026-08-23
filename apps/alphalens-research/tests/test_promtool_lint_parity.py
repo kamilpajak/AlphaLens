@@ -109,6 +109,30 @@ class TestPromtoolLintParity(unittest.TestCase):
             "the version regex no longer discriminates — parity check is a no-op.",
         )
 
+    def test_ci_and_justfile_evaluate_both_promtool_fixtures(self) -> None:
+        # ci.yml hard-codes the fixture paths (rearm design memo §7.10): a new
+        # fixture file that is not named in the promtool-test step is silently
+        # never executed while CI stays green. Both call sites must run BOTH
+        # fixtures — the 1h-grid thematic one and the 1m-grid broker-stream one
+        # (a `for: 20m` vs `for: 10m` case is indistinguishable on a 1h grid,
+        # which is why a second file exists at all).
+        fixtures = ("alphalens_test.yaml", "alphalens_broker_test.yaml")
+        rules_dir = RULES.parent
+        for fixture in fixtures:
+            self.assertTrue(
+                (rules_dir / fixture).is_file(),
+                f"promtool fixture {fixture} is missing from {rules_dir}.",
+            )
+        for path in (CI_WORKFLOW, JUSTFILE):
+            text = path.read_text()
+            for fixture in fixtures:
+                self.assertIn(
+                    fixture,
+                    text,
+                    f"{path.name} does not run promtool against {fixture} — "
+                    "its cases are silently never executed.",
+                )
+
     def test_rules_header_does_not_overstate_unit_test_coverage(self) -> None:
         # The header used to list what the unit tests check in a way that read
         # as full validation. Anyone trusting that list would not run promtool.

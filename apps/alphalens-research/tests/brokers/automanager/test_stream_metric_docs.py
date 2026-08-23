@@ -19,6 +19,7 @@ import re
 import unittest
 from pathlib import Path
 
+from alphalens_pipeline.brokers.automanager import control_loop
 from alphalens_pipeline.brokers.automanager.control_loop import (
     stream_last_message_metric,
 )
@@ -33,6 +34,18 @@ ENV_EXAMPLE = WORKSPACE_ROOT / ".env.example"
 # name the operator writes into the alert rule is everything before the brace.
 # The job value used here (a placeholder) is irrelevant to the base-name check.
 _GAUGE_BASE = stream_last_message_metric("broker-manager-sim").split("{", 1)[0]
+
+# Every stream-state gauge the tick emits (rearm design memo §4.6) — the docs
+# must name each one, or a hand-synced rule targets a metric that does not
+# exist and silently never fires.
+_ALL_GAUGE_BASES = (
+    control_loop._STREAM_READER_UP_METRIC_NAME,
+    control_loop._STREAM_BREAKER_OPEN_METRIC_NAME,
+    control_loop._STREAM_LAST_MESSAGE_METRIC_NAME,
+    control_loop._STREAM_CONSECUTIVE_FAILURES_METRIC_NAME,
+    control_loop._STREAM_TRIPS_TOTAL_METRIC_NAME,
+    control_loop._STREAM_IN_SESSION_METRIC_NAME,
+)
 
 
 class TestStreamMetricDocsMatchCode(unittest.TestCase):
@@ -55,6 +68,24 @@ class TestStreamMetricDocsMatchCode(unittest.TestCase):
     def test_env_example_names_the_emitted_gauge(self) -> None:
         text = ENV_EXAMPLE.read_text(encoding="utf-8")
         self.assertIn(_GAUGE_BASE, text)
+
+    def test_readme_names_every_stream_gauge(self) -> None:
+        # Rearm design memo §6 INC-4: the runbook must name the FULL gauge set
+        # (six, one atomic emit), not only the original age gauge — the three
+        # shipped rules target three of them and the operator triage recipe
+        # reads them all.
+        text = README.read_text(encoding="utf-8")
+        for base in _ALL_GAUGE_BASES:
+            self.assertIn(
+                base,
+                text,
+                f"deploy/systemd/README.md must name the emitted gauge {base}.",
+            )
+
+    def test_env_example_names_every_stream_gauge(self) -> None:
+        text = ENV_EXAMPLE.read_text(encoding="utf-8")
+        for base in _ALL_GAUGE_BASES:
+            self.assertIn(base, text, f".env.example must name the emitted gauge {base}.")
 
     def test_docs_do_not_name_a_truncated_gauge(self) -> None:
         # ``broker_manager_stream_last_message`` without the ``_age_seconds``

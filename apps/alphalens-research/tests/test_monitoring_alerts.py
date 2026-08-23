@@ -1407,5 +1407,90 @@ class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):
         self.assertNotIn("edgar-press-release", ACTIVE_JOBS)
 
 
+class TestBrokerStreamRules(unittest.TestCase):
+    """Pins for the SIM order/position-stream breaker rules (rearm design memo
+    saxo_stream_breaker_rearm_design_2026_08_22.md §4.6 / §6 INC-5).
+
+    Telegram gets EDGES (the daemon's episode latch pages one OPEN and one
+    delivery-confirmed CLOSE); Prometheus owns every LEVEL — these three rules
+    are what replaced the 2026-08-22 thirty-minute Telegram metronome, so if
+    they rot, a tripped breaker is once again invisible past its two pages.
+    """
+
+    ALERTS = (
+        "AlphalensBrokerStreamBreakerOpen",
+        "AlphalensBrokerStreamStale",
+        "AlphalensBrokerStreamFlapping",
+    )
+    FRESHNESS_GUARD = (
+        "(time() - alphalens_broker_manager_last_tick_timestamp_seconds"
+        '{job="broker-manager-sim"}) < 300'
+    )
+
+    def _rules(self) -> list[dict]:
+        return _load_rules()["groups"][0]["rules"]
+
+    def _one(self, name: str) -> dict:
+        matches = [r for r in self._rules() if r.get("alert") == name]
+        self.assertEqual(len(matches), 1, f"Expected exactly one {name}, found {len(matches)}.")
+        return matches[0]
+
+    def test_broker_stream_rules_exist_in_the_cron_health_group_with_route_and_unit(self) -> None:
+        for name in self.ALERTS:
+            rule = self._one(name)
+            self.assertEqual(rule.get("labels", {}).get("severity"), "warning", name)
+            self.assertEqual(rule.get("labels", {}).get("route"), "telegram", name)
+            self.assertEqual(rule.get("labels", {}).get("unit"), "broker-manager", name)
+            self.assertIn("for", rule, name)
+
+    def test_broker_stream_rules_form_unique_alertname_job_pairs(self) -> None:
+        # Each alertname appears exactly once and every expr is pinned to the
+        # SIM daemon's job label — a LIVE mirror (there is no LIVE stream
+        # reader, §4.1) or a copy-paste duplicate would collide here.
+        all_names = [r.get("alert") for r in self._rules()]
+        for name in self.ALERTS:
+            self.assertEqual(all_names.count(name), 1, name)
+            expr = self._one(name)["expr"]
+            jobs = set(re.findall(r'job="([^"]+)"', expr))
+            self.assertEqual(jobs, {"broker-manager-sim"}, name)
+            # STATIC labels stay job-free so the rules stay out of the
+            # cron-keyed enumerations (ACTIVE_JOBS parity machinery).
+            self.assertNotIn("job", self._one(name).get("labels", {}))
+
+    def test_every_broker_stream_rule_carries_the_daemon_freshness_guard(self) -> None:
+        # emit_domain_metrics never unlinks: a stopped SIM unit leaves
+        # node_exporter re-serving a frozen breaker_open=1 forever. The guard
+        # goes false as the heartbeat freezes, so
+        # AlphalensBrokerManagerHeartbeatStale fires instead — the correct
+        # alert for "the daemon stopped".
+        for name in self.ALERTS:
+            expr = self._one(name)["expr"]
+            self.assertIn(
+                self.FRESHNESS_GUARD,
+                " ".join(expr.split()),
+                f"{name} is missing the daemon-freshness guard.",
+            )
+
+    def test_stale_rule_uses_unless_for_the_breaker_guard(self) -> None:
+        # `unless` (NOT `and == 0`): the live rules copy is hand-synced and may
+        # lead the daemon, so an ABSENT breaker gauge must leave the stale
+        # alert behaving exactly as before (the price-stream session_asleep
+        # precedent at the LivePriceStreamStale rule).
+        expr = " ".join(self._one("AlphalensBrokerStreamStale")["expr"].split())
+        self.assertIn(
+            'unless alphalens_broker_manager_stream_breaker_open{job="broker-manager-sim"} == 1',
+            expr,
+        )
+        self.assertNotIn('breaker_open{job="broker-manager-sim"} == 0', expr)
+
+    def test_annotations_note_manual_live_rules_deploy(self) -> None:
+        # The repo rules file is the SoT but the live VPS Prometheus loads a
+        # separately, manually deployed copy — the operator reading the page
+        # must know a merged rule change is not live until copied + HUP'd.
+        for name in self.ALERTS:
+            description = self._one(name).get("annotations", {}).get("description", "")
+            self.assertIn("manually", description, name)
+
+
 if __name__ == "__main__":
     unittest.main()

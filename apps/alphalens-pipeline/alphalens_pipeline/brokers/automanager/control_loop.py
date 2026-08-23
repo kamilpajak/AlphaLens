@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import time
+from collections import deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -149,10 +150,65 @@ _STREAMING_ENABLED_ENV = "ALPHALENS_BROKER_STREAMING_ENABLED"
 _STREAM_STALE_ENV = "ALPHALENS_BROKER_STREAM_STALE_S"
 _DEFAULT_STREAM_STALE_S = 45.0
 
+# --- Stream breaker re-arm episode constants (rearm design memo §5) -----------
+# All named, all sited here beside _DEFAULT_STREAM_STALE_S; deliberately NO env
+# knob (ALPHALENS_BROKER_STREAM_DEBOUNCE_S is a documented knob on this exact
+# surface that already rotted dead) — tuning here is a code change with a test.
+#
+# Cooldown-ladder floor between re-arm trials. Must exceed the probed ~31s
+# wall-clock cost of one full in-breaker backoff budget (1+2+4+8+16s sleeps +
+# 6 connects — matching the incident's 08:43:26 -> 08:46:21 gap), so a re-arm
+# cycle can never spend connects faster than the failing state it replaces. It
+# also exceeds both stale_after_s (45s) and the 45s poll grid, guaranteeing at
+# most one trial per protective pass.
+_STREAM_REARM_FLOOR_S = 60.0
+# Ladder ceiling: bounds a long outage at 4 connect attempts/hour. A dark
+# stream costs at most one poll period of extra wake latency, never protection,
+# so 15 min is the worst-case dark-after-vendor-recovery window (vs the 14h
+# observed on 2026-08-22).
+_STREAM_REARM_CEILING_S = 900.0
+# Delivery-confirmed dwell before (a) the recovery CLOSE page and (b) the
+# ladder resets to the floor. 10x recv_timeout_s (30s) ~= 10-15 consecutive SIM
+# heartbeats at the documented 20-30s cadence — a deliver-once-then-die flapper
+# climbs the ladder instead of looping at the floor. A normal reconnect never
+# reaches this code (it never trips), so the dwell cannot affect healthy
+# operation.
+_STREAM_HEALTHY_DWELL_S = 300.0
+# Rolling window for the flap escalation: 4x the ceiling, so a window that saw
+# the threshold has necessarily seen the ladder fail to converge.
+_STREAM_FLAP_WINDOW_S = 3600.0
+# Trips inside the window before ONE CRITICAL page + the OPEN-page latch (the
+# CLOSE page is never suppressed). Mirrors _MAX_CONSECUTIVE_PLACE_FAILURES —
+# the repo's existing escalate-once threshold on the alert throttle.
+_STREAM_FLAP_ESCALATE_AT = 3
+
 # Prometheus liveness gauge: seconds since the last streamed message (age). Watched
-# by an AlphalensBrokerStreamStale rule, distinct from the per-poll heartbeat gauge
-# (a dead stream still emits heartbeats — the poll backstop keeps running).
+# by the AlphalensBrokerStreamStale rule shipped in
+# deploy/monitoring/prometheus/rules/alphalens.yaml (repo SoT; the live copy is
+# hand-synced — see deploy/systemd/README.md §8.5), distinct from the per-poll
+# heartbeat gauge (a dead stream still emits heartbeats — the poll backstop keeps
+# running).
 _STREAM_LAST_MESSAGE_METRIC_NAME = "alphalens_broker_manager_stream_last_message_age_seconds"
+
+# Stream-state gauge base names (rearm design memo §4.6). All co-emitted with the
+# age gauge in ONE atomic emit per tick (_emit_stream_gauge) — the write
+# OVERWRITES the whole stream domain textfile, so an omitted key deletes its
+# series and a second call to the domain clobbers the first.
+_STREAM_READER_UP_METRIC_NAME = "alphalens_broker_manager_stream_reader_up"
+# EPISODE-scoped: 1 from the down edge until the delivery-confirmed close. It
+# deliberately does NOT flicker per re-arm trial — a per-trial gauge resets to 0
+# on every ladder rung, so no Prometheus `for:` longer than one rung could fire.
+_STREAM_BREAKER_OPEN_METRIC_NAME = "alphalens_broker_manager_stream_breaker_open"
+# A LEVEL for eyeballing streak composition — rate()/increase() on it are
+# nonsense. The number the 2026-08-22 incident journal could not recover.
+_STREAM_CONSECUTIVE_FAILURES_METRIC_NAME = "alphalens_broker_manager_stream_consecutive_failures"
+# Monotonic counter: survives a tick gap; feeds the flapping rule.
+_STREAM_TRIPS_TOTAL_METRIC_NAME = "alphalens_broker_manager_stream_trips_total"
+# 0/1 trading-window gauge from _make_stream_session_window (memo §3 Q5):
+# emitted but referenced by NO shipped rule — making a rule session-aware
+# later is a one-line YAML change, not a code change. The trip page itself
+# stays unconditional (weekend quiet comes from the episode latch).
+_STREAM_IN_SESSION_METRIC_NAME = "alphalens_broker_manager_stream_in_session"
 
 
 def stream_last_message_metric(job: str) -> str:
@@ -2990,60 +3046,213 @@ def _stream_stale_s() -> float:
     return value
 
 
-def _emit_stream_gauge(age_seconds: float) -> None:
-    """Best-effort Prometheus liveness gauge (seconds since the last streamed
-    message). A textfile-dir hiccup must never crash the loop — the poll backstop
-    covers protection regardless of observability. The gauge's {job=...} label is the
-    SAME job as the heartbeat's (``state_paths.metrics_job()``) — it is the same
-    daemon instance — but it writes to the stream's OWN domain textfile
-    (``state_paths.stream_metrics_job()``) so it never clobbers the heartbeat."""
+def _emit_stream_gauge(values: Mapping[str, float]) -> None:
+    """Best-effort Prometheus stream-state gauges, in ONE atomic write per tick
+    (rearm design memo §4.6). ``values`` maps gauge BASE names to values; the
+    per-instance ``{job=...}`` label is applied here (the SAME job as the
+    heartbeat's, ``state_paths.metrics_job()`` — it is the same daemon instance).
+    The write atomically OVERWRITES the stream's OWN domain textfile
+    (``state_paths.stream_metrics_job()``) — never the heartbeat's, which a
+    shared domain would clobber — so every stream gauge MUST land in this single
+    call: an omitted key deletes its series. A textfile-dir hiccup must never
+    crash the loop — the poll backstop covers protection regardless of
+    observability."""
     from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
     job = state_paths.metrics_job()
     try:
         emit_domain_metrics(
-            state_paths.stream_metrics_job(), {stream_last_message_metric(job): age_seconds}
+            state_paths.stream_metrics_job(),
+            {f'{name}{{job="{job}"}}': value for name, value in values.items()},
         )
     except OSError:
-        logger.warning("broker-manager stream-liveness gauge emit failed", exc_info=True)
+        logger.warning("broker-manager stream gauges emit failed", exc_info=True)
 
 
 def _make_stream_tick(
     trigger: StreamTrigger,
     *,
     get_bearer: Callable[[], str],
+    alert: Callable[[str], None],
     alert_throttled: Callable[[str, str], bool],
     stale_s: float,
-    emit_gauge: Callable[[float], None] = _emit_stream_gauge,
+    emit_gauge: Callable[[Mapping[str, float]], None] = _emit_stream_gauge,
+    monotonic: Callable[[], float] = time.monotonic,
+    in_session: Callable[[], bool] | None = None,
 ) -> Callable[[], None]:
     """Build the per-tick streaming hook run by ``run_daemon`` on the MAIN thread.
 
-    If the reader's circuit breaker has tripped (``trigger.is_streaming`` False) it
-    pages a THROTTLED ``stream-breaker`` alert and returns — the daemon is on the
-    poll backstop, and this is the only place a permanent trip surfaces to the
-    operator on a thread where the alert sink is safe. Otherwise each tick it
-    (1) pushes the current bearer into the reader so a mid-stream
-    token rotation is re-authorized in place (never pulled by the reader — it
-    can never stall on the token flock), and (2) reads the reader's
-    ``seconds_since_last_message`` for the liveness gauge + a THROTTLED
-    ``stream-dead`` alert once silence exceeds ``stale_s``. Both the alert and the
-    gauge run only on the main thread (the shared ``_AlertThrottle`` is not
-    thread-safe). Fully best-effort: a bearer-read error (chain loss) degrades to
-    poll-only silently rather than crashing the protective loop."""
+    Rearm design memo ``saxo_stream_breaker_rearm_design_2026_08_22.md``
+    §4.4-§4.6. Every tick, unconditionally, in this order:
+
+    1. **Push the bearer FIRST** — before any dark-branch return. The pre-rearm
+       tick returned from the breaker branch before ``push_token``, freezing the
+       reader's token at the trip instant while ``alphalens-saxo-refresh``
+       rotated the real one every ~20 min — a re-armed reader would have burned
+       its single half-open trial on a 401.
+    2. **Sample delivery-backed health.** ``up`` requires a frame delivered on
+       THIS trial (``frames_delivered > delivered_at_rearm``) — never
+       ``is_streaming``, which ``rearm()`` sets True before any evidence; and
+       ``reader_dark`` includes ``not is_running()`` so a reader thread that
+       crashed WITHOUT tripping is recovered by the same path.
+    3. **Drive the episode state machine**: CLOSED -> OPEN on ``reader_dark``
+       (ONE guaranteed-send page); OPEN -> TRIAL at each cooldown-ladder rung
+       (60s doubling to 900s, at most one ``trigger.rearm()`` per tick, no
+       page); OPEN -> CLOSED once ``up`` has held ``_STREAM_HEALTHY_DWELL_S``
+       (ONE guaranteed-send page, ladder back to the floor). Telegram gets
+       EDGES once per EPISODE; Prometheus owns every level — a sustained dark
+       stream NEVER pages on an interval (the 2026-08-22 metronome). Flapping
+       (``_STREAM_FLAP_ESCALATE_AT`` trips inside ``_STREAM_FLAP_WINDOW_S``)
+       escalates ONE CRITICAL and then suppresses further OPEN pages only; the
+       CLOSE page is never suppressed (an unpaired page is worse than none).
+       The throttled ``stream-dead`` alert covers only the dark-but-CONNECTED
+       case (``not episode_open``) — an open episode already reports the dark
+       stream via its own page and gauge.
+    4. **Emit the stream gauges** — always, including while dark, in ONE atomic
+       multi-key write; the age key is never omitted (epoch ``None`` reports
+       seconds since this closure was built).
+
+    Both ``alert`` (guaranteed-send, edges only — mirrors
+    ``_alert_kill_transition``: edges are rare and each transition must deliver)
+    and ``alert_throttled`` are MAIN-THREAD-ONLY sinks; neither may ever be
+    handed to the reader thread's client (memo §7.14 / PR #900). Everything
+    after the bearer push is best-effort: ``run_daemon`` calls ``on_tick()``
+    bare and the CLI catches only ``BrokerError``, so a raising ``rearm()``
+    (e.g. ``Thread.start()`` under thread exhaustion) must never unwind the
+    protective daemon."""
+
+    # Episode state lives in this closure, constructed once per daemon by
+    # _build_stream_handles — the same daemon-lifetime one-slot shape as
+    # deps.kill_state, without a new LoopDeps field (memo §4.5).
+    #
+    # The session predicate feeds the in_session GAUGE only (memo §3 Q5) —
+    # nothing here gates on it. Built per-tick-closure (main-thread-only, so
+    # _make_stream_session_window's single-writer memo holds), injectable for
+    # tests. It FAILS OPEN: the calendar contract says a raising predicate is
+    # treated as in-session, and a calendar bug must never take the other five
+    # gauges down with it.
+    session_predicate = in_session if in_session is not None else _make_stream_session_window()
+    started_mono = monotonic()
+    episode_open = False
+    episode_rearms = 0
+    cooldown_s = _STREAM_REARM_FLOOR_S
+    next_trial_mono = 0.0
+    delivered_at_rearm = 0
+    up_since: float | None = None
+    last_trips_total = trigger.trips_total
+    trip_times: deque[float] = deque()
+    flap_latched = False
+
+    def _drive_episode() -> None:
+        nonlocal episode_open, episode_rearms, cooldown_s, next_trial_mono
+        nonlocal delivered_at_rearm, up_since, last_trips_total, flap_latched
+        now = monotonic()
+        # (2) Delivery-backed health sample (memo §4.4 step 2).
+        running = trigger.is_running()
+        streaming = trigger.is_streaming
+        frames = trigger.frames_delivered
+        silence = trigger.seconds_since_last_message()
+        reader_dark = (not running) or (not streaming)
+        up = (
+            running
+            and streaming
+            and frames > delivered_at_rearm
+            and silence is not None
+            and silence <= stale_s
+        )
+
+        # Flap accounting off the monotonic trips_total counter — a trip whose
+        # whole lifetime falls between two ticks is still counted (memo §7.1).
+        trips = trigger.trips_total
+        for _ in range(max(0, trips - last_trips_total)):
+            trip_times.append(now)
+        last_trips_total = trips
+        while trip_times and now - trip_times[0] > _STREAM_FLAP_WINDOW_S:
+            trip_times.popleft()
+        flap_active = len(trip_times) >= _STREAM_FLAP_ESCALATE_AT
+        if flap_active and not flap_latched:
+            alert(
+                f"CRITICAL: saxo stream flapping — {len(trip_times)} breaker trips "
+                f"inside {_STREAM_FLAP_WINDOW_S / 60:.0f} min; episode-OPEN pages "
+                "suppressed until the window clears (recovery pages never are)"
+            )
+        flap_latched = flap_active
+
+        # (3) Episode state machine (memo §4.5).
+        if not episode_open:
+            if reader_dark:
+                # CLOSED -> OPEN: arm the ladder; NO trial on the opening tick.
+                episode_open = True
+                episode_rearms = 0
+                cooldown_s = _STREAM_REARM_FLOOR_S
+                next_trial_mono = now + cooldown_s
+                up_since = None
+                if not flap_latched:
+                    alert(
+                        "saxo stream DOWN — reader dark, re-arm ladder engaged; "
+                        "running on poll backstop"
+                    )
+        elif up:
+            if up_since is None:
+                up_since = now
+            if now - up_since >= _STREAM_HEALTHY_DWELL_S:
+                # OPEN -> CLOSED: delivery-confirmed recovery held for the full
+                # dwell. NEVER suppressed by the flap latch — the operator must
+                # always see an episode end.
+                episode_open = False
+                cooldown_s = _STREAM_REARM_FLOOR_S
+                up_since = None
+                alert(
+                    f"saxo stream RECOVERED — delivery-confirmed after "
+                    f"{episode_rearms} re-arm trial(s); ladder reset"
+                )
+        else:
+            up_since = None  # the dwell must be CONTINUOUS delivery-backed health
+            if reader_dark and now >= next_trial_mono:
+                # OPEN -> TRIAL: at most ONE trial per tick, no page. The ladder
+                # advances BEFORE the rearm so a raising spawn cannot burn
+                # trials at the floor rate.
+                delivered_at_rearm = frames
+                trigger.reset_liveness()  # an hours-old epoch must never page stream-dead
+                cooldown_s = min(cooldown_s * 2.0, _STREAM_REARM_CEILING_S)
+                next_trial_mono = now + cooldown_s
+                episode_rearms += 1
+                trigger.rearm()
+                silence = trigger.seconds_since_last_message()
+
+        # stream-dead is for the dark-but-CONNECTED case only (memo §7.2): an
+        # open episode already reports the dark stream via its own page + gauge.
+        if not episode_open and silence is not None and silence > stale_s:
+            alert_throttled(
+                f"saxo stream silent >{stale_s:.0f}s ({silence:.0f}s) — running on poll backstop",
+                "stream-dead",
+            )
+
+        # (4) Gauges — every tick, including while dark, ONE atomic emit (all
+        # SIX keys: an omitted key deletes its series). The age key is never
+        # omitted: epoch None -> seconds since closure build.
+        # Fallback diverges from memo §4.6's "seconds since reader start":
+        # started_mono is the CLOSURE build time (daemon start). Harmless — no
+        # alert keys on the absolute value while the breaker is open.
+        age = silence if silence is not None else now - started_mono
+        try:
+            session = 1.0 if session_predicate() else 0.0
+        except Exception:  # calendar fail-open: report in-session, keep gauges
+            logger.warning("streaming: session predicate raised — reporting in-session")
+            session = 1.0
+        emit_gauge(
+            {
+                _STREAM_READER_UP_METRIC_NAME: 1.0 if (running and streaming) else 0.0,
+                _STREAM_BREAKER_OPEN_METRIC_NAME: 1.0 if episode_open else 0.0,
+                _STREAM_LAST_MESSAGE_METRIC_NAME: age,
+                _STREAM_CONSECUTIVE_FAILURES_METRIC_NAME: float(trigger.consecutive_failures),
+                _STREAM_TRIPS_TOTAL_METRIC_NAME: float(trips),
+                _STREAM_IN_SESSION_METRIC_NAME: session,
+            }
+        )
 
     def _tick() -> None:
-        if not trigger.is_streaming:
-            # The circuit breaker tripped PERMANENTLY -> the reader thread is dead and
-            # the daemon is on the poll backstop. Page once (throttled) on the MAIN
-            # thread — the breaker's own alert runs on the reader thread where the
-            # _AlertThrottle/Telegram sink is not thread-safe, and the 'stream-dead'
-            # silence alert never fires when the stream never delivered a message
-            # (seconds_since_last_message stays None). zen MEDIUM, PR #900.
-            alert_throttled(
-                "saxo stream circuit breaker tripped — running on poll backstop",
-                "stream-breaker",
-            )
-            return
+        # (1) Bearer FIRST — before any dark-branch logic (memo §4.4 step 1).
         try:
             bearer = get_bearer()
         except Exception:  # a token/chain error must never crash the protective loop
@@ -3051,14 +3260,15 @@ def _make_stream_tick(
             bearer = None
         if bearer:
             trigger.push_token(bearer)
-        silence = trigger.seconds_since_last_message()
-        if silence is None:
-            return  # no message yet — the poll backstop covers protection
-        emit_gauge(silence)
-        if silence > stale_s:
-            alert_throttled(
-                f"saxo stream silent >{stale_s:.0f}s ({silence:.0f}s) — running on poll backstop",
-                "stream-dead",
+        try:
+            _drive_episode()
+        except Exception:
+            # run_daemon calls on_tick() bare and the CLI catches only
+            # BrokerError — a raising rearm()/read must degrade to poll-only,
+            # never unwind the protective daemon (memo §7.5).
+            logger.warning(
+                "streaming: episode tick failed — poll backstop covers protection",
+                exc_info=True,
             )
 
     return _tick
@@ -3218,7 +3428,9 @@ def build_default_deps(
     # which case the daemon degrades to poll-only, byte-identical to today. The
     # _compact_standalone_stop_journal() above already ran, so the reader thread
     # never races the compaction rewrite (thread-model §Startup ordering).
-    wake_event, stream_tick, stream_trigger = _build_stream_handles(broker, provider, _throttled)
+    wake_event, stream_tick, stream_trigger = _build_stream_handles(
+        broker, provider, base_alert, _throttled
+    )
 
     # Day-1 gap gate price probe (built once, shared by both LoopDeps sites it
     # is wired into below — the closure captured by ``place_pick`` and the
@@ -3286,10 +3498,18 @@ def _build_streaming_subscriber(provider: Any) -> Any:
 def _build_stream_handles(
     broker: Broker,
     provider: Any,
+    base_alert: Callable[[str], None],
     alert_throttled: Callable[[str, str], bool],
 ) -> tuple[threading.Event | None, Callable[[], None] | None, StreamTrigger | None]:
     """Construct + start the dark streaming reader when every structural
     precondition holds, else return the poll-only ``(None, None, None)``.
+
+    ``base_alert`` (guaranteed-send, episode edges) and ``alert_throttled`` are
+    both MAIN-THREAD-ONLY sinks consumed by the tick closure. NEITHER may ever
+    be passed into the StreamTrigger / streaming-client construction below —
+    the client's optional ``alert=`` kwarg must stay unset so ``_trip_breaker``
+    stays journald-only on the READER thread (rearm design memo §7.14; pinned
+    by ``test_client_factory_is_never_given_an_alert_sink``).
 
     Preconditions (each a fail-safe-to-poll gate, design memo §Env gates):
       0. ``env != live`` — the order-WS subscriber
@@ -3322,7 +3542,10 @@ def _build_stream_handles(
     if not _streaming_enabled():
         return None, None, None
 
-    from alphalens_pipeline.brokers.automanager.streaming_trigger import StreamTrigger
+    from alphalens_pipeline.brokers.automanager.streaming_trigger import (
+        StreamTrigger,
+        default_context_id_factory,
+    )
     from alphalens_pipeline.brokers.saxo.broker import SaxoBroker
     from alphalens_pipeline.brokers.saxo.tokens import OAuthTokenProvider
 
@@ -3339,7 +3562,10 @@ def _build_stream_handles(
         return None, None, None
 
     stale_s = _stream_stale_s()
-    context_id = f"almgr-{os.getpid()}-{int(time.time())}"  # <=50 chars, [a-zA-Z0-9-]
+    # The contextId format has ONE home (streaming_trigger.default_context_id_factory,
+    # <=50 chars, [a-zA-Z0-9-]) so the initial context and every rearm() rotation
+    # stay consistent (rearm design memo §4.3).
+    context_id = default_context_id_factory()
     try:
         trigger = StreamTrigger(
             token_provider=provider,
@@ -3363,6 +3589,7 @@ def _build_stream_handles(
     stream_tick = _make_stream_tick(
         trigger,
         get_bearer=provider.get_access_token,
+        alert=base_alert,
         alert_throttled=alert_throttled,
         stale_s=stale_s,
     )

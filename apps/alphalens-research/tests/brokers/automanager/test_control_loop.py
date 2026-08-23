@@ -6408,107 +6408,166 @@ class TestStreamRestBudget(unittest.TestCase):
         self.assertIn(45.0, event.timeouts)
 
 
+class _FakeStreamTrigger:
+    """The ONE shared stub of the full ``StreamTrigger`` surface the rewritten
+    tick consumes (rearm design memo §6 INC-3 / §7.11): read-only liveness
+    (``is_running`` / ``is_streaming`` / ``frames_delivered`` / ``trips_total``
+    / ``consecutive_failures`` / ``seconds_since_last_message``) plus the
+    main-thread acts (``push_token`` / ``reset_liveness`` / ``rearm``). One
+    class instead of five ad-hoc ``_Trig`` stubs, so the next surface addition
+    breaks one class, not five."""
+
+    def __init__(
+        self,
+        *,
+        running: bool = True,
+        streaming: bool = True,
+        frames: int = 0,
+        trips: int = 0,
+        failures: int = 0,
+        silence: float | None = None,
+        rearm_result: bool = True,
+    ) -> None:
+        self.running = running
+        self.is_streaming = streaming
+        self.frames_delivered = frames
+        self.trips_total = trips
+        self.consecutive_failures = failures
+        self.silence = silence
+        self.pushed: list[str] = []
+        self.rearm_calls = 0
+        self.reset_liveness_calls = 0
+        self.rearm_result = rearm_result
+        # Optional scripted rearm behaviour (memo §7.12: the stub must FOLLOW a
+        # scripted state transition driven by re-arm calls, never a bare False).
+        self.on_rearm: Callable[[_FakeStreamTrigger], bool] | None = None
+
+    def is_running(self) -> bool:
+        return self.running
+
+    def push_token(self, tok: str) -> None:
+        self.pushed.append(tok)
+
+    def seconds_since_last_message(self) -> float | None:
+        return self.silence
+
+    def reset_liveness(self) -> None:
+        self.reset_liveness_calls += 1
+        self.silence = None
+
+    def rearm(self) -> bool:
+        self.rearm_calls += 1
+        if self.on_rearm is not None:
+            return self.on_rearm(self)
+        return self.rearm_result
+
+    # ----- scenario helpers (what the real client does on these transitions) --
+
+    def go_dark_with_trip(self) -> None:
+        """Breaker trips: reader exits, streaming shuts, trips_total bumps."""
+        self.is_streaming = False
+        self.running = False
+        self.trips_total += 1
+
+    def come_up(self, *, silence: float = 5.0) -> None:
+        """A trial connects AND delivers a frame (the delivery proof)."""
+        self.running = True
+        self.is_streaming = True
+        self.frames_delivered += 1
+        self.silence = silence
+
+
+def _stream_tick_harness(
+    trig: _FakeStreamTrigger,
+    clock: _Clock,
+    *,
+    stale_s: float = 45.0,
+    bearer: Any = "B",
+    gauges: list[dict[str, float]] | None = None,
+    in_session: Callable[[], bool] | None = None,
+) -> tuple[Callable[[], None], list[str], list[tuple[str, str]]]:
+    """Build the rewritten tick with recording sinks: ``pages`` records the
+    guaranteed-send edge sink, ``throttled`` the interval-throttled one."""
+    pages: list[str] = []
+    throttled: list[tuple[str, str]] = []
+    get_bearer = bearer if callable(bearer) else (lambda: bearer)
+    tick = cl._make_stream_tick(
+        trig,
+        get_bearer=get_bearer,
+        alert=pages.append,
+        alert_throttled=lambda m, r: throttled.append((m, r)) or True,
+        stale_s=stale_s,
+        emit_gauge=(gauges.append if gauges is not None else (lambda values: None)),
+        monotonic=clock,
+        in_session=in_session if in_session is not None else (lambda: True),
+    )
+    return tick, pages, throttled
+
+
+# Every gauge base name the tick must land in ONE atomic domain emit (rearm
+# design memo §4.6) — an omitted key deletes its Prometheus series.
+_ALL_STREAM_GAUGE_NAMES = (
+    "alphalens_broker_manager_stream_reader_up",
+    "alphalens_broker_manager_stream_breaker_open",
+    "alphalens_broker_manager_stream_last_message_age_seconds",
+    "alphalens_broker_manager_stream_consecutive_failures",
+    "alphalens_broker_manager_stream_trips_total",
+    "alphalens_broker_manager_stream_in_session",
+)
+
+
 class TestStreamStaleAlert(unittest.TestCase):
     def test_stream_silence_beyond_stale_s_raises_throttled_alert_on_main_thread(self) -> None:
-        alerts: list[tuple[str, str]] = []
-
-        class _Trig:
-            is_streaming = True
-
-            def __init__(self, silence: float | None) -> None:
-                self._silence = silence
-                self.pushed: list[str] = []
-
-            def push_token(self, tok: str) -> None:
-                self.pushed.append(tok)
-
-            def seconds_since_last_message(self) -> float | None:
-                return self._silence
-
-        gauges: list[float] = []
-        # Silence beyond stale_s -> throttled 'stream-dead' alert fires.
-        trig = _Trig(silence=90.0)
-        tick = cl._make_stream_tick(
-            trig,
-            get_bearer=lambda: "BEARER-1",
-            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
-            stale_s=45.0,
-            emit_gauge=gauges.append,
-        )
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        # Silence beyond stale_s on a HEALTHY reader (dark-but-connected) ->
+        # throttled 'stream-dead' alert fires; the episode machine stays closed.
+        trig = _FakeStreamTrigger(frames=1, silence=90.0)
+        tick, pages, throttled = _stream_tick_harness(trig, clock, bearer="BEARER-1", gauges=gauges)
         tick()
         self.assertEqual(trig.pushed, ["BEARER-1"])
-        self.assertEqual(len(alerts), 1)
-        self.assertEqual(alerts[0][1], "stream-dead")
-        self.assertEqual(gauges, [90.0])
+        self.assertEqual(len(throttled), 1)
+        self.assertEqual(throttled[0][1], "stream-dead")
+        self.assertEqual(pages, [])
+        self.assertEqual(gauges[-1][cl._STREAM_LAST_MESSAGE_METRIC_NAME], 90.0)
 
         # Fresh stream (silence <= stale_s) -> no alert, still pushes + gauges.
-        alerts.clear()
         gauges.clear()
-        trig2 = _Trig(silence=5.0)
-        tick2 = cl._make_stream_tick(
-            trig2,
-            get_bearer=lambda: "BEARER-2",
-            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
-            stale_s=45.0,
-            emit_gauge=gauges.append,
+        trig2 = _FakeStreamTrigger(frames=1, silence=5.0)
+        tick2, pages2, throttled2 = _stream_tick_harness(
+            trig2, clock, bearer="BEARER-2", gauges=gauges
         )
         tick2()
         self.assertEqual(trig2.pushed, ["BEARER-2"])
-        self.assertEqual(alerts, [])
-        self.assertEqual(gauges, [5.0])
+        self.assertEqual(throttled2, [])
+        self.assertEqual(pages2, [])
+        self.assertEqual(gauges[-1][cl._STREAM_LAST_MESSAGE_METRIC_NAME], 5.0)
 
-    def test_no_message_yet_neither_alerts_nor_gauges(self) -> None:
-        alerts: list[tuple[str, str]] = []
-        gauges: list[float] = []
-
-        class _Trig:
-            is_streaming = True
-
-            def push_token(self, tok: str) -> None:
-                pass
-
-            def seconds_since_last_message(self) -> float | None:
-                return None
-
-        tick = cl._make_stream_tick(
-            _Trig(),
-            get_bearer=lambda: "B",
-            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
-            stale_s=45.0,
-            emit_gauge=gauges.append,
-        )
+    def test_no_message_yet_does_not_alert_but_still_gauges(self) -> None:
+        # Rearm design memo §4.6: the gauges are written on EVERY tick and the
+        # age key is never omitted — before any message it reports seconds since
+        # the tick closure was built (an omitted key deletes its series).
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(silence=None)
+        tick, pages, throttled = _stream_tick_harness(trig, clock, gauges=gauges)
+        clock.now += 30.0
         tick()
-        self.assertEqual(alerts, [])
-        self.assertEqual(gauges, [])
+        self.assertEqual(pages, [])
+        self.assertEqual(throttled, [])
+        self.assertEqual(len(gauges), 1)
+        self.assertEqual(gauges[0][cl._STREAM_LAST_MESSAGE_METRIC_NAME], 30.0)
 
     def test_bearer_read_failure_never_crashes_the_tick(self) -> None:
         # A token flock / chain-loss error while reading the bearer must degrade
         # to poll-only silently (never-worse-than-poll), never crash the loop.
-        alerts: list[tuple[str, str]] = []
-
-        class _Trig:
-            is_streaming = True
-
-            def __init__(self) -> None:
-                self.pushed: list[str] = []
-
-            def push_token(self, tok: str) -> None:
-                self.pushed.append(tok)
-
-            def seconds_since_last_message(self) -> float | None:
-                return None
+        clock = _Clock(start=0.0)
 
         def _raise_bearer() -> str:
             raise RuntimeError("chain lost")
 
-        trig = _Trig()
-        tick = cl._make_stream_tick(
-            trig,
-            get_bearer=_raise_bearer,
-            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
-            stale_s=45.0,
-            emit_gauge=lambda v: None,
-        )
+        trig = _FakeStreamTrigger(silence=None)
+        tick, _pages, _throttled = _stream_tick_harness(trig, clock, bearer=_raise_bearer)
         tick()  # must not raise
         self.assertEqual(trig.pushed, [])
 
@@ -6563,51 +6622,511 @@ class TestBlockingOnTickDoesNotExtendGap(unittest.TestCase):
 
 
 class TestStreamBreakerAlert(unittest.TestCase):
-    """zen MEDIUM: when the circuit breaker trips permanently (is_streaming False),
-    the operator must be paged on the MAIN thread — even if the stream never
-    delivered a single message (seconds_since_last_message stays None, so the
-    'stream-dead' silence alert would never fire)."""
+    """REWRITTEN for the breaker re-arm design (memo §6 INC-3). The old
+    ``test_breaker_tripped_pages_even_with_no_message`` pinned the THROTTLED
+    repeating 'stream-breaker' page — the mechanism behind the 2026-08-22
+    metronome (29 identical Telegram messages over 14 h). A trip now opens an
+    EPISODE: exactly one guaranteed-send OPEN page (even when the stream never
+    delivered a message and ``seconds_since_last_message`` stays None), silence
+    while open, one delivery-confirmed CLOSE page."""
 
-    def _trig(self, *, is_streaming: bool, silence: float | None):
-        class _Trig:
-            def __init__(self) -> None:
-                self.pushed: list[str] = []
-                self.is_streaming = is_streaming
-
-            def push_token(self, tok: str) -> None:
-                self.pushed.append(tok)
-
-            def seconds_since_last_message(self) -> float | None:
-                return silence
-
-        return _Trig()
-
-    def test_breaker_tripped_pages_even_with_no_message(self) -> None:
-        alerts: list[tuple[str, str]] = []
-        trig = self._trig(is_streaming=False, silence=None)
-        tick = cl._make_stream_tick(
-            trig,
-            get_bearer=lambda: "B",
-            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
-            stale_s=45.0,
-            emit_gauge=lambda v: None,
-        )
+    def test_breaker_trip_with_no_message_pages_once_via_guaranteed_sink(self) -> None:
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False, silence=None)
+        tick, pages, throttled = _stream_tick_harness(trig, clock)
         tick()
-        self.assertEqual(len(alerts), 1)
-        self.assertEqual(alerts[0][1], "stream-breaker")
+        self.assertEqual(len(pages), 1)  # OPEN — paged even with no message ever
+        for _ in range(10):
+            clock.now += 45.0
+            tick()
+        self.assertEqual(len(pages), 1)  # a LEVEL never pages on an interval
+        self.assertEqual(throttled, [])  # the 'stream-breaker' metronome is gone
 
     def test_live_stream_does_not_page_breaker(self) -> None:
-        alerts: list[tuple[str, str]] = []
-        trig = self._trig(is_streaming=True, silence=5.0)
-        tick = cl._make_stream_tick(
-            trig,
-            get_bearer=lambda: "B",
-            alert_throttled=lambda m, r: alerts.append((m, r)) or True,
-            stale_s=45.0,
-            emit_gauge=lambda v: None,
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+        tick, pages, throttled = _stream_tick_harness(trig, clock)
+        tick()
+        self.assertEqual(pages, [])
+        self.assertEqual(throttled, [])
+
+
+class TestStreamEpisodeLatch(unittest.TestCase):
+    """Rearm design memo §4.5: Telegram gets EDGES, once per EPISODE — one OPEN
+    page on the down edge, zero while open, one delivery-confirmed CLOSE page.
+    Prometheus owns every level."""
+
+    def test_sustained_breaker_open_pages_once_across_sixty_ticks(self) -> None:
+        # The 2026-08-22 metronome regression, red first: 60 ticks x 45s (~45
+        # min) of an unbroken dark stream used to page every ~30.5 min.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False, rearm_result=False)
+        tick, pages, throttled = _stream_tick_harness(trig, clock)
+        for _ in range(60):
+            tick()
+            clock.now += 45.0
+        self.assertEqual(len(pages), 1)
+        self.assertEqual(throttled, [])
+
+    def test_recovery_pages_only_after_a_delivered_frame_and_the_dwell(self) -> None:
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, throttled = _stream_tick_harness(trig, clock)
+
+        tick()  # t=0: episode OPEN
+        self.assertEqual(len(pages), 1)
+        clock.now = 60.0
+        tick()  # first trial: rearm + deliver
+        self.assertEqual(trig.rearm_calls, 1)
+        # up is sampled BEFORE the rearm, so the delivery registers next tick.
+        clock.now = 105.0
+        tick()  # up_since = 105
+        # No CLOSE page until the 300s dwell has been held CONTINUOUSLY.
+        for t in (150.0, 195.0, 240.0, 285.0, 330.0, 375.0, 404.9):
+            clock.now = t
+            tick()
+        self.assertEqual(len(pages), 1, pages)
+        clock.now = 405.0  # 105 + _STREAM_HEALTHY_DWELL_S — dwell boundary
+        tick()
+        self.assertEqual(len(pages), 2)
+        self.assertIn("RECOVERED", pages[-1])
+        self.assertEqual(throttled, [])
+
+    def test_incident_replay_two_messages_instead_of_twenty_nine(self) -> None:
+        # The REAL 2026-08-22 shape, replayed per memo §4.7: 6 consecutive
+        # failures trip the breaker at 08:46:21 (t=0 here), the vendor recovers
+        # ~08:48 — trial 1 at +60s still hits the outage and re-trips (no page),
+        # trial 2 at +180s delivers, the 300s dwell holds, CLOSE follows. The
+        # journal's 31-page metronome becomes exactly TWO Telegram lines and
+        # ~3 min dark instead of 14 hours.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False, failures=6, trips=0)
+        outage_over = False
+
+        def _saxo(t: _FakeStreamTrigger) -> bool:
+            if outage_over:
+                t.come_up()  # a heartbeat lands on the re-armed context
+            else:
+                t.go_dark_with_trip()  # still 504/500 — the single trial re-trips
+            return True
+
+        trig.on_rearm = _saxo
+        tick, pages, throttled = _stream_tick_harness(trig, clock)
+        trig.go_dark_with_trip()  # 08:46:21 — the breaker trips
+
+        tick()  # t=0: OPEN — the ONE down-edge page
+        self.assertEqual(len(pages), 1)
+        self.assertIn("DOWN", pages[0])
+        rearm_times: list[float] = []
+        for t in (45.0, 60.0, 105.0, 150.0, 180.0):
+            clock.now = t
+            before = trig.rearm_calls
+            tick()
+            if trig.rearm_calls > before:
+                rearm_times.append(t)
+            if t == 60.0:
+                outage_over = True  # Saxo recovered ~08:48 — after trial 1, before trial 2
+        self.assertEqual(rearm_times, [60.0, 180.0])  # the ladder schedule: 60 then +120
+        # Delivery registered at trial 2 (t=180); dwell from the next tick.
+        clock.now = 225.0
+        tick()  # up_since = 225
+        for t in (270.0, 315.0, 360.0, 405.0, 450.0, 495.0, 524.9):
+            clock.now = t
+            tick()
+        self.assertEqual(len(pages), 1)  # still just the OPEN page while dwelling
+        clock.now = 525.0  # 225 + 300s dwell -> CLOSE (~08:55 wall clock)
+        tick()
+        self.assertEqual(len(pages), 2)
+        self.assertIn("RECOVERED", pages[-1])
+        # No interval-throttled traffic at any point: the metronome is gone.
+        self.assertEqual(throttled, [])
+        # Exactly one failed trial + one delivering trial, on the ladder grid.
+        self.assertEqual(trig.rearm_calls, 2)
+
+    def test_a_trial_that_dies_before_delivering_pages_nothing(self) -> None:
+        # Memo §7.1: the winning proposal's worst defect — a trial that connects
+        # but never delivers must NOT page "re-armed / streaming again".
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False)
+
+        def _connect_without_delivery(t: _FakeStreamTrigger) -> bool:
+            t.running = True
+            t.is_streaming = True  # rearm sets the flag True BEFORE any evidence
+            return True
+
+        trig.on_rearm = _connect_without_delivery
+        tick, pages, _throttled = _stream_tick_harness(trig, clock)
+        tick()  # OPEN
+        clock.now = 60.0
+        tick()  # trial connects, no frame
+        clock.now = 105.0
+        tick()  # up stays False (frames == delivered_at_rearm)
+        trig.go_dark_with_trip()  # the trial dies
+        clock.now = 150.0
+        tick()
+        self.assertEqual(len(pages), 1)  # only the original OPEN page
+
+    def test_a_reader_thread_that_dies_without_tripping_is_rearmed(self) -> None:
+        # Memo §7.6: _thread_main swallows a crash, leaving is_streaming True —
+        # the episode must key on reader_dark (which includes not is_running()).
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=True, silence=30.0)
+        tick, pages, _throttled = _stream_tick_harness(trig, clock)
+        tick()
+        self.assertEqual(len(pages), 1)  # crashed reader opens an episode
+        clock.now = 60.0
+        tick()
+        self.assertEqual(trig.rearm_calls, 1)  # and is re-armed at the floor
+
+    def test_edge_pages_use_the_guaranteed_send_sink_not_the_interval_throttle(self) -> None:
+        # Memo §4.5: routing a genuine edge through an interval throttle is what
+        # produced the metronome — edges go to deps.alert (guaranteed-send).
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, throttled = _stream_tick_harness(trig, clock)
+        for t in (0.0, 60.0, 105.0, 150.0, 405.0, 450.0):
+            clock.now = t
+            tick()
+        self.assertEqual(len(pages), 2)  # OPEN + CLOSE on the guaranteed sink
+        self.assertEqual(throttled, [])  # and NOTHING on the throttled sink
+
+    def test_bearer_is_pushed_before_every_branch_including_the_dark_one(self) -> None:
+        # Memo §2.2/§4.4 step 1: the old tick returned from the breaker branch
+        # BEFORE push_token, freezing the reader's bearer at the trip instant.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False)
+        tick, _pages, _throttled = _stream_tick_harness(trig, clock, bearer="FRESH")
+        tick()
+        self.assertEqual(trig.pushed, ["FRESH"])
+
+    def test_bearer_read_failure_still_never_crashes_the_tick(self) -> None:
+        clock = _Clock(start=0.0)
+
+        def _raise_bearer() -> str:
+            raise RuntimeError("chain lost")
+
+        trig = _FakeStreamTrigger(running=False, streaming=False)
+        tick, pages, _throttled = _stream_tick_harness(trig, clock, bearer=_raise_bearer)
+        tick()  # must not raise, and the episode machine still runs
+        self.assertEqual(trig.pushed, [])
+        self.assertEqual(len(pages), 1)  # the OPEN page still fires
+
+    def test_a_raising_rearm_never_escapes_the_tick(self) -> None:
+        # Memo §7.5: run_daemon calls on_tick() bare and the CLI catches only
+        # BrokerError — a RuntimeError from Thread.start() must never unwind
+        # the protective daemon.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False)
+
+        def _boom(_t: _FakeStreamTrigger) -> bool:
+            raise RuntimeError("thread exhaustion")
+
+        trig.on_rearm = _boom
+        tick, _pages, _throttled = _stream_tick_harness(trig, clock)
+        tick()
+        clock.now = 60.0
+        tick()  # the raising rearm is swallowed
+        self.assertEqual(trig.rearm_calls, 1)
+        clock.now = 180.0
+        tick()  # and the ladder keeps retrying on later ticks
+        self.assertEqual(trig.rearm_calls, 2)
+
+    def test_stream_dead_alert_is_silent_while_an_episode_is_open(self) -> None:
+        # Memo §7.2: after 14h dark seconds_since_last_message() is ~50400 —
+        # without the episode gate the metronome relocates onto 'stream-dead'.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False, silence=50400.0)
+        trig.on_rearm = lambda t: False  # keep the episode open, liveness reset
+        tick, _pages, throttled = _stream_tick_harness(trig, clock)
+        for _ in range(60):
+            tick()
+            clock.now += 45.0
+        self.assertEqual([r for _, r in throttled], [])
+
+    def test_rearm_resets_liveness_so_an_hours_old_epoch_never_pages_stream_dead(self) -> None:
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False, silence=50400.0)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, throttled = _stream_tick_harness(trig, clock)
+        for t in (0.0, 60.0, 105.0, 405.0, 450.0):
+            clock.now = t
+            tick()
+        self.assertGreaterEqual(trig.reset_liveness_calls, 1)
+        self.assertNotIn("stream-dead", [r for _, r in throttled])
+        self.assertEqual(len(pages), 2)  # a clean OPEN -> CLOSE episode
+
+
+def _drive_flap_episodes(
+    *,
+    kills: int,
+    ticks: int = 60,
+) -> tuple[list[str], list[tuple[str, str]], _FakeStreamTrigger]:
+    """Drive repeated trip -> rearm -> deliver -> dwell -> close episodes: the
+    trigger starts healthy, an initial trip opens episode 1, and after each
+    delivery-confirmed CLOSE the stream is killed again (up to ``kills`` times).
+    45s tick grid, all inside one _STREAM_FLAP_WINDOW_S."""
+    clock = _Clock(start=0.0)
+    trig = _FakeStreamTrigger(frames=1, silence=5.0)
+    trig.on_rearm = lambda t: (t.come_up(), True)[1]
+    tick, pages, throttled = _stream_tick_harness(trig, clock)
+    trig.go_dark_with_trip()
+    kills_done = 0
+    for _ in range(ticks):
+        before = len(pages)
+        tick()
+        just_closed = len(pages) > before and "RECOVERED" in pages[-1]
+        if just_closed and kills_done < kills:
+            trig.go_dark_with_trip()
+            kills_done += 1
+        clock.now += 45.0
+    return pages, throttled, trig
+
+
+class TestStreamRearmLadder(unittest.TestCase):
+    """Rearm design memo §3 Q3 / §4.5 / §5: the cooldown ladder
+    60 -> 120 -> 240 -> 480 -> 900 -> 900 s lives in the tick closure, resets to
+    the floor ONLY after a delivery-confirmed 300s dwell, and flapping escalates
+    ONE CRITICAL after 3 trips inside the rolling hour."""
+
+    def test_first_tick_after_a_trip_arms_the_cooldown_and_does_not_rearm(self) -> None:
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False, rearm_result=False)
+        tick, _pages, _throttled = _stream_tick_harness(trig, clock)
+        tick()  # t=0: OPEN, cooldown armed — NO trial on the opening tick
+        self.assertEqual(trig.rearm_calls, 0)
+        clock.now = 45.0
+        tick()  # still inside the 60s floor
+        self.assertEqual(trig.rearm_calls, 0)
+        clock.now = 59.9
+        tick()
+        self.assertEqual(trig.rearm_calls, 0)
+        clock.now = 60.0  # the floor boundary
+        tick()
+        self.assertEqual(trig.rearm_calls, 1)
+
+    def test_cooldown_doubles_from_sixty_and_caps_at_nine_hundred(self) -> None:
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False, rearm_result=False)
+        tick, _pages, _throttled = _stream_tick_harness(trig, clock)
+        tick()  # t=0: OPEN
+        # Trial times on the ladder: gaps 60, 120, 240, 480, 900, 900 (cap).
+        expected_trial_times = [60.0, 180.0, 420.0, 900.0, 1800.0, 2700.0, 3600.0]
+        for i, trial_at in enumerate(expected_trial_times, start=1):
+            clock.now = trial_at - 0.1
+            tick()
+            self.assertEqual(trig.rearm_calls, i - 1, f"early trial before t={trial_at}")
+            clock.now = trial_at
+            tick()
+            self.assertEqual(trig.rearm_calls, i, f"missing trial at t={trial_at}")
+
+    def test_at_most_one_rearm_attempt_per_tick(self) -> None:
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False, rearm_result=False)
+        tick, _pages, _throttled = _stream_tick_harness(trig, clock)
+        tick()  # OPEN
+        clock.now = 5000.0  # far past SEVERAL ladder rungs in one gap
+        tick()
+        self.assertEqual(trig.rearm_calls, 1)
+
+    def test_a_flap_inside_the_dwell_climbs_the_ladder_instead_of_resetting_it(self) -> None:
+        # Memo §3 Q3 damping layer 2: a deliver-once-then-die flapper must climb
+        # 60 -> 120 -> 240, not loop at the floor off its sub-dwell delivery.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(running=False, streaming=False)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, _throttled = _stream_tick_harness(trig, clock)
+        tick()  # t=0: OPEN
+        clock.now = 60.0
+        tick()  # trial 1 delivers
+        clock.now = 105.0
+        tick()  # up, dwell running (105s < 300s held)
+        trig.go_dark_with_trip()  # dies INSIDE the dwell
+        clock.now = 150.0
+        tick()  # dark again; next rung is 180 (climbed), not 150+60
+        self.assertEqual(trig.rearm_calls, 1)
+        clock.now = 180.0
+        tick()  # trial 2 at the SECOND rung
+        self.assertEqual(trig.rearm_calls, 2)
+        trig.go_dark_with_trip()
+        clock.now = 419.9
+        tick()
+        self.assertEqual(trig.rearm_calls, 2)
+        clock.now = 420.0  # third rung: 180 + 240 — the ladder kept climbing
+        tick()
+        self.assertEqual(trig.rearm_calls, 3)
+        # The sub-dwell deliveries never paged a recovery.
+        self.assertEqual(len(pages), 1)
+
+    def test_three_trips_in_the_flap_window_escalate_once_then_suppress_open_pages(self) -> None:
+        pages, _throttled, trig = _drive_flap_episodes(kills=2)
+        criticals = [p for p in pages if "CRITICAL" in p]
+        opens = [p for p in pages if "DOWN" in p and "CRITICAL" not in p]
+        closes = [p for p in pages if "RECOVERED" in p]
+        self.assertEqual(len(criticals), 1)  # escalate ONCE at the 3rd trip
+        self.assertEqual(len(opens), 2)  # episode 3's OPEN page is suppressed
+        self.assertEqual(len(closes), 3)  # every episode still closes loudly
+        self.assertEqual(trig.trips_total, 3)
+
+    def test_the_close_page_is_never_suppressed_by_the_flap_latch(self) -> None:
+        # Memo §4.5: an unpaired page is worse than none — the operator must
+        # always see an episode end, latch or no latch.
+        pages, _throttled, _trig = _drive_flap_episodes(kills=2)
+        critical_at = next(i for i, p in enumerate(pages) if "CRITICAL" in p)
+        self.assertTrue(
+            any("RECOVERED" in p for p in pages[critical_at + 1 :]),
+            f"no CLOSE page after the flap CRITICAL: {pages}",
+        )
+
+    def test_a_scripted_trip_rearm_fail_cycle_pages_at_most_twice_per_hour(self) -> None:
+        # Memo §7.12 replacement: the stub FOLLOWS a scripted trip/rearm/fail
+        # cycle across a simulated hour — total messages stay <= 2 (one OPEN +
+        # at most one flap CRITICAL), vs the metronome's 2/hour FOREVER plus
+        # false recovery pages a flag-keyed edge would add.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+
+        def _trial_connects_without_delivery(t: _FakeStreamTrigger) -> bool:
+            t.running = True
+            t.is_streaming = True
+            return True
+
+        trig.on_rearm = _trial_connects_without_delivery
+        tick, pages, throttled = _stream_tick_harness(trig, clock)
+        trig.go_dark_with_trip()
+        rearms_seen = 0
+        trial_live_ticks = 0
+        for _ in range(80):  # 80 x 45s = one hour
+            tick()
+            if trig.rearm_calls > rearms_seen:
+                rearms_seen = trig.rearm_calls
+                trial_live_ticks = 1
+            elif trial_live_ticks:
+                trial_live_ticks = 0
+                trig.go_dark_with_trip()  # every trial dies one tick later
+            clock.now += 45.0
+        self.assertLessEqual(len(pages), 2, pages)
+        self.assertEqual(throttled, [])
+
+
+class TestStreamGauges(unittest.TestCase):
+    """Rearm design memo §4.6 / §6 INC-4: six gauges, written on EVERY tick
+    (including while dark — the pre-rearm tick returned from the breaker branch
+    before emitting, freezing the textfile so no age rule could ever fire), in
+    ONE atomic domain emit. Prometheus owns every level; Telegram gets edges."""
+
+    def test_gauges_are_written_on_every_tick_including_while_dark(self) -> None:
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(
+            running=False, streaming=False, trips=1, failures=6, rearm_result=False
+        )
+        tick, _pages, _throttled = _stream_tick_harness(
+            trig, clock, gauges=gauges, in_session=lambda: False
+        )
+        for _ in range(5):
+            tick()
+            clock.now += 45.0
+        self.assertEqual(len(gauges), 5)
+        for emitted in gauges:
+            self.assertEqual(sorted(emitted), sorted(_ALL_STREAM_GAUGE_NAMES))
+        # The dark reader reads down; the levels carry the streak composition
+        # the 2026-08-22 journal could not recover; the session gauge follows
+        # the injected predicate.
+        last = gauges[-1]
+        self.assertEqual(last["alphalens_broker_manager_stream_reader_up"], 0.0)
+        self.assertEqual(last["alphalens_broker_manager_stream_breaker_open"], 1.0)
+        self.assertEqual(last["alphalens_broker_manager_stream_consecutive_failures"], 6.0)
+        self.assertEqual(last["alphalens_broker_manager_stream_trips_total"], 1.0)
+        self.assertEqual(last["alphalens_broker_manager_stream_in_session"], 0.0)
+
+    def test_the_age_gauge_key_is_never_omitted_when_no_message_has_arrived(self) -> None:
+        # An omitted key deletes its Prometheus series (emit_domain_metrics
+        # overwrites the whole domain file) — epoch None must still write the
+        # age key, reporting seconds since the closure was built.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(silence=None)
+        tick, _pages, _throttled = _stream_tick_harness(trig, clock, gauges=gauges)
+        clock.now += 120.0
+        tick()
+        self.assertIn("alphalens_broker_manager_stream_last_message_age_seconds", gauges[0])
+        self.assertEqual(
+            gauges[0]["alphalens_broker_manager_stream_last_message_age_seconds"], 120.0
+        )
+
+    def test_breaker_open_stays_one_across_a_whole_episode_and_does_not_flicker_per_trial(
+        self,
+    ) -> None:
+        # Memo §7.3: a per-trial gauge resets to 0 on every ladder rung, so no
+        # Prometheus `for:` longer than one rung could ever fire. The gauge is
+        # EPISODE-scoped: 1 from OPEN until the delivery-confirmed CLOSE.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(running=False, streaming=False)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, _throttled = _stream_tick_harness(trig, clock, gauges=gauges)
+        tick()  # t=0: OPEN
+        clock.now = 60.0
+        tick()  # trial connects AND delivers — dwell starts, episode still open
+        clock.now = 105.0
+        tick()  # up, mid-dwell: the trial must NOT flicker the gauge to 0
+        breaker_values = [g["alphalens_broker_manager_stream_breaker_open"] for g in gauges]
+        self.assertEqual(breaker_values, [1.0, 1.0, 1.0])
+        # The dwell clock starts at the first tick that OBSERVES delivery-backed
+        # health (t=105), not at the trial itself.
+        clock.now = 105.0 + 300.0
+        tick()  # dwell held -> delivery-confirmed CLOSE
+        self.assertEqual(gauges[-1]["alphalens_broker_manager_stream_breaker_open"], 0.0)
+        self.assertEqual(len(pages), 2)  # one OPEN, one CLOSE
+
+    def test_all_six_stream_gauges_land_in_one_atomic_domain_emit(self) -> None:
+        # Drive the REAL default emitter (_emit_stream_gauge) into a temp
+        # textfile dir: all six series must land in the ONE stream domain file
+        # (a second emit to the domain would clobber the first, and a separate
+        # file would prove a second call happened).
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+        with (
+            TemporaryDirectory() as d,
+            mock.patch.dict(os.environ, {"ALPHALENS_TEXTFILE_DIR": d}, clear=False),
+        ):
+            tick = cl._make_stream_tick(
+                trig,
+                get_bearer=lambda: "B",
+                alert=lambda _m: None,
+                alert_throttled=lambda _m, _r: True,
+                stale_s=45.0,
+                monotonic=clock,
+                in_session=lambda: True,
+            )
+            tick()
+            proms = sorted(Path(d).glob("*.prom"))
+            self.assertEqual(len(proms), 1, [p.name for p in proms])
+            self.assertEqual(proms[0].name, "alphalens_domain_broker-manager-sim-stream.prom")
+            text = proms[0].read_text()
+        for name in _ALL_STREAM_GAUGE_NAMES:
+            self.assertIn(f'{name}{{job="broker-manager-sim"}}', text)
+
+    def test_a_raising_session_predicate_reports_in_session_and_keeps_gauges(self) -> None:
+        # The calendar predicate fails OPEN by contract (a calendar bug must
+        # never silence observability): a raise reports in_session=1 and the
+        # other five gauges still land.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+
+        def _raising_session() -> bool:
+            raise RuntimeError("calendar exploded")
+
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+        tick, _pages, _throttled = _stream_tick_harness(
+            trig, clock, gauges=gauges, in_session=_raising_session
         )
         tick()
-        self.assertEqual([r for _, r in alerts], [])
+        self.assertEqual(len(gauges), 1)
+        self.assertEqual(sorted(gauges[0]), sorted(_ALL_STREAM_GAUGE_NAMES))
+        self.assertEqual(gauges[0]["alphalens_broker_manager_stream_in_session"], 1.0)
 
 
 class TestStreamingSubscriberIsolation(unittest.TestCase):
@@ -6656,7 +7175,8 @@ class TestStreamGaugeDoesNotClobberHeartbeat(unittest.TestCase):
             mock.patch.dict(os.environ, {"ALPHALENS_TEXTFILE_DIR": d}, clear=False),
         ):
             cl._default_emit_heartbeat()  # per-tick heartbeat gauge
-            cl._emit_stream_gauge(5.0)  # stream-liveness gauge (runs AFTER heartbeat)
+            # stream gauges (run AFTER heartbeat every tick; multi-key since INC-3)
+            cl._emit_stream_gauge({cl._STREAM_LAST_MESSAGE_METRIC_NAME: 5.0})
             proms = sorted(Path(d).glob("*.prom"))
             blob = "\n".join(p.read_text() for p in proms)
         # Both series present (neither atomic overwrite clobbered the other) ...
@@ -7250,6 +7770,142 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
         self.assertEqual(broker.placed, [])
         self.assertEqual(refusals, [])
         self.assertEqual(alerts, [], "a pre-open defer is DEBUG-only, never an alert")
+
+
+class TestStreamDeliveryProof(unittest.TestCase):
+    """Mutation-hardening pins for the tick's delivery-backed ``up`` sample.
+
+    The post-workflow mutation review proved these exact arms unkilled: a
+    mutant dropping the ``frames > delivered_at_rearm`` conjunct (the flag-keyed
+    ``up`` shape memo §7.1 names as the winning proposal's worst defect), the
+    silence conjuncts, and the dwell-continuity reset all survived the suite.
+    Each test here goes red under its mutant.
+    """
+
+    def test_flags_up_without_a_delivered_frame_never_closes_the_episode(self) -> None:
+        # A trial that CONNECTS but never delivers: is_running/is_streaming flip
+        # up, frames stay frozen. Flag-keyed health would dwell and CLOSE; the
+        # delivery-backed sample must hold the episode open forever.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+
+        def _connect_without_delivery(t: _FakeStreamTrigger) -> bool:
+            t.running = True
+            t.is_streaming = True
+            t.silence = 5.0
+            return True
+
+        trig.on_rearm = _connect_without_delivery
+        tick, pages, _throttled = _stream_tick_harness(trig, clock, gauges=gauges)
+        trig.go_dark_with_trip()
+        for _ in range(20):  # 900s of ticks — three dwells' worth of wall time
+            tick()
+            clock.now += 45.0
+        self.assertEqual([p for p in pages if "RECOVERED" in p], [])
+        self.assertEqual(gauges[-1]["alphalens_broker_manager_stream_breaker_open"], 1.0)
+
+    def test_a_delivered_frame_with_stale_silence_does_not_close(self) -> None:
+        # Delivery evidence exists but the pipe has gone silent again: the
+        # ``silence <= stale_s`` conjunct must veto the dwell.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+
+        def _connect_then_stale(t: _FakeStreamTrigger) -> bool:
+            t.running = True
+            t.is_streaming = True
+            t.frames_delivered += 1
+            t.silence = 90.0  # > stale_s=45
+            return True
+
+        trig.on_rearm = _connect_then_stale
+        tick, pages, _throttled = _stream_tick_harness(trig, clock)
+        trig.go_dark_with_trip()
+        for _ in range(20):
+            tick()
+            clock.now += 45.0
+        self.assertEqual([p for p in pages if "RECOVERED" in p], [])
+
+    def test_a_none_silence_after_connect_keeps_the_machine_alive_and_open(self) -> None:
+        # ``silence is not None`` guards the comparison; dropping it raises a
+        # TypeError that the tick's outer swallow would eat SILENTLY — so this
+        # pin also asserts the gauges kept flowing on every tick.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+
+        def _connect_with_no_epoch(t: _FakeStreamTrigger) -> bool:
+            t.running = True
+            t.is_streaming = True
+            t.frames_delivered += 1
+            t.silence = None
+            return True
+
+        trig.on_rearm = _connect_with_no_epoch
+        tick, pages, _throttled = _stream_tick_harness(trig, clock, gauges=gauges)
+        trig.go_dark_with_trip()
+        n_ticks = 20
+        for _ in range(n_ticks):
+            tick()
+            clock.now += 45.0
+        self.assertEqual([p for p in pages if "RECOVERED" in p], [])
+        self.assertEqual(len(gauges), n_ticks)  # a swallowed TypeError skips the emit
+
+    def test_an_interrupted_dwell_restarts_from_the_fresh_up_sample(self) -> None:
+        # Memo §4.5: the dwell is CONTINUOUS delivery-backed health. After an
+        # interruption the 300s clock restarts from the fresh up sample — a
+        # dropped ``up_since = None`` reset would CLOSE on wall time since the
+        # FIRST up sample.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, _throttled = _stream_tick_harness(trig, clock)
+
+        def _closes() -> list[str]:
+            return [p for p in pages if "RECOVERED" in p]
+
+        trig.go_dark_with_trip()
+        tick()  # t=0: OPEN, ladder armed (first trial at t=60)
+        clock.now += 45.0
+        tick()  # t=45: still dark, before the trial
+        clock.now += 45.0
+        tick()  # t=90: trial -> come_up (delivered frame)
+        for _ in range(4):  # up samples at t=135..270 — 135s of dwell accrued
+            clock.now += 45.0
+            tick()
+        trig.silence = 90.0  # one stale sample interrupts the dwell (t=315)
+        clock.now += 45.0
+        tick()
+        trig.come_up()  # fresh delivery; the dwell must restart from t=360
+        for _ in range(6):  # up samples t=360..585 — only 225s since the re-up
+            clock.now += 45.0
+            tick()
+        self.assertEqual(_closes(), [])  # a wall-time dwell closes in here
+        for _ in range(2):  # t=630 (270s — still short), t=675 (315s — closes)
+            clock.now += 45.0
+            tick()
+        self.assertEqual(len(_closes()), 1)
+
+    def test_trips_spread_wider_than_the_flap_window_never_escalate(self) -> None:
+        # The rolling-window eviction is what distinguishes "3 trips in an
+        # hour" from "3 trips over a lifetime". Without it the flap latch
+        # engages permanently and OPEN pages are suppressed forever.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, _throttled = _stream_tick_harness(trig, clock)
+        for _ in range(3):  # 3 one-trip episodes, separated by > the flap window
+            trig.go_dark_with_trip()
+            for _ in range(12):  # trial ~t+90, dwell 300s -> closes inside
+                tick()
+                clock.now += 45.0
+            clock.now += 3600.0  # quiet gap wider than _STREAM_FLAP_WINDOW_S
+            tick()  # healthy tick: the eviction runs
+            clock.now += 45.0
+        self.assertEqual([p for p in pages if "flapping" in p], [])
+        opens = [p for p in pages if "DOWN" in p]
+        self.assertEqual(len(opens), 3)  # every episode still pages OPEN
+        self.assertEqual(trig.trips_total, 3)
 
 
 if __name__ == "__main__":
