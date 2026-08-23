@@ -648,3 +648,20 @@ A short trip that self-heals on the first trial now produces two Telegram lines 
 - **No `# pragma: no cover` removal on `_supervise`** (§7.18) and **no shared breaker abstraction** (§7.19).
 - **No new env knob** (§5).
 - **Nothing on the LIVE rail** (§4.1).
+
+---
+
+## Implementation notes (2026-08-24, post-verification)
+
+- **§8.2's `stream_rearms_total` is superseded by the §4.6 six-gauge table** — the
+  implementation emits exactly the six §4.6 gauges; the CLI's "trips / re-arm
+  cycles" line reads `stream_trips_total` (one trip opens each re-arm cycle, so
+  the counts coincide). §4.6 is normative.
+- **Age-gauge fallback:** when the delivery epoch is None the gauge reports
+  seconds since the tick closure was built (daemon start), not "since reader
+  start" as §4.6's wording suggests. No alert path keys on the absolute value
+  while the breaker is open (`AlphalensBrokerStreamStale` carries
+  `unless stream_breaker_open == 1`), so the divergence is cosmetic.
+- **Context-id mints carry a monotonic serial** (`almgr-<pid>-<unix-s>-<n>`) so
+  two mints inside one second can never collide — a collided rotation would
+  retire the LIVE context id into the drain deque.

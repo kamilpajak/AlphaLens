@@ -40,6 +40,7 @@ the loop only ever waits on the plain Event.
 
 from __future__ import annotations
 
+import itertools
 import os
 import threading
 import time
@@ -82,8 +83,14 @@ def default_context_id_factory() -> str:
     consistent. Rotation is mandatory on rearm: the trip-time subscription
     DELETE is best-effort and most likely to have failed during the outage, and
     the price-stream reliability contract mandates a fresh contextId per
-    connection after the 2026-08-10 incident."""
-    return f"almgr-{os.getpid()}-{int(time.time())}"
+    connection after the 2026-08-10 incident. The monotonic suffix makes two
+    mints inside the same second distinct — a collided rotation would append
+    the LIVE context id to the retired deque, whose next drain best-effort
+    DELETEs its subscriptions."""
+    return f"almgr-{os.getpid()}-{int(time.time())}-{next(_CONTEXT_ID_SERIAL)}"
+
+
+_CONTEXT_ID_SERIAL = itertools.count()
 
 
 def _default_client_factory(**kwargs: Any) -> SaxoStreamingClient:

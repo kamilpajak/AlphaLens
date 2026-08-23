@@ -469,6 +469,18 @@ class TestStreamTriggerDefaults(unittest.TestCase):
         self.assertRegex(minted, r"^[a-zA-Z0-9-]+$")
         self.assertTrue(minted.startswith("almgr-"))
 
+    def test_two_mints_in_the_same_second_are_distinct(self) -> None:
+        # A collided rotation would append the LIVE context id to the retired
+        # deque, whose next drain best-effort DELETEs its subscriptions — so
+        # the factory carries a monotonic serial, not just second resolution.
+        from alphalens_pipeline.brokers.automanager.streaming_trigger import (
+            default_context_id_factory,
+        )
+
+        first = default_context_id_factory()
+        second = default_context_id_factory()
+        self.assertNotEqual(first, second)
+
 
 if __name__ == "__main__":
     unittest.main()

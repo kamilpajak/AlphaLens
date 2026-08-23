@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import unittest
 from typing import Any
+from unittest import mock
 
 from alphalens_pipeline.brokers.saxo.streaming import (
     SIM_STREAMING_BASE_URL,
@@ -990,6 +991,18 @@ class TestStreamRearm(unittest.TestCase):
         factory.raise_next = True
         with self.assertRaises(RuntimeError):
             client.rearm(_NEW_CTX)
+        self.assertFalse(client.is_streaming)
+        self.assertFalse(client.is_running())
+        self.assertIs(client._thread, factory.threads[0])  # prior thread restored
+
+    def test_a_false_start_rolls_back_so_the_next_tick_retries(self):
+        # start() returning False (the StaticTokenProvider refusal) must roll
+        # back exactly like a raising spawn: rearm() reports False and
+        # _thread/_is_streaming are restored, so the stream is never reported
+        # healthy without a live reader (memo §7.5).
+        client, factory, _ = _tripped_client()
+        with mock.patch.object(client, "start", return_value=False):
+            self.assertFalse(client.rearm(_NEW_CTX))
         self.assertFalse(client.is_streaming)
         self.assertFalse(client.is_running())
         self.assertIs(client._thread, factory.threads[0])  # prior thread restored

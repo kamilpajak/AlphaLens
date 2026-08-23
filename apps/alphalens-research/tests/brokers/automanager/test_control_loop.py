@@ -7772,5 +7772,141 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
         self.assertEqual(alerts, [], "a pre-open defer is DEBUG-only, never an alert")
 
 
+class TestStreamDeliveryProof(unittest.TestCase):
+    """Mutation-hardening pins for the tick's delivery-backed ``up`` sample.
+
+    The post-workflow mutation review proved these exact arms unkilled: a
+    mutant dropping the ``frames > delivered_at_rearm`` conjunct (the flag-keyed
+    ``up`` shape memo §7.1 names as the winning proposal's worst defect), the
+    silence conjuncts, and the dwell-continuity reset all survived the suite.
+    Each test here goes red under its mutant.
+    """
+
+    def test_flags_up_without_a_delivered_frame_never_closes_the_episode(self) -> None:
+        # A trial that CONNECTS but never delivers: is_running/is_streaming flip
+        # up, frames stay frozen. Flag-keyed health would dwell and CLOSE; the
+        # delivery-backed sample must hold the episode open forever.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+
+        def _connect_without_delivery(t: _FakeStreamTrigger) -> bool:
+            t.running = True
+            t.is_streaming = True
+            t.silence = 5.0
+            return True
+
+        trig.on_rearm = _connect_without_delivery
+        tick, pages, _throttled = _stream_tick_harness(trig, clock, gauges=gauges)
+        trig.go_dark_with_trip()
+        for _ in range(20):  # 900s of ticks — three dwells' worth of wall time
+            tick()
+            clock.now += 45.0
+        self.assertEqual([p for p in pages if "RECOVERED" in p], [])
+        self.assertEqual(gauges[-1]["alphalens_broker_manager_stream_breaker_open"], 1.0)
+
+    def test_a_delivered_frame_with_stale_silence_does_not_close(self) -> None:
+        # Delivery evidence exists but the pipe has gone silent again: the
+        # ``silence <= stale_s`` conjunct must veto the dwell.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+
+        def _connect_then_stale(t: _FakeStreamTrigger) -> bool:
+            t.running = True
+            t.is_streaming = True
+            t.frames_delivered += 1
+            t.silence = 90.0  # > stale_s=45
+            return True
+
+        trig.on_rearm = _connect_then_stale
+        tick, pages, _throttled = _stream_tick_harness(trig, clock)
+        trig.go_dark_with_trip()
+        for _ in range(20):
+            tick()
+            clock.now += 45.0
+        self.assertEqual([p for p in pages if "RECOVERED" in p], [])
+
+    def test_a_none_silence_after_connect_keeps_the_machine_alive_and_open(self) -> None:
+        # ``silence is not None`` guards the comparison; dropping it raises a
+        # TypeError that the tick's outer swallow would eat SILENTLY — so this
+        # pin also asserts the gauges kept flowing on every tick.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+
+        def _connect_with_no_epoch(t: _FakeStreamTrigger) -> bool:
+            t.running = True
+            t.is_streaming = True
+            t.frames_delivered += 1
+            t.silence = None
+            return True
+
+        trig.on_rearm = _connect_with_no_epoch
+        tick, pages, _throttled = _stream_tick_harness(trig, clock, gauges=gauges)
+        trig.go_dark_with_trip()
+        n_ticks = 20
+        for _ in range(n_ticks):
+            tick()
+            clock.now += 45.0
+        self.assertEqual([p for p in pages if "RECOVERED" in p], [])
+        self.assertEqual(len(gauges), n_ticks)  # a swallowed TypeError skips the emit
+
+    def test_an_interrupted_dwell_restarts_from_the_fresh_up_sample(self) -> None:
+        # Memo §4.5: the dwell is CONTINUOUS delivery-backed health. After an
+        # interruption the 300s clock restarts from the fresh up sample — a
+        # dropped ``up_since = None`` reset would CLOSE on wall time since the
+        # FIRST up sample.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, _throttled = _stream_tick_harness(trig, clock)
+
+        def _closes() -> list[str]:
+            return [p for p in pages if "RECOVERED" in p]
+
+        trig.go_dark_with_trip()
+        tick()  # t=0: OPEN, ladder armed (first trial at t=60)
+        clock.now += 45.0
+        tick()  # t=45: still dark, before the trial
+        clock.now += 45.0
+        tick()  # t=90: trial -> come_up (delivered frame)
+        for _ in range(4):  # up samples at t=135..270 — 135s of dwell accrued
+            clock.now += 45.0
+            tick()
+        trig.silence = 90.0  # one stale sample interrupts the dwell (t=315)
+        clock.now += 45.0
+        tick()
+        trig.come_up()  # fresh delivery; the dwell must restart from t=360
+        for _ in range(6):  # up samples t=360..585 — only 225s since the re-up
+            clock.now += 45.0
+            tick()
+        self.assertEqual(_closes(), [])  # a wall-time dwell closes in here
+        for _ in range(2):  # t=630 (270s — still short), t=675 (315s — closes)
+            clock.now += 45.0
+            tick()
+        self.assertEqual(len(_closes()), 1)
+
+    def test_trips_spread_wider_than_the_flap_window_never_escalate(self) -> None:
+        # The rolling-window eviction is what distinguishes "3 trips in an
+        # hour" from "3 trips over a lifetime". Without it the flap latch
+        # engages permanently and OPEN pages are suppressed forever.
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, _throttled = _stream_tick_harness(trig, clock)
+        for _ in range(3):  # 3 one-trip episodes, separated by > the flap window
+            trig.go_dark_with_trip()
+            for _ in range(12):  # trial ~t+90, dwell 300s -> closes inside
+                tick()
+                clock.now += 45.0
+            clock.now += 3600.0  # quiet gap wider than _STREAM_FLAP_WINDOW_S
+            tick()  # healthy tick: the eviction runs
+            clock.now += 45.0
+        self.assertEqual([p for p in pages if "flapping" in p], [])
+        opens = [p for p in pages if "DOWN" in p]
+        self.assertEqual(len(opens), 3)  # every episode still pages OPEN
+        self.assertEqual(trig.trips_total, 3)
+
+
 if __name__ == "__main__":
     unittest.main()
