@@ -77,7 +77,24 @@ WAITING_LABEL = "waiting:data"
 # ("please set Wake: 2026-09-01 when the vendor confirms") must not arm the
 # timer, so the pattern is anchored at both ends. Leading indentation and a
 # trailing CR (GitHub bodies arrive CRLF) are tolerated.
-WAKE_LINE_RE = re.compile(r"^[ \t]*Wake:[ \t]*(?P<value>\S.*?)[ \t\r]*$", re.MULTILINE)
+# The KEY may carry ordinary Markdown decoration — a list bullet, a checkbox, a
+# blockquote marker, bold, any case. An adversarial review found `- Wake: ...`
+# in a bullet list produced NO match, which sent the issue to the silent
+# `no_wake_line` bucket forever, on an issue whose very label asserts it carries
+# one. The bullet form is the most likely thing a human types.
+#
+# The VALUE may be empty, and deliberately so: `Wake:` with the date not yet
+# filled in must be REPORTED, not treated as "no wake line". That is the
+# sharpest silent case, because the author believes the issue is armed.
+#
+# Still anchored at the start of a line, so prose that merely mentions the
+# convention ("please set Wake: 2026-09-01 when the vendor confirms") does not
+# arm the timer.
+WAKE_LINE_RE = re.compile(
+    r"^[ \t]*(?:[-*+>][ \t]*)*(?:\[[ xX]\][ \t]*)?"
+    r"\*{0,2}wake\*{0,2}[ \t]*:\*{0,2}[ \t]*(?P<value>.*?)[ \t\r]*$",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 # The date format is exactly YYYY-MM-DD. `date.fromisoformat` also accepts
 # `20260901` and other ISO spellings; accepting those would silently honour a
@@ -89,6 +106,13 @@ ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # `Wake: YYYY-MM-DD` inside a fence to show the format. Honouring that would
 # wake every issue carrying the template.
 FENCE_RE = re.compile(r"^[ \t]*(```|~~~)")
+# GitHub renders three more things as code, and a Wake line inside any of them
+# is documentation. `<pre>` and a 4-space indent are the two the fence rule
+# missed; an issue template showing the format as an indented sample would have
+# woken every issue carrying it AND stripped the label permanently.
+PRE_OPEN_RE = re.compile(r"^[ \t]*<pre\b", re.IGNORECASE)
+PRE_CLOSE_RE = re.compile(r"</pre>", re.IGNORECASE)
+INDENTED_CODE_RE = re.compile(r"^(?: {4}|\t)")
 
 # gh caps --limit; 200 is far above the realistic number of parked issues and
 # keeps one page per run.
@@ -161,8 +185,8 @@ NotifyPort = Callable[[str], bool]
 # ----------------------------------------------------------------------------
 
 
-def strip_fenced_blocks(body: str) -> str:
-    """Blank out every fenced code block, preserving line numbering.
+def strip_fenced_blocks(body: str) -> tuple[str, list[str]]:
+    """Blank out every code block; return the body plus any Wake lines removed.
 
     An UNTERMINATED fence swallows the rest of the body, which is what GitHub
     itself renders — so the parser agrees with what the author sees. That is
@@ -170,14 +194,30 @@ def strip_fenced_blocks(body: str) -> str:
     the author believes is inside a code sample.
     """
     out: list[str] = []
-    inside = False
+    removed: list[str] = []
+    inside_fence = False
+    inside_pre = False
     for line in body.splitlines():
         if FENCE_RE.match(line):
-            inside = not inside
+            inside_fence = not inside_fence
             out.append("")
             continue
-        out.append("" if inside else line)
-    return "\n".join(out)
+        if PRE_OPEN_RE.match(line):
+            inside_pre = True
+        code = inside_fence or inside_pre or INDENTED_CODE_RE.match(line) is not None
+        if PRE_CLOSE_RE.search(line):
+            inside_pre = False
+        if code:
+            # Kept, not discarded: a Wake line in here must be REPORTED rather
+            # than vanish. Blanking it made the issue MISSING, which is the same
+            # forever-parked failure the fence rule exists to prevent, reached
+            # by the other door.
+            if WAKE_LINE_RE.match(line):
+                removed.append(line.strip())
+            out.append("")
+            continue
+        out.append(line)
+    return "\n".join(out), removed
 
 
 def parse_wake_date(body: str) -> WakeParse:
@@ -188,8 +228,13 @@ def parse_wake_date(body: str) -> WakeParse:
     silently repair a typo above it, which is the invented-date failure this
     job must not have.
     """
-    match = WAKE_LINE_RE.search(strip_fenced_blocks(body))
+    prose, in_code = strip_fenced_blocks(body)
+    match = WAKE_LINE_RE.search(prose)
     if match is None:
+        if in_code:
+            # A Wake line exists but only inside a code sample. Never honour it;
+            # never stay quiet about it either.
+            return WakeParse(status=WakeStatus.MALFORMED, raw=f"{in_code[0]} (inside a code block)")
         return WakeParse(status=WakeStatus.MISSING)
 
     raw = match.group("value").strip()
@@ -403,6 +448,16 @@ def default_notify() -> NotifyPort:
     )
 
 
+def utc_today() -> dt.date:
+    """Today in UTC.
+
+    NOT ``date.today()``. The timer fires in UTC but the VPS runs Europe/Berlin,
+    so on a Persistent=true catch-up firing at 22:30 UTC the local date is
+    already tomorrow — and an issue would wake a day before its date arrived.
+    """
+    return dt.datetime.now(dt.UTC).date()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -424,7 +479,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
-    today = dt.date.fromisoformat(args.today) if args.today else dt.date.today()
+    if args.today is not None and not ISO_DATE_RE.match(args.today):
+        # `date.fromisoformat` also accepts 20260901 and 2026-W01-1, which would
+        # silently replay a different day than the operator typed.
+        parser.error(f"--today must be YYYY-MM-DD, got {args.today!r}")
+    today = dt.date.fromisoformat(args.today) if args.today else utc_today()
 
     return run(
         github=GhCliGitHub(args.repo),

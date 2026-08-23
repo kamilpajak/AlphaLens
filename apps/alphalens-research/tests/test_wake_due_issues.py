@@ -16,6 +16,7 @@ import datetime as dt
 import json
 import subprocess
 import unittest
+from unittest import mock
 
 from scripts import wake_due_issues as wake
 
@@ -117,14 +118,21 @@ class TestParseWakeDate(unittest.TestCase):
         self.assertEqual(parsed.raw, "whenever")
 
     def test_wake_inside_a_fenced_code_block_is_ignored(self) -> None:
-        # DECISION (pinned): fenced blocks are documentation, not instruction.
-        # Issue templates paste `Wake: YYYY-MM-DD` inside a fence to show the
-        # format; honouring that would wake every issue carrying the template.
+        # DECISION (pinned): a fenced block is documentation, so the date is
+        # never HONOURED — issue templates paste `Wake: YYYY-MM-DD` inside a
+        # fence to show the format, and honouring it would wake every issue
+        # carrying the template.
+        #
+        # REVISED after an adversarial review: the outcome is MALFORMED, not
+        # MISSING. MISSING is the silent bucket, so the old behaviour parked
+        # such an issue forever without ever saying so — the same failure the
+        # fence rule exists to prevent, reached by the other door.
         body = "How to use:\n\n```\nWake: 2026-09-01\n```\n\nStill blocked.\n"
 
         parsed = wake.parse_wake_date(body)
 
-        self.assertEqual(parsed.status, wake.WakeStatus.MISSING)
+        self.assertEqual(parsed.status, wake.WakeStatus.MALFORMED)
+        self.assertIn("2026-09-01", parsed.raw or "")
 
     def test_wake_outside_a_fence_is_read_even_when_a_fence_is_present(self) -> None:
         # The other half of the fence rule — stripping must not swallow the
@@ -138,15 +146,16 @@ class TestParseWakeDate(unittest.TestCase):
     def test_tilde_fences_are_stripped_too(self) -> None:
         body = "~~~text\nWake: 2026-09-01\n~~~\n"
 
-        self.assertEqual(parse_status(body), wake.WakeStatus.MISSING)
+        self.assertEqual(parse_status(body), wake.WakeStatus.MALFORMED)
 
     def test_unterminated_fence_swallows_the_rest_of_the_body(self) -> None:
         # GitHub renders an unterminated fence as code to end-of-body, so the
-        # parser agrees with what the author actually sees. Ignoring is the
-        # conservative arm: the issue stays labelled and keeps waiting.
+        # parser agrees with what the author actually sees. The issue is not
+        # woken — but it IS reported, so an author who fenced the line by
+        # accident finds out instead of waiting forever.
         body = "```\nWake: 2026-09-01\n"
 
-        self.assertEqual(parse_status(body), wake.WakeStatus.MISSING)
+        self.assertEqual(parse_status(body), wake.WakeStatus.MALFORMED)
 
     def test_inline_mention_is_not_a_wake_line(self) -> None:
         # Only a whole line counts. Prose that mentions the convention
@@ -515,3 +524,136 @@ class TestTelegramSink(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWakeKeyIsNeverSilentlyDropped(unittest.TestCase):
+    """The module promises a Wake line it cannot read is REPORTED, never skipped.
+
+    An adversarial review showed that holds for a bad VALUE but not for a
+    decorated KEY: `- Wake: 2026-09-01` in a bullet list, `**Wake:**`, a
+    blockquote, lowercase, or an empty value all landed in `no_wake_line` and
+    stayed silent forever — on issues whose very label asserts they carry one.
+    The bullet form is the most likely thing a human types.
+    """
+
+    def test_a_bullet_wake_line_is_read(self):
+        for prefix in ("- ", "* ", "+ ", "> ", "- [ ] ", "  - "):
+            with self.subTest(prefix=prefix):
+                got = wake.parse_wake_date(f"{prefix}Wake: 2026-09-01\n")
+                self.assertIs(got.status, wake.WakeStatus.OK, prefix)
+                self.assertEqual(got.date, dt.date(2026, 9, 1))
+
+    def test_bold_and_case_variants_are_read(self):
+        for line in ("**Wake:** 2026-09-01", "**Wake**: 2026-09-01", "wake: 2026-09-01"):
+            with self.subTest(line=line):
+                got = wake.parse_wake_date(line + "\n")
+                self.assertIs(got.status, wake.WakeStatus.OK, line)
+
+    def test_an_empty_wake_value_is_reported_not_ignored(self):
+        """`Wake:` with the date not yet filled in — the sharpest case, because
+        the author believes the issue is armed."""
+        got = wake.parse_wake_date("Wake:\n")
+
+        self.assertIs(got.status, wake.WakeStatus.MALFORMED)
+
+    def test_prose_mentioning_the_convention_still_does_not_arm_it(self):
+        body = "please set Wake: 2026-09-01 once the vendor confirms\n"
+
+        self.assertIs(wake.parse_wake_date(body).status, wake.WakeStatus.MISSING)
+
+
+class TestCodeSamplesNeitherWakeNorVanish(unittest.TestCase):
+    """A Wake line inside a code sample must not wake the issue — and must not
+    disappear either. Blanking it made it MISSING, i.e. silent, which is the
+    same forever-parked failure by another route."""
+
+    def test_an_indented_code_sample_is_reported_not_honoured(self):
+        body = "Set the date like this:\n\n    Wake: 2026-01-15\n"
+
+        got = wake.parse_wake_date(body)
+
+        self.assertIs(got.status, wake.WakeStatus.MALFORMED)
+        self.assertIn("2026-01-15", got.raw or "")
+
+    def test_a_pre_block_is_reported_not_honoured(self):
+        body = "<pre>\nWake: 2026-01-15\n</pre>\n"
+
+        self.assertIs(wake.parse_wake_date(body).status, wake.WakeStatus.MALFORMED)
+
+    def test_a_fenced_sample_is_reported_not_silent(self):
+        body = "```\nWake: 2026-01-15\n```\n"
+
+        self.assertIs(wake.parse_wake_date(body).status, wake.WakeStatus.MALFORMED)
+
+    def test_a_real_line_outside_the_fence_still_wins(self):
+        body = "```\nWake: 2026-01-15\n```\n\nWake: 2026-09-01\n"
+
+        got = wake.parse_wake_date(body)
+
+        self.assertIs(got.status, wake.WakeStatus.OK)
+        self.assertEqual(got.date, dt.date(2026, 9, 1))
+
+
+class TestMainWiring(unittest.TestCase):
+    """`run()` was covered; the wiring that reaches it was not, and 10 of 13
+    mutations there survived. The worst: dropping the `return` in front of
+    `run(...)` makes the job always exit 0 — a failed send would stamp success,
+    the staleness alert would never fire, and the job would be silently dead."""
+
+    def _patch(self, **over):
+        calls = {}
+
+        def fake_run(**kwargs):
+            calls.update(kwargs)
+            return over.get("rc", 0)
+
+        return calls, fake_run
+
+    def test_the_exit_code_of_run_is_returned(self):
+        _calls, fake_run = self._patch(rc=7)
+
+        with mock.patch.object(wake, "run", fake_run):
+            rc = wake.main(["--dry-run", "--today", "2026-09-01"])
+
+        self.assertEqual(rc, 7)
+
+    def test_dry_run_reaches_run_as_true(self):
+        calls, fake_run = self._patch()
+
+        with mock.patch.object(wake, "run", fake_run):
+            wake.main(["--dry-run", "--today", "2026-09-01"])
+
+        self.assertTrue(calls["dry_run"])
+
+    def test_repo_label_and_today_are_threaded_through(self):
+        calls, fake_run = self._patch()
+
+        with mock.patch.object(wake, "run", fake_run):
+            wake.main(
+                ["--dry-run", "--today", "2026-09-01", "--label", "waiting:other", "--repo", "a/b"]
+            )
+
+        self.assertEqual(calls["today"], dt.date(2026, 9, 1))
+        self.assertEqual(calls["label"], "waiting:other")
+
+    def test_a_today_in_another_iso_spelling_is_a_usage_error(self):
+        """`date.fromisoformat` accepts 20260901 and 2026-W01-1. Honouring those
+        would silently replay a different day than the operator typed."""
+        for bad in ("20260901", "2026-W01-1", "2026-9-1", "tomorrow"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(SystemExit) as ctx:
+                    wake.main(["--dry-run", "--today", bad])
+                self.assertEqual(ctx.exception.code, 2)
+
+    def test_today_defaults_to_utc_not_local_time(self):
+        """The timer is UTC and the VPS is Europe/Berlin. On a Persistent=true
+        catch-up firing at 22:30 UTC, local time is already the next day, so a
+        local `today` would wake an issue whose date has not arrived."""
+        calls, fake_run = self._patch()
+        fixed = dt.datetime(2026, 9, 1, 22, 30, tzinfo=dt.UTC)
+
+        with mock.patch.object(wake, "run", fake_run), mock.patch.object(wake, "utc_today") as u:
+            u.return_value = fixed.date()
+            wake.main(["--dry-run"])
+
+        self.assertEqual(calls["today"], dt.date(2026, 9, 1))
