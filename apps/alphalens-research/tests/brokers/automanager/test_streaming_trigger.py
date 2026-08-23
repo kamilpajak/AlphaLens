@@ -80,9 +80,11 @@ class _TimerRecorder:
 
 class _StubClient:
     """Stands in for :class:`SaxoStreamingClient` — captures the wired callbacks
-    and records lifecycle calls WITHOUT opening a socket or spawning a thread."""
+    and records lifecycle calls WITHOUT opening a socket or spawning a thread.
+    Carries the full rearm-era read surface (rearm design memo §4.2/§4.3) so the
+    trigger's read-only delegations and ``rearm()`` are pinned against it."""
 
-    def __init__(self, *, start_result: bool = True) -> None:
+    def __init__(self, *, start_result: bool = True, rearm_result: bool = True) -> None:
         self.on_trigger: Any = None
         self.on_heartbeat: Any = None
         self.pushed: list[str] = []
@@ -90,8 +92,14 @@ class _StubClient:
         self.stopped = False
         self.stop_timeout: float | None = None
         self._start_result = start_result
+        self._rearm_result = rearm_result
         self.is_streaming = True
         self.is_started = False
+        self.running = False
+        self.frames_delivered = 0
+        self.trips_total = 0
+        self.consecutive_failures = 0
+        self.rearm_ids: list[str] = []
 
     def push_token(self, token: str) -> None:
         self.pushed.append(token)
@@ -100,6 +108,13 @@ class _StubClient:
         self.started = True
         self.is_started = self._start_result
         return self._start_result
+
+    def is_running(self) -> bool:
+        return self.running
+
+    def rearm(self, context_id: str) -> bool:
+        self.rearm_ids.append(context_id)
+        return self._rearm_result
 
     def stop(self, *, timeout: float = 5.0) -> None:
         self.stopped = True
@@ -121,7 +136,11 @@ def _make_trigger(
     recorder: _TimerRecorder,
     *,
     debounce_s: float = 1.0,
+    context_id_factory: Any = None,
 ) -> StreamTrigger:
+    kwargs: dict[str, Any] = {}
+    if context_id_factory is not None:
+        kwargs["context_id_factory"] = context_id_factory
     return StreamTrigger(
         token_provider=object(),
         subscriber=object(),
@@ -130,6 +149,7 @@ def _make_trigger(
         monotonic=clock,
         timer_factory=recorder,
         client_factory=_capturing_factory(stub),
+        **kwargs,
     )
 
 
@@ -305,6 +325,54 @@ class TestStreamTriggerLifecycle(unittest.TestCase):
         self.assertFalse(trigger.is_streaming)
         self.assertTrue(trigger.is_started)
 
+    def test_rearm_and_read_surface_delegate_to_client(self) -> None:
+        # Rearm design memo §4.6: the tick consumes the whole delivery-backed
+        # read surface through the trigger — pure delegations, no local state.
+        clock, rec, stub = _FakeClock(), _TimerRecorder(), _StubClient()
+        trigger = _make_trigger(stub, clock, rec, context_id_factory=lambda: "almgr-fresh-1")
+        stub.running = False
+        stub.frames_delivered = 7
+        stub.trips_total = 2
+        stub.consecutive_failures = 6
+
+        self.assertFalse(trigger.is_running())
+        stub.running = True
+        self.assertTrue(trigger.is_running())
+        self.assertEqual(trigger.frames_delivered, 7)
+        self.assertEqual(trigger.trips_total, 2)
+        self.assertEqual(trigger.consecutive_failures, 6)
+        self.assertTrue(trigger.rearm())
+        self.assertEqual(stub.rearm_ids, ["almgr-fresh-1"])
+
+    def test_reset_liveness_clears_the_epoch(self) -> None:
+        # Rearm design memo §4.6/§7.2: without this, an hours-old epoch fires
+        # the throttled 'stream-dead' alert every 30 min after a re-arm — the
+        # metronome relocated onto a different key.
+        clock, rec, stub = _FakeClock(100.0), _TimerRecorder(), _StubClient()
+        trigger = _make_trigger(stub, clock, rec)
+        trigger.on_heartbeat(100.0)
+        clock.advance(50400.0)  # the incident's 14h dark stretch
+        self.assertEqual(trigger.seconds_since_last_message(), 50400.0)
+
+        trigger.reset_liveness()
+        self.assertIsNone(trigger.seconds_since_last_message())
+        # The epoch is documented single-writer = stream thread; this second,
+        # main-thread writer is safe ONLY while the reader is dead — the
+        # docstring must carry that condition (memo §4.6 "a test pins it").
+        doc = StreamTrigger.reset_liveness.__doc__ or ""
+        self.assertIn("is_running", doc)
+
+    def test_context_id_factory_reaches_the_client(self) -> None:
+        # Context rotation is mandatory (memo §4.3): every rearm() mints a FRESH
+        # id via the injected factory and hands it to the client verbatim.
+        clock, rec, stub = _FakeClock(), _TimerRecorder(), _StubClient()
+        ids = iter(["almgr-a-1", "almgr-b-2"])
+        trigger = _make_trigger(stub, clock, rec, context_id_factory=lambda: next(ids))
+
+        trigger.rearm()
+        trigger.rearm()
+        self.assertEqual(stub.rearm_ids, ["almgr-a-1", "almgr-b-2"])
+
 
 # ---- SIM-rail positive control (mirrors test_saxo_sim_only_rail.py doctrine) ----
 
@@ -363,10 +431,43 @@ class TestStreamTriggerSimRail(unittest.TestCase):
         )
         self.assertFalse(trigger.start())
 
+    def test_client_factory_is_never_given_an_alert_sink(self) -> None:
+        # PR #900 / rearm memo §7.14: SaxoStreamingClient accepts an optional
+        # ``alert`` and production is safe only because this factory call omits
+        # it — _trip_breaker stays journald-only on the READER thread; both
+        # Telegram sinks are main-thread-only. A future implementer threading
+        # the sink through here would undo that.
+        seen_kwargs: dict[str, Any] = {}
+
+        def factory(**kwargs: Any) -> _StubClient:
+            seen_kwargs.update(kwargs)
+            return _StubClient()
+
+        StreamTrigger(
+            token_provider=_AnyTokenProvider(),
+            subscriber=_FakeSubscriber(),
+            context_id="almgr-1-2",
+            client_factory=factory,
+        )
+        self.assertNotIn("alert", seen_kwargs)
+
 
 class TestStreamTriggerDefaults(unittest.TestCase):
     def test_default_debounce_is_one_second(self) -> None:
         self.assertEqual(DEFAULT_STREAM_DEBOUNCE_S, 1.0)
+
+    def test_default_context_id_factory_keeps_the_saxo_constraint(self) -> None:
+        # <=50 chars, [a-zA-Z0-9-] only — the format moved out of
+        # _build_stream_handles so the initial context and every rearm rotation
+        # share ONE home (rearm design memo §4.3).
+        from alphalens_pipeline.brokers.automanager.streaming_trigger import (
+            default_context_id_factory,
+        )
+
+        minted = default_context_id_factory()
+        self.assertLessEqual(len(minted), 50)
+        self.assertRegex(minted, r"^[a-zA-Z0-9-]+$")
+        self.assertTrue(minted.startswith("almgr-"))
 
 
 if __name__ == "__main__":

@@ -15,6 +15,10 @@ surfaces and NOTHING safety-critical:
   thread (``on_trigger`` / ``on_heartbeat``). The main thread only READS it via
   :meth:`seconds_since_last_message` for its own staleness alert; a torn read is
   benign (it only nudges a threshold). The trailing timer NEVER writes it.
+  ONE narrow exception: :meth:`reset_liveness` is a main-thread write, legal
+  only while ``is_running()`` has just returned False — the reader thread is
+  dead at that instant, so no concurrent writer exists (rearm design memo
+  ``saxo_stream_breaker_rearm_design_2026_08_22.md`` §4.6).
 * the ``_current_token`` holder — SINGLE-WRITER = the main thread via
   :meth:`push_token` (forwarded to the client). The reader only ever READS it.
 * the streaming client's thread lifecycle (``start`` / ``stop``).
@@ -36,6 +40,7 @@ the loop only ever waits on the plain Event.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -69,6 +74,18 @@ _TimerFactory = Callable[[float, Callable[[], None]], Any]
 _ClientFactory = Callable[..., Any]
 
 
+def default_context_id_factory() -> str:
+    """Mint a fresh streaming contextId — <=50 chars, ``[a-zA-Z0-9-]`` (the Saxo
+    constraint). ONE home for the format (moved out of
+    ``control_loop._build_stream_handles``, rearm design memo §4.3) so the
+    initial context and every :meth:`StreamTrigger.rearm` rotation stay
+    consistent. Rotation is mandatory on rearm: the trip-time subscription
+    DELETE is best-effort and most likely to have failed during the outage, and
+    the price-stream reliability contract mandates a fresh contextId per
+    connection after the 2026-08-10 incident."""
+    return f"almgr-{os.getpid()}-{int(time.time())}"
+
+
 def _default_client_factory(**kwargs: Any) -> SaxoStreamingClient:
     """Build the real SIM-only streaming client. Its constructor runs the SIM
     rail, so a live streaming host is refused at the trigger boundary too."""
@@ -93,10 +110,12 @@ class StreamTrigger:
         monotonic: Callable[[], float] = time.monotonic,
         timer_factory: _TimerFactory = threading.Timer,
         client_factory: _ClientFactory | None = None,
+        context_id_factory: Callable[[], str] = default_context_id_factory,
     ) -> None:
         self._monotonic = monotonic
         self._debounce_s = debounce_s
         self._timer_factory = timer_factory
+        self._context_id_factory = context_id_factory
 
         self._wake_event = threading.Event()
 
@@ -149,6 +168,30 @@ class StreamTrigger:
     @property
     def is_started(self) -> bool:
         return self._client.is_started
+
+    def is_running(self) -> bool:
+        """True while the reader THREAD is alive (rearm design memo §4.2). The
+        truthful liveness read the tick's episode machine keys on —
+        ``is_streaming`` alone misses a reader that crashed without tripping."""
+        return self._client.is_running()
+
+    @property
+    def frames_delivered(self) -> int:
+        """Monotonic count of real server frames — the delivery proof. The
+        liveness epoch is NOT delivery evidence (a bare subscribe dispatch
+        stamps it, memo §7.7); this counter is."""
+        return self._client.frames_delivered
+
+    @property
+    def trips_total(self) -> int:
+        """Monotonic breaker-trip count — a trip whose whole lifetime falls
+        between two ticks is still countable (memo §7.1)."""
+        return self._client.trips_total
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Current reconnect-failure streak, for the gauge."""
+        return self._client.consecutive_failures
 
     # ----- callbacks the streaming reader fires (stream thread) -----
 
@@ -216,6 +259,22 @@ class StreamTrigger:
         client refuses to start — e.g. under a static token provider."""
         return self._client.start()
 
+    def rearm(self) -> bool:
+        """MAIN THREAD ONLY (single caller: run_daemon's tick — rearm design
+        memo §4.3). Mint a FRESH contextId via the injected factory and delegate
+        to the client's spawn-guarded ``rearm()``. Returns True iff a new reader
+        thread is running."""
+        return self._client.rearm(self._context_id_factory())
+
+    def reset_liveness(self) -> None:
+        """MAIN-THREAD write clearing the liveness epoch at a re-arm, so an
+        hours-old epoch cannot fire the throttled 'stream-dead' alert against a
+        fresh trial (rearm design memo §4.6/§7.2). The epoch is documented
+        single-writer = stream thread; this second writer is legal ONLY because
+        the tick calls it while ``is_running()`` has just returned False — the
+        reader thread is dead at that instant, so no concurrent writer exists."""
+        self._last_message_epoch = None
+
     def stop(self, *, timeout: float = 5.0) -> None:
         """Cancel any pending trailing timer and stop the streaming client
         (DELETE subs + join)."""
@@ -232,4 +291,5 @@ __all__ = [
     "DEFAULT_STREAM_DEBOUNCE_S",
     "DEFAULT_STREAM_STALE_S",
     "StreamTrigger",
+    "default_context_id_factory",
 ]
