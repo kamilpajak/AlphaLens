@@ -739,5 +739,76 @@ class TestOptionChain(unittest.TestCase):
             self.assertIsNone(client.option_chain("QUBT", dt.date(2026, 7, 17)))
 
 
+class TestAdjustedDailyCloses(unittest.TestCase):
+    """``adjusted_daily_closes`` — the independent-vendor cross-check arm of the
+    implausible-move guard (#1090): split/dividend-ADJUSTED closes so a window
+    return recomputed from them is immune to the raw-bar split artifact."""
+
+    def test_returns_adjusted_close_series_tz_naive(self):
+        frame = pd.DataFrame(
+            {
+                "Open": [34.0, 80.0],
+                "High": [35.0, 84.0],
+                "Low": [33.0, 79.0],
+                "Close": [34.2, 82.8],
+                "Volume": [4_300_000.0, 199_000_000.0],
+            },
+            index=pd.DatetimeIndex(["2026-07-06", "2026-08-19"], tz="America/New_York"),
+        )
+        fake = MagicMock()
+        fake.history.return_value = frame
+        with patch("yfinance.Ticker", return_value=fake) as patched:
+            series = _client().adjusted_daily_closes(
+                "mrna", start=dt.date(2026, 7, 6), end=dt.date(2026, 8, 22)
+            )
+        patched.assert_called_once_with("MRNA")
+        _, kwargs = fake.history.call_args
+        self.assertTrue(kwargs["auto_adjust"])
+        self.assertIsNotNone(series)
+        self.assertIsNone(series.index.tz)
+        self.assertEqual(float(series.iloc[0]), 34.2)
+        self.assertEqual(float(series.iloc[-1]), 82.8)
+
+    def test_permanent_failure_returns_none(self):
+        fake = MagicMock()
+        fake.history.side_effect = RuntimeError("delisted")
+        with patch("yfinance.Ticker", return_value=fake):
+            self.assertIsNone(
+                _client().adjusted_daily_closes(
+                    "DEAD", start=dt.date(2026, 7, 1), end=dt.date(2026, 8, 1)
+                )
+            )
+
+    def test_empty_history_returns_empty_series(self):
+        fake = MagicMock()
+        fake.history.return_value = pd.DataFrame()
+        with patch("yfinance.Ticker", return_value=fake):
+            series = _client().adjusted_daily_closes(
+                "MRNA", start=dt.date(2026, 7, 1), end=dt.date(2026, 8, 1)
+            )
+        self.assertIsNotNone(series)
+        self.assertEqual(len(series), 0)
+
+    def test_non_finite_closes_are_dropped(self):
+        frame = pd.DataFrame(
+            {
+                "Open": [10.0, 10.2],
+                "High": [11.0, 11.1],
+                "Low": [9.0, 9.4],
+                "Close": [10.5, float("nan")],
+                "Volume": [5000.0, 5200.0],
+            },
+            index=pd.DatetimeIndex(["2026-07-22", "2026-07-23"], tz="America/New_York"),
+        )
+        fake = MagicMock()
+        fake.history.return_value = frame
+        with patch("yfinance.Ticker", return_value=fake):
+            series = _client().adjusted_daily_closes(
+                "QUBT", start=dt.date(2026, 7, 1), end=dt.date(2026, 8, 1)
+            )
+        self.assertEqual(len(series), 1)
+        self.assertEqual(float(series.iloc[0]), 10.5)
+
+
 if __name__ == "__main__":
     unittest.main()

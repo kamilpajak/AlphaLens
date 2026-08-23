@@ -3396,5 +3396,312 @@ class TestBreakerOnlyCountsPolygonError(_MonitorTestBase):
         self.assertEqual(deadline.stopped_reason, "breaker")
 
 
+class TestImplausibleGuardDispositions(_MonitorTestBase):
+    """#1090 — the 0.60 threshold is a TRIGGER, not a verdict (memo Amendment 1).
+
+    On a trip the monitor asks the corporate-actions lookup, then the
+    independent-vendor cross-check: action found -> SPLIT_INVALIDATED terminal;
+    lookup failed -> carry (lookup_failed); none found + yfinance agrees ->
+    accept (extreme_validated); disagrees / no data -> carry (data_quality).
+    The synthetic ladders mirror the three REAL production trips: MRNA +142%,
+    CRSR +61.6% (both real moves), MQ +342% (4:1 reverse split 2026-07-01).
+    """
+
+    _BRIEF_DATE = dt.date(2026, 6, 25)
+    _NOW = dt.datetime(2026, 8, 22, 7, 0, tzinfo=UTC)
+
+    def _implausible_fetch(self, last_close: float):
+        """Two RTH bars: entry fill at 100, then a |move| way over the trigger.
+
+        The second bar sits 3h after the open — OUTSIDE the 30-min arrival VWAP
+        window — so reference_close is exactly 100.0 and forward_return is
+        exactly ``last_close/100 - 1``.
+        """
+
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [
+                {"t": base, "o": 100.0, "h": 100.5, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {
+                    "t": base + 3 * 3600 * 1000,
+                    "o": last_close,
+                    "h": last_close + 1.0,
+                    "l": last_close - 1.0,
+                    "c": last_close,
+                    "v": 2000.0,
+                },
+            ]
+
+        return _fetch
+
+    def _run(
+        self,
+        ticker: str,
+        last_close: float,
+        *,
+        actions_lookup,
+        adjusted_closes_fetch,
+        bar_fetch=None,
+    ):
+        _write_brief(self.briefs_dir, self._BRIEF_DATE, [{"ticker": ticker, "setup": _OK_SETUP}])
+        reports = replay_population_ladders(
+            self.briefs_dir,
+            end_date=self._NOW.date(),
+            store_dir=self.store_dir,
+            bar_fetch=bar_fetch or self._implausible_fetch(last_close),
+            now=self._NOW,
+            lookback_days=(self._NOW.date() - self._BRIEF_DATE).days,
+            actions_lookup=actions_lookup,
+            adjusted_closes_fetch=adjusted_closes_fetch,
+        )
+        return reports
+
+    @staticmethod
+    def _agreeing_closes(last_close: float):
+        """Adjusted closes whose window return equals the raw-bar forward_return."""
+
+        def _fetch(ticker, start, end):
+            return pd.Series(
+                [100.0, last_close],
+                index=pd.DatetimeIndex([start, end - dt.timedelta(days=1)]),
+                dtype=float,
+            )
+
+        return _fetch
+
+    def test_mq_split_found_resolves_split_invalidated_terminal(self):
+        from alphalens_pipeline.feedback.corporate_actions import CorporateActionsAnswer
+
+        class _FoundLookup:
+            calls = 0
+
+            def lookup(self, ticker, start, end):
+                type(self).calls += 1
+                return CorporateActionsAnswer(found=True, detail="split 4.0:1.0 2026-07-01")
+
+        reports = self._run(
+            "MQ",
+            442.0,  # forward_return +3.42 — the real MQ artifact magnitude
+            actions_lookup=_FoundLookup(),
+            adjusted_closes_fetch=lambda t, s, e: None,
+        )
+        df = self._read_store(self._BRIEF_DATE).set_index("ticker")
+        row = df.loc["MQ"]
+        self.assertEqual(row["ladder_classification"], "SPLIT_INVALIDATED")
+        self.assertTrue(bool(row["terminal"]))
+        self.assertTrue(pd.isna(row["realized_r"]))
+        self.assertEqual(row["guard_disposition"], "split_invalidated")
+        self.assertEqual(row["guard_config_version"], "2026-08-23")
+        report = next(r for r in reports if r.brief_date == self._BRIEF_DATE)
+        self.assertEqual(report.guard_split_invalidated, 1)
+        self.assertEqual(report.terminal, 1)
+
+    def test_split_invalidated_row_is_frozen_next_night(self):
+        from alphalens_pipeline.feedback.corporate_actions import CorporateActionsAnswer
+
+        class _FoundLookup:
+            def lookup(self, ticker, start, end):
+                return CorporateActionsAnswer(found=True, detail="split")
+
+        self._run(
+            "MQ",
+            442.0,
+            actions_lookup=_FoundLookup(),
+            adjusted_closes_fetch=lambda t, s, e: None,
+        )
+        fetched: list[str] = []
+
+        def _second_night_fetch(ticker, start, end):
+            fetched.append(ticker)
+            return []
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=self._NOW.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_second_night_fetch,
+            now=self._NOW,
+            lookback_days=(self._NOW.date() - self._BRIEF_DATE).days,
+            actions_lookup=_FoundLookup(),
+            adjusted_closes_fetch=lambda t, s, e: None,
+        )
+        # FREEZE: the terminal quarantine row stops paying nightly fetches.
+        self.assertEqual(fetched, [])
+        row = self._read_store(self._BRIEF_DATE).set_index("ticker").loc["MQ"]
+        self.assertEqual(row["ladder_classification"], "SPLIT_INVALIDATED")
+
+    def test_mrna_no_actions_yf_agrees_accepts_extreme_validated(self):
+        from alphalens_pipeline.feedback.corporate_actions import CorporateActionsAnswer
+
+        class _NoneFound:
+            def lookup(self, ticker, start, end):
+                return CorporateActionsAnswer(found=False)
+
+        reports = self._run(
+            "MRNA",
+            242.0,  # forward_return +1.42 — the real MRNA magnitude
+            actions_lookup=_NoneFound(),
+            adjusted_closes_fetch=self._agreeing_closes(242.0),
+        )
+        row = self._read_store(self._BRIEF_DATE).set_index("ticker").loc["MRNA"]
+        # The outcome is ACCEPTED: the replay's own classification stands and
+        # realized_r is stamped (TP at 110 was crossed on the way to 242).
+        self.assertEqual(row["ladder_classification"], "TP_FULL")
+        self.assertTrue(bool(row["terminal"]))
+        self.assertFalse(pd.isna(row["realized_r"]))
+        self.assertEqual(row["guard_disposition"], "extreme_validated")
+        self.assertEqual(row["guard_config_version"], "2026-08-23")
+        report = next(r for r in reports if r.brief_date == self._BRIEF_DATE)
+        self.assertEqual(report.guard_extreme_validated, 1)
+
+    def test_crsr_barely_over_trigger_accepts_extreme_validated(self):
+        from alphalens_pipeline.feedback.corporate_actions import CorporateActionsAnswer
+
+        class _NoneFound:
+            def lookup(self, ticker, start, end):
+                return CorporateActionsAnswer(found=False)
+
+        self._run(
+            "CRSR",
+            161.6,  # forward_return +0.616 — the real CRSR magnitude
+            actions_lookup=_NoneFound(),
+            adjusted_closes_fetch=self._agreeing_closes(161.6),
+        )
+        row = self._read_store(self._BRIEF_DATE).set_index("ticker").loc["CRSR"]
+        self.assertEqual(row["guard_disposition"], "extreme_validated")
+        self.assertFalse(pd.isna(row["realized_r"]))
+
+    def test_lookup_failure_carries_with_lookup_failed(self):
+        class _BrokenLookup:
+            def lookup(self, ticker, start, end):
+                raise RuntimeError("polygon down")
+
+        reports = self._run(
+            "MRNA",
+            242.0,
+            actions_lookup=_BrokenLookup(),
+            adjusted_closes_fetch=self._agreeing_closes(242.0),
+        )
+        row = self._read_store(self._BRIEF_DATE).set_index("ticker").loc["MRNA"]
+        # Today's conservative behaviour: carried (retryable placeholder for a
+        # brand-new ticker), but now COUNTED and stamped.
+        self.assertFalse(bool(row["terminal"]))
+        self.assertTrue(pd.isna(row["ladder_classification"]))
+        self.assertTrue(pd.isna(row["realized_r"]))
+        self.assertEqual(row["guard_disposition"], "lookup_failed")
+        self.assertEqual(row["guard_config_version"], "2026-08-23")
+        report = next(r for r in reports if r.brief_date == self._BRIEF_DATE)
+        self.assertEqual(report.guard_lookup_failed, 1)
+        self.assertEqual(report.carried_forward, 1)
+
+    def test_yf_disagreement_carries_data_quality(self):
+        from alphalens_pipeline.feedback.corporate_actions import CorporateActionsAnswer
+
+        class _NoneFound:
+            def lookup(self, ticker, start, end):
+                return CorporateActionsAnswer(found=False)
+
+        def flat_closes(ticker, start, end):
+            return pd.Series(
+                [100.0, 101.0],
+                index=pd.DatetimeIndex([start, end - dt.timedelta(days=1)]),
+                dtype=float,
+            )
+
+        reports = self._run(
+            "MRNA",
+            242.0,
+            actions_lookup=_NoneFound(),
+            adjusted_closes_fetch=flat_closes,
+        )
+        row = self._read_store(self._BRIEF_DATE).set_index("ticker").loc["MRNA"]
+        self.assertFalse(bool(row["terminal"]))
+        self.assertEqual(row["guard_disposition"], "data_quality")
+        report = next(r for r in reports if r.brief_date == self._BRIEF_DATE)
+        self.assertEqual(report.guard_data_quality, 1)
+
+    def test_yf_no_data_carries_data_quality(self):
+        from alphalens_pipeline.feedback.corporate_actions import CorporateActionsAnswer
+
+        class _NoneFound:
+            def lookup(self, ticker, start, end):
+                return CorporateActionsAnswer(found=False)
+
+        self._run(
+            "MRNA",
+            242.0,
+            actions_lookup=_NoneFound(),
+            adjusted_closes_fetch=lambda t, s, e: None,
+        )
+        row = self._read_store(self._BRIEF_DATE).set_index("ticker").loc["MRNA"]
+        self.assertEqual(row["guard_disposition"], "data_quality")
+
+    def test_plausible_row_has_null_guard_columns(self):
+        # The guard columns are ADDITIVE schema: a row the trigger never touched
+        # carries them as null.
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [{"t": base, "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0}]
+
+        self._run(
+            "NVDA",
+            100.0,
+            actions_lookup=None,
+            adjusted_closes_fetch=None,
+            bar_fetch=_fetch,
+        )
+        df = self._read_store(self._BRIEF_DATE)
+        self.assertIn("guard_disposition", df.columns)
+        self.assertIn("guard_config_version", df.columns)
+        row = df.set_index("ticker").loc["NVDA"]
+        self.assertTrue(pd.isna(row["guard_disposition"]))
+        self.assertTrue(pd.isna(row["guard_config_version"]))
+
+    def test_legacy_row_without_guard_columns_reads_null_after_carry(self):
+        # GIVEN an OLD-format store row that predates the guard columns, WHEN
+        # the next sweep carries it (fetch failure), THEN the rewritten store
+        # backfills both columns to null instead of dropping them.
+        _write_brief(self.briefs_dir, self._BRIEF_DATE, [{"ticker": "MRNA", "setup": _OK_SETUP}])
+        legacy = {
+            "brief_date": self._BRIEF_DATE,
+            "ticker": "MRNA",
+            "plannable": True,
+            "nonplannable_reason": None,
+            "terminal": False,
+            "matured_at": None,
+            "ladder_classification": "OPEN",
+            "blended_entry": 100.0,
+            "realized_r": None,
+            "open_r": 0.1,
+            "forward_return": 0.01,
+        }
+        self.store_dir.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame([legacy]).to_parquet(
+            self.store_dir / f"{self._BRIEF_DATE.isoformat()}.parquet"
+        )
+
+        def _failing_fetch(ticker, start, end):
+            raise ValueError("transient")
+
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=self._NOW.date(),
+            store_dir=self.store_dir,
+            bar_fetch=_failing_fetch,
+            now=self._NOW,
+            lookback_days=(self._NOW.date() - self._BRIEF_DATE).days,
+        )
+        df = self._read_store(self._BRIEF_DATE)
+        self.assertIn("guard_disposition", df.columns)
+        row = df.set_index("ticker").loc["MRNA"]
+        self.assertTrue(pd.isna(row["guard_disposition"]))
+        self.assertTrue(pd.isna(row["guard_config_version"]))
+
+    def test_terminal_set_includes_split_invalidated(self):
+        from alphalens_pipeline.feedback.population_ladder_monitor import _TERMINAL_SET
+
+        self.assertIn("SPLIT_INVALIDATED", _TERMINAL_SET)
+
+
 if __name__ == "__main__":
     unittest.main()

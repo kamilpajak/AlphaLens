@@ -34,10 +34,15 @@ becomes terminal that night.
 Resilience
 ----------
 * A missing brief parquet skips the date (no crash).
-* A per-ticker fetch failure or an implausible (split-class) move CARRIES the
-  prior row forward verbatim — the population denominator never silently shrinks.
-  A brand-new ticker that fails on its first night gets a retryable placeholder
-  row (``ladder_classification=None``, ``terminal=False``), never dropped.
+* A per-ticker fetch failure CARRIES the prior row forward verbatim — the
+  population denominator never silently shrinks. A brand-new ticker that fails
+  on its first night gets a retryable placeholder row
+  (``ladder_classification=None``, ``terminal=False``), never dropped.
+* An implausible (|forward_return| > 0.60) move is a TRIGGER, not a verdict
+  (#1090): a corporate-actions lookup + independent-vendor cross-check decides
+  between ``SPLIT_INVALIDATED`` (terminal quarantine), acceptance
+  (``extreme_validated``), and the conservative carry (``lookup_failed`` /
+  ``data_quality``) — see :mod:`alphalens_pipeline.feedback.corporate_actions`.
 * A terminal NO_DATA is never written on a transient gap (cache-poisoning class).
 
 Operator/researcher overview: ``alphalens_pipeline/feedback/README.md``.
@@ -66,6 +71,17 @@ from alphalens_pipeline.feedback.bar_window import (
     _window_vwap,
 )
 from alphalens_pipeline.feedback.breakeven_lenses import breakeven_grid
+from alphalens_pipeline.feedback.corporate_actions import (
+    DISPOSITION_EXTREME_VALIDATED,
+    DISPOSITION_SPLIT_INVALIDATED,
+    GUARD_CONFIG_VERSION,
+    SPLIT_INVALIDATED_CLASSIFICATION,
+    AdjustedClosesFetch,
+    CachedCorporateActionsLookup,
+    PolygonCorporateActionsLookup,
+    default_adjusted_closes_fetch,
+    resolve_guard_disposition,
+)
 from alphalens_pipeline.feedback.ladder_config import ladder_config_version
 from alphalens_pipeline.feedback.ladder_replay import (
     LadderOutcome,
@@ -191,7 +207,19 @@ _SPLIT_SCREEN_THRESHOLD = 0.18
 # later night, so freezing it avoids pointless re-fetches). ``OPEN`` /
 # ``PARTIAL_TP_OPEN`` are the ONLY ongoing states.
 _TERMINAL_SET = frozenset(
-    {"TP_FULL", "SL_HIT", "PARTIAL_TP_THEN_SL", "TIME_STOP", "NO_FILL", "BAD_GEOMETRY"}
+    {
+        "TP_FULL",
+        "SL_HIT",
+        "PARTIAL_TP_THEN_SL",
+        "TIME_STOP",
+        "NO_FILL",
+        "BAD_GEOMETRY",
+        # A replay window that crosses a REAL corporate action (#1090): the
+        # ladder levels were set on pre-action prices, so the row can never
+        # resolve meaningfully. Terminal stops the nightly fetch spend;
+        # realized_r stays null so R aggregates exclude it (NO_FILL convention).
+        SPLIT_INVALIDATED_CLASSIFICATION,
+    }
 )
 
 _BAR_COLUMNS = ("t", "o", "h", "l", "c", "v")
@@ -274,6 +302,16 @@ _BREAKEVEN_COLUMNS = ("breakeven_realized_r_json",)
 # the headline realized_r is the entry-tier-spacing drag. Carried like the rest.
 _ENTRY_CF_COLUMNS = ("realized_r_full_fill",)
 
+# Implausible-move guard provenance (#1090, memo Amendment 2): stamped on every
+# row the 0.60 trigger ever touched — ``guard_disposition`` names the arm that
+# handled the trip (split_invalidated / lookup_failed / extreme_validated /
+# data_quality) and ``guard_config_version`` pins the guard rule revision
+# (:data:`GUARD_CONFIG_VERSION`, the memo date). Deliberately NOT a
+# ``ladder_config_version`` bump — that is a pooling key and the guard never
+# alters a pooled value. Additive like the other column families: older rows
+# read as null.
+_GUARD_COLUMNS = ("guard_disposition", "guard_config_version")
+
 
 @dataclass(frozen=True)
 class PopulationMonitorReport:
@@ -293,6 +331,13 @@ class PopulationMonitorReport:
         0  # max sessions a deferred-touch row is behind (dead-man-switch)
     )
     stopped_for_deadline: int = 0  # items deferred because the run deadline tripped
+    # Implausible-move guard dispositions this run (#1090) — one count per arm of
+    # the Amendment-1 tree, so a sustained lookup_failed (the fail-closed arm
+    # silently reverting to the old blindness) is countable, not just logged.
+    guard_split_invalidated: int = 0
+    guard_lookup_failed: int = 0
+    guard_extreme_validated: int = 0
+    guard_data_quality: int = 0
 
 
 def _default_bar_fetch(
@@ -895,6 +940,10 @@ def _terminal_row(
         "last_priced_session": last_priced_session,
         "last_resolved_session": last_resolved_session,
         "reference_close": reference_close,
+        # Guard provenance (additive): null unless the 0.60 trigger touched this
+        # resolve — the caller stamps the disposition + version on a trip.
+        "guard_disposition": None,
+        "guard_config_version": None,
     }
     row.update(_size_fields(setup, outcome, realized_r=realized_r, open_r=open_r))
     # Carry the prior row's last-good /edge chart across this rewrite (None for a
@@ -992,6 +1041,8 @@ def _nonplannable_row(brief_date: dt.date, ticker: str, reason: str) -> dict[str
         "last_priced_session": None,
         "last_resolved_session": None,
         "reference_close": None,
+        "guard_disposition": None,
+        "guard_config_version": None,
         **_null_size_fields(),
     }
 
@@ -1038,6 +1089,8 @@ def _placeholder_row(
         "last_priced_session": None,
         "last_resolved_session": None,
         "reference_close": None,
+        "guard_disposition": None,
+        "guard_config_version": None,
         **_null_size_fields(),
     }
 
@@ -1058,6 +1111,7 @@ def _carry_prior(prior: dict[str, Any]) -> dict[str, Any]:
         *_BREAKEVEN_COLUMNS,
         *_ENTRY_CF_COLUMNS,
         *_PROVENANCE_COLUMNS,
+        *_GUARD_COLUMNS,
         _CHART_PAYLOAD_COLUMN,
     ):
         # ``setdefault`` so an OLD-format row predating the chart column gets an
@@ -1154,6 +1208,8 @@ def replay_population_ladders(
     now: dt.datetime | None = None,
     exchange: str = DEFAULT_EXCHANGE,
     deadline: _RunDeadline | None = None,
+    actions_lookup: Any | None = None,
+    adjusted_closes_fetch: AdjustedClosesFetch | None = None,
 ) -> list[PopulationMonitorReport]:
     """Replay every brief candidate's ladder to terminal over the monitor window.
 
@@ -1172,6 +1228,12 @@ def replay_population_ladders(
     grouped = grouped_fetch or _default_grouped_fetch
     store = store_dir or (Path.home() / ".alphalens" / "population_ladders")
     last_closed_session = _last_closed_session(now, exchange)
+    guard = _build_guard(
+        store,
+        exchange,
+        actions_lookup=actions_lookup,
+        adjusted_closes_fetch=adjusted_closes_fetch,
+    )
 
     # One shared MINUTE budget across the whole run (the cheap daily screen is NOT
     # budget-bounded). The reserved forced sub-budget protects R7 periodic +
@@ -1196,6 +1258,7 @@ def replay_population_ladders(
             budget=budget,
             forced_budget=forced_budget,
             deadline=deadline,
+            guard=guard,
         )
         if report is not None:
             reports.append(report)
@@ -1213,6 +1276,82 @@ def _last_closed_session(now: dt.datetime, exchange: str) -> dt.date:
     from alphalens_pipeline.paper.calendar import previous_trading_day
 
     return previous_trading_day(now.date(), exchange)
+
+
+@dataclass(frozen=True)
+class _ImplausibleGuard:
+    """The two injectable ports behind the implausible-move trigger (#1090).
+
+    ``lookup`` answers "was there a corporate action in this window?"
+    (``.lookup(ticker, start, end) -> CorporateActionsAnswer``, raising =
+    lookup_failed); ``adjusted_closes`` is the independent-vendor adjusted
+    daily-closes fetch for the cross-check arm.
+    """
+
+    lookup: Any
+    adjusted_closes: AdjustedClosesFetch
+
+
+@dataclass(frozen=True)
+class _GuardCarry:
+    """Guard verdict: carry the prior row forward, stamped + counted.
+
+    Distinct from the bare ``None`` return (budget exhausted / fetch fail) so
+    the lookup_failed and data_quality arms are countable separately.
+    """
+
+    disposition: str
+
+
+def _build_guard(
+    store_dir: Path,
+    exchange: str,
+    *,
+    actions_lookup: Any | None,
+    adjusted_closes_fetch: AdjustedClosesFetch | None,
+) -> _ImplausibleGuard:
+    """Assemble the guard from injected ports, defaulting to the canonical clients.
+
+    The default lookup is the Polygon reference lookup wrapped in the on-disk
+    cache next to the monitor's other caches (``<store>/corporate_actions_cache.json``);
+    its dividend-materiality denominator reads the pre-ex-date close from the
+    monitor's own raw (adjusted=false) grouped-daily store. Clients are resolved
+    LAZILY at trip time, so a run that never trips never constructs them.
+    """
+    if actions_lookup is None:
+        actions_lookup = CachedCorporateActionsLookup(
+            PolygonCorporateActionsLookup(
+                pre_ex_close=lambda ticker, ex_date: _grouped_pre_ex_close(
+                    store_dir, ticker, ex_date, exchange
+                )
+            ),
+            store_dir / "corporate_actions_cache.json",
+        )
+    return _ImplausibleGuard(
+        lookup=actions_lookup,
+        adjusted_closes=adjusted_closes_fetch or default_adjusted_closes_fetch,
+    )
+
+
+def _grouped_pre_ex_close(
+    store_dir: Path, ticker: str, ex_date: dt.date, exchange: str
+) -> float | None:
+    """Raw close of the session before ``ex_date`` from the grouped-daily store.
+
+    ``None`` when the session is not cached or the ticker did not trade — the
+    lookup then fails closed (carry + lookup_failed) rather than guessing the
+    dividend-materiality denominator.
+    """
+    from alphalens_pipeline.paper.calendar import previous_trading_day
+
+    prev_session = previous_trading_day(ex_date, exchange)
+    grouped = _read_grouped_cache(store_dir, prev_session)
+    if grouped is None:
+        return None
+    bar = grouped.get(ticker.upper())
+    if bar is None:
+        return None
+    return _safe_finite_float(bar.get("c"))
 
 
 class _FetchBudget:
@@ -1241,6 +1380,7 @@ def _replay_one_date(
     budget: _FetchBudget,
     forced_budget: _FetchBudget,
     deadline: _RunDeadline | None = None,
+    guard: _ImplausibleGuard | None = None,
 ) -> PopulationMonitorReport | None:
     """Two-tier screen + resolve every candidate on one brief date. ``None`` when no brief.
 
@@ -1310,6 +1450,7 @@ def _replay_one_date(
         budget=budget,
         forced_budget=forced_budget,
         deadline=deadline,
+        guard=guard,
     )
 
     rows = [rows_by_ticker[t] for t in order]
@@ -1327,6 +1468,10 @@ def _replay_one_date(
         deferred_touches=len(deferred_ages),
         oldest_deferred_touch_age=max(deferred_ages, default=0),
         stopped_for_deadline=counts.get("stopped_for_deadline", 0),
+        guard_split_invalidated=counts.get("guard_split_invalidated", 0),
+        guard_lookup_failed=counts.get("guard_lookup_failed", 0),
+        guard_extreme_validated=counts.get("guard_extreme_validated", 0),
+        guard_data_quality=counts.get("guard_data_quality", 0),
     )
 
 
@@ -1902,6 +2047,7 @@ def _cheap_update_row(
         *_BREAKEVEN_COLUMNS,
         *_ENTRY_CF_COLUMNS,
         *_PROVENANCE_COLUMNS,
+        *_GUARD_COLUMNS,
     ):
         row.setdefault(col, None)
     row["last_close"] = c_star
@@ -2066,6 +2212,7 @@ def _resolve_queue(
     budget: _FetchBudget,
     forced_budget: _FetchBudget,
     deadline: _RunDeadline | None = None,
+    guard: _ImplausibleGuard | None = None,
 ) -> list[int]:
     """Pass 2 — resolve the queued candidates under the main + reserved budgets.
 
@@ -2109,10 +2256,11 @@ def _resolve_queue(
             reference_close_override=item.reference_close,
             deadline=deadline,
             pct_off_52w_high=item.candidate.technical_pct_off_52w_high,
+            guard=guard,
         )
         if result is None:
-            # Budget exhausted / fetch fail / implausible — carry prior (or a
-            # retryable placeholder for a brand-new ticker) and record the age.
+            # Budget exhausted / fetch fail — carry prior (or a retryable
+            # placeholder for a brand-new ticker) and record the age.
             _carry_deferred(
                 item,
                 rows_by_ticker=rows_by_ticker,
@@ -2122,6 +2270,20 @@ def _resolve_queue(
                 scorer_version=scorer_version,
                 last_closed_session=last_closed_session,
             )
+            continue
+        if isinstance(result, _GuardCarry):
+            # Guard fail-closed arms (lookup_failed / data_quality): today's
+            # conservative carry, but stamped + counted per disposition.
+            _carry_deferred(
+                item,
+                rows_by_ticker=rows_by_ticker,
+                counts=counts,
+                deferred_ages=deferred_ages,
+                theme=theme,
+                scorer_version=scorer_version,
+                last_closed_session=last_closed_session,
+            )
+            _stamp_guard(rows_by_ticker[ticker], result.disposition, counts)
             continue
 
         row = _terminal_row(
@@ -2139,9 +2301,41 @@ def _resolve_queue(
             realized_r_full=result.realized_r_full,
             prior_chart_payload=_carried_chart(item.prior),
         )
+        if result.guard_disposition is not None:
+            _stamp_guard(row, result.guard_disposition, counts)
+            if result.guard_disposition == DISPOSITION_SPLIT_INVALIDATED:
+                _apply_split_invalidation(row, last_closed_session)
         rows_by_ticker[ticker] = _stamp_scorer_version(_stamp_theme(row, theme), scorer_version)
         counts["terminal" if row["terminal"] else "ongoing"] += 1
     return deferred_ages
+
+
+def _stamp_guard(row: dict[str, Any], disposition: str, counts: dict[str, int]) -> None:
+    """Stamp the guard provenance columns on a trigger-touched row and count it."""
+    row["guard_disposition"] = disposition
+    row["guard_config_version"] = GUARD_CONFIG_VERSION
+    key = f"guard_{disposition}"
+    counts[key] = counts.get(key, 0) + 1
+
+
+def _apply_split_invalidation(row: dict[str, Any], last_closed_session: dt.date) -> dict[str, Any]:
+    """Quarantine a corporate-action-crossed row as terminal SPLIT_INVALIDATED.
+
+    The ladder levels were set on pre-action prices, so the replay outcome is
+    meaningless: terminal stops the nightly fetch spend (the freeze path never
+    re-replays it); ``realized_r`` / ``open_r`` and their %-of-book projections
+    are nulled so every R aggregate excludes the row (the NO_FILL convention).
+    Diagnostic fields (forward_return, sequence, mfe/mae) keep the raw replay
+    values as telemetry of WHAT tripped the guard.
+    """
+    row["ladder_classification"] = SPLIT_INVALIDATED_CLASSIFICATION
+    row["terminal"] = True
+    row["matured_at"] = last_closed_session
+    row["realized_r"] = None
+    row["open_r"] = None
+    row["realized_return_pct_of_book"] = None
+    row["open_return_pct_of_book"] = None
+    return row
 
 
 @dataclass(frozen=True)
@@ -2154,6 +2348,11 @@ class _ResolveResult:
     grid_realized_r: dict[str, float | None] | None = None
     breakeven_grid_r: dict[str, float | None] | None = None
     realized_r_full: float | None = None
+    # Set when the implausible-move trigger fired on this resolve:
+    # ``extreme_validated`` (accepted outcome) or ``split_invalidated`` (the
+    # caller quarantines the row terminally). Carry-class dispositions return a
+    # _GuardCarry instead of a result.
+    guard_disposition: str | None = None
 
 
 def _replay_candidate(
@@ -2169,7 +2368,8 @@ def _replay_candidate(
     reference_close_override: float | None = None,
     deadline: _RunDeadline | None = None,
     pct_off_52w_high: float | None = None,
-) -> _ResolveResult | None:
+    guard: _ImplausibleGuard | None = None,
+) -> _ResolveResult | _GuardCarry | None:
     """RTH-only minute fetch + replay one ticker. ``None`` on fetch fail / defer / skip.
 
     ``pct_off_52w_high`` is the brief row's ``technical_pct_off_52w_high``
@@ -2243,14 +2443,37 @@ def _replay_candidate(
         entry_expiry_ms=entry_expiry_ms,
         position_expiry_ms=position_expiry_ms,
     )
+    guard_disposition: str | None = None
     if _outcome_is_implausible(outcome):
+        # #1090: the 0.60 threshold is a TRIGGER, not a verdict — ask the
+        # corporate-actions source of record, then the independent vendor.
+        assert outcome.forward_return is not None  # _outcome_is_implausible checked
+        guard_disposition = _guard_disposition_for(
+            guard,
+            ticker=ticker,
+            forward_return=float(outcome.forward_return),
+            arrival_session=arrival_session,
+            horizon_session=horizon_session,
+        )
         logger.warning(
-            "population-monitor: implausible forward_return %.3f for %s (likely a split; "
-            "bars adjusted=false) — carrying prior rather than recording.",
+            "population-monitor: implausible forward_return %.3f for %s "
+            "(bars adjusted=false) — guard disposition=%s.",
             outcome.forward_return,
             ticker,
+            guard_disposition,
         )
-        return None
+        if guard_disposition == DISPOSITION_SPLIT_INVALIDATED:
+            # No grids / counterfactuals: the raw-bar window is meaningless, the
+            # caller quarantines the row terminally.
+            return _ResolveResult(
+                outcome=outcome,
+                reference_close=reference_close,
+                horizon_session=horizon_session,
+                guard_disposition=guard_disposition,
+            )
+        if guard_disposition != DISPOSITION_EXTREME_VALIDATED:
+            # lookup_failed / data_quality: today's conservative carry, counted.
+            return _GuardCarry(disposition=guard_disposition)
     # Re-replay the SAME bars under the alternate-exit grid (PR-2): zero extra
     # Polygon cost, separates ladder-capture from selection downstream.
     grid_realized_r = replay_ladder_grid(
@@ -2278,6 +2501,35 @@ def _replay_candidate(
         grid_realized_r=grid_realized_r,
         breakeven_grid_r=breakeven_grid_r,
         realized_r_full=realized_r_full,
+        guard_disposition=guard_disposition,
+    )
+
+
+def _guard_disposition_for(
+    guard: _ImplausibleGuard | None,
+    *,
+    ticker: str,
+    forward_return: float,
+    arrival_session: dt.date,
+    horizon_session: dt.date,
+) -> str:
+    """Resolve one trigger via the Amendment-1 tree; no guard = fail closed.
+
+    A ``None`` guard (an internal caller that did not wire the ports) behaves
+    like a failed lookup: carry + ``lookup_failed`` — never the old silent skip
+    and never an unchecked accept.
+    """
+    from alphalens_pipeline.feedback.corporate_actions import DISPOSITION_LOOKUP_FAILED
+
+    if guard is None:
+        return DISPOSITION_LOOKUP_FAILED
+    return resolve_guard_disposition(
+        ticker=ticker,
+        forward_return=forward_return,
+        arrival_session=arrival_session,
+        horizon_session=horizon_session,
+        lookup=guard.lookup,
+        adjusted_closes=guard.adjusted_closes,
     )
 
 

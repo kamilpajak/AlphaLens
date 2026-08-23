@@ -173,6 +173,40 @@ class YFinanceClient:
             return pd.DataFrame()
         return _normalize_ohlcv(raw)
 
+    def adjusted_daily_closes(
+        self, ticker: str, *, start: dt.date, end: dt.date
+    ) -> pd.Series | None:
+        """Split/dividend-ADJUSTED daily closes for ``ticker`` over ``[start, end)``.
+
+        Wraps ``yfinance.Ticker(T).history(start=, end=, auto_adjust=True)`` —
+        the deliberate mirror-image of :meth:`daily_ohlcv`'s raw fetch. Consumed
+        by the population-monitor implausible-move guard (#1090) as the
+        INDEPENDENT-VENDOR cross-check: a window return recomputed from adjusted
+        closes is immune to the raw-bar split artifact, so agreement validates
+        an extreme move while disagreement flags a data-quality problem.
+
+        Tri-state contract (mirrors :meth:`splits`): a tz-naive ``float`` Series
+        on success (non-finite closes dropped), an EMPTY Series when Yahoo has
+        no rows in the window, and ``None`` only on a permanent failure /
+        exhausted retries — never raises.
+        """
+        upper = ticker.upper()
+
+        def _fetch() -> pd.DataFrame | None:
+            import yfinance as yf
+
+            return yf.Ticker(upper).history(start=start, end=end, auto_adjust=True)
+
+        raw = self._call_with_retry(_fetch, what=f"adjusted_history({upper})", default=None)
+        if raw is None:
+            return None
+        if raw.empty or "Close" not in raw.columns:
+            return pd.Series(dtype=float)
+        series = raw["Close"].astype(float).copy()
+        if isinstance(series.index, pd.DatetimeIndex) and series.index.tz is not None:
+            series.index = series.index.tz_localize(None)
+        return series[np.isfinite(series)]
+
     def splits(self, ticker: str) -> pd.Series | None:
         """All recorded stock-split actions for ``ticker`` as a date -> ratio Series.
 

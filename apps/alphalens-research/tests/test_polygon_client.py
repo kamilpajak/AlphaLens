@@ -621,6 +621,91 @@ class PolygonClientGetJsonEscapeHatchTests(unittest.TestCase):
         self.assertEqual(payload, {"status": "OK", "results": [1, 2, 3]})
 
 
+class PolygonClientSplitsTests(unittest.TestCase):
+    """``get_splits`` — corporate-actions reference lookup for the implausible-move
+    guard (#1090). The MQ payload mirrors the real 4:1 reverse split executed
+    2026-07-01 that parked 9 rows behind the old blind guard."""
+
+    _MQ_SPLIT = {
+        "ticker": "MQ",
+        "execution_date": "2026-07-01",
+        "split_from": 4.0,
+        "split_to": 1.0,
+    }
+
+    def test_builds_v3_reference_splits_url_with_window_params(self):
+        session = mock.Mock()
+        session.get.return_value = _ok({"results": [self._MQ_SPLIT]})
+        client = _make_client(session=session)
+
+        rows = client.get_splits(
+            ticker="mq",
+            execution_date_gte=dt.date(2026, 6, 22),
+            execution_date_lte=dt.date(2026, 8, 22),
+        )
+
+        self.assertEqual(rows, [self._MQ_SPLIT])
+        url = session.get.call_args[0][0]
+        self.assertEqual(url, "https://api.polygon.io/v3/reference/splits")
+        params = session.get.call_args[1]["params"]
+        self.assertEqual(params["ticker"], "MQ")
+        self.assertEqual(params["execution_date.gte"], "2026-06-22")
+        self.assertEqual(params["execution_date.lte"], "2026-08-22")
+
+    def test_no_splits_returns_empty_list(self):
+        session = mock.Mock()
+        session.get.return_value = _ok({"results": []})
+        client = _make_client(session=session)
+        self.assertEqual(client.get_splits(ticker="MRNA"), [])
+
+    def test_pagination_follows_next_url_with_apikey_stripped(self):
+        session = mock.Mock()
+        session.get.side_effect = [
+            _ok(
+                {
+                    "results": [self._MQ_SPLIT],
+                    "next_url": "https://api.polygon.io/v3/reference/splits?cursor=x&apiKey=leak",
+                }
+            ),
+            _ok({"results": [{"ticker": "MQ", "execution_date": "2020-01-02"}]}),
+        ]
+        client = _make_client(session=session)
+        rows = client.get_splits(ticker="MQ")
+        self.assertEqual(len(rows), 2)
+        second_url = session.get.call_args_list[1][0][0]
+        self.assertNotIn("apiKey", second_url)
+
+
+class PolygonClientDividendsTests(unittest.TestCase):
+    """``get_dividends`` — the second reference arm of the guard lookup."""
+
+    def test_builds_v3_reference_dividends_url_with_window_params(self):
+        session = mock.Mock()
+        payload = {"ticker": "XYZ", "ex_dividend_date": "2026-07-10", "cash_amount": 5.5}
+        session.get.return_value = _ok({"results": [payload]})
+        client = _make_client(session=session)
+
+        rows = client.get_dividends(
+            ticker="xyz",
+            ex_dividend_date_gte=dt.date(2026, 6, 22),
+            ex_dividend_date_lte=dt.date(2026, 8, 22),
+        )
+
+        self.assertEqual(rows, [payload])
+        url = session.get.call_args[0][0]
+        self.assertEqual(url, "https://api.polygon.io/v3/reference/dividends")
+        params = session.get.call_args[1]["params"]
+        self.assertEqual(params["ticker"], "XYZ")
+        self.assertEqual(params["ex_dividend_date.gte"], "2026-06-22")
+        self.assertEqual(params["ex_dividend_date.lte"], "2026-08-22")
+
+    def test_no_dividends_returns_empty_list(self):
+        session = mock.Mock()
+        session.get.return_value = _ok({"results": []})
+        client = _make_client(session=session)
+        self.assertEqual(client.get_dividends(ticker="MRNA"), [])
+
+
 class GetDefaultClientSingletonTests(unittest.TestCase):
     def setUp(self):
         _reset_default_client_for_tests()
