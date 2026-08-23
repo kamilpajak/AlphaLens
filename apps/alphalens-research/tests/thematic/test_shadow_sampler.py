@@ -239,3 +239,33 @@ class TestIdempotencePerDate(unittest.TestCase):
 
         self.assertNotIn("thematic_candidates", str(raw))
         self.assertNotIn("thematic_briefs", str(raw))
+
+
+class TestBandsUseOriginalRanks(unittest.TestCase):
+    """The review claimed bands are cut AFTER removing the selected themes, so a
+    theme originally at rank 11 would slide into rank 10 and change band. It is
+    not what the code does — ranks come from the full eligible frame — but
+    nothing pinned it, so a future edit could make the claim true.
+    """
+
+    def test_removing_low_ranked_selections_does_not_shift_the_bands(self):
+        pool = _rollup()
+        order = list(pool["theme"])
+        # The selector took the top 10 AND two stragglers from deep in the pool.
+        selected = set(order[:10]) | {order[12], order[45]}
+
+        draw = sample_shadow_themes(pool, asof=_ASOF, selected=selected)
+
+        near_ranks = sorted(order.index(t) for t in draw.near)
+        far_ranks = sorted(order.index(t) for t in draw.far)
+        self.assertTrue(all(10 <= r < 30 for r in near_ranks), near_ranks)
+        self.assertTrue(all(r >= 30 for r in far_ranks), far_ranks)
+
+    def test_a_selector_that_took_fewer_than_ten_does_not_shift_them_either(self):
+        pool = _rollup()
+        order = list(pool["theme"])
+
+        draw = sample_shadow_themes(pool, asof=_ASOF, selected=set(order[:4]))
+
+        near_ranks = sorted(order.index(t) for t in draw.near)
+        self.assertTrue(all(10 <= r < 30 for r in near_ranks), near_ranks)

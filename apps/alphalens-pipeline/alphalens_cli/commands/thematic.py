@@ -1427,6 +1427,15 @@ def shadow_map_cmd(
         envvar="ALPHALENS_MAPPER_MODEL",
         help="OpenRouter LLM slug (must match the production mapper or the arms differ).",
     ),
+    keep_unverified: bool = typer.Option(
+        False,
+        "--keep-unverified",
+        help=(
+            "Mirror of the production map-themes flag. Present so the two calls stay "
+            "mechanically identical: an operator re-running production with it set "
+            "while the shadow arm did not would confound the arms invisibly."
+        ),
+    ),
     rebuild: bool = typer.Option(
         False,
         "--rebuild",
@@ -1457,7 +1466,12 @@ def shadow_map_cmd(
         typer.echo(f"shadow-map: {asof} already collected — skipping.")
         return
 
-    rollup = themes_mod.roll_up(asof=asof, events_dir=events_dir)
+    # recent_days passed explicitly, matching the production stage: the default
+    # is shared today, and a future change to one and not the other would make
+    # the two rollups drift while looking identical at the call site.
+    rollup = themes_mod.roll_up(
+        asof=asof, events_dir=events_dir, recent_days=themes_mod.DEFAULT_RECENT_DAYS
+    )
     if rollup.empty:
         typer.echo(f"shadow-map: no theme rollup for {asof} — nothing to draw.")
         return
@@ -1511,6 +1525,7 @@ def shadow_map_cmd(
         polygon_api_key=os.environ.get("POLYGON_API_KEY", ""),
         output_dir=raw_dir,
         model=model,
+        keep_unverified=keep_unverified,
         theme_novelty=theme_novelty,
         novelty_config_version=novelty_cfg,
         # NOT an unconditional rebuild: map_themes freezes per (asof, config), so
@@ -1530,3 +1545,25 @@ def shadow_map_cmd(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     write_parquet_atomic(frame, out_path, index=False)
     typer.echo(f"shadow-map: wrote {len(frame)} rows to {out_path}")
+
+    # Countable, not just logged. The stage is best-effort, so a stopped
+    # collector would otherwise look exactly like a quiet day — the same blind
+    # spot the theme-rollup write had before PR #1086 gave it a gauge. These
+    # also make the contract's per-day cost obligation (section 9) observable
+    # without reading journals.
+    try:
+        emit_domain_metrics(
+            job="thematic-shadow-map",
+            metrics={
+                "shadow_map_rows": len(frame),
+                "shadow_map_themes_drawn": len(draw.all_themes),
+                "shadow_map_themes_near": len(draw.near),
+                "shadow_map_themes_far": len(draw.far),
+                "shadow_map_eligible_pool": draw.eligible_pool,
+                "shadow_map_themes_without_proposal": int(
+                    frame.groupby("theme")["ticker"].count().eq(0).sum()
+                ),
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed for shadow-map; the run succeeded")
