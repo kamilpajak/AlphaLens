@@ -349,6 +349,10 @@ class SaxoStreamingClient:
             return False  # old reader still unwinding asyncio.run
         if self._current_token is None:
             return False  # never trial without a bearer (memo §4.4)
+        # Rollback (below) restores ONLY _thread/_is_streaming — the context
+        # rotation and cleared _last_message_id/_breaker_alerted deliberately
+        # stay: the next trial reuses the rotated id, and the superseded id is
+        # already in the retired drain deque (DELETE on a dead context no-ops).
         prior_thread, prior_streaming = self._thread, self._is_streaming
         self._retired_context_ids.append(self._context_id)
         self._context_id = context_id  # rotate — trip-time DELETE is best-effort

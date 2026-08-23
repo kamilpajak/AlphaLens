@@ -3231,6 +3231,9 @@ def _make_stream_tick(
         # (4) Gauges — every tick, including while dark, ONE atomic emit (all
         # SIX keys: an omitted key deletes its series). The age key is never
         # omitted: epoch None -> seconds since closure build.
+        # Fallback diverges from memo §4.6's "seconds since reader start":
+        # started_mono is the CLOSURE build time (daemon start). Harmless — no
+        # alert keys on the absolute value while the breaker is open.
         age = silence if silence is not None else now - started_mono
         try:
             session = 1.0 if session_predicate() else 0.0
