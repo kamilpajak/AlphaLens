@@ -273,8 +273,10 @@ class CachedCorporateActionsLookup:
         try:
             self._cache_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self._cache_path.with_suffix(self._cache_path.suffix + ".tmp")
-            tmp.write_text(json.dumps(cache, indent=0, sort_keys=True))
-            os.replace(tmp, self._cache_path)
+            # S2083 taint FP: the path derives from the operator-configured
+            # store dir, never request/user input (mcap_filter.py precedent).
+            tmp.write_text(json.dumps(cache, indent=0, sort_keys=True))  # NOSONAR
+            os.replace(tmp, self._cache_path)  # NOSONAR
         except OSError as exc:  # best-effort cache; a disk error is never fatal
             logger.warning("corporate-actions cache write failed: %s", exc)
 
