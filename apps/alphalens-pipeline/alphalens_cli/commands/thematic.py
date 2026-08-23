@@ -1510,14 +1510,10 @@ def shadow_map_cmd(
         recent_days=themes_mod.DEFAULT_RECENT_DAYS,
         threshold=themes_mod.DEFAULT_NOVELTY_THRESHOLD,
     )
-    ranked = rollup.set_index("theme")
+    order = list(rollup["theme"])
+    scores = dict(zip(rollup["theme"], rollup["novelty_score"].astype(float), strict=True))
     theme_novelty = {
-        t: (
-            int(list(rollup["theme"]).index(t)) + 1,
-            float(ranked.loc[t, "novelty_score"]),
-        )
-        for t in draw.all_themes
-        if t in ranked.index
+        t: (order.index(t) + 1, float(scores[t])) for t in draw.all_themes if t in scores
     }
     orchestrator.map_themes(
         themes=draw.all_themes,
