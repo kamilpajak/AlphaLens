@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import typer
+from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.observability.textfile import emit_domain_metrics
 from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
@@ -19,7 +20,7 @@ from alphalens_pipeline.thematic import verify_cache as verify_cache_mod
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orchestrator
 from alphalens_pipeline.thematic.extraction import event_extractor
 from alphalens_pipeline.thematic.extraction import themes as themes_mod
-from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping import orchestrator, shadow_sampler, theme_mapper
 from alphalens_pipeline.thematic.screening import scorer as screening_scorer
 from alphalens_pipeline.thematic.trade_setup import model as trade_setup_model
 
@@ -1395,3 +1396,98 @@ def clean_titles_command(
         else f"{result.total_rows_cleaned} row(s) would be cleaned (dry-run)"
     )
     typer.echo(f"done. {summary}.")
+
+
+@thematic_app.command("shadow-map")
+def shadow_map_cmd(
+    date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
+    events_dir: Path = typer.Option(
+        event_extractor.DEFAULT_EVENTS_DIR,
+        "--events-dir",
+        help="Phase B extracted-events parquet root.",
+    ),
+    funnel_dir: Path = typer.Option(
+        orchestrator.DEFAULT_OUTPUT_DIR / "proposal_funnel",
+        "--funnel-dir",
+        help="Production proposal funnel, read to learn which themes were SELECTED.",
+    ),
+    store_dir: Path = typer.Option(
+        shadow_sampler.SHADOW_STORE_DIR,
+        "--store-dir",
+        help="Shadow-arm output root. Never under thematic_candidates/ (contract section 4).",
+    ),
+    per_band: int = typer.Option(
+        shadow_sampler.SHADOW_THEMES_PER_BAND,
+        "--per-band",
+        help="Themes drawn from each of the two bands.",
+    ),
+    model: str = typer.Option(
+        theme_mapper.DEFAULT_MODEL,
+        "--model",
+        envvar="ALPHALENS_MAPPER_MODEL",
+        help="OpenRouter LLM slug (must match the production mapper or the arms differ).",
+    ),
+) -> None:
+    """Ask the mapper about themes the selector did NOT pick, and record the answer.
+
+    Measurement only. Its output never reaches a brief, a card, or the candidate
+    parquet — see docs/research/theme_shadow_arm_contract_2026_08_23.md section 4,
+    which is enforced by test rather than by intent.
+
+    The question: the mapper proposes mostly mega-caps, and that can come from
+    WHICH themes are picked or from how the model behaves inside a theme. This
+    addresses the first. Runs after map-themes, so the selected set is known.
+    """
+    # Same default as every other stage: yesterday in UTC.
+    asof = (
+        dt.date.fromisoformat(date)
+        if date
+        else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    )
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
+    rollup = themes_mod.roll_up(asof=asof, events_dir=events_dir)
+    if rollup.empty:
+        typer.echo(f"shadow-map: no theme rollup for {asof} — nothing to draw.")
+        return
+
+    funnel_path = funnel_dir / f"{asof.isoformat()}.parquet"
+    if not funnel_path.exists():
+        typer.echo(
+            f"shadow-map: no production funnel at {funnel_path}. "
+            "Run map-themes first — without it the arms cannot be kept disjoint."
+        )
+        raise typer.Exit(code=1)
+    selected = set(pd.read_parquet(funnel_path, columns=["theme"])["theme"].dropna().astype(str))
+
+    draw = shadow_sampler.sample_shadow_themes(
+        rollup, asof=asof, selected=selected, per_band=per_band
+    )
+    if not draw.all_themes:
+        typer.echo(f"shadow-map: eligible pool empty for {asof} — nothing to draw.")
+        return
+    typer.echo(
+        f"shadow-map {asof}: {len(draw.near)} near + {len(draw.far)} far "
+        f"from {draw.eligible_pool} eligible ({len(selected)} selected excluded)"
+    )
+
+    raw_dir = store_dir / "raw"
+    orchestrator.map_themes(
+        themes=draw.all_themes,
+        asof=asof,
+        output_dir=raw_dir,
+        model=model,
+        rebuild=True,
+    )
+
+    raw_funnel = raw_dir / "proposal_funnel" / f"{asof.isoformat()}.parquet"
+    funnel = (
+        pd.read_parquet(raw_funnel)
+        if raw_funnel.exists()
+        else pd.DataFrame(columns=["theme", "ticker", "bracket_verdict"])
+    )
+    frame = shadow_sampler.build_shadow_frame(funnel, draw)
+    out_path = shadow_sampler.shadow_store_path(asof, store_dir=store_dir)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    write_parquet_atomic(frame, out_path, index=False)
+    typer.echo(f"shadow-map: wrote {len(frame)} rows to {out_path}")
