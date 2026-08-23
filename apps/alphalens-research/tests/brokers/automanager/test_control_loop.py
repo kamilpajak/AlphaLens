@@ -6484,6 +6484,7 @@ def _stream_tick_harness(
     stale_s: float = 45.0,
     bearer: Any = "B",
     gauges: list[dict[str, float]] | None = None,
+    in_session: Callable[[], bool] | None = None,
 ) -> tuple[Callable[[], None], list[str], list[tuple[str, str]]]:
     """Build the rewritten tick with recording sinks: ``pages`` records the
     guaranteed-send edge sink, ``throttled`` the interval-throttled one."""
@@ -6498,8 +6499,21 @@ def _stream_tick_harness(
         stale_s=stale_s,
         emit_gauge=(gauges.append if gauges is not None else (lambda values: None)),
         monotonic=clock,
+        in_session=in_session if in_session is not None else (lambda: True),
     )
     return tick, pages, throttled
+
+
+# Every gauge base name the tick must land in ONE atomic domain emit (rearm
+# design memo §4.6) — an omitted key deletes its Prometheus series.
+_ALL_STREAM_GAUGE_NAMES = (
+    "alphalens_broker_manager_stream_reader_up",
+    "alphalens_broker_manager_stream_breaker_open",
+    "alphalens_broker_manager_stream_last_message_age_seconds",
+    "alphalens_broker_manager_stream_consecutive_failures",
+    "alphalens_broker_manager_stream_trips_total",
+    "alphalens_broker_manager_stream_in_session",
+)
 
 
 class TestStreamStaleAlert(unittest.TestCase):
@@ -6994,6 +7008,125 @@ class TestStreamRearmLadder(unittest.TestCase):
             clock.now += 45.0
         self.assertLessEqual(len(pages), 2, pages)
         self.assertEqual(throttled, [])
+
+
+class TestStreamGauges(unittest.TestCase):
+    """Rearm design memo §4.6 / §6 INC-4: six gauges, written on EVERY tick
+    (including while dark — the pre-rearm tick returned from the breaker branch
+    before emitting, freezing the textfile so no age rule could ever fire), in
+    ONE atomic domain emit. Prometheus owns every level; Telegram gets edges."""
+
+    def test_gauges_are_written_on_every_tick_including_while_dark(self) -> None:
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(
+            running=False, streaming=False, trips=1, failures=6, rearm_result=False
+        )
+        tick, _pages, _throttled = _stream_tick_harness(
+            trig, clock, gauges=gauges, in_session=lambda: False
+        )
+        for _ in range(5):
+            tick()
+            clock.now += 45.0
+        self.assertEqual(len(gauges), 5)
+        for emitted in gauges:
+            self.assertEqual(sorted(emitted), sorted(_ALL_STREAM_GAUGE_NAMES))
+        # The dark reader reads down; the levels carry the streak composition
+        # the 2026-08-22 journal could not recover; the session gauge follows
+        # the injected predicate.
+        last = gauges[-1]
+        self.assertEqual(last["alphalens_broker_manager_stream_reader_up"], 0.0)
+        self.assertEqual(last["alphalens_broker_manager_stream_breaker_open"], 1.0)
+        self.assertEqual(last["alphalens_broker_manager_stream_consecutive_failures"], 6.0)
+        self.assertEqual(last["alphalens_broker_manager_stream_trips_total"], 1.0)
+        self.assertEqual(last["alphalens_broker_manager_stream_in_session"], 0.0)
+
+    def test_the_age_gauge_key_is_never_omitted_when_no_message_has_arrived(self) -> None:
+        # An omitted key deletes its Prometheus series (emit_domain_metrics
+        # overwrites the whole domain file) — epoch None must still write the
+        # age key, reporting seconds since the closure was built.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(silence=None)
+        tick, _pages, _throttled = _stream_tick_harness(trig, clock, gauges=gauges)
+        clock.now += 120.0
+        tick()
+        self.assertIn("alphalens_broker_manager_stream_last_message_age_seconds", gauges[0])
+        self.assertEqual(
+            gauges[0]["alphalens_broker_manager_stream_last_message_age_seconds"], 120.0
+        )
+
+    def test_breaker_open_stays_one_across_a_whole_episode_and_does_not_flicker_per_trial(
+        self,
+    ) -> None:
+        # Memo §7.3: a per-trial gauge resets to 0 on every ladder rung, so no
+        # Prometheus `for:` longer than one rung could ever fire. The gauge is
+        # EPISODE-scoped: 1 from OPEN until the delivery-confirmed CLOSE.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+        trig = _FakeStreamTrigger(running=False, streaming=False)
+        trig.on_rearm = lambda t: (t.come_up(), True)[1]
+        tick, pages, _throttled = _stream_tick_harness(trig, clock, gauges=gauges)
+        tick()  # t=0: OPEN
+        clock.now = 60.0
+        tick()  # trial connects AND delivers — dwell starts, episode still open
+        clock.now = 105.0
+        tick()  # up, mid-dwell: the trial must NOT flicker the gauge to 0
+        breaker_values = [g["alphalens_broker_manager_stream_breaker_open"] for g in gauges]
+        self.assertEqual(breaker_values, [1.0, 1.0, 1.0])
+        # The dwell clock starts at the first tick that OBSERVES delivery-backed
+        # health (t=105), not at the trial itself.
+        clock.now = 105.0 + 300.0
+        tick()  # dwell held -> delivery-confirmed CLOSE
+        self.assertEqual(gauges[-1]["alphalens_broker_manager_stream_breaker_open"], 0.0)
+        self.assertEqual(len(pages), 2)  # one OPEN, one CLOSE
+
+    def test_all_six_stream_gauges_land_in_one_atomic_domain_emit(self) -> None:
+        # Drive the REAL default emitter (_emit_stream_gauge) into a temp
+        # textfile dir: all six series must land in the ONE stream domain file
+        # (a second emit to the domain would clobber the first, and a separate
+        # file would prove a second call happened).
+        clock = _Clock(start=0.0)
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+        with (
+            TemporaryDirectory() as d,
+            mock.patch.dict(os.environ, {"ALPHALENS_TEXTFILE_DIR": d}, clear=False),
+        ):
+            tick = cl._make_stream_tick(
+                trig,
+                get_bearer=lambda: "B",
+                alert=lambda _m: None,
+                alert_throttled=lambda _m, _r: True,
+                stale_s=45.0,
+                monotonic=clock,
+                in_session=lambda: True,
+            )
+            tick()
+            proms = sorted(Path(d).glob("*.prom"))
+            self.assertEqual(len(proms), 1, [p.name for p in proms])
+            self.assertEqual(proms[0].name, "alphalens_domain_broker-manager-sim-stream.prom")
+            text = proms[0].read_text()
+        for name in _ALL_STREAM_GAUGE_NAMES:
+            self.assertIn(f'{name}{{job="broker-manager-sim"}}', text)
+
+    def test_a_raising_session_predicate_reports_in_session_and_keeps_gauges(self) -> None:
+        # The calendar predicate fails OPEN by contract (a calendar bug must
+        # never silence observability): a raise reports in_session=1 and the
+        # other five gauges still land.
+        clock = _Clock(start=0.0)
+        gauges: list[dict[str, float]] = []
+
+        def _raising_session() -> bool:
+            raise RuntimeError("calendar exploded")
+
+        trig = _FakeStreamTrigger(frames=1, silence=5.0)
+        tick, _pages, _throttled = _stream_tick_harness(
+            trig, clock, gauges=gauges, in_session=_raising_session
+        )
+        tick()
+        self.assertEqual(len(gauges), 1)
+        self.assertEqual(sorted(gauges[0]), sorted(_ALL_STREAM_GAUGE_NAMES))
+        self.assertEqual(gauges[0]["alphalens_broker_manager_stream_in_session"], 1.0)
 
 
 class TestStreamingSubscriberIsolation(unittest.TestCase):

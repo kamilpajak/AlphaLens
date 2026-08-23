@@ -201,6 +201,11 @@ _STREAM_BREAKER_OPEN_METRIC_NAME = "alphalens_broker_manager_stream_breaker_open
 _STREAM_CONSECUTIVE_FAILURES_METRIC_NAME = "alphalens_broker_manager_stream_consecutive_failures"
 # Monotonic counter: survives a tick gap; feeds the flapping rule.
 _STREAM_TRIPS_TOTAL_METRIC_NAME = "alphalens_broker_manager_stream_trips_total"
+# 0/1 trading-window gauge from _make_stream_session_window (memo §3 Q5):
+# emitted but referenced by NO shipped rule — making a rule session-aware
+# later is a one-line YAML change, not a code change. The trip page itself
+# stays unconditional (weekend quiet comes from the episode latch).
+_STREAM_IN_SESSION_METRIC_NAME = "alphalens_broker_manager_stream_in_session"
 
 
 def stream_last_message_metric(job: str) -> str:
@@ -3070,6 +3075,7 @@ def _make_stream_tick(
     stale_s: float,
     emit_gauge: Callable[[Mapping[str, float]], None] = _emit_stream_gauge,
     monotonic: Callable[[], float] = time.monotonic,
+    in_session: Callable[[], bool] | None = None,
 ) -> Callable[[], None]:
     """Build the per-tick streaming hook run by ``run_daemon`` on the MAIN thread.
 
@@ -3115,6 +3121,14 @@ def _make_stream_tick(
     # Episode state lives in this closure, constructed once per daemon by
     # _build_stream_handles — the same daemon-lifetime one-slot shape as
     # deps.kill_state, without a new LoopDeps field (memo §4.5).
+    #
+    # The session predicate feeds the in_session GAUGE only (memo §3 Q5) —
+    # nothing here gates on it. Built per-tick-closure (main-thread-only, so
+    # _make_stream_session_window's single-writer memo holds), injectable for
+    # tests. It FAILS OPEN: the calendar contract says a raising predicate is
+    # treated as in-session, and a calendar bug must never take the other five
+    # gauges down with it.
+    session_predicate = in_session if in_session is not None else _make_stream_session_window()
     started_mono = monotonic()
     episode_open = False
     episode_rearms = 0
@@ -3211,9 +3225,15 @@ def _make_stream_tick(
                 "stream-dead",
             )
 
-        # (4) Gauges — every tick, including while dark, ONE atomic emit. The
-        # age key is never omitted: epoch None -> seconds since closure build.
+        # (4) Gauges — every tick, including while dark, ONE atomic emit (all
+        # SIX keys: an omitted key deletes its series). The age key is never
+        # omitted: epoch None -> seconds since closure build.
         age = silence if silence is not None else now - started_mono
+        try:
+            session = 1.0 if session_predicate() else 0.0
+        except Exception:  # calendar fail-open: report in-session, keep gauges
+            logger.warning("streaming: session predicate raised — reporting in-session")
+            session = 1.0
         emit_gauge(
             {
                 _STREAM_READER_UP_METRIC_NAME: 1.0 if (running and streaming) else 0.0,
@@ -3221,6 +3241,7 @@ def _make_stream_tick(
                 _STREAM_LAST_MESSAGE_METRIC_NAME: age,
                 _STREAM_CONSECUTIVE_FAILURES_METRIC_NAME: float(trigger.consecutive_failures),
                 _STREAM_TRIPS_TOTAL_METRIC_NAME: float(trips),
+                _STREAM_IN_SESSION_METRIC_NAME: session,
             }
         )
 
