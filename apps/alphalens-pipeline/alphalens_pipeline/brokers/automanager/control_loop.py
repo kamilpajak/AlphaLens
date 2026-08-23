@@ -183,8 +183,11 @@ _STREAM_FLAP_WINDOW_S = 3600.0
 _STREAM_FLAP_ESCALATE_AT = 3
 
 # Prometheus liveness gauge: seconds since the last streamed message (age). Watched
-# by an AlphalensBrokerStreamStale rule, distinct from the per-poll heartbeat gauge
-# (a dead stream still emits heartbeats — the poll backstop keeps running).
+# by the AlphalensBrokerStreamStale rule shipped in
+# deploy/monitoring/prometheus/rules/alphalens.yaml (repo SoT; the live copy is
+# hand-synced — see deploy/systemd/README.md §8.5), distinct from the per-poll
+# heartbeat gauge (a dead stream still emits heartbeats — the poll backstop keeps
+# running).
 _STREAM_LAST_MESSAGE_METRIC_NAME = "alphalens_broker_manager_stream_last_message_age_seconds"
 
 # Stream-state gauge base names (rearm design memo §4.6). All co-emitted with the

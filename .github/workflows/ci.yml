@@ -377,12 +377,17 @@ jobs:
       # against a series fixture and asserts which alerts fire. Mutation-tested
       # when it was added: swapping the operands, dropping the range selector
       # and removing `ignoring(outcome)` each turn it red.
+      # BOTH fixture files, explicitly: alphalens_test.yaml (1h grid, the
+      # thematic rules) and alphalens_broker_test.yaml (1m grid — the broker
+      # stream rules' for: 20m/10m debounces are indistinguishable on a 1h
+      # grid). A fixture not named here is silently never executed; parity
+      # pinned by tests/test_promtool_lint_parity.py.
       - name: promtool test rules
         run: |
           docker run --rm \
             --entrypoint promtool \
             -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" -w /r \
-            prom/prometheus:v3.3.1 test rules /r/alphalens_test.yaml
+            prom/prometheus:v3.3.1 test rules /r/alphalens_test.yaml /r/alphalens_broker_test.yaml
 
   sonar:
     name: sonarcloud

@@ -1,0 +1,158 @@
+# promtool unit tests for the SIM order-stream breaker rules in alphalens.yaml
+# (rearm design memo saxo_stream_breaker_rearm_design_2026_08_22.md §6 INC-5).
+#
+# WHY A SECOND FIXTURE FILE. alphalens_test.yaml sets a file-level
+# `evaluation_interval: 1h` with fixtures on a 1h grid — on that grid a
+# `for: 20m` rule goes pending at one hourly evaluation and firing at the
+# next, so the BreakerOpen 20m and Flapping 10m debounces would be
+# indistinguishable. These rules need a 1-minute grid, and rewriting the
+# thematic fixtures onto it is avoided by keeping two files. BOTH files must
+# be named in the ci.yml promtool step and the justfile test-rules recipe
+# (pinned by tests/test_promtool_lint_parity.py) — a fixture promtool never
+# reads is silently dead.
+#
+# exp_annotations are compared byte-for-byte by promtool: any annotation edit
+# in alphalens.yaml must be mirrored here verbatim.
+#
+# Run: `just test-rules` (same pinned promtool image as `just lint-rules`).
+
+rule_files:
+  - alphalens.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------
+  # AlphalensBrokerStreamBreakerOpen
+  # ---------------------------------------------------------------------
+
+  # A breaker episode held open for 25m with a fresh daemon heartbeat fires
+  # (for: 20m elapsed); at 10m it is still pending.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_stream_breaker_open{job="broker-manager-sim"}'
+        values: '1x40'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AlphalensBrokerStreamBreakerOpen
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: AlphalensBrokerStreamBreakerOpen
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: broker-manager
+              job: broker-manager-sim
+            exp_annotations:
+              summary: "SIM order-stream breaker episode open > 20m (re-arm ladder not converging)"
+              description: "The Saxo SIM order/position stream has stayed dark across at least four re-arm trials plus a delivery dwell — likely a sustained Saxo outage. Protection is unaffected (the ~45s poll backstop covers every tick); the cost is wake latency. Check `journalctl --user -u alphalens-broker-manager.service` for the trial failures and run `alphalens broker stream-status` for the gauge snapshot. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+
+  # A blip: the episode closes after 10m (a delivery-confirmed recovery
+  # within the first ladder rungs) — for: 20m never elapses, no page.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_stream_breaker_open{job="broker-manager-sim"}'
+        values: '1x10 0x30'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AlphalensBrokerStreamBreakerOpen
+        exp_alerts: []
+
+  # The daemon-freshness guard: a STOPPED daemon leaves node_exporter
+  # re-serving a frozen breaker_open=1 forever (emit_domain_metrics never
+  # unlinks). The heartbeat freezes with it, the guard goes false, and this
+  # rule must stay silent — AlphalensBrokerManagerHeartbeatStale owns "the
+  # daemon stopped".
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_stream_breaker_open{job="broker-manager-sim"}'
+        values: '1x60'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AlphalensBrokerStreamBreakerOpen
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensBrokerStreamStale
+  # ---------------------------------------------------------------------
+
+  # Dark-but-connected: age > 300s while the reader claims up, no breaker
+  # episode, fresh heartbeat -> fires after for: 5m.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager-sim"}'
+        values: '400x30'
+      - series: 'alphalens_broker_manager_stream_reader_up{job="broker-manager-sim"}'
+        values: '1x30'
+      - series: 'alphalens_broker_manager_stream_breaker_open{job="broker-manager-sim"}'
+        values: '0x30'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AlphalensBrokerStreamStale
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: AlphalensBrokerStreamStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: broker-manager
+              job: broker-manager-sim
+            exp_annotations:
+              summary: "SIM order-stream silent > 5m while the reader claims up"
+              description: "The stream reader reports up but no frame has arrived for over 5 minutes — the dark-but-connected case (recv timeout + resubscribe should self-heal; sustained staleness means they are not). Early wake degrades to the ~45s poll; protection is unaffected. Check `journalctl --user -u alphalens-broker-manager.service`. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+
+  # Same staleness signature while a breaker episode is open: suppressed by
+  # the `unless` — the episode is already reported by its own pages and the
+  # BreakerOpen rule.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_stream_last_message_age_seconds{job="broker-manager-sim"}'
+        values: '400x30'
+      - series: 'alphalens_broker_manager_stream_reader_up{job="broker-manager-sim"}'
+        values: '1x30'
+      - series: 'alphalens_broker_manager_stream_breaker_open{job="broker-manager-sim"}'
+        values: '1x30'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}'
+        values: '0+60x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AlphalensBrokerStreamStale
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensBrokerStreamFlapping
+  # ---------------------------------------------------------------------
+
+  # Four breaker trips inside the hour (trips_total 0 -> 4 at t=5m) with a
+  # fresh heartbeat -> increase(...[1h]) > 3 holds and fires after for: 10m.
+  - interval: 1m
+    input_series:
+      - series: 'alphalens_broker_manager_stream_trips_total{job="broker-manager-sim"}'
+        values: '0 0 0 0 0 4x55'
+      - series: 'alphalens_broker_manager_last_tick_timestamp_seconds{job="broker-manager-sim"}'
+        values: '0+60x60'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: AlphalensBrokerStreamFlapping
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: AlphalensBrokerStreamFlapping
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: broker-manager
+              job: broker-manager-sim
+            exp_annotations:
+              summary: "SIM order-stream breaker flapping (>3 trips/hour)"
+              description: "More than 3 breaker trips inside an hour — the stream connects and dies repeatedly, so the re-arm ladder is cycling instead of converging (a gateway that accepts sockets and then drops them, or a Saxo-side incident). Check `journalctl --user -u alphalens-broker-manager.service` for the trip reasons. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."

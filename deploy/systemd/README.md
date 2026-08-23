@@ -1137,6 +1137,16 @@ The daemon can early-wake on a Saxo WebSocket fill push instead of only on the ~
   - `alphalens_broker_manager_stream_in_session` — 0/1 XNYS trading-window gauge; emitted but referenced by NO shipped rule, so making a rule session-aware later is a one-line YAML change.
 
   A dark-but-connected stream (no frame for `STREAM_STALE_S` while no episode is open) still raises the throttled `stream silent — on poll backstop` Telegram alert; a tripped breaker pages exactly twice per episode (one OPEN, one delivery-confirmed CLOSE) — a stale stream is a latency regression back to the 45 s poll, NOT a protection outage.
+- **Prometheus rules (levels).** Three rules ship in `deploy/monitoring/prometheus/rules/alphalens.yaml`, each with the daemon-freshness guard `time() - last_tick < 300` (a stopped daemon freezes the textfile; the guard hands off to `AlphalensBrokerManagerHeartbeatStale`):
+  - `AlphalensBrokerStreamBreakerOpen` — `stream_breaker_open == 1` for 20 m (episode-scoped: at least four failed re-arm trials plus a dwell);
+  - `AlphalensBrokerStreamStale` — `stream_last_message_age_seconds > 300` while `stream_reader_up == 1`, `unless` a breaker episode is open, for 5 m (dark-but-connected);
+  - `AlphalensBrokerStreamFlapping` — `increase(stream_trips_total[1h]) > 3` for 10 m.
+
+  The repo copy is NOT "documentation only": CI runs `promtool check rules` AND `promtool test rules` against it (`.github/workflows/ci.yml` prom-rules job; fixtures `alphalens_test.yaml` + `alphalens_broker_test.yaml`, locally `just lint-rules` / `just test-rules`). It IS the source of truth — but the live VPS Prometheus loads a separate, manually deployed copy. **Live-rules sync checklist (a deploy GATE for any stream-rule change, rearm memo §7.16 — until the rules are live, deleting the Telegram metronome strictly reduces observability):**
+  1. copy the repo `alphalens.yaml` over the live rules file on the monitoring host;
+  2. `docker exec prometheus kill -HUP 1`;
+  3. confirm each rule is present in `curl -s localhost:9090/api/v1/rules | jq '.data.groups[].rules[].name'` before considering the change deployed.
+- **30-second triage.** `alphalens broker stream-status` (reads the gauges from the textfile, no broker call, safe while the daemon runs): `breaker_open=1` → an episode is open, check the OPEN page timestamp and `trips_total`; `reader_up=1` with a large `last_message_age_seconds` → dark-but-connected (recv timeout/resubscribe not self-healing); `consecutive_failures` shows how close the streak is to the trip threshold (6). Then `journalctl --user -u alphalens-broker-manager.service --since -1h | grep -i "saxo stream"` for the trial-by-trial story. Protection is never at stake — the ~45 s poll backstop runs regardless.
 - **Attended shape probe (before flipping the gate live):** `SAXO_STREAM_LIVE_TEST=1 .venv/bin/python -m unittest tests.live.test_saxo_stream_live -v` (needs the OAuth env sourced) validates connect + snapshot + heartbeat + PUT-reauthorize 202 + DELETE cleanup against the live SIM host — SHAPE only, places nothing.
 
 ### 9. LIVE instance runbook (ADR 0017 standing-LIVE authorization)

@@ -48,7 +48,7 @@ lint-rules:
 test-rules:
     docker run --rm --entrypoint promtool \
         -v "$PWD/deploy/monitoring/prometheus/rules:/r:ro" -w /r \
-        prom/prometheus:v3.3.1 test rules /r/alphalens_test.yaml
+        prom/prometheus:v3.3.1 test rules /r/alphalens_test.yaml /r/alphalens_broker_test.yaml
 
 # Format Python (all members)
 fmt:
