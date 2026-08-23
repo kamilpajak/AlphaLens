@@ -39,6 +39,14 @@ alphalens thematic extract
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic map-themes"
 alphalens thematic map-themes
 
+# Shadow arm (contract: docs/research/theme_shadow_arm_contract_2026_08_23.md).
+# Asks the mapper about themes the selector did NOT pick and records the answer;
+# the output never reaches a brief or a card. Idempotent per asof, so the six
+# daily slots draw once. Best-effort: a measurement must never fail the pipeline
+# that produces the actual product.
+echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic shadow-map (measurement, best-effort)"
+alphalens thematic shadow-map || echo "shadow-map failed; continuing (measurement only)"
+
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] thematic score"
 alphalens thematic score
 

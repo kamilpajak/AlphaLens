@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import typer
+from alphalens_pipeline.data.parquet_io import write_parquet_atomic
 from alphalens_pipeline.observability.textfile import emit_domain_metrics
 from alphalens_pipeline.thematic import clean_titles as clean_titles_mod
 from alphalens_pipeline.thematic import news_ingest
@@ -19,7 +20,7 @@ from alphalens_pipeline.thematic import verify_cache as verify_cache_mod
 from alphalens_pipeline.thematic.argumentation import orchestrator as brief_orchestrator
 from alphalens_pipeline.thematic.extraction import event_extractor
 from alphalens_pipeline.thematic.extraction import themes as themes_mod
-from alphalens_pipeline.thematic.mapping import orchestrator, theme_mapper
+from alphalens_pipeline.thematic.mapping import orchestrator, shadow_sampler, theme_mapper
 from alphalens_pipeline.thematic.screening import scorer as screening_scorer
 from alphalens_pipeline.thematic.trade_setup import model as trade_setup_model
 
@@ -1395,3 +1396,170 @@ def clean_titles_command(
         else f"{result.total_rows_cleaned} row(s) would be cleaned (dry-run)"
     )
     typer.echo(f"done. {summary}.")
+
+
+@thematic_app.command("shadow-map")
+def shadow_map_cmd(
+    date: str = typer.Option(None, "--date", help=_DATE_OPTION_HELP),
+    events_dir: Path = typer.Option(
+        event_extractor.DEFAULT_EVENTS_DIR,
+        "--events-dir",
+        help="Phase B extracted-events parquet root.",
+    ),
+    funnel_dir: Path = typer.Option(
+        orchestrator.DEFAULT_OUTPUT_DIR / "proposal_funnel",
+        "--funnel-dir",
+        help="Production proposal funnel, read to learn which themes were SELECTED.",
+    ),
+    store_dir: Path = typer.Option(
+        shadow_sampler.SHADOW_STORE_DIR,
+        "--store-dir",
+        help="Shadow-arm output root. Never under thematic_candidates/ (contract section 4).",
+    ),
+    per_band: int = typer.Option(
+        shadow_sampler.SHADOW_THEMES_PER_BAND,
+        "--per-band",
+        help="Themes drawn from each of the two bands.",
+    ),
+    model: str = typer.Option(
+        theme_mapper.DEFAULT_MODEL,
+        "--model",
+        envvar="ALPHALENS_MAPPER_MODEL",
+        help="OpenRouter LLM slug (must match the production mapper or the arms differ).",
+    ),
+    keep_unverified: bool = typer.Option(
+        False,
+        "--keep-unverified",
+        help=(
+            "Mirror of the production map-themes flag. Present so the two calls stay "
+            "mechanically identical: an operator re-running production with it set "
+            "while the shadow arm did not would confound the arms invisibly."
+        ),
+    ),
+    rebuild: bool = typer.Option(
+        False,
+        "--rebuild",
+        help="Redraw a date already collected. Changes the recorded sample; use deliberately.",
+    ),
+) -> None:
+    """Ask the mapper about themes the selector did NOT pick, and record the answer.
+
+    Measurement only. Its output never reaches a brief, a card, or the candidate
+    parquet — see docs/research/theme_shadow_arm_contract_2026_08_23.md section 4,
+    which is enforced by test rather than by intent.
+
+    The question: the mapper proposes mostly mega-caps, and that can come from
+    WHICH themes are picked or from how the model behaves inside a theme. This
+    addresses the first. Runs after map-themes, so the selected set is known.
+    """
+    # Same default as every other stage: yesterday in UTC.
+    asof = (
+        dt.date.fromisoformat(date)
+        if date
+        else dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)
+    )
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
+
+    # The daily pipeline fires six times on the same asof; the draw happens once.
+    if not rebuild and shadow_sampler.already_collected(asof, store_dir=store_dir):
+        typer.echo(f"shadow-map: {asof} already collected — skipping.")
+        return
+
+    # recent_days passed explicitly, matching the production stage: the default
+    # is shared today, and a future change to one and not the other would make
+    # the two rollups drift while looking identical at the call site.
+    rollup = themes_mod.roll_up(
+        asof=asof, events_dir=events_dir, recent_days=themes_mod.DEFAULT_RECENT_DAYS
+    )
+    if rollup.empty:
+        typer.echo(f"shadow-map: no theme rollup for {asof} — nothing to draw.")
+        return
+
+    funnel_path = funnel_dir / f"{asof.isoformat()}.parquet"
+    if not funnel_path.exists():
+        typer.echo(
+            f"shadow-map: no production funnel at {funnel_path}. "
+            "Run map-themes first — without it the arms cannot be kept disjoint."
+        )
+        raise typer.Exit(code=1)
+    selected = set(pd.read_parquet(funnel_path, columns=["theme"])["theme"].dropna().astype(str))
+
+    draw = shadow_sampler.sample_shadow_themes(
+        rollup, asof=asof, selected=selected, per_band=per_band
+    )
+    if not draw.all_themes:
+        typer.echo(f"shadow-map: eligible pool empty for {asof} — nothing to draw.")
+        return
+    typer.echo(
+        f"shadow-map {asof}: {len(draw.near)} near + {len(draw.far)} far "
+        f"from {draw.eligible_pool} eligible ({len(selected)} selected excluded)"
+    )
+
+    raw_dir = store_dir / "raw"
+    # Mirror the production call parameter for parameter. Anything the selected
+    # arm passes and this one does not would make the arms differ for a reason
+    # unrelated to theme choice — and it would be invisible in the read, because
+    # nothing downstream records which call produced a row.
+    #
+    # `theme_novelty` matters most: rank is the confounder the contract names in
+    # section 8, and it is computed here and nowhere else. Without the stamp the
+    # read cannot even describe how far below the cut a shadow theme sat.
+    novelty_cfg = themes_mod.novelty_config_version(
+        window_days=themes_mod.DEFAULT_WINDOW_DAYS,
+        recent_days=themes_mod.DEFAULT_RECENT_DAYS,
+        threshold=themes_mod.DEFAULT_NOVELTY_THRESHOLD,
+    )
+    order = list(rollup["theme"])
+    scores = dict(zip(rollup["theme"], rollup["novelty_score"].astype(float), strict=True))
+    theme_novelty = {
+        t: (order.index(t) + 1, float(scores[t])) for t in draw.all_themes if t in scores
+    }
+    orchestrator.map_themes(
+        themes=draw.all_themes,
+        asof=asof,
+        polygon_api_key=os.environ.get("POLYGON_API_KEY", ""),
+        output_dir=raw_dir,
+        model=model,
+        keep_unverified=keep_unverified,
+        theme_novelty=theme_novelty,
+        novelty_config_version=novelty_cfg,
+        # NOT an unconditional rebuild: map_themes freezes per (asof, config), so
+        # a retry after a failed store write reuses the frozen raw output instead
+        # of paying the LLM twice. The CLI's own --rebuild is the deliberate path.
+        rebuild=rebuild,
+    )
+
+    raw_funnel = raw_dir / "proposal_funnel" / f"{asof.isoformat()}.parquet"
+    funnel = (
+        pd.read_parquet(raw_funnel)
+        if raw_funnel.exists()
+        else pd.DataFrame(columns=["theme", "ticker", "bracket_verdict"])
+    )
+    frame = shadow_sampler.build_shadow_frame(funnel, draw)
+    out_path = shadow_sampler.shadow_store_path(asof, store_dir=store_dir)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    write_parquet_atomic(frame, out_path, index=False)
+    typer.echo(f"shadow-map: wrote {len(frame)} rows to {out_path}")
+
+    # Countable, not just logged. The stage is best-effort, so a stopped
+    # collector would otherwise look exactly like a quiet day — the same blind
+    # spot the theme-rollup write had before PR #1086 gave it a gauge. These
+    # also make the contract's per-day cost obligation (section 9) observable
+    # without reading journals.
+    try:
+        emit_domain_metrics(
+            job="thematic-shadow-map",
+            metrics={
+                "shadow_map_rows": len(frame),
+                "shadow_map_themes_drawn": len(draw.all_themes),
+                "shadow_map_themes_near": len(draw.near),
+                "shadow_map_themes_far": len(draw.far),
+                "shadow_map_eligible_pool": draw.eligible_pool,
+                "shadow_map_themes_without_proposal": int(
+                    frame.groupby("theme")["ticker"].count().eq(0).sum()
+                ),
+            },
+        )
+    except Exception:
+        logger.exception("emit_domain_metrics failed for shadow-map; the run succeeded")
