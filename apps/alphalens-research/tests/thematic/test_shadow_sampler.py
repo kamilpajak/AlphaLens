@@ -230,3 +230,12 @@ class TestIdempotencePerDate(unittest.TestCase):
     def test_a_missing_store_directory_is_not_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertFalse(already_collected(_ASOF, store_dir=Path(tmp) / "absent"))
+
+    def test_the_raw_subdirectory_is_covered_by_the_same_guarantee(self):
+        """The mapper writes its own candidate parquet and funnel under
+        ``<store>/raw/``. That inherits the store's location, so the §4
+        guarantee covers it — asserted rather than argued."""
+        raw = shadow_store_path(_ASOF).parent / "raw"
+
+        self.assertNotIn("thematic_candidates", str(raw))
+        self.assertNotIn("thematic_briefs", str(raw))

@@ -1483,12 +1483,40 @@ def shadow_map_cmd(
     )
 
     raw_dir = store_dir / "raw"
+    # Mirror the production call parameter for parameter. Anything the selected
+    # arm passes and this one does not would make the arms differ for a reason
+    # unrelated to theme choice — and it would be invisible in the read, because
+    # nothing downstream records which call produced a row.
+    #
+    # `theme_novelty` matters most: rank is the confounder the contract names in
+    # section 8, and it is computed here and nowhere else. Without the stamp the
+    # read cannot even describe how far below the cut a shadow theme sat.
+    novelty_cfg = themes_mod.novelty_config_version(
+        window_days=themes_mod.DEFAULT_WINDOW_DAYS,
+        recent_days=themes_mod.DEFAULT_RECENT_DAYS,
+        threshold=themes_mod.DEFAULT_NOVELTY_THRESHOLD,
+    )
+    ranked = rollup.set_index("theme")
+    theme_novelty = {
+        t: (
+            int(list(rollup["theme"]).index(t)) + 1,
+            float(ranked.loc[t, "novelty_score"]),
+        )
+        for t in draw.all_themes
+        if t in ranked.index
+    }
     orchestrator.map_themes(
         themes=draw.all_themes,
         asof=asof,
+        polygon_api_key=os.environ.get("POLYGON_API_KEY", ""),
         output_dir=raw_dir,
         model=model,
-        rebuild=True,
+        theme_novelty=theme_novelty,
+        novelty_config_version=novelty_cfg,
+        # NOT an unconditional rebuild: map_themes freezes per (asof, config), so
+        # a retry after a failed store write reuses the frozen raw output instead
+        # of paying the LLM twice. The CLI's own --rebuild is the deliberate path.
+        rebuild=rebuild,
     )
 
     raw_funnel = raw_dir / "proposal_funnel" / f"{asof.isoformat()}.parquet"
