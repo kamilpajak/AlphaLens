@@ -7,13 +7,16 @@ file existed, so none of these thresholds were chosen with a result in view.
 from __future__ import annotations
 
 import datetime as dt
+import tempfile
 import unittest
+from pathlib import Path
 
 import pandas as pd
 from alphalens_pipeline.thematic.mapping.shadow_sampler import (
     MIN_COUNT_RECENT,
     SHADOW_THEMES_PER_BAND,
     ShadowDraw,
+    already_collected,
     build_shadow_frame,
     sample_shadow_themes,
     shadow_store_path,
@@ -203,3 +206,27 @@ class TestShadowFrame(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestIdempotencePerDate(unittest.TestCase):
+    """The daily pipeline fires SIX times on the same asof.
+
+    Without a per-date skip the collector would redraw on every slot: 120
+    themes a day instead of 20, six times the spend, and a sample whose size
+    depends on how many slots happened to succeed.
+    """
+
+    def test_an_existing_day_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Path(tmp)
+            shadow_store_path(_ASOF, store_dir=store).write_bytes(b"x")
+
+            self.assertTrue(already_collected(_ASOF, store_dir=store))
+
+    def test_a_fresh_day_is_not_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(already_collected(_ASOF, store_dir=Path(tmp)))
+
+    def test_a_missing_store_directory_is_not_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertFalse(already_collected(_ASOF, store_dir=Path(tmp) / "absent"))

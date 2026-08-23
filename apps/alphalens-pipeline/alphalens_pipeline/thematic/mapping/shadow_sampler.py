@@ -79,6 +79,17 @@ def shadow_store_path(asof: dt.date, store_dir: Path = SHADOW_STORE_DIR) -> Path
     return store_dir / f"{asof.isoformat()}.parquet"
 
 
+def already_collected(asof: dt.date, *, store_dir: Path = SHADOW_STORE_DIR) -> bool:
+    """True when this date's shadow draw has already been collected.
+
+    The daily pipeline fires SIX times on the same asof. Without this the
+    collector would redraw on every slot — 120 themes a day instead of the 20
+    the contract fixes, six times the spend, and a sample size that depends on
+    how many slots happened to succeed rather than on the design.
+    """
+    return shadow_store_path(asof, store_dir=store_dir).exists()
+
+
 def _eligible(rollup: pd.DataFrame) -> pd.DataFrame:
     keep = rollup[
         (rollup["novelty_score"] >= DEFAULT_NOVELTY_THRESHOLD)
@@ -175,6 +186,7 @@ __all__ = [
     "SHADOW_STORE_DIR",
     "SHADOW_THEMES_PER_BAND",
     "ShadowDraw",
+    "already_collected",
     "build_shadow_frame",
     "sample_shadow_themes",
     "shadow_store_path",

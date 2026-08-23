@@ -1427,6 +1427,11 @@ def shadow_map_cmd(
         envvar="ALPHALENS_MAPPER_MODEL",
         help="OpenRouter LLM slug (must match the production mapper or the arms differ).",
     ),
+    rebuild: bool = typer.Option(
+        False,
+        "--rebuild",
+        help="Redraw a date already collected. Changes the recorded sample; use deliberately.",
+    ),
 ) -> None:
     """Ask the mapper about themes the selector did NOT pick, and record the answer.
 
@@ -1446,6 +1451,12 @@ def shadow_map_cmd(
     )
     if not os.environ.get("OPENROUTER_API_KEY"):
         raise typer.BadParameter("OPENROUTER_API_KEY missing from environment.")
+
+    # The daily pipeline fires six times on the same asof; the draw happens once.
+    if not rebuild and shadow_sampler.already_collected(asof, store_dir=store_dir):
+        typer.echo(f"shadow-map: {asof} already collected — skipping.")
+        return
+
     rollup = themes_mod.roll_up(asof=asof, events_dir=events_dir)
     if rollup.empty:
         typer.echo(f"shadow-map: no theme rollup for {asof} — nothing to draw.")
