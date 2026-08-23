@@ -149,3 +149,108 @@ the zen pre-merge gate as usual. If rejected, the alternative worth naming is
 "leave it and record the bias" — defensible only if ±60% tail outcomes are
 deliberately out of scope for every current and future measurement, which the
 bracket-cost contract already contradicts.
+
+---
+
+## Amendment 1 — adversarial review (Perplexity, 2026-08-23), adjudicated
+
+The design above was submitted for adversarial review before implementation.
+Three findings are accepted and change the design; three are adjudicated
+against, with reasons; the rest are recorded as declared limitations.
+
+### Accepted 1 — "no action found ⇒ accept" is logically unsafe (§2 revised)
+
+The reviewer is right: a missing corporate-action record does not validate the
+raw-bar arithmetic. Bad vendor bars, halt-reopen gaps, ticker changes, and
+merger consideration all pass a splits+dividends lookup and would be stamped as
+real. MRNA's 46× volume was evidence, not proof — a corrupted aggregation can
+carry large reported volume too.
+
+Revised disposition tree:
+
+```
+|forward_return| > 0.60
+  └─ corporate-actions lookup (splits + dividends, window ±3d/+1d)
+       ├─ action found   → SPLIT_INVALIDATED (terminal)
+       ├─ lookup failed  → carry, counted (disposition=lookup_failed)
+       └─ none found     → INDEPENDENT-VENDOR cross-check:
+            window return recomputed from yfinance ADJUSTED daily closes
+            (canonical yfinance client; different vendor, different basis)
+              ├─ agrees within 10pp   → accept (disposition=extreme_validated)
+              ├─ disagrees            → carry, counted (disposition=data_quality)
+              └─ no data (delisted /
+                 renamed / halted)    → carry, counted (disposition=data_quality)
+```
+
+The cross-check is local-cheap (one yfinance daily-history call, already
+quota-tracked by the canonical client) and it also catches most of the
+identity-lineage failures the reviewer listed: a renamed or merged ticker has
+no coherent yfinance series and lands in data_quality rather than being
+accepted. Only `extreme_validated` enters the aggregates automatically.
+
+### Accepted 2 — the no-version-bump argument was wrong (§5 revised)
+
+"Population membership is part of the measurement instrument" — conceded.
+Reproducibility requires stamping the rule change even when no stamped value
+moves, and the original argument was also too strong on its own terms: a parked
+row is path-dependent state, and un-parking it changes downstream aggregation
+even though no individual stamped value is rewritten.
+
+Implementation compromise, to avoid fragmenting the pooled population over a
+change that alters membership but no per-row value: a **provenance column**
+(`guard_disposition`, plus a `guard_config_version` string) on every row the
+trigger ever touched — NOT a bump of `ladder_config_version`, which is a
+pooling key. The deploy-day note records before/after population counts. Any
+future read can therefore split by regime; no read is forced to.
+
+### Accepted 3 — the dividend threshold used the wrong denominator (§2 revised)
+
+Materiality is relative to the pre-ex-date close, not the trade's entry price.
+Trivial fix: the pre-ex close comes from our own raw grouped store. The 10%
+figure stays as a triage level only — the reviewer's own position ("can remain
+as an alert threshold").
+
+Cache policy also tightened per review: a FOUND action is cached forever
+(immutable once executed); a NONE-FOUND answer is cached 14 days, because
+corporate-action records are corrected and appended late.
+
+### Adjudicated against 1 — mechanical ladder adjustment across the split
+
+The reviewer's preferred treatment (LEAN-style: scale quantity, levels, stops
+by the split factor and let the position run) is standard for backtest engines
+simulating an economically maintained position. Rejected HERE, for a reason
+specific to this system: the replay measures what the SHIPPED ladder would have
+done at a real broker, and real brokers **cancel resting orders on corporate
+actions** — the Saxo rail this project actually trades on does. A mechanically
+adjusted resting ladder models an order state that would not have existed.
+`SPLIT_INVALIDATED` is closer to broker reality than adjustment is. Recorded as
+possible future work for the already-filled-position case (~1 ticker/month at
+the measured rate), not as part of this change.
+
+### Adjudicated against 2 — CUSIP/FIGI security master
+
+Correct at institutional scale; out of proportion here. The universe is brief
+candidates from the last 75 days with tickers current at brief time, and the
+independent-vendor cross-check fails loudly (data_quality) on exactly the
+lineage breaks a security master would catch. Declared limitation, not a
+component.
+
+### Adjudicated against 3 — full sensitivity-report battery per read
+
+The reviewer proposes five parallel population variants per read. At the
+measured event rate (one true split per month in-population) the strata would
+be empty theatre. The counts ARE reported (classification mixes + the counter
+metric); a sensitivity battery becomes worth building when
+`split_invalidated`'s count stops being ~1.
+
+### Declared limitations (from the review, kept visible)
+
+* **Selection effect of exclusion**: reverse splits correlate with distress, so
+  excluded windows are a non-random slice. Unchanged from today — these rows
+  are already suppressed; the change makes the exclusion terminal, counted and
+  visible instead of silent and eternal.
+* **Look-ahead in the lookup**: the reference is queried as of today, not as of
+  the replay date. This is retrospective telemetry, not a tradable signal;
+  declared, not fixed.
+* **Intraday split timing**: irrelevant while the disposition is quarantine;
+  becomes a real problem only if mechanical adjustment is ever built.
