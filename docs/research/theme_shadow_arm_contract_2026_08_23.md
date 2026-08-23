@@ -186,3 +186,43 @@ Reads: `docs/research/theme_shadow_arm_read_<DATE>.md`, one per read.
 Collector: `alphalens thematic shadow-map`.
 Store: `~/.alphalens/theme_shadow/<YYYY-MM-DD>.parquet` — outside
 `thematic_candidates/`, per §4.
+
+---
+
+## Amendment 1 — §3's pool size was wrong, and the real one is small
+
+Written 2026-08-23, after a four-theme live smoke of the collector and BEFORE
+any comparison between the arms exists.
+
+**The error.** §3 states "226 themes met both conditions on 2026-08-21". They
+did not. 226 is the count of themes with `count_recent >= 5` **regardless of
+novelty**; 3099 met the novelty threshold regardless of article count. I read
+the two conditions separately and reported one as though it were the
+intersection. Measured:
+
+| date | novelty >= 3 | count_recent >= 5 | **both** |
+|---|---:|---:|---:|
+| 2026-08-19 | 3011 | 224 | **44** |
+| 2026-08-20 | 3060 | 229 | **56** |
+| 2026-08-21 | 3099 | 226 | **56** |
+
+**What it changes.** The eligible pool is roughly 50, not 226. After removing
+the ~10 the selector took, arm U draws 20 from about 40. Two consequences the
+original text did not admit:
+
+* **themes recur heavily across days.** The unit is the theme-DAY and a theme
+  carries different news on a different day, so recurrence is not invalid — but
+  the day-cluster bootstrap in §5 absorbs day-level dependence only. It does
+  nothing about the same theme appearing on many days.
+* **the far band is thin.** With ~50 eligible, ranks 31+ hold roughly 20
+  themes, so `far` will often draw most of what exists rather than sampling it.
+
+**What it does NOT change.** The eligibility rule stays as written. Loosening it
+to `count_recent >= 3` would widen the pool to 169, but arm S is drawn by the
+production selector from the SAME narrow set, and widening one arm only would
+make the arms less comparable — which is the one property this design has.
+
+**Added reporting obligation.** Every read states the **distinct-theme count**
+beside the theme-day count for each arm, and the mean number of days each theme
+appears. A theme-day total that comes from twelve themes is a different sample
+from one that comes from forty, and the reader must be able to see which.
