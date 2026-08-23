@@ -301,6 +301,39 @@ groups:
           description: "No success metric for bracket-cost. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Clears after the first successful run."
 
       # ---------------------------------------------------------------
+      # waiting:data wake-date notifier (alphalens-issue-wake). Daily, and the
+      # only job here whose HEALTHY behaviour is to send nothing.
+      #
+      # That is what makes the pair mandatory rather than nice to have: a dead
+      # timer and a day with nothing due are indistinguishable on Telegram. The
+      # failure is silent AND cumulative — every issue parked on a future date
+      # sleeps through its wake and stays parked, and the longer the outage the
+      # more of them pile up behind it. The exit-code alert cannot see this
+      # either; a job that never runs never reports a bad exit.
+      # ---------------------------------------------------------------
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="issue-wake"} > 172800
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: issue-wake
+        annotations:
+          summary: "issue-wake stale > 48h (expected daily cadence)"
+          description: "Last successful run was {{ $value | humanizeDuration }} ago. The wake-date notifier has stopped running, so waiting:data issues whose Wake date has arrived are not being unlabelled or announced — and its silence is indistinguishable from a quiet day."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="issue-wake"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: issue-wake
+        annotations:
+          summary: "issue-wake success metric missing"
+          description: "No success metric for issue-wake. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Clears after the first successful run."
+
+      # ---------------------------------------------------------------
       # VIX regime-cache freshness (Track A v2 PR-2 follow-up).
       # ---------------------------------------------------------------
       #

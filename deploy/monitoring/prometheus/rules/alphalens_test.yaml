@@ -174,6 +174,35 @@ tests:
               summary: "bracket-cost stale > 48h (expected daily cadence)"
               description: "Last successful run was 2d 12h 0m 0s ago. The bracket-cost replay has stopped advancing its ladders, so the measurement of what the market-cap filter discards is frozen and its maturity date slips by one day per day of outage."
 
+  # Wake-date notifier staleness. This is the job whose staleness rule carries
+  # the most weight, because it is the only one whose healthy output is silence:
+  # no Telegram traffic is the SUCCESS signal, so a dead timer looks exactly
+  # like a week with nothing due. The alert below is the entire difference
+  # between the two, which makes "does it actually fire" worth evaluating
+  # rather than assuming.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_job_last_success_timestamp_seconds{job="issue-wake"}'
+        values: '0x71'
+    alert_rule_test:
+      # A day without a run is normal catch-up territory (Persistent=true), so
+      # the rule must stay quiet here — a 24h-firing rule would page on every
+      # ordinary reboot.
+      - eval_time: 24h
+        alertname: AlphalensJobStale
+        exp_alerts: []
+      - eval_time: 60h
+        alertname: AlphalensJobStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: issue-wake
+              job: issue-wake
+            exp_annotations:
+              summary: "issue-wake stale > 48h (expected daily cadence)"
+              description: "Last successful run was 2d 12h 0m 0s ago. The wake-date notifier has stopped running, so waiting:data issues whose Wake date has arrived are not being unlabelled or announced — and its silence is indistinguishable from a quiet day."
+
   # NOT tested here: "MetricMissing fires when the series is absent". Every job
   # shares the alertname AlphalensJobMetricMissing and is distinguished only by
   # its `unit` label, so a fixture with one job's series present makes every

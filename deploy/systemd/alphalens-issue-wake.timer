@@ -1,0 +1,21 @@
+# Trigger the wake-date notifier daily at 05:30 UTC — in the gap between the
+# bracket-cost replay (03:30) and the nightly feedback sweep (06:30), and clear
+# of the thematic build slots (HH:30 on 00/04/08/12/16/20). The job costs two
+# `gh` calls, so the slot is about landing in a quiet window rather than
+# contending for any quota.
+#
+# Persistent=true so a missed fire runs on next boot. Catching up is safe and
+# idempotent: the wake test is "date <= today", so a day of downtime makes the
+# next run announce everything that came due meanwhile, in one message, and the
+# label removal means an already-woken issue is never seen again.
+[Unit]
+Description=Trigger AlphaLens waiting:data wake-date notifier
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-* 05:30:00 UTC
+Persistent=true
+Unit=alphalens-issue-wake.service
+
+[Install]
+WantedBy=timers.target

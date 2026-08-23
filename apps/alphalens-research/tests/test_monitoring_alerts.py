@@ -72,6 +72,13 @@ ACTIVE_JOBS = (
     # stop would surface only in October as "the measurement never matured",
     # and the lost weeks of maturity cannot be recovered afterwards.
     "bracket-cost",
+    # waiting:data wake-date notifier. The only job whose HEALTHY output is
+    # silence, which makes it the one most able to die unnoticed: a dead timer
+    # and a day with nothing due look identical from the Telegram side. Every
+    # issue parked on a future date would then sleep through its wake and stay
+    # parked indefinitely, with nothing anywhere saying so. The staleness pair
+    # is the only thing that can tell the two apart.
+    "issue-wake",
 )
 
 
