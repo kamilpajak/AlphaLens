@@ -264,3 +264,41 @@ theme effect.
 **Obligation.** Every read joins rank from the rollup store for BOTH arms, and
 states the join's coverage — the rollup begins 2026-08-05, so an earlier day
 would have no rank for either arm rather than for one.
+
+---
+
+## Amendment 3 — a day-only interval is too narrow when themes recur
+
+Written 2026-08-23, prompted by an adversarial review (zen, deepseek-v4-pro) and
+before any comparison between the arms exists.
+
+**The gap.** §5 fixes a cluster bootstrap over DAYS. That absorbs day-level
+shocks — a news cycle, a market session, a prompt version — and nothing else.
+But Amendment 1 established that the eligible pool is ~50, so drawing 20 a day
+from ~40 unpicked means the SAME THEMES reappear across many days. Two
+observations sharing a theme are not independent, and a day-only cluster
+ignores that entirely. The interval would be too narrow, and a too-narrow
+interval is exactly how an inconclusive result becomes a false
+"SELECTION IS A LEVER".
+
+**Amendment.** The primary interval is the **wider of two cluster bootstraps**:
+one resampling DAYS, one resampling THEMES, each 10 000 draws, percentile 95%.
+The verdict uses the wider interval.
+
+Taking the wider of two is deliberately cruder than a two-way cluster-robust
+variance. It is chosen because it cannot understate uncertainty in either
+dimension, it is one line to state and to check, and at this sample size the
+extra precision of a proper two-way estimator would be spent on a design whose
+larger uncertainties are the confounds in §8, not the variance formula.
+
+Both intervals are reported, always, with the wider marked. A read where the two
+disagree materially is itself informative and must say so.
+
+**Why this cannot favour an answer.** It only ever widens the interval, so it
+can turn a verdict into INCONCLUSIVE and never the reverse. No read exists yet,
+so it changes nothing already published.
+
+**Added reporting obligation** (folding in Amendment 1's): every read states, per
+arm, the theme-day count, the DISTINCT-theme count, and the mean number of days
+a theme appears. A theme-day total drawn from twelve themes is a different
+sample from one drawn from forty.
