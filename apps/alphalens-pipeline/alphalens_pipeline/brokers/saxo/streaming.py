@@ -38,6 +38,7 @@ import enum
 import logging
 import threading
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -70,6 +71,11 @@ SIM_STREAMING_BASE_URL = "wss://sim-streaming.saxobank.com/sim/oapi/streaming/ws
 # never matches the trading-gateway rail's live auth marker nor the
 # ``test_no_raw_saxo_http`` URL-fragment list.
 _LIVE_STREAMING_MARKERS = ("live-streaming", "live.logonvalidation")
+
+# Retired-context deque bound (rearm design memo §5): 5 rungs to the tick-side
+# cooldown-ladder saturation plus slack, so a permanent outage cannot grow the
+# deque without limit. Client-side because the deque lives on the client.
+_STREAM_RETIRED_CONTEXT_CAP = 8
 
 # Control-message reference ids (Saxo reserves the ``_`` prefix for control).
 _HEARTBEAT_REF = "_heartbeat"
@@ -169,6 +175,12 @@ class StreamTuning:
     max_consecutive_failures: int = 6
     backoff_floor_s: float = 1.0
     backoff_ceiling_s: float = 30.0
+    # Delivery-life gate (rearm design memo §4.2/§5): a frame clears the failure
+    # streak only once the CURRENT connection has been alive this long. 10x
+    # SaxoClient._MIN_REQUEST_INTERVAL_S (0.5s, what bounds one reconnect+
+    # resubscribe cycle) and far below the 20-30s heartbeat cadence, so it is
+    # transparent on a healthy connection.
+    min_connection_life_s: float = 5.0
 
 
 class SaxoStreamingClient:
@@ -197,6 +209,7 @@ class SaxoStreamingClient:
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
         alert: Callable[[str], None] | None = None,
+        thread_factory: Callable[..., threading.Thread] = threading.Thread,
     ):
         _refuse_non_sim_streaming(streaming_base_url)
         self._token_provider = token_provider
@@ -210,12 +223,18 @@ class SaxoStreamingClient:
         self._max_consecutive_failures = tuning.max_consecutive_failures
         self._backoff_floor_s = tuning.backoff_floor_s
         self._backoff_ceiling_s = tuning.backoff_ceiling_s
+        self._min_connection_life_s = tuning.min_connection_life_s
         self._session = session or requests.Session()
         self._ws_connect = ws_connect or _default_ws_connect
         self._async_sleep = async_sleep
         self._sleep = sleep
         self._monotonic = monotonic
         self._alert = alert if alert is not None else logger.warning
+        self._thread_factory = thread_factory
+        # Context ids retired by rearm(); drained (best-effort DELETE) on the
+        # next healthy _subscribe and by stop(). Main thread only ever appends
+        # while the reader is provably dead; deque ops are atomic (memo §4.3).
+        self._retired_context_ids: deque[str] = deque(maxlen=_STREAM_RETIRED_CONTEXT_CAP)
 
         self._timeout = 30.0
         # Cross-thread: the bearer the MAIN loop pushes (atomic str assignment).
@@ -224,9 +243,14 @@ class SaxoStreamingClient:
         # Retained for reconnect replay (single-writer = stream thread).
         self._last_message_id: int | None = None
         self._last_recv_mono: float = 0.0
+        # Stamped in _run_one_connection beside _last_recv_mono; gates WHICH
+        # delivery may clear the failure streak (rearm design memo §4.2).
+        self._connection_started_mono: float = 0.0
         self._subscription_generation = 0
 
         self._consecutive_failures = 0
+        self._frames_delivered = 0
+        self._trips_total = 0
         self._is_streaming = True
         self._breaker_alerted = False
 
@@ -245,6 +269,35 @@ class SaxoStreamingClient:
     def is_started(self) -> bool:
         return self._started
 
+    def is_running(self) -> bool:
+        """True once ``start()`` has launched the reader thread and it is still
+        alive. False before the first ``start()`` call, or after the reconnect
+        circuit breaker has tripped and ``_supervise`` has returned, exiting the
+        thread — the signal the daemon tick uses to know the reader is dark and
+        needs re-arming rather than being trusted dead-but-healthy-looking.
+        Verbatim mirror of ``SaxoPriceStream.is_running``."""
+        return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def frames_delivered(self) -> int:
+        """Monotonic count of REAL server frames, incremented ONLY in
+        :meth:`_mark_delivered` — the delivery proof. A bare subscribe dispatch
+        stamps the liveness epoch without any server frame (memo §7.7), so the
+        epoch must never be used as delivery evidence; this counter is."""
+        return self._frames_delivered
+
+    @property
+    def trips_total(self) -> int:
+        """Monotonic count of breaker trips — lets the main-thread tick count a
+        trip whose whole lifetime falls between two ticks."""
+        return self._trips_total
+
+    @property
+    def consecutive_failures(self) -> int:
+        """Current failure streak, for the gauge — makes the streak composition
+        recoverable, which the 2026-08-22 incident journal could not do."""
+        return self._consecutive_failures
+
     def push_token(self, token: str) -> None:
         """Main thread hands the reader the current bearer (never pulled here)."""
         self._current_token = token
@@ -262,16 +315,67 @@ class SaxoStreamingClient:
         if self._thread is not None:
             return True
         self._stop = False
-        self._thread = threading.Thread(target=self._thread_main, name="saxo-stream", daemon=True)
+        self._thread = self._thread_factory(
+            target=self._thread_main, name="saxo-stream", daemon=True
+        )
         self._thread.start()
         self._started = True
         return True
 
+    def rearm(self, context_id: str) -> bool:
+        """MAIN THREAD ONLY. Re-open a tripped-or-crashed reader on a FRESH
+        context. Returns True iff a new reader thread is running.
+
+        Thread-safety: every field written here is written only after
+        ``is_running()`` has confirmed the previous reader thread is dead, and
+        the new thread is spawned after those writes — so no field ever has two
+        live writers. Attribute assignment is atomic under the GIL, so no lock
+        is taken and the protective loop can never block here.
+
+        Deliberately NOT reset (rearm design memo §4.3): ``_consecutive_failures``
+        (keeping the streak IS the half-open mechanism — the trial gets exactly
+        one connect and only a delivered frame restores the budget),
+        ``_current_token`` (clearing it would unbound the startup
+        ``token_missing`` exemption), ``_subscription_generation`` (monotonic —
+        guarantees fresh pos-N/ord-N ReferenceIds).
+
+        SINGLE-CALLER CONTRACT: ``start()`` sets ``self._stop = False``, so a
+        rearm() racing stop() could resurrect a reader mid-shutdown. Both are
+        main-thread-only (run_daemon's tick and the CLI ``finally`` are the same
+        thread). Do not call this from anywhere else."""
+        if self._stop:
+            return False  # shutdown latch — never resurrect
+        if self.is_running():
+            return False  # old reader still unwinding asyncio.run
+        if self._current_token is None:
+            return False  # never trial without a bearer (memo §4.4)
+        prior_thread, prior_streaming = self._thread, self._is_streaming
+        self._retired_context_ids.append(self._context_id)
+        self._context_id = context_id  # rotate — trip-time DELETE is best-effort
+        self._last_message_id = None  # explicit COLD connect (INC-0 probed cold only)
+        self._breaker_alerted = False  # so a second trip logs again
+        self._thread = None  # else start() silently no-ops
+        self._is_streaming = True
+        try:
+            started = self.start()
+        except Exception:
+            # Roll back so the next tick retries — a naive swallow would leave
+            # _thread=None with _is_streaming=True: a dead stream every
+            # instrument reports as healthy (memo §7.5).
+            self._thread, self._is_streaming = prior_thread, prior_streaming
+            raise
+        if not started:  # StaticTokenProvider refusal
+            self._thread, self._is_streaming = prior_thread, prior_streaming
+            return False
+        return True
+
     def stop(self, *, timeout: float = 5.0) -> None:
-        """Signal the reader to stop, best-effort DELETE the subs, join."""
+        """Signal the reader to stop, best-effort DELETE the subs (current
+        context AND any rearm-retired ones), join."""
         self._stop = True
         with contextlib.suppress(Exception):
             self._subscriber.delete_all_subscriptions(self._context_id)
+        self._drain_retired_contexts()
         thread = self._thread
         if thread is not None:
             thread.join(timeout)
@@ -314,13 +418,17 @@ class SaxoStreamingClient:
         return StreamAction.CONTINUE
 
     def _mark_delivered(self) -> None:
-        """A real server frame arrived (heartbeat / data / unknown-control
-        liveness) — the connection is demonstrably delivering, so clear the
-        failure streak. Reset is gated on DELIVERY, never on a mere
-        subscribe-dispatch or a ``_disconnect``/``_resetsubscriptions`` teardown,
-        so a connect -> immediate-drop storm keeps counting toward the breaker
-        (finding #1)."""
-        self._reset_failures()
+        """A real server frame arrived. Always counts as delivery evidence
+        (``frames_delivered``). Clears the failure streak only once the CURRENT
+        connection has been alive for ``min_connection_life_s``: a connection
+        that delivers one frame and dies inside that window has not demonstrated
+        it can carry the stream, and clearing on it lets a
+        one-heartbeat-then-drop gateway spin under the breaker forever. Delivery
+        stays the ONLY reset trigger (finding #1) — this narrows WHICH delivery
+        counts, never widens it."""
+        self._frames_delivered += 1
+        if self._monotonic() - self._connection_started_mono >= self._min_connection_life_s:
+            self._reset_failures()
 
     # ----- subscriptions (synchronous, through the shared SaxoClient) -----
 
@@ -333,6 +441,26 @@ class SaxoStreamingClient:
             self._subscriber.delete_all_subscriptions(self._context_id)
         self._create_subscriptions()
         self._on_trigger()
+        # REST is demonstrably healthy here (two 201s) — the best moment to
+        # drain contexts retired by rearm() whose trip-time DELETE likely failed
+        # during the outage (memo §4.3/§7.13).
+        self._drain_retired_contexts()
+
+    def _drain_retired_contexts(self) -> None:
+        """Best-effort DELETE every rearm-retired context's subscriptions.
+        Bounded to one pass over the ids present at entry; a failed DELETE
+        re-appends its id for the next drain. ``deque.popleft``/``append`` are
+        atomic, so the reader thread (healthy ``_subscribe``) and the main
+        thread (``stop()``) never corrupt it."""
+        for _ in range(len(self._retired_context_ids)):
+            try:
+                retired = self._retired_context_ids.popleft()
+            except IndexError:  # pragma: no cover - concurrent drain emptied it
+                return
+            try:
+                self._subscriber.delete_all_subscriptions(retired)
+            except Exception:
+                self._retired_context_ids.append(retired)
 
     def _handle_reset(self) -> None:
         """``_resetsubscriptions``: DELETE all subs on the context + recreate with
@@ -409,6 +537,7 @@ class SaxoStreamingClient:
         )
 
     def _trip_breaker(self) -> None:
+        self._trips_total += 1
         self._is_streaming = False
         with contextlib.suppress(Exception):
             self._subscriber.delete_all_subscriptions(self._context_id)
@@ -523,7 +652,9 @@ class SaxoStreamingClient:
         url = self._build_connect_url(self._last_message_id if is_reconnect else None)
         conn = await self._ws_connect(url, {"Authorization": f"BEARER {token}"})
         self._last_authorized_token = token
-        self._last_recv_mono = self._monotonic()
+        # One stamp serves two clocks: staleness (_last_recv_mono) and the
+        # delivery-life gate (_connection_started_mono, memo §4.2).
+        self._connection_started_mono = self._last_recv_mono = self._monotonic()
         try:
             # NOTE: the failure streak is NOT reset here. A dispatched subscribe
             # is no proof the connection delivers — the reset happens only when a
