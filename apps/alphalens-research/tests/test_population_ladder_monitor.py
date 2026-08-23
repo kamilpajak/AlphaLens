@@ -3703,5 +3703,66 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
         self.assertIn("SPLIT_INVALIDATED", _TERMINAL_SET)
 
 
+class TestGuardMetricsEmissionFromFixtureRun(_MonitorTestBase):
+    """#1090 memo §4 end-to-end: a REAL guard trip in a replay run flows into
+    the ``alphalens_feedback_guard_total{disposition=...}`` metric dict the
+    nightly CLI emits — not just into the report dataclass. Fixture mirrors
+    the production MRNA trip (+142%) with the corporate-actions lookup down,
+    i.e. the fail-closed arm the sustained alert exists for.
+    """
+
+    _BRIEF_DATE = dt.date(2026, 6, 25)
+    _NOW = dt.datetime(2026, 8, 22, 7, 0, tzinfo=UTC)
+
+    def _implausible_fetch(self, last_close: float):
+        def _fetch(ticker, start, end):
+            base = int(start.timestamp() * 1000)
+            return [
+                {"t": base, "o": 100.0, "h": 100.5, "l": 99.0, "c": 100.0, "v": 1000.0},
+                {
+                    "t": base + 3 * 3600 * 1000,
+                    "o": last_close,
+                    "h": last_close + 1.0,
+                    "l": last_close - 1.0,
+                    "c": last_close,
+                    "v": 2000.0,
+                },
+            ]
+
+        return _fetch
+
+    def test_lookup_failed_trip_increments_only_that_label(self):
+        from unittest.mock import patch
+
+        from alphalens_cli.commands import feedback
+
+        class _BrokenLookup:
+            def lookup(self, ticker, start, end):
+                raise RuntimeError("reference endpoint down")
+
+        _write_brief(self.briefs_dir, self._BRIEF_DATE, [{"ticker": "MRNA", "setup": _OK_SETUP}])
+        reports = replay_population_ladders(
+            self.briefs_dir,
+            end_date=self._NOW.date(),
+            store_dir=self.store_dir,
+            bar_fetch=self._implausible_fetch(242.0),
+            now=self._NOW,
+            lookback_days=(self._NOW.date() - self._BRIEF_DATE).days,
+            actions_lookup=_BrokenLookup(),
+            adjusted_closes_fetch=lambda t, s, e: None,
+        )
+
+        with patch.object(feedback, "emit_domain_metrics") as emit:
+            feedback._emit_guard_metrics(reports)
+
+        emit.assert_called_once()
+        kwargs = emit.call_args.kwargs
+        self.assertEqual(kwargs["job"], "feedback-shadow-returns")
+        metrics = kwargs["metrics"]
+        self.assertEqual(metrics['alphalens_feedback_guard_total{disposition="lookup_failed"}'], 1)
+        for label in ("split_invalidated", "extreme_validated", "data_quality"):
+            self.assertEqual(metrics[f'alphalens_feedback_guard_total{{disposition="{label}"}}'], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

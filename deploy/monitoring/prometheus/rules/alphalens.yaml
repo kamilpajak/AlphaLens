@@ -983,6 +983,29 @@ groups:
           summary: "Form-4 daily-incremental hit SEC fetch errors on consecutive runs"
           description: "alphalens_form4_transient_errors stayed > 0 across the last two nightly form4-incremental runs (a clean run emits 0 and clears this). A persistent SEC daily-index / submissions / XML 403 or transient failure is dropping some dates' filings while rows_written may remain non-zero from other dates — so AlphalensForm4IncrementalDark and AlphalensJobStale will NOT surface it. Check `journalctl --user -u alphalens-form4-incremental.service` and the SEC rate coordinator / per-IP 403 load."
 
+      # Implausible-move guard fail-closed arm going chronic (#1090 memo §4).
+      # A lookup_failed disposition means the guard tripped on a >60% move but
+      # could NOT reach the corporate-actions reference, so it carried the row
+      # — i.e. the pre-#1090 blindness, silently back: /edge quietly loses its
+      # largest movers again while the nightly run still exits 0, so
+      # AlphalensJobStale will NOT surface it. GAUGE not counter (the textfile
+      # emitter overwrites the per-run value; the _total suffix follows the
+      # existing edgar/thematic naming): min_over_time(...[50h]) > 0 means
+      # BOTH of the last two nightly 06:30 UTC runs reported lookup failures —
+      # a single clean run emits 0 and clears it, so a one-off Polygon blip
+      # does not fire. DISTINCT alertname + NO job= label keep it out of the
+      # cron-keyed enums (the form4-transient-errors precedent).
+      - alert: AlphalensFeedbackGuardLookupFailed
+        expr: min_over_time(alphalens_feedback_guard_total{disposition="lookup_failed"}[50h]) > 0
+        for: 1h
+        labels:
+          severity: warning
+          route: telegram
+          unit: feedback-shadow-returns
+        annotations:
+          summary: "Implausible-move guard corporate-actions lookups failing on consecutive runs"
+          description: "alphalens_feedback_guard_total{disposition=\"lookup_failed\"} stayed > 0 across the last two nightly feedback-shadow-returns runs — the guard is carrying >60% movers unresolved instead of classifying them (the fail-closed arm has reverted to the pre-#1090 blindness). Check `journalctl --user -u alphalens-feedback-shadow-returns.service` for the Polygon reference-endpoint errors. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+
       # broker-manager is a Type=simple daemon: ExecStopPost fires only on
       # crash/restart, so health = the per-tick heartbeat gauge the control loop
       # writes each ~45s tick. 300s = 5min ~ 6-7 missed ticks.

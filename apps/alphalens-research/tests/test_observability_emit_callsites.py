@@ -1129,6 +1129,125 @@ class TestThematicIngestEmitsSourceRows(unittest.TestCase):
                 thematic.ingest(date="2026-05-29", cache_dir=Path(tmp))  # MUST NOT raise
 
 
+class TestBackfillEmitsGuardDispositionMetrics(unittest.TestCase):
+    """#1090 memo §4: the nightly population-monitor run emits
+    ``alphalens_feedback_guard_total{disposition=...}``.
+
+    Every disposition label of the Amendment-1 tree (split_invalidated,
+    lookup_failed, extreme_validated, data_quality) is zero-initialised on
+    EVERY successful run — the theme-rollup zero-init doctrine: a series that
+    disappears on healthy nights is indistinguishable from a stopped
+    exporter, and the sustained-lookup_failed alert needs a clean run to
+    emit 0 so it CLEARS.
+    """
+
+    _LABELS = (
+        "split_invalidated",
+        "lookup_failed",
+        "extreme_validated",
+        "data_quality",
+    )
+
+    def _report(self, **overrides):
+        import datetime as dt
+
+        from alphalens_pipeline.feedback.population_ladder_monitor import (
+            PopulationMonitorReport,
+        )
+
+        defaults: dict = {
+            "brief_date": dt.date(2026, 8, 20),
+            "n_brief": 3,
+            "n_plannable": 3,
+            "terminal": 1,
+            "ongoing": 2,
+            "carried_forward": 0,
+            "fetches": 1,
+        }
+        defaults.update(overrides)
+        return PopulationMonitorReport(**defaults)
+
+    def _run_refresh(self, *, reports=None, replay_side_effect=None, emit_side_effect=None):
+        from alphalens_cli.commands import feedback
+
+        emit = MagicMock(side_effect=emit_side_effect)
+        replay_kwargs = (
+            {"side_effect": replay_side_effect}
+            if replay_side_effect is not None
+            else {"return_value": reports or []}
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch(
+                "alphalens_pipeline.feedback.population_ladder_monitor.replay_population_ladders",
+                **replay_kwargs,
+            ),
+            patch.object(feedback, "emit_domain_metrics", emit),
+            patch.object(feedback, "_enrich_population_benchmark_excess"),
+            patch.object(feedback, "_enrich_population_sector_excess"),
+            patch.object(feedback, "_enrich_population_size_fields"),
+            patch.object(feedback, "_enrich_population_chart_payloads"),
+            patch.object(feedback, "_write_ingest_watermark"),
+        ):
+            feedback._refresh_population_ladders(Path(tmp) / "thematic_briefs")
+        return emit
+
+    def test_emits_all_disposition_labels_zero_initialised(self) -> None:
+        # A night with zero guard trips (the overwhelmingly common case) must
+        # still write every label at 0 — absence means broken emitter, never
+        # "nothing tripped".
+        emit = self._run_refresh(reports=[self._report()])
+
+        emit.assert_called_once()
+        kwargs = emit.call_args.kwargs
+        self.assertEqual(kwargs["job"], "feedback-shadow-returns")
+        metrics = kwargs["metrics"]
+        for label in self._LABELS:
+            key = f'alphalens_feedback_guard_total{{disposition="{label}"}}'
+            self.assertIn(key, metrics)
+            self.assertEqual(metrics[key], 0)
+
+    def test_sums_guard_counts_across_brief_date_reports(self) -> None:
+        # One report per brief date; the metric is the run-wide sum so the
+        # alert reads one number per disposition per night.
+        emit = self._run_refresh(
+            reports=[
+                self._report(guard_lookup_failed=1, guard_split_invalidated=1),
+                self._report(
+                    guard_lookup_failed=2,
+                    guard_extreme_validated=1,
+                    guard_data_quality=1,
+                ),
+            ]
+        )
+
+        metrics = emit.call_args.kwargs["metrics"]
+        self.assertEqual(metrics['alphalens_feedback_guard_total{disposition="lookup_failed"}'], 3)
+        self.assertEqual(
+            metrics['alphalens_feedback_guard_total{disposition="split_invalidated"}'], 1
+        )
+        self.assertEqual(
+            metrics['alphalens_feedback_guard_total{disposition="extreme_validated"}'], 1
+        )
+        self.assertEqual(metrics['alphalens_feedback_guard_total{disposition="data_quality"}'], 1)
+
+    def test_no_emit_when_replay_fails(self) -> None:
+        # On a failed replay there are no disposition counts to report;
+        # emitting invented zeros would CLEAR a firing sustained-lookup_failed
+        # alert without any lookup having succeeded. The gauge file holds last
+        # night's values instead (established textfile semantics).
+        emit = self._run_refresh(replay_side_effect=RuntimeError("polygon down"))
+
+        emit.assert_not_called()
+
+    def test_emit_failure_does_not_crash_the_nightly_tail(self) -> None:
+        # PR #311 rule: the store parquets are already written; an emit
+        # failure is observability debt, not a job failure.
+        emit = self._run_refresh(reports=[self._report()], emit_side_effect=OSError("disk full"))
+
+        emit.assert_called_once()  # attempted, swallowed
+
+
 class TestBackfillRefreshesPopulationLadders(unittest.TestCase):
     """The nightly ``backfill-shadow-returns`` tail runs the broker-free
     population-monitor replay via ``_refresh_population_ladders(briefs_dir)``.

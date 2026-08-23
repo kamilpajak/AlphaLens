@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 import typer
+from alphalens_pipeline.observability.textfile import emit_domain_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,7 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     # deadline rather than crashing the nightly timer.
     deadline: Any = None
     chart_deadline: Any = None
+    reports: Any = None
     try:
         from alphalens_pipeline.feedback.population_ladder_monitor import (
             _CHART_RESERVE_S_DEFAULT,
@@ -149,6 +151,14 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     except Exception:
         logger.exception("population-monitor refresh failed; continuing")
 
+    # Guard-disposition counters (#1090 memo §4). Emitted ONLY off a completed
+    # replay: on a failed replay there are no counts to report, and emitting
+    # invented zeros would CLEAR a firing sustained-lookup_failed alert without
+    # any lookup having succeeded (the .prom file keeps last night's values —
+    # standard textfile gauge semantics).
+    if reports is not None:
+        _emit_guard_metrics(reports)
+
     if deadline is not None and deadline.stopped_reason:
         logger.warning(
             "population-monitor: stopped fetching early (%s); remaining work deferred to next run.",
@@ -174,6 +184,52 @@ def _refresh_population_ladders(briefs_dir: Path) -> None:
     # internally-failed-but-completed pass are honestly degraded by that pass's own
     # guard (benchmark -> NULL/#847 pending; chart -> last-good), NOT withheld.
     _write_ingest_watermark(_ALPHALENS_HOME / "population_ladders")
+
+
+def _emit_guard_metrics(reports: Any) -> None:
+    """Emit the implausible-guard disposition counters (#1090 memo §4). Never raises.
+
+    One ``alphalens_feedback_guard_total{disposition=...}`` series per arm of
+    the Amendment-1 tree, summed across the run's per-brief-date reports.
+    EVERY label is emitted on EVERY successful run, zeros included — a series
+    that disappears on healthy nights is indistinguishable from a stopped
+    exporter, and the sustained-lookup_failed alert needs a clean run's 0 to
+    clear. Per-run GAUGE like every textfile metric (the ``_total`` suffix
+    follows the existing edgar/thematic naming, not Prometheus counter
+    semantics) — alert rules use ``min_over_time``/``max_over_time``, never
+    ``increase()``/``rate()``.
+
+    This is the job's ONLY ``emit_domain_metrics`` call — a second call with
+    ``job="feedback-shadow-returns"`` would overwrite the .prom file and
+    silently delete these series. Swallow-all (PR #311 rule): the store
+    parquets are already written, so an emit failure is observability debt,
+    not a job failure.
+    """
+    try:
+        # Lazy: corporate_actions imports pandas; the constants are only
+        # needed after a replay already paid that import.
+        from alphalens_pipeline.feedback.corporate_actions import (
+            DISPOSITION_DATA_QUALITY,
+            DISPOSITION_EXTREME_VALIDATED,
+            DISPOSITION_LOOKUP_FAILED,
+            DISPOSITION_SPLIT_INVALIDATED,
+        )
+
+        dispositions = (
+            DISPOSITION_SPLIT_INVALIDATED,
+            DISPOSITION_LOOKUP_FAILED,
+            DISPOSITION_EXTREME_VALIDATED,
+            DISPOSITION_DATA_QUALITY,
+        )
+        metrics = {
+            f'alphalens_feedback_guard_total{{disposition="{disposition}"}}': sum(
+                getattr(report, f"guard_{disposition}", 0) for report in reports
+            )
+            for disposition in dispositions
+        }
+        emit_domain_metrics(job="feedback-shadow-returns", metrics=metrics)
+    except Exception:
+        logger.exception("guard-disposition metric emit failed; continuing")
 
 
 def _enrich_population_size_fields(briefs_dir: Path, *, deadline: Any = None) -> None:
