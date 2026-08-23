@@ -249,6 +249,37 @@ def test_ingest_sector_excess_defaults_when_columns_absent(tmp_path: Path):
     assert outcome.outcome_benchmark_version == ""
 
 
+@pytest.mark.django_db
+def test_ingest_round_trips_split_invalidated_with_null_realized_r(tmp_path: Path):
+    """A SPLIT_INVALIDATED terminal row (implausible-guard redesign, #1090)
+    round-trips through the ingest untouched.
+
+    The replay window crossed a corporate action, so the row is terminal with
+    ``realized_r`` NULL (the NO_FILL null convention). The parquet also carries
+    the guard provenance columns (``guard_disposition`` /
+    ``guard_config_version``), which are parquet-only telemetry — the ingest
+    must drop them silently, not crash on the unknown columns.
+    """
+    row = _terminal_row("MQ", excess=None)
+    row["ladder_classification"] = "SPLIT_INVALIDATED"
+    row["realized_r"] = None
+    row["open_r"] = None
+    row["realized_return_pct_of_book"] = None
+    row["guard_disposition"] = "split_invalidated"
+    row["guard_config_version"] = "2026-08-23"
+    _write_parquet(tmp_path, "2026-05-27", [row])
+    rebuild_from_parquet(tmp_path)
+
+    outcome = LadderOutcome.objects.get(ticker="MQ")
+    assert outcome.ladder_classification == "SPLIT_INVALIDATED"
+    assert outcome.terminal is True
+    assert outcome.realized_r is None
+    assert outcome.open_r is None
+
+    meta = DayMetaLadderOutcome.objects.get(brief_date=dt.date(2026, 5, 27))
+    assert meta.n_terminal == 1
+
+
 def _write_watermark(store_dir: Path, completed_at: float) -> None:
     (store_dir / ".ingest_watermark.json").write_text(json.dumps({"completed_at": completed_at}))
 

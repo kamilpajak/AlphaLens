@@ -333,6 +333,51 @@ def test_outcomes_facets_reflect_window_population_before_filters_and_cap(
 
 
 @pytest.mark.django_db
+def test_edge_tolerates_split_invalidated_classification(tmp_path: Path):
+    """A SPLIT_INVALIDATED terminal row (implausible-guard redesign, #1090)
+    flows through both /edge endpoints without special-casing.
+
+    The row is terminal with ``realized_r`` NULL (the window crossed a
+    corporate action, so no R is measurable — the NO_FILL null convention).
+    It must list on /outcomes, appear as its own classification facet, be
+    filterable, and leave /summary computable (the NULL realized_r drops out
+    of the R aggregates via the existing finite-value gate).
+    """
+    split_row = _terminal("MQ", excess=0.0, realized_r=1.0, classification="SPLIT_INVALIDATED")
+    split_row["realized_r"] = None
+    split_row["market_excess_return"] = None
+    split_row["benchmark_window_return"] = None
+    split_row["forward_return"] = None
+    _write_parquet(
+        tmp_path,
+        "2026-05-27",
+        [
+            split_row,
+            _terminal("AMPL", excess=0.04, realized_r=1.2),
+            _terminal("RGTI", excess=-0.03, realized_r=-1.0, classification="SL_HIT"),
+        ],
+    )
+    rebuild_from_parquet(tmp_path)
+
+    body = APIClient().get("/v1/edge/outcomes").json()
+    rows = {r["ticker"]: r for r in body["data"]}
+    assert rows["MQ"]["ladder_classification"] == "SPLIT_INVALIDATED"
+    assert rows["MQ"]["terminal"] is True
+    assert rows["MQ"]["realized_r"] is None
+    assert body["facets"]["classification"]["terminal"]["SPLIT_INVALIDATED"] == 1
+
+    filtered = APIClient().get("/v1/edge/outcomes?classification=SPLIT_INVALIDATED").json()
+    assert [r["ticker"] for r in filtered["data"]] == ["MQ"]
+
+    summary = APIClient().get("/v1/edge/summary")
+    assert summary.status_code == 200
+    deployment = summary.json()["deployment"]
+    assert deployment["n_terminal"] == 3  # counted as terminal...
+    # ...but its NULL excess/R never enters the matured pool.
+    assert summary.json()["edge"]["n_matured"] == 2
+
+
+@pytest.mark.django_db
 def test_outcomes_facets_drop_empty_classification_bucket(tmp_path: Path):
     # Not-yet-priced rows carry an empty ladder_classification; the "" bucket is
     # dropped from facets.classification but the row still counts in facets.status.
