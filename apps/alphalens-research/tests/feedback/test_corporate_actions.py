@@ -151,6 +151,17 @@ class TestPolygonCorporateActionsLookup(unittest.TestCase):
     def test_materiality_constant_is_ten_percent(self):
         self.assertEqual(SPECIAL_DIVIDEND_PRE_EX_CLOSE_FRACTION, 0.10)
 
+    def test_dividend_at_exactly_the_floor_does_not_invalidate(self):
+        # Boundary pin: materiality is STRICTLY above the floor. 5.0/50.0
+        # divides to exactly the float literal 0.1, so the comparison is
+        # float-exact here and a `>` -> `>=` flip goes red.
+        client = self._client(
+            dividends=[{"ticker": "XYZ", "ex_dividend_date": "2026-07-10", "cash_amount": 5.0}]
+        )
+        lookup = PolygonCorporateActionsLookup(pre_ex_close=lambda t, d: 50.0, client=client)
+        answer = lookup.lookup("XYZ", dt.date(2026, 7, 1), dt.date(2026, 8, 21))
+        self.assertFalse(answer.found)
+
     def test_dividend_with_missing_pre_ex_close_raises_lookup_error(self):
         # Fail-closed: without the denominator the materiality cannot be
         # assessed, so the lookup fails (-> carry + lookup_failed) rather than
@@ -250,6 +261,27 @@ class TestResolveGuardDisposition(unittest.TestCase):
         lookup = _StubLookup(CorporateActionsAnswer(found=False))
         flat = _closes({"2026-07-06": 34.2, "2026-08-21": 35.0})
         disposition = self._resolve(forward_return=_MRNA_FORWARD_RETURN, lookup=lookup, closes=flat)
+        self.assertEqual(disposition, DISPOSITION_DATA_QUALITY)
+
+    def test_cross_check_just_inside_the_band_agrees(self):
+        # Band-width pin from the inside: raw +142% vs adjusted +132.1% is a
+        # 9.9pp gap — inside CROSS_CHECK_AGREEMENT_PP. (The exact-0.10 edge is
+        # deliberately unpinned: at float precision a strict-vs-inclusive flip
+        # there is unobservable, so the pair 9.9/10.1 pins the band's width.)
+        lookup = _StubLookup(CorporateActionsAnswer(found=False))
+        inside = _closes({"2026-07-06": 100.0, "2026-08-21": 232.1})
+        disposition = self._resolve(
+            forward_return=_MRNA_FORWARD_RETURN, lookup=lookup, closes=inside
+        )
+        self.assertEqual(disposition, DISPOSITION_EXTREME_VALIDATED)
+
+    def test_cross_check_just_outside_the_band_is_data_quality(self):
+        # Band-width pin from the outside: a 10.1pp gap must NOT validate.
+        lookup = _StubLookup(CorporateActionsAnswer(found=False))
+        outside = _closes({"2026-07-06": 100.0, "2026-08-21": 231.9})
+        disposition = self._resolve(
+            forward_return=_MRNA_FORWARD_RETURN, lookup=lookup, closes=outside
+        )
         self.assertEqual(disposition, DISPOSITION_DATA_QUALITY)
 
     def test_yf_no_data_is_data_quality(self):

@@ -211,3 +211,41 @@ tests:
   # for reasons unrelated to what it claims to check. The case above pins the
   # half that is specific and stable: the rule stays SILENT while the series
   # exists, which is what separates "stopped" from "never started".
+
+  # ---------------------------------------------------------------------
+  # AlphalensFeedbackGuardLookupFailed
+  # ---------------------------------------------------------------------
+  #
+  # min_over_time(...[50h]) > 0: fires only when BOTH of the last two nightly
+  # 06:30 UTC runs reported lookup failures; one clean run's 0 clears it.
+
+  # Chronic: the gauge stays > 0 across two-plus nightly writes -> fires
+  # (after `for: 1h`).
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_feedback_guard_total{disposition="lookup_failed"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 52h
+        alertname: AlphalensFeedbackGuardLookupFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: feedback-shadow-returns
+              disposition: lookup_failed
+            exp_annotations:
+              summary: "Implausible-move guard corporate-actions lookups failing on consecutive runs"
+              description: "alphalens_feedback_guard_total{disposition=\"lookup_failed\"} stayed > 0 across the last two nightly feedback-shadow-returns runs — the guard is carrying >60% movers unresolved instead of classifying them (the fail-closed arm has reverted to the pre-#1090 blindness). Check `journalctl --user -u alphalens-feedback-shadow-returns.service` for the Polygon reference-endpoint errors. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+
+  # One-off Polygon blip: the next nightly run writes 0 and the 50h window
+  # now contains it -> stays quiet. This is the half that separates "chronic
+  # fail-closed blindness" from "one bad night".
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_feedback_guard_total{disposition="lookup_failed"}'
+        values: '1x23 0x37'
+    alert_rule_test:
+      - eval_time: 52h
+        alertname: AlphalensFeedbackGuardLookupFailed
+        exp_alerts: []

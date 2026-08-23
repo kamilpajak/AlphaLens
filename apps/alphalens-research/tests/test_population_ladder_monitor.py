@@ -3530,6 +3530,40 @@ class TestImplausibleGuardDispositions(_MonitorTestBase):
         row = self._read_store(self._BRIEF_DATE).set_index("ticker").loc["MQ"]
         self.assertEqual(row["ladder_classification"], "SPLIT_INVALIDATED")
 
+    def test_open_row_crossing_a_split_nulls_open_r_on_invalidation(self):
+        # The invalidation docstring claims EVERY R aggregate excludes the row.
+        # The MQ fixture above resolves TP-like (open_r already null), so this
+        # is the shape that actually exercises the open-side nulling: entry
+        # filled at 100, close 165 (+65% trips the trigger) with TP parked at
+        # 300 — a genuinely OPEN row carrying non-null open_r into the guard.
+        from alphalens_pipeline.feedback.corporate_actions import CorporateActionsAnswer
+
+        class _FoundLookup:
+            def lookup(self, ticker, start, end):
+                return CorporateActionsAnswer(found=True, detail="split 4.0:1.0")
+
+        far_tp_setup = dict(_OK_SETUP, tp_tranches=[{"target": 300.0, "tranche_pct": 100.0}])
+        _write_brief(self.briefs_dir, self._BRIEF_DATE, [{"ticker": "MQ", "setup": far_tp_setup}])
+        replay_population_ladders(
+            self.briefs_dir,
+            end_date=self._NOW.date(),
+            store_dir=self.store_dir,
+            bar_fetch=self._implausible_fetch(165.0),
+            now=self._NOW,
+            lookback_days=(self._NOW.date() - self._BRIEF_DATE).days,
+            actions_lookup=_FoundLookup(),
+            adjusted_closes_fetch=lambda t, s, e: None,
+        )
+        row = self._read_store(self._BRIEF_DATE).set_index("ticker").loc["MQ"]
+        self.assertEqual(row["ladder_classification"], "SPLIT_INVALIDATED")
+        for col in (
+            "open_r",
+            "open_return_pct_of_book",
+            "realized_r",
+            "realized_return_pct_of_book",
+        ):
+            self.assertTrue(pd.isna(row[col]), col)
+
     def test_mrna_no_actions_yf_agrees_accepts_extreme_validated(self):
         from alphalens_pipeline.feedback.corporate_actions import CorporateActionsAnswer
 
