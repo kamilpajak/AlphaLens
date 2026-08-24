@@ -373,3 +373,63 @@ tests:
       - eval_time: 4h
         alertname: AlphalensPrometheusRulesSyncFailed
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensTemplateMatchRateLow
+  # ---------------------------------------------------------------------
+  #
+  # The all-zero template (#1108). Before per-template zero-init, a template
+  # that never matched emitted NO match series at all: rate() over an absent
+  # series returns an empty vector, the division produced no result, and the
+  # alert structurally could not fire — the defect this case pins. The
+  # fixture mirrors what production emits after zero-init: attempt_total
+  # climbing (every article attempts every template until first match) and
+  # match_total PRESENT as an explicit constant 0. Production overwrites the
+  # textfile with fresh per-run accumulators (counter resets); rate() and
+  # increase() treat resets as continuations, so a monotone fixture is the
+  # equivalent steady-state shape.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="m_and_a_press_release"}'
+        values: '0+1x216'
+      - series: 'alphalens_template_match_total{template_id="m_and_a_press_release"}'
+        values: '0x216'
+    alert_rule_test:
+      # Min-sample guard not yet met: increase(...[7d]) ~= 40 < 50 — a 0%
+      # match rate on too few attempts must not page.
+      - eval_time: 40h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts: []
+      # Guard crossed (~50 cumulative attempts at ~50h) but `for: 1d` has
+      # not elapsed — still pending, not firing.
+      - eval_time: 60h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts: []
+      # Sustained: 0 matches over >50 attempts, condition held > 1d -> fires.
+      - eval_time: 96h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              template_id: m_and_a_press_release
+            exp_annotations:
+              summary: "Template m_and_a_press_release match rate < 20% for 7 days"
+              description: "Per-template match-rate sustained below 20% — review pattern in templates/m_and_a_press_release.yaml or accept drift via `alphalens templates evaluate`."
+
+  # Low-traffic template: the same 0% match rate on ~30 attempts stays under
+  # the 50-attempt min-sample guard and must never page — that volume is
+  # statistically meaningless (the guard the rule comment promises).
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="regulatory_action"}'
+        values: '0+1x30 30x185'
+      - series: 'alphalens_template_match_total{template_id="regulatory_action"}'
+        values: '0x216'
+    alert_rule_test:
+      - eval_time: 96h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts: []
+      - eval_time: 192h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts: []
