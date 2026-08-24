@@ -325,6 +325,11 @@ def referenced_datasource_uids(doc: Any) -> set[str]:
 def _collect_datasource_uids(node: Any, found: set[str]) -> None:
     if isinstance(node, dict):
         reference = node.get("datasource")
+        # Only the modern object form is collected. Grafana's legacy form is a
+        # bare string, but that string is the datasource NAME, not its uid, so
+        # feeding it to a uid comparison would refuse valid dashboards. A
+        # dashboard written in the legacy form is therefore not cross-checked
+        # here — the shipped ones use the object form (schemaVersion 39).
         if isinstance(reference, dict):
             uid = reference.get("uid")
             if isinstance(uid, str) and not uid.startswith("$"):
