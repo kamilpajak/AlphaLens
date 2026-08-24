@@ -155,7 +155,7 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     # FORWARD-ONLY (frozen terminal rows keep their stamped grid; PR #747).
     BreakevenLens(
         lens_id="atr_bracket_1p5",
-        label="ATR bracket 1.5 (bezpazery)",
+        label="ATR bracket 1.5 (bezpazery) · realised-fill anchor",
         category="exit-stop",
         status="in_sample",
         kind="atr_bracket",
@@ -165,6 +165,29 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
         anchor_mode="realised",
         preregistered_ref=(
             "betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)"
+        ),
+    ),
+    # The SAME bezpazery v1 bracket placed against the PLANNED blend — the
+    # anchor the live rail actually uses (issue #1114). Registered beside the
+    # realised-anchor lens above rather than replacing it: the historical
+    # ``atr_bracket_1p5`` id carries every already-stamped value, and the daily
+    # path never recomputes a stamped row, so this one populates FORWARD-ONLY.
+    # A head-to-head of the two means is therefore invalid until this lens
+    # accrues its own N — before that it compares cohorts, not anchors.
+    # Charges its own row in the ~2026-09 walk-forward multiplicity budget
+    # (ADR 0013 R4); this is the 5th of MAX_REGISTERED_LENSES.
+    BreakevenLens(
+        lens_id="atr_bracket_1p5_planned",
+        label="ATR bracket 1.5 (bezpazery) · planned-blend anchor",
+        category="exit-stop",
+        status="in_sample",
+        kind="atr_bracket",
+        stop_atr_mult=1.5,
+        tp_atr_mult=1.5,
+        tp_floor_frac=0.006,
+        anchor_mode="planned",
+        preregistered_ref=(
+            "bezpazery v1 bracket on the live planned-blend anchor (issue #1114 option 1)"
         ),
     ),
 )

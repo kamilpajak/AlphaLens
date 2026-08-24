@@ -178,8 +178,51 @@ class TestBreakevenRegistry(unittest.TestCase):
         self.assertEqual(lens.tp_floor_frac, 0.006)
         self.assertEqual(lens.status, "in_sample")
         self.assertEqual(lens.category, "exit-stop")
-        self.assertEqual(lens.label, "ATR bracket 1.5 (bezpazery)")
+        # The label names the anchor since #1114 -- "ATR bracket 1.5" alone was
+        # what let a reader assume the lens described the live policy.
+        self.assertEqual(lens.label, "ATR bracket 1.5 (bezpazery) · realised-fill anchor")
         self.assertEqual(lens.preregistered_ref, _BEZPAZERY_REF)
+
+    def test_both_anchor_modes_are_registered_as_distinct_lenses(self):
+        # #1114 option 1: the pair must be measurable SIDE BY SIDE, so each
+        # anchor is its own lens_id with the same pinned bracket parameters.
+        # The historical id keeps the realised anchor -- it carries the already
+        # stamped values on ~800 live rows, and renaming it would strand them
+        # under a key no longer in the registry.
+        by_id = {lens.lens_id: lens for lens in BREAKEVEN_LENSES}
+        realised = by_id["atr_bracket_1p5"]
+        planned = by_id["atr_bracket_1p5_planned"]
+        self.assertEqual(realised.anchor_mode, "realised")
+        self.assertEqual(planned.anchor_mode, "planned")
+        for lens in (realised, planned):
+            self.assertEqual(lens.kind, "atr_bracket")
+            self.assertEqual(lens.category, "exit-stop")
+            self.assertEqual(lens.status, "in_sample")
+            self.assertEqual(lens.stop_atr_mult, 1.5)
+            self.assertEqual(lens.tp_atr_mult, 1.5)
+            self.assertEqual(lens.tp_floor_frac, 0.006)
+        # Each label must NAME its anchor -- an /edge reader picks the lens by
+        # its label, and "ATR bracket 1.5" alone is what hid the divergence.
+        self.assertIn("realised", realised.label)
+        self.assertIn("planned", planned.label)
+        self.assertNotEqual(realised.label, planned.label)
+        self.assertIsNotNone(planned.preregistered_ref)
+        self.assertIn("1114", planned.preregistered_ref or "")
+
+    def test_the_two_bracket_lenses_report_different_r_on_a_partial_fill(self):
+        # End-to-end through the registry, not just the replay leaf: a ladder
+        # where only the top tier is reachable must produce two DIFFERENT grid
+        # entries, otherwise the second registration buys nothing.
+        setup = _setup(
+            entries=[(100.0, 50.0), (80.0, 50.0)], tps=[(200.0, 100.0)], stop=70.0, atr=2.0
+        )
+        bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 99.5, 104.0, 103.5)]
+        grid = breakeven_grid(setup, bars)
+        self.assertIsNotNone(grid["atr_bracket_1p5"])
+        self.assertIsNotNone(grid["atr_bracket_1p5_planned"])
+        self.assertNotAlmostEqual(
+            grid["atr_bracket_1p5"], grid["atr_bracket_1p5_planned"], places=6
+        )
 
     def test_an_atr_bracket_lens_without_an_anchor_mode_is_refused(self):
         # #1114: the anchor is the one atr_bracket param with NO default. The
