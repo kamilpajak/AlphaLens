@@ -33,8 +33,9 @@
 #      dashboard_provisioning.check_sum, which is the md5 of the source file).
 #
 # Exit codes carry meaning, so the unit must NOT be made failure-tolerant:
-#   0  live matches origin/main and grafana was observed serving it (in_sync or
-#      synced)
+#   0  in_sync (live bytes already equal the origin/main blobs — a byte
+#      comparison only, no grafana read) or synced (files replaced AND grafana
+#      observed serving them)
 #   1  it does not — fetch_failed / check_failed / reload_failed; the journal
 #      names the stage. Non-zero holds the last_success clock still.
 #

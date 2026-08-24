@@ -198,6 +198,24 @@ class TestValidateDesired(unittest.TestCase):
         self.assertIsNotNone(problem)
         self.assertIn(sync.REQUIRED_DATASOURCE_UID, str(problem))
 
+    def test_a_consistently_renamed_uid_is_still_refused(self) -> None:
+        # Pins the REQUIRED_DATASOURCE_UID clause SPECIFICALLY. The two
+        # tests above are also satisfied by the dangling-reference check
+        # (their dashboards still point at "prometheus"), so neutering the
+        # clause leaves them green. Here the rename is internally
+        # consistent - every dashboard target follows the datasource - so
+        # only the required-uid clause can refuse it. It must: the live
+        # dashboards this repo ships address "prometheus", and a live
+        # datasource that stops declaring that uid is the 2026-08-24
+        # incident (every panel renders "No data").
+        renamed_ds = DATASOURCE_YML.replace(b"uid: prometheus", b"uid: grafana-prom")
+        renamed_dash = DASHBOARD_JSON.replace(b'"prometheus"', b'"grafana-prom"')
+
+        problem = sync.validate_desired(desired_set(datasource=renamed_ds, dashboard=renamed_dash))
+
+        self.assertIsNotNone(problem)
+        self.assertIn(sync.REQUIRED_DATASOURCE_UID, str(problem))
+
     def test_a_datasource_with_a_different_uid_is_refused(self) -> None:
         renamed = DATASOURCE_YML.replace(b"uid: prometheus", b"uid: promeetheus")
 
@@ -404,6 +422,27 @@ class TestLiveTree(unittest.TestCase):
         self.live.prune_autosync_backups(self.relpath, sync.BACKUP_KEEP)
 
         self.assertTrue((directory / sibling).exists())
+
+    def test_prune_of_the_provider_spares_a_dashboard_backup(self) -> None:
+        # The MIRROR of the test above, and the direction that actually
+        # tests the code: "alphalens-cron-health.json..." sorts BELOW
+        # "dashboards.yml...", so pruning the dashboard relpath spares its
+        # provider sibling by alphabet even when the prefix filter is
+        # loosened to the shared infix. Pruning the PROVIDER relpath is the
+        # direction where only the per-file prefix can save the sibling.
+        provider_relpath = PROVIDER_FILE.live_relpath
+        directory = self.live.live_path(provider_relpath).parent
+        directory.mkdir(parents=True, exist_ok=True)
+        sibling = f"{sync.backup_prefix(DASHBOARD_FILE.live_name)}20260824T110000Z"
+        (directory / sibling).write_bytes(b"sibling")
+        prefix = sync.backup_prefix(PROVIDER_FILE.live_name)
+        for hour in range(12):
+            (directory / f"{prefix}20260824T{hour:02d}0000Z").write_bytes(b"old")
+
+        self.live.prune_autosync_backups(provider_relpath, sync.BACKUP_KEEP)
+
+        self.assertTrue((directory / sibling).exists())
+        self.assertEqual((directory / sibling).read_bytes(), b"sibling")
 
     def test_prune_tolerates_a_missing_directory(self) -> None:
         self.live.prune_autosync_backups(self.relpath, sync.BACKUP_KEEP)  # must not raise
