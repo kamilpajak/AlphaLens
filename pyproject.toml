@@ -35,7 +35,7 @@ dev = [
     "pandas-stubs>=3.0.5.260730",
     "django-types>=0.24.0",
     "djangorestframework-types>=0.9.0",
-    "cosmic-ray>=8.4.6",
+    "cosmic-ray>=8.7.0",
     "hypothesis>=6.165.2",
 ]
 
