@@ -3507,6 +3507,7 @@ def build_default_deps(
             exit_policy,
             alert_throttled=_throttled,
             day1_gap_price_probe=day1_gap_probe,
+            audit_budget=audit_budget,
         ),
         read_records=_read_records,
         verdicts_fn=functools.partial(reconcile_bridge.verdicts, audit_budget=audit_budget),
@@ -4643,6 +4644,7 @@ def _make_place_pick(
     *,
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
+    audit_budget: OutcomeAuditBudget | None = None,
 ) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
@@ -4680,6 +4682,7 @@ def _make_place_pick(
             exit_policy,
             alert_throttled=alert_throttled,
             day1_gap_price_probe=day1_gap_price_probe,
+            audit_budget=audit_budget,
         )
 
     return _place
@@ -6052,6 +6055,7 @@ def _place_pick(
     *,
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
+    audit_budget: OutcomeAuditBudget | None = None,
 ) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
@@ -6101,7 +6105,10 @@ def _place_pick(
         account = broker.get_account()
         positions = broker.get_positions()
         records = list(iter_submission_records(state_paths.submissions_path()))
-        open_verdicts = reconcile_verdicts(records, broker)
+        # #1094: the placement read draws from the SAME per-tick budget as
+        # the verdict and entry-trail passes — a cold-start tick draining an
+        # armed pick must not fan out unbudgeted (the third consumer).
+        open_verdicts = reconcile_verdicts(records, broker, audit_budget=audit_budget)
     except BrokerError as exc:
         logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
         return False

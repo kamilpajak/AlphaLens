@@ -643,7 +643,7 @@ class TestPlacePickPerTierJournaling(unittest.TestCase):
             p = stack.enter_context
             p(mock.patch(f"{pkg}.submission_log.append_submission_record", submitted.append))
             p(mock.patch(f"{pkg}.submission_log.iter_submission_records", lambda _p: []))
-            p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b: []))
+            p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b, **_k: []))
             p(mock.patch(f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()))
             p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: instrument))
             p(
@@ -750,7 +750,7 @@ class TestPlacePickBranches(unittest.TestCase):
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         m: dict[str, Any] = {
-            "verdicts": lambda _r, _b: [],
+            "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
             "resolve": lambda _b, _t: _instr(),
             "classify": lambda *_a, **_k: _placement(),
@@ -777,13 +777,37 @@ class TestPlacePickBranches(unittest.TestCase):
         p(mock.patch(f"{pkg}.automanager.placement_planner.classify", m["classify"]))
         p(mock.patch("broker_contract.sizing.compute_setup_plan", m["compute_plan"]))
         p(mock.patch.object(cl, "_append_standalone_stop_journal", lambda _line: None))
-        return cl._make_place_pick(broker)
+        return cl._make_place_pick(broker, **m.get("make_kwargs", {}))
 
     def test_broker_read_error_returns_false(self) -> None:
         def _boom() -> Any:
             raise BrokerError("account read down")
 
         self.assertFalse(self._placer(_PlaceBroker(on_account=_boom))(_pick()))
+
+    def test_placement_verdicts_read_draws_from_the_shared_audit_budget(self) -> None:
+        # #1094 verifier MAJOR: _place_pick's reconcile_verdicts call ran with
+        # NO audit budget, so a cold-start tick draining an armed pick did the
+        # FULL unbudgeted audit fan-out — reproducing the 429 burst between the
+        # two budgeted passes. The placement read must draw from the SAME
+        # per-tick budget as the verdict and entry-trail passes.
+        from alphalens_pipeline.brokers.reconcile import OutcomeAuditBudget
+
+        shared = OutcomeAuditBudget()
+        captured: list[Any] = []
+
+        def _capture_verdicts(_r: Any, _b: Any, audit_budget: Any = None) -> list:
+            captured.append(audit_budget)
+            return []
+
+        placer = self._placer(
+            _PlaceBroker(),
+            verdicts=_capture_verdicts,
+            make_kwargs={"audit_budget": shared},
+        )
+        placer(_pick())
+        self.assertEqual(len(captured), 1)
+        self.assertIs(captured[0], shared)
 
     def test_safety_refuse_returns_false(self) -> None:
         from alphalens_pipeline.brokers.automanager.safety import Refuse
@@ -928,7 +952,7 @@ class TestPlacePickBranches(unittest.TestCase):
 
         placer = self._placer(
             _PlaceBroker(),
-            verdicts=lambda _r, _b: [working],
+            verdicts=lambda _r, _b, **_k: [working],
             iter_records=lambda _p: [
                 {"brackets": [{"client_request_id": "rid-x", "entry": 10.0, "qty": 5}]}
             ],
@@ -1198,7 +1222,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
             return True
 
         m: dict[str, Any] = {
-            "verdicts": lambda _r, _b: [],
+            "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
             "resolve": resolve if resolve is not None else (lambda _b, _t: _instr()),
             "classify": lambda *_a, **_k: _placement(),
@@ -1291,7 +1315,7 @@ class TestPlacePickFeeFloorIntegration(unittest.TestCase):
         p(mock.patch(f"{pkg}.submission_log.build_submission_record", lambda **kw: dict(kw)))
         p(mock.patch(f"{pkg}.submission_log.append_submission_record", lambda _r: None))
         p(mock.patch(f"{pkg}.submission_log.iter_submission_records", lambda _p: []))
-        p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b: []))
+        p(mock.patch(f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b, **_k: []))
         p(mock.patch(f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()))
         p(mock.patch(f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: _instr()))
         p(mock.patch("broker_contract.sizing.compute_setup_plan", lambda _s, **_k: _fee_plan(50.0)))
@@ -1589,7 +1613,7 @@ class TestPlacePickGrossCapIntegration(unittest.TestCase):
             return True
 
         m: dict[str, Any] = {
-            "verdicts": lambda _r, _b: [],
+            "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
             "resolve": lambda _b, _t: _instr(),
             "classify": lambda *_a, **_k: _placement(),
@@ -1652,7 +1676,7 @@ class TestPlacePickGrossCapIntegration(unittest.TestCase):
             placer, _alerts, refusals, _appended = self._placer(
                 broker,
                 notional=10_000.0,
-                verdicts=lambda _r, _b: [working],
+                verdicts=lambda _r, _b, **_k: [working],
                 iter_records=lambda _p: records,
             )
             self.assertFalse(placer(_pick()))
@@ -1846,7 +1870,7 @@ class TestPlacePickCashFloorIntegration(unittest.TestCase):
             return True
 
         m: dict[str, Any] = {
-            "verdicts": lambda _r, _b: [],
+            "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
             "resolve": lambda _b, _t: _instr(),
             "classify": lambda *_a, **_k: _placement(),
@@ -2132,6 +2156,28 @@ class TestBuildDefaultDepsBootCompactsJournals(unittest.TestCase):
             cl.build_default_deps(notify=lambda _msg: None, chain_loss_notify=lambda _msg: None)
         standalone.assert_called_once_with()
         trails.assert_called_once_with()
+
+
+class TestBuildDefaultDepsThreadsAuditBudgetIntoPlacement(unittest.TestCase):
+    """#1094: ONE per-tick audit budget covers ALL three consumers — the
+    verdict pass, the entry-trail pass AND the placement path's own
+    reconcile_verdicts read (the verifier-caught third consumer)."""
+
+    def test_place_pick_factory_receives_the_shared_audit_budget(self) -> None:
+        with (
+            _isolated_home(),
+            mock.patch(
+                "alphalens_pipeline.brokers.registry.get_default_broker",
+                return_value=_StopOnlyBroker(),
+            ),
+            mock.patch.object(cl, "_default_oauth_provider", return_value=mock.Mock()),
+            mock.patch.object(cl, "_make_place_pick", wraps=cl._make_place_pick) as factory,
+        ):
+            deps = cl.build_default_deps(
+                notify=lambda _msg: None, chain_loss_notify=lambda _msg: None
+            )
+        self.assertIs(factory.call_args.kwargs.get("audit_budget"), deps.audit_budget)
+        self.assertIs(deps.verdicts_fn.keywords["audit_budget"], deps.audit_budget)
 
 
 def _exit_spec(*, stop: float, tp: float, atr: float, ceiling: float | None = None) -> Any:
@@ -7708,7 +7754,7 @@ class TestPlacePickDay1GapGateIntegration(unittest.TestCase):
             return True
 
         m: dict[str, Any] = {
-            "verdicts": lambda _r, _b: [],
+            "verdicts": lambda _r, _b, **_k: [],
             "safety_check": lambda *_a, **_k: object(),
             "resolve": lambda _b, _t: _instr(),
             "classify": lambda *_a, **_k: _placement(),

@@ -216,3 +216,16 @@ fabricates a verdict and is at-least-as-safe as today's
 `UNRESOLVED(audit_error)` for every downstream consumer (placement dedup is
 journal-keyed and the protection pass is broker-state-keyed — neither reads
 verdicts — so deferral removes only the alert while keeping the retry).
+
+### Amendment 1 precision notes (post-verification, 2026-08-24)
+
+- The "previously-audited brackets never re-consume the budget" property holds for
+  TERMINAL outcomes only (the cache peek exempts memoized terminals). A recent
+  bracket that keeps resolving UNKNOWN (deliberately uncached — self-healing) re-bills
+  the budget each pass; with >= 6 persistently non-terminal RECENT brackets the
+  recency-first order would starve older ones. Bounded and consistent with the
+  steady-state doctrine (UNKNOWN self-heals within ticks); recorded, not engineered
+  around.
+- Verifier-caught third consumer: the placement path's own reconcile_verdicts read
+  inside _place_pick ran unbudgeted — fixed by threading the SAME per-tick budget
+  (test pins the factory wiring and the build_default_deps composition).
