@@ -201,27 +201,54 @@ dashboard (one stat row "time since last success", one per-job
 duration time-series, one exit-code state timeline, plus domain
 panels for EDGAR / thematic / AV quota).
 
-### Provision via filesystem (no UI clicks)
+The datasource and the dashboard provider config are versioned beside
+it, under `grafana/provisioning/`:
 
-Drop the JSON into Grafana's provisioning dir and restart:
+| Repo file | Live path | What it is |
+|---|---|---|
+| `grafana/provisioning/datasources/prometheus.yml` | `~/monitoring/grafana/provisioning/datasources/prometheus.yml` | the Prometheus datasource, pinned to `uid: prometheus` |
+| `grafana/provisioning/dashboards/dashboards.yml` | `~/monitoring/grafana/provisioning/dashboards/dashboards.yml` | the file provider (`updateIntervalSeconds: 10`) |
+| `grafana/dashboards/alphalens-cron-health.json` | `~/monitoring/grafana/provisioning/dashboards/alphalens-cron-health.json` | the dashboard itself |
 
-```bash
-docker run -d --name grafana \
-    --restart always --net host \
-    -v ~/AlphaLens/deploy/monitoring/grafana/dashboards:/var/lib/grafana/dashboards/alphalens:ro \
-    -v ~/AlphaLens/deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro \
-    grafana/grafana:latest
+Every dashboard target in the JSON addresses `uid: prometheus`. That is
+why the datasource yml pins that uid, and the sync refuses any set
+where a dashboard references a uid no synced datasource declares. Do
+NOT "fix" a uid mismatch by editing the dashboard JSON — that is the
+wrong direction, and it is how the 2026-08-24 incident happened.
 
-# After dashboard JSON changes:
-docker restart grafana
-# (Grafana re-imports on startup if the JSON's `version` field changed
-# OR the file mtime is newer than the in-memory copy.)
-```
+### Deploy = merge to main (#1110)
 
-The dashboard expects a Prometheus datasource with `uid: prometheus`.
-If the existing datasource has a different uid, edit
-`grafana/dashboards/alphalens-cron-health.json` once and `docker
-restart grafana`.
+The live tree is NOT bind-mounted from the repo. Grafana runs from the
+compose stack at `~/monitoring/docker-compose.yml`, which bind-mounts
+`./grafana/provisioning` into `/etc/grafana/provisioning`. The hourly
+`alphalens-grafana-provisioning-sync` timer converges that live tree to
+the `origin/main` blobs of the three files above, so **merging a
+dashboard or datasource change deploys it within ~1h**. Converge
+immediately with `systemctl --user start
+alphalens-grafana-provisioning-sync.service`.
+
+Two consequences worth stating plainly:
+
+- **A hand-edit under `~/monitoring/grafana/provisioning/` does not
+  survive.** The next fire overwrites it from `origin/main` and keeps
+  the overwritten bytes as one `.bak-autosync-<UTC>` file.
+- **Adding a dashboard means adding its datasource first.** The
+  cross-file gate refuses the whole set — nothing syncs — if a
+  dashboard references a datasource uid the repo does not declare.
+
+Reload semantics, measured on the VPS 2026-08-24: a dashboard JSON
+change is picked up by the provisioning watcher with NO container
+restart (and with no log line either — the watcher is silent on the
+happy path). The datasource and provider ymls are read only during the
+startup provisioning pass, so those changes cost one
+`docker restart grafana`, which the sync spends only when one of them
+actually changed.
+
+To confirm what Grafana ingested, read `grafana.db` with sqlite
+(`dashboard_provisioning.check_sum` is the md5 of the source file's
+bytes). The admin API cannot be used: its password is a dead
+placeholder and it answers 401. Full recipe + the runbook:
+`deploy/systemd/README.md` § "Grafana provisioning sync".
 
 Browse to `http://<vps>:3000/d/alphalens-cron-health` (or whichever
 hostname the CF Tunnel exposes Grafana on).

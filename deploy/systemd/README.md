@@ -22,6 +22,7 @@ hosts where launchd is unavailable.
 | `alphalens-edge-mirror.{service,timer}` | hourly at `:05` UTC | Self-heal for the `/edge` dashboard — rebuilds the ladder-outcome Postgres cache from the population-ladder parquets, independent of the nightly `feedback-shadow-returns` compute (so `/edge` never lags a failed/late compute run). See "Edge mirror (decoupled)" below. |
 | `alphalens-bracket-cost.{service,timer}` | daily 03:30 UTC | Keeps the market-cap bracket-cost measurement (PR #1087) advancing: `--prepare` (new funnel days only — days already written are FROZEN, because the split-adjusted grouped store retro-adjusts history and re-deriving a setup would move the levels of a ladder already under replay), then `--replay`, then `--benchmark`. **Daily AND multi-pass, both forced rather than chosen**: brand-new rows draw from a hardcoded 50-per-run budget (`_FORCED_RESOLVE_BUDGET`, NOT tunable by `ALPHALENS_FEEDBACK_MAX_FETCHES`), and the measured arrival rate is 51.5 proposals/day since the 2026-08-18 prompt change (17.2/day before it), peaking at 68 — i.e. ABOVE the per-run budget. `--replay` therefore makes up to 4 passes and stops early once a pass fetches nothing. A single pass would fall behind daily and accumulate a backlog that never drains, silently, because the job still exits 0. All three stages run even if an earlier one fails (the unit still reports failure), so a bad `--prepare` never stops `--replay` from advancing existing rows. Writes only to `~/.alphalens/bracket_cost{,_ladders}/` — both write paths refuse the production ladder store by name. Needs `POLYGON_API_KEY`. Monitoring: `AlphalensJobStale`@48h + `MetricMissing`. Contract + reads: `docs/research/mcap_bracket_cost_*.md`. |
 | `alphalens-prometheus-rules-sync.{service,timer}` | hourly at `:27` UTC | Converges the live Prometheus rules file (`~/monitoring/prometheus/alphalens.rules`) to the `origin/main` blob of `deploy/monitoring/prometheus/rules/alphalens.yaml` — **merging to main IS the alert-rules deploy** (live within ~1h). Reads the fetched blob via `git show` (never the working tree), short-circuits on identical content, and otherwise: timestamped autosync backup (pruned to 10, never touches foreign `.bak` files or the shared container's other tenants) → in-container `promtool check` BEFORE the atomic replace → HUP → fingerprint verification against `api/v1/rules`. Emits the `alphalens_rules_sync_outcome` one-hot; two consecutive failed fires page via `AlphalensPrometheusRulesSyncFailed`, plus the standard `AlphalensJobStale`@2h + `MetricMissing` pair. Manual copy+HUP survives only as an emergency override — see the "Prometheus live-rules sync" section below. Script: `apps/alphalens-research/scripts/sync_prometheus_rules.py` (`--dry-run` reports in_sync/would-sync and writes nothing). |
+| `alphalens-grafana-provisioning-sync.{service,timer}` | hourly at `:37` UTC | Converges the live Grafana provisioning tree (`~/monitoring/grafana/provisioning/`) to the `origin/main` blobs of three repo files — the datasource yml, the dashboard provider yml, and `deploy/monitoring/grafana/dashboards/alphalens-cron-health.json`. **Merging to main IS the dashboard/datasource deploy** (live within ~1h); a hand-edit on the VPS is overwritten at the next fire. Reads the fetched blobs via `git show` (never the working tree), short-circuits on identical content, and otherwise: in-process validation of the WHOLE set BEFORE any write (YAML/JSON parse, the required `uid: prometheus`, the provider path, and the cross-file check that every datasource uid a dashboard references is declared — the 2026-08-24 root cause, caught at the gate) → per-file dated backup (pruned to 10, never ending in `.json`/`.yml` so Grafana cannot import a backup as a duplicate dashboard) → atomic replace → `docker restart grafana` **only when a yml changed** (dashboard JSONs hot-reload through the provisioning watcher) → verification against `/api/health` + `grafana.db` (`data_source.uid` and `dashboard_provisioning.check_sum`, which is the md5 of the file bytes). The admin API is deliberately unused — its password is a dead placeholder and it answers 401 (#1101). An explicit WHITELIST of three files, never a directory mirror: `node-exporter-dashboard.json` shares the live dir and belongs to another tenant. Emits the `alphalens_grafana_sync_outcome` one-hot; `AlphalensGrafanaProvisioningSyncFailed` + `AlphalensJobStale`@2h + `MetricMissing`. Script: `apps/alphalens-research/scripts/sync_grafana_provisioning.py` (`--dry-run` writes nothing, not even a metric). See the "Grafana provisioning sync" section below. |
 | `alphalens-issue-wake.{service,timer}` | daily 05:30 UTC | Wakes GitHub issues parked on external data. Finds open `waiting:data` issues whose body carries a `Wake: YYYY-MM-DD` line dated today or earlier, removes the label from each, and sends ONE Telegram message listing them. **Nothing due sends nothing** — which is exactly why it carries the staleness pair: a dead timer and a quiet day produce identical Telegram traffic, so `AlphalensJobStale`@48h + `MetricMissing` are the only things that can tell them apart, and the failure is cumulative (every issue whose date passes during an outage stays parked). A `Wake:` line the parser cannot read is REPORTED in the same message and the label is left alone — a bad date is never guessed at. A `Wake:` line inside a fenced code block is ignored (issue templates paste the format as a sample). Sends BEFORE unlabelling, so a failed send leaves the labels on and the next run repeats the set. Needs `GH_TOKEN` (via `gh`) + `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`. Script: `apps/alphalens-research/scripts/wake_due_issues.py` (`--dry-run` prints the message it would send and mutates nothing). |
 
 > **Decommissioned 2026-06-03 (ADR 0012):** the Alpaca paper-trading units
@@ -984,9 +985,9 @@ edge-mirror, the `:30` dailies, and the EDGAR `:00/:15/:30/:45` grid):
 
 **Monitoring.** Every run rewrites the `alphalens_rules_sync_outcome` one-hot
 (all five labels `in_sync`/`synced`/`fetch_failed`/`check_failed`/
-`reload_failed`, zeros included) and stamps
-`alphalens_rules_sync_last_success_timestamp_seconds` only on success, plus
-the standard `ExecStopPost` job metrics. Alerts:
+`reload_failed`, zeros included). That family is the ONLY thing the script
+emits; `alphalens_job_last_success_timestamp_seconds` is stamped by the
+standard `ExecStopPost` hook, not by the script. Alerts:
 `AlphalensPrometheusRulesSyncFailed` (no success outcome across two hourly
 fires — live alerts are diverging from main), `AlphalensJobStale`@2h and
 `AlphalensJobMetricMissing`. A failing run exits 1; `journalctl --user -u
@@ -1022,6 +1023,152 @@ cp ~/AlphaLens/deploy/monitoring/prometheus/rules/alphalens.yaml \
 docker exec prometheus promtool check rules /etc/prometheus/alphalens.rules
 docker exec prometheus kill -HUP 1
 curl -s localhost:9090/api/v1/rules | jq '.data.groups[].rules[].name'   # confirm the new rules are present
+```
+
+## Grafana provisioning sync — alphalens-grafana-provisioning-sync.service + .timer
+
+Same contract as the Prometheus rules sync above, applied to Grafana's
+provisioning tree: **merging to main IS the deploy, live converges within ~1h,
+and a broken sync pages.** Three repo files are the SoT:
+
+| Repo file (SoT) | Live path under `~/monitoring/grafana/provisioning/` | Restart? |
+|---|---|---|
+| `deploy/monitoring/grafana/provisioning/datasources/prometheus.yml` | `datasources/prometheus.yml` | yes |
+| `deploy/monitoring/grafana/provisioning/dashboards/dashboards.yml` | `dashboards/dashboards.yml` | yes |
+| `deploy/monitoring/grafana/dashboards/alphalens-cron-health.json` | `dashboards/alphalens-cron-health.json` | no |
+
+The repo layout is not the live layout (the dashboard JSON keeps its historical
+repo home), so the mapping is an explicit whitelist in the script, never a
+directory walk. That matters: `node-exporter-dashboard.json` sits in the same
+live directory and belongs to another tenant, so a mirror-with-delete would
+erase a live dashboard.
+
+Why the unit exists: on 2026-08-24 the live datasource yml never declared
+`uid: prometheus` while every dashboard target references that uid, and the
+live dashboard copy was two months stale. Every panel read "No data" while
+Prometheus itself was healthy. Nothing converged repo and live, and nothing
+noticed.
+
+Each hourly fire (`:37` UTC — clear of the `:05` edge-mirror, the `:27` rules
+sync, the `:30` dailies and the EDGAR `:00/:15/:30/:45` grid):
+
+1. `git fetch origin main` in `~/AlphaLens`, then one
+   `git show origin/main:<path>` per managed file — the BLOB, never the
+   working tree;
+2. every managed file already matching its blob → outcome `in_sync`: no
+   backup, no writes, no restart, not even a verification poll;
+3. otherwise the WHOLE desired set is validated in-process BEFORE anything is
+   replaced — YAML/JSON parse, the required `uid: prometheus`, the provider
+   path, and the cross-file check that every datasource uid a dashboard
+   references is actually declared (that last one is the 2026-08-24 root cause,
+   caught at the gate instead of in the UI). A refusal leaves the live tree
+   byte-identical with zero backups and zero temp files, outcome
+   `check_failed`;
+4. per differing file: timestamped backup (`<filename>.bak-autosync-<UTC>`,
+   pruned to the newest 10 on that exact per-file prefix) → temp file in the
+   same directory → atomic replace. Backup and temp names never end in
+   `.json`/`.yml`/`.yaml`, because Grafana's file provider would import such a
+   file as a duplicate dashboard or a stale datasource;
+5. `docker restart grafana` **only if the datasource yml or the provider yml
+   changed**. A dashboard-JSON-only change never restarts — the provisioning
+   watcher (`updateIntervalSeconds: 10`) picks it up, so an outage per
+   dashboard edit would buy nothing;
+6. verification — `synced` requires OBSERVING Grafana serve the new content,
+   never just writing the file. After a restart, `GET /api/health` must report
+   `database: ok`, and the datasource uids the new yml declares must appear in
+   `grafana.db`. For each replaced dashboard, `dashboard_provisioning.check_sum`
+   must equal the md5 of the new file's bytes. Anything else is
+   `reload_failed`.
+
+**Why sqlite and not the admin API.** The compose file's
+`GF_SECURITY_ADMIN_PASSWORD` is a dead placeholder — Grafana persists its
+first-init credentials in the volume — so `/api/datasources` answers 401
+(see #1101, which this unit deliberately does not depend on); provisioning also
+logs nothing on the happy path, so log scraping would verify nothing either.
+
+**A hand-edit on the VPS does NOT survive.** Anything edited directly under
+`~/monitoring/grafana/provisioning/` is overwritten at the next fire (≤1h) by
+the `origin/main` blob, with the overwritten content kept as one
+`.bak-autosync-<UTC>` file. Change the repo and merge; that is the only durable
+path.
+
+**Monitoring.** Every run rewrites the `alphalens_grafana_sync_outcome` one-hot
+(all five labels `in_sync`/`synced`/`fetch_failed`/`check_failed`/
+`reload_failed`, zeros included) — that family is the only thing the script
+emits, and `alphalens_job_last_success_timestamp_seconds` comes from the
+standard `ExecStopPost` hook. Alerts:
+`AlphalensGrafanaProvisioningSyncFailed` (no success outcome across the 150m
+lookback — roughly three consecutive hourly runs), plus `AlphalensJobStale`@2h
+and `AlphalensJobMetricMissing`. A failing run exits 1; `journalctl --user -u
+alphalens-grafana-provisioning-sync.service` names the stage.
+
+### Deploy bootstrap (one-time)
+
+The script, the provisioning content and the alert rules all self-deploy (the
+first two on `git pull`, the rules through the hourly rules-sync timer). The
+UNIT FILES do not — the VPS runs COPIES under `~/.config/systemd/user/`, not
+symlinks into the checkout, so a later unit edit needs a re-`cp` +
+`daemon-reload`.
+
+```bash
+# On the VPS, after pulling a main that contains the unit files:
+cd ~/AlphaLens && git pull
+cp ~/AlphaLens/deploy/systemd/alphalens-grafana-provisioning-sync.{service,timer} \
+   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-grafana-provisioning-sync.timer
+
+# Start one run by hand — it performs the final manual sync itself.
+systemctl --user start alphalens-grafana-provisioning-sync.service
+journalctl --user -u alphalens-grafana-provisioning-sync.service -n 20
+# expect: exit 0, outcome in_sync or synced
+```
+
+`--dry-run` reports `in_sync` / `would sync: …` and writes nothing — not even a
+metric (a metric is a write too):
+
+```bash
+~/AlphaLens/.venv/bin/python \
+    ~/AlphaLens/apps/alphalens-research/scripts/sync_grafana_provisioning.py --dry-run
+```
+
+### Verify what Grafana actually ingested (sqlite, never the admin API)
+
+Read-only, no network, no extra image, no root. Select explicit non-secret
+columns — `data_source` also holds `password`, `basic_auth_password` and
+`secure_json_data`:
+
+```bash
+# On the VPS.
+docker cp grafana:/var/lib/grafana/grafana.db /tmp/grafana.db
+~/AlphaLens/.venv/bin/python - <<'PY'
+import sqlite3
+db = sqlite3.connect("file:/tmp/grafana.db?mode=ro", uri=True)
+print(db.execute("SELECT uid, name, type FROM data_source").fetchall())
+print(db.execute("SELECT external_id, check_sum FROM dashboard_provisioning").fetchall())
+PY
+rm -f /tmp/grafana.db
+
+# check_sum is the md5 of the source file's bytes, so this must match:
+md5sum ~/monitoring/grafana/provisioning/dashboards/alphalens-cron-health.json
+```
+
+### Emergency manual override (sync broken ONLY)
+
+The pre-#1110 hand-copy survives solely as the fallback while the timer itself
+is broken (e.g. `AlphalensGrafanaProvisioningSyncFailed` firing and a Grafana
+fix must land NOW). It is not the deploy path — the next healthy fire converges
+live to `origin/main` regardless of what was copied:
+
+```bash
+cp ~/AlphaLens/deploy/monitoring/grafana/provisioning/datasources/prometheus.yml \
+   ~/monitoring/grafana/provisioning/datasources/prometheus.yml
+cp ~/AlphaLens/deploy/monitoring/grafana/provisioning/dashboards/dashboards.yml \
+   ~/monitoring/grafana/provisioning/dashboards/dashboards.yml
+cp ~/AlphaLens/deploy/monitoring/grafana/dashboards/alphalens-cron-health.json \
+   ~/monitoring/grafana/provisioning/dashboards/alphalens-cron-health.json
+docker restart grafana                      # only the two ymls need this
+curl -s localhost:3000/api/health           # expect {"database": "ok", ...}
 ```
 
 ## Saxo auto-manager (SIM) — VPS deploy runbook
