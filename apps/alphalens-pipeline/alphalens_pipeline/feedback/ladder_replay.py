@@ -34,7 +34,10 @@ Three measurement layers (design memo §5.0), in priority order:
 Pure + deterministic: this module imports nothing from the store / Polygon /
 broker. It takes a parsed trade-setup dict + a list of OHLC bars and returns a
 :class:`LadderOutcome`. Brief enumeration, the Polygon fetch and the parquet
-write live in the caller (``population_ladder_monitor``).
+write live in the caller (``population_ladder_monitor``). The one import from
+``paper`` (``planned_blended_entry``, issue #1114) is a pure dict-to-float
+helper with no I/O — reused on purpose so the planned-anchor lens and the live
+rail cannot compute different blends.
 
 Operator/researcher overview: ``alphalens_pipeline/feedback/README.md``.
 """
@@ -755,7 +758,7 @@ def replay_ladder_atr_bracket(
     drift is not slight, it is the whole point of the lens — accepted
     for the ``replay_ladder`` reuse (SL-first ambiguity, filled-frac re-basing,
     NO_FILL->None inherited for free; memo §4.3). The bracket itself stays
-    frozen at the walk-1 blend: later tier fills never move the stop/TP.
+    frozen at the ``anchor`` blend: later tier fills never move the stop/TP.
 
     Returns ``None`` for an unparseable setup, no bars, a missing / non-finite /
     non-positive ATR, a non-positive risk (``stop_atr_mult <= 0``), a
