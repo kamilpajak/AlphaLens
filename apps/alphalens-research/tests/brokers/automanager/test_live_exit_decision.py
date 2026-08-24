@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import unittest
 
+from alphalens_pipeline.brokers.automanager.entry_trail_geometry import (
+    arms_inside_exit_region,
+    entry_fill_estimate,
+)
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     EXIT_EDGE_MIN_BPS,
     TrancheExit,
@@ -13,9 +17,11 @@ from broker_contract.sizing import TpTranchePlan
 
 from tests.incident_1112_fixture import (
     SMG_ACTUAL_FILL,
+    SMG_D_BPS,
     SMG_EXIT_DECISION_BID,
     SMG_GEOMETRY_TP,
     SMG_ROUND_TRIP_FEE_BPS,
+    SMG_TOUCH_BID,
     SMG_TP_TRANCHES,
 )
 
@@ -164,6 +170,49 @@ class TestExitCostGate(unittest.TestCase):
             price=16.5, tp_tranches=_LADDER, reference_qty=100, owned=100, already_fired=frozenset()
         )
         self.assertEqual(out, [TrancheExit(tag="tp1", qty=50, target_price=16.0)])
+
+
+class TestArmGateAndExitGateAgree(unittest.TestCase):
+    """The two #1112 gates must draw the SAME line. If the arm gate admits a
+    tier the exit gate would later refuse, the rail submits an entry and then
+    has no take-profit path for it until the disaster stop — a worse state than
+    the defect either gate was added to prevent.
+    """
+
+    def _fires(self, *, target, realised_entry):
+        return bool(
+            plan_tranche_exits(
+                price=target,
+                tp_tranches=(_geometry_tranche(target),),
+                reference_qty=1,
+                owned=1,
+                already_fired=frozenset(),
+                realised_entry=realised_entry,
+            )
+        )
+
+    def test_every_target_the_arm_gate_admits_is_one_the_exit_gate_would_fire(self):
+        estimate = entry_fill_estimate(
+            reference=SMG_TOUCH_BID, trough=SMG_TOUCH_BID, d_bps=SMG_D_BPS
+        )
+        assert estimate is not None
+        admitted = []
+        for target in (60.5, 61.0, 62.0, 62.5, 62.7, 62.8, 63.0, 65.25, 70.0):
+            with self.subTest(target=target):
+                arms = not arms_inside_exit_region(
+                    fill_estimate=estimate, exit_target=target, qty=1.0
+                )
+                fires = self._fires(target=target, realised_entry=estimate)
+                self.assertEqual(
+                    arms,
+                    fires,
+                    f"arm gate ({arms}) and exit gate ({fires}) disagree at target {target}",
+                )
+                if arms:
+                    admitted.append(target)
+        # The table has to contain BOTH verdicts, or the agreement above is
+        # vacuous (a gate that always refuses would pass it too).
+        self.assertEqual(admitted, [62.8, 63.0, 65.25, 70.0])
 
 
 if __name__ == "__main__":

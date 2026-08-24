@@ -19,7 +19,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from broker_contract.contract import Broker, OrderState
-from broker_contract.costs import round_trip_fee_bps
+from broker_contract.costs import (
+    COST_GATE_FX_APPLIES,
+    COST_GATE_MIN_COMMISSION_APPLIES,
+    min_profitable_exit_price,
+    round_trip_fee_bps,
+)
+from broker_contract.costs import EXIT_EDGE_MIN_BPS as _EXIT_EDGE_MIN_BPS
 from broker_contract.price_feed import PriceFeed, PricePoint
 from broker_contract.sizing import TpTranchePlan
 
@@ -32,31 +38,9 @@ _PRICE_EPS = 1e-9  # a long tranche fires when price >= target (within eps)
 _QTY_EPS = 0.5  # share-qty tolerance (mirrors broker_contract.contract._QTY_EPS)
 _BPS_PER_UNIT = 10_000.0
 
-EXIT_EDGE_MIN_BPS = 50.0
-"""The DECLARED minimum edge, in bps, an exit must clear ON TOP of round-trip
-cost before it may fire (issue #1112 step 2).
-
-This is a declared value, NOT one derived from the fee. *Optimal Transaction
-Filters Under Transitory Trading Opportunities* shows that a filter set exactly
-equal to round-trip cost is suboptimal: at the break-even point the expected
-net gain is zero while the variance is not, so the filter has to sit strictly
-wider than the fee. The literature gives no closed form for this strategy's
-opportunity process, so the width is a judgement call recorded here rather than
-a formula. 50 bps is the starting value; changing it is a strategy change and
-belongs in a pre-registered measurement, not in a bug fix.
-"""
-
-EXIT_COST_FX_APPLIES = True
-"""Whether the exit cost model charges the FX round-trip leg.
-
-DECLARED, because the exit engine does not know the account currency: a
-:class:`~alphalens_pipeline.brokers.automanager.live_exit_engine.ManagedExit`
-carries only uic / tranches / qty / stop, and the ``tranche_plan`` journal line
-it is folded from carries no ``fx_rate`` either. The live account is PLN and
-every first-cohort instrument is USD, so a conversion always applies today. It
-is not load-bearing for the case this gate exists to catch: commission alone on
-one share at about $60 is 334 bps, far above any plausible buffer.
-"""
+EXIT_EDGE_MIN_BPS = _EXIT_EDGE_MIN_BPS
+"""Re-exported from :mod:`broker_contract.costs` — the declared ``E_min``
+buffer, shared with the arm-time gate so the two cannot drift apart."""
 
 
 def tranche_tag(index: int) -> str:
@@ -89,6 +73,10 @@ def _exit_clears_cost(
     the declared :data:`EXIT_EDGE_MIN_BPS` buffer, measured from the REALISED
     entry (issue #1112 step 2).
 
+    The threshold is :func:`~broker_contract.costs.min_profitable_exit_price` —
+    the same one the arm-time gate compares a tier's exit target against, so a
+    tier can never be armed on a target this gate would refuse to fire.
+
     FAILS OPEN — an unknown realised entry (``None``, the SIM ``NoAccess``
     non-positive sentinel, or a NaN) returns ``True`` and logs. This is the
     OPPOSITE of ``position_manager._maybe_reanchor``'s fail-closed stance on the
@@ -104,15 +92,17 @@ def _exit_clears_cost(
             realised_entry,
         )
         return True
+    required_price = min_profitable_exit_price(entry_price=realised_entry, qty=qty)
+    if required_price is None or price >= required_price:
+        return True
+    # Refused. Restate the same threshold in bps, which is the shape an operator
+    # reads the journal in (the decision above is the price comparison).
     cost_bps = round_trip_fee_bps(
         qty * realised_entry,
-        fx_applies=EXIT_COST_FX_APPLIES,
-        min_commission_applies=True,
+        fx_applies=COST_GATE_FX_APPLIES,
+        min_commission_applies=COST_GATE_MIN_COMMISSION_APPLIES,
     )
     edge_bps = (price / realised_entry - 1.0) * _BPS_PER_UNIT
-    required_bps = cost_bps + EXIT_EDGE_MIN_BPS
-    if edge_bps >= required_bps:
-        return True
     logger.warning(
         "tranche %s refused (inside cost): realised entry %.4f, target %.4f, bid %.4f, "
         "edge %.1f bps < round-trip cost %.1f bps + E_min %.1f bps",

@@ -454,12 +454,13 @@ def _seed_watch(
     window_end: str | None = None,
     d_bps: int = 50,
     geometry: dict[str, Any] | None = None,
+    qty: float = 100.0,
 ) -> None:
     line: dict[str, Any] = {
         "kind": entry_trails.KIND_WATCH_OPEN,
         "crid": crid,
         "limit": limit,
-        "qty": 100.0,
+        "qty": qty,
         "d_bps": d_bps,
         "window_end": window_end or "2099-01-01T21:00:00+00:00",
         "fx_rate": None,
@@ -684,13 +685,63 @@ class TestEntryArmInsideExitRegion(unittest.TestCase):
         with mock.patch.dict("os.environ", _ALLOW, clear=True):
             cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
 
-    def _seed(self, path: Path, *, limit: float, geometry: dict[str, Any] | None) -> None:
+    def _seed(
+        self,
+        path: Path,
+        *,
+        limit: float,
+        geometry: dict[str, Any] | None,
+        qty: float = 100.0,
+    ) -> None:
         _seed_watch(
             path,
             crid="KO-2026-07-20-entry-t0",
             limit=limit,
             next_tier_limit=None,
             geometry=geometry,
+            qty=qty,
+        )
+
+    def _arm_count(self, *, limit: float, target: float, touch: float, qty: float) -> int:
+        """How many native trails one touch tick places for a tier with this
+        stamped exit target — the whole ``_run_entry_watch_pass`` path, not the
+        predicate."""
+        path = _journal(self)
+        _planned_journal(self)
+        self._seed(
+            path,
+            limit=limit,
+            geometry={**smg_geometry_stamp(), "geometry_tp": target},
+            qty=qty,
+        )
+        prices: dict[int, float | None] = {}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        self._run(deps, touch, prices)
+        return len(broker.trailing_orders)
+
+    def test_the_gate_uses_the_realistic_fill_estimate_not_the_nominal_tier_limit(self) -> None:
+        # The issue's "a build-time check on the nominal limit is not
+        # sufficient", pinned END TO END on the LIVE rail size (1 share).
+        #
+        #   tier limit 59.786017 -> minimum profitable exit 62.3839
+        #   fill estimate 60.1890 -> minimum profitable exit 62.7909
+        #
+        # A target of 62.60 sits BETWEEN them: a gate reading the nominal limit
+        # arms this tier, a gate reading the realistic fill refuses it. That
+        # band is exactly the defect class the 2026-08-24 fill (23 bps above its
+        # own limit) fell into.
+        self.assertEqual(
+            self._arm_count(limit=SMG_TIERS[0][0], target=62.60, touch=SMG_TOUCH_BID, qty=1.0),
+            0,
+            "a target the realistic fill cannot clear must refuse the arm",
+        )
+        # Just above the estimate-based threshold the same tier still arms, so
+        # the assertion above is a real discriminator, not a blanket refusal.
+        self.assertEqual(
+            self._arm_count(limit=SMG_TIERS[0][0], target=62.90, touch=SMG_TOUCH_BID, qty=1.0),
+            1,
+            "a target that clears cost plus the buffer must still arm",
         )
 
     def test_top_tier_inside_the_exit_region_places_no_order_and_terminates(self) -> None:

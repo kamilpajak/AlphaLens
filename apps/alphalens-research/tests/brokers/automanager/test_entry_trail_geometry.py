@@ -22,6 +22,9 @@ from alphalens_pipeline.brokers.automanager.entry_trail_geometry import (
     compute_trailing_order_geometry,
     entry_fill_estimate,
 )
+from alphalens_pipeline.paper.sizing import build_exit_geometry_spec, planned_blended_entry
+from broker_contract.costs import min_profitable_exit_price
+from broker_contract.exit_geometry import resolve_exit_policy
 
 from tests.incident_1112_fixture import (
     SMG_ACTUAL_FILL,
@@ -30,6 +33,7 @@ from tests.incident_1112_fixture import (
     SMG_GEOMETRY_TP,
     SMG_TIERS,
     SMG_TOUCH_BID,
+    smg_brief_trade_setup,
 )
 
 
@@ -89,14 +93,6 @@ class TestTrailingOrderGeometry(unittest.TestCase):
             self.assertTrue(math.isfinite(value) and value > 0.0)
 
 
-_K_ATR = 1.5  # atr_bracket_1p5 pinned take-profit multiple
-
-
-def _alloc_weighted_blend(subset: tuple[tuple[float, float], ...]) -> float:
-    wsum = sum(w for _p, w in subset)
-    return sum(p * w for p, w in subset) / wsum
-
-
 class TestEntryFillEstimate(unittest.TestCase):
     """Issue #1112 step 1: the validity test must use a REALISTIC fill estimate,
     never the nominal tier limit. The estimate is the broker-enforced StopLimit
@@ -139,7 +135,7 @@ class TestArmsInsideExitRegion(unittest.TestCase):
         )
         assert estimate is not None
         self.assertTrue(
-            arms_inside_exit_region(fill_estimate=estimate, exit_target=SMG_GEOMETRY_TP)
+            arms_inside_exit_region(fill_estimate=estimate, exit_target=SMG_GEOMETRY_TP, qty=1.0)
         )
 
     def test_a_nominal_limit_check_would_miss_this_tier(self) -> None:
@@ -152,7 +148,7 @@ class TestArmsInsideExitRegion(unittest.TestCase):
         assert estimate is not None
         self.assertGreater(estimate, SMG_GEOMETRY_TP)
         self.assertTrue(
-            arms_inside_exit_region(fill_estimate=estimate, exit_target=SMG_GEOMETRY_TP)
+            arms_inside_exit_region(fill_estimate=estimate, exit_target=SMG_GEOMETRY_TP, qty=1.0)
         )
 
     def test_healthy_live_tiers_are_not_inside_the_exit_region(self) -> None:
@@ -166,7 +162,7 @@ class TestArmsInsideExitRegion(unittest.TestCase):
                 estimate = entry_fill_estimate(reference=limit, trough=limit, d_bps=SMG_D_BPS)
                 assert estimate is not None
                 self.assertFalse(
-                    arms_inside_exit_region(fill_estimate=estimate, exit_target=target)
+                    arms_inside_exit_region(fill_estimate=estimate, exit_target=target, qty=1.0)
                 )
 
     def test_degenerate_inputs_fail_open(self) -> None:
@@ -182,45 +178,139 @@ class TestArmsInsideExitRegion(unittest.TestCase):
         ):
             with self.subTest(estimate=estimate, target=target):
                 self.assertFalse(
-                    arms_inside_exit_region(fill_estimate=estimate, exit_target=target)
+                    arms_inside_exit_region(fill_estimate=estimate, exit_target=target, qty=1.0)
+                )
+
+
+class TestArmGateChargesRoundTripCostPlusBuffer(unittest.TestCase):
+    """The issue's Goal is not ``target > fill``, it is
+    ``T(s) > max_filled_price(s) + exit_cost + E_min``. A tier whose own target
+    cannot pay the round trip must be refused at ARM time, not admitted and then
+    refused again by the step-2 exit gate — that combination submits an entry
+    and then strands it with no take-profit path until the disaster stop.
+    """
+
+    def _estimate(self, price: float) -> float:
+        estimate = entry_fill_estimate(reference=price, trough=price, d_bps=SMG_D_BPS)
+        assert estimate is not None
+        return estimate
+
+    def test_a_target_the_round_trip_cannot_pay_is_inside_the_exit_region(self) -> None:
+        estimate = self._estimate(SMG_TOUCH_BID)
+        target = 61.00
+        # A bare "target above the fill" check admits this tier: 61.00 sits
+        # 134.7 bps above the estimate. One share at about $60 pays roughly
+        # 382 bps round trip, so the trade is a loss the moment it opens.
+        self.assertGreater(target, estimate)
+        self.assertTrue(
+            arms_inside_exit_region(fill_estimate=estimate, exit_target=target, qty=1.0)
+        )
+
+    def test_a_target_that_clears_cost_plus_buffer_arms(self) -> None:
+        estimate = self._estimate(SMG_TOUCH_BID)
+        required = min_profitable_exit_price(entry_price=estimate, qty=1.0)
+        assert required is not None
+        self.assertAlmostEqual(required, 62.790877, places=5)
+        self.assertFalse(
+            arms_inside_exit_region(fill_estimate=estimate, exit_target=required + 0.01, qty=1.0)
+        )
+        self.assertTrue(
+            arms_inside_exit_region(fill_estimate=estimate, exit_target=required - 0.01, qty=1.0)
+        )
+
+    def test_healthy_live_tiers_still_clear_cost_on_the_one_share_rail(self) -> None:
+        # Regression on the LIVE rail size (1 share), the size the cost model is
+        # harshest at: the $1 per-fill minimum dominates a $60 notional.
+        for label, limit, target in (
+            ("SMG E2", SMG_TIERS[1][0], SMG_GEOMETRY_TP),
+            ("SMG E3", SMG_TIERS[2][0], SMG_GEOMETRY_TP),
+            ("ETSY E3", 67.62, 77.33634),
+        ):
+            with self.subTest(tier=label):
+                self.assertFalse(
+                    arms_inside_exit_region(
+                        fill_estimate=self._estimate(limit), exit_target=target, qty=1.0
+                    )
+                )
+
+    def test_degenerate_qty_fails_open(self) -> None:
+        estimate = self._estimate(SMG_TOUCH_BID)
+        for qty in (0.0, -1.0, float("nan"), None):
+            with self.subTest(qty=qty):
+                self.assertFalse(
+                    arms_inside_exit_region(
+                        fill_estimate=estimate, exit_target=SMG_GEOMETRY_TP, qty=qty
+                    )
                 )
 
 
 class TestValidityAcrossEveryPartialFillSubset(unittest.TestCase):
     """The issue's core requirement: validity must hold in EVERY partial-fill
-    state of the ladder, not only the full-fill state. Table-driven over all
-    seven non-empty subsets of the SMG three-tier ladder — for each subset the
-    bracket is anchored on that subset's alloc-weighted blend and the SHALLOWEST
-    (highest-limit) tier in the subset is the one that can fill inside it."""
+    state of the ladder, not only the full-fill state.
+
+    Table-driven over all seven non-empty subsets of the SMG three-tier ladder.
+    Each subset's target comes from the REAL
+    :func:`alphalens_pipeline.paper.sizing.build_exit_geometry_spec` over a brief
+    whose ``entry_tiers`` are that subset — the same builder the router stamps
+    ``geometry_tp`` from — so the table follows any change to how production
+    picks a target instead of re-deriving one of its own.
+    """
 
     def _subsets(self):
         for size in range(1, len(SMG_TIERS) + 1):
             yield from itertools.combinations(range(len(SMG_TIERS)), size)
 
-    def test_exactly_the_two_e1_bearing_deep_subsets_are_invalid(self) -> None:
+    def _setup_for(self, indices: tuple[int, ...]) -> dict:
+        setup = smg_brief_trade_setup()
+        setup["entry_tiers"] = [setup["entry_tiers"][i] for i in indices]
+        return setup
+
+    def _shallowest_estimate(self, indices: tuple[int, ...]) -> float:
+        # The highest-limit tier in the subset is the one that can fill inside
+        # the bracket; a deeper tier only ever fills further below it.
+        shallowest = max(SMG_TIERS[i][0] for i in indices)
+        estimate = entry_fill_estimate(reference=shallowest, trough=shallowest, d_bps=SMG_D_BPS)
+        assert estimate is not None
+        return estimate
+
+    def test_every_partial_fill_subset_is_valid_as_production_builds_it(self) -> None:
         invalid = []
         for indices in self._subsets():
-            subset = tuple(SMG_TIERS[i] for i in indices)
-            blend = _alloc_weighted_blend(subset)
-            target = blend + _K_ATR * SMG_ATR
-            shallowest = max(p for p, _w in subset)
-            estimate = entry_fill_estimate(reference=shallowest, trough=shallowest, d_bps=SMG_D_BPS)
-            assert estimate is not None
-            if arms_inside_exit_region(fill_estimate=estimate, exit_target=target):
+            spec = build_exit_geometry_spec(self._setup_for(indices))
+            assert spec is not None
+            if arms_inside_exit_region(
+                fill_estimate=self._shallowest_estimate(indices),
+                exit_target=spec.initial_levels.tp,
+                qty=1.0,
+            ):
                 invalid.append(indices)
-        # {E1,E3} (blend 55.5207, target 59.5527) and {E1,E2,E3} (blend 55.5957,
-        # target 59.6277) both put the target below the top tier at 59.786017.
-        self.assertEqual(invalid, [(0, 2), (0, 1, 2)])
+        self.assertEqual(invalid, [], "no partial-fill state may open inside its own exit region")
 
-    def test_e1_alone_is_valid(self) -> None:
-        # A lone top-tier fill anchors the bracket on its own limit, so the
-        # target (59.786017 + 1.5*2.688 = 63.818) is comfortably above any fill.
-        limit = SMG_TIERS[0][0]
-        estimate = entry_fill_estimate(reference=limit, trough=limit, d_bps=SMG_D_BPS)
-        assert estimate is not None
-        self.assertFalse(
-            arms_inside_exit_region(fill_estimate=estimate, exit_target=limit + _K_ATR * SMG_ATR)
-        )
+    def test_without_the_brief_floor_four_of_the_seven_subsets_are_invalid(self) -> None:
+        # The discriminator for the test above: run the SAME table against the
+        # policy's RAW levels (no step-3 clamp) and the ladder fails in four
+        # states, so an all-valid result is a property of the fix and not of a
+        # gate that never fires.
+        #
+        # Note {E2,E3} is among them (raw target 58.5091 against a fill estimate
+        # of 56.1449, which needs 58.7060): on the one-share LIVE rail the plain
+        # 1.5*ATR bracket barely pays its own round trip, quite apart from the
+        # top-tier defect this issue is about.
+        policy = resolve_exit_policy("atr_bracket_1p5")
+        invalid = []
+        for indices in self._subsets():
+            setup = self._setup_for(indices)
+            blend = planned_blended_entry(setup)
+            assert blend is not None
+            levels = policy.decide_placement_geometry(blend, SMG_ATR, ceiling_price=None)
+            assert levels is not None
+            if arms_inside_exit_region(
+                fill_estimate=self._shallowest_estimate(indices),
+                exit_target=levels[1],
+                qty=1.0,
+            ):
+                invalid.append(indices)
+        self.assertEqual(invalid, [(0, 1), (0, 2), (1, 2), (0, 1, 2)])
 
 
 if __name__ == "__main__":

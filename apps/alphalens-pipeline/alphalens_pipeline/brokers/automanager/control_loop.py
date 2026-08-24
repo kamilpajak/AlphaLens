@@ -41,6 +41,7 @@ from broker_contract.contract import (
 )
 from broker_contract.costs import (
     COMMISSION_RATE,
+    EXIT_EDGE_MIN_BPS,
     FX_ROUND_TRIP_RATE,
     MIN_COMMISSION_USD,
     round_trip_fee_bps,
@@ -2402,20 +2403,26 @@ def _refuse_arm_inside_exit_region(
     record: Mapping[str, Any],
     runtime: _EntryWatchRuntime,
     d_bps: int,
-    geo: entry_trail_geometry.TrailingOrderGeometry,
+    reference: float,
+    trough: float,
+    qty: float,
     report: TickReport,
 ) -> bool:
-    """``True`` iff this tier was terminal-refused because its realistic fill
-    would land AT OR ABOVE its own exit target (issue #1112 step 1).
+    """``True`` iff this tier was terminal-refused because its own exit target
+    cannot pay for the position its realistic fill would open (issue #1112
+    step 1: ``exit_target > fill_estimate + round_trip_cost + E_min``).
 
     LIVE 2026-08-24 (SMG): the top tier's limit 59.786017 sat above the exit
     target 59.6277 the policy derived from the alloc-weighted PLANNED blend of
     the whole ladder, so the fill at 59.9261 was already past its take-profit
     and the exit engine sold it 62 seconds later for about -380 bps net.
 
-    The fill estimate is the armed order's own broker-enforced ceiling, NOT the
-    tier limit: the live fill printed 23 bps ABOVE its limit, so a check on the
-    nominal limit would have seen nothing wrong.
+    The fill estimate comes from :func:`entry_trail_geometry.entry_fill_estimate`
+    — the armed order's own broker-enforced ceiling — NOT from the tier limit:
+    the live fill printed 23 bps ABOVE its limit, so a check on the nominal
+    limit would have seen nothing wrong. Pinned end to end by
+    ``test_entry_watch_wiring.py::
+    test_the_gate_uses_the_realistic_fill_estimate_not_the_nominal_tier_limit``.
 
     Terminal (``KIND_CANCELLED`` + ``watcher.cancel()``), mirroring the G7
     insufficient-funds refuse in :func:`_handle_arm_failure` — the condition is
@@ -2423,13 +2430,18 @@ def _refuse_arm_inside_exit_region(
     would only spam. Fails OPEN: no usable stamp means arm as before.
     """
     target = _stamped_exit_target(record)
+    estimate = entry_trail_geometry.entry_fill_estimate(
+        reference=reference, trough=trough, d_bps=d_bps
+    )
     if not entry_trail_geometry.arms_inside_exit_region(
-        fill_estimate=geo.ceiling_price, exit_target=target
+        fill_estimate=estimate, exit_target=target, qty=qty
     ):
         return False
+    assert estimate is not None and target is not None  # the gate returns False on either
     note = (
-        f"tier would fill inside the exit region: fill estimate {geo.ceiling_price:.4f} "
-        f">= exit target {target:.4f}"
+        f"tier would fill inside the exit region: fill estimate {estimate:.4f}, "
+        f"exit target {target:.4f} does not clear round-trip cost + E_min "
+        f"{EXIT_EDGE_MIN_BPS:.0f} bps"
     )
     entry_trails.append_entry_trail_line(
         {
@@ -2506,7 +2518,9 @@ def _arm_native_trail(
     # the watch while a real buy order still rests at the broker, and
     # KIND_CANCELLED is outside _RESTING_BEARING_TERMINALS so nothing would
     # cancel-then-verify it. Only a FRESH arm is refused.
-    if _refuse_arm_inside_exit_region(deps, crid, record, runtime, d_bps, geo, report):
+    if _refuse_arm_inside_exit_region(
+        deps, crid, record, runtime, d_bps, reference, trough, qty, report
+    ):
         return
 
     try:

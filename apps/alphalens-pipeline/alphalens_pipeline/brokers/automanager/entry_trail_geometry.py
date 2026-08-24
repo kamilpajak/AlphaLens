@@ -34,6 +34,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+from broker_contract.costs import min_profitable_exit_price
+
 _BPS_DENOMINATOR = 10_000
 """``d = d_bps / 10_000`` (50 bps -> 0.005) — mirrors ``entry_trail_watcher``."""
 
@@ -104,19 +106,37 @@ def entry_fill_estimate(*, reference: float, trough: float, d_bps: int) -> float
     return None if geo is None else geo.ceiling_price
 
 
-def arms_inside_exit_region(*, fill_estimate: float | None, exit_target: float | None) -> bool:
-    """Whether arming this tier could fill AT OR ABOVE its own exit target — i.e.
-    the position would already be past its take-profit the moment it opens
-    (issue #1112: the LIVE SMG round trip of 2026-08-24, 62 seconds, -380 bps).
+def arms_inside_exit_region(
+    *, fill_estimate: float | None, exit_target: float | None, qty: float | None
+) -> bool:
+    """Whether arming this tier would open a position its own exit target cannot
+    pay for (issue #1112: the LIVE SMG round trip of 2026-08-24, 62 seconds,
+    -380 bps).
+
+    The condition is the issue's Goal, not a bare price comparison:
+
+        refuse unless   exit_target > fill_estimate + round_trip_cost + E_min
+
+    so a target that sits above the fill but inside the round trip is refused
+    too. Both #1112 gates measure that threshold with the SAME
+    :func:`~broker_contract.costs.min_profitable_exit_price`, so a tier can
+    never be armed on a target the exit gate would later refuse to fire.
+
+    ``qty`` is the tier's share count — the cost model's per-fill USD minimum
+    makes the required move depend on it (one share at about $60 pays roughly
+    382 bps round trip).
 
     FAILS OPEN by design: a missing, non-finite or non-positive input returns
     ``False`` (arm as before). A gate that silently refuses every arm on
     degenerate data would stop the whole entry rail, which is worse than the
     defect it prevents; the caller logs whichever way it goes.
     """
-    if fill_estimate is None or exit_target is None:
+    if fill_estimate is None or exit_target is None or qty is None:
         return False
-    for value in (fill_estimate, exit_target):
+    for value in (fill_estimate, exit_target, qty):
         if not math.isfinite(value) or value <= 0.0:
             return False
-    return fill_estimate >= exit_target
+    required = min_profitable_exit_price(entry_price=fill_estimate, qty=qty)
+    if required is None:
+        return False
+    return exit_target < required
