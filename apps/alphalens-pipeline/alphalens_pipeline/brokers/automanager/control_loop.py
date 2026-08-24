@@ -2440,7 +2440,8 @@ def _inside_exit_region_note(
         fill_estimate=estimate, exit_target=target, qty=qty
     ):
         return None
-    assert estimate is not None and target is not None  # the gate returns False on either
+    if estimate is None or target is None:
+        return None  # unreachable: the gate above returns False on either being None
     return (
         f"tier would fill inside the exit region: fill estimate {estimate:.4f}, "
         f"exit target {target:.4f} does not clear round-trip cost + E_min "
