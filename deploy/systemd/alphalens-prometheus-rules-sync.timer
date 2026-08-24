@@ -1,0 +1,22 @@
+# Trigger the Prometheus live-rules sync hourly at :27 UTC. The minute is
+# chosen for a quiet slot: :05 is the hourly edge-mirror, :30 is every daily
+# job plus the six thematic-build slots, and the EDGAR detector walks the
+# :00/:15/:30/:45 grid. :27 contends with nothing, and hourly is the cadence
+# the convergence contract promises ("a merged rule change is live within
+# ~1h").
+#
+# Persistent=true so a missed fire runs on next boot. Catching up is safe and
+# idempotent: the job is a pure convergence loop (identical content is a full
+# short-circuit — no backup, no reload), so a gap costs latency, never
+# correctness.
+[Unit]
+Description=Trigger AlphaLens Prometheus live-rules sync
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-* *:27:00 UTC
+Persistent=true
+Unit=alphalens-prometheus-rules-sync.service
+
+[Install]
+WantedBy=timers.target

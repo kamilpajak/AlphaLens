@@ -48,7 +48,7 @@ tests:
               job: broker-manager-sim
             exp_annotations:
               summary: "SIM order-stream breaker episode open > 20m (re-arm ladder not converging)"
-              description: "The Saxo SIM order/position stream has stayed dark across at least four re-arm trials plus a delivery dwell — likely a sustained Saxo outage. Protection is unaffected (the ~45s poll backstop covers every tick); the cost is wake latency. Check `journalctl --user -u alphalens-broker-manager.service` for the trial failures and run `alphalens broker stream-status` for the gauge snapshot. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+              description: "The Saxo SIM order/position stream has stayed dark across at least four re-arm trials plus a delivery dwell — likely a sustained Saxo outage. Protection is unaffected (the ~45s poll backstop covers every tick); the cost is wake latency. Check `journalctl --user -u alphalens-broker-manager.service` for the trial failures and run `alphalens broker stream-status` for the gauge snapshot. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
   # A blip: the episode closes after 10m (a delivery-confirmed recovery
   # within the first ladder rungs) — for: 20m never elapses, no page.
@@ -109,7 +109,7 @@ tests:
               job: broker-manager-sim
             exp_annotations:
               summary: "SIM order-stream silent > 5m while the reader claims up"
-              description: "The stream reader reports up but no frame has arrived for over 5 minutes — the dark-but-connected case (recv timeout + resubscribe should self-heal; sustained staleness means they are not). Early wake degrades to the ~45s poll; protection is unaffected. Check `journalctl --user -u alphalens-broker-manager.service`. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+              description: "The stream reader reports up but no frame has arrived for over 5 minutes — the dark-but-connected case (recv timeout + resubscribe should self-heal; sustained staleness means they are not). Early wake degrades to the ~45s poll; protection is unaffected. Check `journalctl --user -u alphalens-broker-manager.service`. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
   # Same staleness signature while a breaker episode is open: suppressed by
   # the `unless` — the episode is already reported by its own pages and the
@@ -155,4 +155,4 @@ tests:
               job: broker-manager-sim
             exp_annotations:
               summary: "SIM order-stream breaker flapping (>3 trips/hour)"
-              description: "More than 3 breaker trips inside an hour — the stream connects and dies repeatedly, so the re-arm ladder is cycling instead of converging (a gateway that accepts sockets and then drops them, or a Saxo-side incident). Check `journalctl --user -u alphalens-broker-manager.service` for the trip reasons. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+              description: "More than 3 breaker trips inside an hour — the stream connects and dies repeatedly, so the re-arm ladder is cycling instead of converging (a gateway that accepts sockets and then drops them, or a Saxo-side incident). Check `journalctl --user -u alphalens-broker-manager.service` for the trip reasons. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."

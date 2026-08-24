@@ -79,6 +79,15 @@ ACTIVE_JOBS = (
     # parked indefinitely, with nothing anywhere saying so. The staleness pair
     # is the only thing that can tell the two apart.
     "issue-wake",
+    # Hourly live-rules sync (issue #1073). The job that keeps THIS rules file
+    # deployed: it converges the live VPS Prometheus copy to the origin/main
+    # blob. A dead sync timer re-opens the drift class that bit three times
+    # (missing rules 2026-05-31, absent new alerts 2026-08-19, a metric rename
+    # 2026-08-20) — and the failure is maximally silent because the thing that
+    # would report it is the thing that stopped being deployed. The staleness
+    # pair below still fires from the LIVE rules already loaded, which keep
+    # working until the next change.
+    "prometheus-rules-sync",
 )
 
 
@@ -191,6 +200,11 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             # the job exits 0 even on a transient-403 night, so last_success
             # refreshes nightly — staleness catches "the job stopped running".
             "form4-incremental": 172800,
+            # 2h = 2× the hourly cadence (the edgar-detect 2× precedent).
+            # Tight on purpose: the job is a cheap read-mostly convergence
+            # loop, so a 2h silence already means the timer died — and every
+            # hour it stays dead is an hour a merged rule change is not live.
+            "prometheus-rules-sync": 7200,
         }
         rules = _load_rules()["groups"][0]["rules"]
         found: dict[str, int] = {}
@@ -339,6 +353,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "alphalens_vix_",
             "alphalens_form4_",
             "alphalens_feedback_",
+            "alphalens_rules_sync_",
         )
         for rule in rules:
             expr = rule.get("expr", "")
@@ -1317,12 +1332,14 @@ class TestFeedbackGuardSustainedLookupFailures(unittest.TestCase):
         self.assertNotIn("job", rule.get("labels", {}))
         self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
 
-    def test_annotation_notes_manual_live_rules_deploy(self) -> None:
-        # The repo rules file is the SoT but the live VPS Prometheus loads a
-        # separately, manually deployed copy — the operator reading the page
-        # must know a merged rule change is not live until copied + HUP'd.
+    def test_annotation_notes_auto_sync_and_emergency_override(self) -> None:
+        # The repo rules file is the SoT; the alphalens-prometheus-rules-sync
+        # timer converges the live VPS copy hourly, so the operator reading
+        # the page must know a merged change deploys itself — and that the
+        # old copy+HUP procedure survives only as an emergency override.
         description = self._one().get("annotations", {}).get("description", "")
-        self.assertIn("manually", description)
+        self.assertIn("alphalens-prometheus-rules-sync", description)
+        self.assertIn("emergency", description)
 
     def test_feedback_prefix_is_registered_as_gauge_family(self) -> None:
         # Belt-pin: the no-counter-functions test must cover the new
@@ -1367,9 +1384,77 @@ class TestFeedbackGuardGaugeMissing(unittest.TestCase):
         self.assertNotIn("job", rule.get("labels", {}))
         self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
 
-    def test_annotation_notes_manual_live_rules_deploy(self) -> None:
+    def test_annotation_notes_auto_sync_and_emergency_override(self) -> None:
         description = self._one().get("annotations", {}).get("description", "")
-        self.assertIn("manually", description)
+        self.assertIn("alphalens-prometheus-rules-sync", description)
+        self.assertIn("emergency", description)
+
+
+class TestPrometheusRulesSyncFailed(unittest.TestCase):
+    """Pins for the sustained live-rules sync failure alert (issue #1073).
+
+    The sync job emits a zero-initialised one-hot outcome family every run
+    (``in_sync``/``synced``/``fetch_failed``/``check_failed``/``reload_failed``).
+    A run is healthy exactly when one of the two success labels is 1, so
+    "failure sustained across 2+ hourly runs" is "no success label reached 1
+    anywhere in a window covering two runs" — which also catches two runs
+    failing with DIFFERENT outcomes (fetch then check), where a per-label
+    ``min_over_time > 0`` would stay quiet. DISTINCT alertname + NO ``job=``
+    label keep it out of the cron-keyed enumerations (the feedback-guard
+    precedent), so it needs its OWN pins here.
+    """
+
+    ALERT = "AlphalensPrometheusRulesSyncFailed"
+    SUCCESS_SELECTOR = 'alphalens_rules_sync_outcome{outcome=~"in_sync|synced"}'
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_alert_exists(self) -> None:
+        self._one()
+
+    def test_expr_is_no_success_across_two_hourly_runs(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn(f"max_over_time({self.SUCCESS_SELECTOR}", expr)
+        self.assertIn("[150m]", expr)  # 2 hourly fires + scrape/jitter slack
+        self.assertIn("== 0", expr)
+        # An absent family must stay quiet here (sum() over an empty vector is
+        # empty, not 0) — absence is the MetricMissing family's page.
+        self.assertNotIn("absent(", expr)
+        # Textfile metrics are per-run GAUGES — no monotonic-counter functions.
+        for func in ("increase(", "rate(", "irate("):
+            self.assertNotIn(func, expr)
+
+    def test_has_for_debounce_and_routes_warning_telegram(self) -> None:
+        rule = self._one()
+        self.assertIn("for", rule)
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertEqual(rule.get("labels", {}).get("unit"), "prometheus-rules-sync")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+    def test_annotation_names_journal_and_emergency_override(self) -> None:
+        # The actionable half: the journal names WHICH stage failed, and the
+        # operator must know the manual copy+HUP path still exists while the
+        # sync is broken.
+        description = self._one().get("annotations", {}).get("description", "")
+        self.assertIn("journalctl --user -u alphalens-prometheus-rules-sync.service", description)
+        self.assertIn("emergency", description)
+
+    def test_rules_sync_prefix_is_registered_as_gauge_family(self) -> None:
+        # Belt-pin: the no-counter-functions test must cover the new
+        # alphalens_rules_sync_* family so a future rule cannot apply
+        # increase()/rate() to the per-run gauges.
+        source = Path(__file__).read_text()
+        self.assertIn('"alphalens_rules_sync_",', source)
 
 
 class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):
@@ -1483,13 +1568,15 @@ class TestBrokerStreamRules(unittest.TestCase):
         )
         self.assertNotIn('breaker_open{job="broker-manager-sim"} == 0', expr)
 
-    def test_annotations_note_manual_live_rules_deploy(self) -> None:
-        # The repo rules file is the SoT but the live VPS Prometheus loads a
-        # separately, manually deployed copy — the operator reading the page
-        # must know a merged rule change is not live until copied + HUP'd.
+    def test_annotations_note_auto_sync_and_emergency_override(self) -> None:
+        # The repo rules file is the SoT; the alphalens-prometheus-rules-sync
+        # timer converges the live VPS copy hourly, so the operator reading
+        # the page must know a merged change deploys itself — and that the
+        # old copy+HUP procedure survives only as an emergency override.
         for name in self.ALERTS:
             description = self._one(name).get("annotations", {}).get("description", "")
-            self.assertIn("manually", description, name)
+            self.assertIn("alphalens-prometheus-rules-sync", description, name)
+            self.assertIn("emergency", description, name)
 
 
 if __name__ == "__main__":

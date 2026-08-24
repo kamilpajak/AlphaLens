@@ -21,6 +21,7 @@ hosts where launchd is unavailable.
 | `alphalens-saxo-marketdata-refresh.{service,timer}` | ~every 20 min | Keep-alive for the LIVE `saxo_auth_live` OAuth chain (app `bracket-keeper`) — feeds the LIVE price stream AND, since ADR 0017, the LIVE order rail's tokens. See "Saxo LIVE market data" §3. |
 | `alphalens-edge-mirror.{service,timer}` | hourly at `:05` UTC | Self-heal for the `/edge` dashboard — rebuilds the ladder-outcome Postgres cache from the population-ladder parquets, independent of the nightly `feedback-shadow-returns` compute (so `/edge` never lags a failed/late compute run). See "Edge mirror (decoupled)" below. |
 | `alphalens-bracket-cost.{service,timer}` | daily 03:30 UTC | Keeps the market-cap bracket-cost measurement (PR #1087) advancing: `--prepare` (new funnel days only — days already written are FROZEN, because the split-adjusted grouped store retro-adjusts history and re-deriving a setup would move the levels of a ladder already under replay), then `--replay`, then `--benchmark`. **Daily AND multi-pass, both forced rather than chosen**: brand-new rows draw from a hardcoded 50-per-run budget (`_FORCED_RESOLVE_BUDGET`, NOT tunable by `ALPHALENS_FEEDBACK_MAX_FETCHES`), and the measured arrival rate is 51.5 proposals/day since the 2026-08-18 prompt change (17.2/day before it), peaking at 68 — i.e. ABOVE the per-run budget. `--replay` therefore makes up to 4 passes and stops early once a pass fetches nothing. A single pass would fall behind daily and accumulate a backlog that never drains, silently, because the job still exits 0. All three stages run even if an earlier one fails (the unit still reports failure), so a bad `--prepare` never stops `--replay` from advancing existing rows. Writes only to `~/.alphalens/bracket_cost{,_ladders}/` — both write paths refuse the production ladder store by name. Needs `POLYGON_API_KEY`. Monitoring: `AlphalensJobStale`@48h + `MetricMissing`. Contract + reads: `docs/research/mcap_bracket_cost_*.md`. |
+| `alphalens-prometheus-rules-sync.{service,timer}` | hourly at `:27` UTC | Converges the live Prometheus rules file (`~/monitoring/prometheus/alphalens.rules`) to the `origin/main` blob of `deploy/monitoring/prometheus/rules/alphalens.yaml` — **merging to main IS the alert-rules deploy** (live within ~1h). Reads the fetched blob via `git show` (never the working tree), short-circuits on identical content, and otherwise: timestamped autosync backup (pruned to 10, never touches foreign `.bak` files or the shared container's other tenants) → in-container `promtool check` BEFORE the atomic replace → HUP → fingerprint verification against `api/v1/rules`. Emits the `alphalens_rules_sync_outcome` one-hot; two consecutive failed fires page via `AlphalensPrometheusRulesSyncFailed`, plus the standard `AlphalensJobStale`@2h + `MetricMissing` pair. Manual copy+HUP survives only as an emergency override — see the "Prometheus live-rules sync" section below. Script: `apps/alphalens-research/scripts/sync_prometheus_rules.py` (`--dry-run` reports in_sync/would-sync and writes nothing). |
 | `alphalens-issue-wake.{service,timer}` | daily 05:30 UTC | Wakes GitHub issues parked on external data. Finds open `waiting:data` issues whose body carries a `Wake: YYYY-MM-DD` line dated today or earlier, removes the label from each, and sends ONE Telegram message listing them. **Nothing due sends nothing** — which is exactly why it carries the staleness pair: a dead timer and a quiet day produce identical Telegram traffic, so `AlphalensJobStale`@48h + `MetricMissing` are the only things that can tell them apart, and the failure is cumulative (every issue whose date passes during an outage stays parked). A `Wake:` line the parser cannot read is REPORTED in the same message and the label is left alone — a bad date is never guessed at. A `Wake:` line inside a fenced code block is ignored (issue templates paste the format as a sample). Sends BEFORE unlabelling, so a failed send leaves the labels on and the next run repeats the set. Needs `GH_TOKEN` (via `gh`) + `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID`. Script: `apps/alphalens-research/scripts/wake_due_issues.py` (`--dry-run` prints the message it would send and mutates nothing). |
 
 > **Decommissioned 2026-06-03 (ADR 0012):** the Alpaca paper-trading units
@@ -948,6 +949,81 @@ docker compose -f deploy/docker/django-prod/docker-compose.yaml exec postgres \
 **Done.** The edge mirror is now running decoupled, resilient to compute
 timeouts, and monitored for staleness via the Prometheus alert.
 
+## Prometheus live-rules sync — alphalens-prometheus-rules-sync.service + .timer
+
+The repo file `deploy/monitoring/prometheus/rules/alphalens.yaml` is the SoT
+(CI runs `promtool check` + `promtool test` on every PR); the live copy at
+`~/monitoring/prometheus/alphalens.rules` is bind-mounted into the SHARED
+`prometheus` container (which also serves gunbot + node alerts). Before this
+unit the live copy was hand-synced after every merge, and the drift bit three
+times: missing rules (2026-05-31), new alerts silently absent (2026-08-19),
+and a metric RENAME (2026-08-20) where every alert NAME matched while the
+live expressions summed absent series — invisible to a name-level diff.
+
+**With this timer, merging to main IS the deploy: live converges within ~1h,
+and a broken sync pages.** Each hourly fire (`:27` UTC — clear of the `:05`
+edge-mirror, the `:30` dailies, and the EDGAR `:00/:15/:30/:45` grid):
+
+1. `git fetch origin main` in `~/AlphaLens` (read-only for the checkout),
+   then reads the rules content via
+   `git show origin/main:deploy/monitoring/prometheus/rules/alphalens.yaml` —
+   the BLOB, never the working tree (a stale checkout nearly shipped stale
+   rules on 2026-08-23);
+2. identical content → outcome `in_sync`: no backup, no writes, no reload;
+3. otherwise: timestamped backup (`alphalens.rules.bak-autosync-<UTC>`,
+   pruned to the newest 10 — pruning is anchored on that exact prefix so the
+   operator's manual backups and the container's other tenants
+   (`prometheus.yml`, `alert.rules`) are never touched) → temp file in the
+   live dir → `docker exec prometheus promtool check rules` on the temp file
+   BEFORE the replace (a refusal leaves live byte-identical, outcome
+   `check_failed`) → atomic replace → `docker exec prometheus kill -HUP 1` →
+   fingerprint verification: every alert name parsed from the new YAML must
+   appear in `localhost:9090/api/v1/rules` (a bare "reload ok" is not
+   trusted — the 2026-05-31 incident was a HUP that looked like success) →
+   outcome `synced`.
+
+**Monitoring.** Every run rewrites the `alphalens_rules_sync_outcome` one-hot
+(all five labels `in_sync`/`synced`/`fetch_failed`/`check_failed`/
+`reload_failed`, zeros included) and stamps
+`alphalens_rules_sync_last_success_timestamp_seconds` only on success, plus
+the standard `ExecStopPost` job metrics. Alerts:
+`AlphalensPrometheusRulesSyncFailed` (no success outcome across two hourly
+fires — live alerts are diverging from main), `AlphalensJobStale`@2h and
+`AlphalensJobMetricMissing`. A failing run exits 1; `journalctl --user -u
+alphalens-prometheus-rules-sync.service` names the stage.
+
+### Deploy bootstrap (one-time)
+
+```bash
+# On the VPS, after pulling a main that contains the unit files:
+cp ~/AlphaLens/deploy/systemd/alphalens-prometheus-rules-sync.{service,timer} \
+   ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alphalens-prometheus-rules-sync.timer
+
+# Start one run by hand — the first run performs the final manual sync
+# itself (it converges live to origin/main, whatever state hand-syncing
+# left it in):
+systemctl --user start alphalens-prometheus-rules-sync.service
+journalctl --user -u alphalens-prometheus-rules-sync.service -n 20
+# expect: exit 0, outcome in_sync or synced
+```
+
+### Emergency manual override (sync broken ONLY)
+
+The pre-#1073 hand-sync procedure survives solely as the fallback while the
+timer itself is broken (e.g. `AlphalensPrometheusRulesSyncFailed` firing and
+a rules fix must land NOW). It is not the deploy path — the next healthy
+timer fire converges live to `origin/main` regardless of what was copied:
+
+```bash
+cp ~/AlphaLens/deploy/monitoring/prometheus/rules/alphalens.yaml \
+   ~/monitoring/prometheus/alphalens.rules
+docker exec prometheus promtool check rules /etc/prometheus/alphalens.rules
+docker exec prometheus kill -HUP 1
+curl -s localhost:9090/api/v1/rules | jq '.data.groups[].rules[].name'   # confirm the new rules are present
+```
+
 ## Saxo auto-manager (SIM) — VPS deploy runbook
 
 This section complements the inline install comments already in
@@ -1052,12 +1128,7 @@ journalctl --user -u alphalens-saxo-refresh.service -n 20   # first --refresh ra
 ### 4. Prometheus + metrics wiring
 
 - The per-tick **heartbeat gauge** writes to `/var/lib/node_exporter/textfile` (via `ALPHALENS_TEXTFILE_DIR`, set in the unit) — node_exporter's textfile collector scrapes it.
-- The alert rules (`AlphalensJobStale{job="broker-manager"}` / `{job="saxo-refresh"}` + the heartbeat rule) are in `deploy/monitoring/prometheus/rules/alphalens.yaml` in the repo, **but the live Prometheus rules are NOT repo-mounted** — hand-sync the new rule blocks into the live rules file and reload:
-```bash
-# copy the new broker-manager + saxo-refresh rule blocks into the live rules file, then:
-sudo promtool check rules /path/to/live/alphalens.rules.yml
-sudo kill -HUP "$(pgrep -x prometheus)"     # or systemctl reload prometheus
-```
+- The alert rules (`AlphalensJobStale{job="broker-manager"}` / `{job="saxo-refresh"}` + the heartbeat rule) are in `deploy/monitoring/prometheus/rules/alphalens.yaml` in the repo. The live rules are NOT repo-mounted, but since #1073 the hourly `alphalens-prometheus-rules-sync` timer converges the live copy to `origin/main` — merge the rule change and it is live within ~1h (or `systemctl --user start alphalens-prometheus-rules-sync.service` to converge immediately). Manual copy+HUP is an emergency override only — see the "Prometheus live-rules sync" section above.
 - Verify after go-live: the heartbeat metric appears in node_exporter's `/metrics`, and `AlphalensJobStale` is not firing.
 
 ### 5. Smoke — INERT (no placement), then a single tick
@@ -1142,10 +1213,11 @@ The daemon can early-wake on a Saxo WebSocket fill push instead of only on the ~
   - `AlphalensBrokerStreamStale` — `stream_last_message_age_seconds > 300` while `stream_reader_up == 1`, `unless` a breaker episode is open, for 5 m (dark-but-connected);
   - `AlphalensBrokerStreamFlapping` — `increase(stream_trips_total[1h]) > 3` for 10 m.
 
-  The repo copy is NOT "documentation only": CI runs `promtool check rules` AND `promtool test rules` against it (`.github/workflows/ci.yml` prom-rules job; fixtures `alphalens_test.yaml` + `alphalens_broker_test.yaml`, locally `just lint-rules` / `just test-rules`). It IS the source of truth — but the live VPS Prometheus loads a separate, manually deployed copy. **Live-rules sync checklist (a deploy GATE for any stream-rule change, rearm memo §7.16 — until the rules are live, deleting the Telegram metronome strictly reduces observability):**
-  1. copy the repo `alphalens.yaml` over the live rules file on the monitoring host;
-  2. `docker exec prometheus kill -HUP 1`;
-  3. confirm each rule is present in `curl -s localhost:9090/api/v1/rules | jq '.data.groups[].rules[].name'` before considering the change deployed.
+  The repo copy is NOT "documentation only": CI runs `promtool check rules` AND `promtool test rules` against it (`.github/workflows/ci.yml` prom-rules job; fixtures `alphalens_test.yaml` + `alphalens_broker_test.yaml`, locally `just lint-rules` / `just test-rules`). It IS the source of truth — and since #1073 the hourly `alphalens-prometheus-rules-sync` timer converges the live copy to `origin/main`, so **merging a stream-rule change deploys it within ~1h** (the rearm memo §7.16 GATE — "until the rules are live, deleting the Telegram metronome strictly reduces observability" — is now satisfied by the timer). To close the GATE faster or double-check it:
+  1. `systemctl --user start alphalens-prometheus-rules-sync.service` (immediate convergence; the run itself verifies every alert name against `api/v1/rules`);
+  2. or confirm by hand: `curl -s localhost:9090/api/v1/rules | jq '.data.groups[].rules[].name'`.
+
+  Manual copy+HUP is an emergency override only (sync broken) — recipe in the "Prometheus live-rules sync" section above.
 - **30-second triage.** `alphalens broker stream-status` (reads the gauges from the textfile, no broker call, safe while the daemon runs): `breaker_open=1` → an episode is open, check the OPEN page timestamp and `trips_total`; `reader_up=1` with a large `last_message_age_seconds` → dark-but-connected (recv timeout/resubscribe not self-healing); `consecutive_failures` shows how close the streak is to the trip threshold (6). Then `journalctl --user -u alphalens-broker-manager.service --since -1h | grep -i "saxo stream"` for the trial-by-trial story. Protection is never at stake — the ~45 s poll backstop runs regardless.
 - **Attended shape probe (before flipping the gate live):** `SAXO_STREAM_LIVE_TEST=1 .venv/bin/python -m unittest tests.live.test_saxo_stream_live -v` (needs the OAuth env sourced) validates connect + snapshot + heartbeat + PUT-reauthorize 202 + DELETE cleanup against the live SIM host — SHAPE only, places nothing.
 
@@ -1176,20 +1248,18 @@ running unattended, and only after the §9.4 go/no-go bar is met.
 - **`alphalens-saxo-marketdata-refresh.timer` enabled** — the keep-alive
   floor for that same chain; install it per "Saxo LIVE market data" §3
   below.
-- **Prometheus rules hand-synced.** The LIVE rule blocks
+- **Prometheus rules live.** The LIVE rule blocks
   (`AlphalensBrokerManagerLiveHeartbeatStale`,
   `AlphalensLivePriceStreamReaderDown` / `AlphalensLivePriceStreamStale`
   for `job="live-price-stream-live"`,
   `AlphalensJobStale{job="saxo-marketdata-refresh"}`) ship in
-  `deploy/monitoring/prometheus/rules/alphalens.yaml`, but — same as every
-  other alert in this repo — the live Prometheus rules are NOT
-  repo-mounted:
-  ```bash
-  # copy the new blocks into the live rules file, then:
-  sudo promtool check rules /path/to/live/alphalens.rules.yml
-  sudo kill -HUP "$(pgrep -x prometheus)"     # or systemctl reload prometheus
-  ```
-  Deploy this BEFORE enabling the unit. The LIVE heartbeat rule is
+  `deploy/monitoring/prometheus/rules/alphalens.yaml`; since #1073 the
+  hourly `alphalens-prometheus-rules-sync` timer converges the live copy
+  to `origin/main`, so a merged rule change is live within ~1h (or run
+  `systemctl --user start alphalens-prometheus-rules-sync.service` to
+  converge immediately; manual copy+HUP is an emergency override only —
+  see the "Prometheus live-rules sync" section above).
+  Confirm the rules are live BEFORE enabling the unit. The LIVE heartbeat rule is
   value-based only for now — deliberately NO `absent()`-based Missing rule
   yet (design memo §5): an absent-rule for a not-yet-running instance would
   page the instant the rules reload (ADR 0016 D5 precedent). Add it in the
