@@ -1,0 +1,24 @@
+# Grafana datasource provisioning — the SoT for the live
+# ~/monitoring/grafana/provisioning/datasources/prometheus.yml on the VPS.
+#
+# `uid: prometheus` is LOAD-BEARING, not cosmetic. Every target in
+# deploy/monitoring/grafana/dashboards/alphalens-cron-health.json addresses its
+# datasource as {"type": "prometheus", "uid": "prometheus"}. When this line was
+# missing (2026-08-24) Grafana assigned a random uid, every dashboard target
+# pointed at a datasource that did not exist, and all 13 panels rendered
+# "No data" while Prometheus itself was perfectly healthy. The sync script
+# refuses to install a datasource file that does not declare this uid, and
+# refuses a dashboard whose targets reference a uid no datasource declares.
+#
+# Datasource changes apply only when the grafana container restarts (the
+# provisioning watcher covers dashboards, not datasources).
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
