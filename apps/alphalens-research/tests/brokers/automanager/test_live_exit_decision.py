@@ -172,6 +172,41 @@ class TestExitCostGate(unittest.TestCase):
         self.assertEqual(out, [TrancheExit(tag="tp1", qty=50, target_price=16.0)])
 
 
+class TestCostGateKeepsTheLadderInOrder(unittest.TestCase):
+    """The cost threshold depends on the TRANCHE's own notional (the per-fill USD
+    minimum weighs more on a small tranche), so a shallow small tranche can be
+    refused while a deeper large one at a HIGHER target clears. Firing the deeper
+    one first would advance ``already_fired`` and the stop-shrink accounting out
+    of ladder order. A refused tranche stops the batch instead.
+    """
+
+    _SMALL_FIRST = (_tr(0, 10.1, 0.10), _tr(1, 10.15, 0.90))
+
+    def _plan(self, price, realised_entry):
+        return plan_tranche_exits(
+            price=price,
+            tp_tranches=self._SMALL_FIRST,
+            reference_qty=100,
+            owned=100,
+            already_fired=frozenset(),
+            realised_entry=realised_entry,
+        )
+
+    def test_a_refused_tranche_blocks_the_deeper_ones_in_the_same_pass(self):
+        # TP1 is 10 shares at 10.10 (250 bps round trip on a $100 notional, so
+        # 300 bps required against 200 bps of edge -> refused). TP2 is 90 shares
+        # at 10.15, where the $1 minimum no longer binds, so on its own terms it
+        # would fire.
+        self.assertEqual(self._plan(price=10.2, realised_entry=10.0), [])
+
+    def test_a_ladder_whose_first_tranche_clears_still_fires_both(self):
+        # The block above is ordering, not a blanket refusal: once TP1 itself
+        # clears, the whole touched batch goes out as before.
+        out = self._plan(price=11.0, realised_entry=10.0)
+        self.assertEqual([e.tag for e in out], ["tp1", "tp2"])
+        self.assertEqual([e.qty for e in out], [10, 90])
+
+
 class TestArmGateAndExitGateAgree(unittest.TestCase):
     """The two #1112 gates must draw the SAME line. If the arm gate admits a
     tier the exit gate would later refuse, the rail submits an entry and then

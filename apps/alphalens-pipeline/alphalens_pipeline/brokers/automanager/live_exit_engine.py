@@ -158,7 +158,13 @@ def plan_tranche_exits(
             realised_entry=realised_entry,
             tag=tag,
         ):
-            continue
+            # STOP the batch, never skip to the deeper tranche. The threshold
+            # scales with the tranche's own notional (the per-fill USD minimum
+            # weighs more on a small tranche), so a deeper LARGER tranche at a
+            # HIGHER target can clear while this one does not. Firing it would
+            # advance already_fired and the stop-shrink accounting past an
+            # unfired shallower tranche, exiting the ladder out of order.
+            break
         out.append(TrancheExit(tag=tag, qty=qty, target_price=t.target_price))
         available -= qty
     return out
