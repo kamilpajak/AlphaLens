@@ -23,7 +23,7 @@ members = ["apps/alphalens-broker-contract", "apps/alphalens-feedback", "apps/al
 # Per-app test-runners (pytest-django for the django app) live here too so a
 # single `uv sync --group dev` boots the full CI test matrix.
 dev = [
-    "ruff>=0.16.1",
+    "ruff>=0.16.3",
     "coverage>=7.15.4",
     "pre-commit>=4.6.2",
     "bandit>=1.9.4",
