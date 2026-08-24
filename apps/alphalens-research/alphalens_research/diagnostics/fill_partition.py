@@ -35,6 +35,7 @@ replay.
 from __future__ import annotations
 
 import itertools
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -618,3 +619,127 @@ def mae_r_at_fill(
         return None
     overshoot = overshoot_bps / BPS_PER_UNIT
     return (mae_pct - overshoot) / (overshoot + stop_distance_pct)
+
+
+def realized_r_at_fill(
+    *, realized_r: float | None, stop_distance_pct: float | None, overshoot_bps: float
+) -> float | None:
+    """Realized R re-anchored to the overshoot FILL rather than the tier-limit blend.
+
+    Same algebra as :func:`mae_r_at_fill`. The stored ``realized_r`` implies the
+    weighted exit mark ``M = blend * (1 + realized_r * stop_distance_pct)``, and
+    re-denominating that mark against the fill gives::
+
+        realized_r' = (realized_r * stop_distance_pct - overshoot)
+                      / (overshoot + stop_distance_pct)
+
+    Two properties worth knowing before reading any number out of it: a stop-out
+    stays exactly -1.0 R (you lose one risk unit whatever the anchor is), and
+    every non-stop outcome moves DOWN, because the fill is worse than the blend
+    and the risk unit is wider. Terminal rows only, for the same reason as
+    :func:`mae_r_at_fill`.
+    """
+    if realized_r is None or stop_distance_pct is None or stop_distance_pct <= 0.0:
+        return None
+    overshoot = overshoot_bps / BPS_PER_UNIT
+    return (realized_r * stop_distance_pct - overshoot) / (overshoot + stop_distance_pct)
+
+
+# --------------------------------------------------------------------------
+# Store rows -> opportunities.
+# --------------------------------------------------------------------------
+
+CLASSIFICATION_NO_FILL = "NO_FILL"
+CLASSIFICATION_BAD_GEOMETRY = "BAD_GEOMETRY"
+CLASSIFICATION_SPLIT_INVALIDATED = "SPLIT_INVALIDATED"
+"""Mirrors ``corporate_actions.SPLIT_INVALIDATED_CLASSIFICATION``; kept as a local
+literal so this pure module needs no import for one string."""
+
+
+def _finite(value: Any) -> float | None:
+    """Read a store cell as a float, treating ``None`` and NaN alike as missing.
+
+    Parquet nulls arrive as float NaN through pandas. A NaN that reached a mean
+    would poison a whole partition silently, which is exactly the failure this
+    instrument exists to avoid.
+    """
+    if value is None:
+        return None
+    try:
+        as_float = float(value)
+    except (TypeError, ValueError):
+        return None
+    return as_float if math.isfinite(as_float) else None
+
+
+def store_row_exclusion(row: Mapping[str, Any]) -> str | None:
+    """Which exclusion bucket a store row falls in, or ``None`` when it counts.
+
+    Order matters: a row can satisfy several conditions and must be counted once.
+    The decidedness check is LAST so a row that is merely ongoing is reported as
+    such rather than as a data problem.
+    """
+    if not bool(row.get("plannable")):
+        return EXCLUDE_NOT_PLANNABLE
+    classification = row.get("ladder_classification")
+    if classification is None:
+        return EXCLUDE_NO_REPLAY
+    if classification == CLASSIFICATION_SPLIT_INVALIDATED:
+        return EXCLUDE_SPLIT_INVALIDATED
+    if classification == CLASSIFICATION_BAD_GEOMETRY:
+        return EXCLUDE_BAD_GEOMETRY
+    if not bool(row.get("terminal")):
+        return EXCLUDE_NOT_DECIDED
+    return None
+
+
+def opportunity_from_store_row(
+    row: Mapping[str, Any],
+    *,
+    fills: Sequence[TierFill],
+    tiers: Sequence[EntryTier],
+    overshoot_bps: float,
+) -> Opportunity:
+    """Build one :class:`Opportunity` from a store row plus its re-replayed fills.
+
+    ``fills`` come from :func:`walk_entry_fills` over the cached minute bars, NOT
+    from the row's ``sequence_str``: that column is order-only, so it cannot say
+    whether a deeper tier filled in the same minute or three weeks later.
+
+    Both re-anchored numbers are withheld on a non-terminal row. The identity they
+    rely on (``stop = blend * (1 - stop_distance_pct)``) is exact once a row has
+    settled and breaks while the position is still moving, so the honest answer
+    for an ongoing row is nothing at all.
+    """
+    terminal = bool(row.get("terminal"))
+    stop_distance_pct = _finite(row.get("stop_distance_pct"))
+    holding = row.get("holding_days_elapsed")
+    holding_days = None if _finite(holding) is None else int(float(holding))
+    return Opportunity(
+        brief_date=str(row.get("brief_date")),
+        ticker=str(row.get("ticker")),
+        excluded_reason=store_row_exclusion(row),
+        filled_tiers=tuple(f.tier_id for f in fills),
+        fill_bar_ts_ms=tuple(f.bar_ts_ms for f in fills),
+        filled_fraction=filled_fraction(tiers, (f.tier_id for f in fills)),
+        realised_return=(
+            realized_r_at_fill(
+                realized_r=_finite(row.get("realized_r")),
+                stop_distance_pct=stop_distance_pct,
+                overshoot_bps=overshoot_bps,
+            )
+            if terminal
+            else None
+        ),
+        forgone_return=_finite(row.get("market_excess_return")),
+        holding_days=holding_days,
+        mae_r=(
+            mae_r_at_fill(
+                stop_distance_pct=stop_distance_pct,
+                mae_pct=_finite(row.get("mae_pct")),
+                overshoot_bps=overshoot_bps,
+            )
+            if terminal
+            else None
+        ),
+    )
