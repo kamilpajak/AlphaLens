@@ -1416,6 +1416,13 @@ class SaxoBroker:
     # brokers lacking them degrade to UNRESOLVED(capability_absent) — never
     # a guessed terminal state.
 
+    def has_cached_order_outcome(self, order_id: str) -> bool:
+        """Whether :meth:`resolve_order_outcome` would answer from the terminal
+        memo — i.e. WITHOUT an audit GET (``SupportsOutcomeCachePeek``). The
+        reconcile audit budget (audit-429 memo) bills only cache misses, so
+        memoized terminals keep resolving budget-free every tick."""
+        return order_id in self._order_outcome_cache
+
     def resolve_order_outcome(self, order_id: str) -> OrderState:
         """Classify a DISAPPEARED order's terminal outcome from the audit log.
 

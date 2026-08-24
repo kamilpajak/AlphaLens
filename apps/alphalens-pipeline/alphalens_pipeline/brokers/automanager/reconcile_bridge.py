@@ -16,7 +16,11 @@ from typing import Any
 
 from broker_contract.contract import Broker
 
-from alphalens_pipeline.brokers.reconcile import ReconcileVerdict, reconcile_brackets
+from alphalens_pipeline.brokers.reconcile import (
+    OutcomeAuditBudget,
+    ReconcileVerdict,
+    reconcile_brackets,
+)
 
 
 def verdicts(
@@ -24,9 +28,13 @@ def verdicts(
     broker: Broker,
     *,
     today: dt.date | None = None,
+    audit_budget: OutcomeAuditBudget | None = None,
 ) -> list[ReconcileVerdict]:
-    """Recompute every journal bracket's verdict (loop tick + crash recovery)."""
-    return reconcile_brackets(records, broker, today=today)
+    """Recompute every journal bracket's verdict (loop tick + crash recovery).
+
+    ``audit_budget`` is the daemon's shared per-tick audit-read cap (audit-429
+    memo); ``None`` keeps the full fan-out (crash-recovery / CLI callers)."""
+    return reconcile_brackets(records, broker, today=today, audit_budget=audit_budget)
 
 
 __all__ = ["verdicts"]

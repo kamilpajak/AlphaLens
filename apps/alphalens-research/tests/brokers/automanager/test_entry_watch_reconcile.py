@@ -374,5 +374,130 @@ class TestReconcileRunsBeforePlacementDrain(unittest.TestCase):
         )
 
 
+class TestAuditBudgetDefersTrailResolve(unittest.TestCase):
+    """Increment 2 (audit-429 memo §3): the trail pass draws from the SHARED
+    per-tick audit budget. An exhausted budget defers the resolve to the next
+    tick — no audit read, no fabricated terminal (the same retry contract as an
+    unreadable audit) — and the next tick's reset budget picks it up."""
+
+    def test_exhausted_budget_defers_the_resolve_and_next_tick_drains_it(self) -> None:
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0)
+        broker = _ResolvingBroker()  # order gone from the book
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=10.05
+        )
+        deps = _watch_deps(None, [], broker=broker)
+        while deps.audit_budget.try_acquire():
+            pass  # tick's budget already spent by other consumers
+
+        _run(deps)
+
+        self.assertEqual(broker.resolve_calls, [], "no audit read over budget")
+        self.assertEqual(
+            [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED],
+            [],
+            "a deferred tier never fabricates a terminal",
+        )
+        self.assertEqual(deps.audit_budget.deferred, 1)
+
+        deps.audit_budget.start_tick()  # the next tick resets the budget
+        _run(deps)
+
+        self.assertEqual(broker.resolve_calls, ["TR-1"])
+        self.assertEqual(
+            len([ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_FIRED]), 1
+        )
+
+    def test_trail_resolve_spends_the_shared_budget(self) -> None:
+        path = _journal(self)
+        _seed_armed(path, order_id="TR-1", limit=10.0)
+        broker = _ResolvingBroker()
+        broker.resolutions["TR-1"] = _os(
+            "TR-1", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=10.05
+        )
+        deps = _watch_deps(None, [], broker=broker)
+
+        _run(deps)
+
+        self.assertEqual(deps.audit_budget.spent, 1, "the trail audit read is billed")
+
+
+class _VerdictCapableBroker(_ResolvingBroker):
+    """The trail-test resolver widened with the verdict pass's open-orders view
+    (``reconcile_brackets`` requires ``list_open_orders``)."""
+
+    def list_open_orders(self) -> list[Any]:
+        return []
+
+
+class TestSharedBudgetAcrossTrailAndVerdictPasses(unittest.TestCase):
+    """The two audit consumers — the entry-trail reconcile pass and the verdict
+    pass — share ONE per-tick budget (run_once order: trail first), so their
+    combined audit fan-out never exceeds the cap in one tick."""
+
+    def test_trail_pass_draws_down_the_verdict_pass_remainder(self) -> None:
+        import functools
+
+        from alphalens_pipeline.brokers.automanager import reconcile_bridge
+        from alphalens_pipeline.brokers.automanager.position_manager import BrokerView
+
+        path = _journal(self)
+        # Two gone armed trail orders -> two audit reads by the trail pass.
+        for n in (1, 2):
+            _seed_armed(path, crid=f"KO-2026-07-2{n}-entry-t0", order_id=f"TR-{n}", limit=10.0)
+        broker = _VerdictCapableBroker()
+        for n in (1, 2):
+            broker.resolutions[f"TR-{n}"] = _os(
+                f"TR-{n}", OrderStatus.FILLED, filled_quantity=100.0, avg_fill_price=10.05
+            )
+        # Ten disappeared journal brackets for the verdict pass (no exit legs, so
+        # the CANCELLED CancelRemaining sweep is a no-op against an empty view).
+        records: list[dict[str, Any]] = [
+            {
+                "ts": f"2026-07-06T{9 + n}:00:00+00:00",
+                "brief_date": "2026-07-06",
+                "ticker": f"T{n}",
+                "mic": "XNYS",
+                "brackets": [
+                    {"client_request_id": f"rid-{n}", "entry_order_id": f"E-{n}", "qty": 1}
+                ],
+            }
+            for n in range(1, 11)
+        ]
+        for n in range(1, 11):
+            broker.resolutions[f"E-{n}"] = _os(f"E-{n}", OrderStatus.CANCELLED)
+        base = _watch_deps(None, [], broker=broker)
+        deps = cl.LoopDeps(
+            **{
+                **base.__dict__,
+                "verdicts_fn": functools.partial(
+                    reconcile_bridge.verdicts, audit_budget=base.audit_budget
+                ),
+                "build_position_view": lambda _b, _r: BrokerView(working_children={}),
+            }
+        )
+        report = cl.TickReport()
+
+        with mock.patch.dict("os.environ", {_ENV: "50"}, clear=True):
+            cl._run_entry_trail_reconcile_pass(deps, report)
+            cl._run_verdict_advance(deps, records, report)
+
+        self.assertEqual(deps.audit_budget.spent, deps.audit_budget.limit)
+        trail_calls = [c for c in broker.resolve_calls if c.startswith("TR-")]
+        verdict_calls = [c for c in broker.resolve_calls if c.startswith("E-")]
+        self.assertEqual(len(trail_calls), 2, "the trail pass audited its two gone orders")
+        self.assertEqual(
+            len(verdict_calls),
+            deps.audit_budget.limit - 2,
+            "the verdict pass got ONLY the remainder of the shared budget",
+        )
+        self.assertLessEqual(len(broker.resolve_calls), deps.audit_budget.limit)
+        # The most recent journal brackets are audited first (Amendment 1).
+        self.assertEqual(verdict_calls, ["E-10", "E-9", "E-8", "E-7"])
+        self.assertEqual(deps.audit_budget.deferred, 6)
+        self.assertEqual(report.verdict_count, 4, "deferred brackets carry no verdict")
+
+
 if __name__ == "__main__":
     unittest.main()

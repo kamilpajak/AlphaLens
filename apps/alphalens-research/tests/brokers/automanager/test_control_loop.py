@@ -3420,6 +3420,47 @@ class TestBrokerErrorBoundary(unittest.TestCase):
             self.assertIsInstance(report, cl.TickReport)
             self.assertTrue(alerts, "reconcile failure must alert")
 
+    def test_run_once_resets_the_shared_audit_budget_each_tick(self) -> None:
+        # The per-tick audit budget (audit-429 memo §3) is daemon-lifetime state
+        # on LoopDeps; run_once MUST reset it at tick start or a cold-start
+        # backlog would permanently starve later ticks.
+        with TemporaryDirectory() as d:
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+            )
+            while deps.audit_budget.try_acquire():
+                pass  # previous tick spent everything
+            deps.audit_budget.note_deferred()
+
+            report = cl.run_once(deps)
+
+            self.assertEqual(deps.audit_budget.spent, 0, "budget resets at tick start")
+            self.assertEqual(report.audits_deferred, 0)
+
+    def test_run_once_reports_the_pass_deferral_counter(self) -> None:
+        with TemporaryDirectory() as d:
+            deps = _deps(
+                _StubBroker(),
+                kill_file=Path(d) / "KILL",
+                verdicts=[],
+                place_calls=[],
+                alerts=[],
+            )
+
+            def _deferring_verdicts_fn(_records: Any, _broker: Any) -> list:
+                deps.audit_budget.note_deferred()
+                return []
+
+            deps = cl.LoopDeps(**{**deps.__dict__, "verdicts_fn": _deferring_verdicts_fn})
+
+            report = cl.run_once(deps)
+
+            self.assertEqual(report.audits_deferred, 1)
+
     def test_build_position_view_broker_error_does_not_crash_tick(self) -> None:
         with TemporaryDirectory() as d:
             alerts: list = []
