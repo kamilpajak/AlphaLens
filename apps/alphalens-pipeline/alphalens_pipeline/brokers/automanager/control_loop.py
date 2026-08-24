@@ -2737,6 +2737,10 @@ def _acquire_outcome_audit_budget(deps: LoopDeps, broker: Broker, order_id: str)
     non-alerting ``VERDICT_AUDIT_DEFERRED`` marker) and let the caller retry
     next tick."""
     if isinstance(broker, SupportsOutcomeCachePeek) and broker.has_cached_order_outcome(order_id):
+        # Contract (SupportsOutcomeCachePeek): a True peek MUST mean
+        # resolve_order_outcome answers from the terminal memo with NO audit
+        # HTTP read — a lazily-populated cache returning True here would
+        # silently bypass the budget (broker bug, not a core bug).
         return True
     if deps.audit_budget.try_acquire():
         return True

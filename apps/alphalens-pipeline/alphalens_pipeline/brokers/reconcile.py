@@ -71,7 +71,8 @@ REASON_AUDIT_ERROR = "audit_error"
 # unmeasured /cs audit bucket (July 2026: ~10/min tripped it; August 2026:
 # ~60 per rolling ~60s). A transient-only shaper: steady state resolves from
 # the terminal memo (SupportsOutcomeCachePeek) and spends ~0 budget per pass.
-_MAX_OUTCOME_AUDITS_PER_PASS = 6
+_MAX_OUTCOME_AUDITS_PER_PASS = 6  # single tuning point; env knob only after the
+# header instrument reports the real quota (memo §5 Q2 — no invented numbers)
 
 # Non-alerting marker for a bracket whose audit was NOT ATTEMPTED this pass
 # (budget exhausted): a log line + pass counter — never an AlertOnly, never a
@@ -281,6 +282,11 @@ def reconcile_brackets(
     recency order. Memoized terminals (``SupportsOutcomeCachePeek``) resolve
     budget-free, so steady state is unchanged. ``None`` (the CLI one-off
     path) keeps today's full fan-out.
+
+    Contract on ``records``: each entry MUST carry a ``"ts"`` field (the ISO
+    submission timestamp ``build_submission_record`` always stamps) for the
+    recency-first ordering to be meaningful; a missing/unparseable ``ts``
+    sorts OLDEST (fail-safe: it never claims budget over known-recency rows).
     """
     asof = today or dt.datetime.now(dt.UTC).date()
     open_states = {state.order_id: state for state in broker.list_open_orders()}
@@ -445,7 +451,9 @@ def _record_ts_key(record: Mapping[str, Any]) -> dt.datetime:
     """The record's journal timestamp as a recency sort key (UTC-aware).
 
     A missing / unparseable ``ts`` sorts OLDEST — it is audited last, matching
-    the weeks-old-likely-terminal-drains-last intent (Amendment 1)."""
+    fail-safe intent: an anomalous row (ts should always exist —
+    build_submission_record stamps it) never claims budget over brackets with
+    known recency (Amendment 1)."""
     ts = record.get("ts")
     if not ts:
         return _OLDEST_TS_KEY
