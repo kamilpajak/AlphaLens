@@ -22,6 +22,7 @@ from alphalens_pipeline.thematic.extraction.templates.holdout import (
     HOLDOUT_ALL_PREDICATES_FAILED,
     HOLDOUT_ENTITY_UNRESOLVED,
     HOLDOUT_NO_TEMPLATE_MATCH,
+    HOLDOUT_REQUIRED_ROLE_UNFILLED,
     TemplateMetrics,
 )
 from alphalens_pipeline.thematic.extraction.templates.predicates import (
@@ -83,6 +84,12 @@ class TemplateEngine:
         self.specs: list[TemplateSpec] = list(specs)
         self.blocklists: dict[str, list[str]] = dict(blocklists or {})
         self.metrics: TemplateMetrics = metrics or TemplateMetrics()
+        # Zero-init attempt/match counters for every loaded template so a
+        # flush always carries the full template set — a never-matching
+        # template must emit an explicit 0 series or the match-rate alert
+        # structurally cannot fire (#1108). Covers from_dir AND from_specs.
+        for spec in self.specs:
+            self.metrics.register_template(spec.template_id)
 
     # -- alt constructors ---------------------------------------------------
 
@@ -129,19 +136,26 @@ class TemplateEngine:
 
         # Step 3: try each template in order. First successful match wins.
         any_attempt_failed = False
+        any_required_role_unfilled = False
         for spec in self.specs:
             self.metrics.record_attempt(spec.template_id)
-            event = self._try_match(spec, article, entities)
+            event, role_unfilled = self._try_match(spec, article, entities)
             if event is not None:
                 self.metrics.record_match(spec.template_id)
                 return event
             any_attempt_failed = True
+            any_required_role_unfilled = any_required_role_unfilled or role_unfilled
 
-        # Step 4: at least one template was tried but none matched →
-        # all_predicates_failed (collapses predicate failure + missing
-        # required role into one drop reason; see test_engine.py).
+        # Step 4: at least one template was tried but none matched. The
+        # more specific reason wins: if any template passed ALL its
+        # predicates and failed only on required-role fill, that is a
+        # resolver shortfall (required_role_unfilled, #1108) — not
+        # pattern drift (all_predicates_failed).
         if any_attempt_failed:
-            self.metrics.record_drop(HOLDOUT_ALL_PREDICATES_FAILED)
+            if any_required_role_unfilled:
+                self.metrics.record_drop(HOLDOUT_REQUIRED_ROLE_UNFILLED)
+            else:
+                self.metrics.record_drop(HOLDOUT_ALL_PREDICATES_FAILED)
         return None
 
     # -- helpers ------------------------------------------------------------
@@ -151,7 +165,15 @@ class TemplateEngine:
         spec: TemplateSpec,
         article: Article,
         entities: list[ResolvedEntity],
-    ) -> TemplateEvent | None:
+    ) -> tuple[TemplateEvent | None, bool]:
+        """Try one template. Returns ``(event, required_role_unfilled)``.
+
+        The second element is True only when every article predicate
+        passed and the template was rejected solely because a required
+        entity role stayed unfilled — the caller uses it to pick the
+        more specific drop reason. Predicate failures (including the
+        unknown-predicate KeyError path) return ``(None, False)``.
+        """
         ctx = PredicateContext(
             article=article,
             resolved_entities=entities,
@@ -172,10 +194,10 @@ class TemplateEngine:
                     pred.name,
                 )
                 self.metrics.record_predicate(pred.name, outcome="fail")
-                return None
+                return None, False
             self.metrics.record_predicate(pred.name, outcome="pass" if ok else "fail")
             if not ok:
-                return None
+                return None, False
             matched.append(pred.name)
 
         # Entity role assignment: positional. Required roles in declaration
@@ -189,7 +211,7 @@ class TemplateEngine:
                 assigned[role_name] = entities[cursor]
                 cursor += 1
             elif requirement.required:
-                return None
+                return None, True
             # else: optional role left unfilled — fine
 
         # Field extraction.
@@ -206,7 +228,7 @@ class TemplateEngine:
             fields=fields,
             source_article_id=article.id,
             matched_predicates=matched,
-        )
+        ), False
 
     def _extract_field(
         self,

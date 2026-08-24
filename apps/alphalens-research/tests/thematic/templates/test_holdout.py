@@ -22,6 +22,7 @@ from alphalens_pipeline.thematic.extraction.templates.holdout import (
     HOLDOUT_ENTITY_UNRESOLVED,
     HOLDOUT_LOW_CONFIDENCE_NO_TEMPLATE,
     HOLDOUT_NO_TEMPLATE_MATCH,
+    HOLDOUT_REQUIRED_ROLE_UNFILLED,
     TemplateMetrics,
 )
 
@@ -29,9 +30,10 @@ from alphalens_pipeline.thematic.extraction.templates.holdout import (
 class TestReasonEnumeration(unittest.TestCase):
     def test_reason_set_matches_design_memo(self):
         # Reasons are load-bearing for the Grafana panel's by-reason
-        # breakdown. Adding/removing one requires updating Prometheus
-        # rule + panel JSON in lockstep. PR-2 added superseded_by_template
-        # (design memo §1.1 precedence rule).
+        # breakdown (legend is templated on the label — no per-reason
+        # JSON edit needed). PR-2 added superseded_by_template (design
+        # memo §1.1 precedence rule); #1108 split required_role_unfilled
+        # out of all_predicates_failed.
         from alphalens_pipeline.thematic.extraction.templates.holdout import (
             HOLDOUT_SUPERSEDED_BY_TEMPLATE,
         )
@@ -45,6 +47,7 @@ class TestReasonEnumeration(unittest.TestCase):
                     HOLDOUT_ALL_PREDICATES_FAILED,
                     HOLDOUT_LOW_CONFIDENCE_NO_TEMPLATE,
                     HOLDOUT_SUPERSEDED_BY_TEMPLATE,
+                    HOLDOUT_REQUIRED_ROLE_UNFILLED,
                 }
             ),
         )
@@ -98,6 +101,24 @@ class TestAccumulation(unittest.TestCase):
             m.record_predicate("x", outcome="maybe")
 
 
+class TestZeroInit(unittest.TestCase):
+    def test_register_template_seeds_zero_attempt_and_match(self):
+        m = TemplateMetrics()
+        m.register_template("never_matched")
+        snap = m.snapshot()
+        self.assertEqual(snap["attempts"]["never_matched"], 0)
+        self.assertEqual(snap["matches"]["never_matched"], 0)
+
+    def test_register_template_does_not_reset_existing_counts(self):
+        m = TemplateMetrics()
+        m.record_attempt("t")
+        m.record_match("t")
+        m.register_template("t")
+        snap = m.snapshot()
+        self.assertEqual(snap["attempts"]["t"], 1)
+        self.assertEqual(snap["matches"]["t"], 1)
+
+
 class TestFlush(unittest.TestCase):
     def setUp(self):
         self.tmpdir = Path(tempfile.mkdtemp())
@@ -138,6 +159,26 @@ class TestFlush(unittest.TestCase):
         )
         self.assertIn(
             'alphalens_template_predicate_total{name="is_press_release",outcome="pass"}',
+            text,
+        )
+
+    def test_flush_emits_explicit_zero_series_for_registered_template(self):
+        # Prometheus distinguishes absent-series from zero-count: the
+        # AlphalensTemplateMatchRateLow alert divides rate(match)/rate
+        # (attempt) and structurally cannot fire when the match series is
+        # absent. A registered-but-never-matched template must therefore
+        # flush explicit 0 samples for BOTH families.
+        m = TemplateMetrics()
+        m.register_template("never_matched")
+        m.flush(job="template-engine-zeroinit-test")
+        out = self.tmpdir / "alphalens_domain_template-engine-zeroinit-test.prom"
+        text = out.read_text()
+        self.assertIn(
+            'alphalens_template_attempt_total{template_id="never_matched"} 0',
+            text,
+        )
+        self.assertIn(
+            'alphalens_template_match_total{template_id="never_matched"} 0',
             text,
         )
 
