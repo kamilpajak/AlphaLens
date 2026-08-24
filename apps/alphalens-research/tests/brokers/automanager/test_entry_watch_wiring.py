@@ -745,6 +745,33 @@ class TestEntryArmInsideExitRegion(unittest.TestCase):
                 self._run(deps, limit, prices)
                 self.assertEqual(len(broker.trailing_orders), 1, f"{label} must still arm")
 
+    def test_an_already_resting_order_is_adopted_never_orphaned(self) -> None:
+        # G3 crash recovery on a tier the gate would refuse: the order ALREADY
+        # rests at the broker. Refusing here would terminate the watch while
+        # leaving a live buy order nobody tracks (KIND_CANCELLED is outside
+        # _RESTING_BEARING_TERMINALS, so no cancel-then-verify runs). Adopt it,
+        # exactly as before the gate existed.
+        path = _journal(self)
+        _planned_journal(self)
+        self._seed(path, limit=SMG_TIERS[0][0], geometry=smg_geometry_stamp())
+        broker = _RecordingBroker()
+        broker.open_orders = [
+            type(
+                "OS",
+                (),
+                {"order_id": "TR-RESTING", "external_reference": "KO-2026-07-20-entry-t0-fire"},
+            )()
+        ]
+        prices: dict[int, float | None] = {}
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        self._run(deps, SMG_TOUCH_BID, prices)
+        armed = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED]
+        self.assertEqual([ln["order_id"] for ln in armed], ["TR-RESTING"])
+        self.assertEqual(
+            [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED], []
+        )
+        self.assertEqual(broker.trailing_orders, [], "adopted, not re-placed")
+
     def test_watch_without_a_geometry_stamp_still_arms(self) -> None:
         # Fail open: a pre-stamp watch_open line (or a policy that places the
         # brief's own ladder) carries no target to compare against.

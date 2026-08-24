@@ -2486,8 +2486,6 @@ def _arm_native_trail(
     )
     if geo is None:
         return  # degenerate geometry — retry next tick
-    if _refuse_arm_inside_exit_region(deps, crid, record, runtime, d_bps, geo, report):
-        return
     try:
         uic = int(record["uic"])
         qty = float(record["qty"])
@@ -2502,6 +2500,13 @@ def _arm_native_trail(
     if existing is not None:
         _journal_trail_armed(crid, order_id=existing, trigger=geo.order_price)
         runtime.watcher.mark_armed()
+        return
+
+    # AFTER the adopt (issue #1112 step 1): refusing before it would terminate
+    # the watch while a real buy order still rests at the broker, and
+    # KIND_CANCELLED is outside _RESTING_BEARING_TERMINALS so nothing would
+    # cancel-then-verify it. Only a FRESH arm is refused.
+    if _refuse_arm_inside_exit_region(deps, crid, record, runtime, d_bps, geo, report):
         return
 
     try:
