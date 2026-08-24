@@ -1,0 +1,55 @@
+# Converges the live Prometheus rules file to the origin/main blob (#1073).
+#
+# The repo file deploy/monitoring/prometheus/rules/alphalens.yaml is the SoT
+# (promtool-checked and unit-tested in CI); the live copy is
+# ~/monitoring/prometheus/alphalens.rules, bind-mounted into the SHARED
+# prometheus container (which also serves gunbot + node alerts — this job
+# never touches anything in that directory except alphalens.rules and its own
+# autosync backups). Before this unit the live copy was hand-synced, and the
+# drift bit three times: missing rules (2026-05-31), new alerts absent
+# (2026-08-19), and a metric RENAME (2026-08-20) where every alert NAME
+# matched while live expressions summed absent series — invisible to a
+# name-level diff. With this unit, merging to main IS the deploy.
+#
+# The script (apps/alphalens-research/scripts/sync_prometheus_rules.py):
+#   1. git fetch + `git show origin/main:<rules path>` — the BLOB, never the
+#      working tree (a stale checkout nearly shipped stale rules 2026-08-23);
+#   2. identical content -> outcome in_sync, no writes, no HUP;
+#   3. otherwise: timestamped backup (autosync-prefixed, pruned to 10) ->
+#      temp file -> promtool check INSIDE the container BEFORE the atomic
+#      replace -> HUP -> fingerprint verification (every alert name from the
+#      new YAML present in api/v1/rules) -> outcome synced.
+#
+# Exit codes carry meaning, so the unit must NOT be made failure-tolerant:
+#   0  live matches origin/main now (in_sync or synced)
+#   1  it does not — fetch_failed / check_failed / reload_failed; the journal
+#      names the stage. Non-zero holds the last_success clock still
+#      (AlphalensJobStale@2h), and the script's own outcome one-hot feeds
+#      AlphalensPrometheusRulesSyncFailed after two consecutive failed fires.
+#
+# EnvironmentFile carries no `-` (fail loud): the run needs
+# ALPHALENS_TEXTFILE_DIR for the outcome metrics. No secrets are read — the
+# repo is public and the fetch is anonymous.
+[Unit]
+Description=AlphaLens Prometheus live-rules sync
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+EnvironmentFile=/etc/alphalens/env
+ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/sync_prometheus_rules.py
+
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics prometheus-rules-sync
+StandardOutput=journal
+StandardError=journal
+MemoryMax=256M
+TasksMax=32
+# One git fetch (120s cap), at most three docker execs (60s cap each) and a
+# ~10s verification poll. 10min is far above any realistic run and still
+# bounds a hung fetch or docker daemon.
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=default.target

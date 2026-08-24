@@ -1,8 +1,12 @@
 ---
 # AlphaLens cron-observability alert rules.
 #
-# Loaded by the existing Prometheus container on the VPS. After
-# editing, reload via:
+# Loaded by the existing (shared) Prometheus container on the VPS. This repo
+# file is the SoT; the live copy (~/monitoring/prometheus/alphalens.rules) is
+# converged to the origin/main blob by the hourly
+# alphalens-prometheus-rules-sync timer, so MERGING TO MAIN IS THE DEPLOY —
+# live picks a change up within ~1h. Emergency override only (sync broken):
+# copy this file over the live one, then:
 #
 #     docker exec prometheus kill -HUP 1
 #
@@ -332,6 +336,62 @@ groups:
         annotations:
           summary: "issue-wake success metric missing"
           description: "No success metric for issue-wake. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Clears after the first successful run."
+
+      # ---------------------------------------------------------------
+      # Live-rules sync (alphalens-prometheus-rules-sync, issue #1073). Hourly,
+      # and the job that deploys THIS file: it converges the live VPS copy to
+      # the origin/main blob (backup -> promtool check -> atomic replace ->
+      # HUP -> fingerprint verification).
+      #
+      # 7200 = 2x the hourly cadence, the edgar-detect 2x precedent — tight
+      # on purpose: every hour the sync stays dead is an hour a merged rule
+      # change is not live, which re-opens the drift class that bit three
+      # times (missing rules 2026-05-31, absent new alerts 2026-08-19, a
+      # metric rename 2026-08-20). These two rules keep firing from the LIVE
+      # rules already loaded, which is what makes a dead sync visible at all.
+      # ---------------------------------------------------------------
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="prometheus-rules-sync"} > 7200
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: prometheus-rules-sync
+        annotations:
+          summary: "prometheus-rules-sync stale > 2h (expected hourly cadence)"
+          description: "Last successful run was {{ $value | humanizeDuration }} ago. The live-rules sync has stopped converging the VPS Prometheus with origin/main — a merged alert change is no longer deploying itself, and the live rules drift further behind main for every hour this lasts."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="prometheus-rules-sync"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: prometheus-rules-sync
+        annotations:
+          summary: "prometheus-rules-sync success metric missing"
+          description: "No success metric for prometheus-rules-sync. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Clears after the first successful run."
+
+      # A run that HAPPENS but fails is invisible to the staleness pair only
+      # until its second consecutive failure: the sync emits a zero-initialised
+      # one-hot outcome family every run, and a run is healthy exactly when one
+      # of the two success labels (in_sync/synced) is 1. "No success label
+      # reached 1 anywhere in a window covering two hourly fires" is therefore
+      # the sustained-failure signal — and unlike a per-label
+      # min_over_time(...) > 0 it also catches two runs failing with DIFFERENT
+      # outcomes (fetch_failed then check_failed). sum() over an empty vector
+      # is empty, so an absent family stays quiet here — absence is the
+      # MetricMissing page above. GAUGES, not counters: max_over_time only.
+      - alert: AlphalensPrometheusRulesSyncFailed
+        expr: sum(max_over_time(alphalens_rules_sync_outcome{outcome=~"in_sync|synced"}[150m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+          route: telegram
+          unit: prometheus-rules-sync
+        annotations:
+          summary: "live Prometheus rules no longer converging with main (sync failing on consecutive runs)"
+          description: "alphalens_rules_sync_outcome reported no in_sync/synced run across the last two hourly fires — git fetch, the in-container promtool check, or the reload verification is failing, and merged alert changes are NOT reaching the live rules file. Check `journalctl --user -u alphalens-prometheus-rules-sync.service` for which stage failed. While it stays broken, the emergency override is the manual copy of the repo alphalens.yaml over the live rules file + `docker exec prometheus kill -HUP 1`."
 
       # ---------------------------------------------------------------
       # VIX regime-cache freshness (Track A v2 PR-2 follow-up).
@@ -1004,7 +1064,7 @@ groups:
           unit: feedback-shadow-returns
         annotations:
           summary: "Implausible-move guard corporate-actions lookups failing on consecutive runs"
-          description: "alphalens_feedback_guard_total{disposition=\"lookup_failed\"} stayed > 0 across the last two nightly feedback-shadow-returns runs — the guard is carrying >60% movers unresolved instead of classifying them (the fail-closed arm has reverted to the pre-#1090 blindness). Check `journalctl --user -u alphalens-feedback-shadow-returns.service` for the Polygon reference-endpoint errors. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+          description: "alphalens_feedback_guard_total{disposition=\"lookup_failed\"} stayed > 0 across the last two nightly feedback-shadow-returns runs — the guard is carrying >60% movers unresolved instead of classifying them (the fail-closed arm has reverted to the pre-#1090 blindness). Check `journalctl --user -u alphalens-feedback-shadow-returns.service` for the Polygon reference-endpoint errors. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
       # Companion absence guard for the rule above: the guard gauge is
       # (re)written by every successful nightly run, so a missing series means
@@ -1021,7 +1081,7 @@ groups:
           unit: feedback-shadow-returns
         annotations:
           summary: "implausible-move guard disposition gauge missing"
-          description: "No alphalens_feedback_guard_total series is being scraped: either the guard-metric emit has not succeeded since deploy, or the textfile collector / node_exporter scrape is broken — AlphalensFeedbackGuardLookupFailed is disarmed while this fires. Clears after the first successful nightly emit. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+          description: "No alphalens_feedback_guard_total series is being scraped: either the guard-metric emit has not succeeded since deploy, or the textfile collector / node_exporter scrape is broken — AlphalensFeedbackGuardLookupFailed is disarmed while this fires. Clears after the first successful nightly emit. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
       # broker-manager is a Type=simple daemon: ExecStopPost fires only on
       # crash/restart, so health = the per-tick heartbeat gauge the control loop
@@ -1073,7 +1133,7 @@ groups:
           unit: broker-manager
         annotations:
           summary: "SIM order-stream breaker episode open > 20m (re-arm ladder not converging)"
-          description: "The Saxo SIM order/position stream has stayed dark across at least four re-arm trials plus a delivery dwell — likely a sustained Saxo outage. Protection is unaffected (the ~45s poll backstop covers every tick); the cost is wake latency. Check `journalctl --user -u alphalens-broker-manager.service` for the trial failures and run `alphalens broker stream-status` for the gauge snapshot. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+          description: "The Saxo SIM order/position stream has stayed dark across at least four re-arm trials plus a delivery dwell — likely a sustained Saxo outage. Protection is unaffected (the ~45s poll backstop covers every tick); the cost is wake latency. Check `journalctl --user -u alphalens-broker-manager.service` for the trial failures and run `alphalens broker stream-status` for the gauge snapshot. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
       - alert: AlphalensBrokerStreamStale
         # Dark-but-CONNECTED: the reader claims to be up but no frame has
@@ -1095,7 +1155,7 @@ groups:
           unit: broker-manager
         annotations:
           summary: "SIM order-stream silent > 5m while the reader claims up"
-          description: "The stream reader reports up but no frame has arrived for over 5 minutes — the dark-but-connected case (recv timeout + resubscribe should self-heal; sustained staleness means they are not). Early wake degrades to the ~45s poll; protection is unaffected. Check `journalctl --user -u alphalens-broker-manager.service`. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+          description: "The stream reader reports up but no frame has arrived for over 5 minutes — the dark-but-connected case (recv timeout + resubscribe should self-heal; sustained staleness means they are not). Early wake degrades to the ~45s poll; protection is unaffected. Check `journalctl --user -u alphalens-broker-manager.service`. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
       - alert: AlphalensBrokerStreamFlapping
         # increase() is correct here: trips_total is the one genuinely
@@ -1113,7 +1173,7 @@ groups:
           unit: broker-manager
         annotations:
           summary: "SIM order-stream breaker flapping (>3 trips/hour)"
-          description: "More than 3 breaker trips inside an hour — the stream connects and dies repeatedly, so the re-arm ladder is cycling instead of converging (a gateway that accepts sockets and then drops them, or a Saxo-side incident). Check `journalctl --user -u alphalens-broker-manager.service` for the trip reasons. Note: this rules file is the repo SoT; the live VPS Prometheus loads a manually deployed copy (copy over + `docker exec prometheus kill -HUP 1`)."
+          description: "More than 3 breaker trips inside an hour — the stream connects and dies repeatedly, so the re-arm ladder is cycling instead of converging (a gateway that accepts sockets and then drops them, or a Saxo-side incident). Check `journalctl --user -u alphalens-broker-manager.service` for the trip reasons. Note: this rules file is the repo SoT; the alphalens-prometheus-rules-sync timer converges the live VPS copy hourly (manual copy over + `docker exec prometheus kill -HUP 1` is an emergency override only)."
 
       - alert: AlphalensLivePriceStreamReaderDown
         # Gated on subscribed_uics > 0: an idle reader (nothing subscribed)

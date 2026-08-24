@@ -1294,6 +1294,65 @@ class TestSaxoRefreshUnit(unittest.TestCase):
         self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
 
 
+class TestPrometheusRulesSyncUnit(unittest.TestCase):
+    """Hourly live-rules sync oneshot (issue #1073).
+
+    Pins the directives the glob-driven parity suites cannot infer: the
+    host-venv python invocation of the sync script (NOT a working-tree copy
+    path — the script itself reads the origin/main blob), docker ordering
+    (promtool + HUP run through `docker exec`), and the hourly :27 UTC slot
+    that stays clear of the :05 edge-mirror and every :30 daily job.
+    """
+
+    SERVICE = SYSTEMD_DIR / "alphalens-prometheus-rules-sync.service"
+    TIMER = SYSTEMD_DIR / "alphalens-prometheus-rules-sync.timer"
+
+    def test_service_is_oneshot_running_the_sync_script(self) -> None:
+        text = self.SERVICE.read_text()
+        self.assertIn("Type=oneshot", text)
+        self.assertRegex(
+            text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/python\s+"
+                r"apps/alphalens-research/scripts/sync_prometheus_rules\.py\s*$",
+                re.MULTILINE,
+            ),
+            "ExecStart must run sync_prometheus_rules.py on the host venv "
+            "python with no extra args (defaults are the production paths).",
+        )
+
+    def test_service_env_fail_loud_and_working_dir(self) -> None:
+        text = self.SERVICE.read_text()
+        self.assertRegex(text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE))
+        self.assertIn("WorkingDirectory=%h/AlphaLens", text)
+
+    def test_service_orders_after_docker(self) -> None:
+        # promtool check + the HUP reload both run through `docker exec`; on
+        # a freshly booted VPS the Persistent=true catch-up fire must not
+        # race dockerd (the shadow-returns precedent).
+        self.assertRegex(
+            self.SERVICE.read_text(),
+            re.compile(r"^After=.*\bdocker\.service\b.*$", re.MULTILINE),
+            "Unit must order After=docker.service — promtool and the HUP "
+            "reload need dockerd ready.",
+        )
+
+    def test_timer_fires_hourly_at_27_utc_persistent(self) -> None:
+        text = self.TIMER.read_text()
+        self.assertRegex(
+            text,
+            re.compile(r"^OnCalendar=\*-\*-\* \*:27:00 UTC\s*$", re.MULTILINE),
+            "Hourly at :27 UTC — clear of the :05 edge-mirror, the :30 "
+            "dailies/thematic slots, and the EDGAR :00/:15/:30/:45 grid.",
+        )
+        self.assertRegex(text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+
+    def test_timer_carries_install_section(self) -> None:
+        text = self.TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
+
+
 class TestBrokerManagerHealthRules(unittest.TestCase):
     RULES = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
 
