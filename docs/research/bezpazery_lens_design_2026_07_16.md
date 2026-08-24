@@ -112,3 +112,70 @@ deploy date. Charged as **1 policy look** against the ~2026-09 exit walk-forward
 multiplicity budget (`edge_hypothesis_budget_2026_07.md` §4.1 annex; ADR 0013
 R4: every registered lens counts). **First honest look = the September exit
 walk-forward** — no peeking at the accruing forward sample before it.
+
+## 7. Amendment 2026-08-24 — the entry anchor is now explicit (issue #1114)
+
+**Status of this amendment:** LOCKED. The pre-registered geometry of §2 is
+**unchanged** — same 1.5×ATR stop, same 1.5×ATR take-profit, same 0.6% cost
+floor, same 52-week-high ceiling. Only the ENTRY ANCHOR the bracket is placed
+around is now stated instead of implied.
+
+### 7.1 What was wrong
+
+`replay_ladder_atr_bracket` anchored the bracket on the alloc-weighted blend
+over the tiers that TOUCHED in the bar walk. The live rail
+(`paper/sizing.py::build_exit_geometry_spec`) anchors on the blend over ALL
+intended tiers. The two are equal only when every tier fills; on a partial fill
+they are far apart. On SMG, 2026-08-24: planned blend 55.5957, realised-anchor
+blend 59.786017 (the top tier's limit), a gap of 4.19 on the anchor and the same
+gap on the derived stop.
+
+The lens is the instrument used to judge this policy, so an `/edge` figure was
+describing a policy the live rail does not run, and the flattery grew exactly in
+the cases that go wrong.
+
+### 7.2 What changed
+
+`replay_ladder_atr_bracket` now takes a REQUIRED, defaultless `anchor`
+(`"planned"` or `"realised"`) and raises on anything else. Both anchors are
+registered as separate lenses:
+
+| lens_id | anchor | mirrors |
+|---|---|---|
+| `atr_bracket_1p5` | `realised` | the lens's own historical behaviour |
+| `atr_bracket_1p5_planned` | `planned` | the live rail |
+
+The historical id keeps the realised anchor because it carries every value
+already stamped on the live rows, and the daily path never recomputes a stamped
+row. Renaming it would strand that history under a key no longer in the
+registry.
+
+### 7.3 Consequences for reading `/edge`
+
+- Every `atr_bracket_1p5` value stamped before 2026-08-24 describes the
+  **realised-fill** anchor, not the live policy. That includes the exploratory
+  read recorded in issue #1115.
+- `atr_bracket_1p5_planned` populates **forward-only**. Comparing the two means
+  before it accrues its own N compares cohorts, not anchors.
+- The registry is now 5 of `MAX_REGISTERED_LENSES = 5`. Any further lens is
+  one-in-one-out (ADR 0013 R4).
+
+### 7.4 The take-profit floor — settled, not one-sided
+
+Issue #1114 records the 0.6% floor as a second divergence the lens applies and
+production does not. That is wrong in BEHAVIOUR and was refuted by running it:
+both sides reach the floor through the one shared leaf
+`broker_contract/exit_geometry/levels.py::atr_bracket_levels`, production via
+`AtrBracketPolicy.decide_placement_geometry`. The floor was one-sided only in
+TELEMETRY — the live geometry stamp never named it — which this change fixes by
+adding `anchor_mode` and `tp_floor_frac` to the stamp. The identity is pinned by
+a test where the floor binds on both sides.
+
+### 7.5 Not modelled: the realised AVERAGE FILL anchor
+
+The replay fills a tier AT its limit, so `"realised"` is the blend of tier
+LIMITS, never of broker fill prices. A third anchor exists in the live journal —
+the realised average fill (SMG: 59.9261, giving a target of 63.9581 against the
+realised-limit 63.818017) — and is what issue #1112 step 4 would move the live
+rail onto. Adding it is a third `AnchorMode` value, which is cheap precisely
+because the anchor is now a named argument with no default.
