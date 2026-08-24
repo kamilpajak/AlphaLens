@@ -44,6 +44,7 @@ from broker_contract.exit_geometry import (
     SetupStaticPolicy,
     resolve_exit_policy,
 )
+from broker_contract.exit_geometry.registry import resolve_policy
 from broker_contract.price_feed import SupportsSessionLow
 
 from alphalens_pipeline.brokers.automanager import (
@@ -5632,6 +5633,12 @@ _GEOMETRY_STAMP_POLICY_NAME = "atr_bracket_1p5"
 # the feedback tier into the broker daemon's hot path.
 _GEOMETRY_STAMP_ANCHOR_MODE = "planned"
 
+# The take-profit cost floor the geometry policy applies, resolved ONCE at import
+# time. `resolve_policy` raises ValueError on an unknown name and the stamp runs
+# on every watch_open inside the unattended drain, where nothing may raise — so
+# an unknown name must fail the daemon at startup, not on a tick hours later.
+_GEOMETRY_STAMP_TP_FLOOR_FRAC = resolve_policy(_GEOMETRY_STAMP_POLICY_NAME).tp_floor_frac
+
 
 def _geometry_shadow_stamp(
     exit_spec: Any, spec: Any, *, use_geometry: bool
@@ -5652,7 +5659,6 @@ def _geometry_shadow_stamp(
     reanchor BY TYPE and leave the reanchor-specific k_atr/atr/ceiling facts None
     when absent — never index [0] / attribute-access blindly, or a
     valid-but-reanchor-less intent would crash the unattended drain every tick."""
-    from broker_contract.exit_geometry.registry import resolve_policy
     from broker_contract.trade_intent.schema import ReanchorOnFill
 
     from alphalens_pipeline.paper.sizing import planned_blended_entry_from_spec
@@ -5678,7 +5684,7 @@ def _geometry_shadow_stamp(
         # take-profit floor, which is why the floor looked one-sided when in
         # fact both sides reach it through the same atr_bracket_levels leaf.
         "anchor_mode": _GEOMETRY_STAMP_ANCHOR_MODE,
-        "tp_floor_frac": resolve_policy(_GEOMETRY_STAMP_POLICY_NAME).tp_floor_frac,
+        "tp_floor_frac": _GEOMETRY_STAMP_TP_FLOOR_FRAC,
     }
 
 
