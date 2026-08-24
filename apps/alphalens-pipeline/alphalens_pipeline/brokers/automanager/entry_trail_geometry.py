@@ -87,3 +87,36 @@ def compute_trailing_order_geometry(
         trailing_step=step,
         ceiling_price=ceiling_price,
     )
+
+
+def entry_fill_estimate(*, reference: float, trough: float, d_bps: int) -> float | None:
+    """A realistic UPPER bound on the price this trail could fill at, or ``None``
+    on any degenerate input (issue #1112 step 1).
+
+    This is the armed order's own ``ceiling_price`` — the ``StopLimitPrice`` the
+    broker enforces, so no fill of that order can print above it. The tier LIMIT
+    is deliberately NOT used: on 2026-08-24 the SMG trail filled at 59.9261
+    against a tier limit of 59.786017 (23 bps above it), because the broker's
+    server-side trail ratcheted the trigger independently of our limit. A
+    validity check on the nominal limit would have seen nothing wrong.
+    """
+    geo = compute_trailing_order_geometry(reference=reference, trough=trough, d_bps=d_bps)
+    return None if geo is None else geo.ceiling_price
+
+
+def arms_inside_exit_region(*, fill_estimate: float | None, exit_target: float | None) -> bool:
+    """Whether arming this tier could fill AT OR ABOVE its own exit target — i.e.
+    the position would already be past its take-profit the moment it opens
+    (issue #1112: the LIVE SMG round trip of 2026-08-24, 62 seconds, -380 bps).
+
+    FAILS OPEN by design: a missing, non-finite or non-positive input returns
+    ``False`` (arm as before). A gate that silently refuses every arm on
+    degenerate data would stop the whole entry rail, which is worse than the
+    defect it prevents; the caller logs whichever way it goes.
+    """
+    if fill_estimate is None or exit_target is None:
+        return False
+    for value in (fill_estimate, exit_target):
+        if not math.isfinite(value) or value <= 0.0:
+            return False
+    return fill_estimate >= exit_target

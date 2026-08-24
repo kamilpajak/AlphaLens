@@ -32,6 +32,14 @@ from alphalens_pipeline.brokers.automanager import entry_trail_watcher, entry_tr
 from alphalens_pipeline.brokers.automanager import safety as _safety
 from broker_contract.sizing import SetupPlan, TierPlan
 
+from tests.incident_1112_fixture import (
+    ETSY_E3_LIMIT,
+    ETSY_E3_TARGET,
+    SMG_TIERS,
+    SMG_TOUCH_BID,
+    smg_geometry_stamp,
+)
+
 _ENV = entry_trails.ENTRY_TRAIL_BPS_ENV
 # Captured at import time (before any test patches the module attribute) so the
 # end-to-end MAX_OPEN test can restore the REAL rail over _placer's stub.
@@ -445,26 +453,31 @@ def _seed_watch(
     next_tier_limit: float | None,
     window_end: str | None = None,
     d_bps: int = 50,
+    geometry: dict[str, Any] | None = None,
 ) -> None:
-    entry_trails.append_entry_trail_line(
-        {
-            "kind": entry_trails.KIND_WATCH_OPEN,
-            "crid": crid,
-            "limit": limit,
-            "qty": 100.0,
-            "d_bps": d_bps,
-            "window_end": window_end or "2099-01-01T21:00:00+00:00",
-            "fx_rate": None,
-            "uic": 307,
-            "ticker": "KO",
-            "exchange_mic": "XNYS",
-            "next_tier_limit": next_tier_limit,
-            "pick_key": "KO:2026-07-20",
-            "entry_mode": "entry-trail-native-d50-testcfg",
-            "disaster_stop": 8.0,
-            "tier_index": 0,
-        }
-    )
+    line: dict[str, Any] = {
+        "kind": entry_trails.KIND_WATCH_OPEN,
+        "crid": crid,
+        "limit": limit,
+        "qty": 100.0,
+        "d_bps": d_bps,
+        "window_end": window_end or "2099-01-01T21:00:00+00:00",
+        "fx_rate": None,
+        "uic": 307,
+        "ticker": "KO",
+        "exchange_mic": "XNYS",
+        "next_tier_limit": next_tier_limit,
+        "pick_key": "KO:2026-07-20",
+        "entry_mode": "entry-trail-native-d50-testcfg",
+        "disaster_stop": 8.0,
+        "tier_index": 0,
+    }
+    if geometry is not None:
+        # The router stamps this blob on the watch_open line at routing time
+        # (control_loop._open_entry_watches); it carries the exit target the
+        # live exit engine fires on.
+        line["geometry"] = geometry
+    entry_trails.append_entry_trail_line(line)
 
 
 _ALLOW = {_ENV: "50", entry_trails.ENTRY_TRAIL_BPS_ENV: "50", "ALPHALENS_BROKER_ALLOW_ORDERS": "1"}
@@ -650,6 +663,118 @@ class TestEntryWatchPassNativeArm(unittest.TestCase):
         self.assertEqual(
             [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED], []
         )
+
+
+class TestEntryArmInsideExitRegion(unittest.TestCase):
+    """Issue #1112 step 1: a tier whose realistic fill would land AT OR ABOVE the
+    exit target already stamped on its own watch must NOT arm.
+
+    LIVE 2026-08-24 (SMG): tier limit 59.786017 sat above the geometry target
+    59.6277, so the fill at 59.9261 was past its take-profit the moment it
+    happened and the exit engine sold 62 seconds later for about -380 bps.
+    """
+
+    def _run(
+        self,
+        deps: cl.LoopDeps,
+        price: float | None,
+        feed: dict[int, float | None],
+    ) -> None:
+        feed[307] = price
+        with mock.patch.dict("os.environ", _ALLOW, clear=True):
+            cl._run_entry_watch_pass(deps, kill=False, report=cl.TickReport())
+
+    def _seed(self, path: Path, *, limit: float, geometry: dict[str, Any] | None) -> None:
+        _seed_watch(
+            path,
+            crid="KO-2026-07-20-entry-t0",
+            limit=limit,
+            next_tier_limit=None,
+            geometry=geometry,
+        )
+
+    def test_top_tier_inside_the_exit_region_places_no_order_and_terminates(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        self._seed(path, limit=SMG_TIERS[0][0], geometry=smg_geometry_stamp())
+        prices: dict[int, float | None] = {}
+        broker = _RecordingBroker()
+        alerts: list[tuple[str, str]] = []
+        deps = _watch_deps(_FakeFeed(prices), alerts, broker=broker)
+
+        self._run(deps, SMG_TOUCH_BID, prices)  # the real touch tick
+
+        self.assertEqual(broker.trailing_orders, [], "no native trail may be armed")
+        self.assertEqual(broker.brackets, [])
+        self.assertEqual(broker.stops, [])
+        self.assertEqual(
+            [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_TRAIL_ARMED], []
+        )
+        cancelled = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED]
+        self.assertEqual(len(cancelled), 1, "the tier is terminal-refused, not retried forever")
+        self.assertIn("exit region", cancelled[0]["note"])
+        self.assertTrue(any("exit region" in msg for msg, _key in alerts))
+
+    def test_refused_tier_does_not_retry_on_the_next_tick(self) -> None:
+        path = _journal(self)
+        _planned_journal(self)
+        self._seed(path, limit=SMG_TIERS[0][0], geometry=smg_geometry_stamp())
+        prices: dict[int, float | None] = {}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        for price in (SMG_TOUCH_BID, SMG_TOUCH_BID - 0.02, SMG_TOUCH_BID - 0.01):
+            self._run(deps, price, prices)
+        self.assertEqual(broker.trailing_orders, [])
+        cancelled = [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED]
+        self.assertEqual(len(cancelled), 1, "terminal-refused exactly once, then dropped")
+
+    def test_healthy_live_tiers_still_arm(self) -> None:
+        # Regression against the same live journal: SMG E2 / SMG E3 / ETSY E3.
+        for label, limit, geometry in (
+            ("SMG E2", SMG_TIERS[1][0], smg_geometry_stamp()),
+            ("SMG E3", SMG_TIERS[2][0], smg_geometry_stamp()),
+            ("ETSY E3", ETSY_E3_LIMIT, {**smg_geometry_stamp(), "geometry_tp": ETSY_E3_TARGET}),
+        ):
+            with self.subTest(tier=label):
+                path = _journal(self)
+                _planned_journal(self)
+                self._seed(path, limit=limit, geometry=geometry)
+                prices: dict[int, float | None] = {}
+                broker = _RecordingBroker()
+                deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+                self._run(deps, limit, prices)
+                self.assertEqual(len(broker.trailing_orders), 1, f"{label} must still arm")
+
+    def test_watch_without_a_geometry_stamp_still_arms(self) -> None:
+        # Fail open: a pre-stamp watch_open line (or a policy that places the
+        # brief's own ladder) carries no target to compare against.
+        path = _journal(self)
+        _planned_journal(self)
+        self._seed(path, limit=SMG_TIERS[0][0], geometry=None)
+        prices: dict[int, float | None] = {}
+        broker = _RecordingBroker()
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+        self._run(deps, SMG_TOUCH_BID, prices)
+        self.assertEqual(len(broker.trailing_orders), 1)
+
+    def test_degenerate_or_unapplied_geometry_stamp_still_arms(self) -> None:
+        for label, stamp in (
+            ("tp None", {**smg_geometry_stamp(), "geometry_tp": None}),
+            ("tp NaN", {**smg_geometry_stamp(), "geometry_tp": float("nan")}),
+            ("tp zero", {**smg_geometry_stamp(), "geometry_tp": 0.0}),
+            ("tp not a number", {**smg_geometry_stamp(), "geometry_tp": "x"}),
+            ("not applied", {**smg_geometry_stamp(), "applied": False}),
+            ("stamp not a mapping", None),
+        ):
+            with self.subTest(case=label):
+                path = _journal(self)
+                _planned_journal(self)
+                self._seed(path, limit=SMG_TIERS[0][0], geometry=stamp)
+                prices: dict[int, float | None] = {}
+                broker = _RecordingBroker()
+                deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+                self._run(deps, SMG_TOUCH_BID, prices)
+                self.assertEqual(len(broker.trailing_orders), 1, f"{label} must fail open")
 
 
 class TestEntryWatchPassTouchLatch(unittest.TestCase):

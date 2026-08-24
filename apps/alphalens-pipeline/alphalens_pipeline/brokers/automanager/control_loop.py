@@ -2361,6 +2361,87 @@ def _find_working_entry_order(broker: Broker, external_reference: str) -> str | 
     return None
 
 
+def _stamped_exit_target(record: Mapping[str, Any]) -> float | None:
+    """The exit target already stamped on this watch's ``watch_open`` line, or
+    ``None`` when there is none to compare against (issue #1112 step 1).
+
+    Reads ONLY data already in scope — the ``geometry`` blob
+    :func:`_geometry_shadow_stamp` wrote at routing time, whose ``geometry_tp``
+    is the very number :func:`_geometry_tranche_ladder` turns into the single
+    tranche the live exit engine fires on. No policy is resolved and no
+    environment is read here (that would reintroduce the per-tick resolve the
+    ExitPolicy refactor removed).
+
+    ``None`` (fail open, arm as before) when: the line carries no stamp, the
+    stamp is not a mapping, ``applied`` is falsey (the placed exit is the
+    brief's own ladder, not this target), or ``geometry_tp`` is absent /
+    unparseable / non-finite / non-positive.
+    """
+    stamp = record.get("geometry")
+    if not isinstance(stamp, Mapping) or not stamp.get("applied"):
+        return None
+    raw = stamp.get("geometry_tp")
+    try:
+        target = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(target) or target <= 0.0:
+        return None
+    return target
+
+
+def _refuse_arm_inside_exit_region(
+    deps: LoopDeps,
+    crid: str,
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    d_bps: int,
+    geo: entry_trail_geometry.TrailingOrderGeometry,
+    report: TickReport,
+) -> bool:
+    """``True`` iff this tier was terminal-refused because its realistic fill
+    would land AT OR ABOVE its own exit target (issue #1112 step 1).
+
+    LIVE 2026-08-24 (SMG): the top tier's limit 59.786017 sat above the exit
+    target 59.6277 the policy derived from the alloc-weighted PLANNED blend of
+    the whole ladder, so the fill at 59.9261 was already past its take-profit
+    and the exit engine sold it 62 seconds later for about -380 bps net.
+
+    The fill estimate is the armed order's own broker-enforced ceiling, NOT the
+    tier limit: the live fill printed 23 bps ABOVE its limit, so a check on the
+    nominal limit would have seen nothing wrong.
+
+    Terminal (``KIND_CANCELLED`` + ``watcher.cancel()``), mirroring the G7
+    insufficient-funds refuse in :func:`_handle_arm_failure` — the condition is
+    a property of the ladder's own geometry, so retrying it every 45 s tick
+    would only spam. Fails OPEN: no usable stamp means arm as before.
+    """
+    target = _stamped_exit_target(record)
+    if not entry_trail_geometry.arms_inside_exit_region(
+        fill_estimate=geo.ceiling_price, exit_target=target
+    ):
+        return False
+    note = (
+        f"tier would fill inside the exit region: fill estimate {geo.ceiling_price:.4f} "
+        f">= exit target {target:.4f}"
+    )
+    entry_trails.append_entry_trail_line(
+        {
+            "kind": entry_trails.KIND_CANCELLED,
+            "crid": crid,
+            "note": note,
+            "measurement": _entry_measurement_blob(record, runtime, d_bps),
+        }
+    )
+    runtime.watcher.cancel()
+    if deps.alert_throttled(
+        f"entry-trail {entry_label_from_crid(crid)}: {note} — tier refused",
+        f"entry-trail:inside-exit-region:{crid}",
+    ):
+        report.alerts += 1
+    return True
+
+
 def _arm_native_trail(
     deps: LoopDeps,
     crid: str,
@@ -2399,6 +2480,8 @@ def _arm_native_trail(
     )
     if geo is None:
         return  # degenerate geometry — retry next tick
+    if _refuse_arm_inside_exit_region(deps, crid, record, runtime, d_bps, geo, report):
+        return
     try:
         uic = int(record["uic"])
         qty = float(record["qty"])
