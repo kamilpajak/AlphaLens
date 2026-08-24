@@ -177,7 +177,7 @@ class TestEntryFillWalk(unittest.TestCase):
 
 
 class TestPartialFillWeighting(unittest.TestCase):
-    SMG = _tiers(*(("E%d" % (i + 1), lim, alloc) for i, (lim, alloc) in enumerate(SMG_TIERS)))
+    SMG = _tiers(*((f"E{i + 1}", lim, alloc) for i, (lim, alloc) in enumerate(SMG_TIERS)))
 
     def test_partition_weight_is_the_alloc_fraction_not_the_tier_count(self) -> None:
         # SMG allocs are 21.07 / 32.14 / 46.79. Only the top tier filling deploys

@@ -656,7 +656,7 @@ CLASSIFICATION_SPLIT_INVALIDATED = "SPLIT_INVALIDATED"
 literal so this pure module needs no import for one string."""
 
 
-def _finite(value: Any) -> float | None:
+def finite_or_none(value: Any) -> float | None:
     """Read a store cell as a float, treating ``None`` and NaN alike as missing.
 
     Parquet nulls arrive as float NaN through pandas. A NaN that reached a mean
@@ -712,9 +712,9 @@ def opportunity_from_store_row(
     for an ongoing row is nothing at all.
     """
     terminal = bool(row.get("terminal"))
-    stop_distance_pct = _finite(row.get("stop_distance_pct"))
+    stop_distance_pct = finite_or_none(row.get("stop_distance_pct"))
     holding = row.get("holding_days_elapsed")
-    holding_days = None if _finite(holding) is None else int(float(holding))
+    holding_days = None if finite_or_none(holding) is None else int(float(holding))
     return Opportunity(
         brief_date=str(row.get("brief_date")),
         ticker=str(row.get("ticker")),
@@ -724,19 +724,19 @@ def opportunity_from_store_row(
         filled_fraction=filled_fraction(tiers, (f.tier_id for f in fills)),
         realised_return=(
             realized_r_at_fill(
-                realized_r=_finite(row.get("realized_r")),
+                realized_r=finite_or_none(row.get("realized_r")),
                 stop_distance_pct=stop_distance_pct,
                 overshoot_bps=overshoot_bps,
             )
             if terminal
             else None
         ),
-        forgone_return=_finite(row.get("market_excess_return")),
+        forgone_return=finite_or_none(row.get("market_excess_return")),
         holding_days=holding_days,
         mae_r=(
             mae_r_at_fill(
                 stop_distance_pct=stop_distance_pct,
-                mae_pct=_finite(row.get("mae_pct")),
+                mae_pct=finite_or_none(row.get("mae_pct")),
                 overshoot_bps=overshoot_bps,
             )
             if terminal
