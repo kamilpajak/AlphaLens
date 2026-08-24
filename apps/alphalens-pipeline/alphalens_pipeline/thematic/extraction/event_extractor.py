@@ -400,13 +400,17 @@ def extract_daily(
         len(to_extract),
     )
 
+    # Resolve the engine ONCE at the run boundary so the end-of-run
+    # metrics flush below sees the same accumulator every row fed.
+    eng = engine if engine is not None else _get_default_engine()
+
     new_rows: list[dict] = []
     for _, row in to_extract.iterrows():
         event = extract_one(
             row,
             llm_client=llm_client,
             model=model,
-            engine=engine,
+            engine=eng,
             resolver=resolver,
         )
         if event is None:
@@ -433,6 +437,17 @@ def extract_daily(
     # Cache is append-only: cached rows are authoritative on news_id collision.
     if not combined.empty:
         combined = combined.drop_duplicates(subset=["news_id"], keep="first").reset_index(drop=True)
+
+    # One metrics flush per production run (#1108). The job name is
+    # distinct from the evaluate CLI's "template-engine-evaluate" so the
+    # two textfiles never clobber each other. Wrapped in try/except
+    # (zen PR #311 rule, same as _emit_stage_volume): the events parquet
+    # is already written, so a metrics-dir failure must not turn a good
+    # extract run into a unit failure.
+    try:
+        eng.metrics.flush(job="template-engine")
+    except Exception:
+        logger.exception("template metrics flush failed; the extract run succeeded")
 
     return combined
 
