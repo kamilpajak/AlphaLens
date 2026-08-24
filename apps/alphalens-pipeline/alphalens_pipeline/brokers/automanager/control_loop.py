@@ -39,6 +39,12 @@ from broker_contract.contract import (
     _is_sell_orders_already_exist,
     _is_too_far_from_market,
 )
+from broker_contract.costs import (
+    COMMISSION_RATE,
+    FX_ROUND_TRIP_RATE,
+    MIN_COMMISSION_USD,
+    round_trip_fee_bps,
+)
 from broker_contract.exit_geometry import (
     ExitPolicy,
     SetupStaticPolicy,
@@ -4937,45 +4943,11 @@ def _resolve_and_size(
 
 # --- Fee floor (design memo §4 round-trip fee equation) ----------------------
 #
-# Saxo LIVE PL: commission 0.08% per fill, $1 minimum, applied on BOTH the
-# entry and the exit fill (round trip); a PLN account additionally converts
-# on BOTH legs of a cross-currency trade (0.25% x 2 = 0.50%). Names cite the
-# memo equation so a future edit stays traceable to it rather than a bare
-# magic number:
+# The model itself lives in ``broker_contract.costs`` (extracted for #1112 so
+# the placement fee floor and the exit-time cost gate share ONE model):
 #
-#   fee_rt(N) = 2 x max(_FEE_FLOOR_MIN_COMMISSION_USD,
-#                        _FEE_FLOOR_COMMISSION_RATE x N)
-#               + (_FEE_FLOOR_FX_ROUND_TRIP_RATE x N if an FX conversion applies else 0)
-_FEE_FLOOR_MIN_COMMISSION_USD = 1.0
-_FEE_FLOOR_COMMISSION_RATE = 0.0008
-_FEE_FLOOR_FX_ROUND_TRIP_RATE = 0.0050
-
-
-def _round_trip_fee_bps(
-    notional: float, *, fx_applies: bool, min_commission_applies: bool = True
-) -> float:
-    """The estimated round-trip fee for ``notional`` (instrument currency),
-    expressed in bps of that notional — design memo §4. ``fx_applies`` is
-    ``True`` iff the pick's ``fx`` conversion is not ``None`` (account
-    currency != instrument currency), which adds the FX round-trip leg.
-    ``min_commission_applies`` gates the $1-per-fill clamp: that figure is
-    denominated in USD, so it is only meaningful when ``notional`` is too —
-    a non-USD instrument gets the ad-valorem rate alone (the memo §4
-    equation is calibrated for the first-cohort US venue).
-
-    A non-positive ``notional`` (an unplannable/zero-tier pick) returns
-    ``0.0`` — the caller's cap comparison then stays inert rather than
-    dividing by zero; the zero-tiers check downstream already refuses such a
-    pick on its own terms."""
-    if notional <= 0:
-        return 0.0
-    ad_valorem = _FEE_FLOOR_COMMISSION_RATE * notional
-    per_fill = (
-        max(_FEE_FLOOR_MIN_COMMISSION_USD, ad_valorem) if min_commission_applies else ad_valorem
-    )
-    commission_round_trip = 2.0 * per_fill
-    fx_round_trip = _FEE_FLOOR_FX_ROUND_TRIP_RATE * notional if fx_applies else 0.0
-    return (commission_round_trip + fx_round_trip) / notional * 10000.0
+#   fee_rt(N) = 2 x max(MIN_COMMISSION_USD, COMMISSION_RATE x N)
+#               + (FX_ROUND_TRIP_RATE x N if an FX conversion applies else 0)
 
 
 def _check_fee_floor(
@@ -5011,7 +4983,7 @@ def _check_fee_floor(
     from broker_contract.sizing import setup_plan_gross_notional
 
     notional = setup_plan_gross_notional(plan)
-    fee_bps = _round_trip_fee_bps(
+    fee_bps = round_trip_fee_bps(
         notional,
         fx_applies=fx is not None,
         min_commission_applies=instrument_currency == "USD",
@@ -5037,7 +5009,7 @@ def _estimate_round_trip_fee_bps(
       ``max($1, 0.08% x qty x limit)`` — zero-qty tiers are never POSTed
       (``_ZERO_QTY_TIER_POLICY``), so they pay nothing. The $1 minimum is a
       USD figure, gated on ``instrument_currency`` exactly like
-      ``_round_trip_fee_bps``.
+      ``round_trip_fee_bps``.
     - ``exit_fees``: the same shape over the TP tranches, with tranche qtys
       derived at placement as ``tranche_pct/100 x total entry qty``
       (``TpTrancheSpec`` doctrine: tranche_pct is a PERCENTAGE 0-100, copied
@@ -5051,7 +5023,7 @@ def _estimate_round_trip_fee_bps(
 
     ``None`` (an honest "not estimable", journaled as a real null) when there
     is no sized plan / no tiers / zero gross — mirrors the inert stance of
-    ``_round_trip_fee_bps`` on a non-positive notional."""
+    ``round_trip_fee_bps`` on a non-positive notional."""
     entry_tiers = getattr(plan, "entry_tiers", None) if plan is not None else None
     if not entry_tiers:
         return None
@@ -5064,9 +5036,9 @@ def _estimate_round_trip_fee_bps(
     min_commission_applies = instrument_currency == "USD"
 
     def _fill_fee(qty: float, price: float) -> float:
-        ad_valorem = _FEE_FLOOR_COMMISSION_RATE * qty * price
+        ad_valorem = COMMISSION_RATE * qty * price
         if min_commission_applies:
-            return max(_FEE_FLOOR_MIN_COMMISSION_USD, ad_valorem)
+            return max(MIN_COMMISSION_USD, ad_valorem)
         return ad_valorem
 
     entry_fees = sum(_fill_fee(t.qty, t.limit_price) for t in entry_tiers if t.qty > 0)
@@ -5078,7 +5050,7 @@ def _estimate_round_trip_fee_bps(
         )
     else:
         exit_fees = entry_fees
-    fx_cost = _FEE_FLOOR_FX_ROUND_TRIP_RATE * gross if fx is not None else 0.0
+    fx_cost = FX_ROUND_TRIP_RATE * gross if fx is not None else 0.0
     return (entry_fees + exit_fees + fx_cost) / gross * 10000.0
 
 

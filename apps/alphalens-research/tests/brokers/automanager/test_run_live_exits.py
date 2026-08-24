@@ -10,6 +10,12 @@ from broker_contract.price_feed import PricePoint
 from broker_contract.sizing import TpTranchePlan
 
 from tests.brokers.automanager.acceptance.fake_broker import FakeBroker
+from tests.incident_1112_fixture import (
+    SMG_ACTUAL_FILL,
+    SMG_EXIT_DECISION_BID,
+    SMG_GEOMETRY_TP,
+    SMG_TP_TRANCHES,
+)
 
 _DECISION_EVENT_TIME = dt.datetime(2026, 8, 5, tzinfo=dt.UTC)
 
@@ -162,6 +168,74 @@ class TestRunLiveExits(unittest.TestCase):
         self.assertEqual(n, 0)
         self.assertEqual(no_cap.get_positions_by_uic(uic).quantity, 100.0)  # nothing sold
         self.assertTrue(any(str(uic) in line for line in cm.output), cm.output)
+
+
+class TestRunLiveExitsCostGate(unittest.TestCase):
+    """Issue #1112 step 2, wired end to end: ``run_live_exits`` reads the
+    realised entry off the Position it already fetches and threads it into the
+    decision, so a refused exit places NO market order and touches NO stop."""
+
+    def _mk_smg(self):
+        b = FakeBroker()
+        uic = b.uic_of("KO")
+        b.set_position("KO", 1, avg_price=SMG_ACTUAL_FILL)
+        b.add_resting_sell("KO", 1, 49.412, order_type="StopIfTraded")
+        feed = _FakeFeed({uic: SMG_EXIT_DECISION_BID})
+        managed = [
+            ManagedExit(
+                uic=uic,
+                tp_tranches=(
+                    TpTranchePlan(
+                        tranche_index=0,
+                        target_price=SMG_GEOMETRY_TP,
+                        tranche_pct=1.0,
+                        r_multiple=0.0,
+                        tag="geometry",
+                    ),
+                ),
+                reference_qty=1,
+                stop_price=49.412,
+                already_fired=frozenset(),
+            )
+        ]
+        return b, uic, feed, managed
+
+    def test_refused_exit_sells_nothing_and_leaves_the_stop_alone(self):
+        b, uic, feed, managed = self._mk_smg()
+        records: list[dict] = []
+        with mock.patch.object(cl, "_append_standalone_stop_journal", side_effect=records.append):
+            n = run_live_exits(b, feed, managed)
+        self.assertEqual(n, 0)
+        self.assertEqual(b.get_positions_by_uic(uic).quantity, 1.0, "position untouched")
+        sl_now = next(o for o in b.list_working_sell_orders() if o.order_type == "StopIfTraded")
+        self.assertEqual(sl_now.amount, 1.0, "the disaster stop is neither shrunk nor cancelled")
+        self.assertEqual([r for r in records if r.get("kind") == "tranche_fired"], [])
+
+    def test_a_target_beyond_cost_plus_buffer_still_fires(self):
+        b, uic, feed, managed = self._mk_smg()
+        far = managed[0]
+        managed = [
+            ManagedExit(
+                uic=far.uic,
+                tp_tranches=(
+                    TpTranchePlan(
+                        tranche_index=0,
+                        target_price=SMG_TP_TRANCHES[0],
+                        tranche_pct=1.0,
+                        r_multiple=0.0,
+                        tag="geometry",
+                    ),
+                ),
+                reference_qty=1,
+                stop_price=49.412,
+                already_fired=frozenset(),
+            )
+        ]
+        feed = _FakeFeed({uic: SMG_TP_TRANCHES[0] + 0.05})
+        with mock.patch.object(cl, "_append_standalone_stop_journal"):
+            n = run_live_exits(b, feed, managed)
+        self.assertEqual(n, 1)
+        self.assertEqual(b.get_positions_by_uic(uic).quantity, 0.0)
 
 
 if __name__ == "__main__":

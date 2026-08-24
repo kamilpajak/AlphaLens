@@ -13,11 +13,13 @@ owned so the position can never flip short.
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from broker_contract.contract import Broker, OrderState
+from broker_contract.costs import round_trip_fee_bps
 from broker_contract.price_feed import PriceFeed, PricePoint
 from broker_contract.sizing import TpTranchePlan
 
@@ -28,6 +30,33 @@ logger = logging.getLogger(__name__)
 
 _PRICE_EPS = 1e-9  # a long tranche fires when price >= target (within eps)
 _QTY_EPS = 0.5  # share-qty tolerance (mirrors broker_contract.contract._QTY_EPS)
+_BPS_PER_UNIT = 10_000.0
+
+EXIT_EDGE_MIN_BPS = 50.0
+"""The DECLARED minimum edge, in bps, an exit must clear ON TOP of round-trip
+cost before it may fire (issue #1112 step 2).
+
+This is a declared value, NOT one derived from the fee. *Optimal Transaction
+Filters Under Transitory Trading Opportunities* shows that a filter set exactly
+equal to round-trip cost is suboptimal: at the break-even point the expected
+net gain is zero while the variance is not, so the filter has to sit strictly
+wider than the fee. The literature gives no closed form for this strategy's
+opportunity process, so the width is a judgement call recorded here rather than
+a formula. 50 bps is the starting value; changing it is a strategy change and
+belongs in a pre-registered measurement, not in a bug fix.
+"""
+
+EXIT_COST_FX_APPLIES = True
+"""Whether the exit cost model charges the FX round-trip leg.
+
+DECLARED, because the exit engine does not know the account currency: a
+:class:`~alphalens_pipeline.brokers.automanager.live_exit_engine.ManagedExit`
+carries only uic / tranches / qty / stop, and the ``tranche_plan`` journal line
+it is folded from carries no ``fx_rate`` either. The live account is PLN and
+every first-cohort instrument is USD, so a conversion always applies today. It
+is not load-bearing for the case this gate exists to catch: commission alone on
+one share at about $60 is 334 bps, far above any plausible buffer.
+"""
 
 
 def tranche_tag(index: int) -> str:
@@ -53,6 +82,51 @@ class TrancheExitResult:
     sell_order_id: str | None
 
 
+def _exit_clears_cost(
+    *, price: float, target_price: float, qty: int, realised_entry: float | None, tag: str
+) -> bool:
+    """Whether selling ``qty`` shares at ``price`` clears round-trip cost plus
+    the declared :data:`EXIT_EDGE_MIN_BPS` buffer, measured from the REALISED
+    entry (issue #1112 step 2).
+
+    FAILS OPEN — an unknown realised entry (``None``, the SIM ``NoAccess``
+    non-positive sentinel, or a NaN) returns ``True`` and logs. This is the
+    OPPOSITE of ``position_manager._maybe_reanchor``'s fail-closed stance on the
+    same field, deliberately: refusing to re-anchor a stop leaves the brief's
+    own stop in place, whereas refusing an exit strands a live position with no
+    take-profit path. The disaster stop is a separate resting broker order this
+    engine never touches, so it still guards the downside either way.
+    """
+    if realised_entry is None or not math.isfinite(realised_entry) or realised_entry <= 0.0:
+        logger.warning(
+            "tranche %s: realised entry unknown (%r) — cost gate skipped, firing as before",
+            tp_label_from_tag(tag),
+            realised_entry,
+        )
+        return True
+    cost_bps = round_trip_fee_bps(
+        qty * realised_entry,
+        fx_applies=EXIT_COST_FX_APPLIES,
+        min_commission_applies=True,
+    )
+    edge_bps = (price / realised_entry - 1.0) * _BPS_PER_UNIT
+    required_bps = cost_bps + EXIT_EDGE_MIN_BPS
+    if edge_bps >= required_bps:
+        return True
+    logger.warning(
+        "tranche %s refused (inside cost): realised entry %.4f, target %.4f, bid %.4f, "
+        "edge %.1f bps < round-trip cost %.1f bps + E_min %.1f bps",
+        tp_label_from_tag(tag),
+        realised_entry,
+        target_price,
+        price,
+        edge_bps,
+        cost_bps,
+        EXIT_EDGE_MIN_BPS,
+    )
+    return False
+
+
 def plan_tranche_exits(
     *,
     price: float,
@@ -60,12 +134,21 @@ def plan_tranche_exits(
     reference_qty: float,
     owned: float,
     already_fired: frozenset[str],
+    realised_entry: float | None = None,
 ) -> list[TrancheExit]:
     """Which not-yet-fired tranches a LONG at ``price`` should realize now.
 
     ``reference_qty`` is the tranche-sizing base (the intended/peak filled
     position); tranche qty = round(reference_qty * tranche_pct), cumulatively
     clamped so the batch never exceeds live ``owned``. Order preserved.
+
+    ``realised_entry`` is the position's realised average entry price
+    (``Position.avg_price``). When supplied, a tranche whose distance from it is
+    inside round-trip cost plus :data:`EXIT_EDGE_MIN_BPS` is refused and logged
+    rather than fired — issue #1112, the 2026-08-24 SMG round trip that took
+    -380 bps net on a flat gross P&L. Defaulted so the pure-decision callers
+    that have no position in hand keep their existing behaviour; the live
+    caller (:func:`run_live_exits`) always passes it.
     """
     available = round(owned)
     out: list[TrancheExit] = []
@@ -77,6 +160,14 @@ def plan_tranche_exits(
             continue  # target not touched
         qty = min(round(reference_qty * t.tranche_pct), available)
         if qty <= 0:
+            continue
+        if realised_entry is not None and not _exit_clears_cost(
+            price=price,
+            target_price=t.target_price,
+            qty=qty,
+            realised_entry=realised_entry,
+            tag=tag,
+        ):
             continue
         out.append(TrancheExit(tag=tag, qty=qty, target_price=t.target_price))
         available -= qty
@@ -261,6 +352,9 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
             reference_qty=m.reference_qty,
             owned=live.quantity,
             already_fired=m.already_fired,
+            # The realised entry the #1112 cost gate measures from — already in
+            # hand from the position read above, so no extra broker I/O.
+            realised_entry=live.avg_price,
         )
         for ex in exits:
             result = execute_tranche_exit(

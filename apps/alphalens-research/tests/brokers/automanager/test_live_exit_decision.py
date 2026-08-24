@@ -3,11 +3,21 @@ from __future__ import annotations
 import unittest
 
 from alphalens_pipeline.brokers.automanager.live_exit_engine import (
+    EXIT_EDGE_MIN_BPS,
     TrancheExit,
     plan_tranche_exits,
     tranche_tag,
 )
+from broker_contract.costs import round_trip_fee_bps
 from broker_contract.sizing import TpTranchePlan
+
+from tests.incident_1112_fixture import (
+    SMG_ACTUAL_FILL,
+    SMG_EXIT_DECISION_BID,
+    SMG_GEOMETRY_TP,
+    SMG_ROUND_TRIP_FEE_BPS,
+    SMG_TP_TRANCHES,
+)
 
 
 def _tr(index, target, pct):
@@ -62,6 +72,98 @@ class TestPlanTrancheExits(unittest.TestCase):
 
     def test_tranche_tag(self):
         self.assertEqual([tranche_tag(i) for i in range(3)], ["tp1", "tp2", "tp3"])
+
+
+def _geometry_tranche(target):
+    """The single 100%-of-position tranche the geometry policy places (the shape
+    ``control_loop._geometry_tranche_ladder`` journals)."""
+    return TpTranchePlan(
+        tranche_index=0, target_price=target, tranche_pct=1.0, r_multiple=0.0, tag="geometry"
+    )
+
+
+class TestExitCostGate(unittest.TestCase):
+    """Issue #1112 step 2: an exit whose distance from the REALISED entry is
+    inside round-trip cost plus the declared ``EXIT_EDGE_MIN_BPS`` buffer is
+    refused and logged, not fired.
+
+    Pinned on the LIVE SMG round trip of 2026-08-24: bought 1 share at 59.9261,
+    sold 62 seconds later at bid 59.89 against a target of 59.62762.
+    """
+
+    def _plan(self, *, price, target, realised_entry, owned=1, reference_qty=1):
+        return plan_tranche_exits(
+            price=price,
+            tp_tranches=(_geometry_tranche(target),),
+            reference_qty=reference_qty,
+            owned=owned,
+            already_fired=frozenset(),
+            realised_entry=realised_entry,
+        )
+
+    def test_the_smg_exit_is_refused(self):
+        out = self._plan(
+            price=SMG_EXIT_DECISION_BID,
+            target=SMG_GEOMETRY_TP,
+            realised_entry=SMG_ACTUAL_FILL,
+        )
+        self.assertEqual(out, [])
+
+    def test_the_cost_model_reproduces_the_measured_incident_cost(self):
+        # 1 share x 59.9261, FX conversion applies, USD $1-per-side minimum.
+        cost = round_trip_fee_bps(SMG_ACTUAL_FILL, fx_applies=True, min_commission_applies=True)
+        self.assertAlmostEqual(cost, SMG_ROUND_TRIP_FEE_BPS, delta=0.1)
+        realised_distance_bps = (SMG_EXIT_DECISION_BID / SMG_ACTUAL_FILL - 1.0) * 10_000.0
+        self.assertAlmostEqual(realised_distance_bps, -6.02, delta=0.01)
+        self.assertLess(realised_distance_bps, cost + EXIT_EDGE_MIN_BPS)
+
+    def test_e_min_is_a_declared_positive_buffer(self):
+        # The buffer is DECLARED, never derived from the fee: a filter set
+        # exactly equal to round-trip cost is known to be suboptimal.
+        self.assertIsInstance(EXIT_EDGE_MIN_BPS, float)
+        self.assertGreater(EXIT_EDGE_MIN_BPS, 0.0)
+
+    def test_a_genuinely_profitable_target_still_fires(self):
+        # The brief's own second tranche (68.34) sits about 1404 bps above the
+        # realised entry — far outside cost plus buffer. The gate is not a
+        # blanket off-switch.
+        out = self._plan(price=69.0, target=SMG_TP_TRANCHES[1], realised_entry=SMG_ACTUAL_FILL)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].tag, "tp1")
+
+    def test_refusal_is_logged_with_the_numbers_an_operator_needs(self):
+        with self.assertLogs(
+            "alphalens_pipeline.brokers.automanager.live_exit_engine", level="WARNING"
+        ) as captured:
+            self._plan(
+                price=SMG_EXIT_DECISION_BID,
+                target=SMG_GEOMETRY_TP,
+                realised_entry=SMG_ACTUAL_FILL,
+            )
+        self.assertEqual(len(captured.records), 1)
+        message = captured.records[0].getMessage()
+        for token in ("59.9261", "59.6277", "383.7", "E_min", "bps"):
+            self.assertIn(token, message)
+
+    def test_no_realised_entry_fails_open(self):
+        # avg_price unknown (the SIM NoAccess sentinel, a NaN, or a broker read
+        # that never happened): fire as before rather than strand the position.
+        for realised_entry in (None, 0.0, -1.0, float("nan")):
+            with self.subTest(realised_entry=realised_entry):
+                out = self._plan(
+                    price=SMG_EXIT_DECISION_BID,
+                    target=SMG_GEOMETRY_TP,
+                    realised_entry=realised_entry,
+                )
+                self.assertEqual(len(out), 1)
+
+    def test_default_call_without_realised_entry_is_unchanged(self):
+        # The six pre-existing callers pass no realised_entry; their behaviour
+        # must be byte-identical.
+        out = plan_tranche_exits(
+            price=16.5, tp_tranches=_LADDER, reference_qty=100, owned=100, already_fired=frozenset()
+        )
+        self.assertEqual(out, [TrancheExit(tag="tp1", qty=50, target_price=16.0)])
 
 
 if __name__ == "__main__":

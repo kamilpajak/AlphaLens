@@ -16,6 +16,12 @@ from broker_contract.sizing import TpTranchePlan
 
 from .world import ManagerWorld
 
+_FILL = 15.0
+"""The realised entry these fixtures fill at. Explicit (the world default is
+50.0) so the tp1 target at 16.0 is a genuine +667 bps gain: the #1112 exit cost
+gate measures from the realised entry, and would refuse a tranche that sits
+BELOW it."""
+
 
 def _tr(index: int, target: float, pct: float) -> TpTranchePlan:
     return TpTranchePlan(
@@ -32,7 +38,9 @@ class LiveExitsNeverBreakNeverNaked(unittest.TestCase):
         world = ManagerWorld(self)
         world.live_exits_are_enabled()
         world.amend_is_enabled()  # in-place SL resize -> a single clean stop
-        world.entry_fills_with_tranches("KO", shares=100, stop=13.0, tranches=(_tr(0, 16.0, 0.5),))
+        world.entry_fills_with_tranches(
+            "KO", shares=100, price=_FILL, stop=13.0, tranches=(_tr(0, 16.0, 0.5),)
+        )
 
         # Tick 1: a fresh fill has no resting SL yet -- the engine requires a
         # SOLE standalone stop to shrink, so the live-exits pass is a no-op
@@ -65,7 +73,9 @@ class LiveExitsNeverBreakNeverNaked(unittest.TestCase):
         world = ManagerWorld(self)
         world.live_exits_are_enabled()
         world.amend_is_enabled()
-        world.entry_fills_with_tranches("KO", shares=100, stop=13.0, tranches=(_tr(0, 16.0, 0.5),))
+        world.entry_fills_with_tranches(
+            "KO", shares=100, price=_FILL, stop=13.0, tranches=(_tr(0, 16.0, 0.5),)
+        )
         world.run_tick()  # establishes the initial 100-share covering SL
         world.assert_exactly_covered("KO")
 
@@ -86,7 +96,9 @@ class LiveExitsNeverBreakNeverNaked(unittest.TestCase):
         # stays off, so a touched target changes nothing (byte-identical to
         # pre-INC-5 acceptance behaviour).
         world = ManagerWorld(self)
-        world.entry_fills_with_tranches("KO", shares=100, stop=13.0, tranches=(_tr(0, 16.0, 0.5),))
+        world.entry_fills_with_tranches(
+            "KO", shares=100, price=_FILL, stop=13.0, tranches=(_tr(0, 16.0, 0.5),)
+        )
         world.run_tick()
         world.price_is("KO", 16.5)  # would touch tp1 if the engine ran
         world.run_tick()
@@ -101,7 +113,9 @@ class LiveExitsNeverBreakNeverNaked(unittest.TestCase):
         # shrinks the SL nor sells, and the position stays covered untouched.
         world = ManagerWorld(self)
         world.live_exits_are_enabled()
-        world.entry_fills_with_tranches("KO", shares=100, stop=13.0, tranches=(_tr(0, 16.0, 0.5),))
+        world.entry_fills_with_tranches(
+            "KO", shares=100, price=_FILL, stop=13.0, tranches=(_tr(0, 16.0, 0.5),)
+        )
         world.run_tick()
         world.orders_are_disabled()
         world.price_is("KO", 16.5)
