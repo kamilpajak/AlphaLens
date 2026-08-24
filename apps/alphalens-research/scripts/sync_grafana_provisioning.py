@@ -26,20 +26,58 @@ The contract that shapes every decision below
   references is actually declared. That last one is the 2026-08-24 root cause
   caught at the gate rather than in the UI. A refusal leaves the live tree
   byte-identical (outcome ``check_failed``);
+* a container restart is spent ONLY where it buys something (see below);
+* ``synced`` requires OBSERVING Grafana serve the new content, never just
+  writing the file;
 * every run rewrites the outcome one-hot metric family with ALL five labels
   (``in_sync``/``synced``/``fetch_failed``/``check_failed``/``reload_failed``),
   zeros included — an absent series must mean "broken emitter", never a state;
 * exit 0 only on ``in_sync``/``synced``; any failure outcome exits 1 so the
   systemd unit fails and the journal carries the reason.
 
-``reload_failed`` today means "at least one file was already installed when the
-run failed, so the live tree is half-applied and Grafana was never confirmed to
-have picked the new content up". The container restart that a datasource change
-needs (dashboards hot-reload through the provisioning watcher; datasources do
-not) and its verification against ``grafana.db`` are a follow-up increment —
-:func:`_sync` already reports WHICH files it replaced so that decision has its
-input. The Grafana admin API is deliberately not used at all: the admin
-password in the compose file is a dead placeholder and the API answers 401.
+When a restart is spent
+-----------------------
+A restart is a real, if brief, outage of a SHARED Grafana (it also serves the
+node-exporter dashboard), so :data:`RESTART_REQUIRING_KINDS` bounds it:
+
+* dashboard JSON -> NO restart. MEASURED on the VPS 2026-08-24: the provider
+  declares ``updateIntervalSeconds: 10`` and the cron-health dashboard's
+  ``dashboard`` row was created 2026-05-30, between the 2026-05-19 and
+  2026-08-01 container starts — the provisioning watcher imported it with no
+  restart. Paying one for a dashboard edit would be pure downtime;
+* datasource yml -> restart. Datasources are provisioned during startup only;
+* dashboard PROVIDER yml -> restart. Reasoned rather than measured: Grafana
+  reads the provider CONFIG in the startup provisioning pass, and the watcher
+  it then starts follows the dashboards DIRECTORY, not the config that
+  described it. This arm fails safe — an unnecessary restart, never a change
+  that silently never applies.
+
+How ``synced`` is verified (and why not the obvious way)
+--------------------------------------------------------
+The Grafana admin API is unusable: the compose file's admin password is a dead
+placeholder and Grafana keeps its first-init credentials in the volume, so
+``/api/datasources`` answers 401 (observed in the container log). Provisioning
+also logs nothing on the happy path — the 2026-05-30 watcher import produced
+zero log lines — so log scraping would verify nothing either. What remains is
+read-only and sufficient:
+
+* ``GET /api/health`` is UNAUTHENTICATED and reports ``database: ok``; polled
+  after a restart as the liveness gate;
+* ``grafana.db`` (streamed out with ``docker cp``, read with stdlib sqlite3 in
+  read-only mode) carries ``data_source.uid`` and, for every provisioned
+  dashboard, ``dashboard_provisioning.check_sum``. That checksum was MEASURED
+  on 2026-08-24 to equal the md5 of the source file's bytes for both live
+  dashboards, which makes it a CONTENT fingerprint, not a name-level one.
+
+A restart that comes back without the declared uid, or a dashboard whose stored
+checksum still fingerprints the old bytes, is ``reload_failed`` — the exact
+2026-08-24 shape, this time caught by the instrument.
+
+``reload_failed`` therefore covers three things, all meaning "the bytes are on
+disk and Grafana was not confirmed to be serving them": a refused restart, a
+container that never came back healthy, and a verification that never
+converged. It also covers an unexpected error raised after the first replace,
+where the live tree is left half-applied.
 
 Backups are ``<filename>.bak-autosync-<UTC stamp>`` beside each managed file
 and pruning deletes ONLY files with that exact per-file prefix beyond the
@@ -64,15 +102,19 @@ is anonymous).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
+import hashlib
 import json
 import logging
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -141,11 +183,36 @@ REQUIRED_DATASOURCE_UID = "prometheus"
 # point there or the file provider watches nothing.
 PROVISIONED_DASHBOARD_DIR = "/etc/grafana/provisioning/dashboards"
 
+# Which replacements cost a container restart. A dashboard JSON is absent by
+# design — the provisioning watcher picks it up (measured; see the module
+# docstring), and an outage per dashboard edit would buy nothing.
+RESTART_REQUIRING_KINDS = frozenset({FileKind.DATASOURCE, FileKind.DASHBOARD_PROVIDER})
+
 BACKUP_INFIX = ".bak-autosync-"
 BACKUP_KEEP = 10  # deliberately hardcoded: ~10 provisioning deploys of history;
 # a knob would outlive its documentation (the no-config-drift doctrine)
 
+CONTAINER_NAME = "grafana"
+# Grafana's sqlite state lives on the named volume; `docker cp` streams it out
+# in ~0.06s for ~1.2MB and needs neither root nor the network.
+CONTAINER_DB_PATH = "/var/lib/grafana/grafana.db"
+# Explicit non-secret columns, never `SELECT *`: data_source also holds
+# password, basic_auth_password and secure_json_data.
+DATASOURCE_UID_SQL = "SELECT uid FROM data_source"
+DASHBOARD_PROVISIONING_SQL = "SELECT external_id, check_sum FROM dashboard_provisioning"
+# The one Grafana endpoint that answers without credentials.
+HEALTH_URL = "http://localhost:3000/api/health"
+
 GIT_TIMEOUT_S = 120
+DOCKER_TIMEOUT_S = 60
+API_TIMEOUT_S = 10
+
+# Convergence is asynchronous on both arms: a restart takes ~5-15s to serve
+# /api/health again, and the dashboards watcher polls on its own
+# updateIntervalSeconds (10 on the VPS). The budget must outlast the slower of
+# the two, so 10 attempts spaced 3s covers ~30s of settling.
+VERIFY_ATTEMPTS = 10
+VERIFY_DELAY_S = 3.0
 
 OUTCOME_METRIC = "alphalens_grafana_sync_outcome"
 
@@ -171,12 +238,48 @@ class GitPort(Protocol):
     def show(self, repo_path: str) -> bytes: ...
 
 
+class GrafanaPort(Protocol):
+    """The container-side operations. None of these raise — a ``False``/``None``
+    answer is already the loud arm (``reload_failed``); an exception past the
+    replace could skip the metric emit entirely."""
+
+    def restart(self) -> bool: ...
+
+    def health_ok(self) -> bool: ...
+
+    def datasource_uids(self) -> set[str] | None: ...
+
+    def provisioned_checksums(self) -> dict[str, str] | None: ...
+
+
 EmitPort = Callable[[str, Mapping[str, float]], object]
 
 
 # ----------------------------------------------------------------------------
 # Pure helpers
 # ----------------------------------------------------------------------------
+
+
+def dashboard_checksums(desired: Mapping[ManagedFile, bytes]) -> dict[str, str]:
+    """The dashboard convergence fingerprint: container path -> md5 of bytes.
+
+    Grafana stores exactly this pair in ``dashboard_provisioning`` —
+    ``external_id`` is the path it read the file from INSIDE the container and
+    ``check_sum`` is the md5 of the file's bytes (both measured against the
+    live database on 2026-08-24, matching ``md5sum`` for the two provisioned
+    dashboards). Comparing content beats comparing names: a dashboard whose
+    file changed but whose title did not would pass any name-level check.
+
+    md5 is not a security choice here — Grafana picked it, and we only compare
+    against what Grafana itself stored.
+    """
+    return {
+        f"{PROVISIONED_DASHBOARD_DIR}/{managed.live_name}": hashlib.md5(
+            content, usedforsecurity=False
+        ).hexdigest()
+        for managed, content in desired.items()
+        if managed.kind is FileKind.DASHBOARD
+    }
 
 
 def backup_prefix(live_name: str) -> str:
@@ -451,8 +554,10 @@ def run(
     *,
     git: GitPort,
     live: LiveTree,
+    grafana: GrafanaPort,
     emit: EmitPort,
     now_fn: Callable[[], float] = time.time,
+    sleep_fn: Callable[[float], None] = time.sleep,
     dry_run: bool = False,
 ) -> int:
     """One pass. Returns the process exit code (0 = live matches SoT now)."""
@@ -483,7 +588,14 @@ def run(
         return 0
 
     try:
-        outcome, replaced = _sync(desired, differing=differing, live=live, now_fn=now_fn)
+        outcome, replaced = _sync(
+            desired,
+            differing=differing,
+            live=live,
+            grafana=grafana,
+            now_fn=now_fn,
+            sleep_fn=sleep_fn,
+        )
         if replaced:
             logger.info("installed %s", ", ".join(m.live_relpath for m in replaced))
     except Exception:
@@ -502,14 +614,16 @@ def _sync(
     *,
     differing: list[ManagedFile],
     live: LiveTree,
+    grafana: GrafanaPort,
     now_fn: Callable[[], float],
+    sleep_fn: Callable[[float], None],
 ) -> tuple[Outcome, tuple[ManagedFile, ...]]:
     """The write path, in the owner-settled order: validate the whole desired
-    set, then per differing file backup + prune, temp file, atomic replace.
+    set, then per differing file backup + prune, temp file, atomic replace,
+    then — once the WHOLE tree is installed — the restart (if the change needs
+    one) and the convergence verification.
 
-    Returns the outcome together with the files actually replaced — the input
-    the restart decision needs, since only a datasource change costs a Grafana
-    container restart.
+    Returns the outcome together with the files actually replaced.
     """
     problem = validate_desired(desired)
     if problem:
@@ -534,7 +648,80 @@ def _sync(
             # must not leave hidden .tmp files accumulating in a shared dir.
             if not installed:
                 live.remove_temp(relpath, temp_name)
-    return Outcome.SYNCED, tuple(differing)
+
+    changed = tuple(differing)
+    # Restart only after every file is on disk: a restart mid-install would
+    # boot Grafana against a half-applied provisioning tree.
+    restarted = any(managed.kind in RESTART_REQUIRING_KINDS for managed in changed)
+    if restarted:
+        logger.info("restarting the %s container (provisioning config changed)", CONTAINER_NAME)
+        if not grafana.restart():
+            # New content on disk, container refused to come back — polling it
+            # would only burn the verify budget.
+            return Outcome.RELOAD_FAILED, changed
+
+    # Verify only what THIS run changed. A datasource file that was already in
+    # sync is not this run's claim to make, and demanding it would deadlock: a
+    # uid missing from a container that never restarts has no remedy here.
+    expected_uids: set[str] = set()
+    for managed in changed:
+        if managed.kind is FileKind.DATASOURCE:
+            expected_uids |= parse_datasource_uids(desired[managed])
+    expected_checksums = dashboard_checksums({m: desired[m] for m in changed})
+
+    if _converged(
+        grafana,
+        restarted=restarted,
+        expected_uids=expected_uids,
+        expected_checksums=expected_checksums,
+        sleep_fn=sleep_fn,
+    ):
+        return Outcome.SYNCED, changed
+    return Outcome.RELOAD_FAILED, changed
+
+
+def _converged(
+    grafana: GrafanaPort,
+    *,
+    restarted: bool,
+    expected_uids: set[str],
+    expected_checksums: Mapping[str, str],
+    sleep_fn: Callable[[float], None],
+) -> bool:
+    """Poll until Grafana is observed serving the new content, or give up.
+
+    Every read fails CLOSED: an unreachable health endpoint or an unreadable
+    database is indistinguishable from "did not converge", and guessing in
+    Grafana's favour is exactly how the 2026-08-24 drift survived two months.
+    """
+    uids: set[str] | None = None
+    checksums: dict[str, str] | None = None
+    for attempt in range(VERIFY_ATTEMPTS):
+        if attempt:
+            sleep_fn(VERIFY_DELAY_S)
+        if restarted and not grafana.health_ok():
+            continue
+        if expected_uids:
+            uids = grafana.datasource_uids()
+            if uids is None or not expected_uids <= uids:
+                continue
+        if expected_checksums:
+            checksums = grafana.provisioned_checksums()
+            if checksums is None:
+                continue
+            if any(checksums.get(path) != digest for path, digest in expected_checksums.items()):
+                continue
+        return True
+    logger.error(
+        "grafana never converged after %d attempts: expected datasource uid(s) %s (saw %s) "
+        "and provisioned checksum(s) %s (saw %s)",
+        VERIFY_ATTEMPTS,
+        sorted(expected_uids),
+        "unreadable" if uids is None else sorted(uids),
+        dict(expected_checksums),
+        "unreadable" if checksums is None else checksums,
+    )
+    return False
 
 
 def _emit(emit: EmitPort, outcome: Outcome) -> None:
@@ -602,6 +789,128 @@ class GitCli:
         return proc.stdout
 
 
+def _fetch_health_json(url: str) -> dict:
+    with urllib.request.urlopen(url, timeout=API_TIMEOUT_S) as response:
+        return json.load(response)
+
+
+class DockerGrafana:
+    """Restart / health / provisioning-state against the grafana container.
+
+    None of the methods raise: a ``False``/``None`` answer routes the run into
+    ``reload_failed``, while an exception raised after the replace could skip
+    the metric emit. The only docker verbs used are ``restart`` and a
+    read-only ``cp`` of the sqlite state.
+    """
+
+    def __init__(
+        self,
+        *,
+        container: str = CONTAINER_NAME,
+        timeout: float = DOCKER_TIMEOUT_S,
+        runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        fetch_json: Callable[[str], dict] = _fetch_health_json,
+        copy_db: Callable[[Path], bool] | None = None,
+    ):
+        self._container = container
+        self._timeout = timeout
+        self._runner = runner
+        self._fetch_json = fetch_json
+        self._copy_db = copy_db or self._docker_cp
+
+    def restart(self) -> bool:
+        # Plain `docker restart` by container name, not `docker compose`: the
+        # monitoring compose file is not in this repo, and the container's own
+        # `restart: unless-stopped` policy is preserved either way.
+        proc = self._docker(["docker", "restart", self._container])
+        if proc is None or proc.returncode != 0:
+            if proc is not None:
+                logger.error("restarting %s failed: %s", self._container, _proc_text(proc))
+            return False
+        return True
+
+    def health_ok(self) -> bool:
+        try:
+            payload = self._fetch_json(HEALTH_URL)
+        except Exception:
+            logger.info("%s not answering yet", HEALTH_URL)
+            return False
+        return isinstance(payload, Mapping) and payload.get("database") == "ok"
+
+    def datasource_uids(self) -> set[str] | None:
+        rows = self._query(DATASOURCE_UID_SQL)
+        if rows is None:
+            return None
+        return {str(row[0]) for row in rows}
+
+    def provisioned_checksums(self) -> dict[str, str] | None:
+        rows = self._query(DASHBOARD_PROVISIONING_SQL)
+        if rows is None:
+            return None
+        return {str(row[0]): str(row[1]) for row in rows}
+
+    def _docker_cp(self, target: Path) -> bool:
+        argv = ["docker", "cp", f"{self._container}:{CONTAINER_DB_PATH}", str(target)]
+        proc = self._docker(argv)
+        if proc is None or proc.returncode != 0:
+            if proc is not None:
+                logger.error("could not copy grafana.db out: %s", _proc_text(proc))
+            return False
+        return True
+
+    def _query(self, sql: str) -> list[tuple] | None:
+        """Copy the live sqlite state out and read it, read-only.
+
+        A copy rather than an in-container query because the grafana image
+        ships no sqlite3 binary, and a copy rather than a host-side open
+        because the docker volume directory is root-only.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "grafana.db"
+            if not self._copy_db(target):
+                return None
+            try:
+                with contextlib.closing(
+                    sqlite3.connect(f"file:{target}?mode=ro", uri=True)
+                ) as conn:
+                    self._warn_on_unexpected_journal_mode(conn)
+                    return list(conn.execute(sql))
+            except Exception:
+                logger.exception("could not read the copied grafana.db")
+                return None
+
+    @staticmethod
+    def _warn_on_unexpected_journal_mode(conn: sqlite3.Connection) -> None:
+        # Measured 'delete' on 2026-08-24, which makes a plain file copy
+        # self-consistent. Were a Grafana upgrade to switch to WAL, the copy
+        # could miss recent commits and verification would fail for a reason
+        # nothing else would name — so name it here.
+        row = conn.execute("PRAGMA journal_mode").fetchone()
+        mode = str(row[0]).lower() if row else "unknown"
+        if mode != "delete":
+            logger.warning(
+                "grafana.db journal_mode is %r, not 'delete'; a plain copy may lag "
+                "recent commits and make verification flap",
+                mode,
+            )
+
+    def _docker(self, argv: list[str]) -> subprocess.CompletedProcess | None:
+        try:
+            return self._runner(argv, capture_output=True, timeout=self._timeout)
+        except Exception:
+            logger.exception("`%s` did not complete", " ".join(argv))
+            return None
+
+
+def _proc_text(proc: subprocess.CompletedProcess) -> str:
+    parts = []
+    for stream in (proc.stdout, proc.stderr):
+        text = stream.decode("utf-8", errors="replace") if isinstance(stream, bytes) else stream
+        if text:
+            parts.append(text.strip())
+    return " | ".join(parts)
+
+
 def default_emit(job: str, metrics: Mapping[str, float]) -> object:
     """The canonical textfile emitter (atomic write into the scraped dir).
 
@@ -638,6 +947,7 @@ def main(argv: list[str] | None = None) -> int:
     return run(
         git=GitCli(args.repo_dir),
         live=LiveTree(Path(args.live_dir)),
+        grafana=DockerGrafana(),
         emit=default_emit,
         dry_run=args.dry_run,
     )

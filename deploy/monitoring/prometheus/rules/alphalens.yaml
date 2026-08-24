@@ -394,6 +394,65 @@ groups:
           description: "alphalens_rules_sync_outcome reported no in_sync/synced run in the 150m lookback — in practice roughly three consecutive hourly runs without success, because a prior success's gauge sample persists ~60m until overwritten. git fetch, the in-container promtool check, or the reload verification is failing, and merged alert changes are NOT reaching the live rules file. Check `journalctl --user -u alphalens-prometheus-rules-sync.service` for which stage failed. While it stays broken, the emergency override is the manual copy of the repo alphalens.yaml over the live rules file + `docker exec prometheus kill -HUP 1`."
 
       # ---------------------------------------------------------------
+      # Grafana provisioning sync (alphalens-grafana-provisioning-sync, #1110).
+      # Hourly, and the layer above the rules sync: it converges the live
+      # datasource yml, the dashboards provider yml and the cron-health
+      # dashboard JSON to the origin/main blobs (validate -> backup -> atomic
+      # replace -> restart only when a provisioning CONFIG changed -> verify
+      # against grafana.db).
+      #
+      # 7200 = 2x the hourly cadence, the same reasoning as the rules sync.
+      # A dead sync here is silent by construction: Grafana keeps serving the
+      # LAST provisioned content, so the dashboards look healthy right up
+      # until someone needs a merged change that never arrived. That is how
+      # the 2026-08-24 incident survived two months — the live datasource
+      # declared no `uid: prometheus` while every panel target asked for it,
+      # and every panel read "No data" against a healthy Prometheus.
+      # ---------------------------------------------------------------
+      - alert: AlphalensJobStale
+        expr: time() - alphalens_job_last_success_timestamp_seconds{job="grafana-provisioning-sync"} > 7200
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: grafana-provisioning-sync
+        annotations:
+          summary: "grafana-provisioning-sync stale > 2h (expected hourly cadence)"
+          description: "Last successful run was {{ $value | humanizeDuration }} ago. The Grafana provisioning sync has stopped converging the VPS with origin/main — a merged dashboard or datasource change is no longer deploying itself, and nothing in the Grafana UI will look wrong while it drifts."
+
+      - alert: AlphalensJobMetricMissing
+        expr: absent(alphalens_job_last_success_timestamp_seconds{job="grafana-provisioning-sync"})
+        for: 5m
+        labels:
+          severity: warning
+          route: telegram
+          unit: grafana-provisioning-sync
+        annotations:
+          summary: "grafana-provisioning-sync success metric missing"
+          description: "No success metric for grafana-provisioning-sync. The unit has not run since metrics were enabled (freshly installed before its first run), or the textfile collector scrape is broken. Clears after the first successful run."
+
+      # A run that HAPPENS but fails is invisible to the staleness pair until
+      # its second consecutive failure — same one-hot contract as the rules
+      # sync above: the job emits a zero-initialised outcome family every run
+      # and is healthy exactly when one of the two success labels is 1. This
+      # rule is what makes an hourly-running, hourly-failing sync visible: a
+      # container that never comes back healthy, or a datasource uid that never
+      # appears in grafana.db, holds the last_success clock still but is
+      # otherwise indistinguishable from a broken exporter. sum() over an empty
+      # vector is empty, so an absent family stays quiet here — absence is the
+      # MetricMissing page above. GAUGES, not counters: max_over_time only.
+      - alert: AlphalensGrafanaProvisioningSyncFailed
+        expr: sum(max_over_time(alphalens_grafana_sync_outcome{outcome=~"in_sync|synced"}[150m])) == 0
+        for: 15m
+        labels:
+          severity: warning
+          route: telegram
+          unit: grafana-provisioning-sync
+        annotations:
+          summary: "live Grafana provisioning no longer converging with main (sync failing on consecutive runs)"
+          description: "alphalens_grafana_sync_outcome reported no in_sync/synced run in the 150m lookback — in practice roughly three consecutive hourly runs without success, because a prior success's gauge sample persists ~60m until overwritten. git fetch, the in-process validation gate, the container restart, or the grafana.db verification is failing, and merged dashboard/datasource changes are NOT reaching the live provisioning tree. Check `journalctl --user -u alphalens-grafana-provisioning-sync.service` for which stage failed. While it stays broken, the emergency override is copying the repo files under deploy/monitoring/grafana/ over ~/monitoring/grafana/provisioning/ by hand + `docker restart grafana`."
+
+      # ---------------------------------------------------------------
       # VIX regime-cache freshness (Track A v2 PR-2 follow-up).
       # ---------------------------------------------------------------
       #

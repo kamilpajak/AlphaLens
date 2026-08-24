@@ -1,0 +1,83 @@
+# Converges the live Grafana provisioning tree to the origin/main blobs (#1110).
+#
+# The repo owns three files — the datasource yml, the dashboards provider yml,
+# and the cron-health dashboard JSON. Their live copies sit in
+# ~/monitoring/grafana/provisioning, bind-mounted into the SHARED grafana
+# container (which also serves the node-exporter dashboard — this job writes
+# only its own three files, their autosync backups, and short-lived temp
+# files). Nothing converged the two until now and the drift bit on 2026-08-24:
+# the live datasource yml never declared `uid: prometheus` while every
+# dashboard target references that uid, and the live dashboard copy was two
+# months stale, so every panel read "No data" against a healthy Prometheus.
+# With this unit, merging to main IS the deploy.
+#
+# The script (apps/alphalens-research/scripts/sync_grafana_provisioning.py):
+#   1. git fetch + `git show origin/main:<path>` per managed file — the BLOB,
+#      never the working tree (a stale checkout must not deploy itself);
+#   2. identical content -> outcome in_sync, no writes, no restart;
+#   3. otherwise the WHOLE desired set is validated in-process first (YAML/JSON
+#      parse, the required uid, the provider path, and the cross-file check
+#      that every datasource uid a dashboard references is declared — the
+#      2026-08-24 root cause, caught at the gate); a refusal leaves the live
+#      tree byte-identical;
+#   4. per differing file: timestamped backup (autosync-prefixed, pruned to 10)
+#      -> temp file -> atomic replace;
+#   5. a container restart ONLY when the datasource yml or the provider yml
+#      changed. A dashboard JSON is picked up by Grafana's provisioning watcher
+#      (updateIntervalSeconds=10), so paying an outage for a dashboard edit
+#      would buy nothing;
+#   6. verification, then outcome synced. The admin API is deliberately unused
+#      — the compose admin password is a dead placeholder and the API answers
+#      401 — so the run polls the unauthenticated /api/health plus the state
+#      Grafana writes itself into grafana.db (data_source.uid and
+#      dashboard_provisioning.check_sum, which is the md5 of the source file).
+#
+# Exit codes carry meaning, so the unit must NOT be made failure-tolerant:
+#   0  live matches origin/main and grafana was observed serving it (in_sync or
+#      synced)
+#   1  it does not — fetch_failed / check_failed / reload_failed; the journal
+#      names the stage. Non-zero holds the last_success clock still.
+#
+# Alert latency, stated honestly. Two different failures page on two
+# different clocks:
+#   * the job STOPS running -> AlphalensJobStale{job="grafana-provisioning-sync"}
+#     at >2h (2x the hourly cadence) plus 5m of debounce, because the
+#     ExecStopPost hook stamps alphalens_job_last_success_timestamp_seconds
+#     only on a successful run;
+#   * the job RUNS and fails -> AlphalensGrafanaProvisioningSyncFailed once no
+#     in_sync/synced sample lands anywhere in a 150m lookback, plus 15m of
+#     debounce. That is roughly three consecutive hourly runs, not two: a
+#     prior success's gauge sample persists ~60m until the next run overwrites
+#     it. So worst-case notice on a newly-broken sync is ~3h, by design — a
+#     tighter window would page on a single transient docker or network blip.
+# A single failing run pages nothing and is expected to; it is visible in the
+# journal and in the outcome one-hot, and the next hourly run either recovers
+# or starts the clock.
+#
+# EnvironmentFile carries no `-` (fail loud): the run needs
+# ALPHALENS_TEXTFILE_DIR for the outcome metrics. No secrets are read — the
+# repo is public, the fetch is anonymous, and the grafana.db queries name
+# non-secret columns only.
+[Unit]
+Description=AlphaLens Grafana provisioning sync
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/AlphaLens
+EnvironmentFile=/etc/alphalens/env
+ExecStart=%h/AlphaLens/.venv/bin/python apps/alphalens-research/scripts/sync_grafana_provisioning.py
+
+ExecStopPost=%h/AlphaLens/deploy/systemd/bin/alphalens-emit-job-metrics grafana-provisioning-sync
+StandardOutput=journal
+StandardError=journal
+MemoryMax=256M
+TasksMax=32
+# One git fetch (120s cap), a handful of docker calls (60s cap each) and a
+# ~30s verification poll. 10min is far above any realistic run and still
+# bounds a hung fetch or docker daemon.
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=default.target

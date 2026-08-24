@@ -9,18 +9,24 @@ referenced that uid, so every panel read "No data") is why the validation gate
 parses the datasource yml and REQUIRES that uid, and why it refuses a dashboard
 whose targets reference a uid no synced datasource declares.
 
-Nothing here touches git or the network: those are ports, and every test passes
-a fake. The live-tree filesystem operations run against a REAL temporary
-directory — "check_failed leaves live byte-identical", "prune spares foreign
-files" and "no backup or temp name is itself a provisioning file" are claims
-about the filesystem, so they are proven on one.
+Nothing here touches git, docker or the network: those are ports, and every
+test passes a fake. The live-tree filesystem operations run against a REAL
+temporary directory — "check_failed leaves live byte-identical", "prune spares
+foreign files" and "no backup or temp name is itself a provisioning file" are
+claims about the filesystem, so they are proven on one. The grafana.db reader
+likewise runs against a REAL sqlite file carrying the live table shapes,
+secret columns included, so "the queries never read a secret" is proven rather
+than asserted.
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
+import shutil
+import sqlite3
 import subprocess
 import unittest
 from pathlib import Path
@@ -463,6 +469,68 @@ class RecordingEmit:
         return hot[0].split('"')[1]
 
 
+class FakeGrafana:
+    """Injected Grafana port. Nothing here raises — a ``False``/``None`` answer
+    is already the loud arm (``reload_failed``)."""
+
+    def __init__(
+        self,
+        *,
+        restart_ok: bool = True,
+        healthy: bool = True,
+        uids: set[str] | None = None,
+        checksums: dict[str, str] | None = None,
+        uid_sequence: list[set[str] | None] | None = None,
+        checksum_sequence: list[dict[str, str] | None] | None = None,
+        health_sequence: list[bool] | None = None,
+        events: list[str] | None = None,
+    ):
+        self._restart_ok = restart_ok
+        self._healthy = healthy
+        self._uids = {sync.REQUIRED_DATASOURCE_UID} if uids is None else set(uids)
+        self._checksums = checksums
+        self._uid_sequence = uid_sequence
+        self._checksum_sequence = checksum_sequence
+        self._health_sequence = health_sequence
+        self.events = [] if events is None else events
+        self.restart_calls = 0
+        self.health_calls = 0
+        self.uid_calls = 0
+        self.checksum_calls = 0
+
+    @staticmethod
+    def _from_sequence(sequence: list, index: int):
+        return sequence[min(index, len(sequence) - 1)]
+
+    def restart(self) -> bool:
+        self.restart_calls += 1
+        self.events.append("restart")
+        return self._restart_ok
+
+    def health_ok(self) -> bool:
+        self.health_calls += 1
+        self.events.append("health")
+        if self._health_sequence is not None:
+            return self._from_sequence(self._health_sequence, self.health_calls - 1)
+        return self._healthy
+
+    def datasource_uids(self) -> set[str] | None:
+        self.uid_calls += 1
+        self.events.append("uids")
+        if self._uid_sequence is not None:
+            return self._from_sequence(self._uid_sequence, self.uid_calls - 1)
+        return set(self._uids)
+
+    def provisioned_checksums(self) -> dict[str, str] | None:
+        self.checksum_calls += 1
+        self.events.append("checksums")
+        if self._checksum_sequence is not None:
+            return self._from_sequence(self._checksum_sequence, self.checksum_calls - 1)
+        if self._checksums is not None:
+            return dict(self._checksums)
+        return sync.dashboard_checksums(desired_set())
+
+
 class RecordingLiveTree(sync.LiveTree):
     """Real LiveTree that also appends each mutation to a shared event list."""
 
@@ -494,6 +562,8 @@ class RunTestBase(unittest.TestCase):
         self.dir = Path(self._tmp.name)
         self.live = sync.LiveTree(self.dir)
         self.emit = RecordingEmit()
+        self.grafana = FakeGrafana()
+        self.slept: list[float] = []
 
     def seed_live(self, content: dict[sync.ManagedFile, bytes]) -> None:
         for managed, blob in content.items():
@@ -504,12 +574,14 @@ class RunTestBase(unittest.TestCase):
     def live_names(self) -> set[str]:
         return {str(p.relative_to(self.dir)) for p in self.dir.rglob("*") if p.is_file()}
 
-    def _run(self, *, git=None, live=None, dry_run=False) -> int:
+    def _run(self, *, git=None, live=None, grafana=None, dry_run=False) -> int:
         return sync.run(
             git=git or FakeGit(),
             live=live or self.live,
+            grafana=grafana or self.grafana,
             emit=self.emit,
             now_fn=lambda: NOW_TS,
+            sleep_fn=self.slept.append,
             dry_run=dry_run,
         )
 
@@ -600,7 +672,9 @@ class TestRun(RunTestBase):
             desired_set(),
             differing=[DASHBOARD_FILE],
             live=self.live,
+            grafana=self.grafana,
             now_fn=lambda: NOW_TS,
+            sleep_fn=self.slept.append,
         )
 
         self.assertEqual(outcome, sync.Outcome.SYNCED)
@@ -685,6 +759,228 @@ class TestRun(RunTestBase):
 
         self.assertEqual(rc, 1)
         self.assertEqual(self.emit.calls, [])
+
+
+class TestRestartPolicy(RunTestBase):
+    """A container restart is a real (if brief) Grafana outage, so it is spent
+    only where it BUYS something.
+
+    Measured on the VPS 2026-08-24: the dashboards provider declares
+    ``updateIntervalSeconds: 10``, and the alphalens dashboard's DB row was
+    created 2026-05-30 — between the 2026-05-19 and 2026-08-01 container
+    starts. So a dashboard JSON is picked up by the provisioning watcher with
+    NO restart, and paying one for a dashboard edit would be pure downtime.
+
+    Datasources are provisioned once at startup, so their file needs the
+    restart. The provider yml is treated the same way: Grafana reads the
+    provider CONFIG during the startup provisioning pass and the watcher it
+    then starts follows the dashboards DIRECTORY, not the config that
+    described it. That one is reasoned, not measured — and it fails safe, an
+    unnecessary restart rather than a change that silently never applies.
+    """
+
+    def test_a_changed_datasource_restarts_the_container_exactly_once(self) -> None:
+        content = desired_set()
+        content[DATASOURCE_FILE] = STALE
+        self.seed_live(content)
+
+        rc = self._run()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.emit.outcome(), "synced")
+        self.assertEqual(self.grafana.restart_calls, 1)
+
+    def test_a_changed_dashboard_never_restarts_the_container(self) -> None:
+        content = desired_set()
+        content[DASHBOARD_FILE] = STALE
+        self.seed_live(content)
+
+        rc = self._run()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.emit.outcome(), "synced")
+        self.assertEqual(self.grafana.restart_calls, 0)
+        self.assertEqual(self.grafana.health_calls, 0)
+
+    def test_a_changed_provider_config_restarts_the_container(self) -> None:
+        content = desired_set()
+        content[PROVIDER_FILE] = STALE
+        self.seed_live(content)
+
+        rc = self._run()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.grafana.restart_calls, 1)
+
+    def test_an_in_sync_run_never_restarts_the_container(self) -> None:
+        self.seed_live(desired_set())
+
+        rc = self._run()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.emit.outcome(), "in_sync")
+        self.assertEqual(self.grafana.restart_calls, 0)
+        self.assertEqual(self.grafana.uid_calls, 0)
+        self.assertEqual(self.grafana.checksum_calls, 0)
+
+    def test_a_refused_blob_never_restarts_the_container(self) -> None:
+        self.seed_live(stale_tree())
+        broken = desired_set(datasource=DATASOURCE_YML.replace(b"    uid: prometheus\n", b""))
+
+        rc = self._run(git=FakeGit(broken))
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "check_failed")
+        self.assertEqual(self.grafana.restart_calls, 0)
+
+    def test_a_failed_restart_is_reload_failed_never_a_silent_success(self) -> None:
+        self.seed_live(stale_tree())
+        grafana = FakeGrafana(restart_ok=False)
+
+        rc = self._run(grafana=grafana)
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+        # The new content IS on disk; the outcome says exactly that Grafana was
+        # never confirmed to be serving it.
+        self.assertEqual(self.live.read_live(DATASOURCE_FILE.live_relpath), DATASOURCE_YML)
+        # No point polling a container that refused to come back.
+        self.assertEqual(grafana.uid_calls, 0)
+
+    def test_the_restart_happens_after_every_file_is_installed(self) -> None:
+        # A restart mid-install would boot Grafana against a half-applied tree.
+        events: list[str] = []
+        live = RecordingLiveTree(self.dir, events)
+        self.live = live
+        self.grafana = FakeGrafana(events=events)
+        self.seed_live(stale_tree())
+
+        self._run(live=live)
+
+        self.assertEqual(events.index("restart"), 4 * len(sync.MANAGED_FILES))
+        self.assertLess(events.index("restart"), events.index("uids"))
+
+
+class TestVerification(RunTestBase):
+    """``synced`` means Grafana was OBSERVED serving the new content.
+
+    The admin API cannot say so — the compose file's admin password is a dead
+    placeholder and Grafana persists its first-init credentials, so
+    ``/api/datasources`` answers 401. The unauthenticated ``/api/health`` and
+    the provisioning state Grafana itself writes into ``grafana.db`` are the
+    two surfaces that remain, and both are read-only.
+    """
+
+    def _restarting_run(self, **kwargs) -> int:
+        self.seed_live(stale_tree())
+        return self._run(**kwargs)
+
+    def test_the_happy_path_polls_health_uids_and_checksums_once(self) -> None:
+        rc = self._restarting_run()
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.emit.outcome(), "synced")
+        self.assertEqual(
+            (self.grafana.health_calls, self.grafana.uid_calls, self.grafana.checksum_calls),
+            (1, 1, 1),
+        )
+        self.assertEqual(self.slept, [])
+
+    def test_a_restart_that_never_becomes_healthy_is_reload_failed(self) -> None:
+        grafana = FakeGrafana(healthy=False)
+
+        rc = self._restarting_run(grafana=grafana)
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+        self.assertEqual(grafana.health_calls, sync.VERIFY_ATTEMPTS)
+        self.assertEqual(len(self.slept), sync.VERIFY_ATTEMPTS - 1)
+        self.assertEqual(set(self.slept), {sync.VERIFY_DELAY_S})
+
+    def test_a_restart_that_comes_back_without_the_uid_is_reload_failed(self) -> None:
+        # The 2026-08-24 shape, caught by the instrument rather than by a human
+        # noticing every panel reads "No data".
+        grafana = FakeGrafana(uids={"prom-old"})
+
+        rc = self._restarting_run(grafana=grafana)
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+        self.assertEqual(grafana.uid_calls, sync.VERIFY_ATTEMPTS)
+
+    def test_an_unreadable_datasource_table_fails_closed(self) -> None:
+        grafana = FakeGrafana(uid_sequence=[None])
+
+        rc = self._restarting_run(grafana=grafana)
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+
+    def test_a_dashboard_grafana_never_ingested_is_reload_failed(self) -> None:
+        # File on disk, watcher never picked it up: the stored checksum still
+        # fingerprints the OLD bytes.
+        grafana = FakeGrafana(checksums=sync.dashboard_checksums({DASHBOARD_FILE: STALE}))
+
+        rc = self._restarting_run(grafana=grafana)
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+        self.assertEqual(grafana.checksum_calls, sync.VERIFY_ATTEMPTS)
+
+    def test_an_unreadable_provisioning_table_fails_closed(self) -> None:
+        grafana = FakeGrafana(checksum_sequence=[None])
+
+        rc = self._restarting_run(grafana=grafana)
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+
+    def test_verification_succeeding_on_a_retry_is_synced(self) -> None:
+        # The watcher polls on its own 10s schedule, so the first read races it.
+        grafana = FakeGrafana(
+            checksum_sequence=[{}, sync.dashboard_checksums(desired_set())],
+        )
+
+        rc = self._restarting_run(grafana=grafana)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.emit.outcome(), "synced")
+        self.assertEqual(self.slept, [sync.VERIFY_DELAY_S])
+
+    def test_the_verify_budget_outlasts_the_provisioning_watcher_interval(self) -> None:
+        # updateIntervalSeconds is 10 on the VPS; a budget under that would
+        # report reload_failed on every healthy dashboard deploy.
+        self.assertGreater(sync.VERIFY_ATTEMPTS * sync.VERIFY_DELAY_S, 10.0)
+
+    def test_a_dashboard_only_change_is_verified_by_checksum_not_by_health(self) -> None:
+        # No restart means nothing to probe for liveness, but the run still
+        # must not claim synced without evidence Grafana ingested the file.
+        content = desired_set()
+        content[DASHBOARD_FILE] = STALE
+        self.seed_live(content)
+        grafana = FakeGrafana(checksums=sync.dashboard_checksums({DASHBOARD_FILE: STALE}))
+
+        rc = self._run(grafana=grafana)
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+        self.assertEqual(grafana.health_calls, 0)
+        self.assertEqual(grafana.uid_calls, 0)
+
+    def test_dashboard_checksums_are_keyed_by_container_path(self) -> None:
+        # Grafana stores dashboard_provisioning.external_id as the path it read
+        # the file from INSIDE the container, and check_sum as md5 of the bytes
+        # (both measured against the live DB on 2026-08-24).
+        checksums = sync.dashboard_checksums(desired_set())
+
+        self.assertEqual(
+            checksums,
+            {
+                f"{sync.PROVISIONED_DASHBOARD_DIR}/{DASHBOARD_FILE.live_name}": hashlib.md5(
+                    DASHBOARD_JSON, usedforsecurity=False
+                ).hexdigest()
+            },
+        )
 
 
 class TestRunHardening(RunTestBase):
@@ -813,6 +1109,174 @@ class TestGitCliAdapter(unittest.TestCase):
             sync.GitCli("/repo", runner=hung_runner).fetch()
 
 
+def write_grafana_db(path: Path) -> None:
+    """A grafana.db carrying the live table shapes measured on 2026-08-24.
+
+    ``data_source`` really does hold ``password``, ``basic_auth_password`` and
+    ``secure_json_data``, so the fixture carries them: the reader must select
+    named non-secret columns, never ``*``.
+    """
+    with contextlib.closing(sqlite3.connect(path)) as conn:
+        conn.execute(
+            "CREATE TABLE data_source (id INTEGER, uid TEXT, name TEXT, type TEXT, "
+            "url TEXT, password TEXT, basic_auth_password TEXT, secure_json_data TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO data_source VALUES (1, 'prometheus', 'Prometheus', 'prometheus', "
+            "'http://prometheus:9090', 'TOP-SECRET', 'TOP-SECRET', 'TOP-SECRET')"
+        )
+        conn.execute(
+            "CREATE TABLE dashboard_provisioning (id INTEGER, dashboard_id INTEGER, "
+            "name TEXT, external_id TEXT, updated INTEGER, check_sum TEXT)"
+        )
+        conn.executemany(
+            "INSERT INTO dashboard_provisioning VALUES (?, ?, 'Default', ?, ?, ?)",
+            [
+                (
+                    1,
+                    1,
+                    "/etc/grafana/provisioning/dashboards/node-exporter-dashboard.json",
+                    1746639200,
+                    "83a94c843a9e558cadeca67b1d3dc4a6",
+                ),
+                (
+                    2,
+                    2,
+                    "/etc/grafana/provisioning/dashboards/alphalens-cron-health.json",
+                    1787575599,
+                    "f0100f542a6d3dc27cdb1604933f5f27",
+                ),
+            ],
+        )
+        conn.commit()
+
+
+class TestDockerGrafanaAdapter(unittest.TestCase):
+    """The only code that talks to docker and to Grafana."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.db = Path(self._tmp.name) / "fixture.db"
+        write_grafana_db(self.db)
+
+    def _adapter(self, **kwargs) -> sync.DockerGrafana:
+        def copy_db(target: Path) -> bool:
+            shutil.copy(self.db, target)
+            return True
+
+        kwargs.setdefault("copy_db", copy_db)
+        return sync.DockerGrafana(**kwargs)
+
+    def test_restart_argv_addresses_the_container_by_name(self) -> None:
+        runner = FakeRunner()
+
+        self.assertTrue(self._adapter(runner=runner).restart())
+
+        self.assertEqual(runner.calls[0], ["docker", "restart", sync.CONTAINER_NAME])
+
+    def test_a_nonzero_restart_is_false_not_an_exception(self) -> None:
+        runner = FakeRunner(returncode=1, stderr=b"No such container: grafana")
+
+        self.assertFalse(self._adapter(runner=runner).restart())
+
+    def test_a_docker_that_never_returns_is_false(self) -> None:
+        def hung(argv, **_kwargs):
+            raise subprocess.TimeoutExpired(argv, 60)
+
+        self.assertFalse(self._adapter(runner=hung).restart())
+
+    def test_health_is_ok_only_when_grafana_reports_its_database_ok(self) -> None:
+        healthy = self._adapter(
+            fetch_json=lambda url: {"database": "ok", "version": "12.0.0"}
+        ).health_ok()
+        degraded = self._adapter(fetch_json=lambda url: {"database": "failing"}).health_ok()
+
+        self.assertTrue(healthy)
+        self.assertFalse(degraded)
+
+    def test_health_reads_the_unauthenticated_endpoint(self) -> None:
+        seen: list[str] = []
+
+        def fetch(url: str) -> dict:
+            seen.append(url)
+            return {"database": "ok"}
+
+        self._adapter(fetch_json=fetch).health_ok()
+
+        self.assertEqual(seen, [sync.HEALTH_URL])
+
+    def test_an_unreachable_health_endpoint_is_false(self) -> None:
+        def boom(_url: str) -> dict:
+            raise OSError("connection refused")
+
+        self.assertFalse(self._adapter(fetch_json=boom).health_ok())
+
+    def test_datasource_uids_come_from_the_database_without_any_secret(self) -> None:
+        uids = self._adapter().datasource_uids()
+
+        self.assertEqual(uids, {"prometheus"})
+        self.assertNotIn("TOP-SECRET", repr(uids))
+
+    def test_provisioned_checksums_are_keyed_by_container_path(self) -> None:
+        checksums = self._adapter().provisioned_checksums()
+
+        self.assertEqual(
+            checksums,
+            {
+                "/etc/grafana/provisioning/dashboards/node-exporter-dashboard.json": (
+                    "83a94c843a9e558cadeca67b1d3dc4a6"
+                ),
+                "/etc/grafana/provisioning/dashboards/alphalens-cron-health.json": (
+                    "f0100f542a6d3dc27cdb1604933f5f27"
+                ),
+            },
+        )
+
+    def test_the_queries_never_select_a_secret_column(self) -> None:
+        # data_source carries password / basic_auth_password / secure_json_data;
+        # a SELECT * here would put credentials into a log line one exception
+        # away from the journal.
+        for statement in (sync.DATASOURCE_UID_SQL, sync.DASHBOARD_PROVISIONING_SQL):
+            with self.subTest(sql=statement):
+                self.assertNotIn("*", statement)
+                self.assertNotIn("password", statement.lower())
+                self.assertNotIn("secure", statement.lower())
+
+    def test_a_failed_database_copy_reads_none_rather_than_raising(self) -> None:
+        adapter = sync.DockerGrafana(copy_db=lambda _target: False)
+
+        self.assertIsNone(adapter.datasource_uids())
+        self.assertIsNone(adapter.provisioned_checksums())
+
+    def test_a_corrupt_database_reads_none_rather_than_raising(self) -> None:
+        def copy_garbage(target: Path) -> bool:
+            target.write_bytes(b"not a sqlite file")
+            return True
+
+        adapter = sync.DockerGrafana(copy_db=copy_garbage)
+
+        self.assertIsNone(adapter.datasource_uids())
+
+    def test_the_default_copy_streams_the_database_out_of_the_container(self) -> None:
+        runner = FakeRunner()
+        adapter = sync.DockerGrafana(runner=runner)
+
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "grafana.db"
+            adapter._docker_cp(target)
+
+        self.assertEqual(
+            runner.calls[0],
+            [
+                "docker",
+                "cp",
+                f"{sync.CONTAINER_NAME}:{sync.CONTAINER_DB_PATH}",
+                str(target),
+            ],
+        )
+
+
 class TestMainWiring(unittest.TestCase):
     """The wake-timer lesson: an untested main() shipped 10 surviving mutants."""
 
@@ -867,6 +1331,31 @@ class TestMainWiring(unittest.TestCase):
             sync.main([])
 
         self.assertIs(calls["emit"], sync.default_emit)
+
+    def test_the_grafana_port_is_the_docker_adapter(self) -> None:
+        calls, fake_run = self._patch()
+
+        with mock.patch.object(sync, "run", fake_run):
+            sync.main([])
+
+        self.assertIsInstance(calls["grafana"], sync.DockerGrafana)
+
+
+class TestAlertMetricParity(unittest.TestCase):
+    """The rule that pages on this job must name the metric this job emits.
+
+    Renaming ``OUTCOME_METRIC`` or changing which outcomes count as success on
+    ONE side alone turns this red — otherwise the alert would silently sum an
+    absent series and never fire again, which is the 2026-08-20 rename class.
+    """
+
+    def test_the_failure_alert_selects_this_scripts_success_labels(self) -> None:
+        rules = (
+            REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
+        ).read_text()
+        labels = "|".join(sorted(outcome.value for outcome in sync.SUCCESS_OUTCOMES))
+
+        self.assertIn(f'{sync.OUTCOME_METRIC}{{outcome=~"{labels}"}}', rules)
 
 
 if __name__ == "__main__":
