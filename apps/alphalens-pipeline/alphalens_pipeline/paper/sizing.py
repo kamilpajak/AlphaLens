@@ -19,6 +19,7 @@ for the locked sizing formula this module's downstream consumers apply.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import Any
 
@@ -215,6 +216,37 @@ def planned_blended_entry_from_spec(spec: TradeSpec) -> float | None:
     return _blend_priced_tiers(priced)
 
 
+def first_brief_tp_target(brief_trade_setup: Mapping[str, Any]) -> float | None:
+    """The brief's OWN first take-profit target, or ``None`` when there is none
+    usable (issue #1112 step 3).
+
+    ``None`` (never raises) when the input is not a mapping, ``tp_tranches`` is
+    empty / not a sequence of mappings, or the first tranche's ``target`` is
+    missing, unparseable, non-finite or non-positive — the same defensive
+    contract as :func:`planned_blended_entry`.
+
+    Only the FIRST tranche is read: it is the shallowest level the research
+    committed to, so it is the floor. The deeper tranches say nothing about
+    whether the geometry target is too low.
+    """
+    if not isinstance(brief_trade_setup, Mapping):
+        return None
+    tranches = brief_trade_setup.get("tp_tranches") or []
+    try:
+        first = tranches[0]
+    except (IndexError, TypeError, KeyError):
+        return None
+    if not isinstance(first, Mapping):
+        return None
+    try:
+        target = float(first.get("target"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(target) or target <= 0.0:
+        return None
+    return target
+
+
 def build_exit_geometry_spec(
     brief_trade_setup: dict, pct_off_52w_high: float | None = None
 ) -> ExitGeometrySpec | None:
@@ -268,6 +300,24 @@ def build_exit_geometry_spec(
     if levels is None:
         return None
     stop, tp = levels
+    # NEVER BELOW THE BRIEF'S OWN FIRST TAKE-PROFIT (issue #1112 step 3) — the
+    # take-profit-side mirror of the never-below-brief-floor rule
+    # ``clamp_reanchor_target`` enforces on the stop side. On 2026-08-24 the
+    # SMG policy target (blend + 1.5*ATR = 59.6277) landed BELOW the top entry
+    # tier (59.786017) and far below the brief's own first tranche (65.25), so
+    # the fill was past its take-profit the moment it happened.
+    #
+    # This is a FLOOR, never a cap (max, not min): a policy target above the
+    # first tranche is left alone. It also outranks the 52w ceiling applied
+    # inside ``atr_bracket_levels`` — the brief tranche is a level the research
+    # committed to, the ceiling is a do-not-chase heuristic.
+    #
+    # Deliberately NOT pushed down into ``atr_bracket_levels``: that leaf is
+    # shared with the ``/edge`` replay lens and ``feedback/ladder_replay``, and
+    # clamping there would silently rewrite historical what-if measurements.
+    first_target = first_brief_tp_target(brief_trade_setup)
+    if first_target is not None:
+        tp = max(tp, first_target)
     return ExitGeometrySpec(
         initial_levels=InitialLevels(stop=stop, tp=tp),
         reaction_plan=(
@@ -278,6 +328,7 @@ def build_exit_geometry_spec(
 
 __all__ = [
     "build_exit_geometry_spec",
+    "first_brief_tp_target",
     "parse_brief_to_spec",
     "planned_blended_entry",
     "planned_blended_entry_from_spec",
