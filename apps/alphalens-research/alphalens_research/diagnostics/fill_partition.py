@@ -339,3 +339,282 @@ def blended_fill_price(fills: Sequence[TierFill]) -> float | None:
     if wsum > 0:
         return sum(f.fill_price * f.alloc_pct for f in fills) / wsum
     return sum(f.fill_price for f in fills) / len(fills)
+
+
+# --------------------------------------------------------------------------
+# The DENOMINATOR: one report row per OPPORTUNITY, not per taken trade.
+# --------------------------------------------------------------------------
+
+EXCLUDE_NOT_PLANNABLE = "not_plannable"
+"""The monitor never planned this candidate (no verified brief trade setup)."""
+
+EXCLUDE_NOT_DECIDED = "not_decided"
+"""The entry-TTL window is still open, so the filled-tier set can still grow.
+
+Counting such a row now would understate every conditional fill rate -- the
+immortal-time trap named in ``scripts/ml/2026_07_ladder_fill_depth_cr.py``.
+"""
+
+EXCLUDE_NO_REPLAY = "no_replay"
+"""A plannable row that was never priced (placeholder / no cached bars)."""
+
+EXCLUDE_SPLIT_INVALIDATED = "split_invalidated"
+"""The replay window crossed a real corporate action, so the levels are stale."""
+
+EXCLUDE_BAD_GEOMETRY = "bad_geometry"
+"""Stop at or above the blended entry -- R units are undefined for the row."""
+
+EXCLUSION_REASONS: tuple[str, ...] = (
+    EXCLUDE_NOT_PLANNABLE,
+    EXCLUDE_NOT_DECIDED,
+    EXCLUDE_NO_REPLAY,
+    EXCLUDE_SPLIT_INVALIDATED,
+    EXCLUDE_BAD_GEOMETRY,
+)
+
+
+@dataclass(frozen=True)
+class Opportunity:
+    """One brief pick, filled or not. The unit of the denominator.
+
+    ``realised_return`` is the return on the capital that was actually deployed
+    and is ``None`` when nothing filled -- deliberately NOT 0.0, because a zero
+    would fold an unfilled pick in as a costless miss, which is exactly the
+    reading issue #1113 forbids. ``forgone_return`` is the market move over the
+    same window and is the opportunity cost that makes the unfilled row readable.
+    """
+
+    brief_date: str
+    ticker: str
+    excluded_reason: str | None
+    filled_tiers: tuple[str, ...]
+    fill_bar_ts_ms: tuple[int, ...]
+    filled_fraction: float
+    realised_return: float | None
+    forgone_return: float | None
+    holding_days: int | None
+    mae_r: float | None
+
+
+@dataclass(frozen=True)
+class PartitionStats:
+    """One partition cell. Every count that could hide a dropped row is named."""
+
+    partition: str
+    n: int
+    share_of_opportunities: float
+    n_realised: int
+    n_missing_realised: int
+    realised_return_mean: float | None
+    realised_return_median: float | None
+    win_rate: float | None
+    n_forgone: int
+    n_missing_forgone: int
+    forgone_return_mean: float | None
+    forgone_return_median: float | None
+    holding_days_median: float | None
+    n_missing_holding: int
+    mae_r_median: float | None
+    n_missing_mae: int
+    filled_fraction_median: float | None
+    no_capital_deployed: bool
+    offline_unreachable: bool
+
+
+@dataclass(frozen=True)
+class ConditionalFill:
+    """Given tier k filled, how often did tier k+1 fill, and what happened next."""
+
+    given_tier: str
+    then_tier: str
+    n_given: int
+    n_then: int
+    n_then_same_bar: int
+    n_then_later: int
+    then_realised_return_median: float | None
+    n_missing_then_realised: int
+
+    @property
+    def rate(self) -> float | None:
+        """P(tier k+1 filled | tier k filled). ``None`` on an empty denominator."""
+        return self.n_then / self.n_given if self.n_given else None
+
+
+@dataclass(frozen=True)
+class PartitionReport:
+    """The instrument's output. Carries no verdict -- issue #1115 owns that."""
+
+    n_store_rows: int
+    n_opportunities: int
+    excluded: dict[str, int]
+    partitions: tuple[PartitionStats, ...]
+    conditional_fills: tuple[ConditionalFill, ...]
+    fill_model: str
+    overshoot_arm: str
+    overshoot_bps: float
+
+
+def _mean(values: Sequence[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
+def _median(values: Sequence[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _present(values: Iterable[float | None]) -> list[float]:
+    return [v for v in values if v is not None]
+
+
+def _partition_stats(
+    partition: str, members: Sequence[Opportunity], n_opportunities: int
+) -> PartitionStats:
+    realised = _present(o.realised_return for o in members)
+    forgone = _present(o.forgone_return for o in members)
+    holding = _present(o.holding_days for o in members)
+    mae = _present(o.mae_r for o in members)
+    return PartitionStats(
+        partition=partition,
+        n=len(members),
+        share_of_opportunities=(len(members) / n_opportunities) if n_opportunities else 0.0,
+        n_realised=len(realised),
+        n_missing_realised=len(members) - len(realised),
+        realised_return_mean=_mean(realised),
+        realised_return_median=_median(realised),
+        win_rate=(sum(1 for r in realised if r > 0) / len(realised)) if realised else None,
+        n_forgone=len(forgone),
+        n_missing_forgone=len(members) - len(forgone),
+        forgone_return_mean=_mean(forgone),
+        forgone_return_median=_median(forgone),
+        holding_days_median=_median(holding),
+        n_missing_holding=len(members) - len(holding),
+        mae_r_median=_median(mae),
+        n_missing_mae=len(members) - len(mae),
+        filled_fraction_median=_median([o.filled_fraction for o in members]),
+        # An unfilled opportunity deployed no capital, so its realised return is
+        # structurally absent rather than missing data. The flag exists so a
+        # reader never mistakes the one for the other.
+        no_capital_deployed=partition == PARTITION_UNFILLED,
+        offline_unreachable=partition in OFFLINE_UNREACHABLE_PARTITIONS,
+    )
+
+
+def _conditional_fill(
+    given: str, then: str, opportunities: Sequence[Opportunity]
+) -> ConditionalFill:
+    n_given = n_then = same_bar = later = 0
+    then_returns: list[float | None] = []
+    for opp in opportunities:
+        ts_by_tier = dict(zip(opp.filled_tiers, opp.fill_bar_ts_ms, strict=True))
+        if given not in ts_by_tier:
+            continue
+        n_given += 1
+        if then not in ts_by_tier:
+            continue
+        n_then += 1
+        then_returns.append(opp.realised_return)
+        if ts_by_tier[then] > ts_by_tier[given]:
+            later += 1
+        else:
+            same_bar += 1
+    present = _present(then_returns)
+    return ConditionalFill(
+        given_tier=given,
+        then_tier=then,
+        n_given=n_given,
+        n_then=n_then,
+        n_then_same_bar=same_bar,
+        n_then_later=later,
+        then_realised_return_median=_median(present),
+        n_missing_then_realised=len(then_returns) - len(present),
+    )
+
+
+def partition_report(
+    opportunities: Sequence[Opportunity], *, fill_model: str, overshoot_arm: str
+) -> PartitionReport:
+    """Aggregate opportunities into the partitioned report.
+
+    ``opportunities`` is the WHOLE store slice, excluded rows included, so the
+    identity ``n_store_rows == n_opportunities + sum(excluded.values())`` holds by
+    construction and a silently dropped row cannot hide.
+    """
+    if fill_model not in FILL_MODELS:
+        raise ValueError(f"unknown fill_model {fill_model!r}; expected one of {FILL_MODELS}")
+    if overshoot_arm not in OVERSHOOT_ARMS_BPS:
+        raise ValueError(
+            f"unknown overshoot_arm {overshoot_arm!r}; expected one of {OVERSHOOT_ARMS}"
+        )
+
+    excluded = dict.fromkeys(EXCLUSION_REASONS, 0)
+    kept: list[Opportunity] = []
+    for opp in opportunities:
+        if opp.excluded_reason is None:
+            kept.append(opp)
+            continue
+        if opp.excluded_reason not in excluded:
+            raise ValueError(
+                f"undeclared exclusion reason {opp.excluded_reason!r}; "
+                f"expected one of {EXCLUSION_REASONS}"
+            )
+        excluded[opp.excluded_reason] += 1
+
+    by_partition: dict[str, list[Opportunity]] = {p: [] for p in PARTITIONS}
+    for opp in kept:
+        by_partition[partition_of(opp.filled_tiers)].append(opp)
+
+    return PartitionReport(
+        n_store_rows=len(opportunities),
+        n_opportunities=len(kept),
+        excluded=excluded,
+        partitions=tuple(_partition_stats(p, by_partition[p], len(kept)) for p in PARTITIONS),
+        conditional_fills=tuple(
+            _conditional_fill(TIER_IDS[i], TIER_IDS[i + 1], kept) for i in range(len(TIER_IDS) - 1)
+        ),
+        fill_model=fill_model,
+        overshoot_arm=overshoot_arm,
+        overshoot_bps=OVERSHOOT_ARMS_BPS[overshoot_arm],
+    )
+
+
+# --------------------------------------------------------------------------
+# Re-anchoring the stored MAE to the overshoot fill.
+# --------------------------------------------------------------------------
+
+
+def mae_r_at_fill(
+    *, stop_distance_pct: float | None, mae_pct: float | None, overshoot_bps: float
+) -> float | None:
+    """Maximum adverse excursion in R, anchored to the FILL rather than the limit.
+
+    The store's ``mae`` is anchored to the tier-limit blend. Once the fill is
+    known to land above that blend, both the numerator (distance travelled
+    against the position) and the denominator (risk per share) change, and the
+    two stored columns are enough to recompute it with no re-replay::
+
+        stop         = blend * (1 - stop_distance_pct)
+        in_trade_low = blend * (1 + mae_pct)
+        fill         = blend * (1 + overshoot)
+        mae_r        = (in_trade_low - fill) / (fill - stop)
+                     = (mae_pct - overshoot) / (overshoot + stop_distance_pct)
+
+    The blend cancels, so this needs only the two fractions. Callers MUST restrict
+    it to TERMINAL rows: the identity holds on a settled row and breaks on an
+    ongoing one, where the stored pair is a snapshot of a still-moving position.
+
+    The direction is not uniformly adverse. An excursion shallower than the stop
+    gets WORSE under the fill anchor; an excursion exactly at the stop is -1.0 R
+    under either anchor (touching your own stop is one R by definition); an
+    excursion past the stop is slightly LESS negative, because the fill anchor
+    widens the risk unit. ``None`` on a missing or non-positive stop distance.
+    """
+    if mae_pct is None or stop_distance_pct is None or stop_distance_pct <= 0.0:
+        return None
+    overshoot = overshoot_bps / BPS_PER_UNIT
+    return (mae_pct - overshoot) / (overshoot + stop_distance_pct)
