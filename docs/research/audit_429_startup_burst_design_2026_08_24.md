@@ -182,3 +182,37 @@ audits draining over ~10 ticks, and any 429 line carries the vendor headers.
    service group (not audit-specific), other /cs consumers added later would share the
    bucket — at that point option (b)'s slow lane becomes worth building with the then-
    measured number. Park until the headers land.
+
+## Amendment 1 — owner adjudication (2026-08-24)
+
+Two §3 points are overridden before implementation; §5 Q2 stays parked.
+
+1. **The cap is 6 per pass, not 8.** §3 justified 8/tick by citing "the rate
+   live-observed sustainable on 2026-07-30" — that citation is INVERTED. The
+   broker.py:311-313 comment records that ~10.7 GETs/min against a /cs audit
+   bucket of ~10/min PRODUCED the rhythmic 429 bursts; that diagnosis is what
+   motivated the terminal memoization in the first place. The two passive
+   brackets (July: ~10/min; August: ~60 requests per rolling ~60s) disagree by
+   ~6x and the bucket's dimension remains unmeasured, so the cap must sit under
+   BOTH brackets: `_MAX_OUTCOME_AUDITS_PER_PASS = 6` at the 45s tick cadence =
+   8 audit GETs/min. The cap is a transient-only shaper — a 76-bracket cold
+   start drains in ~10 minutes; steady state (memoized terminals) spends ~0
+   budget per tick.
+
+2. **§5 Q1 is answered by default engineering: audit ordering is MOST-RECENT
+   journal activity first.** The verdict pass orders disappeared brackets by
+   the newest journal timestamp first, so a genuine divergence on a recent /
+   live bracket is detected in the first passes while weeks-old likely-terminal
+   brackets drain last. Deferred brackets carry the non-alerting
+   `VERDICT_AUDIT_DEFERRED` marker (log line + pass counter, no AlertOnly, no
+   verdict) and are picked up on the next pass continuing the same recency
+   order (memoized terminals resolve budget-free, so previously-audited
+   brackets never re-consume the budget).
+
+§4 hard constraints unchanged: per-position `divergence:{crid}` alert keys
+untouched; steady-state behaviour unchanged (terminal memoization, UNRESOLVED
+re-audit next tick); no numeric backoff invented; a DEFERRED bracket never
+fabricates a verdict and is at-least-as-safe as today's
+`UNRESOLVED(audit_error)` for every downstream consumer (placement dedup is
+journal-keyed and the protection pass is broker-state-keyed — neither reads
+verdicts — so deferral removes only the alert while keeping the retry).
