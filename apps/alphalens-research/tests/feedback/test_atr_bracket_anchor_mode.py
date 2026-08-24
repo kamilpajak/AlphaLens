@@ -246,6 +246,45 @@ class TestBothModesShareTheNoFillGate(unittest.TestCase):
         self.assertIsNone(replay_ladder_atr_bracket(setup, above_every_tier, anchor="realised"))
 
 
+class TestTheSeamRefusesEveryInputTheLensRefuses(unittest.TestCase):
+    """``atr_bracket_anchor`` promises the price the lens WOULD place its bracket
+    around, so on an input the lens rejects outright it must reject too.
+
+    ATR is the case that matters: the lens drops the row for a missing /
+    non-finite / non-positive ATR before it ever computes a blend. A seam that
+    still returns a price there hands a test a number no lens value was ever
+    derived from.
+    """
+
+    def _setup_with_atr(self, atr: object) -> dict:
+        setup = smg_brief_trade_setup()
+        setup["atr"] = atr
+        return setup
+
+    def test_a_non_positive_atr_is_none_in_the_seam_as_it_is_in_the_lens(self):
+        setup = self._setup_with_atr(0.0)
+        self.assertIsNone(replay_ladder_atr_bracket(setup, _SMG_BARS, anchor="planned"))
+        self.assertIsNone(atr_bracket_anchor(setup, _SMG_BARS, anchor="planned"))
+        self.assertIsNone(atr_bracket_anchor(setup, _SMG_BARS, anchor="realised"))
+
+    def test_a_non_finite_atr_is_none_in_the_seam_as_it_is_in_the_lens(self):
+        setup = self._setup_with_atr(float("nan"))
+        self.assertIsNone(replay_ladder_atr_bracket(setup, _SMG_BARS, anchor="planned"))
+        self.assertIsNone(atr_bracket_anchor(setup, _SMG_BARS, anchor="planned"))
+
+    def test_a_missing_atr_is_none_in_the_seam_as_it_is_in_the_lens(self):
+        setup = smg_brief_trade_setup()
+        del setup["atr"]
+        self.assertIsNone(replay_ladder_atr_bracket(setup, _SMG_BARS, anchor="planned"))
+        self.assertIsNone(atr_bracket_anchor(setup, _SMG_BARS, anchor="planned"))
+
+    def test_a_healthy_atr_still_returns_the_anchor(self):
+        # Positive control: the ATR gate must not swallow the normal path.
+        anchor = atr_bracket_anchor(smg_brief_trade_setup(), _SMG_BARS, anchor="planned")
+        assert anchor is not None
+        self.assertAlmostEqual(anchor, SMG_PLANNED_BLEND, places=9)
+
+
 class TestTheTakeProfitFloorIsTheSameLeafOnBothSides(unittest.TestCase):
     """CHARACTERIZATION -- this passes on the code as it stands, deliberately.
 

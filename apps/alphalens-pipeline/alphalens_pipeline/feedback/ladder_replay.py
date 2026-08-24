@@ -679,6 +679,33 @@ def _anchor_from_walk(
     return blended
 
 
+def _bracket_walk(
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+) -> tuple[_ParsedLadder, _LadderWalk] | None:
+    """Walk-1 for the ATR-bracket family, behind the family's ROW-LEVEL gates.
+
+    One function so :func:`atr_bracket_anchor` and
+    :func:`replay_ladder_atr_bracket` cannot drift on which rows they accept:
+    unparseable / non-OK setup, no bars, and a missing / non-finite /
+    non-positive ATR all drop the row here, BEFORE any anchor is computed.
+    Everything past this point (nothing filled, non-finite blend, a
+    non-constructible bracket) is anchor-dependent and stays with the caller.
+    """
+    ladder = parse_ladder(trade_setup)
+    if trade_setup is None or not bars or not ladder.ok:
+        return None
+    atr = ladder.atr
+    if atr is None or not math.isfinite(atr) or atr <= 0:
+        return None
+    stop = ladder.disaster_stop
+    assert stop is not None  # ok=True guarantees it
+    walk = _LadderWalk(ladder, stop, entry_expiry_ms=None, position_expiry_ms=None)
+    for bar in sorted(bars, key=lambda b: int(b["t"])):
+        walk.step(bar)
+    return ladder, walk
+
+
 def atr_bracket_anchor(
     trade_setup: Mapping[str, Any] | None,
     bars: Sequence[Mapping[str, Any]],
@@ -688,23 +715,25 @@ def atr_bracket_anchor(
     """The price :func:`replay_ladder_atr_bracket` would place its bracket around.
 
     Public seam for the #1114 anchor split: it runs the SAME walk-1 the lens
-    runs and applies the SAME ``anchor`` semantics, so a test can pin the anchor
-    itself instead of only the realized R that follows from it. ``anchor`` is
-    required and validated -- see :data:`ANCHOR_PLANNED` / :data:`ANCHOR_REALISED`.
+    runs, behind the SAME row-level gates (:func:`_bracket_walk`), and applies
+    the SAME ``anchor`` semantics -- so a test can pin the anchor itself instead
+    of only the realized R that follows from it. ``anchor`` is required and
+    validated -- see :data:`ANCHOR_PLANNED` / :data:`ANCHOR_REALISED`.
 
-    Returns ``None`` under the lens's own degenerate-input contract (unparseable
-    setup, no bars, nothing filled in walk-1, non-finite blend).
+    Returns ``None`` for every input the lens drops BEFORE placing a bracket:
+    unparseable setup, no bars, a missing / non-finite / non-positive ATR,
+    nothing filled in walk-1, a non-finite blend. It does NOT model the gates
+    that come AFTER the anchor -- a non-positive ``stop_atr_mult`` and a
+    non-constructible bracket (ceiling at/below the cost floor, bracket stop
+    at/below zero) are properties of the bracket, not of the anchor, so the
+    lens can still return ``None`` on a row where this returns a price.
     """
     _validate_anchor(anchor)
-    ladder = parse_ladder(trade_setup)
-    if trade_setup is None or not bars or not ladder.ok:
+    walked = _bracket_walk(trade_setup, bars)
+    if walked is None:
         return None
-    stop = ladder.disaster_stop
-    assert stop is not None  # ok=True guarantees it
-    walk = _LadderWalk(ladder, stop, entry_expiry_ms=None, position_expiry_ms=None)
-    for bar in sorted(bars, key=lambda b: int(b["t"])):
-        walk.step(bar)
-    return _anchor_from_walk(trade_setup, walk.filled, anchor=anchor)
+    assert trade_setup is not None  # _bracket_walk returns None otherwise
+    return _anchor_from_walk(trade_setup, walked[1].filled, anchor=anchor)
 
 
 def replay_ladder_atr_bracket(
@@ -767,23 +796,18 @@ def replay_ladder_atr_bracket(
     on an unknown ``anchor``. Display-only; never the headline ``realized_r``.
     """
     _validate_anchor(anchor)
-    ladder = parse_ladder(trade_setup)
-    if trade_setup is None or not bars or not ladder.ok:
-        return None
-    atr = ladder.atr
-    if atr is None or not math.isfinite(atr) or atr <= 0:
-        return None
     if stop_atr_mult <= 0:  # risk = stop_atr_mult * atr would be <= 0
         return None
-    ordered = sorted(bars, key=lambda b: int(b["t"]))
-    stop = ladder.disaster_stop
-    assert stop is not None  # ok=True guarantees it
-    # Walk-1: derive the fill set under the family contract (no expiries). The
-    # fill set gates BOTH anchors (no fill -> no lens value) and supplies the
-    # realised blend; the planned blend comes from the live rail's own helper.
-    walk = _LadderWalk(ladder, stop, entry_expiry_ms=None, position_expiry_ms=None)
-    for bar in ordered:
-        walk.step(bar)
+    # Walk-1: derive the fill set under the family contract (no expiries), behind
+    # the row-level gates shared with atr_bracket_anchor. The fill set gates BOTH
+    # anchors (no fill -> no lens value) and supplies the realised blend; the
+    # planned blend comes from the live rail's own helper.
+    walked = _bracket_walk(trade_setup, bars)
+    if walked is None:
+        return None
+    ladder, walk = walked
+    atr = ladder.atr
+    assert atr is not None  # _bracket_walk returns None otherwise
     assert trade_setup is not None  # ok=True guarantees a mapping
     blended = _anchor_from_walk(trade_setup, walk.filled, anchor=anchor)
     if blended is None:
