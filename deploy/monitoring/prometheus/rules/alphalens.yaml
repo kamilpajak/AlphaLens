@@ -376,7 +376,7 @@ groups:
       # until its second consecutive failure: the sync emits a zero-initialised
       # one-hot outcome family every run, and a run is healthy exactly when one
       # of the two success labels (in_sync/synced) is 1. "No success label
-      # reached 1 anywhere in a window covering two hourly fires" is therefore
+      # reached 1 anywhere in the 150m lookback (about three hourly runs once gauge persistence is counted)" is therefore
       # the sustained-failure signal — and unlike a per-label
       # min_over_time(...) > 0 it also catches two runs failing with DIFFERENT
       # outcomes (fetch_failed then check_failed). sum() over an empty vector
@@ -391,7 +391,7 @@ groups:
           unit: prometheus-rules-sync
         annotations:
           summary: "live Prometheus rules no longer converging with main (sync failing on consecutive runs)"
-          description: "alphalens_rules_sync_outcome reported no in_sync/synced run across the last two hourly fires — git fetch, the in-container promtool check, or the reload verification is failing, and merged alert changes are NOT reaching the live rules file. Check `journalctl --user -u alphalens-prometheus-rules-sync.service` for which stage failed. While it stays broken, the emergency override is the manual copy of the repo alphalens.yaml over the live rules file + `docker exec prometheus kill -HUP 1`."
+          description: "alphalens_rules_sync_outcome reported no in_sync/synced run in the 150m lookback — in practice roughly three consecutive hourly runs without success, because a prior success's gauge sample persists ~60m until overwritten. git fetch, the in-container promtool check, or the reload verification is failing, and merged alert changes are NOT reaching the live rules file. Check `journalctl --user -u alphalens-prometheus-rules-sync.service` for which stage failed. While it stays broken, the emergency override is the manual copy of the repo alphalens.yaml over the live rules file + `docker exec prometheus kill -HUP 1`."
 
       # ---------------------------------------------------------------
       # VIX regime-cache freshness (Track A v2 PR-2 follow-up).

@@ -317,7 +317,7 @@ tests:
   # ---------------------------------------------------------------------
   #
   # sum(max_over_time({outcome=~"in_sync|synced"}[150m])) == 0: fires only
-  # when NO success label reached 1 across a window covering two hourly
+  # when NO success label reached 1 across the 150m lookback (~three hourly
   # fires — which also catches consecutive runs failing with DIFFERENT
   # outcomes; a single clean run's 1 lingers in the window and clears it.
 
@@ -342,7 +342,7 @@ tests:
               unit: prometheus-rules-sync
             exp_annotations:
               summary: "live Prometheus rules no longer converging with main (sync failing on consecutive runs)"
-              description: "alphalens_rules_sync_outcome reported no in_sync/synced run across the last two hourly fires — git fetch, the in-container promtool check, or the reload verification is failing, and merged alert changes are NOT reaching the live rules file. Check `journalctl --user -u alphalens-prometheus-rules-sync.service` for which stage failed. While it stays broken, the emergency override is the manual copy of the repo alphalens.yaml over the live rules file + `docker exec prometheus kill -HUP 1`."
+              description: "alphalens_rules_sync_outcome reported no in_sync/synced run in the 150m lookback — in practice roughly three consecutive hourly runs without success, because a prior success's gauge sample persists ~60m until overwritten. git fetch, the in-container promtool check, or the reload verification is failing, and merged alert changes are NOT reaching the live rules file. Check `journalctl --user -u alphalens-prometheus-rules-sync.service` for which stage failed. While it stays broken, the emergency override is the manual copy of the repo alphalens.yaml over the live rules file + `docker exec prometheus kill -HUP 1`."
 
   # Recovered: three failed runs, then a clean run writes in_sync=1 and the
   # gauge holds it (textfile semantics: the value persists until the next

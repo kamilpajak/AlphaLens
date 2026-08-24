@@ -89,6 +89,10 @@ CONTAINER_NAME = "prometheus"
 # the file at its container path.
 CONTAINER_RULES_DIR = "/etc/prometheus"
 RULES_API_URL = "http://localhost:9090/api/v1/rules"
+RUNTIME_INFO_URL = "http://localhost:9090/api/v1/status/runtimeinfo"
+# Host and container share a clock, but lastConfigTime has second resolution;
+# a small slack keeps a reload landing in the same second as run-start valid.
+RELOAD_TIME_SLACK_S = 5.0
 
 GIT_TIMEOUT_S = 120
 DOCKER_TIMEOUT_S = 60
@@ -100,7 +104,6 @@ VERIFY_ATTEMPTS = 5
 VERIFY_DELAY_S = 2.0
 
 OUTCOME_METRIC = "alphalens_rules_sync_outcome"
-SUCCESS_METRIC = "alphalens_rules_sync_last_success_timestamp_seconds"
 
 
 class Outcome(Enum):
@@ -133,6 +136,8 @@ class PrometheusPort(Protocol):
     def reload(self) -> bool: ...
 
     def active_alert_names(self) -> set[str] | None: ...
+
+    def runtime_info(self) -> Mapping | None: ...
 
 
 EmitPort = Callable[[str, Mapping[str, float]], object]
@@ -183,23 +188,48 @@ def parse_rules_payload(payload: Mapping) -> set[str]:
     return names
 
 
-def build_metrics(outcome: Outcome, now_ts: float) -> dict[str, float]:
-    """The per-run textfile gauges.
+def build_metrics(outcome: Outcome) -> dict[str, float]:
+    """The per-run textfile gauges: the outcome family and NOTHING else.
 
     ALL five outcome labels every run, zeros included — a series that
     disappears is indistinguishable from a stopped exporter, and the
-    sustained-failure alert needs a clean run's 0 to clear. The success
-    timestamp appears only on success outcomes (mirroring the bash
-    ``alphalens-emit-job-metrics`` hook) so a failing sync stalls the
-    staleness clock instead of quietly advancing it.
+    sustained-failure alert needs a clean run's 0 to clear. Job-level
+    staleness deliberately comes from the unit's ``ExecStopPost``
+    ``alphalens-emit-job-metrics`` hook (success-only stamp), so a second
+    script-side timestamp would be an unconsumed duplicate.
     """
-    metrics: dict[str, float] = {
+    return {
         f'{OUTCOME_METRIC}{{outcome="{candidate.value}"}}': (1 if candidate is outcome else 0)
         for candidate in Outcome
     }
-    if outcome in SUCCESS_OUTCOMES:
-        metrics[SUCCESS_METRIC] = int(now_ts)
-    return metrics
+
+
+def reload_confirmed(info: Mapping | None, started_ts: float) -> bool:
+    """True only when prometheus ITSELF reports a successful config reload
+    that happened after this run started.
+
+    The alert-name fingerprint alone is blind to expression-only changes —
+    exactly the 2026-08-20 rename incident class this job exists for: every
+    expected name already lives in the OLD in-memory config, so a silently
+    failed HUP would "verify". ``reloadConfigSuccess`` plus a fresh
+    ``lastConfigTime`` close that hole; a missing or garbled payload fails
+    closed (``reload_failed``), never open.
+    """
+    if not isinstance(info, Mapping):
+        return False
+    data = info.get("data")
+    if not isinstance(data, Mapping):
+        return False
+    if data.get("reloadConfigSuccess") is not True:
+        return False
+    raw = data.get("lastConfigTime")
+    if not isinstance(raw, str):
+        return False
+    try:
+        parsed = dt.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.timestamp() >= started_ts - RELOAD_TIME_SLACK_S
 
 
 def utc_stamp(now_ts: float) -> str:
@@ -220,6 +250,9 @@ class LiveDir:
 
     def __init__(self, path: Path):
         self.path = Path(path)
+        # Phase marker for run()'s catch-all: an unexpected error BEFORE the
+        # replace maps to check_failed (live untouched), AFTER to reload_failed.
+        self.replaced = False
 
     @property
     def live_path(self) -> Path:
@@ -279,6 +312,7 @@ class LiveDir:
         """Atomic install: ``rename(2)``, so a scrape or reload mid-replace
         sees either the old complete file or the new complete file."""
         os.replace(self.path / name, self.live_path)
+        self.replaced = True
 
 
 # ----------------------------------------------------------------------------
@@ -297,13 +331,14 @@ def run(
     dry_run: bool = False,
 ) -> int:
     """One pass. Returns the process exit code (0 = live matches SoT now)."""
+    started_ts = now_fn()
     try:
         git.fetch()
         desired = git.show_rules()
-    except GitCommandError:
+    except Exception:  # GitCommandError, a hung-subprocess timeout, anything
         logger.exception("could not read the origin/main rules blob")
         if not dry_run:
-            _emit(emit, Outcome.FETCH_FAILED, now_fn())
+            _emit(emit, Outcome.FETCH_FAILED)
         return 1
 
     current = live.read_live()
@@ -311,7 +346,7 @@ def run(
         if dry_run:
             print("in_sync: live rules match the origin/main blob; nothing to do")
             return 0
-        _emit(emit, Outcome.IN_SYNC, now_fn())
+        _emit(emit, Outcome.IN_SYNC)
         return 0
 
     if dry_run:
@@ -319,8 +354,23 @@ def run(
         print(f"would sync: live rules ({live_size}) differ from the blob ({len(desired)} bytes)")
         return 0
 
-    outcome = _sync(desired, live=live, prom=prom, now_fn=now_fn, sleep_fn=sleep_fn)
-    _emit(emit, outcome, now_fn())
+    try:
+        outcome = _sync(
+            desired,
+            live=live,
+            prom=prom,
+            started_ts=started_ts,
+            now_fn=now_fn,
+            sleep_fn=sleep_fn,
+        )
+    except Exception:
+        # An unexpected error (disk-full OSError, a port-contract violation)
+        # must still emit the one-hot family — a run with no metrics is
+        # indistinguishable from a stopped exporter. Phase mapping: live
+        # untouched -> check_failed; already replaced -> reload_failed.
+        logger.exception("unexpected error in the sync write path")
+        outcome = Outcome.RELOAD_FAILED if live.replaced else Outcome.CHECK_FAILED
+    _emit(emit, outcome)
     return 0 if outcome in SUCCESS_OUTCOMES else 1
 
 
@@ -329,6 +379,7 @@ def _sync(
     *,
     live: LiveDir,
     prom: PrometheusPort,
+    started_ts: float,
     now_fn: Callable[[], float],
     sleep_fn: Callable[[float], None],
 ) -> Outcome:
@@ -362,21 +413,27 @@ def _sync(
         if attempt:
             sleep_fn(VERIFY_DELAY_S)
         active = prom.active_alert_names()
-        if active is not None and expected <= active:
+        if active is None or not expected <= active:
+            continue
+        # Names alone are blind to expression-only changes (the 2026-08-20
+        # rename class) — prometheus itself must confirm a fresh, successful
+        # reload before the run may claim SYNCED.
+        if reload_confirmed(prom.runtime_info(), started_ts):
             return Outcome.SYNCED
     logger.error(
-        "reload verification failed: %s not all present in api/v1/rules after %d attempts",
-        sorted(expected),
+        "reload verification failed after %d attempts: names %s must all be active "
+        "AND runtimeinfo must report a successful reload newer than run start",
         VERIFY_ATTEMPTS,
+        sorted(expected),
     )
     return Outcome.RELOAD_FAILED
 
 
-def _emit(emit: EmitPort, outcome: Outcome, now_ts: float) -> None:
+def _emit(emit: EmitPort, outcome: Outcome) -> None:
     """Swallow-all: the sync already happened (or loudly failed via the exit
     code); a broken textfile dir is observability debt, not a second failure."""
     try:
-        emit(JOB_NAME, build_metrics(outcome, now_ts))
+        emit(JOB_NAME, build_metrics(outcome))
     except Exception:
         logger.exception("outcome metric emit failed; continuing")
 
@@ -417,7 +474,14 @@ class GitCli:
 
     def _git(self, *args: str) -> bytes:
         argv = ["git", "-C", str(self.repo_dir), *args]
-        proc = self._runner(argv, capture_output=True, timeout=self._timeout)
+        try:
+            proc = self._runner(argv, capture_output=True, timeout=self._timeout)
+        except subprocess.TimeoutExpired as exc:
+            # A hung git (dead network, wedged lock) must land in the
+            # fetch_failed arm WITH metrics, not escape past the emit.
+            raise GitCommandError(
+                f"`{' '.join(argv)}` timed out after {self._timeout:.0f}s"
+            ) from exc
         if proc.returncode != 0:
             stderr = proc.stderr
             if isinstance(stderr, bytes):
@@ -492,6 +556,13 @@ class DockerPrometheus:
             logger.exception("could not read %s", RULES_API_URL)
             return None
         return parse_rules_payload(payload)
+
+    def runtime_info(self) -> Mapping | None:
+        try:
+            return self._fetch_json(RUNTIME_INFO_URL)
+        except Exception:
+            logger.exception("could not read %s", RUNTIME_INFO_URL)
+            return None
 
     def _docker(self, argv: list[str]) -> subprocess.CompletedProcess | None:
         try:

@@ -48,6 +48,9 @@ STALE_LIVE = b"groups: []\n"
 FOREIGN_FILES = (
     "alphalens.rules.bak-stream1093-20260824-003837",
     "alphalens.rules.bak.20260823T113614Z",
+    # Sorts BELOW every autosync stamp: under a loosened prune prefix this is
+    # the file a keep-newest-10 pass would delete first (mutation kill).
+    "alphalens.rules.bak-20260531-202411",
     "prometheus.yml",
     "alert.rules",
 )
@@ -104,7 +107,7 @@ class TestBuildMetrics(unittest.TestCase):
         return {key: value for key, value in metrics.items() if key.startswith(sync.OUTCOME_METRIC)}
 
     def test_every_outcome_label_is_emitted_every_run_zeros_included(self) -> None:
-        metrics = sync.build_metrics(sync.Outcome.CHECK_FAILED, NOW_TS)
+        metrics = sync.build_metrics(sync.Outcome.CHECK_FAILED)
 
         one_hot = self._one_hot(metrics)
         self.assertEqual(len(one_hot), 5)
@@ -114,22 +117,14 @@ class TestBuildMetrics(unittest.TestCase):
         self.assertEqual(sum(one_hot.values()), 1)
         self.assertEqual(one_hot[f'{sync.OUTCOME_METRIC}{{outcome="check_failed"}}'], 1)
 
-    def test_success_timestamp_present_on_in_sync_and_synced(self) -> None:
-        for outcome in (sync.Outcome.IN_SYNC, sync.Outcome.SYNCED):
+    def test_the_outcome_family_is_the_only_emitted_metric(self) -> None:
+        # Job-level staleness comes from the unit's ExecStopPost hook; a
+        # script-side timestamp would be an unconsumed duplicate. Pinning the
+        # EXACT key set kills any silent metric-name drift too.
+        for outcome in sync.Outcome:
             with self.subTest(outcome=outcome):
-                metrics = sync.build_metrics(outcome, NOW_TS)
-                self.assertEqual(metrics[sync.SUCCESS_METRIC], int(NOW_TS))
-
-    def test_failure_outcomes_omit_the_success_timestamp(self) -> None:
-        # Mirrors the bash hook: last_success appears only on success, so a
-        # failing run stalls the clock and the staleness pair takes over.
-        for outcome in (
-            sync.Outcome.FETCH_FAILED,
-            sync.Outcome.CHECK_FAILED,
-            sync.Outcome.RELOAD_FAILED,
-        ):
-            with self.subTest(outcome=outcome):
-                self.assertNotIn(sync.SUCCESS_METRIC, sync.build_metrics(outcome, NOW_TS))
+                expected = {f'{sync.OUTCOME_METRIC}{{outcome="{o.value}"}}' for o in sync.Outcome}
+                self.assertEqual(set(sync.build_metrics(outcome)), expected)
 
 
 class TestLiveDir(unittest.TestCase):
@@ -194,6 +189,7 @@ class TestLiveDir(unittest.TestCase):
         # The live dir is SHARED: prometheus.yml and alert.rules belong to
         # other tenants, and the operator keeps manual backups in two other
         # naming styles. Deleting any of them is the disaster scenario.
+        self.live.live_path.write_bytes(b"live")
         for name in FOREIGN_FILES:
             (self.dir / name).write_bytes(b"foreign")
         for hour in range(12):
@@ -205,6 +201,9 @@ class TestLiveDir(unittest.TestCase):
         for name in FOREIGN_FILES:
             self.assertIn(name, survivors)
             self.assertEqual((self.dir / name).read_bytes(), b"foreign")
+        # The live rules file itself must survive any prune-prefix loosening.
+        self.assertIn(sync.LIVE_RULES_FILENAME, survivors)
+        self.assertEqual(self.live.live_path.read_bytes(), b"live")
 
     def test_replace_live_with_temp_installs_the_new_content(self) -> None:
         self.live.live_path.write_bytes(STALE_LIVE)
@@ -252,15 +251,22 @@ class FakeProm:
         active: set[str] | None = None,
         active_sequence: list[set[str] | None] | None = None,
         events: list[str] | None = None,
+        reload_config_success: bool = True,
+        last_config_time: str = "9999-01-01T00:00:00Z",
+        runtime_payload: object = "DEFAULT",
     ):
         self._check_ok = check_ok
         self._reload_ok = reload_ok
         self._active = active if active is not None else set(DESIRED_ALERTS) | {"GunbotDown"}
         self._active_sequence = active_sequence
         self._events = events if events is not None else []
+        self._reload_config_success = reload_config_success
+        self._last_config_time = last_config_time
+        self._runtime_payload = runtime_payload
         self.checked: list[str] = []
         self.reload_calls = 0
         self.verify_calls = 0
+        self.runtime_calls = 0
 
     def promtool_check(self, temp_name: str) -> bool:
         self._events.append("check")
@@ -278,6 +284,18 @@ class FakeProm:
         if self._active_sequence:
             return self._active_sequence.pop(0)
         return self._active
+
+    def runtime_info(self):
+        self._events.append("runtime")
+        self.runtime_calls += 1
+        if self._runtime_payload != "DEFAULT":
+            return self._runtime_payload
+        return {
+            "data": {
+                "reloadConfigSuccess": self._reload_config_success,
+                "lastConfigTime": self._last_config_time,
+            }
+        }
 
 
 class RecordingEmit:
@@ -363,13 +381,14 @@ class TestRun(unittest.TestCase):
         self.assertEqual(prom.reload_calls, 0)
         self.assertEqual(prom.verify_calls, 0)
 
-    def test_in_sync_stamps_the_success_timestamp(self) -> None:
+    def test_in_sync_emits_exactly_the_outcome_family(self) -> None:
         self.live.live_path.write_bytes(DESIRED)
 
         self._run()
 
         _job, metrics = self.emit.calls[0]
-        self.assertEqual(metrics[sync.SUCCESS_METRIC], int(NOW_TS))
+        expected = {f'{sync.OUTCOME_METRIC}{{outcome="{o.value}"}}' for o in sync.Outcome}
+        self.assertEqual(set(metrics), expected)
 
     def test_synced_happy_path_installs_content_and_backs_up_the_old(self) -> None:
         self.live.live_path.write_bytes(STALE_LIVE)
@@ -382,9 +401,8 @@ class TestRun(unittest.TestCase):
         backups = [p for p in self.dir.iterdir() if p.name.startswith(sync.BACKUP_PREFIX)]
         self.assertEqual(len(backups), 1)
         self.assertEqual(backups[0].read_bytes(), STALE_LIVE)
-        job, metrics = self.emit.calls[0]
+        job, _metrics = self.emit.calls[0]
         self.assertEqual(job, sync.JOB_NAME)
-        self.assertEqual(metrics[sync.SUCCESS_METRIC], int(NOW_TS))
 
     def test_sync_step_order_is_backup_check_replace_reload_verify(self) -> None:
         # The owner-settled order: backup + prune first, promtool check the
@@ -397,7 +415,8 @@ class TestRun(unittest.TestCase):
         self._run(live=live, prom=prom)
 
         self.assertEqual(
-            events, ["backup", "prune", "write_temp", "check", "replace", "reload", "verify"]
+            events,
+            ["backup", "prune", "write_temp", "check", "replace", "reload", "verify", "runtime"],
         )
 
     def test_fetch_failure_reports_fetch_failed_and_touches_nothing(self) -> None:
@@ -407,7 +426,6 @@ class TestRun(unittest.TestCase):
 
         self.assertEqual(rc, 1)
         self.assertEqual(self.emit.outcome(), "fetch_failed")
-        self.assertNotIn(sync.SUCCESS_METRIC, self.emit.calls[0][1])
         self.assertEqual(self.live.live_path.read_bytes(), STALE_LIVE)
         self.assertEqual([p.name for p in self.dir.iterdir()], [sync.LIVE_RULES_FILENAME])
 
@@ -730,3 +748,130 @@ class TestMainWiring(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReloadConfirmed(unittest.TestCase):
+    """The runtimeinfo gate: names alone are blind to expression-only changes
+    (the 2026-08-20 rename class) — prometheus itself must report a fresh,
+    successful reload."""
+
+    _FRESH = {"data": {"reloadConfigSuccess": True, "lastConfigTime": "9999-01-01T00:00:00Z"}}
+
+    def test_fresh_successful_reload_confirms(self) -> None:
+        self.assertTrue(sync.reload_confirmed(self._FRESH, NOW_TS))
+
+    def test_stale_last_config_time_fails_closed(self) -> None:
+        info = {"data": {"reloadConfigSuccess": True, "lastConfigTime": "2000-01-01T00:00:00Z"}}
+        self.assertFalse(sync.reload_confirmed(info, NOW_TS))
+
+    def test_reload_config_success_false_fails_closed(self) -> None:
+        info = {"data": {"reloadConfigSuccess": False, "lastConfigTime": "9999-01-01T00:00:00Z"}}
+        self.assertFalse(sync.reload_confirmed(info, NOW_TS))
+
+    def test_missing_or_garbled_payload_fails_closed(self) -> None:
+        for info in (
+            None,
+            {},
+            {"data": None},
+            {"data": {"reloadConfigSuccess": True}},
+            {"data": {"reloadConfigSuccess": True, "lastConfigTime": "not-a-time"}},
+        ):
+            with self.subTest(info=info):
+                self.assertFalse(sync.reload_confirmed(info, NOW_TS))
+
+    def test_same_second_reload_is_inside_the_slack(self) -> None:
+        stamp = sync.dt.datetime.fromtimestamp(NOW_TS, tz=sync.dt.UTC).isoformat()
+        info = {"data": {"reloadConfigSuccess": True, "lastConfigTime": stamp}}
+        self.assertTrue(sync.reload_confirmed(info, NOW_TS))
+
+
+class TestRunHardening(unittest.TestCase):
+    """Verifier findings: hung subprocesses and unexpected write-path errors
+    must still land in a metric-emitting outcome, and the reload gate must
+    veto a stale in-memory config even when every alert name matches."""
+
+    def setUp(self) -> None:
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+        self.live = sync.LiveDir(self.dir)
+        self.emit = RecordingEmit()
+
+    def _run(self, *, git=None, prom=None, live=None) -> int:
+        return sync.run(
+            git=git or FakeGit(),
+            live=live or self.live,
+            prom=prom if prom is not None else FakeProm(),
+            emit=self.emit,
+            now_fn=lambda: NOW_TS,
+            sleep_fn=lambda _s: None,
+        )
+
+    def test_git_timeout_raises_git_command_error(self) -> None:
+        def hung_runner(argv, **_kwargs):
+            raise subprocess.TimeoutExpired(argv, 120)
+
+        cli = sync.GitCli("/repo", runner=hung_runner)
+        with self.assertRaises(sync.GitCommandError):
+            cli.fetch()
+
+    def test_unexpected_error_before_replace_is_check_failed_and_live_untouched(self) -> None:
+        class DiskFullLive(sync.LiveDir):
+            def backup_live(self, stamp):
+                raise OSError("no space left on device")
+
+        live = DiskFullLive(self.dir)
+        live.live_path.write_bytes(STALE_LIVE)
+
+        rc = self._run(live=live)
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "check_failed")
+        self.assertEqual(live.live_path.read_bytes(), STALE_LIVE)
+
+    def test_unexpected_error_after_replace_is_reload_failed(self) -> None:
+        class RaisingReloadProm(FakeProm):
+            def reload(self):
+                raise RuntimeError("port contract violated")
+
+        self.live.live_path.write_bytes(STALE_LIVE)
+
+        rc = self._run(prom=RaisingReloadProm())
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+
+    def test_matching_names_with_stale_reload_time_is_reload_failed(self) -> None:
+        # The 2026-08-20 shape: expression-only change, every alert name
+        # already active in the OLD config, HUP silently failed.
+        self.live.live_path.write_bytes(STALE_LIVE)
+        prom = FakeProm(last_config_time="2000-01-01T00:00:00Z")
+
+        rc = self._run(prom=prom)
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+        self.assertGreaterEqual(prom.runtime_calls, 1)
+
+    def test_reload_config_success_false_is_reload_failed(self) -> None:
+        self.live.live_path.write_bytes(STALE_LIVE)
+
+        rc = self._run(prom=FakeProm(reload_config_success=False))
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "reload_failed")
+
+
+class TestAlertMetricParity(unittest.TestCase):
+    """The sustained-failure alert must reference the exact metric family and
+    success labels the script emits - renaming either side alone is the exact
+    silent-blindness class this whole job exists to prevent."""
+
+    def _rules_text(self) -> str:
+        root = Path(__file__).resolve().parents[3]
+        return (root / "deploy/monitoring/prometheus/rules/alphalens.yaml").read_text()
+
+    def test_alert_expr_uses_the_script_metric_and_success_labels(self) -> None:
+        labels = "|".join(sorted(o.value for o in sync.SUCCESS_OUTCOMES))
+        fragment = f'{sync.OUTCOME_METRIC}{{outcome=~"{labels}"}}'
+        self.assertIn(fragment, self._rules_text())
