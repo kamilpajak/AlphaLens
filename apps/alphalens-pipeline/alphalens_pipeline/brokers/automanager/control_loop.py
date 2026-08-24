@@ -21,7 +21,7 @@ from collections import deque
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.contract import (
@@ -2347,25 +2347,37 @@ class _EntryArmAbortError(Exception):
     — never escapes to the tick loop."""
 
 
-def _find_working_entry_order(broker: Broker, external_reference: str) -> str | None:
+class _EntryOrderLookup(NamedTuple):
+    """The result of the G3 adopt read. ``read_ok`` is False when the book could
+    not be read at all, which is NOT the same fact as "no order rests": a caller
+    that terminates the watch must only do so on a read that actually
+    succeeded (issue #1112)."""
+
+    order_id: str | None
+    read_ok: bool
+
+
+def _find_working_entry_order(broker: Broker, external_reference: str) -> _EntryOrderLookup:
     """The order id of a WORKING order whose ``ExternalReference`` matches
     (idempotent re-arm, memo §3 G3): a crash between the POST and the id-journal
     leaves a native order at Saxo the journal recorded only with a null id — on
     the next TOUCHED tick, adopt it rather than resting a second trail. A
-    ``BrokerError`` reading the book returns ``None`` (treat as not-found): the
-    deterministic ``request_id`` + Saxo's 15 s dedup still guard the short
-    re-POST window."""
+    ``BrokerError`` reading the book returns ``(None, read_ok=False)`` — the
+    re-POST path treats that as not-found (the deterministic ``request_id`` +
+    Saxo's 15 s dedup still guard the short re-POST window), while any path that
+    would TERMINATE the watch must stand down until the book is readable."""
     try:
         for state in broker.list_open_orders():
             if state.external_reference == external_reference:
-                return str(state.order_id)
+                return _EntryOrderLookup(str(state.order_id), True)
     except BrokerError as exc:
         logger.warning(
             "entry-trail arm: list_open_orders failed for dedup check (%s) — "
             "relying on request-id dedup",
             exc,
         )
-    return None
+        return _EntryOrderLookup(None, False)
+    return _EntryOrderLookup(None, True)
 
 
 def _stamped_exit_target(record: Mapping[str, Any]) -> float | None:
@@ -2397,20 +2409,13 @@ def _stamped_exit_target(record: Mapping[str, Any]) -> float | None:
     return target
 
 
-def _refuse_arm_inside_exit_region(
-    deps: LoopDeps,
-    crid: str,
-    record: Mapping[str, Any],
-    runtime: _EntryWatchRuntime,
-    d_bps: int,
-    reference: float,
-    trough: float,
-    qty: float,
-    report: TickReport,
-) -> bool:
-    """``True`` iff this tier was terminal-refused because its own exit target
-    cannot pay for the position its realistic fill would open (issue #1112
-    step 1: ``exit_target > fill_estimate + round_trip_cost + E_min``).
+def _inside_exit_region_note(
+    record: Mapping[str, Any], d_bps: int, reference: float, trough: float, qty: float
+) -> str | None:
+    """A one-line operator note when this tier's own exit target cannot pay for
+    the position its realistic fill would open, else ``None`` (issue #1112
+    step 1: refuse unless ``exit_target > fill_estimate + round_trip_cost +
+    E_min``).
 
     LIVE 2026-08-24 (SMG): the top tier's limit 59.786017 sat above the exit
     target 59.6277 the policy derived from the alloc-weighted PLANNED blend of
@@ -2424,10 +2429,8 @@ def _refuse_arm_inside_exit_region(
     ``test_entry_watch_wiring.py::
     test_the_gate_uses_the_realistic_fill_estimate_not_the_nominal_tier_limit``.
 
-    Terminal (``KIND_CANCELLED`` + ``watcher.cancel()``), mirroring the G7
-    insufficient-funds refuse in :func:`_handle_arm_failure` — the condition is
-    a property of the ladder's own geometry, so retrying it every 45 s tick
-    would only spam. Fails OPEN: no usable stamp means arm as before.
+    Fails OPEN (``None``, arm as before) on any unusable input — no stamp, a
+    degenerate geometry, a non-positive qty.
     """
     target = _stamped_exit_target(record)
     estimate = entry_trail_geometry.entry_fill_estimate(
@@ -2436,13 +2439,33 @@ def _refuse_arm_inside_exit_region(
     if not entry_trail_geometry.arms_inside_exit_region(
         fill_estimate=estimate, exit_target=target, qty=qty
     ):
-        return False
+        return None
     assert estimate is not None and target is not None  # the gate returns False on either
-    note = (
+    return (
         f"tier would fill inside the exit region: fill estimate {estimate:.4f}, "
         f"exit target {target:.4f} does not clear round-trip cost + E_min "
         f"{EXIT_EDGE_MIN_BPS:.0f} bps"
     )
+
+
+def _terminal_refuse_arm_inside_exit_region(
+    deps: LoopDeps,
+    crid: str,
+    record: Mapping[str, Any],
+    runtime: _EntryWatchRuntime,
+    d_bps: int,
+    note: str,
+    report: TickReport,
+) -> None:
+    """Terminal-refuse this tier (``KIND_CANCELLED`` + ``watcher.cancel()``),
+    mirroring the G7 insufficient-funds refuse in :func:`_handle_arm_failure` —
+    the condition is a property of the ladder's own geometry, so retrying it
+    every 45 s tick would only spam.
+
+    The caller must have a SUCCESSFUL open-order read in hand: this terminal is
+    outside ``_RESTING_BEARING_TERMINALS``, so nothing would cancel-then-verify
+    an order that turned out to be resting after all.
+    """
     entry_trails.append_entry_trail_line(
         {
             "kind": entry_trails.KIND_CANCELLED,
@@ -2457,7 +2480,6 @@ def _refuse_arm_inside_exit_region(
         f"entry-trail:inside-exit-region:{crid}",
     ):
         report.alerts += 1
-    return True
 
 
 def _arm_native_trail(
@@ -2508,9 +2530,9 @@ def _arm_native_trail(
         return
     fire_rid = _entry_fire_request_id(crid)
 
-    existing = _find_working_entry_order(broker, fire_rid)
-    if existing is not None:
-        _journal_trail_armed(crid, order_id=existing, trigger=geo.order_price)
+    lookup = _find_working_entry_order(broker, fire_rid)
+    if lookup.order_id is not None:
+        _journal_trail_armed(crid, order_id=lookup.order_id, trigger=geo.order_price)
         runtime.watcher.mark_armed()
         return
 
@@ -2518,9 +2540,22 @@ def _arm_native_trail(
     # the watch while a real buy order still rests at the broker, and
     # KIND_CANCELLED is outside _RESTING_BEARING_TERMINALS so nothing would
     # cancel-then-verify it. Only a FRESH arm is refused.
-    if _refuse_arm_inside_exit_region(
-        deps, crid, record, runtime, d_bps, reference, trough, qty, report
-    ):
+    note = _inside_exit_region_note(record, d_bps, reference, trough, qty)
+    if note is not None:
+        if lookup.read_ok:
+            _terminal_refuse_arm_inside_exit_region(
+                deps, crid, record, runtime, d_bps, note, report
+            )
+        else:
+            # The book read FAILED, so "no order rests" is a fact we do not have.
+            # Neither terminate (a prior tick's POST could be resting, and this
+            # terminal does no cancel-then-verify) nor arm a tier we know is bad:
+            # stay TOUCHED and settle it on a tick that can read the book.
+            logger.warning(
+                "entry-trail %s: %s — open-order read failed, deferring the refusal",
+                entry_label_from_crid(crid),
+                note,
+            )
         return
 
     try:
@@ -2596,9 +2631,17 @@ def _handle_arm_failure(
 # The engine terminals that can strand a resting native order at the broker: a
 # tier that hit a G9 deep-decline (SUSPENDED) or its TTL window (EXPIRED) while
 # still arm-in-progress (a G3 null-id write-ahead whose POST rested at the broker
-# but whose id-journal was lost). WOULD_FIRE never occurs in native mode and
-# CANCELLED is only reached through the KILL / insufficient-funds paths, which do
-# their own broker cancel — so neither needs the cancel-then-verify here.
+# but whose id-journal was lost). WOULD_FIRE never occurs in native mode.
+#
+# CANCELLED has three producers, none of which needs the cancel-then-verify here:
+# the KILL and insufficient-funds paths do their own broker cancel, and the
+# #1112 inside-the-exit-region refuse runs only AFTER _find_working_entry_order
+# came back empty, so there is no order of ours to cancel. That third path rests
+# on the open-order read being complete: a broker read that fails SOFT (returns
+# an empty book instead of raising) while a crashed prior tick's POST is resting
+# would terminal-refuse and leave that order untracked. _find_working_entry_order
+# raises on a BrokerError rather than returning None, which is what keeps the
+# assumption true today.
 _RESTING_BEARING_TERMINALS = frozenset(
     {entry_trail_watcher.WatchState.SUSPENDED, entry_trail_watcher.WatchState.EXPIRED}
 )
@@ -2657,7 +2700,7 @@ def _finalize_entry_terminal_vs_broker(
     if not isinstance(broker, SupportsTrailingStop):
         return result  # a non-trailing broker never armed — nothing can rest
     fire_rid = _entry_fire_request_id(crid)
-    existing = _find_working_entry_order(broker, fire_rid)
+    existing = _find_working_entry_order(broker, fire_rid).order_id
     if existing is None:
         return result  # nothing resting — the terminal stands as the engine set it
     # Cancel FIRST, then re-read (memo §3 G6 cancel-then-verify).

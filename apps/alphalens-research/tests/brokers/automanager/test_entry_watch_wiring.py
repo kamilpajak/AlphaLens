@@ -107,6 +107,7 @@ class _RecordingBroker:
         self.trailing_orders: list[dict[str, Any]] = []
         self.stop_limits: list[tuple] = []
         self.open_orders: list[Any] = []  # OrderState-like, for list_open_orders
+        self.open_orders_error: Exception | None = None  # set to fail the book read
         self.order_states: dict[str, Any] = {}  # order_id -> OrderState-like, for get_order
         self._next_id = 0
 
@@ -164,6 +165,8 @@ class _RecordingBroker:
         return _placed("SL-1")
 
     def list_open_orders(self) -> list[Any]:
+        if self.open_orders_error is not None:
+            raise self.open_orders_error
         return self.open_orders
 
     def get_order(self, order_id: str) -> Any:
@@ -822,6 +825,38 @@ class TestEntryArmInsideExitRegion(unittest.TestCase):
             [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED], []
         )
         self.assertEqual(broker.trailing_orders, [], "adopted, not re-placed")
+
+    def test_a_failed_open_order_read_defers_the_refusal_instead_of_orphaning(self) -> None:
+        # The adopt read is what proves no order of ours rests at the broker, and
+        # it returns "not found" both when the book is empty AND when the read
+        # itself failed. Terminal-refusing on a FAILED read would drop a watch
+        # whose prior-tick POST may be resting, with nothing left to cancel it
+        # (KIND_CANCELLED is outside _RESTING_BEARING_TERMINALS). The tier stays
+        # TOUCHED and retries on the next tick instead.
+        from broker_contract.contract import BrokerError
+
+        path = _journal(self)
+        _planned_journal(self)
+        self._seed(path, limit=SMG_TIERS[0][0], geometry=smg_geometry_stamp())
+        broker = _RecordingBroker()
+        broker.open_orders_error = BrokerError("book read failed")
+        prices: dict[int, float | None] = {}
+        deps = _watch_deps(_FakeFeed(prices), [], broker=broker)
+
+        self._run(deps, SMG_TOUCH_BID, prices)
+
+        self.assertEqual(
+            [ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED],
+            [],
+            "a refusal on an unreadable book would strand a possibly-resting order",
+        )
+        self.assertEqual(broker.trailing_orders, [], "and it must not arm the bad tier either")
+        # The next tick, with the book readable again, refuses properly.
+        broker.open_orders_error = None
+        self._run(deps, SMG_TOUCH_BID, prices)
+        self.assertEqual(
+            len([ln for ln in _lines(path) if ln["kind"] == entry_trails.KIND_CANCELLED]), 1
+        )
 
     def test_watch_without_a_geometry_stamp_still_arms(self) -> None:
         # Fail open: a pre-stamp watch_open line (or a policy that places the
