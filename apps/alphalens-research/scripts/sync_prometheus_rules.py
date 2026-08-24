@@ -82,7 +82,8 @@ RULES_REPO_PATH = "deploy/monitoring/prometheus/rules/alphalens.yaml"
 LIVE_RULES_FILENAME = "alphalens.rules"
 
 BACKUP_PREFIX = "alphalens.rules.bak-autosync-"
-BACKUP_KEEP = 10
+BACKUP_KEEP = 10  # deliberately hardcoded: ~10 changed-rule deploys of history;
+# a knob would outlive its documentation (the no-config-drift doctrine)
 
 CONTAINER_NAME = "prometheus"
 # The live dir is bind-mounted here inside the container; promtool must check
@@ -390,13 +391,19 @@ def _sync(
     live.prune_autosync_backups(BACKUP_KEEP)
 
     temp_name = live.write_temp(desired)
-    if not prom.promtool_check(temp_name):
-        # Live is untouched; the backup made above is of the unchanged file
-        # and harmless. The bad content never replaces the running rules.
-        live.remove_temp(temp_name)
-        return Outcome.CHECK_FAILED
+    try:
+        if not prom.promtool_check(temp_name):
+            # Live is untouched; the backup made above is of the unchanged
+            # file and harmless. The bad content never replaces the rules.
+            return Outcome.CHECK_FAILED
 
-    live.replace_live_with_temp(temp_name)
+        live.replace_live_with_temp(temp_name)
+    finally:
+        # The replace consumes the temp on the happy path; every other exit
+        # (promtool refusal, an exception from any port) must not leave
+        # hidden .tmp files accumulating in the shared live dir.
+        if not live.replaced:
+            live.remove_temp(temp_name)
 
     if not prom.reload():
         # New file on disk, but prometheus may still run the old rules —

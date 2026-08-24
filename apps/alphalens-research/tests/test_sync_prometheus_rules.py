@@ -853,6 +853,21 @@ class TestRunHardening(unittest.TestCase):
         self.assertEqual(self.emit.outcome(), "reload_failed")
         self.assertGreaterEqual(prom.runtime_calls, 1)
 
+    def test_no_temp_file_left_behind_on_any_failure_path(self) -> None:
+        # The live dir is SHARED - hidden .tmp files must never accumulate.
+        class RaisingCheckProm(FakeProm):
+            def promtool_check(self, temp_name):
+                raise RuntimeError("docker daemon hiccup")
+
+        self.live.live_path.write_bytes(STALE_LIVE)
+
+        rc = self._run(prom=RaisingCheckProm())
+
+        self.assertEqual(rc, 1)
+        self.assertEqual(self.emit.outcome(), "check_failed")
+        leftovers = [p.name for p in self.dir.iterdir() if p.name.startswith(".")]
+        self.assertEqual(leftovers, [])
+
     def test_reload_config_success_false_is_reload_failed(self) -> None:
         self.live.live_path.write_bytes(STALE_LIVE)
 

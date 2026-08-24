@@ -25,7 +25,8 @@
 #   1  it does not — fetch_failed / check_failed / reload_failed; the journal
 #      names the stage. Non-zero holds the last_success clock still
 #      (AlphalensJobStale@2h), and the script's own outcome one-hot feeds
-#      AlphalensPrometheusRulesSyncFailed after two consecutive failed fires.
+#      AlphalensPrometheusRulesSyncFailed once no success lands in its 150m
+#      lookback (about three consecutive hourly runs, gauge persistence counted).
 #
 # EnvironmentFile carries no `-` (fail loud): the run needs
 # ALPHALENS_TEXTFILE_DIR for the outcome metrics. No secrets are read — the
