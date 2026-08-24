@@ -15,6 +15,7 @@ from alphalens_pipeline.thematic.extraction.templates.holdout import (
     HOLDOUT_ALL_PREDICATES_FAILED,
     HOLDOUT_ENTITY_UNRESOLVED,
     HOLDOUT_NO_TEMPLATE_MATCH,
+    HOLDOUT_REQUIRED_ROLE_UNFILLED,
 )
 from alphalens_pipeline.thematic.extraction.templates.spec import (
     Article,
@@ -136,17 +137,55 @@ class TestNoMatchPaths(unittest.TestCase):
 
 
 class TestEntityRequirementSemantics(unittest.TestCase):
-    def test_missing_required_role_records_all_predicates_failed(self):
-        # Template requires acquirer + target; only one resolved → reject.
+    def test_missing_required_role_records_required_role_unfilled(self):
+        # Template requires acquirer + target; only one entity resolved.
+        # The article is shaped like a real edgar_press_release row — one
+        # feed ticker (from the filer CIK), EX-99.1 title — because that
+        # is the production shape where the shortfall occurs (#321): the
+        # entity resolver can never produce a second entity there.
         engine = TemplateEngine.from_specs([_m_and_a_spec()])
+        article = _article(
+            source="edgar_press_release",
+            url="https://www.sec.gov/Archives/edgar/data/1709442/x-index.htm",
+            title="EX-99.1",
+            body="FirstSun announced the acquisition for $890 million in cash.",
+            tickers=["FSUN"],
+        )
+        event = engine.match(article, entities=_resolved("FSUN"))
+        self.assertIsNone(event)
+        snap = engine.metrics.snapshot()
+        # All text predicates passed; only the role fill failed — that is
+        # a distinct operational signal (resolver shortfall, not pattern
+        # drift) and must not collapse into all_predicates_failed (#1108).
+        self.assertEqual(snap["holdout"][HOLDOUT_REQUIRED_ROLE_UNFILLED], 1)
+        self.assertEqual(snap["holdout"][HOLDOUT_ALL_PREDICATES_FAILED], 0)
+
+    def test_role_unfilled_wins_over_predicate_failure_across_templates(self):
+        # Two templates: the first fails a predicate outright, the second
+        # passes all predicates and fails only on role fill. The article's
+        # single drop reason must be the more specific required_role_unfilled.
+        failing_spec = TemplateSpec(
+            template_id="earnings_surprise",
+            event_type="earnings",
+            description="",
+            article_predicates=[
+                PredicateRef(name="is_press_release", kwargs={}),
+                PredicateRef(
+                    name="any_sentence_contains",
+                    kwargs={"words": ["quarterly results"]},
+                ),
+            ],
+            entity_requirements={
+                "reporter": EntityRequirement(role="reporter", type="company", required=True),
+            },
+            extraction=[],
+        )
+        engine = TemplateEngine.from_specs([failing_spec, _m_and_a_spec()])
         event = engine.match(_article(tickers=["NVDA"]), entities=_resolved("NVDA"))
         self.assertIsNone(event)
         snap = engine.metrics.snapshot()
-        # Required-role miss collapses into the same drop family as a
-        # predicate failure (both = "template didn't fit"). The Grafana
-        # panel groups them — separating would inflate the reason set
-        # without operational value at this stage.
-        self.assertGreaterEqual(snap["holdout"][HOLDOUT_ALL_PREDICATES_FAILED], 1)
+        self.assertEqual(snap["holdout"][HOLDOUT_REQUIRED_ROLE_UNFILLED], 1)
+        self.assertEqual(snap["holdout"][HOLDOUT_ALL_PREDICATES_FAILED], 0)
 
     def test_optional_role_can_be_absent(self):
         spec = TemplateSpec(
@@ -197,6 +236,30 @@ class TestMultiTemplateOrdering(unittest.TestCase):
         # First template in the library that passes wins; downstream
         # PR-2 catalyst_resolver implements the cross-source precedence.
         self.assertEqual(event.template_id, "m_and_a_press_release")
+
+
+class TestMetricsZeroInitAtConstruction(unittest.TestCase):
+    def test_engine_construction_registers_all_templates_at_zero(self):
+        # A template that never sees traffic must still flush explicit
+        # 0-valued attempt/match series (absent-series vs zero-count —
+        # the match-rate alert needs the series to exist to fire).
+        engine = TemplateEngine.from_specs([_m_and_a_spec()])
+        snap = engine.metrics.snapshot()
+        self.assertEqual(snap["attempts"]["m_and_a_press_release"], 0)
+        self.assertEqual(snap["matches"]["m_and_a_press_release"], 0)
+
+    def test_from_dir_registers_every_loaded_template_at_zero(self):
+        from pathlib import Path
+
+        import alphalens_pipeline.thematic.extraction.templates as templates_pkg
+
+        ship_dir = Path(templates_pkg.__file__).parent / "templates"
+        engine = TemplateEngine.from_dir(ship_dir)
+        snap = engine.metrics.snapshot()
+        self.assertGreater(len(engine.specs), 0)
+        for spec in engine.specs:
+            self.assertEqual(snap["attempts"][spec.template_id], 0)
+            self.assertEqual(snap["matches"][spec.template_id], 0)
 
 
 class TestEngineFromDir(unittest.TestCase):

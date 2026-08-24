@@ -28,6 +28,7 @@ from alphalens_pipeline.thematic.extraction.templates.holdout import (
     HOLDOUT_ENTITY_UNRESOLVED,
     HOLDOUT_LOW_CONFIDENCE_NO_TEMPLATE,
     HOLDOUT_NO_TEMPLATE_MATCH,
+    HOLDOUT_REQUIRED_ROLE_UNFILLED,
     TemplateMetrics,
 )
 from alphalens_pipeline.thematic.extraction.templates.predicates import (
@@ -56,6 +57,7 @@ __all__ = [
     "HOLDOUT_ENTITY_UNRESOLVED",
     "HOLDOUT_LOW_CONFIDENCE_NO_TEMPLATE",
     "HOLDOUT_NO_TEMPLATE_MATCH",
+    "HOLDOUT_REQUIRED_ROLE_UNFILLED",
     "PREDICATE_REGISTRY",
     "TEMPLATE_JSON_SCHEMA",
     "Article",

@@ -373,3 +373,108 @@ tests:
       - eval_time: 4h
         alertname: AlphalensPrometheusRulesSyncFailed
         exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensTemplateMatchRateLow
+  # ---------------------------------------------------------------------
+  #
+  # The all-zero template (#1108). Before per-template zero-init, a template
+  # that never matched emitted NO match series at all: rate() over an absent
+  # series returns an empty vector, the division produced no result, and the
+  # alert structurally could not fire. This fixture evaluates the shipped
+  # rule against the POST-FIX production shape (explicit 0) — the emission
+  # zero-init itself is pinned Python-side (test_holdout.py explicit-zero
+  # flush test + test_hybrid_extraction.py production-flush test), and the
+  # missing-family case is owned by AlphalensTemplateMetricsMissing below.
+  # The fixture mirrors what production emits after zero-init: attempt_total
+  # climbing (every article attempts every template until first match) and
+  # match_total PRESENT as an explicit constant 0. Production overwrites the
+  # textfile with fresh per-run accumulators (counter resets); rate() and
+  # increase() treat resets as continuations, so a monotone fixture is the
+  # equivalent steady-state shape.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="m_and_a_press_release"}'
+        values: '0+1x216'
+      - series: 'alphalens_template_match_total{template_id="m_and_a_press_release"}'
+        values: '0x216'
+    alert_rule_test:
+      # Min-sample guard not yet met: increase(...[7d]) ~= 40 < 50 — a 0%
+      # match rate on too few attempts must not page.
+      - eval_time: 40h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts: []
+      # Guard crossed (~50 cumulative attempts at ~50h) but `for: 1d` has
+      # not elapsed — still pending, not firing.
+      - eval_time: 60h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts: []
+      # Sustained: 0 matches over >50 attempts, condition held > 1d -> fires.
+      - eval_time: 96h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              template_id: m_and_a_press_release
+            exp_annotations:
+              summary: "Template m_and_a_press_release match rate < 20% for 7 days"
+              description: "Per-template match-rate sustained below 20% — review pattern in templates/m_and_a_press_release.yaml or accept drift via `alphalens templates evaluate`."
+
+  # Low-traffic template: the same 0% match rate on ~30 attempts stays under
+  # the 50-attempt min-sample guard and must never page — that volume is
+  # statistically meaningless (the guard the rule comment promises).
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="regulatory_action"}'
+        values: '0+1x30 30x185'
+      - series: 'alphalens_template_match_total{template_id="regulatory_action"}'
+        values: '0x216'
+    alert_rule_test:
+      - eval_time: 96h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts: []
+      - eval_time: 192h
+        alertname: AlphalensTemplateMatchRateLow
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------
+  # AlphalensTemplateMetricsMissing
+  # ---------------------------------------------------------------------
+  #
+  # The missing-family guard (zen review of PR #1109). The production
+  # flush is failure-isolated (a metrics error must not fail a good
+  # extract run), so a chronically failing or unwired flush would leave
+  # the whole alphalens_template_* family absent with only a container
+  # log line — the exact silence class #1108 removes. absent() owns
+  # that case at the Prometheus layer.
+  #
+  # Case 1: family absent entirely -> fires once `for: 6h` elapses.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_job_last_exit_code{job="thematic-build"}'
+        values: '0x216'
+    alert_rule_test:
+      # for: 6h not yet elapsed - pending, not firing.
+      - eval_time: 3h
+        alertname: AlphalensTemplateMetricsMissing
+        exp_alerts: []
+      - eval_time: 8h
+        alertname: AlphalensTemplateMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+            exp_annotations:
+              summary: "Template-engine metrics missing"
+              description: "alphalens_template_attempt_total is absent — the production template-metrics flush is unwired, chronically failing inside its failure-isolation catch, or the textfile was deleted. The match-rate alert is blind while this lasts. Check the thematic-build container log for 'template metrics flush failed'."
+
+  # Case 2: the family exists (even at explicit 0) -> guard stays quiet.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_template_attempt_total{template_id="m_and_a_press_release"}'
+        values: '0x216'
+    alert_rule_test:
+      - eval_time: 8h
+        alertname: AlphalensTemplateMetricsMissing
+        exp_alerts: []

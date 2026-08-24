@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -231,6 +232,127 @@ class TestExtractDailyLegacyCacheBackfill(unittest.TestCase):
         self.assertTrue(
             legacy_row["template_id"] is None or pd.isna(legacy_row["template_id"]),
         )
+
+
+class TestExtractDailyEmitsTemplateMetrics(unittest.TestCase):
+    """The PRODUCTION extract path must flush template metrics (#1108).
+
+    Before this pin, ``TemplateMetrics.flush`` was called only by the
+    ad-hoc ``alphalens templates evaluate`` CLI — the 6x/day production
+    ``thematic extract`` run emitted nothing, so the match-rate alert
+    watched an empty series set for 12 weeks. ``extract_daily`` is the
+    one-run-one-process boundary, so it owns the single per-run flush.
+    """
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp())
+        self._orig_env = os.environ.get("ALPHALENS_TEXTFILE_DIR")
+        os.environ["ALPHALENS_TEXTFILE_DIR"] = str(self.tmpdir)
+        # Fresh module singleton: the default engine's accumulator is
+        # cumulative per process, so counters from other tests in this
+        # module must not leak into the flushed file asserted below.
+        self._orig_engine = event_extractor._default_engine
+        event_extractor._default_engine = None
+
+    def tearDown(self):
+        event_extractor._default_engine = self._orig_engine
+        if self._orig_env is None:
+            os.environ.pop("ALPHALENS_TEXTFILE_DIR", None)
+        else:
+            os.environ["ALPHALENS_TEXTFILE_DIR"] = self._orig_env
+
+    def test_extract_daily_flushes_template_metrics_to_textfile(self):
+        # One template-matching row — the Flash path must not be needed
+        # for the flush to happen (and _call_llm is patched to prove the
+        # LLM is never touched).
+        news = _news_frame(
+            [
+                _news_row(
+                    "bw:1",
+                    "businesswire",
+                    "NVDA announces $5 billion acquisition of XYZ",
+                    body="A $5 billion all-cash acquisition.",
+                    tickers=["NVDA", "XYZ"],
+                    url="https://www.businesswire.com/news/home/x",
+                ),
+            ]
+        )
+        news_dir = self.tmpdir / "news"
+        events_dir = self.tmpdir / "events"
+        news_dir.mkdir()
+        news.to_parquet(news_dir / "2026-05-30.parquet", index=False)
+
+        with patch.object(
+            event_extractor, "_call_llm", side_effect=AssertionError("Flash was called")
+        ):
+            event_extractor.extract_daily(
+                date=dt.date(2026, 5, 30),
+                news_dir=news_dir,
+                events_dir=events_dir,
+                api_key="testkey",
+            )
+
+        out = self.tmpdir / "alphalens_domain_template-engine.prom"
+        self.assertTrue(out.exists(), f"production extract run did not flush {out}")
+        text = out.read_text()
+        # Every shipped template flushes BOTH families — including the
+        # ones this article never matched (explicit 0, not absent series;
+        # the match-rate alert needs the series to exist to fire).
+        ship_ids = sorted(p.stem for p in event_extractor.DEFAULT_TEMPLATES_DIR.glob("*.yaml"))
+        self.assertGreater(len(ship_ids), 0)
+        for tid in ship_ids:
+            self.assertIn(f'alphalens_template_attempt_total{{template_id="{tid}"}}', text)
+            self.assertIn(f'alphalens_template_match_total{{template_id="{tid}"}}', text)
+        # The matching template counted its match; an all-time-zero
+        # template carries an explicit 0 sample.
+        self.assertIn(
+            'alphalens_template_match_total{template_id="m_and_a_press_release"} 1',
+            text,
+        )
+        self.assertIn(
+            'alphalens_template_match_total{template_id="regulatory_action"} 0',
+            text,
+        )
+
+    def test_flush_failure_does_not_fail_the_run(self):
+        # Mirror of the _emit_stage_volume rule (zen PR #311): the events
+        # parquet is already written, so a metrics failure must not turn a
+        # good extract run into a unit failure.
+        news = _news_frame(
+            [
+                _news_row(
+                    "bw:1",
+                    "businesswire",
+                    "NVDA announces $5 billion acquisition of XYZ",
+                    body="A $5 billion all-cash acquisition.",
+                    tickers=["NVDA", "XYZ"],
+                    url="https://www.businesswire.com/news/home/x",
+                ),
+            ]
+        )
+        news_dir = self.tmpdir / "news"
+        events_dir = self.tmpdir / "events"
+        news_dir.mkdir()
+        news.to_parquet(news_dir / "2026-05-30.parquet", index=False)
+
+        with (
+            patch.object(
+                event_extractor, "_call_llm", side_effect=AssertionError("Flash was called")
+            ),
+            patch(
+                "alphalens_pipeline.thematic.extraction.templates.holdout.TemplateMetrics.flush",
+                side_effect=OSError("metrics dir unwritable"),
+            ),
+        ):
+            df = event_extractor.extract_daily(
+                date=dt.date(2026, 5, 30),
+                news_dir=news_dir,
+                events_dir=events_dir,
+                api_key="testkey",
+            )
+        # The run still returned its events despite the flush failure.
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["extraction_method"], "template")
 
 
 if __name__ == "__main__":
