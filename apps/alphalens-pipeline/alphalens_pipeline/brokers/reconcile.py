@@ -41,6 +41,7 @@ Verdict semantics per journal bracket:
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
@@ -57,10 +58,27 @@ from broker_contract.contract import (
 
 from alphalens_pipeline.paper.calendar import trading_days_elapsed
 
+logger = logging.getLogger(__name__)
+
 # Reason codes emitted by THIS module (the resolver-side codes travel in the
 # resolver's OrderState.raw_status and pass through verbatim).
 REASON_CAPABILITY_ABSENT = "capability_absent"
 REASON_AUDIT_ERROR = "audit_error"
+
+# Per-pass cap on audit-log resolution reads (GET /cs/v1/audit/orderactivities),
+# the cold-start 429-burst shaper (audit-429 memo §3 + Amendment 1). 6/pass at
+# the 45s tick cadence = 8 GETs/min — under BOTH passive brackets of the
+# unmeasured /cs audit bucket (July 2026: ~10/min tripped it; August 2026:
+# ~60 per rolling ~60s). A transient-only shaper: steady state resolves from
+# the terminal memo (SupportsOutcomeCachePeek) and spends ~0 budget per pass.
+_MAX_OUTCOME_AUDITS_PER_PASS = 6  # single tuning point; env knob only after the
+# header instrument reports the real quota (memo §5 Q2 — no invented numbers)
+
+# Non-alerting marker for a bracket whose audit was NOT ATTEMPTED this pass
+# (budget exhausted): a log line + pass counter — never an AlertOnly, never a
+# verdict. Distinct from UNRESOLVED(audit_error), which is an ATTEMPTED audit
+# that failed (and keeps its alert).
+VERDICT_AUDIT_DEFERRED = "AUDIT_DEFERRED"
 
 _WORKING_STATUSES = frozenset({OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED})
 _TERMINAL_STATUSES = frozenset(
@@ -101,6 +119,50 @@ class SupportsPositionNetting(Protocol):
     """
 
     def get_positions(self) -> list[Position]: ...
+
+
+@runtime_checkable
+class SupportsOutcomeCachePeek(Protocol):
+    """Extension capability: whether ``resolve_order_outcome`` would answer from
+    a terminal memo (no audit HTTP read). Lets the audit budget cap only REAL
+    reads — memoized terminals resolve budget-free, so steady state (terminal
+    majority cached) is byte-identical to the un-budgeted pass."""
+
+    def has_cached_order_outcome(self, order_id: str) -> bool: ...
+
+
+class OutcomeAuditBudget:
+    """Per-tick cap on audit-log resolution reads, shared by every consumer.
+
+    ONE instance per daemon (built once, mirroring the loop's other lifetime
+    state); ``start_tick`` resets it at the top of each tick so the cap is
+    per-pass. Both audit consumers — the verdict pass (``reconcile_brackets``)
+    and the entry-trail reconcile pass — draw from the same budget, so their
+    combined fan-out never exceeds the cap in one tick. Deliberately NOT
+    thread-safe: only the single tick thread ever resolves outcomes."""
+
+    def __init__(self, limit: int = _MAX_OUTCOME_AUDITS_PER_PASS) -> None:
+        if limit < 1:
+            raise ValueError(f"audit budget limit must be >= 1, got {limit}")
+        self.limit = limit
+        self.spent = 0
+        self.deferred = 0
+
+    def start_tick(self) -> None:
+        """Reset the per-pass counters (called once at the top of each tick)."""
+        self.spent = 0
+        self.deferred = 0
+
+    def try_acquire(self) -> bool:
+        """Reserve one audit read; False once the pass cap is exhausted."""
+        if self.spent >= self.limit:
+            return False
+        self.spent += 1
+        return True
+
+    def note_deferred(self) -> None:
+        """Count one bracket whose audit was not attempted this pass."""
+        self.deferred += 1
 
 
 @dataclass(frozen=True)
@@ -205,12 +267,26 @@ def reconcile_brackets(
     broker: Broker,
     *,
     today: dt.date | None = None,
+    audit_budget: OutcomeAuditBudget | None = None,
 ) -> list[ReconcileVerdict]:
     """Reconcile every journal bracket against the broker's current views.
 
     One ``list_open_orders`` call up front; the optional capabilities are
     each fetched once; disappeared orders then resolve one by one (the
     broker's client throttles the per-order audit reads).
+
+    With an ``audit_budget`` (the daemon's per-tick cap — audit-429 memo §3 +
+    Amendment 1), disappeared brackets are audited MOST-RECENT journal
+    activity first; brackets over the budget are DEFERRED — no verdict, no
+    alert, a log line + budget counter — and retried next pass in the same
+    recency order. Memoized terminals (``SupportsOutcomeCachePeek``) resolve
+    budget-free, so steady state is unchanged. ``None`` (the CLI one-off
+    path) keeps today's full fan-out.
+
+    Contract on ``records``: each entry MUST carry a ``"ts"`` field (the ISO
+    submission timestamp ``build_submission_record`` always stamps) for the
+    recency-first ordering to be meaningful; a missing/unparseable ``ts``
+    sorts OLDEST (fail-safe: it never claims budget over known-recency rows).
     """
     asof = today or dt.datetime.now(dt.UTC).date()
     open_states = {state.order_id: state for state in broker.list_open_orders()}
@@ -231,19 +307,35 @@ def reconcile_brackets(
             owned_by_uic=owned_by_uic,
         )
 
-    verdicts: list[ReconcileVerdict] = []
+    slots: list[ReconcileVerdict | _PendingAudit] = []
     for record in records:
         for bracket in record.get("brackets") or []:
-            verdicts.append(
-                _reconcile_one(
+            slots.append(
+                _triage_one(
                     record,
                     bracket,
                     open_states=open_states,
                     resolver=resolver,
-                    cross_check=cross_check,
                     today=asof,
                 )
             )
+    audited = _resolve_pending_audits(
+        [slot for slot in slots if isinstance(slot, _PendingAudit)],
+        broker=broker,
+        cross_check=cross_check,
+        asof=asof,
+        audit_budget=audit_budget,
+    )
+    # Journal order is preserved for every EMITTED verdict; a deferred bracket
+    # simply has no row this pass (never a fabricated verdict).
+    verdicts: list[ReconcileVerdict] = []
+    for slot in slots:
+        if isinstance(slot, _PendingAudit):
+            verdict = audited.get(id(slot))
+            if verdict is not None:
+                verdicts.append(verdict)
+        else:
+            verdicts.append(slot)
     return verdicts
 
 
@@ -335,15 +427,138 @@ def _base_verdict_fields(
     )
 
 
-def _reconcile_one(
+@dataclass
+class _PendingAudit:
+    """A disappeared bracket awaiting its audit-log resolution (one per
+    bracket; resolved most-recent ``ts_key`` first under a budget)."""
+
+    record: Mapping[str, Any]
+    bracket: Mapping[str, Any]
+    brief: tuple[str, str, float, str]
+    details: dict[str, Any]
+    resolver: SupportsOrderResolution
+    ts_key: dt.datetime
+
+    @property
+    def entry_order_id(self) -> str:
+        return self.brief[3]
+
+
+_OLDEST_TS_KEY = dt.datetime.min.replace(tzinfo=dt.UTC)
+
+
+def _record_ts_key(record: Mapping[str, Any]) -> dt.datetime:
+    """The record's journal timestamp as a recency sort key (UTC-aware).
+
+    A missing / unparseable ``ts`` sorts OLDEST — it is audited last, matching
+    fail-safe intent: an anomalous row (ts should always exist —
+    build_submission_record stamps it) never claims budget over brackets with
+    known recency (Amendment 1)."""
+    ts = record.get("ts")
+    if not ts:
+        return _OLDEST_TS_KEY
+    try:
+        parsed = dt.datetime.fromisoformat(str(ts))
+    except ValueError:
+        return _OLDEST_TS_KEY
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=dt.UTC)
+
+
+def _resolve_pending_audits(
+    pending: list[_PendingAudit],
+    *,
+    broker: Broker,
+    cross_check: _CrossCheckData | None,
+    asof: dt.date,
+    audit_budget: OutcomeAuditBudget | None,
+) -> dict[int, ReconcileVerdict]:
+    """Resolve disappeared brackets, capped per pass by the audit budget.
+
+    Returns ``id(pending_item) -> verdict`` for every AUDITED bracket; a
+    deferred bracket is simply absent (its non-alerting marker is the
+    ``VERDICT_AUDIT_DEFERRED`` log line + the budget's ``deferred`` counter).
+    """
+    results: dict[int, ReconcileVerdict] = {}
+    if not pending:
+        return results
+    if audit_budget is None:
+        for item in pending:
+            results[id(item)] = _audit_one(item, cross_check=cross_check, asof=asof)
+        return results
+    peek = broker if isinstance(broker, SupportsOutcomeCachePeek) else None
+    needs_budget: list[_PendingAudit] = []
+    for item in pending:
+        if peek is not None and peek.has_cached_order_outcome(item.entry_order_id):
+            # Memoized terminal — no audit HTTP read, so no budget draw.
+            results[id(item)] = _audit_one(item, cross_check=cross_check, asof=asof)
+        else:
+            needs_budget.append(item)
+    # Most-recent journal activity first (Amendment 1 / §5 Q1): a genuine
+    # divergence on a recent bracket is detected in the first passes; stable
+    # sort keeps journal order among equal timestamps.
+    needs_budget.sort(key=lambda item: item.ts_key, reverse=True)
+    deferred: list[_PendingAudit] = []
+    for item in needs_budget:
+        if audit_budget.try_acquire():
+            results[id(item)] = _audit_one(item, cross_check=cross_check, asof=asof)
+        else:
+            audit_budget.note_deferred()
+            deferred.append(item)
+    if deferred:
+        logger.info(
+            "%s: audit budget exhausted (%d/%d this pass) — deferred %d of %d "
+            "disappeared brackets to the next pass (no verdict, no alert): %s",
+            VERDICT_AUDIT_DEFERRED,
+            audit_budget.spent,
+            audit_budget.limit,
+            len(deferred),
+            len(pending),
+            ", ".join(item.entry_order_id for item in deferred),
+        )
+    return results
+
+
+def _audit_one(
+    item: _PendingAudit,
+    *,
+    cross_check: _CrossCheckData | None,
+    asof: dt.date,
+) -> ReconcileVerdict:
+    """One bracket's audit-log resolution -> verdict (the pre-cap inline body)."""
+    brief_date, ticker, qty, entry_order_id = item.brief
+    try:
+        state = item.resolver.resolve_order_outcome(entry_order_id)
+    except BrokerError as exc:
+        # Transient by contract — the audit store is durable; retry next run.
+        return ReconcileVerdict(
+            brief_date=brief_date,
+            ticker=ticker,
+            qty=qty,
+            entry_order_id=entry_order_id,
+            status=_UNRESOLVED,
+            verdict=f"{_UNRESOLVED}({REASON_AUDIT_ERROR})",
+            reason=f"{REASON_AUDIT_ERROR}: {exc}",
+            details=item.details,
+        )
+    return _reconcile_resolved(
+        item.bracket,
+        state,
+        brief=item.brief,
+        details=item.details,
+        cross_check=cross_check,
+        submission_date=_submission_date(item.record),
+        asof=asof,
+    )
+
+
+def _triage_one(
     record: Mapping[str, Any],
     bracket: Mapping[str, Any],
     *,
     open_states: Mapping[str, OrderState],
     resolver: SupportsOrderResolution | None,
-    cross_check: _CrossCheckData | None,
     today: dt.date,
-) -> ReconcileVerdict:
+) -> ReconcileVerdict | _PendingAudit:
     brief_date, ticker, qty, entry_order_id = _base_verdict_fields(record, bracket)
     details: dict[str, Any] = {
         "client_request_id": bracket.get("client_request_id"),
@@ -389,28 +604,13 @@ def _reconcile_one(
             details=details,
         )
 
-    try:
-        state = resolver.resolve_order_outcome(entry_order_id)
-    except BrokerError as exc:
-        # Transient by contract — the audit store is durable; retry next run.
-        return ReconcileVerdict(
-            brief_date=brief_date,
-            ticker=ticker,
-            qty=qty,
-            entry_order_id=entry_order_id,
-            status=_UNRESOLVED,
-            verdict=f"{_UNRESOLVED}({REASON_AUDIT_ERROR})",
-            reason=f"{REASON_AUDIT_ERROR}: {exc}",
-            details=details,
-        )
-    return _reconcile_resolved(
-        bracket,
-        state,
+    return _PendingAudit(
+        record=record,
+        bracket=bracket,
         brief=(brief_date, ticker, qty, entry_order_id),
         details=details,
-        cross_check=cross_check,
-        submission_date=_submission_date(record),
-        asof=today,
+        resolver=resolver,
+        ts_key=_record_ts_key(record),
     )
 
 
@@ -720,9 +920,12 @@ def _reconcile_filled(
 __all__ = [
     "REASON_AUDIT_ERROR",
     "REASON_CAPABILITY_ABSENT",
+    "VERDICT_AUDIT_DEFERRED",
+    "OutcomeAuditBudget",
     "ReconcileVerdict",
     "SupportsFillCrossCheck",
     "SupportsOrderResolution",
+    "SupportsOutcomeCachePeek",
     "SupportsPositionNetting",
     "compute_realized_r",
     "filled_sum_matches_owned",

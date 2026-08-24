@@ -82,7 +82,12 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     advance,
     reconcile_protection,
 )
-from alphalens_pipeline.brokers.reconcile import SupportsOrderResolution
+from alphalens_pipeline.brokers.reconcile import (
+    VERDICT_AUDIT_DEFERRED,
+    OutcomeAuditBudget,
+    SupportsOrderResolution,
+    SupportsOutcomeCachePeek,
+)
 from alphalens_pipeline.data.alt_data.saxo_exchanges import US_MIC_PROBE_ORDER
 
 if TYPE_CHECKING:
@@ -366,6 +371,16 @@ class LoopDeps:
     # trough never reseeds upward (memo §5). Empty until a watch opens; with the
     # ENTRY_TRAIL_BPS flag off it stays empty, byte-identical to today.
     entry_watchers: dict[str, _EntryWatchRuntime] = field(default_factory=dict)
+    # Shared per-tick cap on audit-log resolution reads (audit-429 memo §3 +
+    # Amendment 1): BOTH resolve consumers — the entry-trail reconcile pass and
+    # the verdict pass (reconcile_bridge, bound via functools.partial in
+    # build_default_deps) — draw from this ONE instance, so their combined
+    # cold-start fan-out never exceeds the cap in a tick. A MUTABLE object on
+    # the (frozen) deps — built once, carried across ticks, reset by run_once
+    # at tick start — mirroring oco_lag_counts / kill_state above. Memoized
+    # terminals (SupportsOutcomeCachePeek) resolve budget-free, so steady
+    # state is byte-identical to the un-budgeted tick.
+    audit_budget: OutcomeAuditBudget = field(default_factory=OutcomeAuditBudget)
 
 
 @dataclass
@@ -376,6 +391,9 @@ class TickReport:
     alerts: int = 0
     orphans: int = 0
     verdict_count: int = 0
+    # Brackets whose audit-log resolution was NOT attempted this tick (shared
+    # audit budget exhausted — audit-429 memo): retried next tick, no alert.
+    audits_deferred: int = 0
     actions: list[tuple[str, str]] = field(default_factory=list)  # (ticker, Action class)
 
 
@@ -452,6 +470,10 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     phases (each with its OWN BrokerError boundary in its helper) so one phase
     failing never starves the safety-critical protection pass."""
     report = TickReport()
+    # Fresh shared audit-read budget every tick (audit-429 memo §3): both
+    # resolve consumers below draw from it; without the reset a cold-start
+    # backlog would permanently starve later ticks.
+    deps.audit_budget.start_tick()
     kill = _kill_active(deps)
     _alert_kill_transition(deps, kill)
     chain = deps.ensure_alive()
@@ -508,6 +530,7 @@ def run_once(deps: LoopDeps, *, sweep_orphans: bool = False) -> TickReport:
     # call site is unconditional and the flag alone controls behaviour.
     _run_live_exits_pass(deps, report)
     _run_protection_pass(deps, records, kill, report)
+    report.audits_deferred = deps.audit_budget.deferred
     return report
 
 
@@ -2658,7 +2681,12 @@ def _reconcile_one_armed_tier(
     if not _armed_order_is_gone(_read_entry_order(broker, order_id)):
         return
     # GONE from the book — one audit-log read disambiguates fill vs expiry/cancel
-    # (memo trap #4: get_order alone reads UNKNOWN for ALL of them).
+    # (memo trap #4: get_order alone reads UNKNOWN for ALL of them). The read
+    # bills the SHARED per-tick audit budget (audit-429 memo §3): over budget it
+    # defers to the next tick — the SAME no-op-retry contract as an unreadable
+    # audit below, never a fabricated terminal.
+    if not _acquire_outcome_audit_budget(deps, broker, order_id):
+        return
     outcome = _resolve_entry_order_outcome(broker, order_id)
     filled_qty = _entry_order_filled_qty(outcome)
     if filled_qty is None:
@@ -2699,6 +2727,30 @@ def _armed_order_is_gone(state: OrderState | None) -> bool:
     if state is None:
         return False
     return state.status not in (OrderStatus.WORKING, OrderStatus.PARTIALLY_FILLED)
+
+
+def _acquire_outcome_audit_budget(deps: LoopDeps, broker: Broker, order_id: str) -> bool:
+    """One draw on the SHARED per-tick audit-read budget (audit-429 memo §3).
+
+    A memoized terminal (``SupportsOutcomeCachePeek``) resolves budget-free —
+    no audit HTTP read happens. Over budget: count + log the deferral (the
+    non-alerting ``VERDICT_AUDIT_DEFERRED`` marker) and let the caller retry
+    next tick."""
+    if isinstance(broker, SupportsOutcomeCachePeek) and broker.has_cached_order_outcome(order_id):
+        # Contract (SupportsOutcomeCachePeek): a True peek MUST mean
+        # resolve_order_outcome answers from the terminal memo with NO audit
+        # HTTP read — a lazily-populated cache returning True here would
+        # silently bypass the budget (broker bug, not a core bug).
+        return True
+    if deps.audit_budget.try_acquire():
+        return True
+    deps.audit_budget.note_deferred()
+    logger.info(
+        "entry-trail reconcile: %s — audit budget exhausted, deferred resolve of %s to next tick",
+        VERDICT_AUDIT_DEFERRED,
+        order_id,
+    )
+    return False
 
 
 def _resolve_entry_order_outcome(
@@ -3442,6 +3494,12 @@ def build_default_deps(
     # returning None when the LIVE chain/env is absent (SIM).
     day1_gap_probe = _build_day1_gap_price_probe()
 
+    # ONE shared per-tick audit-read budget (audit-429 memo §3 + Amendment 1)
+    # for BOTH resolve consumers: bound into the verdict pass via the partial
+    # below (mirroring build_protection_view) and carried on LoopDeps for the
+    # entry-trail reconcile pass; run_once resets it at every tick start.
+    audit_budget = OutcomeAuditBudget()
+
     return LoopDeps(
         broker=broker,
         kill_file=state_paths.kill_file_path(),
@@ -3453,9 +3511,10 @@ def build_default_deps(
             exit_policy,
             alert_throttled=_throttled,
             day1_gap_price_probe=day1_gap_probe,
+            audit_budget=audit_budget,
         ),
         read_records=_read_records,
-        verdicts_fn=reconcile_bridge.verdicts,
+        verdicts_fn=functools.partial(reconcile_bridge.verdicts, audit_budget=audit_budget),
         build_position_view=_make_position_view_builder(broker),
         build_protection_view=functools.partial(build_protection_view, exit_policy=exit_policy),
         execute_protection=_make_protection_executor(
@@ -3474,6 +3533,7 @@ def build_default_deps(
         exit_policy=exit_policy,
         live_exits_feed_factory=_default_live_exits_feed_factory,
         day1_gap_price_probe=day1_gap_probe,
+        audit_budget=audit_budget,
     )
 
 
@@ -4588,6 +4648,7 @@ def _make_place_pick(
     *,
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
+    audit_budget: OutcomeAuditBudget | None = None,
 ) -> Callable[[Any], bool]:
     """Compose safety.check -> placement_planner.classify -> placer loop over
     place_bracket_order + the submissions journal for one armed pick, plus the
@@ -4625,6 +4686,7 @@ def _make_place_pick(
             exit_policy,
             alert_throttled=alert_throttled,
             day1_gap_price_probe=day1_gap_price_probe,
+            audit_budget=audit_budget,
         )
 
     return _place
@@ -5997,6 +6059,7 @@ def _place_pick(
     *,
     alert_throttled: Callable[[str, str], bool] | None = None,
     day1_gap_price_probe: Callable[[str, str], float | None] | None = None,
+    audit_budget: OutcomeAuditBudget | None = None,
 ) -> bool:
     """Place one armed :class:`~broker_contract.trade_intent.schema.TradeIntent`
     end-to-end (see _make_place_pick). Module-level so the per-phase helpers
@@ -6046,7 +6109,10 @@ def _place_pick(
         account = broker.get_account()
         positions = broker.get_positions()
         records = list(iter_submission_records(state_paths.submissions_path()))
-        open_verdicts = reconcile_verdicts(records, broker)
+        # #1094: the placement read draws from the SAME per-tick budget as
+        # the verdict and entry-trail passes — a cold-start tick draining an
+        # armed pick must not fan out unbudgeted (the third consumer).
+        open_verdicts = reconcile_verdicts(records, broker, audit_budget=audit_budget)
     except BrokerError as exc:
         logger.warning("place_pick %s: broker read failed: %s", ticker, exc)
         return False

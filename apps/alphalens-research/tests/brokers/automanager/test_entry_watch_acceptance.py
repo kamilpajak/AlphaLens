@@ -62,7 +62,7 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
     ) -> cl.LoopDeps:
         pkg = "alphalens_pipeline.brokers"
         for target, fn in (
-            (f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b: []),
+            (f"{pkg}.automanager.reconcile_bridge.verdicts", lambda _r, _b, **_k: []),
             (f"{pkg}.automanager.safety.check", lambda *_a, **_k: object()),
             (f"{pkg}.routing.resolve_us_instrument", lambda _b, _t: _instr()),
             (f"{pkg}.submission_log.iter_submission_records", lambda _p: []),
@@ -86,7 +86,7 @@ class TestEntryWatchEndToEndAcceptance(unittest.TestCase):
             iter_picks=lambda: iter(picks),
             place_pick=cl._make_place_pick(broker),
             read_records=list,
-            verdicts_fn=lambda _r, _b: [],
+            verdicts_fn=lambda _r, _b, **_k: [],
             build_position_view=lambda _b, _r: object(),
             build_protection_view=lambda _b, _r: _empty_pview(),
             execute_protection=lambda _a, _k, _r: None,

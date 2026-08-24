@@ -25,8 +25,10 @@ from alphalens_pipeline.brokers.automanager.position_manager import (
     advance,
 )
 from alphalens_pipeline.brokers.reconcile import (
+    _MAX_OUTCOME_AUDITS_PER_PASS,
     REASON_AUDIT_ERROR,
     REASON_CAPABILITY_ABSENT,
+    OutcomeAuditBudget,
     ReconcileVerdict,
     SupportsFillCrossCheck,
     SupportsOrderResolution,
@@ -827,6 +829,219 @@ class TestSecondFilledTierNotDivergent(unittest.TestCase):
         self.assertEqual(verdict.status, "FILLED")
         self.assertTrue(verdict.divergence)
         self.assertIn("no open position or closed pair", verdict.reason or "")
+
+
+class _CachingResolvingBroker(_FullBroker):
+    """A resolver that mirrors the Saxo terminal memo + cache peek
+    (``SupportsOutcomeCachePeek``): terminal outcomes are cached after the first
+    audit read; ``audit_calls`` records only CACHE-MISS resolves (the
+    HTTP-equivalent reads the budget must cap), while the inherited
+    ``resolve_calls`` keeps recording every call."""
+
+    name = "stub-caching"
+
+    def __init__(self, **kw: Any):
+        super().__init__(**kw)
+        self._cache: dict[str, OrderState] = {}
+        self.audit_calls: list[str] = []
+
+    def has_cached_order_outcome(self, order_id: str) -> bool:
+        return order_id in self._cache
+
+    def resolve_order_outcome(self, order_id: str) -> OrderState:
+        self.resolve_calls.append(order_id)
+        cached = self._cache.get(order_id)
+        if cached is not None:
+            return cached
+        self.audit_calls.append(order_id)
+        if self._resolve_error is not None:
+            raise self._resolve_error
+        state = self._outcomes.get(
+            order_id,
+            _order_state(order_id, OrderStatus.UNKNOWN, raw_status="not_in_retention"),
+        )
+        if state.status in (
+            OrderStatus.FILLED,
+            OrderStatus.CANCELLED,
+            OrderStatus.REJECTED,
+            OrderStatus.EXPIRED,
+        ):
+            self._cache[order_id] = state
+        return state
+
+
+def _ten_disappeared_records() -> list[dict[str, Any]]:
+    """Ten single-bracket records with strictly increasing journal timestamps —
+    E-1 is the OLDEST, E-10 the most recent."""
+    return [
+        _record(
+            ts=f"2026-07-06T{9 + i}:00:00+00:00",
+            ticker=f"T{i}",
+            brackets=[_bracket(entry_order_id=f"E-{i}", client_request_id=f"rid-{i}")],
+        )
+        for i in range(1, 11)
+    ]
+
+
+def _cancelled_outcomes(n: int = 10) -> dict[str, OrderState]:
+    return {
+        f"E-{i}": _order_state(f"E-{i}", OrderStatus.CANCELLED, raw_status="Cancelled/Confirmed")
+        for i in range(1, n + 1)
+    }
+
+
+class TestOutcomeAuditBudgetCap(unittest.TestCase):
+    """Increment 1 (audit-429 memo §3 + Amendment 1): the per-pass audit fan-out
+    cap. 10 disappeared brackets + the default cap of 6 -> exactly 6 resolver
+    calls this pass; the 4 OLDEST are deferred with NO verdict and NO alert-
+    bearing UNRESOLVED row, and are retried next pass."""
+
+    def test_cap_limits_resolver_calls_and_defers_remainder_without_verdicts(self):
+        broker = _ResolvingBroker(outcomes=_cancelled_outcomes())
+        budget = OutcomeAuditBudget()
+
+        verdicts = reconcile_brackets(
+            _ten_disappeared_records(), broker, today=_TODAY_FRESH, audit_budget=budget
+        )
+
+        self.assertEqual(len(broker.resolve_calls), _MAX_OUTCOME_AUDITS_PER_PASS)
+        self.assertEqual(len(verdicts), 6, "deferred brackets yield NO verdict")
+        self.assertEqual(budget.deferred, 4)
+        audited = {v.entry_order_id for v in verdicts}
+        self.assertEqual(audited, {"E-5", "E-6", "E-7", "E-8", "E-9", "E-10"})
+        # No fabricated UNRESOLVED / terminal rows for the deferred four.
+        self.assertTrue(all(v.status == "CANCELLED" for v in verdicts))
+        self.assertFalse(has_failures(verdicts))
+
+    def test_default_cap_is_six(self):
+        self.assertEqual(_MAX_OUTCOME_AUDITS_PER_PASS, 6)
+        self.assertEqual(OutcomeAuditBudget().limit, 6)
+
+    def test_no_budget_keeps_the_full_fanout(self):
+        # The CLI one-off reconcile path passes no budget — today's behaviour.
+        broker = _ResolvingBroker(outcomes=_cancelled_outcomes())
+
+        verdicts = reconcile_brackets(_ten_disappeared_records(), broker, today=_TODAY_FRESH)
+
+        self.assertEqual(len(broker.resolve_calls), 10)
+        self.assertEqual(len(verdicts), 10)
+
+    def test_audit_failure_inside_the_cap_still_yields_unresolved_audit_error(self):
+        # A REAL audit failure inside the cap keeps today's UNRESOLVED(audit_error)
+        # verdict (and its alert path); only the over-cap remainder is deferred.
+        broker = _ResolvingBroker(resolve_error=BrokerError("audit endpoint 502"))
+        budget = OutcomeAuditBudget()
+
+        verdicts = reconcile_brackets(
+            _ten_disappeared_records(), broker, today=_TODAY_FRESH, audit_budget=budget
+        )
+
+        self.assertEqual(len(verdicts), 6)
+        for verdict in verdicts:
+            self.assertEqual(verdict.verdict, f"UNRESOLVED({REASON_AUDIT_ERROR})")
+        self.assertEqual(budget.deferred, 4)
+
+
+class TestOutcomeAuditRecencyOrdering(unittest.TestCase):
+    """Amendment 1 / §5 Q1: audits run MOST-RECENT journal activity first, so a
+    genuine divergence on a recent bracket is detected in the first passes."""
+
+    def test_newest_journal_activity_is_audited_first(self):
+        # Journal order deliberately DISAGREES with timestamp order.
+        records = [
+            _record(
+                ts="2026-07-06T10:00:00+00:00",
+                ticker="OLD",
+                brackets=[_bracket(entry_order_id="E-old", client_request_id="rid-old")],
+            ),
+            _record(
+                ts="2026-07-06T18:00:00+00:00",
+                ticker="NEW",
+                brackets=[_bracket(entry_order_id="E-new", client_request_id="rid-new")],
+            ),
+            _record(
+                ts="2026-07-06T14:00:00+00:00",
+                ticker="MID",
+                brackets=[_bracket(entry_order_id="E-mid", client_request_id="rid-mid")],
+            ),
+        ]
+        broker = _ResolvingBroker(outcomes=_cancelled_outcomes(0))
+        budget = OutcomeAuditBudget(limit=2)
+
+        reconcile_brackets(records, broker, today=_TODAY_FRESH, audit_budget=budget)
+
+        self.assertEqual(broker.resolve_calls, ["E-new", "E-mid"], "newest first")
+        self.assertEqual(budget.deferred, 1)
+
+    def test_next_pass_drains_the_deferred_first_by_recency(self):
+        # Pass 1 audits the 6 newest; their terminals memoize (cache peek), so
+        # pass 2's budget goes ENTIRELY to the previously-deferred four — drained
+        # newest-first — and every bracket now carries a verdict.
+        records = _ten_disappeared_records()
+        broker = _CachingResolvingBroker(outcomes=_cancelled_outcomes())
+
+        pass1 = OutcomeAuditBudget()
+        verdicts1 = reconcile_brackets(records, broker, today=_TODAY_FRESH, audit_budget=pass1)
+        self.assertEqual(broker.audit_calls, ["E-10", "E-9", "E-8", "E-7", "E-6", "E-5"])
+        self.assertEqual(len(verdicts1), 6)
+
+        pass2 = OutcomeAuditBudget()
+        verdicts2 = reconcile_brackets(records, broker, today=_TODAY_FRESH, audit_budget=pass2)
+
+        self.assertEqual(
+            broker.audit_calls[6:],
+            ["E-4", "E-3", "E-2", "E-1"],
+            "pass 2 audits ONLY the previously-deferred, newest-first",
+        )
+        self.assertEqual(len(verdicts2), 10, "the whole journal is drained by pass 2")
+        self.assertEqual(pass2.spent, 4, "memoized terminals resolve budget-free")
+        self.assertEqual(pass2.deferred, 0)
+
+
+class TestDeferralIsNoWeakerThanUnresolved(unittest.TestCase):
+    """Memo §4 safety pin: a DEFERRED bracket's downstream treatment must be
+    at-least-as-safe as today's UNRESOLVED(audit_error).
+
+    What UNRESOLVED(audit_error) does downstream (inspected):
+    - ``advance`` -> ``AlertOnly`` (position_manager.py) — an alert and NOTHING
+      else: no CancelRemaining, no stop placement, no broker mutation;
+    - placement dedup is journal-keyed (``_submitted_pick_keys``) and the
+      protection pass is broker-state-keyed — NEITHER reads verdicts;
+    - the bracket is re-audited on the next pass (verdicts are recomputed).
+
+    Deferral therefore removes ONLY the alert: no verdict -> no action at all,
+    zero broker mutations (same as AlertOnly), and the same next-pass retry."""
+
+    def test_unresolved_audit_error_advances_to_alert_only_no_mutation(self):
+        broker = _FullBroker(resolve_error=BrokerError("429 persisted"))
+        verdict = _single(reconcile_brackets([_record()], broker, today=_TODAY_FRESH))
+
+        action = advance(verdict)
+
+        self.assertIsInstance(action, AlertOnly)  # alert, never CancelRemaining
+
+    def test_deferred_bracket_produces_no_action_and_is_retried_next_pass(self):
+        records = _ten_disappeared_records()
+        broker = _CachingResolvingBroker(outcomes=_cancelled_outcomes())
+
+        verdicts1 = reconcile_brackets(
+            records, broker, today=_TODAY_FRESH, audit_budget=OutcomeAuditBudget()
+        )
+
+        # The deferred four have NO verdict -> nothing for `advance` to turn into
+        # an action (not even AlertOnly): strictly quieter than UNRESOLVED, with
+        # identical (zero) broker mutation.
+        deferred_ids = {"E-1", "E-2", "E-3", "E-4"}
+        self.assertTrue(deferred_ids.isdisjoint({v.entry_order_id for v in verdicts1}))
+        actions = [advance(v) for v in verdicts1]
+        self.assertTrue(all(not isinstance(a, AlertOnly) for a in actions))
+        # ... and deferral never claims a failure the pass did not observe.
+        self.assertFalse(has_failures(verdicts1))
+
+        # Retry contract: the next pass audits the deferred four (same as the
+        # UNRESOLVED re-audit-next-tick contract).
+        reconcile_brackets(records, broker, today=_TODAY_FRESH, audit_budget=OutcomeAuditBudget())
+        self.assertEqual(set(broker.audit_calls[6:]), deferred_ids)
 
 
 if __name__ == "__main__":

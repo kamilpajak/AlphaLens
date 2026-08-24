@@ -756,6 +756,26 @@ class TestResolveOrderOutcomeMemoization(unittest.TestCase):
 
         self.assertEqual(client.activity_call_order_ids, [cancelled_id, filled_id])
 
+    def test_cache_peek_tracks_the_terminal_memo(self):
+        # SupportsOutcomeCachePeek (audit-429 memo): the per-tick audit budget
+        # bills only cache MISSES, so the peek must mirror the terminal memo.
+        from alphalens_pipeline.brokers.reconcile import SupportsOutcomeCachePeek
+
+        order_id = str(_ROW_CANCELLED_CONFIRMED["OrderId"])
+        broker, _client = self._broker_and_client({order_id: [_ROW_CANCELLED_CONFIRMED]})
+
+        self.assertIsInstance(broker, SupportsOutcomeCachePeek)
+        self.assertFalse(broker.has_cached_order_outcome(order_id))
+        broker.resolve_order_outcome(order_id)
+        self.assertTrue(broker.has_cached_order_outcome(order_id))
+
+    def test_cache_peek_stays_false_for_uncached_unknown(self):
+        broker, _client = self._broker_and_client({})
+
+        broker.resolve_order_outcome("5039279999")  # UNKNOWN -> deliberately uncached
+
+        self.assertFalse(broker.has_cached_order_outcome("5039279999"))
+
     def test_non_terminal_pair_inconsistent_state_is_not_cached(self):
         # (Placed, Confirmed) is in _NON_TERMINAL_PAIRS -> UNKNOWN
         # inconsistent_state; the order could still reach a terminal row.

@@ -624,6 +624,23 @@ class SaxoClient:
             return floor
         return max(floor, min(value, ceiling))
 
+    @staticmethod
+    def _format_rate_limit_headers(resp: requests.Response) -> str:
+        """Render every ``X-RateLimit-*`` response header as ``name=value``.
+
+        Passive measurement instrument for the vendor quota bracket (design
+        memo 2026-08-24 §3 increment 3): Saxo names the tripped bucket's
+        dimension in the header name, but may send these headers only near the
+        limit — an explicit absence marker keeps an empty reading
+        distinguishable from a broken probe.
+        """
+        parts = [
+            f"{name}={value}"
+            for name, value in resp.headers.items()
+            if name.lower().startswith("x-ratelimit-")
+        ]
+        return ", ".join(parts) if parts else "no X-RateLimit headers"
+
     def _request(self, path: str, *, params: dict[str, Any] | None = None) -> requests.Response:
         """Synchronous GET with throttle + dual-layer retry + 401 refresh seam.
 
@@ -657,11 +674,12 @@ class SaxoClient:
                     resp, floor=self._RATE_LIMIT_FLOOR_S, ceiling=self._RATE_LIMIT_CEILING_S
                 )
                 logger.warning(
-                    "saxo 429 rate-limited on GET %s (attempt %d/%d); sleeping %ds",
+                    "saxo 429 rate-limited on GET %s (attempt %d/%d); sleeping %ds; %s",
                     path,
                     attempt + 1,
                     self._MAX_REQUEST_ATTEMPTS,
                     backoff,
+                    self._format_rate_limit_headers(resp),
                 )
                 self._sleep(backoff)
                 continue

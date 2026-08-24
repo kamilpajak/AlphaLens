@@ -282,6 +282,55 @@ class TestRateLimitHandling(unittest.TestCase):
             f"429 warning must name the endpoint: {logs.output}",
         )
 
+    def test_429_warning_logs_x_ratelimit_headers_verbatim(self):
+        """The 429 warning is the passive measurement instrument for the vendor
+        quota bracket (design memo 2026-08-24 §3 increment 3): every
+        ``X-RateLimit-*`` header on the response — Saxo names the tripped
+        bucket's dimension in the header name — must appear name=value in the
+        log line. NO behaviour change: the Retry-After sleep stays as-is."""
+        session = _RecordingSession(
+            [
+                _FakeResponse(
+                    429,
+                    headers={
+                        "Retry-After": "2",
+                        "X-RateLimit-Session-Limit": "120",
+                        "X-RateLimit-Session-Remaining": "0",
+                        "X-RateLimit-Session-Reset": "3",
+                    },
+                ),
+                _FakeResponse(200),
+            ]
+        )
+        client, _, sleeps = _make_client(session)
+
+        with self.assertLogs("alphalens_pipeline.brokers.saxo.client", level="WARNING") as logs:
+            client.get_user()
+
+        line = next(line for line in logs.output if "429" in line)
+        for fragment in (
+            "X-RateLimit-Session-Limit=120",
+            "X-RateLimit-Session-Remaining=0",
+            "X-RateLimit-Session-Reset=3",
+        ):
+            self.assertIn(fragment, line, f"429 warning must carry {fragment!r}: {line}")
+        self.assertNotIn("Retry-After=", line, "only X-RateLimit-* headers are the probe")
+        self.assertIn(2.0, [float(s) for s in sleeps], "Retry-After sleep must be unchanged")
+
+    def test_429_warning_notes_absence_of_x_ratelimit_headers(self):
+        """Saxo may send the X-RateLimit-* headers only near the limit; a 429
+        without them must say so explicitly, so an empty probe reading is
+        distinguishable from a broken probe."""
+        session = _RecordingSession([_FakeResponse(429), _FakeResponse(200)])
+        client, _, sleeps = _make_client(session)
+
+        with self.assertLogs("alphalens_pipeline.brokers.saxo.client", level="WARNING") as logs:
+            client.get_user()
+
+        line = next(line for line in logs.output if "429" in line)
+        self.assertIn("no X-RateLimit headers", line)
+        self.assertIn(1.0, [float(s) for s in sleeps], "floor sleep must be unchanged")
+
 
 class TestServerErrorHandling(unittest.TestCase):
     def test_5xx_backoffs_then_saxo_error(self):
