@@ -124,4 +124,8 @@ def smg_geometry_stamp() -> dict:
         "atr": SMG_ATR,
         "ceiling_price": None,
         "applied": True,
+        # Added by issue #1114 so a journal line says which anchor produced the
+        # levels and which take-profit floor was applied.
+        "anchor_mode": "planned",
+        "tp_floor_frac": 0.006,
     }
