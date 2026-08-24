@@ -374,6 +374,91 @@ tests:
         alertname: AlphalensPrometheusRulesSyncFailed
         exp_alerts: []
 
+  # Grafana provisioning sync staleness. Hourly cadence, so the same 2h
+  # (7200s) threshold as the rules sync above. A dead sync timer here is
+  # invisible in the UI — Grafana keeps serving the last provisioned content,
+  # so nothing looks broken while the live tree drifts from main.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_job_last_success_timestamp_seconds{job="grafana-provisioning-sync"}'
+        values: '0x71'
+    alert_rule_test:
+      # One missed fire is Persistent=true catch-up territory; 1h staleness
+      # sits under the 2h threshold and must stay quiet.
+      - eval_time: 1h
+        alertname: AlphalensJobStale
+        exp_alerts: []
+      - eval_time: 5h
+        alertname: AlphalensJobStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: grafana-provisioning-sync
+              job: grafana-provisioning-sync
+            exp_annotations:
+              summary: "grafana-provisioning-sync stale > 2h (expected hourly cadence)"
+              description: "Last successful run was 5h 0m 0s ago. The Grafana provisioning sync has stopped converging the VPS with origin/main — a merged dashboard or datasource change is no longer deploying itself, and nothing in the Grafana UI will look wrong while it drifts."
+
+  # ---------------------------------------------------------------------
+  # AlphalensGrafanaProvisioningSyncFailed
+  # ---------------------------------------------------------------------
+  #
+  # Same one-hot contract as AlphalensPrometheusRulesSyncFailed above: fires
+  # only when NO success label reached 1 across the 150m lookback.
+
+  # Chronic: every hourly run fails after the files are already on disk
+  # (reload_failed stays 1 — the container never comes back with the declared
+  # uid, or the watcher never ingests the dashboard) -> fires.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_grafana_sync_outcome{outcome="in_sync"}'
+        values: '0x10'
+      - series: 'alphalens_grafana_sync_outcome{outcome="synced"}'
+        values: '0x10'
+      - series: 'alphalens_grafana_sync_outcome{outcome="reload_failed"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: AlphalensGrafanaProvisioningSyncFailed
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              route: telegram
+              unit: grafana-provisioning-sync
+            exp_annotations:
+              summary: "live Grafana provisioning no longer converging with main (sync failing on consecutive runs)"
+              description: "alphalens_grafana_sync_outcome reported no in_sync/synced run in the 150m lookback — in practice roughly three consecutive hourly runs without success, because a prior success's gauge sample persists ~60m until overwritten. git fetch, the in-process validation gate, the container restart, or the grafana.db verification is failing, and merged dashboard/datasource changes are NOT reaching the live provisioning tree. Check `journalctl --user -u alphalens-grafana-provisioning-sync.service` for which stage failed. While it stays broken, the emergency override is copying the repo files under deploy/monitoring/grafana/ over ~/monitoring/grafana/provisioning/ by hand + `docker restart grafana`."
+
+  # Recovered: three failed runs, then a clean run writes synced=1 and the
+  # gauge holds it -> the success sample lingers in the 150m window and the
+  # alert stays quiet. Separates "chronically broken sync" from "one bad hour".
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_grafana_sync_outcome{outcome="in_sync"}'
+        values: '0x10'
+      - series: 'alphalens_grafana_sync_outcome{outcome="synced"}'
+        values: '0 0 0 1x7'
+      - series: 'alphalens_grafana_sync_outcome{outcome="reload_failed"}'
+        values: '1 1 1 0x7'
+    alert_rule_test:
+      - eval_time: 6h
+        alertname: AlphalensGrafanaProvisioningSyncFailed
+        exp_alerts: []
+
+  # Healthy steady state: in_sync=1 every hour (nothing to deploy) -> never
+  # fires. This is what the VPS looks like between merges.
+  - interval: 1h
+    input_series:
+      - series: 'alphalens_grafana_sync_outcome{outcome="in_sync"}'
+        values: '1x10'
+      - series: 'alphalens_grafana_sync_outcome{outcome="synced"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: AlphalensGrafanaProvisioningSyncFailed
+        exp_alerts: []
+
   # ---------------------------------------------------------------------
   # AlphalensTemplateMatchRateLow
   # ---------------------------------------------------------------------

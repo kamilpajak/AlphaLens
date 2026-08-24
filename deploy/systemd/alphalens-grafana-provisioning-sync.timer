@@ -1,0 +1,23 @@
+# Trigger the Grafana provisioning sync hourly at :37 UTC. The minute is
+# chosen for a quiet slot (timer census taken on the VPS 2026-08-24): :05 is
+# the hourly edge-mirror, :27 is the Prometheus rules sync, :30 is every daily
+# job plus the six thematic-build slots, and the EDGAR detector walks the
+# :00/:15/:30/:45 grid. :37 contends with nothing, and hourly is the cadence
+# the convergence contract promises ("a merged provisioning change is live
+# within ~1h").
+#
+# Persistent=true so a missed fire runs on next boot. Catching up is safe and
+# idempotent: the job is a pure convergence loop (identical content is a full
+# short-circuit — no backup, no restart, not even a verification poll), so a
+# gap costs latency, never correctness.
+[Unit]
+Description=Trigger AlphaLens Grafana provisioning sync
+After=network-online.target
+
+[Timer]
+OnCalendar=*-*-* *:37:00 UTC
+Persistent=true
+Unit=alphalens-grafana-provisioning-sync.service
+
+[Install]
+WantedBy=timers.target

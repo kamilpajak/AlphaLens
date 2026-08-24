@@ -1,0 +1,24 @@
+# Grafana dashboard-provider provisioning — the SoT for the live
+# ~/monitoring/grafana/provisioning/dashboards/dashboards.yml on the VPS.
+#
+# `options.path` is the directory INSIDE the container that the compose stack
+# bind-mounts from ~/monitoring/grafana/provisioning. It holds this provider
+# file next to the dashboard JSONs, so every file the sync writes there (temp
+# files, backups) must avoid the .json / .yml / .yaml suffixes Grafana picks up
+# — a stray backup ending in .json would be imported as a second dashboard with
+# a duplicate uid.
+#
+# `updateIntervalSeconds: 10` is the dashboard hot-reload cadence: a rewritten
+# dashboard JSON converges without a container restart.
+apiVersion: 1
+
+providers:
+  - name: 'Default'
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+    updateIntervalSeconds: 10

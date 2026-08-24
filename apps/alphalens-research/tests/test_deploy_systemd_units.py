@@ -1353,6 +1353,97 @@ class TestPrometheusRulesSyncUnit(unittest.TestCase):
         self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
 
 
+class TestGrafanaProvisioningSyncUnit(unittest.TestCase):
+    """Hourly Grafana provisioning sync oneshot (issue #1110).
+
+    Same shape as the Prometheus rules sync: pins the host-venv python
+    invocation of the sync script, docker ordering (the run restarts the
+    grafana container and reads its sqlite state through `docker cp`), the
+    ExecStopPost job name the emit hook derives its unit name from, and the
+    hourly :37 UTC slot that stays clear of every other alphalens timer.
+    """
+
+    SERVICE = SYSTEMD_DIR / "alphalens-grafana-provisioning-sync.service"
+    TIMER = SYSTEMD_DIR / "alphalens-grafana-provisioning-sync.timer"
+
+    def test_service_is_oneshot_running_the_sync_script(self) -> None:
+        text = self.SERVICE.read_text()
+        self.assertIn("Type=oneshot", text)
+        self.assertRegex(
+            text,
+            re.compile(
+                r"^ExecStart=%h/AlphaLens/\.venv/bin/python\s+"
+                r"apps/alphalens-research/scripts/sync_grafana_provisioning\.py\s*$",
+                re.MULTILINE,
+            ),
+            "ExecStart must run sync_grafana_provisioning.py on the host venv "
+            "python with no extra args (defaults are the production paths).",
+        )
+
+    def test_service_env_fail_loud_and_working_dir(self) -> None:
+        text = self.SERVICE.read_text()
+        self.assertRegex(text, re.compile(r"^EnvironmentFile=/etc/alphalens/env\s*$", re.MULTILINE))
+        self.assertIn("WorkingDirectory=%h/AlphaLens", text)
+
+    def test_service_orders_after_docker(self) -> None:
+        # The restart and both grafana.db reads go through docker; on a freshly
+        # booted VPS the Persistent=true catch-up fire must not race dockerd.
+        self.assertRegex(
+            self.SERVICE.read_text(),
+            re.compile(r"^After=.*\bdocker\.service\b.*$", re.MULTILINE),
+            "Unit must order After=docker.service — the restart and the "
+            "grafana.db reads need dockerd ready.",
+        )
+
+    def test_emit_hook_job_name_matches_the_unit_basename(self) -> None:
+        # alphalens-emit-job-metrics rebuilds the unit name as
+        # alphalens-<job>.service to read its ActiveEnterTimestamp; a job name
+        # that does not match reports a zero duration in silence.
+        job = self.SERVICE.stem.removeprefix("alphalens-")
+        self.assertRegex(
+            self.SERVICE.read_text(),
+            re.compile(
+                r"^ExecStopPost=%h/AlphaLens/deploy/systemd/bin/"
+                rf"alphalens-emit-job-metrics {re.escape(job)}\s*$",
+                re.MULTILINE,
+            ),
+        )
+
+    def test_service_bounds_a_hung_docker_or_fetch(self) -> None:
+        self.assertRegex(
+            self.SERVICE.read_text(),
+            re.compile(r"^TimeoutStartSec=10min\s*$", re.MULTILINE),
+        )
+
+    def test_timer_fires_hourly_at_37_utc_persistent(self) -> None:
+        text = self.TIMER.read_text()
+        self.assertRegex(
+            text,
+            re.compile(r"^OnCalendar=\*-\*-\* \*:37:00 UTC\s*$", re.MULTILINE),
+            "Hourly at :37 UTC — clear of the :05 edge-mirror, the :27 rules "
+            "sync, the :30 dailies/thematic slots, and the EDGAR "
+            ":00/:15/:30/:45 grid.",
+        )
+        self.assertRegex(text, re.compile(r"^Persistent=true\s*$", re.MULTILINE))
+
+    def test_timer_does_not_collide_with_the_prometheus_rules_sync(self) -> None:
+        # Both jobs run `docker` against the same host every hour; sharing a
+        # minute would stack them for no reason.
+        grafana_minute = re.search(r"^OnCalendar=.*\*:(\d\d):00 UTC", self.TIMER.read_text(), re.M)
+        rules_timer = SYSTEMD_DIR / "alphalens-prometheus-rules-sync.timer"
+        rules_minute = re.search(r"^OnCalendar=.*\*:(\d\d):00 UTC", rules_timer.read_text(), re.M)
+
+        self.assertIsNotNone(grafana_minute)
+        self.assertIsNotNone(rules_minute)
+        assert grafana_minute is not None and rules_minute is not None
+        self.assertNotEqual(grafana_minute.group(1), rules_minute.group(1))
+
+    def test_timer_carries_install_section(self) -> None:
+        text = self.TIMER.read_text()
+        self.assertRegex(text, re.compile(r"^\[Install\]\s*$", re.MULTILINE))
+        self.assertRegex(text, re.compile(r"^WantedBy=timers\.target\s*$", re.MULTILINE))
+
+
 class TestBrokerManagerHealthRules(unittest.TestCase):
     RULES = REPO_ROOT / "deploy" / "monitoring" / "prometheus" / "rules" / "alphalens.yaml"
 

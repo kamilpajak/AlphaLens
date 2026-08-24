@@ -88,6 +88,15 @@ ACTIVE_JOBS = (
     # pair below still fires from the LIVE rules already loaded, which keep
     # working until the next change.
     "prometheus-rules-sync",
+    # Hourly Grafana provisioning sync (issue #1110). Same convergence contract
+    # as prometheus-rules-sync, one layer up: it keeps the live datasource yml,
+    # the dashboards provider yml and the cron-health dashboard JSON equal to
+    # the origin/main blobs. A dead timer is silent by construction — Grafana
+    # keeps serving the LAST provisioned content, so the dashboards look fine
+    # right up until someone needs a merged change that never arrived. That is
+    # exactly how the 2026-08-24 incident survived two months: the live
+    # datasource declared no `uid: prometheus` while every panel asked for it.
+    "grafana-provisioning-sync",
 )
 
 
@@ -205,6 +214,11 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             # loop, so a 2h silence already means the timer died — and every
             # hour it stays dead is an hour a merged rule change is not live.
             "prometheus-rules-sync": 7200,
+            # 2h = 2× the hourly cadence, same reasoning as the rules sync
+            # above: a cheap convergence loop, so 2h of silence already means
+            # the timer died, and every hour it stays dead is an hour a merged
+            # dashboard or datasource change is not live.
+            "grafana-provisioning-sync": 7200,
         }
         rules = _load_rules()["groups"][0]["rules"]
         found: dict[str, int] = {}
@@ -354,6 +368,7 @@ class TestPrometheusRulesYaml(unittest.TestCase):
             "alphalens_form4_",
             "alphalens_feedback_",
             "alphalens_rules_sync_",
+            "alphalens_grafana_sync_",
         )
         for rule in rules:
             expr = rule.get("expr", "")
@@ -1455,6 +1470,71 @@ class TestPrometheusRulesSyncFailed(unittest.TestCase):
         # increase()/rate() to the per-run gauges.
         source = Path(__file__).read_text()
         self.assertIn('"alphalens_rules_sync_",', source)
+
+
+class TestGrafanaProvisioningSyncFailed(unittest.TestCase):
+    """Pins for the sustained Grafana provisioning sync failure alert (#1110).
+
+    Same shape and same reasoning as ``TestPrometheusRulesSyncFailed``: the job
+    emits a zero-initialised one-hot outcome family every run, a run is healthy
+    exactly when one of the two success labels is 1, and a DISTINCT alertname
+    with NO ``job=`` label keeps it out of the cron-keyed enumerations.
+
+    Why this one matters on its own: the staleness pair only sees a job that
+    STOPPED running. A sync that runs hourly and fails hourly — a container
+    that never comes back healthy, a datasource uid that never appears — keeps
+    the last_success clock frozen but would look identical to a broken exporter
+    without this rule naming the failure.
+    """
+
+    ALERT = "AlphalensGrafanaProvisioningSyncFailed"
+    SUCCESS_SELECTOR = 'alphalens_grafana_sync_outcome{outcome=~"in_sync|synced"}'
+
+    def _one(self) -> dict:
+        matches = [r for r in _load_rules()["groups"][0]["rules"] if r.get("alert") == self.ALERT]
+        self.assertEqual(
+            len(matches), 1, f"Expected exactly one {self.ALERT}, found {len(matches)}."
+        )
+        return matches[0]
+
+    def test_alert_exists(self) -> None:
+        self._one()
+
+    def test_expr_is_no_success_across_consecutive_hourly_runs(self) -> None:
+        expr = self._one()["expr"]
+        self.assertIn(f"max_over_time({self.SUCCESS_SELECTOR}", expr)
+        self.assertIn("[150m]", expr)
+        self.assertIn("== 0", expr)
+        # An absent family must stay quiet here — absence is MetricMissing's page.
+        self.assertNotIn("absent(", expr)
+        # Textfile metrics are per-run GAUGES — no monotonic-counter functions.
+        for func in ("increase(", "rate(", "irate("):
+            self.assertNotIn(func, expr)
+
+    def test_has_for_debounce_and_routes_warning_telegram(self) -> None:
+        rule = self._one()
+        self.assertIn("for", rule)
+        self.assertEqual(rule.get("labels", {}).get("severity"), "warning")
+        self.assertEqual(rule.get("labels", {}).get("route"), "telegram")
+        self.assertEqual(rule.get("labels", {}).get("unit"), "grafana-provisioning-sync")
+
+    def test_carries_no_job_label_so_it_stays_out_of_cron_enums(self) -> None:
+        rule = self._one()
+        self.assertNotIn("job", rule.get("labels", {}))
+        self.assertIsNone(re.search(r'job="[^"]+"', rule.get("expr", "")))
+
+    def test_annotation_names_journal_and_emergency_override(self) -> None:
+        description = self._one().get("annotations", {}).get("description", "")
+        self.assertIn(
+            "journalctl --user -u alphalens-grafana-provisioning-sync.service", description
+        )
+        self.assertIn("emergency", description)
+
+    def test_grafana_sync_prefix_is_registered_as_gauge_family(self) -> None:
+        # Belt-pin: the no-counter-functions test must cover the new
+        # alphalens_grafana_sync_* family.
+        source = Path(__file__).read_text()
+        self.assertIn('"alphalens_grafana_sync_",', source)
 
 
 class TestEdgarPressReleaseDoesNotCollideWithCronEnums(unittest.TestCase):
