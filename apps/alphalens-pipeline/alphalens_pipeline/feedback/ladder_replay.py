@@ -661,12 +661,15 @@ def _anchor_from_walk(
     single named seam both the lens and its tests reach, and so the ``planned``
     branch CALLS the live rail's own blend rather than re-implementing it.
 
-    Returns ``None`` when nothing filled (both modes share that gate, so the two
-    lenses always report over the SAME cohort and stay comparable), when the
+    Returns ``None`` when nothing filled (both modes share that gate), when the
     planned blend has no usable tier, or when either blend is non-finite --
     ``planned_blended_entry`` lets a NaN limit through (``nan <= 0`` is False)
     and a bare ``NaN`` in the stamped JSON map is not valid JSON for a strict
     reader.
+
+    Sharing the no-fill gate does NOT make the two lenses report over the same
+    cohort: the bracket-constructibility gates downstream are anchor-dependent
+    -- see :func:`replay_ladder_atr_bracket`.
     """
     _validate_anchor(anchor)
     if not filled:
@@ -767,9 +770,17 @@ def replay_ladder_atr_bracket(
     mirrors the live rail by calling ``paper.sizing.planned_blended_entry`` over
     ALL intended tiers. The two disagree on every partial fill — on the SMG
     incident of 2026-08-24 by 4.19 on the anchor alone — and a caller that could
-    fall back to either by accident is exactly the defect #1114 records. Both
-    modes share the walk-1 no-fill gate, so the two registered lenses report over
-    the SAME cohort.
+    fall back to either by accident is exactly the defect #1114 records.
+
+    COHORT WARNING (memo §7.5). The two modes share the walk-1 no-fill gate, but
+    that does NOT make the two registered lenses report over the same rows. The
+    gates below run AFTER the anchor is chosen and depend on it: a ceiling
+    at/below the anchor's cost floor, and a bracket stop at/below zero. The
+    planned blend sits BELOW the realised blend on every partial fill, so the
+    two lenses drop different rows, and not at random -- the split lands on the
+    52w-ceiling-capped rows. Compare the two lenses only where BOTH are
+    non-null; a difference of means over each lens's own non-null set mixes an
+    anchor effect with a cohort effect.
 
     ATR is ``trade_setup["atr"]`` (absolute, asof_close-anchored — the
     fill-anchored precedent) with the identical null-guard. Like the other

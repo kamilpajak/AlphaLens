@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import unittest
 
+from alphalens_pipeline.feedback.breakeven_lenses import breakeven_grid
 from alphalens_pipeline.feedback.ladder_replay import (
     atr_bracket_anchor,
     replay_ladder_atr_bracket,
@@ -234,8 +235,11 @@ class TestTheModesAgreeWhenEveryTierFills(unittest.TestCase):
 
 
 class TestBothModesShareTheNoFillGate(unittest.TestCase):
-    """The anchor changes the bracket, never the cohort: a path where nothing
-    touches is ``None`` under both modes, so the two lenses stay comparable."""
+    """A path where nothing touches is ``None`` under both modes.
+
+    This is the ONE cohort property the two lenses share. It does not extend to
+    the gates that run after the anchor is chosen -- see
+    ``TestTheAnchorAlsoMovesTheCohort``."""
 
     def test_nothing_fills_under_either_anchor(self):
         setup = smg_brief_trade_setup()
@@ -244,6 +248,85 @@ class TestBothModesShareTheNoFillGate(unittest.TestCase):
         self.assertIsNone(atr_bracket_anchor(setup, above_every_tier, anchor="realised"))
         self.assertIsNone(replay_ladder_atr_bracket(setup, above_every_tier, anchor="planned"))
         self.assertIsNone(replay_ladder_atr_bracket(setup, above_every_tier, anchor="realised"))
+
+
+class TestTheAnchorAlsoMovesTheCohort(unittest.TestCase):
+    """The anchor changes WHICH ROWS the lens can report, not only the bracket.
+
+    The two modes share the walk-1 no-fill gate, but the gates that come AFTER
+    the anchor are anchor-dependent: ``atr_bracket_levels`` returns ``None``
+    when the 52-week ceiling sits at/below the anchor's cost floor, and when the
+    bracket stop falls at/below zero. Because the planned blend is systematically
+    LOWER than the realised blend on a partial fill, the drop is not symmetric —
+    it lands on exactly the ceiling-capped rows the pair exists to compare.
+
+    Pinned here so a reader never takes a difference of means between the two
+    lenses for a pure anchor effect, and so nobody "fixes" the asymmetry by
+    coupling the two lenses' null sets (each lens must keep the null conditions
+    it was pre-registered with — memo section 5).
+
+    CHARACTERIZATION: these passed on first write. They exist because the
+    docstrings claimed the opposite, not because the behaviour was wrong.
+    """
+
+    # Two tiers 50/50 -> planned blend 80.0; only the top tier is reachable, so
+    # the realised anchor is 100.0. ATR 2.0 keeps both brackets well-formed.
+    _CEILING_SPLIT_SETUP = {
+        "status": "OK",
+        "disaster_stop": 50.0,
+        "entry_tiers": [
+            {"limit": 100.0, "alloc_pct": 50.0},
+            {"limit": 60.0, "alloc_pct": 50.0},
+        ],
+        "tp_tranches": [{"target": 110.0, "tranche_pct": 100.0}],
+        "atr": 2.0,
+        "asof_close": 100.0,
+    }
+    # asof_close 100 at -0.5% off the 52w high -> ceiling 100.5025. That sits
+    # ABOVE the planned floor (80 * 1.006 = 80.48) and BELOW the realised one
+    # (100 * 1.006 = 100.6).
+    _PCT_OFF_52W_HIGH = -0.5
+    _TOP_TIER_ONLY = [
+        {"t": 1, "l": 99.0, "h": 102.0, "c": 100.5},
+        {"t": 2, "l": 99.5, "h": 101.0, "c": 100.0},
+    ]
+
+    def test_a_ceiling_between_the_two_floors_drops_only_the_realised_lens(self):
+        grid = breakeven_grid(
+            dict(self._CEILING_SPLIT_SETUP),
+            self._TOP_TIER_ONLY,
+            pct_off_52w_high=self._PCT_OFF_52W_HIGH,
+        )
+        # Same row, same bars, same fill set -- one lens reports, one is null.
+        self.assertIsNone(grid["atr_bracket_1p5"])
+        self.assertIsNotNone(grid["atr_bracket_1p5_planned"])
+
+    def test_both_anchors_exist_on_that_row_so_the_null_is_the_bracket_not_the_fill(self):
+        setup = dict(self._CEILING_SPLIT_SETUP)
+        planned = atr_bracket_anchor(setup, self._TOP_TIER_ONLY, anchor="planned")
+        realised = atr_bracket_anchor(setup, self._TOP_TIER_ONLY, anchor="realised")
+        self.assertAlmostEqual(planned or 0.0, 80.0, places=9)
+        self.assertAlmostEqual(realised or 0.0, 100.0, places=9)
+
+    def test_the_asymmetry_also_runs_the_other_way_on_a_bracket_stop_at_zero(self):
+        # Mirror case: a wide ATR pushes the LOWER (planned) anchor's bracket
+        # stop to zero, so there the planned lens is the one that drops out.
+        setup = {
+            "status": "OK",
+            "disaster_stop": 1.0,
+            "entry_tiers": [
+                {"limit": 10.0, "alloc_pct": 50.0},
+                {"limit": 2.0, "alloc_pct": 50.0},
+            ],
+            "tp_tranches": [{"target": 20.0, "tranche_pct": 100.0}],
+            "atr": 4.0,  # planned blend 6.0 - 1.5*4 = 0.0 -> not constructible
+        }
+        bars = [
+            {"t": 1, "l": 9.5, "h": 11.0, "c": 10.2},
+            {"t": 2, "l": 9.9, "h": 10.5, "c": 10.1},
+        ]
+        self.assertIsNone(replay_ladder_atr_bracket(setup, bars, anchor="planned"))
+        self.assertIsNotNone(replay_ladder_atr_bracket(setup, bars, anchor="realised"))
 
 
 class TestTheSeamRefusesEveryInputTheLensRefuses(unittest.TestCase):

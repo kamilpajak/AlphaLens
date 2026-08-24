@@ -173,7 +173,10 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
     # ``atr_bracket_1p5`` id carries every already-stamped value, and the daily
     # path never recomputes a stamped row, so this one populates FORWARD-ONLY.
     # A head-to-head of the two means is therefore invalid until this lens
-    # accrues its own N — before that it compares cohorts, not anchors.
+    # accrues its own N — before that it compares cohorts, not anchors. Even
+    # after that, compare them ONLY on rows where both are non-null: the two
+    # anchors share the no-fill gate but not the bracket-constructibility gates
+    # (bezpazery_lens_design_2026_07_16.md §7.5).
     # Charges its own row in the ~2026-09 walk-forward multiplicity budget
     # (ADR 0013 R4); this is the 5th of MAX_REGISTERED_LENSES.
     BreakevenLens(

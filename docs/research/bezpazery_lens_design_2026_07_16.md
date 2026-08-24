@@ -171,7 +171,35 @@ TELEMETRY — the live geometry stamp never named it — which this change fixes
 adding `anchor_mode` and `tp_floor_frac` to the stamp. The identity is pinned by
 a test where the floor binds on both sides.
 
-### 7.5 Not modelled: the realised AVERAGE FILL anchor
+### 7.5 The two anchors do NOT gate the same cohort
+
+An earlier draft of this amendment said the two lenses report over the same
+cohort because they share the walk-1 no-fill gate. The premise is true and the
+conclusion does not follow. The null conditions of §5 are applied to EACH
+lens's own anchor, and two of them are anchor-dependent:
+
+- ceiling ≤ anchor × (1 + `tp_floor_frac`) → not constructible (§4.1);
+- anchor − 1.5 × ATR ≤ 0 → bracket stop at/below zero.
+
+Because the planned blend sits BELOW the realised blend on every partial fill,
+the two gates fall on different rows, and not at random. Worked examples, both
+pinned as tests in `tests/feedback/test_atr_bracket_anchor_mode.py`
+(`TestTheAnchorAlsoMovesTheCohort`):
+
+| shape | planned lens | realised lens |
+|---|---|---|
+| tiers 100 / 60 at 50-50, only the top fills, ATR 2, 52w ceiling 100.5025 | value (floor 80.48 < ceiling) | `None` (floor 100.6 > ceiling) |
+| tiers 10 / 2 at 50-50, only the top fills, ATR 4 | `None` (stop 6.0 − 6.0 = 0) | value (stop 4.0) |
+
+Reading rule for the September walk-forward: **compare the two lenses only on
+rows where BOTH are non-null.** A difference of means over each lens's own
+non-null set mixes an anchor effect with a cohort effect, and the cohort
+difference concentrates on the ceiling-capped rows — the ones the pair exists to
+compare. This is a reading caveat, not a defect to code around: each lens keeps
+the null conditions it was pre-registered with, and coupling their null sets
+would make one lens's value depend on the other lens's geometry.
+
+### 7.6 Not modelled: the realised AVERAGE FILL anchor
 
 The replay fills a tier AT its limit, so `"realised"` is the blend of tier
 LIMITS, never of broker fill prices. A third anchor exists in the live journal —
