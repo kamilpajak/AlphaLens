@@ -254,13 +254,21 @@ def build_exit_geometry_spec(
 
     The client-precomputed levels for the (currently dark) exit-geometry
     override at placement (broker-manager extraction memo section 4.1 / 4.3).
-    Mirrors exactly what
+    Reads the SAME setup dict as
     :func:`alphalens_pipeline.feedback.ladder_replay.replay_ladder_atr_bracket`
-    (the ``/edge`` what-if replay) reads off the SAME setup dict, so "live ==
-    replay via shared formula" holds for the anchor FACTS -- ATR is
+    (the ``/edge`` what-if replay) for the anchor FACTS -- ATR is
     ``brief_trade_setup["atr"]`` (the identical brief key the replay leaf reads)
     and the 52w ceiling comes from the identical
     :func:`~broker_contract.exit_geometry.levels.ceiling_from_52w_high` leaf.
+
+    LIVE AND THE REPLAY NO LONGER AGREE ON THE TAKE-PROFIT (issue #1112 step 3,
+    the clamp below): live raises the target to the brief's own first tranche
+    when the ATR bracket lands under it; the replay lens does not, on purpose,
+    because clamping there would rewrite the historical what-if series issues
+    #1114 / #1115 measure against. So an ``/edge`` ``atr_bracket_1p5`` what-if
+    figure is NOT a prediction of what live will do on the take-profit side. The
+    stop and the anchor blend still match. Pinned by ``test_exit_geometry_spec.py
+    ::test_multi_tier_blend_and_stop_match_replay_but_the_take_profit_does_not``.
 
     The one place this diverges from the replay's ``_blended_entry`` by
     necessity: replay anchors the bracket at the blend over tiers that actually

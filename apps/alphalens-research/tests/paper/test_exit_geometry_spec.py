@@ -156,7 +156,7 @@ class TestBuildExitGeometrySpec(unittest.TestCase):
         self.assertIsNotNone(ceiling)
         self.assertAlmostEqual(spec_capped.initial_levels.tp, min(103.0, ceiling))
 
-    def test_multi_tier_blend_matches_replay_when_every_tier_fills(self) -> None:
+    def test_multi_tier_blend_and_stop_match_replay_but_the_take_profit_does_not(self) -> None:
         # Mirrors TestAtrBracketWhatIf.test_multi_tier_fills_anchor_bracket_at_blended_entry:
         # both tiers fill on bar 1 -> blend 99, bracket stop 96, TP 102 (rally hits it).
         setup = _setup(
