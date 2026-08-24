@@ -105,6 +105,7 @@ class TestBreakevenRegistry(unittest.TestCase):
                 expected = replay_ladder_atr_bracket(
                     _SETUP,
                     _BARS,
+                    anchor=lens.anchor_mode,
                     stop_atr_mult=lens.stop_atr_mult,
                     tp_atr_mult=lens.tp_atr_mult,
                     tp_floor_frac=lens.tp_floor_frac,
@@ -180,6 +181,38 @@ class TestBreakevenRegistry(unittest.TestCase):
         self.assertEqual(lens.label, "ATR bracket 1.5 (bezpazery)")
         self.assertEqual(lens.preregistered_ref, _BEZPAZERY_REF)
 
+    def test_an_atr_bracket_lens_without_an_anchor_mode_is_refused(self):
+        # #1114: the anchor is the one atr_bracket param with NO default. The
+        # other three fall back to a module constant when the lens leaves them
+        # None; this one must raise instead, so a lens cannot be registered that
+        # silently measures a policy nobody chose.
+        lens = BreakevenLens(
+            lens_id="atr_bracket_no_anchor",
+            label="unanchored",
+            category="exit-stop",
+            status="in_sample",
+            kind="atr_bracket",
+            stop_atr_mult=1.5,
+            tp_atr_mult=1.5,
+            tp_floor_frac=0.006,
+            anchor_mode=None,
+        )
+        with self.assertRaises(ValueError):
+            _lens_realized_r(lens, _SETUP, _BARS)
+
+    def test_every_registered_atr_bracket_lens_declares_its_anchor(self):
+        bracket_lenses = [lens for lens in BREAKEVEN_LENSES if lens.kind == "atr_bracket"]
+        self.assertTrue(bracket_lenses, "positive control: at least one atr_bracket lens")
+        for lens in bracket_lenses:
+            self.assertIn(lens.anchor_mode, {"planned", "realised"}, lens.lens_id)
+
+    def test_non_bracket_lenses_carry_no_anchor_mode(self):
+        # The anchor is meaningless outside the bracket kind; a stray value there
+        # would read as a policy claim the lens does not make.
+        for lens in BREAKEVEN_LENSES:
+            if lens.kind != "atr_bracket":
+                self.assertIsNone(lens.anchor_mode, lens.lens_id)
+
     def test_atr_bracket_lens_matches_exit_geometry_registry_sot(self):
         # SoT parity guard: the BreakevenLens registration and the exit-geometry
         # policy registry (apps/alphalens-broker-contract/.../exit_geometry/registry.py)
@@ -202,7 +235,9 @@ class TestBreakevenRegistry(unittest.TestCase):
         bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
         capped = breakeven_grid(setup, bars, pct_off_52w_high=-2.0)["atr_bracket_1p5"]
         uncapped = breakeven_grid(setup, bars)["atr_bracket_1p5"]
-        expected = replay_ladder_atr_bracket(setup, bars, ceiling_price=100.0 / 0.98)
+        expected = replay_ladder_atr_bracket(
+            setup, bars, anchor="realised", ceiling_price=100.0 / 0.98
+        )
         self.assertIsNotNone(capped)
         self.assertEqual(capped, expected)
         self.assertAlmostEqual(capped, (100.0 / 0.98 - 100.0) / 3.0, places=6)
@@ -214,7 +249,7 @@ class TestBreakevenRegistry(unittest.TestCase):
         setup = _setup(entries=[(100.0, 100.0)], tps=[(120.0, 100.0)], stop=90.0, atr=2.0)
         setup["asof_close"] = 100.0
         bars = [_bar(1, 99.0, 100.5, 100.0), _bar(2, 100.5, 103.5, 103.0)]
-        expected_uncapped = replay_ladder_atr_bracket(setup, bars)
+        expected_uncapped = replay_ladder_atr_bracket(setup, bars, anchor="realised")
         self.assertEqual(
             breakeven_grid(setup, bars, pct_off_52w_high=None)["atr_bracket_1p5"],
             expected_uncapped,

@@ -7,10 +7,13 @@ Pins that the ATR bracket built here matches the SAME ``atr_bracket_1p5``
 policy the ``/edge`` replay leaf (``feedback/ladder_replay.py::
 replay_ladder_atr_bracket``) reads off an IDENTICAL setup dict, so "live ==
 replay via shared formula" holds for the anchor facts (blend, ATR, ceiling).
-The one deliberate divergence: replay anchors the blend at tiers that
-actually TOUCHED in a bar-replay walk; at placement time no bars/fills exist
-yet, so the blend here is the alloc-weighted mean over ALL intended entry
-tiers (the "planned" blend, memo section 4.3).
+At placement time no bars/fills exist yet, so the blend here is the
+alloc-weighted mean over ALL intended entry tiers (the "planned" blend, memo
+section 4.3). Since issue #1114 the replay lens takes that anchor as an
+explicit argument -- ``anchor="planned"`` mirrors this builder, while the
+lens's historical behaviour (``anchor="realised"``, the blend over tiers that
+actually TOUCHED) is registered as a separate lens. The two agree only when
+every tier fills, which is the case every test below constructs.
 """
 
 from __future__ import annotations
@@ -163,8 +166,12 @@ class TestBuildExitGeometrySpec(unittest.TestCase):
             entries=[(100.0, 50.0), (98.0, 50.0)], tps=[(120.0, 100.0)], stop=90.0, atr=2.0
         )
         bars = [_bar(1, 97.5, 100.0, 98.0), _bar(2, 98.0, 102.5, 102.0)]
-        replayed_r = replay_ladder_atr_bracket(setup, bars)
+        replayed_r = replay_ladder_atr_bracket(setup, bars, anchor="planned")
         self.assertAlmostEqual(replayed_r, 1.0, places=6)
+        # Every tier fills here, so the two #1114 anchor modes coincide. On a
+        # PARTIAL fill they do not, which is why the anchor is now stated at
+        # every call site instead of being implied.
+        self.assertEqual(replayed_r, replay_ladder_atr_bracket(setup, bars, anchor="realised"))
 
         spec = build_exit_geometry_spec(setup)
         assert spec is not None

@@ -44,9 +44,29 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from broker_contract.exit_geometry.levels import atr_bracket_levels
+
+from alphalens_pipeline.paper.sizing import planned_blended_entry
+
+# The two entry anchors an ATR bracket can be placed against (issue #1114).
+# They disagree on EVERY partial fill, so the lens must be told which policy it
+# is replaying -- there is deliberately no default anywhere in this module.
+ANCHOR_PLANNED = "planned"
+"""Alloc-weighted blend over ALL intended entry tiers -- what the LIVE rail
+places against (``paper.sizing.planned_blended_entry``, called directly below so
+the two cannot drift)."""
+
+ANCHOR_REALISED = "realised"
+"""Alloc-weighted blend over the tiers that TOUCHED in the bar walk. NOTE: the
+replay fills a tier AT its limit, so this is the blend of tier LIMITS, not of
+broker fill prices -- a third anchor (the realised average fill) exists in the
+live journal and is not modelled here."""
+
+AnchorMode = Literal["planned", "realised"]
+
+_ANCHOR_MODES: frozenset[str] = frozenset({ANCHOR_PLANNED, ANCHOR_REALISED})
 
 # Within one bar we cannot order an SL touch vs a TP touch (minute granularity
 # hides intra-bar sequence). We resolve it CONSERVATIVELY -- assume the adverse
@@ -614,10 +634,81 @@ def realized_r_fill_anchored(
     return replay_ladder(setup_single, bars).realized_r
 
 
+def _validate_anchor(anchor: str) -> None:
+    """Fail loud on an anchor this module does not implement.
+
+    A typo must NOT fall through to one of the two real modes: the whole point
+    of #1114 is that a caller cannot end up on an anchor it did not choose.
+    """
+    if anchor not in _ANCHOR_MODES:
+        raise ValueError(
+            f"unknown ATR-bracket anchor: {anchor!r} (expected one of {sorted(_ANCHOR_MODES)})"
+        )
+
+
+def _anchor_from_walk(
+    trade_setup: Mapping[str, Any],
+    filled: list[_Level],
+    *,
+    anchor: AnchorMode,
+) -> float | None:
+    """The bracket anchor price for one already-walked ladder.
+
+    Split out of :func:`replay_ladder_atr_bracket` so the anchor decision is a
+    single named seam both the lens and its tests reach, and so the ``planned``
+    branch CALLS the live rail's own blend rather than re-implementing it.
+
+    Returns ``None`` when nothing filled (both modes share that gate, so the two
+    lenses always report over the SAME cohort and stay comparable), when the
+    planned blend has no usable tier, or when either blend is non-finite --
+    ``planned_blended_entry`` lets a NaN limit through (``nan <= 0`` is False)
+    and a bare ``NaN`` in the stamped JSON map is not valid JSON for a strict
+    reader.
+    """
+    _validate_anchor(anchor)
+    if not filled:
+        return None
+    blended = (
+        planned_blended_entry(trade_setup) if anchor == ANCHOR_PLANNED else _blended_entry(filled)
+    )
+    if blended is None or not math.isfinite(blended):
+        return None
+    return blended
+
+
+def atr_bracket_anchor(
+    trade_setup: Mapping[str, Any] | None,
+    bars: Sequence[Mapping[str, Any]],
+    *,
+    anchor: AnchorMode,
+) -> float | None:
+    """The price :func:`replay_ladder_atr_bracket` would place its bracket around.
+
+    Public seam for the #1114 anchor split: it runs the SAME walk-1 the lens
+    runs and applies the SAME ``anchor`` semantics, so a test can pin the anchor
+    itself instead of only the realized R that follows from it. ``anchor`` is
+    required and validated -- see :data:`ANCHOR_PLANNED` / :data:`ANCHOR_REALISED`.
+
+    Returns ``None`` under the lens's own degenerate-input contract (unparseable
+    setup, no bars, nothing filled in walk-1, non-finite blend).
+    """
+    _validate_anchor(anchor)
+    ladder = parse_ladder(trade_setup)
+    if trade_setup is None or not bars or not ladder.ok:
+        return None
+    stop = ladder.disaster_stop
+    assert stop is not None  # ok=True guarantees it
+    walk = _LadderWalk(ladder, stop, entry_expiry_ms=None, position_expiry_ms=None)
+    for bar in sorted(bars, key=lambda b: int(b["t"])):
+        walk.step(bar)
+    return _anchor_from_walk(trade_setup, walk.filled, anchor=anchor)
+
+
 def replay_ladder_atr_bracket(
     trade_setup: Mapping[str, Any] | None,
     bars: Sequence[Mapping[str, Any]],
     *,
+    anchor: AnchorMode,
     stop_atr_mult: float = 1.5,
     tp_atr_mult: float = 1.5,
     tp_floor_frac: float = 0.006,
@@ -629,7 +720,7 @@ def replay_ladder_atr_bracket(
     replication (``docs/research/bezpazery_lens_design_2026_07_16.md``). The
     production entry tiers are KEPT (unlike :func:`realized_r_fill_anchored`'s
     single-E1 collapse); the exit is replaced with a symmetric bracket anchored to
-    the walk-1 blended entry:
+    the blend named by ``anchor``:
 
     * stop  = ``blended - stop_atr_mult * ATR`` (static — no ratchet, no trail);
     * TP    = ``min(ceiling_price, max(blended * (1 + tp_floor_frac),
@@ -637,6 +728,16 @@ def replay_ladder_atr_bracket(
       non-finite ``ceiling_price`` leaves the TP uncapped (missing 52w-high data
       is coverage, not a null — memo §4.2); a ceiling at/below the cost floor
       makes the bracket degenerate and returns ``None`` (memo §4.1).
+
+    ``anchor`` is REQUIRED and has no default (issue #1114): ``"realised"``
+    reproduces the behaviour this lens shipped with (the blend over tiers that
+    TOUCHED, which is the repaired policy, not the live one); ``"planned"``
+    mirrors the live rail by calling ``paper.sizing.planned_blended_entry`` over
+    ALL intended tiers. The two disagree on every partial fill — on the SMG
+    incident of 2026-08-24 by 4.19 on the anchor alone — and a caller that could
+    fall back to either by accident is exactly the defect #1114 records. Both
+    modes share the walk-1 no-fill gate, so the two registered lenses report over
+    the SAME cohort.
 
     ATR is ``trade_setup["atr"]`` (absolute, asof_close-anchored — the
     fill-anchored precedent) with the identical null-guard. Like the other
@@ -650,7 +751,8 @@ def replay_ladder_atr_bracket(
 
     Note on the R denominator: walk-2 re-derives fills under the bracket stop,
     so on multi-tier paths its realized blend (and hence risk) can drift
-    slightly from the walk-1 anchor blend used to place the bracket — accepted
+    from the anchor blend used to place the bracket — under ``"planned"`` that
+    drift is not slight, it is the whole point of the lens — accepted
     for the ``replay_ladder`` reuse (SL-first ambiguity, filled-frac re-basing,
     NO_FILL->None inherited for free; memo §4.3). The bracket itself stays
     frozen at the walk-1 blend: later tier fills never move the stop/TP.
@@ -658,9 +760,10 @@ def replay_ladder_atr_bracket(
     Returns ``None`` for an unparseable setup, no bars, a missing / non-finite /
     non-positive ATR, a non-positive risk (``stop_atr_mult <= 0``), a
     non-constructible bracket (ceiling at/below the cost floor, or a bracket
-    stop at/below zero), or when nothing fills in walk-1. Display-only; never
-    the headline ``realized_r``.
+    stop at/below zero), or when nothing fills in walk-1. Raises ``ValueError``
+    on an unknown ``anchor``. Display-only; never the headline ``realized_r``.
     """
+    _validate_anchor(anchor)
     ladder = parse_ladder(trade_setup)
     if trade_setup is None or not bars or not ladder.ok:
         return None
@@ -672,14 +775,16 @@ def replay_ladder_atr_bracket(
     ordered = sorted(bars, key=lambda b: int(b["t"]))
     stop = ladder.disaster_stop
     assert stop is not None  # ok=True guarantees it
-    # Walk-1: derive the fill set under the family contract (no expiries) to
-    # anchor the bracket at the alloc-weighted blended entry.
+    # Walk-1: derive the fill set under the family contract (no expiries). The
+    # fill set gates BOTH anchors (no fill -> no lens value) and supplies the
+    # realised blend; the planned blend comes from the live rail's own helper.
     walk = _LadderWalk(ladder, stop, entry_expiry_ms=None, position_expiry_ms=None)
     for bar in ordered:
         walk.step(bar)
-    if not walk.filled:
+    assert trade_setup is not None  # ok=True guarantees a mapping
+    blended = _anchor_from_walk(trade_setup, walk.filled, anchor=anchor)
+    if blended is None:
         return None
-    blended = _blended_entry(walk.filled)
     levels = atr_bracket_levels(
         blended,
         atr,

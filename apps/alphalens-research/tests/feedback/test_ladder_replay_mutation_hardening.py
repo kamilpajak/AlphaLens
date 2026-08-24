@@ -167,9 +167,15 @@ class TestFillAnchoredAtrThreshold_L575(unittest.TestCase):
 
 class TestAtrBracketKwOnly_L593(unittest.TestCase):
     def test_positional_call_rejected(self):
-        """Kills the '*,' -> '/,' marker swap in replay_ladder_atr_bracket's signature."""
+        """Kills the '*,' -> '/,' marker swap in replay_ladder_atr_bracket's signature.
+
+        ``anchor`` is passed explicitly so the only reason this raises is the
+        keyword-only marker; the separate missing-anchor guard (#1114) lives in
+        ``tests/feedback/test_atr_bracket_anchor_mode.py`` so the two mutations
+        stay distinguishable.
+        """
         with self.assertRaises(TypeError):
-            replay_ladder_atr_bracket(None, [], 1.5)
+            replay_ladder_atr_bracket(None, [], 1.5, anchor="realised")
 
 
 class TestBracketAtrGuard_L641(unittest.TestCase):
@@ -182,7 +188,7 @@ class TestBracketAtrGuard_L641(unittest.TestCase):
             "atr": 0.0,
         }
         bars = [{"t": 1, "l": 9.5, "h": 9.6, "c": 9.55}, {"t": 2, "l": 7.9, "h": 8.5, "c": 8.0}]
-        self.assertIsNone(replay_ladder_atr_bracket(setup, bars))
+        self.assertIsNone(replay_ladder_atr_bracket(setup, bars, anchor="realised"))
 
 
 class TestBracketStopMultGuard_L643(unittest.TestCase):
@@ -195,7 +201,9 @@ class TestBracketStopMultGuard_L643(unittest.TestCase):
             "atr": 0.5,
         }
         bars = [{"t": 1, "l": 9.5, "h": 9.6, "c": 9.55}, {"t": 2, "l": 7.9, "h": 8.5, "c": 8.0}]
-        self.assertIsNone(replay_ladder_atr_bracket(setup, bars, stop_atr_mult=-1.0))
+        self.assertIsNone(
+            replay_ladder_atr_bracket(setup, bars, anchor="realised", stop_atr_mult=-1.0)
+        )
 
 
 class TestBracketTpFormula_L664(unittest.TestCase):
@@ -208,7 +216,7 @@ class TestBracketTpFormula_L664(unittest.TestCase):
             "atr": 0.5,
         }
         bars = [{"t": 1, "l": 9.9, "h": 10.1, "c": 10.0}, {"t": 2, "l": 10.0, "h": 10.5, "c": 10.2}]
-        res = replay_ladder_atr_bracket(setup, bars)
+        res = replay_ladder_atr_bracket(setup, bars, anchor="realised")
         self.assertAlmostEqual(res, (10.2 - 10.0) / 0.75)
 
 

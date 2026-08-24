@@ -20,7 +20,11 @@ Three lens KINDS today (dispatched by ``BreakevenLens.kind``):
   is NOT in the trade setup — the caller threads the brief's
   ``technical_pct_off_52w_high`` into :func:`breakeven_grid`, which reconstructs
   the ceiling from ``asof_close``. ``stop_atr_mult`` / ``tp_atr_mult`` /
-  ``tp_floor_frac``.
+  ``tp_floor_frac`` / ``anchor_mode``. The ``anchor_mode`` says WHICH entry blend
+  the bracket is placed around and is mandatory (issue #1114): ``"planned"``
+  (all intended tiers — what the live rail places against) or ``"realised"``
+  (tiers that touched in the bar walk). Both are registered, so the pair is
+  measurable side by side; they differ on every partial fill.
 
 The registry is data-driven: adding a lens is one entry here, no schema or UI
 change (the stamped column is a JSON map and the ``/edge`` selector reads the
@@ -87,6 +91,13 @@ class BreakevenLens:
     stop_atr_mult: float | None = None  # fill_anchored- + atr_bracket-kind replay param
     tp_atr_mult: float | None = None  # atr_bracket-kind replay param
     tp_floor_frac: float | None = None  # atr_bracket-kind replay param
+    # atr_bracket-kind ENTRY ANCHOR (issue #1114): "planned" (all intended
+    # tiers, what the live rail places against) or "realised" (tiers that
+    # touched in the bar walk). Unlike the three params above this one has NO
+    # module-level default -- an atr_bracket lens that leaves it None is
+    # REFUSED at dispatch, because a what-if figure must name the policy it
+    # replays. ``None`` on every other kind.
+    anchor_mode: str | None = None
     preregistered_ref: str | None = None  # provenance (design-memo section), display-only
 
 
@@ -151,6 +162,7 @@ BREAKEVEN_LENSES: tuple[BreakevenLens, ...] = (
         stop_atr_mult=1.5,
         tp_atr_mult=1.5,
         tp_floor_frac=0.006,
+        anchor_mode="realised",
         preregistered_ref=(
             "betlejem5_comparative bezpazery v1 (bracket 1.5xATR, floor 0.6%, ceiling 52w-high)"
         ),
@@ -178,9 +190,17 @@ def _lens_realized_r(
         mult = lens.stop_atr_mult if lens.stop_atr_mult is not None else _DEFAULT_STOP_ATR_MULT
         return realized_r_fill_anchored(trade_setup, bars, stop_atr_mult=mult)
     if lens.kind == "atr_bracket":
+        # DELIBERATELY NOT the "X if X is not None else _DEFAULT_X" pattern the
+        # other three params use (issue #1114). A default here would let a lens
+        # measure an anchor nobody chose, which is the exact defect: the lens
+        # replayed the realised-fill anchor while the live rail placed against
+        # the planned blend, and nothing said so.
+        if lens.anchor_mode is None:
+            raise ValueError(f"atr_bracket lens {lens.lens_id!r} must declare an anchor_mode")
         return replay_ladder_atr_bracket(
             trade_setup,
             bars,
+            anchor=lens.anchor_mode,  # type: ignore[arg-type]
             stop_atr_mult=(
                 lens.stop_atr_mult
                 if lens.stop_atr_mult is not None
