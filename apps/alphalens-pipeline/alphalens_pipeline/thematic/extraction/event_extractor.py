@@ -82,10 +82,11 @@ def _get_default_engine() -> TemplateEngine:
 
     Not thread-safe. The thematic-build cron + ``alphalens`` CLI are
     both single-threaded; if a future caller invokes ``extract_one`` /
-    ``extract_daily`` from multiple threads, the worst case is two
-    engine instances racing to init then one wiping the other — benign
-    in terms of correctness but wasteful. Add ``threading.Lock`` here
-    if the pipeline ever goes multi-threaded.
+    ``extract_daily`` from multiple threads, two engine instances can
+    race to init and each accumulates its own ``TemplateMetrics`` —
+    the per-run flush would then persist only the surviving instance's
+    counts and silently drop the loser's. Add ``threading.Lock`` here
+    BEFORE any multi-threaded extraction.
     """
     global _default_engine  # noqa: PLW0603 — documented singleton pattern
     if _default_engine is None:

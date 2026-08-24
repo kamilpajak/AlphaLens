@@ -182,6 +182,23 @@ class TestFlush(unittest.TestCase):
             text,
         )
 
+    def test_flush_escapes_label_values(self):
+        # A quote or backslash in a template_id would otherwise render an
+        # invalid textfile line, and the failure-isolated production
+        # flush would swallow the parse error silently (zen review of
+        # PR #1109). IDs today are safe YAML slugs - this pins the
+        # escaping so a future id cannot corrupt the whole file.
+        m = TemplateMetrics()
+        m.register_template('bad"id\\slug')
+        m.flush(job="template-engine-escape-test")
+        out = self.tmpdir / "alphalens_domain_template-engine-escape-test.prom"
+        text = out.read_text()
+        self.assertIn(
+            'alphalens_template_attempt_total{template_id="bad\\"id\\\\slug"} 0',
+            text,
+        )
+        self.assertNotIn('template_id="bad"id', text)
+
     def test_flush_is_idempotent(self):
         m = TemplateMetrics()
         m.record_drop(HOLDOUT_NO_TEMPLATE_MATCH)

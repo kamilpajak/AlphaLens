@@ -61,6 +61,17 @@ ALL_HOLDOUT_REASONS: frozenset[str] = frozenset(
 _VALID_PREDICATE_OUTCOMES = frozenset({"pass", "fail"})
 
 
+def _escape_label(value: str) -> str:
+    """Escape a Prometheus label value for textfile rendering.
+
+    Backslash first, then quote - the exposition format's own escaping
+    rules. Without this a template_id containing either character would
+    render an unparseable line and the failure-isolated production
+    flush would swallow node_exporter's rejection silently.
+    """
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
 class TemplateMetrics:
     """In-process accumulator. Single-threaded; one instance per engine.
 
@@ -124,13 +135,17 @@ class TemplateMetrics:
         """
         metrics: dict[str, float | int] = {}
         for reason, count in self._holdout.items():
-            metrics[f'alphalens_template_holdout_total{{reason="{reason}"}}'] = count
+            metrics[f'alphalens_template_holdout_total{{reason="{_escape_label(reason)}"}}'] = count
         for (name, outcome), count in self._predicates.items():
-            metrics[f'alphalens_template_predicate_total{{name="{name}",outcome="{outcome}"}}'] = (
-                count
+            key = (
+                "alphalens_template_predicate_total"
+                f'{{name="{_escape_label(name)}",outcome="{_escape_label(outcome)}"}}'
             )
+            metrics[key] = count
         for template_id, count in self._attempts.items():
-            metrics[f'alphalens_template_attempt_total{{template_id="{template_id}"}}'] = count
+            tid = _escape_label(template_id)
+            metrics[f'alphalens_template_attempt_total{{template_id="{tid}"}}'] = count
         for template_id, count in self._matches.items():
-            metrics[f'alphalens_template_match_total{{template_id="{template_id}"}}'] = count
+            tid = _escape_label(template_id)
+            metrics[f'alphalens_template_match_total{{template_id="{tid}"}}'] = count
         emit_domain_metrics(job=job, metrics=metrics)
