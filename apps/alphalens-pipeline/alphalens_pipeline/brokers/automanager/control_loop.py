@@ -6212,7 +6212,7 @@ def _geometry_without_entry_trail_note(
     (issue #1112 round 2, point 4).
 
     The #1112 exit-region arm gate (:func:`_inside_exit_region_note`) and the
-    single-tranche contract (:func:`_exit_plan_shape_note`) exist ONLY on the
+    single-tranche contract (:func:`_exit_plan_shape_refusal`) exist ONLY on the
     trailing-entry path. With ``ALPHALENS_BROKER_ENTRY_TRAIL_BPS`` at 0 a pick
     falls through to the classic ``_place_tiers`` bracket path, which has
     neither — so the exact defect #1112 fixed (an entry filling inside its own
