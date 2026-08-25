@@ -254,6 +254,23 @@ class TestValidityAcrossEveryPartialFillSubset(unittest.TestCase):
     whose ``entry_tiers`` are that subset — the same builder the router stamps
     ``geometry_tp`` from — so the table follows any change to how production
     picks a target instead of re-deriving one of its own.
+
+    WHAT THIS COVERS, AND WHAT IT DOES NOT (#1116 round 2, point 5). The seven
+    subsets are the complete state space only under an ATOMIC-TIER assumption:
+    that each tier either fills in full or not at all. Our own incident refutes
+    that assumption — on 2026-08-24 SMG carried ``reference_qty`` 6.0 and filled
+    1 share, a state no subset of {E1, E2, E3} describes. So these seven rows
+    are seven POINTS sampled from a much larger continuous space (any partial
+    quantity on any subset of tiers), not an exhaustive enumeration of it.
+
+    They are still the right seven points: the target each subset produces comes
+    from the alloc-weighted blend of the tiers in it, and within a subset the
+    shallowest tier's fill estimate is what the gate compares, neither of which
+    moves with the filled QUANTITY. What a partial fill does change is the cost
+    side — a smaller realised notional pays proportionally more of the per-fill
+    USD minimum — and that is measured at the gates themselves
+    (``TestArmGateChargesRoundTripCostPlusBuffer`` at one share, the exit-side
+    cost gate in ``test_live_exit_decision.py``), not here.
     """
 
     def _subsets(self):
