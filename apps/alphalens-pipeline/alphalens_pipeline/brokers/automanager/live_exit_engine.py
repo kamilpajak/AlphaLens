@@ -20,6 +20,7 @@ from typing import Any
 
 from broker_contract.contract import _QTY_EPS, Broker, OrderState
 from broker_contract.price_feed import PriceFeed, PricePoint
+from broker_contract.quantity import QuantityLattice, quantize_down
 from broker_contract.sizing import TpTranchePlan
 
 from alphalens_pipeline.brokers.automanager.costs import (
@@ -31,6 +32,7 @@ from alphalens_pipeline.brokers.automanager.costs import (
 from alphalens_pipeline.brokers.automanager.costs import EXIT_EDGE_MIN_BPS as _EXIT_EDGE_MIN_BPS
 from alphalens_pipeline.brokers.automanager.labels import tp_label_from_tag
 from alphalens_pipeline.brokers.automanager.position_manager import _sole_standalone_stop
+from alphalens_pipeline.brokers.execution import assert_rail_lattice
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +166,7 @@ def plan_tranche_exits(
     reference_qty: float,
     owned: float,
     already_fired: frozenset[str],
+    lattice: QuantityLattice,
     realised_entry: float | None = None,
 ) -> list[TrancheExit]:
     """Which not-yet-fired tranches a LONG at ``price`` should realize now.
@@ -194,7 +197,8 @@ def plan_tranche_exits(
     if not _is_real_quantity(owned):
         logger.warning("live exits: owned %r is not a real quantity — no tranche planned", owned)
         return []
-    available = round(owned)
+    assert_rail_lattice(lattice)
+    available = quantize_down(owned, lattice)
     out: list[TrancheExit] = []
     for i, t in enumerate(tp_tranches):
         tag = tranche_tag(i)
@@ -232,6 +236,7 @@ def execute_tranche_exit(
     sl_leg: OrderState,
     stop_price: float,
     request_ref: str,
+    lattice: QuantityLattice,
 ) -> TrancheExitResult:
     """Realize ONE tranche: free the tranche from the standalone SL, THEN market
     sell it. Re-snapshots live owned first (never sell more than owned → cannot
@@ -260,7 +265,7 @@ def execute_tranche_exit(
         )
         return TrancheExitResult(sold=False, sell_order_id=None)
     owned = max(live.quantity, 0.0)
-    qty = min(exit.qty, round(owned))
+    qty = min(exit.qty, quantize_down(owned, lattice))
     if qty <= 0:
         logger.info(
             "tranche %s uic %s: position gone (owned=%.2f) — no sell",
@@ -269,7 +274,7 @@ def execute_tranche_exit(
             owned,
         )
         return TrancheExitResult(sold=False, sell_order_id=None)
-    new_sl_qty = max(round(owned) - qty, 0.0)
+    new_sl_qty = max(quantize_down(owned, lattice) - qty, 0.0)
     # 1) free the tranche from the SL FIRST (a sell while the SL commits full
     #    owned is rejected SellOrdersAlreadyExistForOwnedContracts).
     if new_sl_qty <= _QTY_EPS:
@@ -377,7 +382,13 @@ class ManagedExit:
     already_fired: frozenset[str]
 
 
-def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) -> int:
+def run_live_exits(
+    broker: Broker,
+    feed: PriceFeed,
+    managed: list[ManagedExit],
+    *,
+    lattice: QuantityLattice,
+) -> int:
     """One live-exit pass over managed positions. Stale/absent price -> veto (skip).
     INERT: no daemon caller yet. Returns the number of tranches fired.
 
@@ -432,6 +443,7 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
             reference_qty=m.reference_qty,
             owned=live.quantity,
             already_fired=m.already_fired,
+            lattice=lattice,
             # The realised entry the #1112 cost gate measures from — already in
             # hand from the position read above, so no extra broker I/O.
             realised_entry=live.avg_price,
@@ -444,6 +456,7 @@ def run_live_exits(broker: Broker, feed: PriceFeed, managed: list[ManagedExit]) 
                 sl_leg=sl,
                 stop_price=m.stop_price,
                 request_ref=f"u{m.uic}",
+                lattice=lattice,
             )
             if result.sold:
                 telemetry = _fire_telemetry(point, ex, sell_order_id=result.sell_order_id)
