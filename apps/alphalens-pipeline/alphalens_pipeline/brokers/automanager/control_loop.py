@@ -5161,7 +5161,25 @@ def _check_fee_floor(
     fee_bps = _estimate_round_trip_fee_bps(plan, fx, instrument_currency=instrument_currency)
     model = "per-tier"
     if fee_bps is None:
+        # FAIL-OPEN, deliberately — and NOT the same class as the malformed-cap
+        # branch above, which fails CLOSED. That one is an operator typo in
+        # configuration: the floor is live but unreadable, so refusing is the
+        # only safe answer. THIS one is a plan that honestly prices to nothing
+        # — the only shape that reaches here is an all-zero-qty tier set (gross
+        # 0), because `compute_setup_plan` raises TradeSetupNotPlannableError
+        # for anything less. Such a plan places NO order: `classify` yields no
+        # tiers and `_place_pick` returns before `_place_tiers` ("every entry
+        # tier sized to zero shares"). So passing it here costs nothing, and
+        # refusing it would attribute the refusal to the fee floor instead of
+        # to the sizing that actually produced it. Logged so a LIVE rail never
+        # takes this path silently.
         model = "aggregate"
+        logger.warning(
+            "fee floor: %s — per-tier model could not price the plan (gross %.2f), "
+            "falling back to the aggregate model",
+            ticker,
+            notional,
+        )
         fee_bps = round_trip_fee_bps(
             notional,
             fx_applies=fx is not None,
@@ -5225,7 +5243,10 @@ def _estimate_round_trip_fee_bps(
     entry_fees = sum(_fill_fee(t.qty, t.limit_price) for t in entry_tiers if t.qty > 0)
     tranches = getattr(plan, "tp_tranches", None) or ()
     if tranches:
-        total_qty = sum(t.qty for t in entry_tiers)
+        # Same `qty > 0` filter as entry_fees above. Zero-qty tiers add zero
+        # either way; keeping the two sums written the same way stops a reader
+        # hunting for a difference that is not there.
+        total_qty = sum(t.qty for t in entry_tiers if t.qty > 0)
         exit_fees = sum(
             _fill_fee(total_qty * t.tranche_pct / 100.0, t.target_price) for t in tranches
         )

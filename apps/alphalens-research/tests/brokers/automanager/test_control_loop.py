@@ -1221,19 +1221,28 @@ class TestFeeFloorCountsChargeableOrders(unittest.TestCase):
     def test_three_tier_ladder_refused_where_the_two_fill_model_admits(self) -> None:
         # Real SMG geometry. Aggregate: (2x$1 + 0.5% x 332.09)/332.09 = 110.2 bps.
         # Per-tier:  (3x$1 + 3x$1 + 0.5% x 332.09)/332.09 = 230.67 bps (journaled).
-        # A 150 bps cap sits between them, so it discriminates the two models.
+        # Bracket the gate between the two models rather than matching the
+        # formatted message: a 150 bps cap must refuse, a 250 bps cap must
+        # admit. Only the per-tier number lands between them.
+        plan = _smg_fee_plan()
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "150"}, clear=True):
-            message = cl._check_fee_floor(_smg_fee_plan(), object(), ticker="SMG")
+            message = cl._check_fee_floor(plan, object(), ticker="SMG")
         self.assertIsNotNone(message, "a 3-tier ladder pays 3 entry minimums, not 1")
         assert message is not None
         self.assertIn("SMG", message)
-        self.assertIn("230.7", message)
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "250"}, clear=True):
+            self.assertIsNone(cl._check_fee_floor(plan, object(), ticker="SMG"))
 
     def test_single_tier_plan_is_priced_identically_by_both_models(self) -> None:
         # ETSY 2026-08-19: one chargeable tier, gross $67.62, journal 345.77 bps.
         # With a single tier the mirrored exit makes the per-tier model EXACTLY
         # the two-fill model — the control that pins ladder depth as the only
         # source of the divergence above.
+        #
+        # DELIBERATELY NOT a discriminator: this passes against the pre-#1123
+        # code too, by construction. It is a regression guard — it fails if
+        # anyone changes the mirrored-exit assumption, which is what makes the
+        # single-tier equivalence true. Do not delete it as "testing nothing".
         plan = SetupPlan(
             suggested_size_pct=1.0,
             scale_factor=1.0,
@@ -1247,15 +1256,22 @@ class TestFeeFloorCountsChargeableOrders(unittest.TestCase):
             ),
             tp_tranches=(),
         )
+        gross = 67.62
+        self.assertAlmostEqual(
+            cl._estimate_round_trip_fee_bps(plan, object()),
+            cl.round_trip_fee_bps(gross, fx_applies=True),
+            msg="one chargeable tier makes the two models the same model",
+        )
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "300"}, clear=True):
-            message = cl._check_fee_floor(plan, object(), ticker="ETSY")
-        self.assertIsNotNone(message)
-        assert message is not None
-        self.assertIn("345.8", message)
+            self.assertIsNotNone(cl._check_fee_floor(plan, object(), ticker="ETSY"))
+        with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "400"}, clear=True):
+            self.assertIsNone(cl._check_fee_floor(plan, object(), ticker="ETSY"))
 
     def test_unpriceable_plan_falls_back_to_the_aggregate_model(self) -> None:
         # No tiers -> the per-tier estimate is an honest None. The floor must
-        # still answer (fall back), never crash the tick on a degenerate plan.
+        # still answer (fall back), never crash the tick on a degenerate plan,
+        # and must SAY SO — a LIVE rail never takes the fallback silently.
+        # `assertLogs` cannot pass vacuously: it fails when nothing is logged.
         plan = SetupPlan(
             suggested_size_pct=1.0,
             scale_factor=1.0,
@@ -1268,7 +1284,9 @@ class TestFeeFloorCountsChargeableOrders(unittest.TestCase):
             tp_tranches=(),
         )
         with mock.patch.dict("os.environ", {MAX_FEE_BPS_ENV: "150"}, clear=True):
-            self.assertIsNone(cl._check_fee_floor(plan, None, ticker="KO"))
+            with self.assertLogs(cl.logger, level="WARNING") as logs:
+                self.assertIsNone(cl._check_fee_floor(plan, None, ticker="KO"))
+        self.assertTrue(any("aggregate" in line for line in logs.output))
 
 
 class _RecordingBroker(_PlaceBroker):
