@@ -31,6 +31,16 @@ silently changed live trading behaviour. Issue #1121.
 
 ## Install
 
+**First time on a host that already has drop-ins, delete the untracked ones.**
+A leftover file wins over everything here: systemd orders drop-ins lexically,
+and an unprefixed name like `entry-trail.conf` sorts AFTER every numbered file
+in this directory. Copying these files on top of it changes nothing, and the
+host keeps being governed by a file no one can read from the repository — the
+exact situation this directory exists to end.
+
+    ls ~/.config/systemd/user/alphalens-broker-manager-live.service.d/
+    # anything not named NN-*.conf is untracked: remove it
+
     cp -r deploy/systemd/alphalens-broker-manager-live.service.d ~/.config/systemd/user/
     systemctl --user daemon-reload
     systemctl --user restart alphalens-broker-manager-live.service
