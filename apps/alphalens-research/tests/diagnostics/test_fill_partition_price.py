@@ -27,6 +27,11 @@ from tests.incident_1112_fixture import (
 
 BPS = 1e4
 
+# The exit geometry shared by the walk tests: a three-tier ladder at 100 / 97 / 95
+# with the disaster stop at 90 and one take-profit at 130.
+WALK_STOP = 90.0
+WALK_TP = 130.0
+
 # The issue prose's number. Its own quoted prices give 23.43, so this is here
 # only so a test can assert the constant is NOT it.
 ISSUE_PROSE_OVERSHOOT_BPS = 40.0
@@ -174,6 +179,169 @@ class TestEntryFillWalk(unittest.TestCase):
             overshoot_bps=0.0,
         )
         self.assertEqual([f.bar_ts_ms for f in fills], [1_000, 2_000])
+
+
+def _ohlc(ts_ms: int, low: float, high: float) -> dict:
+    return {"t": ts_ms, "l": low, "h": high, "c": (low + high) / 2.0, "o": low}
+
+
+def _walk_setup() -> dict:
+    return {
+        "status": "OK",
+        "disaster_stop": WALK_STOP,
+        "entry_tiers": [
+            {"limit": 100.0, "alloc_pct": 20.0},
+            {"limit": 97.0, "alloc_pct": 30.0},
+            {"limit": 95.0, "alloc_pct": 50.0},
+        ],
+        "tp_tranches": [{"target": WALK_TP, "tranche_pct": 100.0}],
+    }
+
+
+class TestTheWalkStopsWhenThePositionExits(unittest.TestCase):
+    """A tier cannot fill after the position has already left the market.
+
+    ``ladder_replay._LadderWalk.step`` returns early once ``exit_reached`` is set,
+    because "a post-exit dip must NOT fill an unused deeper tier and retroactively
+    change blended entry / filled_frac / realized_r". The instrument reads the
+    store's ``realized_r``, which the engine computed against ITS fill set, so a
+    walk that keeps filling after the exit files that realised number under the
+    wrong partition and inflates P(E2 | E1).
+    """
+
+    TIERS = _tiers(("E1", 100.0, 20.0), ("E2", 97.0, 30.0), ("E3", 95.0, 50.0))
+
+    # Each path is walked bar by bar and compared against the replay engine on the
+    # SAME bars. Multi-bar by design: a single-bar comparison can never see an exit.
+    PATHS = {
+        "take_profit_then_a_deep_dip": [(99.0, 100.5), (100.0, 131.0), (94.0, 99.0)],
+        "stop_out_then_a_deeper_dip": [(99.0, 100.5), (89.0, 99.0), (80.0, 85.0)],
+        "dip_deepens_while_the_position_is_still_open": [(99.0, 100.5), (96.0, 99.0), (94.0, 96.5)],
+        "one_bar_gapping_through_the_whole_ladder": [(94.0, 101.0)],
+        "price_never_reaches_the_shallowest_tier": [(101.0, 105.0), (102.0, 106.0)],
+    }
+
+    def _exits(self, *, position_expiry_ms: int | None = None) -> fp.ExitLevels:
+        return fp.ExitLevels(
+            disaster_stop=WALK_STOP,
+            tp_targets=(WALK_TP,),
+            position_expiry_ms=position_expiry_ms,
+        )
+
+    def test_a_post_exit_dip_does_not_fill_a_deeper_tier(self) -> None:
+        bars = [_ohlc(1_000, 99.0, 100.5), _ohlc(2_000, 100.0, 131.0), _ohlc(3_000, 94.0, 99.0)]
+        fills = fp.walk_entry_fills(
+            self.TIERS,
+            bars,
+            fill_model=fp.FILL_MODEL_TOUCH,
+            overshoot_bps=0.0,
+            exit_levels=self._exits(),
+        )
+        self.assertEqual(tuple(f.tier_id for f in fills), ("E1",))
+        self.assertEqual(fp.partition_of(f.tier_id for f in fills), fp.PARTITION_FIRST_ONLY)
+
+    def test_the_walk_agrees_with_the_replay_engine_over_a_multi_bar_path(self) -> None:
+        setup = _walk_setup()
+        for name, path in self.PATHS.items():
+            with self.subTest(path=name):
+                bars = [_ohlc(1_000 * (i + 1), low, high) for i, (low, high) in enumerate(path)]
+                engine = replay_ladder(setup, bars).entries_filled
+                walked = fp.walk_entry_fills(
+                    self.TIERS,
+                    bars,
+                    fill_model=fp.FILL_MODEL_TOUCH,
+                    overshoot_bps=0.0,
+                    exit_levels=self._exits(),
+                )
+                self.assertEqual(tuple(f.tier_id for f in walked), engine)
+
+    def test_a_tier_reached_on_the_exit_bar_itself_still_fills(self) -> None:
+        # The engine fills entries BEFORE it resolves the stop, so a gap-down bar
+        # that both fills a tier and pierces the stop counts the fill.
+        bars = [_ohlc(1_000, 89.0, 101.0)]
+        fills = fp.walk_entry_fills(
+            self.TIERS,
+            bars,
+            fill_model=fp.FILL_MODEL_TOUCH,
+            overshoot_bps=0.0,
+            exit_levels=self._exits(),
+        )
+        self.assertEqual(tuple(f.tier_id for f in fills), ("E1", "E2", "E3"))
+        self.assertEqual(
+            tuple(f.tier_id for f in fills), replay_ladder(_walk_setup(), bars).entries_filled
+        )
+
+    def test_a_time_stopped_position_stops_filling_too(self) -> None:
+        bars = [_ohlc(1_000, 99.0, 100.5), _ohlc(2_000, 99.5, 100.0), _ohlc(3_000, 94.0, 99.0)]
+        fills = fp.walk_entry_fills(
+            self.TIERS,
+            bars,
+            fill_model=fp.FILL_MODEL_TOUCH,
+            overshoot_bps=0.0,
+            exit_levels=self._exits(position_expiry_ms=2_000),
+        )
+        self.assertEqual(tuple(f.tier_id for f in fills), ("E1",))
+        engine = replay_ladder(_walk_setup(), bars, position_expiry_ms=2_000)
+        self.assertEqual(tuple(f.tier_id for f in fills), engine.entries_filled)
+
+    def test_an_exit_cannot_fire_before_anything_filled(self) -> None:
+        # No position, no exit: a bar below the disaster stop with nothing filled
+        # must not end the walk, or a gap-down open would freeze the ladder.
+        bars = [_ohlc(1_000, 101.0, 102.0), _ohlc(2_000, 96.0, 99.0)]
+        fills = fp.walk_entry_fills(
+            self.TIERS,
+            bars,
+            fill_model=fp.FILL_MODEL_TOUCH,
+            overshoot_bps=0.0,
+            exit_levels=fp.ExitLevels(disaster_stop=103.0, tp_targets=(), position_expiry_ms=None),
+        )
+        self.assertEqual(tuple(f.tier_id for f in fills), ("E1", "E2"))
+
+    def test_the_no_exit_sentinel_is_an_explicit_choice_not_a_default(self) -> None:
+        bars = [_ohlc(1_000, 99.0, 100.5), _ohlc(2_000, 100.0, 131.0), _ohlc(3_000, 94.0, 99.0)]
+        unaware = fp.walk_entry_fills(
+            self.TIERS,
+            bars,
+            fill_model=fp.FILL_MODEL_TOUCH,
+            overshoot_bps=0.0,
+            exit_levels=fp.NO_EXIT,
+        )
+        self.assertEqual(tuple(f.tier_id for f in unaware), ("E1", "E2", "E3"))
+        # ... and the caller cannot get that reading by accident.
+        with self.assertRaises(TypeError):
+            fp.walk_entry_fills(self.TIERS, bars, fill_model=fp.FILL_MODEL_TOUCH, overshoot_bps=0.0)
+
+
+class TestExitLevelsFromSetup(unittest.TestCase):
+    def test_the_stop_and_every_take_profit_target_are_read_from_the_brief(self) -> None:
+        levels = fp.exit_levels_from_setup(
+            {
+                "status": "OK",
+                "disaster_stop": WALK_STOP,
+                "tp_tranches": [
+                    {"target": 110.0, "tranche_pct": 50.0},
+                    {"target": WALK_TP, "tranche_pct": 50.0},
+                ],
+            },
+            position_expiry_ms=42,
+        )
+        self.assertEqual(levels.disaster_stop, WALK_STOP)
+        self.assertEqual(levels.tp_targets, (110.0, WALK_TP))
+        self.assertEqual(levels.position_expiry_ms, 42)
+
+    def test_a_setup_without_exits_yields_the_no_exit_sentinel_shape(self) -> None:
+        for setup in (None, {}, {"disaster_stop": None, "tp_tranches": []}):
+            with self.subTest(setup=setup):
+                levels = fp.exit_levels_from_setup(setup, position_expiry_ms=None)
+                self.assertIsNone(levels.disaster_stop)
+                self.assertEqual(levels.tp_targets, ())
+
+    def test_a_malformed_stop_is_read_as_absent_rather_than_raising(self) -> None:
+        levels = fp.exit_levels_from_setup(
+            {"disaster_stop": "n/a", "tp_tranches": [{"target": "n/a"}]}, position_expiry_ms=None
+        )
+        self.assertIsNone(levels.disaster_stop)
+        self.assertEqual(levels.tp_targets, ())
 
 
 class TestPartialFillWeighting(unittest.TestCase):

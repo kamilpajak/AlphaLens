@@ -92,19 +92,22 @@ def _write_store(store_dir: Path, rows: list[dict]) -> None:
     pd.DataFrame(rows).to_parquet(store_dir / f"{BRIEF_DATE.isoformat()}.parquet")
 
 
-def _write_bars(store_dir: Path, ticker: str, lows: list[float]) -> None:
+def _write_bars(
+    store_dir: Path, ticker: str, lows: list[float], highs: list[float] | None = None
+) -> None:
     arrival = session_on_or_after(BRIEF_DATE, EXCHANGE)
     open_ms = int(session_open_utc(arrival, EXCHANGE).timestamp() * 1000)
+    tops = highs if highs is not None else [low + 1.0 for low in lows]
     bars = [
         {
             "t": open_ms + i * 60_000,
             "o": low + 0.5,
-            "h": low + 1.0,
+            "h": high,
             "l": low,
             "c": low + 0.5,
             "v": 1000.0,
         }
-        for i, low in enumerate(lows)
+        for i, (low, high) in enumerate(zip(lows, tops, strict=True))
     ]
     bars_dir = store_dir / "bars"
     bars_dir.mkdir(parents=True, exist_ok=True)
@@ -334,6 +337,35 @@ class TestDeeperTierTimingComesFromTheBars(MeasureFillPartitionTestCase):
         )
         self.assertEqual(touch[0].filled_tiers, ("E1",))
         self.assertEqual(through[0].filled_tiers, ())
+
+
+class TestDriverIsExitAware(MeasureFillPartitionTestCase):
+    """The driver must hand the walk the exits the brief specified.
+
+    Without them a dip AFTER the position closed fills an unused deeper tier, and
+    the row's realised return -- which the engine computed on its own fill set --
+    is filed under the wrong partition.
+    """
+
+    def test_a_dip_after_the_take_profit_does_not_move_the_row_into_mixed(self) -> None:
+        _write_brief(self.fx.briefs, ["AAA"])
+        _write_store(self.fx.store, [_store_row("AAA", sequence_str="E1->TP1")])
+        # bar 1 fills E1; bar 2 takes the 130 target; bar 3 dips through E2 and E3.
+        _write_bars(self.fx.store, "AAA", [99.0, 100.0, 94.0], highs=[100.5, 131.0, 99.0])
+        opportunities, coverage = self._collect()
+        self.assertEqual(opportunities[0].filled_tiers, ("E1",))
+        self.assertEqual(coverage["rows_walk_disagrees_with_store"], 0)
+        cells = {p["partition"]: p for p in self._payload()["partitions"]}
+        self.assertEqual(cells[fp.PARTITION_FIRST_ONLY]["n"], 1)
+        self.assertEqual(cells[fp.PARTITION_MIXED]["n"], 0)
+
+    def test_a_dip_while_the_position_is_still_open_does_fill_the_deeper_tier(self) -> None:
+        # The mirror case, so the fix cannot be "never fill a deeper tier".
+        _write_brief(self.fx.briefs, ["AAA"])
+        _write_store(self.fx.store, [_store_row("AAA", sequence_str="E1->E2->TP1")])
+        _write_bars(self.fx.store, "AAA", [99.0, 96.0], highs=[100.5, 99.0])
+        opportunities, _ = self._collect()
+        self.assertEqual(opportunities[0].filled_tiers, ("E1", "E2"))
 
 
 class TestDriverCli(MeasureFillPartitionTestCase):
