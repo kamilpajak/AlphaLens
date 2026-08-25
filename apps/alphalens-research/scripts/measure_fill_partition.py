@@ -80,9 +80,12 @@ COVERAGE_KEYS = (
 PAYLOAD_NOTES = (
     "deep_only is empty in the offline replay by construction: the bar walk fills"
     " every tier a bar's low reaches, and tiers descend in price, so only prefix"
-    " fill sets can occur. The live rail CAN produce a deep-only set, because"
+    " fill sets can occur. Only the live rail produces a deep-only set, because"
     " issue #1112 refuses to arm a shallow tier whose own take-profit target sits"
-    " at or below a realistic fill.",
+    " at or below a realistic fill -- and that refusal needs the tier's SHARE"
+    " COUNT, which the population-ladder store does not record, so it cannot be"
+    " replayed here. Read the deep_only zero as 'not measured', never as 'never"
+    " happens'.",
     "The unfilled partition has no realised R because no capital was deployed."
     " The forgone_excess_return beside it is the market-excess move over the same"
     " window and is a plain return fraction, so the two are NOT comparable: they"
