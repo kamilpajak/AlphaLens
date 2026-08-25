@@ -106,6 +106,46 @@ class TestQuantizeDown(unittest.TestCase):
         # multiple of 0.05. This is the distinction ccxt users routinely trip on.
         self.assertAlmostEqual(quantize_down(1.03, NICKEL), 1.00, places=9)
 
+    def test_a_large_quantity_just_below_a_step_boundary_does_not_snap_up(self) -> None:
+        # The tolerance that absorbs representation error must not GROW past a
+        # step. A tolerance stated as a fixed fraction of the quantity does
+        # exactly that: at a million shares, 1e-12 of the quantity is 1e-6 —
+        # wide enough to swallow a real 5e-7 gap and hand back a share that is
+        # not held. Representation error scales with the float's own
+        # resolution, so the tolerance must too.
+        qty = 1_000_000.0 - 5e-7
+        self.assertEqual(quantize_down(qty, WHOLE), 999_999.0)
+        self.assertLess(quantize_down(qty, WHOLE), qty)
+
+    def test_the_slack_can_never_reach_a_step(self) -> None:
+        # The honest statement of the safety property, and the reason the
+        # tolerance is stated in ULPs. Absorbing representation error means the
+        # result CAN exceed the input — but only by the float's own resolution
+        # there, ~7e-15 of the quantity. Two bounds, both pinned:
+        #
+        #   1. the overshoot stays proportional to the QUANTITY, so it does not
+        #      grow relative to itself the way a fixed relative tolerance does;
+        #   2. it stays far below half a STEP, which is the unit that matters —
+        #      crossing one is selling a share that is not held. It would take
+        #      ~1e14 steps' worth of position before the slack got that wide.
+        for lattice in (WHOLE, MILLI, NICKEL):
+            for qty in (0.9999999999, 999.9999999999, 9_214_075.715999965, 1e7 - 1e-9):
+                with self.subTest(step=lattice.step, qty=qty):
+                    overshoot = quantize_down(qty, lattice) - qty
+                    self.assertLess(overshoot, abs(qty) * 1e-13)
+                    self.assertLess(overshoot, lattice.step / 2.0)
+
+    def test_the_no_exceed_property_holds_across_magnitudes(self) -> None:
+        # Same trap swept: for each lattice, a value one hair below every
+        # decade boundary. Random draws never land here, which is why the
+        # original sweep measured a clean zero and still shipped the defect.
+        for lattice in (WHOLE, MILLI, NICKEL):
+            for decade in (1e2, 1e3, 1e4, 1e5, 1e6, 1e7):
+                for gap in (5e-7, 1e-6, 1e-4):
+                    qty = decade - gap
+                    with self.subTest(step=lattice.step, qty=qty):
+                        self.assertLessEqual(quantize_down(qty, lattice), qty)
+
 
 class TestPredicates(unittest.TestCase):
     def test_same_quantity_is_half_a_step(self) -> None:
@@ -187,6 +227,14 @@ class TestSplitPosition(unittest.TestCase):
         parts = split_position(1.0, (1 / 3, 1 / 3, 1 / 3), WHOLE)
         self.assertAlmostEqual(sum(parts), 1.0, places=9)
 
+    def test_the_parts_carry_no_float_dust(self) -> None:
+        # `quantize_down` rounds to the venue precision so a caller never sees
+        # `3.0000000000000004` on the wire; the split has to agree, or the same
+        # share count reads differently depending on which function produced it.
+        for part in split_position(0.7, (1 / 3, 1 / 3, 1 / 3), MILLI):
+            with self.subTest(part=part):
+                self.assertEqual(part, round(part, MILLI.precision))
+
     def test_never_splits_more_than_the_position_holds(self) -> None:
         for qty in (0.669, 1.0, 6.0, 27.0):
             for lattice in (WHOLE, MILLI):
@@ -206,6 +254,27 @@ class TestLatticeConstruction(unittest.TestCase):
         # Caught once, at construction, rather than assumed at 50 call sites.
         with self.assertRaises(ValueError):
             QuantityLattice(step=0.001, min_qty=0.001, precision=2)
+
+    def test_a_step_that_rounds_to_zero_units_is_refused(self) -> None:
+        # The self-contradiction the first check let through: a 1e-10 step at
+        # zero decimal places is "within 1e-9 of an integer" — the integer
+        # being ZERO. The lattice was accepted and every later division by the
+        # step count raised ZeroDivisionError out of a pure function, past
+        # every `except BrokerError` on the rail. A lattice must be at least
+        # one whole unit wide.
+        with self.assertRaises(ValueError):
+            QuantityLattice(step=1e-10, min_qty=0.0, precision=0)
+
+    def test_a_refused_lattice_cannot_reach_the_arithmetic(self) -> None:
+        # Stated as the property rather than the instance: whatever the venue
+        # says, either construction refuses it or the arithmetic runs.
+        for step, precision in ((1e-10, 0), (1e-4, 2), (0.5, 0)):
+            with self.subTest(step=step, precision=precision):
+                try:
+                    lattice = QuantityLattice(step=step, min_qty=0.0, precision=precision)
+                except ValueError:
+                    continue
+                self.assertIsInstance(lattice_units(1.0, lattice), int)
 
     def test_lattice_units_counts_whole_steps(self) -> None:
         self.assertEqual(lattice_units(6.0, WHOLE), 6)

@@ -46,16 +46,29 @@ from dataclasses import dataclass
 # Absorbs binary-float REPRESENTATION error and nothing wider. `0.1 + 0.2` is
 # `0.30000000000000004` — an artefact roughly 1e-16 relative, which must scale
 # as `0.3`. A literal `2.9999999999` is NOT an artefact: it is a real value 1e-10
-# below three, and flooring it to `2.9` is correct. Float64 carries ~2.2e-16
-# relative resolution, so 1e-12 is generous against the former while still
-# thousands of times tighter than the latter.
+# below three, and flooring it to `2.9` is correct.
 #
-# The bound is relative because representation error grows with magnitude; an
-# absolute epsilon would be simultaneously too loose on small quantities and too
-# tight on large ones. Measured over 80k random draws across four lattices, the
-# worst upward deviation is ~5e-15 of the quantity — far below any venue step.
+# The slack is stated in ULPs — the float's OWN resolution at that magnitude —
+# rather than as a fraction of the quantity. That distinction is not cosmetic:
+# a fixed relative bound grows without limit, so at a million shares a 1e-12
+# fraction is 1e-6, wide enough to swallow a real gap and hand back a share
+# that is not held. An ULP-stated bound tracks representation error by
+# construction and can never reach a step, which is what makes the no-exceed
+# property in `quantize_down` true rather than approximately true.
+#
+# 32 ULPs leaves room for a value that arrived through a few arithmetic
+# operations while staying ~1e14 times tighter than any venue step.
+_ULP_SLACK = 32
+# `step`-relative, therefore BOUNDED — safe to use for the membership and
+# minimum comparisons, which ask about a distance from a lattice point rather
+# than about the magnitude of the quantity itself.
 _REL_TOL = 1e-12
 _ABS_TOL = 1e-15
+
+
+def _slack(value: float) -> float:
+    """Upward slack allowed at ``value``: its own representation error, no wider."""
+    return max(math.ulp(abs(value)) * _ULP_SLACK, _ABS_TOL)
 
 
 @dataclass(frozen=True)
@@ -116,17 +129,25 @@ class QuantityLattice:
         # says quantities carry. Caught ONCE here rather than assumed at every
         # call site, because `precision` is what makes the arithmetic exact.
         scaled_step = self.step * (10**self.precision)
-        if abs(scaled_step - round(scaled_step)) > 1e-9:
+        step_units = round(scaled_step)
+        # `step_units <= 0` is its own refusal and not a special case of the
+        # nearness check: a 1e-10 step at zero decimals IS within 1e-9 of an
+        # integer — the integer being ZERO. Accepting it made every later
+        # division by the step count raise ZeroDivisionError out of a pure
+        # function, past every `except BrokerError` on the rail. A lattice is
+        # at least one whole unit wide or it is not a lattice.
+        if step_units <= 0 or abs(scaled_step - step_units) > 1e-9:
             raise ValueError(
                 f"step {self.step!r} is not expressible at precision "
-                f"{self.precision!r} — the venue's own numbers disagree"
+                f"{self.precision!r} as a positive whole number of units "
+                f"— the venue's own numbers disagree"
             )
 
 
 def _scaled_units(qty: float, lattice: QuantityLattice) -> int:
     """``abs(qty)`` in units of ``10**-precision``, floored, float error absorbed."""
     scaled = abs(qty) * (10**lattice.precision)
-    return math.floor(scaled + abs(scaled) * _REL_TOL + _ABS_TOL)
+    return math.floor(scaled + _slack(scaled))
 
 
 def _step_units(lattice: QuantityLattice) -> int:
@@ -260,7 +281,12 @@ def split_position(
     never more than is held.
     """
     units = lattice_units(qty, lattice)
-    return tuple(u * lattice.step for u in allocate_units(units, fractions))
+    # Rounded to the venue precision for the same reason `quantize_down` is:
+    # the same share count must not read differently depending on which
+    # function produced it.
+    return tuple(
+        round(u * lattice.step, lattice.precision) for u in allocate_units(units, fractions)
+    )
 
 
 def quantity_refusal(

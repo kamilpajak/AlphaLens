@@ -297,6 +297,19 @@ def decompose_setup_plan(
     return brackets
 
 
+class QuantityLatticeUnavailableError(TradeSetupNotPlannableError):
+    """The venue stated NO usable quantity step. Distinct from stating a bad one.
+
+    Both refuse a pick, so both are :class:`TradeSetupNotPlannableError` and the
+    daemon's existing except clause covers them unchanged. They are separate
+    types because one boundary must tell them apart: the Saxo wire verifier
+    degrades to pass-through on absence (a thin payload must not kill a
+    placement path that works today) but has to REFUSE a contradiction — a
+    venue whose own numbers disagree is exactly the payload that needed
+    verifying. One catch for both would silently disable it.
+    """
+
+
 def build_quantity_lattice(rules: InstrumentQuantityRules) -> QuantityLattice:
     """Turn what the venue SAID into the lattice the arithmetic may use.
 
@@ -323,7 +336,7 @@ def build_quantity_lattice(rules: InstrumentQuantityRules) -> QuantityLattice:
     """
     step = rules.quantity_step
     if step is None or not math.isfinite(step) or step <= 0.0:
-        raise TradeSetupNotPlannableError(
+        raise QuantityLatticeUnavailableError(
             f"instrument {rules.broker_instrument_id!r} reports no usable quantity step "
             f"({step!r}) — refusing to size against a guessed lattice "
             f"(policy: {_MISSING_QUANTITY_RULES_POLICY})"

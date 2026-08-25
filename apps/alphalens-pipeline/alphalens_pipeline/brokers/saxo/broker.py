@@ -1793,19 +1793,34 @@ class SaxoBroker:
         through untouched. Refusing here would kill a placement path that works
         today, and "this venue told us nothing" is a sizing-time decision that
         belongs where it can refuse one pick rather than one order.
+
+        ONLY absence degrades. A venue that states a lattice contradicting
+        itself (a 0.001 step at two decimal places) is REFUSED — that payload
+        is the one that most needed verifying, and a catch wide enough to cover
+        both would turn this method off exactly there.
         """
-        from alphalens_pipeline.brokers.execution import build_quantity_lattice
+        from alphalens_pipeline.brokers.execution import (
+            QuantityLatticeUnavailableError,
+            build_quantity_lattice,
+        )
 
         rules = SaxoBroker._quantity_rules_from_details(details)
         try:
             lattice = build_quantity_lattice(rules)
-        except TradeSetupNotPlannableError:
+        except QuantityLatticeUnavailableError:
             logger.debug(
                 "quantity verification skipped for %s: instrument %s states no usable lattice",
                 label,
                 rules.broker_instrument_id or "?",
             )
             return qty
+        except TradeSetupNotPlannableError as exc:
+            # Stated but self-contradictory. Refused in the wire's own currency
+            # (`OrderRejectedError`), because a sizing-time exception escaping a
+            # placement path is not covered by the `except BrokerError` around it.
+            raise OrderRejectedError(
+                f"{label}={qty!r} cannot be verified on this venue: {exc}"
+            ) from exc
 
         refusal = quantity_refusal(qty, lattice)
         if refusal is not None:

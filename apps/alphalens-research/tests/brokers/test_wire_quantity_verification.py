@@ -88,6 +88,22 @@ class TestWireVerificationDegradesWhenTheVenueSaysNothing(unittest.TestCase):
             with self.subTest(details=details):
                 self.assertEqual(SaxoBroker._verify_quantity(7, details, label="qty"), 7)
 
+    def test_a_venue_that_contradicts_itself_is_refused_not_degraded(self) -> None:
+        # "The venue said nothing" and "the venue's own numbers disagree" are
+        # different failures and must not share a catch. Absence degrades — a
+        # working placement path must not die because a payload is thin.
+        # Contradiction is a refusal: a 0.001 step at two decimal places is not
+        # a lattice, and passing the quantity through would silently disable
+        # wire verification on exactly the payload that needed it most.
+        contradictory = {
+            "Uic": 1,
+            "IncrementSize": 0.001,
+            "AmountDecimals": 2,
+            "MinimumTradeSize": 0.001,
+        }
+        with self.assertRaises(OrderRejectedError):
+            SaxoBroker._verify_quantity(0.665, contradictory, label="qty")
+
     def test_a_fractional_venue_accepts_its_own_fractions(self) -> None:
         self.assertEqual(SaxoBroker._verify_quantity(0.669, _FRACTIONAL, label="qty"), 0.669)
         with self.assertRaises(OrderRejectedError):
