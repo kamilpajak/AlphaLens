@@ -48,6 +48,7 @@ from typing import Any
 from broker_contract.exit_geometry.levels import ceiling_from_52w_high
 
 from alphalens_pipeline.feedback.ladder_replay import (
+    AnchorMode,
     realized_r_fill_anchored,
     replay_ladder_atr_bracket,
     replay_ladder_breakeven,
@@ -97,7 +98,7 @@ class BreakevenLens:
     # module-level default -- an atr_bracket lens that leaves it None is
     # REFUSED at dispatch, because a what-if figure must name the policy it
     # replays. ``None`` on every other kind.
-    anchor_mode: str | None = None
+    anchor_mode: AnchorMode | None = None
     preregistered_ref: str | None = None  # provenance (design-memo section), display-only
 
 
@@ -226,7 +227,7 @@ def _lens_realized_r(
         return replay_ladder_atr_bracket(
             trade_setup,
             bars,
-            anchor=lens.anchor_mode,  # type: ignore[arg-type]
+            anchor=lens.anchor_mode,
             stop_atr_mult=(
                 lens.stop_atr_mult
                 if lens.stop_atr_mult is not None
