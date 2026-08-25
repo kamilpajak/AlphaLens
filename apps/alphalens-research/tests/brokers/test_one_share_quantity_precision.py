@@ -30,10 +30,20 @@ from pathlib import Path
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 PIPELINE = WORKSPACE_ROOT / "alphalens-pipeline" / "alphalens_pipeline"
 BROKER_CONTRACT = WORKSPACE_ROOT / "alphalens-broker-contract" / "broker_contract"
+TESTS = WORKSPACE_ROOT / "alphalens-research" / "tests"
 # Both production trees are scanned. The contract layer is not exempt just
 # because it OWNS the constant — a second numeric copy there would be the
 # same defect one layer up.
-SCAN_ROOTS = (PIPELINE, BROKER_CONTRACT)
+#
+# THE TEST TREE IS SCANNED TOO, and that is not tidiness. A copy here does not
+# mis-size an order; it decides what the suite can OBSERVE. The acceptance
+# `FakeBroker` carried its own `0.5` and deleted any position at or below it,
+# so measured on this tree: selling 0.6 of a 1.0-share position — leaving 0.4
+# shares with no stop — made the position vanish entirely, indistinguishable
+# from a clean close. A fractional rail that sold more than it held would have
+# gone GREEN. A false instrument is worse than a missing one, because it
+# reports success.
+SCAN_ROOTS = (PIPELINE, BROKER_CONTRACT, TESTS)
 CANONICAL = WORKSPACE_ROOT / "alphalens-broker-contract" / "broker_contract" / "constants.py"
 ALIAS_SITE = WORKSPACE_ROOT / "alphalens-broker-contract" / "broker_contract" / "contract.py"
 
@@ -141,6 +151,7 @@ class TestOneShareQuantityPrecision(unittest.TestCase):
         for expected in (
             Path("alphalens-pipeline/alphalens_pipeline/brokers/automanager/live_exit_engine.py"),
             Path("alphalens-broker-contract/broker_contract/constants.py"),
+            Path("alphalens-research/tests/brokers/automanager/acceptance/fake_broker.py"),
         ):
             self.assertIn(expected, scanned, f"{expected} is not being scanned")
 

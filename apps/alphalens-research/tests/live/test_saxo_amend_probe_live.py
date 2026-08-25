@@ -57,6 +57,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from broker_contract.contract import _QTY_EPS
+
 from tests.live import PermanentProbeError, TransientProbeError, run_probes
 
 _LIVE_FLAG = "SAXO_LIVE_AMEND_PROBE"
@@ -78,7 +80,6 @@ _STOP_START_QTY = 1
 # stop ref must be compact. The amend body carries NO ExternalReference (only an
 # x-request-id header), but the refs stay compact + distinct anyway.
 _SAXO_EXTERNAL_REF_MAX = 50
-_QTY_EPS = 0.5
 
 WORKSPACE_ROOT = Path(__file__).resolve().parents[4]
 
