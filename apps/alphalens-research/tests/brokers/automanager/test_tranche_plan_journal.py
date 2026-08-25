@@ -23,7 +23,7 @@ def _tr(
     return TpTranchePlan(
         tranche_index=index,
         target_price=target,
-        tranche_pct=pct,
+        tranche_frac=pct,
         r_multiple=r,
         tag=tag or f"tp{index + 1}",
     )
@@ -65,21 +65,21 @@ class TestBuildTranchePlanLine(unittest.TestCase):
                 {
                     "tranche_index": 0,
                     "target_price": 16.0,
-                    "tranche_pct": 0.5,
+                    "tranche_frac": 0.5,
                     "r_multiple": 1.5,
                     "tag": "tp1",
                 },
                 {
                     "tranche_index": 1,
                     "target_price": 18.0,
-                    "tranche_pct": 0.3,
+                    "tranche_frac": 0.3,
                     "r_multiple": 1.5,
                     "tag": "tp2",
                 },
                 {
                     "tranche_index": 2,
                     "target_price": 20.0,
-                    "tranche_pct": 0.2,
+                    "tranche_frac": 0.2,
                     "r_multiple": 1.5,
                     "tag": "tp3",
                 },

@@ -2523,7 +2523,7 @@ def _exit_plan_shape_refusal(record: Mapping[str, Any], position_qty: float) -> 
     tranches, reference_qty, _stop = plan
     violation = single_full_position_tranche_violation(
         # Exactly how live_exit_engine.plan_tranche_exits sizes each tranche.
-        tranche_quantities=[round(reference_qty * t.tranche_pct) for t in tranches],
+        tranche_quantities=[round(reference_qty * t.tranche_frac) for t in tranches],
         position_qty=reference_qty,
     )
     if violation is None:
@@ -4202,7 +4202,7 @@ def _build_tranche_plan_line(
             {
                 "tranche_index": int(t.tranche_index),
                 "target_price": float(t.target_price),
-                "tranche_pct": float(t.tranche_pct),
+                "tranche_frac": float(t.tranche_frac),
                 "r_multiple": float(t.r_multiple),
                 "tag": str(t.tag),
             }
@@ -4256,7 +4256,16 @@ def fold_tranche_plans(
                 TpTranchePlan(
                     tranche_index=int(t["tranche_index"]),
                     target_price=float(t["target_price"]),
-                    tranche_pct=float(t["tranche_pct"]),
+                    # Legacy lines carry "tranche_pct". Read them as a FRACTION,
+                    # because that is what the writer meant: every tranche_plan
+                    # record on the LIVE rail was written by the geometry
+                    # producer with the literal 1.0 for "the whole position"
+                    # (verified 2026-08-25 against all three live journal
+                    # lines). Converting them as percentages would resize an
+                    # in-flight position's exit to 1% and leave the rest naked.
+                    tranche_frac=float(
+                        t["tranche_frac"] if "tranche_frac" in t else t["tranche_pct"]
+                    ),
                     r_multiple=float(t["r_multiple"]),
                     tag=str(t["tag"]),
                 )
@@ -5210,9 +5219,11 @@ def _estimate_round_trip_fee_bps(
       USD figure, gated on ``instrument_currency`` exactly like
       ``round_trip_fee_bps``.
     - ``exit_fees``: the same shape over the TP tranches, with tranche qtys
-      derived at placement as ``tranche_pct/100 x total entry qty``
-      (``TpTrancheSpec`` doctrine: tranche_pct is a PERCENTAGE 0-100, copied
-      verbatim into ``TpTranchePlan`` by ``compute_setup_plan``). When the
+      derived at placement as ``tranche_frac x total entry qty``
+      (the brief-shaped ``TpTrancheSpec.tranche_pct`` is a PERCENTAGE 0-100;
+      ``compute_setup_plan`` converts it ONCE into the plan's fraction, so
+      nothing downstream divides by 100 again — this function used to, and
+      priced the whole exit leg at 1% of the position). When the
       plan carries NO tranches (geometry-policy picks express the exit in
       ``exit_spec``, not static tranches) the estimate MIRRORS the entry fees
       — a symmetric single-exit assumption, deliberately simple over falsely
@@ -5247,9 +5258,7 @@ def _estimate_round_trip_fee_bps(
         # either way; keeping the two sums written the same way stops a reader
         # hunting for a difference that is not there.
         total_qty = sum(t.qty for t in entry_tiers if t.qty > 0)
-        exit_fees = sum(
-            _fill_fee(total_qty * t.tranche_pct / 100.0, t.target_price) for t in tranches
-        )
+        exit_fees = sum(_fill_fee(total_qty * t.tranche_frac, t.target_price) for t in tranches)
     else:
         exit_fees = entry_fees
     fx_cost = FX_ROUND_TRIP_RATE * gross if fx is not None else 0.0
@@ -5652,7 +5661,7 @@ def _geometry_tranche_ladder(exit_spec: Any) -> tuple[tuple[TpTranchePlan, ...],
         TpTranchePlan(
             tranche_index=0,
             target_price=float(geo_tp),
-            tranche_pct=1.0,
+            tranche_frac=1.0,
             r_multiple=0.0,
             tag="geometry",
         ),
