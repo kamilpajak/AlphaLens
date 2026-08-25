@@ -32,12 +32,11 @@ from unittest import mock
 
 from alphalens_pipeline.brokers.automanager import control_loop as cl
 from alphalens_pipeline.brokers.automanager import safety, service
-from broker_contract.contract import OrderStatus
+from broker_contract.contract import _QTY_EPS, OrderStatus
 from broker_contract.price_feed import PricePoint
 
 from .fake_broker import FakeBroker
 
-_QTY_EPS = 0.5
 _DEFAULT_STOP = 44.0
 _DEFAULT_TP = 59.0
 _DEFAULT_FILL = 50.0

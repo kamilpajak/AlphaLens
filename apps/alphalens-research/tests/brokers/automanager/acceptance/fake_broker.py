@@ -17,6 +17,7 @@ import dataclasses
 import datetime as dt
 
 from broker_contract.contract import (
+    _QTY_EPS,
     AccountSnapshot,
     BracketOrderRequest,
     BrokerError,
@@ -28,7 +29,6 @@ from broker_contract.contract import (
     Position,
 )
 
-_QTY_EPS = 0.5  # float-qty tolerance, mirrors contract._QTY_EPS
 _FIRST_UIC = 40000  # deterministic ticker -> uic assignment
 
 

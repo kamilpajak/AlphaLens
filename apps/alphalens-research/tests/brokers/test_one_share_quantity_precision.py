@@ -30,10 +30,20 @@ from pathlib import Path
 WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 PIPELINE = WORKSPACE_ROOT / "alphalens-pipeline" / "alphalens_pipeline"
 BROKER_CONTRACT = WORKSPACE_ROOT / "alphalens-broker-contract" / "broker_contract"
+TESTS = WORKSPACE_ROOT / "alphalens-research" / "tests"
 # Both production trees are scanned. The contract layer is not exempt just
 # because it OWNS the constant — a second numeric copy there would be the
 # same defect one layer up.
-SCAN_ROOTS = (PIPELINE, BROKER_CONTRACT)
+#
+# THE TEST TREE IS SCANNED TOO, and that is not tidiness. A copy here does not
+# mis-size an order; it decides what the suite can OBSERVE. The acceptance
+# `FakeBroker` carried its own `0.5` and deleted any position at or below it,
+# so measured on this tree: selling 0.6 of a 1.0-share position — leaving 0.4
+# shares with no stop — made the position vanish entirely, indistinguishable
+# from a clean close. A fractional rail that sold more than it held would have
+# gone GREEN. A false instrument is worse than a missing one, because it
+# reports success.
+SCAN_ROOTS = (PIPELINE, BROKER_CONTRACT, TESTS)
 CANONICAL = WORKSPACE_ROOT / "alphalens-broker-contract" / "broker_contract" / "constants.py"
 ALIAS_SITE = WORKSPACE_ROOT / "alphalens-broker-contract" / "broker_contract" / "contract.py"
 
@@ -42,7 +52,7 @@ PRECISION_NAMES = frozenset({"QTY_PRECISION", "_QTY_EPS"})
 
 
 def _value_declarations(path: Path) -> set[str]:
-    """Module-level bindings of a precision name that DECLARE a value.
+    """Bindings of a precision name that DECLARE a value, at ANY nesting depth.
 
     The rule is stated as an exemption rather than a match, because the ways to
     write ``0.5`` are unbounded while the ways to point at an existing value are
@@ -53,10 +63,30 @@ def _value_declarations(path: Path) -> set[str]:
 
         _QTY_EPS = 0.5            _QTY_EPS = float("0.5")
         _QTY_EPS = 1.0 / 2.0      _QTY_EPS = 0.25 * 2
+
+    WHY THE WALK IS NOT MODULE-LEVEL-ONLY. It was, and that was adequate while
+    only production trees were scanned: a constant there sits at module level
+    and nowhere else. Inside the test tree the missed shapes are ordinary — a
+    class attribute, a ``setUp`` assignment, a local in one test — so keeping
+    the narrow scope would have claimed a coverage the scan does not have.
+    Measured before widening, six such shapes passed undetected.
+
+    The breadth is safe because the RULE is narrow: only two specific names are
+    policed, and neither should ever be bound to a computed value anywhere, at
+    any depth. THE CONVENTION THAT MAKES THAT WORKABLE: a test that genuinely
+    needs a different tolerance — proving a lattice migration behaves, say —
+    binds it under its OWN name or builds a ``QuantityLattice``. The shared
+    name must always resolve to the shared value. Verified against the one such
+    test that exists today (the P5a lattice suite): it is not flagged, because
+    it never binds either policed name.
+
+    STILL NOT CAUGHT, and deliberately: monkeypatching the source
+    (``constants.QTY_PRECISION = 0.25``). That is a test changing the RAIL
+    rather than declaring a private copy — a different act, and a legal one.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     found: set[str] = set()
-    for node in tree.body:
+    for node in ast.walk(tree):
         targets: list[ast.expr] = []
         if isinstance(node, ast.Assign):
             targets = list(node.targets)
@@ -66,9 +96,12 @@ def _value_declarations(path: Path) -> set[str]:
             continue
         if node.value is None or isinstance(node.value, (ast.Name, ast.Attribute)):
             continue  # an alias, not a declaration
+        # A tuple target (`_QTY_EPS, OTHER = 0.5, 1`) hides the name from a
+        # check that only looks at the top-level target node.
         for target in targets:
-            if isinstance(target, ast.Name) and target.id in PRECISION_NAMES:
-                found.add(target.id)
+            for leaf in ast.walk(target):
+                if isinstance(leaf, ast.Name) and leaf.id in PRECISION_NAMES:
+                    found.add(leaf.id)
     return found
 
 
@@ -111,6 +144,18 @@ class TestOneShareQuantityPrecision(unittest.TestCase):
             "_QTY_EPS = 0.25 * 2",  # and this
             "_QTY_EPS: float = 0.5",
             "QTY_PRECISION = 0.5",
+            # The shapes that a MODULE-LEVEL-ONLY walk misses. They are exotic
+            # in production, where constants sit at module level and nowhere
+            # else — which is why the original scope was adequate. They are
+            # ordinary in TEST code, so extending the scan to the test tree
+            # without extending the walk would have claimed a coverage the
+            # scan does not have. All six were measured slipping through.
+            "class T:\n    _QTY_EPS = 0.5",
+            "class T:\n    def setUp(self):\n        self._QTY_EPS = 0.5\n        _QTY_EPS = 0.5",
+            "def f():\n    _QTY_EPS = 0.5",
+            "if True:\n    _QTY_EPS = 0.5",
+            "try:\n    _QTY_EPS = 0.5\nexcept Exception:\n    pass",
+            "_QTY_EPS, OTHER = 0.5, 1",
         )
         aliases_and_noise = (
             "_QTY_EPS = QTY_PRECISION",  # the legal re-binding
@@ -141,6 +186,7 @@ class TestOneShareQuantityPrecision(unittest.TestCase):
         for expected in (
             Path("alphalens-pipeline/alphalens_pipeline/brokers/automanager/live_exit_engine.py"),
             Path("alphalens-broker-contract/broker_contract/constants.py"),
+            Path("alphalens-research/tests/brokers/automanager/acceptance/fake_broker.py"),
         ):
             self.assertIn(expected, scanned, f"{expected} is not being scanned")
 
