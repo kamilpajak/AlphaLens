@@ -37,12 +37,14 @@ import datetime as dt
 import hashlib
 import json
 import logging
+import math
 import uuid
 from typing import Literal
 
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS
 from broker_contract.contract import BracketOrderRequest, InstrumentRef
 from broker_contract.fx import FxConversion, FxRateQuote
+from broker_contract.quantity import InstrumentQuantityRules, QuantityLattice
 from broker_contract.sizing import SetupPlan, TradeSetupNotPlannableError
 
 logger = logging.getLogger(__name__)
@@ -142,6 +144,22 @@ _MAX_TICK_ADJUSTMENT_BPS = 25.0
 # never a static hardcoded rate. The same-currency path is a strict no-op.
 _MISSING_FX_RATE_POLICY = "reject"
 
+# A venue that will not state its quantity lattice cannot be sized against.
+# Same stance as the FX rate above and for the same reason: the alternative is
+# assuming whole shares, which is exactly the assumption this workstream exists
+# to remove. Refusing one pick is cheap; silently sizing on a guess is not.
+_MISSING_QUANTITY_RULES_POLICY = "reject"
+
+# Floor the MAGNITUDE. Deliberately NOT the price side's "nearest": a sub-tick
+# price move is economically inert, a share is not, and rounding a sell UP is
+# the measured defect (round(0.669) == 1 sold a share that was not held).
+_QTY_QUANTIZE_POLICY = "floor-abs"
+
+# LotSize is advisory market structure, not a mandatory increment. A US equity
+# may carry a 100-share round lot and still accept odd lots; enforcing it would
+# refuse every ordinary order.
+_ROUND_LOT_ENFORCED = False
+
 # Belt constant: a quote older than this (local fetch clock, NOT Saxo's
 # LastUpdated — live-probed to echo the request second even on a CLOSED
 # market) is rejected. The rate is fetched synchronously per submission, so
@@ -200,6 +218,9 @@ def execution_config_version() -> str:
         "manual_order": _MANUAL_ORDER,
         "tick_quantize_policy": _TICK_QUANTIZE_POLICY,
         "max_tick_adjustment_bps": _MAX_TICK_ADJUSTMENT_BPS,
+        "missing_quantity_rules_policy": _MISSING_QUANTITY_RULES_POLICY,
+        "qty_quantize_policy": _QTY_QUANTIZE_POLICY,
+        "round_lot_enforced": _ROUND_LOT_ENFORCED,
         "missing_fx_rate_policy": _MISSING_FX_RATE_POLICY,
         "fx_rate_max_age_s": _FX_RATE_MAX_AGE_S,
         "fx_accepted_price_types": list(_FX_ACCEPTED_PRICE_TYPES),
@@ -274,6 +295,76 @@ def decompose_setup_plan(
             )
         )
     return brackets
+
+
+def build_quantity_lattice(rules: InstrumentQuantityRules) -> QuantityLattice:
+    """Turn what the venue SAID into the lattice the arithmetic may use.
+
+    The quantity sibling of :func:`build_fx_conversion`, and it sits here for
+    the same reason: the adapter reports verbatim, and THIS is where policy
+    decides what a report means. ``broker_contract`` must not carry a rule
+    about which venues are acceptable.
+
+    Absence is a refusal, never a guess (``_MISSING_QUANTITY_RULES_POLICY``).
+    Defaulting to whole shares would be indistinguishable from a venue that
+    genuinely trades whole shares — which is exactly the confusion this
+    workstream exists to remove.
+
+    Two fields get a policy decision rather than a straight copy:
+
+    - ``quantity_precision`` falls back to the step's own decimal count when
+      the venue does not state one. The step is the authority; precision only
+      has to be fine enough to express it.
+    - ``min_quantity`` falls back to ONE STEP, not to zero. A venue that states
+      a step but no minimum can still trade one step.
+
+    ``round_lot`` is carried for reporting and never becomes the step
+    (``_ROUND_LOT_ENFORCED``).
+    """
+    step = rules.quantity_step
+    if step is None or not math.isfinite(step) or step <= 0.0:
+        raise TradeSetupNotPlannableError(
+            f"instrument {rules.broker_instrument_id!r} reports no usable quantity step "
+            f"({step!r}) — refusing to size against a guessed lattice "
+            f"(policy: {_MISSING_QUANTITY_RULES_POLICY})"
+        )
+
+    precision = rules.quantity_precision
+    if precision is None:
+        precision = _decimal_places(step)
+
+    min_qty = rules.min_quantity
+    if min_qty is None or not math.isfinite(min_qty) or min_qty <= 0.0:
+        min_qty = step
+
+    try:
+        return QuantityLattice(
+            step=step,
+            min_qty=min_qty,
+            precision=precision,
+            min_notional=rules.min_notional,
+            round_lot=rules.round_lot,
+            source=rules.source,
+        )
+    except ValueError as exc:
+        # The venue's own numbers disagree (e.g. a 0.001 step at 2 decimals).
+        # Refuse the pick the way every other malformed input is refused, so
+        # the daemon's existing except clause covers it.
+        raise TradeSetupNotPlannableError(
+            f"instrument {rules.broker_instrument_id!r} reports an inconsistent quantity "
+            f"lattice: {exc}"
+        ) from exc
+
+
+def _decimal_places(step: float) -> int:
+    """How many decimals it takes to write ``step`` exactly (capped, never guessed high)."""
+    for places in range(12):
+        scaled = step * (10**places)
+        if abs(scaled - round(scaled)) < 1e-9:
+            return places
+    raise TradeSetupNotPlannableError(
+        f"quantity step {step!r} is not expressible in a sane number of decimals"
+    )
 
 
 def build_fx_conversion(
