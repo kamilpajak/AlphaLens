@@ -662,10 +662,22 @@ def _anchor_from_walk(
     branch CALLS the live rail's own blend rather than re-implementing it.
 
     Returns ``None`` when nothing filled (both modes share that gate), when the
-    planned blend has no usable tier, or when either blend is non-finite --
-    ``planned_blended_entry`` lets a NaN limit through (``nan <= 0`` is False)
-    and a bare ``NaN`` in the stamped JSON map is not valid JSON for a strict
-    reader.
+    planned blend has no usable tier, or when either blend is non-finite.
+
+    The non-finite guard bites on BOTH anchors, and it CHANGES the historical
+    ``realised`` lens, which is worth stating because the change is invisible in
+    the diff. Two different leaks reach it:
+
+    * ``planned`` -- ``planned_blended_entry`` lets a NaN limit through, because
+      it only drops tiers with ``limit <= 0`` and ``nan <= 0`` is False.
+    * ``realised`` -- an INFINITE tier limit fills (``_LadderWalk.step`` fills on
+      ``bar_low <= limit``, and any low is ``<= inf``), so it enters the fill set
+      and drags ``_blended_entry`` to non-finite. Before this guard the lens
+      stamped a bare ``NaN`` into the JSON map, which is not valid JSON for a
+      strict reader. A NaN limit is the opposite case and never fills, since
+      ``low <= nan`` is False.
+
+    Pinned by ``TestANonFiniteTierLimitIsRefusedUnderBothAnchors``.
 
     Sharing the no-fill gate does NOT make the two lenses report over the same
     cohort: the bracket-constructibility gates downstream are anchor-dependent
@@ -723,9 +735,19 @@ def atr_bracket_anchor(
     of only the realized R that follows from it. ``anchor`` is required and
     validated -- see :data:`ANCHOR_PLANNED` / :data:`ANCHOR_REALISED`.
 
-    Returns ``None`` for every input the lens drops BEFORE placing a bracket:
-    unparseable setup, no bars, a missing / non-finite / non-positive ATR,
-    nothing filled in walk-1, a non-finite blend. It does NOT model the gates
+    Returns ``None`` for every input the lens drops BEFORE placing a bracket: a
+    setup ``parse_ladder`` reports as not-ok (absent, status != "OK", no
+    disaster stop, no entry tiers), no bars, a missing / non-finite /
+    non-positive ATR, nothing filled in walk-1, a non-finite blend.
+
+    Does NOT return ``None`` for a MALFORMED tier: ``parse_ladder`` does a bare
+    ``float(t["limit"])``, so a non-numeric limit raises ``ValueError`` and a
+    missing ``limit`` key raises ``KeyError``, out of this function. That is
+    pre-existing and symmetric -- ``replay_ladder`` itself raises on the same
+    row, and the monitor replays a row through it before ever reaching a lens --
+    so swallowing it here would hide the defect without saving the run.
+
+    It does NOT model the gates
     that come AFTER the anchor -- a non-positive ``stop_atr_mult`` and a
     non-constructible bracket (ceiling at/below the cost floor, bracket stop
     at/below zero) are properties of the bracket, not of the anchor, so the
