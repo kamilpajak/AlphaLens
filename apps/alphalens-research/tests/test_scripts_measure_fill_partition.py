@@ -22,6 +22,7 @@ from alphalens_research.diagnostics import fill_partition as fp
 from scripts.measure_fill_partition import (
     EXCHANGE,
     PAYLOAD_SCHEMA,
+    _render_human,
     build_report,
     collect_opportunities,
     main,
@@ -337,6 +338,28 @@ class TestDeeperTierTimingComesFromTheBars(MeasureFillPartitionTestCase):
         )
         self.assertEqual(touch[0].filled_tiers, ("E1",))
         self.assertEqual(through[0].filled_tiers, ())
+
+
+class TestTheEnvelopeDeclaresItsUnits(MeasureFillPartitionTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        _write_brief(self.fx.briefs, ["AAA"])
+        _write_store(self.fx.store, [_store_row("AAA")])
+        _write_bars(self.fx.store, "AAA", [99.0, 98.0])
+
+    def test_the_payload_carries_the_unit_of_every_reported_measure(self) -> None:
+        self.assertEqual(self._payload()["units"], dict(fp.MEASURE_UNITS))
+
+    def test_the_notes_do_not_invite_reading_r_against_a_return_fraction(self) -> None:
+        # The unfilled cell has no realised R, and the forgone number beside it is
+        # a plain return fraction, so the two are not two halves of one measure.
+        notes = " ".join(self._payload()["notes"]).lower()
+        self.assertIn("not comparable", notes)
+
+    def test_the_human_render_labels_both_columns_with_their_unit(self) -> None:
+        text = _render_human(self._payload())
+        self.assertIn("realised R", text)
+        self.assertIn("forgone excess return", text)
 
 
 class TestDriverIsExitAware(MeasureFillPartitionTestCase):

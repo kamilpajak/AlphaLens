@@ -197,6 +197,46 @@ class TestALadderDeeperThanTheDeclaredTiers(unittest.TestCase):
         self.assertNotIn("E4", fp.TIER_IDS)
 
 
+class TestTheTwoOutcomeMeasuresCarryTheirUnits(unittest.TestCase):
+    """The realised number is in R; the forgone one is a plain return fraction.
+
+    ``realised_r`` is risk-normalised by the row's own stop distance at the
+    overshoot fill. ``forgone_excess_return`` is the store's
+    ``market_excess_return`` -- ``forward_return - benchmark_window_return``, a
+    decimal fraction. Sitting side by side in one row without their units invites
+    exactly the subtraction that cannot be done.
+    """
+
+    def test_each_reported_measure_names_its_unit(self) -> None:
+        self.assertEqual(
+            set(fp.MEASURE_UNITS),
+            {"realised_r", "forgone_excess_return", "mae_r", "holding_days", "filled_fraction"},
+        )
+        self.assertIn("R", fp.MEASURE_UNITS["realised_r"])
+        self.assertIn("fraction", fp.MEASURE_UNITS["forgone_excess_return"])
+
+    def test_the_two_measures_do_not_share_a_unit(self) -> None:
+        self.assertNotEqual(
+            fp.MEASURE_UNITS["realised_r"], fp.MEASURE_UNITS["forgone_excess_return"]
+        )
+
+    def test_the_field_names_say_which_unit_they_are_in(self) -> None:
+        report = _report([_opp("AAA", filled=("E1",), realised_r=1.0, forgone_excess_return=0.02)])
+        first = _stats(report, fp.PARTITION_FIRST_ONLY)
+        self.assertAlmostEqual(first.realised_r_mean, 1.0)
+        self.assertAlmostEqual(first.forgone_excess_return_mean, 0.02)
+        self.assertFalse(hasattr(first, "realised_return_mean"))
+        self.assertFalse(hasattr(first, "forgone_return_mean"))
+
+    def test_the_conditional_record_names_its_unit_too(self) -> None:
+        report = _report(
+            [_opp("AAA", filled=("E1", "E2"), fill_ts=(1_000, 2_000), realised_r=-0.5)]
+        )
+        rec = next(r for r in report.conditional_fills if r.given_tier == "E1")
+        self.assertAlmostEqual(rec.then_realised_r_median, -0.5)
+        self.assertFalse(hasattr(rec, "then_realised_return_median"))
+
+
 class TestPartitionCellHonesty(unittest.TestCase):
     def test_the_deep_only_cell_carries_its_structural_zero_reason(self) -> None:
         report = _report([_opp("AAA", filled=("E1",))])
