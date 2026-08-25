@@ -19,8 +19,11 @@ import re
 import stat
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
+from alphalens_pipeline.brokers.automanager.live_rails import assert_live_rails
+from broker_contract.contract import BrokerCapabilityError
 
 # Test file lives at apps/alphalens-research/tests/<name>.py; the repo root
 # is three parents up. deploy/ stays at the repo root, not under the app.
@@ -1553,11 +1556,22 @@ class TestLiveBrokerManagerUnit(unittest.TestCase):
             re.compile(r"^Environment=ALPHALENS_BROKER_ALLOW_ORDERS=0\s*$", re.MULTILINE),
             "LIVE unit must ship with ALLOW_ORDERS=0 (inert-first rollout, design memo §7 step 1).",
         )
+        # Arming stopped being a "flip this line" operation in #1121: editing
+        # the installed unit by hand is what let production run for two weeks
+        # on values no one could read from this repository. The unit must now
+        # point at the tracked drop-in instead — same §7 step 3 obligation,
+        # different mechanism.
         self.assertIn(
+            "10-allow-orders.conf",
+            self.text,
+            "unit must document the attended arm-time step (design memo §7 "
+            "step 3) as installing the tracked drop-in, not editing this file.",
+        )
+        self.assertNotIn(
             "flip to 1",
             self.text.lower(),
-            "unit must document the attended arm-time flip to "
-            "ALLOW_ORDERS=1 (design memo §7 step 3).",
+            "the unit must not tell an operator to hand-edit the installed "
+            "copy — that practice caused the drift in issue #1121.",
         )
 
     def test_all_seven_safety_vars_pinned_in_unit(self) -> None:
@@ -1876,6 +1890,183 @@ class TestPriceStreamStaleSessionGateGuard(unittest.TestCase):
                     f"AlphalensLivePriceStreamStale for {job!r} must drop the "
                     "session-gate asleep state via `unless session_asleep == 1`.",
                 )
+
+
+# --------------------------------------------------------------------------
+# The LIVE unit COMPOSED with its tracked drop-ins (issue #1121).
+#
+# Everything above pins the unit file's TEXT. These classes pin what systemd
+# would actually COMPOSE from the unit plus the drop-in directory, and run the
+# real `assert_live_rails()` over the result — so the repository cannot declare
+# a LIVE configuration that would refuse to boot.
+#
+# What they cannot do: see the VPS. A hand edit on the host is still invisible
+# here; that needs a host-side drift check.
+# --------------------------------------------------------------------------
+
+_LIVE_DROPIN_DIR = REPO_ROOT / "deploy" / "systemd" / "alphalens-broker-manager-live.service.d"
+
+_ALLOW_ORDERS = "ALPHALENS_BROKER_ALLOW_ORDERS"
+_SIZING_EQUITY = "ALPHALENS_BROKER_SIZING_EQUITY"
+
+
+def _environment_assignments(text: str) -> dict[str, str]:
+    """The ``Environment=`` assignments in one unit or drop-in file.
+
+    systemd's ``Environment=`` takes a space-separated LIST of assignments, so
+    one line may carry several; this splits on whitespace rather than reading
+    the line as a single pair. That is only sound because a value containing a
+    space would have to be QUOTED, and
+    :func:`test_every_environment_line_is_the_simple_form` refuses quoting.
+
+    Still deliberately narrow: no quoting, no line continuations, no bare
+    ``Environment=`` reset. Anything this parser cannot read honestly, that
+    same test refuses outright rather than letting it be misread quietly.
+    """
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("Environment="):
+            continue
+        for assignment in stripped[len("Environment=") :].split():
+            key, _, value = assignment.partition("=")
+            values[key.strip()] = value.strip()
+    return values
+
+
+def _unreadable_reason(assignments: str) -> str | None:
+    """Why :func:`_environment_assignments` cannot honestly read this
+    ``Environment=`` payload, or ``None`` when it can.
+
+    The contract is refusal, not best effort: systemd understands quoting,
+    line continuations, C-style escapes and a bare ``Environment=`` reset, and
+    this parser understands none of them. Anything it would MISREAD has to be
+    rejected outright, because a quietly wrong composition is the one failure
+    this whole file exists to prevent.
+
+    Hence the blanket ban on backslashes rather than a rule per escape. A
+    trailing one continues the line and an escaped space hides a value
+    boundary; both slip past a narrower check, and neither is worth supporting
+    for files that have never needed either.
+    """
+    if "\\" in assignments:
+        return "backslash: continuation and C-style escapes are not parsed"
+    if '"' in assignments or "'" in assignments:
+        return "quoted value is not parsed"
+    tokens = assignments.split()
+    if not tokens:
+        return "bare Environment= reset is not parsed"
+    for token in tokens:
+        if "=" not in token:
+            return f"{token!r} is not an assignment"
+    return None
+
+
+def _dropin_files() -> list[Path]:
+    # systemd applies drop-ins in lexical filename order, so sorted() is the
+    # composition order, not merely a tidy one.
+    return sorted(_LIVE_DROPIN_DIR.glob("*.conf"))
+
+
+def _base_environment() -> dict[str, str]:
+    return _environment_assignments(LIVE_BROKER_MANAGER_SERVICE.read_text())
+
+
+def _composed_environment() -> dict[str, str]:
+    composed = _base_environment()
+    for path in _dropin_files():
+        composed.update(_environment_assignments(path.read_text()))
+    return composed
+
+
+class TestTheShippedLiveConfigBoots(unittest.TestCase):
+    def test_the_composed_config_passes_the_live_boot_assert(self):
+        # Base unit + every tracked drop-in, exactly as a deploy composes them.
+        with mock.patch.dict("os.environ", _composed_environment(), clear=True):
+            assert_live_rails()
+
+    def test_the_base_unit_alone_also_boots(self):
+        # A partial install (unit copied, drop-in directory forgotten) must fail
+        # SAFE, not fail to start: all eight pins have to be present here too,
+        # or the operator gets a dead daemon instead of a conservative one.
+        with mock.patch.dict("os.environ", _base_environment(), clear=True):
+            assert_live_rails()
+
+    def test_the_gate_can_actually_fail(self):
+        # A green result above means nothing unless this file can go red. One
+        # typo'd digit in the declared frame — the exact shape #1121 left
+        # unbounded — must be refused.
+        broken = dict(_composed_environment(), **{_SIZING_EQUITY: "150000"})
+        with mock.patch.dict("os.environ", broken, clear=True):
+            with self.assertRaises(BrokerCapabilityError):
+                assert_live_rails()
+
+
+class TestTheTemplateIsDisarmed(unittest.TestCase):
+    """The base unit shipping ALLOW_ORDERS=0 is already pinned by
+    ``TestLiveBrokerManagerUnit.test_pins_allow_orders_zero_at_first_deploy``;
+    what is left to state here is where arming lives and that the composition
+    admits to it."""
+
+    def test_arming_lives_in_exactly_one_drop_in(self):
+        arming = [p.name for p in _dropin_files() if _ALLOW_ORDERS in p.read_text()]
+        self.assertEqual(arming, ["10-allow-orders.conf"])
+
+    def test_the_composed_config_says_production_is_armed(self):
+        # The point of tracking these files is that the repository states what
+        # production does, and production has been placing real orders since
+        # 2026-08-11. Without this, deleting the arming drop-in would leave
+        # every other test green: the base unit alone still boots, and the
+        # composed config would simply describe a daemon that trades nothing.
+        self.assertEqual(_composed_environment()[_ALLOW_ORDERS], "1")
+
+
+class TestTheDropInsAreReadableTheWayTheyAreApplied(unittest.TestCase):
+    def test_every_environment_line_is_the_simple_form(self):
+        for path in [LIVE_BROKER_MANAGER_SERVICE, *_dropin_files()]:
+            for line in path.read_text().splitlines():
+                stripped = line.strip()
+                if not stripped.startswith("Environment="):
+                    continue
+                with self.subTest(file=path.name, line=stripped):
+                    self.assertIsNone(_unreadable_reason(stripped[len("Environment=") :]))
+
+    def test_the_guard_refuses_every_form_the_parser_would_misread(self):
+        # A guard that has never been shown to refuse anything is not a guard.
+        # Each of these is a legal systemd line that this parser reads WRONG,
+        # so the file must refuse it rather than go green on a composition
+        # systemd does not produce.
+        for assignments, why in (
+            ('"FOO=1 BAR=2"', "quoted"),
+            ("FOO='a b'", "quoted"),
+            ("FOO=1 \\", "line continuation"),
+            ("FOO=15000\\ mode=clamped", "backslash-escaped space inside a value"),
+            ("", "bare Environment= reset"),
+            ("JUSTANAME", "not an assignment"),
+        ):
+            with self.subTest(form=why):
+                self.assertIsNotNone(_unreadable_reason(assignments), why)
+
+    def test_several_assignments_on_one_line_are_read_as_several(self):
+        # systemd's Environment= takes a space-separated LIST of assignments,
+        # and this parser folded such a line into one key with a garbage value
+        # while the guard above waved it through — so a future edit in that
+        # form would have made this whole file green against a composition
+        # systemd does not produce. No file uses the form today; the parser has
+        # to survive one that does.
+        parsed = _environment_assignments("Environment=FIRST=1 SECOND=2\n")
+        self.assertEqual(parsed, {"FIRST": "1", "SECOND": "2"})
+
+    def test_no_variable_is_set_by_two_drop_ins(self):
+        # While that holds, filename order decides nothing. The SIM unit lost
+        # this property and had to grow a `zz-` prefixed file to win an
+        # ordering fight; the numeric prefixes here exist to keep it.
+        seen: dict[str, str] = {}
+        for path in _dropin_files():
+            for key in _environment_assignments(path.read_text()):
+                with self.subTest(variable=key):
+                    self.assertNotIn(key, seen, f"also set by {seen.get(key)}")
+                seen[key] = path.name
 
 
 if __name__ == "__main__":
