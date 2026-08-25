@@ -286,6 +286,41 @@ class TestOpportunityFromStoreRow(unittest.TestCase):
         self.assertIsNone(opp.mae_r)
         self.assertIsNone(opp.forgone_excess_return)
 
+    def test_a_nan_holding_time_is_missing_and_never_reaches_int(self) -> None:
+        # `holding_days_elapsed` is the one column read through a SECOND float()
+        # after the missing-value guard, so it is the one column where dropping
+        # the guard raises instead of returning None: int(float(nan)) is a
+        # ValueError, and one such row would kill the whole store run.
+        opp = fp.opportunity_from_store_row(
+            _row(holding_days_elapsed=float("nan")),
+            fills=(_fill("E1", 100.0, 1_000),),
+            tiers=(fp.EntryTier("E1", 100.0, 100.0),),
+            overshoot_bps=MEASURED_BPS,
+        )
+        self.assertIsNone(opp.holding_days)
+
+    def test_a_holding_time_that_is_not_a_number_at_all_is_missing(self) -> None:
+        # Positive control for the case above: the guard swallows TypeError and
+        # ValueError as well as NaN, so a text cell is missing, not a crash.
+        opp = fp.opportunity_from_store_row(
+            _row(holding_days_elapsed="six"),
+            fills=(_fill("E1", 100.0, 1_000),),
+            tiers=(fp.EntryTier("E1", 100.0, 100.0),),
+            overshoot_bps=MEASURED_BPS,
+        )
+        self.assertIsNone(opp.holding_days)
+
+    def test_a_fractional_holding_time_truncates_toward_zero(self) -> None:
+        # Pins the int() that the type fix must keep: the column is float-typed
+        # in parquet, and a 6.9-day row reports 6 whole days, not 7.
+        opp = fp.opportunity_from_store_row(
+            _row(holding_days_elapsed=6.9),
+            fills=(_fill("E1", 100.0, 1_000),),
+            tiers=(fp.EntryTier("E1", 100.0, 100.0),),
+            overshoot_bps=MEASURED_BPS,
+        )
+        self.assertEqual(opp.holding_days, 6)
+
 
 if __name__ == "__main__":
     unittest.main()
