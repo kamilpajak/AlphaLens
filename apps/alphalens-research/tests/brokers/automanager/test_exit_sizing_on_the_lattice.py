@@ -45,6 +45,8 @@ from alphalens_pipeline.brokers.automanager.live_exit_engine import (
     tranche_tag,
 )
 from alphalens_pipeline.brokers.execution import RAIL_LATTICE, assert_rail_lattice
+from broker_contract.constants import QTY_PRECISION
+from broker_contract.contract import BrokerCapabilityError, BrokerError
 from broker_contract.quantity import QuantityLattice
 from broker_contract.sizing import TpTranchePlan
 
@@ -121,13 +123,29 @@ class TestTheRailLatticeGuard(unittest.TestCase):
         # Half a step is 0.5 — the value the protection epsilon has always
         # been. That identity is why the two halves can be migrated separately.
         self.assertEqual(RAIL_LATTICE.step, 1.0)
-        self.assertEqual(RAIL_LATTICE.step / 2.0, 0.5)
+        self.assertEqual(RAIL_LATTICE.step / 2.0, QTY_PRECISION)
 
     def test_a_lattice_finer_than_the_epsilon_is_refused(self) -> None:
         # The measured-dangerous shape: a venue whose sellable quantity is
         # below what the protection pass considers a real position. Refused
         # until those sites migrate, so it cannot arrive by accident.
-        with self.assertRaises(NotImplementedError):
+        with self.assertRaises(BrokerCapabilityError):
+            assert_rail_lattice(QuantityLattice(step=0.001, min_qty=0.001, precision=3))
+
+    def test_a_lattice_that_matches_only_on_step_is_refused(self) -> None:
+        # The guard pins the ARITHMETIC, not one field of it. A lattice with the
+        # right step but a 100-share minimum is a different policy than the one
+        # the rail declared, and comparing `step / 2` alone would admit it.
+        with self.assertRaises(BrokerCapabilityError):
+            assert_rail_lattice(QuantityLattice(step=1.0, min_qty=100.0, precision=0))
+
+    def test_the_refusal_is_containable_by_the_live_exits_boundary(self) -> None:
+        # `_run_live_exits_pass` catches `BrokerError` and nothing else, and the
+        # protection pass runs right after it in the same tick. A refusal that
+        # is not a BrokerError would kill the tick and take the never-naked
+        # backstop with it — the guard would cause the class of harm it exists
+        # to prevent.
+        with self.assertRaises(BrokerError):
             assert_rail_lattice(QuantityLattice(step=0.001, min_qty=0.001, precision=3))
 
     def test_a_lattice_COARSER_than_one_share_is_refused_too(self) -> None:
@@ -143,7 +161,7 @@ class TestTheRailLatticeGuard(unittest.TestCase):
         # while 50 shares were still held. Same naked position as the incident
         # this PR fixes, reached from the other direction.
         for step in (10.0, 100.0):
-            with self.subTest(step=step), self.assertRaises(NotImplementedError):
+            with self.subTest(step=step), self.assertRaises(BrokerCapabilityError):
                 assert_rail_lattice(QuantityLattice(step=step, min_qty=step, precision=0))
 
     def test_the_whole_share_lattice_passes_the_guard(self) -> None:
@@ -157,7 +175,7 @@ class TestTheRailLatticeGuard(unittest.TestCase):
         # Demonstrated: calling it directly with a coarse lattice used to run
         # happily and cancel the stop.
         coarse = QuantityLattice(step=100.0, min_qty=100.0, precision=0)
-        with self.assertRaises(NotImplementedError):
+        with self.assertRaises(BrokerCapabilityError):
             execute_tranche_exit(
                 broker=_NeverCalled(),
                 uic=1,
@@ -172,9 +190,42 @@ class TestTheRailLatticeGuard(unittest.TestCase):
         # The production entry point refuses once per pass, so a bad lattice
         # never reaches per-position work at all.
         coarse = QuantityLattice(step=100.0, min_qty=100.0, precision=0)
-        with self.assertRaises(NotImplementedError):
+        with self.assertRaises(BrokerCapabilityError):
             run_live_exits(_NeverCalled(), _NeverCalled(), (), lattice=coarse)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMalformedReferenceQuantity(unittest.TestCase):
+    """`owned` was guarded in #1126; `reference_qty` — its sibling in the same
+    expression — was not, and it is the one that comes off DISK.
+
+    `fold_tranche_plans` folds a journal line's `reference_qty` with a bare
+    `float()`, and JSON spells non-finite values `NaN` / `Infinity`, so both
+    survive the fold. `round(nan)` raises ValueError and `round(inf)` raises
+    OverflowError — neither is a `BrokerError`, so neither is caught by
+    `_run_live_exits_pass`, and the statement after it in the tick is the
+    never-naked protection pass. One malformed journal line would starve
+    protection for every position, not just the one it describes.
+    """
+
+    def _plan(self, reference_qty: object) -> list:
+        return plan_tranche_exits(
+            price=20.0,
+            tp_tranches=_WHOLE_POSITION,
+            reference_qty=reference_qty,  # type: ignore[arg-type]
+            owned=10.0,
+            already_fired=frozenset(),
+            lattice=RAIL_LATTICE,
+        )
+
+    def test_non_finite_reference_qty_plans_nothing_instead_of_raising(self) -> None:
+        for bad in (float("nan"), float("inf"), float("-inf"), None):
+            with self.subTest(reference_qty=bad):
+                self.assertEqual(self._plan(bad), [])
+
+    def test_a_healthy_reference_qty_still_fires(self) -> None:
+        # Guard against a fix that refuses everything.
+        self.assertEqual(self._plan(10.0)[0].qty, 10)

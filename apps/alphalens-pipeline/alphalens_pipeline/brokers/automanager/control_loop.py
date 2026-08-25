@@ -4256,6 +4256,16 @@ def fold_tranche_plans(
             uic = int(raw_uic)
             reference_qty = float(line["reference_qty"])
             stop_price = float(line["stop_price"])
+            # `float()` happily parses JSON's `NaN` / `Infinity`, so a malformed
+            # or hand-edited line could otherwise become a GOVERNING ladder
+            # carrying a non-finite size. Refused at the SOURCE as well as at
+            # the sizer, because a bad line should contribute nothing rather
+            # than be caught later by whichever consumer happens to look first.
+            if not math.isfinite(reference_qty) or not math.isfinite(stop_price):
+                raise ValueError(
+                    f"non-finite tranche_plan scalars for uic {uic}: "
+                    f"reference_qty={reference_qty!r} stop_price={stop_price!r}"
+                )
             tranches = tuple(
                 TpTranchePlan(
                     tranche_index=int(t["tranche_index"]),

@@ -109,7 +109,7 @@ def _is_real_quantity(qty: Any) -> bool:
 
 
 def _exit_clears_cost(
-    *, price: float, target_price: float, qty: int, realised_entry: float | None, tag: str
+    *, price: float, target_price: float, qty: float, realised_entry: float | None, tag: str
 ) -> bool:
     """Whether selling ``qty`` shares at ``price`` clears round-trip cost plus
     the declared :data:`EXIT_EDGE_MIN_BPS` buffer, measured from the REALISED
@@ -208,6 +208,21 @@ def plan_tranche_exits(
         return []
     if not _is_real_quantity(owned):
         logger.warning("live exits: owned %r is not a real quantity — no tranche planned", owned)
+        return []
+    if not _is_real_quantity(reference_qty):
+        # `owned` was guarded in #1126; this is its sibling in the same
+        # expression, and the one that comes off DISK. `fold_tranche_plans`
+        # parses a journal line's reference_qty with a bare `float()`, and JSON
+        # spells non-finite values `NaN` / `Infinity`, so both survive the fold.
+        # `round(nan)` raises ValueError and `round(inf)` OverflowError —
+        # neither is a BrokerError, so neither is caught by
+        # `_run_live_exits_pass`, and the statement after it in the tick is the
+        # never-naked protection pass. One malformed line would starve
+        # protection for EVERY position, not just the one it describes.
+        logger.warning(
+            "live exits: reference_qty %r is not a real quantity — no tranche planned",
+            reference_qty,
+        )
         return []
     available = quantize_down(owned, lattice)
     out: list[TrancheExit] = []

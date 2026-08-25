@@ -42,7 +42,7 @@ import uuid
 from typing import Literal
 
 from broker_contract.constants import DEFAULT_ORDER_TTL_DAYS, QTY_PRECISION
-from broker_contract.contract import BracketOrderRequest, InstrumentRef
+from broker_contract.contract import BracketOrderRequest, BrokerCapabilityError, InstrumentRef
 from broker_contract.fx import FxConversion, FxRateQuote
 from broker_contract.quantity import InstrumentQuantityRules, QuantityLattice
 from broker_contract.sizing import SetupPlan, TradeSetupNotPlannableError
@@ -228,6 +228,14 @@ def execution_config_version() -> str:
         "fx_conversion_point": _FX_CONVERSION_POINT,
         "fx_precheck_rate_divergence_max_pct": _FX_PRECHECK_RATE_DIVERGENCE_MAX_PCT,
         "fx_sizing_buffer_pct": _FX_SIZING_BUFFER_PCT,
+        # The exit sizer's arithmetic, not just its policy strings. The sweep
+        # test walks _UPPER_CASE names, and RAIL_LATTICE is an OBJECT, so it
+        # would otherwise sit in the namespace without reaching the token —
+        # meaning the lattice could change and fills executed under different
+        # size arithmetic would pool. Its VALUES go in; the object is not JSON.
+        "rail_lattice_step": RAIL_LATTICE.step,
+        "rail_lattice_min_qty": RAIL_LATTICE.min_qty,
+        "rail_lattice_precision": RAIL_LATTICE.precision,
     }
     canon = json.dumps(config, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canon.encode("utf-8")).hexdigest()[:12]
@@ -352,15 +360,31 @@ def assert_rail_lattice(lattice: QuantityLattice) -> None:
     other granularity needs the epsilon comparison sites migrated first, which
     is what makes that migration the prerequisite for CONNECTING such a venue
     rather than for fixing the rounding.
+
+    RAISES ``BrokerCapabilityError``, which is a ``BrokerError``, and that is
+    load-bearing rather than cosmetic: ``_run_live_exits_pass`` catches
+    ``BrokerError`` and nothing else, and the statement after it in the tick is
+    the never-naked protection pass. A refusal outside that boundary would kill
+    the tick and take the backstop with it — the guard would cause the class of
+    harm it exists to prevent.
+
+    All THREE arithmetic fields are pinned, not just the step. A lattice with
+    the right step but a 100-share minimum is a different policy than the one
+    the rail declared, and a ``step / 2`` comparison alone would admit it.
     """
-    if lattice.step / 2.0 != QTY_PRECISION:
-        raise NotImplementedError(
-            f"lattice step {lattice.step!r} is not the whole-share step the protection "
-            f"epsilon {QTY_PRECISION!r} was derived for. Finer, and the exit sizer could "
-            f"sell a quantity the protection pass does not treat as a live position; "
-            f"coarser, and it under-counts the holding and cancels the stop over a "
-            f"residual it cannot see. Migrate the epsilon comparison sites before "
-            f"connecting a venue with this granularity."
+    if (
+        lattice.step != RAIL_LATTICE.step
+        or lattice.min_qty != RAIL_LATTICE.min_qty
+        or lattice.precision != RAIL_LATTICE.precision
+    ):
+        raise BrokerCapabilityError(
+            f"quantity lattice {lattice.step!r}/{lattice.min_qty!r}/{lattice.precision!r} is "
+            f"not the rail lattice {RAIL_LATTICE.step!r}/{RAIL_LATTICE.min_qty!r}/"
+            f"{RAIL_LATTICE.precision!r} the protection epsilon {QTY_PRECISION!r} was derived "
+            f"for. Finer, and the exit sizer could sell a quantity the protection pass does "
+            f"not treat as a live position; coarser, and it under-counts the holding and "
+            f"cancels the stop over a residual it cannot see. Migrate the epsilon comparison "
+            f"sites before connecting a venue with this granularity."
         )
 
 
