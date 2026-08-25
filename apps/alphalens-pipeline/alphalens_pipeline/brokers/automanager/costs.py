@@ -174,7 +174,7 @@ def single_full_position_tranche_violation(
 
     Measured 2026-08-25: every ``tranche_plan`` record on the LIVE rail
     (SMG 2026-08-19, uic 23474, ETSY 2026-08-18) carries one ``geometry``
-    tranche at ``tranche_pct`` 1.0, so the contract holds today. It is checked
+    tranche at ``tranche_frac`` 1.0, so the contract holds today. It is checked
     here rather than assumed because restoring multi-tranche take-profits would
     silently make the arm gate's pricing optimistic.
 

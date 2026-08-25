@@ -47,6 +47,8 @@ from broker_contract.contract import (
     Position,
 )
 from broker_contract.fx import FxRateQuote
+from broker_contract.quantity import InstrumentQuantityRules, quantity_refusal
+from broker_contract.sizing import TradeSetupNotPlannableError
 
 from alphalens_pipeline.brokers import execution as execution_policy
 from alphalens_pipeline.brokers.automanager import live_rails
@@ -648,7 +650,7 @@ class SaxoBroker:
             "Uic": int(uic),
             "AssetType": asset_type,
             "AccountKey": account_key,
-            "Amount": qty,
+            "Amount": self._verify_quantity(qty, details, label="qty"),
             "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
             "OrderType": stop_type,
             "OrderPrice": stop_q,
@@ -699,7 +701,7 @@ class SaxoBroker:
             "Uic": int(uic),
             "AssetType": asset_type,
             "AccountKey": account_key,
-            "Amount": qty,
+            "Amount": self._verify_quantity(qty, details, label="qty"),
             "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
             "OrderType": "Market",
             "OrderDuration": {"DurationType": execution_policy._MARKET_ORDER_DURATION},
@@ -809,7 +811,7 @@ class SaxoBroker:
             "Uic": int(uic),
             "AssetType": asset_type,
             "AccountKey": account_key,
-            "Amount": qty,
+            "Amount": self._verify_quantity(qty, details, label="qty"),
             "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
             "OrderType": _TRAILING_STOP_ORDER_TYPE,
             "OrderPrice": trigger_q,
@@ -928,7 +930,7 @@ class SaxoBroker:
             "Uic": int(uic),
             "AssetType": asset_type,
             "AccountKey": account_key,
-            "Amount": qty,
+            "Amount": self._verify_quantity(qty, details, label="qty"),
             "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
             "OrderType": _STOP_LIMIT_ORDER_TYPE,
             "OrderPrice": stop_q,
@@ -1042,7 +1044,7 @@ class SaxoBroker:
                 "Uic": int(uic),
                 "AssetType": asset_type,
                 "AccountKey": account_key,
-                "Amount": qty,
+                "Amount": self._verify_quantity(qty, details, label="qty"),
                 "BuySell": buy_sell,
                 "OrderType": order_type,
                 "OrderPrice": price,
@@ -1225,7 +1227,7 @@ class SaxoBroker:
             "OrderType": order_type or "StopIfTraded",
             "OrderPrice": stop_q,
             "OrderDuration": {"DurationType": execution_policy._EXIT_DURATION},
-            "Amount": new_qty,
+            "Amount": self._verify_quantity(new_qty, details, label="new_qty"),
             "BuySell": _SIDE_TO_SAXO_BUY_SELL[side],
             "ManualOrder": execution_policy._MANUAL_ORDER,
         }
@@ -1716,6 +1718,115 @@ class SaxoBroker:
         decimals = int(fmt.get("OrderDecimals", fmt.get("Decimals", details.get("Decimals", 2))))
         return 10.0**-decimals
 
+    @staticmethod
+    def _quantity_rules_from_details(details: dict[str, Any]) -> InstrumentQuantityRules:
+        """What Saxo says about quantity for this instrument, VERBATIM.
+
+        The quantity sibling of :meth:`_tick_size_for`, reading the SAME
+        ``details`` payload that method already consumes — so no placement path
+        gains an HTTP call. The fields have been arriving all along and were
+        dropped on the floor.
+
+        Reports, never decides: an absent or unusable field becomes ``None``,
+        the honest "the vendor did not say", and policy is applied by
+        ``execution.build_quantity_lattice``. Substituting a default here is
+        the present defect wearing a nicer name — the caller could no longer
+        tell a whole-share venue from an unanswered question.
+
+        ``LotSize`` is carried but is advisory market structure, not a step: a
+        US equity may have a 100-share round lot and still accept odd lots.
+        """
+
+        def _finite(value: Any) -> float | None:
+            # A bool is an int in Python, so `IncrementSize: true` would arrive
+            # as a step of 1.0 and `MinimumTradeSize: false` as a minimum of
+            # 0.0 — a venue fact invented out of a flag. The leaf's
+            # `is_finite_quantity` excludes bool for the same reason; the
+            # adapter has to agree or the exclusion is decorative.
+            if isinstance(value, bool):
+                return None
+            # `_opt_float` raises on a non-numeric string; here that is just
+            # another way for the vendor to have said nothing usable. Reporting
+            # None keeps the refusal (with a reason) one layer up, where policy
+            # lives, instead of turning a bad field into an exception on a
+            # placement path.
+            try:
+                parsed = _opt_float(value)
+            except (TypeError, ValueError):
+                return None
+            if parsed is None or not math.isfinite(parsed):
+                return None
+            return parsed
+
+        def _decimals(value: Any) -> int | None:
+            parsed = _finite(value)
+            if parsed is None or parsed < 0 or parsed != int(parsed):
+                return None
+            return int(parsed)
+
+        fractional = details.get("FractionalOrderEnabled")
+        uic = details.get("Uic")
+        return InstrumentQuantityRules(
+            broker_instrument_id=str(uic) if uic is not None else "",
+            min_quantity=_finite(details.get("MinimumTradeSize")),
+            quantity_step=_finite(details.get("IncrementSize")),
+            quantity_precision=_decimals(details.get("AmountDecimals")),
+            round_lot=_finite(details.get("LotSize")),
+            min_notional=_finite(details.get("MinimumOrderValue")),
+            fractional_enabled=fractional if isinstance(fractional, bool) else None,
+            currency=str(details.get("CurrencyCode") or ""),
+            source=f"saxo-instrument-details-uic-{uic}",
+        )
+
+    @staticmethod
+    def _verify_quantity(qty: float, details: dict[str, Any], *, label: str) -> float:
+        """Confirm ``qty`` is a quantity this venue can express. NEVER adjust it.
+
+        The deliberate asymmetry with :meth:`_quantize_price`, which DOES
+        adjust: a sub-tick price move is economically inert, a share is not.
+        An off-lattice quantity reaching the wire is an upstream defect, and
+        rounding it here would hide that defect behind a phantom share — while
+        creating a second quantizer that can disagree with the first. Two
+        quantizers is exactly the drift this workstream removes.
+
+        DEGRADES when the venue states no usable lattice: the quantity passes
+        through untouched. Refusing here would kill a placement path that works
+        today, and "this venue told us nothing" is a sizing-time decision that
+        belongs where it can refuse one pick rather than one order.
+
+        ONLY absence degrades. A venue that states a lattice contradicting
+        itself (a 0.001 step at two decimal places) is REFUSED — that payload
+        is the one that most needed verifying, and a catch wide enough to cover
+        both would turn this method off exactly there.
+        """
+        from alphalens_pipeline.brokers.execution import (
+            QuantityLatticeUnavailableError,
+            build_quantity_lattice,
+        )
+
+        rules = SaxoBroker._quantity_rules_from_details(details)
+        try:
+            lattice = build_quantity_lattice(rules)
+        except QuantityLatticeUnavailableError:
+            logger.debug(
+                "quantity verification skipped for %s: instrument %s states no usable lattice",
+                label,
+                rules.broker_instrument_id or "?",
+            )
+            return qty
+        except TradeSetupNotPlannableError as exc:
+            # Stated but self-contradictory. Refused in the wire's own currency
+            # (`OrderRejectedError`), because a sizing-time exception escaping a
+            # placement path is not covered by the `except BrokerError` around it.
+            raise OrderRejectedError(
+                f"{label}={qty!r} cannot be verified on this venue: {exc}"
+            ) from exc
+
+        refusal = quantity_refusal(qty, lattice)
+        if refusal is not None:
+            raise OrderRejectedError(f"{label}={qty!r} cannot be placed on this venue: {refusal}")
+        return qty
+
     def _quantize_price(self, price: float, details: dict[str, Any], *, label: str) -> float:
         """Nearest-tick quantization with the config-versioned bps hard-fail.
 
@@ -1796,7 +1907,7 @@ class SaxoBroker:
         if request.take_profit is not None:
             children.append(
                 {
-                    "Amount": request.quantity,
+                    "Amount": self._verify_quantity(request.quantity, details, label="quantity"),
                     "BuySell": opposite,
                     "OrderType": "Limit",
                     "OrderPrice": tp_q,
@@ -1808,7 +1919,7 @@ class SaxoBroker:
         if request.stop_loss is not None:
             children.append(
                 {
-                    "Amount": request.quantity,
+                    "Amount": self._verify_quantity(request.quantity, details, label="quantity"),
                     "BuySell": opposite,
                     "OrderType": stop_type,
                     "OrderPrice": stop_q,
@@ -1822,7 +1933,7 @@ class SaxoBroker:
             "Uic": int(instrument.broker_instrument_id),
             "AssetType": instrument.asset_type,
             "AccountKey": account_key,
-            "Amount": request.quantity,
+            "Amount": self._verify_quantity(request.quantity, details, label="quantity"),
             "BuySell": side,
             "OrderType": "Limit",
             "OrderPrice": entry_q,

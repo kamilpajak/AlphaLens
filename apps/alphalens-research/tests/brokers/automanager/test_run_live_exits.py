@@ -49,7 +49,7 @@ def _tr(index, target, pct):
     return TpTranchePlan(
         tranche_index=index,
         target_price=target,
-        tranche_pct=pct,
+        tranche_frac=pct,
         r_multiple=1.0,
         tag=f"tp{index + 1}",
     )
@@ -192,7 +192,7 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
                     TpTranchePlan(
                         tranche_index=0,
                         target_price=SMG_GEOMETRY_TP,
-                        tranche_pct=1.0,
+                        tranche_frac=1.0,
                         r_multiple=0.0,
                         tag="geometry",
                     ),
@@ -225,7 +225,7 @@ class TestRunLiveExitsCostGate(unittest.TestCase):
                     TpTranchePlan(
                         tranche_index=0,
                         target_price=SMG_TP_TRANCHES[0],
-                        tranche_pct=1.0,
+                        tranche_frac=1.0,
                         r_multiple=0.0,
                         tag="geometry",
                     ),

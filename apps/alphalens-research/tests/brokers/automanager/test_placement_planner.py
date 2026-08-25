@@ -44,7 +44,7 @@ def _setup_plan(
         TpTranchePlan(
             tranche_index=i,
             target_price=t,
-            tranche_pct=100.0 / len(tps),
+            tranche_frac=1.0 / len(tps),
             r_multiple=1.5,
             tag=f"tp{i}",
         )

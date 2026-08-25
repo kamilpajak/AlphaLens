@@ -169,7 +169,7 @@ def plan_tranche_exits(
     """Which not-yet-fired tranches a LONG at ``price`` should realize now.
 
     ``reference_qty`` is the tranche-sizing base (the intended/peak filled
-    position); tranche qty = round(reference_qty * tranche_pct), cumulatively
+    position); tranche qty = round(reference_qty * tranche_frac), cumulatively
     clamped so the batch never exceeds live ``owned``. Order preserved.
 
     ``realised_entry`` is the position's realised average entry price
@@ -202,7 +202,7 @@ def plan_tranche_exits(
             continue
         if price + _PRICE_EPS < t.target_price:
             continue  # target not touched
-        qty = min(round(reference_qty * t.tranche_pct), available)
+        qty = min(round(reference_qty * t.tranche_frac), available)
         if qty <= 0:
             continue
         if realised_entry is not None and not _exit_clears_cost(
